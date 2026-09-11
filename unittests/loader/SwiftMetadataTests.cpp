@@ -85,6 +85,27 @@ struct Fixture {
     Image.Segments[0].Data[0x345] = 0;
     Image.DyldBindSlots[0x1500] = {"_$ss5Int64VMn", 0};
   }
+  void emptyStruct() {
+    text(0x1130, "Empty");
+    u32(0x1114, 0);
+    u32(0x1118, 0);
+    u32(0x130c, 0);
+    u64(0x13f8, 0x1600);
+    u64(0x1640, 0);
+    u64(0x1648, 1);
+    u32(0x1650, 0);
+    u32(0x1654, 0);
+  }
+  void separateValueWitnessSection() {
+    Image.Sections[1].Size = Image.Sections[1].FileSz = 0x5fc;
+    Section Table;
+    Table.Name = "__const";
+    Table.VA = 0x1600;
+    Table.Size = Table.FileSz = 88;
+    Table.FileOff = 0x600;
+    Table.Flags = SegmentFlags::Readable;
+    Image.Sections.push_back(Table);
+  }
 };
 
 struct SelfFixture : Fixture {
@@ -468,4 +489,425 @@ TEST(SwiftMetadata, TruncatedFieldRecordsAndDuplicateMetadataAreRejected) {
   Other.Addr = 0x1600;
   Ambiguous.Image.Symbols.push_back(Other);
   EXPECT_NE(recoverSwiftTypes(Ambiguous.Image)[0].Status, "recovered");
+}
+
+TEST(SwiftMetadata, EmptyStructUsesTheActualLocalValueWitnessLayout) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F;
+    F.Image.Arch = Architecture;
+    F.emptyStruct();
+    F.separateValueWitnessSection();
+    auto Types = recoverSwiftTypes(F.Image);
+    ASSERT_EQ(Types.size(), 1u);
+    ASSERT_EQ(Types[0].Status, "recovered") << Types[0].Reason;
+    EXPECT_EQ(Types[0].Descriptor, 0x1100u);
+    EXPECT_EQ(Types[0].Metadata, 0x1400u);
+    EXPECT_EQ(Types[0].Module, "Demo");
+    EXPECT_EQ(Types[0].Kind, "struct");
+    EXPECT_EQ(Types[0].Name, "Empty");
+    EXPECT_EQ(Types[0].Size, 0u);
+    EXPECT_EQ(Types[0].Alignment, 1u);
+    EXPECT_TRUE(Types[0].Fields.empty());
+    EXPECT_TRUE(Types[0].Reason.empty());
+    // This reader validates the declared ABI, not witness implementations.
+    // Neither null nor non-null function slots are native body evidence.
+    for (unsigned Index = 0; Index < 8; ++Index)
+      F.u64(0x1600 + Index * 8, 0x1800 + Index * 16);
+    EXPECT_EQ(recoverSwiftTypes(F.Image)[0].Status, "recovered");
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructRejectsNontrivialValueWitnessStorageAndTraits) {
+  struct Case {
+    va_t Address;
+    uint64_t Value;
+    bool Wide;
+  };
+  const Case Cases[] = {
+      {0x1640, 1, true},
+      {0x1640, UINT64_MAX, true},
+      {0x1648, 0, true},
+      {0x1648, 2, true},
+      {0x1648, UINT64_MAX, true},
+      {0x1650, 1, false},
+      {0x1650, 7, false},
+      {0x1650, 15, false},
+      {0x1650, 0x10000, false},
+      {0x1650, 0x20000, false},
+      {0x1650, 0x40000, false},
+      {0x1650, 0x80000, false},
+      {0x1650, 0x100000, false},
+      {0x1650, 0x200000, false},
+      {0x1650, 0x400000, false},
+      {0x1650, 0x800000, false},
+      {0x1650, 0x1000000, false},
+      {0x1650, 0x2000000, false},
+      {0x1650, 0x80000000, false},
+      {0x1654, 1, false},
+      {0x1654, UINT32_MAX, false},
+  };
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(C.Address);
+      SCOPED_TRACE(C.Value);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      if (C.Wide)
+        F.u64(C.Address, C.Value);
+      else
+        F.u32(C.Address, static_cast<uint32_t>(C.Value));
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("plain empty struct contract"),
+                std::string::npos);
+      // The field-derived values alone must not make this a recovered type.
+      EXPECT_EQ(Types[0].Size, 0u);
+      EXPECT_EQ(Types[0].Alignment, 1u);
+      EXPECT_TRUE(Types[0].Fields.empty());
+    }
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructRequiresAnAvailableExactValueWitnessPointer) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const uint64_t Pointer :
+         {uint64_t(0), uint64_t(0x1601), uint64_t(0x3000), UINT64_MAX - 7}) {
+      SCOPED_TRACE(Pointer);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      F.u64(0x13f8, Pointer);
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("value-witness table is unavailable"),
+                std::string::npos);
+    }
+    Fixture Chained;
+    Chained.Image.Arch = Architecture;
+    Chained.emptyStruct();
+    Chained.Image.MachOHasChainedFixups = true;
+    Chained.Image.MachOResolvedChainedPointerSlots.insert(0x1408);
+    Chained.Image.MachOResolvedChainedPointerSlots.insert(0x13f0);
+    auto Types = recoverSwiftTypes(Chained.Image);
+    ASSERT_EQ(Types.size(), 1u);
+    EXPECT_EQ(Types[0].Status, "unrecovered");
+    EXPECT_NE(Types[0].Reason.find("value-witness table is unavailable"),
+              std::string::npos);
+    Chained.Image.MachOResolvedChainedPointerSlots.insert(0x13f8);
+    EXPECT_EQ(recoverSwiftTypes(Chained.Image)[0].Status, "recovered");
+    Chained.Image.MachOResolvedChainedPointerSlots.erase(0x13f8);
+    EXPECT_EQ(recoverSwiftTypes(Chained.Image)[0].Status, "unrecovered");
+    Chained.Image.MachOResolvedChainedPointerSlots.insert(0x13f8);
+    Chained.Image.MachOChainedFixupsAmbiguous = true;
+    Types = recoverSwiftTypes(Chained.Image);
+    ASSERT_EQ(Types.size(), 1u);
+    EXPECT_EQ(Types[0].Status, "unrecovered");
+    EXPECT_NE(Types[0].Reason.find("ambiguous fixups"), std::string::npos);
+    Chained.Image.MachOChainedFixupsAmbiguous = false;
+    EXPECT_EQ(recoverSwiftTypes(Chained.Image)[0].Status, "recovered");
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructRequiresTheEntireFileBackedValueWitnessTable) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      F.separateValueWitnessSection();
+      auto &Table = F.Image.Sections.back();
+      switch (Mutation) {
+      case 0:
+        Table.FileSz = 87;
+        break;
+      case 1:
+        Table.Size = 87;
+        break;
+      case 2:
+        Table.Flags = SegmentFlags::None;
+        break;
+      case 3:
+        Table.Type = llvm::MachO::S_ZEROFILL;
+        break;
+      case 4:
+        Table.FileOff = 0x601;
+        break;
+      case 5:
+        F.Image.Segments[0].FileSz = 0x657;
+        break;
+      case 6:
+        F.Image.Sections[1].Size = F.Image.Sections[1].FileSz = 0x3f4;
+        Section Metadata;
+        Metadata.Name = "__metadata";
+        Metadata.VA = 0x1400;
+        Metadata.Size = Metadata.FileSz = 16;
+        Metadata.FileOff = 0x400;
+        Metadata.Flags = SegmentFlags::Readable;
+        F.Image.Sections.push_back(Metadata);
+        break;
+      }
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("value-witness table is unavailable"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructCannotTreatImportedPayloadsAsLocalTables) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      switch (Mutation) {
+      case 0:
+        F.Image.DyldBindSlots[0x13f8] = {"_$sytWV", 0};
+        break;
+      case 1:
+        F.Image.DyldBindSlots[0x13f8] = {"_$sytWV", 8};
+        break;
+      case 2:
+        F.Image.ImportPtrSlots[0x13f8] = "_$sytWV";
+        break;
+      case 3:
+        F.Image.ImportStorageSlots[0x13f8] = {"_$sytWV", 0};
+        break;
+      case 4:
+        F.Image.ConflictingImportStorageSlots.insert(0x13f8);
+        break;
+      case 5:
+        F.Image.DyldBindSlots[0x13f8] = {"_$sytWV", 0};
+        F.Image.ImportPtrSlots[0x13f8] = "another_table";
+        break;
+      case 6:
+        F.Image.DyldBindSlots[0x13f8] = {"", 0};
+        break;
+      }
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("table is external or ambiguous"),
+                std::string::npos);
+    }
+    Fixture OtherSlot;
+    OtherSlot.Image.Arch = Architecture;
+    OtherSlot.emptyStruct();
+    OtherSlot.Image.DyldBindSlots[0x13f0] = {"_$sytWV", 0};
+    EXPECT_EQ(recoverSwiftTypes(OtherSlot.Image)[0].Status, "recovered");
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructUsesAnExactStrongStandardRuntimeBinding) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (bool Chained : {false, true}) {
+      SCOPED_TRACE(Chained);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      F.Image.MachOTwoLevelNamespace = true;
+      F.Image.MachOHasChainedFixups = Chained;
+      if (Chained)
+        F.Image.MachOResolvedChainedPointerSlots.insert(0x1408);
+      ASSERT_TRUE(F.Image.recordDyldBindSlot(
+          0x13f8, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+      // Imported pointers are not dereferenced as local VWT addresses. This
+      // local table deliberately cannot establish the required declaration.
+      F.u64(0x1640, 42);
+      for (uint64_t Payload :
+           {uint64_t(0), uint64_t(0x1600), uint64_t(0x8000000000000000)}) {
+        SCOPED_TRACE(Payload);
+        F.u64(0x13f8, Payload);
+        auto Types = recoverSwiftTypes(F.Image);
+        ASSERT_EQ(Types.size(), 1u);
+        ASSERT_EQ(Types[0].Status, "recovered") << Types[0].Reason;
+        EXPECT_EQ(Types[0].Descriptor, 0x1100u);
+        EXPECT_EQ(Types[0].Metadata, 0x1400u);
+        EXPECT_EQ(Types[0].Size, 0u);
+        EXPECT_EQ(Types[0].Alignment, 1u);
+        EXPECT_TRUE(Types[0].Fields.empty());
+        EXPECT_TRUE(Types[0].Reason.empty());
+      }
+      F.Image.MachOHasChainedFixups = true;
+      F.Image.MachOResolvedChainedPointerSlots.insert(0x1408);
+      F.Image.MachOChainedFixupsAmbiguous = true;
+      const auto Ambiguous = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Ambiguous.size(), 1u);
+      EXPECT_EQ(Ambiguous[0].Status, "unrecovered");
+      EXPECT_NE(Ambiguous[0].Reason.find("ambiguous fixups"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructRejectsInexactStandardRuntimeBindingContracts) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 16; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      F.Image.MachOTwoLevelNamespace = true;
+      std::string Name = "_$sytWV";
+      std::string Module = "/usr/lib/swift/libswiftCore.dylib";
+      int64_t Addend = 0;
+      bool Weak = false;
+      switch (Mutation) {
+      case 0:
+        F.Image.MachOTwoLevelNamespace = false;
+        break;
+      case 1:
+        Weak = true;
+        break;
+      case 2:
+        Module.clear();
+        break;
+      case 3:
+        Module = "libswiftCore";
+        break;
+      case 4:
+        Module = "@rpath/libswiftCore.dylib";
+        break;
+      case 5:
+        Module = "/other/libswiftCore.dylib";
+        break;
+      case 6:
+        Name = "$sytWV";
+        break;
+      case 7:
+        Name = "__$sytWV";
+        break;
+      case 8:
+        Name = "_$sytWV_suffix";
+        break;
+      case 9:
+        Addend = 1;
+        break;
+      case 10:
+        Addend = -1;
+        break;
+      case 13:
+        Addend = 256;
+        break;
+      case 14:
+        Addend = INT64_MIN;
+        break;
+      case 15:
+        Addend = INT64_MAX;
+        break;
+      default:
+        break;
+      }
+      ASSERT_TRUE(
+          F.Image.recordDyldBindSlot(0x13f8, Name, Addend, Module, Weak));
+      if (Mutation == 11)
+        F.Image.DyldBindSlots.erase(0x13f8);
+      if (Mutation == 12) {
+        F.Image.DyldBindSlots.erase(0x13f8);
+        F.Image.ImportStorageSlots.erase(0x13f8);
+        F.Image.ImportPtrSlots[0x13f8] = "_$sytWV";
+      }
+      // A global same-name import never supplies a missing slot provider.
+      Import Global;
+      Global.Name = "_$sytWV";
+      Global.Module = "/usr/lib/swift/libswiftCore.dylib";
+      Global.IATAddr = 0x13f0;
+      F.Image.Imports.push_back(Global);
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("table is external or ambiguous"),
+                std::string::npos);
+    }
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructStandardBindingRequiresReadableExactHeaderSlot) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture WrongSlot;
+    WrongSlot.Image.Arch = Architecture;
+    WrongSlot.emptyStruct();
+    WrongSlot.Image.MachOTwoLevelNamespace = true;
+    WrongSlot.u64(0x13f8, 0);
+    ASSERT_TRUE(WrongSlot.Image.recordDyldBindSlot(
+        0x13f0, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+    auto Types = recoverSwiftTypes(WrongSlot.Image);
+    ASSERT_EQ(Types.size(), 1u);
+    EXPECT_EQ(Types[0].Status, "unrecovered");
+    EXPECT_NE(Types[0].Reason.find("value-witness table is unavailable"),
+              std::string::npos);
+
+    Fixture MissingHeader;
+    MissingHeader.Image.Arch = Architecture;
+    MissingHeader.emptyStruct();
+    MissingHeader.Image.MachOTwoLevelNamespace = true;
+    ASSERT_TRUE(MissingHeader.Image.recordDyldBindSlot(
+        0x13f8, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+    MissingHeader.Image.Sections[1].Size =
+        MissingHeader.Image.Sections[1].FileSz = 0x3f4;
+    Section Metadata;
+    Metadata.Name = "__metadata";
+    Metadata.VA = 0x1400;
+    Metadata.Size = Metadata.FileSz = 16;
+    Metadata.FileOff = 0x400;
+    Metadata.Flags = SegmentFlags::Readable;
+    MissingHeader.Image.Sections.push_back(Metadata);
+    Types = recoverSwiftTypes(MissingHeader.Image);
+    ASSERT_EQ(Types.size(), 1u);
+    EXPECT_EQ(Types[0].Status, "unrecovered");
+    EXPECT_NE(Types[0].Reason.find("value-witness table is unavailable"),
+              std::string::npos);
+  }
+}
+
+TEST(SwiftMetadata, EmptyStructStandardBindingConflictsCannotBeResurrected) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.emptyStruct();
+      F.Image.MachOTwoLevelNamespace = true;
+      ASSERT_TRUE(F.Image.recordDyldBindSlot(
+          0x13f8, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+      ASSERT_EQ(recoverSwiftTypes(F.Image)[0].Status, "recovered");
+      switch (Mutation) {
+      case 0:
+        ASSERT_FALSE(F.Image.recordDyldBindSlot(
+            0x13f8, "_$sytWV", 0, "/other/libswiftCore.dylib", false));
+        break;
+      case 1:
+        ASSERT_FALSE(F.Image.recordDyldBindSlot(
+            0x13f8, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", true));
+        break;
+      case 2:
+        F.Image.ImportStorageSlots[0x13f8] = {
+            "other_table", 0, ImportStorageEvidence::LoaderBind};
+        break;
+      case 3:
+        F.Image.ImportStorageSlots[0x13f8] = {
+            "_$sytWV", 8, ImportStorageEvidence::LoaderBind};
+        break;
+      case 4:
+        F.Image.ConflictingImportStorageSlots.insert(0x13f8);
+        break;
+      }
+      auto Types = recoverSwiftTypes(F.Image);
+      ASSERT_EQ(Types.size(), 1u);
+      EXPECT_EQ(Types[0].Status, "unrecovered");
+      EXPECT_NE(Types[0].Reason.find("table is external or ambiguous"),
+                std::string::npos);
+      if (Mutation < 2) {
+        EXPECT_FALSE(F.Image.recordDyldBindSlot(
+            0x13f8, "_$sytWV", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+        EXPECT_EQ(recoverSwiftTypes(F.Image)[0].Status, "unrecovered");
+      }
+    }
+  }
 }

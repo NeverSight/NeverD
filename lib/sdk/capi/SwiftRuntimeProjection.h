@@ -3,7 +3,9 @@
 
 #include "ObjCSourceProjection.h"
 #include "SwiftSourceIdentity.h"
+#include "SwiftSourceNamespace.h"
 #include "SwiftSourceProperties.h"
+#include "SwiftSourceSignatures.h"
 
 #include "neverd/loader/Swift/SwiftRuntimeSource.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -11,6 +13,7 @@
 namespace neverd::sdk::swift_source {
 using RuntimeRequests = std::vector<std::optional<SwiftRuntimeSourceRequest>>;
 using RuntimeProofs = std::vector<std::optional<SwiftRuntimeSourceProof>>;
+using EmptyStructSourceContexts = std::map<PropertyContext, SwiftRecoveredType>;
 using RuntimeIdentity = std::pair<va_t, std::string>;
 inline RuntimeIdentity runtimeIdentity(const SwiftSourceSignature &S) {
   return sourceIdentity(S.Entry, S.MangledSymbol);
@@ -37,6 +40,59 @@ inline std::string runtimeProjectionKind(SwiftRuntimeSourceKind K) {
     return "modify_resume";
   }
   return {};
+}
+
+inline PropertyContext nominalContext(const SwiftRecoveredType &T) {
+  return {T.Module, T.Kind, T.Name};
+}
+
+inline bool isEmptyStructSourceContext(const SwiftRecoveredType &T) {
+  return T.Status == "recovered" && T.Reason.empty() && T.Kind == "struct" &&
+         identifier(T.Module) && identifier(T.Name) && T.Descriptor &&
+         T.Metadata && T.Size == 0 && T.Alignment == 1 && T.Fields.empty();
+}
+
+/// This is a source dependency, never an ordinary method or callable ABI hint.
+/// The existing native proof owns the exact accessor identity and effects.
+inline bool bindsEmptyStructSourceContext(const SwiftRuntimeSourceRequest &R,
+                                         const SwiftRuntimeSourceProof &P,
+                                         const SwiftRecoveredType &T) {
+  return R.Kind == SwiftRuntimeSourceKind::TypeMetadataAccessor && P.Proven &&
+         P.ProjectionKind == "type_metadata_accessor" &&
+         isEmptyStructSourceContext(T) &&
+         propertyContext(R.Signature) == nominalContext(T) &&
+         P.Descriptor == T.Descriptor && P.Metadata == T.Metadata;
+}
+
+inline EmptyStructSourceContexts collectEmptyStructSourceContexts(
+    const RuntimeRequests &Requests, const RuntimeProofs &Proofs,
+    const std::vector<SwiftRecoveredType> &Types) {
+  if (Requests.size() != Proofs.size())
+    throw std::invalid_argument(
+        "Swift nominal source inventory dimensions disagree");
+  std::map<PropertyContext, const SwiftRecoveredType *> NativeTypes;
+  for (const auto &T : Types) {
+    auto [It, Unique] = NativeTypes.emplace(nominalContext(T), &T);
+    if (!Unique)
+      It->second = nullptr;
+  }
+  EmptyStructSourceContexts Contexts;
+  for (size_t I = 0; I < Requests.size(); ++I) {
+    if (!Requests[I] || !Proofs[I])
+      continue;
+    const auto Context = propertyContext(Requests[I]->Signature);
+    const auto Found = NativeTypes.find(Context);
+    if (Found != NativeTypes.end() && Found->second &&
+        bindsEmptyStructSourceContext(*Requests[I], *Proofs[I], *Found->second))
+      Contexts.emplace(Context, *Found->second);
+  }
+  return Contexts;
+}
+
+inline std::string assembleEmptyStructContext(const SwiftRecoveredType &T) {
+  if (!isEmptyStructSourceContext(T) || T.Name == "Swift")
+    throw std::invalid_argument("invalid Swift empty nominal source context");
+  return "struct `" + T.Name + "` {\n}\n";
 }
 
 /// Resolve identities from the supplied native inventory. The native proof
@@ -184,6 +240,7 @@ struct RuntimeProjectionPlan {
   std::set<size_t> Recovered;
   std::map<size_t, std::string> Reasons;
   std::map<PropertyContext, PropertyRuntimeSource> ContextSources;
+  EmptyStructSourceContexts NominalContexts;
 };
 
 /// A native proof is not itself a recovered source body. Root this graph in
@@ -192,7 +249,8 @@ struct RuntimeProjectionPlan {
 inline RuntimeProjectionPlan planRuntimeProjections(
     const RuntimeRequests &Requests, const RuntimeProofs &Proofs,
     const std::vector<std::optional<SwiftSourceSignature>> &Signatures,
-    const std::set<size_t> &OrdinaryRecovered) {
+    const std::set<size_t> &OrdinaryRecovered,
+    const EmptyStructSourceContexts &Nominals = {}) {
   using Kind = SwiftRuntimeSourceKind;
   if (Requests.size() != Proofs.size() || Requests.size() != Signatures.size())
     throw std::invalid_argument(
@@ -234,6 +292,15 @@ inline RuntimeProjectionPlan planRuntimeProjections(
     else
       Candidates.insert(I);
   }
+  auto Nominal = [&](size_t I) -> const SwiftRecoveredType * {
+    const auto Found =
+        Nominals.find(propertyContext(Requests[I]->Signature));
+    return Found != Nominals.end() && Proofs[I] &&
+                   bindsEmptyStructSourceContext(*Requests[I], *Proofs[I],
+                                                 Found->second)
+               ? &Found->second
+               : nullptr;
+  };
   auto Dependency = [&](size_t I, const SwiftRuntimeSourceDependency &D,
                         const std::set<size_t> &Group) {
     const auto &R = *Requests[I];
@@ -241,7 +308,7 @@ inline RuntimeProjectionPlan planRuntimeProjections(
     if (Context != propertyContext(R.Signature))
       return false;
     if (D.Kind == "context")
-      return Contexts.count(Context) != 0;
+      return Contexts.count(Context) != 0 || Nominal(I);
     if (D.Kind == "method") {
       auto It = Methods.find(runtimeIdentity(D.Identity));
       return It != Methods.end() && propertyContext(*It->second) == Context &&
@@ -267,7 +334,7 @@ inline RuntimeProjectionPlan planRuntimeProjections(
     return false;
   };
   auto Ready = [&](size_t I, const std::set<size_t> &Group) {
-    if (!Contexts.count(propertyContext(Requests[I]->Signature)))
+    if (!Contexts.count(propertyContext(Requests[I]->Signature)) && !Nominal(I))
       return false;
     std::map<std::string, unsigned> Counts;
     for (const auto &D : Proofs[I]->Dependencies) {
@@ -356,6 +423,9 @@ inline RuntimeProjectionPlan planRuntimeProjections(
                         "related native entries that were not recovered";
       continue;
     }
+    if (!Contexts.count(propertyContext(Requests[I]->Signature)))
+      if (const auto *T = Nominal(I))
+        Plan.NominalContexts.emplace(nominalContext(*T), *T);
     auto &Source = Plan.ContextSources[propertyContext(Requests[I]->Signature)];
     if (Requests[I]->Kind == Kind::TrivialDestructor)
       Source.TrivialDestructor = true;

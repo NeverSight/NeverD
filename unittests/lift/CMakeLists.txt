@@ -1560,6 +1560,7 @@ endif()
 if(TARGET neverd_shared)
   add_neverd_unittest(NeverDMetadataJSONTests
     sdk/MetadataJSONTests.cpp
+    sdk/SwiftNominalContextCAPITests.cpp
   )
 
   target_include_directories(NeverDMetadataJSONTests PRIVATE

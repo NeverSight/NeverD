@@ -3,6 +3,7 @@
   "fixture": "SwiftBehavior.swift",
   "module": "SwiftBehavior",
   "provenance": "Hand-reviewed from the Calculator.bias and Counter.value declarations in the owned SwiftBehavior.swift fixture, and the defined __TEXT,__text symbols in its Apple Swift 6.1.2 arm64/x86_64 -O outputs. Roles were independently checked with Apple's swift-demangle; the modify continuation is the compiler's defined .resume.0 symbol. NeverD output is not the source of this oracle. Changes in compiler-generated identities require explicit fixture review, not automatic regeneration from recovery reports.",
+  "additional_expectation_provenance": "The Empty metadata accessor below is a static Swift ABI spelling/role expectation for the added owned public frozen empty struct. It has not been observed in a compiler run for this change. The runner must independently confirm its defined text symbol, address and Apple demangler role in every actual compiled variant before NeverD recovery. The preceding Apple Swift 6.1.2 provenance applies only to the original ten entries, not to Empty.",
   "callables": [
     {
       "mangled_symbol": "_$s13SwiftBehavior10CalculatorC4biass5Int64Vvg",
@@ -100,6 +101,18 @@
       "declaration_kind": "runtime",
       "source_representation": "compiler-generated-from-type",
       "compiler_projection_kind": "modify_resume"
+    },
+    {
+      "mangled_symbol": "_$s13SwiftBehavior5EmptyVMa",
+      "module": "SwiftBehavior",
+      "node_kind": "TypeMetadataAccessFunction",
+      "context_kind": "struct",
+      "context_name": "Empty",
+      "name": "typeMetadata",
+      "declaration_kind": "runtime",
+      "source_representation": "compiler-generated-from-type",
+      "compiler_projection_kind": "type_metadata_accessor",
+      "provenance_kind": "static-abi-expectation-pending-ci"
     }
   ]
 }

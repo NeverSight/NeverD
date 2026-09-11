@@ -240,8 +240,21 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
       }
     }
     swift_source::planPropertyStorage(Signatures);
-    const auto NamespaceConflicts =
-        swift_source::namespaceConflicts(Signatures);
+    auto NominalContexts = swift_source::collectEmptyStructSourceContexts(
+        RuntimeRequests, RuntimeProofs, Types);
+    std::vector<swift_source::NominalSourceContext> Nominals;
+    for (const auto &[Context, Type] : NominalContexts)
+      Nominals.push_back({Type.Module, Type.Kind, Type.Name});
+    const auto Namespace =
+        swift_source::namespaceConflicts(Signatures, Nominals);
+    const auto &NamespaceConflicts = Namespace.Methods;
+    std::set<swift_source::PropertyContext> NominalConflicts;
+    for (size_t I : Namespace.Nominals) {
+      const auto &N = Nominals[I];
+      const swift_source::PropertyContext Context{N.Module, N.Kind, N.Name};
+      NominalConflicts.insert(Context);
+      NominalContexts.erase(Context);
+    }
     HighSwiftEmitter Emitter;
     std::vector<SwiftSourceSignature> Callees;
     for (const auto &Signature : Signatures)
@@ -416,9 +429,16 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
     } while (Changed);
 
     const auto RuntimePlan = swift_source::planRuntimeProjections(
-        RuntimeRequests, RuntimeProofs, Signatures, Recoverable);
+        RuntimeRequests, RuntimeProofs, Signatures, Recoverable,
+        NominalContexts);
     for (const auto &[Index, Reason] : RuntimePlan.Reasons)
       (*Rows[Index].getAsObject())["reason"] = Reason;
+    for (size_t I = 0; I < RuntimeRequests.size(); ++I)
+      if (RuntimeRequests[I] &&
+          NominalConflicts.count(
+              swift_source::propertyContext(RuntimeRequests[I]->Signature)))
+        (*Rows[I].getAsObject())["reason"] =
+            "Swift declarations collide in the emitted source namespace";
 
     auto TypeName = swift_source::typeSpelling;
     auto AddressText = [](va_t Address) {
@@ -496,21 +516,27 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
       auto Ordinary =
           std::find_if(Indices.begin(), Indices.end(),
                        [&](size_t I) { return bool(Signatures[I]); });
-      if (Ordinary == Indices.end())
-        throw std::logic_error(
-            "Swift compiler projection has no emitted source context");
-      const auto &Signature = *Signatures[*Ordinary];
-      std::vector<swift_source::PropertySourceMember> SourceMembers;
-      for (size_t Index : Indices)
-        if (Signatures[Index])
-          SourceMembers.push_back(
-              {&*Signatures[Index], Emissions[Index]->MemberSource});
-      const auto Runtime = RuntimePlan.ContextSources.find(Context);
-      auto Text = swift_source::assemblePropertyContext(
-          Signature, SourceMembers,
-          Runtime == RuntimePlan.ContextSources.end()
-              ? swift_source::PropertyRuntimeSource()
-              : Runtime->second);
+      std::string Text;
+      if (Ordinary == Indices.end()) {
+        const auto Nominal = RuntimePlan.NominalContexts.find(Context);
+        if (Nominal == RuntimePlan.NominalContexts.end())
+          throw std::logic_error(
+              "Swift compiler projection has no emitted source context");
+        Text = swift_source::assembleEmptyStructContext(Nominal->second);
+      } else {
+        const auto &Signature = *Signatures[*Ordinary];
+        std::vector<swift_source::PropertySourceMember> SourceMembers;
+        for (size_t Index : Indices)
+          if (Signatures[Index])
+            SourceMembers.push_back(
+                {&*Signatures[Index], Emissions[Index]->MemberSource});
+        const auto Runtime = RuntimePlan.ContextSources.find(Context);
+        Text = swift_source::assemblePropertyContext(
+            Signature, SourceMembers,
+            Runtime == RuntimePlan.ContextSources.end()
+                ? swift_source::PropertyRuntimeSource()
+                : Runtime->second);
+      }
       for (size_t Index : Indices)
         if (RuntimeRequests[Index])
           (*Rows[Index].getAsObject())["source"] = Text;
@@ -561,11 +587,16 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
              "Compiler-entry rows represent native-proven effects regenerated "
              "from the emitted type, initializer, property, or deinitializer; "
              "their original helper bodies and ABI are not source methods.",
+             "Independent empty-struct contexts describe only proven nominal "
+             "storage and metadata accessors; they do not recover protocol "
+             "conformances, witnesses, or ordinary method bodies.",
              "Source coverage describes the supplied callable inventory; "
              "stripped or unclassified symbols can conceal additional methods.",
              "Only proven fixed storage layouts and complete source dependency "
              "groups are published; generic, resilient, async, throwing, or "
-             "unknown ABI paths remain individually unrecovered."}}};
+             "unknown ABI paths remain individually unrecovered.",
+             "Standard runtime layouts use the binary-declared strong "
+             "two-level binding; the dynamic provider is not verified."}}};
     std::string Text;
     llvm::raw_string_ostream Stream(Text);
     Stream << llvm::json::Value(std::move(Report));

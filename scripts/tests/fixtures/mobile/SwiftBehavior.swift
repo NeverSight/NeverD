@@ -67,3 +67,5 @@ public final class Calculator {
     @inline(never) public func affine(_ delta: Int64) -> Int64 { (value &* 7) &+ delta }
     @inline(never) public mutating func adjust(_ delta: Int64) { value = (value &* 7) &+ delta }
 }
+
+@frozen public struct Empty {}

@@ -51,6 +51,48 @@ class Reader {
           "Swift metadata extends beyond readable file-backed bytes");
     return llvm::support::endian::read64le(Bytes);
   }
+  void requirePlainEmptyStructLayout(va_t Metadata) const {
+    if (Metadata < 8 || Metadata % 8)
+      throw Unsupported("Swift empty struct metadata header is misaligned");
+    if (Image.MachOChainedFixupsAmbiguous)
+      throw Unsupported("Swift empty struct value-witness table has "
+                        "ambiguous fixups");
+    const va_t Slot = Metadata - 8;
+    if (!Data.bytes(Slot, 8))
+      throw Unsupported("Swift empty struct value-witness table is unavailable");
+    const auto Binding = Image.DyldBindSlots.find(Slot);
+    const auto Canonical = Imports.Slots.find(Slot);
+    // Model the ABI declared by a strong two-level reference to the standard
+    // runtime's empty-tuple witnesses, which are also used for empty structs.
+    // Both the provider and canonical binding must belong to this exact slot.
+    if (!Imports.Conflicts.count(Slot) && Image.MachOTwoLevelNamespace &&
+        Binding != Image.DyldBindSlots.end() &&
+        Binding->second.Name == "_$sytWV" && Binding->second.Addend == 0 &&
+        Binding->second.Module == "/usr/lib/swift/libswiftCore.dylib" &&
+        !Binding->second.WeakImport && Canonical != Imports.Slots.end() &&
+        Canonical->second.Name == Binding->second.Name &&
+        Canonical->second.Addend == Binding->second.Addend &&
+        Canonical->second.Evidence == ImportStorageEvidence::LoaderBind)
+      return;
+    // An imported slot's on-disk payload is not a local table address, even
+    // when its numeric value happens to point at readable bytes. Other or
+    // conflicting imports cannot fall through to local table interpretation.
+    if (Imports.Conflicts.count(Slot) || Imports.Slots.count(Slot) ||
+        Image.ImportStorageSlots.count(Slot) ||
+        Image.ImportPtrSlots.count(Slot) || Image.DyldBindSlots.count(Slot))
+      throw Unsupported("Swift empty struct value-witness table is external "
+                        "or ambiguous");
+    const auto Table = Data.pointer(Slot);
+    if (!Table || !*Table || *Table % 8 || !Data.bytes(*Table, 88))
+      throw Unsupported("Swift empty struct value-witness table is unavailable");
+    // The 64-bit ABI places size, stride, flags, and extra-inhabitant count
+    // after eight required function pointers. Validate the declared storage
+    // and value traits; this does not prove those functions' implementations.
+    if (u64(*Table + 64) != 0 || u64(*Table + 72) != 1 ||
+        u32(*Table + 80) != 0 || u32(*Table + 84) != 0)
+      throw Unsupported("Swift empty struct value-witness layout is not the "
+                        "plain empty struct contract");
+  }
   va_t relative(va_t Address) const {
     const int64_t Delta = static_cast<int32_t>(u32(Address));
     if (!Delta)
@@ -227,6 +269,8 @@ class Reader {
         Result.Fields.push_back(std::move(Field));
       }
       Result.Size = PreviousEnd;
+      if (!IsClass && Count == 0)
+        requirePlainEmptyStructLayout(Result.Metadata);
       if (IsClass) {
         const uint32_t InstanceSize = u32(Result.Metadata + 48);
         const uint32_t AlignmentMask = u32(Result.Metadata + 52) & 0xffff;

@@ -7,6 +7,9 @@ import SwiftBehavior
 @main struct VerifySwiftBehavior {
     static func emit<T>(_ name: String, _ index: Int, _ value: T) { print("\(name):\(index)=\(value)") }
     static func main() {
+        emit("empty-size", 0, MemoryLayout<Empty>.size)
+        emit("empty-alignment", 0, MemoryLayout<Empty>.alignment)
+        emit("empty-stride", 0, MemoryLayout<Empty>.stride)
         let integers: [Int64] = [.min, .min + 1, -65537, -1, 0, 1, 65537, .max - 1, .max]
         for (xIndex, x) in integers.enumerated() {
             let calculator = Calculator(x)
