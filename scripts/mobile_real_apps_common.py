@@ -122,7 +122,7 @@ class CaseContext:
             effective_env.update({key: str(value) for key, value in env.items()})
         # Upstream builds never need the workflow's GitHub/API credentials.
         # Keep SDK, compiler and CI environment settings, but omit credentials
-        # from child processes and never serialize the process environment.
+        # from child processes and never serialize the full process environment.
         for key in list(effective_env):
             if any(part in key.upper() for part in ("TOKEN", "PASSWORD", "SECRET", "API_KEY", "PRIVATE_KEY")):
                 effective_env.pop(key)
@@ -133,6 +133,11 @@ class CaseContext:
             "stderr": stderr_path.relative_to(self.work).as_posix(),
             "status": "running", "exitcode": None,
         }
+        if self.variant.get("platform") == "ios" \
+                and command[:2] == [str(self.neverd), "mobile"] \
+                and effective_env.get("NEVERD_NATIVE_PHASES") == "1":
+            # Record only this fixed, nonsecret setting, not arbitrary values.
+            record["diagnostic_environment"] = {"NEVERD_NATIVE_PHASES": "1"}
         self.result["commands"].append(record)
         self.write_json("result.json", self.result)
         failure = None

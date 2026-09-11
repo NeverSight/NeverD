@@ -14,11 +14,14 @@
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +34,7 @@
 #include <string_view>
 #ifndef _WIN32
 #include <csignal>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #endif
@@ -44,6 +48,120 @@ std::string takeString(const char *Value) {
   neverd_free_string(Value);
   return Text;
 }
+
+class ScopedNativePhaseEnvironment {
+public:
+  ScopedNativePhaseEnvironment() {
+    if (const char *Value = std::getenv("NEVERD_NATIVE_PHASES")) {
+      HadValue = true;
+      Original = Value;
+    }
+  }
+
+  ~ScopedNativePhaseEnvironment() {
+    EXPECT_EQ(set(HadValue ? Original.c_str() : nullptr), 0);
+  }
+
+  int set(const char *Value) const {
+#ifdef _WIN32
+    return _putenv_s("NEVERD_NATIVE_PHASES", Value ? Value : "");
+#else
+    return Value ? setenv("NEVERD_NATIVE_PHASES", Value, 1)
+                 : unsetenv("NEVERD_NATIVE_PHASES");
+#endif
+  }
+
+private:
+  bool HadValue = false;
+  std::string Original;
+};
+
+struct CapturedPhaseLoad {
+  int Status;
+  std::string Diagnostic;
+  std::string Error;
+};
+
+CapturedPhaseLoad capturePhaseLoad(neverd_session_t Session, const char *Path) {
+  testing::internal::CaptureStderr();
+  const int Status = neverd_session_load(Session, Path);
+  std::string Diagnostic = testing::internal::GetCapturedStderr();
+  return {Status, std::move(Diagnostic), takeString(neverd_last_error(Session))};
+}
+
+void expectSessionPhasePair(const std::string &Diagnostic, const char *Event) {
+  llvm::StringRef Remaining(Diagnostic);
+  ASSERT_TRUE(Remaining.consume_front(
+      "[neverd-child-phase] phase=session_load event=begin iteration=0 "
+      "elapsed_ms=0\n"))
+      << Diagnostic;
+  const std::string End =
+      std::string("[neverd-child-phase] phase=session_load event=") + Event +
+      " iteration=0 elapsed_ms=";
+  ASSERT_TRUE(Remaining.consume_front(End)) << Diagnostic;
+  ASSERT_TRUE(Remaining.consume_back("\n")) << Diagnostic;
+  ASSERT_FALSE(Remaining.empty());
+  EXPECT_TRUE(std::all_of(Remaining.begin(), Remaining.end(),
+                          [](char C) { return C >= '0' && C <= '9'; }))
+      << Diagnostic;
+  uint64_t Elapsed = 0;
+  EXPECT_FALSE(Remaining.getAsInteger(10, Elapsed)) << Diagnostic;
+  // The elapsed value has no timing threshold. Exact consumption forbids
+  // extra records, path/error disclosure, or a completed/aborted failure.
+}
+
+#ifndef _WIN32
+int exerciseFailedPhaseSink(neverd_session_t Session, const std::string &Input,
+                            const std::string &Missing, bool Full,
+                            bool Enabled) {
+  if (unsetenv("NEVERD_NATIVE_PHASES") != 0)
+    return 10;
+  if (neverd_session_load(Session, Input.c_str()) != 1)
+    return 11;
+  const std::string BeforeError = takeString(neverd_last_error(Session));
+  const std::string BeforeHeaders = takeString(neverd_headers_json(Session));
+  if (!BeforeError.empty() || BeforeHeaders.empty() || llvm::errs().has_error())
+    return 12;
+  if (setenv("NEVERD_NATIVE_PHASES", Enabled ? "1" : "0", 1) != 0)
+    return 13;
+  const int SavedStderr = dup(STDERR_FILENO);
+  if (SavedStderr < 0)
+    return 14;
+  if (Full) {
+    const int Sink = open("/dev/full", O_WRONLY);
+    if (Sink < 0 || dup2(Sink, STDERR_FILENO) < 0)
+      return 15;
+    close(Sink);
+  } else if (close(STDERR_FILENO) != 0) {
+    return 16;
+  }
+  errno = 0;
+  const bool SinkFailed =
+      ::write(STDERR_FILENO, "x", 1) == -1 && errno == (Full ? ENOSPC : EBADF);
+  const int Loaded = neverd_session_load(Session, Input.c_str());
+  const std::string LoadedError = takeString(neverd_last_error(Session));
+  const std::string Headers = takeString(neverd_headers_json(Session));
+  const int Failed = neverd_session_load(Session, Missing.c_str());
+  const std::string Failure = takeString(neverd_last_error(Session));
+  const bool PreservedImage =
+      neverd_session_is_loaded(Session) == 1 &&
+      takeString(neverd_session_file_path(Session)) == Input;
+  const int Restored = dup2(SavedStderr, STDERR_FILENO);
+  close(SavedStderr);
+  if (Restored < 0)
+    return 17;
+  if (!SinkFailed || Loaded != 1 || LoadedError != BeforeError ||
+      Headers != BeforeHeaders || Failed != 0 ||
+      Failure != "file not found: " + Missing || !PreservedImage)
+    return 18;
+  // Do not clear global stream errors: that would hide the v1 regression.
+  if (llvm::errs().has_error())
+    return 19;
+  llvm::errs() << "phase-sink-restored\n";
+  llvm::errs().flush();
+  return llvm::errs().has_error() ? 20 : 0;
+}
+#endif
 
 // A sectionless executable with one RX segment and a two-instruction body.
 // Keeping both ISAs in the fixture makes decoder state observable on reload.
@@ -310,6 +428,124 @@ protected:
   std::filesystem::path Directory;
   neverd_session_t Session = nullptr;
 };
+
+TEST_F(SessionCAPITest, NativePhaseTraceRequiresExactEnvironmentValue) {
+  ScopedNativePhaseEnvironment Environment;
+  const char *Values[] = {nullptr, "",   "0",  "01", "11",
+                          "true",  "1 ", " 1", "1\n"};
+  for (const char *Value : Values) {
+    SCOPED_TRACE(Value ? Value : "<unset>");
+    ASSERT_EQ(Environment.set(Value), 0);
+    const auto Load = capturePhaseLoad(Session, nullptr);
+    EXPECT_EQ(Load.Status, 0);
+    EXPECT_EQ(Load.Error, "input path is empty");
+    EXPECT_TRUE(Load.Diagnostic.empty()) << Load.Diagnostic;
+  }
+}
+
+TEST_F(SessionCAPITest, NativePhaseTracePreservesLoadFailuresAndExactPairing) {
+  ScopedNativePhaseEnvironment Environment;
+  const std::string Missing = (Directory / "absent-native.elf").string();
+  const std::string Malformed = write("malformed.elf", "not an ELF image");
+  const char *Paths[] = {nullptr, "", Missing.c_str(), Malformed.c_str()};
+  for (const char *Path : Paths) {
+    SCOPED_TRACE(Path ? Path : "<null>");
+    ASSERT_EQ(Environment.set(nullptr), 0);
+    const auto Before = capturePhaseLoad(Session, Path);
+    ASSERT_EQ(Before.Status, 0);
+    ASSERT_FALSE(Before.Error.empty());
+    ASSERT_TRUE(Before.Diagnostic.empty()) << Before.Diagnostic;
+    if (!Path || Path[0] == '\0')
+      EXPECT_EQ(Before.Error, "input path is empty");
+    else if (Missing == Path)
+      EXPECT_EQ(Before.Error, "file not found: " + Missing);
+
+    ASSERT_EQ(Environment.set("1"), 0);
+    const auto Traced = capturePhaseLoad(Session, Path);
+    EXPECT_EQ(Traced.Status, Before.Status);
+    EXPECT_EQ(Traced.Error, Before.Error);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+    expectSessionPhasePair(Traced.Diagnostic, "failed");
+  }
+}
+
+TEST_F(SessionCAPITest, NativePhaseTraceDoesNotTraceNullSessions) {
+  ScopedNativePhaseEnvironment Environment;
+  ASSERT_EQ(Environment.set("1"), 0);
+  const std::string Path = (Directory / "not-opened.elf").string();
+  testing::internal::CaptureStderr();
+  const int NullPath = neverd_session_load(nullptr, nullptr);
+  const int NamedPath = neverd_session_load(nullptr, Path.c_str());
+  const std::string Diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(NullPath, 0);
+  EXPECT_EQ(NamedPath, 0);
+  EXPECT_TRUE(Diagnostic.empty()) << Diagnostic;
+}
+
+TEST_F(SessionCAPITest, NativePhaseTracePreservesCompletedNativeLoadsAndReports) {
+  ScopedNativePhaseEnvironment Environment;
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const std::string Path = write(AArch64 ? "phase-arm64.elf" : "phase-x64.elf",
+                                   makeNativeELF(AArch64));
+    ASSERT_EQ(Environment.set(nullptr), 0);
+    const auto Before = capturePhaseLoad(Session, Path.c_str());
+    ASSERT_EQ(Before.Status, 1) << Before.Error;
+    ASSERT_TRUE(Before.Error.empty());
+    ASSERT_TRUE(Before.Diagnostic.empty()) << Before.Diagnostic;
+    const std::string Headers = takeString(neverd_headers_json(Session));
+    ASSERT_FALSE(Headers.empty());
+    const neverd_va_t Entry = neverd_session_entry_addr(Session);
+    EXPECT_EQ(Entry, 0x400000u + sizeof(llvm::object::ELF64LE::Ehdr) +
+                        sizeof(llvm::object::ELF64LE::Phdr));
+    ASSERT_EQ(neverd_func_count(Session), 1);
+
+    ASSERT_EQ(Environment.set("1"), 0);
+    const auto Traced = capturePhaseLoad(Session, Path.c_str());
+    EXPECT_EQ(Traced.Status, Before.Status);
+    EXPECT_EQ(Traced.Error, Before.Error);
+    expectSessionPhasePair(Traced.Diagnostic, "completed");
+    EXPECT_EQ(neverd_session_is_loaded(Session), 1);
+    EXPECT_EQ(neverd_session_entry_addr(Session), Entry);
+    EXPECT_EQ(takeString(neverd_session_file_path(Session)), Path);
+    EXPECT_EQ(neverd_func_count(Session), 1);
+    EXPECT_EQ(takeString(neverd_headers_json(Session)), Headers);
+  }
+}
+
+#ifndef _WIN32
+TEST_F(SessionCAPITest, NativePhaseTraceClosedStderrPreservesActualLoadContract) {
+  const std::string Input = write("phase-closed.elf", makeNativeELF(false));
+  const std::string Missing = (Directory / "absent-closed.elf").string();
+  for (bool Enabled : {false, true}) {
+    SCOPED_TRACE(Enabled);
+    ASSERT_EXIT(
+        {
+          const int Status =
+              exerciseFailedPhaseSink(Session, Input, Missing, false, Enabled);
+          std::exit(Status);
+        },
+        ::testing::ExitedWithCode(0), "^phase-sink-restored\n$");
+  }
+}
+#endif
+
+#ifdef __linux__
+TEST_F(SessionCAPITest, NativePhaseTraceFullStderrPreservesActualLoadContract) {
+  const std::string Input = write("phase-full.elf", makeNativeELF(false));
+  const std::string Missing = (Directory / "absent-full.elf").string();
+  for (bool Enabled : {false, true}) {
+    SCOPED_TRACE(Enabled);
+    ASSERT_EXIT(
+        {
+          const int Status =
+              exerciseFailedPhaseSink(Session, Input, Missing, true, Enabled);
+          std::exit(Status);
+        },
+        ::testing::ExitedWithCode(0), "^phase-sink-restored\n$");
+  }
+}
+#endif
 
 TEST_F(SessionCAPITest, DecompileDiffPreservesEqualSuccessfulOutputs) {
   expectDecompileDiff("6001600055", true);

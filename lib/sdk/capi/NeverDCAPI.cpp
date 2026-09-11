@@ -24,6 +24,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "NativePhaseTrace.h"
 #include "SessionImpl.h"
 
 #include "neverd/Common.h"
@@ -186,15 +187,18 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   auto *S = toSession(Sess);
   if (!S)
     return 0;
+  NativePhaseTrace Trace(NativePhaseTrace::Phase::SessionLoad);
   S->clearError();
 
   if (!Path || Path[0] == '\0') {
     S->setError("input path is empty");
+    Trace.finish(false);
     return 0;
   }
   auto P = std::filesystem::path(Path);
   if (!std::filesystem::exists(P)) {
     S->setError(std::string("file not found: ") + Path);
+    Trace.finish(false);
     return 0;
   }
 
@@ -206,6 +210,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
       std::filesystem::canonical(P, CanonicalError);
   if (CanonicalError) {
     S->setError("cannot canonicalize input path: " + CanonicalError.message());
+    Trace.finish(false);
     return 0;
   }
 
@@ -215,6 +220,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
     llvm::raw_string_ostream OS(Err);
     logAllUnhandledErrors(ImgOrErr.takeError(), OS);
     S->setError(Err);
+    Trace.finish(false);
     return 0;
   }
 
@@ -224,6 +230,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   auto Found = loadDebugInfo(P, *ImgOrErr, S->DbgRequest);
   if (!Found.Error.empty()) {
     S->setError(Found.Error);
+    Trace.finish(false);
     return 0;
   }
   if (Found)
@@ -234,6 +241,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   if (ImgOrErr->Arch != Arch::EVM && ImgOrErr->Arch != Arch::SBF &&
       !S->Dec.init(ImgOrErr->Arch, ImgOrErr->Mode)) {
     S->setError("failed to init decoder for arch");
+    Trace.finish(false);
     return 0;
   }
 
@@ -254,6 +262,7 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   neverd_annotations_load(Sess);
   neverd_renames_load(Sess);
 
+  Trace.finish(true);
   return 1;
 }
 

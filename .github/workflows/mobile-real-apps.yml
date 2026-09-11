@@ -397,6 +397,7 @@ jobs:
           CASE_ID: ${{ matrix.case_id }}
           TOOLCHAIN_ID: ${{ matrix.toolchain }}
           DYLD_LIBRARY_PATH: ${{ runner.temp }}/neverd-host/bin
+          NEVERD_NATIVE_PHASES: '1'
         run: |
           receipt_args=()
           if [[ "$TOOLCHAIN_ID" != XcodeDefault ]]; then

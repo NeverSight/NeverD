@@ -91,10 +91,11 @@ class EvidenceContextTests(unittest.TestCase):
             source=self.source, work=self.root / work, neverd=self.root / "neverd",
             timeout=timeout, consumer_commit="b" * 40, manifest_sha256="c" * 64)
 
-    def invoke(self, ctx, process, **kwargs):
+    def invoke(self, ctx, process, *, argv=None, **kwargs):
         with patch.object(common.subprocess, "Popen", side_effect=process.start), \
              patch.object(common.os, "killpg", side_effect=process.killpg, create=True):
-            return ctx.command("owned-command", ["owned-tool", "literal argument"], **kwargs)
+            return ctx.command("owned-command", ["owned-tool", "literal argument"] if argv is None else argv,
+                               **kwargs)
 
     def complete_stages(self, ctx):
         ctx.write_json("proof.json", {"independent": True})
@@ -301,6 +302,67 @@ class EvidenceContextTests(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", child_env)
         self.assertNotIn("CUSTOM_API_KEY", child_env)
         self.assertNotIn("secret-fixture", json.dumps(common.load_json(ctx.work / "result.json")))
+
+    def test_native_phase_receipt_uses_exact_effective_ios_mobile_setting(self):
+        cases = ((None, None), ("", None), ("0", None), ("01", None), ("1 ", None),
+                 ("1", None), ("0", "1"), ("1", "0"), ("1", "01"))
+        for index, (inherited, override) in enumerate(cases):
+            with self.subTest(inherited=inherited, override=override):
+                ctx = self.context(work=f"setting-{index}")
+                ctx.variant["platform"] = "ios"
+                process = ProcessDouble()
+                argv = [ctx.neverd, "mobile", self.source / "Owned"]
+                overrides = None if override is None else {"NEVERD_NATIVE_PHASES": override}
+                with patch.dict(os.environ, {}, clear=True):
+                    if inherited is not None:
+                        os.environ["NEVERD_NATIVE_PHASES"] = inherited
+                    result = self.invoke(ctx, process, argv=argv, env=overrides)
+                effective = inherited if override is None else override
+                self.assertEqual(process.kwargs["env"].get("NEVERD_NATIVE_PHASES"), effective)
+                record = self.assert_saved_record(ctx, "success")
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(record["argv"], [str(value) for value in argv])
+                self.assertEqual(process.argv, record["argv"])
+                if effective == "1":
+                    self.assertEqual(record["diagnostic_environment"], {"NEVERD_NATIVE_PHASES": "1"})
+                else:
+                    self.assertNotIn("diagnostic_environment", record)
+
+    def test_native_phase_receipt_does_not_label_other_commands(self):
+        cases = (("ios", "other", "mobile"), ("ios", "native", "export"),
+                 ("ios", "native", None), ("android", "native", "mobile"))
+        for index, (platform, executable, operation) in enumerate(cases):
+            with self.subTest(platform=platform, executable=executable, operation=operation):
+                ctx = self.context(work=f"other-command-{index}")
+                ctx.variant["platform"] = platform
+                process = ProcessDouble()
+                argv = [ctx.neverd if executable == "native" else self.root / "other-tool"]
+                if operation is not None:
+                    argv.append(operation)
+                with patch.dict(os.environ, {"NEVERD_NATIVE_PHASES": "1"}, clear=True):
+                    self.invoke(ctx, process, argv=argv)
+                self.assertEqual(process.kwargs["env"]["NEVERD_NATIVE_PHASES"], "1")
+                record = self.assert_saved_record(ctx, "success")
+                self.assertNotIn("diagnostic_environment", record)
+
+    def test_native_phase_receipt_keeps_failure_and_excludes_other_environment(self):
+        ctx = self.context()
+        ctx.variant["platform"] = "ios"
+        process = ProcessDouble(code=7, stderr=b"original native error\n")
+        with patch.dict(os.environ, {"NEVERD_NATIVE_PHASES": "1", "GITHUB_TOKEN": "secret-fixture",
+                                     "UNRELATED_SETTING": "not-for-receipt"}, clear=True):
+            result = self.invoke(ctx, process, argv=[ctx.neverd, "mobile", self.source / "Owned"],
+                                 allow_failure=True)
+        record = self.assert_saved_record(ctx, "failed")
+        self.assertEqual(record["diagnostic_environment"], {"NEVERD_NATIVE_PHASES": "1"})
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(record["exitcode"], 7)
+        self.assertEqual((ctx.work / record["stderr"]).read_bytes(), process.stderr_bytes)
+        self.assertNotIn("GITHUB_TOKEN", process.kwargs["env"])
+        self.assertEqual(process.kwargs["env"]["UNRELATED_SETTING"], "not-for-receipt")
+        saved = json.dumps(common.load_json(ctx.work / "result.json"))
+        self.assertNotIn("secret-fixture", saved)
+        self.assertNotIn("not-for-receipt", saved)
 
 
 if __name__ == "__main__":

@@ -347,9 +347,32 @@ jobs:
                    "NeverDLiftTests"),
                   ("MachOChainedPointerBoundary.RejectsMalformedOrdinalNameAndAddendOverflow",
                    "NeverDLiftTests"),
+                  ("SessionCAPITest.NativePhaseTraceRequiresExactEnvironmentValue",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativePhaseTracePreservesLoadFailuresAndExactPairing",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativePhaseTraceDoesNotTraceNullSessions",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativePhaseTracePreservesCompletedNativeLoadsAndReports",
+                   "NeverDSessionCAPITests"),
               )
           )
-          expected_count = 48
+          runner_os = os.environ["RUNNER_OS"]
+          expected_count = {
+              ("Linux", "linux-semantic"): 54,
+              ("macOS", "macos-patch"): 53,
+              ("Windows", "windows-focused"): 52,
+          }[(runner_os, os.environ["TEST_PROFILE"])]
+          if runner_os in ("Linux", "macOS"):
+              expected += (TestRecord(
+                  "SessionCAPITest.NativePhaseTraceClosedStderrPreservesActualLoadContract",
+                  frozenset({"NeverDSessionCAPITests"}),
+              ),)
+          if runner_os == "Linux":
+              expected += (TestRecord(
+                  "SessionCAPITest.NativePhaseTraceFullStderrPreservesActualLoadContract",
+                  frozenset({"NeverDSessionCAPITests"}),
+              ),)
           if (len(expected) != expected_count or len(set(expected)) != expected_count
                   or len({item.name for item in expected}) != expected_count):
               raise RuntimeError("focused contract has missing or duplicate identities")
@@ -392,6 +415,7 @@ jobs:
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "profile": os.environ["TEST_PROFILE"],
+              "runner_os": runner_os,
               "cwd": str(Path.cwd()),
               "discovery": discovery,
               "execution": execution,

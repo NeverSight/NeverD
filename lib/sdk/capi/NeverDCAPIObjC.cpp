@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "JSONText.h"
+#include "NativePhaseTrace.h"
 #include "ObjCBlockSources.h"
 #include "ObjCNativeDependencies.h"
 #include "ObjCSourceBindings.h"
@@ -123,9 +124,11 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
   if (!S)
     return nullptr;
   S->clearError();
+  NativePhaseTrace Trace(NativePhaseTrace::Phase::ObjCExport);
   try {
     if (!S->Loaded || S->Img.Format != BinaryFormat::MachO) {
       S->setError("Objective-C source export requires a loaded Mach-O image");
+      Trace.finish(false);
       return nullptr;
     }
     llvm::LLVMContext Context;
@@ -134,10 +137,18 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     Options.MaxFunctions = MaxFunctions;
     Options.EmitDumpOutput = false;
     Pipeline Engine;
-    auto Result = Engine.run(S->Img, Context, Options, S->Dbg.get());
+    auto RunPipeline = [&](unsigned Iteration) {
+      NativePhaseTrace PipelineTrace(NativePhaseTrace::Phase::Pipeline,
+                                     Iteration);
+      auto Result = Engine.run(S->Img, Context, Options, S->Dbg.get());
+      PipelineTrace.finish(Result.Success);
+      return Result;
+    };
+    auto Result = RunPipeline(0);
     if (!Result.Success) {
       S->setError(Result.Error.empty() ? "native source pipeline failed"
                                        : Result.Error);
+      Trace.finish(false);
       return nullptr;
     }
 
@@ -151,11 +162,12 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
       if (!NativeChanged && !BlocksChanged)
         break;
-      Result = Engine.run(S->Img, Context, Options, S->Dbg.get());
+      Result = RunPipeline(Depth + 1);
       if (!Result.Success) {
         S->setError(Result.Error.empty()
                         ? "native dependency source pipeline failed"
                         : Result.Error);
+        Trace.finish(false);
         return nullptr;
       }
     }
@@ -173,6 +185,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     llvm::raw_string_ostream NativeOS(NativeSource);
     if (!Emitter.emit(Result.HighFuncs, NativeOS, COptions)) {
       S->setError("native C source projection failed");
+      Trace.finish(false);
       return nullptr;
     }
     std::map<va_t, const HighFunc *> Functions;
@@ -376,6 +389,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     char *Output = dupStr(Text);
     if (!Output)
       S->setError("unable to allocate Objective-C source report");
+    Trace.finish(Output != nullptr);
     return Output;
   } catch (const std::exception &Error) {
     S->setError(std::string("Objective-C source export failed: ") +
@@ -383,5 +397,6 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
   } catch (...) {
     S->setError("Objective-C source export failed with an unknown exception");
   }
+  Trace.finish(false);
   return nullptr;
 }
