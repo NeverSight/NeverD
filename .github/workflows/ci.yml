@@ -425,7 +425,12 @@ jobs:
               ]
 
           name_regex = "^(" + "|".join(re.escape(item.name) for item in expected) + ")$"
-          owners = sorted({owner for item in expected for owner in item.labels})
+          # CTest accepts any matching label. Select the owning aggregates;
+          # additional labels remain part of each exact expected identity.
+          owners = (
+              "NeverDLanguageEHTests", "NeverDLiftTests", "NeverDMetadataJSONTests",
+              "NeverDMobileTests", "NeverDSessionCAPITests",
+          )
           owner_regex = "^(" + "|".join(re.escape(owner) for owner in owners) + ")$"
           common = [
               "ctest", "--test-dir", "build-ci", "--build-config", "Release",
