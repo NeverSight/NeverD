@@ -372,7 +372,8 @@ TEST(RuntimeMetadata, NativeDylibOrdinalsPreserveInvalidNamePlaceholders) {
       if (!Reparsed)
         llvm::consumeError(Reparsed.takeError());
     } else {
-      ASSERT_TRUE(Reparsed) << llvm::toString(Reparsed.takeError());
+      ASSERT_TRUE(static_cast<bool>(Reparsed))
+          << llvm::toString(Reparsed.takeError());
     }
     BinaryImage Img;
     Img.Bits = Bitness::Bits64;
