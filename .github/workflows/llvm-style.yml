@@ -41,7 +41,124 @@ jobs:
         run: python -m unittest scripts.tests.test_check_clang_format -v
 
       - name: Check changed C and C++ files
+        id: format_check
         run: python scripts/check_clang_format.py --base "$FORMAT_BASE" --head "$FORMAT_HEAD"
         env:
           FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           FORMAT_HEAD: ${{ github.sha }}
+
+      - name: Capture proposed formatting changes
+        if: ${{ !cancelled() && steps.format_check.outcome == 'failure' }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import difflib
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          from scripts.check_clang_format import (
+              PINNED_CLANG_FORMAT_VERSION, create_argument_parser,
+              create_git_command, parse_paths,
+          )
+
+          evidence = Path("format-evidence")
+          evidence.mkdir()
+          version = None
+          discovery = None
+          records = []
+          patch = []
+          report = {
+              "status": "incomplete", "errors": [],
+              "head_sha": os.environ["FORMAT_HEAD"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "files": records,
+          }
+
+          def save():
+              patch_bytes = b"".join(patch)
+              report.update({
+                  "formatter": version, "discovery": discovery,
+                  "patch_sha256": hashlib.sha256(patch_bytes).hexdigest(),
+              })
+              (evidence / "format.patch").write_bytes(patch_bytes)
+              (evidence / "manifest.json").write_text(
+                  json.dumps(report, indent=2) + "\n", encoding="utf-8",
+              )
+
+          save()
+          try:
+              version = subprocess.check_output(
+                  ["clang-format", "--version"], stderr=subprocess.PIPE, text=True,
+              ).strip()
+              match = re.search(r"\bversion\s+(\d+\.\d+\.\d+)\b", version)
+              if not match or match.group(1) != PINNED_CLANG_FORMAT_VERSION:
+                  raise RuntimeError("Formatting evidence requires the pinned formatter")
+              arguments = create_argument_parser().parse_args([
+                  "--base", os.environ["FORMAT_BASE"], "--head", os.environ["FORMAT_HEAD"],
+              ])
+              discovery = create_git_command(arguments)
+              paths = parse_paths(subprocess.check_output(discovery, stderr=subprocess.PIPE))
+              for name in paths:
+                  record = {"path": name, "command": ["clang-format", name],
+                            "returncode": None}
+                  records.append(record)
+                  try:
+                      original = Path(name).read_bytes()
+                      record["original_sha256"] = hashlib.sha256(original).hexdigest()
+                      formatted = subprocess.run(
+                          record["command"], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, check=False,
+                      )
+                      record.update({"returncode": formatted.returncode,
+                                     "stderr": formatted.stderr.decode("utf-8", errors="replace")})
+                      if formatted.returncode != 0:
+                          report["errors"].append(f"Formatter failed for {name}")
+                          continue
+                      record["formatted_sha256"] = hashlib.sha256(formatted.stdout).hexdigest()
+                      record["changed"] = original != formatted.stdout
+                      if original != formatted.stdout:
+                          for line in difflib.diff_bytes(
+                              difflib.unified_diff,
+                              original.splitlines(keepends=True),
+                              formatted.stdout.splitlines(keepends=True),
+                              fromfile=os.fsencode("a/" + name),
+                              tofile=os.fsencode("b/" + name),
+                          ):
+                              patch.append(line)
+                              if not line.endswith(b"\n"):
+                                  patch.append(b"\n\\ No newline at end of file\n")
+                  except OSError as error:
+                      record["error"] = str(error)
+                      report["errors"].append(f"Could not format {name}: {error}")
+                  finally:
+                      save()
+              if not report["errors"]:
+                  report["status"] = "complete"
+          except Exception as error:
+              detail = {"type": type(error).__name__, "message": str(error)}
+              if isinstance(error, subprocess.CalledProcessError):
+                  stderr = error.stderr or ""
+                  detail.update({"command": error.cmd, "returncode": error.returncode,
+                                 "stderr": stderr.decode("utf-8", errors="replace")
+                                 if isinstance(stderr, bytes) else stderr})
+              report["errors"].append(detail)
+          finally:
+              save()
+          raise SystemExit(0 if report["status"] == "complete" else 1)
+          PY
+        env:
+          FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FORMAT_HEAD: ${{ github.sha }}
+
+      - name: Upload proposed formatting changes
+        if: ${{ !cancelled() && steps.format_check.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clang-format-evidence
+          path: format-evidence/
+          if-no-files-found: error

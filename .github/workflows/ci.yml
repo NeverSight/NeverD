@@ -233,7 +233,7 @@ jobs:
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
 
-      - name: Run and audit seven Darwin unwind regressions
+      - name: Run and audit mobile native regressions
         if: ${{ !cancelled() && steps.default_build.outcome == 'success' }}
         shell: bash
         run: |
@@ -265,11 +265,95 @@ jobs:
                    "NeverDLiftTests"),
                   ("MachOFunctionListingTest.FuncsJSONListsOnlyFunctionsWithStableNamesAndExactSizes",
                    "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.EmptyStructMetadataUsesAnExplicitContextWithoutAnOrdinaryMethod",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.EmptyStructContextRequiresUniqueNativeLayoutAndItsOwnProof",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.NominalContextAuthorizesOnlyItsBoundMetadataAccessor",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.NominalMetadataRetainsEverySourceDependencyAndRejectsChangedSeeds",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.NominalSourceNamesRejectBothSidesOfTopLevelCollisions",
+                   "NeverDLiftTests"),
+                  ("SwiftRuntimeProjection.ExistingOrdinaryContextAndOverloadRulesDoNotBecomeNominalShells",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructUsesTheActualLocalValueWitnessLayout",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructRejectsNontrivialValueWitnessStorageAndTraits",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructRequiresAnAvailableExactValueWitnessPointer",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructRequiresTheEntireFileBackedValueWitnessTable",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructCannotTreatImportedPayloadsAsLocalTables",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructUsesAnExactStrongStandardRuntimeBinding",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructRejectsInexactStandardRuntimeBindingContracts",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructStandardBindingRequiresReadableExactHeaderSlot",
+                   "NeverDLiftTests"),
+                  ("SwiftMetadata.EmptyStructStandardBindingConflictsCannotBeResurrected",
+                   "NeverDLiftTests"),
+                  ("SwiftNominalContextCAPI.OwnedAccessorPublishesTypeWithoutOrdinaryBody",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.NativeOwnershipAndCompletePairRemainRequired",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.IncompleteMetadataCannotSeedNominalSource",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.EmptyFieldsDoNotReplaceValueWitnessLayout",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.OrdinaryMemberCannotBypassEmptyLayoutCheck",
+                   "NeverDMetadataJSONTests"),
+                  ("SwiftNominalContextCAPI.GlobalCollisionRejectsBothNativeIdentities",
+                   "NeverDMetadataJSONTests"),
+                  ("MachOChainedPointerBoundary.PreservesHighPositiveLibraryOrdinals",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.SpecialZeroAndOutOfRangeLibraryOrdinalsStayExternal",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.Keeps64BitInlineAddendsUnsigned",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.AddsUnsignedInlineToSignedOutlineWithinInt64Range",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.OverflowingUnsignedInlineDoesNotPublishOrReclassifySlot",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.DyldBindingsValidateStorageBeforeMutation",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.DyldBindingIdentityConflictsAreSticky",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.CanonicalConflictCannotReviveDyldProvider",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.NativeDylibBytesSurviveDisplayNormalization",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.NativeDylibOrdinalsExcludeLazyAndKeepDuplicates",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.NativeDylibOrdinalsPreserveInvalidNamePlaceholders",
+                   "NeverDLiftTests"),
+                  ("RuntimeMetadata.MachOTwoLevelNamespaceUsesActualHeaderFlags",
+                   "NeverDLiftTests"),
+                  ("MachOClassicBindBoundary.RecordsNativeProviderAndWeakness",
+                   "NeverDLiftTests"),
+                  ("MachOClassicBindBoundary.ProviderConflictsAreStickyAcrossStreams",
+                   "NeverDLiftTests"),
+                  ("MachOClassicBindBoundary.LazyEntriesResetProviderAndAddend",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.PreservesNativeProviderAndWeakness",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.DuplicateNamesKeepIndependentProviderSlots",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.ProviderConflictsAreStickyAcrossParsers",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.RecordsBindAndFineGrainedRebases",
+                   "NeverDLiftTests"),
+                  ("MachOChainedPointerBoundary.RejectsMalformedOrdinalNameAndAddendOverflow",
+                   "NeverDLiftTests"),
               )
           )
-          if len(expected) != 7 or len(set(expected)) != 7:
-              raise RuntimeError("focused contract must contain seven unique identities")
-          evidence = Path("build-ci/macho-range-focused").resolve()
+          expected_count = 48
+          if (len(expected) != expected_count or len(set(expected)) != expected_count
+                  or len({item.name for item in expected}) != expected_count):
+              raise RuntimeError("focused contract has missing or duplicate identities")
+          evidence = Path("build-ci/mobile-native-focused").resolve()
           evidence.mkdir()
           errors = []
           statuses = {}
@@ -286,14 +370,19 @@ jobs:
               ]
 
           name_regex = "^(" + "|".join(re.escape(item.name) for item in expected) + ")$"
+          owners = sorted({owner for item in expected for owner in item.labels})
+          owner_regex = "^(" + "|".join(re.escape(owner) for owner in owners) + ")$"
           common = [
               "ctest", "--test-dir", "build-ci", "--build-config", "Release",
-              "--label-regex", "^(NeverDLanguageEHTests|NeverDLiftTests)$",
+              "--label-regex", owner_regex,
               "--tests-regex", name_regex,
           ]
           discovery = common + ["--show-only=json-v1"]
           execution = common + [
-              "--no-tests=error", "--output-on-failure", "--parallel", "1",
+              "--no-tests=error", "--output-on-failure", "--verbose", "--parallel", "1",
+              "--test-output-size-passed", "1048576",
+              "--test-output-size-failed", "1048576",
+              "--test-output-truncation", "middle",
               "--output-junit", str(evidence / "results.xml"),
               "--output-log", str(evidence / "ctest.log"),
           ]
@@ -330,7 +419,7 @@ jobs:
               actual = set(records)
               required = set(expected)
               order = lambda item: (item.name, tuple(sorted(item.labels)))
-              if len(records) != 7 or actual != required:
+              if len(records) != expected_count or actual != required:
                   errors.append(
                       f"{name} identities differ: count={len(records)}, "
                       f"missing={identities(sorted(required - actual, key=order))}, "
@@ -339,6 +428,7 @@ jobs:
 
           selected = None
           outcomes = None
+          gtest_receipts = []
           try:
               selected = parse_inventory(json.loads(
                   (evidence / "inventory.json").read_text(encoding="utf-8")
@@ -350,6 +440,19 @@ jobs:
               outcomes = parse_junit(ET.parse(evidence / "results.xml").getroot())
               check_identities("execution", tuple(item.test for item in outcomes))
               for item in outcomes:
+                  lines = item.output.splitlines()
+                  started = lines.count(f"[ RUN      ] {item.test.name}")
+                  passed_pattern = re.escape(f"[       OK ] {item.test.name}") + r"(?: \([0-9]+ ms\))?"
+                  passed = sum(re.fullmatch(passed_pattern, line) is not None for line in lines)
+                  gtest_receipts.append({
+                      "name": item.test.name, "labels": sorted(item.test.labels),
+                      "started": started, "passed": passed,
+                  })
+                  if started != 1 or passed != 1:
+                      errors.append(
+                          f"{item.test.name} {sorted(item.test.labels)}: "
+                          f"expected one actual GTest start and pass, got {started}/{passed}"
+                      )
                   if item.outcome != "passed":
                       errors.append(
                           f"{item.test.name} {sorted(item.test.labels)}: "
@@ -359,12 +462,15 @@ jobs:
               errors.append(f"JUnit audit failed: {type(error).__name__}: {error}")
           report = {
               "status": "failed" if errors else "passed",
-              "expected_count": 7,
+              "expected_count": expected_count,
               "selected_count": None if selected is None else len(selected),
               "reported_count": None if outcomes is None else len(outcomes),
               "passed_count": None if outcomes is None else sum(
                   item.outcome == "passed" for item in outcomes
               ),
+              "started_count": sum(item["started"] == 1 for item in gtest_receipts),
+              "gtest_passed_count": sum(item["passed"] == 1 for item in gtest_receipts),
+              "gtest_receipts": gtest_receipts,
               "selected": None if selected is None else identities(selected),
               "outcomes": None if outcomes is None else [
                   {"name": item.test.name, "labels": sorted(item.test.labels),
@@ -382,12 +488,12 @@ jobs:
           PYTHON: ${{ matrix.python }}
           TEST_PROFILE: ${{ matrix.test_profile }}
 
-      - name: Upload Darwin unwind regression evidence
+      - name: Upload mobile native regression evidence
         if: ${{ always() && steps.default_build.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macho-range-focused-${{ matrix.test_profile }}
-          path: build-ci/macho-range-focused/
+          name: mobile-native-focused-${{ matrix.test_profile }}
+          path: build-ci/mobile-native-focused/
           if-no-files-found: error
 
       # The C++ side alone cannot prove agreement with the implementation that
@@ -396,7 +502,8 @@ jobs:
       # then make the Linux semantic leg treat every skipped oracle case as a
       # configured, executable differential test.
       - name: Build the pinned Anza SBF oracle
-        if: runner.os == 'Linux'
+        id: sbf_oracle
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' && runner.os == 'Linux' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -426,7 +533,8 @@ jobs:
       # the object identity from SBFUpstreamSources.def, and the required flag
       # turns a missing, partial, or wrong checkout into a hard failure.
       - name: Fetch the pinned Agave ELF-loader corpus
-        if: runner.os == 'Linux'
+        id: agave_corpus
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' && runner.os == 'Linux' && steps.sbf_oracle.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -448,6 +556,8 @@ jobs:
           PYTHON: ${{ matrix.python }}
 
       - name: Run native and Python plugin examples
+        id: plugin_examples
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' && (runner.os != 'Linux' || (steps.sbf_oracle.outcome == 'success' && steps.agave_corpus.outcome == 'success')) }}
         shell: bash
         run: |
           set -o pipefail
@@ -463,6 +573,7 @@ jobs:
 
       - name: Audit and select test profile
         id: inventory
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' && steps.plugin_examples.outcome == 'success' }}
         shell: bash
         run: |
           set -o pipefail
@@ -480,6 +591,7 @@ jobs:
 
       - name: Run selected test profile
         id: ctest
+        if: ${{ !cancelled() && steps.default_build.outcome == 'success' && steps.inventory.outcome == 'success' }}
         shell: bash
         run: |
           set -o pipefail
