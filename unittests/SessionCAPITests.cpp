@@ -23,6 +23,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -242,6 +243,37 @@ protected:
     EXPECT_EQ(takeString(neverd_session_file_path(Session)), Input);
   }
 
+  void expectDecompileDiff(const std::string &OtherCode, bool Identical) {
+    const auto Input = write("diff-original.evm", "6001600055");
+    const auto OtherInput = write("diff-other.evm", OtherCode);
+    std::unique_ptr<void, decltype(&neverd_session_destroy)> Other(
+        neverd_session_create(), &neverd_session_destroy);
+    ASSERT_NE(Other.get(), nullptr);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+        << takeString(neverd_last_error(Session));
+    ASSERT_EQ(neverd_session_load(Other.get(), OtherInput.c_str()), 1)
+        << takeString(neverd_last_error(Other.get()));
+    ASSERT_EQ(neverd_session_analyze(Session), 1)
+        << takeString(neverd_last_error(Session));
+    ASSERT_EQ(neverd_session_analyze(Other.get()), 1)
+        << takeString(neverd_last_error(Other.get()));
+    const std::string ExpectedA = takeString(neverd_decompile(Session, 0));
+    const std::string ExpectedB = takeString(neverd_decompile(Other.get(), 0));
+    ASSERT_FALSE(ExpectedA.empty());
+    ASSERT_FALSE(ExpectedB.empty());
+    ASSERT_EQ(ExpectedA == ExpectedB, Identical);
+
+    auto Parsed = llvm::json::parse(
+        takeString(neverd_diff_decompile(Session, 0, Other.get(), 0)));
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError());
+    const auto *Object = Parsed->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getString("code_a"), ExpectedA);
+    EXPECT_EQ(Object->getString("code_b"), ExpectedB);
+    EXPECT_EQ(Object->getBoolean("identical"), Identical);
+  }
+
   std::string readSidecar(std::string_view Name) {
     std::ifstream Input(Directory / Name, std::ios::binary);
     EXPECT_TRUE(Input.is_open());
@@ -276,6 +308,14 @@ protected:
   std::filesystem::path Directory;
   neverd_session_t Session = nullptr;
 };
+
+TEST_F(SessionCAPITest, DecompileDiffPreservesEqualSuccessfulOutputs) {
+  expectDecompileDiff("6001600055", true);
+}
+
+TEST_F(SessionCAPITest, DecompileDiffPreservesDistinctSuccessfulOutputs) {
+  expectDecompileDiff("6002600055", false);
+}
 
 TEST_F(SessionCAPITest, QueryJSONPreservesASCIIFileSpelling) {
   const auto Input = write("query sample.elf", makeNamedNativeELF("entry"));

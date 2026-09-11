@@ -178,8 +178,8 @@ const char *neverd_diff_decompile(neverd_session_t SessA, neverd_va_t EntryA,
   const char *CodeB = neverd_decompile(SessB, EntryB);
 
   llvm::json::Object Result;
-  Result["code_a"] = CodeA ? CodeA : "";
-  Result["code_b"] = CodeB ? CodeB : "";
+  Result["code_a"] = jsonSafeText(CodeA ? CodeA : "");
+  Result["code_b"] = jsonSafeText(CodeB ? CodeB : "");
   bool Identical = CodeA && CodeB && std::strcmp(CodeA, CodeB) == 0;
   Result["identical"] = Identical;
 
