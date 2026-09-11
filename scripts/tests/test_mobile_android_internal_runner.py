@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
+from scripts.mobile_android_marker_input import inspect_marker_dex
 
 SCRIPT = Path(__file__).resolve().parents[1] / "test_mobile_android_internal.py"
 SPEC = importlib.util.spec_from_file_location("neverd_android_internal_acceptance", SCRIPT)
@@ -1081,6 +1084,130 @@ class MarkerOracleTests(unittest.TestCase):
                     runner.marker_reflection(path)
 
 
+def marker_sdk_fixture(owners=None, method_count=10):
+    """Self-authored complete SDK text; header bytes are not a verified DEX."""
+    if owners is None:
+        owners = tuple("Lfixture/" + name + ";" for name in (
+            "MarkerAnnotationOnly", "MarkerBase", "MarkerChild", "MarkerClass", "MarkerDefault",
+            "MarkerEmptyTarget", "MarkerImplementer", "MarkerInherited", "MarkerInterface",
+            "MarkerPlain", "MarkerRuntime", "MarkerSource", "MarkerSourceUse", "MarkerTagged",
+            "MarkerTypeOnly"))
+    data = bytearray(112)
+    data[:8] = b"dex\n035\x00"
+    struct.pack_into("<III", data, 32, 112, 112, 0x12345678)
+    struct.pack_into("<I", data, 88, method_count)
+    struct.pack_into("<I", data, 96, len(owners))
+    lines = ["Processing 'classes.dex'...", "Opened 'classes.dex', DEX version '035'",
+             "DEX file header:", "file_size : 112", f"class_defs_size : {len(owners)}",
+             f"method_ids_size : {method_count}"]
+    for index, owner in enumerate(owners):
+        count = method_count if owner == "Lfixture/MarkerBase;" else 0
+        lines += [f"Class #{index} header:", f"class_idx : {index}",
+                  "static_fields_size : 0", "instance_fields_size : 0",
+                  "direct_methods_size : 0", f"virtual_methods_size : {count}"]
+        if owner == "Lfixture/MarkerBase;":
+            lines += [f"Class #{index} annotations:", "Annotations on class",
+                      "  VISIBILITY_BUILD Lfixture/MarkerDefault;",
+                      "  VISIBILITY_BUILD Lfixture/MarkerClass;",
+                      "  VISIBILITY_RUNTIME Lfixture/MarkerInherited;",
+                      "  VISIBILITY_RUNTIME Lfixture/MarkerRuntime;"]
+        lines += [f"Class #{index} -", f"  Class descriptor : '{owner}'",
+                  "  Access flags : 0x0001 (PUBLIC)", "  Superclass : 'Ljava/lang/Object;'",
+                  "  Interfaces -", "  Static fields -", "  Instance fields -",
+                  "  Direct methods -", "  Virtual methods -"]
+        for method in range(count):
+            lines += [f"    #{method} : (in {owner})", f"      name : 'm{method}'",
+                      "      type : '()I'", "      access : 0x0001 (PUBLIC)",
+                      "      code -", "      insns size : 1 16-bit code units"]
+        lines += [f"  source_file_idx : {index} (Owned.java)", ""]
+    return bytes(data), "\n".join(lines)
+
+
+class MarkerInputSDKTests(unittest.TestCase):
+    def setUp(self):
+        self.data, self.dump = marker_sdk_fixture()
+        self.block = ("Class #1 annotations:\nAnnotations on class\n"
+                      "  VISIBILITY_BUILD Lfixture/MarkerDefault;\n"
+                      "  VISIBILITY_BUILD Lfixture/MarkerClass;\n"
+                      "  VISIBILITY_RUNTIME Lfixture/MarkerInherited;\n"
+                      "  VISIBILITY_RUNTIME Lfixture/MarkerRuntime;\n")
+
+    def test_preserved_actual_sdk_view_binds_header_owner_and_four_empty_applications(self):
+        result = inspect_marker_dex(self.data, self.dump)
+        self.assertEqual(set(result), {"scope", "provider", "input_sha256", "header",
+                                      "class_descriptors", "owner", "class_index", "annotations"})
+        self.assertEqual(result["scope"], "owned-markerbase-class-annotations")
+        self.assertEqual(result["provider"], "android-sdk-dexdump")
+        self.assertEqual(result["input_sha256"], hashlib.sha256(self.data).hexdigest())
+        self.assertEqual(result["header"], {"version": "035", "file_size": 112,
+                                           "class_defs_size": 15, "method_ids_size": 10})
+        self.assertEqual(len(result["class_descriptors"]), 15)
+        self.assertEqual(result["class_descriptors"][1], "Lfixture/MarkerBase;")
+        self.assertEqual(result["owner"], "Lfixture/MarkerBase;")
+        self.assertEqual(result["class_index"], 1)
+        self.assertEqual(result["annotations"], [
+            {"type": "Lfixture/MarkerClass;", "visibility": "VISIBILITY_BUILD"},
+            {"type": "Lfixture/MarkerDefault;", "visibility": "VISIBILITY_BUILD"},
+            {"type": "Lfixture/MarkerInherited;", "visibility": "VISIBILITY_RUNTIME"},
+            {"type": "Lfixture/MarkerRuntime;", "visibility": "VISIBILITY_RUNTIME"}])
+
+    def test_class_ordinal_is_discovered_and_other_annotation_payloads_are_not_reused(self):
+        data, dump = marker_sdk_fixture(("Lfixture/MarkerBase;", "Lfixture/Other;"))
+        other = ("Class #1 annotations:\nAnnotations on class\n"
+                 "  VISIBILITY_RUNTIME Ljava/lang/annotation/Target; value={ TYPE }\n")
+        dump = dump.replace("Class #1 -", other + "Class #1 -")
+        result = inspect_marker_dex(data, dump)
+        self.assertEqual(result["class_index"], 0)
+        self.assertEqual(result["class_descriptors"], ["Lfixture/MarkerBase;", "Lfixture/Other;"])
+
+    def test_old_runtime_only_d8_output_and_absent_block_are_rejected(self):
+        runtime_only = self.dump.replace("  VISIBILITY_BUILD Lfixture/MarkerDefault;\n", "")
+        runtime_only = runtime_only.replace("  VISIBILITY_BUILD Lfixture/MarkerClass;\n", "")
+        for index, dump in enumerate((runtime_only, self.dump.replace(self.block, ""))):
+            with self.subTest(case=index), self.assertRaises(RuntimeError):
+                inspect_marker_dex(self.data, dump)
+
+    def test_member_scopes_values_wrong_visibility_and_duplicates_are_rejected(self):
+        changes = (
+            ("Annotations on class", "Annotations on field #0 'seed'"),
+            ("Annotations on class", "Annotations on method #0 'm0'"),
+            ("Annotations on class", "Annotations on method #0 'm0' parameters"),
+            ("VISIBILITY_BUILD Lfixture/MarkerClass;", "VISIBILITY_RUNTIME Lfixture/MarkerClass;"),
+            ("VISIBILITY_BUILD Lfixture/MarkerClass;", "VISIBILITY_BUILD Lfixture/MarkerDefault;"),
+            ("VISIBILITY_BUILD Lfixture/MarkerClass;", "VISIBILITY_BUILD Lfixture/Other;"),
+            ("VISIBILITY_BUILD Lfixture/MarkerClass;", "VISIBILITY_BUILD Lfixture/MarkerClass; value=1"),
+        )
+        for before, after in changes:
+            with self.subTest(after=after), self.assertRaises(RuntimeError):
+                inspect_marker_dex(self.data, self.dump.replace(before, after))
+
+    def test_same_names_on_another_owner_or_detached_blocks_cannot_pass(self):
+        other_block = self.block.replace("Class #1 annotations:", "Class #0 annotations:")
+        moved = self.dump.replace(self.block, "").replace("Class #0 -", other_block + "Class #0 -")
+        detached = self.dump.replace(self.block, "").replace("Class #0 header:", self.block + "Class #0 header:")
+        changes = (moved, detached, self.dump.replace("Lfixture/MarkerBase;", "Lfixture/OtherBase;"),
+                   self.dump.replace("Class #1 annotations:", "Class #0 annotations:"),
+                   self.dump.replace(self.block, self.block + self.block), self.dump + self.block)
+        for index, dump in enumerate(changes):
+            with self.subTest(case=index), self.assertRaises(RuntimeError):
+                inspect_marker_dex(self.data, dump)
+
+    def test_complete_sdk_inventory_and_actual_fixed_header_are_not_mocked(self):
+        changes = (self.dump.replace("class_defs_size : 15", "class_defs_size : 14"),
+                   self.dump.replace("method_ids_size : 10", "method_ids_size : 11"),
+                   self.dump.replace("      name : 'm0'\n", ""),
+                   self.dump[:self.dump.index("Class #14 header:")],
+                   self.dump.replace("Class #1 -", "Class #2 -"))
+        for index, dump in enumerate(changes):
+            with self.subTest(case=index), self.assertRaises(RuntimeError):
+                inspect_marker_dex(self.data, dump)
+        wrong_endian = bytearray(self.data)
+        struct.pack_into("<I", wrong_endian, 40, 0)
+        for data in (self.data[:100], bytes(wrong_endian)):
+            with self.subTest(data=data), self.assertRaises(RuntimeError):
+                inspect_marker_dex(data, self.dump)
+
+
 class MarkerWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -1093,6 +1220,10 @@ class MarkerWorkflowTests(unittest.TestCase):
         self.helpers = runner.marker_helpers()
         self.coverage_mutation = None
         self.compiles, self.commands, self.dexes, self.inventory_modes = [], [], [], []
+        self.dex_data, self.sdk_dump = marker_sdk_fixture()
+        self.dex_failure = None
+        self.mutate_dex_during_inspection = False
+        self.verify.dexdump.write_bytes(b"owned SDK tool identity fixture")
 
     def compile(self, sources, output, *, classpath=None):
         output.mkdir(parents=True)
@@ -1102,15 +1233,24 @@ class MarkerWorkflowTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"mock")
 
-    def dex(self, paths, output, classpath):
-        self.dexes.append((list(paths), output, classpath))
-        output.mkdir(parents=True)
-        path = output / "classes.dex"
-        path.write_bytes(b"mock owned marker input")
-        return path
-
     def run_command(self, argv, label):
         self.commands.append((list(map(str, argv)), label))
+        if label == "d8":
+            output = Path(argv[argv.index("--output") + 1])
+            paths = list(map(Path, argv[argv.index("--output") + 2:]))
+            self.dexes.append((paths, output, Path(argv[argv.index("--classpath") + 1])))
+            if self.dex_failure == "timeout":
+                raise runner.subprocess.TimeoutExpired(list(map(str, argv)), self.verify.timeout)
+            if self.dex_failure == "exit":
+                raise RuntimeError("d8 exited 1: fixture compiler failure")
+            if self.dex_failure != "missing":
+                (output / "classes.dex").write_bytes(self.dex_data)
+            if self.dex_failure == "multiple":
+                (output / "classes2.dex").write_bytes(self.dex_data)
+        if label == "marker-input-dexdump":
+            if self.mutate_dex_during_inspection:
+                Path(argv[-1]).write_bytes(self.dex_data + b"changed input")
+            return self.sdk_dump
         if label == "marker-dex":
             output = Path(argv[argv.index("-o") + 1])
             sources = ["sources/" + owner[1:-1] + ".java" for owner in sorted(self.original)]
@@ -1144,7 +1284,6 @@ class MarkerWorkflowTests(unittest.TestCase):
             self.inventory_modes.append((directory, owned_markers))
             return copy.deepcopy(self.original if directory == self.root / "original-marker/classes" else self.rebuilt)
         with patch.object(self.verify, "run", side_effect=self.run_command), patch.object(self.verify, "compile_local", side_effect=self.compile), \
-                patch.object(self.verify, "dex", side_effect=self.dex), \
                 patch.object(runner.class_identity, "compiler_classes", side_effect=inventory):
             return self.verify.marker_cases(self.root / "neverd")
 
@@ -1164,6 +1303,29 @@ class MarkerWorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.dexes), 1)
         self.assertEqual(self.dexes[0][0], [self.root / "original-marker/classes" / (owner[1:-1] + ".class") for owner in sorted(self.original)])
         self.assertEqual(self.dexes[0][2], self.root / "original-marker/classes")
+        dex_argv = next(argv for argv, name in self.commands if name == "d8")
+        self.assertEqual(dex_argv, [*self.verify.d8, "--debug", "--intermediate", "--classpath",
+            str(self.root / "original-marker/classes"), "--output", str(self.root / "marker-dex/dex"),
+            *map(str, self.dexes[0][0])])
+        source = self.root / "marker-dex/dex/classes.dex"
+        dump_argv = next(argv for argv, name in self.commands if name == "marker-input-dexdump")
+        self.assertEqual(dump_argv, [str(self.verify.dexdump), "-a", "-f", "-h", "-l", "plain", str(source)])
+        labels = [label for _, label in self.commands]
+        self.assertLess(labels.index("d8"), labels.index("marker-input-dexdump"))
+        self.assertLess(labels.index("marker-input-dexdump"), labels.index("marker-dex"))
+        native = next(argv for argv, name in self.commands if name == "marker-dex")
+        self.assertEqual(native, [str(self.root / "neverd"), "mobile", str(source), "-o",
+            str(self.root / "marker-dex/recovered"), "--timeout", str(self.verify.timeout), "--json"])
+        inventory = json.loads((self.root / "marker-dex/input-inventory.json").read_text())
+        evidence = json.loads((self.root / "marker-dex/input-marker-annotations.json").read_text())
+        self.assertEqual(inventory["classes_provider"], "original-javac-before-d8")
+        self.assertEqual(inventory["dex_annotations"], evidence)
+        self.assertEqual(evidence["stage"], "post-d8")
+        self.assertEqual(evidence["status"], "success")
+        self.assertEqual(evidence["input_sha256"], runner.hashlib.sha256(self.dex_data).hexdigest())
+        self.assertEqual(evidence["input_sha256"], inventory["input_sha256"])
+        self.assertEqual(evidence["dexdump_sha256"], runner.hashlib.sha256(self.verify.dexdump.read_bytes()).hexdigest())
+        self.assertEqual(set(evidence["class_descriptors"]), set(self.original))
         self.assertEqual(len(self.compiles), 4)
         self.assertEqual(len(self.compiles[0][0]), 15)
         self.assertIsNone(self.compiles[0][2])
@@ -1178,7 +1340,7 @@ class MarkerWorkflowTests(unittest.TestCase):
             self.assertEqual(harness[2], classes)
             argv = next(argv for argv, name in self.commands if name == label)
             self.assertEqual(argv[argv.index("-cp") + 1], os.pathsep.join(map(str, (directory / "harness", classes))))
-        for name in ("input-inventory.json", "generated-source-hashes.json", "rebuilt-class-inventory.json",
+        for name in ("input-inventory.json", "input-marker-annotations.json", "generated-source-hashes.json", "rebuilt-class-inventory.json",
                      "marker-identity.json", "reflection.tsv", "reflection.json", "execution.json"):
             self.assertTrue((self.root / "marker-dex" / name).is_file())
         self.assertTrue((self.root / "original-marker/marker-identity.json").is_file())
@@ -1251,6 +1413,145 @@ class MarkerWorkflowTests(unittest.TestCase):
         self.assertEqual(passed, [])
         self.assertEqual([row["case"] for row in failures], ["marker-dex"])
         self.assertTrue((self.root / "marker-preparation-failure.json").is_file())
+
+    def test_d8_failure_cannot_reach_input_acceptance_or_neverd(self):
+        for failure in ("timeout", "exit", "missing", "multiple"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.dex_failure = failure
+                passed, failures = self.execute()
+                self.assertEqual(passed, [])
+                self.assertEqual(len(failures), 1)
+                self.assertFalse(any(label in ("marker-input-dexdump", "marker-dex") for _, label in self.commands))
+                self.assertFalse((self.root / "marker-dex/input-inventory.json").exists())
+                self.assertTrue((self.root / "marker-dex/failure.json").is_file())
+
+    def test_actual_input_missing_class_annotations_fails_before_neverd(self):
+        self.sdk_dump = "\n".join(line for line in self.sdk_dump.splitlines()
+                                  if "VISIBILITY_BUILD" not in line)
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertFalse(any(label == "marker-dex" for _, label in self.commands))
+        self.assertFalse((self.root / "marker-dex/input-inventory.json").exists())
+        evidence = json.loads((self.root / "marker-dex/input-marker-annotations.json").read_text())
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["input_sha256"], runner.hashlib.sha256(self.dex_data).hexdigest())
+
+    def test_missing_sdk_dexdump_cannot_be_replaced_by_original_class_facts(self):
+        self.verify.dexdump.unlink()
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("SDK dexdump", failures[0]["error"])
+        self.assertFalse(any(label in ("marker-input-dexdump", "marker-dex") for _, label in self.commands))
+        evidence = json.loads((self.root / "marker-dex/input-marker-annotations.json").read_text())
+        self.assertEqual(evidence["status"], "failed")
+
+    def test_sdk_inspection_cannot_accept_a_changed_input(self):
+        self.mutate_dex_during_inspection = True
+        passed, failures = self.execute()
+        self.assertEqual(passed, [])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("changed during SDK inspection", failures[0]["error"])
+        self.assertFalse(any(label == "marker-dex" for _, label in self.commands))
+        self.assertFalse((self.root / "marker-dex/input-inventory.json").exists())
+        evidence = json.loads((self.root / "marker-dex/input-marker-annotations.json").read_text())
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["input_sha256"], runner.hashlib.sha256(self.dex_data).hexdigest())
+
+
+class MarkerInputCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="marker input paths ")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.verify = runner.Verify(self.root, self.root / "JDK", self.root / "d8", 17)
+
+    def test_intermediate_mode_is_explicit_and_default_d8_arguments_are_unchanged(self):
+        classes = [self.root / "original/First.class", self.root / "original/Second.class"]
+        classpath = self.root / "original"
+        for index, options in enumerate(({}, {"intermediate": False}, {"intermediate": True})):
+            with self.subTest(options=options):
+                output = self.root / str(index)
+                def command(argv, label):
+                    self.assertEqual(label, "d8")
+                    self.assertEqual(argv, [*self.verify.d8, "--debug",
+                        *(["--intermediate"] if index == 2 else []), "--classpath", classpath,
+                        "--output", output, *classes])
+                    (output / "classes.dex").write_bytes(b"owned D8 output")
+                with patch.object(self.verify, "run", side_effect=command) as invoked:
+                    self.assertEqual(self.verify.dex(classes, output, classpath, **options), output / "classes.dex")
+                invoked.assert_called_once()
+
+    def test_real_process_boundary_retains_d8_mode_and_timeout_receipt(self):
+        output = self.root / "dex"
+        def process(argv, **options):
+            self.assertEqual(options["timeout"], 17)
+            self.assertEqual(options["stdin"], runner.subprocess.DEVNULL)
+            self.assertEqual(options["stderr"], runner.subprocess.STDOUT)
+            self.assertFalse(options["check"])
+            self.assertEqual(options["env"], self.verify.environment)
+            (output / "classes.dex").write_bytes(b"owned D8 output")
+            return runner.subprocess.CompletedProcess(argv, 0)
+        with patch.object(runner.subprocess, "run", side_effect=process):
+            self.verify.dex([self.root / "Original.class"], output, self.root, intermediate=True)
+        receipt = json.loads((self.root / "logs/001-d8.command.json").read_text())
+        self.assertEqual(receipt["argv"], [*self.verify.d8, "--debug", "--intermediate", "--classpath",
+            str(self.root), "--output", str(output), str(self.root / "Original.class")])
+        self.assertEqual((receipt["status"], receipt["exit_code"], receipt["timeout"]), ("success", 0, 17))
+
+    def test_real_d8_timeout_is_a_failed_receipt_and_propagates(self):
+        with patch.object(runner.subprocess, "run", side_effect=runner.subprocess.TimeoutExpired("d8", 17)), \
+                self.assertRaises(runner.subprocess.TimeoutExpired):
+            self.verify.dex([self.root / "Original.class"], self.root / "dex", self.root, intermediate=True)
+        receipt = json.loads((self.root / "logs/001-d8.command.json").read_text())
+        self.assertEqual((receipt["status"], receipt["timeout"]), ("failed", 17))
+        self.assertIn("--intermediate", receipt["argv"])
+        self.assertNotIn("exit_code", receipt)
+        self.assertFalse((self.root / "dex/classes.dex").exists())
+
+    def test_sdk_dump_uses_actual_source_and_the_same_process_budget(self):
+        data, dump = marker_sdk_fixture()
+        source = self.root / "marker-dex/dex/classes.dex"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(data)
+        self.verify.dexdump.write_bytes(b"owned SDK tool identity fixture")
+        def process(argv, **options):
+            self.assertEqual(argv, [str(self.verify.dexdump), "-a", "-f", "-h", "-l", "plain", str(source)])
+            self.assertEqual(options["timeout"], 17)
+            options["stdout"].write(dump)
+            return runner.subprocess.CompletedProcess(argv, 0)
+        with patch.object(runner.subprocess, "run", side_effect=process):
+            evidence = self.verify.marker_dex_input(source)
+        self.assertEqual((evidence["stage"], evidence["status"]), ("post-d8", "success"))
+        self.assertEqual(evidence["input_sha256"], runner.hashlib.sha256(data).hexdigest())
+        receipt = json.loads((self.root / "logs/001-marker-input-dexdump.command.json").read_text())
+        self.assertEqual((receipt["status"], receipt["exit_code"], receipt["timeout"]), ("success", 0, 17))
+        self.assertEqual((self.root / "logs/001-marker-input-dexdump.log").read_text(), dump)
+
+    def test_sdk_dump_failure_keeps_input_identity_and_failed_process_receipts(self):
+        data, _ = marker_sdk_fixture()
+        source = self.root / "marker-dex/dex/classes.dex"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(data)
+        self.verify.dexdump.write_bytes(b"owned SDK tool identity fixture")
+        for index, failure in enumerate(("timeout", "exit"), 1):
+            with self.subTest(failure=failure):
+                def process(argv, **options):
+                    self.assertEqual(options["timeout"], 17)
+                    if failure == "timeout":
+                        raise runner.subprocess.TimeoutExpired(argv, 17)
+                    return runner.subprocess.CompletedProcess(argv, 1)
+                with patch.object(runner.subprocess, "run", side_effect=process), \
+                        self.assertRaises((RuntimeError, runner.subprocess.TimeoutExpired)):
+                    self.verify.marker_dex_input(source)
+                evidence = json.loads((self.root / "marker-dex/input-marker-annotations.json").read_text())
+                self.assertEqual((evidence["status"], evidence["input_sha256"]),
+                                 ("failed", runner.hashlib.sha256(data).hexdigest()))
+                receipt = json.loads((self.root / f"logs/{index:03d}-marker-input-dexdump.command.json").read_text())
+                self.assertEqual((receipt["status"], receipt["timeout"]), ("failed", 17))
+                self.assertFalse((self.root / "marker-dex/input-inventory.json").exists())
 
 
 class LocalCompilerIsolationTests(unittest.TestCase):

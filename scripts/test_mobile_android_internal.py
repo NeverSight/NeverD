@@ -24,10 +24,12 @@ import zipfile
 
 try:
     from scripts import mobile_android_class_identity as class_identity
+    from scripts import mobile_android_marker_input as marker_input
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import mobile_android_class_identity as class_identity
+    import mobile_android_marker_input as marker_input
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -768,6 +770,8 @@ class Verify:
         suffix = ".exe" if os.name == "nt" else ""
         self.java, self.javac = str(jdk / "bin" / ("java" + suffix)), str(jdk / "bin" / ("javac" + suffix))
         self.d8 = d8_command(d8, self.java)
+        sdk_tools = d8.parent.parent if d8.suffix.lower() == ".jar" else d8.parent
+        self.dexdump = sdk_tools / ("dexdump" + suffix)
         self.log_index = 0
         (work / "logs").mkdir()
 
@@ -819,13 +823,40 @@ class Verify:
         (directory / "baseline.json").write_text(json.dumps(baseline, indent=2) + "\n")
         return directory / "classes", baseline
 
-    def dex(self, classes, output: Path, classpath: Path):
+    def dex(self, classes, output: Path, classpath: Path, *, intermediate: bool = False):
         output.mkdir(parents=True)
-        self.run([*self.d8, "--debug", "--classpath", classpath, "--output", output, *classes], "d8")
+        self.run([*self.d8, "--debug", *(["--intermediate"] if intermediate else []),
+                  "--classpath", classpath, "--output", output, *classes], "d8")
         dex = output / "classes.dex"
         if not dex.is_file() or list(output.glob("classes*.dex")) != [dex]:
             raise RuntimeError("Fixture partition did not produce exactly one DEX")
         return dex
+
+    def marker_dex_input(self, source: Path) -> dict:
+        """Keep the SDK's post-D8 evidence separate from the javac baseline."""
+        receipt = source.parent.parent / "input-marker-annotations.json"
+        evidence = {"schema_version": 1, "stage": "post-d8", "status": "started",
+                    "scope": "owned-markerbase-class-annotations", "dexdump": str(self.dexdump)}
+        try:
+            data = source.read_bytes()
+            evidence["input_sha256"] = hashlib.sha256(data).hexdigest()
+            if not self.dexdump.is_file():
+                raise RuntimeError("Marker input requires the SDK dexdump beside D8")
+            evidence["dexdump_sha256"] = hashlib.sha256(self.dexdump.read_bytes()).hexdigest()
+            dump = self.run([self.dexdump, "-a", "-f", "-h", "-l", "plain", source],
+                            "marker-input-dexdump")
+            if source.read_bytes() != data:
+                raise RuntimeError("Marker input changed during SDK inspection")
+            evidence.update(marker_input.inspect_marker_dex(data, dump))
+            if set(evidence["class_descriptors"]) != {"Lfixture/" + name + ";" for name in MARKER_VISIBLE}:
+                raise RuntimeError("Marker post-D8 class inventory changed")
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+            evidence.update(status="failed", error=str(error))
+            receipt.write_text(json.dumps(evidence, indent=2) + "\n")
+            raise
+        evidence["status"] = "success"
+        receipt.write_text(json.dumps(evidence, indent=2) + "\n")
+        return evidence
 
     def rebuilt(self, output: Path, harness: str, kind: str, baseline: dict):
         compiled = output.parent / (output.name + "-compiled")
@@ -882,10 +913,15 @@ class Verify:
             try:
                 inputs = {owner: "classes.dex" for owner in original}
                 paths = [classes_dir / original[owner]["path"] for owner in sorted(original)]
-                source = self.dex(paths, case / "dex", classes_dir)
+                source = self.dex(paths, case / "dex", classes_dir, intermediate=True)
+                dex_annotations = self.marker_dex_input(source)
+                input_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+                if input_sha256 != dex_annotations["input_sha256"]:
+                    raise RuntimeError("Marker input changed after SDK inspection")
                 (case / "input-inventory.json").write_text(json.dumps({"classes": original, "inputs": inputs,
+                    "classes_provider": "original-javac-before-d8", "dex_annotations": dex_annotations,
                     "expected_generated_helpers": marker_helpers(),
-                    "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, indent=2) + "\n")
+                    "input_sha256": input_sha256}, indent=2) + "\n")
                 output = case / "recovered"
                 self.run([neverd, "mobile", source, "-o", output, "--timeout", self.timeout, "--json"], label)
                 report = json.loads((output / "report.json").read_text())
