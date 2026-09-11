@@ -88,7 +88,7 @@ jobs:
       - name: Run native readers, emitters, archives, process and CLI tests
         run: ctest --test-dir build-mobile/unittests/mobile -C Release --output-on-failure --no-tests=error
       - name: Verify the independent acceptance gates reject false coverage
-        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_android_class_identity scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend -v
+        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_android_class_identity scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend scripts.tests.test_mobile_ios_single_session -v
       - name: Verify real-app evidence changes before the downstream build matrix
         if: runner.os == 'Linux'
         run: |
@@ -154,6 +154,8 @@ jobs:
       # Attempt every suite even when an earlier test fails. No failure is
       # ignored; separate steps retain diagnostics for all requested corpora.
       - name: Recover and independently execute Objective-C scalar sources
+        env:
+          NEVERD_NATIVE_PHASES: '1'
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
         timeout-minutes: 6
         shell: bash
@@ -162,6 +164,8 @@ jobs:
             --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
             --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/scalar"
       - name: Recover and independently execute Objective-C calls and Blocks
+        env:
+          NEVERD_NATIVE_PHASES: '1'
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
         timeout-minutes: 30
         shell: bash
@@ -170,6 +174,8 @@ jobs:
             --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
             --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/calls"
       - name: Recover and independently execute Swift sources
+        env:
+          NEVERD_NATIVE_PHASES: '1'
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
         timeout-minutes: 30
         shell: bash
@@ -177,6 +183,14 @@ jobs:
           python scripts/test_mobile_swift_backend.py \
             --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
             --arch all --fixups both --work-dir "$RUNNER_TEMP/ios-native/swift"
+      - name: Verify one native session and direct-loader metadata parity
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.build_mobile.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          python scripts/test_mobile_ios_single_session.py \
+            --neverd "$GITHUB_WORKSPACE/build-mobile/bin/neverd" \
+            --work-dir "$RUNNER_TEMP/ios-native"
       - name: Preserve validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -208,4 +222,5 @@ jobs:
             ${{ runner.temp }}/ios-native/scalar/
             ${{ runner.temp }}/ios-native/calls/
             ${{ runner.temp }}/ios-native/swift/
+            ${{ runner.temp }}/ios-native/single-session.json
           if-no-files-found: ignore
