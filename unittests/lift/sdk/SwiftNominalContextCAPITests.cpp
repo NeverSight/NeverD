@@ -102,7 +102,8 @@ std::vector<uint8_t> makeMachO(bool Arm64, Damage Fault, bool WithGlobal,
   mach_header_64 Header{};
   Header.magic = MH_MAGIC_64;
   Header.cputype = Arm64 ? CPU_TYPE_ARM64 : CPU_TYPE_X86_64;
-  Header.cpusubtype = Arm64 ? CPU_SUBTYPE_ARM64_ALL : CPU_SUBTYPE_X86_64_ALL;
+  Header.cpusubtype = Arm64 ? uint32_t(CPU_SUBTYPE_ARM64_ALL)
+                            : uint32_t(CPU_SUBTYPE_X86_64_ALL);
   Header.filetype = MH_EXECUTE;
   Header.ncmds = 5;
   Header.sizeofcmds = CommandSize;
@@ -471,7 +472,7 @@ TEST_F(SwiftNominalContextCAPI, OwnedAccessorPublishesTypeWithoutOrdinaryBody) {
   for (bool Arm64 : {true, false}) {
     SCOPED_TRACE(Arm64 ? "AArch64" : "x86-64");
     ASSERT_NO_FATAL_FAILURE(load(Arm64));
-    const auto Value = report({request()});
+    const auto Value = report(llvm::json::Array{request()});
     const auto *Report = Value.getAsObject();
     ASSERT_NE(Report, nullptr);
     counts(*Report, 1, 0, 1);
@@ -548,7 +549,7 @@ TEST_F(SwiftNominalContextCAPI, NativeOwnershipAndCompletePairRemainRequired) {
                     "metadata and complete state"}}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault));
-      rejected(report({request()}), Reason);
+      rejected(report(llvm::json::Array{request()}), Reason);
       EXPECT_EQ(neverd_func_count(Session), 1);
     }
   }
@@ -565,7 +566,7 @@ TEST_F(SwiftNominalContextCAPI, IncompleteMetadataCannotSeedNominalSource) {
                     "descriptor"}}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault));
-      const auto Value = report({request()});
+      const auto Value = report(llvm::json::Array{request()});
       rejected(Value, "runtime source context has ambiguous or unsupported "
                       "native metadata");
       const auto *Report = Value.getAsObject();
@@ -595,7 +596,7 @@ TEST_F(SwiftNominalContextCAPI, EmptyFieldsDoNotReplaceValueWitnessLayout) {
           Damage::UnknownValueFlags}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault));
-      const auto Value = report({request()});
+      const auto Value = report(llvm::json::Array{request()});
       rejected(Value, "runtime source context has ambiguous or unsupported "
                       "native metadata");
       const auto *Report = Value.getAsObject();
@@ -623,7 +624,7 @@ TEST_F(SwiftNominalContextCAPI, OrdinaryMemberCannotBypassEmptyLayoutCheck) {
           Damage::OveralignedStorage, Damage::NoncopyableValues}) {
       SCOPED_TRACE(static_cast<int>(Fault));
       ASSERT_NO_FATAL_FAILURE(load(Arm64, Fault, true, true));
-      const auto Value = report({memberRequest()});
+      const auto Value = report(llvm::json::Array{memberRequest()});
       const auto *Report = Value.getAsObject();
       ASSERT_NE(Report, nullptr);
       const bool Recoverable = Fault == Damage::None;
@@ -669,7 +670,7 @@ TEST_F(SwiftNominalContextCAPI, GlobalCollisionRejectsBothNativeIdentities) {
     ASSERT_NO_FATAL_FAILURE(load(Arm64, Damage::None, true));
     // Prove the ordinary row has a real recoverable native body, rather than
     // obtaining two failures from an already unsupported signature.
-    const auto Ordinary = report({request(true)});
+    const auto Ordinary = report(llvm::json::Array{request(true)});
     const auto *Report = Ordinary.getAsObject();
     ASSERT_NE(Report, nullptr);
     counts(*Report, 1, 1, 0);
