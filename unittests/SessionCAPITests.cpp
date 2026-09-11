@@ -86,7 +86,8 @@ CapturedPhaseLoad capturePhaseLoad(neverd_session_t Session, const char *Path) {
   testing::internal::CaptureStderr();
   const int Status = neverd_session_load(Session, Path);
   std::string Diagnostic = testing::internal::GetCapturedStderr();
-  return {Status, std::move(Diagnostic), takeString(neverd_last_error(Session))};
+  return {Status, std::move(Diagnostic),
+          takeString(neverd_last_error(Session))};
 }
 
 void expectSessionPhasePair(const std::string &Diagnostic, const char *Event) {
@@ -101,9 +102,9 @@ void expectSessionPhasePair(const std::string &Diagnostic, const char *Event) {
   ASSERT_TRUE(Remaining.consume_front(End)) << Diagnostic;
   ASSERT_TRUE(Remaining.consume_back("\n")) << Diagnostic;
   ASSERT_FALSE(Remaining.empty());
-  EXPECT_TRUE(std::all_of(Remaining.begin(), Remaining.end(),
-                          [](char C) { return C >= '0' && C <= '9'; }))
-      << Diagnostic;
+  EXPECT_TRUE(std::all_of(Remaining.begin(), Remaining.end(), [](char C) {
+    return C >= '0' && C <= '9';
+  })) << Diagnostic;
   uint64_t Elapsed = 0;
   EXPECT_FALSE(Remaining.getAsInteger(10, Elapsed)) << Diagnostic;
   // The elapsed value has no timing threshold. Exact consumption forbids
@@ -482,12 +483,13 @@ TEST_F(SessionCAPITest, NativePhaseTraceDoesNotTraceNullSessions) {
   EXPECT_TRUE(Diagnostic.empty()) << Diagnostic;
 }
 
-TEST_F(SessionCAPITest, NativePhaseTracePreservesCompletedNativeLoadsAndReports) {
+TEST_F(SessionCAPITest,
+       NativePhaseTracePreservesCompletedNativeLoadsAndReports) {
   ScopedNativePhaseEnvironment Environment;
   for (bool AArch64 : {false, true}) {
     SCOPED_TRACE(AArch64);
-    const std::string Path = write(AArch64 ? "phase-arm64.elf" : "phase-x64.elf",
-                                   makeNativeELF(AArch64));
+    const std::string Path = write(
+        AArch64 ? "phase-arm64.elf" : "phase-x64.elf", makeNativeELF(AArch64));
     ASSERT_EQ(Environment.set(nullptr), 0);
     const auto Before = capturePhaseLoad(Session, Path.c_str());
     ASSERT_EQ(Before.Status, 1) << Before.Error;
@@ -497,7 +499,7 @@ TEST_F(SessionCAPITest, NativePhaseTracePreservesCompletedNativeLoadsAndReports)
     ASSERT_FALSE(Headers.empty());
     const neverd_va_t Entry = neverd_session_entry_addr(Session);
     EXPECT_EQ(Entry, 0x400000u + sizeof(llvm::object::ELF64LE::Ehdr) +
-                        sizeof(llvm::object::ELF64LE::Phdr));
+                         sizeof(llvm::object::ELF64LE::Phdr));
     ASSERT_EQ(neverd_func_count(Session), 1);
 
     ASSERT_EQ(Environment.set("1"), 0);
@@ -514,7 +516,8 @@ TEST_F(SessionCAPITest, NativePhaseTracePreservesCompletedNativeLoadsAndReports)
 }
 
 #ifndef _WIN32
-TEST_F(SessionCAPITest, NativePhaseTraceClosedStderrPreservesActualLoadContract) {
+TEST_F(SessionCAPITest,
+       NativePhaseTraceClosedStderrPreservesActualLoadContract) {
   const std::string Input = write("phase-closed.elf", makeNativeELF(false));
   const std::string Missing = (Directory / "absent-closed.elf").string();
   for (bool Enabled : {false, true}) {
