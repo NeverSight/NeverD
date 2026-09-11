@@ -139,6 +139,8 @@ recovered-ios/
 
 最外层 `status: "success"` 表示已发布通过校验的输出。方法覆盖 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已发现清单，不是语义等价或原程序完整性。每个未恢复方法都有原因。Objective-C 的 `recovered` 还要求运行时元数据完整。空清单不能证明原程序没有方法。
 
+未恢复的 Objective-C 方法行可能包含 `native_backend: {status, reason, diagnostics}`，前提是唯一的后端结果与运行时身份完全匹配。这个有大小限制的可选摘要会保留后端的中间结果，即使声明或布局检查先失败。方法行的主状态、原因和恢复计数仍为最终依据；没有摘要表示该证据不可用。
+
 Swift 的 `coverage_status` 只统计已分类的可调用项。整体 Swift `status` 还考虑未知符号，可为 `unclassified`、`unsupported-architecture` 或 `no-symbols`。不可调用元数据位于 `non_method_symbols`，状态为 `not-callable`；未知符号使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分别记录类型元数据/输出类型单元，不得用来增加方法数量。
 
 每个已恢复 Swift 条目的 `source_representation` 为 `native-method-body` 或 `compiler-generated-from-type`。编译器投影还保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 统计已恢复原生方法体，`compiler_projection_method_count` 统计通过证明的编译器投影，两者之和等于 `recovered_method_count`。编译器入口继续计入 `method_count` 分母，其准确身份必须出现在唯一对应的 `type` 源码单元中。仅有类型元数据或依赖名称不能增加已恢复覆盖。原生批量 JSON 的编译器条目和类型单元包含 `source`；mobile 的 `source_units` 仅保留描述、不含 `source`，完整源码见 `sources/swift.swift`。
@@ -175,7 +177,9 @@ python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 
 macOS 上的 Objective-C 验证脚本先编译原样本，再恢复 `.m`，最后只把生成源码与独立调用程序链接。标量脚本覆盖整数边界、分支、循环、指针读写、隐藏参数、float/double 位身份、混合参数和栈参数。调用脚本另覆盖消息分派、继承、Category、实例变量存储、原生辅助函数及 Block 调用/捕获/共享身份。调用样本要求 arm64/x86_64 × classic/default 每个变体恢复 21/21 个方法，并通过 134/134 项独立预期结果检查。请对当前原生 CLI 构建运行这些验证。
 
-严格 Swift 脚本检查 22 个用户声明、3 个 getter/setter 入口和 7 个编译器生成的可调用入口，任何一项都不能从清单中消失。每个变体有 855 个原程序独立预期结果检查。脚本独立编译生成的 `.swift` 与调用程序，不使用原始 dylib、模块、桥接或手写替代声明。覆盖标量/原生调用、类初始化与存储、结构体按值/mutating 方法、浮点和栈参数、指针及循环。原生 C++20 CLI 的验收要求是 arm64/x86_64 × classic/default 四个变体零跳过：每组必须恢复 25 个原生方法体和 7 个编译器投影，保留全部 32 个可调用身份，原程序与独立编译的生成 Swift 均须通过 855/855 项独立预期结果检查。这些结果限于该样本，不保证任意应用或原始源码文本的恢复。脚本会拒绝覆盖缺失、源码编译失败及行为差异。
+严格 Swift 脚本检查 22 个用户声明、3 个 getter/setter 入口和 9 个编译器生成的可调用入口，任何一项都不能从清单中消失。每个变体有 858 个原程序独立预期结果检查。脚本独立编译生成的 `.swift` 与调用程序，不使用原始 dylib、模块、桥接或手写替代声明。覆盖标量/原生调用、类初始化与存储、结构体按值/mutating 方法、浮点和栈参数、指针及循环。原生 C++20 CLI 的验收要求是 arm64/x86_64 × classic/default 四个变体零跳过：每组必须恢复 25 个原生方法体和 9 个编译器投影，保留全部 34 个可调用身份，原程序与独立编译的生成 Swift 均须通过 858/858 项独立预期结果检查。这些结果限于该样本，不保证任意应用或原始源码文本的恢复。脚本会拒绝覆盖缺失、源码编译失败及行为差异。
+
+这四个变体的编译目标是 macOS。新增的两个编译器入口分别为空值初始化器及其元数据访问器，二者经过独立的原生证明，并在同一个 `struct Empty {}` 源码单元中保留各自身份。通过该样本不代表真实 iOS 应用已通过验收。
 
 三个脚本都支持 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只验证原样本，不测试恢复。包括标量脚本在内，验收要求完成所有请求的架构和 fixup 变体；缺少变体或宿主无法执行某个要求的架构均视为失败，不允许跳过。保留的失败产物可用于区分源码覆盖缺失、编译错误和行为差异；声称已验证前应查看当前测试结果。
 

@@ -139,6 +139,8 @@ recovered-ios/
 
 最外層 `status: "success"` 表示已釋出通過校驗的輸出。方法覆蓋 `recovered`、`partial`、`unrecovered`、`no-methods` 描述的是已發現清單，不是語義等價或原程式完整性。每個未恢復方法都有原因。Objective-C 的 `recovered` 還要求執行階段中繼資料完整。空清單不能證明原程式沒有方法。
 
+未恢復的 Objective-C 方法列可能包含 `native_backend: {status, reason, diagnostics}`，前提是唯一的後端結果與執行階段身分完全相符。這個有大小限制的選用摘要會保留後端的中間結果，即使宣告或配置檢查先失敗。方法列的主要狀態、原因和還原計數仍為最終依據；沒有摘要表示該證據無法取得。
+
 Swift 的 `coverage_status` 只統計已分類的可呼叫項。整體 Swift `status` 還考慮未知符號，可為 `unclassified`、`unsupported-architecture` 或 `no-symbols`。不可呼叫中繼資料位於 `non_method_symbols`，狀態為 `not-callable`；未知符號使用 `unclassified`。`types`、`type_metadata_count`、`source_type_count` 分別記錄型別中繼資料/輸出型別單元，不得用來增加方法數量。
 
 每個已還原 Swift 項目的 `source_representation` 為 `native-method-body` 或 `compiler-generated-from-type`。編譯器投影另保留 `compiler_projection_kind` 和 `compiler_projection_evidence`。`source_body_method_count` 計算已還原原生方法本體，`compiler_projection_method_count` 計算通過證明的編譯器投影，兩者相加等於 `recovered_method_count`。編譯器入口仍計入 `method_count` 分母，其確切身分必須出現在唯一對應的 `type` 原始碼單元中。只有型別中繼資料或相依項名稱不能增加已還原涵蓋率。原生批次 JSON 的編譯器項目和型別單元包含 `source`；mobile 的 `source_units` 僅保留描述、不含 `source`，完整原始碼請見 `sources/swift.swift`。
@@ -175,7 +177,9 @@ python3 scripts/test_mobile_swift_backend.py --neverd build/bin/neverd
 
 macOS 上的 Objective-C 驗證腳本先編譯原始樣本，再還原 `.m`，最後只將產生的原始碼與獨立呼叫程式連結。純量腳本涵蓋整數邊界、分支、迴圈、指標讀寫、隱藏參數、float/double 位元身分、混合參數和堆疊參數。呼叫腳本另涵蓋訊息分派、繼承、Category、執行個體變數儲存、原生輔助函式及 Block 呼叫/擷取/共用身分。呼叫樣本要求 arm64/x86_64 × classic/default 每個變體還原 21/21 個方法，並通過 134/134 項獨立預期結果檢查。請對目前的原生 CLI 建置執行這些驗證。
 
-嚴格 Swift 腳本檢查 22 個使用者宣告、3 個 getter/setter 入口和 7 個編譯器產生的可呼叫入口，任何項目都不能從清單消失。每個變體有 855 個原程式獨立預期結果檢查。腳本獨立編譯產生的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告。案例涵蓋純量/原生呼叫、類別初始化與儲存、結構按值/mutating 方法、浮點及堆疊參數、指標與迴圈。原生 C++20 CLI 的驗收要求是 arm64/x86_64 × classic/default 四個變體零略過：每組必須還原 25 個原生方法本體和 7 個編譯器投影，保留全部 32 個可呼叫身分，原程式與獨立編譯的產生 Swift 均須通過 855/855 項獨立預期結果檢查。這些結果僅適用於此樣本，不保證任意應用程式或原始程式文字的還原。腳本會拒絕涵蓋缺漏、原始碼編譯失敗及行為差異。
+嚴格 Swift 腳本檢查 22 個使用者宣告、3 個 getter/setter 入口和 9 個編譯器產生的可呼叫入口，任何項目都不能從清單消失。每個變體有 858 個原程式獨立預期結果檢查。腳本獨立編譯產生的 `.swift` 與呼叫程式，不使用原始 dylib、模組、橋接或手寫替代宣告。案例涵蓋純量/原生呼叫、類別初始化與儲存、結構按值/mutating 方法、浮點及堆疊參數、指標與迴圈。原生 C++20 CLI 的驗收要求是 arm64/x86_64 × classic/default 四個變體零略過：每組必須還原 25 個原生方法本體和 9 個編譯器投影，保留全部 34 個可呼叫身分，原程式與獨立編譯的產生 Swift 均須通過 858/858 項獨立預期結果檢查。這些結果僅適用於此樣本，不保證任意應用程式或原始程式文字的還原。腳本會拒絕涵蓋缺漏、原始碼編譯失敗及行為差異。
+
+這四個變體的編譯目標是 macOS。新增的兩個編譯器入口分別為空值初始化器及其中繼資料存取器，兩者經過獨立的原生證明，並在同一個 `struct Empty {}` 原始碼單元中保留各自身分。通過此樣本不代表真實 iOS 應用程式已通過驗收。
 
 三個腳本都支援 `--arch all|arm64|x86_64`、`--fixups both|classic|default`、`--timeout N` 和 `--work-dir NEW_DIRECTORY`。`--setup-only` 只驗證原始樣本，不測試還原。包含純量腳本在內，驗收要求完成所有指定的架構與 fixup 變體；缺少變體或主機無法執行指定架構均視為失敗，不允許略過。保留失敗產物可區分原始碼涵蓋缺漏、編譯錯誤與行為差異；宣稱已驗證前應查看目前測試結果。
 
