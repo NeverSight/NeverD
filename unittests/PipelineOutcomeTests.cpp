@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
@@ -18,13 +19,22 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdlib>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace neverd {
 
@@ -519,6 +529,445 @@ TEST(PipelineOutcome, LiftPreservesTheFailedShardDiagnostic) {
             std::string::npos)
       << Result.Error;
 }
+
+class PipelineStageTrace : public ::testing::Test {
+protected:
+  void SetUp() override {
+    PreviousDeathStyle = GTEST_FLAG_GET(death_test_style);
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+  }
+  void TearDown() override {
+    GTEST_FLAG_SET(death_test_style, PreviousDeathStyle);
+  }
+
+private:
+  std::string PreviousDeathStyle;
+};
+
+class ScopedPipelineTraceEnvironment {
+public:
+  ScopedPipelineTraceEnvironment() {
+    if (const char *Value = std::getenv("NEVERD_NATIVE_PHASES")) {
+      HadValue = true;
+      Previous = Value;
+    }
+  }
+  ~ScopedPipelineTraceEnvironment() {
+    EXPECT_EQ(set(HadValue ? Previous.c_str() : nullptr), 0);
+  }
+  int set(const char *Value) const {
+#ifdef _WIN32
+    return _putenv_s("NEVERD_NATIVE_PHASES", Value ? Value : "");
+#else
+    return Value ? setenv("NEVERD_NATIVE_PHASES", Value, 1)
+                 : unsetenv("NEVERD_NATIVE_PHASES");
+#endif
+  }
+
+private:
+  bool HadValue = false;
+  std::string Previous;
+};
+
+BinaryImage stageTraceImage(Arch Architecture) {
+  BinaryImage Image;
+  Image.Arch = Architecture;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::MachO;
+  Image.Entry = 0x1000;
+  Segment Text;
+  Text.Name = "__text";
+  Text.VA = Image.Entry;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  // Owned mov-return bodies; no fixture compiler or external image is used.
+  Text.Data = Architecture == Arch::AArch64
+                  ? std::vector<uint8_t>{0x40, 0x05, 0x80, 0x52,
+                                         0xc0, 0x03, 0x5f, 0xd6}
+                  : std::vector<uint8_t>{0xb8, 0x2a, 0, 0, 0, 0xc3};
+  Text.Size = Text.FileSz = Text.Data.size();
+  Image.Symbols.push_back(
+      {"owned_trace_return", Image.Entry, Text.Size, true});
+  Image.Segments.push_back(std::move(Text));
+  return Image;
+}
+
+PipelineOptions stageTraceOptions(Arch Architecture) {
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.ReturnType = NdType::makeInt(4);
+  std::string Error;
+  EXPECT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error)) << Error;
+  Options.SourceTypeHints.emplace(0x1000, std::move(Hint));
+  return Options;
+}
+
+struct CapturedPipelineStage {
+  PipelineResult Result;
+  std::string Diagnostic;
+  int ErrorNumber;
+};
+
+CapturedPipelineStage capturePipelineStage(const BinaryImage &Image,
+                                           llvm::LLVMContext &Context,
+                                           const PipelineOptions &Options) {
+  testing::internal::CaptureStderr();
+  errno = E2BIG;
+  auto Result = Pipeline().run(Image, Context, Options);
+  const int ErrorNumber = errno;
+  auto Diagnostic = testing::internal::GetCapturedStderr();
+  return {std::move(Result), std::move(Diagnostic), ErrorNumber};
+}
+
+void expectStageRecords(const std::string &Diagnostic, unsigned Invocation,
+                        std::initializer_list<const char *> Stages,
+                        const char *FinalEvent = "completed") {
+  llvm::StringRef Remaining(Diagnostic);
+  size_t StageIndex = 0;
+  for (const char *Stage : Stages) {
+    for (bool Begin : {true, false}) {
+      const auto LineAndRest = Remaining.split('\n');
+      const llvm::StringRef Line = LineAndRest.first;
+      ASSERT_LT(Line.size(), Remaining.size()) << Diagnostic;
+      ASSERT_LE(Line.size() + 1, 192u);
+      llvm::StringRef Fields = Line;
+      const std::string Prefix =
+          "[neverd-pipeline-stage] invocation=" + std::to_string(Invocation) +
+          " stage=" + Stage + " event=" +
+          (Begin ? "begin"
+                 : StageIndex + 1 == Stages.size() ? FinalEvent : "completed") +
+          " elapsed_ms=";
+      ASSERT_TRUE(Fields.consume_front(Prefix)) << Line;
+      ASSERT_FALSE(Fields.empty());
+      EXPECT_TRUE(std::all_of(Fields.begin(), Fields.end(), [](char C) {
+        return C >= '0' && C <= '9';
+      })) << Line;
+      uint64_t Elapsed = 0;
+      ASSERT_FALSE(Fields.getAsInteger(10, Elapsed)) << Line;
+      if (Begin)
+        EXPECT_EQ(Fields, "0");
+      Remaining = LineAndRest.second;
+    }
+    ++StageIndex;
+  }
+  EXPECT_TRUE(Remaining.empty()) << Remaining.str();
+  // Full line consumption also forbids disclosed image names and extra fields.
+}
+
+void expectOwnedStageResult(const BinaryImage &Image,
+                            const PipelineResult &Result, std::string &Source) {
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  EXPECT_TRUE(Result.Error.empty());
+  EXPECT_EQ(Result.SourceImage, &Image);
+  ASSERT_EQ(Result.LowFuncs.size(), 1u);
+  ASSERT_EQ(Result.MedFuncs.size(), 1u);
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  EXPECT_EQ(Result.LowFuncs.front().Entry, 0x1000u);
+  EXPECT_EQ(Result.MedFuncs.front().Entry, 0x1000u);
+  EXPECT_EQ(Result.HighFuncs.front().Entry, 0x1000u);
+  EXPECT_EQ(Result.LowFuncs.front().Name, "owned_trace_return");
+  EXPECT_EQ(Result.MedFuncs.front().Name, "owned_trace_return");
+  EXPECT_EQ(Result.HighFuncs.front().Name, "owned_trace_return");
+  ASSERT_EQ(Result.FunctionAudits.size(), 1u);
+  const auto &Audit = Result.FunctionAudits.front();
+  EXPECT_EQ(Audit.Entry, 0x1000u);
+  EXPECT_EQ(Audit.Name, "owned_trace_return");
+  EXPECT_EQ(Audit.Disposition, PipelineFunctionDisposition::Accepted);
+  EXPECT_EQ(Audit.DecodedInstructions, 2u);
+  EXPECT_EQ(Audit.LiftedInstructions, 2u);
+  EXPECT_TRUE(Audit.DecodeFailures.empty());
+  EXPECT_TRUE(Audit.UnsupportedInstructions.empty());
+  EXPECT_TRUE(Audit.TruncatedPaths.empty());
+  EXPECT_TRUE(Audit.HasLowIR);
+  EXPECT_TRUE(Audit.HasMedIR);
+  EXPECT_TRUE(Audit.MedIRVerified);
+  EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+  EXPECT_EQ(Result.BackendUnhandledValueIntrinsics, 0u);
+  EXPECT_FALSE(Result.LLVMVerifierFailed);
+  EXPECT_EQ(Result.LlvmModule, nullptr);
+  EXPECT_EQ(Result.EVM, nullptr);
+  EXPECT_EQ(Result.SBF, nullptr);
+  llvm::raw_string_ostream Stream(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Options));
+  EXPECT_NE(Source.find("owned_trace_return"), std::string::npos);
+  EXPECT_NE(Source.find("42"), std::string::npos);
+}
+
+void exerciseOwnedPipelineStages() {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  unsigned Invocation = 0;
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(getArchName(Architecture));
+    const auto Image = stageTraceImage(Architecture);
+    const auto Options = stageTraceOptions(Architecture);
+    llvm::LLVMContext BeforeContext;
+    ASSERT_EQ(Environment.set(nullptr), 0);
+    const auto Before = capturePipelineStage(Image, BeforeContext, Options);
+    EXPECT_TRUE(Before.Diagnostic.empty()) << Before.Diagnostic;
+    std::string BeforeSource;
+    expectOwnedStageResult(Image, Before.Result, BeforeSource);
+    llvm::LLVMContext AfterContext;
+    ASSERT_EQ(Environment.set("1"), 0);
+    const auto After = capturePipelineStage(Image, AfterContext, Options);
+    expectStageRecords(After.Diagnostic, ++Invocation,
+                       {"decoder", "function_detection", "low_ir",
+                        "candidate_cleanup", "med_ir", "noreturn_verify",
+                        "high_ir"});
+    std::string AfterSource;
+    expectOwnedStageResult(Image, After.Result, AfterSource);
+    EXPECT_EQ(AfterSource, BeforeSource);
+    EXPECT_EQ(After.ErrorNumber, Before.ErrorNumber);
+  }
+}
+
+TEST_F(PipelineStageTrace, PreservesOwnedNativeResults) {
+  ASSERT_EXIT(
+      {
+        exerciseOwnedPipelineStages();
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+void exerciseExactPipelineTraceEnvironment() {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  const auto Image = stageTraceImage(Arch::X64);
+  const auto Options = stageTraceOptions(Image.Arch);
+  const char *Values[] = {nullptr, "", "0", "01", "11", "true", "1 ",
+                           " 1", "1\n"};
+  for (const char *Value : Values) {
+    SCOPED_TRACE(Value ? Value : "unset");
+    ASSERT_EQ(Environment.set(Value), 0);
+    llvm::LLVMContext Context;
+    const auto Captured = capturePipelineStage(Image, Context, Options);
+    EXPECT_TRUE(Captured.Diagnostic.empty()) << Captured.Diagnostic;
+    std::string Source;
+    expectOwnedStageResult(Image, Captured.Result, Source);
+  }
+  ASSERT_EQ(Environment.set("1"), 0);
+  llvm::LLVMContext Context;
+  const auto Captured = capturePipelineStage(Image, Context, Options);
+  expectStageRecords(Captured.Diagnostic, 1,
+                     {"decoder", "function_detection", "low_ir",
+                      "candidate_cleanup", "med_ir", "noreturn_verify",
+                      "high_ir"});
+  std::string Source;
+  expectOwnedStageResult(Image, Captured.Result, Source);
+}
+
+TEST_F(PipelineStageTrace, RequiresExactEnvironmentValue) {
+  ASSERT_EXIT(
+      {
+        exerciseExactPipelineTraceEnvironment();
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+void exercisePipelineStageFailureAndEarlyReturn() {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  BinaryImage Unknown;
+  Unknown.Arch = Arch::Unknown;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext BeforeContext;
+  ASSERT_EQ(Environment.set(nullptr), 0);
+  const auto Before = capturePipelineStage(Unknown, BeforeContext, Options);
+  ASSERT_FALSE(Before.Result.Success);
+  EXPECT_EQ(Before.Result.Error,
+            "failed to initialize decoder for architecture unknown");
+  ASSERT_FALSE(Before.Diagnostic.empty());
+  llvm::LLVMContext AfterContext;
+  ASSERT_EQ(Environment.set("1"), 0);
+  const auto After = capturePipelineStage(Unknown, AfterContext, Options);
+  EXPECT_FALSE(After.Result.Success);
+  EXPECT_EQ(After.Result.Error, Before.Result.Error);
+  EXPECT_TRUE(After.Result.LowFuncs.empty());
+  EXPECT_TRUE(After.Result.HighFuncs.empty());
+  EXPECT_EQ(After.Result.LlvmModule, nullptr);
+  std::string Trace = After.Diagnostic;
+  const size_t OriginalError = Trace.find(Before.Diagnostic);
+  ASSERT_NE(OriginalError, std::string::npos) << Trace;
+  Trace.erase(OriginalError, Before.Diagnostic.size());
+  expectStageRecords(Trace, 1, {"decoder"}, "failed");
+
+  unsigned Invocation = 1;
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    const auto Image = stageTraceImage(Architecture);
+    auto Intermediate = stageTraceOptions(Architecture);
+    Intermediate.DumpLow = true;
+    llvm::LLVMContext Context;
+    const auto Captured = capturePipelineStage(Image, Context, Intermediate);
+    ASSERT_TRUE(Captured.Result.Success) << Captured.Result.Error;
+    ASSERT_EQ(Captured.Result.LowFuncs.size(), 1u);
+    ASSERT_EQ(Captured.Result.MedFuncs.size(), 1u);
+    EXPECT_TRUE(Captured.Result.HighFuncs.empty());
+    EXPECT_EQ(Captured.Result.LlvmModule, nullptr);
+    expectStageRecords(Captured.Diagnostic, ++Invocation,
+                       {"decoder", "function_detection", "low_ir",
+                        "candidate_cleanup", "med_ir", "noreturn_verify"});
+  }
+}
+
+TEST_F(PipelineStageTrace, KeepsFailuresAndIntermediateReturns) {
+  ASSERT_EXIT(
+      {
+        exercisePipelineStageFailureAndEarlyReturn();
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+void exercisePipelineTraceAdmission() {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  ASSERT_EQ(Environment.set("1"), 0);
+  size_t TotalDiagnosticBytes = 0;
+  std::string ReferenceSource;
+  const auto Image = stageTraceImage(Arch::AArch64);
+  const auto Options = stageTraceOptions(Image.Arch);
+  for (unsigned Run = 1; Run <= 35; ++Run) {
+    SCOPED_TRACE(Run);
+    llvm::LLVMContext Context;
+    const auto Captured = capturePipelineStage(Image, Context, Options);
+    std::string Source;
+    expectOwnedStageResult(Image, Captured.Result, Source);
+    if (Run == 1)
+      ReferenceSource = Source;
+    else
+      EXPECT_EQ(Source, ReferenceSource);
+    if (Run <= 32)
+      expectStageRecords(Captured.Diagnostic, Run,
+                         {"decoder", "function_detection", "low_ir",
+                          "candidate_cleanup", "med_ir", "noreturn_verify",
+                          "high_ir"});
+    else
+      EXPECT_TRUE(Captured.Diagnostic.empty()) << Captured.Diagnostic;
+    TotalDiagnosticBytes += Captured.Diagnostic.size();
+  }
+  EXPECT_LE(TotalDiagnosticBytes, 32u * 14u * 192u);
+  EXPECT_FALSE(ReferenceSource.empty());
+}
+
+TEST_F(PipelineStageTrace, AdmissionDoesNotLimitAnalysis) {
+  ASSERT_EXIT(
+      {
+        exercisePipelineTraceAdmission();
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+void exercisePipelineTraceLift() {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  ASSERT_EQ(Environment.set("1"), 0);
+  unsigned Invocation = 0;
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    const auto Image = stageTraceImage(Architecture);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.NoOpt = true;
+    Options.LiftMode = true;
+    llvm::LLVMContext Context;
+    const auto Captured = capturePipelineStage(Image, Context, Options);
+    ASSERT_TRUE(Captured.Result.Success) << Captured.Result.Error;
+    ASSERT_NE(Captured.Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Captured.Result.LlvmModule));
+    const auto *Function =
+        Captured.Result.LlvmModule->getFunction("owned_trace_return");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_FALSE(Function->isDeclaration());
+    EXPECT_TRUE(Captured.Result.HighFuncs.empty());
+    ASSERT_EQ(Captured.Result.FunctionAudits.size(), 1u);
+    EXPECT_TRUE(Captured.Result.FunctionAudits.front().HasLLVMDefinition);
+    expectStageRecords(Captured.Diagnostic, ++Invocation,
+                       {"decoder", "function_detection", "low_ir",
+                        "candidate_cleanup", "med_ir", "noreturn_verify",
+                        "llvm_emission"});
+  }
+}
+
+TEST_F(PipelineStageTrace, KeepsLiftBranchAndItsNativeDefinition) {
+  ASSERT_EXIT(
+      {
+        exercisePipelineTraceLift();
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "");
+}
+
+#ifndef _WIN32
+void exercisePipelineTraceSink(bool Full) {
+  ScopedPipelineTraceEnvironment Environment;
+  ScopedThreadCount Threads(1);
+  const auto Image = stageTraceImage(Arch::X64);
+  const auto Options = stageTraceOptions(Image.Arch);
+  ASSERT_EQ(Environment.set(nullptr), 0);
+  llvm::LLVMContext BeforeContext;
+  const auto Before = capturePipelineStage(Image, BeforeContext, Options);
+  std::string BeforeSource;
+  expectOwnedStageResult(Image, Before.Result, BeforeSource);
+  ASSERT_FALSE(llvm::errs().has_error());
+  ASSERT_EQ(Environment.set("1"), 0);
+  const int Saved = dup(STDERR_FILENO);
+  ASSERT_GE(Saved, 0);
+  if (Full) {
+    const int Sink = open("/dev/full", O_WRONLY);
+    ASSERT_GE(Sink, 0);
+    ASSERT_GE(dup2(Sink, STDERR_FILENO), 0);
+    close(Sink);
+  } else {
+    ASSERT_EQ(close(STDERR_FILENO), 0);
+  }
+  errno = 0;
+  const bool ActualWriteFailure =
+      ::write(STDERR_FILENO, "x", 1) == -1 && errno == (Full ? ENOSPC : EBADF);
+  llvm::LLVMContext AfterContext;
+  errno = E2BIG;
+  const auto Result = Pipeline().run(Image, AfterContext, Options);
+  const int AfterErrno = errno;
+  const int Restored = dup2(Saved, STDERR_FILENO);
+  close(Saved);
+  ASSERT_GE(Restored, 0);
+  EXPECT_TRUE(ActualWriteFailure);
+  EXPECT_FALSE(llvm::errs().has_error());
+  EXPECT_EQ(AfterErrno, Before.ErrorNumber);
+  std::string AfterSource;
+  expectOwnedStageResult(Image, Result, AfterSource);
+  EXPECT_EQ(AfterSource, BeforeSource);
+  // Do not clear the global stream: that would hide diagnostic contamination.
+  llvm::errs() << "pipeline-sink-restored\n";
+  llvm::errs().flush();
+  EXPECT_FALSE(llvm::errs().has_error());
+}
+
+TEST_F(PipelineStageTrace, ClosedStderrPreservesNativeResult) {
+  ASSERT_EXIT(
+      {
+        exercisePipelineTraceSink(false);
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "^pipeline-sink-restored\n$");
+}
+#endif
+
+#ifdef __linux__
+TEST_F(PipelineStageTrace, FullStderrPreservesNativeResult) {
+  ASSERT_EXIT(
+      {
+        exercisePipelineTraceSink(true);
+        std::exit(::testing::Test::HasFailure() ? 1 : 0);
+      },
+      ::testing::ExitedWithCode(0), "^pipeline-sink-restored\n$");
+}
+#endif
 
 } // namespace
 } // namespace neverd

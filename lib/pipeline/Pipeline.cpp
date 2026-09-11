@@ -22,13 +22,19 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <set>
 #include <string>
@@ -38,6 +44,129 @@
 #define DEBUG_TYPE "neverd-pipeline"
 
 namespace neverd {
+
+namespace {
+
+class NativePipelineTrace {
+public:
+  enum class Stage {
+    Decoder,
+    FunctionDetection,
+    LowIR,
+    CandidateCleanup,
+    MedIR,
+    NoReturnVerify,
+    HighIR,
+    LLVMEmission
+  };
+
+private:
+  using Clock = std::chrono::steady_clock;
+  using Milliseconds = std::chrono::milliseconds;
+  unsigned Invocation = 0;
+  Stage Current = Stage::Decoder;
+  bool Active = false;
+  Clock::time_point Started;
+
+  const char *name() const noexcept {
+    switch (Current) {
+    case Stage::Decoder:
+      return "decoder";
+    case Stage::FunctionDetection:
+      return "function_detection";
+    case Stage::LowIR:
+      return "low_ir";
+    case Stage::CandidateCleanup:
+      return "candidate_cleanup";
+    case Stage::MedIR:
+      return "med_ir";
+    case Stage::NoReturnVerify:
+      return "noreturn_verify";
+    case Stage::HighIR:
+      return "high_ir";
+    case Stage::LLVMEmission:
+      return "llvm_emission";
+    }
+    return "unknown";
+  }
+
+  Milliseconds::rep elapsed() const noexcept {
+    const int SavedErrno = errno;
+    const auto Elapsed =
+        std::chrono::duration_cast<Milliseconds>(Clock::now() - Started)
+            .count();
+    errno = SavedErrno;
+    return Elapsed;
+  }
+
+  void record(const char *Event, Milliseconds::rep Elapsed) noexcept {
+    const int SavedErrno = errno;
+    try {
+      llvm::SmallString<192> Line;
+      llvm::raw_svector_ostream OS(Line);
+      OS << "[neverd-pipeline-stage] invocation=" << Invocation
+         << " stage=" << name() << " event=" << Event
+         << " elapsed_ms=" << Elapsed << '\n';
+      if (Line.size() <= 192) {
+        llvm::raw_fd_ostream Sink(2, /*shouldClose=*/false, /*unbuffered=*/true);
+        llvm::scope_exit ClearError([&Sink]() noexcept { Sink.clear_error(); });
+        Sink.write(Line.data(), Line.size());
+        Sink.flush();
+      }
+    } catch (...) {
+      // Diagnostic failures must not replace the pipeline result or exception.
+    }
+    errno = SavedErrno;
+  }
+
+public:
+  NativePipelineTrace() noexcept {
+    const int SavedErrno = errno;
+    const char *Value = std::getenv("NEVERD_NATIVE_PHASES");
+    if (Value && Value[0] == '1' && Value[1] == '\0') {
+      // Only diagnostics are capped. Each admitted run can emit at most seven
+      // stage pairs, including one of the mutually exclusive final branches.
+      static std::atomic<unsigned> Used{0};
+      unsigned Count = Used.load(std::memory_order_relaxed);
+      while (Count < 32) {
+        if (Used.compare_exchange_strong(Count, Count + 1,
+                                         std::memory_order_relaxed)) {
+          Invocation = Count + 1;
+          break;
+        }
+      }
+    }
+    errno = SavedErrno;
+  }
+  NativePipelineTrace(const NativePipelineTrace &) = delete;
+  NativePipelineTrace &operator=(const NativePipelineTrace &) = delete;
+
+  ~NativePipelineTrace() noexcept {
+    if (Active)
+      record("aborted", elapsed());
+  }
+
+  void finish(bool Success) noexcept {
+    if (!Active)
+      return;
+    Active = false;
+    record(Success ? "completed" : "failed", elapsed());
+  }
+
+  void start(Stage Next) noexcept {
+    if (!Invocation)
+      return;
+    const int SavedErrno = errno;
+    finish(true);
+    Current = Next;
+    Started = Clock::now();
+    Active = true;
+    record("begin", 0);
+    errno = SavedErrno;
+  }
+};
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Pipeline::run — orchestration
@@ -136,19 +265,25 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
 
+  NativePipelineTrace Trace;
+  Trace.start(NativePipelineTrace::Stage::Decoder);
   Decoder Dec;
   if (!Dec.init(Img.Arch, Img.Mode)) {
     Result.Error = "failed to initialize decoder for architecture " +
                    std::string(getArchName(Img.Arch));
     llvm::WithColor::error() << "pipeline: " << Result.Error << "\n";
+    Trace.finish(false);
     return Result;
   }
 
+  Trace.start(NativePipelineTrace::Stage::FunctionDetection);
   auto Candidates = detectFunctions(Img, Dec, Opts, Dbg, Result);
 
   // Phase 1: Build LowIR (parallel).
+  Trace.start(NativePipelineTrace::Stage::LowIR);
   buildLowIR(Img, Candidates, Opts, Dbg, Result);
 
+  Trace.start(NativePipelineTrace::Stage::CandidateCleanup);
   // Remove spurious functions whose entry coincides with a jump-table
   // target of another function.  The function detector may promote
   // call-scan targets that are actually switch-case destinations.
@@ -204,7 +339,9 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     dumpLowIR(Result.LowFuncs);
 
   // Phase 2: LowIR -> MedIR (parallel).
+  Trace.start(NativePipelineTrace::Stage::MedIR);
   buildMedIR(Img, Opts, Result);
+  Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
   propagateInternalNoReturn(Result.MedFuncs, Img.Arch);
 
   if (Opts.DumpMed && Opts.EmitDumpOutput)
@@ -213,6 +350,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   if (Result.MedIRVerifierFailures != 0) {
     Result.Error = "MedIR verification failed";
     Result.Success = false;
+    Trace.finish(false);
     return Result;
   }
 
@@ -222,19 +360,25 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   if ((Opts.DumpLow || Opts.DumpMed) && !Opts.DumpHigh && !Opts.PatchMode &&
       !Opts.LiftMode) {
     Result.Success = true;
+    Trace.finish(true);
     return Result;
   }
 
   // Patch/Lift mode: MedIR -> LLVM IR, skip HighIR.
   if (Opts.PatchMode || Opts.LiftMode) {
+    Trace.start(NativePipelineTrace::Stage::LLVMEmission);
     Result.Success = runPatchLiftMode(Img, Ctx, Opts, Result);
+    Trace.finish(Result.Success);
     return Result;
   }
 
   // Phase 3: MedIR -> HighIR (parallel).
+  Trace.start(NativePipelineTrace::Stage::HighIR);
   if (!pipeline_detail::runHighIRStage(Result,
-                                       [&] { buildHighIR(Img, Opts, Result); }))
+                                       [&] { buildHighIR(Img, Opts, Result); })) {
+    Trace.finish(false);
     return Result;
+  }
 
   if (Opts.DumpHigh && Opts.EmitDumpOutput)
     dumpHighIR(Result.HighFuncs);
@@ -244,6 +388,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                           << " functions, for C emission)\n");
 
   Result.Success = true;
+  Trace.finish(true);
   return Result;
 }
 

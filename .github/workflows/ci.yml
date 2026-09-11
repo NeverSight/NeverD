@@ -387,13 +387,39 @@ jobs:
                    "NeverDSessionCAPITests"),
                   ("SessionCAPITest.NativePhaseTracePreservesCompletedNativeLoadsAndReports",
                    "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativeMobileObserverSeesRawImageBeforeNormalizedPublication",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativeMobileLoadRejectsBeforeCallingTheObserver",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativeMobileObserverFailurePreservesLoadedAnalysisAndEdits",
+                   "NeverDSessionCAPITests"),
+                  ("SessionCAPITest.NativeMobileDebugFailureRetainsDecoderAndAllowsReplacement",
+                   "NeverDSessionCAPITests"),
+                  ("ObjCCallHints.SelectorStubCommandProofDoesNotRequireMethodSignature",
+                   "NeverDLiftTests"),
+                  ("ObjCCallHints.SelectorStubCommandProofRejectsUnverifiedCodeAndSlots",
+                   "NeverDLiftTests"),
+                  ("ObjCCallHints.VerifiedSelectorStubDiscardsStaleCallerCommand",
+                   "NeverDLiftTests"),
+                  ("ObjCCallHints.UnverifiedSelectorStubKeepsObservedCallerCommand",
+                   "NeverDLiftTests"),
+                  ("PipelineStageTrace.PreservesOwnedNativeResults",
+                   "NeverDPipelineOutcomeTests"),
+                  ("PipelineStageTrace.RequiresExactEnvironmentValue",
+                   "NeverDPipelineOutcomeTests"),
+                  ("PipelineStageTrace.KeepsFailuresAndIntermediateReturns",
+                   "NeverDPipelineOutcomeTests"),
+                  ("PipelineStageTrace.AdmissionDoesNotLimitAnalysis",
+                   "NeverDPipelineOutcomeTests"),
+                  ("PipelineStageTrace.KeepsLiftBranchAndItsNativeDefinition",
+                   "NeverDPipelineOutcomeTests"),
               )
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 70,
-              ("macOS", "macos-patch"): 69,
-              ("Windows", "windows-focused"): 68,
+              ("Linux", "linux-semantic"): 85,
+              ("macOS", "macos-patch"): 83,
+              ("Windows", "windows-focused"): 81,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(
@@ -404,6 +430,16 @@ jobs:
               expected += (TestRecord(
                   "SessionCAPITest.NativePhaseTraceFullStderrPreservesActualLoadContract",
                   frozenset({"NeverDSessionCAPITests"}),
+              ),)
+          if runner_os in ("Linux", "macOS"):
+              expected += (TestRecord(
+                  "PipelineStageTrace.ClosedStderrPreservesNativeResult",
+                  frozenset({"NeverDPipelineOutcomeTests"}),
+              ),)
+          if runner_os == "Linux":
+              expected += (TestRecord(
+                  "PipelineStageTrace.FullStderrPreservesNativeResult",
+                  frozenset({"NeverDPipelineOutcomeTests"}),
               ),)
           if (len(expected) != expected_count or len(set(expected)) != expected_count
                   or len({item.name for item in expected}) != expected_count):
@@ -430,6 +466,7 @@ jobs:
           owners = (
               "NeverDLanguageEHTests", "NeverDLiftTests", "NeverDMetadataJSONTests",
               "NeverDMobileTests", "NeverDSessionCAPITests",
+              "NeverDPipelineOutcomeTests",
           )
           owner_regex = "^(" + "|".join(re.escape(owner) for owner in owners) + ")$"
           common = [

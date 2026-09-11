@@ -113,6 +113,31 @@ class SingleSessionEvidenceTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     runner.validate_trace(output, report)
 
+    def test_pipeline_stage_prefix_preserves_the_child_phase_contract(self):
+        stages = ("decoder", "function_detection", "low_ir", "candidate_cleanup",
+                  "med_ir", "noreturn_verify", "high_ir")
+        records = "".join(
+            f"[neverd-pipeline-stage] invocation=1 stage={stage} "
+            f"event={event} elapsed_ms={elapsed}\n"
+            for stage in stages
+            for event, elapsed in (("begin", 0), ("completed", 1))
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output, report = self.fixture(Path(temporary) / "variant")
+            before = runner.validate_trace(output, report)
+            pipeline_end = (
+                "[neverd-child-phase] phase=pipeline event=completed "
+                "iteration=0 elapsed_ms=7\n"
+            )
+            trace = TRACE.replace(pipeline_end, records + pipeline_end)
+            (output / "logs/native.log").write_text(trace)
+            after = runner.validate_trace(output, report)
+            self.assertNotEqual(after.pop("log_sha256"), before.pop("log_sha256"))
+            self.assertEqual(after, before)
+            self.assertEqual(after["session_loads"], 1)
+            self.assertEqual(after["objc_exports"], 1)
+            self.assertTrue(after["swift_export_used"])
+
     def test_missing_or_separate_export_logs_are_rejected(self):
         for mutation in ("missing-native", "different-swift", "missing-swift", "extra-log"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
