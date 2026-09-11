@@ -31,6 +31,40 @@ struct TemporaryDirectory {
     fs::remove_all(path, error);
   }
 };
+void expectFailurePhases(const std::string &message, std::string_view prefix,
+                         llvm::StringRef active,
+                         const std::vector<std::string> &completed) {
+  constexpr std::string_view marker = "\n[neverd-ios-phases] ";
+  EXPECT_TRUE(message.starts_with(prefix));
+  auto position = message.find(marker);
+  ASSERT_NE(position, std::string::npos);
+  EXPECT_EQ(message.find(marker, position + marker.size()), std::string::npos);
+  auto text = message.substr(position + marker.size());
+  EXPECT_EQ(text.find('\n'), std::string::npos);
+  EXPECT_LT(text.size(), 4096u);
+  auto value = parseJSON(text, "iOS phase diagnostic");
+  const auto *diagnostic = value.getAsObject();
+  ASSERT_NE(diagnostic, nullptr);
+  EXPECT_EQ(diagnostic->size(), 4u);
+  EXPECT_EQ(str(*diagnostic, "active_phase"), active);
+  for (auto key : {"active_elapsed_ms", "elapsed_ms"}) {
+    auto elapsed = diagnostic->getInteger(key);
+    ASSERT_TRUE(elapsed.has_value());
+    EXPECT_GE(*elapsed, 0);
+  }
+  const auto *phases = diagnostic->getArray("completed_phases");
+  ASSERT_NE(phases, nullptr);
+  ASSERT_EQ(phases->size(), completed.size());
+  for (size_t i = 0; i < phases->size(); ++i) {
+    const auto *phase = (*phases)[i].getAsObject();
+    ASSERT_NE(phase, nullptr);
+    EXPECT_EQ(phase->size(), 2u);
+    EXPECT_EQ(str(*phase, "phase"), completed[i]);
+    auto elapsed = phase->getInteger("elapsed_ms");
+    ASSERT_TRUE(elapsed.has_value());
+    EXPECT_GE(*elapsed, 0);
+  }
+}
 void integer(std::string &d, size_t p, uint64_t value, unsigned width = 4,
              bool little = true) {
   for (unsigned i = 0; i < width; ++i)
@@ -1231,6 +1265,81 @@ TEST(MobileIOSNative, MetadataOnlyAppUsesAppRelativeArtifactWithoutTools) {
   EXPECT_FALSE(fs::exists(staging / "input"));
   EXPECT_TRUE(fs::is_regular_file(staging / "metadata/objc.h"));
   EXPECT_FALSE(fs::exists(staging / "sources"));
+}
+
+TEST(MobileIOSNative, RecoveryFailureReportsSlicePhaseAndPreservesCleanup) {
+  TemporaryDirectory directory;
+  Options options;
+  options.input = directory.path / "invalid-input.macho";
+  options.output = directory.path / "output";
+  options.platform = "ios";
+  writeFile(options.input, std::string(32, '\0'));
+  try {
+    recover(options);
+    FAIL() << "invalid image unexpectedly recovered";
+  } catch (const Error &error) {
+    expectFailurePhases(error.what(),
+                        "expected a little-endian Mach-O executable",
+                        "slice_selection", {"input_staging"});
+  }
+  EXPECT_FALSE(fs::exists(options.output));
+  for (const auto &entry : fs::directory_iterator(directory.path))
+    EXPECT_EQ(entry.path(), options.input);
+}
+
+TEST(MobileIOSNative, RecoveryFailureReportsNativePhaseAfterMetadata) {
+  TemporaryDirectory directory;
+  Options options;
+  options.input = directory.path / "input.macho";
+  options.output = directory.path / "output";
+  options.platform = "ios";
+  options.architecture = "arm64";
+  options.executable = pathText(directory.path / "missing-native-backend");
+  writeFile(options.input, loadableThin());
+  ASSERT_FALSE(fs::exists(pathFromUTF8(options.executable)));
+  try {
+    recover(options);
+    FAIL() << "missing native backend unexpectedly recovered";
+  } catch (const Error &error) {
+    expectFailurePhases(error.what(), "cannot execute backend " +
+                                         options.executable,
+                        "native_export",
+                        {"input_staging", "slice_selection", "build_target",
+                         "macho_loading", "objc_metadata", "swift_metadata"});
+  }
+  EXPECT_FALSE(fs::exists(options.output));
+  for (const auto &entry : fs::directory_iterator(directory.path))
+    EXPECT_EQ(entry.path(), options.input);
+}
+
+TEST(MobileIOSNative, MetadataOnlyRecoveryDoesNotPublishFailureDiagnostics) {
+  TemporaryDirectory directory;
+  Options options;
+  options.input = directory.path / "input.macho";
+  options.output = directory.path / "output";
+  options.platform = "ios";
+  options.architecture = "arm64";
+  options.metadata_only = true;
+  options.executable = pathText(directory.path / "missing-native-backend");
+  writeFile(options.input, loadableThin());
+  auto report = recover(options);
+  EXPECT_EQ(str(report, "status"), "success");
+  EXPECT_TRUE(flag(report, "metadata_only"));
+  EXPECT_TRUE(fs::is_regular_file(options.output / "artifacts/selected.macho"));
+  EXPECT_TRUE(fs::is_regular_file(options.output / "metadata/objc.json"));
+  EXPECT_TRUE(fs::is_regular_file(options.output / "metadata/objc.h"));
+  EXPECT_TRUE(fs::is_regular_file(options.output / "metadata/swift.json"));
+  EXPECT_FALSE(fs::exists(options.output / "sources"));
+  EXPECT_FALSE(fs::exists(options.output / "input"));
+  for (auto key : {"active_phase", "active_elapsed_ms", "elapsed_ms",
+                   "completed_phases"})
+    EXPECT_EQ(report.get(key), nullptr);
+  auto text = readFile(options.output / "report.json", options.limits.max_bytes);
+  EXPECT_EQ(text.find("[neverd-ios-phases]"), std::string::npos);
+  EXPECT_EQ(parseJSON(text, "successful mobile report"), Value(Object(report)));
+  for (const auto &entry : fs::directory_iterator(directory.path))
+    EXPECT_FALSE(
+        pathText(entry.path().filename()).starts_with(".neverd-mobile-"));
 }
 
 TEST(MobileIOSNative, MetadataOnlyPreservesMissingAndZipperedBuildTargets) {

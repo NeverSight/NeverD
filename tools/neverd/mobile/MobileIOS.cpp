@@ -3,11 +3,51 @@
 #include "neverd/loader/MachO/MachOLoader.h"
 
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
+#include <array>
 
 namespace neverd::mobile {
 namespace {
+class PhaseTimer {
+  using Clock = std::chrono::steady_clock;
+  struct CompletedPhase {
+    const char *name = nullptr;
+    int64_t elapsed = 0;
+  };
+  Clock::time_point started = Clock::now(), active_started = started;
+  const char *active = "input_staging";
+  std::array<CompletedPhase, 9> completed{};
+  size_t count = 0;
+
+  static int64_t milliseconds(Clock::time_point begin, Clock::time_point end) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
+        .count();
+  }
+
+public:
+  void enter(const char *phase) {
+    auto now = Clock::now();
+    if (count < completed.size())
+      completed[count++] = {active, milliseconds(active_started, now)};
+    active = phase;
+    active_started = now;
+  }
+  std::string diagnostic() const {
+    auto now = Clock::now();
+    llvm::json::Array phases;
+    for (size_t i = 0; i < count; ++i)
+      phases.push_back(llvm::json::Object{
+          {"phase", completed[i].name}, {"elapsed_ms", completed[i].elapsed}});
+    llvm::json::Object report{
+        {"active_phase", active},
+        {"active_elapsed_ms", milliseconds(active_started, now)},
+        {"elapsed_ms", milliseconds(started, now)},
+        {"completed_phases", std::move(phases)}};
+    return llvm::formatv("{0}", llvm::json::Value(std::move(report))).str();
+  }
+};
 fs::path artifactPath(const fs::path &bundle, const std::string &artifact) {
   auto relative = relativeMember(artifact);
   auto candidate = bundle / relative;
@@ -42,9 +82,9 @@ void publishJSON(const fs::path &path, const ios::Object &value,
                  Budget &budget) {
   publish(path, jsonText(ios::Value(ios::Object(value))), budget);
 }
-} // namespace
-llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
-                              Budget &budget) {
+llvm::json::Object recoverIOSImpl(const Options &options,
+                                  const fs::path &staging, Budget &budget,
+                                  PhaseTimer &phases) {
   using namespace ios;
   auto input = staging / "input";
   fs::create_directories(input);
@@ -80,8 +120,10 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
     kind = "macho";
     executable = options.input;
   }
+  phases.enter("slice_selection");
   auto selection = selectSlice(readFile(executable, budget.limits.max_bytes),
                                options.architecture, budget);
+  phases.enter("build_target");
   auto build_target = buildTargetMetadata(selection, budget);
   if (selection.encrypted)
     throw Error("selected Mach-O slice is encrypted (cryptid != 0); supply a "
@@ -89,6 +131,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
   auto selected = kind == "macho"
                       ? pathText(options.input.filename())
                       : pathText(executable.lexically_relative(input));
+  phases.enter("macho_loading");
   fs::create_directories(staging / "metadata");
   fs::create_directories(staging / "artifacts");
   auto thin = staging / "artifacts/selected.macho";
@@ -99,7 +142,10 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
   if (!loaded)
     throw Error("invalid selected Mach-O: " +
                 llvm::toString(loaded.takeError()));
-  auto objc = objcMetadata(*loaded), swift = swiftMetadata(*loaded, budget);
+  phases.enter("objc_metadata");
+  auto objc = objcMetadata(*loaded);
+  phases.enter("swift_metadata");
+  auto swift = swiftMetadata(*loaded, budget);
   publishJSON(staging / "metadata/swift.json", swift, budget);
   Object outputs{{"selected_binary", "artifacts/selected.macho"},
                  {"objc_metadata", "metadata/objc.json"},
@@ -108,6 +154,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
   Value native_count(nullptr), objc_recovery(nullptr), swift_recovery(nullptr);
   Array native_limitations;
   if (!options.metadata_only) {
+    phases.enter("native_export");
     fs::create_directories(staging / "sources");
     fs::create_directories(staging / "logs");
     auto batchpath = staging / "artifacts/native-recovery.json";
@@ -141,6 +188,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
     if (!batch.getObject("objc_metadata"))
       throw Error("native source report has invalid Objective-C metadata");
     objc = *batch.getObject("objc_metadata");
+    phases.enter("objc_sources");
     auto recovered = objcSources(batch, objc, selection.pointer_size, budget);
     publish(staging / "sources/native.c", native, budget);
     native_count = count;
@@ -155,6 +203,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
     outputs["native_source"] = "sources/native.c";
     outputs["native_log"] = "logs/native.log";
     fs::remove(batchpath);
+    phases.enter("swift_sources");
     auto swift_result =
         swiftSources(options, staging, thin, array(swift, "symbols"),
                      selection.pointer_size, budget);
@@ -162,6 +211,7 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
     for (auto &[key, v] : swift_result.outputs)
       outputs[key] = std::move(v);
   }
+  phases.enter("output_publication");
   publishJSON(staging / "metadata/objc.json", objc, budget);
   publish(staging / "metadata/objc.h", objcHeader(objc, selection.pointer_size),
           budget);
@@ -214,5 +264,25 @@ llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
                 {"swift_type_count", array(swift, "types").size()},
                 {"swift_symbol_count", array(swift, "symbols").size()},
                 {"limitations", std::move(limitations)}};
+}
+} // namespace
+
+llvm::json::Object recoverIOS(const Options &options, const fs::path &staging,
+                              Budget &budget) {
+  PhaseTimer phases;
+  try {
+    return recoverIOSImpl(options, staging, budget, phases);
+  } catch (const Error &error) {
+    std::optional<Error> diagnostic;
+    try {
+      diagnostic.emplace(std::string(error.what()) + "\n[neverd-ios-phases] " +
+                         phases.diagnostic());
+    } catch (...) {
+      // Failure diagnostics must not replace the original recovery error.
+    }
+    if (diagnostic)
+      throw *diagnostic;
+    throw;
+  }
 }
 } // namespace neverd::mobile
