@@ -530,9 +530,8 @@ void annotationIndex(std::string &out, unsigned kind, unsigned index) {
   append(out, kind | 0x60, 1);
   append(out, index, 4);
 }
-FixtureAnnotation enumAnnotation(std::string type,
-                                 std::vector<FieldRef> values, bool array,
-                                 unsigned kind = 0x1b) {
+FixtureAnnotation enumAnnotation(std::string type, std::vector<FieldRef> values,
+                                 bool array, unsigned kind = 0x1b) {
   FixtureAnnotation result{std::move(type), 1};
   result.extra_fields = values;
   result.extra_strings = {u"value"};
@@ -551,8 +550,8 @@ FixtureAnnotation enumAnnotation(std::string type,
       ASSERT_NE(found, f.fields.end());
       unsigned index = unsigned(found - f.fields.begin());
       if (kind == 0x17)
-        index = fixtureStringIndex(
-            f, value.owner + "->" + value.name + ":" + value.type);
+        index = fixtureStringIndex(f, value.owner + "->" + value.name + ":" +
+                                      value.type);
       else if (kind == 0x18)
         index = fixtureTypeIndex(f, value.owner);
       annotationIndex(out, kind, index);
@@ -1439,10 +1438,11 @@ TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
 
 TEST(MobileDalvikReader, DexMarkerUsesRealEnumPoolAndHasNoElementMethods) {
   const std::vector<std::string> targets{"TYPE_USE", "FIELD", "TYPE"};
-  auto options = markerOptions(
-      {retentionAnnotation(), targetAnnotation(targets),
-       {"Ljava/lang/annotation/Documented;", 1},
-       {"Ljava/lang/annotation/Inherited;", 1}, {"Ljava/lang/Deprecated;", 1}});
+  auto options = markerOptions({retentionAnnotation(),
+                                targetAnnotation(targets),
+                                {"Ljava/lang/annotation/Documented;", 1},
+                                {"Ljava/lang/annotation/Inherited;", 1},
+                                {"Ljava/lang/Deprecated;", 1}});
   const auto f = fixture(options);
   ASSERT_EQ(f.fields.size(), 4u);
   EXPECT_TRUE(f.methods.empty());
@@ -1468,8 +1468,8 @@ TEST(MobileDalvikReader, DexMarkerUsesRealEnumPoolAndHasNoElementMethods) {
 }
 
 TEST(MobileDalvikReader, DexMarkerPreservesExplicitAndAbsentMetaValues) {
-  const std::vector<std::optional<std::string>> policies{
-      std::nullopt, "SOURCE", "CLASS", "RUNTIME"};
+  const std::vector<std::optional<std::string>> policies{std::nullopt, "SOURCE",
+                                                         "CLASS", "RUNTIME"};
   const std::vector<std::optional<std::vector<std::string>>> targets{
       std::nullopt, std::vector<std::string>{},
       std::vector<std::string>{"ANNOTATION_TYPE", "TYPE"}};
@@ -1513,8 +1513,7 @@ TEST(MobileDalvikReader, DexMetaEnumsRequireExactKindOwnerTypeAndConstant) {
                    Error);
     }
     for (unsigned mutation = 0; mutation != 3; ++mutation) {
-      SCOPED_TRACE(annotation + " enum identity " +
-                   std::to_string(mutation));
+      SCOPED_TRACE(annotation + " enum identity " + std::to_string(mutation));
       auto field = valid;
       if (mutation == 0)
         field.owner = "Lfixture/OtherEnum;";
@@ -1535,8 +1534,11 @@ TEST(MobileDalvikReader, DexMetaEnumsRequireExactKindOwnerTypeAndConstant) {
   for (const auto &newer : {"MODULE", "RECORD_COMPONENT"})
     EXPECT_THROW(linkedDex(markerOptions({targetAnnotation({newer})})), Error);
   const std::vector<std::string> java8_targets{
-      "TYPE_USE", "TYPE_PARAMETER", "PACKAGE", "ANNOTATION_TYPE",
-      "LOCAL_VARIABLE", "CONSTRUCTOR", "PARAMETER", "METHOD", "FIELD", "TYPE"};
+      "TYPE_USE",       "TYPE_PARAMETER",
+      "PACKAGE",        "ANNOTATION_TYPE",
+      "LOCAL_VARIABLE", "CONSTRUCTOR",
+      "PARAMETER",      "METHOD",
+      "FIELD",          "TYPE"};
   auto all = linkedDex(markerOptions({targetAnnotation(java8_targets)}));
   ASSERT_TRUE(all.at("Lfixture/ZMarker;").annotation_metadata.targets);
   EXPECT_EQ(*all.at("Lfixture/ZMarker;").annotation_metadata.targets,
@@ -1552,8 +1554,8 @@ TEST(MobileDalvikReader, DexMetaEnumsRequireExactKindOwnerTypeAndConstant) {
 }
 
 TEST(MobileDalvikReader, DexMetaValuesCannotBeMissingExtraOrRepeated) {
-  for (const auto &type : {"Ljava/lang/annotation/Retention;",
-                           "Ljava/lang/annotation/Target;"}) {
+  for (const auto &type :
+       {"Ljava/lang/annotation/Retention;", "Ljava/lang/annotation/Target;"}) {
     SCOPED_TRACE(type);
     EXPECT_THROW(linkedDex(markerOptions({{type, 1}})), Error);
   }
@@ -1699,19 +1701,21 @@ TEST(MobileDalvikReader, SmaliMarkerMetaGrammarPreservesEnumsAndOrder) {
       ".implements Ljava/lang/annotation/Annotation;\n";
   for (const auto &policy : {"SOURCE", "CLASS", "RUNTIME"}) {
     SCOPED_TRACE(policy);
-    auto cls = smali(
-        header + ".annotation runtime Ljava/lang/annotation/Retention;\n"
-                 "value = .enum Ljava/lang/annotation/RetentionPolicy;->" +
-        policy + ":Ljava/lang/annotation/RetentionPolicy;\n.end annotation\n"
-                 ".annotation runtime Ljava/lang/annotation/Target;\n"
-                 "value = {\n.enum Ljava/lang/annotation/ElementType;->"
-                 "ANNOTATION_TYPE:Ljava/lang/annotation/ElementType;,\n"
-                 ".enum Ljava/lang/annotation/ElementType;->"
-                 "TYPE:Ljava/lang/annotation/ElementType;\n}\n.end annotation\n"
-                 ".annotation runtime Ljava/lang/annotation/Documented;\n"
-                 ".end annotation\n"
-                 ".annotation runtime Ljava/lang/annotation/Inherited;\n"
-                 ".end annotation\n");
+    auto cls =
+        smali(header +
+              ".annotation runtime Ljava/lang/annotation/Retention;\n"
+              "value = .enum Ljava/lang/annotation/RetentionPolicy;->" +
+              policy +
+              ":Ljava/lang/annotation/RetentionPolicy;\n.end annotation\n"
+              ".annotation runtime Ljava/lang/annotation/Target;\n"
+              "value = {\n.enum Ljava/lang/annotation/ElementType;->"
+              "ANNOTATION_TYPE:Ljava/lang/annotation/ElementType;,\n"
+              ".enum Ljava/lang/annotation/ElementType;->"
+              "TYPE:Ljava/lang/annotation/ElementType;\n}\n.end annotation\n"
+              ".annotation runtime Ljava/lang/annotation/Documented;\n"
+              ".end annotation\n"
+              ".annotation runtime Ljava/lang/annotation/Inherited;\n"
+              ".end annotation\n");
     EXPECT_EQ(cls.annotation_metadata.retention, policy);
     ASSERT_TRUE(cls.annotation_metadata.targets);
     EXPECT_EQ(*cls.annotation_metadata.targets,
@@ -1724,9 +1728,9 @@ TEST(MobileDalvikReader, SmaliMarkerMetaGrammarPreservesEnumsAndOrder) {
     EXPECT_NO_THROW(linkClasses({cls}, budget));
   }
   auto absent = smali(header);
-  auto empty = smali(
-      header + ".annotation runtime Ljava/lang/annotation/Target;\n"
-               "value = {}\n.end annotation\n");
+  auto empty =
+      smali(header + ".annotation runtime Ljava/lang/annotation/Target;\n"
+                     "value = {}\n.end annotation\n");
   EXPECT_FALSE(absent.annotation_metadata.targets);
   ASSERT_TRUE(empty.annotation_metadata.targets);
   EXPECT_TRUE(empty.annotation_metadata.targets->empty());
@@ -1743,22 +1747,22 @@ TEST(MobileDalvikReader, SmaliMarkerMetadataRejectsMalformedEnumAndMetaSites) {
   const std::string valid =
       "value = .enum Ljava/lang/annotation/RetentionPolicy;->"
       "RUNTIME:Ljava/lang/annotation/RetentionPolicy;\n";
-  for (const auto &value : {
-           "value = Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
-           "Ljava/lang/annotation/RetentionPolicy;\n",
-           "value = .enum Lfixture/Policy;->RUNTIME:"
-           "Ljava/lang/annotation/RetentionPolicy;\n",
-           "value = .enum Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
-           "Ljava/lang/String;\n",
-           "value = .enum Ljava/lang/annotation/RetentionPolicy;->UNKNOWN:"
-           "Ljava/lang/annotation/RetentionPolicy;\n",
-           "value = {}\n", "other = 1\n", ""}) {
+  for (const auto &value :
+       {"value = Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
+        "Ljava/lang/annotation/RetentionPolicy;\n",
+        "value = .enum Lfixture/Policy;->RUNTIME:"
+        "Ljava/lang/annotation/RetentionPolicy;\n",
+        "value = .enum Ljava/lang/annotation/RetentionPolicy;->RUNTIME:"
+        "Ljava/lang/String;\n",
+        "value = .enum Ljava/lang/annotation/RetentionPolicy;->UNKNOWN:"
+        "Ljava/lang/annotation/RetentionPolicy;\n",
+        "value = {}\n", "other = 1\n", ""}) {
     SCOPED_TRACE(value);
     Budget budget;
-    EXPECT_THROW(linkClasses({smali(header + start + value +
-                                     ".end annotation\n")},
-                             budget),
-                 Error);
+    EXPECT_THROW(
+        linkClasses({smali(header + start + value + ".end annotation\n")},
+                    budget),
+        Error);
   }
   EXPECT_THROW(smali(header + start + valid + valid + ".end annotation\n"),
                Error);
@@ -1771,9 +1775,8 @@ TEST(MobileDalvikReader, SmaliMarkerMetadataRejectsMalformedEnumAndMetaSites) {
                  Error);
   for (const auto &meta : {"Retention", "Target", "Documented", "Inherited"}) {
     SCOPED_TRACE(meta);
-    const std::string bare =
-        ".annotation runtime Ljava/lang/annotation/" + std::string(meta) +
-        ";\n.end annotation\n";
+    const std::string bare = ".annotation runtime Ljava/lang/annotation/" +
+                             std::string(meta) + ";\n.end annotation\n";
     EXPECT_THROW(smali(header + ".field public static final flag:I = 0\n" +
                        bare + ".end field\n"),
                  Error);
@@ -1802,7 +1805,7 @@ TEST(MobileDalvikReader, SmaliEmptyClassApplicationsRequireLinkedDefinition) {
   EXPECT_EQ(linked.at(cls.name).marker_annotations[0].visibility, 0u);
   EXPECT_FALSE(linked.at("Lfixture/ZMarker;").annotation_metadata.retention);
   EXPECT_THROW(smali(use + ".annotation build Lfixture/ZMarker;\n"
-                          ".end annotation\n"),
+                           ".end annotation\n"),
                Error);
   EXPECT_THROW(smali(".class public Lfixture/AUse;\n"
                      ".super Ljava/lang/Object;\n"

@@ -511,9 +511,8 @@ void linkLocalScopes(const ClassMap &classes, Budget &budget) {
     }
   }
 }
-std::vector<const Class *> annotationScopes(const Class &cls,
-                                           const ClassMap &classes,
-                                           Budget &budget) {
+std::vector<const Class *>
+annotationScopes(const Class &cls, const ClassMap &classes, Budget &budget) {
   std::set<std::string> seen;
   std::vector<const Class *> result;
   const Class *scope = &cls;
@@ -544,15 +543,19 @@ std::vector<const Class *> annotationScopes(const Class &cls,
   return result;
 }
 void checkAnnotationClass(const Class &cls, const ClassMap &classes,
-                          const std::set<std::string> &owners,
-                          Budget &budget) {
-  static const Access reserved = {
-      "Ljava/lang/Deprecated;", "Ljava/lang/annotation/Retention;",
-      "Ljava/lang/annotation/Target;", "Ljava/lang/annotation/Documented;",
-      "Ljava/lang/annotation/Inherited;", "Ldalvik/annotation/Signature;",
-      "Ldalvik/annotation/Throws;", "Ldalvik/annotation/InnerClass;",
-      "Ldalvik/annotation/EnclosingClass;", "Ldalvik/annotation/EnclosingMethod;",
-      "Ldalvik/annotation/MemberClasses;", "Ldalvik/annotation/AnnotationDefault;"};
+                          const std::set<std::string> &owners, Budget &budget) {
+  static const Access reserved = {"Ljava/lang/Deprecated;",
+                                  "Ljava/lang/annotation/Retention;",
+                                  "Ljava/lang/annotation/Target;",
+                                  "Ljava/lang/annotation/Documented;",
+                                  "Ljava/lang/annotation/Inherited;",
+                                  "Ldalvik/annotation/Signature;",
+                                  "Ldalvik/annotation/Throws;",
+                                  "Ldalvik/annotation/InnerClass;",
+                                  "Ldalvik/annotation/EnclosingClass;",
+                                  "Ldalvik/annotation/EnclosingMethod;",
+                                  "Ldalvik/annotation/MemberClasses;",
+                                  "Ldalvik/annotation/AnnotationDefault;"};
   const auto &metadata = cls.annotation_metadata;
   bool annotation = has(cls.access, "annotation");
   if (!annotation && !metadata.empty())
@@ -590,9 +593,9 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
   if (metadata.targets) {
     Access seen;
     const Access allowed = {
-        "TYPE", "FIELD", "METHOD", "PARAMETER", "CONSTRUCTOR",
-        "LOCAL_VARIABLE", "ANNOTATION_TYPE", "PACKAGE", "TYPE_PARAMETER",
-        "TYPE_USE"};
+        "TYPE",           "FIELD",          "METHOD",          "PARAMETER",
+        "CONSTRUCTOR",    "LOCAL_VARIABLE", "ANNOTATION_TYPE", "PACKAGE",
+        "TYPE_PARAMETER", "TYPE_USE"};
     for (const auto &target : *metadata.targets) {
       budget.tick();
       if (!allowed.contains(target) || !seen.insert(target).second)
@@ -602,13 +605,13 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
   std::vector<const Class *> scopes;
   if (annotation || !cls.marker_annotations.empty()) {
     scopes = annotationScopes(cls, classes, budget);
-    for (const auto *type : {"Ljava/lang/annotation/Annotation;",
-                             "Ljava/lang/annotation/Retention;",
-                             "Ljava/lang/annotation/RetentionPolicy;",
-                             "Ljava/lang/annotation/Target;",
-                             "Ljava/lang/annotation/ElementType;",
-                             "Ljava/lang/annotation/Documented;",
-                             "Ljava/lang/annotation/Inherited;"})
+    for (const auto *type :
+         {"Ljava/lang/annotation/Annotation;",
+          "Ljava/lang/annotation/Retention;",
+          "Ljava/lang/annotation/RetentionPolicy;",
+          "Ljava/lang/annotation/Target;", "Ljava/lang/annotation/ElementType;",
+          "Ljava/lang/annotation/Documented;",
+          "Ljava/lang/annotation/Inherited;"})
       if (classes.contains(type))
         scopeError(cls, "marker annotations require the platform definition: " +
                             std::string(type));
@@ -618,8 +621,7 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
     budget.tick();
     if (reserved.contains(use.type))
       scopeError(cls, "reserved marker annotation descriptor: " + use.type);
-    if (!descriptor(use.type).starts_with('L') ||
-        !seen.insert(use.type).second)
+    if (!descriptor(use.type).starts_with('L') || !seen.insert(use.type).second)
       scopeError(cls, "invalid or duplicate marker annotation application");
     auto definition = classes.find(use.type);
     if (definition == classes.end() ||
@@ -631,7 +633,7 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
       auto package = [](const Class &type) {
         auto slash = type.name.rfind('/');
         return slash == std::string::npos ? std::string()
-                                         : type.name.substr(1, slash - 1);
+                                          : type.name.substr(1, slash - 1);
       };
       for (const auto *scope : definition_scopes) {
         budget.tick();
@@ -648,7 +650,8 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
     if (retention == "SOURCE" ||
         use.visibility != (retention == "RUNTIME" ? 1u : 0u))
       scopeError(cls, "marker annotation visibility disagrees with "
-                      "retention: " + use.type);
+                      "retention: " +
+                          use.type);
     if (policy.targets) {
       const auto &targets = *policy.targets;
       auto permits = [&](const char *target) {
@@ -658,7 +661,8 @@ void checkAnnotationClass(const Class &cls, const ClassMap &classes,
       if (!permits("TYPE") && !permits("TYPE_USE") &&
           !(annotation && permits("ANNOTATION_TYPE")))
         scopeError(cls, "marker annotation target excludes this class "
-                        "declaration: " + use.type);
+                        "declaration: " +
+                            use.type);
     }
   }
 }
@@ -668,6 +672,11 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
   std::set<std::string> owners;
   for (const auto &[name, cls] : classes) {
     budget.tick();
+    if (name != cls.name)
+      scopeError(cls, "class map key disagrees with its descriptor");
+    // Annotation checks can inspect another class's definition or owners.
+    // Validate every intrinsic scope before those dependent checks.
+    checkSourceScope(cls, budget);
     if (cls.enclosing)
       owners.insert(*cls.enclosing);
     if (cls.enclosing_method)
@@ -675,8 +684,6 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
   }
   for (const auto &[name, cls] : classes) {
     budget.tick();
-    if (name != cls.name)
-      scopeError(cls, "class map key disagrees with its descriptor");
     bool deprecated = cls.deprecated;
     for (const auto &field : cls.fields) {
       budget.tick();
@@ -692,7 +699,6 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
     if (deprecated && classes.contains("Ljava/lang/Deprecated;"))
       scopeError(cls, "Deprecated requires the platform annotation definition");
     checkAnnotationClass(cls, classes, owners, budget);
-    checkSourceScope(cls, budget);
   }
   linkLocalScopes(classes, budget);
 }

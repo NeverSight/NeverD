@@ -609,7 +609,8 @@ public:
         budget.tick();
         if (Field.reference.name == "java")
           javaError("annotation enum package qualifier is shadowed by a "
-                    "field in " + Name);
+                    "field in " +
+                    Name);
       }
       if (I->second.superclass)
         Pending.push_back(*I->second.superclass);
@@ -2144,7 +2145,7 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       std::erase(Mods, "static");
     if (Annotation)
       std::erase(Mods, "abstract");
-    std::string Kind = Annotation ? "@interface"
+    std::string Kind = Annotation                       ? "@interface"
                        : C.access.contains("interface") ? "interface"
                                                         : "class";
     Mods.push_back(Kind);
@@ -2172,8 +2173,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
                 join(Interfaces, ", ");
     }
     Lines BodyLines(B, true);
-    const JavaScope ModifierScope{
-        C, nullptr, JavaScope::Position::ClassModifiers};
+    const JavaScope ModifierScope{C, nullptr,
+                                  JavaScope::Position::ClassModifiers};
     auto annotationType = [&](const std::string &Type) {
       return "@" + TypeNames.render(Type, ModifierScope);
     };
@@ -2190,13 +2191,12 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       std::vector<std::string> Values;
       for (const auto &Target : *Metadata.targets) {
         B.tick();
-        Values.push_back(
-            TypeNames.render("Ljava/lang/annotation/ElementType;",
-                             ModifierScope) +
-            "." + Target);
+        Values.push_back(TypeNames.render("Ljava/lang/annotation/ElementType;",
+                                          ModifierScope) +
+                         "." + Target);
       }
-      BodyLines.append(annotationType("Ljava/lang/annotation/Target;") +
-                       "({" + join(Values, ", ") + "})");
+      BodyLines.append(annotationType("Ljava/lang/annotation/Target;") + "({" +
+                       join(Values, ", ") + "})");
     }
     if (Metadata.documented)
       BodyLines.append(annotationType("Ljava/lang/annotation/Documented;"));

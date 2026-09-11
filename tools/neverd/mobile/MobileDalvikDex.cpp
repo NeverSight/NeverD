@@ -769,8 +769,8 @@ class Dex {
     if (retention) {
       if (metadata.retention)
         bad("duplicate Retention annotation");
-      metadata.retention = enumValue(
-          value->second, "Ljava/lang/annotation/RetentionPolicy;");
+      metadata.retention =
+          enumValue(value->second, "Ljava/lang/annotation/RetentionPolicy;");
     } else {
       if (metadata.targets)
         bad("duplicate Target annotation");

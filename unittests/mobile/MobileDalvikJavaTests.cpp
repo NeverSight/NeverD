@@ -1405,8 +1405,7 @@ Class memberClass(Class C, const Class &Owner, std::string Name,
   C.inner_access.insert("static");
   return C;
 }
-std::string sourceAt(const llvm::json::Object &Report,
-                      llvm::StringRef Path) {
+std::string sourceAt(const llvm::json::Object &Report, llvm::StringRef Path) {
   const auto *Units = Report.getArray("source_units");
   if (!Units)
     return {};
@@ -1452,10 +1451,8 @@ TEST(MobileDalvikJava, MarkerDeclarationHasMetadataAndNoInventedMembers) {
                       "java.lang.annotation.ElementType.FIELD, "
                       "java.lang.annotation.ElementType.TYPE})"),
             std::string::npos);
-  EXPECT_NE(Java.find("@java.lang.annotation.Documented\n"),
-            std::string::npos);
-  EXPECT_NE(Java.find("@java.lang.annotation.Inherited\n"),
-            std::string::npos);
+  EXPECT_NE(Java.find("@java.lang.annotation.Documented\n"), std::string::npos);
+  EXPECT_NE(Java.find("@java.lang.annotation.Inherited\n"), std::string::npos);
   EXPECT_NE(Java.find("@java.lang.Deprecated\npublic @interface ZMarker {"),
             std::string::npos);
   EXPECT_EQ(Java.find("extends "), std::string::npos);
@@ -1465,9 +1462,8 @@ TEST(MobileDalvikJava, MarkerDeclarationHasMetadataAndNoInventedMembers) {
 }
 
 TEST(MobileDalvikJava, MarkerMetadataAbsenceAndEmptyArraySurviveEmission) {
-  for (const auto &Policy :
-       std::vector<std::optional<std::string>>{std::nullopt, "SOURCE", "CLASS",
-                                                "RUNTIME"}) {
+  for (const auto &Policy : std::vector<std::optional<std::string>>{
+           std::nullopt, "SOURCE", "CLASS", "RUNTIME"}) {
     for (bool ExplicitEmptyTarget : {false, true}) {
       SCOPED_TRACE(Policy.value_or("absent") +
                    (ExplicitEmptyTarget ? " empty target" : " absent target"));
@@ -1498,9 +1494,8 @@ TEST(MobileDalvikJava, MarkerMetadataAbsenceAndEmptyArraySurviveEmission) {
 }
 
 TEST(MobileDalvikJava, MarkerClassApplicationsRespectRetentionAndVisibility) {
-  for (const auto &Policy :
-       std::vector<std::optional<std::string>>{std::nullopt, "SOURCE", "CLASS",
-                                                "RUNTIME"}) {
+  for (const auto &Policy : std::vector<std::optional<std::string>>{
+           std::nullopt, "SOURCE", "CLASS", "RUNTIME"}) {
     for (unsigned Visibility : {0u, 1u, 2u, 3u}) {
       SCOPED_TRACE(Policy.value_or("absent") + " visibility " +
                    std::to_string(Visibility));
@@ -1508,8 +1503,8 @@ TEST(MobileDalvikJava, MarkerClassApplicationsRespectRetentionAndVisibility) {
       Marker.annotation_metadata.retention = Policy;
       Class Use = klass("Lfixture/AUse;");
       Use.marker_annotations.push_back({Marker.name, Visibility});
-      const bool Accepted = Policy != "SOURCE" &&
-                            Visibility == (Policy == "RUNTIME" ? 1u : 0u);
+      const bool Accepted =
+          Policy != "SOURCE" && Visibility == (Policy == "RUNTIME" ? 1u : 0u);
       if (!Accepted) {
         rejectAnnotationBoth({Use, Marker});
         continue;
@@ -1530,28 +1525,29 @@ TEST(MobileDalvikJava, MarkerClassApplicationsRespectRetentionAndVisibility) {
 
 TEST(MobileDalvikJava, MarkerTargetsDistinguishClassAndAnnotationRoles) {
   const std::vector<std::optional<std::vector<std::string>>> Targets{
-      std::nullopt, std::vector<std::string>{},
+      std::nullopt,
+      std::vector<std::string>{},
       std::vector<std::string>{"TYPE"},
       std::vector<std::string>{"ANNOTATION_TYPE"},
       std::vector<std::string>{"TYPE_USE"},
       std::vector<std::string>{"FIELD"}};
   for (const auto &Target : Targets) {
     for (unsigned Role = 0; Role != 3; ++Role) {
-      SCOPED_TRACE((Target ? (Target->empty() ? "empty" : Target->front())
-                           : "absent") +
-                   " role " + std::to_string(Role));
+      SCOPED_TRACE(
+          (Target ? (Target->empty() ? "empty" : Target->front()) : "absent") +
+          " role " + std::to_string(Role));
       Class Marker = markerClass();
       Marker.annotation_metadata.targets = Target;
-      Class Use = Role == 2 ? markerClass("Lfixture/AUse;")
-                             : klass("Lfixture/AUse;");
+      Class Use =
+          Role == 2 ? markerClass("Lfixture/AUse;") : klass("Lfixture/AUse;");
       if (Role == 1)
         Use.access = {"public", "interface", "abstract"};
       Use.marker_annotations.push_back({Marker.name, 0});
       const bool Accepted =
-          !Target || (!Target->empty() &&
-                      (Target->front() == "TYPE" ||
-                       Target->front() == "TYPE_USE" ||
-                       (Role == 2 && Target->front() == "ANNOTATION_TYPE")));
+          !Target ||
+          (!Target->empty() &&
+           (Target->front() == "TYPE" || Target->front() == "TYPE_USE" ||
+            (Role == 2 && Target->front() == "ANNOTATION_TYPE")));
       if (!Accepted) {
         rejectAnnotationBoth({Use, Marker});
         continue;
@@ -1602,7 +1598,9 @@ TEST(MobileDalvikJava, MarkerShapeIsValidatedByDirectAndLinkedEntryPoints) {
   rejectAnnotationBoth({C, Child});
   auto Enumeration = klass("Lfixture/StillUnsupportedEnum;");
   Enumeration.access.insert("enum");
-  EXPECT_THROW(recover({Enumeration}), Error);
+  rejected([&] { recover({Enumeration}); },
+           "unsupported Java declaration shape: "
+           "Lfixture/StillUnsupportedEnum;");
 }
 
 TEST(MobileDalvikJava, MarkerModelRejectsForgedMetadataAndDefinitions) {
@@ -1611,9 +1609,8 @@ TEST(MobileDalvikJava, MarkerModelRejectsForgedMetadataAndDefinitions) {
     C.annotation_metadata.retention = Policy;
     rejectAnnotationBoth({C});
   }
-  for (const auto &Targets :
-       std::vector<std::vector<std::string>>{{"TYPE", "TYPE"}, {"MODULE"},
-                                              {"RECORD_COMPONENT"}, {""}}) {
+  for (const auto &Targets : std::vector<std::vector<std::string>>{
+           {"TYPE", "TYPE"}, {"MODULE"}, {"RECORD_COMPONENT"}, {""}}) {
     auto C = markerClass();
     C.annotation_metadata.targets = Targets;
     rejectAnnotationBoth({C});
@@ -1674,8 +1671,8 @@ TEST(MobileDalvikJava, MarkerModelRejectsForgedMetadataAndDefinitions) {
 
 TEST(MobileDalvikJava, MarkerEnumsCheckOuterValueAndTypeScopesIndependently) {
   auto Outer = klass("Lfixture/Outer;");
-  auto Marker = memberClass(markerClass("Lfixture/Outer$Marker;"), Outer,
-                            "Marker");
+  auto Marker =
+      memberClass(markerClass("Lfixture/Outer$Marker;"), Outer, "Marker");
   Marker.annotation_metadata.retention = "RUNTIME";
   const auto Good = recover({Outer, Marker});
   EXPECT_NE(source(Good).find("public static @interface Marker"),
@@ -1699,15 +1696,20 @@ TEST(MobileDalvikJava, MarkerEnumsCheckOuterValueAndTypeScopesIndependently) {
   Outer.interfaces.clear();
   Outer.access = {"public"};
   auto Shadow = memberClass(klass("Lfixture/Outer$java;"), Outer, "java");
-  EXPECT_THROW(recover({Outer, Marker, Shadow}), Error);
+  rejected([&] { recover({Outer, Marker, Shadow}); },
+           "ambiguous Java type: required Java runtime package is shadowed in "
+           "Lfixture/Outer;");
   Outer.generic_signature = "<java:Ljava/lang/Object;>Ljava/lang/Object;";
-  EXPECT_THROW(recover({Outer, Marker}), Error);
+  rejected([&] { recover({Outer, Marker}); },
+           "ambiguous Java type: Ljava/lang/Object; in Lfixture/Outer; "
+           "(package qualifier is shadowed and no unique source name "
+           "is proven)");
 }
 
 TEST(MobileDalvikJava, MarkerOwnershipMustHaveExactNonLocalBinaryIdentity) {
   auto Outer = klass("Lfixture/Outer;");
-  auto Marker = memberClass(markerClass("Lfixture/Outer$Marker;"), Outer,
-                            "Marker");
+  auto Marker =
+      memberClass(markerClass("Lfixture/Outer$Marker;"), Outer, "Marker");
   for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
     SCOPED_TRACE("marker ownership " + std::to_string(Mutation));
     auto Changed = Marker;
@@ -1724,8 +1726,8 @@ TEST(MobileDalvikJava, MarkerOwnershipMustHaveExactNonLocalBinaryIdentity) {
     rejectAnnotationBoth({Outer, Changed});
   }
   auto Local = localClasses();
-  auto NestedMarker = memberClass(
-      markerClass("Lfixture/Core$17Worker$Marker;"), Local[1], "Marker");
+  auto NestedMarker = memberClass(markerClass("Lfixture/Core$17Worker$Marker;"),
+                                  Local[1], "Marker");
   Local.push_back(NestedMarker);
   rejectAnnotationBoth(Local);
   auto DirectLocal = markerClass("Lfixture/Core$17Marker;");

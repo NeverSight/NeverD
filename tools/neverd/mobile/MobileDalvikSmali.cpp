@@ -596,8 +596,8 @@ class Reader {
     if (retention) {
       if (!match(body, value, R"(value\s*=\s*(.*))"))
         fail("Retention annotation requires exactly value");
-      metadata.retention = enumValue(
-          trim(value[1]), "Ljava/lang/annotation/RetentionPolicy;");
+      metadata.retention =
+          enumValue(trim(value[1]), "Ljava/lang/annotation/RetentionPolicy;");
     } else {
       if (!match(body, value, R"(value\s*=\s*\{(.*)\})"))
         fail("Target annotation requires an enum array");
