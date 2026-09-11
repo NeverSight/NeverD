@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -267,23 +268,45 @@ const char *neverd_disasm_text(neverd_session_t Sess,
     return dupStr(Buffer);
   }
 
+  if (!S->synchronizeFunctions())
+    return nullptr;
+
+  std::optional<FuncInfo> Function;
   const Symbol *Sym = nullptr;
   std::string FN(FuncNameOrAddr ? FuncNameOrAddr : "");
   if (FN.size() > 2 && (FN.substr(0, 2) == "0x" || FN.substr(0, 2) == "0X")) {
     llvm::StringRef Ref(FN);
     Ref = Ref.drop_front(2);
     va_t Addr = 0;
-    if (!Ref.getAsInteger(16, Addr))
-      Sym = S->Img.findSymbolAt(Addr);
+    if (!Ref.getAsInteger(16, Addr)) {
+      for (const auto &F : S->Functions) {
+        if (F.Entry == Addr) {
+          Function = F;
+          break;
+        }
+      }
+      if (!Function)
+        Sym = S->Img.findSymbolAt(Addr);
+    }
   } else {
-    Sym = S->Img.findSymbol(FN);
+    for (const auto &F : S->Functions) {
+      if (F.Name == FN) {
+        Function = F;
+        break;
+      }
+    }
+    if (!Function)
+      Sym = S->Img.findSymbol(FN);
   }
-  if (!Sym)
-    return nullptr;
+  if (!Function) {
+    if (!Sym)
+      return nullptr;
+    Function = FuncInfo{Sym->Addr, Sym->Size, Sym->Name};
+  }
 
   const Segment *Seg = nullptr;
   for (const auto &Sg : S->Img.Segments)
-    if (Sg.contains(Sym->Addr)) {
+    if (Sg.contains(Function->Entry)) {
       Seg = &Sg;
       break;
     }
@@ -295,12 +318,13 @@ const char *neverd_disasm_text(neverd_session_t Sess,
 
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
-  OS << "; " << Sym->Name << " (0x" << llvm::utohexstr(Sym->Addr) << ", "
-     << Sym->Size << " bytes)\n";
+  OS << "; " << Function->Name << " (0x" << llvm::utohexstr(Function->Entry)
+     << ", " << Function->Size << " bytes)\n";
 
-  va_t Addr = Sym->Addr;
-  uint64_t Span = Sym->Size > 0 ? Sym->Size : 0x100;
-  while (Addr >= Sym->Addr && Addr - Sym->Addr < Span && Seg->contains(Addr)) {
+  va_t Addr = Function->Entry;
+  uint64_t Span = Function->Size > 0 ? Function->Size : 0x100;
+  while (Addr >= Function->Entry && Addr - Function->Entry < Span &&
+         Seg->contains(Addr)) {
     uint64_t Off64 = Addr - Seg->VA;
     // contains() only checks the VA span (Seg->Size), which can exceed the
     // materialized bytes; guard so Remain does not underflow into a huge
@@ -311,7 +335,8 @@ const char *neverd_disasm_text(neverd_session_t Sess,
     const uint8_t *Bytes = Seg->Data.data() + Off;
     size_t Remain = static_cast<size_t>(std::min<uint64_t>(
         Seg->Size - Off64,
-        std::min<uint64_t>(Seg->Data.size() - Off, Span - (Addr - Sym->Addr))));
+        std::min<uint64_t>(Seg->Data.size() - Off,
+                           Span - (Addr - Function->Entry))));
     DecodedInsn Insn;
     int Sz = S->Dec.decodeOne(Bytes, Remain, Addr, Insn);
     if (Sz <= 0)

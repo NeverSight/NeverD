@@ -9,11 +9,13 @@
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/support/ProjectWriteLock.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -656,6 +658,65 @@ TEST_F(SessionCAPITest, FailedNativeReloadPreservesDecoderAndDebugSelection) {
       takeString(neverd_disasm_json(Session, Entry, 2));
   EXPECT_NE(NewDisassembly.find("w0"), std::string::npos) << NewDisassembly;
   EXPECT_NE(NewDisassembly, Disassembly);
+}
+
+TEST_F(SessionCAPITest, NativeTextDisassemblyUsesCurrentRecoveredFunctionView) {
+  for (bool AArch64 : {false, true}) {
+    for (bool Lazy : {false, true}) {
+      SCOPED_TRACE(AArch64 ? "aarch64" : "x86_64");
+      SCOPED_TRACE(Lazy ? "lazy analysis" : "explicit analysis");
+      const std::string Tail =
+          AArch64 ? std::string("\x1f\x20\x03\xd5\x1f\x20\x03\xd5", 8)
+                  : std::string("\x90\x90", 2);
+      const std::string Path =
+          write((std::string("text-recovered-") + (AArch64 ? "arm-" : "x86-") +
+                 (Lazy ? "lazy.elf" : "explicit.elf")),
+                makeNativeELF(AArch64, 0x400000, Tail));
+      ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+      const neverd_va_t Entry = neverd_session_entry_addr(Session);
+      if (Lazy)
+        ASSERT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty());
+      else
+        ASSERT_EQ(neverd_session_analyze(Session), 1);
+      const std::string Address = "0x" + llvm::utohexstr(Entry);
+      // Text must synchronize recovery before any function-list query does.
+      const std::string ByAddress =
+          takeString(neverd_disasm_text(Session, Address.c_str(), 0));
+      ASSERT_FALSE(ByAddress.empty());
+      EXPECT_EQ(std::count(ByAddress.begin(), ByAddress.end(), '\n'), 3);
+      const int Index = neverd_func_find_by_addr(Session, Entry);
+      ASSERT_GE(Index, 0);
+      const std::string Name = takeString(neverd_func_name(Session, Index));
+      const std::string Header = "; " + Name + " (" + Address + ", " +
+                                 std::to_string(AArch64 ? 8 : 6) + " bytes)\n";
+      EXPECT_EQ(ByAddress.substr(0, Header.size()), Header);
+      EXPECT_EQ(takeString(neverd_disasm_text(Session, Name.c_str(), 0)),
+                ByAddress);
+      ASSERT_EQ(neverd_rename_func(Session, Name.c_str(), "reviewed_text"), 0);
+      const std::string Renamed =
+          takeString(neverd_disasm_text(Session, "reviewed_text", 0));
+      ASSERT_FALSE(Renamed.empty());
+      EXPECT_EQ(Renamed.find("; reviewed_text ("), 0u);
+      EXPECT_EQ(std::count(Renamed.begin(), Renamed.end(), '\n'), 3);
+      EXPECT_EQ(takeString(neverd_disasm_text(Session, Address.c_str(), 0)),
+                Renamed);
+    }
+  }
+}
+
+TEST_F(SessionCAPITest, NativeTextDisassemblyPreservesLoaderNameFallback) {
+  const std::string Path = write("text-named.elf", makeNamedNativeELF("entry"));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const std::string Original =
+      takeString(neverd_disasm_text(Session, "entry", 0));
+  ASSERT_FALSE(Original.empty());
+  EXPECT_EQ(Original.find("; entry ("), 0u);
+  ASSERT_EQ(neverd_rename_func(Session, "entry", "reviewed_entry"), 0);
+  const std::string Renamed =
+      takeString(neverd_disasm_text(Session, "reviewed_entry", 0));
+  ASSERT_FALSE(Renamed.empty());
+  EXPECT_EQ(Renamed.find("; reviewed_entry ("), 0u);
+  EXPECT_EQ(takeString(neverd_disasm_text(Session, "entry", 0)), Original);
 }
 
 TEST_F(SessionCAPITest, NativeAnalysisPublishesRecoveredFunctions) {
