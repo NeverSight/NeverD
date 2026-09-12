@@ -5092,6 +5092,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         }
         return false;
       };
+      if (GuardedGroupProofContext &&
+          GuardedGroupProofContext->ConsumerRoleInfos) {
+        const auto &Members = *GuardedGroupProofContext->ConsumerRoleInfos;
+        if (!consumeCandidateEvidence(Members.size())) {
+          AnalysisComplete = false;
+          return false;
+        }
+        if (AuthenticatesSibling(Members))
+          return true;
+        if (!AnalysisComplete)
+          return false;
+      }
       if (CandidateProposalStageActive)
         return AuthenticatesSibling(PriorStrongJumpTableProposals);
       return AuthenticatesSibling(ResolvedTableInfo);

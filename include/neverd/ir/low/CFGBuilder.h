@@ -825,6 +825,10 @@ public:
       bool MaskQueryIssued = false;
       bool MaskQueryComplete = false;
       bool MaskQueryMatched = false;
+      size_t OwnerSlotCount = 0;
+      size_t PermittedSlotCount = 0;
+      size_t OwnerBaseCount = 0;
+      size_t UsedBaseCount = 0;
     } LastProof;
     size_t PublishedMemberCount = 0;
     bool CommitTailInjected = false;
@@ -1561,6 +1565,11 @@ private:
     std::set<va_t> Roots;
     std::map<va_t, std::vector<va_t>> Edges;
     std::map<va_t, std::vector<va_t>> EmptyEdges;
+    /// Borrowed only for the consumer audit's exact sibling LOAD exemption.
+    /// Every member reads the same complete preceding phase; the owning map
+    /// outlives all scratch builders and is replaced only between phases.
+    /// No selector, target, root, or ownership proof may borrow these results.
+    const std::map<va_t, JumpTableInfo> *ConsumerRoleInfos = nullptr;
   };
   struct GuardedJumpTableGroupKey {
     va_t OwnerBegin = InvalidVA;

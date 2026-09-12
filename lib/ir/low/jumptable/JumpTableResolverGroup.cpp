@@ -255,6 +255,8 @@ bool CFGBuilder::copyGuardedGroupProofSnapshot(
   // This is an input whitelist, deliberately not a builder copy followed by
   // clearing results. No proposed/published sibling certificate, mutable cache,
   // callback classification or proof history enters the fresh member query.
+  // Context may borrow a complete prior group phase solely for the consumer
+  // audit's exact sibling LOAD check; it grants no other proof authority.
   Scratch.Insns = Insns;
   Scratch.BlockStarts = BlockStarts;
   Scratch.PublishedBlockStarts = PublishedBlockStarts;
@@ -594,7 +596,10 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     Context.EmptyEdges.emplace(Branch, std::vector<va_t>{});
   }
   std::map<va_t, JumpTableInfo> PreviousInfos;
-  for (unsigned Round = 0; Round < 2; ++Round) {
+  // Bootstrap every member without sibling exemptions, then prove the entire
+  // consumer set twice with an immutable preceding-phase role universe. A
+  // phase never observes an already processed prefix of its own members.
+  for (unsigned Round = 0; Round < 3; ++Round) {
     std::map<va_t, std::vector<va_t>> RuntimeEdges;
     std::map<va_t, JumpTableInfo> RuntimeInfos;
     std::set<va_t> RuntimeSlots;
@@ -703,14 +708,26 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     if (!Budget.products(
             {{SlotCount, 8}, {Candidates.size(), 16 + 2 * SlotCount}}))
       return Incomplete();
-    // Suppression permission must cover the complete physical owner. There
-    // is no implicit filler, unused tail, or extra same-section pointer.
-    if (RuntimeSlots != Slots || UsedBases != Bases) {
+    auto &Coverage = JumpTableGroupLifecycleForTesting.LastProof;
+    Coverage.OwnerSlotCount = Slots.size();
+    Coverage.PermittedSlotCount = RuntimeSlots.size();
+    Coverage.OwnerBaseCount = Bases.size();
+    Coverage.UsedBaseCount = UsedBases.size();
+    // Suppression permission must cover the complete physical owner in both
+    // consumer-proof rounds. Bootstrap establishes only complete member
+    // contracts and base coverage; it cannot publish suppression permission.
+    if (UsedBases != Bases || (Round != 0 && RuntimeSlots != Slots)) {
       JumpTableGroupLifecycleForTesting.LastProof.Stage = "owner-coverage";
       GuardedGroupRejected = true;
       return false;
     }
-    bool Stable = RuntimeEdges == Context.Edges &&
+    if (Round == 0) {
+      Context.Edges = std::move(RuntimeEdges);
+      PreviousInfos = std::move(RuntimeInfos);
+      Context.ConsumerRoleInfos = &PreviousInfos;
+      continue;
+    }
+    bool Stable = Round == 2 && RuntimeEdges == Context.Edges &&
                   RuntimeInfos.size() == PreviousInfos.size();
     for (const auto &[Branch, Info] : RuntimeInfos) {
       const auto Prev = PreviousInfos.find(Branch);

@@ -1087,7 +1087,11 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
       << " guard-rejected=" << Proof.GuardDomainRejected
       << " mask=" << Proof.MaskBound << " queried=" << Proof.MaskQueryIssued
       << " complete=" << Proof.MaskQueryComplete
-      << " matched=" << Proof.MaskQueryMatched;
+      << " matched=" << Proof.MaskQueryMatched
+      << " owner-slots=" << Proof.OwnerSlotCount
+      << " permitted-slots=" << Proof.PermittedSlotCount
+      << " owner-bases=" << Proof.OwnerBaseCount
+      << " used-bases=" << Proof.UsedBaseCount;
   EXPECT_EQ(
       Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
       3u);
