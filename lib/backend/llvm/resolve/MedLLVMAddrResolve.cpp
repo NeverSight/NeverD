@@ -764,11 +764,12 @@ bool MedLLVMEmitter::controlConstantMayRelocate(const MedVar &V) const {
 }
 
 std::optional<uint64_t>
-MedLLVMEmitter::traceControlConst(const MedVar &V) const {
+MedLLVMEmitter::traceControlConst(const MedVar &V,
+                                  const ControlValueBindings *Bindings) const {
   if (!CurMedFunc)
     return std::nullopt;
 
-  using Key = std::tuple<int, int, int>;
+  using Key = AddressProvenanceVarKey;
   std::map<Key, std::optional<uint64_t>> Cache;
   std::set<Key> Active;
 
@@ -796,12 +797,19 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
     // this original numeric value. Once a leaf becomes ptrtoint(@global) or
     // ptrtoint(@function), equality/order against another original VA is a
     // link-time question and cannot prove either CFG edge dead here.
-    if (Cur.isConst() && controlConstantMayRelocate(Cur))
+    if (Cur.isConst() &&
+        (controlConstantMayRelocate(Cur) ||
+         (Bindings && isAddressProvenance(Cur.Provenance))))
       return std::nullopt;
     if (Cur.isConst())
       return atWidth(Cur.ConstVal, CurWidth);
 
-    Key K{static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer};
+    if (Bindings)
+      for (const auto &[Bound, Bits] : *Bindings)
+        if (addressProvenanceVarKey(Cur) == addressProvenanceVarKey(Bound))
+          return atWidth(Bits, CurWidth);
+
+    const Key K = addressProvenanceVarKey(Cur);
     if (auto It = Cache.find(K); It != Cache.end())
       return It->second;
     if (!Active.insert(K).second)
@@ -999,6 +1007,122 @@ MedLLVMEmitter::traceControlConst(const MedVar &V) const {
   };
 
   return Eval(V, 0);
+}
+
+MedLLVMEmitter::ControlValueBindings
+MedLLVMEmitter::frameEdgeEqualityFacts(
+    const MedBlock &Block, int Successor,
+    const std::map<int, const MedBlock *> &BlocksById) const {
+  if (!CurMedFunc || Block.Ops.empty() || Block.Succs.size() != 2 ||
+      Block.Succs[0] == Block.Succs[1] ||
+      !Block.ExceptionalSuccs.empty() ||
+      std::find(Block.Succs.begin(), Block.Succs.end(), Successor) ==
+          Block.Succs.end())
+    return {};
+  const MedOp &Branch = Block.Ops.back();
+  if (Branch.Opcode != NdOp::COND_BR || Branch.NumInputs != 2 ||
+      !Branch.Inputs[0].isConst())
+    return {};
+  for (size_t I = 0; I + 1 < Block.Ops.size(); ++I) {
+    const MedOp &Op = Block.Ops[I];
+    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+        Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN ||
+        Op.DoesNotReturn)
+      return {};
+  }
+
+  std::optional<int> Taken;
+  for (int Id : Block.Succs) {
+    const auto It = BlocksById.find(Id);
+    if (It == BlocksById.end())
+      return {};
+    const MedBlock *Candidate = It->second;
+    if (Candidate->StartAddr == Branch.Inputs[0].ConstVal) {
+      if (Taken)
+        return {};
+      Taken = Id;
+    }
+  }
+  if (!Taken)
+    return {};
+  bool Truth = Successor == *Taken;
+  MedVar Condition = Branch.Inputs[1];
+  for (unsigned I = 0; I != 16; ++I) {
+    const MedOp *Def = lookupDef(Condition);
+    if (!Def || Def->NumInputs != 1)
+      break;
+    if (Def->Opcode == NdOp::COPY &&
+        Def->Output.Size == Def->Inputs[0].Size && Def->Output.Size != 0) {
+      Condition = Def->Inputs[0];
+      continue;
+    }
+    if (Def->Opcode == NdOp::BOOL_NOT && Def->Output.Size != 0) {
+      Truth = !Truth;
+      Condition = Def->Inputs[0];
+      continue;
+    }
+    break;
+  }
+  const MedOp *Compare = lookupDef(Condition);
+  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1 ||
+      (Compare->Opcode != NdOp::INT_EQUAL &&
+       Compare->Opcode != NdOp::INT_NOTEQUAL) ||
+      Truth != (Compare->Opcode == NdOp::INT_EQUAL) ||
+      Compare->Inputs[0].Size == 0 || Compare->Inputs[0].Size > 8 ||
+      Compare->Inputs[0].Size != Compare->Inputs[1].Size)
+    return {};
+  const ControlValueBindings NoBindings;
+  auto constantValue = [&](const MedVar &V) {
+    return traceControlConst(V, &NoBindings);
+  };
+  const auto Left = constantValue(Compare->Inputs[0]);
+  const auto Right = constantValue(Compare->Inputs[1]);
+  if (Left.has_value() == Right.has_value())
+    return {};
+  MedVar Value = Left ? Compare->Inputs[1] : Compare->Inputs[0];
+  uint64_t Bits = Left ? *Left : *Right;
+  ControlValueBindings Facts;
+  std::set<AddressProvenanceVarKey> Seen;
+  for (unsigned I = 0; I != 32 && !Value.isConst(); ++I) {
+    if (Value.Size == 0 || Value.Size > 8 ||
+        !Seen.insert(addressProvenanceVarKey(Value)).second)
+      break;
+    const uint64_t Mask = Value.Size == 8
+                              ? ~uint64_t{0}
+                              : (uint64_t{1} << (Value.Size * 8)) - 1;
+    Bits &= Mask;
+    Facts.emplace_back(Value, Bits);
+    // A PHI fact belongs to this occurrence on this edge. Never propagate it
+    // into the PHI's incoming values or another iteration of the loop.
+    if (lookupPhi(Value))
+      break;
+    const MedOp *Def = lookupDef(Value);
+    if (!Def || Def->Output.Size != Value.Size)
+      break;
+    if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+        Def->Inputs[0].Size == Value.Size) {
+      Value = Def->Inputs[0];
+      continue;
+    }
+    if ((Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB) ||
+        Def->NumInputs != 2 || Def->Inputs[0].Size != Value.Size ||
+        Def->Inputs[1].Size != Value.Size)
+      break;
+    const auto A = constantValue(Def->Inputs[0]);
+    const auto B = constantValue(Def->Inputs[1]);
+    if (A.has_value() == B.has_value())
+      break;
+    // Invert only a width-exact modular addition/subtraction. Narrow casts,
+    // shifts and multi-unknown expressions provide no inverse equality.
+    if (B) {
+      Bits = Def->Opcode == NdOp::INT_ADD ? Bits - *B : Bits + *B;
+      Value = Def->Inputs[0];
+    } else {
+      Bits = Def->Opcode == NdOp::INT_ADD ? Bits - *A : *A - Bits;
+      Value = Def->Inputs[1];
+    }
+  }
+  return Facts;
 }
 
 void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {

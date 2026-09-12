@@ -417,8 +417,9 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
 }
 
 std::optional<med_llvm::SlotKey>
-MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V,
-                                      bool RequireEntryStackPointer) const {
+MedLLVMEmitter::canonicalFrameSlotKey(
+    const MedVar &V, bool RequireEntryStackPointer,
+    const ControlValueBindings *Bindings) const {
   if (!CurMedFunc || V.isConst())
     return std::nullopt;
 
@@ -431,9 +432,13 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V,
     return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
            A.SSAVer == B.SSAVer;
   };
-  auto signedDelta = [](const MedVar &C,
+  auto signedDelta = [&](const MedVar &C,
                         uint16_t FallbackSize) -> std::optional<int64_t> {
-    if (!C.isConst())
+    const auto Constant =
+        Bindings ? traceControlConst(C, Bindings)
+                 : C.isConst() ? std::optional<uint64_t>(C.ConstVal)
+                               : std::nullopt;
+    if (!Constant)
       return std::nullopt;
     // INT_ADD/INT_SUB wrap at the operation's result width.  A wider literal
     // feeding a 32-bit address therefore represents its signed low 32 bits,
@@ -442,7 +447,7 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V,
     if (Bytes == 0 || Bytes > sizeof(uint64_t))
       return std::nullopt;
     const unsigned Bits = Bytes * 8;
-    uint64_t Value = C.ConstVal;
+    uint64_t Value = *Constant;
     if (Bits < 64) {
       const uint64_t Mask = (uint64_t{1} << Bits) - 1;
       Value &= Mask;
@@ -660,16 +665,20 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V,
           Result = rec(Def->Inputs[0], Depth + 1);
         break;
       case NdOp::INT_ADD:
-        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
+        if (Def->NumInputs >= 2 &&
+            (Def->Inputs[1].isConst() || Bindings)) {
           if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size))
             Result = addOffset(Def->Inputs[0], *Delta);
-        } else if (Def->NumInputs >= 2 && Def->Inputs[0].isConst()) {
+        }
+        if (!Result && Def->NumInputs >= 2 &&
+            (Def->Inputs[0].isConst() || Bindings)) {
           if (auto Delta = signedDelta(Def->Inputs[0], Cur.Size))
             Result = addOffset(Def->Inputs[1], *Delta);
         }
         break;
       case NdOp::INT_SUB:
-        if (Def->NumInputs >= 2 && Def->Inputs[1].isConst()) {
+        if (Def->NumInputs >= 2 &&
+            (Def->Inputs[1].isConst() || Bindings)) {
           if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
             int64_t Negated = 0;
             if (!llvm::SubOverflow(int64_t{0}, *Delta, Negated))

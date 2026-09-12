@@ -1002,6 +1002,10 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
   FrameReloadAnalysisBuilt = true;
   ++FrameReloadAnalysisBuilds;
   const MedFunc &Func = *CurMedFunc;
+  std::map<int, const MedBlock *> BlocksById;
+  for (const MedBlock &Block : Func.Blocks)
+    if (!BlocksById.emplace(Block.Id, &Block).second)
+      return;
   auto isMemoryWrite = [](NdOp Opcode) {
     return Opcode == NdOp::STORE || Opcode == NdOp::ATOMIC_XCHG ||
            Opcode == NdOp::ATOMIC_ADD || Opcode == NdOp::ATOMIC_CMPXCHG;
@@ -1019,6 +1023,12 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
       FrameReloadIndex.EntryBlockId = Block.Id;
     }
     Indexed.Successors = Block.Succs;
+    for (int Successor : Block.Succs) {
+      ControlValueBindings Facts =
+          frameEdgeEqualityFacts(Block, Successor, BlocksById);
+      if (!Facts.empty())
+        Indexed.EqualityFacts.emplace(Successor, std::move(Facts));
+    }
     for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
       if (Edge.BlockId >= 0)
         Indexed.Successors.push_back(Edge.BlockId);
@@ -1235,7 +1245,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     return !sameState(Before, Dst);
   };
   auto transfer = [&](const FrameReloadBlock &Block, std::size_t Boundary,
-                      ReachingState State) {
+                      ReachingState State,
+                      const ControlValueBindings *Bindings = nullptr) {
     if (!State.Reachable)
       return State;
     for (const FrameReloadWrite &Write : Block.Writes) {
@@ -1250,7 +1261,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       if (!varMayBeFrameAddress(WriteAddr))
         continue;
       const uint16_t WriteSize = Write.Size;
-      const auto WriteKey = canonicalFrameSlotKey(WriteAddr);
+      const auto WriteKey = canonicalFrameSlotKey(
+          WriteAddr, /*RequireEntryStackPointer=*/false, Bindings);
       // A frame-derived write whose slot cannot be canonicalized, or whose
       // root differs from the reload's root, may still alias after an
       // unmodelled stack adjustment. Keep the state poisoned until a later
@@ -1287,7 +1299,7 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   // Forward may-reach dataflow over the exact slot. The immutable snapshot
   // keeps CFG and write construction out of this per-occurrence proof.
   std::map<int, ReachingState> InStates;
-  std::map<int, ReachingState> OutStates;
+  std::map<std::pair<int, int>, ReachingState> EdgeOutStates;
   ReachingState Entry;
   Entry.Reachable = true;
   Entry.Uninitialized = true;
@@ -1348,15 +1360,19 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     if (BlockIt == FrameReloadIndex.Blocks.end())
       return false;
     const FrameReloadBlock &Block = BlockIt->second;
-    ReachingState Next = transfer(
-        Block, std::numeric_limits<std::size_t>::max(), InStates[BlockId]);
-    if (sameState(OutStates[BlockId], Next))
-      continue;
-    OutStates[BlockId] = Next;
-
     for (int SuccId : Block.Successors) {
       if (FrameReloadIndex.Blocks.find(SuccId) == FrameReloadIndex.Blocks.end())
         return false;
+      const auto Facts = Block.EqualityFacts.find(SuccId);
+      const ControlValueBindings *Bindings =
+          Facts == Block.EqualityFacts.end() ? nullptr : &Facts->second;
+      ReachingState Next =
+          transfer(Block, std::numeric_limits<std::size_t>::max(),
+                   InStates[BlockId], Bindings);
+      ReachingState &Previous = EdgeOutStates[{BlockId, SuccId}];
+      if (sameState(Previous, Next))
+        continue;
+      Previous = Next;
       if (mergeInto(InStates[SuccId], Next))
         Work.push_back(SuccId);
     }

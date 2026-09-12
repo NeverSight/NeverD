@@ -817,7 +817,14 @@ private:
   /// comparisons, boolean ops, and a SELECT with a proven condition are
   /// supported; PHIs, memory, calls, and any unrecognised operation stay
   /// unknown. This is control-feasibility evidence, never a value rewrite.
-  std::optional<uint64_t> traceControlConst(const MedVar &V) const;
+  using ControlValueBindings = std::vector<std::pair<MedVar, uint64_t>>;
+  std::optional<uint64_t>
+  traceControlConst(const MedVar &V,
+                    const ControlValueBindings *Bindings = nullptr) const;
+  /// Exact scalar equalities local to one ordinary conditional successor.
+  ControlValueBindings frameEdgeEqualityFacts(
+      const MedBlock &Block, int Successor,
+      const std::map<int, const MedBlock *> &BlocksById) const;
 
   /// Conservative upper bound on whether getVar may replace a constant with a
   /// rebuilt pointer. This predicate is intentionally independent of PHI/CFG
@@ -1572,7 +1579,8 @@ private:
   /// Entry-only queries additionally reject an independent live-in FP root.
   std::optional<med_llvm::SlotKey>
   canonicalFrameSlotKey(const MedVar &V,
-                        bool RequireEntryStackPointer = false) const;
+                        bool RequireEntryStackPointer = false,
+                        const ControlValueBindings *Bindings = nullptr) const;
 
   /// True when \p V is reloaded from a stack slot that a stack-pointer-derived
   /// value was spilled to (`mov [slot],sp ; ... ; mov reg,[slot]`).  clang
@@ -1690,6 +1698,7 @@ private:
     std::vector<int> Successors;
     std::set<int> StructuralPreds;
     std::vector<FrameReloadWrite> Writes;
+    std::map<int, ControlValueBindings> EqualityFacts;
   };
   struct FrameReloadLoadSite {
     int BlockId = -1;
