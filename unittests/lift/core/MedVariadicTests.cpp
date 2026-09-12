@@ -89,7 +89,7 @@ void classify(MedFunc &F, Arch TheArch = Arch::AArch64) {
   F.VariadicOverflowBase = -1;
   detectVariadic(F, getTargetRegInfo(TheArch), TheArch,
                  TheArch == Arch::AArch64 ? BinaryFormat::MachO
-                                         : BinaryFormat::ELF);
+                                          : BinaryFormat::ELF);
 }
 
 TEST(MedVariadic, HomeSlotProofKeepsIdentityPhiAndAddressSpaceBoundaries) {
@@ -190,20 +190,18 @@ TEST(MedVariadic, DefinitionLookupIsFreshForEachFunctionAndEdit) {
     auto &Ops = Original.Blocks[0].Ops;
     if (TheArch == Arch::X64) {
       Ops.push_back(op(NdOp::STORE, {},
-                       {Ops[1].Output,
-                        reg(20, 0, Size, TRI.IntParamRegs[0])}));
-      Ops.push_back(op(NdOp::STORE, {},
-                       {Ops[1].Output,
-                        MedVar::makeConst((uint64_t{48} << 32) | 8, 8)}));
+                       {Ops[1].Output, reg(20, 0, Size, TRI.IntParamRegs[0])}));
+      Ops.push_back(
+          op(NdOp::STORE, {},
+             {Ops[1].Output, MedVar::makeConst((uint64_t{48} << 32) | 8, 8)}));
     } else if (TheArch == Arch::ARM) {
-      Ops[1].Inputs[1] =
-          MedVar::makeConst(static_cast<uint64_t>(-Size), Size);
-      Ops.push_back(op(NdOp::STORE, {},
-                       {Ops[1].Output,
-                        reg(20, 0, Size, TRI.IntParamRegs.back())}));
-      Ops.push_back(op(NdOp::STORE, {},
-                       {Ops[1].Output,
-                        reg(21, 0, Size, TRI.IntParamRegs.front())}));
+      Ops[1].Inputs[1] = MedVar::makeConst(static_cast<uint64_t>(-Size), Size);
+      Ops.push_back(
+          op(NdOp::STORE, {},
+             {Ops[1].Output, reg(20, 0, Size, TRI.IntParamRegs.back())}));
+      Ops.push_back(
+          op(NdOp::STORE, {},
+             {Ops[1].Output, reg(21, 0, Size, TRI.IntParamRegs.front())}));
     }
     MedFunc F = Original;
     classify(F, TheArch);
@@ -279,8 +277,8 @@ TEST(MedVariadic, DarwinWalkRetainsFirstCopyAndOrderedOrCandidates) {
                        {SP, MedVar::makeConst(static_cast<uint64_t>(-16), 8)}));
       MedVar NarrowWalk = Walk;
       NarrowWalk.Size = 4;
-      Ops.push_back(op(NdOp::INT_OR, NarrowWalk,
-                       {Negative, MedVar::makeConst(0, 8)}));
+      Ops.push_back(
+          op(NdOp::INT_OR, NarrowWalk, {Negative, MedVar::makeConst(0, 8)}));
     }
     classify(F);
     EXPECT_EQ(F.IsVariadic, Mode != 2 && Mode != 5 && Mode != 7);
