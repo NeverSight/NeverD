@@ -22,3 +22,8 @@ add_neverd_component_library(NeverDIR
 # NeverDIR archive.  Record that static-library cycle explicitly so CMake
 # repeats the archives for one-pass linkers such as GNU ld.
 target_link_libraries(NeverDIRHigh PUBLIC NeverDIR)
+
+# IRHigh's selector-stub query can first extract Loader's call-hint object on
+# the second scan. That object then needs SourceABI from the preceding IR
+# archive, so one-pass archive linkers need a third scan of this component.
+set_property(TARGET NeverDIR PROPERTY LINK_INTERFACE_MULTIPLICITY 3)
