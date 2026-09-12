@@ -1273,7 +1273,7 @@ struct BinaryImage {
   /// Share metadata lookups for an unchanged image. Null or a different
   /// image's index retains the live lookup; see ExecutableCodeOwnerIndex.
   bool hasExecutableCodeOwnerAt(va_t Addr,
-                               const ExecutableCodeOwnerIndex *Index) const;
+                                const ExecutableCodeOwnerIndex *Index) const;
 
   /// True when p Addr is an authenticated callable entry, rather than merely
   /// an address inside executable code. Untyped COFF exports are deliberately

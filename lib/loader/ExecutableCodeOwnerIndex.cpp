@@ -113,8 +113,8 @@ bool BinaryImage::hasExecutableCodeOwnerAt(
     const va_t Start = normalizeCodeAddress(Sym.Addr, Arch, Mode);
     if (Normalized == Start)
       return true;
-    if (Sym.Size != 0 && Sym.Size <= InvalidVA - Start &&
-        Normalized > Start && Normalized < Start + Sym.Size)
+    if (Sym.Size != 0 && Sym.Size <= InvalidVA - Start && Normalized > Start &&
+        Normalized < Start + Sym.Size)
       return true;
   }
   return false;

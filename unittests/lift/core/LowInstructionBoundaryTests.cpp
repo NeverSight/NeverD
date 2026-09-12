@@ -3183,8 +3183,8 @@ TEST(LowInstructionBoundary, X86GetPcPairCannotCrossDisjointDecodeRoots) {
 enum class PageBaseOwner { Data, PackedData, PackedCode };
 
 LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes,
-                              bool UseIndex = false,
-                              PageBaseOwner Owner = PageBaseOwner::Data) {
+                                bool UseIndex = false,
+                                PageBaseOwner Owner = PageBaseOwner::Data) {
   constexpr va_t DataPage = 0x9000;
 
   BinaryImage Image;
@@ -4420,16 +4420,15 @@ TEST(LowInstructionBoundary,
   // The typed-code case is data-owned by section flags but must still reject
   // data completion because its function extent is authoritative.
   for (PageBaseOwner Owner : {PageBaseOwner::Data, PageBaseOwner::PackedData,
-                             PageBaseOwner::PackedCode})
+                              PageBaseOwner::PackedCode})
     for (bool OffsetUse : {false, true}) {
       const std::vector<uint8_t> Bytes =
-          OffsetUse
-              ? std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0x08, 0x81, 0x00,
-                                     0x91, 0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03,
-                                     0x5f, 0xd6}
-              : std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0xe8, 0x0f, 0x00,
-                                     0xf9, 0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03,
-                                     0x5f, 0xd6};
+          OffsetUse ? std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0x08, 0x81,
+                                           0x00, 0x91, 0x08, 0x01, 0x40, 0xf9,
+                                           0xc0, 0x03, 0x5f, 0xd6}
+                    : std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0xe8, 0x0f,
+                                           0x00, 0xf9, 0x08, 0x01, 0x40, 0xf9,
+                                           0xc0, 0x03, 0x5f, 0xd6};
       const LowFunc Live = buildAArch64PageBaseUse(Bytes, false, Owner);
       const LowFunc Indexed = buildAArch64PageBaseUse(Bytes, true, Owner);
       const LowOp *LiveOp = findAddressMaterialization(Live, kEntry);

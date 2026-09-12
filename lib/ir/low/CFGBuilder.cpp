@@ -2105,11 +2105,10 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       Occurrence.TargetVA = Materialized.TargetVA;
       Occurrence.TargetOwnerVA = Materialized.TargetOwnerVA;
       Occurrence.Width = 4;
-      Occurrence.Provenance =
-          Img.hasExecutableCodeOwnerAt(Materialized.TargetVA,
-                                      ExecutableCodeOwners)
-              ? ConstantAddressProvenance::CodeAddress
-              : ConstantAddressProvenance::DataAddress;
+      Occurrence.Provenance = Img.hasExecutableCodeOwnerAt(
+                                  Materialized.TargetVA, ExecutableCodeOwners)
+                                  ? ConstantAddressProvenance::CodeAddress
+                                  : ConstantAddressProvenance::DataAddress;
       Occurrence.DefinesOutput = true;
       Occurrence.OutputMayDepend = !IsExact;
       Occurrence.OutputOpcode = Op.Opcode;

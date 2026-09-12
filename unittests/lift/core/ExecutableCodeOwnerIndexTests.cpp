@@ -49,14 +49,16 @@ BinaryImage makeMetadataImage(BinaryFormat Format = BinaryFormat::MachO,
   Image.RuntimeFunctionAddrs = {0x61};
   Image.VerifiedFunctionEntries = {0x70};
   Image.KnownCodeRanges = {{0x100, 0x140}, {0x110, 0x120}, {0x140, 0x148},
-                          {0x160, 0x168}, {0x180, 0x180}, {0x198, 0x190}};
-  Image.Symbols = {Symbol::makeFunc(0), Symbol::makeFunc(0x200),
+                           {0x160, 0x168}, {0x180, 0x180}, {0x198, 0x190}};
+  Image.Symbols = {Symbol::makeFunc(0),
+                   Symbol::makeFunc(0x200),
                    Symbol::makeFunc(0x220, 0x10),
                    Symbol::makeFunc(0x22e, 0x20),
                    Symbol::makeFunc(0x260, InvalidVA),
                    Symbol::makeFunc(InvalidVA),
                    Symbol::makeFunc(InvalidVA - 0x40, 0x20),
-                   Symbol::makeFunc(0x2000), Symbol::makeFunc(0x3000)};
+                   Symbol::makeFunc(0x2000),
+                   Symbol::makeFunc(0x3000)};
   Symbol DataSymbol;
   DataSymbol.Addr = 0x280;
   DataSymbol.Size = 0x20;
@@ -91,18 +93,18 @@ TEST(ExecutableCodeOwnerIndex, PreservesMetadataBoundariesAndRawThumbSpelling) {
        {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
     for (bool Thumb : {false, true}) {
       SCOPED_TRACE(::testing::Message() << "format " << static_cast<int>(Format)
-                                      << " thumb " << Thumb);
+                                        << " thumb " << Thumb);
       const BinaryImage Image = makeMetadataImage(Format, Thumb);
       const ExecutableCodeOwnerIndex Index(Image);
       expectSame(Image, Index);
       for (va_t Addr : {0ull, 0x50ull, 0x61ull, 0x70ull, 0x100ull, 0x146ull,
-                       0x160ull, 0x200ull, 0x220ull, 0x240ull, 0x260ull,
-                       0x301ull, 0x311ull, 0x316ull, 0x320ull})
+                        0x160ull, 0x200ull, 0x220ull, 0x240ull, 0x260ull,
+                        0x301ull, 0x311ull, 0x316ull, 0x320ull})
         EXPECT_TRUE(Image.hasExecutableCodeOwnerAt(Addr, &Index)) << Addr;
-      for (va_t Addr : {0x80ull, 0x148ull, 0x158ull, 0x168ull, 0x180ull,
-                       0x190ull, 0x202ull, 0x24eull, 0x262ull, 0x280ull,
-                       0x300ull, 0x305ull, 0x310ull, 0x318ull, 0x330ull,
-                       0x338ull, 0x380ull})
+      for (va_t Addr :
+           {0x80ull, 0x148ull, 0x158ull, 0x168ull, 0x180ull, 0x190ull, 0x202ull,
+            0x24eull, 0x262ull, 0x280ull, 0x300ull, 0x305ull, 0x310ull,
+            0x318ull, 0x330ull, 0x338ull, 0x380ull})
         EXPECT_FALSE(Image.hasExecutableCodeOwnerAt(Addr, &Index)) << Addr;
       EXPECT_TRUE(Image.hasExecutableCodeOwnerAt(InvalidVA, &Index));
       EXPECT_FALSE(Image.hasExecutableCodeOwnerAt(InvalidVA - 0x20, &Index));
