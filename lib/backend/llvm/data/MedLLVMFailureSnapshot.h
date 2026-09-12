@@ -671,6 +671,75 @@ inline bool writeFile(const std::filesystem::path &Path,
   return !Out.fail();
 }
 
+// Supplemental rejected scalar queries from the same opt-in CI capture.
+// These are observations of completed false results, not a proof history or
+// necessarily the decisive query at the eventual first-fatal address.
+inline void scalarOffsetRejection(const MedFunc *Func, const MedVar &Query,
+                                  const MedVar *Forbidden, const char *Reason,
+                                  const MedVar &Rejected, int Depth,
+                                  int ProofNodesLeft, int FrameNodesLeft,
+                                  int ReachNodesLeft) noexcept {
+  const char *Root = std::getenv("NEVERD_CI_FAILURE_SNAPSHOT_DIR");
+  const char *Selected = std::getenv("NEVERD_CI_FAILURE_SNAPSHOT_FUNCTION");
+  if (!Root || !*Root || !Selected || !Func || Func->Name != Selected ||
+      std::strlen(Root) > 4096)
+    return;
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+  try {
+    namespace fs = std::filesystem;
+    std::error_code EC;
+    const fs::path Parent(Root);
+    if (!fs::is_directory(Parent, EC) || EC)
+      return;
+    // At most 64 fixed slots per case, shared safely across capture threads
+    // and processes through exclusive directory creation. Never overwrite.
+    fs::path Dir;
+    for (unsigned Slot = 0; Slot < 64; ++Slot) {
+      fs::path Candidate = Parent / ("offset-rejection-" + std::to_string(Slot));
+      EC.clear();
+      if (fs::create_directory(Candidate, EC)) {
+        Dir = std::move(Candidate);
+        break;
+      }
+      if (EC && EC != std::errc::file_exists)
+        return;
+    }
+    if (Dir.empty())
+      return;
+    Buffer Data(4096);
+    Budget Limit;
+    SnapshotWriter W{Limit, Data};
+    if (W.row("scalar-offset-query-rejection")) {
+      W.s("function", Func->Name);
+      W.u("entry", Func->Entry);
+      W.v("query", Query);
+      if (Forbidden)
+        W.v("forbidden", *Forbidden);
+      W.s("first_rejection_reason", Reason ? Reason : "unlabelled-return");
+      W.v("first_rejected_value", Rejected);
+      W.n("first_rejection_depth", Depth);
+      W.n("proof_nodes_left", ProofNodesLeft);
+      W.n("frame_root_nodes_left", FrameNodesLeft);
+      W.n("frame_reach_nodes_left", ReachNodesLeft);
+      W.end();
+    }
+    if (Data.complete())
+      (void)writeFile(Dir / "query.jsonl", Data.str());
+  } catch (...) {
+    // Observer failure never replaces or retries the original query.
+  }
+#else
+  (void)Query;
+  (void)Forbidden;
+  (void)Reason;
+  (void)Rejected;
+  (void)Depth;
+  (void)ProofNodesLeft;
+  (void)FrameNodesLeft;
+  (void)ReachNodesLeft;
+#endif
+}
+
 // Called only inside an already-taken first-fatal branch. All arguments are
 // existing values; this function must never call a provenance/ABI/CFG helper.
 inline void capture(const BinaryImage *Img, const MedFunc *Func,

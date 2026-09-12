@@ -1348,7 +1348,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffset(const MedVar &V,
 
 bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     const MedVar &V, const MedVar *Forbidden) const {
-  auto stableOffsetFailure = [](const char *, const MedVar &, int) {
+  const char *FirstRejectionReason = nullptr;
+  MedVar FirstRejectedValue = V;
+  int FirstRejectionDepth = -1;
+  auto stableOffsetFailure = [&](const char *Reason, const MedVar &Value,
+                                  int Depth) {
+    if (!FirstRejectionReason) {
+      FirstRejectionReason = Reason;
+      FirstRejectedValue = Value;
+      FirstRejectionDepth = Depth;
+    }
     return false;
   };
   auto sameVar = [](const MedVar &A, const MedVar &B) {
@@ -2605,7 +2614,13 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     }
     return Result;
   };
-  return prove(V, 0, {}, {}, {});
+  const bool Result = prove(V, 0, {}, {}, {});
+  if (!Result)
+    detail::failure_snapshot::scalarOffsetRejection(
+        CurMedFunc, V, Forbidden, FirstRejectionReason, FirstRejectedValue,
+        FirstRejectionDepth, RemainingProofNodes, RemainingFrameRootNodes,
+        RemainingFrameDomainReachNodes);
+  return Result;
 }
 
 std::optional<MedLLVMEmitter::PureReadOnlyBaseIdentity>
