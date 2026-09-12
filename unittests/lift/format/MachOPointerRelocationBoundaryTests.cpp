@@ -12078,6 +12078,174 @@ TEST(LLVMDataPointerInvariantBoundary,
       }
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     NarrowFrameDomainPreservesPredicateAndConcatDependencies) {
+  enum class Scenario {
+    Independent,
+    FramePredicate,
+    CyclicOnly,
+    PointerInitializer,
+    PointerWidth,
+    ConcatAddress,
+    ConcatAddressFragment,
+    MalformedConcat,
+    ConcatWidthMismatch,
+    MalformedPredicate,
+  };
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+      for (NdOp Predicate :
+           {NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL, NdOp::INT_LESS,
+            NdOp::INT_SLESS, NdOp::INT_LESSEQUAL, NdOp::INT_SLESSEQUAL,
+            NdOp::INT_CARRY, NdOp::INT_SOVF, NdOp::INT_SBOR})
+        for (bool ViaConcat : {false, true})
+          for (Scenario Case :
+               {Scenario::Independent, Scenario::FramePredicate,
+                Scenario::CyclicOnly, Scenario::PointerInitializer,
+                Scenario::PointerWidth, Scenario::ConcatAddress,
+                Scenario::ConcatAddressFragment, Scenario::MalformedConcat,
+                Scenario::ConcatWidthMismatch, Scenario::MalformedPredicate}) {
+            SCOPED_TRACE(formatTraceName(Format));
+            SCOPED_TRACE(static_cast<int>(TargetArch));
+            SCOPED_TRACE(static_cast<int>(Predicate));
+            SCOPED_TRACE(ViaConcat);
+            SCOPED_TRACE(static_cast<int>(Case));
+            const auto &TRI = getTargetRegInfo(TargetArch);
+            const uint16_t Width =
+                Case == Scenario::PointerWidth ? TRI.PointerSize : 4;
+            auto value = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+              MedVar V;
+              V.Kind = Kind;
+              V.TheArch = TargetArch;
+              V.Id = Id;
+              V.SSAVer = Kind == MedVar::Temp ? 1 : 0;
+              V.Size = Size;
+              return V;
+            };
+            auto scalar = [](uint64_t Bits, uint16_t Size) {
+              return MedVar::makeConst(Bits, Size,
+                                        ConstantAddressProvenance::Scalar);
+            };
+            MedFunc Func;
+            Func.Entry = CallerVA;
+            Func.Name = "frame_predicate_dependencies";
+            Func.ReturnType = NdType::makeVoid();
+            Func.FrameSize = 32;
+            MedVar Index = value(MedVar::Param, 0, TRI.PointerSize);
+            Index.RegOff = TRI.IntParamRegs[0];
+            MedVar Input = value(MedVar::Param, 1, Width);
+            Input.RegOff = TRI.IntParamRegs[1];
+            Func.Params = {Index, Input};
+            MedVar SP = value(MedVar::Reg, 100, TRI.PointerSize);
+            SP.RegOff = TRI.StackPointer;
+            const MedVar Exact = value(MedVar::Temp, 1, TRI.PointerSize);
+            const MedVar Dynamic = value(MedVar::Temp, 2, TRI.PointerSize);
+            const MedVar Reloaded = value(MedVar::Temp, 3, Width);
+            MedBlock Block;
+            Block.Id = 0;
+            Block.StartAddr = CallerVA;
+            Block.EndAddr = CallerVA + 0x20;
+            auto append = [&](NdOp Opcode, MedVar Output,
+                              std::initializer_list<MedVar> Inputs) {
+              MedOp Op;
+              Op.Opcode = Opcode;
+              Op.Output = Output;
+              for (const MedVar &Arg : Inputs)
+                Op.addInput(Arg);
+              Block.Ops.push_back(std::move(Op));
+            };
+            append(NdOp::COPY, SP, {SP});
+            append(NdOp::INT_ADD, Exact,
+                   {SP, scalar(uint64_t(-16), TRI.PointerSize)});
+            append(NdOp::INT_ADD, Dynamic, {Exact, Index});
+            append(NdOp::LOAD, Reloaded, {Exact});
+            MedVar Base = Reloaded;
+            if (Case != Scenario::CyclicOnly) {
+              Base = value(MedVar::Temp, 4, Width);
+              append(NdOp::SELECT, Base,
+                     {Index, Reloaded,
+                      Case == Scenario::PointerInitializer
+                          ? MedVar::makeConst(
+                                SpilledConstTableVA, Width,
+                                ConstantAddressProvenance::DataAddress)
+                          : Input});
+            }
+            MedVar Compared =
+                Case == Scenario::FramePredicate ? Reloaded : Input;
+            if (ViaConcat) {
+              // Match the lowered subregister chain before the KMP compare.
+              // A constant high lane cannot initialize a cyclic low lane.
+              const MedVar Byte = value(MedVar::Temp, 5, 1);
+              const MedVar Joined = value(MedVar::Temp, 6, 2);
+              Compared = value(MedVar::Temp, 7, 1);
+              append(NdOp::SUBBYTES, Byte,
+                     {Case == Scenario::FramePredicate ? Reloaded : Input,
+                      scalar(0, 4)});
+              append(NdOp::CONCAT, Joined, {scalar(0, 1), Byte});
+              append(NdOp::SUBBYTES, Compared, {Joined, scalar(0, 4)});
+            }
+            const MedVar Flag = value(MedVar::Temp, 8, 1);
+            const MedVar Widened = value(MedVar::Temp, 9, Width);
+            const MedVar Updated = value(MedVar::Temp, 10, Width);
+            if (Case == Scenario::MalformedPredicate)
+              append(Predicate, Flag, {Compared});
+            else
+              append(Predicate, Flag, {Compared, scalar(1, Compared.Size)});
+            append(NdOp::INT_ZEXT, Widened, {Flag});
+            append(NdOp::INT_ADD, Updated, {Base, Widened});
+            MedVar Stored = Updated;
+            std::optional<MedVar> RejectedConcat;
+            if (Case == Scenario::ConcatAddress ||
+                Case == Scenario::ConcatAddressFragment ||
+                Case == Scenario::MalformedConcat ||
+                Case == Scenario::ConcatWidthMismatch) {
+              const MedVar Joined = value(
+                  MedVar::Temp, 11,
+                  Case == Scenario::ConcatWidthMismatch ? 7 : 8);
+              MedVar Low =
+                  Case == Scenario::MalformedConcat ||
+                          Case == Scenario::ConcatWidthMismatch
+                      ? scalar(7, 4)
+                      : MedVar::makeConst(
+                            SpilledConstTableVA, 4,
+                            Case == Scenario::ConcatAddress
+                                ? ConstantAddressProvenance::DataAddress
+                                : ConstantAddressProvenance::AddressFragment);
+              if (Case == Scenario::MalformedConcat)
+                append(NdOp::CONCAT, Joined, {Low});
+              else
+                append(NdOp::CONCAT, Joined, {Input, Low});
+              RejectedConcat = Joined;
+              Stored = value(MedVar::Temp, 12, 4);
+              append(NdOp::SUBBYTES, Stored, {Joined, scalar(0, 4)});
+            }
+            append(NdOp::STORE, {}, {Dynamic, Stored});
+            append(NdOp::RETURN, {}, {});
+            Func.Blocks.push_back(std::move(Block));
+            BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+            MedLLVMEmitter Emitter;
+            MedLLVMProvenanceTestPeer::prepareFreshAnalysis(
+                Emitter, Func, Image, TargetArch, Format);
+            const MedOp &Reload = Func.Blocks.front().Ops[3];
+            std::vector<MedVar> Sources;
+            EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                Emitter, Func, TargetArch, Reload, Sources));
+            EXPECT_TRUE(Sources.empty());
+            if (RejectedConcat) {
+              // The other lane is a runtime input, so constant folding alone
+              // cannot reject this independently relocatable bit payload.
+              EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+                  Emitter, *RejectedConcat, nullptr));
+              EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
+                  Emitter, Stored, nullptr));
+            }
+            EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
+                          Emitter, Reloaded, nullptr),
+                      Case == Scenario::Independent);
+          }
+}
+
 TEST(MachOLLVMDataPointerBoundary,
      ClearsProvenanceCachesAcrossFunctionsAndEmitterReuse) {
   {

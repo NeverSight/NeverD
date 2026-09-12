@@ -412,6 +412,8 @@ jobs:
                    "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
                   ("MachOLLVMDataPointerBoundary.IncomingParameterHomesPreserveAllPathWriteEffects",
                    "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
+                  ("LLVMDataPointerInvariantBoundary.NarrowFrameDomainPreservesPredicateAndConcatDependencies",
+                   "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
                   ("PipelineStageTrace.PreservesOwnedNativeResults",
                    "NeverDPipelineOutcomeTests"),
                   ("PipelineStageTrace.RequiresExactEnvironmentValue",
@@ -426,9 +428,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 89,
-              ("macOS", "macos-patch"): 87,
-              ("Windows", "windows-focused"): 85,
+              ("Linux", "linux-semantic"): 90,
+              ("macOS", "macos-patch"): 88,
+              ("Windows", "windows-focused"): 86,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

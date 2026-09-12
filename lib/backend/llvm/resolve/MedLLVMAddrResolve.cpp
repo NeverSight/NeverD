@@ -1383,6 +1383,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
            exactSameVar(Def->Output, Value) &&
            exactSameVar(Def->Inputs[0], Value);
   };
+  auto concatHasExactWidths = [](const MedOp &Op) {
+    return Op.NumInputs == 2 && Op.Inputs[0].Size != 0 &&
+           Op.Inputs[1].Size != 0 &&
+           static_cast<unsigned>(Op.Output.Size) ==
+               static_cast<unsigned>(Op.Inputs[0].Size) + Op.Inputs[1].Size;
+  };
   auto keyOf = [](const MedVar &V) {
     return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
@@ -1603,6 +1609,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     const MedOp *Def = lookupDef(Start);
     if (!Def)
       return {.HasIndependentAlternative = true};
+    if (Def->Opcode == NdOp::CONCAT && !concatHasExactWidths(*Def))
+      return {.Unknown = true};
     // SSA live-ins use an exact self-COPY. The scalar proof accepts this
     // source identity, so the frame-domain initializer audit must retain it
     // rather than following the marker as a source-free recurrence.
@@ -1638,7 +1646,30 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
             {summarizeFrameDomainReach(ArmT, TargetRoot, Depth + 1, Seen),
              summarizeFrameDomainReach(ArmF, TargetRoot, Depth + 1, Seen)});
     }
+    auto dependencies = [&]() {
+      std::vector<FrameDomainReachSummary> Dependencies;
+      Dependencies.reserve(Def->NumInputs);
+      for (uint8_t I = 0; I < Def->NumInputs; ++I)
+        Dependencies.push_back(summarizeFrameDomainReach(
+            Def->Inputs[I], TargetRoot, Depth + 1, Seen));
+      return mergeFrameDomainDependencies(Dependencies);
+    };
     switch (Def->Opcode) {
+    case NdOp::INT_EQUAL:
+    case NdOp::INT_NOTEQUAL:
+    case NdOp::INT_LESS:
+    case NdOp::INT_SLESS:
+    case NdOp::INT_LESSEQUAL:
+    case NdOp::INT_SLESSEQUAL:
+    case NdOp::INT_CARRY:
+    case NdOp::INT_SOVF:
+    case NdOp::INT_SBOR:
+      // The emitted i8 predicate retains its operand initialization needs.
+      // A comparison fed only by this frame cannot initialize a pure cycle.
+      if (Def->NumInputs != 2 || Def->Output.Size != 1 ||
+          Def->Inputs[0].Size == 0 || Def->Inputs[1].Size == 0)
+        return {.Unknown = true};
+      return dependencies();
     case NdOp::COPY:
     case NdOp::INT_ZEXT:
     case NdOp::INT_SEXT:
@@ -1658,14 +1689,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     case NdOp::INT_XOR:
     case NdOp::INT_NEG2:
     case NdOp::INT_NEGATE:
-    case NdOp::INT_NOT: {
-      std::vector<FrameDomainReachSummary> Dependencies;
-      Dependencies.reserve(Def->NumInputs);
-      for (uint8_t I = 0; I < Def->NumInputs; ++I)
-        Dependencies.push_back(summarizeFrameDomainReach(
-            Def->Inputs[I], TargetRoot, Depth + 1, Seen));
-      return mergeFrameDomainDependencies(Dependencies);
-    }
+    case NdOp::INT_NOT:
+    case NdOp::CONCAT:
+      // Both CONCAT lanes contribute dependencies. An independent high lane
+      // cannot initialize a cyclic low lane through a later SUBBYTES.
+      return dependencies();
     default:
       break;
     }
@@ -1767,6 +1795,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     case NdOp::INT_NEG2:
     case NdOp::INT_NEGATE:
     case NdOp::INT_NOT:
+    case NdOp::CONCAT:
       for (uint8_t I = 0; I < Def->NumInputs; ++I)
         if (scalarValueReaches(Def->Inputs[I], Target, Depth + 1, Seen))
           return true;
@@ -1987,6 +2016,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       case NdOp::INT_NEG2:
       case NdOp::INT_NEGATE:
       case NdOp::INT_NOT:
+      case NdOp::CONCAT:
         for (uint8_t I = 0; I < Def->NumInputs; ++I)
           if (reachesRoot(Def->Inputs[I]))
             Work.push_back(Def->Inputs[I]);
@@ -2180,6 +2210,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
                prove(ArmF, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
     }
 
+    if (Def->Opcode == NdOp::CONCAT && !concatHasExactWidths(*Def))
+      return stableOffsetFailure("malformed-concat", Start, Depth);
     bool CarriesArithmeticValue = false;
     switch (Def->Opcode) {
     case NdOp::COPY:
@@ -2202,6 +2234,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     case NdOp::INT_NEG2:
     case NdOp::INT_NEGATE:
     case NdOp::INT_NOT:
+    case NdOp::CONCAT:
       CarriesArithmeticValue = true;
       break;
     default:
