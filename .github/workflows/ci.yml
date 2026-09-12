@@ -492,9 +492,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 116,
-              ("macOS", "macos-patch"): 114,
-              ("Windows", "windows-focused"): 112,
+              ("Linux", "linux-semantic"): 122,
+              ("macOS", "macos-patch"): 120,
+              ("Windows", "windows-focused"): 118,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(
