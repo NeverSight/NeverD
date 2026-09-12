@@ -807,6 +807,23 @@ public:
     return !QuarantinedJumpTableProposals.empty();
   }
   struct JumpTableGroupLifecycleStateForTesting {
+    // Passive observations of an already executed proof. No resolver reads
+    // these fields to grant authority or select a recovery path.
+    struct ProofObservation {
+      const char *Stage = "not-entered";
+      va_t Branch = InvalidVA;
+      size_t MemberCount = 0;
+      size_t TargetLoads = 0;
+      size_t LoadRoles = 0;
+      size_t IndexAlternatives = 0;
+      uint16_t IndexSize = 0;
+      int IndexUseSeq = -1;
+      bool IndexDefinedAtUse = false;
+      uint32_t MaskBound = 0;
+      bool MaskQueryIssued = false;
+      bool MaskQueryComplete = false;
+      bool MaskQueryMatched = false;
+    } LastProof;
     size_t PublishedMemberCount = 0;
     bool CommitTailInjected = false;
     bool CommitTailRollbackClearedAllMembers = false;

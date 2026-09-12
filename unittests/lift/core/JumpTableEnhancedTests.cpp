@@ -1075,7 +1075,19 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
   neverd::CFGBuilder Builder;
   const auto Low =
       Builder.build(Image, Decoder, Function->Addr, Function->Name);
-  ASSERT_EQ(Low.JumpTables.size(), 3u);
+  const auto &Proof =
+      Builder.jumpTableGroupLifecycleStateForTesting().LastProof;
+  ASSERT_EQ(Low.JumpTables.size(), 3u)
+      << "stage=" << Proof.Stage << " branch=" << Proof.Branch
+      << " members=" << Proof.MemberCount << " loads=" << Proof.TargetLoads
+      << " roles=" << Proof.LoadRoles
+      << " indices=" << Proof.IndexAlternatives << " width=" << Proof.IndexSize
+      << " use-seq=" << Proof.IndexUseSeq
+      << " defined-at-use=" << Proof.IndexDefinedAtUse
+      << " mask=" << Proof.MaskBound
+      << " queried=" << Proof.MaskQueryIssued
+      << " complete=" << Proof.MaskQueryComplete
+      << " matched=" << Proof.MaskQueryMatched;
   EXPECT_EQ(
       Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
       3u);

@@ -376,6 +376,20 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           : CandidateEvidenceLimit;
   size_t CandidateEvidenceBudget = InitialCandidateEvidenceBudget;
   JumpTableInfo Info;
+  auto observeGroupProof = [&](const char *Stage) {
+    if (!GuardedGroupProofContext)
+      return;
+    auto &Observation = JumpTableGroupLifecycleForTesting.LastProof;
+    Observation.Stage = Stage;
+    Observation.Branch = Rec.Addr;
+    Observation.TargetLoads = Info.TargetLoads.size();
+    Observation.LoadRoles = Info.LoadRoles.size();
+    Observation.IndexAlternatives = Info.IndexValueAlternatives.size();
+    Observation.IndexSize = Info.IndexValueAtUse.Size;
+    Observation.IndexUseSeq = Info.IndexUseSeq;
+    Observation.IndexDefinedAtUse = Info.IndexValueDefinedAtUse;
+  };
+  observeGroupProof("shape");
   JumpTableExactConsumerGroup ExactConsumerGroup;
   bool CandidateEvidenceShapeClaimed = false;
   bool CandidateEvidencePublished = false;
@@ -2397,6 +2411,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       TargetRoleEdgeOverrides = &RelativeEdgeOverrides;
   }
   bool TargetRoleComplete = false;
+  observeGroupProof("target-role");
   if (GuardedGroupProofContext)
     TargetRoleEdgeOverrides = &GuardedGroupProofContext->Edges;
   bool TargetRole = branchTargetDependsOnTableLoad(
@@ -2583,6 +2598,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   }
 
   bool AddressRoleComplete = false;
+  observeGroupProof("address-role");
   const bool AddressRole = tableLoadAddressesMatchRole(
       Info, &CandidateEvidenceBudget, &AddressRoleComplete,
       TargetRoleUsesDefinedOccurrenceRoots, TargetRoleEdgeOverrides);
@@ -2889,6 +2905,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
   }
   if (GuardedGroupProofContext) {
+    observeGroupProof("single-load-selector");
     if (!GroupHasSingleGuardedLoadAndSelector(Info))
       return {};
     // A group hypothesis can support universal reaching-value proofs, but
@@ -2907,6 +2924,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Info.HasControllingGuard = false;
     Info.IncompleteGuardDomain = false;
     Info.SemanticGuardDomainAmbiguous = false;
+    observeGroupProof("precise-guard");
     GuardFound = inferBoundsFromPreciseGuards(
         Rec, Info, &CandidateEvidenceBudget,
         /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
@@ -2917,6 +2935,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.AuthenticatedGuardBound = Info.MaxEntries;
     } else {
       bool Incomplete = false;
+      observeGroupProof("dense-mask");
       const uint32_t Bound = proveGroupDenseMaskBound(
           Rec, Info, &CandidateEvidenceBudget, Incomplete);
       CandidateEvidenceAnalysisIncomplete |= Incomplete;
@@ -2927,6 +2946,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       GuardFound = true;
     }
     Info.IndexDomainAuthenticated = true;
+    observeGroupProof("post-domain");
   }
   // Linked x64 PE RVA switches have no per-entry relocation run: the exact
   // unsigned range guard is their only slot-domain certificate.  Keep this
@@ -4157,6 +4177,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       return false;
     bool Revalidated = false;
     if (Info.AuthenticatedDenseMaskBound != 0) {
+      observeGroupProof("dense-mask-revalidation");
       bool Incomplete = false;
       const uint32_t Bound = proveGroupDenseMaskBound(
           Rec, Info, &CandidateEvidenceBudget, Incomplete);
@@ -5813,6 +5834,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // revalidating any certificate, because it also publishes the corresponding
     // index occurrence metadata transactionally.
     bool FinalAddressRoleComplete = false;
+    observeGroupProof("final-address-role");
     bool FinalAddressRoleDomainInputsChanged = false;
     const bool FinalAddressRole = tableLoadAddressesMatchRole(
         Info, &CandidateEvidenceBudget, &FinalAddressRoleComplete,

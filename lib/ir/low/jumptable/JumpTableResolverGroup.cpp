@@ -65,6 +65,11 @@ uint32_t CFGBuilder::proveGroupDenseMaskBound(const InsnRecord &Rec,
                                               const JumpTableInfo &Info,
                                               size_t *AggregateEvidenceBudget,
                                               bool &Incomplete) {
+  auto &Observation = JumpTableGroupLifecycleForTesting.LastProof;
+  Observation.MaskBound = 0;
+  Observation.MaskQueryIssued = false;
+  Observation.MaskQueryComplete = false;
+  Observation.MaskQueryMatched = false;
   if (!AggregateEvidenceBudget) {
     Incomplete = true;
     return 0;
@@ -125,6 +130,8 @@ uint32_t CFGBuilder::proveGroupDenseMaskBound(const InsnRecord &Rec,
     // cannot borrow an AND certificate for another architectural lane.
     bool Complete = false;
     std::vector<bool> QueryComplete;
+    Observation.MaskBound = Bound;
+    Observation.MaskQueryIssued = true;
     const auto Matches = tableValuesMatchAtUses(
         {Query}, &Complete, &QueryComplete, Rec.Addr,
         /*CandidateTargetsOverride=*/nullptr, AggregateEvidenceBudget,
@@ -133,6 +140,10 @@ uint32_t CFGBuilder::proveGroupDenseMaskBound(const InsnRecord &Rec,
         /*QueryUnsignedFeasibleMasks=*/nullptr,
         limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
         &GuardedGroupProofContext->Edges);
+    Observation.MaskQueryComplete =
+        Complete && Matches.size() == 1 && QueryComplete.size() == 1 &&
+        QueryComplete.front();
+    Observation.MaskQueryMatched = Matches.size() == 1 && Matches.front();
     if (!Complete || Matches.size() != 1 || QueryComplete.size() != 1 ||
         !QueryComplete.front()) {
       Incomplete = true;
@@ -387,6 +398,11 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
                                               llvm::ArrayRef<va_t> Candidates,
                                               bool &MadeProgress,
                                               bool &MetadataRefreshed) {
+  if (!GuardedGroupRejected) {
+    JumpTableGroupLifecycleForTesting.LastProof = {};
+    JumpTableGroupLifecycleForTesting.LastProof.Stage = "eligibility";
+    JumpTableGroupLifecycleForTesting.LastProof.MemberCount = Candidates.size();
+  }
   // Cheap, narrow gates precede every image or instruction inventory walk.
   if (GuardedGroupRejected || GuardedGroupProofContext || !Img.IsRelocatable ||
       Img.Format != BinaryFormat::ELF || Img.Arch != Arch::X86 ||
@@ -400,6 +416,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       !QuarantinedJumpTableProposals.empty() ||
       !EverStrongJumpTableProposalBranches.empty())
     return false;
+  JumpTableGroupLifecycleForTesting.LastProof.Stage = "owner-inventory";
   GroupEvidence Budget(CandidateProposalStageEvidenceRemaining,
                        CandidateProposalStageEvidenceIncomplete);
   auto Incomplete = [&]() {
@@ -529,6 +546,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
   }
   if (!Owner)
     return false;
+  JumpTableGroupLifecycleForTesting.LastProof.Stage = "owner-context";
   const auto &Section = *Owner->Storage;
   const auto &Key = Owner->Key;
   if (GuardedGroupIdentity && Key != *GuardedGroupIdentity)
@@ -594,7 +612,11 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
           CandidateProposalStageEvidenceRemaining;
       Scratch.StrongJumpTableProposalOutcomes.emplace(
           Branch, StrongJumpTableProposalOutcome::DefinitiveLocalProofLoss);
+      Scratch.JumpTableGroupLifecycleForTesting.LastProof.MemberCount =
+          Candidates.size();
       auto Result = Scratch.resolveJumpTable(Img, Scratch.Insns.at(Branch));
+      JumpTableGroupLifecycleForTesting.LastProof =
+          Scratch.JumpTableGroupLifecycleForTesting.LastProof;
       // Transfer balances, never re-debit the resolver or restore a previous
       // allowance. Its RAII candidate outcome has already settled its work.
       CandidateProposalStageEvidenceRemaining =
@@ -625,6 +647,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         break;
       }
       const JumpTableInfo &Info = InfoIt->second;
+      JumpTableGroupLifecycleForTesting.LastProof.Stage = "member-contract";
       const auto Capacity = Capacities.find(Info.BaseAddr);
       const bool DenseDomain =
           (Info.AuthenticatedGuardBound == Result.size() &&
@@ -683,6 +706,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     // Suppression permission must cover the complete physical owner. There
     // is no implicit filler, unused tail, or extra same-section pointer.
     if (RuntimeSlots != Slots || UsedBases != Bases) {
+      JumpTableGroupLifecycleForTesting.LastProof.Stage = "owner-coverage";
       GuardedGroupRejected = true;
       return false;
     }
