@@ -147,7 +147,9 @@ def main():
         original = identity.compiler_classes(original_dir, platform_suppress_lint=True)
         save("original-class-inventory.json", original)
         original_annotations = declarations(original)
-        dex = verify.dex(sorted(original_dir.rglob("*.class")), args.work_dir / "dex", sdk)
+        # Keep CLASS-retained annotations in the DEX that exercises recovery.
+        dex = verify.dex(sorted(original_dir.rglob("*.class")), args.work_dir / "dex", sdk,
+                         intermediate=True)
         save("input.json", {"dex_sha256": hashlib.sha256(dex.read_bytes()).hexdigest(),
                             "expected_classes": [OWNER], "expected_methods": sorted(original[OWNER]["methods"])})
         output = args.work_dir / "recovered"
