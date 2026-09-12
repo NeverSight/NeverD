@@ -1083,6 +1083,8 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
       << " roles=" << Proof.LoadRoles << " indices=" << Proof.IndexAlternatives
       << " width=" << Proof.IndexSize << " use-seq=" << Proof.IndexUseSeq
       << " defined-at-use=" << Proof.IndexDefinedAtUse
+      << " guard-incomplete=" << Proof.GuardAnalysisIncomplete
+      << " guard-rejected=" << Proof.GuardDomainRejected
       << " mask=" << Proof.MaskBound << " queried=" << Proof.MaskQueryIssued
       << " complete=" << Proof.MaskQueryComplete
       << " matched=" << Proof.MaskQueryMatched;

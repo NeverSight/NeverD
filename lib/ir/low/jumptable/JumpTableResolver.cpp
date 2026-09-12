@@ -388,6 +388,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Observation.IndexSize = Info.IndexValueAtUse.Size;
     Observation.IndexUseSeq = Info.IndexUseSeq;
     Observation.IndexDefinedAtUse = Info.IndexValueDefinedAtUse;
+    Observation.GuardAnalysisIncomplete = Info.IncompleteGuardDomain;
+    Observation.GuardDomainRejected = Info.SemanticGuardDomainAmbiguous;
   };
   observeGroupProof("shape");
   JumpTableExactConsumerGroup ExactConsumerGroup;
@@ -2924,16 +2926,21 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     Info.HasControllingGuard = false;
     Info.IncompleteGuardDomain = false;
     Info.SemanticGuardDomainAmbiguous = false;
-    observeGroupProof("precise-guard");
     GuardFound = inferBoundsFromPreciseGuards(
         Rec, Info, &CandidateEvidenceBudget,
         /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
+    observeGroupProof("precise-guard");
     CandidateEvidenceAnalysisIncomplete |= Info.IncompleteGuardDomain;
-    if (Info.IncompleteGuardDomain || Info.SemanticGuardDomainAmbiguous)
+    if (Info.IncompleteGuardDomain)
       return {};
-    if (GuardFound && Info.HasControllingGuard) {
+    if (GuardFound && Info.HasControllingGuard &&
+        !Info.SemanticGuardDomainAmbiguous) {
       Info.AuthenticatedGuardBound = Info.MaxEntries;
     } else {
+      // A completed guard proof may find only an unrelated loop condition or
+      // a non-dense subset. That does not invalidate an independent unsigned
+      // AND envelope. Keep incomplete analysis fail-closed above, and replace
+      // the guard metadata only after the exact mask proof completes.
       bool Incomplete = false;
       observeGroupProof("dense-mask");
       const uint32_t Bound = proveGroupDenseMaskBound(
@@ -2941,6 +2948,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       CandidateEvidenceAnalysisIncomplete |= Incomplete;
       if (Incomplete || Bound == 0)
         return {};
+      Info.HasControllingGuard = false;
+      Info.SemanticGuardDomainAmbiguous = false;
       Info.MaxEntries = Bound;
       Info.AuthenticatedDenseMaskBound = Bound;
       GuardFound = true;

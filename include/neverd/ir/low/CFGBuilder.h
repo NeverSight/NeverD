@@ -819,6 +819,8 @@ public:
       uint16_t IndexSize = 0;
       int IndexUseSeq = -1;
       bool IndexDefinedAtUse = false;
+      bool GuardAnalysisIncomplete = false;
+      bool GuardDomainRejected = false;
       uint32_t MaskBound = 0;
       bool MaskQueryIssued = false;
       bool MaskQueryComplete = false;
