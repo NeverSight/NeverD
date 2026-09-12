@@ -695,7 +695,8 @@ inline void scalarOffsetRejection(const MedFunc *Func, const MedVar &Query,
     // and processes through exclusive directory creation. Never overwrite.
     fs::path Dir;
     for (unsigned Slot = 0; Slot < 64; ++Slot) {
-      fs::path Candidate = Parent / ("offset-rejection-" + std::to_string(Slot));
+      fs::path Candidate =
+          Parent / ("offset-rejection-" + std::to_string(Slot));
       EC.clear();
       if (fs::create_directory(Candidate, EC)) {
         Dir = std::move(Candidate);

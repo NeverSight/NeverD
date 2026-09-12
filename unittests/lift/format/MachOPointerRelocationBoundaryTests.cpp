@@ -7237,11 +7237,11 @@ TEST(MachOInteriorCodePointerCFG,
     Foreign.Flags = SegmentFlags::Readable;
     Foreign.Data.resize(Foreign.Size);
     for (size_t I = 0; I < 2048; ++I) {
-      const va_t Target = I == 0 ? Fixture.Entry
-                         : I == 1 ? Fixture.End
-                         : I == 2 ? Fixture.SelectedTarget
-                         : I == 3 ? InvalidVA
-                                  : Fixture.End + I * 4;
+      const va_t Target = I == 0   ? Fixture.Entry
+                          : I == 1 ? Fixture.End
+                          : I == 2 ? Fixture.SelectedTarget
+                          : I == 3 ? InvalidVA
+                                   : Fixture.End + I * 4;
       writeObject(Foreign.Data, I * sizeof(uint64_t), Target);
       Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + I * sizeof(uint64_t));
     }
@@ -7250,7 +7250,8 @@ TEST(MachOInteriorCodePointerCFG,
     const LowFunc WithForeignRoots = Build();
 
     EXPECT_EQ(blockStarts(WithForeignRoots), blockStarts(Baseline));
-    EXPECT_EQ(WithForeignRoots.ModuleAnalysisRoots, Baseline.ModuleAnalysisRoots);
+    EXPECT_EQ(WithForeignRoots.ModuleAnalysisRoots,
+              Baseline.ModuleAnalysisRoots);
     EXPECT_EQ(WithForeignRoots.OrdinaryModuleAnalysisRoots,
               Baseline.OrdinaryModuleAnalysisRoots);
     EXPECT_EQ(WithForeignRoots.DecodedInstructionCount,
