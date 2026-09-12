@@ -300,9 +300,9 @@ void expectNativeSelectorCommand(const MedFunc &Function,
   Options.TheArch = Arch::AArch64;
   Options.EmitComments = false;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-  const std::string ExpectedCall =
-      Command == 0 ? "sub_1100(0x2222, 0, 0x123456)"
-                   : "sub_1100(0x2222, 0x777777, 0x123456)";
+  const std::string ExpectedCall = Command == 0
+                                       ? "sub_1100(0x2222, 0, 0x123456)"
+                                       : "sub_1100(0x2222, 0x777777, 0x123456)";
   EXPECT_NE(Source.find(ExpectedCall), std::string::npos) << Source;
 }
 
