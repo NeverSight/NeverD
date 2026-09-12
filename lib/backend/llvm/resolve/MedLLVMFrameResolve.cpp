@@ -416,8 +416,7 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
   }
 }
 
-std::optional<med_llvm::SlotKey>
-MedLLVMEmitter::canonicalFrameSlotKey(
+std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     const MedVar &V, bool RequireEntryStackPointer,
     const ControlValueBindings *Bindings) const {
   if (!CurMedFunc || V.isConst())
@@ -433,11 +432,10 @@ MedLLVMEmitter::canonicalFrameSlotKey(
            A.SSAVer == B.SSAVer;
   };
   auto signedDelta = [&](const MedVar &C,
-                        uint16_t FallbackSize) -> std::optional<int64_t> {
-    const auto Constant =
-        Bindings ? traceControlConst(C, Bindings)
-                 : C.isConst() ? std::optional<uint64_t>(C.ConstVal)
-                               : std::nullopt;
+                         uint16_t FallbackSize) -> std::optional<int64_t> {
+    const auto Constant = Bindings      ? traceControlConst(C, Bindings)
+                          : C.isConst() ? std::optional<uint64_t>(C.ConstVal)
+                                        : std::nullopt;
     if (!Constant)
       return std::nullopt;
     // INT_ADD/INT_SUB wrap at the operation's result width.  A wider literal
@@ -665,8 +663,7 @@ MedLLVMEmitter::canonicalFrameSlotKey(
           Result = rec(Def->Inputs[0], Depth + 1);
         break;
       case NdOp::INT_ADD:
-        if (Def->NumInputs >= 2 &&
-            (Def->Inputs[1].isConst() || Bindings)) {
+        if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
           if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size))
             Result = addOffset(Def->Inputs[0], *Delta);
         }
@@ -677,8 +674,7 @@ MedLLVMEmitter::canonicalFrameSlotKey(
         }
         break;
       case NdOp::INT_SUB:
-        if (Def->NumInputs >= 2 &&
-            (Def->Inputs[1].isConst() || Bindings)) {
+        if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
           if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
             int64_t Negated = 0;
             if (!llvm::SubOverflow(int64_t{0}, *Delta, Negated))

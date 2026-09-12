@@ -1578,8 +1578,7 @@ private:
   /// stack adjustments, ambiguous PHIs, and overflow fail closed.
   /// Entry-only queries additionally reject an independent live-in FP root.
   std::optional<med_llvm::SlotKey>
-  canonicalFrameSlotKey(const MedVar &V,
-                        bool RequireEntryStackPointer = false,
+  canonicalFrameSlotKey(const MedVar &V, bool RequireEntryStackPointer = false,
                         const ControlValueBindings *Bindings = nullptr) const;
 
   /// True when \p V is reloaded from a stack slot that a stack-pointer-derived

@@ -1307,9 +1307,9 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       canonicalFrameSlotKey(Load.Inputs[0],
                             /*RequireEntryStackPointer=*/true) == Target) {
     const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
-    const bool HaveTypes = CurMedFunc->hasTypeInfo() &&
-                           CurMedFunc->TypedParams.size() ==
-                               CurMedFunc->Params.size();
+    const bool HaveTypes =
+        CurMedFunc->hasTypeInfo() &&
+        CurMedFunc->TypedParams.size() == CurMedFunc->Params.size();
     // declareFunc can override the Med parameter width with a typed or FP
     // ABI argument. Only certify integer STORE bytes represented exactly by
     // the incoming Med value; an unknown footprint may overlap any home.
@@ -1321,8 +1321,7 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         const TypeRef &Type = CurMedFunc->TypedParams[Index].Type;
         if (!Type)
           return 8;
-        if (Type->Kind != NdTypeKind::Int &&
-            Type->Kind != NdTypeKind::Unknown)
+        if (Type->Kind != NdTypeKind::Int && Type->Kind != NdTypeKind::Unknown)
           return 0;
         return Type->Size > 0 ? Type->Size : 8;
       }
@@ -1339,10 +1338,9 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
           !overlaps(Offset, Width, Target->second, Load.Output.Size))
         continue;
       Entry.Values.clear();
-      if (Offset == Target->second && Width == Load.Output.Size &&
-          Width != 0 && Width <= 8 && Param.Size == Width &&
-          Param.Kind == MedVar::Param && !lookupDef(Param) &&
-          !lookupPhi(Param)) {
+      if (Offset == Target->second && Width == Load.Output.Size && Width != 0 &&
+          Width <= 8 && Param.Size == Width && Param.Kind == MedVar::Param &&
+          !lookupDef(Param) && !lookupPhi(Param)) {
         Entry.Uninitialized = false;
         Entry.Invalid = false;
         addUnique(Entry.Values, Param);

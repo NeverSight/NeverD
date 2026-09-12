@@ -797,9 +797,8 @@ MedLLVMEmitter::traceControlConst(const MedVar &V,
     // this original numeric value. Once a leaf becomes ptrtoint(@global) or
     // ptrtoint(@function), equality/order against another original VA is a
     // link-time question and cannot prove either CFG edge dead here.
-    if (Cur.isConst() &&
-        (controlConstantMayRelocate(Cur) ||
-         (Bindings && isAddressProvenance(Cur.Provenance))))
+    if (Cur.isConst() && (controlConstantMayRelocate(Cur) ||
+                          (Bindings && isAddressProvenance(Cur.Provenance))))
       return std::nullopt;
     if (Cur.isConst())
       return atWidth(Cur.ConstVal, CurWidth);
@@ -1009,13 +1008,11 @@ MedLLVMEmitter::traceControlConst(const MedVar &V,
   return Eval(V, 0);
 }
 
-MedLLVMEmitter::ControlValueBindings
-MedLLVMEmitter::frameEdgeEqualityFacts(
+MedLLVMEmitter::ControlValueBindings MedLLVMEmitter::frameEdgeEqualityFacts(
     const MedBlock &Block, int Successor,
     const std::map<int, const MedBlock *> &BlocksById) const {
   if (!CurMedFunc || Block.Ops.empty() || Block.Succs.size() != 2 ||
-      Block.Succs[0] == Block.Succs[1] ||
-      !Block.ExceptionalSuccs.empty() ||
+      Block.Succs[0] == Block.Succs[1] || !Block.ExceptionalSuccs.empty() ||
       std::find(Block.Succs.begin(), Block.Succs.end(), Successor) ==
           Block.Succs.end())
     return {};
@@ -1051,8 +1048,8 @@ MedLLVMEmitter::frameEdgeEqualityFacts(
     const MedOp *Def = lookupDef(Condition);
     if (!Def || Def->NumInputs != 1)
       break;
-    if (Def->Opcode == NdOp::COPY &&
-        Def->Output.Size == Def->Inputs[0].Size && Def->Output.Size != 0) {
+    if (Def->Opcode == NdOp::COPY && Def->Output.Size == Def->Inputs[0].Size &&
+        Def->Output.Size != 0) {
       Condition = Def->Inputs[0];
       continue;
     }
@@ -1087,9 +1084,8 @@ MedLLVMEmitter::frameEdgeEqualityFacts(
     if (Value.Size == 0 || Value.Size > 8 ||
         !Seen.insert(addressProvenanceVarKey(Value)).second)
       break;
-    const uint64_t Mask = Value.Size == 8
-                              ? ~uint64_t{0}
-                              : (uint64_t{1} << (Value.Size * 8)) - 1;
+    const uint64_t Mask =
+        Value.Size == 8 ? ~uint64_t{0} : (uint64_t{1} << (Value.Size * 8)) - 1;
     Bits &= Mask;
     Facts.emplace_back(Value, Bits);
     // A PHI fact belongs to this occurrence on this edge. Never propagate it

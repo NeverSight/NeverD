@@ -1521,7 +1521,7 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
 }
 
 MedFunc makeIncomingParameterHomeReload(Arch TargetArch, bool ViaFP = false,
-                                       bool LiveFP = false) {
+                                        bool LiveFP = false) {
   const auto &TRI = getTargetRegInfo(TargetArch);
   const uint16_t Width = TRI.PointerSize;
   auto value = [&](MedVar::VarKind Kind, int Id) {
@@ -9954,13 +9954,13 @@ TEST(MachOLLVMDataPointerBoundary,
           Proof, Func, TargetArch, Reload, Sources));
       ASSERT_EQ(Sources.size(), 1u);
       EXPECT_EQ(Sources.front(), Func.Params.front());
-      EXPECT_TRUE(MedLLVMProvenanceTestPeer::stableOffset(
-          Proof, Reload.Output, nullptr));
+      EXPECT_TRUE(MedLLVMProvenanceTestPeer::stableOffset(Proof, Reload.Output,
+                                                          nullptr));
 
       // The proof's source and width must match the real emitted prologue.
       llvm::LLVMContext Context;
-      auto Module = MedLLVMEmitter().emit({Func}, Context, "parameter-home",
-                                          TargetArch);
+      auto Module =
+          MedLLVMEmitter().emit({Func}, Context, "parameter-home", TargetArch);
       ASSERT_NE(Module, nullptr);
       expectValidModule(*Module);
       llvm::Function *Function = Module->getFunction(Func.Name);
@@ -9992,8 +9992,8 @@ TEST(MachOLLVMDataPointerBoundary,
             const auto *FrameEnd = llvm::dyn_cast<llvm::GetElementPtrInst>(
                 FrameBase->getPointerOperand());
             ASSERT_NE(FrameEnd, nullptr);
-            EXPECT_TRUE(llvm::isa<llvm::AllocaInst>(
-                FrameEnd->getPointerOperand()));
+            EXPECT_TRUE(
+                llvm::isa<llvm::AllocaInst>(FrameEnd->getPointerOperand()));
           }
       EXPECT_EQ(Initializers, 1u);
     }
@@ -10021,12 +10021,12 @@ TEST(MachOLLVMDataPointerBoundary,
     BranchPartialWrite,
     LoopUpdate
   };
-  for (Case Variant : {MissingHome, LiveFramePointer, WrongOffset, NarrowLoad,
-                       TypedWidthMismatch, PartialWrite, UnknownWrite,
-                       AtomicWrite, PointerWrite, ScalarWrite, OverlappingHomes,
-                       ExactHomeLast, UnknownHomeLast, ExactHomeAfterUnknown,
-                       InvalidHomeIndex, BranchScalarWrite, BranchPartialWrite,
-                       LoopUpdate}) {
+  for (Case Variant :
+       {MissingHome, LiveFramePointer, WrongOffset, NarrowLoad,
+        TypedWidthMismatch, PartialWrite, UnknownWrite, AtomicWrite,
+        PointerWrite, ScalarWrite, OverlappingHomes, ExactHomeLast,
+        UnknownHomeLast, ExactHomeAfterUnknown, InvalidHomeIndex,
+        BranchScalarWrite, BranchPartialWrite, LoopUpdate}) {
     SCOPED_TRACE(static_cast<int>(Variant));
     MedFunc Func = makeIncomingParameterHomeReload(
         Arch::X86, Variant == LiveFramePointer, Variant == LiveFramePointer);
@@ -10079,8 +10079,7 @@ TEST(MachOLLVMDataPointerBoundary,
       append(Func.Blocks.front(), NdOp::STORE, {},
              {Slot, scalar(42, Variant == PartialWrite ? 1 : 4)});
     if (Variant == UnknownWrite) {
-      append(Func.Blocks.front(), NdOp::INT_ADD, temp(3),
-             {SP, Func.Params[1]});
+      append(Func.Blocks.front(), NdOp::INT_ADD, temp(3), {SP, Func.Params[1]});
       append(Func.Blocks.front(), NdOp::STORE, {}, {temp(3), scalar(42)});
     }
     if (Variant == AtomicWrite)
@@ -10149,9 +10148,9 @@ TEST(MachOLLVMDataPointerBoundary,
       EXPECT_TRUE(Sources.empty());
       continue;
     }
-    EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
-                  Proof, Reload.Output, nullptr),
-              Variant != PointerWrite);
+    EXPECT_EQ(
+        MedLLVMProvenanceTestPeer::stableOffset(Proof, Reload.Output, nullptr),
+        Variant != PointerWrite);
     if (Variant == PointerWrite)
       EXPECT_EQ(Sources, std::vector<MedVar>{Address});
     else if (Variant == ScalarWrite)
@@ -10195,9 +10194,8 @@ TEST(MachOLLVMDataPointerBoundary,
           Scenario::OtherVersion, Scenario::AddressBound,
           Scenario::PartialAfter, Scenario::UnknownAfter, Scenario::AtomicAfter,
           Scenario::ScalarAfter, Scenario::PointerAfter,
-          Scenario::PointerSource,
-          Scenario::OtherPredecessor, Scenario::ExceptionalSuccessor,
-          Scenario::AmbiguousSuccessor}) {
+          Scenario::PointerSource, Scenario::OtherPredecessor,
+          Scenario::ExceptionalSuccessor, Scenario::AmbiguousSuccessor}) {
       SCOPED_TRACE(static_cast<int>(TargetArch));
       SCOPED_TRACE(static_cast<int>(Case));
       const auto &TRI = getTargetRegInfo(TargetArch);
@@ -10214,7 +10212,7 @@ TEST(MachOLLVMDataPointerBoundary,
       };
       auto scalar = [&](uint64_t Bits, uint16_t Size = 0) {
         return MedVar::makeConst(Bits, Size ? Size : Width,
-                                  ConstantAddressProvenance::Scalar);
+                                 ConstantAddressProvenance::Scalar);
       };
       MedFunc Func;
       Func.Name = "edge_equality_store";
@@ -10257,22 +10255,20 @@ TEST(MachOLLVMDataPointerBoundary,
       const MedVar Address = MedVar::makeConst(
           SpilledConstTableVA, Width, ConstantAddressProvenance::DataAddress);
       append(Entry, NdOp::STORE, {},
-             {Dynamic, Case == Scenario::PointerSource ? Address
-                                                       : Func.Params[1]});
+             {Dynamic,
+              Case == Scenario::PointerSource ? Address : Func.Params[1]});
       if (Case == Scenario::PartialAfter || Case == Scenario::ScalarAfter ||
           Case == Scenario::PointerAfter) {
         const MedVar After =
             Case == Scenario::PointerAfter
                 ? Address
                 : scalar(42, Case == Scenario::PartialAfter ? 1 : Width);
-        append(Entry, NdOp::STORE, {},
-               {Exact, After});
+        append(Entry, NdOp::STORE, {}, {Exact, After});
       }
       if (Case == Scenario::UnknownAfter) {
         append(Entry, NdOp::INT_ADD, value(MedVar::Temp, 5),
                {SP, Func.Params[2]});
-        append(Entry, NdOp::STORE, {},
-               {value(MedVar::Temp, 5), scalar(42)});
+        append(Entry, NdOp::STORE, {}, {value(MedVar::Temp, 5), scalar(42)});
       }
       if (Case == Scenario::AtomicAfter)
         append(Entry, NdOp::ATOMIC_XCHG, value(MedVar::Temp, 5),
@@ -10289,8 +10285,7 @@ TEST(MachOLLVMDataPointerBoundary,
       }
       if (Case == Scenario::NarrowGuard) {
         Compared = value(MedVar::Temp, 7, 1);
-        append(Entry, NdOp::SUBBYTES, Compared,
-               {Func.Params[0], scalar(0)});
+        append(Entry, NdOp::SUBBYTES, Compared, {Func.Params[0], scalar(0)});
         Bound = scalar(7, 1);
       }
       if (Case == Scenario::OtherVersion)
@@ -10301,7 +10296,7 @@ TEST(MachOLLVMDataPointerBoundary,
       }
       if (Case == Scenario::AddressBound)
         Bound = MedVar::makeConst(7, Width,
-                                   ConstantAddressProvenance::AddressFragment);
+                                  ConstantAddressProvenance::AddressFragment);
       MedVar Condition = value(MedVar::Temp, 8, 1);
       append(Entry,
              Case == Scenario::NotEqualFalse ? NdOp::INT_NOTEQUAL
@@ -10315,9 +10310,9 @@ TEST(MachOLLVMDataPointerBoundary,
       const bool LoadOnFalse = Case == Scenario::NotEqualFalse ||
                                Case == Scenario::InvertedCopy ||
                                Case == Scenario::OtherEdge;
-      append(Entry, NdOp::COND_BR, {},
-             {scalar(LoadOnFalse ? Exit.StartAddr : Loaded.StartAddr),
-              Condition});
+      append(
+          Entry, NdOp::COND_BR, {},
+          {scalar(LoadOnFalse ? Exit.StartAddr : Loaded.StartAddr), Condition});
       const MedVar Result = value(MedVar::Temp, 11);
       append(Loaded, NdOp::LOAD, Result, {Exact});
       append(Loaded, NdOp::RETURN, {}, {Result});
@@ -10339,7 +10334,7 @@ TEST(MachOLLVMDataPointerBoundary,
         Alternate.Ops.assign(Func.Blocks[0].Ops.begin(),
                              Func.Blocks[0].Ops.begin() + 5);
         Func.Blocks[0].Ops.erase(Func.Blocks[0].Ops.begin(),
-                                Func.Blocks[0].Ops.begin() + 5);
+                                 Func.Blocks[0].Ops.begin() + 5);
         append(Alternate, NdOp::COND_BR, {},
                {scalar(CallerVA), Func.Params[2]});
         Func.Blocks.push_back(std::move(Alternate));
@@ -10358,16 +10353,15 @@ TEST(MachOLLVMDataPointerBoundary,
         EXPECT_TRUE(Sources.empty());
         continue;
       }
-      const bool Pointer = Case == Scenario::PointerAfter ||
-                           Case == Scenario::PointerSource;
-      const MedVar Source = Pointer ? Address
-                                   : Case == Scenario::ScalarAfter
-                                         ? scalar(42)
-                                         : Func.Params[1];
+      const bool Pointer =
+          Case == Scenario::PointerAfter || Case == Scenario::PointerSource;
+      const MedVar Source = Pointer                         ? Address
+                            : Case == Scenario::ScalarAfter ? scalar(42)
+                                                            : Func.Params[1];
       EXPECT_EQ(Sources, std::vector<MedVar>{Source});
-      EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
-                    Emitter, Result, nullptr),
-                !Pointer);
+      EXPECT_EQ(
+          MedLLVMProvenanceTestPeer::stableOffset(Emitter, Result, nullptr),
+          !Pointer);
     }
 }
 
@@ -10388,8 +10382,7 @@ TEST(MachOLLVMDataPointerBoundary,
       return V;
     };
     auto scalar = [&](uint64_t Bits) {
-      return MedVar::makeConst(Bits, Width,
-                                ConstantAddressProvenance::Scalar);
+      return MedVar::makeConst(Bits, Width, ConstantAddressProvenance::Scalar);
     };
     MedFunc Func;
     Func.Name = "edge_store_loop_updates";
@@ -10453,8 +10446,8 @@ TEST(MachOLLVMDataPointerBoundary,
               Sources.end());
     EXPECT_NE(std::find(Sources.begin(), Sources.end(), scalar(42)),
               Sources.end());
-    EXPECT_TRUE(MedLLVMProvenanceTestPeer::stableOffset(
-        Emitter, Result, nullptr));
+    EXPECT_TRUE(
+        MedLLVMProvenanceTestPeer::stableOffset(Emitter, Result, nullptr));
   }
 }
 
@@ -12419,7 +12412,7 @@ TEST(LLVMDataPointerInvariantBoundary,
             };
             auto scalar = [](uint64_t Bits, uint16_t Size) {
               return MedVar::makeConst(Bits, Size,
-                                        ConstantAddressProvenance::Scalar);
+                                       ConstantAddressProvenance::Scalar);
             };
             MedFunc Func;
             Func.Entry = CallerVA;
@@ -12494,9 +12487,9 @@ TEST(LLVMDataPointerInvariantBoundary,
                 Case == Scenario::ConcatAddressFragment ||
                 Case == Scenario::MalformedConcat ||
                 Case == Scenario::ConcatWidthMismatch) {
-              const MedVar Joined = value(
-                  MedVar::Temp, 11,
-                  Case == Scenario::ConcatWidthMismatch ? 7 : 8);
+              const MedVar Joined =
+                  value(MedVar::Temp, 11,
+                        Case == Scenario::ConcatWidthMismatch ? 7 : 8);
               MedVar Low =
                   Case == Scenario::MalformedConcat ||
                           Case == Scenario::ConcatWidthMismatch
@@ -12534,8 +12527,8 @@ TEST(LLVMDataPointerInvariantBoundary,
               EXPECT_FALSE(MedLLVMProvenanceTestPeer::stableOffset(
                   Emitter, Stored, nullptr));
             }
-            EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
-                          Emitter, Reloaded, nullptr),
+            EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(Emitter, Reloaded,
+                                                              nullptr),
                       Case == Scenario::Independent);
           }
 }
