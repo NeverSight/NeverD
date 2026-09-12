@@ -102,6 +102,7 @@ add_neverd_unittest(NeverDLiftTests
   arm32/ARM32_SwitchTests.cpp
   arm32/ARM32_RoundTripTests.cpp
   core/InstructionModeTests.cpp
+  core/ExecutableCodeOwnerIndexTests.cpp
   core/LowInstructionBoundaryTests.cpp
   core/LiftCommonTests.cpp
   core/MedSSAMultiRootTests.cpp

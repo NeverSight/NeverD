@@ -44,6 +44,8 @@
 
 namespace neverd {
 
+class ExecutableCodeOwnerIndex;
+
 /// One concrete pointer slot bound by Mach-O dyld metadata.  This native view
 /// is retained for patch provenance; collectImportStorageSlots() combines it
 /// with the format-neutral identity while preserving the signed addend.
@@ -1265,32 +1267,13 @@ struct BinaryImage {
   /// extents, unwind ranges, and explicitly registered import veneers remain
   /// authoritative for packed images whose section flags are incomplete.
   bool hasExecutableCodeOwnerAt(va_t Addr) const {
-    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
-    const Segment *Seg = getSegmentFor(Normalized);
-    if (!Seg || !Seg->isExecutable())
-      return false;
-    if (isCodeAddress(Normalized) || isImportStubAt(Addr) ||
-        isImportStubAt(Normalized) ||
-        (Entry != 0 && normalizeCodeAddress(Entry, Arch, Mode) == Normalized) ||
-        RuntimeFunctionAddrs.count(Addr) != 0 ||
-        RuntimeFunctionAddrs.count(Normalized) != 0 ||
-        VerifiedFunctionEntries.count(Normalized) != 0)
-      return true;
-    for (const auto &[Start, End] : KnownCodeRanges)
-      if (Normalized >= Start && Normalized < End)
-        return true;
-    for (const Symbol &Sym : Symbols) {
-      if (!Sym.IsFunc)
-        continue;
-      const va_t Start = normalizeCodeAddress(Sym.Addr, Arch, Mode);
-      if (Normalized == Start)
-        return true;
-      if (Sym.Size != 0 && Sym.Size <= InvalidVA - Start &&
-          Normalized > Start && Normalized < Start + Sym.Size)
-        return true;
-    }
-    return false;
+    return hasExecutableCodeOwnerAt(Addr, nullptr);
   }
+
+  /// Share metadata lookups for an unchanged image. Null or a different
+  /// image's index retains the live lookup; see ExecutableCodeOwnerIndex.
+  bool hasExecutableCodeOwnerAt(va_t Addr,
+                               const ExecutableCodeOwnerIndex *Index) const;
 
   /// True when p Addr is an authenticated callable entry, rather than merely
   /// an address inside executable code. Untyped COFF exports are deliberately

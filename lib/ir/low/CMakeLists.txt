@@ -49,6 +49,7 @@ add_neverd_component_library(NeverDIRLow
   Decode
   IRLowValidation
   LibC
+  Loader
   Solver
   Symbolic
 )

@@ -18,6 +18,7 @@
 #include "neverd/lift/LiftCommon.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -3179,7 +3180,11 @@ TEST(LowInstructionBoundary, X86GetPcPairCannotCrossDisjointDecodeRoots) {
   EXPECT_FALSE(Dec.getX86GetPcOccurrence());
 }
 
-LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {
+enum class PageBaseOwner { Data, PackedData, PackedCode };
+
+LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes,
+                              bool UseIndex = false,
+                              PageBaseOwner Owner = PageBaseOwner::Data) {
   constexpr va_t DataPage = 0x9000;
 
   BinaryImage Image;
@@ -3203,8 +3208,19 @@ LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {
   Data.VA = DataPage;
   Data.Size = 0x100;
   Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  if (Owner != PageBaseOwner::Data)
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Data.Data.resize(Data.Size);
   Image.Segments.push_back(std::move(Data));
+  if (Owner != PageBaseOwner::Data) {
+    Section DataSection;
+    DataSection.VA = DataPage;
+    DataSection.Size = 0x100;
+    DataSection.Flags = SegmentFlags::Readable;
+    Image.Sections.push_back(DataSection);
+  }
+  if (Owner == PageBaseOwner::PackedCode)
+    Image.Symbols.push_back(Symbol::makeFunc(DataPage, 0x10));
 
   // Deliberately give the page start exact loader ownership in both tests.
   // The negative case therefore cannot pass by merely noticing that the ADRP
@@ -3217,6 +3233,11 @@ LowFunc buildAArch64PageBaseUse(std::vector<uint8_t> Bytes) {
     return {};
   }
   CFGBuilder Builder;
+  std::optional<ExecutableCodeOwnerIndex> CodeOwners;
+  if (UseIndex) {
+    CodeOwners.emplace(Image);
+    Builder.setExecutableCodeOwnerIndex(&*CodeOwners);
+  }
   return Builder.build(Image, Dec, kEntry, "aarch64_page_base_use");
 }
 
@@ -4391,6 +4412,40 @@ TEST(LowInstructionBoundary,
   EXPECT_EQ(Materialization->Inputs[0].Provenance,
             ConstantAddressProvenance::DataAddress);
   EXPECT_EQ(Materialization->Inputs[0].AddressOwnerVA, 0x9000u);
+}
+
+TEST(LowInstructionBoundary,
+     IndexedAArch64PagesKeepExactDereferenceAndTypedCodeOwnership) {
+  // Compare the actual materialized LowOp, including its owner certificate.
+  // The typed-code case is data-owned by section flags but must still reject
+  // data completion because its function extent is authoritative.
+  for (PageBaseOwner Owner : {PageBaseOwner::Data, PageBaseOwner::PackedData,
+                             PageBaseOwner::PackedCode})
+    for (bool OffsetUse : {false, true}) {
+      const std::vector<uint8_t> Bytes =
+          OffsetUse
+              ? std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0x08, 0x81, 0x00,
+                                     0x91, 0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03,
+                                     0x5f, 0xd6}
+              : std::vector<uint8_t>{0x48, 0x00, 0x00, 0x90, 0xe8, 0x0f, 0x00,
+                                     0xf9, 0x08, 0x01, 0x40, 0xf9, 0xc0, 0x03,
+                                     0x5f, 0xd6};
+      const LowFunc Live = buildAArch64PageBaseUse(Bytes, false, Owner);
+      const LowFunc Indexed = buildAArch64PageBaseUse(Bytes, true, Owner);
+      const LowOp *LiveOp = findAddressMaterialization(Live, kEntry);
+      const LowOp *IndexedOp = findAddressMaterialization(Indexed, kEntry);
+      ASSERT_NE(LiveOp, nullptr);
+      ASSERT_NE(IndexedOp, nullptr);
+      EXPECT_EQ(IndexedOp->Inputs[0], LiveOp->Inputs[0]);
+      EXPECT_EQ(Indexed.RelocatedInstructionAddressOccurrences,
+                Live.RelocatedInstructionAddressOccurrences);
+      const bool ExactData = !OffsetUse && Owner != PageBaseOwner::PackedCode;
+      EXPECT_EQ(IndexedOp->Inputs[0].Provenance,
+                ExactData ? ConstantAddressProvenance::DataAddress
+                          : ConstantAddressProvenance::AddressFragment);
+      EXPECT_EQ(IndexedOp->Inputs[0].AddressOwnerVA,
+                ExactData ? 0x9000 : InvalidVA);
+    }
 }
 
 TEST(LowInstructionBoundary,

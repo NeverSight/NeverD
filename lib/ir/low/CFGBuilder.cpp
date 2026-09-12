@@ -1859,7 +1859,7 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
         (PageMaterialization->second.TargetVA & ~AArch64PageMask) == PageBase;
     const bool CanAuthenticatePageByDereference =
         Img.hasObjectDataProvenance(PageBase) &&
-        !Img.hasExecutableCodeOwnerAt(PageBase);
+        !Img.hasExecutableCodeOwnerAt(PageBase, ExecutableCodeOwners);
     if ((PageBase & AArch64PageMask) != 0 ||
         (!HasAuthenticatedPage && !CanAuthenticatePageByDereference))
       continue;
@@ -2106,7 +2106,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
       Occurrence.TargetOwnerVA = Materialized.TargetOwnerVA;
       Occurrence.Width = 4;
       Occurrence.Provenance =
-          Img.hasExecutableCodeOwnerAt(Materialized.TargetVA)
+          Img.hasExecutableCodeOwnerAt(Materialized.TargetVA,
+                                      ExecutableCodeOwners)
               ? ConstantAddressProvenance::CodeAddress
               : ConstantAddressProvenance::DataAddress;
       Occurrence.DefinesOutput = true;
@@ -2195,8 +2196,8 @@ void CFGBuilder::completeExactAArch64PageBases(const BinaryImage &Img) {
     const va_t Last = Address + AccessSize - 1;
     if (!Img.hasObjectDataProvenance(Address) ||
         !Img.hasObjectDataProvenance(Last) ||
-        Img.hasExecutableCodeOwnerAt(Address) ||
-        Img.hasExecutableCodeOwnerAt(Last) ||
+        Img.hasExecutableCodeOwnerAt(Address, ExecutableCodeOwners) ||
+        Img.hasExecutableCodeOwnerAt(Last, ExecutableCodeOwners) ||
         isRuntimeWritableAddress(Img, Address) ||
         isRuntimeWritableAddress(Img, Last))
       return std::nullopt;

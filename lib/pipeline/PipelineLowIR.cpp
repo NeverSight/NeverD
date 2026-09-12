@@ -19,6 +19,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -2801,6 +2802,12 @@ void Pipeline::buildLowIR(
   std::vector<LowFunc> AllLow(Total);
   const libc::NoReturnTargetIndex NoReturnTargets(Img);
   const detail::AbsoluteRelocationRootIndex AbsoluteRelocationRoots(Img);
+  const std::optional<ExecutableCodeOwnerIndex> ExecutableCodeOwners =
+      Img.Arch == Arch::AArch64
+          ? std::optional<ExecutableCodeOwnerIndex>(std::in_place, Img)
+          : std::nullopt;
+  const ExecutableCodeOwnerIndex *CodeOwnerIndex =
+      ExecutableCodeOwners ? &*ExecutableCodeOwners : nullptr;
 
   // The set of all detected function entries lets each CFG builder recognise an
   // unconditional `jmp` to *another* function as a tail call (call + ret)
@@ -2832,6 +2839,7 @@ void Pipeline::buildLowIR(
     LocalCFG.setKnownFuncEntries(&FuncEntries);
     LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
     LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
+    LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
     for (size_t I; (I = Claim()) < N;) {
       AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                  Candidates[I].second);
@@ -2875,6 +2883,7 @@ void Pipeline::buildLowIR(
       LocalCFG.setKnownFuncEntries(&FuncEntries);
       LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
       LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
+      LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
       LocalCFG.setProtectedJumpTableRelocationSlots(&ProtectedRelocationSlots);
       LocalCFG.setUnsafeJumpTableBranches(&UnsafeJumpTableBranches);
       LocalCFG.setPreservePotentialJumpTableBranches(

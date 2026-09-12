@@ -666,6 +666,12 @@ public:
       const detail::AbsoluteRelocationRootIndex *Index) {
     AbsoluteRelocationRoots = Index;
   }
+  /// Borrow code ownership metadata for one unchanged image operation. The
+  /// index must outlive initial and rebuilt CFG construction; null uses live
+  /// metadata.
+  void setExecutableCodeOwnerIndex(const ExecutableCodeOwnerIndex *Index) {
+    ExecutableCodeOwners = Index;
+  }
   /// Provide exception-metadata-proven continuation addresses owned by the
   /// function passed to build().  These are intentionally owner-scoped rather
   /// than image-global: build() revalidates each address against an exact
@@ -2477,6 +2483,7 @@ private:
   const std::set<va_t> *KnownFuncEntries = nullptr;
   const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
+  const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;
   const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
   /// Owned one-shot history for the next build, plus the snapshot active in
