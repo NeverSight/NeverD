@@ -681,8 +681,7 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
     return TRI.isSubRegOf(AV.RegOff, AV.Size, BV.RegOff, BV.Size) ||
            TRI.isSubRegOf(BV.RegOff, BV.Size, AV.RegOff, AV.Size);
   };
-  auto isSelectArmComponent = [&](const PhiNode &Phi,
-                                  const MedVar &Arm) {
+  auto isSelectArmComponent = [&](const PhiNode &Phi, const MedVar &Arm) {
     if (Phi.Output == Arm)
       return true;
     const PhiNode *ArmPhi = findPhi(Arm);
@@ -710,7 +709,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
       // Multiple table-bearing recurrence candidates are only one pointer
       // component when their outputs are overlapping register aliases. Two
       // independent pointer PHIs under ADD/SUB are not a base+index. Exact
-      // SELECT arms are allowed only when both stay in one forwarding component.
+      // SELECT arms are allowed only when both stay in one forwarding
+      // component.
       if (Item.Phi != PrimaryPhi && !isRegisterAlias(*PrimaryPhi, *Item.Phi) &&
           !inSameForwardingComponent(PrimaryPhi, Item.Phi) &&
           !isSelectArmPair(*PrimaryPhi, *Item.Phi)) {
@@ -1066,8 +1066,8 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
     if (!Load || Load->Opcode != NdOp::LOAD || Load->NumInputs < 1)
       return false;
     auto sameValue = [](const MedVar &A, const MedVar &B) {
-      return !A.isConst() && !B.isConst() && A.Kind == B.Kind &&
-             A.Id == B.Id && A.SSAVer == B.SSAVer;
+      return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
+             A.SSAVer == B.SSAVer;
     };
     bool HasSmallBound = false;
     for (const MedBlock &Block : CurMedFunc->Blocks)
@@ -1076,13 +1076,12 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
           if (!sameValue(Use.Inputs[I], Value))
             continue;
           const uint8_t Other = I ^ 1u;
-          const bool IsCompare =
-              Use.Opcode == NdOp::INT_EQUAL ||
-              Use.Opcode == NdOp::INT_NOTEQUAL ||
-              Use.Opcode == NdOp::INT_LESS ||
-              Use.Opcode == NdOp::INT_SLESS ||
-              Use.Opcode == NdOp::INT_LESSEQUAL ||
-              Use.Opcode == NdOp::INT_SLESSEQUAL;
+          const bool IsCompare = Use.Opcode == NdOp::INT_EQUAL ||
+                                 Use.Opcode == NdOp::INT_NOTEQUAL ||
+                                 Use.Opcode == NdOp::INT_LESS ||
+                                 Use.Opcode == NdOp::INT_SLESS ||
+                                 Use.Opcode == NdOp::INT_LESSEQUAL ||
+                                 Use.Opcode == NdOp::INT_SLESSEQUAL;
           if (IsCompare) {
             if (Use.NumInputs >= 2 && Use.Inputs[Other].isConst() &&
                 Use.Inputs[Other].ConstVal <= 0x100000)
@@ -1169,8 +1168,7 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
   for (const auto &T : IdxTerms) {
     if (varIsFrameDerived(T))
       return nullptr;
-    if (!valueIsStableAddressOffset(T) &&
-        !isBoundedScalarLookup(T)) {
+    if (!valueIsStableAddressOffset(T) && !isBoundedScalarLookup(T)) {
       if (FailClosed) {
         if (!FatalDataPointerResolution) {
           syncError() << "med_llvm_emitter: read-only table address "
@@ -1180,7 +1178,8 @@ MedLLVMEmitter::tryResolveIndexedGlobalPtr(const MedVar &AddrVar,
           detail::failure_snapshot::capture(
               Img, CurMedFunc, "indexed-runtime-offset", AddrVar,
               FatalCodePointerResolution, &T,
-              {{"base", Base}, {"have_base", HaveBase},
+              {{"base", Base},
+               {"have_base", HaveBase},
                {"base_is_rodata_symbol", BaseIsRodataSymbol},
                {"base_owner_present", BaseOwner.has_value()},
                {"base_owner", BaseOwner.value_or(InvalidVA)},

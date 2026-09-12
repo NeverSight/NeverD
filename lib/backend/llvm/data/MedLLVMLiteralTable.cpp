@@ -1007,10 +1007,8 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
     // relocatable constant, so a second base cannot hide behind this shortcut.
     const MedOp *Def = findDef(V);
     const bool IsForwardingWrapper =
-        Def && (Def->Opcode == NdOp::COPY ||
-                Def->Opcode == NdOp::INT_ZEXT ||
-                Def->Opcode == NdOp::INT_SEXT ||
-                Def->Opcode == NdOp::SUBBYTES);
+        Def && (Def->Opcode == NdOp::COPY || Def->Opcode == NdOp::INT_ZEXT ||
+                Def->Opcode == NdOp::INT_SEXT || Def->Opcode == NdOp::SUBBYTES);
     if (!IsForwardingWrapper && valueIsStableAddressOffset(V))
       return BaseProof::NoBase;
     auto Key = std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer);

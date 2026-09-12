@@ -240,9 +240,8 @@ struct SnapshotWriter {
     Exceptional(BB.ExceptionalPreds, "exceptional-predecessor");
   }
 };
-inline void writeTables(SnapshotWriter &A,
-                              const std::vector<JumpTable> &Tables,
-                              const char *Level) noexcept {
+inline void writeTables(SnapshotWriter &A, const std::vector<JumpTable> &Tables,
+                        const char *Level) noexcept {
   for (size_t I = 0; I < Tables.size(); ++I) {
     const auto &T = Tables[I];
     if (!A.row("jump-table"))
@@ -675,8 +674,8 @@ inline bool writeFile(const std::filesystem::path &Path,
 // Called only inside an already-taken first-fatal branch. All arguments are
 // existing values; this function must never call a provenance/ABI/CFG helper.
 inline void capture(const BinaryImage *Img, const MedFunc *Func,
-                    const char *Branch, const MedVar &Address, bool HasEarlierCodeFatal,
-                    const MedVar *Term = nullptr,
+                    const char *Branch, const MedVar &Address,
+                    bool HasEarlierCodeFatal, const MedVar *Term = nullptr,
                     std::initializer_list<std::pair<const char *, uint64_t>>
                         Facts = {}) noexcept {
   const char *Root = std::getenv("NEVERD_CI_FAILURE_SNAPSHOT_DIR");
@@ -692,12 +691,13 @@ inline void capture(const BinaryImage *Img, const MedFunc *Func,
     if (!fs::is_directory(Parent, EC) || EC)
       return;
     fs::path Dir;
-    const auto Stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto Stamp =
+        std::chrono::steady_clock::now().time_since_epoch().count();
     // Directory creation arbitrates concurrent shard/process captures. No
     // shared counter, process-global observer, or thread-local state is used.
     for (unsigned Attempt = 0; Attempt < 64; ++Attempt) {
-      fs::path Candidate = Parent / ("snapshot-" + std::to_string(Stamp) +
-                                     "-" + std::to_string(Attempt));
+      fs::path Candidate = Parent / ("snapshot-" + std::to_string(Stamp) + "-" +
+                                     std::to_string(Attempt));
       EC.clear();
       if (fs::create_directory(Candidate, EC)) {
         Dir = std::move(Candidate);
@@ -731,7 +731,8 @@ inline void capture(const BinaryImage *Img, const MedFunc *Func,
     }
     writeGraph(O, Data, *Img, *Func);
     const bool GraphComplete = O.allows() && Data.complete();
-    const bool GraphWritten = writeFile(Dir / "post-abi-graph.jsonl", Data.str());
+    const bool GraphWritten =
+        writeFile(Dir / "post-abi-graph.jsonl", Data.str());
     constexpr size_t RawLimit = 16 * 1024 * 1024;
     bool RawWritten = false;
     if (!Img->Raw.empty() && Img->Raw.size() <= RawLimit)
@@ -762,7 +763,8 @@ inline void capture(const BinaryImage *Img, const MedFunc *Func,
     Manifest.append(",\"raw_limit_bytes\":");
     Manifest.number(RawLimit);
     Manifest.append(",\"complete_ir_model\":false,\"proof_history\":false");
-    Manifest.append(",\"low_ir\":false,\"operation_locator\":false,\"original_object_equality\":\"unchecked\"}\n");
+    Manifest.append(",\"low_ir\":false,\"operation_locator\":false,\"original_"
+                    "object_equality\":\"unchecked\"}\n");
     if (Manifest.complete())
       (void)writeFile(Dir / "capture.json", Manifest.str());
   } catch (...) {

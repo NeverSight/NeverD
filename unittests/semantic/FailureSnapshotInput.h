@@ -13,10 +13,10 @@
 #include <system_error>
 
 namespace neverd::test {
-inline void retainFailureSnapshotInput(std::string_view Name,
-                                      const std::string &Source,
-                                      const std::string &Object,
-                                      const std::string &CompileCommand) noexcept {
+inline void
+retainFailureSnapshotInput(std::string_view Name, const std::string &Source,
+                           const std::string &Object,
+                           const std::string &CompileCommand) noexcept {
   const char *Root = std::getenv("NEVERD_CI_FAILURE_SNAPSHOT_DIR");
   const char *Selected = std::getenv("NEVERD_CI_FAILURE_SNAPSHOT_FUNCTION");
   if (!Root || !*Root || !Selected || Name != Selected)
@@ -56,7 +56,8 @@ inline void retainFailureSnapshotInput(std::string_view Name,
         Remaining -= N;
       }
       // Confirm the retained stream is exactly the previously measured file.
-      const bool Exact = Remaining == 0 && In.peek() == std::char_traits<char>::eof();
+      const bool Exact =
+          Remaining == 0 && In.peek() == std::char_traits<char>::eof();
       Out.close();
       return Exact && !Out.fail();
     };
@@ -72,7 +73,8 @@ inline void retainFailureSnapshotInput(std::string_view Name,
     const bool ObjectWritten = Copy(Object, "input.o", 16 * 1024 * 1024);
     const bool NameWritten = Text("function.txt", Name);
     const bool CommandWritten = Text("compile-command.txt", CompileCommand);
-    std::ofstream Receipt(Dir / "retention.json", std::ios::binary | std::ios::out);
+    std::ofstream Receipt(Dir / "retention.json",
+                          std::ios::binary | std::ios::out);
     Receipt << "{\"schema\":1,\"compile_succeeded\":true"
             << ",\"source_written\":" << (SourceWritten ? "true" : "false")
             << ",\"object_written\":" << (ObjectWritten ? "true" : "false")
