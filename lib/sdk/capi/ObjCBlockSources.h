@@ -778,8 +778,8 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
     const HighFunc &Function, const BinaryImage &Image,
     const ObjCBlockSourcePlan &Plan,
     const std::map<va_t, const HighFunc *> &Functions) {
-  return bindObjCBlockSourceReferences(
-      Function, ObjCBlockSourceContext(Image), Plan, Functions);
+  return bindObjCBlockSourceReferences(Function, ObjCBlockSourceContext(Image),
+                                       Plan, Functions);
 }
 
 inline bool

@@ -208,8 +208,8 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     for (const auto &[Entry, Func] : Functions) {
       if (!Func->SourceTypeHint)
         continue;
-      auto BlockBinding =
-          bindObjCBlockSourceReferences(*Func, BlockSource, BlockPlan, Functions);
+      auto BlockBinding = bindObjCBlockSourceReferences(*Func, BlockSource,
+                                                        BlockPlan, Functions);
       auto Binding = bindObjCSourceReferences(BlockBinding.Function, S->Img);
       Binding.Dependencies.insert(BlockBinding.Dependencies.begin(),
                                   BlockBinding.Dependencies.end());
@@ -223,8 +223,8 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions) ||
-                     objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
-                                              Functions);
+                     objcBlockSourceCallBound(Expression, BlockSource,
+                                              BlockPlan, Functions);
             });
       }
       if (Reason.empty())
@@ -276,8 +276,8 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
             It == Audits.end() ? nullptr : It->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions) ||
-                     objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
-                                              Functions);
+                     objcBlockSourceCallBound(Expression, BlockSource,
+                                              BlockPlan, Functions);
             });
         if (Reason.empty()) {
           if (auto Projection = ProjectionReasons.find(Method.Implementation);

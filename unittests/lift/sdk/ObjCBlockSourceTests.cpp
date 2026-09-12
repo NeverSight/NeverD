@@ -364,7 +364,7 @@ TEST(ObjCBlockSources, NewExportObservesChangedImportIdentityAndConflicts) {
       Plan = discoverObjCBlockSources(Source, F.Result);
       ASSERT_EQ(Plan.StackBlocks[F.Caller].size(), 1U);
       auto Bound = bindObjCBlockSourceReferences(F.caller(), Source, Plan,
-                                                F.functions());
+                                                 F.functions());
       ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
       Isa = Bound.Function.Body[0].StoreVal;
       ASSERT_TRUE(objcBlockSourceCallBound(*Isa, Source, Plan, F.functions()));
@@ -379,9 +379,11 @@ TEST(ObjCBlockSources, NewExportObservesChangedImportIdentityAndConflicts) {
     if (Mutation == 3)
       F.Image.ConflictingImportStorageSlots.insert(F.StackIsa);
     const ObjCBlockSourceContext Changed(F.Image);
-    EXPECT_TRUE(discoverObjCBlockSources(Changed, F.Result).StackBlocks.empty());
+    EXPECT_TRUE(
+        discoverObjCBlockSources(Changed, F.Result).StackBlocks.empty());
     EXPECT_FALSE(objcBlockSourceCallBound(*Isa, Changed, Plan, F.functions()));
-    EXPECT_TRUE(discoverObjCBlockSources(F.Image, F.Result).StackBlocks.empty());
+    EXPECT_TRUE(
+        discoverObjCBlockSources(F.Image, F.Result).StackBlocks.empty());
     EXPECT_FALSE(objcBlockSourceCallBound(*Isa, F.Image, Plan, F.functions()));
   }
 }
@@ -391,9 +393,9 @@ TEST(ObjCBlockSources, SharedImportsDoNotReusePipelineFunctionProofs) {
   const ObjCBlockSourceContext Source(F.Image);
   auto Plan = discoverObjCBlockSources(Source, F.Result);
   ASSERT_EQ(Plan.StackBlocks[F.Caller].size(), 1U);
-  ASSERT_TRUE(bindObjCBlockSourceReferences(F.caller(), Source, Plan,
-                                           F.functions())
-                  .Limitation.empty());
+  ASSERT_TRUE(
+      bindObjCBlockSourceReferences(F.caller(), Source, Plan, F.functions())
+          .Limitation.empty());
 
   PipelineResult Next;
   Next.SourceImage = &F.Image;
@@ -410,15 +412,15 @@ TEST(ObjCBlockSources, SharedImportsDoNotReusePipelineFunctionProofs) {
   Invoke.Body = {ret(parameter(0, Invoke.Params[0].Type))};
   auto NextPlan = discoverObjCBlockSources(Source, Next);
   ASSERT_EQ(NextPlan.StackBlocks[F.Caller].size(), 1U);
-  EXPECT_FALSE(bindObjCBlockSourceReferences(Next.HighFuncs[2], Source, NextPlan,
-                                            Functions)
+  EXPECT_FALSE(bindObjCBlockSourceReferences(Next.HighFuncs[2], Source,
+                                             NextPlan, Functions)
                    .Limitation.empty());
-  EXPECT_EQ(discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller]
-                .size(),
-            1U);
-  EXPECT_TRUE(bindObjCBlockSourceReferences(F.caller(), Source, Plan,
-                                           F.functions())
-                  .Limitation.empty());
+  EXPECT_EQ(
+      discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller].size(),
+      1U);
+  EXPECT_TRUE(
+      bindObjCBlockSourceReferences(F.caller(), Source, Plan, F.functions())
+          .Limitation.empty());
 }
 
 TEST(ObjCBlockSources, ImportContextRejectsAnotherPipelineImage) {
@@ -428,7 +430,7 @@ TEST(ObjCBlockSources, ImportContextRejectsAnotherPipelineImage) {
                std::invalid_argument);
   EXPECT_THROW(discoverObjCBlockSources(F.Image, Other.Result),
                std::invalid_argument);
-  EXPECT_EQ(discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller]
-                .size(),
-            1U);
+  EXPECT_EQ(
+      discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller].size(),
+      1U);
 }
