@@ -1352,7 +1352,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   MedVar FirstRejectedValue = V;
   int FirstRejectionDepth = -1;
   auto stableOffsetFailure = [&](const char *Reason, const MedVar &Value,
-                                  int Depth) {
+                                 int Depth) {
     if (!FirstRejectionReason) {
       FirstRejectionReason = Reason;
       FirstRejectedValue = Value;
