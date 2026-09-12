@@ -18,6 +18,8 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "../data/MedLLVMFailureSnapshot.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -2132,12 +2134,35 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
   // An explicit code-address origin exists, but its value graph cannot be
   // emitted as one function identity.  The raw original VA is never a sound
   // fallback, even when the final ABI type is an integer.
-  if (!FatalCodePointerResolution && !FatalDataPointerResolution)
+  if (!FatalCodePointerResolution && !FatalDataPointerResolution) {
+    detail::failure_snapshot::capture(
+        Img, CurMedFunc, "unresolved-code-identity", V,
+        /*HasEarlierCodeFatal=*/false, /*Term=*/nullptr,
+        {{"require_code_role", RequireCodeRole},
+         {"unique_code", UniqueCode},
+         {"has_common_target", Proof.CommonTarget.has_value()},
+         {"common_target", Proof.CommonTarget.value_or(InvalidVA)},
+         {"saw_code", Proof.SawCode},
+         {"saw_non_code", Proof.SawNonCode},
+         {"saw_null", Proof.SawNull},
+         {"saw_unresolved", Proof.SawUnresolved},
+         {"saw_conflict", Proof.SawConflict},
+         {"saw_block_identity", Proof.SawBlockIdentity},
+         {"saw_non_block_identity", Proof.SawNonBlockIdentity},
+         {"saw_owner_conflict", Proof.SawOwnerConflict},
+         {"saw_unmaterializable_code", Proof.SawUnmaterializableCodeIdentity},
+         {"saw_explicit", Proof.SawExplicit},
+         {"saw_code_dependency", Proof.SawCodeDependency},
+         {"saw_function_identity", Proof.SawFunctionIdentity},
+         {"saw_lifted_code_identity", Proof.SawLiftedCodeIdentity},
+         {"saw_strong_code_provenance", Proof.SawStrongCodeProvenance},
+         {"saw_unsafe_code_dependency", Proof.SawUnsafeCodeDependency}});
     syncError() << "med_llvm_emitter: relocatable code-address value "
                 << V.display() << " in " << CurMedFunc->Name
                 << " has no unique lifted "
                 << (RequireCodeRole ? "function entry" : "code identity")
                 << "; refusing stale-address fallback\n";
+  }
   FatalCodePointerResolution = true;
   return nullptr;
 }
