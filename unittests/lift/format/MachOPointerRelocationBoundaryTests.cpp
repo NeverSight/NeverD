@@ -7216,6 +7216,71 @@ TEST(MachOInteriorCodePointerCFG, DoesNotFoldWritableOrUnprovenRelay) {
 }
 
 TEST(MachOInteriorCodePointerCFG,
+     UnrelatedRelocationRootsPreserveLocalCFGAndObserveUpdatedInput) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(TargetArch);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Fixture.Image.Arch));
+    CFGBuilder Builder;
+    const std::set<va_t> Entries{Fixture.Entry};
+    Builder.setKnownFuncEntries(&Entries);
+    auto Build = [&] {
+      return Builder.build(Fixture.Image, Dec, Fixture.Entry, "interior_owner");
+    };
+    const LowFunc Baseline = Build();
+
+    Segment Foreign;
+    Foreign.VA = TextVA + 0x10000;
+    Foreign.Size = 2048 * sizeof(uint64_t);
+    Foreign.FileSz = Foreign.Size;
+    Foreign.Flags = SegmentFlags::Readable;
+    Foreign.Data.resize(Foreign.Size);
+    for (size_t I = 0; I < 2048; ++I) {
+      const va_t Target = I == 0 ? Fixture.Entry
+                         : I == 1 ? Fixture.End
+                         : I == 2 ? Fixture.SelectedTarget
+                         : I == 3 ? InvalidVA
+                                  : Fixture.End + I * 4;
+      writeObject(Foreign.Data, I * sizeof(uint64_t), Target);
+      Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + I * sizeof(uint64_t));
+    }
+    Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + Foreign.Size - 1);
+    Fixture.Image.Segments.push_back(std::move(Foreign));
+    const LowFunc WithForeignRoots = Build();
+
+    EXPECT_EQ(blockStarts(WithForeignRoots), blockStarts(Baseline));
+    EXPECT_EQ(WithForeignRoots.ModuleAnalysisRoots, Baseline.ModuleAnalysisRoots);
+    EXPECT_EQ(WithForeignRoots.OrdinaryModuleAnalysisRoots,
+              Baseline.OrdinaryModuleAnalysisRoots);
+    EXPECT_EQ(WithForeignRoots.DecodedInstructionCount,
+              Baseline.DecodedInstructionCount);
+    EXPECT_EQ(WithForeignRoots.LiftedInstructionCount,
+              Baseline.LiftedInstructionCount);
+    EXPECT_FALSE(containsOpcode(WithForeignRoots, NdOp::INDIR_CALL));
+
+    // Reusing the builder must read the current input, including changed
+    // pointer bytes with an unchanged relocation-slot count.
+    const va_t NewTarget = Fixture.InteriorTargets.back();
+    ASSERT_NE(NewTarget, Fixture.SelectedTarget);
+    ASSERT_TRUE(Fixture.Image.patchPtr(Fixture.SelectedSlot, NewTarget));
+    const LowFunc Updated = Build();
+    bool HasUpdatedBranch = false;
+    bool HasStaleBranch = false;
+    for (const LowBlock &Block : Updated.Blocks)
+      for (const LowOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::BRANCH && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst()) {
+          HasUpdatedBranch |= Op.Inputs[0].Offset == NewTarget;
+          HasStaleBranch |= Op.Inputs[0].Offset == Fixture.SelectedTarget;
+        }
+    EXPECT_TRUE(HasUpdatedBranch);
+    EXPECT_FALSE(HasStaleBranch);
+    EXPECT_FALSE(containsOpcode(Updated, NdOp::INDIR_CALL));
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG,
      RejectsOtherFunctionsAdjacentTargetsAndInstructionInteriors) {
   {
     InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::X64);

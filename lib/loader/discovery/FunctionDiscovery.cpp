@@ -163,7 +163,12 @@ void scanDataFuncPointers(BinaryImage &Img) {
 
   auto InExecSeg = [&](va_t Addr) -> const Segment * {
     const auto *S = Img.getSegmentFor(Addr);
-    return (S && Img.hasExecutableCodeOwnerAt(Addr)) ? S : nullptr;
+    // Most read-only data values are not prologue addresses. Reject their
+    // bounded byte probes before consulting image-wide ownership metadata.
+    if (!S || !S->isExecutable() ||
+        !checkPrologueAtOffset(*S, static_cast<size_t>(Addr - S->VA), Img.Arch))
+      return nullptr;
+    return Img.hasExecutableCodeOwnerAt(Addr) ? S : nullptr;
   };
 
   [[maybe_unused]] size_t Added = 0;
@@ -191,13 +196,13 @@ void scanDataFuncPointers(BinaryImage &Img) {
       const size_t I = static_cast<size_t>(Cur - Seg->VA);
       uint64_t Val = normalizeCodeAddress(
           readPtr(Seg->Data.data() + I, Img.is64Bit()), Img.Arch, Img.Mode);
+      if (insideInterval(Known, Val) || Existing.count(Val))
+        continue;
       const auto *ESeg = InExecSeg(Val);
       if (!ESeg)
         continue;
       size_t Off = static_cast<size_t>(Val - ESeg->VA);
       if (!checkCodePrologueAtOffset(Img, *ESeg, Off, Img.Arch))
-        continue;
-      if (insideInterval(Known, Val))
         continue;
       if (!Existing.insert(Val).second)
         continue;

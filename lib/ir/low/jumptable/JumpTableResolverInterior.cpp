@@ -105,22 +105,30 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   if (!CurrentFuncRange)
     return;
 
+  // Absolute relocation bytes and this function's range are fixed for this
+  // call. Keep all source slots for local targets, without rebuilding maps
+  // for every image-wide target on each exploration iteration. Instruction
+  // ownership remains checked below after any newly decoded instructions.
+  std::set<va_t> RelocationCandidates;
+  std::map<va_t, std::set<va_t>> RelocationSources;
+  const uint32_t PtrSz = Img.getPointerSize();
+  if (PtrSz != 0)
+    for (va_t Slot : Img.CodePtrRelocSlots)
+      if (const uint8_t *P = Img.readVA(Slot, PtrSz)) {
+        const va_t Target = normalizeCodeAddress(
+            static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch, Img.Mode);
+        if (Target <= CurrentFuncRange->first ||
+            Target >= CurrentFuncRange->second)
+          continue;
+        RelocationCandidates.insert(Target);
+        RelocationSources[Target].insert(Slot);
+      }
+
   std::set<va_t> Processed;
   for (;;) {
     std::set<va_t> Candidates;
-    std::set<va_t> RelocationCandidates;
     std::set<va_t> ProtectedRelativeRelocationCandidates;
     std::set<va_t> CrossFunctionContinuationCandidates;
-    std::map<va_t, std::set<va_t>> RelocationSources;
-    const uint32_t PtrSz = Img.getPointerSize();
-    if (PtrSz != 0)
-      for (va_t Slot : Img.CodePtrRelocSlots)
-        if (const uint8_t *P = Img.readVA(Slot, PtrSz)) {
-          const va_t Target = normalizeCodeAddress(
-              static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch, Img.Mode);
-          RelocationCandidates.insert(Target);
-          RelocationSources[Target].insert(Slot);
-        }
 
     // Relative table entries are normally admitted only through their
     // authenticated selector coordinates.  Module arbitration can explicitly

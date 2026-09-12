@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -173,6 +174,63 @@ TEST(FunctionDiscoveryAlignment,
   EXPECT_FALSE(Img.Symbols[0].IsFunc);
   EXPECT_EQ(Img.Symbols[1].Addr, 0x1002u);
   EXPECT_TRUE(Img.Symbols[1].IsFunc);
+}
+
+TEST(FunctionDiscoveryAlignment,
+     DataPrologueCandidatesKeepExactOwnershipAndExistingSymbols) {
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    BinaryImage Img;
+    Img.Arch = Arch::AArch64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = Format;
+    std::vector<uint8_t> Bytes(0x60, 0);
+    for (size_t Offset : {4u, 8u, 12u, 16u, 32u})
+      writeLE<uint32_t>(Bytes.data() + Offset, 0xd10083ffu);
+    Img.Segments.push_back(executableSegment(0x1000, Bytes));
+
+    Section Code;
+    Code.VA = 0x1000;
+    Code.Size = 14;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Img.Sections.push_back(Code);
+    Section Constants;
+    Constants.VA = Code.VA + Code.Size;
+    Constants.Size = Bytes.size() - Code.Size;
+    Constants.Flags = SegmentFlags::Readable;
+    Img.Sections.push_back(Constants);
+
+    Symbol Existing;
+    Existing.Name = "existing_data_label";
+    Existing.Addr = 0x1004;
+    Img.Symbols.push_back(Existing);
+    Img.KnownCodeRanges.push_back({0x1010, 0x1014});
+    // Includes a duplicate, an instruction crossing a code/data boundary,
+    // a claimed body, non-code prologue bytes, and an unmapped target.
+    const uint64_t Targets[] = {0x1004, 0x1008, 0x1008, 0x100c,
+                                0x1010, 0x1020, 0x2000};
+    Segment Data;
+    Data.VA = 0x3000;
+    Data.Size = sizeof(Targets);
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(sizeof(Targets));
+    for (size_t I = 0; I < std::size(Targets); ++I)
+      writeLE<uint64_t>(Data.Data.data() + I * sizeof(uint64_t), Targets[I]);
+    Img.Segments.push_back(std::move(Data));
+
+    scanDataFuncPointers(Img);
+
+    ASSERT_EQ(Img.Symbols.size(), 2u);
+    EXPECT_EQ(Img.Symbols[0].Addr, Existing.Addr);
+    EXPECT_EQ(Img.Symbols[0].Name, Existing.Name);
+    EXPECT_FALSE(Img.Symbols[0].IsFunc);
+    EXPECT_EQ(Img.Symbols[1].Addr, 0x1008u);
+    EXPECT_TRUE(Img.Symbols[1].IsFunc);
+    scanDataFuncPointers(Img);
+    EXPECT_EQ(Img.Symbols.size(), 2u);
+  }
 }
 
 } // namespace
