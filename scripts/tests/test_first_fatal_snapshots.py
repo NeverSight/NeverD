@@ -30,7 +30,8 @@ class OriginalCTestCommandTests(unittest.TestCase):
     def test_original_linux_direct_commands_keep_their_owned_filters(self):
         for suite, function in (("X64", "x64o105_kmp"), ("X86", "x86o105_kmp")):
             gtest = f"OptStress105/{suite}OptStress105RT.Verify/{function}"
-            command = ["/home/runner/work/NeverD/NeverD/build-ci/bin/NeverDSemanticTests",
+            # Normalize only the runner checkout prefix; keep the owned command arguments.
+            command = ["/build-ci/bin/NeverDSemanticTests",
                        "--gtest_filter=" + gtest, "--gtest_also_run_disabled_tests"]
             with self.subTest(function=function):
                 self.assertEqual(collector.command_filter({"command": command}, OWNER), gtest)
