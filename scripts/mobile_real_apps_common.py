@@ -16,6 +16,11 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+if __package__:
+    from .mobile_native_sampling import NativeWorkerSampler
+else:
+    from mobile_native_sampling import NativeWorkerSampler
+
 STAGES = ("provenance", "original_build", "inventory", "recovery", "recompile", "behavior")
 MAX_COMMAND_OUTPUT = 256 * 1024 * 1024
 
@@ -140,6 +145,8 @@ class CaseContext:
             record["diagnostic_environment"] = {"NEVERD_NATIVE_PHASES": "1"}
         self.result["commands"].append(record)
         self.write_json("result.json", self.result)
+        sampler = NativeWorkerSampler.create(self.variant, command, self.neverd, effective_env,
+                                             command_dir, stem, started)
         failure = None
         process = None
         with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
@@ -164,6 +171,19 @@ class CaseContext:
                         record["status"] = "timeout"
                         failure = subprocess.TimeoutExpired(command, limit)
                         break
+                    if sampler is not None:
+                        # Sampling consumes the existing deadline; it cannot renew it.
+                        try:
+                            sampled = sampler.capture_if_due(process.pid, command_deadline - remaining,
+                                                              command_deadline)
+                            if sampled:
+                                record["native_samples"] = sampler.records
+                                self.write_json("result.json", self.result)
+                                continue
+                        except Exception as error:
+                            record["native_samples"] = sampler.records
+                            record["native_sampling_error"] = str(error)
+                            sampler = None
                     try:
                         record["exitcode"] = process.wait(timeout=min(1, remaining))
                     except subprocess.TimeoutExpired:

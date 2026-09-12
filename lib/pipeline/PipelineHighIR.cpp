@@ -54,6 +54,7 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
 
   parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
     MedToHighConverter Local;
+    Local.setBinaryImage(&Img);
     Local.setFuncNames(&AllFuncNames);
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];

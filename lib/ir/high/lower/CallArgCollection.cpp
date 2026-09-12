@@ -14,6 +14,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 
 #include <functional>
 #include <set>
@@ -100,6 +101,17 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
       if (reachingRegAtBlockEntry(CurBlock, TRI.IntParamRegs[K], LiveIn))
         Found[K] = medvarToExpr(LiveIn);
     }
+  }
+
+  // Source emission has its own argument collection path. Reuse the same
+  // machine proof as LLVM ABI recovery: this stub replaces x1 before reading
+  // it, even if the caller's recovered value is stale or undefined.
+  if (Image && TargetArch == Arch::AArch64 && CallIdx < Ops.size()) {
+    const auto &Call = Ops[CallIdx];
+    if (Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
+        Call.Inputs[0].isConst() &&
+        objcSelectorStubOverwritesCommand(*Image, Call.Inputs[0].ConstVal))
+      Found[1] = HighExpr::makeConst(0, TRI.PointerSize);
   }
 
   int FirstStackSlot = 0;

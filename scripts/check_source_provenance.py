@@ -343,6 +343,51 @@ ALLOWED: tuple[Allowance, ...] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class HistoryAllowance:
+    path: str
+    rule: str
+    commits: frozenset[str]
+    line: str
+    reason: str
+
+
+HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
+    HistoryAllowance(
+        path="scripts/tests/test_first_fatal_snapshots.py",
+        rule="private-path",
+        commits=frozenset({
+            "db077ee2cb8a5fbb8d9431a3e385fbebfc47e4f1",
+            "322dc95d96133313c55f6782cb1ac65e1290ac62",
+        }),
+        line=(
+            '            command = ["/home/runner/work/NeverD/NeverD/'
+            'build-ci/bin/NeverDSemanticTests",'
+        ),
+        reason=(
+            "The public GitHub runner checkout path was retained from Main "
+            "34631601930 attempt 1, Linux artifact 10276713971. The first "
+            "commit added this regression fixture and the second normalized "
+            "its checkout prefix. Review covers only that exact historical "
+            "line, including its deletion; it permits no new path occurrences."
+        ),
+    ),
+)
+
+
+def is_allowed_history_line(
+    path: str, rule: Rule, line: str, history_commit: str | None
+) -> bool:
+    # External policy rules remain authoritative even when their names match.
+    return rule in RULES and any(
+        a.rule == rule.name
+        and history_commit in a.commits
+        and path == a.path
+        and line == a.line
+        for a in HISTORY_ALLOWED
+    )
+
+
 def is_allowed(path: str, rule: str) -> bool:
     return any(a.rule == rule and fnmatch(path, a.path) for a in ALLOWED)
 
@@ -386,6 +431,7 @@ def _scan_text(
     rules: Sequence[Rule],
     *,
     display_name: str | None = None,
+    history_commit: str | None = None,
 ) -> list[str]:
     findings: list[str] = []
     if name in EXEMPT or Path(name).suffix.lower() not in TEXT_SUFFIXES:
@@ -400,6 +446,8 @@ def _scan_text(
             )
             matched_term = bool(rule.terms & candidates)
             if not matched_pattern and not matched_term:
+                continue
+            if is_allowed_history_line(name, rule, line, history_commit):
                 continue
             findings.append(
                 f"{display_name or name}:{number}: {rule.name} — {rule.explanation}"
@@ -455,6 +503,7 @@ def _scan_patch_set(
     rules: Sequence[Rule],
     *,
     deleted_only: bool,
+    history_commit: str | None = None,
 ) -> list[str]:
     starts = [match.start() for match in re.finditer(r"(?m)^diff --git ", patch)]
     sections = [
@@ -474,6 +523,7 @@ def _scan_patch_set(
                     payload,
                     rules,
                     display_name=f"{name}@{label}",
+                    history_commit=history_commit,
                 )
             )
     return findings
@@ -560,6 +610,7 @@ def scan_recent_history(
                 commit[:12],
                 selected_rules,
                 deleted_only=False,
+                history_commit=commit,
             )
         )
     return findings

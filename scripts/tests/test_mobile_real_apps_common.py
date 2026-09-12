@@ -14,9 +14,10 @@ import signal
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import mobile_real_apps_common as common
+from scripts import mobile_native_sampling as sampling
 
 
 class ProcessDouble:
@@ -363,6 +364,190 @@ class EvidenceContextTests(unittest.TestCase):
         saved = json.dumps(common.load_json(ctx.work / "result.json"))
         self.assertNotIn("secret-fixture", saved)
         self.assertNotIn("not-for-receipt", saved)
+
+
+    def test_optional_sampling_failure_keeps_native_exit_and_raw_diagnostics(self):
+        ctx, process = self.context(), ProcessDouble(code=7, stderr=b"native failure\n")
+        observer = Mock(records=[{"status": "unavailable"}])
+        observer.capture_if_due.side_effect = OSError("sample unavailable")
+        with patch.object(common.NativeWorkerSampler, "create", return_value=observer):
+            result = self.invoke(ctx, process, allow_failure=True)
+        record = self.assert_saved_record(ctx, "failed")
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(record["exitcode"], 7)
+        self.assertEqual((ctx.work / record["stderr"]).read_bytes(), b"native failure\n")
+        self.assertEqual(record["native_samples"], observer.records)
+        self.assertIn("sample unavailable", record["native_sampling_error"])
+
+    def test_sampling_iteration_never_renews_the_native_command_deadline(self):
+        ctx, process = self.context(timeout=2), ProcessDouble(running=True)
+        observer = Mock(records=[{"status": "captured"}])
+        observer.capture_if_due.side_effect = itertools.chain([True], itertools.repeat(False))
+        with patch.object(common.NativeWorkerSampler, "create", return_value=observer):
+            with self.assertRaisesRegex(RuntimeError, "timeout"):
+                self.invoke(ctx, process, allow_failure=True)
+        record = self.assert_saved_record(ctx, "timeout")
+        self.assertLessEqual(record["timeout_seconds"], 2)
+        self.assertEqual(record["exitcode"], -9)
+        deadlines = {call.args[2] for call in observer.capture_if_due.call_args_list}
+        self.assertEqual(len(deadlines), 1)
+        self.assertTrue(process.killed)
+
+
+class NativeWorkerSamplingTests(unittest.TestCase):
+    TABLE = "101 1 /build/neverd\n102 101 /build/neverd\n777 1 /unrelated/neverd\n"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.commands = self.root / "commands"
+        self.commands.mkdir()
+        self.sampler = sampling.NativeWorkerSampler(self.commands, "0000-owned", "neverd", {}, 0)
+
+    def fake_tools(self, argv, **kwargs):
+        if tuple(argv) == sampling.PS_COMMAND:
+            return subprocess.CompletedProcess(argv, 0, self.TABLE.encode(), b"")
+        Path(argv[-1]).write_bytes(b"Owned worker call graph\n")
+        kwargs["stdout"].write(b"Sampling completed\n")
+        kwargs["stderr"].write(b"")
+        return subprocess.CompletedProcess(argv, 0)
+
+    def capture(self, now=60, deadline=200, runner=None):
+        with patch.object(sampling.time, "monotonic", return_value=now), \
+             patch.object(sampling.subprocess, "run", side_effect=runner or self.fake_tools) as run:
+            result = self.sampler.capture_if_due(101, now, deadline)
+        return result, run
+
+    def test_factory_requires_exact_native_ios_command_and_darwin_diagnostics(self):
+        native = Path("/build/neverd")
+        args = ({"platform": "ios"}, [str(native), "mobile", "Owned"], native,
+                {"NEVERD_NATIVE_PHASES": "1"}, self.commands, "owned", 0)
+        with patch.object(sampling.sys, "platform", "darwin"):
+            self.assertIsNotNone(sampling.NativeWorkerSampler.create(*args))
+            for position, value in ((0, {"platform": "android"}),
+                                    (1, ["/build/other", "mobile"]),
+                                    (1, [str(native), "other"]), (3, {}),
+                                    (3, {"NEVERD_NATIVE_PHASES": "true"})):
+                changed = list(args)
+                changed[position] = value
+                self.assertIsNone(sampling.NativeWorkerSampler.create(*changed))
+        with patch.object(sampling.sys, "platform", "linux"):
+            self.assertIsNone(sampling.NativeWorkerSampler.create(*args))
+
+    def test_only_a_unique_descendant_is_selected(self):
+        pid, lineage = sampling.owned_worker(self.TABLE, 101, "neverd")
+        self.assertEqual(pid, 102)
+        self.assertEqual([row[0] for row in lineage], [102, 101])
+        for table in ("101 1 /build/neverd\n777 1 /unrelated/neverd\n",
+                      self.TABLE + "103 101 /build/neverd\n",
+                      self.TABLE.replace("102 101", "102 102"),
+                      self.TABLE.replace("101 1 /build/neverd", "101 1 /build/other"),
+                      self.TABLE + "102 101 /build/neverd\n", "broken process row"):
+            with self.subTest(table=table), self.assertRaises(ValueError):
+                sampling.owned_worker(table, 101, "neverd")
+
+    def test_two_bounded_samples_retain_exact_tool_outputs(self):
+        result, run = self.capture(now=59)
+        self.assertFalse(result)
+        run.assert_not_called()
+        for now in (60, 140):
+            result, run = self.capture(now=now)
+            self.assertTrue(result)
+            self.assertEqual(run.call_count, 3)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:6], ["/usr/bin/sample", "102", "1", "10", "-mayDie", "-file"])
+            self.assertLessEqual(run.call_args.kwargs["timeout"], 3)
+            record = self.sampler.records[-1]
+            self.assertEqual(record["status"], "captured")
+            self.assertEqual(record["ancestry_pids"], [102, 101])
+            self.assertNotIn("unrelated", json.dumps(record))
+            self.assertFalse(record["native_exit_status_overridden"])
+            self.assertTrue(record["may_perturb_timing"])
+            for receipt in record["files"]:
+                data = (self.root / receipt["path"]).read_bytes()
+                self.assertEqual(receipt["sha256"], hashlib.sha256(data).hexdigest())
+                self.assertEqual(receipt["bytes"], len(data))
+        result, run = self.capture(now=180)
+        self.assertFalse(result)
+        run.assert_not_called()
+
+    def test_insufficient_original_deadline_skips_every_tool(self):
+        result, run = self.capture(now=60, deadline=67)
+        self.assertTrue(result)
+        run.assert_not_called()
+        self.assertEqual(self.sampler.records[0]["status"], "skipped")
+        self.assertEqual(list(self.commands.iterdir()), [])
+
+    def test_changed_worker_lineage_prevents_sampling(self):
+        tables = iter((self.TABLE, self.TABLE.replace("102 101", "102 103") +
+                       "103 101 /build/helper\n"))
+        def observe(argv, **kwargs):
+            self.assertEqual(tuple(argv), sampling.PS_COMMAND)
+            return subprocess.CompletedProcess(argv, 0, next(tables).encode(), b"")
+        _, run = self.capture(runner=observe)
+        self.assertEqual(run.call_count, 2)
+        record = self.sampler.records[0]
+        self.assertEqual(record["status"], "unavailable")
+        self.assertNotIn("argv", record)
+
+    def test_sampler_timeout_is_an_unavailable_diagnostic(self):
+        def fail(argv, **kwargs):
+            if tuple(argv) == sampling.PS_COMMAND:
+                return self.fake_tools(argv, **kwargs)
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        self.capture(runner=fail)
+        record = self.sampler.records[0]
+        self.assertEqual(record["status"], "unavailable")
+        self.assertNotIn("exitcode", record)
+
+    def test_empty_and_failed_tool_reports_never_count_as_captured(self):
+        for code in (0, 3):
+            self.sampler.stem = f"empty-{code}"
+            self.sampler.records.clear()
+            def empty(argv, **kwargs):
+                if tuple(argv) == sampling.PS_COMMAND:
+                    return self.fake_tools(argv, **kwargs)
+                Path(argv[-1]).write_bytes(b"")
+                return subprocess.CompletedProcess(argv, code)
+            self.capture(runner=empty)
+            self.assertEqual(self.sampler.records[0]["status"], "unavailable")
+
+    def test_oversized_reports_are_retained_but_not_parsed_or_certified(self):
+        def large(argv, **kwargs):
+            if tuple(argv) == sampling.PS_COMMAND:
+                return self.fake_tools(argv, **kwargs)
+            with Path(argv[-1]).open("wb") as stream:
+                stream.truncate(sampling.MAX_REPORT_BYTES + 1)
+            return subprocess.CompletedProcess(argv, 0)
+        self.capture(runner=large)
+        record = self.sampler.records[0]
+        self.assertEqual(record["status"], "unavailable")
+        self.assertEqual(record["files"][0]["status"], "oversized")
+        self.assertNotIn("sha256", record["files"][0])
+
+    def test_stale_sample_paths_are_never_overwritten(self):
+        directory = self.commands / "0000-owned-native-sample-0"
+        directory.mkdir()
+        report = directory / "sample.txt"
+        report.write_bytes(b"prior evidence")
+        _, run = self.capture()
+        run.assert_not_called()
+        self.assertEqual(report.read_bytes(), b"prior evidence")
+        self.assertEqual(self.sampler.records[0]["status"], "unavailable")
+
+    def test_final_receipts_must_support_the_captured_status(self):
+        with patch.object(self.sampler, "file_receipt", return_value={"status": "changed"}):
+            self.capture()
+        self.assertEqual(self.sampler.records[0]["status"], "unavailable")
+        self.assertEqual(self.sampler.records[0]["files"][0]["status"], "changed")
+        self.sampler.stem = "receipt-error"
+        self.sampler.records.clear()
+        with patch.object(self.sampler, "file_receipt", side_effect=OSError("receipt unavailable")):
+            with self.assertRaisesRegex(OSError, "receipt unavailable"):
+                self.capture()
+        self.assertEqual(self.sampler.records[0]["status"], "unavailable")
+        self.assertNotIn("files", self.sampler.records[0])
 
 
 if __name__ == "__main__":

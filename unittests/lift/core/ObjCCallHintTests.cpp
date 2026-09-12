@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -9,6 +10,7 @@
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace neverd;
 
@@ -173,6 +175,7 @@ TEST(ObjCCallHints, RejectsSymbolOnlyWrongBranchAndWrongImport) {
 
 TEST(ObjCCallHints, PreservesReceiverArgumentAndReturnBeforeSSA) {
   auto Image = image();
+  Image.Sections[0].Name = "__objc_stubs";
   auto Low = caller();
   auto &Ops = Low.Blocks[0].Ops;
   Ops.insert(Ops.begin(), operation(NdOp::COPY, NdVar::reg(16, 4),
@@ -191,13 +194,17 @@ TEST(ObjCCallHints, PreservesReceiverArgumentAndReturnBeforeSSA) {
   EXPECT_EQ(Op.Output.RegOff, 0U);
   EXPECT_EQ(Op.Output.Size, 4U);
   EXPECT_EQ(Med.ReturnValueEvidence, MedReturnValueEvidence::Unknown);
-  const auto High = MedToHighConverter().convert(Med, Image.Arch);
+  MedToHighConverter HighConverter;
+  HighConverter.setBinaryImage(&Image);
+  const auto High = HighConverter.convert(Med, Image.Arch);
   const auto *SourceCall = sourceCall(High);
   ASSERT_NE(SourceCall, nullptr);
   ASSERT_EQ(SourceCall->Operands.size(), 3U);
   EXPECT_EQ(SourceCall->Operands[0]->Kind, ExprKind::Var);
   EXPECT_EQ(SourceCall->Operands[0]->Var.Kind, MedVar::Param);
   EXPECT_EQ(SourceCall->Operands[0]->Var.RegOff, 0U);
+  EXPECT_FALSE(SourceCall->Operands[1]->Kind == ExprKind::Const &&
+               SourceCall->Operands[1]->ConstVal == 0);
   EXPECT_EQ(SourceCall->Operands[2]->Kind, ExprKind::Const);
   EXPECT_EQ(SourceCall->Operands[2]->ConstVal, 0x80000001U);
   const auto Disabled = convert(Image, Low, false);
@@ -229,6 +236,7 @@ MedFunc callerWithStaleCommand(bool Clobbered) {
   Function.Blocks.resize(1);
   auto &Block = Function.Blocks[0];
   Block.Id = 0;
+  Block.StartAddr = Function.Entry;
   auto Append = [&](NdOp Opcode, MedVar Output, MedVar Input,
                     unsigned CallSite = 0) {
     MedOp Op;
@@ -250,7 +258,52 @@ MedFunc callerWithStaleCommand(bool Clobbered) {
   Append(NdOp::COPY, Register(30, 1, 2), MedVar::makeConst(0x123456, 8));
   Append(NdOp::CALL, Register(12, 3, 0), MedVar::makeConst(0x1100, 8), 2);
   Append(NdOp::RETURN, {}, Register(12, 3, 0));
+  Block.EndAddr = Block.Ops.back().Addr + 4;
   return Function;
+}
+
+void expectNativeSelectorCommand(const MedFunc &Function,
+                                 const BinaryImage *Image, uint64_t Command) {
+  MedToHighConverter Converter;
+  Converter.setBinaryImage(Image);
+  const auto High = Converter.convert(Function, Arch::AArch64);
+  std::vector<const HighExpr *> Work;
+  walkStmts(High.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, [&](const ExprPtr &Expression) {
+      Work.push_back(Expression.get());
+    });
+  });
+  std::vector<const HighExpr *> Calls;
+  while (!Work.empty()) {
+    const auto *Expression = Work.back();
+    Work.pop_back();
+    if (Expression->Kind == ExprKind::Call && Expression->CallAddr == 0x1100)
+      Calls.push_back(Expression);
+    for (const auto &Operand : Expression->Operands)
+      if (Operand)
+        Work.push_back(Operand.get());
+  }
+  ASSERT_EQ(Calls.size(), 1U);
+  const auto &Call = *Calls.front();
+  EXPECT_FALSE(Call.SourceCallHint);
+  EXPECT_FALSE(Call.IsIndirectCall);
+  ASSERT_EQ(Call.Operands.size(), 3U);
+  const uint64_t Expected[] = {0x2222, Command, 0x123456};
+  for (size_t I = 0; I < 3; ++I) {
+    ASSERT_NE(Call.Operands[I], nullptr);
+    ASSERT_EQ(Call.Operands[I]->Kind, ExprKind::Const);
+    EXPECT_EQ(Call.Operands[I]->ConstVal, Expected[I]);
+  }
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.EmitComments = false;
+  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  const std::string ExpectedCall =
+      Command == 0 ? "sub_1100(0x2222, 0, 0x123456)"
+                   : "sub_1100(0x2222, 0x777777, 0x123456)";
+  EXPECT_NE(Source.find(ExpectedCall), std::string::npos) << Source;
 }
 
 TEST(ObjCCallHints, SelectorStubCommandProofDoesNotRequireMethodSignature) {
@@ -268,6 +321,7 @@ TEST(ObjCCallHints, SelectorStubCommandProofDoesNotRequireMethodSignature) {
     }
     EXPECT_TRUE(objcSelectorStubOverwritesCommand(Image, 0x1100));
     EXPECT_TRUE(buildObjCSourceCallHints(Image, caller()).empty());
+    expectNativeSelectorCommand(callerWithStaleCommand(false), &Image, 0);
   }
 }
 
@@ -329,6 +383,8 @@ TEST(ObjCCallHints, SelectorStubCommandProofRejectsUnverifiedCodeAndSlots) {
       break;
     }
     EXPECT_FALSE(objcSelectorStubOverwritesCommand(Image, 0x1100));
+    expectNativeSelectorCommand(callerWithStaleCommand(false), &Image,
+                                0x777777);
   }
 }
 
@@ -338,6 +394,11 @@ TEST(ObjCCallHints, VerifiedSelectorStubDiscardsStaleCallerCommand) {
     auto Image = selectorStubImage();
     Image.ObjCMethods.clear();
     auto Function = callerWithStaleCommand(Clobbered);
+    // The ordinary source pipeline does not run recoverCallAbi. Exercise
+    // that route before also checking the independently recovered ABI record.
+    expectNativeSelectorCommand(Function, &Image, 0);
+    if (!Clobbered)
+      expectNativeSelectorCommand(Function, nullptr, 0x777777);
     ASSERT_TRUE(verifyMedFunc(Function, "before-selector-stub-abi"));
     const auto ClobberCount = Function.CallClobbers.size();
     recoverCallAbi(Function, Arch::AArch64, {}, &Image);
@@ -355,6 +416,7 @@ TEST(ObjCCallHints, VerifiedSelectorStubDiscardsStaleCallerCommand) {
     EXPECT_EQ(Call.Args[2].ConstVal, 0x123456U);
     EXPECT_EQ(Function.CallClobbers.size(), ClobberCount);
     EXPECT_TRUE(verifyMedFunc(Function, "after-selector-stub-abi"));
+    expectNativeSelectorCommand(Function, &Image, 0);
   }
 }
 
@@ -375,6 +437,7 @@ TEST(ObjCCallHints, UnverifiedSelectorStubKeepsObservedCallerCommand) {
     ASSERT_TRUE(Call.Args[1].isConst());
     EXPECT_EQ(Call.Args[1].ConstVal, 0x777777U);
     EXPECT_TRUE(verifyMedFunc(Function, "unverified-selector-stub-abi"));
+    expectNativeSelectorCommand(Function, &Image, 0x777777);
   }
 }
 

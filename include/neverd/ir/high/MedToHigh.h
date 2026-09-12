@@ -22,6 +22,8 @@
 
 namespace neverd {
 
+struct BinaryImage;
+
 Intrinsic intrinsicId(const MedOp &Op);
 std::string intrinsicName(const MedOp &Op);
 uint16_t inferReturnSize(const MedFunc &Med);
@@ -48,6 +50,8 @@ void simplifyExprSemantics(std::vector<HighStmt> &Stmts);
 class MedToHighConverter {
 public:
   HighFunc convert(const MedFunc &Med, Arch TheArch = Arch::Unknown);
+
+  void setBinaryImage(const BinaryImage *Img) { Image = Img; }
 
   void setFuncNames(const std::map<va_t, std::string> *Names) {
     FuncNames = Names;
@@ -132,6 +136,7 @@ private:
   /// call block (loop-carried via a header PHI) rather than written before the
   /// call.
   const MedFunc *CurMed = nullptr;
+  const BinaryImage *Image = nullptr;
   Arch TargetArch = Arch::Unknown;
   const std::map<va_t, std::string> *FuncNames = nullptr;
   std::vector<JumpTable> JumpTables;

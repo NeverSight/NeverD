@@ -24,5 +24,6 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighLoopRecovery.cpp
 
   LINK_COMPONENTS
+  Loader
   Symbolic
 )

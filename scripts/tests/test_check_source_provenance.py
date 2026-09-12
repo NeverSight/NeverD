@@ -300,6 +300,97 @@ class ProvenanceScanTests(unittest.TestCase):
         )
 
 
+class ReviewedRunnerHistoryTests(unittest.TestCase):
+    PATH = "scripts/tests/test_first_fatal_snapshots.py"
+    ADDED = "db077ee2cb8a5fbb8d9431a3e385fbebfc47e4f1"
+    REMOVED = "322dc95d96133313c55f6782cb1ac65e1290ac62"
+    LINE = (
+        '            command = ["/home/runner/work/NeverD/NeverD/'
+        'build-ci/bin/NeverDSemanticTests",'
+    )
+
+    @classmethod
+    def patch(cls, sign: str, line: str | None = None) -> str:
+        return (
+            f"diff --git a/{cls.PATH} b/{cls.PATH}\n"
+            f"--- a/{cls.PATH}\n+++ b/{cls.PATH}\n@@ -33 +33 @@\n"
+            f"{sign}{cls.LINE if line is None else line}\n"
+        )
+
+    def test_reviewed_added_and_deleted_history_use_the_full_commit(self) -> None:
+        for commit, sign in ((self.ADDED, "+"), (self.REMOVED, "-")):
+            with self.subTest(commit=commit), mock.patch.object(
+                provenance, "_git_output",
+                side_effect=[
+                    commit + "\n", commit + " " + "0" * 40 + "\n",
+                    self.PATH + "\0", self.patch(sign),
+                ],
+            ) as read:
+                self.assertEqual(provenance.scan_recent_history(1), [])
+                self.assertEqual(read.call_args_list[0].args[0],
+                                 ["rev-list", "--max-count", "1", "HEAD"])
+                self.assertIn(commit, read.call_args_list[-1].args[0])
+
+    def test_current_source_and_worktree_deletions_remain_findings(self) -> None:
+        self.assertEqual(len(provenance._scan_text(
+            self.PATH, self.LINE, provenance.RULES)), 1)
+        with mock.patch.object(
+            provenance, "_git_output",
+            side_effect=[self.PATH + "\0", self.patch("-")],
+        ):
+            self.assertEqual(len(provenance.scan_worktree_patch()), 1)
+
+    def test_display_label_cannot_grant_a_history_allowance(self) -> None:
+        self.assertEqual(len(provenance._scan_patch_set(
+            [self.PATH], self.patch("+"), self.ADDED[:12], provenance.RULES,
+            deleted_only=False)), 1)
+        self.assertEqual(len(provenance._scan_text(
+            self.PATH, self.LINE, provenance.RULES,
+            display_name=self.PATH + "@" + self.ADDED[:12])), 1)
+
+    def test_other_or_abbreviated_commits_cannot_reintroduce_the_line(self) -> None:
+        for commit in ("0" * 40, self.ADDED[:12], self.REMOVED[:12],
+                       self.ADDED[:-1] + "0"):
+            with self.subTest(commit=commit):
+                self.assertEqual(len(provenance._scan_patch_set(
+                    [self.PATH], self.patch("+"), self.ADDED[:12],
+                    provenance.RULES, deleted_only=False,
+                    history_commit=commit)), 1)
+
+    def test_only_the_exact_path_and_line_are_reviewed(self) -> None:
+        cases = (
+            ("scripts/tests/other.py", self.LINE),
+            ("copy/" + self.PATH, self.LINE),
+            (self.PATH, self.LINE.replace("/home/runner/", "/home/someone/")),
+            (self.PATH, self.LINE.replace("NeverDSemanticTests", "OtherTests")),
+            (self.PATH, self.LINE + " # /Users/someone/notes.txt"),
+            (self.PATH, self.LINE.lstrip()),
+        )
+        for path, line in cases:
+            with self.subTest(path=path, line=line):
+                self.assertEqual(len(provenance._scan_text(
+                    path, line, provenance.RULES,
+                    history_commit=self.ADDED)), 1)
+
+    def test_external_policy_terms_are_not_overridden_by_history_review(self) -> None:
+        for name in ("private-path", "foreign-project", "foreign-terminology"):
+            rule = ProvenanceScanTests.term_rule(name, "runner")
+            with self.subTest(rule=name):
+                findings = provenance._scan_text(
+                    self.PATH, self.LINE, (*provenance.RULES, rule),
+                    history_commit=self.ADDED)
+                self.assertEqual(len(findings), 1)
+                self.assertIn(name, findings[0])
+
+    def test_another_private_path_in_the_same_patch_remains_a_finding(self) -> None:
+        patch = self.patch("+") + "+# /Users/someone/notes.txt\n"
+        findings = provenance._scan_patch_set(
+            [self.PATH], patch, self.ADDED[:12], provenance.RULES,
+            deleted_only=False, history_commit=self.ADDED)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("private-path", findings[0])
+
+
 class ProvenanceOfThisRepositoryTests(unittest.TestCase):
     @staticmethod
     def commit(root: Path, message: str) -> None:
