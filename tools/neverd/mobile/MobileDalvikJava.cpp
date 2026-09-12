@@ -2186,7 +2186,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
         B.tick(1 + Value.size() / 16);
         Strings.push_back(javaString(Value));
       }
-      return "@" + TypeNames.render("Landroid/annotation/SuppressLint;", Scope) +
+      return "@" +
+             TypeNames.render("Landroid/annotation/SuppressLint;", Scope) +
              "({" + join(Strings, ", ") + "})";
     };
     const auto &Metadata = C.annotation_metadata;

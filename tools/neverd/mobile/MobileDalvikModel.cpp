@@ -706,7 +706,8 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
     if (deprecated && classes.contains("Ljava/lang/Deprecated;"))
       scopeError(cls, "Deprecated requires the platform annotation definition");
     if (suppress_lint && classes.contains("Landroid/annotation/SuppressLint;"))
-      scopeError(cls, "SuppressLint requires the platform annotation definition");
+      scopeError(cls,
+                 "SuppressLint requires the platform annotation definition");
     checkAnnotationClass(cls, classes, owners, budget);
   }
   linkLocalScopes(classes, budget);

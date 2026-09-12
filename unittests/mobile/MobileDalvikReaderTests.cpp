@@ -1417,8 +1417,9 @@ FixtureAnnotation suppressLintAnnotation(std::vector<std::string> values,
 }
 
 TEST(MobileDalvikReader, DexSuppressLintPreservesDeclarationValues) {
-  for (const auto &values : {std::vector<std::string>{},
-                              std::vector<std::string>{"PrivateApi", "", "PrivateApi"}}) {
+  for (const auto &values :
+       {std::vector<std::string>{},
+        std::vector<std::string>{"PrivateApi", "", "PrivateApi"}}) {
     for (const auto *site : {"class", "field", "method"}) {
       SCOPED_TRACE(site);
       FixtureOptions options;
@@ -1438,7 +1439,8 @@ TEST(MobileDalvikReader, DexSuppressLintPreservesDeclarationValues) {
   }
 }
 
-TEST(MobileDalvikReader, DexSuppressLintRejectsVisibilityShapeAndDuplicateLoss) {
+TEST(MobileDalvikReader,
+     DexSuppressLintRejectsVisibilityShapeAndDuplicateLoss) {
   for (const auto *site : {"class", "field", "method", "parameter"}) {
     SCOPED_TRACE(site);
     FixtureOptions options;
@@ -1476,16 +1478,17 @@ std::string suppressLintSmali(std::string values = "\"PrivateApi\"") {
 }
 
 TEST(MobileDalvikReader, SmaliSuppressLintPreservesEmptyAndEscapedValues) {
-  const auto cls = smali(
-      ".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n" +
-      suppressLintSmali("") +
-      ".field public value:I\n" + suppressLintSmali("\"a\\n\\\"\\u0000\\ud800\"") +
-      ".end field\n.method public native call()V\n" + suppressLintSmali() +
-      ".end method\n");
+  const auto cls =
+      smali(".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n" +
+            suppressLintSmali("") + ".field public value:I\n" +
+            suppressLintSmali("\"a\\n\\\"\\u0000\\ud800\"") +
+            ".end field\n.method public native call()V\n" +
+            suppressLintSmali() + ".end method\n");
   ASSERT_TRUE(cls.suppress_lint);
   EXPECT_TRUE(cls.suppress_lint->empty());
   EXPECT_EQ(cls.fields.at(0).suppress_lint,
-            std::optional(std::vector<std::string>{std::string("a\n\"\0", 4) + "\xed\xa0\x80"}));
+            std::optional(std::vector<std::string>{std::string("a\n\"\0", 4) +
+                                                   "\xed\xa0\x80"}));
   EXPECT_EQ(cls.methods.at(0).suppress_lint,
             std::optional(std::vector<std::string>{"PrivateApi"}));
   Budget budget;
@@ -1499,24 +1502,30 @@ TEST(MobileDalvikReader, SmaliSuppressLintPreservesEmptyAndEscapedValues) {
   ASSERT_TRUE(text);
   EXPECT_NE(text->str().find("@android.annotation.SuppressLint({})"),
             std::string::npos);
-  EXPECT_NE(text->str().find("@android.annotation.SuppressLint({\"PrivateApi\"})"),
-            std::string::npos);
+  EXPECT_NE(
+      text->str().find("@android.annotation.SuppressLint({\"PrivateApi\"})"),
+      std::string::npos);
 }
 
 TEST(MobileDalvikReader, SmaliSuppressLintRejectsDuplicatesAndParameterLoss) {
-  const std::string header = ".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n"
-                             ".method public call(JI)V\n.registers 5\n";
+  const std::string header =
+      ".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n"
+      ".method public call(JI)V\n.registers 5\n";
   EXPECT_THROW(smali(header + ".param p3\n" + suppressLintSmali() +
-                     ".end param\nreturn-void\n.end method\n"), Error);
+                     ".end param\nreturn-void\n.end method\n"),
+               Error);
   EXPECT_THROW(smali(header + suppressLintSmali("") + suppressLintSmali() +
-                     "return-void\n.end method\n"), Error);
+                     "return-void\n.end method\n"),
+               Error);
   for (const auto *visibility : {"runtime", "system"})
     EXPECT_THROW(smali(header + ".annotation " + visibility +
                        " Landroid/annotation/SuppressLint;\nvalue = {}\n"
-                       ".end annotation\nreturn-void\n.end method\n"), Error);
+                       ".end annotation\nreturn-void\n.end method\n"),
+                 Error);
   for (const auto *values : {"1", "null", "\"ok\", 1"})
     EXPECT_THROW(smali(header + suppressLintSmali(values) +
-                       "return-void\n.end method\n"), Error);
+                       "return-void\n.end method\n"),
+                 Error);
 }
 
 TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {

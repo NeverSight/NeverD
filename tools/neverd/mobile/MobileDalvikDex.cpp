@@ -878,8 +878,7 @@ class Dex {
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
               &found->second->declared_throws, found->second->deprecated,
-              found->second->suppress_lint,
-              "method " + ref.identity());
+              found->second->suppress_lint, "method " + ref.identity());
           continue;
         }
         auto parameters = item<std::vector<uint32_t>>(
