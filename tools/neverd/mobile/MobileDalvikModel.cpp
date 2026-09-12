@@ -545,6 +545,7 @@ annotationScopes(const Class &cls, const ClassMap &classes, Budget &budget) {
 void checkAnnotationClass(const Class &cls, const ClassMap &classes,
                           const std::set<std::string> &owners, Budget &budget) {
   static const Access reserved = {"Ljava/lang/Deprecated;",
+                                  "Landroid/annotation/SuppressLint;",
                                   "Ljava/lang/annotation/Retention;",
                                   "Ljava/lang/annotation/Target;",
                                   "Ljava/lang/annotation/Documented;",
@@ -685,19 +686,27 @@ void validateSourceScopes(const ClassMap &classes, Budget &budget) {
   for (const auto &[name, cls] : classes) {
     budget.tick();
     bool deprecated = cls.deprecated;
+    bool suppress_lint = cls.suppress_lint.has_value();
     for (const auto &field : cls.fields) {
       budget.tick();
       deprecated |= field.deprecated;
+      suppress_lint |= field.suppress_lint.has_value();
     }
     for (const auto &method : cls.methods) {
       budget.tick();
       deprecated |= method.deprecated;
+      suppress_lint |= method.suppress_lint.has_value();
+      if (method.suppress_lint && method.reference.name == "<clinit>")
+        scopeError(cls, "SuppressLint cannot annotate a class initializer: " +
+                            method.reference.identity());
       if (method.deprecated && method.reference.name == "<clinit>")
         scopeError(cls, "Deprecated cannot annotate a class initializer: " +
                             method.reference.identity());
     }
     if (deprecated && classes.contains("Ljava/lang/Deprecated;"))
       scopeError(cls, "Deprecated requires the platform annotation definition");
+    if (suppress_lint && classes.contains("Landroid/annotation/SuppressLint;"))
+      scopeError(cls, "SuppressLint requires the platform annotation definition");
     checkAnnotationClass(cls, classes, owners, budget);
   }
   linkLocalScopes(classes, budget);

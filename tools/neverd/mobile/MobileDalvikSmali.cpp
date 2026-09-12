@@ -490,11 +490,48 @@ class Reader {
   std::string peek() const {
     return position < lines.size() ? lines[position].second : std::string();
   }
+  bool suppressLint(const std::string &header,
+                    std::optional<std::vector<std::string>> &result,
+                    const std::string &declaration) {
+    Match parsed;
+    if (!match(header, parsed,
+               R"(\.annotation (build|runtime|system) (L[^\s]+;))") ||
+        parsed[2] != "Landroid/annotation/SuppressLint;")
+      return false;
+    if (parsed[1] != "build")
+      fail("SuppressLint annotation on " + declaration +
+           " requires build visibility");
+    if (result)
+      fail("duplicate SuppressLint annotation on " + declaration);
+    std::string body;
+    while (peek() != ".end annotation") {
+      if (!body.empty())
+        body += ' ';
+      body += take();
+    }
+    take();
+    if (!match(body, parsed, R"(value\s*=\s*\{(.*)\})"))
+      fail("SuppressLint annotation on " + declaration +
+           " requires exactly one string-array value");
+    std::vector<std::string> values;
+    auto contents = trim(parsed[1]);
+    if (!contents.empty())
+      for (const auto &value : parts(contents)) {
+        budget.tick();
+        values.push_back(decodeQuoted(value));
+      }
+    result = std::move(values);
+    return true;
+  }
   void sourceAnnotation(const std::string &header,
                         std::optional<std::string> &signature,
                         std::optional<std::vector<std::string>> *throws_types,
-                        bool &deprecated, std::set<std::string> &seen,
+                        bool &deprecated,
+                        std::optional<std::vector<std::string>> &suppress_lint,
+                        std::set<std::string> &seen,
                         const std::string &declaration) {
+    if (suppressLint(header, suppress_lint, declaration))
+      return;
     Match match_result;
     if (!match(header, match_result,
                R"(\.annotation (build|runtime|system) (L[^\s]+;))"))
@@ -618,9 +655,10 @@ class Reader {
       fail("unsupported smali annotation visibility or declaration");
     auto type = classType(m[2]);
     if (type == "Ldalvik/annotation/Signature;" ||
-        type == "Ljava/lang/Deprecated;") {
+        type == "Ljava/lang/Deprecated;" ||
+        type == "Landroid/annotation/SuppressLint;") {
       sourceAnnotation(header, cls.generic_signature, nullptr, cls.deprecated,
-                       seen, "class " + cls.name);
+                       cls.suppress_lint, seen, "class " + cls.name);
       return;
     }
     if (annotationMetadata(type, m[1], cls, seen))
@@ -754,7 +792,7 @@ class Reader {
     std::set<std::string> seen;
     while (peek().starts_with(".annotation"))
       sourceAnnotation(take(), result.generic_signature, nullptr,
-                       result.deprecated, seen,
+                       result.deprecated, result.suppress_lint, seen,
                        "field " + owner + "->" + result.reference.name + ":" +
                            result.reference.type);
     if (peek() == ".end field")
@@ -1216,7 +1254,8 @@ class Reader {
           fail("parameter annotations are not represented in the source model");
         sourceAnnotation(text, result.generic_signature,
                          &result.declared_throws, result.deprecated,
-                         seen_annotations, "method " + ref.identity());
+                         result.suppress_lint, seen_annotations,
+                         "method " + ref.identity());
       } else if (text.starts_with(".locals ") ||
                  text.starts_with(".registers ")) {
         if (total || !raw.empty() || !payloads.empty())

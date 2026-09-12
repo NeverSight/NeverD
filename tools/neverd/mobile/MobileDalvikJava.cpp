@@ -2029,14 +2029,15 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     B.tick();
     HasDeclarationMetadata |= C.deprecated || C.access.contains("annotation") ||
                               !C.annotation_metadata.empty() ||
-                              !C.marker_annotations.empty();
+                              !C.marker_annotations.empty() ||
+                              C.suppress_lint.has_value();
     for (const auto &F : C.fields) {
       B.tick();
-      HasDeclarationMetadata |= F.deprecated;
+      HasDeclarationMetadata |= F.deprecated || F.suppress_lint.has_value();
     }
     for (const auto &M : C.methods) {
       B.tick();
-      HasDeclarationMetadata |= M.deprecated;
+      HasDeclarationMetadata |= M.deprecated || M.suppress_lint.has_value();
     }
     if (C.enclosing) {
       if (*C.enclosing == Name || !Classes.contains(*C.enclosing) ||
@@ -2178,6 +2179,16 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
     auto annotationType = [&](const std::string &Type) {
       return "@" + TypeNames.render(Type, ModifierScope);
     };
+    auto suppressLint = [&](const std::vector<std::string> &Values,
+                            const JavaScope &Scope) {
+      std::vector<std::string> Strings;
+      for (const auto &Value : Values) {
+        B.tick(1 + Value.size() / 16);
+        Strings.push_back(javaString(Value));
+      }
+      return "@" + TypeNames.render("Landroid/annotation/SuppressLint;", Scope) +
+             "({" + join(Strings, ", ") + "})";
+    };
     const auto &Metadata = C.annotation_metadata;
     if (Metadata.retention || (Metadata.targets && !Metadata.targets->empty()))
       TypeNames.requireAnnotationEnumQualifier(C);
@@ -2212,6 +2223,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
           TypeNames.render(
               "Ljava/lang/Deprecated;",
               JavaScope{C, nullptr, JavaScope::Position::ClassModifiers}));
+    if (C.suppress_lint)
+      BodyLines.append(suppressLint(*C.suppress_lint, ModifierScope));
     BodyLines.append(Header + " {");
     if (Local) {
       const auto &R = *C.enclosing_method;
@@ -2265,6 +2278,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       FieldMods.push_back(javaIdentifier(F.reference.name));
       if (F.deprecated)
         BodyLines.append("  @" + TypeNames.render("Ljava/lang/Deprecated;", C));
+      if (F.suppress_lint)
+        BodyLines.append("  " + suppressLint(*F.suppress_lint, JavaScope{C}));
       BodyLines.append("  " + join(FieldMods, " ") +
                        (Value ? " = " + *Value : "") + ";");
     }
@@ -2323,7 +2338,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       if (R.name == "<clinit>") {
         if (!R.parameters.empty() || R.returns != "V" ||
             !M.access.contains("static") || MethodSignature ||
-            Generics.declared_throws.contains(R) || M.deprecated)
+            Generics.declared_throws.contains(R) || M.deprecated ||
+            M.suppress_lint)
           javaError("invalid class initializer signature");
         Declaration = "static";
       } else if (R.name == "<init>") {
@@ -2347,6 +2363,8 @@ llvm::json::Object recoverJava(const ClassMap &Classes, Budget &B) {
       if (M.deprecated)
         // Method and constructor type parameters exclude their modifiers.
         BodyLines.append("  @" + TypeNames.render("Ljava/lang/Deprecated;", C));
+      if (M.suppress_lint)
+        BodyLines.append("  " + suppressLint(*M.suppress_lint, JavaScope{C}));
       if (M.access.contains("abstract") || M.access.contains("native")) {
         BodyLines.append("  " + Declaration + ";");
         Row["status"] = "declaration-only";

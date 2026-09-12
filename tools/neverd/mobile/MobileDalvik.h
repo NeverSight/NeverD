@@ -80,6 +80,7 @@ struct Method {
   std::optional<std::string> generic_signature;
   std::optional<std::vector<std::string>> declared_throws;
   bool deprecated = false;
+  std::optional<std::vector<std::string>> suppress_lint;
 };
 struct Field {
   FieldRef reference;
@@ -87,6 +88,7 @@ struct Field {
   FieldValue value;
   std::optional<std::string> generic_signature;
   bool deprecated = false;
+  std::optional<std::vector<std::string>> suppress_lint;
 };
 struct AnnotationMetadata {
   std::optional<std::string> retention;
@@ -118,6 +120,7 @@ struct Class {
   bool deprecated = false;
   AnnotationMetadata annotation_metadata;
   std::vector<MarkerAnnotation> marker_annotations;
+  std::optional<std::vector<std::string>> suppress_lint;
 };
 using ClassMap = std::map<std::string, Class>;
 void validateSourceScopes(const ClassMap &classes, Budget &budget);

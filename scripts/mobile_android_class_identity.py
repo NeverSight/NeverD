@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 DEPRECATED_TYPE = "Ljava/lang/Deprecated;"
+SUPPRESS_LINT_TYPE = "Landroid/annotation/SuppressLint;"
 MARKER_META_TYPES = frozenset("Ljava/lang/annotation/" + name + ";"
                               for name in ("Retention", "Target", "Documented", "Inherited"))
 OWNED_MARKER_TYPES = frozenset("Lfixture/" + name + ";" for name in (
@@ -80,11 +81,13 @@ class Bytes:
 
 
 class ClassFile:
-    def __init__(self, data, *, owned_markers=False):
+    def __init__(self, data, *, owned_markers=False, platform_suppress_lint=False):
         require(len(data) <= 16 * 1024 * 1024, "Compiler class file exceeds its byte limit")
         require(type(owned_markers) is bool, "Invalid owned marker compiler mode")
+        require(type(platform_suppress_lint) is bool, "Invalid platform annotation compiler mode")
         self.reader, self.constants, self.result = Bytes(data), {}, None
         self.owned_markers = owned_markers
+        self.platform_suppress_lint = platform_suppress_lint
 
     def constant(self, index, tag):
         entry = self.constants.get(index)
@@ -145,6 +148,16 @@ class ClassFile:
         require(len({value["constant"] for value in values}) == length, "Duplicate compiler Target enum")
         return [{"name": "value", "tag": "[", "values": values}]
 
+    def suppress_lint_elements(self, reader, context):
+        require(reader.number(2) == 1 and self.text(reader.number(2)) == "value",
+                "Compiler SuppressLint requires exactly value on " + context)
+        require(reader.take(1) == b"[", "Compiler SuppressLint requires an array on " + context)
+        values = []
+        for _ in range(reader.number(2)):
+            require(reader.take(1) == b"s", "Compiler SuppressLint requires strings on " + context)
+            values.append({"tag": "s", "value": self.text(reader.number(2))})
+        return [{"name": "value", "tag": "[", "values": values}]
+
     def deprecation(self, attributes, context, *, allowed=True, marker_class=False, definition=False):
         """The Java 8 marker and the zero-length attribute are distinct facts.
 
@@ -164,14 +177,19 @@ class ClassFile:
                 deprecated = True
                 continue
             marker_mode = self.owned_markers and marker_class
-            require(kind == "RuntimeVisibleAnnotations" or (marker_mode and kind == "RuntimeInvisibleAnnotations"),
+            require(kind == "RuntimeVisibleAnnotations" or
+                    ((marker_mode or self.platform_suppress_lint) and kind == "RuntimeInvisibleAnnotations"),
                     "Unsupported compiler annotation attribute " + kind + " on " + context)
             attribute = Bytes(data)
             for _ in range(attribute.number(2)):
                 descriptor = self.text(attribute.number(2))
                 require(descriptor not in types, "Duplicate compiler runtime annotation on " + context)
                 types.add(descriptor)
-                if marker_mode and descriptor in MARKER_META_TYPES | OWNED_MARKER_TYPES:
+                if self.platform_suppress_lint and descriptor == SUPPRESS_LINT_TYPE:
+                    require(kind == "RuntimeInvisibleAnnotations",
+                            "Compiler SuppressLint must be class retained on " + context)
+                    elements = self.suppress_lint_elements(attribute, context)
+                elif marker_mode and descriptor in MARKER_META_TYPES | OWNED_MARKER_TYPES:
                     require(kind == "RuntimeVisibleAnnotations" or descriptor in OWNED_MARKER_TYPES,
                             "Compiler meta annotation must be runtime visible on " + context)
                     elements = self.marker_elements(attribute, descriptor, context, definition=definition)
@@ -185,7 +203,7 @@ class ClassFile:
                 target.append({"type": descriptor, "elements": elements})
             attribute.finish()
         result = {"deprecated_attribute": deprecated, "runtime_visible_annotations": visible}
-        if self.owned_markers and marker_class:
+        if (self.owned_markers and marker_class) or self.platform_suppress_lint:
             result["runtime_invisible_annotations"] = invisible
         return result
 
@@ -320,12 +338,13 @@ class ClassFile:
                                for identity, row in facts["methods"].items()}
 
 
-def compiler_classes(directory, *, owned_markers=False):
+def compiler_classes(directory, *, owned_markers=False, platform_suppress_lint=False):
     classes = {}
     for path in sorted(Path(directory).rglob("*.class")):
         require(not path.is_symlink(), "Compiler class inventory contains a symlink")
         data = path.read_bytes()
-        facts = ClassFile(data, owned_markers=owned_markers).facts()
+        facts = ClassFile(data, owned_markers=owned_markers,
+                          platform_suppress_lint=platform_suppress_lint).facts()
         owner = facts["name"]
         require(owner not in classes, "Duplicate compiler inventory")
         require(path.relative_to(directory).as_posix() == owner[1:-1] + ".class",

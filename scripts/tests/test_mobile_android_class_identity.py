@@ -301,6 +301,54 @@ class DeprecatedCompilerAttributesTests(unittest.TestCase):
                 self.read({("code", "oldAdd", "(I)I"): [(kind, payload)]})
 
 
+class SuppressLintCompilerAttributesTests(unittest.TestCase):
+    owner = "Lfixture/LintFixture;"
+
+    def read(self, attrs, **options):
+        return oracle.ClassFile(class_bytes(self.owner, [("plus", "(I)I", 1, True)],
+                                             fields=[("value", 1, None)], extra_attributes=attrs, **options),
+                                platform_suppress_lint=True).facts()
+
+    def test_exact_string_arrays_preserve_empty_duplicates_and_sites(self):
+        for values in ([], ["PrivateApi", "", "PrivateApi", 'line\n"\\']):
+            annotation = [(oracle.SUPPRESS_LINT_TYPE, [("value", "[", [("s", value) for value in values])])]
+            for site in ("class", ("field", "value"), ("method", "plus", "(I)I")):
+                with self.subTest(values=values, site=site):
+                    facts = self.read({site: [("RuntimeInvisibleAnnotations", annotation)]})
+                    row = facts if site == "class" else (facts["fields"][self.owner + "->value:I"]
+                          if site[0] == "field" else facts["methods"][self.owner + "->plus(I)I"])
+                    self.assertEqual(row["runtime_invisible_annotations"], [{"type": oracle.SUPPRESS_LINT_TYPE,
+                        "elements": [{"name": "value", "tag": "[", "values": [
+                            {"tag": "s", "value": value} for value in values]}]}])
+                    self.assertEqual(row["runtime_visible_annotations"], [])
+
+    def test_default_mode_and_unmodeled_attachments_remain_rejected(self):
+        annotation = [(oracle.SUPPRESS_LINT_TYPE, [("value", "[", [])])]
+        data = class_bytes(self.owner, [], extra_attributes={"class": [("RuntimeInvisibleAnnotations", annotation)]})
+        with self.assertRaises(RuntimeError):
+            oracle.ClassFile(data).facts()
+        for kind in ("RuntimeVisibleAnnotations", "RuntimeInvisibleParameterAnnotations",
+                     "RuntimeInvisibleTypeAnnotations"):
+            with self.subTest(kind=kind), self.assertRaises(RuntimeError):
+                self.read({"class": [(kind, annotation)]})
+        with self.assertRaises(RuntimeError):
+            self.read({("code", "plus", "(I)I"): [("RuntimeInvisibleAnnotations", annotation)]})
+
+    def test_malformed_or_unknown_payloads_do_not_become_empty_annotations(self):
+        for elements in ([], [("wrong", "[", [])], [("value", "s", "PrivateApi")],
+                         [("value", "[", [("Z", 1)])], [("value", "[", []), ("value", "[", [])]):
+            with self.subTest(elements=elements), self.assertRaises(RuntimeError):
+                self.read({"class": [("RuntimeInvisibleAnnotations", [(oracle.SUPPRESS_LINT_TYPE, elements)])]})
+        annotation = [(oracle.SUPPRESS_LINT_TYPE, [("value", "[", [])])]
+        for options in ({"wrong_annotation_tag": True}, {"annotation_trailer": b"\0"}):
+            with self.subTest(options=options), self.assertRaises(RuntimeError):
+                self.read({"class": [("RuntimeInvisibleAnnotations", annotation)]}, **options)
+        with self.assertRaises(RuntimeError):
+            self.read({"class": [("RuntimeInvisibleAnnotations", annotation + annotation)]})
+        with self.assertRaises(RuntimeError):
+            self.read({"class": [("RuntimeInvisibleAnnotations", [("Lfixture/Unknown;", [])])]})
+
+
 class MarkerCompilerAttributesTests(unittest.TestCase):
     owner = "Lfixture/MarkerRuntime;"
     retention = "Ljava/lang/annotation/Retention;"

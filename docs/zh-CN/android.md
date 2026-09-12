@@ -35,6 +35,8 @@ Java 名称绑定区分类头与类体，可处理已知的同包名称遮蔽；
 
 类、字段、方法和构造器上不含元素且运行时可见的 Java 8 `@java.lang.Deprecated` 标记会被保留。参数注解、带注解的静态初始化器、其他可见性级别，以及 `since` 或 `forRemoval` 等元素值均会被拒绝。重新编译后，CI 分别比较 classfile 的 `Deprecated` 属性和运行时注解，并检查无注解的对照声明和生成的辅助方法；辅助方法不计入原始方法数。
 
+DEX 和 smali 还会保留类、字段、方法及构造器上的平台注解 `@android.annotation.SuppressLint`。它必须采用 build 可见性，且仅包含字符串数组 `value`；空数组、空字符串、重复值、顺序及转义字符值都会保留。参数注解和带注解的静态初始化器仍不支持。CI 使用实际 Android SDK，检查重新编译后的 CLASS 保留注解并比较程序行为。
+
 内置引擎还会保留受支持注解声明上运行时可见的 `@Retention`、`@Target`、`@Documented` 和 `@Inherited`，并输出真正的 `@interface`。该子集不含字段、方法、类型参数或嵌套声明，仅支持名称、访问权限及所属关系均可确认的顶层注解和静态成员注解；局部类或匿名类作用域会被拒绝。
 
 类、接口和注解声明上的空 marker 应用，要求同一批分析的类中包含可访问且匹配的 marker 定义，并且其 Retention 和 Target 允许该应用。可以重建 `SOURCE` 声明，但已持久化到输入中的应用会被拒绝；`CLASS` 或未指定 Retention 的应用要求 DEX build 可见性（`0`），`RUNTIME` 要求 runtime 可见性（`1`）。缺失 Retention 与显式 `CLASS` 保持区别，缺失 Target 与空数组也保持区别，Target 数组顺序不会改变。Target 值限定为 Java 8，`MODULE`、`RECORD_COMPONENT` 等较新值会被拒绝。保留 `@Inherited` 时，不会将继承得到的应用复制成子类上的直接声明。

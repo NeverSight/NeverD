@@ -1387,6 +1387,59 @@ TEST(MobileDalvikJava, DeprecatedRequiresThePlatformAnnotationDefinition) {
       "platform annotation definition");
 }
 
+TEST(MobileDalvikJava, SuppressLintPreservesSitesValuesAndDeclarationStatus) {
+  auto M = method("observe", {"J", "I"}, "V", 0, {});
+  M.access = {"public", "native"};
+  M.suppress_lint = std::vector<std::string>{"PrivateApi", "", "PrivateApi"};
+  auto C = klass("Lfixture/Core;", {M});
+  C.suppress_lint = std::vector<std::string>{};
+  Field F{{C.name, "value", "I"}, {"public"}, {}};
+  F.suppress_lint = std::vector<std::string>{std::string("a\n\"\0", 4) + "\xed\xa0\x80"};
+  C.fields.push_back(F);
+  const auto Report = recover({C});
+  const auto Java = source(Report);
+  EXPECT_NE(Java.find("@android.annotation.SuppressLint({})\npublic class Core"),
+            std::string::npos) << Java;
+  EXPECT_NE(Java.find("@android.annotation.SuppressLint({\"a\\n\\\"\\u0000\\ud800\"})"),
+            std::string::npos) << Java;
+  EXPECT_NE(Java.find("@android.annotation.SuppressLint({\"PrivateApi\", \"\", \"PrivateApi\"})"),
+            std::string::npos) << Java;
+  EXPECT_NE(Java.find("observe(long arg0, int arg1);"),
+            std::string::npos) << Java;
+  EXPECT_EQ(Report.getInteger("recovered_method_count"), 0);
+  EXPECT_EQ(Report.getInteger("declaration_only_method_count"), 1);
+}
+
+TEST(MobileDalvikJava, SuppressLintModifiersRespectTypeParameterScopes) {
+  auto M = method("observe", {"I"}, "V", 0, {});
+  M.access = {"public", "native"};
+  M.generic_signature = "<android:Lfixture/Core;>(I)V";
+  M.suppress_lint = std::vector<std::string>{"PrivateApi"};
+  auto C = klass("Lfixture/Core;", {M});
+  EXPECT_NE(source(recover({C})).find("@android.annotation.SuppressLint({\"PrivateApi\"})"),
+            std::string::npos);
+  C.generic_signature = "<android:Ljava/lang/Object;>Ljava/lang/Object;";
+  rejected([&] { recover({C}); }, "ambiguous Java type");
+}
+
+TEST(MobileDalvikJava, SuppressLintRejectsInvalidOwnersAndPlatformReplacement) {
+  auto rejectsBoth = [](const std::vector<Class> &Classes,
+                        const char *Reason) {
+    rejected([&] { recover(Classes); }, Reason);
+    rejected([&] { Budget B; linkClasses(Classes, B); }, Reason);
+  };
+  auto M = method("<clinit>", {}, "V", 0, {op(0, "return-void")});
+  M.access = {"static", "constructor"};
+  M.suppress_lint = std::vector<std::string>{};
+  rejectsBoth({klass("Lfixture/Core;", {M})}, "class initializer");
+  M = method("observe", {"I"}, "V", 0, {});
+  M.access = {"public", "native"};
+  M.suppress_lint = std::vector<std::string>{};
+  rejectsBoth({klass("Lfixture/Core;", {M}),
+               klass("Landroid/annotation/SuppressLint;")},
+              "platform annotation definition");
+}
+
 Class markerClass(std::string Name = "Lfixture/ZMarker;") {
   Class C = klass(std::move(Name));
   C.access = {"public", "interface", "abstract", "annotation"};

@@ -1399,6 +1399,126 @@ TEST(MobileDalvikReader, SmaliExceptionRegionAndHandlerOrderAreExact) {
   EXPECT_FALSE(region.handlers[1].type);
   EXPECT_EQ(region.handlers[1].target, 2u);
 }
+FixtureAnnotation suppressLintAnnotation(std::vector<std::string> values,
+                                         unsigned visibility = 0) {
+  FixtureAnnotation result{"Landroid/annotation/SuppressLint;", visibility};
+  result.extra_strings = {u"value"};
+  for (const auto &value : values)
+    result.extra_strings.push_back(utf16(value));
+  result.elements = [values](std::string &out, const Fixture &f) {
+    uleb(out, 1);
+    uleb(out, fixtureStringIndex(f, "value"));
+    append(out, 0x1c, 1);
+    uleb(out, values.size());
+    for (const auto &value : values)
+      annotationIndex(out, 0x17, fixtureStringIndex(f, value));
+  };
+  return result;
+}
+
+TEST(MobileDalvikReader, DexSuppressLintPreservesDeclarationValues) {
+  for (const auto &values : {std::vector<std::string>{},
+                              std::vector<std::string>{"PrivateApi", "", "PrivateApi"}}) {
+    for (const auto *site : {"class", "field", "method"}) {
+      SCOPED_TRACE(site);
+      FixtureOptions options;
+      options.annotations = {suppressLintAnnotation(values)};
+      options.annotation_sets = {{0}};
+      attachFixtureAnnotation(options, site);
+      const auto classes = parse(fixture(options).data);
+      ASSERT_EQ(classes.size(), 1u);
+      const auto &cls = classes.front();
+      if (std::string_view(site) == "class")
+        EXPECT_EQ(cls.suppress_lint, std::optional(values));
+      else if (std::string_view(site) == "field")
+        EXPECT_EQ(cls.fields.at(0).suppress_lint, std::optional(values));
+      else
+        EXPECT_EQ(cls.methods.at(0).suppress_lint, std::optional(values));
+    }
+  }
+}
+
+TEST(MobileDalvikReader, DexSuppressLintRejectsVisibilityShapeAndDuplicateLoss) {
+  for (const auto *site : {"class", "field", "method", "parameter"}) {
+    SCOPED_TRACE(site);
+    FixtureOptions options;
+    options.annotations = {suppressLintAnnotation({"PrivateApi"})};
+    options.annotation_sets = {{0}};
+    attachFixtureAnnotation(options, site);
+    if (std::string_view(site) == "parameter")
+      EXPECT_THROW(parse(fixture(options).data), Error);
+    for (unsigned visibility : {1u, 2u}) {
+      auto changed = options;
+      changed.annotations[0].visibility = visibility;
+      EXPECT_THROW(parse(fixture(changed).data), Error);
+    }
+    auto changed = options;
+    changed.annotations[0].elements = {};
+    EXPECT_THROW(parse(fixture(changed).data), Error);
+    changed = options;
+    changed.annotations[0].elements = [](std::string &out, const Fixture &f) {
+      uleb(out, 1);
+      uleb(out, fixtureStringIndex(f, "value"));
+      append(out, 0x1c, 1);
+      uleb(out, 1);
+      append(out, 0x1e, 1);
+    };
+    EXPECT_THROW(parse(fixture(changed).data), Error);
+    changed = options;
+    changed.annotation_sets = {{0, 0}};
+    EXPECT_THROW(parse(fixture(changed).data), Error);
+  }
+}
+
+std::string suppressLintSmali(std::string values = "\"PrivateApi\"") {
+  return ".annotation build Landroid/annotation/SuppressLint;\nvalue = {" +
+         values + "}\n.end annotation\n";
+}
+
+TEST(MobileDalvikReader, SmaliSuppressLintPreservesEmptyAndEscapedValues) {
+  const auto cls = smali(
+      ".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n" +
+      suppressLintSmali("") +
+      ".field public value:I\n" + suppressLintSmali("\"a\\n\\\"\\u0000\\ud800\"") +
+      ".end field\n.method public native call()V\n" + suppressLintSmali() +
+      ".end method\n");
+  ASSERT_TRUE(cls.suppress_lint);
+  EXPECT_TRUE(cls.suppress_lint->empty());
+  EXPECT_EQ(cls.fields.at(0).suppress_lint,
+            std::optional(std::vector<std::string>{std::string("a\n\"\0", 4) + "\xed\xa0\x80"}));
+  EXPECT_EQ(cls.methods.at(0).suppress_lint,
+            std::optional(std::vector<std::string>{"PrivateApi"}));
+  Budget budget;
+  const auto report = recoverJava(linkClasses({cls}, budget), budget);
+  const auto *units = report.getArray("source_units");
+  ASSERT_NE(units, nullptr);
+  ASSERT_EQ(units->size(), 1u);
+  const auto *unit = units->front().getAsObject();
+  ASSERT_NE(unit, nullptr);
+  const auto text = unit->getString("source");
+  ASSERT_TRUE(text);
+  EXPECT_NE(text->str().find("@android.annotation.SuppressLint({})"),
+            std::string::npos);
+  EXPECT_NE(text->str().find("@android.annotation.SuppressLint({\"PrivateApi\"})"),
+            std::string::npos);
+}
+
+TEST(MobileDalvikReader, SmaliSuppressLintRejectsDuplicatesAndParameterLoss) {
+  const std::string header = ".class public Lfixture/Lint;\n.super Ljava/lang/Object;\n"
+                             ".method public call(JI)V\n.registers 5\n";
+  EXPECT_THROW(smali(header + ".param p3\n" + suppressLintSmali() +
+                     ".end param\nreturn-void\n.end method\n"), Error);
+  EXPECT_THROW(smali(header + suppressLintSmali("") + suppressLintSmali() +
+                     "return-void\n.end method\n"), Error);
+  for (const auto *visibility : {"runtime", "system"})
+    EXPECT_THROW(smali(header + ".annotation " + visibility +
+                       " Landroid/annotation/SuppressLint;\nvalue = {}\n"
+                       ".end annotation\nreturn-void\n.end method\n"), Error);
+  for (const auto *values : {"1", "null", "\"ok\", 1"})
+    EXPECT_THROW(smali(header + suppressLintSmali(values) +
+                       "return-void\n.end method\n"), Error);
+}
+
 TEST(MobileDalvikReader, DexAttachedUnknownAnnotationsCannotLoseSemantics) {
   for (const auto &type : {"Lfixture/Unknown;"}) {
     for (unsigned visibility : {0u, 1u, 2u}) {

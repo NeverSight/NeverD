@@ -673,13 +673,43 @@ class Dex {
       bad("unsupported annotation " + values.front().value.first + " on " +
           declaration);
   }
+  bool suppressLint(const AnnotationItem &entry,
+                    std::optional<std::vector<std::string>> &result,
+                    const std::string &declaration) {
+    const auto &[name, elements] = entry.value;
+    if (name != "Landroid/annotation/SuppressLint;")
+      return false;
+    if (entry.visibility != 0)
+      bad("SuppressLint annotation on " + declaration +
+          " requires build visibility");
+    if (result)
+      bad("duplicate SuppressLint annotation on " + declaration);
+    auto value = elements.find("value");
+    if (elements.size() != 1 || value == elements.end() ||
+        value->second.kind != 0x1c)
+      bad("SuppressLint annotation on " + declaration +
+          " requires exactly one string-array value");
+    std::vector<std::string> values;
+    for (const auto &part : value->second.array) {
+      budget.tick();
+      if (part.kind != 0x17)
+        bad("SuppressLint value is not a string on " + declaration);
+      values.push_back(std::get<std::string>(part.value));
+    }
+    result = std::move(values);
+    return true;
+  }
   void sourceAnnotations(const AnnotationSet &values,
                          std::optional<std::string> &signature,
                          std::optional<std::vector<std::string>> *throws_types,
-                         bool &deprecated, const std::string &declaration) {
+                         bool &deprecated,
+                         std::optional<std::vector<std::string>> &suppress_lint,
+                         const std::string &declaration) {
     for (const auto &entry : values) {
       budget.tick();
       const auto &[name, elements] = entry.value;
+      if (suppressLint(entry, suppress_lint, declaration))
+        continue;
       if (name == "Ljava/lang/Deprecated;") {
         if (entry.visibility != 1)
           bad("Deprecated annotation on " + declaration +
@@ -834,7 +864,7 @@ class Dex {
             bad("annotated field has no class_data definition");
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
-              nullptr, found->second->deprecated,
+              nullptr, found->second->deprecated, found->second->suppress_lint,
               "field " + ref.owner + "->" + ref.name + ":" + ref.type);
           continue;
         }
@@ -848,6 +878,7 @@ class Dex {
           sourceAnnotations(
               annotationSet(annotation_off), found->second->generic_signature,
               &found->second->declared_throws, found->second->deprecated,
+              found->second->suppress_lint,
               "method " + ref.identity());
           continue;
         }
@@ -876,9 +907,11 @@ class Dex {
       budget.tick();
       const auto &[name, elements] = entry.value;
       if (name == "Ldalvik/annotation/Signature;" ||
-          name == "Ljava/lang/Deprecated;") {
+          name == "Ljava/lang/Deprecated;" ||
+          name == "Landroid/annotation/SuppressLint;") {
         sourceAnnotations({entry}, cls.generic_signature, nullptr,
-                          cls.deprecated, "class " + cls.name);
+                          cls.deprecated, cls.suppress_lint,
+                          "class " + cls.name);
         continue;
       }
       if (annotationMetadata(entry, cls))

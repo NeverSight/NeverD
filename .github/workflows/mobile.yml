@@ -88,7 +88,7 @@ jobs:
       - name: Run native readers, emitters, archives, process and CLI tests
         run: ctest --test-dir build-mobile/unittests/mobile -C Release --output-on-failure --no-tests=error
       - name: Verify the independent acceptance gates reject false coverage
-        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_android_class_identity scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend scripts.tests.test_mobile_ios_single_session -v
+        run: python -m unittest scripts.tests.test_mobile_android_internal_runner scripts.tests.test_mobile_android_class_identity scripts.tests.test_mobile_android_suppress_lint scripts.tests.test_mobile_ios_backend scripts.tests.test_mobile_swift_backend scripts.tests.test_mobile_ios_single_session -v
       - name: Verify real-app evidence changes before the downstream build matrix
         if: runner.os == 'Linux'
         run: |
@@ -130,6 +130,10 @@ jobs:
             "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0"
           fi
           test -x "$ANDROID_HOME/build-tools/35.0.0/d8"
+          if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35"
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
           printf 'NEVERD_D8=%s\n' "$ANDROID_HOME/build-tools/35.0.0/d8" >> "$GITHUB_ENV"
       - name: Recover and independently execute Android sources through C++ CLI
         if: runner.os == 'Linux'
@@ -138,6 +142,15 @@ jobs:
           python scripts/test_mobile_android_internal.py \
             --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
             --work-dir "$RUNNER_TEMP/android-native" --timeout 120
+      - name: Preserve Android SDK SuppressLint through source recovery
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.build_mobile.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          python scripts/test_mobile_android_suppress_lint.py \
+            --neverd build-mobile/bin/neverd --d8 "$NEVERD_D8" \
+            --android-jar "$ANDROID_HOME/platforms/android-35/android.jar" \
+            --work-dir "$RUNNER_TEMP/android-suppress-lint"
       - name: Prepare the pinned optional Android compatibility backend
         if: runner.os == 'Linux'
         shell: bash
@@ -219,6 +232,7 @@ jobs:
             ${{ runner.temp }}/android-native/original-marker/
             ${{ runner.temp }}/android-native/marker-dex/
             ${{ runner.temp }}/android-native/marker-preparation-failure.json
+            ${{ runner.temp }}/android-suppress-lint/
             ${{ runner.temp }}/ios-native/scalar/
             ${{ runner.temp }}/ios-native/calls/
             ${{ runner.temp }}/ios-native/swift/
