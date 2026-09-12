@@ -242,7 +242,7 @@ class CTestStartupAllowanceTests(unittest.TestCase):
                     mock.patch.object(collector.time, "monotonic", side_effect=lambda: now[0]), \
                     mock.patch.object(collector, "terminate_group", side_effect=terminate):
                 result = collector.collect_case(Path(root) / "build", folder, test, gtest, OWNER)
-            self.assertEqual(collector.read_json(folder / "outcome.json"), result)
+            self.assertEqual(collector.read_json(folder / "outcome.json"), json.loads(json.dumps(result)))
             self.assertEqual(test["properties"][-1], {"name": "TIMEOUT", "value": 120})
             exit_path = folder / "ctest-exit-status.txt"
             retained_exit = exit_path.read_text() if exit_path.exists() else None
