@@ -54,7 +54,8 @@ TEST(VarArgFixedCount, FortifiedChkVariants) {
   EXPECT_EQ(varArgFixedCount("__dprintf_chk"), 3u);  // fd, flag, fmt
   EXPECT_EQ(varArgFixedCount("__asprintf_chk"), 3u); // &buf, flag, fmt
   EXPECT_EQ(varArgFixedCount("__sprintf_chk"), 4u);  // buf, flag, slen, fmt
-  EXPECT_EQ(varArgFixedCount("__snprintf_chk"), 5u); // buf, maxlen, flag, slen, fmt
+  EXPECT_EQ(varArgFixedCount("__snprintf_chk"),
+            5u); // buf, maxlen, flag, slen, fmt
   // ELF form (over-stripped to a single leading '_').
   EXPECT_EQ(varArgFixedCount("_snprintf_chk"), 5u);
   EXPECT_EQ(varArgFixedCount("_printf_chk"), 2u);
@@ -62,7 +63,8 @@ TEST(VarArgFixedCount, FortifiedChkVariants) {
   EXPECT_EQ(varArgFixedCount("__vsnprintf_chk"), 0u);
   EXPECT_EQ(varArgFixedCount("__vsprintf_chk"), 0u);
   EXPECT_EQ(varArgFixedCount("__vprintf_chk"), 0u);
-  // Unknown _chk callees stay non-variadic (e.g. memcpy/strcpy fortified forms).
+  // Unknown _chk callees stay non-variadic (e.g. memcpy/strcpy fortified
+  // forms).
   EXPECT_EQ(varArgFixedCount("__memcpy_chk"), 0u);
   EXPECT_EQ(varArgFixedCount("__strcpy_chk"), 0u);
 }
@@ -100,9 +102,8 @@ TEST(VarArgFixedCount, DarwinObjectiveCMessageStubs) {
   // at x2 and any true varargs follow the selector's colon-counted arguments.
   EXPECT_EQ(varArgFixedCount("objc_msgSend$length"), 2u);
   EXPECT_EQ(varArgFixedCount("objc_msgSend$stringWithFormat:"), 3u);
-  EXPECT_EQ(
-      varArgFixedCount("objc_msgSend$exceptionWithName:reason:userInfo:"),
-      5u);
+  EXPECT_EQ(varArgFixedCount("objc_msgSend$exceptionWithName:reason:userInfo:"),
+            5u);
   EXPECT_EQ(varArgFixedCount("objc_msgSend$"), 0u);
 }
 
@@ -158,12 +159,9 @@ TEST(VarArgFixedParamKind, PrintfFamilyPreservesScalarParameters) {
 }
 
 TEST(VarArgFixedParamKind, OpenPreservesNamedPathAndFlags) {
-  EXPECT_EQ(varArgFixedParamKind("open", 0),
-            VarArgFixedParamKind::Pointer);
-  EXPECT_EQ(varArgFixedParamKind("open", 1),
-            VarArgFixedParamKind::Integer);
-  EXPECT_EQ(varArgFixedParamKind("open", 2),
-            VarArgFixedParamKind::Unknown);
+  EXPECT_EQ(varArgFixedParamKind("open", 0), VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("open", 1), VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("open", 2), VarArgFixedParamKind::Unknown);
 }
 
 TEST(VarArgFixedParamKind, FortifiedSnprintfShape) {
@@ -443,9 +441,9 @@ TEST(IsNoReturnTarget, IndexPreservesFirstNamesAndImportPrecedence) {
 
   const NoReturnTargetIndex Index(Img);
   const std::pair<va_t, bool> Cases[] = {
-      {0, true},       {0x1000, false}, {0x1100, true}, {0x1200, false},
-      {0x1300, true},  {0x1400, false}, {0x1500, false}, {0x1600, true},
-      {0x1700, true},  {0x1800, true},  {0x1900, true}, {0x2000, false},
+      {0, true},       {0x1000, false},   {0x1100, true},  {0x1200, false},
+      {0x1300, true},  {0x1400, false},   {0x1500, false}, {0x1600, true},
+      {0x1700, true},  {0x1800, true},    {0x1900, true},  {0x2000, false},
       {0x9999, false}, {InvalidVA, false}};
   for (const auto &[Address, Expected] : Cases) {
     SCOPED_TRACE(Address);

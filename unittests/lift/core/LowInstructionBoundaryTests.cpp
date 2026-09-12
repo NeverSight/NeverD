@@ -4922,13 +4922,14 @@ TEST(LowInstructionBoundary, ConditionalNoReturnCallKeepsFalsePath) {
   EXPECT_TRUE(verifyMedFunc(Med, "test-predicated-no-return-call"));
 }
 
-TEST(LowInstructionBoundary, IndexedNoReturnPreservesConditionalAndReturningPaths) {
+TEST(LowInstructionBoundary,
+     IndexedNoReturnPreservesConditionalAndReturningPaths) {
   for (bool Indexed : {false, true})
     for (bool Conditional : {false, true})
       for (bool NoReturn : {false, true}) {
-        SCOPED_TRACE(testing::Message() << "indexed=" << Indexed
-                                       << " conditional=" << Conditional
-                                       << " noreturn=" << NoReturn);
+        SCOPED_TRACE(testing::Message()
+                     << "indexed=" << Indexed << " conditional=" << Conditional
+                     << " noreturn=" << NoReturn);
         Symbol Callee = Symbol::makeFunc(kEntry + 0x10);
         Callee.Name = NoReturn ? "abort" : "warn";
         // bl/bleq callee; bx lr
@@ -4955,8 +4956,8 @@ TEST(LowInstructionBoundary, IndexedNoReturnPreservesConditionalAndReturningPath
         EXPECT_EQ(HasFallthrough, Conditional || !NoReturn);
         EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
             Function, LowInstructionBoundaryRequirement::Required)));
-        MedFunc Med = LowToMedConverter().convert(Function, Arch::ARM,
-                                                  BinaryFormat::ELF);
+        MedFunc Med =
+            LowToMedConverter().convert(Function, Arch::ARM, BinaryFormat::ELF);
         EXPECT_TRUE(verifyMedFunc(Med, "indexed-no-return-control"));
       }
 }

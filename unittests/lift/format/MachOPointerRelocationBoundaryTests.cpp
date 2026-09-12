@@ -7347,9 +7347,8 @@ TEST(MachOInteriorCodePointerCFG,
     const va_t Begin = Image.is64Bit() ? 0x100001000ULL : 0x1000;
     const va_t End = Begin + 0x100;
     const uint32_t Width = Image.getPointerSize();
-    const va_t Encoded[] = {Begin | (Thumb ? 1 : 0), Begin + 5,
-                            Begin + 5, End | (Thumb ? 1 : 0),
-                            End + 4, Begin + 3};
+    const va_t Encoded[] = {Begin | (Thumb ? 1 : 0), Begin + 5, Begin + 5,
+                            End | (Thumb ? 1 : 0),   End + 4,   Begin + 3};
     Segment Data;
     Data.VA = 0x8000;
     Data.Size = 7 * Width;
@@ -7383,8 +7382,8 @@ TEST(MachOInteriorCodePointerCFG,
     EXPECT_EQ(Sources, Expected);
 
     Sources.clear();
-    ASSERT_TRUE(Index.collectSources(Image, UnalignedTarget, AliasTarget,
-                                    Sources));
+    ASSERT_TRUE(
+        Index.collectSources(Image, UnalignedTarget, AliasTarget, Sources));
     EXPECT_TRUE(Sources.empty());
     ASSERT_TRUE(Index.collectSources(Image, End, Begin, Sources));
     ASSERT_TRUE(Index.collectSources(Image, End, End, Sources));

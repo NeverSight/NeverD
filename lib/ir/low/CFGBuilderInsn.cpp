@@ -168,8 +168,8 @@ bool CFGBuilder::resolveConstantIndirectBranch(const BinaryImage &Img,
   // Only AArch64 RET with an explicit non-LR register is lifted as INDIR_BR
   // for this purpose.  Folding an ordinary BR/jump here can sample a dynamic
   // table load at its default index and collapse a real jump table to one arm.
-  if (Img.Arch != Arch::AArch64 || InsnId != AARCH64_INS_RET ||
-      !Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsCond)
+  if (Img.Arch != Arch::AArch64 || InsnId != AARCH64_INS_RET || !Rec.IsBranch ||
+      !Rec.IsIndirect || Rec.IsCall || Rec.IsCond)
     return false;
 
   for (LowOp &Op : Rec.Ops) {

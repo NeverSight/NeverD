@@ -36,9 +36,8 @@ void visitAbsoluteRelocationSources(const BinaryImage &Img, Visitor Visit) {
   if (PtrSz != 0)
     for (va_t Slot : Img.CodePtrRelocSlots)
       if (const uint8_t *P = Img.readVA(Slot, PtrSz))
-        Visit(normalizeCodeAddress(
-                  static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch,
-                  Img.Mode),
+        Visit(normalizeCodeAddress(static_cast<va_t>(readPtr(P, Img.is64Bit())),
+                                   Img.Arch, Img.Mode),
               Slot);
 }
 
@@ -61,16 +60,16 @@ bool detail::AbsoluteRelocationRootIndex::collectSources(
     return false;
   if (Begin >= End)
     return true;
-  const auto First = std::upper_bound(
-      Sources.begin(), Sources.end(), Begin,
-      [](va_t Address, const std::pair<va_t, va_t> &Source) {
-        return Address < Source.first;
-      });
-  const auto Last = std::lower_bound(
-      First, Sources.end(), End,
-      [](const std::pair<va_t, va_t> &Source, va_t Address) {
-        return Source.first < Address;
-      });
+  const auto First =
+      std::upper_bound(Sources.begin(), Sources.end(), Begin,
+                       [](va_t Address, const std::pair<va_t, va_t> &Source) {
+                         return Address < Source.first;
+                       });
+  const auto Last =
+      std::lower_bound(First, Sources.end(), End,
+                       [](const std::pair<va_t, va_t> &Source, va_t Address) {
+                         return Source.first < Address;
+                       });
   for (auto It = First; It != Last; ++It)
     RootSources[It->first].insert(It->second);
   return true;
@@ -159,9 +158,9 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   std::set<va_t> RelocationCandidates;
   std::map<va_t, std::set<va_t>> RelocationSources;
   if (!AbsoluteRelocationRoots ||
-      !AbsoluteRelocationRoots->collectSources(
-          Img, CurrentFuncRange->first, CurrentFuncRange->second,
-          RelocationSources))
+      !AbsoluteRelocationRoots->collectSources(Img, CurrentFuncRange->first,
+                                               CurrentFuncRange->second,
+                                               RelocationSources))
     visitAbsoluteRelocationSources(Img, [&](va_t Target, va_t Slot) {
       if (Target > CurrentFuncRange->first && Target < CurrentFuncRange->second)
         RelocationSources[Target].insert(Slot);
