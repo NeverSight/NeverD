@@ -153,11 +153,12 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     }
 
     std::map<va_t, std::string> NativeDependencies;
+    const ObjCBlockSourceContext BlockSource(S->Img);
     ObjCBlockSourcePlan BlockPlan;
     for (unsigned Depth = 0; Depth < 16; ++Depth) {
       const bool NativeChanged = inferObjCNativeDependencies(
           S->Img, Result, Options, NativeDependencies);
-      BlockPlan = discoverObjCBlockSources(S->Img, Result);
+      BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
       if (!NativeChanged && !BlocksChanged)
@@ -173,7 +174,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
     }
 
     // Stack expression identities belong to the final pipeline result.
-    BlockPlan = discoverObjCBlockSources(S->Img, Result);
+    BlockPlan = discoverObjCBlockSources(BlockSource, Result);
 
     CEmitterOptions COptions;
     COptions.TheArch = S->Img.Arch;
@@ -208,7 +209,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
       if (!Func->SourceTypeHint)
         continue;
       auto BlockBinding =
-          bindObjCBlockSourceReferences(*Func, S->Img, BlockPlan, Functions);
+          bindObjCBlockSourceReferences(*Func, BlockSource, BlockPlan, Functions);
       auto Binding = bindObjCSourceReferences(BlockBinding.Function, S->Img);
       Binding.Dependencies.insert(BlockBinding.Dependencies.begin(),
                                   BlockBinding.Dependencies.end());
@@ -222,7 +223,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions) ||
-                     objcBlockSourceCallBound(Expression, S->Img, BlockPlan,
+                     objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
                                               Functions);
             });
       }
@@ -275,7 +276,7 @@ const char *neverd_objc_methods_json(neverd_session_t Sess,
             It == Audits.end() ? nullptr : It->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions) ||
-                     objcBlockSourceCallBound(Expression, S->Img, BlockPlan,
+                     objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
                                               Functions);
             });
         if (Reason.empty()) {

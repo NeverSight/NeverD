@@ -38,6 +38,17 @@ struct ObjCBlockSourceBindingResult {
   std::set<va_t> Dependencies, Descriptors, Literals;
 };
 
+/// Import evidence belongs to one export of an unchanged loaded image. Share
+/// it across functions and pipeline rounds, but keep expression and frame
+/// proofs local to each result. Construct a new context after image changes.
+struct ObjCBlockSourceContext {
+  const BinaryImage &Image;
+  const ImportStorageSlotCollection Imports;
+
+  explicit ObjCBlockSourceContext(const BinaryImage &I)
+      : Image(I), Imports(I.collectImportStorageSlots()) {}
+};
+
 namespace objc_block_source_detail {
 using Identity = objc_projection_detail::LocalIdentity;
 using CallKind = SourceCallTypeHint::Kind;
@@ -98,7 +109,7 @@ class Values {
   const BinaryImage &Image;
   const HighFunc &Function;
   std::optional<size_t> ContextParameter;
-  ImportStorageSlotCollection Imports;
+  const ImportStorageSlotCollection &Imports;
   size_t EvaluationBudget = 1000000;
   std::set<int64_t> FrameIdentityBytes;
 
@@ -107,10 +118,12 @@ public:
   std::map<std::pair<int64_t, unsigned>, Value> FrameValues;
   std::function<Value(const HighExpr &, const std::vector<Value> &)> Call;
   std::function<Value(const Value &, unsigned)> ContextRead;
-  Values(const BinaryImage &I, const HighFunc &F,
+  Values(const ObjCBlockSourceContext &Source, const HighFunc &F,
          std::optional<size_t> Context = std::nullopt)
-      : Image(I), Function(F), ContextParameter(Context),
-        Imports(I.collectImportStorageSlots()) {}
+      : Image(Source.Image), Function(F), ContextParameter(Context),
+        Imports(Source.Imports) {}
+  Values(ObjCBlockSourceContext &&, const HighFunc &,
+         std::optional<size_t> = std::nullopt) = delete;
   Value eval(const ExprPtr &E, unsigned Depth = 0) {
     if (!E || Depth > 128 || !E->Type || !EvaluationBudget--)
       throw Invalid("block source has an incomplete or excessive expression");
@@ -251,7 +264,7 @@ public:
 /// Prove that a context pointer is neither returned nor exposed to memory or
 /// unknown callees. A descriptor-backed invoke may read only known capture
 /// bytes. Forwarding consumers may read only the invoke pointer at byte 16.
-inline bool noEscape(const BinaryImage &Image,
+inline bool noEscape(const ObjCBlockSourceContext &Source,
                      const std::map<va_t, const HighFunc *> &Functions,
                      va_t Entry, size_t Parameter,
                      const std::set<uint64_t> *Initialized,
@@ -269,7 +282,7 @@ inline bool noEscape(const BinaryImage &Image,
     if (Found == Functions.end() || Parameter >= Found->second->Params.size())
       throw Invalid("block consumer has no recovered parameter binding");
     const auto &F = *Found->second;
-    Values State(Image, F, Parameter);
+    Values State(Source, F, Parameter);
     State.ContextRead = [&](const Value &Address, unsigned Bytes) -> Value {
       if (!Initialized && Address.Offset == 16 && Bytes == 8)
         return {Value::Invoke};
@@ -302,7 +315,7 @@ inline bool noEscape(const BinaryImage &Image,
           continue;
         if (A.Offset || !B || B->CallKind != CallKind::Native ||
             E.IsIndirectCall ||
-            !noEscape(Image, Functions, B->TargetAddress, I, nullptr, Active,
+            !noEscape(Source, Functions, B->TargetAddress, I, nullptr, Active,
                       Reason))
           throw Invalid(
               "block address flows to an unproven synchronous consumer");
@@ -377,9 +390,10 @@ inline bool publish(ObjCBlockSourcePlan &Plan,
 }
 
 inline std::vector<ObjCStackBlockSource>
-stackBlocks(const BinaryImage &Image, const HighFunc &Function,
+stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
             const std::map<va_t, const HighFunc *> &Functions,
             std::string &Reason) {
+  const auto &Image = Source.Image;
   struct Byte {
     Value V;
     unsigned Index = 0, Width = 0;
@@ -388,7 +402,7 @@ stackBlocks(const BinaryImage &Image, const HighFunc &Function,
   std::map<int64_t, ObjCStackBlockSource> Blocks;
   bool SawIsa = false;
   try {
-    Values State(Image, Function);
+    Values State(Source, Function);
     auto Word = [&](int64_t Address) -> Value {
       auto Begin = Memory.find(Address);
       if (Begin == Memory.end() || Begin->second.Index ||
@@ -473,7 +487,7 @@ stackBlocks(const BinaryImage &Image, const HighFunc &Function,
             Binding && Binding->CallKind == CallKind::BlockInvoke && I == 0;
         if (!Direct && (!Binding || Binding->CallKind != CallKind::Native ||
                         E.IsIndirectCall ||
-                        !noEscape(Image, Functions, Binding->TargetAddress, I,
+                        !noEscape(Source, Functions, Binding->TargetAddress, I,
                                   nullptr, Active, Error)))
           throw Invalid(
               "stack block flows to an unproven synchronous consumer: " +
@@ -550,9 +564,10 @@ stackBlocks(const BinaryImage &Image, const HighFunc &Function,
 } // namespace objc_block_source_detail
 
 inline ObjCBlockSourcePlan
-discoverObjCBlockSources(const BinaryImage &Image,
+discoverObjCBlockSources(const ObjCBlockSourceContext &Source,
                          const PipelineResult &Result) {
   using namespace objc_block_source_detail;
+  const auto &Image = Source.Image;
   ObjCBlockSourcePlan Plan;
   if (Result.SourceImage != &Image)
     throw std::invalid_argument(
@@ -574,7 +589,7 @@ discoverObjCBlockSources(const BinaryImage &Image,
     Functions.emplace(Function.Entry, &Function);
   for (const auto &Function : Result.HighFuncs) {
     std::string Error;
-    auto Blocks = stackBlocks(Image, Function, Functions, Error);
+    auto Blocks = stackBlocks(Source, Function, Functions, Error);
     if (!Error.empty())
       Plan.Rejections[Function.Entry] = std::move(Error);
     for (auto &Block : Blocks)
@@ -582,6 +597,12 @@ discoverObjCBlockSources(const BinaryImage &Image,
         Plan.StackBlocks[Function.Entry].push_back(std::move(Block));
   }
   return Plan;
+}
+
+inline ObjCBlockSourcePlan
+discoverObjCBlockSources(const BinaryImage &Image,
+                         const PipelineResult &Result) {
+  return discoverObjCBlockSources(ObjCBlockSourceContext(Image), Result);
 }
 
 inline size_t applyObjCBlockInvokeHints(const ObjCBlockSourcePlan &Plan,
@@ -615,10 +636,11 @@ inline std::string objcBlockHelperName(bool Literal, va_t Address) {
 /// Bind only references whose literal construction or loaded-image identity
 /// has already been established. Preserve every raw frame/capture write.
 inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
-    const HighFunc &Function, const BinaryImage &Image,
+    const HighFunc &Function, const ObjCBlockSourceContext &Source,
     const ObjCBlockSourcePlan &Plan,
     const std::map<va_t, const HighFunc *> &Functions) {
   using namespace objc_block_source_detail;
+  const auto &Image = Source.Image;
   ObjCBlockSourceBindingResult Result{Function, {}, {}, {}, {}};
   try {
     if (auto Rejected = Plan.Rejections.find(Function.Entry);
@@ -640,7 +662,7 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
             "block invoke has no complete descriptor-bound native function");
       std::string Reason;
       std::set<std::pair<va_t, size_t>> Active;
-      if (!noEscape(Image, Functions, Entry, 0, &Initialized, Active, Reason))
+      if (!noEscape(Source, Functions, Entry, 0, &Initialized, Active, Reason))
         throw Invalid("block invoke capture proof failed: " + Reason);
       Result.Dependencies.insert(Entry);
     };
@@ -752,11 +774,21 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
   return Result;
 }
 
+inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
+    const HighFunc &Function, const BinaryImage &Image,
+    const ObjCBlockSourcePlan &Plan,
+    const std::map<va_t, const HighFunc *> &Functions) {
+  return bindObjCBlockSourceReferences(
+      Function, ObjCBlockSourceContext(Image), Plan, Functions);
+}
+
 inline bool
-objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
+objcBlockSourceCallBound(const HighExpr &Expression,
+                         const ObjCBlockSourceContext &Source,
                          const ObjCBlockSourcePlan &Plan,
                          const std::map<va_t, const HighFunc *> &Functions) {
   using namespace objc_block_source_detail;
+  const auto &Image = Source.Image;
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default)
@@ -786,7 +818,7 @@ objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                                             Invoke->second);
   }
   case CallKind::RuntimeBlockIsa: {
-    auto Imports = Image.collectImportStorageSlots();
+    const auto &Imports = Source.Imports;
     auto Slot = Imports.Slots.find(Binding.TargetAddress);
     return Slot != Imports.Slots.end() && !Slot->second.Addend &&
            !Imports.Conflicts.count(Binding.TargetAddress) &&
@@ -801,6 +833,14 @@ objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   default:
     return false;
   }
+}
+
+inline bool
+objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
+                         const ObjCBlockSourcePlan &Plan,
+                         const std::map<va_t, const HighFunc *> &Functions) {
+  return objcBlockSourceCallBound(Expression, ObjCBlockSourceContext(Image),
+                                  Plan, Functions);
 }
 
 /// All data definitions are function-local, while the three generated function

@@ -319,7 +319,8 @@ TEST(ObjCBlockSources, SharedExpressionDAGCannotExhaustTheProofEvaluator) {
   auto Value = HighExpr::makeConst(1, 8);
   for (unsigned I = 0; I < 30; ++I)
     Value = HighExpr::makeBinop(NdOp::INT_ADD, Value, Value);
-  objc_block_source_detail::Values State(F.Image, F.caller());
+  const ObjCBlockSourceContext Source(F.Image);
+  objc_block_source_detail::Values State(Source, F.caller());
   EXPECT_THROW(State.eval(Value), objc_block_source_detail::Invalid);
 }
 TEST(ObjCBlockSources, PartialSpillReadsCannotEraseContextAddressProvenance) {
@@ -350,4 +351,84 @@ TEST(ObjCBlockSources, CompleteScalarOverwriteClearsOnlyReplacedIdentityBytes) {
       ret(HighExpr::makeLoad(frame(F.Image, -4), NdType::makeInt(4)))};
   auto Plan = discoverObjCBlockSources(F.Image, F.Result);
   EXPECT_EQ(Plan.StackBlocks[F.Caller].size(), 1U) << Plan.Rejections[F.Caller];
+}
+
+TEST(ObjCBlockSources, NewExportObservesChangedImportIdentityAndConflicts) {
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    SourceFixture F(true);
+    ObjCBlockSourcePlan Plan;
+    ExprPtr Isa;
+    {
+      const ObjCBlockSourceContext Source(F.Image);
+      Plan = discoverObjCBlockSources(Source, F.Result);
+      ASSERT_EQ(Plan.StackBlocks[F.Caller].size(), 1U);
+      auto Bound = bindObjCBlockSourceReferences(F.caller(), Source, Plan,
+                                                F.functions());
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      Isa = Bound.Function.Body[0].StoreVal;
+      ASSERT_TRUE(objcBlockSourceCallBound(*Isa, Source, Plan, F.functions()));
+    }
+    if (Mutation == 0)
+      F.Image.ImportPtrSlots[F.StackIsa] = "__NSConcreteGlobalBlock";
+    if (Mutation == 1)
+      F.Image.ImportStorageSlots[F.StackIsa] = {
+          "__NSConcreteGlobalBlock", 0, ImportStorageEvidence::LoaderBind};
+    if (Mutation == 2)
+      F.Image.DyldBindSlots[F.StackIsa] = {"__NSConcreteStackBlock", 8};
+    if (Mutation == 3)
+      F.Image.ConflictingImportStorageSlots.insert(F.StackIsa);
+    const ObjCBlockSourceContext Changed(F.Image);
+    EXPECT_TRUE(discoverObjCBlockSources(Changed, F.Result).StackBlocks.empty());
+    EXPECT_FALSE(objcBlockSourceCallBound(*Isa, Changed, Plan, F.functions()));
+    EXPECT_TRUE(discoverObjCBlockSources(F.Image, F.Result).StackBlocks.empty());
+    EXPECT_FALSE(objcBlockSourceCallBound(*Isa, F.Image, Plan, F.functions()));
+  }
+}
+
+TEST(ObjCBlockSources, SharedImportsDoNotReusePipelineFunctionProofs) {
+  SourceFixture F(true);
+  const ObjCBlockSourceContext Source(F.Image);
+  auto Plan = discoverObjCBlockSources(Source, F.Result);
+  ASSERT_EQ(Plan.StackBlocks[F.Caller].size(), 1U);
+  ASSERT_TRUE(bindObjCBlockSourceReferences(F.caller(), Source, Plan,
+                                           F.functions())
+                  .Limitation.empty());
+
+  PipelineResult Next;
+  Next.SourceImage = &F.Image;
+  Next.HighFuncs = F.Result.HighFuncs;
+  auto &Consumer = Next.HighFuncs[1];
+  Consumer.Body = {ret(parameter(0, Consumer.Params[0].Type))};
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &Function : Next.HighFuncs)
+    Functions.emplace(Function.Entry, &Function);
+  EXPECT_TRUE(discoverObjCBlockSources(Source, Next).StackBlocks.empty());
+
+  Consumer.Body = F.Result.HighFuncs[1].Body;
+  auto &Invoke = Next.HighFuncs[0];
+  Invoke.Body = {ret(parameter(0, Invoke.Params[0].Type))};
+  auto NextPlan = discoverObjCBlockSources(Source, Next);
+  ASSERT_EQ(NextPlan.StackBlocks[F.Caller].size(), 1U);
+  EXPECT_FALSE(bindObjCBlockSourceReferences(Next.HighFuncs[2], Source, NextPlan,
+                                            Functions)
+                   .Limitation.empty());
+  EXPECT_EQ(discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller]
+                .size(),
+            1U);
+  EXPECT_TRUE(bindObjCBlockSourceReferences(F.caller(), Source, Plan,
+                                           F.functions())
+                  .Limitation.empty());
+}
+
+TEST(ObjCBlockSources, ImportContextRejectsAnotherPipelineImage) {
+  SourceFixture F(true), Other(true);
+  const ObjCBlockSourceContext Source(F.Image);
+  EXPECT_THROW(discoverObjCBlockSources(Source, Other.Result),
+               std::invalid_argument);
+  EXPECT_THROW(discoverObjCBlockSources(F.Image, Other.Result),
+               std::invalid_argument);
+  EXPECT_EQ(discoverObjCBlockSources(Source, F.Result).StackBlocks[F.Caller]
+                .size(),
+            1U);
 }
