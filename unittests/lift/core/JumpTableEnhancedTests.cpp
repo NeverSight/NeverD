@@ -1057,6 +1057,124 @@ TEST_F(JTE_X86_32, DirectGOTOFFGroupsRetainDistinctTableBases) {
   }
 }
 
+TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
+  auto ImageOrErr = neverd::loadBinary(
+      (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_mask_group");
+  const auto *First = Image.findSymbol("jt_i386_mask_group_first_table");
+  const auto *Second = Image.findSymbol("jt_i386_mask_group_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_EQ(Second->Addr, First->Addr + 16);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 3u);
+  EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
+                .PublishedMemberCount,
+            3u);
+  unsigned FirstConsumers = 0;
+  unsigned SecondConsumers = 0;
+  for (const auto &Table : Low.JumpTables) {
+    if (Table.BaseAddr == First->Addr)
+      ++FirstConsumers;
+    else {
+      EXPECT_EQ(Table.BaseAddr, Second->Addr);
+      ++SecondConsumers;
+    }
+    ASSERT_EQ(Table.Targets.size(), 4u);
+    EXPECT_TRUE(Table.HasDispatchSlotMap);
+    EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 1, 2, 3}));
+    for (unsigned Slot = 0; Slot != 4; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(Table.BaseAddr + 4 * Slot, 4);
+      ASSERT_NE(Bytes, nullptr);
+      const uint32_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                              uint32_t{Bytes[2]} << 16 |
+                              uint32_t{Bytes[3]} << 24;
+      EXPECT_EQ(Table.Targets[Slot], Target);
+    }
+  }
+  EXPECT_EQ(FirstConsumers, 2u);
+  EXPECT_EQ(SecondConsumers, 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, DenseMaskGroupRejectsUnprovedSelectorPaths) {
+  for (const char *Name : {"jt_i386_mask_bypass", "jt_i386_mask_overwrite",
+                           "jt_i386_mask_partial_write", "jt_i386_mask_sparse",
+                           "jt_i386_mask_decrement",
+                           "jt_i386_mask_partial_mask"}) {
+    SCOPED_TRACE(Name);
+    auto ImageOrErr = neverd::loadBinary(
+        (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol(Name);
+    const auto *Branch =
+        Image.findSymbol(std::string(Name) + "_first_branch");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Branch, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
+                  .PublishedMemberCount,
+              0u);
+    for (const auto &Table : Low.JumpTables)
+      EXPECT_NE(Table.InsnAddr, Branch->Addr);
+  }
+}
+
+TEST_F(JTE_X86_32, DenseMaskGroupRetainsIndependentRootsAndStorage) {
+  for (const char *Name : {"jt_i386_mask_group", "jt_i386_mask_extra_slot",
+                           "jt_i386_mask_independent_reader"}) {
+    SCOPED_TRACE(Name);
+    auto ImageOrErr = neverd::loadBinary(
+        (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol(Name);
+    const auto *First = Image.findSymbol(std::string(Name) + "_first_table");
+    const auto *Load = Image.findSymbol(std::string(Name) + "_first_load");
+    const auto *Branch = Image.findSymbol(std::string(Name) + "_first_branch");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(First, nullptr);
+    ASSERT_NE(Load, nullptr);
+    ASSERT_NE(Branch, nullptr);
+    const bool IndependentEntry = std::string_view(Name) == "jt_i386_mask_group";
+    const bool IndependentReader =
+        std::string_view(Name) == "jt_i386_mask_independent_reader";
+    const std::set<neverd::va_t> IndependentRoots{Load->Addr};
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    if (IndependentEntry)
+      Builder.setCrossFunctionContinuationRoots(&IndependentRoots);
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
+                  .PublishedMemberCount,
+              0u);
+    for (const auto &Table : Low.JumpTables) {
+      if (IndependentEntry)
+        EXPECT_NE(Table.InsnAddr, Branch->Addr);
+      if (IndependentReader)
+        EXPECT_FALSE(Table.suppressesRelocationSlot(First->Addr));
+    }
+  }
+}
+
 TEST_F(JTE_X86_32, GOTOFFModuloPrefixReplaysEveryDispatchArm) {
   auto ImageOrErr = neverd::loadBinary(
       (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());

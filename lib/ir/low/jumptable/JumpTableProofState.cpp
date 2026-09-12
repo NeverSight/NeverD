@@ -431,9 +431,9 @@ std::optional<bool> CFGBuilder::compareJumpTableInfo(const JumpTableInfo &Left,
   auto SameJumpTableInfoNoShortCircuit =
       [&](const JumpTableInfo &Left,
           const JumpTableInfo &Right) -> std::optional<bool> {
-    // Thirty-nine direct scalar fields plus optional-storage presence.  Each
+    // Forty direct scalar fields plus optional-storage presence.  Each
     // dynamic container pays its size and maximum element traversal below.
-    if (!ConsumeProposalStageEvidence(40))
+    if (!ConsumeProposalStageEvidence(41))
       return std::nullopt;
     bool Same = true;
     Same &= Left.BaseAddr == Right.BaseAddr;
@@ -447,6 +447,8 @@ std::optional<bool> CFGBuilder::compareJumpTableInfo(const JumpTableInfo &Left,
     Same &= Left.IndexDomainAuthenticated == Right.IndexDomainAuthenticated;
     Same &= Left.AuthenticatedGuardBound == Right.AuthenticatedGuardBound;
     Same &= Left.AuthenticatedModuloBound == Right.AuthenticatedModuloBound;
+    Same &= Left.AuthenticatedDenseMaskBound ==
+            Right.AuthenticatedDenseMaskBound;
     Same &= Left.ExactPhysicalStorageRange.has_value() ==
             Right.ExactPhysicalStorageRange.has_value();
     Same &= Left.IsRelative == Right.IsRelative;

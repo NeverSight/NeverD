@@ -123,4 +123,116 @@ prefix_modulo jt_i386_prefix_modulo, 0xaaaaaaab, 0
 prefix_modulo jt_i386_prefix_bad_magic, 0xaaaaaaaa, 0
 prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
 
+// A peeled dispatch and a loop dispatch share one table, followed by a
+// second table. There are no selector comparison guards. The first selector
+// can be only 1 or 3, while the mask still proves the universal [0,4) envelope.
+.macro dense_mask_group name, mode
+.text
+.p2align 2
+.globl \name
+.type \name, @function
+\name:
+  pushl %ebx
+  pushl %esi
+  movl 12(%esp), %eax
+  call .L\name\()_pc
+.L\name\()_pc:
+  popl %ecx
+  .byte 0x81, 0xc1
+.L\name\()_gotpc:
+  .long .L\name\()_gotpc - .L\name\()_pc
+  .reloc .L\name\()_gotpc, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+  movl $80, %esi
+  orl $1, %eax
+.if \mode == 1
+  testl $8, %eax
+  jnz .L\name\()_first_load
+.endif
+.if \mode == 4
+  andl $5, %eax
+.elseif \mode == 6
+  andb $3, %al
+.else
+  andl $3, %eax
+.endif
+.if \mode == 2
+  movl $4, %eax
+.elseif \mode == 3
+  movb $4, %al
+.elseif \mode == 5
+  decl %eax
+.endif
+.globl \name\()_first_load
+\name\()_first_load:
+.L\name\()_first_load:
+  movl \name\()_first_table@GOTOFF(%ecx,%eax,4), %ebx
+  addl %ecx, %ebx
+.globl \name\()_first_branch
+\name\()_first_branch:
+  jmp *%ebx
+.L\name\()_repeat:
+  decl %esi
+  jz .L\name\()_done
+  movl %eax, %edx
+  andl $3, %edx
+  movl \name\()_first_table@GOTOFF(%ecx,%edx,4), %ebx
+  addl %ecx, %ebx
+  jmp *%ebx
+.irp n,0,1,2,3
+.L\name\()_first\n:
+  addl $\n+1, %eax
+  jmp .L\name\()_second
+.endr
+.L\name\()_second:
+  movl %eax, %edx
+  shrl $2, %edx
+  andl $3, %edx
+  movl \name\()_second_table@GOTOFF(%ecx,%edx,4), %ebx
+  addl %ecx, %ebx
+  jmp *%ebx
+.irp n,0,1,2
+.L\name\()_last\n:
+  addl $\n+5, %eax
+  jmp .L\name\()_repeat
+.endr
+.L\name\()_last3:
+.if \mode == 8
+  movl \name\()_first_table@GOTOFF(%ecx), %eax
+  jmp .L\name\()_done
+.else
+  xorl $0x55, %eax
+  jmp .L\name\()_repeat
+.endif
+.L\name\()_done:
+  popl %esi
+  popl %ebx
+  ret
+.size \name, .-\name
+.section .rodata.\name,"a",@progbits
+.p2align 2
+.globl \name\()_first_table
+\name\()_first_table:
+.irp n,0,1,2,3
+  .long .L\name\()_first\n@GOTOFF
+.endr
+.globl \name\()_second_table
+\name\()_second_table:
+.irp n,0,1,2,3
+  .long .L\name\()_last\n@GOTOFF
+.endr
+.if \mode == 7
+  .long .L\name\()_first0@GOTOFF
+.endif
+.endm
+
+dense_mask_group jt_i386_mask_group, 0
+dense_mask_group jt_i386_mask_bypass, 1
+dense_mask_group jt_i386_mask_overwrite, 2
+dense_mask_group jt_i386_mask_partial_write, 3
+dense_mask_group jt_i386_mask_sparse, 4
+dense_mask_group jt_i386_mask_decrement, 5
+dense_mask_group jt_i386_mask_partial_mask, 6
+dense_mask_group jt_i386_mask_extra_slot, 7
+dense_mask_group jt_i386_mask_independent_reader, 8
+
 .section .note.GNU-stack,"",@progbits

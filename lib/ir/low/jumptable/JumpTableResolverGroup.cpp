@@ -5,13 +5,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 namespace {
@@ -57,6 +60,90 @@ size_t lookupWork(size_t Count) {
 }
 
 } // namespace
+
+uint32_t CFGBuilder::proveGroupDenseMaskBound(
+    const InsnRecord &Rec, const JumpTableInfo &Info,
+    size_t *AggregateEvidenceBudget, bool &Incomplete) {
+  if (!AggregateEvidenceBudget) {
+    Incomplete = true;
+    return 0;
+  }
+  GroupEvidence Budget(*AggregateEvidenceBudget, Incomplete);
+  if (!GuardedGroupProofContext || Info.IndexValueDefinedAtUse ||
+      Info.IndexValueAtUse.Size != 4 || Info.IndexUseAddr == InvalidVA ||
+      Info.IndexUseSeq < 0 || Info.PreScaledIndex || Info.Stride != 1 ||
+      Info.NormBase != 0 || Info.NormShift != 0)
+    return 0;
+
+  // The mask itself proves an unsigned envelope independently of every CFG
+  // hypothesis. Never derive this bound from the table's physical capacity,
+  // enumerate feasible coordinates, or accept a merely dependent selector.
+  std::map<uint32_t, std::vector<JumpTableValueOccurrence>> Producers;
+  if (!Budget.products({{Insns.size(), 1}}))
+    return 0;
+  for (const auto &[Addr, Insn] : Insns) {
+    if (!Budget.products({{Insn.Ops.size(), 16}}))
+      return 0;
+    if (Insn.IsInstructionGuard)
+      continue;
+    for (const LowOp &Op : Insn.Ops) {
+      if (Op.Opcode != NdOp::INT_AND || Op.NumInputs != 2 ||
+          Op.Output.Size != 4 ||
+          (!Op.Output.isReg() && !Op.Output.isTemp()) || Op.Addr != Addr ||
+          Op.Seq < 0 || Op.Inputs[0].Size != 4 || Op.Inputs[1].Size != 4 ||
+          Op.Inputs[0].isConst() == Op.Inputs[1].isConst())
+        continue;
+      const NdVar &Mask =
+          Op.Inputs[Op.Inputs[0].isConst() ? 0 : 1];
+      if ((Mask.Provenance != ConstantAddressProvenance::Unknown &&
+           Mask.Provenance != ConstantAddressProvenance::Scalar) ||
+          Mask.Offset == 0 ||
+          Mask.Offset >= limits::kMaxJumpTableEntries ||
+          (Mask.Offset & (Mask.Offset + 1)) != 0)
+        continue;
+      const auto Bound = static_cast<uint32_t>(Mask.Offset + 1);
+      // Bound groups, exact occurrence payloads, vector growth/copies, and
+      // eventual destruction all debit the caller's unchanged aggregate.
+      if (!Budget.take(32 + lookupWork(Producers.size())))
+        return 0;
+      Producers[Bound].push_back(
+          {Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true});
+    }
+  }
+  if (!Budget.products({{Producers.size(), 1}}))
+    return 0;
+  for (const auto &[Bound, Alternatives] : Producers) {
+    if (!Budget.products({{1, 16}, {Alternatives.size(), 32}}))
+      return 0;
+    JumpTableValueQuery Query;
+    Query.Candidate = Info.IndexValueAtUse;
+    Query.UseAddr = Info.IndexUseAddr;
+    Query.UseSeq = Info.IndexUseSeq;
+    Query.Alternatives = Alternatives;
+    Query.Relation = JumpTableValueRelation::MustEqual;
+    Query.UseDefinedAlternativesAsOccurrenceRoots = true;
+    // Equal width is intentional: a partial overwrite or a wider selector
+    // cannot borrow an AND certificate for another architectural lane.
+    bool Complete = false;
+    std::vector<bool> QueryComplete;
+    const auto Matches = tableValuesMatchAtUses(
+        {Query}, &Complete, &QueryComplete, Rec.Addr,
+        /*CandidateTargetsOverride=*/nullptr, AggregateEvidenceBudget,
+        limits::kMaxJumpTableMaskMatchEvidenceWork,
+        /*CandidateBranchesSharingTargets=*/nullptr,
+        /*QueryUnsignedFeasibleMasks=*/nullptr,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+        &GuardedGroupProofContext->Edges);
+    if (!Complete || Matches.size() != 1 || QueryComplete.size() != 1 ||
+        !QueryComplete.front()) {
+      Incomplete = true;
+      return 0;
+    }
+    if (Matches.front())
+      return Bound;
+  }
+  return 0;
+}
 
 bool CFGBuilder::prepayJumpTableInfoCopy(const JumpTableInfo &Info,
                                          size_t Copies) {
@@ -540,10 +627,13 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       }
       const JumpTableInfo &Info = InfoIt->second;
       const auto Capacity = Capacities.find(Info.BaseAddr);
+      const bool DenseDomain =
+          (Info.AuthenticatedGuardBound == Result.size() &&
+           Info.HasControllingGuard) ||
+          Info.AuthenticatedDenseMaskBound == Result.size();
       bool Passed =
           Capacity != Capacities.end() && Capacity->second == Result.size() &&
-          Info.AuthenticatedGuardBound == Result.size() &&
-          Info.IndexDomainAuthenticated && Info.HasControllingGuard &&
+          DenseDomain && Info.IndexDomainAuthenticated &&
           !Info.IncompleteGuardDomain && !Info.SemanticGuardDomainAmbiguous &&
           Info.RelocAbsolute && !Info.IsRelative && !Info.MutatedUnsafe &&
           Info.EntrySize == 4 &&

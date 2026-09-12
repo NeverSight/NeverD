@@ -1302,6 +1302,11 @@ private:
     /// these witnesses.
     uint32_t AuthenticatedGuardBound = 0;
     uint32_t AuthenticatedModuloBound = 0;
+    /// Universal [0,N) envelope from an exact equal-width AND producer.
+    /// Joint proofs may use this without asserting that every coordinate is
+    /// reachable. It is independent of physical capacity and is replayed at
+    /// the exact selector use after every proof-root refinement.
+    uint32_t AuthenticatedDenseMaskBound = 0;
     std::vector<uint32_t> AuthenticatedMaskCoordinates;
     std::vector<JumpTableMaskKnownOneWitness>
         AuthenticatedMaskKnownOneWitnesses;
@@ -1565,6 +1570,10 @@ private:
   bool prepayJumpTableInfoCopy(const JumpTableInfo &Info, size_t Copies);
   bool copyGuardedGroupProofSnapshot(
       CFGBuilder &Scratch, const GuardedJumpTableGroupProofContext &Context);
+  uint32_t proveGroupDenseMaskBound(const InsnRecord &Rec,
+                                   const JumpTableInfo &Info,
+                                   size_t *AggregateEvidenceBudget,
+                                   bool &Incomplete);
   bool recoverGuardedJumpTableGroup(const BinaryImage &Img, LowFunc &Func,
                                     llvm::ArrayRef<va_t> Candidates,
                                     bool &MadeProgress,

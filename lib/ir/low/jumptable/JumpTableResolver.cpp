@@ -2892,12 +2892,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (!GroupHasSingleGuardedLoadAndSelector(Info))
       return {};
     // A group hypothesis can support universal reaching-value proofs, but
-    // cannot seed an existential finite domain. Prove the complete unsigned
-    // prefix from its controlling guard, with no old capacity to clamp it.
+    // cannot seed an existential finite domain. Derive an unsigned envelope
+    // from a controlling guard or an exact dense AND producer, independently
+    // of storage capacity and without asserting that every slot is reachable.
     Info.MaxEntries = 0;
     Info.IndexDomainAuthenticated = false;
     Info.AuthenticatedGuardBound = 0;
     Info.AuthenticatedModuloBound = 0;
+    Info.AuthenticatedDenseMaskBound = 0;
     Info.AuthenticatedMaskCoordinates.clear();
     Info.AuthenticatedMaskKnownOneWitnesses.clear();
     Info.RuntimeCaseLabels.clear();
@@ -2909,11 +2911,22 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         Rec, Info, &CandidateEvidenceBudget,
         /*UseDefinedAlternativesAsRoots=*/false, TargetRoleEdgeOverrides);
     CandidateEvidenceAnalysisIncomplete |= Info.IncompleteGuardDomain;
-    if (!GuardFound || Info.IncompleteGuardDomain ||
-        Info.SemanticGuardDomainAmbiguous || !Info.HasControllingGuard)
+    if (Info.IncompleteGuardDomain || Info.SemanticGuardDomainAmbiguous)
       return {};
+    if (GuardFound && Info.HasControllingGuard) {
+      Info.AuthenticatedGuardBound = Info.MaxEntries;
+    } else {
+      bool Incomplete = false;
+      const uint32_t Bound = proveGroupDenseMaskBound(
+          Rec, Info, &CandidateEvidenceBudget, Incomplete);
+      CandidateEvidenceAnalysisIncomplete |= Incomplete;
+      if (Incomplete || Bound == 0)
+        return {};
+      Info.MaxEntries = Bound;
+      Info.AuthenticatedDenseMaskBound = Bound;
+      GuardFound = true;
+    }
     Info.IndexDomainAuthenticated = true;
-    Info.AuthenticatedGuardBound = Info.MaxEntries;
   }
   // Linked x64 PE RVA switches have no per-entry relocation run: the exact
   // unsigned range guard is their only slot-domain certificate.  Keep this
@@ -4143,6 +4156,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (!GroupHasSingleGuardedLoadAndSelector(Info))
       return false;
     bool Revalidated = false;
+    if (Info.AuthenticatedDenseMaskBound != 0) {
+      bool Incomplete = false;
+      const uint32_t Bound = proveGroupDenseMaskBound(
+          Rec, Info, &CandidateEvidenceBudget, Incomplete);
+      CandidateEvidenceAnalysisIncomplete |= Incomplete;
+      if (Incomplete || Bound != Info.AuthenticatedDenseMaskBound)
+        return false;
+      Revalidated = true;
+    }
     if (Info.AuthenticatedGuardBound != 0) {
       if (!consumeJumpTableInfoTraversal(Info))
         return false;
