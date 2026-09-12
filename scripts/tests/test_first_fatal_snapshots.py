@@ -1,7 +1,10 @@
 """CI regressions for the original 741 KMP failure receipt shapes."""
 
 import io
+import json
+from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -158,7 +161,7 @@ class DiagnosticSupervisorTests(unittest.TestCase):
     def test_outer_allowance_preserves_the_existing_native_timeout(self):
         for native in (120, 600):
             test = {"properties": [{"name": "TIMEOUT", "value": native}]}
-            self.assertEqual(collector.execution_timeout(test), native + 60)
+            self.assertEqual(collector.execution_timeout(test), native + 300)
         with self.assertRaises(ValueError):
             collector.execution_timeout({"properties": []})
 
@@ -184,6 +187,116 @@ class DiagnosticSupervisorTests(unittest.TestCase):
         self.assertTrue(result["timed_out"])
         self.assertIsNone(result["returncode"])
         self.assertTrue(result["cleanup_errors"])
+
+
+class CTestStartupAllowanceTests(unittest.TestCase):
+    def collect(self, *, discovery_seconds=184.324, execution_seconds=180.629,
+                discovered_native_timeout=120):
+        """Run the collector with virtual subprocess time; launch no programs."""
+        gtest = "OptStress105/X64OptStress105RT.Verify/x64o105_kmp"
+        test = {"name": gtest, "config": "Release",
+                "command": ["/build/bin/" + OWNER, "--gtest_filter=" + gtest],
+                "properties": [{"name": "LABELS", "value": [OWNER]},
+                               {"name": "TIMEOUT", "value": 120}]}
+        selected = {**test, "properties": [{"name": "LABELS", "value": [OWNER]},
+                                           {"name": "TIMEOUT", "value": discovered_native_timeout}]}
+        now, calls, terminated = [0.0], [], []
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "capture"
+
+            def launch(command, *, stdout, **kwargs):
+                discovery = "--show-only=json-v1" in command
+                delay = discovery_seconds if discovery else execution_seconds
+                call = {"command": command, "waits": [], "environment": kwargs.get("env")}
+                calls.append(call)
+                process = mock.Mock(returncode=None)
+
+                def wait(*, timeout):
+                    call["waits"].append(timeout)
+                    if process.returncode is not None:
+                        return process.returncode
+                    now[0] += min(delay, timeout)
+                    if delay > timeout:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    if discovery:
+                        stdout.write(json.dumps({"tests": [selected]}).encode("utf-8"))
+                        process.returncode = 0
+                    else:
+                        raw = (f"1: [ RUN      ] {gtest}\n"
+                               f"1: [  FAILED  ] {gtest} (250 ms)\n")
+                        ET.ElementTree(junit(gtest)).write(folder / "results.xml")
+                        (folder / "ctest.log").write_text(raw, encoding="utf-8")
+                        stdout.write(raw.encode("utf-8"))
+                        process.returncode = 8
+                    return process.returncode
+
+                process.wait.side_effect = wait
+                return process
+
+            def terminate(process):
+                terminated.append(process)
+                process.returncode = -9
+                return []
+
+            with mock.patch.object(collector.subprocess, "Popen", side_effect=launch), \
+                    mock.patch.object(collector.time, "monotonic", side_effect=lambda: now[0]), \
+                    mock.patch.object(collector, "terminate_group", side_effect=terminate):
+                result = collector.collect_case(Path(root) / "build", folder, test, gtest, OWNER)
+            self.assertEqual(collector.read_json(folder / "outcome.json"), result)
+            self.assertEqual(test["properties"][-1], {"name": "TIMEOUT", "value": 120})
+            exit_path = folder / "ctest-exit-status.txt"
+            retained_exit = exit_path.read_text() if exit_path.exists() else None
+            return result, calls, len(terminated), retained_exit
+
+    def test_observed_slow_startup_reaches_original_native_failure_audit(self):
+        result, calls, killed, retained_exit = self.collect()
+        self.assertEqual([call["waits"] for call in calls], [[300], [420]])
+        self.assertGreater(result["discovery_supervision"]["elapsed_seconds"], 180)
+        self.assertGreater(result["execution_supervision"]["elapsed_seconds"], 180)
+        self.assertEqual(result["semantic_outcome"], "failed")
+        self.assertEqual(result["execution_audit"]["errors"], [])
+        self.assertEqual(result["ctest_exit"], 8)
+        self.assertEqual(retained_exit, "8\n")
+        self.assertEqual(killed, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call["command"][0] == "ctest" for call in calls))
+        self.assertTrue(all("--timeout" not in call["command"] for call in calls))
+        self.assertEqual(calls[1]["environment"]["NEVERD_CI_FAILURE_SNAPSHOT_FUNCTION"], "x64o105_kmp")
+        # Simulated command results supply no native fixture or graph. The
+        # collector must retain that capture error even after the native audit.
+        self.assertTrue(result["errors"])
+
+    def test_exhausted_discovery_budget_cannot_start_native_execution(self):
+        result, calls, killed, retained_exit = self.collect(discovery_seconds=301)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["waits"], [300, 10])
+        self.assertTrue(result["discovery_supervision"]["timed_out"])
+        self.assertEqual(result["discovery_exit"], -9)
+        self.assertEqual(result["semantic_outcome"], "unavailable")
+        self.assertEqual(result["errors"], ["CTest discovery failed"])
+        self.assertNotIn("execution_supervision", result)
+        self.assertEqual(killed, 1)
+        self.assertIsNone(retained_exit)
+
+    def test_exhausted_execution_budget_retains_original_killed_status(self):
+        result, calls, killed, retained_exit = self.collect(execution_seconds=421)
+        self.assertEqual(calls[1]["waits"], [420, 10])
+        self.assertTrue(result["execution_supervision"]["timed_out"])
+        self.assertEqual(result["semantic_outcome"], "supervisor_timeout")
+        self.assertEqual(result["ctest_exit"], -9)
+        self.assertEqual(retained_exit, "-9\n")
+        self.assertEqual(killed, 1)
+        self.assertTrue(result["errors"])
+        self.assertNotIn("execution_audit", result)
+
+    def test_startup_allowance_does_not_accept_changed_native_timeout(self):
+        result, calls, killed, retained_exit = self.collect(discovered_native_timeout=600)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(killed, 0)
+        self.assertEqual(result["semantic_outcome"], "unavailable")
+        self.assertIn("CTest selection does not exactly match the retained inventory row", result["errors"])
+        self.assertNotIn("execution_supervision", result)
+        self.assertIsNone(retained_exit)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,11 @@ CASES = {
     ),
 }
 
+# Main CI observed about 180 seconds from CTest startup to the first native
+# test on macOS. Allow CTest startup overhead without changing the selected
+# native test's independently enforced TIMEOUT property.
+CTEST_STARTUP_ALLOWANCE_SECONDS = 300
+
 
 def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -273,7 +278,7 @@ def execution_timeout(test: dict) -> float:
         raise ValueError("selected known registration lacks its bounded CTest timeout")
     # CTest retains its native timeout. The outer allowance only covers CTest
     # discovery/startup/reporting/cleanup if its own supervision stalls.
-    return float(timeout) + 60
+    return float(timeout) + CTEST_STARTUP_ALLOWANCE_SECONDS
 
 
 def collect_case(build: Path, folder: Path, test: dict, gtest: str, owner: str) -> dict:
@@ -292,7 +297,8 @@ def collect_case(build: Path, folder: Path, test: dict, gtest: str, owner: str) 
         discovery = command + ["--show-only=json-v1"]
         record["commands"].append(discovery)
         with (folder / "discovery.json").open("xb") as stdout, (folder / "discovery.stderr").open("xb") as stderr:
-            result = run_bounded(discovery, stdout, stderr, timeout=60)
+            result = run_bounded(discovery, stdout, stderr,
+                                 timeout=CTEST_STARTUP_ALLOWANCE_SECONDS)
         record["discovery_supervision"] = result
         record["discovery_exit"] = result["returncode"]
         if result["timed_out"] or result["returncode"] != 0:
