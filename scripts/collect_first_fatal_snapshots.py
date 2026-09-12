@@ -37,10 +37,10 @@ CASES = {
     ),
 }
 
-# Main CI observed about 180 seconds from CTest startup to the first native
-# test on macOS. Allow CTest startup overhead without changing the selected
+# Main CI discovery and inventory audit took about 357 seconds on Windows.
+# Allow CTest startup overhead without changing the selected
 # native test's independently enforced TIMEOUT property.
-CTEST_STARTUP_ALLOWANCE_SECONDS = 300
+CTEST_STARTUP_ALLOWANCE_SECONDS = 600
 
 
 def write_json(path: Path, value: object) -> None:

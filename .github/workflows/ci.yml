@@ -748,9 +748,9 @@ jobs:
 
       - name: Capture the existing first-fatal semantic failures
         id: first_fatal_snapshot
-        # Two bounded discovery/execution pairs need up to 40 minutes, with
+        # Two bounded discovery/execution pairs need up to 60 minutes, with
         # additional room for process cleanup and retained artifact checks.
-        timeout-minutes: 45
+        timeout-minutes: 65
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
         shell: bash
         run: |

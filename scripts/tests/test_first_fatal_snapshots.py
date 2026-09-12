@@ -161,7 +161,7 @@ class DiagnosticSupervisorTests(unittest.TestCase):
     def test_outer_allowance_preserves_the_existing_native_timeout(self):
         for native in (120, 600):
             test = {"properties": [{"name": "TIMEOUT", "value": native}]}
-            self.assertEqual(collector.execution_timeout(test), native + 300)
+            self.assertEqual(collector.execution_timeout(test), native + 600)
         with self.assertRaises(ValueError):
             collector.execution_timeout({"properties": []})
 
@@ -190,7 +190,7 @@ class DiagnosticSupervisorTests(unittest.TestCase):
 
 
 class CTestStartupAllowanceTests(unittest.TestCase):
-    def collect(self, *, discovery_seconds=184.324, execution_seconds=180.629,
+    def collect(self, *, discovery_seconds=356.927, execution_seconds=264.001,
                 discovered_native_timeout=120):
         """Run the collector with virtual subprocess time; launch no programs."""
         gtest = "OptStress105/X64OptStress105RT.Verify/x64o105_kmp"
@@ -250,9 +250,9 @@ class CTestStartupAllowanceTests(unittest.TestCase):
 
     def test_observed_slow_startup_reaches_original_native_failure_audit(self):
         result, calls, killed, retained_exit = self.collect()
-        self.assertEqual([call["waits"] for call in calls], [[300], [420]])
-        self.assertGreater(result["discovery_supervision"]["elapsed_seconds"], 180)
-        self.assertGreater(result["execution_supervision"]["elapsed_seconds"], 180)
+        self.assertEqual([call["waits"] for call in calls], [[600], [720]])
+        self.assertGreater(result["discovery_supervision"]["elapsed_seconds"], 300)
+        self.assertGreater(result["execution_supervision"]["elapsed_seconds"], 260)
         self.assertEqual(result["semantic_outcome"], "failed")
         self.assertEqual(result["execution_audit"]["errors"], [])
         self.assertEqual(result["ctest_exit"], 8)
@@ -267,9 +267,9 @@ class CTestStartupAllowanceTests(unittest.TestCase):
         self.assertTrue(result["errors"])
 
     def test_exhausted_discovery_budget_cannot_start_native_execution(self):
-        result, calls, killed, retained_exit = self.collect(discovery_seconds=301)
+        result, calls, killed, retained_exit = self.collect(discovery_seconds=601)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["waits"], [300, 10])
+        self.assertEqual(calls[0]["waits"], [600, 10])
         self.assertTrue(result["discovery_supervision"]["timed_out"])
         self.assertEqual(result["discovery_exit"], -9)
         self.assertEqual(result["semantic_outcome"], "unavailable")
@@ -279,8 +279,8 @@ class CTestStartupAllowanceTests(unittest.TestCase):
         self.assertIsNone(retained_exit)
 
     def test_exhausted_execution_budget_retains_original_killed_status(self):
-        result, calls, killed, retained_exit = self.collect(execution_seconds=421)
-        self.assertEqual(calls[1]["waits"], [420, 10])
+        result, calls, killed, retained_exit = self.collect(execution_seconds=721)
+        self.assertEqual(calls[1]["waits"], [720, 10])
         self.assertTrue(result["execution_supervision"]["timed_out"])
         self.assertEqual(result["semantic_outcome"], "supervisor_timeout")
         self.assertEqual(result["ctest_exit"], -9)
