@@ -638,13 +638,13 @@ void expectStageRecords(const std::string &Diagnostic, unsigned Invocation,
            : StageIndex + 1 == Stages.size() ? FinalEvent
                                              : "completed") +
           " elapsed_ms=";
-      ASSERT_TRUE(Fields.consume_front(Prefix)) << Line;
+      ASSERT_TRUE(Fields.consume_front(Prefix)) << Line.str();
       ASSERT_FALSE(Fields.empty());
       EXPECT_TRUE(std::all_of(Fields.begin(), Fields.end(), [](char C) {
         return C >= '0' && C <= '9';
-      })) << Line;
+      })) << Line.str();
       uint64_t Elapsed = 0;
-      ASSERT_FALSE(Fields.getAsInteger(10, Elapsed)) << Line;
+      ASSERT_FALSE(Fields.getAsInteger(10, Elapsed)) << Line.str();
       if (Begin)
         EXPECT_EQ(Fields, "0");
       Remaining = LineAndRest.second;
