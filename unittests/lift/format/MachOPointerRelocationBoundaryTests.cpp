@@ -1520,6 +1520,57 @@ MedFunc makeSpilledConstTableLookup(Arch TargetArch) {
   return Func;
 }
 
+MedFunc makeIncomingParameterHomeReload(Arch TargetArch, bool ViaFP = false,
+                                       bool LiveFP = false) {
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  const uint16_t Width = TRI.PointerSize;
+  auto value = [&](MedVar::VarKind Kind, int Id) {
+    MedVar V;
+    V.Kind = Kind;
+    V.TheArch = TargetArch;
+    V.Id = Id;
+    V.Size = Width;
+    V.SSAVer = Kind == MedVar::Temp ? 1 : 0;
+    V.RegOff = kNoParamReg;
+    return V;
+  };
+  MedFunc Func;
+  Func.Name = "incoming_parameter_home";
+  Func.Entry = CallerVA;
+  Func.FrameSize = 16;
+  Func.ReturnType = NdType::makeInt(Width);
+  Func.Params = {value(MedVar::Param, 0), value(MedVar::Param, 1)};
+  Func.TypedParams = {{"input", NdType::makeInt(Width)},
+                      {"condition", NdType::makeInt(Width)}};
+  Func.MutableStackParamHomes = {{0, Width}};
+  MedVar SP = value(MedVar::Reg, 100);
+  SP.RegOff = TRI.StackPointer;
+  MedVar FP = value(MedVar::Reg, 101);
+  FP.RegOff = TRI.FramePointer;
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = CallerVA;
+  Block.EndAddr = CallerVA + 0x10;
+  auto append = [&](NdOp Opcode, MedVar Output,
+                    std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Output;
+    for (const MedVar &Input : Inputs)
+      Op.addInput(Input);
+    Block.Ops.push_back(std::move(Op));
+  };
+  append(NdOp::COPY, SP, {SP});
+  if (ViaFP && !LiveFP)
+    append(NdOp::COPY, FP, {SP});
+  append(NdOp::INT_ADD, value(MedVar::Temp, 1),
+         {ViaFP ? FP : SP, MedVar::makeConst(Width, Width)});
+  append(NdOp::LOAD, value(MedVar::Temp, 2), {value(MedVar::Temp, 1)});
+  append(NdOp::RETURN, {}, {value(MedVar::Temp, 2)});
+  Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
 MedFunc makeConstantGuardedFrameReloadLookup() {
   constexpr Arch TargetArch = Arch::X64;
   const uint16_t PointerSize =
@@ -9887,6 +9938,230 @@ TEST(MachOLLVMDataPointerBoundary,
       EXPECT_FALSE(
           valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
     }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     IncomingParameterHomesMatchEmittedEntryStores) {
+  for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (bool ViaFP : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(TargetArch));
+      SCOPED_TRACE(ViaFP);
+      MedFunc Func = makeIncomingParameterHomeReload(TargetArch, ViaFP);
+      const MedOp &Reload = Func.Blocks.front().Ops[ViaFP ? 3 : 2];
+      MedLLVMEmitter Proof;
+      std::vector<MedVar> Sources;
+      ASSERT_TRUE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+          Proof, Func, TargetArch, Reload, Sources));
+      ASSERT_EQ(Sources.size(), 1u);
+      EXPECT_EQ(Sources.front(), Func.Params.front());
+      EXPECT_TRUE(MedLLVMProvenanceTestPeer::stableOffset(
+          Proof, Reload.Output, nullptr));
+
+      // The proof's source and width must match the real emitted prologue.
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({Func}, Context, "parameter-home",
+                                          TargetArch);
+      ASSERT_NE(Module, nullptr);
+      expectValidModule(*Module);
+      llvm::Function *Function = Module->getFunction(Func.Name);
+      ASSERT_NE(Function, nullptr);
+      unsigned Initializers = 0;
+      for (const llvm::BasicBlock &Block : *Function)
+        for (const llvm::Instruction &Instruction : Block)
+          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+              Store && Store->getValueOperand() == Function->getArg(0)) {
+            ++Initializers;
+            EXPECT_EQ(Store->getParent(), &Function->getEntryBlock());
+            EXPECT_TRUE(Store->getValueOperand()->getType()->isIntegerTy(
+                Func.Params.front().Size * 8));
+            const auto *Pointer =
+                llvm::dyn_cast<llvm::IntToPtrInst>(Store->getPointerOperand());
+            ASSERT_NE(Pointer, nullptr);
+            const auto *Address =
+                llvm::dyn_cast<llvm::BinaryOperator>(Pointer->getOperand(0));
+            ASSERT_NE(Address, nullptr);
+            EXPECT_EQ(Address->getOpcode(), llvm::Instruction::Add);
+            const auto *Offset =
+                llvm::dyn_cast<llvm::ConstantInt>(Address->getOperand(1));
+            ASSERT_NE(Offset, nullptr);
+            EXPECT_EQ(Offset->getSExtValue(),
+                      getTargetRegInfo(TargetArch).PointerSize);
+            const auto *FrameBase =
+                llvm::dyn_cast<llvm::PtrToIntInst>(Address->getOperand(0));
+            ASSERT_NE(FrameBase, nullptr);
+            const auto *FrameEnd = llvm::dyn_cast<llvm::GetElementPtrInst>(
+                FrameBase->getPointerOperand());
+            ASSERT_NE(FrameEnd, nullptr);
+            EXPECT_TRUE(llvm::isa<llvm::AllocaInst>(
+                FrameEnd->getPointerOperand()));
+          }
+      EXPECT_EQ(Initializers, 1u);
+    }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     IncomingParameterHomesPreserveAllPathWriteEffects) {
+  enum Case {
+    MissingHome,
+    LiveFramePointer,
+    WrongOffset,
+    NarrowLoad,
+    TypedWidthMismatch,
+    PartialWrite,
+    UnknownWrite,
+    AtomicWrite,
+    PointerWrite,
+    ScalarWrite,
+    OverlappingHomes,
+    ExactHomeLast,
+    UnknownHomeLast,
+    ExactHomeAfterUnknown,
+    InvalidHomeIndex,
+    BranchScalarWrite,
+    BranchPartialWrite,
+    LoopUpdate
+  };
+  for (Case Variant : {MissingHome, LiveFramePointer, WrongOffset, NarrowLoad,
+                       TypedWidthMismatch, PartialWrite, UnknownWrite,
+                       AtomicWrite, PointerWrite, ScalarWrite, OverlappingHomes,
+                       ExactHomeLast, UnknownHomeLast, ExactHomeAfterUnknown,
+                       InvalidHomeIndex, BranchScalarWrite, BranchPartialWrite,
+                       LoopUpdate}) {
+    SCOPED_TRACE(static_cast<int>(Variant));
+    MedFunc Func = makeIncomingParameterHomeReload(
+        Arch::X86, Variant == LiveFramePointer, Variant == LiveFramePointer);
+    MedOp Reload = Func.Blocks.front().Ops[2];
+    const MedVar Slot = Reload.Inputs[0];
+    const MedVar SP = Func.Blocks.front().Ops.front().Output;
+    auto temp = [](int Id) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.TheArch = Arch::X86;
+      V.Id = Id;
+      V.SSAVer = 1;
+      V.Size = 4;
+      return V;
+    };
+    auto scalar = [](uint64_t V, uint16_t Width = 4) {
+      return MedVar::makeConst(V, Width, ConstantAddressProvenance::Scalar);
+    };
+    auto append = [](MedBlock &Block, NdOp Opcode, MedVar Output,
+                     std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const MedVar &Input : Inputs)
+        Op.addInput(Input);
+      Block.Ops.push_back(std::move(Op));
+    };
+    Func.Blocks.front().Ops.resize(2);
+    if (Variant == MissingHome)
+      Func.MutableStackParamHomes.clear();
+    if (Variant == WrongOffset)
+      Func.MutableStackParamHomes = {{0, 8}};
+    if (Variant == NarrowLoad)
+      Reload.Output.Size = 2;
+    if (Variant == TypedWidthMismatch)
+      Func.TypedParams[0].Type = NdType::makeInt(8);
+    if (Variant == OverlappingHomes)
+      Func.MutableStackParamHomes = {{0, 4}, {1, 6}};
+    if (Variant == ExactHomeLast)
+      Func.MutableStackParamHomes = {{1, 6}, {0, 4}};
+    if (Variant == UnknownHomeLast || Variant == ExactHomeAfterUnknown) {
+      Func.TypedParams[1].Type = NdType::makePtr();
+      Func.MutableStackParamHomes = {{0, 4}, {1, 4}};
+      if (Variant == ExactHomeAfterUnknown)
+        Func.MutableStackParamHomes = {{1, 4}, {0, 4}};
+    }
+    if (Variant == InvalidHomeIndex)
+      Func.MutableStackParamHomes = {{0, 4}, {-1, 4}, {2, 4}};
+    if (Variant == PartialWrite || Variant == ScalarWrite)
+      append(Func.Blocks.front(), NdOp::STORE, {},
+             {Slot, scalar(42, Variant == PartialWrite ? 1 : 4)});
+    if (Variant == UnknownWrite) {
+      append(Func.Blocks.front(), NdOp::INT_ADD, temp(3),
+             {SP, Func.Params[1]});
+      append(Func.Blocks.front(), NdOp::STORE, {}, {temp(3), scalar(42)});
+    }
+    if (Variant == AtomicWrite)
+      append(Func.Blocks.front(), NdOp::ATOMIC_XCHG, temp(3),
+             {Slot, scalar(42)});
+    const MedVar Address = MedVar::makeConst(
+        SpilledConstTableVA, 4, ConstantAddressProvenance::DataAddress);
+    if (Variant == PointerWrite)
+      append(Func.Blocks.front(), NdOp::STORE, {}, {Slot, Address});
+
+    size_t LoadBlock = 0;
+    if (Variant >= BranchScalarWrite) {
+      Func.Blocks.resize(4);
+      for (int I = 1; I != 4; ++I) {
+        Func.Blocks[I].Id = I;
+        Func.Blocks[I].StartAddr = CallerVA + I * 0x10;
+        Func.Blocks[I].EndAddr = CallerVA + (I + 1) * 0x10;
+      }
+      MedBlock &Entry = Func.Blocks[0];
+      MedBlock &First = Func.Blocks[1];
+      MedBlock &Second = Func.Blocks[2];
+      MedBlock &Exit = Func.Blocks[3];
+      if (Variant == LoopUpdate) {
+        Entry.Succs = {1};
+        First.Preds = {0, 2};
+        First.Succs = {2, 3};
+        Second.Preds = {1};
+        Second.Succs = {1};
+        Exit.Preds = {1};
+        append(Entry, NdOp::BRANCH, {}, {scalar(First.StartAddr)});
+        append(First, NdOp::LOAD, temp(3), {Slot});
+        append(First, NdOp::COND_BR, {},
+               {scalar(Exit.StartAddr), Func.Params[1]});
+        append(Second, NdOp::INT_ADD, temp(4), {temp(3), scalar(1)});
+        append(Second, NdOp::STORE, {}, {Slot, temp(4)});
+        append(Second, NdOp::BRANCH, {}, {scalar(First.StartAddr)});
+      } else {
+        Entry.Succs = {1, 2};
+        First.Preds = Second.Preds = {0};
+        First.Succs = Second.Succs = {3};
+        Exit.Preds = {1, 2};
+        append(Entry, NdOp::COND_BR, {},
+               {scalar(First.StartAddr), Func.Params[1]});
+        append(First, NdOp::STORE, {},
+               {Slot, scalar(42, Variant == BranchPartialWrite ? 1 : 4)});
+        append(First, NdOp::BRANCH, {}, {scalar(Exit.StartAddr)});
+        append(Second, NdOp::BRANCH, {}, {scalar(Exit.StartAddr)});
+      }
+      LoadBlock = 3;
+    }
+    Func.Blocks[LoadBlock].Ops.push_back(Reload);
+    append(Func.Blocks[LoadBlock], NdOp::RETURN, {}, {Reload.Output});
+    const MedOp &ActualLoad =
+        Func.Blocks[LoadBlock].Ops[Func.Blocks[LoadBlock].Ops.size() - 2];
+    const bool Expected = Variant == PointerWrite || Variant == ScalarWrite ||
+                          Variant == ExactHomeLast ||
+                          Variant == ExactHomeAfterUnknown ||
+                          Variant == InvalidHomeIndex ||
+                          Variant == BranchScalarWrite || Variant == LoopUpdate;
+    MedLLVMEmitter Proof;
+    std::vector<MedVar> Sources;
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+                  Proof, Func, Arch::X86, ActualLoad, Sources),
+              Expected);
+    if (!Expected) {
+      EXPECT_TRUE(Sources.empty());
+      continue;
+    }
+    EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
+                  Proof, Reload.Output, nullptr),
+              Variant != PointerWrite);
+    if (Variant == PointerWrite)
+      EXPECT_EQ(Sources, std::vector<MedVar>{Address});
+    else if (Variant == ScalarWrite)
+      EXPECT_EQ(Sources, std::vector<MedVar>{scalar(42)});
+    else {
+      EXPECT_NE(std::find(Sources.begin(), Sources.end(), Func.Params[0]),
+                Sources.end());
+      EXPECT_EQ(Sources.size(), Variant >= BranchScalarWrite ? 2u : 1u);
+    }
+  }
 }
 
 TEST(MachOLLVMDataPointerBoundary, ReusesPositiveAndNegativeFrameReloadProofs) {

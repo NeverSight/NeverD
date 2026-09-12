@@ -1569,7 +1569,10 @@ private:
   /// FP-relative slot and an SP-relative write can be compared by byte range.
   /// Only exact affine COPY/width/constant-add chains are accepted; dynamic
   /// stack adjustments, ambiguous PHIs, and overflow fail closed.
-  std::optional<med_llvm::SlotKey> canonicalFrameSlotKey(const MedVar &V) const;
+  /// Entry-only queries additionally reject an independent live-in FP root.
+  std::optional<med_llvm::SlotKey>
+  canonicalFrameSlotKey(const MedVar &V,
+                        bool RequireEntryStackPointer = false) const;
 
   /// True when \p V is reloaded from a stack slot that a stack-pointer-derived
   /// value was spilled to (`mov [slot],sp ; ... ; mov reg,[slot]`).  clang

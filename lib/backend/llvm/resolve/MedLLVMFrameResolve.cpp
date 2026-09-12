@@ -417,7 +417,8 @@ MedLLVMEmitter::addrSlotKey(const MedVar &V, int Depth,
 }
 
 std::optional<med_llvm::SlotKey>
-MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
+MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V,
+                                      bool RequireEntryStackPointer) const {
   if (!CurMedFunc || V.isConst())
     return std::nullopt;
 
@@ -594,6 +595,8 @@ MedLLVMEmitter::canonicalFrameSlotKey(const MedVar &V) const {
         Cur.Size >= PointerSize && !IsMergedValue && (!Def || IsSelfCopy);
     if (IsEntryStackPointer || IsLiveInFramePointer) {
       Active.erase(Key);
+      if (RequireEntryStackPointer && !IsEntryStackPointer)
+        return std::nullopt;
       return med_llvm::SlotKey{{Cur.Id, Cur.SSAVer}, 0};
     }
 

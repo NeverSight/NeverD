@@ -1291,6 +1291,54 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   ReachingState Entry;
   Entry.Reachable = true;
   Entry.Uninitialized = true;
+  if (!CurMedFunc->MutableStackParamHomes.empty() &&
+      canonicalFrameSlotKey(Load.Inputs[0],
+                            /*RequireEntryStackPointer=*/true) == Target) {
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    const bool HaveTypes = CurMedFunc->hasTypeInfo() &&
+                           CurMedFunc->TypedParams.size() ==
+                               CurMedFunc->Params.size();
+    // declareFunc can override the Med parameter width with a typed or FP
+    // ABI argument. Only certify integer STORE bytes represented exactly by
+    // the incoming Med value; an unknown footprint may overlap any home.
+    auto integerStoreWidth = [&](size_t Index) -> uint16_t {
+      const MedVar &Param = CurMedFunc->Params[Index];
+      if (Param.RegOff != kNoParamReg && TRI.isFPArgReg(Param.RegOff))
+        return 0;
+      if (HaveTypes) {
+        const TypeRef &Type = CurMedFunc->TypedParams[Index].Type;
+        if (!Type)
+          return 8;
+        if (Type->Kind != NdTypeKind::Int &&
+            Type->Kind != NdTypeKind::Unknown)
+          return 0;
+        return Type->Size > 0 ? Type->Size : 8;
+      }
+      return Param.Size != 0 ? Param.Size : 8;
+    };
+    // Match the actual prologue STORE order, including a later overlapping
+    // home. Ordinary writes below still kill or replace these entry values.
+    for (const auto &[Index, Offset] : CurMedFunc->MutableStackParamHomes) {
+      if (Index < 0 || static_cast<size_t>(Index) >= CurMedFunc->Params.size())
+        continue;
+      const MedVar &Param = CurMedFunc->Params[static_cast<size_t>(Index)];
+      const uint16_t Width = integerStoreWidth(static_cast<size_t>(Index));
+      if (Width != 0 &&
+          !overlaps(Offset, Width, Target->second, Load.Output.Size))
+        continue;
+      Entry.Values.clear();
+      if (Offset == Target->second && Width == Load.Output.Size &&
+          Width != 0 && Width <= 8 && Param.Size == Width &&
+          Param.Kind == MedVar::Param && !lookupDef(Param) &&
+          !lookupPhi(Param)) {
+        Entry.Uninitialized = false;
+        Entry.Invalid = false;
+        addUnique(Entry.Values, Param);
+      } else {
+        Entry.Invalid = true;
+      }
+    }
+  }
   InStates[FrameReloadIndex.EntryBlockId] = Entry;
   std::vector<int> Work{FrameReloadIndex.EntryBlockId};
   while (!Work.empty()) {
