@@ -140,9 +140,9 @@ uint32_t CFGBuilder::proveGroupDenseMaskBound(const InsnRecord &Rec,
         /*QueryUnsignedFeasibleMasks=*/nullptr,
         limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
         &GuardedGroupProofContext->Edges);
-    Observation.MaskQueryComplete =
-        Complete && Matches.size() == 1 && QueryComplete.size() == 1 &&
-        QueryComplete.front();
+    Observation.MaskQueryComplete = Complete && Matches.size() == 1 &&
+                                    QueryComplete.size() == 1 &&
+                                    QueryComplete.front();
     Observation.MaskQueryMatched = Matches.size() == 1 && Matches.front();
     if (!Complete || Matches.size() != 1 || QueryComplete.size() != 1 ||
         !QueryComplete.front()) {

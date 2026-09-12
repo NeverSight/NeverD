@@ -1080,12 +1080,10 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
   ASSERT_EQ(Low.JumpTables.size(), 3u)
       << "stage=" << Proof.Stage << " branch=" << Proof.Branch
       << " members=" << Proof.MemberCount << " loads=" << Proof.TargetLoads
-      << " roles=" << Proof.LoadRoles
-      << " indices=" << Proof.IndexAlternatives << " width=" << Proof.IndexSize
-      << " use-seq=" << Proof.IndexUseSeq
+      << " roles=" << Proof.LoadRoles << " indices=" << Proof.IndexAlternatives
+      << " width=" << Proof.IndexSize << " use-seq=" << Proof.IndexUseSeq
       << " defined-at-use=" << Proof.IndexDefinedAtUse
-      << " mask=" << Proof.MaskBound
-      << " queried=" << Proof.MaskQueryIssued
+      << " mask=" << Proof.MaskBound << " queried=" << Proof.MaskQueryIssued
       << " complete=" << Proof.MaskQueryComplete
       << " matched=" << Proof.MaskQueryMatched;
   EXPECT_EQ(
