@@ -446,6 +446,14 @@ jobs:
                    "NeverDLiftTests"),
                   ("ExecutableCodeOwnerIndex.KeepsMappingPrecedenceAndLiveEntryEvidence",
                    "NeverDLiftTests"),
+                  ("MedVariadic.HomeSlotProofKeepsIdentityPhiAndAddressSpaceBoundaries",
+                   "NeverDLiftTests"),
+                  ("MedVariadic.DefinitionLookupIsFreshForEachFunctionAndEdit",
+                   "NeverDLiftTests"),
+                  ("MedVariadic.DarwinWalkRetainsFirstCopyAndOrderedOrCandidates",
+                   "NeverDLiftTests"),
+                  ("MedVariadic.ProofAndCopyDepthLimitsRemainPerRoot",
+                   "NeverDLiftTests"),
                   ("LowInstructionBoundary.IndexedAArch64PagesKeepExactDereferenceAndTypedCodeOwnership",
                    "NeverDLiftTests"),
                   ("LowInstructionBoundary.AArch64BarePageBaseCompletesOnlyForExactDereference",
@@ -492,9 +500,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 122,
-              ("macOS", "macos-patch"): 120,
-              ("Windows", "windows-focused"): 118,
+              ("Linux", "linux-semantic"): 126,
+              ("macOS", "macos-patch"): 124,
+              ("Windows", "windows-focused"): 122,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

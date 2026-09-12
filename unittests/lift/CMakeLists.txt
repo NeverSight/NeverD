@@ -149,6 +149,7 @@ add_neverd_unittest(NeverDLiftTests
   format/COFFRelocatableAbsoluteRelocationTests.cpp
   format/NativePointerRelocationBoundaryTests.cpp
   core/MedCallingConvTests.cpp
+  core/MedVariadicTests.cpp
   eh/COFFExceptionTests.cpp
   eh/COFFExceptionARM32UnwindTests.cpp
   eh/COFFExceptionARM64UnwindTests.cpp

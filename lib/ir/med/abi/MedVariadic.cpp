@@ -42,35 +42,66 @@ using med_calling_conv_detail::containsValue;
 
 namespace {
 
-// Byte offset of \p V relative to the entry stack pointer. Every SSA/PHI
-// definition must be unique and every PHI arm must prove the same offset.
-std::optional<int64_t> entrySpDelta(const MedFunc &Func, uint64_t SpOff,
-                                    const MedVar &Root, int Depth) {
+// Definitions stay unchanged for one detectVariadic invocation. Index them
+// once; recursive proof state still belongs to each individual root query.
+struct VariadicValueIndex {
   using Key = std::tuple<uint8_t, int, int, uint64_t, uint16_t>;
-  auto keyOf = [](const MedVar &Value) -> Key {
+  using WalkKey = std::tuple<uint8_t, int, int>;
+
+  static Key keyOf(const MedVar &Value) {
     return {static_cast<uint8_t>(Value.Kind), Value.Id, Value.SSAVer,
             Value.Kind == MedVar::Reg ? Value.RegOff : 0, Value.Size};
-  };
+  }
+
+  // Darwin's existing COPY/OR walk uses a deliberately different identity
+  // from the exact entry-SP proof. Keep its first COPY and ordered ORs.
+  static WalkKey walkKeyOf(const MedVar &Value) {
+    return {static_cast<uint8_t>(Value.Kind), Value.Id, Value.SSAVer};
+  }
+
   std::map<Key, const MedOp *> Definitions;
   std::set<Key> AmbiguousDefinitions;
   std::map<Key, const PhiNode *> Phis;
   std::set<Key> AmbiguousPhis;
-  for (const auto &Block : Func.Blocks) {
-    for (const auto &Op : Block.Ops) {
-      if (Op.Output.isConst())
-        continue;
-      const Key K = keyOf(Op.Output);
-      auto [It, Inserted] = Definitions.emplace(K, &Op);
-      if (!Inserted && It->second != &Op)
-        AmbiguousDefinitions.insert(K);
-    }
-    for (const auto &Phi : Block.Phis) {
-      const Key K = keyOf(Phi.Output);
-      auto [It, Inserted] = Phis.emplace(K, &Phi);
-      if (!Inserted && It->second != &Phi)
-        AmbiguousPhis.insert(K);
+  std::map<WalkKey, const MedOp *> FirstCopies;
+  std::map<WalkKey, llvm::SmallVector<const MedOp *, 1>> OrDefinitions;
+
+  explicit VariadicValueIndex(const MedFunc &Func) {
+    for (const auto &Block : Func.Blocks) {
+      for (const auto &Op : Block.Ops) {
+        if (!Op.Output.isConst()) {
+          const Key K = keyOf(Op.Output);
+          auto [It, Inserted] = Definitions.emplace(K, &Op);
+          if (!Inserted && It->second != &Op)
+            AmbiguousDefinitions.insert(K);
+        }
+        const WalkKey K = walkKeyOf(Op.Output);
+        if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1)
+          FirstCopies.emplace(K, &Op);
+        if (Op.Opcode == NdOp::INT_OR && Op.NumInputs >= 2 &&
+            Op.Inputs[1].isConst())
+          OrDefinitions[K].push_back(&Op);
+      }
+      for (const auto &Phi : Block.Phis) {
+        const Key K = keyOf(Phi.Output);
+        auto [It, Inserted] = Phis.emplace(K, &Phi);
+        if (!Inserted && It->second != &Phi)
+          AmbiguousPhis.insert(K);
+      }
     }
   }
+};
+
+// Byte offset of \p V relative to the entry stack pointer. Every SSA/PHI
+// definition must be unique and every PHI arm must prove the same offset.
+std::optional<int64_t> entrySpDelta(const VariadicValueIndex &Index,
+                                    uint64_t SpOff, const MedVar &Root,
+                                    int Depth) {
+  using Key = VariadicValueIndex::Key;
+  const auto &Definitions = Index.Definitions;
+  const auto &AmbiguousDefinitions = Index.AmbiguousDefinitions;
+  const auto &Phis = Index.Phis;
+  const auto &AmbiguousPhis = Index.AmbiguousPhis;
 
   std::set<Key> Active;
   std::function<std::optional<int64_t>(const MedVar &, int)> Eval =
@@ -88,7 +119,7 @@ std::optional<int64_t> entrySpDelta(const MedFunc &Func, uint64_t SpOff,
     if (V.Kind == MedVar::Reg && V.RegOff == SpOff && V.SSAVer == 0)
       return int64_t{0};
 
-    const Key K = keyOf(V);
+    const Key K = VariadicValueIndex::keyOf(V);
     if (!Active.insert(K).second || AmbiguousDefinitions.count(K) ||
         AmbiguousPhis.count(K))
       return std::nullopt;
@@ -198,6 +229,12 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
   if (Func.Blocks.empty())
     return;
   const uint64_t SpOff = TRI.StackPointer;
+  std::optional<VariadicValueIndex> Values;
+  auto getValueIndex = [&]() -> const VariadicValueIndex & {
+    if (!Values)
+      Values.emplace(Func);
+    return *Values;
+  };
 
   // The minimum number of saved parameter registers that distinguishes a
   // variadic register save area from an ordinary function spilling a few of its
@@ -259,17 +296,18 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
           if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
               Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
               !Op.Inputs[1].isConst())
-            if (auto VD = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
+            if (auto VD = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[1], 0))
               if (*VD >= 0 && *VD <= limits::kVariadicOverflowBaseMax &&
                   TRI.PointerSize > 0 && (*VD % TRI.PointerSize) == 0)
-                if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
+                if (auto AD =
+                        entrySpDelta(getValueIndex(), SpOff, Op.Inputs[0], 0))
                   HomeSlots.insert(*AD);
       bool Reloaded = false;
       for (const auto &Blk : Func.Blocks)
         for (const auto &Op : Blk.Ops)
           if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
               Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-            if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
+            if (auto AD = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[0], 0))
               if (HomeSlots.count(*AD))
                 Reloaded = true;
       Marked = !HomeSlots.empty() && Reloaded;
@@ -291,20 +329,16 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     // not false-positive on a non-variadic callee (which would silently drop
     // args).
     if (!Marked && Fmt == BinaryFormat::MachO) {
-      auto sameVar = [](const MedVar &A, const MedVar &B) {
-        return A.Kind == B.Kind && A.Id == B.Id && A.SSAVer == B.SSAVer;
-      };
       // Resolve a value through COPY chains to its underlying definition (the
       // post-indexed load address is often a COPY of the walked register).
       std::function<MedVar(const MedVar &, int)> thruCopy =
           [&](const MedVar &V, int Depth) -> MedVar {
         if (Depth > 32 || V.isConst())
           return V;
-        for (const auto &Blk : Func.Blocks)
-          for (const auto &Op : Blk.Ops)
-            if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
-                sameVar(Op.Output, V))
-              return thruCopy(Op.Inputs[0], Depth + 1);
+        const auto &Copies = getValueIndex().FirstCopies;
+        auto It = Copies.find(VariadicValueIndex::walkKeyOf(V));
+        if (It != Copies.end())
+          return thruCopy(It->second->Inputs[0], Depth + 1);
         return V;
       };
       // entry-SP delta allowing the va_arg alignment `orr base,#c`: entry SP is
@@ -314,29 +348,33 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
           [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
         if (Depth > 32)
           return std::nullopt;
-        if (auto D = entrySpDelta(Func, SpOff, V, 0))
+        if (auto D = entrySpDelta(getValueIndex(), SpOff, V, 0))
           return D;
-        for (const auto &Blk : Func.Blocks)
-          for (const auto &Op : Blk.Ops)
-            if (Op.Opcode == NdOp::INT_OR && Op.NumInputs >= 2 &&
-                Op.Inputs[1].isConst() && sameVar(Op.Output, V))
-              if (auto B = ovfDelta(Op.Inputs[0], Depth + 1))
-                return *B + static_cast<int64_t>(Op.Inputs[1].ConstVal);
+        const auto &Ors = getValueIndex().OrDefinitions;
+        auto It = Ors.find(VariadicValueIndex::walkKeyOf(V));
+        if (It != Ors.end())
+          for (const MedOp *Op : It->second)
+            if (auto B = ovfDelta(Op->Inputs[0], Depth + 1))
+              return *B + static_cast<int64_t>(Op->Inputs[1].ConstVal);
         return std::nullopt;
       };
       // Whether some LOAD's address (through COPYs) is the register RegOff (the
       // walked va_list pointer is reused across post-indexed loads as the same
       // ABI register, re-versioned each advance).
+      std::optional<std::set<uint64_t>> LoadAddressRegs;
       auto regIsLoadAddr = [&](uint64_t RegOff) {
-        for (const auto &Blk : Func.Blocks)
-          for (const auto &Op : Blk.Ops)
-            if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-                Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-              MedVar A = thruCopy(Op.Inputs[0], 0);
-              if (A.Kind == MedVar::Reg && A.RegOff == RegOff)
-                return true;
-            }
-        return false;
+        if (!LoadAddressRegs) {
+          LoadAddressRegs.emplace();
+          for (const auto &Blk : Func.Blocks)
+            for (const auto &Op : Blk.Ops)
+              if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+                  Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+                MedVar A = thruCopy(Op.Inputs[0], 0);
+                if (A.Kind == MedVar::Reg)
+                  LoadAddressRegs->insert(A.RegOff);
+              }
+        }
+        return LoadAddressRegs->count(RegOff) != 0;
       };
       // Find a register walk: `R.(v+1) = R.v + const` (same ABI register
       // advancing) that is used as a LOAD address and whose value is an
@@ -384,7 +422,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
             Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
             LastArgIdx >= 0 &&
             TRI.regToArgIdx(Op.Inputs[1].RegOff) == LastArgIdx)
-          if (auto D = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
+          if (auto D = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[0], 0))
             if (*D == -TRI.PointerSize)
               AbutsEntry = true;
     Marked = AbutsEntry && countParamRegSpills(Func, TRI.IntParamRegs) >= 2;
@@ -407,10 +445,11 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
             Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto VD = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
+          if (auto VD = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[1], 0))
             if (*VD >= MinPtrDelta && *VD <= limits::kVariadicOverflowBaseMax &&
                 TRI.PointerSize > 0 && (*VD % TRI.PointerSize) == 0)
-              if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0)) {
+              if (auto AD =
+                      entrySpDelta(getValueIndex(), SpOff, Op.Inputs[0], 0)) {
                 HomeSlots.insert(*AD);
                 DirectSeeds.push_back(Op.Inputs[1]);
               }
@@ -419,7 +458,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
             Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto AD = entrySpDelta(Func, SpOff, Op.Inputs[0], 0))
+          if (auto AD = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[0], 0))
             if (HomeSlots.count(*AD))
               Reloaded = true;
 
@@ -490,7 +529,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
     for (const auto &Op : Blk.Ops)
       if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto D = entrySpDelta(Func, SpOff, Op.Inputs[1], 0))
+        if (auto D = entrySpDelta(getValueIndex(), SpOff, Op.Inputs[1], 0))
           if (*D >= 0 && *D <= limits::kVariadicOverflowBaseMax)
             if (!Base || *D < *Base)
               Base = *D;
