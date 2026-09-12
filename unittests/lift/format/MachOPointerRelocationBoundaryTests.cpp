@@ -7333,6 +7333,228 @@ TEST(MachOInteriorCodePointerCFG,
 }
 
 TEST(MachOInteriorCodePointerCFG,
+     AbsoluteRootIndexPreservesWidthsAliasesAndOpenRanges) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64, Arch::X86, Arch::ARM}) {
+    SCOPED_TRACE(static_cast<int>(TargetArch));
+    BinaryImage Image;
+    Image.Arch = TargetArch;
+    Image.Bits = TargetArch == Arch::ARM || TargetArch == Arch::X86
+                     ? Bitness::Bits32
+                     : Bitness::Bits64;
+    const bool Thumb = TargetArch == Arch::ARM;
+    if (Thumb)
+      Image.Mode = InstructionMode::Thumb;
+    const va_t Begin = Image.is64Bit() ? 0x100001000ULL : 0x1000;
+    const va_t End = Begin + 0x100;
+    const uint32_t Width = Image.getPointerSize();
+    const va_t Encoded[] = {Begin | (Thumb ? 1 : 0), Begin + 5,
+                            Begin + 5, End | (Thumb ? 1 : 0),
+                            End + 4, Begin + 3};
+    Segment Data;
+    Data.VA = 0x8000;
+    Data.Size = 7 * Width;
+    Data.FileSz = Data.Size;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(Data.Size);
+    for (size_t I = 0; I < 6; ++I) {
+      if (Image.is64Bit())
+        writeObject(Data.Data, I * Width, uint64_t(Encoded[I]));
+      else
+        writeObject(Data.Data, I * Width, uint32_t(Encoded[I]));
+      Image.CodePtrRelocSlots.insert(Data.VA + I * Width);
+    }
+    // The final complete pointer is deliberately not relocation evidence.
+    if (Image.is64Bit())
+      writeObject(Data.Data, 6 * Width, uint64_t(Begin + 8));
+    else
+      writeObject(Data.Data, 6 * Width, uint32_t(Begin + 8));
+    Image.CodePtrRelocSlots.insert(Data.VA + Data.Size - 1);
+    Image.CodePtrRelocSlots.insert(Data.VA + Data.Size + 0x1000);
+    Image.Segments.push_back(std::move(Data));
+
+    const va_t AliasTarget = Begin + (Thumb ? 4 : 5);
+    const va_t UnalignedTarget = Begin + (Thumb ? 2 : 3);
+    const std::map<va_t, std::set<va_t>> Expected{
+        {AliasTarget, {0x8000 + Width, 0x8000 + 2 * Width}},
+        {UnalignedTarget, {0x8000 + 5 * Width}}};
+    const detail::AbsoluteRelocationRootIndex Index(Image);
+    std::map<va_t, std::set<va_t>> Sources;
+    ASSERT_TRUE(Index.collectSources(Image, Begin, End, Sources));
+    EXPECT_EQ(Sources, Expected);
+
+    Sources.clear();
+    ASSERT_TRUE(Index.collectSources(Image, UnalignedTarget, AliasTarget,
+                                    Sources));
+    EXPECT_TRUE(Sources.empty());
+    ASSERT_TRUE(Index.collectSources(Image, End, Begin, Sources));
+    ASSERT_TRUE(Index.collectSources(Image, End, End, Sources));
+    ASSERT_TRUE(Index.collectSources(Image, InvalidVA - 1, InvalidVA, Sources));
+    EXPECT_TRUE(Sources.empty());
+
+    BinaryImage Other;
+    Sources = Expected;
+    EXPECT_FALSE(Index.collectSources(Other, Begin, End, Sources));
+    EXPECT_EQ(Sources, Expected);
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG,
+     IndexedAbsoluteRootsPreserveAliasesAndRebuildFreshness) {
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+    InteriorPointerFixture Fixture = makeInteriorPointerFixture(TargetArch);
+    Segment Foreign;
+    Foreign.VA = TextVA + 0x10000;
+    Foreign.Size = 2048 * sizeof(uint64_t);
+    Foreign.FileSz = Foreign.Size;
+    Foreign.Flags = SegmentFlags::Readable;
+    Foreign.Data.resize(Foreign.Size);
+    for (size_t I = 0; I < 2048; ++I) {
+      const va_t Target = I == 0   ? Fixture.Entry
+                          : I == 1 ? Fixture.End
+                          : I == 2 ? Fixture.SelectedTarget
+                          : I == 3 ? InvalidVA
+                                   : Fixture.End + I * 4;
+      writeObject(Foreign.Data, I * sizeof(uint64_t), Target);
+      Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + I * sizeof(uint64_t));
+    }
+    const va_t AliasSlot = Foreign.VA + 2 * sizeof(uint64_t);
+    Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + Foreign.Size - 1);
+    Fixture.Image.CodePtrRelocSlots.insert(Foreign.VA + Foreign.Size + 0x1000);
+    Fixture.Image.Segments.push_back(std::move(Foreign));
+
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(TargetArch));
+    CFGBuilder LiveBuilder;
+    CFGBuilder IndexedBuilder;
+    const std::set<va_t> Entries{Fixture.Entry};
+    LiveBuilder.setKnownFuncEntries(&Entries);
+    IndexedBuilder.setKnownFuncEntries(&Entries);
+    auto Compare = [&](InteriorPointerFixture &Input,
+                       const detail::AbsoluteRelocationRootIndex &Index) {
+      IndexedBuilder.setAbsoluteRelocationRootIndex(&Index);
+      const LowFunc Live = LiveBuilder.build(Input.Image, Dec, Input.Entry);
+      const LowFunc Indexed =
+          IndexedBuilder.build(Input.Image, Dec, Input.Entry);
+      EXPECT_EQ(blockStarts(Indexed), blockStarts(Live));
+      EXPECT_EQ(Indexed.ModuleAnalysisRoots, Live.ModuleAnalysisRoots);
+      EXPECT_EQ(Indexed.OrdinaryModuleAnalysisRoots,
+                Live.OrdinaryModuleAnalysisRoots);
+      EXPECT_EQ(Indexed.DecodedInstructionCount, Live.DecodedInstructionCount);
+      EXPECT_EQ(Indexed.LiftedInstructionCount, Live.LiftedInstructionCount);
+      EXPECT_EQ(IndexedBuilder.relocationCFGRootSourcesForTesting(),
+                LiveBuilder.relocationCFGRootSourcesForTesting());
+      EXPECT_FALSE(containsOpcode(Indexed, NdOp::INDIR_CALL));
+      std::set<va_t> DirectTargets;
+      for (const LowBlock &Block : Indexed.Blocks)
+        for (const LowOp &Op : Block.Ops)
+          if (Op.Opcode == NdOp::BRANCH && Op.NumInputs >= 1 &&
+              Op.Inputs[0].isConst())
+            DirectTargets.insert(Op.Inputs[0].Offset);
+      return DirectTargets;
+    };
+
+    const detail::AbsoluteRelocationRootIndex FirstIndex(Fixture.Image);
+    EXPECT_EQ(Compare(Fixture, FirstIndex).count(Fixture.SelectedTarget), 1u);
+    const auto OriginalSources =
+        IndexedBuilder.relocationCFGRootSourcesForTesting();
+    ASSERT_EQ(OriginalSources.size(), Fixture.InteriorTargets.size());
+    for (size_t I = 0; I < Fixture.InteriorTargets.size(); ++I) {
+      std::set<va_t> Expected{Fixture.SelectedSlot + I * 16};
+      if (I == 0)
+        Expected.insert(AliasSlot);
+      EXPECT_EQ(OriginalSources.at(Fixture.InteriorTargets[I]), Expected);
+    }
+
+    // New pointer bytes at the same address and slot count need a new scope.
+    const size_t SlotCount = Fixture.Image.CodePtrRelocSlots.size();
+    const va_t NewTarget = Fixture.InteriorTargets.back();
+    ASSERT_TRUE(Fixture.Image.patchPtr(Fixture.SelectedSlot, NewTarget));
+    ASSERT_EQ(Fixture.Image.CodePtrRelocSlots.size(), SlotCount);
+    const detail::AbsoluteRelocationRootIndex UpdatedIndex(Fixture.Image);
+    const auto UpdatedTargets = Compare(Fixture, UpdatedIndex);
+    EXPECT_EQ(UpdatedTargets.count(NewTarget), 1u);
+    EXPECT_EQ(UpdatedTargets.count(Fixture.SelectedTarget), 0u);
+    auto UpdatedSources = OriginalSources;
+    UpdatedSources[Fixture.SelectedTarget].erase(Fixture.SelectedSlot);
+    UpdatedSources[NewTarget].insert(Fixture.SelectedSlot);
+    EXPECT_EQ(IndexedBuilder.relocationCFGRootSourcesForTesting(),
+              UpdatedSources);
+
+    // An unrelated image at identical VAs must use the original live scan.
+    InteriorPointerFixture Other = makeInteriorPointerFixture(TargetArch);
+    const va_t OtherTarget = Other.InteriorTargets[1];
+    ASSERT_TRUE(Other.Image.patchPtr(Other.SelectedSlot, OtherTarget));
+    const auto OtherTargets = Compare(Other, UpdatedIndex);
+    EXPECT_EQ(OtherTargets.count(OtherTarget), 1u);
+    EXPECT_EQ(OtherTargets.count(Other.SelectedTarget), 0u);
+    const detail::AbsoluteRelocationRootIndex OtherIndex(Other.Image);
+    EXPECT_EQ(Compare(Other, OtherIndex), OtherTargets);
+  }
+}
+
+TEST(MachOInteriorCodePointerCFG,
+     IndexedAbsoluteRootsKeepOwnershipAndRelayRejections) {
+  enum Case {
+    InstructionInterior,
+    OtherFunction,
+    Adjacent,
+    Writable,
+    Unproven,
+    NoRange
+  };
+  for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+    for (Case TestCase : {InstructionInterior, OtherFunction, Adjacent,
+                          Writable, Unproven, NoRange}) {
+      SCOPED_TRACE(static_cast<int>(TargetArch));
+      SCOPED_TRACE(static_cast<int>(TestCase));
+      InteriorPointerFixture Fixture = makeInteriorPointerFixture(TargetArch);
+      std::set<va_t> Entries{Fixture.Entry};
+      va_t RejectedTarget = InvalidVA;
+      if (TestCase == InstructionInterior) {
+        RejectedTarget = Fixture.Entry + 2;
+        ASSERT_TRUE(
+            Fixture.Image.patchPtr(Fixture.SelectedSlot, RejectedTarget));
+      } else if (TestCase == OtherFunction) {
+        RejectedTarget = Fixture.SelectedTarget;
+        Entries.insert(RejectedTarget);
+      } else if (TestCase == Adjacent) {
+        RejectedTarget = Fixture.End;
+        ASSERT_TRUE(
+            Fixture.Image.patchPtr(Fixture.SelectedSlot, RejectedTarget));
+        Entries.insert(RejectedTarget);
+      } else if (TestCase == Writable) {
+        Fixture.Image.Segments.back().Name = section_names::macho::DataSeg;
+      } else if (TestCase == Unproven) {
+        Fixture.Image.CodePtrRelocSlots.clear();
+      } else {
+        Fixture.Image.KnownCodeRanges.clear();
+        Fixture.Image.ExceptionMetadata.Functions.clear();
+        Fixture.Image.ExceptionMetadata.rebuildIndex();
+      }
+      const detail::AbsoluteRelocationRootIndex Index(Fixture.Image);
+      Decoder Dec;
+      ASSERT_TRUE(Dec.init(TargetArch));
+      CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      const LowFunc Live = Builder.build(Fixture.Image, Dec, Fixture.Entry);
+      const auto LiveSources = Builder.relocationCFGRootSourcesForTesting();
+      Builder.setAbsoluteRelocationRootIndex(&Index);
+      const LowFunc Indexed = Builder.build(Fixture.Image, Dec, Fixture.Entry);
+      EXPECT_EQ(blockStarts(Indexed), blockStarts(Live));
+      EXPECT_EQ(Indexed.ModuleAnalysisRoots, Live.ModuleAnalysisRoots);
+      EXPECT_EQ(Indexed.OrdinaryModuleAnalysisRoots,
+                Live.OrdinaryModuleAnalysisRoots);
+      EXPECT_EQ(Indexed.DecodedInstructionCount, Live.DecodedInstructionCount);
+      EXPECT_EQ(Indexed.LiftedInstructionCount, Live.LiftedInstructionCount);
+      EXPECT_EQ(Builder.relocationCFGRootSourcesForTesting(), LiveSources);
+      EXPECT_TRUE(containsOpcode(Indexed, NdOp::INDIR_CALL));
+      if (RejectedTarget != InvalidVA)
+        EXPECT_EQ(blockStarts(Indexed).count(RejectedTarget), 0u);
+    }
+}
+
+TEST(MachOInteriorCodePointerCFG,
      RejectsOtherFunctionsAdjacentTargetsAndInstructionInteriors) {
   {
     InteriorPointerFixture Fixture = makeInteriorPointerFixture(Arch::X64);

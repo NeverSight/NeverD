@@ -606,6 +606,22 @@ std::set<va_t> refineRelocationRootSuppressionOwners(
 void mergeRelativeRelocationRootSources(
     const std::vector<std::pair<va_t, va_t>> &SortedSources,
     const std::set<va_t> &Roots, std::map<va_t, std::set<va_t>> &RootSources);
+
+/// Absolute relocation bytes for one unchanged image operation. All aliases
+/// remain distinct; current-function ownership is checked by each CFG build.
+class AbsoluteRelocationRootIndex {
+public:
+  explicit AbsoluteRelocationRootIndex(const BinaryImage &Image);
+
+  /// Merge sources strictly between Begin and End. A different image returns
+  /// false without changing RootSources, so the caller can scan live input.
+  bool collectSources(const BinaryImage &Image, va_t Begin, va_t End,
+                      std::map<va_t, std::set<va_t>> &RootSources) const;
+
+private:
+  const BinaryImage *Image;
+  std::vector<std::pair<va_t, va_t>> Sources;
+};
 } // namespace detail
 
 class CFGBuilder {
@@ -628,6 +644,10 @@ public:
                         return Source.first == Root;
                       }));
   }
+  const std::map<va_t, std::set<va_t>> &
+  relocationCFGRootSourcesForTesting() const {
+    return RelocationCFGRootSources;
+  }
 
   /// Provide the set of known function entry addresses so that
   /// sanity checking can reject targets that overlap other functions.
@@ -638,6 +658,13 @@ public:
   /// image. The index must outlive all builds; null retains the live lookup.
   void setNoReturnTargetIndex(const libc::NoReturnTargetIndex *Index) {
     NoReturnTargets = Index;
+  }
+  /// Borrow an index through all builds of one unchanged image. Pointer-byte,
+  /// relocation, segment, bitness or mode changes require a fresh index. The
+  /// index must outlive the builds; null or a different image uses live input.
+  void setAbsoluteRelocationRootIndex(
+      const detail::AbsoluteRelocationRootIndex *Index) {
+    AbsoluteRelocationRoots = Index;
   }
   /// Provide exception-metadata-proven continuation addresses owned by the
   /// function passed to build().  These are intentionally owner-scoped rather
@@ -2449,6 +2476,7 @@ private:
   size_t RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   const std::set<va_t> *KnownFuncEntries = nullptr;
   const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
+  const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
   const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
   /// Owned one-shot history for the next build, plus the snapshot active in

@@ -2800,6 +2800,7 @@ void Pipeline::buildLowIR(
   const size_t Total = Candidates.size();
   std::vector<LowFunc> AllLow(Total);
   const libc::NoReturnTargetIndex NoReturnTargets(Img);
+  const detail::AbsoluteRelocationRootIndex AbsoluteRelocationRoots(Img);
 
   // The set of all detected function entries lets each CFG builder recognise an
   // unconditional `jmp` to *another* function as a tail call (call + ret)
@@ -2830,6 +2831,7 @@ void Pipeline::buildLowIR(
     CFGBuilder LocalCFG;
     LocalCFG.setKnownFuncEntries(&FuncEntries);
     LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
+    LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
     for (size_t I; (I = Claim()) < N;) {
       AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                  Candidates[I].second);
@@ -2872,6 +2874,7 @@ void Pipeline::buildLowIR(
       CFGBuilder LocalCFG;
       LocalCFG.setKnownFuncEntries(&FuncEntries);
       LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
+      LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
       LocalCFG.setProtectedJumpTableRelocationSlots(&ProtectedRelocationSlots);
       LocalCFG.setUnsafeJumpTableBranches(&UnsafeJumpTableBranches);
       LocalCFG.setPreservePotentialJumpTableBranches(

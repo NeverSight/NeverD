@@ -444,6 +444,12 @@ jobs:
                    "NeverDLiftTests"),
                   ("MachOInteriorCodePointerCFG.UnrelatedRelocationRootsPreserveLocalCFGAndObserveUpdatedInput",
                    "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
+                  ("MachOInteriorCodePointerCFG.AbsoluteRootIndexPreservesWidthsAliasesAndOpenRanges",
+                   "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
+                  ("MachOInteriorCodePointerCFG.IndexedAbsoluteRootsPreserveAliasesAndRebuildFreshness",
+                   "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
+                  ("MachOInteriorCodePointerCFG.IndexedAbsoluteRootsKeepOwnershipAndRelayRejections",
+                   "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
                   ("MachOLLVMDataPointerBoundary.IncomingParameterHomesMatchEmittedEntryStores",
                    "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
                   ("MachOLLVMDataPointerBoundary.IncomingParameterHomesPreserveAllPathWriteEffects",
@@ -474,9 +480,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 113,
-              ("macOS", "macos-patch"): 111,
-              ("Windows", "windows-focused"): 109,
+              ("Linux", "linux-semantic"): 116,
+              ("macOS", "macos-patch"): 114,
+              ("Windows", "windows-focused"): 112,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

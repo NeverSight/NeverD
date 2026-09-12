@@ -28,6 +28,54 @@
 
 namespace neverd {
 
+namespace {
+
+template <typename Visitor>
+void visitAbsoluteRelocationSources(const BinaryImage &Img, Visitor Visit) {
+  const uint32_t PtrSz = Img.getPointerSize();
+  if (PtrSz != 0)
+    for (va_t Slot : Img.CodePtrRelocSlots)
+      if (const uint8_t *P = Img.readVA(Slot, PtrSz))
+        Visit(normalizeCodeAddress(
+                  static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch,
+                  Img.Mode),
+              Slot);
+}
+
+} // namespace
+
+detail::AbsoluteRelocationRootIndex::AbsoluteRelocationRootIndex(
+    const BinaryImage &Image)
+    : Image(&Image) {
+  Sources.reserve(Image.CodePtrRelocSlots.size());
+  visitAbsoluteRelocationSources(Image, [&](va_t Target, va_t Slot) {
+    Sources.emplace_back(Target, Slot);
+  });
+  std::sort(Sources.begin(), Sources.end());
+}
+
+bool detail::AbsoluteRelocationRootIndex::collectSources(
+    const BinaryImage &Img, va_t Begin, va_t End,
+    std::map<va_t, std::set<va_t>> &RootSources) const {
+  if (Image != &Img)
+    return false;
+  if (Begin >= End)
+    return true;
+  const auto First = std::upper_bound(
+      Sources.begin(), Sources.end(), Begin,
+      [](va_t Address, const std::pair<va_t, va_t> &Source) {
+        return Address < Source.first;
+      });
+  const auto Last = std::lower_bound(
+      First, Sources.end(), End,
+      [](const std::pair<va_t, va_t> &Source, va_t Address) {
+        return Source.first < Address;
+      });
+  for (auto It = First; It != Last; ++It)
+    RootSources[It->first].insert(It->second);
+  return true;
+}
+
 void CFGBuilder::establishCurrentFuncRange(const BinaryImage &Img,
                                            const ExceptionFunction *Exception) {
   CurrentFuncRange.reset();
@@ -105,24 +153,21 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   if (!CurrentFuncRange)
     return;
 
-  // Absolute relocation bytes and this function's range are fixed for this
-  // call. Keep all source slots for local targets, without rebuilding maps
-  // for every image-wide target on each exploration iteration. Instruction
-  // ownership remains checked below after any newly decoded instructions.
+  // The operation index shares only absolute pointer bytes. This function's
+  // range and all source aliases remain local; instruction ownership is
+  // checked below after any newly decoded instructions.
   std::set<va_t> RelocationCandidates;
   std::map<va_t, std::set<va_t>> RelocationSources;
-  const uint32_t PtrSz = Img.getPointerSize();
-  if (PtrSz != 0)
-    for (va_t Slot : Img.CodePtrRelocSlots)
-      if (const uint8_t *P = Img.readVA(Slot, PtrSz)) {
-        const va_t Target = normalizeCodeAddress(
-            static_cast<va_t>(readPtr(P, Img.is64Bit())), Img.Arch, Img.Mode);
-        if (Target <= CurrentFuncRange->first ||
-            Target >= CurrentFuncRange->second)
-          continue;
-        RelocationCandidates.insert(Target);
+  if (!AbsoluteRelocationRoots ||
+      !AbsoluteRelocationRoots->collectSources(
+          Img, CurrentFuncRange->first, CurrentFuncRange->second,
+          RelocationSources))
+    visitAbsoluteRelocationSources(Img, [&](va_t Target, va_t Slot) {
+      if (Target > CurrentFuncRange->first && Target < CurrentFuncRange->second)
         RelocationSources[Target].insert(Slot);
-      }
+    });
+  for (const auto &[Target, Sources] : RelocationSources)
+    RelocationCandidates.insert(Target);
 
   std::set<va_t> Processed;
   for (;;) {
