@@ -61,9 +61,10 @@ size_t lookupWork(size_t Count) {
 
 } // namespace
 
-uint32_t CFGBuilder::proveGroupDenseMaskBound(
-    const InsnRecord &Rec, const JumpTableInfo &Info,
-    size_t *AggregateEvidenceBudget, bool &Incomplete) {
+uint32_t CFGBuilder::proveGroupDenseMaskBound(const InsnRecord &Rec,
+                                              const JumpTableInfo &Info,
+                                              size_t *AggregateEvidenceBudget,
+                                              bool &Incomplete) {
   if (!AggregateEvidenceBudget) {
     Incomplete = true;
     return 0;
@@ -88,17 +89,15 @@ uint32_t CFGBuilder::proveGroupDenseMaskBound(
       continue;
     for (const LowOp &Op : Insn.Ops) {
       if (Op.Opcode != NdOp::INT_AND || Op.NumInputs != 2 ||
-          Op.Output.Size != 4 ||
-          (!Op.Output.isReg() && !Op.Output.isTemp()) || Op.Addr != Addr ||
-          Op.Seq < 0 || Op.Inputs[0].Size != 4 || Op.Inputs[1].Size != 4 ||
+          Op.Output.Size != 4 || (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+          Op.Addr != Addr || Op.Seq < 0 || Op.Inputs[0].Size != 4 ||
+          Op.Inputs[1].Size != 4 ||
           Op.Inputs[0].isConst() == Op.Inputs[1].isConst())
         continue;
-      const NdVar &Mask =
-          Op.Inputs[Op.Inputs[0].isConst() ? 0 : 1];
+      const NdVar &Mask = Op.Inputs[Op.Inputs[0].isConst() ? 0 : 1];
       if ((Mask.Provenance != ConstantAddressProvenance::Unknown &&
            Mask.Provenance != ConstantAddressProvenance::Scalar) ||
-          Mask.Offset == 0 ||
-          Mask.Offset >= limits::kMaxJumpTableEntries ||
+          Mask.Offset == 0 || Mask.Offset >= limits::kMaxJumpTableEntries ||
           (Mask.Offset & (Mask.Offset + 1)) != 0)
         continue;
       const auto Bound = static_cast<uint32_t>(Mask.Offset + 1);

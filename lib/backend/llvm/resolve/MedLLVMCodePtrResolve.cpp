@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../data/MedLLVMFailureSnapshot.h"
+
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
@@ -17,8 +19,6 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
-
-#include "../data/MedLLVMFailureSnapshot.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
@@ -76,7 +76,7 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
 }
 
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
-                                                           uint64_t &OutSegVA) {
+                                                          uint64_t &OutSegVA) {
   if (!Img)
     return nullptr;
   ensureImportStorageSnapshot();
@@ -1016,9 +1016,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
       Img->hasRelocationProvenanceAt(0) && !varIsFrameDerived(AddrVar) &&
       valueIsStableAddressOffset(AddrVar)) {
     const Segment *ZeroSeg = Img->getSegmentFor(0);
-    const bool PointerSlotAtZero =
-        Img->CodePtrRelocSlots.count(0) || Img->DataPtrRelocSlots.count(0) ||
-        EffectiveImportStorageSlots.count(0);
+    const bool PointerSlotAtZero = Img->CodePtrRelocSlots.count(0) ||
+                                   Img->DataPtrRelocSlots.count(0) ||
+                                   EffectiveImportStorageSlots.count(0);
     if (ZeroSeg && !ZeroSeg->isExecutable() && PointerSlotAtZero) {
       Base = 0;
       HaveBase = true;
@@ -2192,15 +2192,12 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
       FatalCodePointerResolution = true;
       return nullptr;
     }
-    const bool IsImportStorage =
-        EffectiveImportStorageSlots.count(SlotVA) != 0;
-    const bool IsStaticCodeStorage =
-        Img->CodePtrRelocSlots.count(SlotVA) != 0;
+    const bool IsImportStorage = EffectiveImportStorageSlots.count(SlotVA) != 0;
+    const bool IsStaticCodeStorage = Img->CodePtrRelocSlots.count(SlotVA) != 0;
     const bool IsRuntimeCallableStorage =
         Img->hasRuntimeCallablePointerSlotAt(SlotVA);
     const bool IsDataStorage = Img->DataPtrRelocSlots.count(SlotVA) != 0;
-    if (IsImportStorage || IsStaticCodeStorage ||
-        IsRuntimeCallableStorage) {
+    if (IsImportStorage || IsStaticCodeStorage || IsRuntimeCallableStorage) {
       if (IsDataStorage) {
         if (!FatalCodePointerResolution && !FatalDataPointerResolution)
           syncError() << "med_llvm_emitter: callable pointer storage at 0x"

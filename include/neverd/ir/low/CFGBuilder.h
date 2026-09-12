@@ -1571,9 +1571,9 @@ private:
   bool copyGuardedGroupProofSnapshot(
       CFGBuilder &Scratch, const GuardedJumpTableGroupProofContext &Context);
   uint32_t proveGroupDenseMaskBound(const InsnRecord &Rec,
-                                   const JumpTableInfo &Info,
-                                   size_t *AggregateEvidenceBudget,
-                                   bool &Incomplete);
+                                    const JumpTableInfo &Info,
+                                    size_t *AggregateEvidenceBudget,
+                                    bool &Incomplete);
   bool recoverGuardedJumpTableGroup(const BinaryImage &Img, LowFunc &Func,
                                     llvm::ArrayRef<va_t> Candidates,
                                     bool &MadeProgress,

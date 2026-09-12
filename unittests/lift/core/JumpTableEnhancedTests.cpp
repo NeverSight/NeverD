@@ -1076,9 +1076,9 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
   const auto Low =
       Builder.build(Image, Decoder, Function->Addr, Function->Name);
   ASSERT_EQ(Low.JumpTables.size(), 3u);
-  EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
-                .PublishedMemberCount,
-            3u);
+  EXPECT_EQ(
+      Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+      3u);
   unsigned FirstConsumers = 0;
   unsigned SecondConsumers = 0;
   for (const auto &Table : Low.JumpTables) {
@@ -1107,10 +1107,10 @@ TEST_F(JTE_X86_32, DenseMaskGroupKeepsPeeledAndAdjacentDispatches) {
 }
 
 TEST_F(JTE_X86_32, DenseMaskGroupRejectsUnprovedSelectorPaths) {
-  for (const char *Name : {"jt_i386_mask_bypass", "jt_i386_mask_overwrite",
-                           "jt_i386_mask_partial_write", "jt_i386_mask_sparse",
-                           "jt_i386_mask_decrement",
-                           "jt_i386_mask_partial_mask"}) {
+  for (const char *Name :
+       {"jt_i386_mask_bypass", "jt_i386_mask_overwrite",
+        "jt_i386_mask_partial_write", "jt_i386_mask_sparse",
+        "jt_i386_mask_decrement", "jt_i386_mask_partial_mask"}) {
     SCOPED_TRACE(Name);
     auto ImageOrErr = neverd::loadBinary(
         (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
@@ -1118,8 +1118,7 @@ TEST_F(JTE_X86_32, DenseMaskGroupRejectsUnprovedSelectorPaths) {
         << llvm::toString(ImageOrErr.takeError());
     const auto &Image = *ImageOrErr;
     const auto *Function = Image.findSymbol(Name);
-    const auto *Branch =
-        Image.findSymbol(std::string(Name) + "_first_branch");
+    const auto *Branch = Image.findSymbol(std::string(Name) + "_first_branch");
     ASSERT_NE(Function, nullptr);
     ASSERT_NE(Branch, nullptr);
     neverd::Decoder Decoder;
@@ -1127,9 +1126,9 @@ TEST_F(JTE_X86_32, DenseMaskGroupRejectsUnprovedSelectorPaths) {
     neverd::CFGBuilder Builder;
     const auto Low =
         Builder.build(Image, Decoder, Function->Addr, Function->Name);
-    EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
-                  .PublishedMemberCount,
-              0u);
+    EXPECT_EQ(
+        Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+        0u);
     for (const auto &Table : Low.JumpTables)
       EXPECT_NE(Table.InsnAddr, Branch->Addr);
   }
@@ -1152,7 +1151,8 @@ TEST_F(JTE_X86_32, DenseMaskGroupRetainsIndependentRootsAndStorage) {
     ASSERT_NE(First, nullptr);
     ASSERT_NE(Load, nullptr);
     ASSERT_NE(Branch, nullptr);
-    const bool IndependentEntry = std::string_view(Name) == "jt_i386_mask_group";
+    const bool IndependentEntry =
+        std::string_view(Name) == "jt_i386_mask_group";
     const bool IndependentReader =
         std::string_view(Name) == "jt_i386_mask_independent_reader";
     const std::set<neverd::va_t> IndependentRoots{Load->Addr};
@@ -1163,9 +1163,9 @@ TEST_F(JTE_X86_32, DenseMaskGroupRetainsIndependentRootsAndStorage) {
       Builder.setCrossFunctionContinuationRoots(&IndependentRoots);
     const auto Low =
         Builder.build(Image, Decoder, Function->Addr, Function->Name);
-    EXPECT_EQ(Builder.jumpTableGroupLifecycleStateForTesting()
-                  .PublishedMemberCount,
-              0u);
+    EXPECT_EQ(
+        Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+        0u);
     for (const auto &Table : Low.JumpTables) {
       if (IndependentEntry)
         EXPECT_NE(Table.InsnAddr, Branch->Addr);

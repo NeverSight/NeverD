@@ -447,8 +447,8 @@ std::optional<bool> CFGBuilder::compareJumpTableInfo(const JumpTableInfo &Left,
     Same &= Left.IndexDomainAuthenticated == Right.IndexDomainAuthenticated;
     Same &= Left.AuthenticatedGuardBound == Right.AuthenticatedGuardBound;
     Same &= Left.AuthenticatedModuloBound == Right.AuthenticatedModuloBound;
-    Same &= Left.AuthenticatedDenseMaskBound ==
-            Right.AuthenticatedDenseMaskBound;
+    Same &=
+        Left.AuthenticatedDenseMaskBound == Right.AuthenticatedDenseMaskBound;
     Same &= Left.ExactPhysicalStorageRange.has_value() ==
             Right.ExactPhysicalStorageRange.has_value();
     Same &= Left.IsRelative == Right.IsRelative;
