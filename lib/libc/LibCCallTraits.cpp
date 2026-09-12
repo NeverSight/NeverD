@@ -225,6 +225,34 @@ bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
   return false;
 }
 
+NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img) : Image(&Img) {
+  // Preserve first-IAT precedence even when its name is empty or returning.
+  // Only an address absent from the IAT map can use an exact stub spelling.
+  std::set<va_t> ImportAddresses;
+  for (const Import &Imp : Img.Imports)
+    if (ImportAddresses.insert(Imp.IATAddr).second &&
+        isNoReturnFunction(Imp.Name))
+      Targets.insert(Imp.IATAddr);
+  for (const auto &[Address, Index] : Img.ImportStubIndices)
+    if (!ImportAddresses.count(Address) && Index < Img.Imports.size() &&
+        isNoReturnFunction(Img.Imports[Index].Name))
+      Targets.insert(Address);
+
+  // A returning import still permits the first same-address symbol to prove
+  // no-return. Later symbol aliases do not override that first symbol.
+  std::set<va_t> SymbolAddresses;
+  for (const Symbol &Sym : Img.Symbols)
+    if (SymbolAddresses.insert(Sym.Addr).second &&
+        isNoReturnFunction(Sym.Name))
+      Targets.insert(Sym.Addr);
+  Targets.erase(InvalidVA);
+}
+
+bool NoReturnTargetIndex::contains(const BinaryImage &Img, va_t Target) const {
+  return Image == &Img ? Targets.count(Target) != 0
+                       : isNoReturnTarget(Img, Target);
+}
+
 bool isReturnsTwiceFunction(std::string_view Name) {
   // setjmp / _setjmp / sigsetjmp / __sigsetjmp all normalize to one of these.
   return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))

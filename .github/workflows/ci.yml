@@ -430,6 +430,16 @@ jobs:
                    "NeverDLiftTests"),
                   ("ObjCBlockSources.ImportContextRejectsAnotherPipelineImage",
                    "NeverDLiftTests"),
+                  ("IsNoReturnTarget.ResolvesImportVeneerAndStaticSymbol",
+                   "NeverDLibCTests"),
+                  ("IsNoReturnTarget.IndexPreservesFirstNamesAndImportPrecedence",
+                   "NeverDLibCTests"),
+                  ("IsNoReturnTarget.NewIndexObservesChangedImageAndMismatchUsesLiveLookup",
+                   "NeverDLibCTests"),
+                  ("LowInstructionBoundary.ConditionalNoReturnCallKeepsFalsePath",
+                   "NeverDLiftTests"),
+                  ("LowInstructionBoundary.IndexedNoReturnPreservesConditionalAndReturningPaths",
+                   "NeverDLiftTests"),
                   ("FunctionDiscoveryAlignment.DataPrologueCandidatesKeepExactOwnershipAndExistingSymbols",
                    "NeverDLiftTests"),
                   ("MachOInteriorCodePointerCFG.UnrelatedRelocationRootsPreserveLocalCFGAndObserveUpdatedInput",
@@ -464,9 +474,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 108,
-              ("macOS", "macos-patch"): 106,
-              ("Windows", "windows-focused"): 104,
+              ("Linux", "linux-semantic"): 113,
+              ("macOS", "macos-patch"): 111,
+              ("Windows", "windows-focused"): 109,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(
@@ -511,7 +521,8 @@ jobs:
           # CTest accepts any matching label. Select the owning aggregates;
           # additional labels remain part of each exact expected identity.
           owners = (
-              "NeverDLanguageEHTests", "NeverDLiftTests", "NeverDMetadataJSONTests",
+              "NeverDLanguageEHTests", "NeverDLibCTests", "NeverDLiftTests",
+              "NeverDMetadataJSONTests",
               "NeverDMobileTests", "NeverDSessionCAPITests",
               "NeverDPipelineOutcomeTests",
           )

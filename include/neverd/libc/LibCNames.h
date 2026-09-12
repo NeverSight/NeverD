@@ -14,6 +14,7 @@
 #include "neverd/Common.h"
 
 #include <optional>
+#include <set>
 #include <string_view>
 
 namespace neverd {
@@ -136,6 +137,17 @@ bool isNoReturnFunction(std::string_view Name);
 /// veneer or statically linked function symbol.  This is the image-aware
 /// counterpart of isNoReturnFunction() shared by discovery and CFG recovery.
 bool isNoReturnTarget(const BinaryImage &Img, va_t Target);
+
+/// Exact no-return name lookup for one operation on an unchanged image.
+/// The owner must outlive its readers; a different image uses the live lookup.
+class NoReturnTargetIndex {
+  const BinaryImage *Image;
+  std::set<va_t> Targets;
+
+public:
+  explicit NoReturnTargetIndex(const BinaryImage &Img);
+  bool contains(const BinaryImage &Img, va_t Target) const;
+};
 
 /// True if Name is a setjmp-family function that may return more than once
 /// (setjmp / _setjmp / sigsetjmp): control re-enters the call site when a

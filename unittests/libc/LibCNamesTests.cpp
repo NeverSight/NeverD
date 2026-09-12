@@ -401,6 +401,82 @@ TEST(IsNoReturnTarget, ResolvesImportVeneerAndStaticSymbol) {
   EXPECT_FALSE(isNoReturnTarget(Img, InvalidVA));
 }
 
+TEST(IsNoReturnTarget, IndexPreservesFirstNamesAndImportPrecedence) {
+  BinaryImage Img;
+  auto ImportAt = [&](va_t Address, const char *Name) {
+    Import Imp;
+    Imp.Name = Name;
+    Imp.IATAddr = Address;
+    Img.Imports.push_back(std::move(Imp));
+  };
+  ImportAt(0x1000, "warn");
+  ImportAt(0x1000, "abort");
+  ImportAt(0x1100, "_abort");
+  ImportAt(0x1100, "warn");
+  ImportAt(0x1200, "");
+  ImportAt(0x1200, "abort");
+  ImportAt(0x1700, "warn");
+  ImportAt(0x1800, "abort");
+  ImportAt(0, "abort");
+  ImportAt(InvalidVA, "abort");
+  Img.ImportStubIndices[0x1000] = 1;
+  Img.ImportStubIndices[0x1200] = 1;
+  Img.ImportStubIndices[0x1300] = 1;
+  Img.ImportStubIndices[0x1400] = Img.Imports.size();
+  Img.ImportStubIndices[0x1900] = Img.Imports.size();
+  auto SymbolAt = [&](va_t Address, const char *Name) {
+    Symbol Sym;
+    Sym.Addr = Address;
+    Sym.Name = Name;
+    Img.Symbols.push_back(std::move(Sym));
+  };
+  SymbolAt(0x1500, "warn");
+  SymbolAt(0x1500, "abort");
+  SymbolAt(0x1600, "_exit");
+  SymbolAt(0x1600, "warn");
+  SymbolAt(0x1700, "abort");
+  SymbolAt(0x1800, "warn");
+  SymbolAt(0x1900, "__cxa_call_terminate");
+  SymbolAt(0x2000, "");
+  SymbolAt(0x2000, "abort");
+  SymbolAt(InvalidVA, "abort");
+
+  const NoReturnTargetIndex Index(Img);
+  const std::pair<va_t, bool> Cases[] = {
+      {0, true},       {0x1000, false}, {0x1100, true}, {0x1200, false},
+      {0x1300, true},  {0x1400, false}, {0x1500, false}, {0x1600, true},
+      {0x1700, true},  {0x1800, true},  {0x1900, true}, {0x2000, false},
+      {0x9999, false}, {InvalidVA, false}};
+  for (const auto &[Address, Expected] : Cases) {
+    SCOPED_TRACE(Address);
+    EXPECT_EQ(isNoReturnTarget(Img, Address), Expected);
+    EXPECT_EQ(Index.contains(Img, Address), Expected);
+  }
+}
+
+TEST(IsNoReturnTarget, NewIndexObservesChangedImageAndMismatchUsesLiveLookup) {
+  BinaryImage Img, Other;
+  constexpr va_t Target = 0x1234;
+  Import Imp;
+  Imp.Name = "abort";
+  Imp.IATAddr = Target;
+  Img.Imports.push_back(Imp);
+  Imp.Name = "warn";
+  Other.Imports.push_back(std::move(Imp));
+  {
+    const NoReturnTargetIndex Index(Img);
+    EXPECT_TRUE(Index.contains(Img, Target));
+    EXPECT_FALSE(Index.contains(Other, Target));
+    Other.Imports[0].Name = "abort";
+    EXPECT_TRUE(Index.contains(Other, Target));
+  }
+  Img.Imports[0].Name = "warn";
+  const NoReturnTargetIndex Changed(Img);
+  EXPECT_FALSE(Changed.contains(Img, Target));
+  EXPECT_TRUE(Changed.contains(Other, Target));
+  EXPECT_FALSE(Changed.contains(Other, InvalidVA));
+}
+
 TEST(IsReturnsTwiceFunction, SetjmpFamily) {
   EXPECT_TRUE(isReturnsTwiceFunction("setjmp"));
   EXPECT_TRUE(isReturnsTwiceFunction("sigsetjmp"));

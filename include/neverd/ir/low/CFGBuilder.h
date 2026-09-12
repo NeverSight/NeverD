@@ -35,6 +35,10 @@
 
 namespace neverd {
 
+namespace libc {
+class NoReturnTargetIndex;
+}
+
 namespace detail {
 using JumpTableProofPoint = std::pair<va_t, int>;
 using JumpTableProofLocation = std::pair<int, int>;
@@ -629,6 +633,11 @@ public:
   /// sanity checking can reject targets that overlap other functions.
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
+  }
+  /// Share immutable import/symbol lookup across builds of one unchanged
+  /// image. The index must outlive all builds; null retains the live lookup.
+  void setNoReturnTargetIndex(const libc::NoReturnTargetIndex *Index) {
+    NoReturnTargets = Index;
   }
   /// Provide exception-metadata-proven continuation addresses owned by the
   /// function passed to build().  These are intentionally owner-scoped rather
@@ -2439,6 +2448,7 @@ private:
   size_t RelativeRelocationRootSourceCacheBuildCountForTesting = 0;
   size_t RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   const std::set<va_t> *KnownFuncEntries = nullptr;
+  const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
   const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
   /// Owned one-shot history for the next build, plus the snapshot active in

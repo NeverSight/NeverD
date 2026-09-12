@@ -13,6 +13,7 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/ARMRegs.h"
 #include "neverd/lift/LiftCommon.h"
 #include "neverd/lift/X86Regs.h"
@@ -634,7 +635,8 @@ TEST(LowInstructionBoundary, IntegerAndMaskUsesOutputAndDynamicWidths) {
 
 LowFunc buildFunction(Arch Architecture, InstructionMode Mode,
                       std::vector<uint8_t> Bytes,
-                      std::vector<Symbol> Symbols = {}) {
+                      std::vector<Symbol> Symbols = {},
+                      bool UseNoReturnIndex = false) {
   BinaryImage Image;
   Image.Arch = Architecture;
   Image.Mode = Mode;
@@ -658,6 +660,11 @@ LowFunc buildFunction(Arch Architecture, InstructionMode Mode,
     return {};
   }
   CFGBuilder Builder;
+  std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
+  if (UseNoReturnIndex) {
+    NoReturnTargets.emplace(Image);
+    Builder.setNoReturnTargetIndex(&*NoReturnTargets);
+  }
   return Builder.build(Image, Dec, kEntry, "instruction_boundaries");
 }
 
@@ -4913,6 +4920,45 @@ TEST(LowInstructionBoundary, ConditionalNoReturnCallKeepsFalsePath) {
         return Op.Opcode == NdOp::CALL && Op.DoesNotReturn;
       }));
   EXPECT_TRUE(verifyMedFunc(Med, "test-predicated-no-return-call"));
+}
+
+TEST(LowInstructionBoundary, IndexedNoReturnPreservesConditionalAndReturningPaths) {
+  for (bool Indexed : {false, true})
+    for (bool Conditional : {false, true})
+      for (bool NoReturn : {false, true}) {
+        SCOPED_TRACE(testing::Message() << "indexed=" << Indexed
+                                       << " conditional=" << Conditional
+                                       << " noreturn=" << NoReturn);
+        Symbol Callee = Symbol::makeFunc(kEntry + 0x10);
+        Callee.Name = NoReturn ? "abort" : "warn";
+        // bl/bleq callee; bx lr
+        LowFunc Function = buildFunction(
+            Arch::ARM, InstructionMode::Default,
+            {0x02, 0x00, 0x00, static_cast<uint8_t>(Conditional ? 0x0b : 0xeb),
+             0x1e, 0xff, 0x2f, 0xe1},
+            {std::move(Callee)}, Indexed);
+        const LowInstructionBoundary *Call = nullptr;
+        bool HasFallthrough = false;
+        for (const auto &Block : Function.Blocks)
+          for (const auto &Boundary : Block.InstructionBoundaries) {
+            if (Boundary.Address == kEntry)
+              Call = &Boundary;
+            HasFallthrough |= Boundary.Address == kEntry + 4;
+          }
+        ASSERT_NE(Call, nullptr);
+        EXPECT_EQ(Call->Control, Conditional
+                                     ? LowInstructionControl::ConditionalCall
+                                     : LowInstructionControl::Call);
+        EXPECT_EQ(hasLowInstructionControlFlag(
+                      Call->ControlFlags, LowInstructionControlFlag::NoReturn),
+                  NoReturn);
+        EXPECT_EQ(HasFallthrough, Conditional || !NoReturn);
+        EXPECT_FALSE(static_cast<bool>(validateLowInstructionBoundaries(
+            Function, LowInstructionBoundaryRequirement::Required)));
+        MedFunc Med = LowToMedConverter().convert(Function, Arch::ARM,
+                                                  BinaryFormat::ELF);
+        EXPECT_TRUE(verifyMedFunc(Med, "indexed-no-return-control"));
+      }
 }
 
 TEST(LowInstructionBoundary, CrossChecksControlAgainstLowOpSlice) {

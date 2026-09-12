@@ -17,6 +17,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -2798,6 +2799,7 @@ void Pipeline::buildLowIR(
     const PipelineOptions &Opts, DebugContext *Dbg, PipelineResult &Result) {
   const size_t Total = Candidates.size();
   std::vector<LowFunc> AllLow(Total);
+  const libc::NoReturnTargetIndex NoReturnTargets(Img);
 
   // The set of all detected function entries lets each CFG builder recognise an
   // unconditional `jmp` to *another* function as a tail call (call + ret)
@@ -2827,6 +2829,7 @@ void Pipeline::buildLowIR(
       return;
     CFGBuilder LocalCFG;
     LocalCFG.setKnownFuncEntries(&FuncEntries);
+    LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
     for (size_t I; (I = Claim()) < N;) {
       AllLow[I] = LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                  Candidates[I].second);
@@ -2868,6 +2871,7 @@ void Pipeline::buildLowIR(
         return;
       CFGBuilder LocalCFG;
       LocalCFG.setKnownFuncEntries(&FuncEntries);
+      LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
       LocalCFG.setProtectedJumpTableRelocationSlots(&ProtectedRelocationSlots);
       LocalCFG.setUnsafeJumpTableBranches(&UnsafeJumpTableBranches);
       LocalCFG.setPreservePotentialJumpTableBranches(

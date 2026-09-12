@@ -273,7 +273,8 @@ bool CFGBuilder::isNoReturnCall(const InsnRecord &Rec) const {
     }
   if (Target == InvalidVA)
     return false;
-  return libc::isNoReturnTarget(*CurrentImg, Target);
+  return NoReturnTargets ? NoReturnTargets->contains(*CurrentImg, Target)
+                         : libc::isNoReturnTarget(*CurrentImg, Target);
 }
 
 void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {
