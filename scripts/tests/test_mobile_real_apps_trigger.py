@@ -1,6 +1,7 @@
 """Cloud trigger identity mutations. REST responses are self-authored mocks."""
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
+import hashlib
 import io
 import json
 import os
@@ -226,6 +227,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("sccache", active.lower())
         self.assertNotRegex(active, r"(?m)^\s*[\w-]+:\s*(?:write|write-all)\s*$")
         jobs = dict(re.findall(r"(?ms)^  ([\w-]+):\n(.*?)(?=^  \S|\Z)", active.split("\njobs:\n", 1)[1]))
+        # Temporary original-input probe only. Remove this exact-body exception
+        # together with original-wmf once the retained native timeout is closed.
+        self.assertIn("original-wmf", jobs)
+        self.assertEqual(hashlib.sha256(jobs.pop("original-wmf").encode()).hexdigest(),
+                         "f02668717172e6cf5fada6c702b2d966c2186f24ee1ea90c6465d35a5d167f51")
         dependencies = {
             "producer": ["trigger"],
             "guards": ["trigger"],
@@ -266,6 +272,21 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_actual_workflow_preserves_read_only_trigger_and_same_consumer_identity(self):
         self.assert_contract(self.workflow())
+
+    def test_original_input_probe_cannot_change_identity_budget_or_permissions(self):
+        text = self.workflow()
+        before, probe = text.split("  original-wmf:\n", 1)
+        probe, after = probe.split("  android:\n", 1)
+        for old, new in (("[trigger, build-macos]", "[trigger]"),
+                         ("[original-wmf]", "[other-input]"),
+                         ("actions: read", "actions: write"),
+                         ("10309539118", "10309539119"),
+                         ("== 180", "== 181")):
+            changed = probe.replace(old, new, 1)
+            self.assertNotEqual(changed, probe, old)
+            with self.subTest(mutation=old), self.assertRaises(AssertionError):
+                self.assert_contract(before + "  original-wmf:\n" + changed +
+                                     "  android:\n" + after)
 
     def test_cache_write_trigger_untrusted_checkout_and_gate_bypass_mutations_fail(self):
         text = self.workflow()

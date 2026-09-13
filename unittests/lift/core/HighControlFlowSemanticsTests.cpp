@@ -234,7 +234,195 @@ TEST(HighControlFlowSemantics, ExclusiveReturnCanStillBeInlined) {
   structureIfElse(F, 10);
   EXPECT_EQ(execute(F, 0), 9u);
   EXPECT_EQ(execute(F, 1), 7u);
+  ASSERT_EQ(F.Body.front().Kind, StmtKind::If);
+  ASSERT_FALSE(F.Body.front().Body.empty());
+  EXPECT_EQ(F.Body.front().Body.back().Kind, StmtKind::Return);
 }
+
+size_t statementCount(const HighFunc &F) {
+  size_t Count = 0;
+  walkStmts(F.Body, [&](const HighStmt &) { ++Count; });
+  return Count;
+}
+
+HighStmt nestedValue(va_t Address) {
+  auto Tail = assign(0, 2, 17);
+  for (unsigned Depth = 0; Depth < 8; ++Depth) {
+    HighStmt Branch;
+    Branch.Kind = StmtKind::IfElse;
+    Branch.Cond = HighExpr::makeConst(1, 1);
+    Branch.Body.push_back(std::move(Tail));
+    Branch.ElseBody = {assign(0, 2, 19)};
+    Tail = std::move(Branch);
+  }
+  Tail.Addr = Address;
+  return Tail;
+}
+
+TEST(HighControlFlowSemantics, SharedNestedTailKeepsPhiEdgesWithoutGrowth) {
+  for (bool WithMed : {false, true}) {
+    HighFunc F;
+    auto Branch = conditional(0x1004, 0x1040);
+    auto Phi = assign(0x1004, 1, 7);
+    Phi.IsPhiCopy = true;
+    Branch.Body.insert(Branch.Body.begin(), Phi);
+    F.Body = {assign(0x1000, 1, 3), Branch, assign(0x1008, 1, 11),
+              nestedValue(0x1040),
+              result(0x1080, HighExpr::makeBinop(NdOp::INT_ADD, local(1),
+                                                local(2)))};
+    MedFunc Med;
+    Med.Blocks.resize(1);
+    Med.Blocks.front().StartAddr = 0x1040;
+    Med.Blocks.front().Preds = {0};
+    const size_t Before = statementCount(F);
+    ASSERT_EQ(execute(F, 0), 28u);
+    ASSERT_EQ(execute(F, 1), 24u);
+    structureIfElse(F, 10, WithMed ? &Med : nullptr);
+    EXPECT_EQ(execute(F, 0), 28u);
+    EXPECT_EQ(execute(F, 1), 24u);
+    EXPECT_LE(statementCount(F), Before);
+  }
+}
+
+TEST(HighControlFlowSemantics, ExternalElseTailIsNotCloned) {
+  HighFunc F;
+  F.Body = {conditional(0x1000, 0x1080), jump(0x1004, 0x1040),
+            nestedValue(0x1040), result(0x1048, local(2)),
+            result(0x1080, HighExpr::makeConst(7, 8))};
+  const size_t Before = statementCount(F);
+  ASSERT_EQ(execute(F, 0), 17u);
+  ASSERT_EQ(execute(F, 1), 7u);
+  structureIfElse(F, 10);
+  EXPECT_EQ(execute(F, 0), 17u);
+  EXPECT_EQ(execute(F, 1), 7u);
+  EXPECT_LE(statementCount(F), Before);
+}
+
+TEST(HighControlFlowSemantics, BackwardTargetDoesNotConsumeItsOwnConditional) {
+  HighFunc F;
+  auto Increment = assign(0x1004, 1, 0);
+  Increment.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(1, 8));
+  auto Branch = conditional(0x1008, 0x1004);
+  Branch.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL, local(1), local(0));
+  F.Body = {assign(0x1000, 1, 0), Increment, Branch, result(0x1010, local(1))};
+  const size_t Before = statementCount(F);
+  for (unsigned Count = 1; Count <= 8; ++Count)
+    ASSERT_EQ(execute(F, Count), Count);
+  structureIfElse(F, 10);
+  for (unsigned Count = 1; Count <= 8; ++Count)
+    EXPECT_EQ(execute(F, Count), Count);
+  EXPECT_LE(statementCount(F), Before);
+}
+
+TEST(HighControlFlowSemantics, SwitchEntryIntoTargetInteriorRemainsVisible) {
+  for (bool DefaultEntry : {false, true}) {
+    HighFunc F;
+    HighStmt Dispatch;
+    Dispatch.Kind = StmtKind::Switch;
+    Dispatch.Addr = 0x1000;
+    Dispatch.SwitchExpr = local(0);
+    Dispatch.Cases.push_back(
+        {0, {jump(0x1000, DefaultEntry ? 0x1010 : 0x1084)}});
+    Dispatch.DefaultBody = {jump(0x1000, DefaultEntry ? 0x1084 : 0x1010)};
+    F.Body = {Dispatch, conditional(0x1010, 0x1080), jump(0x1014, 0x10a0),
+              assign(0x1080, 1, 7),
+              result(0x1084, HighExpr::makeConst(9, 8)),
+              result(0x10a0, HighExpr::makeConst(11, 8))};
+    const auto Zero = execute(F, 0), One = execute(F, 1);
+    ASSERT_EQ(Zero, DefaultEntry ? 11u : 9u);
+    ASSERT_EQ(One, 9u);
+    const size_t Before = statementCount(F);
+    structureIfElse(F, 10);
+    EXPECT_EQ(execute(F, 0), Zero);
+    EXPECT_EQ(execute(F, 1), One);
+    EXPECT_LE(statementCount(F), Before);
+  }
+}
+
+TEST(HighControlFlowSemantics, OverlappingTargetRunRetainsItsSingleOwner) {
+  HighFunc F;
+  F.Body = {conditional(0x1000, 0x1004), jump(0x1004, 0x1020),
+            result(0x1020, HighExpr::makeConst(7, 8))};
+  const size_t Before = statementCount(F);
+  ASSERT_EQ(execute(F, 0), 7u);
+  ASSERT_EQ(execute(F, 1), 7u);
+  structureIfElse(F, 10);
+  EXPECT_EQ(execute(F, 0), 7u);
+  EXPECT_EQ(execute(F, 1), 7u);
+  EXPECT_LE(statementCount(F), Before);
+}
+
+TEST(HighControlFlowSemantics, MovedBranchKeepsItsNonadjacentSuccessor) {
+  for (bool ExplicitGoto : {false, true}) {
+    HighFunc F;
+    F.Body = {conditional(0x1000, 0x1080), assign(0x1004, 1, 3),
+              jump(0x1008, 0x1100),
+              result(0x1040, HighExpr::makeConst(91, 8)),
+              assign(0x1080, 1, 7)};
+    if (ExplicitGoto)
+      F.Body.push_back(jump(0x1084, 0x1100));
+    F.Body.push_back(result(0x1100, local(1)));
+    const size_t Before = statementCount(F);
+    ASSERT_EQ(execute(F, 0), 3u);
+    ASSERT_EQ(execute(F, 1), 7u);
+    structureIfElse(F, 10);
+    EXPECT_EQ(execute(F, 0), 3u);
+    EXPECT_EQ(execute(F, 1), 7u);
+    EXPECT_LE(statementCount(F), Before);
+  }
+}
+
+TEST(HighControlFlowSemantics, ImmediateTargetKeepsBothEdgesAndPhiCopies) {
+  for (bool WithPhi : {false, true}) {
+    HighFunc F;
+    auto Branch = conditional(0x1004, 0x1008);
+    if (WithPhi) {
+      auto Phi = assign(0x1004, 1, 7);
+      Phi.IsPhiCopy = true;
+      Branch.Body.insert(Branch.Body.begin(), Phi);
+    }
+    F.Body = {assign(0x1000, 1, 3), Branch, result(0x1008, local(1))};
+    ASSERT_EQ(execute(F, 0), 3u);
+    ASSERT_EQ(execute(F, 1), WithPhi ? 7u : 3u);
+    structureIfElse(F, 10);
+    EXPECT_EQ(execute(F, 0), 3u);
+    EXPECT_EQ(execute(F, 1), WithPhi ? 7u : 3u);
+  }
+}
+
+TEST(HighControlFlowSemantics, ExceptionalTargetKeepsItsExternalEntry) {
+  HighFunc F;
+  F.Body = {conditional(0x1000, 0x1020), jump(0x1004, 0x1040),
+            result(0x1028, HighExpr::makeConst(7, 8)),
+            result(0x1040, HighExpr::makeConst(9, 8))};
+  MedFunc Med;
+  Med.Blocks.resize(3);
+  for (int I = 0; I < 3; ++I) {
+    Med.Blocks[I].Id = I;
+    Med.Blocks[I].StartAddr = 0x1000 + I * 0x20;
+  }
+  Med.Blocks[0].Succs = {1, 2};
+  Med.Blocks[1].Preds = {0};
+  Med.Blocks[2].Preds = {0};
+  ExceptionalEdge ToHandler;
+  ToHandler.BlockId = 1;
+  ToHandler.TargetVA = 0x1020;
+  ToHandler.Kind = ExceptionalEdgeKind::ItaniumCatchPad;
+  Med.Blocks[2].ExceptionalSuccs = {ToHandler};
+  ToHandler.BlockId = 2;
+  Med.Blocks[1].ExceptionalPreds = {ToHandler};
+  auto EnterHandler = [](HighFunc Handler) {
+    Handler.Body.insert(Handler.Body.begin(), jump(0, 0x1020));
+    return execute(Handler, 0);
+  };
+  ASSERT_EQ(EnterHandler(F), 7u);
+  structureIfElse(F, 10, &Med);
+  EXPECT_EQ(execute(F, 0), 9u);
+  EXPECT_EQ(execute(F, 1), 7u);
+  EXPECT_EQ(EnterHandler(F), 7u);
+}
+
 MedVar machineValue(int Id, Arch Architecture) {
   MedVar V;
   V.Kind = MedVar::Temp;

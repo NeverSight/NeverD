@@ -79,27 +79,27 @@ static ElseTargetInfo findElseTarget(const std::vector<HighStmt> &Body,
 }
 
 struct StmtCollectResult {
-  std::vector<HighStmt> Stmts;
   size_t Start = SIZE_MAX, End = SIZE_MAX;
 };
 
-/// Collect a run of statements beginning at \p Target, stopping at
-/// \p Merge or a terminating goto/return.
+static size_t findTargetIndex(AddrMap &AM, va_t Target) {
+  auto It = AM.Idx.find(Target);
+  if (It != AM.Idx.end())
+    return It->second;
+  AM.ensureSorted();
+  auto LB = std::lower_bound(AM.Sorted.begin(), AM.Sorted.end(),
+                             std::make_pair(Target, size_t(0)));
+  return LB != AM.Sorted.end() && LB->first - Target <= 16 ? LB->second
+                                                         : SIZE_MAX;
+}
+
+/// Locate a run without copying its nested statement trees. Ownership must be
+/// established before moving any of its statements into a branch.
 static StmtCollectResult
 collectStmtsForTarget(const std::vector<HighStmt> &Body, AddrMap &AM,
                       va_t Target, va_t Merge) {
   StmtCollectResult Result;
-  size_t StartIdx = SIZE_MAX;
-  auto It = AM.Idx.find(Target);
-  if (It != AM.Idx.end()) {
-    StartIdx = It->second;
-  } else {
-    AM.ensureSorted();
-    auto LB = std::lower_bound(AM.Sorted.begin(), AM.Sorted.end(),
-                               std::make_pair(Target, size_t(0)));
-    if (LB != AM.Sorted.end() && LB->first - Target <= 16)
-      StartIdx = LB->second;
-  }
+  const size_t StartIdx = findTargetIndex(AM, Target);
   if (StartIdx == SIZE_MAX)
     return Result;
   Result.Start = StartIdx;
@@ -107,12 +107,62 @@ collectStmtsForTarget(const std::vector<HighStmt> &Body, AddrMap &AM,
     auto &S = Body[K];
     if (Merge != 0 && S.Addr != 0 && S.Addr >= Merge)
       break;
-    Result.Stmts.push_back(S);
     Result.End = K + 1;
     if (S.Kind == StmtKind::Return || S.Kind == StmtKind::Goto)
       break;
   }
   return Result;
+}
+
+static bool endsWithTransfer(const HighStmt &S) {
+  return S.Kind == StmtKind::Goto || S.Kind == StmtKind::Return ||
+         S.Kind == StmtKind::Break || S.Kind == StmtKind::Continue;
+}
+
+/// Moving a shared label into one branch would hide another incoming edge.
+/// Preserve its original goto instead of cloning and retaining the target tree.
+static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
+                    StmtCollectResult Run, size_t Owner, const MedFunc *Med) {
+  if (Run.Start == SIZE_MAX || Run.End == SIZE_MAX || Run.Start <= Owner ||
+      Run.Start >= Run.End)
+    return false;
+  if (Run.Start != Owner + 1 && !endsWithTransfer(Body[Run.Start - 1]))
+    return false;
+
+  auto Contains = [&](va_t Address) {
+    const size_t Index = findTargetIndex(AM, Address);
+    return Index >= Run.Start && Index < Run.End;
+  };
+  for (size_t K = 0; K < Body.size(); ++K) {
+    if (K == Owner || (K >= Run.Start && K < Run.End))
+      continue;
+    bool HasEntry = false;
+    auto Check = [&](const HighStmt &S) {
+      if (S.Kind == StmtKind::Goto && Contains(S.GotoTarget))
+        HasEntry = true;
+    };
+    const auto &Other = Body[K];
+    Check(Other);
+    walkStmts(Other.Body, Check);
+    walkStmts(Other.ElseBody, Check);
+    for (const auto &Case : Other.Cases)
+      walkStmts(Case.Body, Check);
+    walkStmts(Other.DefaultBody, Check);
+    for (const auto &Clause : Other.EHClauseBodies)
+      walkStmts(Clause, Check);
+    if (HasEntry)
+      return false;
+  }
+  if (Med)
+    for (const auto &Block : Med->Blocks) {
+      const va_t Start = Block.StartAddr
+                             ? Block.StartAddr
+                             : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
+      if ((Block.Preds.size() > 1 || !Block.ExceptionalPreds.empty()) &&
+          Contains(Start))
+        return false;
+    }
+  return true;
 }
 
 /// Find the goto destination of the block starting at \p Target.
@@ -187,8 +237,10 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
       // A block can start before its first surviving HighIR statement (for
       // example COPY return-register, RET). Its own return is never part of
       // the conditional's fallthrough arm.
-      auto TargetRun = collectStmtsForTarget(Func.Body, AM, IfTarget, 0);
-      auto Else = findElseTarget(Func.Body, NextI, IfTarget, TargetRun.Start);
+      const size_t TargetIndex = findTargetIndex(AM, IfTarget);
+      if (TargetIndex == SIZE_MAX || TargetIndex <= static_cast<size_t>(I))
+        continue;
+      auto Else = findElseTarget(Func.Body, NextI, IfTarget, TargetIndex);
 
       // Early-return fold.
       if (TakenCopies.empty() && Else.HasEarlyReturn && Else.Target == 0 &&
@@ -234,88 +286,59 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
 
       auto IfResult =
           collectStmtsForTarget(Func.Body, AM, IfTarget, MergeTarget);
-
-      std::vector<HighStmt> ElseBody;
-      size_t InlineStart = NextI;
-      size_t InlineEnd = NextI;
-
-      if (Else.GotoIdx > NextI) {
-        for (size_t K = NextI; K <= Else.GotoIdx; ++K)
-          ElseBody.push_back(Func.Body[K]);
-        InlineEnd = Else.GotoIdx + 1;
-      } else if (Else.Target != 0) {
-        auto ElseResult =
-            collectStmtsForTarget(Func.Body, AM, Else.Target, MergeTarget);
-        ElseBody = std::move(ElseResult.Stmts);
-        InlineEnd = Else.GotoIdx + 1;
-      }
-
-      if (IfResult.Stmts.empty() && ElseBody.empty())
+      const size_t InlineEnd = Else.Target != 0 ? Else.GotoIdx + 1 : NextI;
+      // The immediately following target also belongs to the false edge.
+      if (IfResult.Start == NextI ||
+          !ownsRun(Func.Body, AM, IfResult, I, Med) ||
+          (InlineEnd > NextI &&
+           (!ownsRun(Func.Body, AM, {NextI, InlineEnd}, I, Med) ||
+            (IfResult.Start < InlineEnd && IfResult.End > NextI))))
         continue;
 
-      IfResult.Stmts.insert(IfResult.Stmts.begin(), TakenCopies.begin(),
-                            TakenCopies.end());
-      trimMergeGoto(IfResult.Stmts, MergeTarget);
-      trimMergeGoto(ElseBody, MergeTarget);
+      // A run stopped at the merge still has a fallthrough successor. Moving
+      // it must preserve that edge even when the merge is not adjacent to I.
+      const bool NeedsSuccessor =
+          !endsWithTransfer(Func.Body[IfResult.End - 1]);
+      if (NeedsSuccessor &&
+          (IfResult.End == Func.Body.size() ||
+           Func.Body[IfResult.End].Addr == 0))
+        continue;
 
-      if (!ElseBody.empty()) {
+      std::vector<std::pair<size_t, size_t>> Ranges{
+          {IfResult.Start, IfResult.End}};
+      if (InlineEnd > NextI)
+        Ranges.push_back({NextI, InlineEnd});
+      size_t Continuation = NextI;
+      for (size_t N = 0; N < Ranges.size(); ++N)
+        for (auto [Start, End] : Ranges)
+          if (Continuation >= Start && Continuation < End)
+            Continuation = End;
+      const bool MergeIsContinuation =
+          MergeTarget != 0 && Continuation < Func.Body.size() &&
+          findTargetIndex(AM, MergeTarget) == Continuation;
+
+      std::vector<HighStmt> IfBody = std::move(TakenCopies);
+      for (size_t K = IfResult.Start; K < IfResult.End; ++K)
+        IfBody.push_back(std::move(Func.Body[K]));
+      if (NeedsSuccessor) {
+        HighStmt Transfer;
+        Transfer.Kind = StmtKind::Goto;
+        Transfer.GotoTarget = Func.Body[IfResult.End].Addr;
+        IfBody.push_back(std::move(Transfer));
+      }
+      std::vector<HighStmt> ElseBody;
+      for (size_t K = NextI; K < InlineEnd; ++K)
+        ElseBody.push_back(std::move(Func.Body[K]));
+      if (MergeIsContinuation) {
+        trimMergeGoto(IfBody, MergeTarget);
+        trimMergeGoto(ElseBody, MergeTarget);
+      }
+      if (!ElseBody.empty())
         Stmt.Kind = StmtKind::IfElse;
-        Stmt.Body = std::move(IfResult.Stmts);
-        Stmt.ElseBody = std::move(ElseBody);
-      } else {
-        Stmt.Body = std::move(IfResult.Stmts);
-      }
+      Stmt.Body = std::move(IfBody);
+      Stmt.ElseBody = std::move(ElseBody);
 
-      // Erase inlined ranges (largest-first to preserve indices).
-      std::vector<std::pair<size_t, size_t>> Ranges;
-      // Inlining one incoming edge does not consume the target's other
-      // incoming edges. In particular a shared return after a loop remains
-      // reachable by fallthrough even after a preceding conditional has an
-      // inline copy of it.
-      bool SharedTarget = false;
-      if (IfResult.Start != SIZE_MAX && IfResult.Start > 0) {
-        const auto &Previous = Func.Body[IfResult.Start - 1];
-        SharedTarget = Previous.Kind != StmtKind::Goto &&
-                       Previous.Kind != StmtKind::Return &&
-                       Previous.Kind != StmtKind::Break &&
-                       Previous.Kind != StmtKind::Continue &&
-                       IfResult.Start != NextI;
-      }
-      for (size_t K = 0; K < Func.Body.size() && !SharedTarget; ++K) {
-        if (K == static_cast<size_t>(I) ||
-            (IfResult.Start != SIZE_MAX && K >= IfResult.Start &&
-             K < IfResult.End))
-          continue;
-        const auto &Other = Func.Body[K];
-        auto Check = [&](const HighStmt &Candidate) {
-          if (Candidate.Kind == StmtKind::Goto &&
-              Candidate.GotoTarget == IfTarget)
-            SharedTarget = true;
-        };
-        Check(Other);
-        walkStmts(Other.Body, Check);
-        walkStmts(Other.ElseBody, Check);
-      }
-      if (Med) {
-        // The original CFG is authoritative even after a neighboring block
-        // has been folded and its terminating goto removed.
-        for (const auto &Block : Med->Blocks) {
-          const va_t Start =
-              Block.StartAddr
-                  ? Block.StartAddr
-                  : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
-          if (Start == IfTarget) {
-            SharedTarget = Block.Preds.size() > 1;
-            break;
-          }
-        }
-      }
-      if (!SharedTarget && IfResult.Start != SIZE_MAX &&
-          IfResult.End != SIZE_MAX && IfResult.Start > static_cast<size_t>(I))
-        Ranges.push_back({IfResult.Start, IfResult.End});
-      if (InlineEnd > InlineStart)
-        Ranges.push_back({InlineStart, InlineEnd});
-
+      // Erase moved ranges largest-first; the preflight proved disjointness.
       std::sort(Ranges.begin(), Ranges.end(),
                 [](auto &A, auto &B) { return A.first > B.first; });
       for (auto &[Start, End] : Ranges) {
