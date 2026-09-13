@@ -117,7 +117,7 @@ TEST_F(AArch64_RoundTrip, ParameterWidthFlowsThroughBranchPhi) {
   // This only validates generated C syntax.  A Darwin cross-target on Linux
   // suppresses the host libc include paths even though no target ABI is used.
   auto Syntax = exec("clang", {"-fsyntax-only", CFile.string()});
-  EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
+  EXPECT_EQ(Syntax.exitCode, 0) << R.err << "\n" << Syntax.err << "\n" << C;
 }
 
 TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
@@ -197,5 +197,5 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
   // This only validates generated C syntax.  A Darwin cross-target on Linux
   // suppresses the host libc include paths even though no target ABI is used.
   auto Syntax = exec("clang", {"-fsyntax-only", CFile.string()});
-  EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
+  EXPECT_EQ(Syntax.exitCode, 0) << R.err << "\n" << Syntax.err << "\n" << C;
 }

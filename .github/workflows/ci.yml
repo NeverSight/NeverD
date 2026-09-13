@@ -731,6 +731,7 @@ jobs:
         env:
           PYTHON: ${{ matrix.python }}
           TEST_PROFILE: ${{ matrix.test_profile }}
+          NEVERD_HIGH_TRACE_FUNCTION: 'test_post_call_x1'
 
       - name: Upload mobile native regression evidence
         if: ${{ always() && steps.default_build.outcome == 'success' }}

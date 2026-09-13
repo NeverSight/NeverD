@@ -447,17 +447,18 @@ std::pair<HighFunc, MedFunc> branchWithInternalLoop() {
   HighStmt Exit;
   Exit.Kind = StmtKind::If;
   Exit.Addr = 0x1058;
-  Exit.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(1),
-                                HighExpr::makeConst(3, 8));
+  Exit.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(1), HighExpr::makeConst(3, 8));
   Exit.Body = {Break};
   HighStmt Loop;
   Loop.Kind = StmtKind::While;
   Loop.Addr = Loop.LoopHeaderAddr = 0x1050;
   Loop.Cond = HighExpr::makeConst(1, 1);
   Loop.Body = {Increment, Exit};
-  F.Body = {conditional(0x1000, 0x1040), jump(0x1004, 0x1080),
-            assign(0x1044, 1, 0), Loop, result(0x1060, local(1)),
-            result(0x1080, HighExpr::makeConst(7, 8))};
+  F.Body = {
+      conditional(0x1000, 0x1040), jump(0x1004, 0x1080),
+      assign(0x1044, 1, 0),        Loop,
+      result(0x1060, local(1)),    result(0x1080, HighExpr::makeConst(7, 8))};
 
   MedFunc Med;
   Med.Blocks.resize(5);
@@ -471,8 +472,8 @@ std::pair<HighFunc, MedFunc> branchWithInternalLoop() {
     MedOp Last;
     Last.Addr = Ends[I];
     Last.Opcode = I == 0 || I == 2 ? NdOp::COND_BR
-                  : I == 1       ? NdOp::BRANCH
-                                 : NdOp::RETURN;
+                  : I == 1         ? NdOp::BRANCH
+                                   : NdOp::RETURN;
     Block.Ops = {Last};
   }
   Med.Blocks[0].Succs = {1, 4};
@@ -495,14 +496,14 @@ TEST(HighControlFlowSemantics, InternalLoopPredecessorsKeepTheirBranchOwner) {
   EXPECT_EQ(execute(F, 1), 3u);
   EXPECT_LE(statementCount(F), Before);
   ASSERT_EQ(F.Body.front().Kind, StmtKind::If);
-  EXPECT_TRUE(std::any_of(F.Body.front().Body.begin(), F.Body.front().Body.end(),
-                          [](const HighStmt &S) {
-                            return S.Kind == StmtKind::While;
-                          }));
+  EXPECT_TRUE(
+      std::any_of(F.Body.front().Body.begin(), F.Body.front().Body.end(),
+                  [](const HighStmt &S) { return S.Kind == StmtKind::While; }));
   expectUniqueGotoTargets(F);
 }
 
-TEST(HighControlFlowSemantics, UnprovenLoopPredecessorsCannotHideTheSharedTail) {
+TEST(HighControlFlowSemantics,
+     UnprovenLoopPredecessorsCannotHideTheSharedTail) {
   for (unsigned Mode = 0; Mode < 8; ++Mode) {
     SCOPED_TRACE(Mode);
     auto [F, Med] = branchWithInternalLoop();
@@ -540,9 +541,10 @@ TEST(HighControlFlowSemantics, UnprovenLoopPredecessorsCannotHideTheSharedTail) 
     EXPECT_EQ(execute(F, 0), 7u);
     EXPECT_EQ(execute(F, 1), 3u);
     EXPECT_LE(statementCount(F), Before);
-    EXPECT_TRUE(std::any_of(F.Body.begin(), F.Body.end(), [](const HighStmt &S) {
-      return S.Kind == StmtKind::While && S.Addr == 0x1050;
-    }));
+    EXPECT_TRUE(
+        std::any_of(F.Body.begin(), F.Body.end(), [](const HighStmt &S) {
+          return S.Kind == StmtKind::While && S.Addr == 0x1050;
+        }));
     expectUniqueGotoTargets(F);
   }
 }
@@ -555,7 +557,7 @@ TEST(HighControlFlowSemantics, SharedPhiTailDoesNotRequireAnEliminatedLabel) {
   Branch.Body.insert(Branch.Body.begin(), Phi);
   F.Body = {assign(0x1000, 1, 3), Branch, assign(0x1008, 1, 11),
             result(0x1048, HighExpr::makeBinop(NdOp::INT_ADD, local(1),
-                                              HighExpr::makeConst(1, 8)))};
+                                               HighExpr::makeConst(1, 8)))};
   const size_t Before = statementCount(F);
   ASSERT_EQ(execute(F, 0), 12u);
   ASSERT_EQ(execute(F, 1), 8u);
@@ -570,13 +572,13 @@ TEST(HighControlFlowSemantics, SharedPhiTailDoesNotRequireAnEliminatedLabel) {
 
 HighFunc nestedDiamondWithSharedReturn() {
   auto Outer = conditional(0x1000, 0x1080);
-  Outer.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
-                                 HighExpr::makeConst(0, 8));
+  Outer.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(0), HighExpr::makeConst(0, 8));
   HighStmt Inner;
   Inner.Kind = StmtKind::IfElse;
   Inner.Addr = 0x1004;
-  Inner.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
-                                 HighExpr::makeConst(1, 8));
+  Inner.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(0), HighExpr::makeConst(1, 8));
   Inner.Body = {assign(0x1040, 1, 1), jump(0x1044, 0x1100)};
   Inner.ElseBody = {assign(0x1060, 1, 2), jump(0x1064, 0x1100)};
   HighFunc F;

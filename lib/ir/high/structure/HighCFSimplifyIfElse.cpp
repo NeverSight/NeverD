@@ -165,7 +165,7 @@ static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
     std::unordered_map<va_t, unsigned> AddressOwners;
     bool HaveAddressOwners = false;
     auto OwnsPredecessor = [&](int PredId, const MedBlock &Block,
-                              bool IsEntry) {
+                               bool IsEntry) {
       if (PredId < 0 || static_cast<size_t>(PredId) >= Med->Blocks.size())
         return false;
       const auto &Pred = Med->Blocks[PredId];
@@ -179,8 +179,8 @@ static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
       if (!HaveAddressOwners) {
         for (size_t K = 0; K < Body.size(); ++K) {
           const unsigned Scope = K >= Run.Start && K < Run.End ? 1
-                                 : K == Owner                 ? 2
-                                                              : 4;
+                                 : K == Owner                  ? 2
+                                                               : 4;
           walkStatementTree(Body[K], [&](const HighStmt &S) {
             if (S.Addr && S.Addr != InvalidVA)
               AddressOwners[S.Addr] |= Scope;
@@ -202,7 +202,8 @@ static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
       if (!Block.ExceptionalPreds.empty())
         return false;
       if (Block.Preds.size() > 1) {
-        if (Block.Id < 0 || static_cast<size_t>(Block.Id) >= Med->Blocks.size() ||
+        if (Block.Id < 0 ||
+            static_cast<size_t>(Block.Id) >= Med->Blocks.size() ||
             &Med->Blocks[Block.Id] != &Block)
           return false;
         const bool IsEntry = findTargetIndex(AM, Start) == Run.Start;
@@ -271,8 +272,7 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
     for (int I = static_cast<int>(Func.Body.size()) - 1; I >= 0; --I) {
       auto &Stmt = Func.Body[I];
       if (Stmt.Kind == StmtKind::IfElse && !Stmt.Body.empty() &&
-          !Stmt.ElseBody.empty() &&
-          Stmt.Body.back().Kind == StmtKind::Goto &&
+          !Stmt.ElseBody.empty() && Stmt.Body.back().Kind == StmtKind::Goto &&
           Stmt.ElseBody.back().Kind == StmtKind::Goto) {
         const va_t Target = Stmt.Body.back().GotoTarget;
         if (!Target || Target == InvalidVA ||
@@ -290,8 +290,9 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
           if (Med)
             for (const auto &Block : Med->Blocks) {
               const va_t Start =
-                  Block.StartAddr ? Block.StartAddr
-                                  : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
+                  Block.StartAddr
+                      ? Block.StartAddr
+                      : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
               if (Start == Address)
                 return true;
               for (const auto &Edge : Block.ExceptionalPreds)
