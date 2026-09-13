@@ -270,6 +270,174 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Temporary diagnosis of the retained original WMF input. Remove this job
+  # when that timeout is closed; the historical artifact expires. The event
+  # message only schedules it: the checked-out commit is verified below.
+  original-wmf:
+    name: Diagnose the original WMF native timeout
+    needs: [trigger, build-macos]
+    if: ${{ !cancelled() && needs.trigger.result == 'success' && needs.build-macos.result == 'success' && contains(github.event.workflow_run.head_commit.message, '[original-wmf]') }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CONSUMER_COMMIT: ${{ needs.trigger.outputs.consumer_commit }}
+      NEVERD_NATIVE_PHASES: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.consumer_commit }}
+          persist-credentials: false
+      - name: Verify the actual commit requested this temporary diagnosis
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$CONSUMER_COMMIT"
+          neverd_commit_message="$(git show -s --format=%B HEAD)"
+          case "$neverd_commit_message" in
+            *'[original-wmf]'*) ;;
+            *) echo 'The verified consumer commit did not request this diagnosis' >&2; exit 1 ;;
+          esac
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: neverd-real-apps-macos-arm64
+          path: ${{ runner.temp }}/original-wmf-runtime-download
+      - name: Prepare the current producer runtime
+        run: |
+          mkdir -p "$RUNNER_TEMP/original-wmf-runtime"
+          tar -xzf "$RUNNER_TEMP/original-wmf-runtime-download/neverd-host.tar.gz" -C "$RUNNER_TEMP/original-wmf-runtime"
+      - name: Download the exact retained original input archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/original-wmf-download"
+          gh api repos/NeverSight/NeverD/actions/artifacts/10309539118 > "$RUNNER_TEMP/original-wmf-download/artifact.json"
+          curl -q --silent --show-error --fail --connect-timeout 15 --max-time 45 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --dump-header "$RUNNER_TEMP/original-wmf-download/location.headers" \
+            --output /dev/null https://api.github.com/repos/NeverSight/NeverD/actions/artifacts/10309539118/zip
+          neverd_archive_url="$(awk 'tolower($1) == "location:" {count++; value=$2; sub(/\r$/, "", value)} END {if (count != 1) exit 1; print value}' "$RUNNER_TEMP/original-wmf-download/location.headers")"
+          # The signed blob request receives no GitHub Authorization header.
+          curl -q --silent --show-error --fail --location --proto '=https' --proto-redir '=https' \
+            --connect-timeout 15 --max-time 180 --url "$neverd_archive_url" \
+            --output "$RUNNER_TEMP/original-wmf-download/original.zip"
+      - name: Verify provenance and record the original native180 outcome
+        env:
+          DYLD_LIBRARY_PATH: ${{ runner.temp }}/original-wmf-runtime/bin
+        run: |
+          python - <<'PY'
+          import os, shutil, stat, sys, zipfile
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd() / 'scripts'))
+          from mobile_real_apps_common import CaseContext, digest, load_json
+          from mobile_real_apps_ios import Session, artifact_recovery
+
+          def require(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          runtime = temporary / 'original-wmf-runtime' / 'bin'
+          download = temporary / 'original-wmf-download'
+          consumer = os.environ['CONSUMER_COMMIT']
+          ctx = CaseContext(
+              app={'source_commit': '86e78a9e5766d89f3d4c44abe9efce30b950d4d4'},
+              variant={'id': 'wikipedia-original-wmf-native180', 'app': 'wikipedia', 'platform': 'ios'},
+              source=Path.cwd(), work=temporary / 'original-wmf-evidence',
+              neverd=runtime / 'neverd', timeout=600, consumer_commit=consumer,
+              manifest_sha256='feeb40df05f410d29631bbfb20e5ea5555276c6f19bc46809ea443a04edbd955')
+          exit_code = 1
+          try:
+              metadata = load_json(download / 'artifact.json')
+              archive_hash = '6e1d100a3f0cc4ce0f2916745ff1e4cf195f02124516f2a7d112cf67218f2f07'
+              require(metadata.get('id') == 10309539118
+                      and metadata.get('name') == 'real-app-evidence-wikipedia-release-arm64-simulator'
+                      and metadata.get('expired') is False
+                      and metadata.get('size_in_bytes') == 229742769
+                      and metadata.get('digest') == 'sha256:' + archive_hash,
+                      'The retained artifact identity changed or expired')
+              producer = metadata['workflow_run']
+              require(producer.get('id') == 34730805274
+                      and producer.get('repository_id') == 1244963310
+                      and producer.get('head_repository_id') == 1244963310
+                      and producer.get('head_branch') == 'dev'
+                      and producer.get('head_sha') == '5686cade18f92824809d25a798dac7df3d126b6d',
+                      'The retained input is not from the verified original producer')
+              archive = download / 'original.zip'
+              require(archive.stat().st_size == 229742769 and digest(archive) == archive_hash,
+                      'The retained archive bytes changed')
+              ctx.write_json('original-artifact.json', metadata)
+
+              receipt = load_json(runtime / 'consumer-build.json')
+              require(receipt.get('consumer_commit') == consumer and receipt.get('host') == 'macos-arm64',
+                      'The native runtime does not belong to this consumer')
+              rows = receipt['runtime_files']
+              paths = [row['path'] for row in rows]
+              require(len(paths) == 42 and len(set(paths)) == 42, 'Runtime inventory changed')
+              actual = set()
+              for path in runtime.rglob('*'):
+                  require(not path.is_symlink(), 'Runtime contains a symlink')
+                  if path.is_file() and path != runtime / 'consumer-build.json':
+                      actual.add(path.relative_to(runtime).as_posix())
+              require(set(paths) == actual and {'neverd', 'libneverd.dylib'} <= actual,
+                      'Runtime inventory is incomplete')
+              for row in rows:
+                  name = row['path']
+                  require(not Path(name).is_absolute() and '..' not in Path(name).parts and '\\' not in name,
+                          'Unsafe runtime member')
+                  path = runtime / name
+                  require(path.is_file() and path.stat().st_size == row['size'] and digest(path) == row['sha256'],
+                          'Runtime member bytes changed: ' + name)
+              require(digest(ctx.neverd) == receipt['neverd_sha256'], 'CLI identity changed')
+              ctx.write_json('consumer-build.json', receipt)
+
+              member = 'original/Wikipedia.app/Frameworks/WMF.framework/WMF'
+              original_hash = '0a8068bf1ced7991b99a86c81f57a7bae8064a2ae59c3c16311a15e37492483c'
+              binary = ctx.work / member
+              with zipfile.ZipFile(archive) as source:
+                  require(source.namelist().count(member) == 1, 'Original input is missing or ambiguous')
+                  info = source.getinfo(member)
+                  require(stat.S_ISREG(info.external_attr >> 16) and info.file_size == 47081968
+                          and not (info.flag_bits & 1), 'Original input is not the expected regular file')
+                  binary.parent.mkdir(parents=True)
+                  with source.open(info) as original, binary.open('xb') as output:
+                      shutil.copyfileobj(original, output, 1024 * 1024)
+              require(binary.stat().st_size == 47081968 and digest(binary) == original_hash,
+                      'Original WMF bytes changed; a rebuilt variant cannot substitute for this input')
+              ctx.stage('provenance', 'success', scope='retained-original-input-and-current-runtime',
+                        input=member, input_sha256=original_hash,
+                        evidence=['original-artifact.json', 'consumer-build.json', member])
+              record = artifact_recovery(Session(ctx),
+                  {'path': 'Frameworks/WMF.framework/WMF', 'resolved': binary}, 1, 'arm64')
+              require(record['timeout_policy'].get('native_timeout_seconds') == 180
+                      and record['timeout_policy'].get('planned_outer_timeout_seconds') == 195,
+                      'Original timeout policy was not preserved')
+              ctx.stage('recovery', record['status'], scope='original-native-timeout-diagnosis', artifacts=[record])
+              # Coverage and independent source/behavior qualification remain
+              # incomplete. Keep a nonzero native CLI outcome visible.
+              exit_code = 0 if record.get('returncode') == 0 and record['status'] == 'incomplete' else 1
+          except Exception as error:
+              ctx.fail(str(error))
+              raise
+          finally:
+              ctx.finish()
+          sys.exit(exit_code)
+          PY
+      - name: Preserve the original input and native diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: original-wmf-native180
+          path: |
+            ${{ runner.temp }}/original-wmf-evidence/
+            ${{ runner.temp }}/original-wmf-download/artifact.json
+          if-no-files-found: error
+          retention-days: 90
+
   android:
     name: Android ${{ matrix.case_id }}
     needs: [trigger, guards, build-linux]
