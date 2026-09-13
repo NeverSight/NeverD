@@ -542,13 +542,29 @@ jobs:
                    "NeverDLiftTests"),
                   ("HighControlFlowSemantics.ExceptionalTargetKeepsItsExternalEntry",
                    "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.InternalLoopPredecessorsKeepTheirBranchOwner",
+                   "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.UnprovenLoopPredecessorsCannotHideTheSharedTail",
+                   "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.SharedPhiTailDoesNotRequireAnEliminatedLabel",
+                   "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.NestedDiamondKeepsItsSharedReturnVisible",
+                   "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.CommonTransferKeepsItsReferencedEntry",
+                   "NeverDLiftTests"),
+                  ("HighControlFlowSemantics.ExternalFalsePrefixEntryRemainsReachable",
+                   "NeverDLiftTests"),
+                  ("AArch64_RoundTrip.ParameterWidthFlowsThroughBranchPhi",
+                   "NeverDLiftTests"),
+                  ("AArch64_RoundTrip.LiveInIdentityAndCallClobbersStayExact",
+                   "NeverDLiftTests"),
               )
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 149,
-              ("macOS", "macos-patch"): 147,
-              ("Windows", "windows-focused"): 145,
+              ("Linux", "linux-semantic"): 157,
+              ("macOS", "macos-patch"): 155,
+              ("Windows", "windows-focused"): 153,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

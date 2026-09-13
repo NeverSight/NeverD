@@ -266,10 +266,10 @@ TEST(HighControlFlowSemantics, SharedNestedTailKeepsPhiEdgesWithoutGrowth) {
     auto Phi = assign(0x1004, 1, 7);
     Phi.IsPhiCopy = true;
     Branch.Body.insert(Branch.Body.begin(), Phi);
-    F.Body = {assign(0x1000, 1, 3), Branch, assign(0x1008, 1, 11),
-              nestedValue(0x1040),
-              result(0x1080, HighExpr::makeBinop(NdOp::INT_ADD, local(1),
-                                                local(2)))};
+    F.Body = {
+        assign(0x1000, 1, 3), Branch, assign(0x1008, 1, 11),
+        nestedValue(0x1040),
+        result(0x1080, HighExpr::makeBinop(NdOp::INT_ADD, local(1), local(2)))};
     MedFunc Med;
     Med.Blocks.resize(1);
     Med.Blocks.front().StartAddr = 0x1040;
@@ -325,7 +325,9 @@ TEST(HighControlFlowSemantics, SwitchEntryIntoTargetInteriorRemainsVisible) {
     Dispatch.Cases.push_back(
         {0, {jump(0x1000, DefaultEntry ? 0x1010 : 0x1084)}});
     Dispatch.DefaultBody = {jump(0x1000, DefaultEntry ? 0x1084 : 0x1010)};
-    F.Body = {Dispatch, conditional(0x1010, 0x1080), jump(0x1014, 0x10a0),
+    F.Body = {Dispatch,
+              conditional(0x1010, 0x1080),
+              jump(0x1014, 0x10a0),
               assign(0x1080, 1, 7),
               result(0x1084, HighExpr::makeConst(9, 8)),
               result(0x10a0, HighExpr::makeConst(11, 8))};
@@ -357,8 +359,7 @@ TEST(HighControlFlowSemantics, MovedBranchKeepsItsNonadjacentSuccessor) {
   for (bool ExplicitGoto : {false, true}) {
     HighFunc F;
     F.Body = {conditional(0x1000, 0x1080), assign(0x1004, 1, 3),
-              jump(0x1008, 0x1100),
-              result(0x1040, HighExpr::makeConst(91, 8)),
+              jump(0x1008, 0x1100), result(0x1040, HighExpr::makeConst(91, 8)),
               assign(0x1080, 1, 7)};
     if (ExplicitGoto)
       F.Body.push_back(jump(0x1084, 0x1100));
@@ -421,6 +422,229 @@ TEST(HighControlFlowSemantics, ExceptionalTargetKeepsItsExternalEntry) {
   EXPECT_EQ(execute(F, 0), 9u);
   EXPECT_EQ(execute(F, 1), 7u);
   EXPECT_EQ(EnterHandler(F), 7u);
+}
+
+void expectUniqueGotoTargets(const HighFunc &F) {
+  std::map<va_t, size_t> Labels;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    if (S.Addr && S.Addr != InvalidVA)
+      ++Labels[S.Addr];
+  });
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto)
+      EXPECT_EQ(Labels[S.GotoTarget], 1u) << "target " << S.GotoTarget;
+  });
+}
+
+std::pair<HighFunc, MedFunc> branchWithInternalLoop() {
+  HighFunc F;
+  auto Increment = assign(0x1054, 1, 0);
+  Increment.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(1, 8));
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  Break.Addr = 0x1058;
+  HighStmt Exit;
+  Exit.Kind = StmtKind::If;
+  Exit.Addr = 0x1058;
+  Exit.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(1),
+                                HighExpr::makeConst(3, 8));
+  Exit.Body = {Break};
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Addr = Loop.LoopHeaderAddr = 0x1050;
+  Loop.Cond = HighExpr::makeConst(1, 1);
+  Loop.Body = {Increment, Exit};
+  F.Body = {conditional(0x1000, 0x1040), jump(0x1004, 0x1080),
+            assign(0x1044, 1, 0), Loop, result(0x1060, local(1)),
+            result(0x1080, HighExpr::makeConst(7, 8))};
+
+  MedFunc Med;
+  Med.Blocks.resize(5);
+  const va_t Starts[] = {0x1000, 0x1040, 0x1050, 0x1060, 0x1080};
+  const va_t Ends[] = {0x1000, 0x1044, 0x1058, 0x1060, 0x1080};
+  for (int I = 0; I < 5; ++I) {
+    auto &Block = Med.Blocks[I];
+    Block.Id = I;
+    Block.StartAddr = Starts[I];
+    Block.EndAddr = Ends[I] + 4;
+    MedOp Last;
+    Last.Addr = Ends[I];
+    Last.Opcode = I == 0 || I == 2 ? NdOp::COND_BR
+                  : I == 1       ? NdOp::BRANCH
+                                 : NdOp::RETURN;
+    Block.Ops = {Last};
+  }
+  Med.Blocks[0].Succs = {1, 4};
+  Med.Blocks[1].Preds = {0};
+  Med.Blocks[1].Succs = {2};
+  Med.Blocks[2].Preds = {1, 2};
+  Med.Blocks[2].Succs = {2, 3};
+  Med.Blocks[3].Preds = {2};
+  Med.Blocks[4].Preds = {0};
+  return {std::move(F), std::move(Med)};
+}
+
+TEST(HighControlFlowSemantics, InternalLoopPredecessorsKeepTheirBranchOwner) {
+  auto [F, Med] = branchWithInternalLoop();
+  const size_t Before = statementCount(F);
+  ASSERT_EQ(execute(F, 0), 7u);
+  ASSERT_EQ(execute(F, 1), 3u);
+  structureIfElse(F, 10, &Med);
+  EXPECT_EQ(execute(F, 0), 7u);
+  EXPECT_EQ(execute(F, 1), 3u);
+  EXPECT_LE(statementCount(F), Before);
+  ASSERT_EQ(F.Body.front().Kind, StmtKind::If);
+  EXPECT_TRUE(std::any_of(F.Body.front().Body.begin(), F.Body.front().Body.end(),
+                          [](const HighStmt &S) {
+                            return S.Kind == StmtKind::While;
+                          }));
+  expectUniqueGotoTargets(F);
+}
+
+TEST(HighControlFlowSemantics, UnprovenLoopPredecessorsCannotHideTheSharedTail) {
+  for (unsigned Mode = 0; Mode < 8; ++Mode) {
+    SCOPED_TRACE(Mode);
+    auto [F, Med] = branchWithInternalLoop();
+    if (Mode == 0) {
+      MedBlock External;
+      External.Id = 5;
+      External.StartAddr = 0x1090;
+      External.Succs = {2};
+      MedOp Last;
+      Last.Opcode = NdOp::BRANCH;
+      Last.Addr = 0x1090;
+      External.Ops = {Last};
+      Med.Blocks.push_back(External);
+      Med.Blocks[2].Preds.push_back(5);
+    } else if (Mode == 1) {
+      Med.Blocks[2].Preds.push_back(-1);
+    } else if (Mode == 2) {
+      HighStmt External;
+      External.Addr = 0x1044;
+      F.Body.push_back(External);
+    } else if (Mode == 3) {
+      Med.Blocks[0].Succs.push_back(2);
+      Med.Blocks[2].Preds.push_back(0);
+    } else if (Mode == 4) {
+      Med.Blocks[1].Ops.clear();
+    } else if (Mode == 5) {
+      Med.Blocks[1].Id = 99;
+    } else if (Mode == 6) {
+      Med.Blocks[1].Succs.clear();
+    } else {
+      Med.Blocks[2].Id = 99;
+    }
+    const size_t Before = statementCount(F);
+    structureIfElse(F, 10, &Med);
+    EXPECT_EQ(execute(F, 0), 7u);
+    EXPECT_EQ(execute(F, 1), 3u);
+    EXPECT_LE(statementCount(F), Before);
+    EXPECT_TRUE(std::any_of(F.Body.begin(), F.Body.end(), [](const HighStmt &S) {
+      return S.Kind == StmtKind::While && S.Addr == 0x1050;
+    }));
+    expectUniqueGotoTargets(F);
+  }
+}
+
+TEST(HighControlFlowSemantics, SharedPhiTailDoesNotRequireAnEliminatedLabel) {
+  HighFunc F;
+  auto Branch = conditional(0x1004, 0x1040);
+  auto Phi = assign(0x1004, 1, 7);
+  Phi.IsPhiCopy = true;
+  Branch.Body.insert(Branch.Body.begin(), Phi);
+  F.Body = {assign(0x1000, 1, 3), Branch, assign(0x1008, 1, 11),
+            result(0x1048, HighExpr::makeBinop(NdOp::INT_ADD, local(1),
+                                              HighExpr::makeConst(1, 8)))};
+  const size_t Before = statementCount(F);
+  ASSERT_EQ(execute(F, 0), 12u);
+  ASSERT_EQ(execute(F, 1), 8u);
+  structureIfElse(F, 10);
+  EXPECT_EQ(execute(F, 0), 12u);
+  EXPECT_EQ(execute(F, 1), 8u);
+  EXPECT_LE(statementCount(F), Before);
+  ASSERT_EQ(F.Body.back().Kind, StmtKind::Return);
+  EXPECT_EQ(F.Body.back().Addr, 0x1048u);
+  expectUniqueGotoTargets(F);
+}
+
+HighFunc nestedDiamondWithSharedReturn() {
+  auto Outer = conditional(0x1000, 0x1080);
+  Outer.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                 HighExpr::makeConst(0, 8));
+  HighStmt Inner;
+  Inner.Kind = StmtKind::IfElse;
+  Inner.Addr = 0x1004;
+  Inner.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                 HighExpr::makeConst(1, 8));
+  Inner.Body = {assign(0x1040, 1, 1), jump(0x1044, 0x1100)};
+  Inner.ElseBody = {assign(0x1060, 1, 2), jump(0x1064, 0x1100)};
+  HighFunc F;
+  F.Body = {Outer, Inner, assign(0x1080, 1, 0), result(0x1104, local(1))};
+  return F;
+}
+
+TEST(HighControlFlowSemantics, NestedDiamondKeepsItsSharedReturnVisible) {
+  auto F = nestedDiamondWithSharedReturn();
+  const size_t Before = statementCount(F);
+  for (uint64_t Input : {0, 1, 2, 3})
+    ASSERT_EQ(execute(F, Input), Input < 2 ? Input : 2u);
+  structureIfElse(F, 10);
+  for (uint64_t Input : {0, 1, 2, 3})
+    EXPECT_EQ(execute(F, Input), Input < 2 ? Input : 2u);
+  EXPECT_LE(statementCount(F), Before);
+  expectUniqueGotoTargets(F);
+}
+
+TEST(HighControlFlowSemantics, CommonTransferKeepsItsReferencedEntry) {
+  for (bool Exceptional : {false, true}) {
+    auto F = nestedDiamondWithSharedReturn();
+    MedFunc Med;
+    if (Exceptional) {
+      Med.Blocks.resize(1);
+      ExceptionalEdge Entry;
+      Entry.TargetVA = 0x1044;
+      Med.Blocks[0].ExceptionalPreds = {Entry};
+    } else {
+      // A switch entry can enter this transfer without executing its arm.
+      // Keep it present even though ordinary inputs below never take it.
+      HighStmt Dispatch;
+      Dispatch.Kind = StmtKind::Switch;
+      Dispatch.SwitchExpr = local(0);
+      Dispatch.Cases.push_back({99, {jump(0, 0x1044)}});
+      F.Body.insert(F.Body.begin(), Dispatch);
+    }
+    structureIfElse(F, 10, Exceptional ? &Med : nullptr);
+    for (uint64_t Input : {0, 1, 2, 3})
+      EXPECT_EQ(execute(F, Input), Input < 2 ? Input : 2u);
+    size_t EntryCount = 0;
+    walkStmts(F.Body, [&](const HighStmt &S) {
+      if (S.Kind == StmtKind::Goto && S.Addr == 0x1044 &&
+          S.GotoTarget == 0x1100)
+        ++EntryCount;
+    });
+    EXPECT_EQ(EntryCount, 1u);
+  }
+}
+
+TEST(HighControlFlowSemantics, ExternalFalsePrefixEntryRemainsReachable) {
+  HighFunc F;
+  HighStmt Dispatch;
+  Dispatch.Kind = StmtKind::Switch;
+  Dispatch.Addr = 0x1004;
+  Dispatch.SwitchExpr = local(0);
+  Dispatch.Cases.push_back({0, {jump(0, 0x1020)}});
+  Dispatch.DefaultBody = {jump(0, 0x1010)};
+  F.Body = {assign(0x1000, 1, 3), Dispatch, conditional(0x1010, 0x1060),
+            assign(0x1020, 1, 9), result(0x1068, local(1))};
+  ASSERT_EQ(execute(F, 0), 9u);
+  ASSERT_EQ(execute(F, 1), 3u);
+  structureIfElse(F, 10);
+  EXPECT_EQ(execute(F, 0), 9u);
+  EXPECT_EQ(execute(F, 1), 3u);
+  EXPECT_TRUE(std::any_of(F.Body.begin(), F.Body.end(), [](const HighStmt &S) {
+    return S.Kind == StmtKind::Assign && S.Addr == 0x1020;
+  }));
 }
 
 MedVar machineValue(int Id, Arch Architecture) {

@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -90,7 +92,7 @@ static size_t findTargetIndex(AddrMap &AM, va_t Target) {
   auto LB = std::lower_bound(AM.Sorted.begin(), AM.Sorted.end(),
                              std::make_pair(Target, size_t(0)));
   return LB != AM.Sorted.end() && LB->first - Target <= 16 ? LB->second
-                                                         : SIZE_MAX;
+                                                           : SIZE_MAX;
 }
 
 /// Locate a run without copying its nested statement trees. Ownership must be
@@ -119,6 +121,17 @@ static bool endsWithTransfer(const HighStmt &S) {
          S.Kind == StmtKind::Break || S.Kind == StmtKind::Continue;
 }
 
+template <typename F> static void walkStatementTree(const HighStmt &S, F &&Fn) {
+  Fn(S);
+  walkStmts(S.Body, Fn);
+  walkStmts(S.ElseBody, Fn);
+  for (const auto &Case : S.Cases)
+    walkStmts(Case.Body, Fn);
+  walkStmts(S.DefaultBody, Fn);
+  for (const auto &Clause : S.EHClauseBodies)
+    walkStmts(Clause, Fn);
+}
+
 /// Moving a shared label into one branch would hide another incoming edge.
 /// Preserve its original goto instead of cloning and retaining the target tree.
 static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
@@ -141,27 +154,64 @@ static bool ownsRun(const std::vector<HighStmt> &Body, AddrMap &AM,
       if (S.Kind == StmtKind::Goto && Contains(S.GotoTarget))
         HasEntry = true;
     };
-    const auto &Other = Body[K];
-    Check(Other);
-    walkStmts(Other.Body, Check);
-    walkStmts(Other.ElseBody, Check);
-    for (const auto &Case : Other.Cases)
-      walkStmts(Case.Body, Check);
-    walkStmts(Other.DefaultBody, Check);
-    for (const auto &Clause : Other.EHClauseBodies)
-      walkStmts(Clause, Check);
+    walkStatementTree(Body[K], Check);
     if (HasEntry)
       return false;
   }
-  if (Med)
+  if (Med) {
+    // A loop header can have several incoming edges wholly inside this run.
+    // Require exact current ownership of each predecessor's last operation;
+    // an absent or externally repeated address cannot prove an internal edge.
+    std::unordered_map<va_t, unsigned> AddressOwners;
+    bool HaveAddressOwners = false;
+    auto OwnsPredecessor = [&](int PredId, const MedBlock &Block,
+                              bool IsEntry) {
+      if (PredId < 0 || static_cast<size_t>(PredId) >= Med->Blocks.size())
+        return false;
+      const auto &Pred = Med->Blocks[PredId];
+      if (Pred.Id != PredId || Pred.Ops.empty() ||
+          std::find(Pred.Succs.begin(), Pred.Succs.end(), Block.Id) ==
+              Pred.Succs.end())
+        return false;
+      const va_t Address = Pred.Ops.back().Addr;
+      if (!Address || Address == InvalidVA)
+        return false;
+      if (!HaveAddressOwners) {
+        for (size_t K = 0; K < Body.size(); ++K) {
+          const unsigned Scope = K >= Run.Start && K < Run.End ? 1
+                                 : K == Owner                 ? 2
+                                                              : 4;
+          walkStatementTree(Body[K], [&](const HighStmt &S) {
+            if (S.Addr && S.Addr != InvalidVA)
+              AddressOwners[S.Addr] |= Scope;
+          });
+        }
+        HaveAddressOwners = true;
+      }
+      auto It = AddressOwners.find(Address);
+      return It != AddressOwners.end() &&
+             (It->second == 1 ||
+              (IsEntry && Address == Body[Owner].Addr && It->second == 2));
+    };
     for (const auto &Block : Med->Blocks) {
       const va_t Start = Block.StartAddr
                              ? Block.StartAddr
                              : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
-      if ((Block.Preds.size() > 1 || !Block.ExceptionalPreds.empty()) &&
-          Contains(Start))
+      if (!Contains(Start))
+        continue;
+      if (!Block.ExceptionalPreds.empty())
         return false;
+      if (Block.Preds.size() > 1) {
+        if (Block.Id < 0 || static_cast<size_t>(Block.Id) >= Med->Blocks.size() ||
+            &Med->Blocks[Block.Id] != &Block)
+          return false;
+        const bool IsEntry = findTargetIndex(AM, Start) == Run.Start;
+        for (int Pred : Block.Preds)
+          if (!OwnsPredecessor(Pred, Block, IsEntry))
+            return false;
+      }
     }
+  }
   return true;
 }
 
@@ -212,9 +262,60 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
   while (Changed && Pass++ < MaxPasses) {
     Changed = false;
     AM.rebuild(Func.Body);
+    std::set<va_t> LiveTargets;
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (S.Kind == StmtKind::Goto)
+        LiveTargets.insert(S.GotoTarget);
+    });
 
     for (int I = static_cast<int>(Func.Body.size()) - 1; I >= 0; --I) {
       auto &Stmt = Func.Body[I];
+      if (Stmt.Kind == StmtKind::IfElse && !Stmt.Body.empty() &&
+          !Stmt.ElseBody.empty() &&
+          Stmt.Body.back().Kind == StmtKind::Goto &&
+          Stmt.ElseBody.back().Kind == StmtKind::Goto) {
+        const va_t Target = Stmt.Body.back().GotoTarget;
+        if (!Target || Target == InvalidVA ||
+            Stmt.ElseBody.back().GotoTarget != Target)
+          continue;
+        AM.rebuild(Func.Body);
+        const size_t TargetIndex = findTargetIndex(AM, Target);
+        if (TargetIndex == SIZE_MAX || TargetIndex <= static_cast<size_t>(I))
+          continue;
+        auto HasEntry = [&](va_t Address) {
+          if (!Address || Address == InvalidVA)
+            return false;
+          if (LiveTargets.count(Address))
+            return true;
+          if (Med)
+            for (const auto &Block : Med->Blocks) {
+              const va_t Start =
+                  Block.StartAddr ? Block.StartAddr
+                                  : (Block.Ops.empty() ? 0 : Block.Ops.front().Addr);
+              if (Start == Address)
+                return true;
+              for (const auto &Edge : Block.ExceptionalPreds)
+                if (Edge.TargetVA == Address)
+                  return true;
+            }
+          return false;
+        };
+        if (HasEntry(Stmt.Body.back().Addr) ||
+            HasEntry(Stmt.ElseBody.back().Addr))
+          continue;
+        // Make the common transfer visible to an enclosing flat conditional.
+        // Neither removed transfer owns a live label or native block entry.
+        Stmt.Body.pop_back();
+        Stmt.ElseBody.pop_back();
+        if (TargetIndex != static_cast<size_t>(I) + 1) {
+          HighStmt Transfer;
+          Transfer.Kind = StmtKind::Goto;
+          Transfer.GotoTarget = Target;
+          Func.Body.insert(Func.Body.begin() + I + 1, std::move(Transfer));
+        }
+        Changed = true;
+        continue;
+      }
       if (Stmt.Kind != StmtKind::If)
         continue;
       if (Stmt.Body.empty() || Stmt.Body.back().Kind != StmtKind::Goto ||
@@ -287,22 +388,41 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
       auto IfResult =
           collectStmtsForTarget(Func.Body, AM, IfTarget, MergeTarget);
       const size_t InlineEnd = Else.Target != 0 ? Else.GotoIdx + 1 : NextI;
+      auto FoldSharedTail = [&]() {
+        if (TargetIndex > NextI &&
+            !ownsRun(Func.Body, AM, {NextI, TargetIndex}, I, Med))
+          return false;
+        // Both arms now continue at the original target. Only the exclusive
+        // false prefix moves; shared tail labels and statements stay in place.
+        std::vector<HighStmt> FalseBody;
+        for (size_t K = NextI; K < TargetIndex; ++K)
+          FalseBody.push_back(std::move(Func.Body[K]));
+        Stmt.Kind = FalseBody.empty() ? StmtKind::If : StmtKind::IfElse;
+        Stmt.Body = std::move(TakenCopies);
+        Stmt.ElseBody = std::move(FalseBody);
+        Func.Body.erase(Func.Body.begin() + static_cast<long>(NextI),
+                        Func.Body.begin() + static_cast<long>(TargetIndex));
+        return true;
+      };
       // The immediately following target also belongs to the false edge.
       if (IfResult.Start == NextI ||
           !ownsRun(Func.Body, AM, IfResult, I, Med) ||
           (InlineEnd > NextI &&
            (!ownsRun(Func.Body, AM, {NextI, InlineEnd}, I, Med) ||
-            (IfResult.Start < InlineEnd && IfResult.End > NextI))))
+            (IfResult.Start < InlineEnd && IfResult.End > NextI)))) {
+        Changed |= FoldSharedTail();
         continue;
+      }
 
       // A run stopped at the merge still has a fallthrough successor. Moving
       // it must preserve that edge even when the merge is not adjacent to I.
       const bool NeedsSuccessor =
           !endsWithTransfer(Func.Body[IfResult.End - 1]);
-      if (NeedsSuccessor &&
-          (IfResult.End == Func.Body.size() ||
-           Func.Body[IfResult.End].Addr == 0))
+      if (NeedsSuccessor && (IfResult.End == Func.Body.size() ||
+                             Func.Body[IfResult.End].Addr == 0)) {
+        Changed |= FoldSharedTail();
         continue;
+      }
 
       std::vector<std::pair<size_t, size_t>> Ranges{
           {IfResult.Start, IfResult.End}};
@@ -324,6 +444,7 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
         HighStmt Transfer;
         Transfer.Kind = StmtKind::Goto;
         Transfer.GotoTarget = Func.Body[IfResult.End].Addr;
+        LiveTargets.insert(Transfer.GotoTarget);
         IfBody.push_back(std::move(Transfer));
       }
       std::vector<HighStmt> ElseBody;
