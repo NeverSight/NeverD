@@ -112,10 +112,13 @@ bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
 /// jump-table provenance proof.  Keeping this separate from CFGBuilder's
 /// private InsnRecord lets the graph/data-flow implementation stay local to
 /// this translation unit without exposing another public CFG type.
+/// The owning instruction map and selected target vectors remain unchanged
+/// until the enclosing synchronous query returns. The graph copies the
+/// operations it retains; the snapshot only borrows its two payloads.
 struct ResolverInsnSnapshot {
   va_t Addr = 0;
   uint16_t Size = 0;
-  std::vector<LowOp> Ops;
+  llvm::ArrayRef<LowOp> Ops;
   bool IsBranch = false;
   bool IsCond = false;
   bool IsCall = false;
@@ -126,7 +129,7 @@ struct ResolverInsnSnapshot {
   bool IsNoReturnCall = false;
   bool IsInstructionGuard = false;
   va_t BranchTarget = InvalidVA;
-  std::vector<va_t> JumpTableTargets;
+  llvm::ArrayRef<va_t> JumpTableTargets;
 };
 
 struct ResolverFlowBlock {
@@ -181,9 +184,9 @@ static bool copyResolverInsnSnapshots(
     return ConsumeWork(Count * Cost);
   };
 
-  // Pay the outer buffer and its fixed lifetime before allocating it.  Each
-  // snapshot then pays its fixed/actual element lifetime plus independent
-  // deep-copy lifetimes for both nested vectors.
+  // Preserve the established accounting for snapshot and payload lifetimes.
+  // Borrowing avoids materializing the two payload copies, but does not change
+  // exhaustion boundaries or give nested proof work an extra allowance.
   if (!consumeProduct(Insns.size(), 2) || !ConsumeWork(2))
     return false;
   Snapshot.reserve(Insns.size());
