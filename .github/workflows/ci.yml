@@ -462,6 +462,20 @@ jobs:
                    "NeverDLiftTests"),
                   ("FunctionDiscoveryAlignment.DataPrologueCandidatesKeepExactOwnershipAndExistingSymbols",
                    "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.UsesVirtualAddressForEveryArchitecture",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.RejectsWrappedAndOutOfBufferAddresses",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.PaddingDoesNotCreateEntriesInsideAArch64Instructions",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.PreservesAlignedEntriesAfterPadding",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.DataPointersRejectMisalignedAArch64Entries",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryAlignment.PreservesTaggedThumbPointersAndOddDataSymbols",
+                   "NeverDLiftTests"),
+                  ("FunctionDiscoveryThumb.IgnoresPaddingCandidatesInsideSizedFunctions",
+                   "NeverDLiftTests"),
                   ("MachOInteriorCodePointerCFG.UnrelatedRelocationRootsPreserveLocalCFGAndObserveUpdatedInput",
                    "NeverDLiftTests", "NeverDMachOPointerRelocationBoundaryTests"),
                   ("MachOInteriorCodePointerCFG.AbsoluteRootIndexPreservesWidthsAliasesAndOpenRanges",
@@ -510,9 +524,9 @@ jobs:
           )
           runner_os = os.environ["RUNNER_OS"]
           expected_count = {
-              ("Linux", "linux-semantic"): 131,
-              ("macOS", "macos-patch"): 129,
-              ("Windows", "windows-focused"): 127,
+              ("Linux", "linux-semantic"): 138,
+              ("macOS", "macos-patch"): 136,
+              ("Windows", "windows-focused"): 134,
           }[(runner_os, os.environ["TEST_PROFILE"])]
           if runner_os in ("Linux", "macOS"):
               expected += (TestRecord(

@@ -79,14 +79,14 @@ bool checkPrologueAtOffset(const Segment &Seg, size_t Off, Arch A) {
 
 static bool checkCodePrologueAtOffset(const BinaryImage &Img,
                                       const Segment &Seg, size_t Off, Arch A) {
-  if (Off >= Seg.Data.size())
+  // Most padding boundaries are not prologues. Reject their bounded byte
+  // probes before consulting image-wide ownership metadata.
+  if (!checkPrologueAtOffset(Seg, Off, A))
     return false;
   const uint64_t ProbeSize = A == Arch::X64 || A == Arch::X86 ? 1
                              : A == Arch::Unknown             ? 0
                                                               : 4;
-  if (!Img.hasExecutableCodeOwnerRange(Seg.VA + Off, ProbeSize))
-    return false;
-  return checkPrologueAtOffset(Seg, Off, A);
+  return Img.hasExecutableCodeOwnerRange(Seg.VA + Off, ProbeSize);
 }
 
 static std::vector<std::pair<va_t, va_t>>
