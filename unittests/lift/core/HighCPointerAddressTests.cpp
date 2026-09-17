@@ -954,6 +954,44 @@ TEST(HighCPointerAddresses, AttachesCxxFuncletBodyIntoCatch) {
   EXPECT_EQ(Source.find("handler @"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch) {
+  HighFunc Parent;
+  Parent.Name = "parent";
+  Parent.Entry = 0x140001000;
+  Parent.ReturnType = NdType::makeInt(4);
+  HighStmt Try;
+  Try.Kind = StmtKind::CxxTry;
+  Try.EHIsReducible = true;
+  HighEHClause Catch;
+  Catch.Kind = HighEHClauseKind::CxxCatch;
+  Catch.HandlerVA = 0x140002000;
+  Catch.TypeName = "ProbeError";
+  Try.EHClauses.push_back(std::move(Catch));
+  Try.EHClauseBodies.emplace_back();
+  Parent.Body.push_back(std::move(Try));
+
+  HighFunc Handler;
+  Handler.Name = "catch_funclet";
+  Handler.Entry = 0x140002000;
+  Handler.ReturnType = NdType::makeVoid();
+  HighStmt Nested;
+  Nested.Kind = StmtKind::CxxTry;
+  Nested.EHIsReducible = true;
+  HighEHClause NestedCatch;
+  NestedCatch.Kind = HighEHClauseKind::CxxCatch;
+  NestedCatch.HandlerVA = 0x140001000;
+  Nested.EHClauses.push_back(std::move(NestedCatch));
+  Nested.EHClauseBodies.emplace_back();
+  HighStmt Caught;
+  Caught.Kind = StmtKind::Call;
+  Caught.CallExpr = HighExpr::makeCall("caught", 0x140003000, {});
+  Nested.Body.push_back(std::move(Caught));
+  Handler.Body.push_back(std::move(Nested));
+
+  const std::string Source = emitFunctions({Parent, Handler});
+  EXPECT_NE(Source.find("caught()"), std::string::npos) << Source;
+}
+
 TEST(LLVMCPointerAddresses, OmitsReturnAfterThrowDespiteJunkAssigns) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-throw-junk", Context);
