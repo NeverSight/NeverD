@@ -156,6 +156,7 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
   llvm::StringRef UIKitData;
   for (llvm::StringRef Name :
        {"UIApplicationDidReceiveMemoryWarningNotification",
+        "UIApplicationWillTerminateNotification", "UIBackgroundTaskInvalid",
         "UIAccessibilityTraitButton", "UIEdgeInsetsZero",
         "UIViewNoIntrinsicMetric"})
     if (Import->starts_with("_") && Import->drop_front() == Name)

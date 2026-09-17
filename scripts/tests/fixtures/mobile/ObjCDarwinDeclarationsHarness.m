@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <math.h>
 #include <objc/runtime.h>
+#include <os/log.h>
 #include <pthread.h>
 #include <stdio.h>
 
@@ -21,6 +22,8 @@
 - (NSString *)descriptionKey;
 - (void *)mainQueue;
 - (const void *)timerType;
+- (void *)defaultLog;
+- (void *)disabledLog;
 - (float)defaultPriority;
 - (double)foundationVersion;
 - (BOOL)belongs:(id)object to:(Class)cls;
@@ -99,6 +102,8 @@ int main(void) {
           [driver descriptionKey] != NSLocalizedDescriptionKey ||
           [driver mainQueue] != (void *)dispatch_get_main_queue() ||
           [driver timerType] != DISPATCH_SOURCE_TYPE_TIMER ||
+          [driver defaultLog] != (__bridge void *)OS_LOG_DEFAULT ||
+          [driver disabledLog] != (__bridge void *)OS_LOG_DISABLED ||
           [driver defaultPriority] != NSURLSessionTaskPriorityDefault ||
           [driver foundationVersion] != NSFoundationVersionNumber)
         return 10;

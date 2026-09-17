@@ -560,10 +560,10 @@ void verifyRuntime(bool Chained,
     EXPECT_EQ(Rejected, 1U);
     return;
   }
-  ASSERT_EQ(Methods->size(), DarwinDeclarations    ? 19U
+  ASSERT_EQ(Methods->size(), DarwinDeclarations    ? 21U
                              : Equality            ? 6U
                              : FloatingSaves       ? 2U
-                             : SharedFrameworks    ? 11U
+                             : SharedFrameworks    ? 13U
                              : SavedScalars        ? 13U
                              : ReceiverResults     ? 8U
                              : ReceiverAliases     ? 5U
@@ -627,10 +627,13 @@ void verifyRuntime(bool Chained,
         "NDPointerReceiver-code",        "NDPointerReceiver-readOwnCode",
         "NDTypedError-declaredCode"};
   if (SharedFrameworks)
-    Remaining = {"makeLayer",      "opacity:",        "opacity:layer:",
-                 "position:",      "position:layer:", "distance:from:",
-                 "describe:text:", "descriptionOf:",  "request:content:",
-                 "type:",          "extensionOf:"};
+    Remaining = {"makeLayer",           "opacity:",
+                 "opacity:layer:",      "position:",
+                 "position:layer:",     "distance:from:",
+                 "describe:text:",      "descriptionOf:",
+                 "request:content:",    "type:",
+                 "extensionOf:",        "resizeGravity",
+                 "resizeGravityStorage"};
   if (SavedScalars)
     Remaining = {"flag",          "setFlag:",
                  "byte",          "setByte:",
@@ -877,6 +880,8 @@ void verifyRuntime(bool Chained,
                  "descriptionKey",
                  "mainQueue",
                  "timerType",
+                 "defaultLog",
+                 "disabledLog",
                  "defaultPriority",
                  "foundationVersion",
                  "belongs:to:",
@@ -1286,7 +1291,7 @@ void verifyRuntime(bool Chained,
                                  : "c-record-checks=2048\n")
       : PredicateFormats ? "predicate-checks=30720\nquoted-placeholders="
                            "pass\nscalar-widths=pass\n"
-      : SharedFrameworks ? "framework-calls=2816\nscalar-record-values="
+      : SharedFrameworks ? "framework-calls=3328\nscalar-record-values="
                            "pass\nobject-identity=pass\n"
       : SavedScalars
           ? "scalar-cases=589824\ncall-effects=589824\nknown-bytes=pass\n"

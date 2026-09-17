@@ -3398,6 +3398,11 @@ TEST(ObjCCallHints, SDKDataBindingsPreserveStorageAddressesAndSubsequentLoads) {
          {std::pair{"NSDefaultRunLoopMode", "/System/Library/Frameworks/"
                                             "Foundation.framework/Foundation"},
           std::pair{"_dispatch_main_q", "/usr/lib/libSystem.B.dylib"},
+          std::pair{"_os_log_default", "/usr/lib/libSystem.B.dylib"},
+          std::pair{"_os_log_disabled",
+                    "/usr/lib/system/libsystem_trace.dylib"},
+          std::pair{"kCAGravityResize", "/System/Library/Frameworks/"
+                                        "QuartzCore.framework/QuartzCore"},
           std::pair{"_dispatch_source_type_timer",
                     "/usr/lib/system/libdispatch.dylib"}}) {
       SCOPED_TRACE(Name);
@@ -3492,6 +3497,7 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (llvm::StringRef Name :
          {"UIApplicationDidReceiveMemoryWarningNotification",
+          "UIApplicationWillTerminateNotification", "UIBackgroundTaskInvalid",
           "UIAccessibilityTraitButton", "UIEdgeInsetsZero",
           "UIViewNoIntrinsicMetric"}) {
       SCOPED_TRACE(Name.str());

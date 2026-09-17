@@ -6,6 +6,8 @@
 #import <UserNotifications/UserNotifications.h>
 @interface NDFrameworkCalls : NSObject
 - (CALayer *)makeLayer;
+- (NSString *)resizeGravity;
+- (const void *)resizeGravityStorage;
 - (float)opacity:(CALayer *)layer;
 - (void)opacity:(float)value layer:(CALayer *)layer;
 - (CGPoint)position:(CALayer *)layer;
@@ -20,6 +22,12 @@
 - (NSString *)extensionOf:(UTType *)type;
 @end
 @implementation NDFrameworkCalls
+- (NSString *)resizeGravity {
+  return kCAGravityResize;
+}
+- (const void *)resizeGravityStorage {
+  return &kCAGravityResize;
+}
 - (CALayer *)makeLayer {
   return [CALayer layer];
 }

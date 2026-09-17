@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <math.h>
 #include <objc/objc-sync.h>
+#include <os/log.h>
 #include <pthread.h>
 
 @interface NDDarwinDeclarations : NSObject
@@ -20,6 +21,8 @@
 - (NSString *)descriptionKey;
 - (void *)mainQueue;
 - (const void *)timerType;
+- (void *)defaultLog;
+- (void *)disabledLog;
 - (float)defaultPriority;
 - (double)foundationVersion;
 - (BOOL)belongs:(id)object to:(Class)cls;
@@ -77,6 +80,12 @@
 }
 - (const void *)timerType {
   return DISPATCH_SOURCE_TYPE_TIMER;
+}
+- (void *)defaultLog {
+  return (__bridge void *)OS_LOG_DEFAULT;
+}
+- (void *)disabledLog {
+  return (__bridge void *)OS_LOG_DISABLED;
 }
 - (float)defaultPriority {
   return NSURLSessionTaskPriorityDefault;

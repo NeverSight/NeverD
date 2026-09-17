@@ -8,6 +8,8 @@
 #include <stdio.h>
 @interface NDFrameworkCalls : NSObject
 - (CALayer *)makeLayer;
+- (NSString *)resizeGravity;
+- (const void *)resizeGravityStorage;
 - (float)opacity:(CALayer *)layer;
 - (void)opacity:(float)value layer:(CALayer *)layer;
 - (CGPoint)position:(CALayer *)layer;
@@ -39,6 +41,9 @@ int main(void) {
     content.body = @"contents";
     for (unsigned i = 0; i < 256; ++i) {
       @autoreleasepool {
+        if ([calls resizeGravity] != kCAGravityResize ||
+            [calls resizeGravityStorage] != &kCAGravityResize)
+          return 8;
         CALayer *layer = [calls makeLayer];
         if (![layer isKindOfClass:CALayer.class] || layer.opacity != 1.0f)
           return 1;
@@ -76,7 +81,7 @@ int main(void) {
     [second release];
     [first release];
     [calls release];
-    puts("framework-calls=2816\nscalar-record-values=pass\nobject-identity="
+    puts("framework-calls=3328\nscalar-record-values=pass\nobject-identity="
          "pass");
   }
   return 0;
