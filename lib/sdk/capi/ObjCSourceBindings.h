@@ -171,19 +171,38 @@ associationKeyHint(const BinaryImage &Image, va_t Address) {
     return std::nullopt;
   const auto *Section = Image.getSectionFor(Address);
   const auto *Segment = Image.getSegmentFor(Address);
-  if (!Section || !Segment || !Section->isReadable() || Section->isWritable() ||
-      !Segment->isReadable() || Segment->isWritable() ||
-      (Section->Type & llvm::MachO::SECTION_TYPE) !=
-          llvm::MachO::S_CSTRING_LITERALS ||
+  if (!Section || !Segment || !Section->isReadable() ||
+      !Segment->isReadable() ||
+      ((Section->isWritable() || Segment->isWritable()) &&
+       !Segment->ReadOnlyAfterRelocations) ||
+      Section->isExecutable() || Segment->isExecutable() ||
       !Image.readVA(Address, 1))
     return std::nullopt;
-  // A pool with complete byte/identity evidence must use the same address
-  // helper in key consumers and ordinary pointer uses.
-  if (cstringStorageSourceHint(Image, Section->VA))
-    return std::nullopt;
+  const bool CString = (Section->Type & llvm::MachO::SECTION_TYPE) ==
+                       llvm::MachO::S_CSTRING_LITERALS;
+  const Symbol *Identity = nullptr;
+  if (CString) {
+    // A pool with complete byte/identity evidence must use the same address
+    // helper in key consumers and ordinary pointer uses.
+    if (cstringStorageSourceHint(Image, Section->VA))
+      return std::nullopt;
+  } else {
+    for (const auto &Symbol : Image.Symbols) {
+      if (Symbol.Addr != Address)
+        continue;
+      if (Identity || Symbol.IsFunc || Symbol.Name.empty() ||
+          llvm::StringRef(Symbol.Name).starts_with(kAutoFuncPrefix))
+        return std::nullopt;
+      Identity = &Symbol;
+    }
+    if (!Identity)
+      return std::nullopt;
+  }
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeAssociationKey;
   Hint.TargetAddress = Address;
+  if (Identity)
+    Hint.TargetName = Identity->Name;
   Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   std::string Reason;
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
@@ -420,22 +439,34 @@ directLocalStorageAccessExtents(const HighFunc &Function,
   return Result;
 }
 
-inline bool isAssociationKeyConsumer(const HighExpr &Expression,
-                                     const BinaryImage &Image) {
+inline std::optional<size_t>
+identityKeyParameter(const HighExpr &Expression, const BinaryImage &Image) {
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Expression.MemoryOrdering != NdMemoryOrdering::None)
-    return false;
+    return std::nullopt;
   const auto &Hint = *Expression.SourceCallHint;
-  if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall ||
-      (Hint.TargetName != "objc_getAssociatedObject" &&
-       Hint.TargetName != "objc_setAssociatedObject") ||
-      Expression.Operands.size() != Hint.Signature.Parameters.size())
-    return false;
-  const auto Expected = objcRuntimeSourceCallHint(Image, Hint.TargetAddress);
-  return Expected && Expected->TargetName == Hint.TargetName &&
-         objc_projection_detail::sameHint(Expected->Signature, Hint.Signature);
+  std::optional<size_t> Parameter;
+  std::optional<SourceCallTypeHint> Expected;
+  if (Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+      (Hint.TargetName == "objc_getAssociatedObject" ||
+       Hint.TargetName == "objc_setAssociatedObject")) {
+    Parameter = 1;
+    Expected = objcRuntimeSourceCallHint(Image, Hint.TargetAddress);
+  } else if (Hint.CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall) {
+    if (Hint.TargetName == "dispatch_get_specific")
+      Parameter = 0;
+    else if (Hint.TargetName == "dispatch_queue_get_specific")
+      Parameter = 1;
+    Expected = darwinRuntimeSourceCallHint(Image, Hint.TargetAddress);
+  }
+  if (!Parameter || !Expected || *Parameter >= Expression.Operands.size() ||
+      Expression.Operands.size() != Hint.Signature.Parameters.size() ||
+      Expected->TargetName != Hint.TargetName ||
+      !objc_projection_detail::sameHint(Expected->Signature, Hint.Signature))
+    return std::nullopt;
+  return Parameter;
 }
 
 inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
@@ -1123,13 +1154,12 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
           }
         }
       }
-      // The associated-object API compares key identities and never reads
-      // their bytes. Rebuild only this authenticated argument occurrence;
+      // Identity-only runtime APIs compare keys and never read their bytes.
+      // Rebuild only this authenticated argument occurrence;
       // ordinary loads, returned addresses, and unrelated calls must retain
       // the unresolved image-data diagnostic. Equal original addresses share
       // one helper across methods, including addresses inside a string.
-      if (Index == 1 && Operand &&
-          isAssociationKeyConsumer(*Expression, Image)) {
+      if (Operand && identityKeyParameter(*Expression, Image) == Index) {
         const auto Address = constantAddress(*Operand);
         auto Hint =
             Address ? associationKeyHint(Image, *Address) : std::nullopt;
@@ -1463,8 +1493,9 @@ inline bool objcSourceCallBound(
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeAssociationKey) {
     const auto Expected = associationKeyHint(Image, Binding.TargetAddress);
-    return Expected && Binding.TargetName.empty() && Binding.Selector.empty() &&
-           Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeStaticIdentity) {

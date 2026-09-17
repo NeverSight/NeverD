@@ -2524,6 +2524,124 @@ TEST(ObjCSourceBindings,
   }
 }
 
+TEST(ObjCSourceBindings,
+     DispatchSpecificKeysKeepExactNamedReadonlyIdentity) {
+  struct Consumer {
+    const char *Name;
+    size_t KeyIndex;
+  };
+  constexpr Consumer Consumers[] = {
+      {"dispatch_get_specific", 0},
+      {"dispatch_queue_get_specific", 1},
+  };
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const auto &[Name, KeyIndex] : Consumers) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Name);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.Image.ObjCSourceReferences.clear();
+      F.Image.Segments[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Image.Segments[0].ReadOnlyAfterRelocations = true;
+      F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+      constexpr va_t Slot = 0x1020;
+      constexpr va_t Address = 0x1040;
+      const std::string Symbol = std::string("_") + Name;
+      F.Image.ImportPtrSlots[Slot] = Symbol;
+      ASSERT_TRUE(F.Image.recordDyldBindSlot(
+          Slot, Symbol, 0, "/usr/lib/system/libdispatch.dylib", false));
+      F.Image.Symbols.push_back(
+          {"_GlobalQueueIdentityKey", Address, 1, false});
+      const auto Hint = darwinRuntimeSourceCallHint(F.Image, Slot);
+      ASSERT_TRUE(Hint);
+      ASSERT_LT(KeyIndex, Hint->Signature.Parameters.size());
+      std::vector<ExprPtr> Arguments;
+      for (size_t Index = 0; Index < Hint->Signature.Parameters.size(); ++Index)
+        Arguments.push_back(HighExpr::makeConst(
+            Index == KeyIndex ? Address : 0, 8,
+            Index == KeyIndex ? ConstantAddressProvenance::DataAddress
+                              : ConstantAddressProvenance::Unknown));
+      auto Call = HighExpr::makeCall(Name, Slot, Arguments);
+      Call->Type = Hint->Signature.ReturnType;
+      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+      F.Function.Body[0].RetVal = Call;
+
+      const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      EXPECT_EQ(Result.AssociationKeys, std::set<va_t>{Address});
+      const auto Bound = Result.Function.Body[0].RetVal->Operands[KeyIndex];
+      ASSERT_TRUE(Bound->SourceCallHint);
+      EXPECT_EQ(Bound->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeAssociationKey);
+      EXPECT_EQ(Bound->SourceCallHint->TargetAddress, Address);
+      EXPECT_EQ(Bound->SourceCallHint->TargetName,
+                "_GlobalQueueIdentityKey");
+      EXPECT_TRUE(objcSourceCallBound(*Bound, F.Image, {}));
+
+      auto Forged = *Bound->SourceCallHint;
+      Forged.TargetName = "_DifferentIdentityKey";
+      Bound->SourceCallHint = std::make_shared<SourceCallTypeHint>(Forged);
+      EXPECT_FALSE(objcSourceCallBound(*Bound, F.Image, {}));
+    }
+  }
+}
+
+TEST(ObjCSourceBindings,
+     DispatchSpecificKeysRejectUnprovedIdentityOrContext) {
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  constexpr va_t Slot = 0x1020;
+  constexpr va_t Address = 0x1040;
+  F.Image.ImportPtrSlots[Slot] = "_dispatch_get_specific";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(
+      Slot, "_dispatch_get_specific", 0,
+      "/usr/lib/system/libdispatch.dylib", false));
+  F.Image.Symbols.push_back({"_GlobalQueueIdentityKey", Address, 1, false});
+  const auto Hint = darwinRuntimeSourceCallHint(F.Image, Slot);
+  ASSERT_TRUE(Hint);
+  auto Call = HighExpr::makeCall(
+      "dispatch_get_specific", Slot,
+      {HighExpr::makeConst(Address, 8,
+                           ConstantAddressProvenance::DataAddress)});
+  Call->Type = Hint->Signature.ReturnType;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+  F.Function.Body[0].RetVal = Call;
+  for (unsigned Case = 0; Case < 6; ++Case) {
+    SCOPED_TRACE(Case);
+    auto Image = F.Image;
+    auto Changed = *Hint;
+    Call->Operands[0] = HighExpr::makeConst(
+        Address, 8, ConstantAddressProvenance::DataAddress);
+    if (Case == 0)
+      Image.Symbols.clear();
+    else if (Case == 1)
+      Image.Symbols.push_back({"_AliasIdentityKey", Address, 1, false});
+    else if (Case == 2)
+      Image.Segments[0].Flags = Image.Sections[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    else if (Case == 3)
+      Changed.Signature.Parameters[0].Location.RegisterOffset += 8;
+    else if (Case == 4)
+      Image.DyldBindSlots[Slot].Module = "/tmp/libdispatch.dylib";
+    else
+      Call->Operands[0] = HighExpr::makeConst(
+          Address + 1, 8, ConstantAddressProvenance::DataAddress);
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Changed);
+    const auto Result = bindObjCSourceReferences(F.Function, Image);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.AssociationKeys.empty());
+  }
+
+  // The address is identity-only only in the authenticated key argument.
+  F.Function.Body[0].RetVal = HighExpr::makeConst(
+      Address, 8, ConstantAddressProvenance::DataAddress);
+  const auto Ordinary = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_FALSE(Ordinary.Limitation.empty());
+  EXPECT_TRUE(Ordinary.AssociationKeys.empty());
+  EXPECT_EQ(Ordinary.Function.Body[0].RetVal->Kind, ExprKind::Const);
+}
+
 TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
   Fixture F;
   constexpr va_t Address = 0x1040;
