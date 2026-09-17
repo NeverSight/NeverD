@@ -20,6 +20,7 @@
 #include "neverd/support/BinaryLoading.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -2951,6 +2952,152 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   EXPECT_NE(Source.find("throw"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("throw 0"), std::string::npos) << Source;
+}
+
+std::filesystem::path gsSehProbePath() {
+  return std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+         "corpus/windows-eh/msvc/x86_64/fh4/gs/o0/abi-probe/"
+         "seh_probe-msvc-x86_64-fh4-gs-o0.exe";
+}
+
+va_t pdataEntryContaining(const BinaryImage &Img, va_t Addr) {
+  for (const auto &Rec : Img.COFFPDataRecords) {
+    const va_t Begin = Img.Base + Rec.BeginRVA;
+    const va_t End = Img.Base + Rec.EndRVA;
+    if (Addr >= Begin && Addr < End)
+      return Begin;
+  }
+  return 0;
+}
+
+va_t findExecutableBytes(const BinaryImage &Img, llvm::ArrayRef<uint8_t> Needle) {
+  if (Needle.empty())
+    return 0;
+  for (const Segment &Seg : Img.Segments) {
+    if (!Seg.isExecutable() || Seg.Data.size() < Needle.size())
+      continue;
+    auto It = std::search(Seg.Data.begin(), Seg.Data.end(), Needle.begin(),
+                          Needle.end());
+    if (It != Seg.Data.end())
+      return Seg.VA + static_cast<va_t>(It - Seg.Data.begin());
+  }
+  return 0;
+}
+
+std::string highcOnlyFunction(BinaryImage Img, va_t Entry) {
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  if (!Result.Success || Result.HighFuncs.empty())
+    return Result.Error;
+  const HighFunc *Attached = nullptr;
+  for (const HighFunc &Func : Result.HighFuncs)
+    if (Func.Entry == Entry)
+      Attached = &Func;
+  if (!Attached)
+    return {};
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  if (!HighCEmitter().emit({*Attached}, OS, Options))
+    return {};
+  OS.flush();
+  return Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadGsCookieIsVoidNoreturnFail) {
+  // Hex-Rays `_security_check_cookie` is void; the unnamed fail `jmp` is
+  // noreturn. Drive the public /GS seh_probe cookie, not stuffed HighIR.
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = gsSehProbePath();
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+  const uint8_t RolRcx16[] = {0x48, 0xc1, 0xc1, 0x10};
+  const va_t Rol = findExecutableBytes(*DiscoverImg, RolRcx16);
+  ASSERT_NE(Rol, 0u);
+  const va_t Entry = pdataEntryContaining(*DiscoverImg, Rol);
+  ASSERT_NE(Entry, 0u);
+
+  BinaryLoadOptions FuncOpts;
+  FuncOpts.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, FuncOpts);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
+  ASSERT_FALSE(Source.empty()) << Source;
+  EXPECT_NE(Source.find("void "), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("= sub_"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return t"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("sub_"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadGsHandlerCheckReturnsOne) {
+  // Hex-Rays `_GSHandlerCheck` returns 1 (ExceptionContinueSearch), not void.
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = gsSehProbePath();
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+  const uint8_t MovEax1[] = {0xb8, 0x01, 0x00, 0x00, 0x00};
+  va_t Entry = 0;
+  for (const Segment &Seg : DiscoverImg->Segments) {
+    if (!Seg.isExecutable() || Seg.Data.size() < sizeof(MovEax1))
+      continue;
+    for (auto It = Seg.Data.begin();;) {
+      It = std::search(It, Seg.Data.end(), std::begin(MovEax1),
+                       std::end(MovEax1));
+      if (It == Seg.Data.end())
+        break;
+      const va_t Addr = Seg.VA + static_cast<va_t>(It - Seg.Data.begin());
+      const va_t Found = pdataEntryContaining(*DiscoverImg, Addr);
+      if (Found) {
+        uint32_t Span = 0;
+        for (const auto &Rec : DiscoverImg->COFFPDataRecords) {
+          const va_t Begin = DiscoverImg->Base + Rec.BeginRVA;
+          if (Begin != Found)
+            continue;
+          Span = Rec.EndRVA - Rec.BeginRVA;
+          break;
+        }
+        if (Span != 0 && Span <= 0x28) {
+          Entry = Found;
+          break;
+        }
+      }
+      ++It;
+    }
+    if (Entry)
+      break;
+  }
+  ASSERT_NE(Entry, 0u) << "no small mov-eax-1 pdata body";
+
+  BinaryLoadOptions FuncOpts;
+  FuncOpts.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, FuncOpts);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
+  ASSERT_FALSE(Source.empty()) << Source;
+  EXPECT_NE(Source.find("return 1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("void sub_"), std::string::npos) << Source;
 }
 
 } // namespace
