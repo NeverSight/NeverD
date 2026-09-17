@@ -3313,6 +3313,35 @@ TEST(ObjCCallHints, UIKitCGSizeStringKeepsExactProviderAndRecordABI) {
   }
 }
 
+TEST(ObjCCallHints, DarwinNotifyCancelKeepsGeneratedIntegerABIAndProviders) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const char *Module : {"/usr/lib/libSystem.B.dylib",
+                               "/usr/lib/system/libsystem_notify.dylib"}) {
+      auto Image = runtimeImage("_notify_cancel", Architecture);
+      Image.DyldBindSlots[0x2180] = {"_notify_cancel", 0, Module, false};
+      const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint) << Module;
+      EXPECT_EQ(Hint->TargetName, "notify_cancel");
+      EXPECT_EQ(Hint->Signature.Origin,
+                SourceFunctionTypeHint::OriginKind::DarwinSDK);
+      ASSERT_TRUE(Hint->Signature.ReturnType);
+      EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Signature.ReturnType->Size, 4U);
+      EXPECT_FALSE(Hint->Signature.ReturnType->IsSigned);
+      ASSERT_EQ(Hint->Signature.Parameters.size(), 1U);
+      EXPECT_EQ(Hint->Signature.Parameters[0].Type->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Signature.Parameters[0].Type->Size, 4U);
+      EXPECT_TRUE(Hint->Signature.Parameters[0].Type->IsSigned);
+      EXPECT_EQ(Hint->Signature.Parameters[0].Location.RegisterOffset,
+                getTargetRegInfo(Architecture).IntParamRegs.front());
+    }
+    auto Wrong = runtimeImage("_notify_cancel", Architecture);
+    Wrong.DyldBindSlots[0x2180] = {
+        "_notify_cancel", 0, "/tmp/libsystem_notify.dylib", false};
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(Wrong, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {

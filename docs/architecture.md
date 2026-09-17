@@ -203,6 +203,12 @@ Padding, packed fields, mixed floating/integer classes and incomplete components
 remain explicitly unsupported. Source record carriers never authorize binary
 rewriting.
 
+The generated Darwin C catalog takes declarations only from its explicit public
+header set and intersects all four macOS/iOS architecture profiles with SDK
+export evidence. Public `notify.h` functions use this path, including exact
+`libSystem` and `libsystem_notify` providers; a header declaration alone cannot
+authorize a call.
+
 Fixed Darwin C imports may use a public declaration outside the generated
 command-line-tools catalog only at an exact symbol and dyld provider boundary.
 `NSStringFromCGSize` is such a UIKit declaration on ARM64: its natural
