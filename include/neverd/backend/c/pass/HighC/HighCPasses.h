@@ -47,6 +47,10 @@ struct HighCAnalysisState {
   /// is a bare `return`.  Cookie-style MSVC helpers (`ret` vs
   /// `jmp report_gsfailure`) have no libc name when the image is stripped.
   std::set<va_t> InferredNoreturnCallAddrs;
+  /// Call expressions followed immediately by `int3`/`ud2`.  MSVC plants a
+  /// trap after noreturn helpers (`_CxxThrowException`, `abort`) even when
+  /// the callee has no libc name.
+  std::set<const HighExpr *> InferredNoreturnCalls;
 };
 
 void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
@@ -59,12 +63,13 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn);
 
 /// Record unnamed noreturn helpers (cookie fail path: bare `return` plus
-/// `return call()`).  Must run before AssignedVars is collected.
+/// `return call()`, or a call immediately followed by `int3`/`ud2`).
+/// Must run before AssignedVars is collected.
 void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
                              VarNameFn VarFn);
 
-/// True when a call never returns: libc noreturn, x86 `__fastfail`, or an
-/// inferred cookie-style fail helper.
+/// True when a call never returns: libc noreturn, x86 `__fastfail`, an
+/// inferred cookie-style fail helper, or a call followed by a debug trap.
 bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E);
 
 void collectUsedVarsExpr(const HighExpr &Expr,

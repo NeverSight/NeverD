@@ -2583,6 +2583,72 @@ TEST(HighCPointerAddresses, CallResultUsedByTestEaxIsAssigned) {
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, CallFollowedByInt3OmitsDebugBreakAndReturn) {
+  // MSVC plants `int3` after noreturn helpers.  An unnamed call immediately
+  // followed by `int3` must not print `__debugbreak()` or a success return
+  // (cxx_eh_probe throw / abort join).
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Helper = 0x140001020;
+  Img.Entry = Entry;
+  static const uint8_t kBytes[] = {
+      0x85, 0xc9,                   // test ecx, ecx
+      0x74, 0x06,                   // je helper_path
+      0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+      0xc3,                         // ret
+      0xe8, 0x11, 0x00, 0x00, 0x00, // call helper (rel to 0x20)
+      0xcc,                         // int3
+      0xc3,                         // ret
+  };
+  static const uint8_t kHelper[] = {
+      0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+      0xc3,
+  };
+  std::vector<uint8_t> Text(0x30, 0xcc);
+  std::copy(std::begin(kBytes), std::end(kBytes), Text.begin());
+  std::copy(std::begin(kHelper), std::end(kHelper), Text.begin() + 0x20);
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = Text.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = Text;
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = Text.size();
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
+  Img.KnownCodeRanges.emplace_back(Helper, Helper + sizeof(kHelper));
+  Symbol Main = Symbol::makeFunc(Entry, sizeof(kBytes));
+  Main.Name = "maybe_abort";
+  Img.Symbols.push_back(std::move(Main));
+  Symbol Help = Symbol::makeFunc(Helper, sizeof(kHelper));
+  Help.Name = "abort_like";
+  Img.Symbols.push_back(std::move(Help));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_FALSE(Result.HighFuncs.empty());
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_NE(Source.find("abort_like("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("= abort_like("), std::string::npos) << Source;
+}
+
 TEST(LLVMCPointerAddresses, TestRcxDoesNotEmitPopcount) {
   // `test rcx, rcx / je` only consumes ZF. PF via POPCOUNT must not appear in
   // --no-opt LLVM-to-C (cookie / seh_probe SSA noise).
@@ -2615,6 +2681,62 @@ TEST(LLVMCPointerAddresses, TestRcxDoesNotEmitPopcount) {
   Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
   Symbol FuncSym = Symbol::makeFunc(Entry, sizeof(kBytes));
   FuncSym.Name = "test_rcx";
+  Img.Symbols.push_back(std::move(FuncSym));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.NoOpt = true;
+  Opts.LiftMode = true;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_NE(Result.LlvmModule, nullptr);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, OS, Options));
+  OS.flush();
+  EXPECT_EQ(Source.find("__builtin_popcount"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, CookieCmpRolTestDoesNotEmitPopcount) {
+  // Cookie-style `cmp / jne; rol; test; jne` joins two flag-producing
+  // compares.  Unused PF PHIs must not keep `__builtin_popcount`.
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  Img.Entry = Entry;
+  static const uint8_t kBytes[] = {
+      0x48, 0x39, 0xd1,       // cmp rcx, rdx
+      0x75, 0x0a,             // jne fail
+      0x48, 0xc1, 0xc1, 0x10, // rol rcx, 16
+      0x66, 0x85, 0xc9,       // test cx, cx
+      0x75, 0x01,             // jne fail
+      0xc3,                   // ret
+      0xc3,                   // fail: ret
+  };
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = sizeof(kBytes);
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data.assign(std::begin(kBytes), std::end(kBytes));
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = sizeof(kBytes);
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
+  Symbol FuncSym = Symbol::makeFunc(Entry, sizeof(kBytes));
+  FuncSym.Name = "check_cookie";
   Img.Symbols.push_back(std::move(FuncSym));
 
   llvm::LLVMContext Ctx;

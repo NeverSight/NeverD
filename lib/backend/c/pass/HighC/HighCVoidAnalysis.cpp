@@ -19,10 +19,69 @@
 
 namespace neverd {
 
+namespace {
+
+bool isDebugTrapExpr(const HighExpr *E) {
+  return E && E->Kind == ExprKind::Call &&
+         (E->IntrinsicId == Intrinsic::Int3 ||
+          E->IntrinsicId == Intrinsic::Ud2 ||
+          E->IntrinsicId == Intrinsic::Int1);
+}
+
+bool isDebugTrapStmt(const HighStmt &Stmt) {
+  if (Stmt.Kind == StmtKind::Call)
+    return isDebugTrapExpr(Stmt.CallExpr.get());
+  if ((Stmt.Kind == StmtKind::Assign || Stmt.Kind == StmtKind::ExprStmt) &&
+      Stmt.Val)
+    return isDebugTrapExpr(Stmt.Val.get());
+  return false;
+}
+
+const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
+  if (Stmt.Kind == StmtKind::Call)
+    return Stmt.CallExpr.get();
+  if ((Stmt.Kind == StmtKind::Assign || Stmt.Kind == StmtKind::ExprStmt) &&
+      Stmt.Val)
+    return Stmt.Val.get();
+  return nullptr;
+}
+
+void markCallsFollowedByTrap(HighCAnalysisState &State,
+                             const std::vector<HighStmt> &Stmts) {
+  for (size_t I = 0; I < Stmts.size(); ++I) {
+    const HighStmt &S = Stmts[I];
+    markCallsFollowedByTrap(State, S.Body);
+    markCallsFollowedByTrap(State, S.ElseBody);
+    for (const SwitchCase &C : S.Cases)
+      markCallsFollowedByTrap(State, C.Body);
+    markCallsFollowedByTrap(State, S.DefaultBody);
+    for (const auto &ClauseBody : S.EHClauseBodies)
+      markCallsFollowedByTrap(State, ClauseBody);
+
+    const HighExpr *Call = stmtCallExpr(S);
+    if (!Call || Call->Kind != ExprKind::Call ||
+        Call->IntrinsicId != Intrinsic::None)
+      continue;
+    size_t J = I + 1;
+    while (J < Stmts.size() && (State.DeadStmts.count(&Stmts[J]) ||
+                                Stmts[J].Kind == StmtKind::Nop))
+      ++J;
+    if (J >= Stmts.size() || !isDebugTrapStmt(Stmts[J]))
+      continue;
+    State.InferredNoreturnCalls.insert(Call);
+    if (Call->CallAddr != 0 && Call->CallAddr != InvalidVA)
+      State.InferredNoreturnCallAddrs.insert(Call->CallAddr);
+  }
+}
+
+} // namespace
+
 bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E) {
   if (E.Kind != ExprKind::Call)
     return false;
   if (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E))
+    return true;
+  if (State.InferredNoreturnCalls.count(&E) != 0)
     return true;
   return E.CallAddr != 0 && E.CallAddr != InvalidVA &&
          State.InferredNoreturnCallAddrs.count(E.CallAddr) != 0;
@@ -31,6 +90,8 @@ bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E) {
 void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
                              VarNameFn VarFn) {
   State.InferredNoreturnCallAddrs.clear();
+  State.InferredNoreturnCalls.clear();
+  markCallsFollowedByTrap(State, Func.Body);
   std::map<std::string, const HighExpr *> VarSources;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (State.DeadStmts.count(&S))

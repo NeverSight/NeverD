@@ -40,6 +40,30 @@ bool isArchitecturalNoReturn(const MedOp &Op, Arch TheArch) {
   return false;
 }
 
+bool isX86DebugTrap(const MedOp &Op) {
+  if (Op.Opcode != NdOp::INTRINSIC || Op.NumInputs < 1 ||
+      !Op.Inputs[0].isConst())
+    return false;
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+  return Id == Intrinsic::Int3 || Id == Intrinsic::Ud2 ||
+         Id == Intrinsic::Int1;
+}
+
+void markCallsFollowedByTrap(MedFunc &Func) {
+  for (MedBlock &Block : Func.Blocks) {
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      MedOp &Op = Block.Ops[I];
+      if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+        continue;
+      size_t J = I + 1;
+      while (J < Block.Ops.size() && Block.Ops[J].Dead)
+        ++J;
+      if (J < Block.Ops.size() && isX86DebugTrap(Block.Ops[J]))
+        Op.DoesNotReturn = true;
+    }
+  }
+}
+
 bool isDirectCallTo(const MedOp &Op, const std::set<va_t> &Targets) {
   return Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
          Op.Inputs[0].isConst() && Targets.count(Op.Inputs[0].ConstVal) != 0;
@@ -162,6 +186,9 @@ void propagateInternalNoReturn(std::vector<MedFunc> &Funcs, Arch TheArch) {
       for (MedOp &Op : Block.Ops)
         if (isDirectCallTo(Op, NoReturnEntries))
           Op.DoesNotReturn = true;
+    // MSVC plants `int3`/`ud2` after noreturn calls.  The callee may be an
+    // unlifted import thunk, so the trap at the call site is the local fact.
+    markCallsFollowedByTrap(Func);
   }
 }
 

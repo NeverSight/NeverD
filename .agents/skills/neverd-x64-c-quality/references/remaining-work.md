@@ -7,11 +7,11 @@ a regression, then delete the row.
 
 | Gap | Surface | Notes |
 |---|---|---|
-| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` prints the GS_HANDLER_DATA bit-2 align branch (`test [r8],4` / `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. Release `--func` of MapleStory2 cookie/GS is 0.14–0.15s (Ghidra already-analyzed UDS 0.23–0.27s) after PE load materializes only the requested `.pdata` body. |
+| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` prints the GS_HANDLER_DATA bit-2 align branch (`test [r8],4` / `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. Release `--func` CLI of MapleStory2 cookie/GS is 0.06–0.07s (includes PE load). Post-load `neverd_decompile` is 12–17ms vs Hex-Rays uncached 18–64ms and Ghidra UDS 0.25–0.37s. |
 | C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
-| Flag / popcount noise | lift + LLVMC | Simple `test`/`je` no longer emits `__builtin_popcount` (`LLVMCPointerAddresses.TestRcxDoesNotEmitPopcount`; MedDCE after flag elim). CMP+ROL cookie still has leftover PF chains. `*(T*)0` clobbers remain. |
+| Flag / popcount noise | lift + LLVMC | Simple `test`/`je` and cookie `cmp`/`rol`/`test` joins no longer emit `__builtin_popcount` (unused flag/temp PHIs are not DCE seeds). `*(T*)0` clobbers and extra Win64 params on the LLVM route remain. |
 | Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
 | Wrapping casts | HighC | `return (int32_t)(uint32_t)((uint32_t)var + 1)` is required by sanitizer tests. Do not strip. |
 | Source names | both | No PDB → `var_m18` / `arg0` / `g_1400050E0` / `sub_1400024E0`, not `Result` / `Value` / `ProbeSink` / `probe_filter`. MSVC `?A@B@@` now prints `B_A` instead of `_x3F_`. Hex-Rays still wins C++ types/`::`. |
@@ -71,6 +71,8 @@ a regression, then delete the row.
 | Catch-funclet attach does not recurse on cyclic handler VA | `HighCPointerAddresses.AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch`; `attachCxxFuncletBodies` keeps an in-flight HandlerVA set |
 | Call result used by `test eax` is assigned | `HighCPointerAddresses.CallResultUsedByTestEaxIsAssigned`; `analyzeInferredNoreturn` does not treat an assigned SSAVer-0 RAX as a bare void return |
 | MedDCE runs after flag elimination | `LLVMCPointerAddresses.TestRcxDoesNotEmitPopcount`; unused PF/POPCOUNT ops are erased before LLVM emit |
+| Call followed by `int3`/`ud2` is noreturn | `HighCPointerAddresses.CallFollowedByInt3OmitsDebugBreakAndReturn`; `MedNoReturn.CallFollowedByInt3IsNoreturn`; HighC omits `__debugbreak` and the success `return`; LLVM emits `noreturn`+unreachable |
+| Unused flag/temp PHIs are not DCE seeds | `LLVMCPointerAddresses.CookieCmpRolTestDoesNotEmitPopcount`; cookie LLVM-to-C has no `__builtin_popcount` |
 
 ## Next x64 exe pass
 
