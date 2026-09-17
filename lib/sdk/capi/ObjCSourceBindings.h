@@ -37,7 +37,7 @@ struct ObjCSourceBindingResult {
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;
   std::set<BorrowedByteRange> BorrowedBytes;
-  std::set<va_t> CStringSections;
+  std::set<va_t> CStringSections, CStringPointerSlots;
   SourceProjectionDiagnostics Diagnostics{};
 };
 
@@ -895,6 +895,21 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
                            : std::nullopt;
         if (!Hint && Target)
           Hint = constantObjectSourceHint(Image, *Target, *Address);
+        if (!Hint && Target) {
+          const auto *Section = Image.getSectionFor(*Target);
+          Hint = Section
+                     ? cstringStorageSourceHint(Image, Section->VA, *Address)
+                     : std::nullopt;
+          if (Hint) {
+            *Expression = *HighExpr::makeCall({}, 0, {});
+            Expression->Type = Original->Type;
+            Expression->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+            Result.CStringSections.insert(Section->VA);
+            Result.CStringPointerSlots.insert(*Address);
+            return Expression;
+          }
+        }
         if (Hint) {
           (Hint->CallKind == SourceCallTypeHint::Kind::RuntimeConstantString
                ? Result.ConstantStrings
@@ -1374,7 +1389,8 @@ inline bool objcSourceCallBound(
     return false;
   if (Binding.ImmutablePointerSlot &&
       Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantString &&
-      Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantObject)
+      Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantObject &&
+      Binding.CallKind != SourceCallTypeHint::Kind::RuntimeCStringStorage)
     return false;
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeConstantObject) {
     const auto Expected = constantObjectSourceHint(
@@ -1394,8 +1410,8 @@ inline bool objcSourceCallBound(
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeCStringStorage) {
-    const auto Expected =
-        cstringStorageSourceHint(Image, Binding.TargetAddress);
+    const auto Expected = cstringStorageSourceHint(
+        Image, Binding.TargetAddress, Binding.ImmutablePointerSlot);
     return Expected && !Expression.IsIndirectCall && !Expression.CallAddr &&
            Expression.CallTarget.empty() &&
            Expression.IntrinsicOutputs.empty() && Binding.TargetName.empty() &&

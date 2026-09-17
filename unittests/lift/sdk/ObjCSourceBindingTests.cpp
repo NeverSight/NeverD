@@ -617,6 +617,98 @@ TEST(ObjCSourceBindings,
   }
 }
 
+TEST(ObjCSourceBindings, CStringPointerSlotsSharePoolsAndRevalidateFixups) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Chained : {false, true})
+      for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        Fixture F;
+        F.Image.Arch = Architecture;
+        F.Image.ObjCSourceReferences.clear();
+        F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+        auto Segment = F.Image.Segments[0];
+        Segment.VA = Segment.FileOff = 0x2000;
+        Segment.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        Segment.ReadOnlyAfterRelocations = true;
+        llvm::support::endian::write64le(Segment.Data.data(), 0x1009);
+        F.Image.Segments.push_back(Segment);
+        auto Section = F.Image.Sections[0];
+        Section.VA = Section.FileOff = 0x2000;
+        Section.Type = llvm::MachO::S_REGULAR;
+        Section.Flags = Segment.Flags;
+        F.Image.Sections.push_back(Section);
+        F.Image.DataPtrRelocSlots.insert(0x2000);
+        F.Image.DataPtrRelocTargetOwners[0x2000] = 0x1000;
+        F.Image.MachOHasChainedFixups = Chained;
+        F.Image.MachOResolvedChainedPointerSlots.insert(0x2000);
+        const auto Pointer = NdType::makePtr(NdType::makeInt(1));
+        F.Function.ReturnType = Pointer;
+        F.Function.Body[0].RetVal =
+            HighExpr::makeLoad(HighExpr::makeConst(0x2000, 8), Pointer);
+        if (Mutation == 1)
+          F.Image.DataPtrRelocSlots.clear();
+        if (Mutation == 2)
+          F.Image.DataPtrRelocTargetOwners[0x2000] = 0x2000;
+        if (Mutation == 3)
+          F.Image.Segments[1].ReadOnlyAfterRelocations = false;
+        if (Mutation == 4)
+          F.Image.ImportPtrSlots[0x2000] = "_unresolved";
+        if (Mutation == 5)
+          F.Image.DataPtrRelocSlots.insert(0x10f8);
+        if (Mutation == 6)
+          F.Image.Segments[0].Flags =
+              SegmentFlags::Readable | SegmentFlags::Writable;
+        if (Mutation == 7)
+          F.Image.Sections[1].FileSz = 4;
+        if (Mutation == 8)
+          F.Image.MachOChainedFixupsAmbiguous = true;
+        if (Mutation == 9) {
+          F.Image.MachOHasChainedFixups = true;
+          F.Image.MachOResolvedChainedPointerSlots.clear();
+        }
+        if (Mutation == 10)
+          F.Function.Body[0].RetVal->Type = NdType::makeInt(4);
+        if (Mutation == 11)
+          F.Function.Body[0].RetVal = HighExpr::makeConst(0x2000, 8);
+        EXPECT_EQ(bool(cstringStorageSourceHint(F.Image, 0x1000, 0x2000)),
+                  Mutation == 0 || Mutation >= 10);
+        const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+        if (Mutation) {
+          EXPECT_TRUE(Bound.CStringPointerSlots.empty());
+          continue;
+        }
+        ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+        EXPECT_EQ(Bound.CStringPointerSlots, std::set<va_t>{0x2000});
+        const auto Helper = Bound.Function.Body[0].RetVal;
+        ASSERT_TRUE(Helper->SourceCallHint);
+        EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}));
+        std::set<std::string> Shared;
+        const auto Source =
+            renderCStringStorageHelpers(F.Image, {0x1000}, Shared, {0x2000});
+        EXPECT_EQ(Shared.size(), 2U);
+        EXPECT_NE(Source.find("neverd_cstring_storage_1000_address() + 9"),
+                  std::string::npos);
+        // The helper represents the slot load, so re-rendering after a new
+        // proved interior target must use that target, not a cached offset.
+        llvm::support::endian::write64le(F.Image.Segments[1].Data.data(),
+                                         0x1011);
+        EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}));
+        Shared.clear();
+        const auto Updated =
+            renderCStringStorageHelpers(F.Image, {}, Shared, {0x2000});
+        EXPECT_NE(Updated.find("neverd_cstring_storage_1000_address() + 17"),
+                  std::string::npos);
+        auto Forged =
+            std::make_shared<SourceCallTypeHint>(*Helper->SourceCallHint);
+        Forged->ImmutablePointerSlot += 8;
+        Helper->SourceCallHint = Forged;
+        EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
+        F.Image.DataPtrRelocSlots.clear();
+        EXPECT_THROW(renderCStringStorageHelpers(F.Image, {}, Shared, {0x2000}),
+                     std::runtime_error);
+      }
+}
+
 TEST(ObjCSourceBindings, CStringPoolsRejectPartialAmbiguousAndMutableStorage) {
   for (unsigned Case = 0; Case != 9; ++Case) {
     SCOPED_TRACE(Case);

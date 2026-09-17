@@ -414,7 +414,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::set<va_t> ConstantStrings;
       std::set<va_t> ConstantObjects;
       std::set<BorrowedByteRange> BorrowedBytes;
-      std::set<va_t> CStringSections;
+      std::set<va_t> CStringSections, CStringPointerSlots;
       for (va_t Entry : Included) {
         const auto &Keys = Projections.at(Entry).AssociationKeys;
         AssociationKeys.insert(Keys.begin(), Keys.end());
@@ -434,6 +434,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         BorrowedBytes.insert(Bytes.begin(), Bytes.end());
         const auto &CStrings = Projections.at(Entry).CStringSections;
         CStringSections.insert(CStrings.begin(), CStrings.end());
+        const auto &CStringSlots = Projections.at(Entry).CStringPointerSlots;
+        CStringPointerSlots.insert(CStringSlots.begin(), CStringSlots.end());
       }
       std::set<std::string> SharedIdentityFunctions;
       for (const auto &[Address, Width] : LocalStorageExtents)
@@ -450,7 +452,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       IdentityHelpers += renderBorrowedByteHelpers(S->Img, BorrowedBytes,
                                                    SharedIdentityFunctions);
       IdentityHelpers += renderCStringStorageHelpers(S->Img, CStringSections,
-                                                     SharedIdentityFunctions);
+                                                     SharedIdentityFunctions,
+                                                     CStringPointerSlots);
       std::set<std::string> SharedStorageFunctions;
       const std::string StorageHelpers =
           ProfileStorage.render(ProfileSections, SharedStorageFunctions) +

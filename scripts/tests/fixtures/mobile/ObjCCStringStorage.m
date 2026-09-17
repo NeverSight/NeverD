@@ -2,7 +2,12 @@
 #include <dispatch/dispatch.h>
 #import <objc/runtime.h>
 
+extern const char *const NDStoredCStringLabel;
+extern const char *const NDStoredCStringSuffix;
+
 @interface NDCStringStorage : NSObject
+- (const char *)loadedLabel;
+- (const char *)loadedSuffix;
 - (const char *)label;
 - (const char *)suffix;
 - (dispatch_queue_t)newQueue;
@@ -12,6 +17,12 @@
 @end
 
 @implementation NDCStringStorage
+- (const char *)loadedLabel {
+  return NDStoredCStringLabel;
+}
+- (const char *)loadedSuffix {
+  return NDStoredCStringSuffix;
+}
 - (NSString *)string {
   return @"persist-queue-label";
 }

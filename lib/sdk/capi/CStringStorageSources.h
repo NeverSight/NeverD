@@ -9,6 +9,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -18,7 +19,8 @@ namespace neverd::sdk {
 // Whole-section storage keeps every supported interior address in one shared,
 // permanent object, including pointers retained by an external runtime.
 inline std::optional<SourceCallTypeHint>
-cstringStorageSourceHint(const BinaryImage &Image, va_t Address) {
+cstringStorageSourceHint(const BinaryImage &Image, va_t Address,
+                         va_t PointerSlot = 0) {
   const auto *Section = Image.getSectionFor(Address);
   if (!Section || Section->VA != Address || !Section->Size ||
       Section->Size > limits::kMaxSourceCallBorrowedBytes ||
@@ -26,7 +28,13 @@ cstringStorageSourceHint(const BinaryImage &Image, va_t Address) {
           llvm::MachO::S_CSTRING_LITERALS ||
       !readImmutableImageBytes(Image, Address, Section->Size))
     return std::nullopt;
+  if (PointerSlot) {
+    const auto Target = readImmutableImagePointer(Image, PointerSlot);
+    if (!Target || Image.getSectionFor(*Target) != Section)
+      return std::nullopt;
+  }
   SourceCallTypeHint Hint;
+  Hint.ImmutablePointerSlot = PointerSlot;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeCStringStorage;
   Hint.TargetAddress = Address;
   Hint.ByteCount = Section->Size;
@@ -40,9 +48,20 @@ cstringStorageSourceHint(const BinaryImage &Image, va_t Address) {
 inline std::string
 renderCStringStorageHelpers(const BinaryImage &Image,
                             const std::set<va_t> &Sections,
-                            std::set<std::string> &SharedFunctions) {
+                            std::set<std::string> &SharedFunctions,
+                            const std::set<va_t> &PointerSlots = {}) {
   std::string Source;
-  for (const auto Address : Sections) {
+  std::set<va_t> Pools = Sections;
+  std::map<va_t, std::pair<va_t, uint64_t>> Pointers;
+  for (const auto Slot : PointerSlots) {
+    const auto Target = readImmutableImagePointer(Image, Slot);
+    const auto *Section = Target ? Image.getSectionFor(*Target) : nullptr;
+    if (!Section || !cstringStorageSourceHint(Image, Section->VA, Slot))
+      throw std::runtime_error("C string pointer storage is no longer valid");
+    Pools.insert(Section->VA);
+    Pointers.emplace(Slot, std::make_pair(Section->VA, *Target - Section->VA));
+  }
+  for (const auto Address : Pools) {
     const auto Hint = cstringStorageSourceHint(Image, Address);
     if (!Hint)
       throw std::runtime_error("C string literal storage is no longer valid");
@@ -74,6 +93,16 @@ renderCStringStorageHelpers(const BinaryImage &Image,
       }
     }
     Source += "\";\n  return (uintptr_t)storage;\n}\n";
+  }
+  for (const auto &[Slot, Target] : Pointers) {
+    const auto Name =
+        "neverd_cstring_pointer_" + llvm::utohexstr(Slot, true) + "_address";
+    if (!SharedFunctions.insert(Name).second)
+      continue;
+    Source += "\nuintptr_t " + Name +
+              "(void) {\n  return neverd_cstring_storage_" +
+              llvm::utohexstr(Target.first, true) + "_address() + " +
+              std::to_string(Target.second) + ";\n}\n";
   }
   return Source;
 }

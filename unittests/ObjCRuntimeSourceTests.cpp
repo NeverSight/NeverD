@@ -334,6 +334,8 @@ void verifyRuntime(bool Chained,
                                    "-dynamiclib", "-framework",
                                    "Foundation",  (Fixtures / Fixture).string(),
                                    "-o",          Original};
+  if (CStringStorage)
+    Compile.push_back((Fixtures / "ObjCCStringStorageCells.m").string());
   if (AtomicARC)
     Compile.push_back("-DNEVERD_ATOMIC_PROPERTIES");
   if (ReceiverAliases) {
@@ -586,7 +588,7 @@ void verifyRuntime(bool Chained,
                              : SwiftTypeLookup     ? 1U
                              : DispatchOnce        ? 2U
                              : MutableConstants    ? 7U
-                             : CStringStorage      ? 6U
+                             : CStringStorage      ? 8U
                              : SwiftOnce           ? 1U
                              : NativeReturnPaths   ? 2U
                              : IncomingResults     ? 2U
@@ -705,7 +707,7 @@ void verifyRuntime(bool Chained,
   if (NativeReturnPaths)
     Remaining = {"adjusted:choose:output:", "wideLeaf:"};
   if (CStringStorage)
-    Remaining = {"label",  "suffix", "newQueue",
+    Remaining = {"loadedLabel", "loadedSuffix", "label",  "suffix", "newQueue",
                  "string", "stored", "setStored:"};
   if (IncomingResults)
     Remaining = {"word:flags:", "word:memory:"};
@@ -1136,7 +1138,7 @@ void verifyRuntime(bool Chained,
                                        : ConstantObjects  ? 13U
                                        : ConstantStrings  ? 7U
                                        : MutableConstants ? 1U
-                                       : CStringStorage   ? 1U
+                                       : CStringStorage   ? 3U
                                        : Foundation       ? 6U
                                        : SwiftLiterals    ? 2U
                                        : StoredStrings    ? 4U
@@ -1149,6 +1151,8 @@ void verifyRuntime(bool Chained,
                                           CStringNames.size());
   if (!IdentityHelpers.empty()) {
     std::string Shared = "#include <stdint.h>\n";
+    for (const auto &[Name, Definition] : IdentityHelpers)
+      Shared += "uintptr_t " + Name + "(void);\n";
     for (const auto &[Name, Definition] : IdentityHelpers)
       Shared += Definition + "\n";
     const auto Path = Work / "shared-identities.c";

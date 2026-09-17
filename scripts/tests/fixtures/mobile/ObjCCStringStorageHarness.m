@@ -6,6 +6,8 @@
 #include <string.h>
 
 @interface NDCStringStorage : NSObject
+- (const char *)loadedLabel;
+- (const char *)loadedSuffix;
 - (const char *)label;
 - (const char *)suffix;
 - (dispatch_queue_t)newQueue;
@@ -28,6 +30,7 @@ int main(void) {
     [a setStored:b];
     for (unsigned i = 0; i != 4096; ++i) {
       if ([b label] != label || [a suffix] != label + 8 ||
+          [a loadedLabel] != label || [b loadedSuffix] != label + 8 ||
           [[a string] UTF8String] != label || [a stored] != b ||
           objc_getAssociatedObject(a, label + 8) != b ||
           strcmp([b suffix], "queue-label") ||

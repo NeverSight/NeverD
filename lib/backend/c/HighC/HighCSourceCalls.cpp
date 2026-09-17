@@ -237,8 +237,13 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress || !Hint.ByteCount ||
           Hint.ByteCount > limits::kMaxSourceCallBorrowedBytes)
         return bad("C string storage has no complete bounded source extent");
-      Value = "neverd_cstring_storage_" +
-              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+      Value =
+          std::string(Hint.ImmutablePointerSlot ? "neverd_cstring_pointer_"
+                                                : "neverd_cstring_storage_") +
+          llvm::utohexstr(Hint.ImmutablePointerSlot ? Hint.ImmutablePointerSlot
+                                                    : Hint.TargetAddress,
+                          true) +
+          "_address()";
     } else if (Hint.CallKind == Kind::RuntimeConstantString ||
                Hint.CallKind == Kind::RuntimeConstantObject) {
       if (!Hint.TargetAddress)

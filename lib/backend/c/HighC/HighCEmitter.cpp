@@ -765,8 +765,14 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                    SourceCallTypeHint::Kind::RuntimeCStringStorage) {
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(
-                "neverd_cstring_storage_" +
-                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+                std::string(Hint.ImmutablePointerSlot
+                                ? "neverd_cstring_pointer_"
+                                : "neverd_cstring_storage_") +
+                llvm::utohexstr(Hint.ImmutablePointerSlot
+                                    ? Hint.ImmutablePointerSlot
+                                    : Hint.TargetAddress,
+                                true) +
+                "_address");
         } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeConstantString ||
                    Hint.CallKind ==

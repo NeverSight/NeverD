@@ -771,3 +771,10 @@ call target. Native source inference and call-ABI recovery use
 logical parameter count cannot validate its split register operands; accepting
 a missing component or replacing renamed operands with a register scan loses
 source semantics.
+
+Immutable relocated C-string pointer slots reuse the complete literal pool.
+Their slot-specific source helpers revalidate the relocation and current
+interior offset, then return that offset within the same permanent pool used
+by direct pointers. Mutable, unresolved, partially mapped or conflicting slots
+remain unsupported; the loaded value does not authorize use of the slot's
+image address.

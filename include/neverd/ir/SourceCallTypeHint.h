@@ -190,7 +190,10 @@ struct SourceCallTypeHint {
   /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded
-  /// value supplied TargetAddress. Revalidate it against the current image.
+  /// value supplied TargetAddress. For RuntimeCStringStorage, TargetAddress
+  /// names the shared pool and this slot identifies a revalidated pointer
+  /// into it; its source helper preserves the current interior offset.
+  /// Revalidate the complete slot and pool against the current image.
   va_t ImmutablePointerSlot = 0;
 };
 
