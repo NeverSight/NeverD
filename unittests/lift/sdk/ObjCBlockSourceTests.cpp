@@ -542,6 +542,158 @@ TEST(ObjCBlockSources,
   EXPECT_TRUE(
       bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
 }
+
+TEST(ObjCBlockSources, CopiedStackBlockCallsKeepDescriptorAcrossBranches) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation < 18; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      SourceFixture F(true, Architecture);
+      F.string(F.Signature, "v8@?0");
+      F.Image.DyldBindSlots[F.StackIsa] = {"__NSConcreteStackBlock", 0,
+                                           "/usr/lib/libSystem.B.dylib", false};
+      constexpr va_t CopySlot = 0x2600, RetainSlot = 0x2610, FlagsPool = 0x2700;
+      F.put64(FlagsPool, UINT64_C(0xc0000000));
+      for (const auto &[Slot, Name] : {std::pair{CopySlot, "_objc_retainBlock"},
+                                       std::pair{RetainSlot, "_objc_retain"}}) {
+        F.Image.ImportPtrSlots[Slot] = Name;
+        F.Image.DyldBindSlots[Slot] = {Name, 0, "/usr/lib/libobjc.A.dylib",
+                                       false};
+      }
+      Segment Data;
+      Data.VA = 0x6000;
+      Data.Size = Data.FileSz = 32;
+      Data.FileOff = 0x4000;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(32);
+      F.Image.Segments.push_back(Data);
+      Section Section;
+      Section.VA = 0x6000;
+      Section.Size = Section.FileSz = 32;
+      Section.FileOff = 0x4000;
+      Section.Flags = Data.Flags;
+      F.Image.Sections.push_back(Section);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto SP = NdVar::reg(TRI.StackPointer, 8);
+      const auto Arg = NdVar::reg(TRI.IntParamRegs[0], 8);
+      const auto Result = NdVar::reg(TRI.IntReturnReg, 8);
+      const auto Saved = NdVar::reg(TRI.CalleeSaveRegs.front(), 8);
+      const auto Target = NdVar::reg(TRI.IntParamRegs.back(), 8);
+      auto Op = [](NdOp Code, NdVar Out, std::initializer_list<NdVar> Inputs,
+                   va_t Address) {
+        LowOp O;
+        O.Opcode = Code;
+        O.Output = Out;
+        O.Addr = Address;
+        for (const auto &V : Inputs)
+          O.addInput(V);
+        return O;
+      };
+      LowFunc Low;
+      Low.Entry = 0x1200;
+      Low.Blocks.resize(4);
+      for (unsigned I = 0; I < 4; ++I) {
+        Low.Blocks[I].Id = I;
+        Low.Blocks[I].StartAddr = 0x1200 + I * 0x100;
+        Low.Blocks[I].EndAddr = Low.Blocks[I].StartAddr + 0x80;
+      }
+      Low.Blocks[0].Succs = {1, 2};
+      Low.Blocks[1].Preds = {0};
+      Low.Blocks[2].Preds = {0};
+      Low.Blocks[1].Succs = {3};
+      Low.Blocks[2].Succs = {3};
+      Low.Blocks[3].Preds = {1, 2};
+      auto &Build = Low.Blocks[0].Ops;
+      Build.push_back(Op(NdOp::INT_SUB, SP, {SP, NdVar::cst(64, 4)}, 0x1200));
+      Build.push_back(
+          Op(NdOp::LOAD, Target, {NdVar::cst(F.StackIsa, 8)}, 0x1204));
+      Build.push_back(Op(NdOp::STORE, {}, {SP, Target}, 0x1208));
+      for (const auto &[Offset, Bits] :
+           {std::pair{8U, uint64_t(0)}, std::pair{16U, F.Invoke},
+            std::pair{24U, F.Descriptor}}) {
+        const va_t At = 0x120c + Offset;
+        Build.push_back(
+            Op(NdOp::INT_ADD, Target, {SP, NdVar::cst(Offset, 8)}, At));
+        if (Offset == 8) {
+          const auto Lane = NdVar::reg(TRI.FPReturnReg, 8);
+          Build.push_back(Op(NdOp::LOAD, Lane, {NdVar::cst(FlagsPool, 8)}, At));
+          Build.push_back(
+              Op(NdOp::INT_ZEXT, NdVar::reg(TRI.FPReturnReg, 16), {Lane}, At));
+          if (Mutation == 14)
+            Build.push_back(Op(NdOp::COPY, NdVar::reg(TRI.FPReturnReg, 4),
+                               {NdVar::cst(0, 4)}, At));
+          Build.push_back(Op(NdOp::STORE, {}, {Target, Lane}, At));
+        } else if (!(Mutation == 10 && Offset == 24))
+          Build.push_back(
+              Op(NdOp::STORE, {}, {Target, NdVar::cst(Bits, 8)}, At));
+      }
+      Build.push_back(Op(NdOp::COPY, Arg, {SP}, 0x1230));
+      Build.push_back(
+          Op(NdOp::INDIR_CALL, Result, {NdVar::cst(CopySlot, 8)}, 0x1234));
+      Build.push_back(Op(NdOp::COPY, Saved, {Result}, 0x1238));
+      if (Mutation == 15)
+        Build.push_back(
+            Op(NdOp::STORE, {}, {NdVar::cst(0x6000, 8), Saved}, 0x123a));
+      if (Mutation == 16)
+        Build.push_back(
+            Op(NdOp::INT_XOR, Target, {Saved, NdVar::cst(0, 8)}, 0x123a));
+      if (Mutation == 17)
+        Build.push_back(Op(NdOp::COPY, NdVar::reg(Target.Offset, 4),
+                           {NdVar::reg(Saved.Offset, 4)}, 0x123a));
+      Build.push_back(Op(NdOp::COPY, Arg, {NdVar::cst(0, 8)}, 0x123c));
+      Build.push_back(
+          Op(NdOp::INDIR_CALL, Result, {NdVar::cst(RetainSlot, 8)}, 0x1240));
+      auto &Left = Low.Blocks[1].Ops;
+      Left.push_back(
+          Op(NdOp::STORE, {},
+             {Mutation == 6 ? Target : NdVar::cst(0x6000, 8), NdVar::cst(7, 8)},
+             0x1300));
+      if (Mutation == 2)
+        Left.push_back(Op(NdOp::COPY, NdVar::reg(Saved.Offset + 1, 1),
+                          {NdVar::cst(0, 1)}, 0x1304));
+      Left.push_back(Op(NdOp::COPY, Arg, {NdVar::cst(0, 8)}, 0x1308));
+      Left.push_back(Op(NdOp::INDIR_CALL, Result,
+                        {NdVar::cst(Mutation == 3 ? 0x2620 : RetainSlot, 8)},
+                        0x130c));
+      if (Mutation == 9)
+        Low.Blocks[2].Ops.push_back(
+            Op(NdOp::COPY, Saved, {NdVar::cst(0, 8)}, 0x1400));
+      Low.Blocks[3].Ops = {
+          Op(NdOp::INT_ADD, Target,
+             {Saved, NdVar::cst(Mutation == 5 ? 24 : 16, 8)}, 0x1500),
+          Op(NdOp::LOAD, Target, {Target}, 0x1504),
+          Op(NdOp::COPY, Arg, {Mutation == 4 ? NdVar::cst(0, 8) : Saved},
+             0x1508),
+          Op(NdOp::INDIR_CALL, {}, {Target}, 0x150c),
+          Op(NdOp::RETURN, {}, {}, 0x1510)};
+      if (Mutation == 1)
+        F.string(F.Signature, "?");
+      if (Mutation == 7)
+        F.Image.DyldBindSlots[CopySlot].Module = "/tmp/impostor.dylib";
+      if (Mutation == 8)
+        F.Image.DyldBindSlots[CopySlot].WeakImport = true;
+      if (Mutation == 11) {
+        F.Image.Segments[1].Flags =
+            F.Image.Segments[1].Flags | SegmentFlags::Writable;
+        F.Image.Sections[1].Flags =
+            F.Image.Sections[1].Flags | SegmentFlags::Writable;
+      }
+      if (Mutation == 12)
+        F.put64(FlagsPool, UINT64_C(0x1c0000000));
+      if (Mutation == 13)
+        F.Image.Sections.push_back(Section);
+      const auto Hints = buildObjCSourceCallHints(F.Image, Low);
+      EXPECT_EQ(Hints.count(0x150c), Mutation == 0 ? 1U : 0U);
+      if (Mutation == 0 && Hints.count(0x150c)) {
+        const auto &Hint = Hints.at(0x150c);
+        EXPECT_EQ(Hint.CallKind, SourceCallTypeHint::Kind::BlockInvoke);
+        EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Void);
+        EXPECT_EQ(Hint.Signature.Parameters.size(), 1U);
+        EXPECT_EQ(Hint.Signature.Origin,
+                  SourceFunctionTypeHint::OriginKind::BlockRuntime);
+      }
+    }
+  }
+}
 TEST(ObjCBlockSources,
      MissingHeaderByteWrongIsaFrameAndUnknownConsumerAreRejected) {
   for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {

@@ -888,7 +888,14 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
         if (Address.K != Value::Frame) {
           if (V.K == Value::Frame)
             throw Invalid("stack address escapes to nonlocal storage");
-          if (Current.SawIsa)
+          const bool ImageStore =
+              Address.K == Value::Number && S.StoreVal && S.StoreVal->Type &&
+              scalarWidth(S.StoreVal->Type->Size) &&
+              S.MemoryOrdering == NdMemoryOrdering::None &&
+              S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+              isFileBackedWritableImageRange(Image, Address.Bits,
+                                             S.StoreVal->Type->Size);
+          if (Current.SawIsa && !ImageStore)
             throw Invalid(
                 "stack block construction has an unknown aliasing write");
           break;

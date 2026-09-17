@@ -15,6 +15,13 @@ struct BinaryImage;
 std::optional<std::vector<uint8_t>>
 readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
 
+/// Prove a complete store range lies in unique file-backed writable image
+/// storage, disjoint from a function's private frame and newly allocated
+/// objects. This proves only the storage owner, never its contents or a source
+/// binding. Zero-fill, executable and ambiguous mappings are not accepted.
+bool isFileBackedWritableImageRange(const BinaryImage &Image, va_t Address,
+                                    uint32_t Size);
+
 /// Whether scalar bits could name a source-owned image object or instruction.
 /// A pointer requires the target width and a mapped section owner; segment
 /// padding and narrow integer pieces do not provide that identity. This check

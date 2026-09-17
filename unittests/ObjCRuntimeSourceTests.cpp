@@ -607,7 +607,7 @@ void verifyRuntime(bool Chained,
                              : IndirectFields      ? 5U
                              : SystemData          ? 9U
                              : Graphics            ? 6U
-                             : BlockLifetimes      ? (ManualBlocks ? 6U : 5U)
+                             : BlockLifetimes      ? (ManualBlocks ? 7U : 6U)
                              : Foundation          ? 13U
                              : Protocols           ? 6U
                              : DiagnosticReports   ? 5U
@@ -889,8 +889,11 @@ void verifyRuntime(bool Chained,
                  "belongs:to:",
                  "responds:selector:"};
   if (BlockLifetimes)
-    Remaining = {"makeCounterForArray:", "makeCounterForArray:other:offset:",
-                 "duplicateBlock:", "releaseBlock:",
+    Remaining = {"makeCounterForArray:",
+                 "makeCounterForArray:other:offset:",
+                 "duplicateBlock:",
+                 "releaseBlock:",
+                 "copiedCountForArray:offset:",
                  "synchronouslyAppend:toArray:queue:"};
   if (ManualBlocks)
     Remaining.insert("holderForBlock:");

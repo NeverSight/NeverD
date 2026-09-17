@@ -92,6 +92,18 @@ neither an inferred signature nor its refinement certifies a publishable body.
 
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
+Calls through copied stack blocks reuse the loader's source-call fixed point.
+A complete stack header and descriptor establish the invoke ABI before an
+authenticated `objc_retainBlock` or `_Block_copy` supplies a copied-block
+identity. Only an invoke-field load and receiver with that same identity can
+bind a dynamic call. Conflicting aliases, partial pointer operations, escaping
+copies, unknown calls and ambiguous writes discard the proof. Image stores
+preserve private construction facts only when the shared loader range check
+proves a complete writable file-backed range disjoint from private storage.
+Stack adjustments retain their full pointer width with bounded narrow numeric
+offsets; SIMD zero extension can preserve the unchanged low image-byte recipe
+without creating a wider pointer or interpreting floating-point values.
+
 Source-call discovery uses a bounded forward fixed point for register facts.
 At ordinary joins, a selector, import slot or numeric address survives only
 when every reached predecessor agrees. Independent and exceptional entries

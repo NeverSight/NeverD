@@ -10,6 +10,7 @@
                                      offset:(NSUInteger)offset;
 - (void *)duplicateBlock:(void *)block;
 - (void)releaseBlock:(void *)block;
+- (NSUInteger)copiedCountForArray:(NSArray *)array offset:(NSUInteger)offset;
 - (void)synchronouslyAppend:(id)value
                     toArray:(NSMutableArray *)array
                       queue:(dispatch_queue_t)queue;
@@ -65,6 +66,9 @@ int main(void) {
     (void)overwriteStack(i);
     if (destroyed != i || saved() != 1)
       return 1;
+    if ([driver copiedCountForArray:observed offset:i] != i + 1 ||
+        destroyed != i)
+      return 9;
 #ifdef NEVERD_MANUAL_BLOCKS
     if (holder() != (id)saved)
       return 6;
@@ -80,6 +84,9 @@ int main(void) {
     const NSUInteger expected = ((i & 1) ? 2 : 4) + i;
     if (duplicate() != 2 || combined() != expected)
       return 3;
+    if ([driver copiedCountForArray:observed offset:i] != (i ^ 0x55) ||
+        destroyed != i)
+      return 10;
     [driver releaseBlock:(void *)duplicate];
     if (destroyed != i || combined() != expected)
       return 4;

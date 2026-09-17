@@ -8,8 +8,10 @@
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/loader/Swift/SwiftStringCalls.h"
 #include "neverd/object/SectionNames.h"
@@ -138,6 +140,12 @@ std::optional<Dispatch> veneer(const BinaryImage &Image, va_t Address) {
                              : std::optional<Dispatch>(std::move(Result));
 }
 
+struct BlockIdentity {
+  va_t CopySite = 0, Descriptor = 0, Invoke = 0;
+  uint32_t Flags = 0;
+  bool operator==(const BlockIdentity &) const = default;
+};
+
 struct Value {
   enum class Kind {
     Number,
@@ -146,21 +154,32 @@ struct Value {
     Receiver,
     IvarOffset,
     FieldAddress,
-    Frame
+    Frame,
+    BlockIsa,
+    ImageBytes,
+    CopiedBlock,
+    BlockInvoke
   };
   Kind TheKind = Kind::Number;
   uint64_t Number = 0;
   std::string Name;
   std::optional<ObjCReceiverTypeHint> Object;
+  std::optional<BlockIdentity> Block;
   bool operator==(const Value &Other) const {
-    return std::tie(TheKind, Number, Name, Object) ==
-           std::tie(Other.TheKind, Other.Number, Other.Name, Other.Object);
+    return std::tie(TheKind, Number, Name, Object, Block) ==
+           std::tie(Other.TheKind, Other.Number, Other.Name, Other.Object,
+                    Other.Block);
   }
 };
 using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
 Key key(const NdVar &V) { return {V.Space, V.Offset, V.Size}; }
 
 constexpr int64_t FrameOffsetLimit = 1048576;
+
+bool fitsUnsignedValue(uint64_t Value, unsigned Bytes) {
+  return Bytes && Bytes <= 8 &&
+         (Bytes == 8 || Value < (UINT64_C(1) << (Bytes * 8)));
+}
 
 std::optional<Value> adjustedFrame(Value Base, uint64_t Amount, bool Subtract) {
   const auto Delta = static_cast<int64_t>(Amount);
@@ -210,6 +229,19 @@ struct CallFacts {
     FrameSlots.clear();
   }
 
+  void forgetCopiedBlocks() {
+    for (auto It = Values.begin(); It != Values.end();)
+      if (It->second.Block)
+        It = Values.erase(It);
+      else
+        ++It;
+    for (auto It = FrameSlots.begin(); It != FrameSlots.end();)
+      if (It->second.Block)
+        It = FrameSlots.erase(It);
+      else
+        ++It;
+  }
+
   void invalidateFrameRange(int64_t Offset, unsigned Size) {
     for (auto It = FrameSlots.begin(); It != FrameSlots.end();)
       if (It->first.first < Offset + Size &&
@@ -220,6 +252,22 @@ struct CallFacts {
   }
 
   void merge(const CallFacts &Other) {
+    // A lost alias must not survive elsewhere as a supposedly private copied
+    // block. Drop this family on any inconsistent reaching alias, including
+    // an alias present on only one predecessor.
+    auto ConflictingBlocks = [](const auto &A, const auto &B) {
+      for (const auto &[K, V] : A) {
+        const auto Found = B.find(K);
+        if (V.Block && (Found == B.end() || !(V == Found->second)))
+          return true;
+      }
+      return false;
+    };
+    const bool LostBlockAlias =
+        ConflictingBlocks(Values, Other.Values) ||
+        ConflictingBlocks(Other.Values, Values) ||
+        ConflictingBlocks(FrameSlots, Other.FrameSlots) ||
+        ConflictingBlocks(Other.FrameSlots, FrameSlots);
     for (auto It = Values.begin(); It != Values.end();) {
       const auto Found = Other.Values.find(It->first);
       if (Found == Other.Values.end() || !(It->second == Found->second))
@@ -230,6 +278,8 @@ struct CallFacts {
     FrameBytes.insert(Other.FrameBytes.begin(), Other.FrameBytes.end());
     if (FrameEscaped || Other.FrameEscaped) {
       escapeFrame();
+      if (LostBlockAlias)
+        forgetCopiedBlocks();
       return;
     }
     for (auto It = FrameSlots.begin(); It != FrameSlots.end();) {
@@ -239,6 +289,8 @@ struct CallFacts {
       else
         ++It;
     }
+    if (LostBlockAlias)
+      forgetCopiedBlocks();
   }
 };
 
@@ -503,6 +555,64 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       return It == Values.end() ? std::nullopt
                                 : std::optional<Value>(It->second);
     };
+    auto CopiedBlockInput = [&](const NdVar &V) {
+      for (const auto &[K, Fact] : Values)
+        if (Fact.Block && std::get<0>(K) == V.Space &&
+            std::get<1>(K) < V.Offset + V.Size &&
+            V.Offset < std::get<1>(K) + std::get<2>(K))
+          return true;
+      return false;
+    };
+    auto StackBlock = [&](const Value &Address,
+                          va_t CopySite) -> std::optional<Value> {
+      if (Address.TheKind != Value::Kind::Frame || State.FrameEscaped)
+        return std::nullopt;
+      const int64_t Base = static_cast<int64_t>(Address.Number);
+      auto Word = [&](int64_t Offset, unsigned Size) -> std::optional<Value> {
+        const auto It = State.FrameSlots.find({Base + Offset, Size});
+        return It == State.FrameSlots.end() ? std::nullopt
+                                            : std::optional<Value>(It->second);
+      };
+      auto Bits = [&](const std::optional<Value> &V,
+                      unsigned Size) -> std::optional<uint64_t> {
+        if (!V)
+          return std::nullopt;
+        if (V->TheKind == Value::Kind::Number)
+          return V->Number;
+        if (V->TheKind != Value::Kind::ImageBytes)
+          return std::nullopt;
+        auto Bytes = readImmutableImageBytes(Image, V->Number, Size);
+        if (!Bytes)
+          return std::nullopt;
+        uint64_t Result = 0;
+        for (unsigned I = 0; I < Size; ++I)
+          Result |= uint64_t((*Bytes)[I]) << (8 * I);
+        return Result;
+      };
+      const auto Isa = Word(0, 8), Invoke = Word(16, 8), D = Word(24, 8);
+      auto Flags = Bits(Word(8, 8), 8);
+      if (!Flags) {
+        const auto Low = Bits(Word(8, 4), 4), High = Bits(Word(12, 4), 4);
+        if (Low && High)
+          Flags = (*Low & UINT32_MAX) | (*High << 32);
+      }
+      if (!Isa || Isa->TheKind != Value::Kind::BlockIsa || !Invoke ||
+          Invoke->TheKind != Value::Kind::Number ||
+          !Image.isCodeAddress(Invoke->Number) || !D ||
+          D->TheKind != Value::Kind::Number || !Flags || *Flags > UINT32_MAX ||
+          ((*Flags & (1u << 28)) && !(*Flags & (1u << 23))))
+        return std::nullopt;
+      std::string Error;
+      const auto Descriptor =
+          readObjCBlockDescriptor(Image, D->Number, uint32_t(*Flags), Error);
+      if (!Descriptor || !Descriptor->InvokeTypeHint ||
+          !Descriptor->Limitations.empty())
+        return std::nullopt;
+      Value V{Value::Kind::CopiedBlock};
+      V.Block =
+          BlockIdentity{CopySite, D->Number, Invoke->Number, uint32_t(*Flags)};
+      return V;
+    };
     auto Clobber = [&](const SourceFunctionTypeHint *Signature) {
       const bool KnownABI = Signature && Signature->HasExplicitABI;
       if (!KnownABI) {
@@ -516,6 +626,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             if (State.mayBeFrame(
                     NdVar::reg(Location.RegisterOffset, Location.ValueBytes)))
               State.escapeFrame();
+            if (CopiedBlockInput(
+                    NdVar::reg(Location.RegisterOffset, Location.ValueBytes)))
+              State.forgetCopiedBlocks();
           } else if (Location.Kind == SourceABICarrierKind::Stack) {
             const int64_t Begin =
                 Location.EntryStackOffset - ReturnAddressBytes;
@@ -588,6 +701,23 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         }
         std::optional<Dispatch> Target;
         auto V = Op.NumInputs ? Read(Op.Inputs[0]) : std::nullopt;
+        if (Op.Opcode == NdOp::INDIR_CALL && V && V->Block &&
+            V->TheKind == Value::Kind::BlockInvoke) {
+          const auto Receiver = Read(NdVar::reg(TRI.IntParamRegs[0], 8));
+          std::string Error;
+          const auto D = readObjCBlockDescriptor(Image, V->Block->Descriptor,
+                                                 V->Block->Flags, Error);
+          if (Receiver && Receiver->TheKind == Value::Kind::CopiedBlock &&
+              Receiver->Number == 0 && Receiver->Block == V->Block && D &&
+              D->InvokeTypeHint && D->Limitations.empty()) {
+            SourceCallTypeHint Hint;
+            Hint.CallKind = SourceCallTypeHint::Kind::BlockInvoke;
+            Hint.Signature = *D->InvokeTypeHint;
+            Clobber(&Hint.Signature);
+            BlockHints.emplace(Op.Addr, std::move(Hint));
+            continue;
+          }
+        }
         if (V && V->TheKind == Value::Kind::Import)
           Target = Dispatch{V->Name, {}, 0, V->Number};
         else if (V && V->TheKind == Value::Kind::Number) {
@@ -629,6 +759,30 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             std::optional<Value> ReturnedReceiver;
             const auto &Signature = Runtime->Signature;
             const auto &Return = Signature.ReturnLocation;
+            const auto Bind = Image.DyldBindSlots.find(Runtime->TargetAddress);
+            const bool CopiesStackBlock =
+                Bind != Image.DyldBindSlots.end() &&
+                ((Runtime->CallKind ==
+                      SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+                  Runtime->TargetName == "objc_retainBlock" &&
+                  Bind->second.Module == "/usr/lib/libobjc.A.dylib") ||
+                 (Runtime->CallKind ==
+                      SourceCallTypeHint::Kind::DarwinRuntimeCall &&
+                  Runtime->TargetName == "_Block_copy" &&
+                  darwinExportModuleMatches("/usr/lib/libSystem.B.dylib|/usr/"
+                                            "lib/system/libsystem_blocks.dylib",
+                                            Bind->second.Module)));
+            if (CopiesStackBlock && Signature.Parameters.size() == 1 &&
+                Signature.Parameters[0].Location.Kind ==
+                    SourceABICarrierKind::IntegerRegister &&
+                Signature.Parameters[0].Location.ValueBytes == 8 &&
+                Return.Kind == SourceABICarrierKind::IntegerRegister &&
+                Return.ValueBytes == 8) {
+              const auto Input = Read(NdVar::reg(
+                  Signature.Parameters[0].Location.RegisterOffset, 8));
+              if (Input)
+                ReturnedReceiver = StackBlock(*Input, Op.Addr);
+            }
             if (Runtime->ReturnedArgument &&
                 *Runtime->ReturnedArgument < Signature.Parameters.size()) {
               const auto &Argument =
@@ -772,6 +926,26 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       const bool PlainMemory =
           Op.MemoryOrdering == NdMemoryOrdering::None &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+      if (Op.Output.Size && CopiedBlockInput(Op.Output)) {
+        const auto Overwritten = Read(Op.Output);
+        if (Op.Output.Size != 8 || !Overwritten || !Overwritten->Block)
+          State.forgetCopiedBlocks();
+      }
+      bool UsesCopiedBlock = false;
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        UsesCopiedBlock |= CopiedBlockInput(Op.Inputs[I]);
+      const bool KeepsBlockIdentity =
+          Op.Output.Size == 8 &&
+          ((Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Inputs[0].Size == 8) ||
+           ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+            Op.NumInputs == 2 && Op.Inputs[0].Size == 8 &&
+            Op.Inputs[1].Size == 8));
+      const bool ReadsBlockField = Op.Opcode == NdOp::LOAD &&
+                                   Op.NumInputs == 1 &&
+                                   Op.Inputs[0].Size == 8 && PlainMemory;
+      if (UsesCopiedBlock && !KeepsBlockIdentity && !ReadsBlockField)
+        State.forgetCopiedBlocks();
       if (Op.Opcode == NdOp::STORE) {
         if (Op.NumInputs == 2 && State.mayBeFrame(Op.Inputs[1]))
           State.escapeFrame();
@@ -779,9 +953,18 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                                  ? Read(Op.Inputs[0])
                                  : std::nullopt;
         const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
+        const bool ImageStore =
+            Address && Address->TheKind == Value::Kind::Number &&
+            isFileBackedWritableImageRange(Image, Address->Number,
+                                           Op.Inputs[1].Size);
+        if (!ImageStore &&
+            (!Address || Address->TheKind != Value::Kind::Frame ||
+             State.FrameEscaped))
+          State.forgetCopiedBlocks();
         if (!Address || Address->TheKind != Value::Kind::Frame || !Stack ||
             Stack->TheKind != Value::Kind::Frame) {
-          State.FrameSlots.clear();
+          if (!ImageStore)
+            State.FrameSlots.clear();
         } else if (!State.FrameEscaped) {
           const auto Offset = static_cast<int64_t>(Address->Number);
           const auto Size = Op.Inputs[1].Size;
@@ -799,6 +982,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
           Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
         State.FrameSlots.clear();
+        State.forgetCopiedBlocks();
         for (unsigned I = 1; I < Op.NumInputs; ++I)
           if (State.mayBeFrame(Op.Inputs[I]))
             State.escapeFrame();
@@ -808,6 +992,16 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         for (unsigned I = 0; I < Op.NumInputs; ++I)
           FrameDerived |= State.mayBeFrame(Op.Inputs[I]);
       std::optional<Value> Out;
+      std::optional<Value> LowImageBytes;
+      // SIMD scalar loads can explicitly zero the upper vector lane. Keep
+      // only the unchanged low eight-byte image recipe, not a 16-byte value
+      // or a pointer fact manufactured by a widening conversion.
+      if (Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs == 1 &&
+          Op.Inputs[0].Size == 8 && Op.Output.Size == 16) {
+        const auto Input = Read(Op.Inputs[0]);
+        if (Input && Input->TheKind == Value::Kind::ImageBytes)
+          LowImageBytes = Input;
+      }
       if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
         Out = Read(Op.Inputs[0]);
       else if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
@@ -825,12 +1019,17 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                  Op.NumInputs == 2) {
         auto A = Read(Op.Inputs[0]);
         auto B = Read(Op.Inputs[1]);
-        if (A && B && Op.Output.Size == 8 && Op.Inputs[0].Size == 8 &&
-            Op.Inputs[1].Size == 8 &&
-            ((A->TheKind == Value::Kind::Frame &&
-              B->TheKind == Value::Kind::Number) ||
+        // LowIR uses a narrow unsigned immediate for ordinary SP adjustments
+        // (for example AArch64 SUB Xsp, #96 carries a four-byte constant).
+        // Preserve the full pointer lane; the bounded numeric offset need not
+        // itself occupy an eight-byte carrier.
+        if (A && B && Op.Output.Size == 8 &&
+            ((A->TheKind == Value::Kind::Frame && Op.Inputs[0].Size == 8 &&
+              B->TheKind == Value::Kind::Number &&
+              fitsUnsignedValue(B->Number, Op.Inputs[1].Size)) ||
              (Op.Opcode == NdOp::INT_ADD && B->TheKind == Value::Kind::Frame &&
-              A->TheKind == Value::Kind::Number))) {
+              Op.Inputs[1].Size == 8 && A->TheKind == Value::Kind::Number &&
+              fitsUnsignedValue(A->Number, Op.Inputs[0].Size)))) {
           if (B->TheKind == Value::Kind::Frame)
             std::swap(A, B);
           Out = adjustedFrame(*A, B->Number, Op.Opcode == NdOp::INT_SUB);
@@ -840,8 +1039,14 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                       Op.Opcode == NdOp::INT_ADD ? A->Number + B->Number
                                                  : A->Number - B->Number,
                       {}};
-        else if (A && B && Op.Opcode == NdOp::INT_ADD && Op.Output.Size == 8 &&
-                 Op.Inputs[0].Size == 8 && Op.Inputs[1].Size == 8) {
+        else if (A && B && Op.Output.Size == 8 && Op.Inputs[0].Size == 8 &&
+                 Op.Inputs[1].Size == 8 &&
+                 A->TheKind == Value::Kind::CopiedBlock && A->Block &&
+                 B->TheKind == Value::Kind::Number) {
+          Out = adjustedFrame(*A, B->Number, Op.Opcode == NdOp::INT_SUB);
+        } else if (A && B && Op.Opcode == NdOp::INT_ADD &&
+                   Op.Output.Size == 8 && Op.Inputs[0].Size == 8 &&
+                   Op.Inputs[1].Size == 8) {
           if (B->TheKind == Value::Kind::Receiver)
             std::swap(A, B);
           const auto Base = receiver(*A);
@@ -857,8 +1062,14 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         }
       } else if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) {
         auto Address = Read(Op.Inputs[0]);
-        if (Address && Address->TheKind == Value::Kind::Frame && PlainMemory &&
-            !State.FrameEscaped) {
+        if (Address && Address->TheKind == Value::Kind::CopiedBlock &&
+            Address->Block && Address->Number == 16 && PlainMemory &&
+            Op.Output.Size == 8) {
+          Out = *Address;
+          Out->TheKind = Value::Kind::BlockInvoke;
+          Out->Number = 0;
+        } else if (Address && Address->TheKind == Value::Kind::Frame &&
+                   PlainMemory && !State.FrameEscaped) {
           const auto Found = State.FrameSlots.find(
               {static_cast<int64_t>(Address->Number), Op.Output.Size});
           if (Found != State.FrameSlots.end())
@@ -900,11 +1111,19 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                      !Name.empty())
               Out =
                   Value{Value::Kind::Import, Address->Number, std::move(Name)};
+            else if (const auto Data =
+                         darwinRuntimeGlobalAddressHint(Image, Address->Number);
+                     Data && Data->TargetName == "_NSConcreteStackBlock")
+              Out = Value{Value::Kind::BlockIsa, Address->Number};
           }
+          if (!Out && PlainMemory && Op.Output.Size && Op.Output.Size <= 8)
+            Out = Value{Value::Kind::ImageBytes, Address->Number};
         }
       }
       if (!Op.Output.Size)
         continue;
+      if (UsesCopiedBlock && KeepsBlockIdentity && (!Out || !Out->Block))
+        State.forgetCopiedBlocks();
       if (!State.writeFrameBytes(Op.Output, FrameDerived))
         return std::nullopt;
       // Kill all overlapping physical aliases, not just the queried width.
@@ -925,6 +1144,13 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                     Op.Output.Size == 4 &&
                     Image.ObjCSourceReferences.at(Out->Number).Size == 4))
           Values.emplace(key(Op.Output), std::move(*Out));
+        if (Values.size() > 4096)
+          return std::nullopt;
+      }
+      if (LowImageBytes) {
+        auto Prefix = Op.Output;
+        Prefix.Size = 8;
+        Values.emplace(key(Prefix), std::move(*LowImageBytes));
         if (Values.size() > 4096)
           return std::nullopt;
       }

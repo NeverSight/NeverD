@@ -110,6 +110,18 @@ bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
          Image.getSectionFor(Bits);
 }
 
+bool isFileBackedWritableImageRange(const BinaryImage &Image, va_t Address,
+                                    uint32_t Size) {
+  if (!supportedImage(Image) || !Size || Size > 1024 * 1024 ||
+      !mappedBytes(Image, Address, Size, false))
+    return false;
+  const auto *Section = Image.getSectionFor(Address);
+  const auto *Segment = Image.getSegmentFor(Address);
+  return Section->isWritable() && !Section->isExecutable() &&
+         Segment->isWritable() && !Segment->isExecutable() &&
+         !Segment->ReadOnlyAfterRelocations;
+}
+
 namespace {
 std::optional<va_t> readResolvedPointer(const BinaryImage &Image, va_t Address,
                                         bool Immutable) {

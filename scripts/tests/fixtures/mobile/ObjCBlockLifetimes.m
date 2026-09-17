@@ -8,6 +8,7 @@
                                      offset:(NSUInteger)offset;
 - (void *)duplicateBlock:(void *)block;
 - (void)releaseBlock:(void *)block;
+- (NSUInteger)copiedCountForArray:(NSArray *)array offset:(NSUInteger)offset;
 - (void)synchronouslyAppend:(id)value
                     toArray:(NSMutableArray *)array
                       queue:(dispatch_queue_t)queue;
@@ -47,6 +48,18 @@
 }
 - (void)releaseBlock:(void *)block {
   _Block_release(block);
+}
+- (NSUInteger)copiedCountForArray:(NSArray *)array offset:(NSUInteger)offset {
+  void *owned = _Block_copy((__bridge const void *)^{
+    return array.count + offset;
+  });
+  NSUInteger result;
+  if (array.count & 1)
+    result = ((__bridge NSUInteger(^)(void))owned)();
+  else
+    result = offset ^ 0x55;
+  _Block_release(owned);
+  return result;
 }
 - (void)synchronouslyAppend:(id)value
                     toArray:(NSMutableArray *)array
