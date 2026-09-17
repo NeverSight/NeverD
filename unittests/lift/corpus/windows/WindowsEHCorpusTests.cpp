@@ -87,7 +87,7 @@ TEST(WindowsEHCorpus, DeclaresCompleteMultiToolchainMatrix) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
-  EXPECT_EQ(ExpectationsOrErr->size(), 168u);
+  EXPECT_EQ(ExpectationsOrErr->size(), 264u);
 
   std::set<std::string> Toolchains;
   std::set<Arch> Architectures;
@@ -110,7 +110,8 @@ TEST(WindowsEHCorpus, RecordsLoadConfigRuntimeCallableSlots) {
     if (Expectation.Name != "cxx_eh_probe" || Expectation.Toolchain != "msvc" ||
         Expectation.Architecture != "x86_64" ||
         Expectation.CxxFormat != "fh3" || Expectation.SecurityCookie ||
-        Expectation.Optimization != "o0")
+        Expectation.Optimization != "o0" ||
+        Expectation.VisualStudioYear != 2022)
       continue;
     ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
     Probe = &Expectation;
@@ -166,7 +167,8 @@ void expectFocusedX64FH3ProbeLift(StringRef ProbeName, StringRef Toolchain,
     if (Expectation.Name == ProbeName && Expectation.Toolchain == Toolchain &&
         Expectation.Architecture == "x86_64" &&
         Expectation.CxxFormat == "fh3" && !Expectation.SecurityCookie &&
-        Expectation.Optimization == "o0") {
+        Expectation.Optimization == "o0" &&
+        Expectation.VisualStudioYear == 2022) {
       ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
       Probe = &Expectation;
     }
@@ -314,11 +316,11 @@ TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
 
   const WindowsEHArtifactExpectation *Probe = nullptr;
   for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
-    if (Expectation.Name != "cxx_eh_probe" ||
-        Expectation.Toolchain != "msvc" ||
+    if (Expectation.Name != "cxx_eh_probe" || Expectation.Toolchain != "msvc" ||
         Expectation.Architecture != "x86_64" ||
         Expectation.CxxFormat != "fh3" || Expectation.SecurityCookie ||
-        Expectation.Optimization != "o0")
+        Expectation.Optimization != "o0" ||
+        Expectation.VisualStudioYear != 2022)
       continue;
     ASSERT_EQ(Probe, nullptr) << "duplicate focused ABI probe";
     Probe = &Expectation;
@@ -360,8 +362,7 @@ TEST(WindowsEHCorpus, PreservesSharedFH3NativeFunctionGroupIdentity) {
       const auto *Header = llvm::dyn_cast<llvm::MDNode>(
           Payload->getOperand(windows_eh_md::CxxHeader).get());
       ASSERT_NE(Header, nullptr);
-      ASSERT_EQ(Header->getNumOperands(),
-                windows_eh_md::CxxHeaderOperandCount);
+      ASSERT_EQ(Header->getNumOperands(), windows_eh_md::CxxHeaderOperandCount);
       const auto *GroupMetadata = llvm::dyn_cast<llvm::ConstantAsMetadata>(
           Header->getOperand(windows_eh_md::CxxNativeFuncInfoVA).get());
       const auto *EncodedGroup =
@@ -602,7 +603,8 @@ TEST(WindowsEHCorpus, RecoversX86RegistrationChains) {
           << " runs into the one at 0x" << llvm::utohexstr(TableSpans[I].first);
   }
 
-  EXPECT_EQ(Images, 36u);
+  // VS2022 x86 (36) plus VS2026 MSVC x86 (24). clang-cl stays 2022-only.
+  EXPECT_EQ(Images, 60u);
   EXPECT_GE(Records, 200u);
   EXPECT_GE(ScopeEntries, 900u);
   EXPECT_GE(CxxRecords, 12u);
@@ -700,7 +702,9 @@ TEST(WindowsEHCorpus, DecodesARMUnwindOperations) {
     }
   }
 
-  EXPECT_EQ(Images, 72u);
+  // VS2022 ARM+AArch64 (72) plus VS2026 MSVC AArch64 (24). VS2026 ARM32 is
+  // skipped.
+  EXPECT_EQ(Images, 96u);
   EXPECT_GT(Frames, 0u);
   // Both forms are present across the corpus: a leaf function that only
   // allocates gets packed data, while anything with an exception handler or an
