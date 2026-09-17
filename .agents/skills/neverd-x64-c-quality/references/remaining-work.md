@@ -67,6 +67,7 @@ a regression, then delete the row.
 | Used GS TEB/TLS loads print `__readgsqword` | `HighCPointerAddresses.GsTebLoadPrintsReadGsQword`; `LLVMCPointerAddresses.GsTebLoadPrintsReadGsQword`; `x86SegmentedReadIntrinsic`; hide only FS EH registration |
 | GS_HANDLER_DATA bit-2 align branch | `HighCPointerAddresses.GsHandlerDataBit2AlignBranchIsPrinted`; MedFlags folds `jz` after `test [r8],4`; Win64 callee-save r10 is not forced to arg0 after a computed def |
 | `--func` PE skips padding/data scans | `FunctionDiscoveryAlignment.CoffFuncLoadSkipsPaddingAndDataScans`; full-image still runs `scanDataFuncPointers` (`CoffFullLoadStillScansDataFuncPointers`) |
+| `--func` PE skips image-wide `.reloc` and Go pclntab | `COFFFunctionListingTest.LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies`; `parseBaseRelocations` / `parseGoExceptions` return when `LoadOnlyFunctionEntries` is set |
 | Catch-funclet attach does not recurse on cyclic handler VA | `HighCPointerAddresses.AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch`; `attachCxxFuncletBodies` keeps an in-flight HandlerVA set |
 
 ## Next x64 exe pass

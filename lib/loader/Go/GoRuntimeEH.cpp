@@ -73,6 +73,8 @@ bool hasGoRuntimeMetadata(const BinaryImage &Img) {
 }
 
 void parseGoExceptions(BinaryImage &Img) {
+  if (!Img.LoadOnlyFunctionEntries.empty())
+    return;
   if (Img.Arch != Arch::X64 && Img.Arch != Arch::X86 &&
       Img.Arch != Arch::AArch64 && Img.Arch != Arch::ARM)
     return;
