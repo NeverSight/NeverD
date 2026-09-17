@@ -12,6 +12,8 @@ extern void swift_beginAccess(void *, void *, uintptr_t, void *);
 extern void swift_endAccess(void *);
 extern const unsigned char nd_string_metadata[] __asm__("_$sSSN");
 extern const unsigned char nd_int_metadata[] __asm__("_$sSiN");
+extern const unsigned char nd_string_hashable[] __asm__("_$sSSSHsWP");
+extern const unsigned char nd_int_hashable[] __asm__("_$sSiSHsWP");
 
 @interface NDSwiftRuntimeCalls : NSObject
 @end
@@ -21,6 +23,12 @@ extern const unsigned char nd_int_metadata[] __asm__("_$sSiN");
 }
 - (const void *)integerMetadata {
   return nd_int_metadata;
+}
+- (const void *)stringHashableWitness {
+  return nd_string_hashable;
+}
+- (const void *)integerHashableWitness {
+  return nd_int_hashable;
 }
 - (void *)keep:(void *)object {
   return swift_unknownObjectRetain(object);

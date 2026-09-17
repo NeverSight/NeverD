@@ -147,10 +147,13 @@ through the live metadata; it never retains the witness address from the
 analyzed image.
 
 Standard Swift metadata storage addresses use compiler-generated `.self`
-queries and matching SDK exports across ARM64/x86-64 macOS and Mac Catalyst.
+queries; standard Hashable witness storage uses the direct witness argument
+of a compiler-generated constrained generic call. Both require matching SDK
+exports across ARM64/x86-64 macOS and Mac Catalyst.
 Only direct external, non-TLS globals qualify. The loader authenticates each
 symbol and provider before binding its runtime address; this supplies neither
-a metadata layout nor a call ABI for accessors or arbitrary mangled symbols.
+a metadata/witness layout nor a call ABI for accessors, witness members or
+arbitrary mangled symbols.
 
 Objective-C property metadata supplies accessor declarations independently of
 method implementations, including dynamic, readonly and custom accessors.

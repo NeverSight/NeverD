@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from scripts.generate_swift_data_declarations import metadata_storage, render
+from scripts.generate_swift_data_declarations import metadata_storage, render, witness_storage
 
 
 MODULE = '/usr/lib/swift/libswiftCore.dylib'
@@ -9,9 +9,48 @@ NAME = '$sSSN'
 IR = ('@"$sSSN" = external global %swift.type, align 8\n'
       'define nonnull ptr @metadata_String() #0 {\nentry:\n'
       '  ret ptr @"$sSSN"\n}\n')
+WITNESS = '$sSSSHsWP'
+WITNESS_IR = ('@"$sSSSHsWP" = external global ptr, align 8\n'
+              'declare swiftcc void @neverd_hashable_probe(ptr noalias, ptr, ptr) local_unnamed_addr #0\n'
+              'define void @witness_String() #0 {\nentry:\n'
+              '  %0 = alloca %TSS, align 8\n'
+              '  call swiftcc void @neverd_hashable_probe(ptr noalias nonnull %0, '
+              'ptr nonnull @"$sSSN", ptr nonnull @"$sSSSHsWP") #2\n'
+              '  ret void\n}\n')
 
 
 class SwiftDataDeclarationTests(unittest.TestCase):
+    def test_only_direct_witness_arguments_supply_storage_identity(self):
+        self.assertEqual(witness_storage(WITNESS_IR, ['witness_String'], {NAME}), {WITNESS})
+        for invalid in [
+            WITNESS_IR.replace('external global', 'external thread_local global'),
+            WITNESS_IR.replace('external global', 'global'),
+            WITNESS_IR.replace('global ptr', 'global i64'),
+            WITNESS_IR.replace('align 8', 'align 4'),
+            WITNESS_IR.replace('ptr nonnull @"$sSSSHsWP"', 'ptr nonnull %loaded'),
+            WITNESS_IR.replace('ptr nonnull @"$sSSSHsWP"',
+                               'ptr nonnull getelementptr (i8, ptr @"$sSSSHsWP", i64 8)'),
+            WITNESS_IR.replace('ptr nonnull @"$sSSN"', 'ptr nonnull @"unknown"'),
+            WITNESS_IR.replace('call swiftcc', 'call'),
+            WITNESS_IR.replace('call swiftcc', 'tail call swiftcc'),
+            '@"$sSSSHsWP" = external global ptr, align 8\n' + WITNESS_IR,
+        ]:
+            with self.subTest(invalid=invalid):
+                self.assertEqual(witness_storage(invalid, ['witness_String'], {NAME}), set())
+        self.assertEqual(witness_storage(WITNESS_IR, ['witness_String'], set()), set())
+
+    def test_witness_probe_requires_unique_definition_and_exact_generic_abi(self):
+        for invalid in [
+            '', WITNESS_IR + WITNESS_IR, ' ' * (16 * 1024 * 1024 + 1),
+            WITNESS_IR.replace('declare swiftcc', 'declare'),
+            WITNESS_IR.replace('(ptr noalias, ptr, ptr)', '(ptr noalias, ptr)'),
+            WITNESS_IR.replace('@witness_String()', '@another_probe()'),
+        ]:
+            with self.subTest(invalid=invalid[:80]), self.assertRaises(ValueError):
+                witness_storage(invalid, ['witness_String'], {NAME})
+        with self.assertRaises(ValueError):
+            witness_storage(WITNESS_IR, ['witness.*'], {NAME})
+
     def test_only_direct_non_tls_external_storage_queries_supply_facts(self):
         self.assertEqual(metadata_storage(IR, ['metadata_String']), {NAME})
         for invalid in [
