@@ -247,17 +247,22 @@ staticIdentityHint(const BinaryImage &Image, va_t Address) {
 
 inline bool overlapsPointerStorage(const BinaryImage &Image, va_t Address,
                                    uint64_t Width) {
+  // Slots are ordered and occupy eight bytes. Earlier slots cannot overlap;
+  // if this first candidate starts beyond the access, later ones cannot either.
+  // Subtraction avoids wrapping at either end of the address space.
+  const va_t First = Address >= 7 ? Address - 7 : 0;
   auto Overlaps = [&](va_t Slot) {
     constexpr uint64_t PointerWidth = 8;
     return Slot <= Address ? Address - Slot < PointerWidth
                            : Slot - Address < Width;
   };
   auto SetOverlaps = [&](const auto &Values) {
-    return std::any_of(Values.begin(), Values.end(), Overlaps);
+    const auto It = Values.lower_bound(First);
+    return It != Values.end() && Overlaps(*It);
   };
   auto MapOverlaps = [&](const auto &Values) {
-    return std::any_of(Values.begin(), Values.end(),
-                       [&](const auto &Item) { return Overlaps(Item.first); });
+    const auto It = Values.lower_bound(First);
+    return It != Values.end() && Overlaps(It->first);
   };
   return SetOverlaps(Image.MachOResolvedChainedPointerSlots) ||
          SetOverlaps(Image.CodePtrRelocSlots) ||

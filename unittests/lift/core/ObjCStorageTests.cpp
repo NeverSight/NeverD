@@ -10,6 +10,73 @@
 
 using namespace neverd;
 namespace {
+TEST(ObjCStorage, PointerOverlapMatchesLinearScanAtAddressBoundaries) {
+  for (unsigned Kind = 0; Kind != 8; ++Kind) {
+    SCOPED_TRACE(Kind);
+    BinaryImage Image;
+    std::vector<va_t> Slots;
+    auto Insert = [&](va_t Address) {
+      Slots.push_back(Address);
+      switch (Kind) {
+      case 0:
+        Image.MachOResolvedChainedPointerSlots.insert(Address);
+        break;
+      case 1:
+        Image.CodePtrRelocSlots.insert(Address);
+        break;
+      case 2:
+        Image.DataPtrRelocSlots.insert(Address);
+        break;
+      case 3:
+        Image.RelDataPtrRelocSlots.insert(Address);
+        break;
+      case 4:
+        Image.RelCodeRelocSlots.insert(Address);
+        break;
+      case 5:
+        Image.ImportPtrSlots[Address] = "pointer";
+        break;
+      case 6:
+        Image.ImportStorageSlots[Address] = {};
+        break;
+      case 7:
+        Image.DyldBindSlots[Address] = {};
+        break;
+      }
+    };
+    auto Check = [&](va_t Address, uint64_t Width) {
+      const bool Expected =
+          std::any_of(Slots.begin(), Slots.end(), [&](va_t Slot) {
+            return Slot <= Address ? Address - Slot < 8
+                                   : Slot - Address < Width;
+          });
+      EXPECT_EQ(sdk::objc_binding_detail::overlapsPointerStorage(Image, Address,
+                                                                 Width),
+                Expected)
+          << Address << ": " << Width;
+    };
+    Check(0, 0);
+    Check(UINT64_MAX, UINT64_MAX);
+    for (va_t Slot :
+         {UINT64_C(0), UINT64_C(8), UINT64_C(127), UINT64_MAX - 15, UINT64_MAX})
+      Insert(Slot);
+    uint64_t State = UINT64_C(0x8da736f4592bc10e);
+    for (unsigned I = 0; I != 256; ++I) {
+      State = State * UINT64_C(6364136223846793005) + 1;
+      Insert(State);
+    }
+    for (va_t Slot : Slots)
+      for (uint64_t Offset = 0; Offset != 18; ++Offset)
+        for (uint64_t Width : {UINT64_C(0), UINT64_C(1), UINT64_C(7),
+                               UINT64_C(8), UINT64_C(9), UINT64_MAX}) {
+          if (Offset <= Slot)
+            Check(Slot - Offset, Width);
+          if (Offset <= UINT64_MAX - Slot)
+            Check(Slot + Offset, Width);
+        }
+  }
+}
+
 struct StorageImage {
   BinaryImage Image;
   void word(va_t Address, uint32_t Value) {
