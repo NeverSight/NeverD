@@ -1202,6 +1202,12 @@ struct BinaryImage {
     return Result;
   }
 
+  /// Decode an executable IAT/PLT veneer at \p Addr without a prior
+  /// image-wide thunk scan.  `--func` PE loads skip that scan, but a
+  /// `call` to `_CxxThrowException`'s `jmp [rip+IAT]` still has to name
+  /// the import.
+  const Import *decodeImportThunkAt(va_t Addr) const;
+
   /// Find the import owned by an exact executable veneer registration.  This
   /// deliberately excludes coarse stub ranges and legacy IAT spellings: code
   /// that needs a symbolic callable identity must not splice those independent
@@ -1210,7 +1216,7 @@ struct BinaryImage {
     auto It = ImportStubIndices.find(Addr);
     if (It != ImportStubIndices.end() && It->second < Imports.size())
       return &Imports[It->second];
-    return nullptr;
+    return decodeImportThunkAt(Addr);
   }
 
   /// Find an import by its format-native IAT address or an exact executable

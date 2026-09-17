@@ -357,4 +357,37 @@ TEST(FunctionDiscoveryAlignment, CoffFullLoadStillScansDataFuncPointers) {
       << "full-image PE still discovers data-pointer callees outside pdata";
 }
 
+TEST(FunctionDiscoveryAlignment, FuncLoadNamesImportThunkWithoutScan) {
+  // `--func` skips scanImportThunks.  A call to an IAT veneer must still
+  // resolve `_CxxThrowException` so HighC can print `throw`.
+  constexpr va_t Thunk = 0x140001020;
+  constexpr va_t IAT = 0x140003000;
+  const int32_t Disp = static_cast<int32_t>(IAT - (Thunk + 6));
+  std::vector<uint8_t> Text(6, 0xcc);
+  Text[0] = 0xff;
+  Text[1] = 0x25;
+  Text[2] = static_cast<uint8_t>(Disp);
+  Text[3] = static_cast<uint8_t>(Disp >> 8);
+  Text[4] = static_cast<uint8_t>(Disp >> 16);
+  Text[5] = static_cast<uint8_t>(Disp >> 24);
+
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.LoadOnlyFunctionEntries.insert(0x140001000);
+  Img.Segments.push_back(executableSegment(Thunk, Text));
+  Import Imp;
+  Imp.Name = "_CxxThrowException";
+  Imp.IATAddr = IAT;
+  Img.Imports.push_back(std::move(Imp));
+
+  runPostLoadDiscovery(Img, "coff-func-thunk");
+  EXPECT_TRUE(Img.ImportStubIndices.empty())
+      << "--func must not walk every executable byte for IAT veneers";
+  const Import *Named = Img.findImportAt(Thunk);
+  ASSERT_NE(Named, nullptr);
+  EXPECT_EQ(Named->Name, "_CxxThrowException");
+}
+
 } // namespace
