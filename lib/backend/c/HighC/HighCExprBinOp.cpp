@@ -85,6 +85,15 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   if (E.Op == NdOp::INT_SUB && E.Operands.size() == 2 &&
       IsZeroLike(E.Operands[1]) && E.Operands[0])
     return exprStr(*E.Operands[0], ParentPrec);
+  if ((E.Op == NdOp::FLOAT_MINNUM || E.Op == NdOp::FLOAT_MAXNUM) &&
+      E.Operands.size() == 2 && E.Operands[0] && E.Operands[1]) {
+    const bool IsFloat = E.Type && E.Type->Size == 4;
+    const char *Name = E.Op == NdOp::FLOAT_MINNUM
+                           ? (IsFloat ? "__builtin_fminf" : "__builtin_fmin")
+                           : (IsFloat ? "__builtin_fmaxf" : "__builtin_fmax");
+    return std::string(Name) + "(" + exprStr(*E.Operands[0]) + ", " +
+           exprStr(*E.Operands[1]) + ")";
+  }
   // MSVC `sbb r, r` after a compare is `0 - (CF - 0)` / `0 - (undef - cond)`.
   // Fold to `cond` so the printed body is not `0 /* unknown */`.
   if (E.Op == NdOp::INT_SUB && E.Operands.size() == 2 &&

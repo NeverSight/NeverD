@@ -97,3 +97,28 @@ test_post_call_q9_upper:
     ldr x30, [sp], #16
     ret
     .size test_post_call_q9_upper, .-test_post_call_q9_upper
+
+// A full Q-register write also defines its low D-register view. That low view
+// remains preserved across the call even though the upper Q half is volatile.
+    .globl test_post_call_q9_low_from_wide_write
+    .type test_post_call_q9_low_from_wide_write, %function
+test_post_call_q9_low_from_wide_write:
+    str x30, [sp, #-16]!
+    mov x2, #123
+    fmov d0, x2
+    mov v9.16b, v0.16b
+    mov x0, #0
+    bl test_call_leaf
+    fmov x0, d9
+    ldr x30, [sp], #16
+    ret
+    .size test_post_call_q9_low_from_wide_write, .-test_post_call_q9_low_from_wide_write
+
+// Number-selecting min/max must remain explicit through HighIR so HighC can
+// preserve their NaN and signed-zero semantics with the matching builtin.
+    .globl test_fminnm_f64
+    .type test_fminnm_f64, %function
+test_fminnm_f64:
+    fminnm d0, d0, d1
+    ret
+    .size test_fminnm_f64, .-test_fminnm_f64

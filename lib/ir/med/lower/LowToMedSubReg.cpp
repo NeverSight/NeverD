@@ -299,6 +299,73 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
       // write, but forget the Q write before considering post-call inputs.
       if ((MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) &&
           !MOp.PreservesCallerSaved) {
+        // A full Q write may be the only definition of its low D view. Before
+        // discarding the volatile Q carrier, materialize the prefix that the
+        // call ABI preserves. Otherwise a post-call D read reconnects to a
+        // stale earlier D definition even though the Q write replaced it.
+        struct PartialWrite {
+          RegWriteInfo Write;
+          bool FromZext = false;
+        };
+        std::map<std::pair<uint64_t, uint16_t>, PartialWrite>
+            PartiallyPreserved;
+        auto CollectPartial = [&](const RegWriteMap &Writes, bool FromZext) {
+          for (const auto &[Key, Write] : Writes) {
+            const uint16_t Prefix =
+                TRI.callPreservedPrefixSize(Key.first, Key.second);
+            if (Prefix == 0 || Prefix >= Key.second)
+              continue;
+            auto [It, Inserted] =
+                PartiallyPreserved.emplace(Key, PartialWrite{Write, FromZext});
+            if (!Inserted && It->second.Write.Ord < Write.Ord)
+              It->second = {Write, FromZext};
+          }
+        };
+        CollectPartial(AllWrites, false);
+        CollectPartial(ZextWrites, true);
+        for (const auto &[WideKey, Partial] : PartiallyPreserved) {
+          const auto &WideWrite = Partial.Write;
+          const uint16_t Prefix =
+              TRI.callPreservedPrefixSize(WideKey.first, WideKey.second);
+          const auto NarrowKey = std::make_pair(WideKey.first, Prefix);
+          auto NarrowId = RegVarMap.find(NarrowKey);
+          if (NarrowId == RegVarMap.end())
+            continue;
+          auto ExistingNarrow = AllWrites.find(NarrowKey);
+          if (Partial.FromZext && ExistingNarrow != AllWrites.end() &&
+              ExistingNarrow->second.Ord + 1 == WideWrite.Ord)
+            continue;
+          bool HasNewerNarrow = false;
+          for (const RegWriteMap *Writes : {&AllWrites, &ZextWrites}) {
+            auto It = Writes->find(NarrowKey);
+            if (It != Writes->end() && It->second.Ord > WideWrite.Ord) {
+              HasNewerNarrow = true;
+            }
+          }
+          if (HasNewerNarrow)
+            continue;
+
+          MedVar Wide;
+          Wide.Kind = MedVar::Reg;
+          Wide.Id = WideWrite.Id;
+          Wide.Size = WideKey.second;
+          Wide.RegOff = WideKey.first;
+          Wide.TheArch = TargetArch;
+          MedVar Narrow = Wide;
+          Narrow.Id = NarrowId->second;
+          Narrow.Size = Prefix;
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Addr = MOp.Addr;
+          Extract.Output = Narrow;
+          Extract.addInput(Wide);
+          Extract.addInput(MedVar::makeConst(0, 4));
+          Pending.push_back({OI, std::move(Extract)});
+          AllWrites[NarrowKey] =
+              {Narrow.Id, Narrow.Size, Narrow.RegOff, Seq++};
+          ZextWrites.erase(NarrowKey);
+        }
+
         auto DiscardClobbered = [&](RegWriteMap &Writes) {
           for (auto It = Writes.begin(); It != Writes.end();) {
             uint64_t RegOff = It->first.first;

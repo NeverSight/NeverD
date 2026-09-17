@@ -183,6 +183,17 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
   EXPECT_NE(D9LLVM.find("ret i64 123"), std::string::npos) << D9LLVM;
   EXPECT_EQ(D9LLVM.find("D9_call_clobber"), std::string::npos) << D9LLVM;
 
+  std::string D9FromWide =
+      functionText(C, "test_post_call_q9_low_from_wide_write");
+  ASSERT_FALSE(D9FromWide.empty()) << C;
+  EXPECT_NE(D9FromWide.find("return 123;"), std::string::npos) << D9FromWide;
+  EXPECT_EQ(D9FromWide.find("unknown"), std::string::npos) << D9FromWide;
+
+  std::string FMinNum = functionText(C, "test_fminnm_f64");
+  ASSERT_FALSE(FMinNum.empty()) << C;
+  EXPECT_NE(FMinNum.find("__builtin_fmin("), std::string::npos) << FMinNum;
+  EXPECT_EQ(FMinNum.find("unknown"), std::string::npos) << FMinNum;
+
   std::string Q9LLVM = functionText(LLVM.out, "@test_post_call_q9_upper");
   ASSERT_FALSE(Q9LLVM.empty()) << LLVM.out;
   EXPECT_NE(Q9LLVM.find("Q9.1_call_clobber_unknown = freeze i128 undef"),
