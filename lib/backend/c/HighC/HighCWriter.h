@@ -222,6 +222,8 @@ public:
   std::map<std::string, std::string> CopyForward;
   std::map<int, std::string> ParamDisplayNames;
   bool InEHClauseBody = false;
+  /// C++ destructor unwind funclets `ret` to the personality, not the parent.
+  bool InCxxCleanupBody = false;
 
   struct ImageObject {
     std::string Name;

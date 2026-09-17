@@ -979,6 +979,60 @@ TEST(HighCPointerAddresses, AttachesCxxFuncletBodyIntoCatch) {
   EXPECT_EQ(Source.find("handler @"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, AttachesCxxUnwindFuncletAsDestructorCall) {
+  HighFunc Parent;
+  Parent.Name = "parent";
+  Parent.Entry = 0x140001000;
+  Parent.ReturnType = NdType::makeInt(4);
+  Parent.FrameSize = 0x40;
+  HighStmt Try;
+  Try.Kind = StmtKind::CxxTry;
+  Try.EHIsReducible = true;
+  HighStmt TryReturn;
+  TryReturn.Kind = StmtKind::Return;
+  TryReturn.RetVal = HighExpr::makeConst(static_cast<uint64_t>(-100), 4);
+  Try.Body.push_back(std::move(TryReturn));
+  HighEHClause Cleanup;
+  Cleanup.Kind = HighEHClauseKind::CxxCleanup;
+  Cleanup.FilterOrActionVA = 0x140002000;
+  Cleanup.State = 0;
+  Cleanup.UnwindActionKind = CxxUnwindAction::ActionKind::Direct;
+  Cleanup.UnwindObjectOffset = 40;
+  Try.EHClauses.push_back(std::move(Cleanup));
+  Try.EHClauseBodies.emplace_back();
+  Parent.Body.push_back(std::move(Try));
+
+  HighFunc Dtor;
+  Dtor.Name = "unwind_funclet";
+  Dtor.Entry = 0x140002000;
+  Dtor.ReturnType = NdType::makeInt(8);
+  MedVar T0;
+  T0.Kind = MedVar::Temp;
+  T0.Id = 22;
+  T0.Size = 8;
+  HighStmt CallDtor;
+  CallDtor.Kind = StmtKind::Assign;
+  CallDtor.Dst = HighExpr::makeVar(T0);
+  CallDtor.Val = HighExpr::makeCall(
+      "dtor", 0x140003000,
+      {HighExpr::makeBinop(NdOp::INT_ADD, parameter(1),
+                           HighExpr::makeConst(40, 8))});
+  Dtor.Body.push_back(std::move(CallDtor));
+  HighStmt UnwindRet;
+  UnwindRet.Kind = StmtKind::Return;
+  UnwindRet.RetVal = HighExpr::makeVar(T0);
+  Dtor.Body.push_back(std::move(UnwindRet));
+
+  const std::string Source = emitFunctions({Parent, Dtor});
+  const auto FuncletAt = Source.find("unwind_funclet");
+  const std::string ParentSrc =
+      FuncletAt == std::string::npos ? Source : Source.substr(0, FuncletAt);
+  EXPECT_NE(ParentSrc.find("unwind cleanup"), std::string::npos) << Source;
+  EXPECT_NE(ParentSrc.find("dtor("), std::string::npos) << Source;
+  EXPECT_EQ(ParentSrc.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(ParentSrc.find("return t22"), std::string::npos) << ParentSrc;
+}
+
 TEST(HighCPointerAddresses, CatchFuncletParentFrameStoreBecomesReturn) {
   // x64 catch funclets write the result to [rdx+k] then ret. rdx is the parent
   // frame, not a parent parameter, so HighC must not print arg1 / return v0.
@@ -3249,6 +3303,47 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues) {
   EXPECT_EQ(Source.find("return v2"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return v0"), std::string::npos) << Source;
   EXPECT_NE(Source.find("return -200"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsUnwindDestructor) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+
+  va_t Entry = 0;
+  std::string Source;
+  for (const auto &Rec : DiscoverImg->COFFPDataRecords) {
+    const va_t Begin = DiscoverImg->Base + Rec.BeginRVA;
+    BinaryLoadOptions FuncOpts;
+    FuncOpts.OnlyFunctionEntries.insert(Begin);
+    auto Img = loadBinary(Path, FuncOpts);
+    if (!Img)
+      continue;
+    std::string Text = highcOnlyFunction(*Img, Begin);
+    if (Text.find("unwind cleanup") == std::string::npos ||
+        Text.find("return -200") == std::string::npos)
+      continue;
+    Entry = Begin;
+    Source = std::move(Text);
+    break;
+  }
+  ASSERT_NE(Entry, 0u) << "no nested catch with unwind cleanup";
+  const auto CleanupAt = Source.find("unwind cleanup");
+  ASSERT_NE(CleanupAt, std::string::npos) << Source;
+  const std::string After = Source.substr(CleanupAt);
+  EXPECT_NE(After.find("sub_"), std::string::npos) << After;
+  EXPECT_NE(After.find("&var_m"), std::string::npos) << After;
+  EXPECT_EQ(After.find("arg1"), std::string::npos) << After;
 }
 
 } // namespace
