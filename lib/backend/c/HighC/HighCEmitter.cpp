@@ -798,6 +798,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 "neverd_objc_association_key_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeKVOContext) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_objc_kvo_context_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::RuntimeStaticIdentity) {
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(

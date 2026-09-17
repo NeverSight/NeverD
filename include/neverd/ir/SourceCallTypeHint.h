@@ -73,6 +73,11 @@ struct SourceCallTypeHint {
     /// TargetAddress identifies the original key; rebuilt methods share one
     /// opaque storage identity. This does not bind readable image contents.
     RuntimeAssociationKey,
+    /// A uniquely named writable KVO context token. The address is rebuilt
+    /// only for an exact observer-registration context argument or an exact
+    /// comparison with the matching callback's context parameter. Its bytes
+    /// are never copied or exposed.
+    RuntimeKVOContext,
     /// A loader-authenticated self-referential writable pointer slot. The
     /// original value is the slot's own address, so source rebuilds one shared
     /// opaque identity instead of retaining either original image address.

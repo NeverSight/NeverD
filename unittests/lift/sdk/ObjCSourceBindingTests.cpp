@@ -2642,6 +2642,163 @@ TEST(ObjCSourceBindings,
   EXPECT_EQ(Ordinary.Function.Body[0].RetVal->Kind, ExprKind::Const);
 }
 
+TEST(ObjCSourceBindings,
+     KVOContextsBindRegistrationAndMatchingCallbackComparison) {
+  constexpr va_t Address = 0x1040;
+  constexpr llvm::StringLiteral Registration =
+      "addObserver:forKeyPath:options:context:";
+  constexpr llvm::StringLiteral Callback =
+      "observeValueForKeyPath:ofObject:change:context:";
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    Fixture F;
+    F.Image.Arch = Architecture;
+    F.Image.ObjCSourceReferences.clear();
+    F.Image.Segments[0].Flags =
+        SegmentFlags::Readable | SegmentFlags::Writable;
+    F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+    F.Image.Symbols.push_back({"_ObserverContext", Address, 1, false});
+    F.Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+
+    const auto RegistrationSignature =
+        objcSelectorSourceTypeHint(F.Image, Registration);
+    ASSERT_TRUE(RegistrationSignature);
+    auto RegistrationHint = std::make_shared<SourceCallTypeHint>();
+    RegistrationHint->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    RegistrationHint->TargetName = "objc_msgSend";
+    RegistrationHint->Selector = Registration.str();
+    RegistrationHint->Signature = *RegistrationSignature;
+    std::vector<ExprPtr> Arguments;
+    for (size_t I = 0; I < RegistrationSignature->Parameters.size(); ++I)
+      Arguments.push_back(HighExpr::makeConst(
+          I == 5 ? Address : 0, 8,
+          I == 5 ? ConstantAddressProvenance::DataAddress
+                 : ConstantAddressProvenance::Unknown));
+    auto Register = HighExpr::makeCall("objc_msgSend", 0, Arguments);
+    Register->Type = RegistrationSignature->ReturnType;
+    Register->SourceCallHint = RegistrationHint;
+    F.Function.Body[0].RetVal = Register;
+    auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.KVOContexts, std::set<va_t>{Address});
+    const auto RegisteredContext =
+        Bound.Function.Body[0].RetVal->Operands[5];
+    ASSERT_TRUE(RegisteredContext->SourceCallHint);
+    EXPECT_EQ(RegisteredContext->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeKVOContext);
+    EXPECT_TRUE(objcSourceCallBound(*RegisteredContext, F.Image, {}));
+
+    ObjCMethod Method;
+    Method.Implementation = 0x2000;
+    Method.ClassName = "Observer";
+    Method.Selector = Callback.str();
+    Method.TypeEncoding = "v48@0:8@16@24@32^v40";
+    Method.Status = "supported";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    std::string Reason;
+    ASSERT_TRUE(
+        assignDarwinObjCSourceABI(*Method.TypeHint, Architecture, Reason))
+        << Reason;
+    F.Image.ObjCMethods = {Method};
+    F.Function.Entry = Method.Implementation;
+    F.Function.SourceTypeHint = Method.TypeHint;
+    F.Function.Params.clear();
+    for (const auto &Parameter : Method.TypeHint->Parameters)
+      F.Function.Params.push_back({Parameter.Name, Parameter.Type});
+    MedVar ContextParameter;
+    ContextParameter.Kind = MedVar::Param;
+    ContextParameter.Id = 5;
+    ContextParameter.Size = 8;
+    auto Context = HighExpr::makeVar(
+        ContextParameter, Method.TypeHint->Parameters[5].Type);
+    auto Token = HighExpr::makeConst(
+        Address, 8, ConstantAddressProvenance::DataAddress);
+    F.Function.Body[0].RetVal =
+        HighExpr::makeBinop(NdOp::INT_EQUAL, Context, Token);
+    Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.KVOContexts, std::set<va_t>{Address});
+    const auto ComparedContext = Bound.Function.Body[0].RetVal->Operands[1];
+    ASSERT_TRUE(ComparedContext->SourceCallHint);
+    EXPECT_EQ(ComparedContext->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeKVOContext);
+    EXPECT_TRUE(objcSourceCallBound(*ComparedContext, F.Image, {}));
+  }
+}
+
+TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
+  constexpr va_t Address = 0x1040;
+  constexpr llvm::StringLiteral Callback =
+      "observeValueForKeyPath:ofObject:change:context:";
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Segments[0].Flags =
+      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+  F.Image.Symbols.push_back({"_ObserverContext", Address, 1, false});
+  ObjCMethod Method;
+  Method.Implementation = 0x2000;
+  Method.ClassName = "Observer";
+  Method.Selector = Callback.str();
+  Method.TypeEncoding = "v48@0:8@16@24@32^v40";
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  std::string Reason;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(*Method.TypeHint, F.Image.Arch, Reason));
+  F.Image.ObjCMethods = {Method};
+  F.Function.Entry = Method.Implementation;
+  F.Function.SourceTypeHint = Method.TypeHint;
+  for (const auto &Parameter : Method.TypeHint->Parameters)
+    F.Function.Params.push_back({Parameter.Name, Parameter.Type});
+  MedVar ContextParameter;
+  ContextParameter.Kind = MedVar::Param;
+  ContextParameter.Id = 5;
+  ContextParameter.Size = 8;
+  auto Context = HighExpr::makeVar(ContextParameter,
+                                   Method.TypeHint->Parameters[5].Type);
+  auto Comparison = HighExpr::makeBinop(
+      NdOp::INT_EQUAL, Context,
+      HighExpr::makeConst(Address, 8,
+                          ConstantAddressProvenance::DataAddress));
+  F.Function.Body[0].RetVal = Comparison;
+
+  for (unsigned Case = 0; Case < 6; ++Case) {
+    SCOPED_TRACE(Case);
+    auto Image = F.Image;
+    auto Function = F.Function;
+    if (Case == 0)
+      Image.Symbols.clear();
+    else if (Case == 1)
+      Image.Symbols.push_back({"_AliasContext", Address, 1, false});
+    else if (Case == 2)
+      Image.Segments[0].Flags = Image.Sections[0].Flags =
+          SegmentFlags::Readable;
+    else if (Case == 3)
+      Image.ObjCMethods[0].Status = "ambiguous_dispatch";
+    else if (Case == 4)
+      Function.Body[0].RetVal->Operands[0] = HighExpr::makeConst(0, 8);
+    else
+      Function.Body[0].RetVal = HighExpr::makeBinop(
+          NdOp::INT_ADD, Context,
+          HighExpr::makeConst(Address, 8,
+                              ConstantAddressProvenance::DataAddress));
+    const auto Result = bindObjCSourceReferences(Function, Image);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.KVOContexts.empty());
+  }
+
+  F.Function.Body[0].RetVal = HighExpr::makeConst(
+      Address, 8, ConstantAddressProvenance::DataAddress);
+  const auto Ordinary = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_FALSE(Ordinary.Limitation.empty());
+  EXPECT_TRUE(Ordinary.KVOContexts.empty());
+}
+
 TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
   Fixture F;
   constexpr va_t Address = 0x1040;

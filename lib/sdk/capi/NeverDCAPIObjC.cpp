@@ -408,6 +408,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         if (BlockPlan.InvokeHints.count(Entry))
           SharedBlockFunctions.insert(objcBlockInvokeName(Entry));
       std::set<va_t> AssociationKeys;
+      std::set<va_t> KVOContexts;
       std::set<va_t> StaticIdentities;
       std::map<va_t, uint64_t> LocalStorageExtents;
       std::set<va_t> ProfileSections;
@@ -418,6 +419,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       for (va_t Entry : Included) {
         const auto &Keys = Projections.at(Entry).AssociationKeys;
         AssociationKeys.insert(Keys.begin(), Keys.end());
+        const auto &Contexts = Projections.at(Entry).KVOContexts;
+        KVOContexts.insert(Contexts.begin(), Contexts.end());
         const auto &Identities = Projections.at(Entry).StaticIdentities;
         StaticIdentities.insert(Identities.begin(), Identities.end());
         for (const auto &[Address, Width] :
@@ -445,6 +448,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           ConstantStrings.insert(*Target);
       std::string IdentityHelpers = renderObjCAssociationKeyHelpers(
           AssociationKeys, SharedIdentityFunctions);
+      IdentityHelpers +=
+          renderObjCKVOContextHelpers(KVOContexts, SharedIdentityFunctions);
       IdentityHelpers += renderObjCStaticIdentityHelpers(
           StaticIdentities, SharedIdentityFunctions);
       IdentityHelpers += renderObjCConstantObjectHelpers(

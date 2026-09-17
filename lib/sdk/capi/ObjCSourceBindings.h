@@ -31,6 +31,7 @@ struct ObjCSourceBindingResult {
   std::set<std::string> InstanceLayoutClasses;
   std::set<std::string> RuntimeProtocols;
   std::set<va_t> AssociationKeys;
+  std::set<va_t> KVOContexts;
   std::set<va_t> StaticIdentities;
   std::map<va_t, uint64_t> LocalStorageExtents;
   std::set<va_t> ProfileCounterSections;
@@ -265,6 +266,22 @@ staticIdentityHint(const BinaryImage &Image, va_t Address) {
   return Hint;
 }
 
+inline std::optional<SourceCallTypeHint>
+kvoContextHint(const BinaryImage &Image, va_t Address) {
+  const auto *Symbol = uniqueWritableDataSymbol(Image, Address, 1);
+  if (!Symbol)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeKVOContext;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = Symbol->Name;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
+}
+
 inline bool overlapsPointerStorage(const BinaryImage &Image, va_t Address,
                                    uint64_t Width) {
   // Slots are ordered and occupy eight bytes. Earlier slots cannot overlap;
@@ -467,6 +484,91 @@ identityKeyParameter(const HighExpr &Expression, const BinaryImage &Image) {
       !objc_projection_detail::sameHint(Expected->Signature, Hint.Signature))
     return std::nullopt;
   return Parameter;
+}
+
+inline std::optional<size_t>
+kvoRegistrationContextParameter(const HighExpr &Expression,
+                                const BinaryImage &Image) {
+  constexpr llvm::StringLiteral Selector =
+      "addObserver:forKeyPath:options:context:";
+  constexpr size_t ContextParameter = 5;
+  if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
+      Expression.IsIndirectCall || Expression.IntrinsicId != Intrinsic::None ||
+      Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Expression.MemoryOrdering != NdMemoryOrdering::None)
+    return std::nullopt;
+  const auto &Hint = *Expression.SourceCallHint;
+  if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
+      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+      Hint.RuntimeObjCResultType || Hint.ValueWitness ||
+      !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
+      Expression.Operands.size() != Hint.Signature.Parameters.size() ||
+      ContextParameter >= Expression.Operands.size())
+    return std::nullopt;
+  std::optional<SourceFunctionTypeHint> Expected;
+  if (Hint.Receiver) {
+    const auto Declaration =
+        objcReceiverSourceTypeHint(Image, Hint.Selector, *Hint.Receiver);
+    if (Declaration.HasDeclaration && Declaration.Signature)
+      Expected = *Declaration.Signature;
+  } else if (Hint.Signature.Origin ==
+             SourceFunctionTypeHint::OriginKind::ObjCSDK) {
+    Expected = objcSelectorSourceTypeHint(Image, Hint.Selector);
+  }
+  if (!Expected ||
+      !objc_projection_detail::sameHint(Hint.Signature, *Expected) ||
+      !Expected->Parameters[ContextParameter].Type ||
+      Expected->Parameters[ContextParameter].Type->Kind != NdTypeKind::Ptr)
+    return std::nullopt;
+  return ContextParameter;
+}
+
+inline std::optional<size_t>
+kvoCallbackContextParameter(const HighFunc &Function,
+                            const BinaryImage &Image) {
+  constexpr llvm::StringLiteral Selector =
+      "observeValueForKeyPath:ofObject:change:context:";
+  constexpr size_t ContextParameter = 5;
+  const ObjCMethod *Method = nullptr;
+  for (const auto &Candidate : Image.ObjCMethods) {
+    if (Candidate.Implementation != Function.Entry)
+      continue;
+    if (Method)
+      return std::nullopt;
+    Method = &Candidate;
+  }
+  if (!Method || Method->Status != "supported" || Method->IsClassMethod ||
+      Method->Selector != Selector || !Method->TypeHint ||
+      !Function.SourceTypeHint ||
+      !objc_projection_detail::sameHint(*Method->TypeHint,
+                                        *Function.SourceTypeHint) ||
+      Function.Params.size() != Function.SourceTypeHint->Parameters.size() ||
+      ContextParameter >= Function.Params.size() ||
+      !Function.Params[ContextParameter].Type ||
+      Function.Params[ContextParameter].Type->Kind != NdTypeKind::Ptr)
+    return std::nullopt;
+  for (size_t I = 0; I < Function.Params.size(); ++I)
+    if (Function.Params[I].Name != Function.SourceTypeHint->Parameters[I].Name ||
+        !equalSourceTypes(Function.Params[I].Type,
+                          Function.SourceTypeHint->Parameters[I].Type))
+      return std::nullopt;
+  return ContextParameter;
+}
+
+inline bool exactParameterValue(const ExprPtr &Value, size_t Parameter,
+                                unsigned Depth = 0) {
+  if (!Value || Depth > 8 || !Value->Type || Value->Type->Size != 8)
+    return false;
+  if (Value->Kind == ExprKind::Var)
+    return Value->Var.Kind == MedVar::Param && Value->Var.Id >= 0 &&
+           static_cast<size_t>(Value->Var.Id) == Parameter &&
+           Value->Var.Size == 8;
+  if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+      Value->Operands.size() == 1 && Value->Operands[0] &&
+      Value->Operands[0]->Type && Value->Operands[0]->Type->Size == 8)
+    return exactParameterValue(Value->Operands[0], Parameter, Depth + 1);
+  return false;
 }
 
 inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
@@ -773,6 +875,8 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
   const auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
   const auto DirectLocalStorage =
       directLocalStorageAccessExtents(Function, Image);
+  const auto KVOCallbackParameter =
+      kvoCallbackContextParameter(Function, Image);
   // Contextual bindings create temporary input nodes. Retain those nodes for
   // the lifetime of their memoized copies so allocator address reuse cannot
   // make a later argument borrow an earlier argument's binding.
@@ -1173,6 +1277,35 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
           continue;
         }
       }
+      // KVO preserves an opaque caller-chosen context pointer between observer
+      // registration and the callback. Rebuild a writable static token only at
+      // the exact declared registration argument, or where the unique matching
+      // callback compares its context parameter directly for equality. Other
+      // uses of the same address remain unresolved image-data references.
+      const bool KVORegistration =
+          Operand &&
+          kvoRegistrationContextParameter(*Expression, Image) == Index;
+      const bool KVOCallbackComparison =
+          Operand && KVOCallbackParameter &&
+          Expression->Kind == ExprKind::BinOp &&
+          (Expression->Op == NdOp::INT_EQUAL ||
+           Expression->Op == NdOp::INT_NOTEQUAL) &&
+          Expression->Operands.size() == 2 && Index < 2 &&
+          exactParameterValue(Expression->Operands[1 - Index],
+                              *KVOCallbackParameter);
+      if (KVORegistration || KVOCallbackComparison) {
+        const auto Address = constantAddress(*Operand);
+        auto Hint = Address ? kvoContextHint(Image, *Address) : std::nullopt;
+        if (Hint) {
+          auto Context = HighExpr::makeCall({}, 0, {});
+          Context->Type = Operand->Type;
+          Context->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+          Result.KVOContexts.insert(*Address);
+          Operand = std::move(Context);
+          continue;
+        }
+      }
       // swift_beginAccess marks an address for the exclusivity runtime but
       // does not describe its pointee type. Rebuild this operand only when an
       // actual load/store in the same function or an exact Swift scalar
@@ -1498,6 +1631,13 @@ inline bool objcSourceCallBound(
            !Binding.SelectorReferenceAddress &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
+  if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeKVOContext) {
+    const auto Expected = kvoContextHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeStaticIdentity) {
     const auto Expected = staticIdentityHint(Image, Binding.TargetAddress);
     return Expected && Binding.TargetName == Expected->TargetName &&
@@ -1654,6 +1794,22 @@ renderObjCAssociationKeyHelpers(const std::set<va_t> &Keys,
               "(void) {\n"
               "  static unsigned char key;\n"
               "  return (uintptr_t)&key;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string
+renderObjCKVOContextHelpers(const std::set<va_t> &Contexts,
+                            std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (va_t Address : Contexts) {
+    const std::string Name = "neverd_objc_kvo_context_" +
+                             llvm::utohexstr(Address, true) + "_address";
+    SharedFunctions.insert(Name);
+    Source += "\nuintptr_t " + Name +
+              "(void) {\n"
+              "  static unsigned char context;\n"
+              "  return (uintptr_t)&context;\n}\n";
   }
   return Source;
 }

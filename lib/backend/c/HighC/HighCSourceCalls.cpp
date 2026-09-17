@@ -181,6 +181,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeBlockDescriptor ||
       Hint.CallKind == Kind::RuntimeBlockLiteral ||
       Hint.CallKind == Kind::RuntimeAssociationKey ||
+      Hint.CallKind == Kind::RuntimeKVOContext ||
       Hint.CallKind == Kind::RuntimeStaticIdentity ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
       Hint.CallKind == Kind::RuntimeConstantString ||
@@ -261,6 +262,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress)
         return bad("association key has no source identity");
       Value = "neverd_objc_association_key_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeKVOContext) {
+      if (!Hint.TargetAddress)
+        return bad("KVO context has no source identity");
+      Value = "neverd_objc_kvo_context_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeStaticIdentity) {
       if (!Hint.TargetAddress)
