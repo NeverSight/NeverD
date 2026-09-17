@@ -16,6 +16,7 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -2429,6 +2430,55 @@ TEST(LLVMCPointerAddresses, SingleFunctionEmitOmitsSiblingDefinitions) {
   OS.flush();
   EXPECT_NE(Source.find("keep_me"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("drop_me"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, GsHandlerDataBit2AlignBranchIsPrinted) {
+  // MSVC __GSHandlerCheckCommon: TEST [r8],4 / MOV r10,rcx / JZ, then align
+  // r10 from HandlerData+4/+8. HighC must keep the bit-2 branch; the MOV
+  // between TEST and Jcc does not clobber flags.
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  Img.Entry = Entry;
+  static const uint8_t kBytes[] = {
+      0x41, 0xf6, 0x00, 0x04, 0x4c, 0x8b, 0xd1, 0x74, 0x13, 0x41, 0x8b,
+      0x40, 0x08, 0x4d, 0x63, 0x50, 0x04, 0xf7, 0xd8, 0x4c, 0x03, 0xd1,
+      0x48, 0x63, 0xc8, 0x4c, 0x23, 0xd1, 0x4c, 0x89, 0xd0, 0xc3,
+  };
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = sizeof(kBytes);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(std::begin(kBytes), std::end(kBytes));
+  Img.Segments.push_back(std::move(Text));
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = Entry;
+  TextSection.Size = sizeof(kBytes);
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
+  Symbol FuncSym = Symbol::makeFunc(Entry, sizeof(kBytes));
+  FuncSym.Name = "GSHandlerCheckCommon";
+  Img.Symbols.push_back(std::move(FuncSym));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_FALSE(Result.HighFuncs.empty());
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_NE(Source.find("& 4"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
 }
 
 } // namespace

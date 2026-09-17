@@ -120,6 +120,13 @@ bool carryFlagMatchesCmp(const std::vector<MedOp> &Ops, int ConsumerIdx,
 CondCode resolveCondFromChain(const std::vector<MedOp> &Ops,
                               const MedVar &CondVar, int SearchStart,
                               const TargetRegInfo &TRI) {
+  // Jcc that reads ZF/CF/SF/OF directly (`jz` after `test [r8],4`) never
+  // wraps the flag in COPY/BOOL_NOT.  The producer is INT_EQUAL ZF, t, 0
+  // (or INT_SLESS for SF).  That is a flag write, not a condition chain, so
+  // map the flag itself.
+  if (CondVar.Kind == MedVar::Flag)
+    return TRI.singleFlagCond(CondVar.RegOff, false);
+
   for (int J = SearchStart; J >= 0; --J) {
     const auto &Def = Ops[J];
     if (Def.Output.Id != CondVar.Id || Def.Output.SSAVer != CondVar.SSAVer)
@@ -565,6 +572,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
                           UseBlocks);
 
         Blk.Ops.insert(Blk.Ops.begin() + static_cast<long>(I), CmpOp);
+        Blk.Ops[I + 1].Inputs[1] = CmpOp.Output;
         ++I;
       }
     }

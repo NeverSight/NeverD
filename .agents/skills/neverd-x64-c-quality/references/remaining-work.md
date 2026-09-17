@@ -7,7 +7,7 @@ a regression, then delete the row.
 
 | Gap | Surface | Notes |
 |---|---|---|
-| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` still has a real body but HighC drops the GS_HANDLER_DATA bit-2 align branch (LLVM IR keeps `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. Release `--func` of MapleStory2 cookie/GS is 0.14–0.15s (Ghidra already-analyzed UDS 0.23–0.27s) after PE load materializes only the requested `.pdata` body. |
+| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` prints the GS_HANDLER_DATA bit-2 align branch (`test [r8],4` / `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. Release `--func` of MapleStory2 cookie/GS is 0.14–0.15s (Ghidra already-analyzed UDS 0.23–0.27s) after PE load materializes only the requested `.pdata` body. |
 | C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
@@ -65,6 +65,7 @@ a regression, then delete the row.
 | `int 0x29` prints `__fastfail` | `HighCPointerAddresses.FastFailPrintsIntrinsicWithoutAssign`; `LLVMCPointerAddresses.FastFailPrintsIntrinsicWithoutAssign`; MedLLVM `@__fastfail(i32)` noreturn, not `int $0` with vector 41 as the code |
 | `_raise_securityfailure` is noreturn, no success `return` | `HighCPointerAddresses.RaiseSecurityFailureOmitsSuccessReturn`; `LLVMCPointerAddresses.RaiseSecurityFailureOmitsSuccessReturn`; `LibCNoReturn.inc` |
 | Used GS TEB/TLS loads print `__readgsqword` | `HighCPointerAddresses.GsTebLoadPrintsReadGsQword`; `LLVMCPointerAddresses.GsTebLoadPrintsReadGsQword`; `x86SegmentedReadIntrinsic`; hide only FS EH registration |
+| GS_HANDLER_DATA bit-2 align branch | `HighCPointerAddresses.GsHandlerDataBit2AlignBranchIsPrinted`; MedFlags folds `jz` after `test [r8],4`; Win64 callee-save r10 is not forced to arg0 after a computed def |
 
 ## Next x64 exe pass
 
