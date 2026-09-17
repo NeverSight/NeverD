@@ -115,6 +115,11 @@ struct ExceptionFunction {
   /// and diagnostics then remain authoritative.
   std::optional<ExceptionFunctionDecodeProvenance> DecodeProvenance;
 
+  /// Set once language personalities and handler tables have been resolved
+  /// for this record, so a later `--func` request can decode another entry
+  /// without re-walking already finished frames.
+  bool LanguageTablesResolved = false;
+
   ExceptionModel model() const { return getExceptionEncodingModel(Encoding); }
 
   /// Start tracking independently replaceable parse contributions.

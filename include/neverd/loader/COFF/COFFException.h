@@ -16,6 +16,8 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <set>
+
 namespace neverd::coff_loader {
 
 /// Decode one AMD64 RUNTIME_FUNCTION and the referenced UNWIND_INFO record.
@@ -30,8 +32,19 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
 
 /// Resolve and decode language personalities after imports, symbols, and
 /// executable import veneers have been discovered.  Unknown personalities are
-/// retained without guessing their handler-data schema.
+/// retained without guessing their handler-data schema.  When
+/// BinaryImage::LoadOnlyFunctionEntries is nonempty, only those entries and
+/// catch funclets they name are materialized.
 void resolveExceptionHandlers(BinaryImage &Img);
+
+/// Decode unwind and language tables for \p Entries (and their catch
+/// funclets) if they are not already present.  Empty \p Entries with an empty
+/// load filter means every already-materialized function.
+void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries);
+
+/// Materialize the x64 RUNTIME_FUNCTION covering \p Address from
+/// BinaryImage::COFFPDataRecords when `--func` skipped it at load.
+bool ensureX64RuntimeFunction(BinaryImage &Img, va_t Address);
 
 } // namespace neverd::coff_loader
 

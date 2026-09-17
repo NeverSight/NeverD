@@ -65,9 +65,24 @@ void scanDataFuncPointers(BinaryImage &Img);
 #define DEBUG_TYPE "neverd-func-discovery"
 inline void runPostLoadDiscovery(BinaryImage &Img,
                                  [[maybe_unused]] llvm::StringRef DebugTag) {
-  scanImportThunks(Img);
-  scanPaddingBoundaries(Img);
-  scanDataFuncPointers(Img);
+  // A `--func` PE load already has `.pdata` ranges and the requested body.
+  // Import-thunk scanning walks every executable byte looking for IAT veneers
+  // outside that table; skip it when the caller named the work set.
+  if (Img.LoadOnlyFunctionEntries.empty())
+    scanImportThunks(Img);
+  // x64/ARM PE .pdata is the format-native function table, the same role as
+  // Mach-O LC_FUNCTION_STARTS.  Padding and data-pointer scans walk every
+  // executable/rodata byte and then linearly probe those ranges; on a
+  // 100k-function image that dominates `--func` load.  Import thunks stay:
+  // IAT veneers are often outside pdata.
+  const bool ExceptionDirectoryOwnsFunctions =
+      Img.Format == BinaryFormat::COFF &&
+      (!Img.ExceptionMetadata.Functions.empty() ||
+       !Img.COFFPDataRecords.empty() || !Img.KnownCodeRanges.empty());
+  if (!ExceptionDirectoryOwnsFunctions) {
+    scanPaddingBoundaries(Img);
+    scanDataFuncPointers(Img);
+  }
   LLVM_DEBUG(Img.debugDumpSummary(llvm::dbgs(), DebugTag));
 }
 #undef DEBUG_TYPE

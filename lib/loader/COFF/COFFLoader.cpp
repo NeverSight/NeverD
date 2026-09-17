@@ -33,7 +33,6 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -123,6 +122,7 @@ COFFLoader::load(const std::filesystem::path &Path) {
   if (!IsRelocatable)
     Img.Entry = normalizeCodeAddress(Img.Entry, Img.Arch, Img.Mode);
   Img.Base = ImageBase;
+  Img.LoadOnlyFunctionEntries = RestrictFunctionEntries;
 
   // COFF object-file section headers are required to keep VirtualAddress at
   // zero. Build a private mapped layout instead of mutating that format-native

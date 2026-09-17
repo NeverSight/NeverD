@@ -2818,6 +2818,15 @@ void Pipeline::buildLowIR(
   for (const auto &Sym : Img.Symbols)
     if (Sym.IsFunc)
       FuncEntries.insert(Sym.Addr);
+  // `.pdata` exclusive-end ranges name every PE function start even when
+  // `--func` skipped materializing those ExceptionFunction/Symbol records.
+  // Without them, an unconditional jmp to the next RUNTIME_FUNCTION is
+  // followed and the callee is fused into this CFG.
+  for (const auto &[Start, End] : Img.KnownCodeRanges) {
+    (void)End;
+    if (Start != 0)
+      FuncEntries.insert(Start);
+  }
 
   // Decode cost tracks a function's instruction count, which is unknown before
   // the recursive-descent build runs.  Candidates are address-sorted, so the

@@ -122,6 +122,16 @@ static int realMain(int Argc, char *Argv[]) {
     neverd_session_set_pdb_path(Sess, PdbFile.getValue().c_str());
   if (!MapFile.getValue().empty())
     neverd_session_set_map_path(Sess, MapFile.getValue().c_str());
+  // Hex `--func` is known before load.  Thread it in so a 100k-function PE
+  // does not decode every `.pdata` language table for a one-function dump.
+  if (!ExportFunc.empty()) {
+    StringRef FuncRef(ExportFunc.getValue());
+    if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
+      uint64_t Addr = 0;
+      if (!FuncRef.empty() && !FuncRef.getAsInteger(16, Addr) && Addr != 0)
+        neverd_session_restrict_function(Sess, Addr);
+    }
+  }
 
   if (!JsonOutput) {
     errs() << "Loading " << Path.filename().string() << "...\n";
