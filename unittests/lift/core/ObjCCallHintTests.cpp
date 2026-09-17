@@ -2614,6 +2614,41 @@ TEST(ObjCCallHints, UnresolvedFormatImportsDoNotInheritMessageDispatch) {
   }
 }
 
+TEST(ObjCCallHints, SnprintfBindsOnlyFromItsProvenCFormatRegister) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = image(Architecture);
+    Image.ImportPtrSlots[0x2180] = "_snprintf";
+    Image.DyldBindSlots[0x2180] = {"_snprintf", 0,
+                                   "/usr/lib/system/libsystem_c.dylib", false};
+    const std::string Format = "%02x";
+    std::copy(Format.begin(), Format.end(),
+              Image.Segments[0].Data.begin() + 0x1200);
+    Image.Segments[0].Data[0x1200 + Format.size()] = 0;
+    const auto &TRI = getTargetRegInfo(Architecture);
+    LowFunc Function;
+    Function.Entry = 0x1200;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.StartAddr = 0x1200;
+    Block.Ops = {
+        operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[2], 8),
+                  {NdVar::cst(0x2200, 8)}, 0x1200),
+        operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1204),
+        operation(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 4)}, 0x1208)};
+    const auto Hints = buildObjCSourceCallHints(Image, Function);
+    ASSERT_EQ(Hints.size(), 1U);
+    const auto &Hint = Hints.at(0x1204);
+    EXPECT_EQ(Hint.TargetName, "snprintf");
+    ASSERT_TRUE(Hint.Format);
+    EXPECT_EQ(Hint.Format->FormatAddress, 0x2200U);
+    EXPECT_EQ(Hint.Format->Syntax, SourceCallTypeHint::FormatSyntax::Printf);
+    ASSERT_EQ(Hint.Signature.Parameters.size(), 4U);
+
+    Function.Blocks[0].Ops[0].Inputs[0] = NdVar::reg(TRI.IntParamRegs[3], 8);
+    EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+  }
+}
+
 TEST(ObjCCallHints, RuntimeVoidAndWeakSignaturesDoNotInventResults) {
   auto Image = runtimeImage("_objc_storeStrong");
   const auto Hints = buildObjCSourceCallHints(Image, caller());

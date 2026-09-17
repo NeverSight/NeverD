@@ -187,6 +187,27 @@ darwinRuntimeFormatDeclaration(const BinaryImage &Image, va_t ImportSlot) {
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
   if (!Import || !Import->starts_with("_") || Bind == Image.DyldBindSlots.end())
     return std::nullopt;
+  // The fixed-declaration catalog excludes variadic functions because their
+  // call-site ABI is incomplete. This public prefix becomes complete only
+  // after the immutable printf format proves every supplied tail argument.
+  if (*Import == "_snprintf") {
+    if (!darwinExportModuleMatches(
+            "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_c.dylib",
+            Bind->second.Module))
+      return std::nullopt;
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Signature.ReturnType = NdType::makeInt(4, true);
+    Signature.Parameters = {
+        {"buffer", NdType::makePtr(NdType::makeInt(1, true))},
+        {"size", NdType::makeInt(8, false)},
+        {"format", NdType::makePtr(NdType::makeInt(1, true))}};
+    std::string Error;
+    if (!assignDarwinScalarSourceABI(Signature, Image.Arch, Error))
+      return std::nullopt;
+    return DarwinFormatDeclaration{std::move(Signature), "snprintf", 2,
+                                   SourceCallTypeHint::FormatSyntax::Printf};
+  }
   static constexpr struct {
     const char *Name;
     const char *AArch64;
@@ -217,8 +238,9 @@ darwinRuntimeFormatDeclaration(const BinaryImage &Image, va_t ImportSlot) {
     Signature->Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
     if (!assignDarwinScalarSourceABI(*Signature, Image.Arch, Error))
       return std::nullopt;
-    Result = DarwinFormatDeclaration{std::move(*Signature), D.Name,
-                                     D.FormatParameter};
+    Result = DarwinFormatDeclaration{
+        std::move(*Signature), D.Name, D.FormatParameter,
+        SourceCallTypeHint::FormatSyntax::NSString};
   }
   return Result;
 }
@@ -234,7 +256,11 @@ darwinFormattedSourceCallHint(const BinaryImage &Image, va_t ImportSlot,
   Call.TargetAddress = ImportSlot;
   Call.TargetName = Declaration->Name;
   Call.Signature = std::move(Declaration->Signature);
+  if (Declaration->Syntax == SourceCallTypeHint::FormatSyntax::Printf)
+    return bindCFormatArguments(Image, std::move(Call),
+                                Declaration->FormatParameter, FormatAddress);
   return bindObjCFormatArguments(Image, std::move(Call),
-                                 Declaration->FormatParameter, FormatAddress);
+                                 Declaration->FormatParameter, FormatAddress,
+                                 Declaration->Syntax);
 }
 } // namespace neverd

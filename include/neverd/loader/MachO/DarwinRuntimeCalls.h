@@ -36,10 +36,12 @@ struct DarwinFormatDeclaration {
   SourceFunctionTypeHint Signature;
   std::string Name;
   unsigned FormatParameter = 0;
+  SourceCallTypeHint::FormatSyntax Syntax =
+      SourceCallTypeHint::FormatSyntax::NSString;
 };
 
-/// Fixed prefix and NSString format attribute of an exact C import. This
-/// declaration alone cannot bind a variadic call's actual arguments.
+/// Fixed prefix and language-specific format attribute of an exact C import.
+/// This declaration alone cannot bind a variadic call's actual arguments.
 std::optional<DarwinFormatDeclaration>
 darwinRuntimeFormatDeclaration(const BinaryImage &Image, va_t ImportSlot);
 

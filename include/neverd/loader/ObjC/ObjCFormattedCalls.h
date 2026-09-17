@@ -25,6 +25,13 @@ bindObjCFormatArguments(const BinaryImage &Image, SourceCallTypeHint Call,
                         SourceCallTypeHint::FormatSyntax Syntax =
                             SourceCallTypeHint::FormatSyntax::NSString);
 
+/// Complete a declared C call using a uniquely mapped immutable NUL-terminated
+/// printf format string and the caller-supplied fixed signature.
+std::optional<SourceCallTypeHint> bindCFormatArguments(const BinaryImage &Image,
+                                                       SourceCallTypeHint Call,
+                                                       unsigned FormatParameter,
+                                                       va_t FormatAddress);
+
 /// Bind a dynamic message using an immutable format object and a declaration
 /// agreed by the SDK and every matching runtime/protocol method.
 std::optional<SourceCallTypeHint>

@@ -182,7 +182,7 @@ struct SourceCallTypeHint {
   /// rebuild proven immortal literal storage; ownership and dynamic values
   /// remain unchanged.
   std::vector<std::pair<unsigned, unsigned>> SwiftStringInputs;
-  enum class FormatSyntax { NSString, Predicate };
+  enum class FormatSyntax { NSString, Predicate, Printf };
   /// Proven actual arguments of a declared format call. Signature contains
   /// every supplied value at its physical location; only FixedCount values
   /// belong in the emitted prototype. Revalidate the format object's identity

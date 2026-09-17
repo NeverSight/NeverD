@@ -3974,6 +3974,26 @@ TEST(ObjCSourceBindings, FormatArgumentsRequireCompleteConsistentSlots) {
   EXPECT_FALSE(objcFormatArgumentTypes(std::vector<uint16_t>{'%', 0x12d, 'd'}));
   EXPECT_FALSE(
       objcFormatArgumentTypes(std::vector<uint16_t>{'a', 0, '%', 'd'}));
+
+  auto ParsePrintf = [](llvm::StringRef Text) {
+    return objcFormatArgumentTypes(
+        std::vector<uint16_t>(Text.begin(), Text.end()),
+        SourceCallTypeHint::FormatSyntax::Printf);
+  };
+  auto Printf = ParsePrintf("%02x %d %zu %*.*f %s %p");
+  ASSERT_TRUE(Printf);
+  ASSERT_EQ(Printf->size(), 8U);
+  EXPECT_EQ((*Printf)[0]->Kind, NdTypeKind::Int);
+  EXPECT_EQ((*Printf)[0]->Size, 4U);
+  EXPECT_FALSE((*Printf)[0]->IsSigned);
+  EXPECT_TRUE((*Printf)[1]->IsSigned);
+  EXPECT_EQ((*Printf)[2]->Size, 8U);
+  EXPECT_FALSE((*Printf)[2]->IsSigned);
+  EXPECT_EQ((*Printf)[5]->Kind, NdTypeKind::Float);
+  EXPECT_EQ((*Printf)[6]->Pointee->Size, 1U);
+  EXPECT_EQ((*Printf)[7]->Pointee->Kind, NdTypeKind::Void);
+  for (const char *Text : {"%@", "%C", "%S", "%n", "%Lf", "%ls"})
+    EXPECT_FALSE(ParsePrintf(Text)) << Text;
 }
 
 namespace {
@@ -4278,5 +4298,134 @@ TEST(ObjCSourceBindings, DarwinFormattedCallsRequireExactImportAndFormat) {
         "/System/Library/Frameworks/Foundation.framework/Foundation";
     F.Image.DyldBindSlots[0x3000].WeakImport = true;
     EXPECT_FALSE(darwinFormattedSourceCallHint(F.Image, 0x3000, 0x2000));
+  }
+}
+
+namespace {
+BinaryImage cFormatImage(Arch Architecture, llvm::StringRef Format) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Architecture;
+  Image.Bits = Bitness::Bits64;
+  Segment Data;
+  Data.Name = "__TEXT";
+  Data.VA = Data.FileOff = 0x2000;
+  Data.Size = Data.FileSz = 0x100;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(Data.Size);
+  std::copy(Format.begin(), Format.end(), Data.Data.begin());
+  Data.Data[Format.size()] = 0;
+  Image.Segments.push_back(Data);
+  Section Strings;
+  Strings.Name = "__cstring";
+  Strings.SegmentName = Data.Name;
+  Strings.VA = Strings.FileOff = Data.VA;
+  Strings.Size = Strings.FileSz = Data.Size;
+  Strings.Flags = Data.Flags;
+  Strings.Type = llvm::MachO::S_CSTRING_LITERALS;
+  Image.Sections.push_back(Strings);
+  Segment Imports;
+  Imports.Name = "__DATA_CONST";
+  Imports.VA = Imports.FileOff = 0x3000;
+  Imports.Size = Imports.FileSz = 8;
+  Imports.Flags = SegmentFlags::Readable;
+  Imports.Data.resize(8);
+  Image.Segments.push_back(Imports);
+  Section Slots;
+  Slots.Name = "__got";
+  Slots.SegmentName = Imports.Name;
+  Slots.VA = Slots.FileOff = Imports.VA;
+  Slots.Size = Slots.FileSz = Imports.Size;
+  Slots.Flags = Imports.Flags;
+  Image.Sections.push_back(Slots);
+  Image.ImportPtrSlots[0x3000] = "_snprintf";
+  EXPECT_TRUE(Image.recordDyldBindSlot(
+      0x3000, "_snprintf", 0, "/usr/lib/system/libsystem_c.dylib", false));
+  return Image;
+}
+} // namespace
+
+TEST(ObjCSourceBindings,
+     DarwinPrintfCallsRequireExactImportAndImmutableCString) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = cFormatImage(Architecture, "%02x");
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x3000));
+    const auto Declaration = darwinRuntimeFormatDeclaration(Image, 0x3000);
+    ASSERT_TRUE(Declaration);
+    EXPECT_EQ(Declaration->Name, "snprintf");
+    EXPECT_EQ(Declaration->FormatParameter, 2U);
+    EXPECT_EQ(Declaration->Syntax, SourceCallTypeHint::FormatSyntax::Printf);
+    EXPECT_EQ(Declaration->Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_TRUE(Declaration->Signature.ReturnType->IsSigned);
+    ASSERT_EQ(Declaration->Signature.Parameters.size(), 3U);
+    EXPECT_EQ(Declaration->Signature.Parameters[0].Type->Pointee->Size, 1U);
+    EXPECT_EQ(Declaration->Signature.Parameters[1].Type->Size, 8U);
+    EXPECT_FALSE(Declaration->Signature.Parameters[1].Type->IsSigned);
+
+    const auto Hint = darwinFormattedSourceCallHint(Image, 0x3000, 0x2000);
+    ASSERT_TRUE(Hint);
+    ASSERT_TRUE(Hint->Format);
+    EXPECT_EQ(Hint->Format->FixedCount, 3U);
+    EXPECT_EQ(Hint->Format->FormatParameter, 2U);
+    EXPECT_EQ(Hint->Format->Syntax, SourceCallTypeHint::FormatSyntax::Printf);
+    ASSERT_EQ(Hint->Signature.Parameters.size(), 4U);
+    EXPECT_EQ(Hint->Signature.Parameters[3].Type->Size, 4U);
+    EXPECT_FALSE(Hint->Signature.Parameters[3].Type->IsSigned);
+    if (Architecture == Arch::AArch64) {
+      EXPECT_EQ(Hint->Signature.Parameters[3].Location.Kind,
+                SourceABICarrierKind::Stack);
+      EXPECT_EQ(Hint->Signature.Parameters[3].Location.EntryStackOffset, 0);
+    }
+
+    auto Call = HighExpr::makeCall(
+        "_snprintf", 0x3000,
+        {HighExpr::makeConst(0, 8), HighExpr::makeConst(3, 8),
+         HighExpr::makeConst(0x2000, 8), HighExpr::makeConst(42, 4)});
+    Call->Type = Hint->Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
+    HighFunc Function;
+    Function.ReturnType = Hint->Signature.ReturnType;
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Call;
+    Function.Body = {Return};
+    const auto Bound = bindObjCSourceReferences(Function, Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.CStringSections, std::set<va_t>{0x2000});
+    const auto BoundCall = Bound.Function.Body[0].RetVal;
+    ASSERT_TRUE(BoundCall);
+    ASSERT_EQ(BoundCall->Operands.size(), 4U);
+    ASSERT_TRUE(BoundCall->Operands[2]->SourceCallHint);
+    EXPECT_EQ(BoundCall->Operands[2]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeCStringStorage);
+    EXPECT_TRUE(objcSourceCallBound(*BoundCall, Image, {}));
+    auto Bad = std::make_shared<SourceCallTypeHint>(*Hint);
+    Bad->Format->Syntax = SourceCallTypeHint::FormatSyntax::NSString;
+    Call->SourceCallHint = Bad;
+    EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+
+    auto WrongProvider = Image;
+    WrongProvider.DyldBindSlots[0x3000].Module = "/tmp/libsystem_c.dylib";
+    EXPECT_FALSE(darwinRuntimeFormatDeclaration(WrongProvider, 0x3000));
+    auto Writable = Image;
+    Writable.Segments[0].Flags =
+        Writable.Segments[0].Flags | SegmentFlags::Writable;
+    Writable.Sections[0].Flags =
+        Writable.Sections[0].Flags | SegmentFlags::Writable;
+    EXPECT_FALSE(darwinFormattedSourceCallHint(Writable, 0x3000, 0x2000));
+    auto FixedUp = Image;
+    FixedUp.DataPtrRelocSlots.insert(0x2000);
+    EXPECT_FALSE(darwinFormattedSourceCallHint(FixedUp, 0x3000, 0x2000));
+    auto Unterminated = Image;
+    std::fill(Unterminated.Segments[0].Data.begin(),
+              Unterminated.Segments[0].Data.end(), 'x');
+    EXPECT_FALSE(darwinFormattedSourceCallHint(Unterminated, 0x3000, 0x2000));
+    auto Dangerous = cFormatImage(Architecture, "%n");
+    EXPECT_FALSE(darwinFormattedSourceCallHint(Dangerous, 0x3000, 0x2000));
+    auto WrongName = Image;
+    WrongName.ImportPtrSlots[0x3000] = "_sprintf";
+    WrongName.DyldBindSlots[0x3000].Name = "_sprintf";
+    EXPECT_FALSE(darwinRuntimeFormatDeclaration(WrongName, 0x3000));
   }
 }

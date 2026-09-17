@@ -1824,6 +1824,27 @@ inline bool objcSourceCallBound(
       return Argument->Operands.empty() &&
              Argument->SourceCallHint->TargetAddress == Format.FormatAddress &&
              objcSourceCallBound(*Argument, Image, Functions);
+    if (Format.Syntax == SourceCallTypeHint::FormatSyntax::Printf) {
+      auto CStringBase = [&](const ExprPtr &Value) -> std::optional<va_t> {
+        if (!Value || Value->Kind != ExprKind::Call || !Value->SourceCallHint ||
+            Value->SourceCallHint->CallKind !=
+                SourceCallTypeHint::Kind::RuntimeCStringStorage ||
+            !objcSourceCallBound(*Value, Image, Functions))
+          return std::nullopt;
+        return Value->SourceCallHint->TargetAddress;
+      };
+      if (const auto Base = CStringBase(Argument))
+        return *Base == Format.FormatAddress;
+      if (Argument->Kind == ExprKind::BinOp && Argument->Op == NdOp::INT_ADD &&
+          Argument->Operands.size() == 2) {
+        for (unsigned I = 0; I < 2; ++I) {
+          const auto Base = CStringBase(Argument->Operands[I]);
+          const auto Offset = constantAddress(*Argument->Operands[1 - I]);
+          if (Base && Offset && *Base <= InvalidVA - *Offset)
+            return *Base + *Offset == Format.FormatAddress;
+        }
+      }
+    }
     return constantAddress(*Argument) == Format.FormatAddress;
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
