@@ -2510,6 +2510,73 @@ TEST(ObjCSourceBindings, NamedWritableScalarsUseSharedRebuiltStorage) {
   EXPECT_TRUE(Rejected.LocalStorageExtents.empty());
 }
 
+TEST(ObjCSourceBindings, PointerAccessesKeepStorageAndValueProofsSeparate) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Shape = 0; Shape < 3; ++Shape)
+      for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+        if (Shape == 0 && Mutation == 7)
+          continue;
+        SCOPED_TRACE(Shape);
+        SCOPED_TRACE(Mutation);
+        Fixture F;
+        F.Image.Arch = Architecture;
+        F.Image.ObjCSourceReferences.clear();
+        F.Image.Segments[0].Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+        F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+        constexpr va_t Address = 0x1040;
+        F.Image.Symbols.push_back({"_savedObject", Address, 8, false});
+        auto Type = NdType::makePtr(NdType::makeVoid());
+        if (Mutation == 1)
+          Type->Size = 4;
+        if (Mutation == 2)
+          Type->Pointee.reset();
+        if (Mutation == 3)
+          F.Image.DataPtrRelocSlots.insert(Address);
+        if (Mutation == 4)
+          F.Image.Symbols.push_back({"_conflict", Address + 4, 4, false});
+        if (Mutation == 5)
+          llvm::support::endian::write64le(
+              F.Image.Segments[0].Data.data() + Address - 0x1000, 0x1080);
+        auto Pointer = HighExpr::makeConst(
+            Address, 8, ConstantAddressProvenance::DataAddress);
+        auto Value = HighExpr::makeConst(0, 8);
+        Value->Type = Type;
+        if (Mutation == 7) {
+          Value->ConstVal = 0x1080;
+          Value->ConstProvenance = ConstantAddressProvenance::DataAddress;
+        }
+        auto &Statement = F.Function.Body[0];
+        if (Shape == 0) {
+          Statement.RetVal = HighExpr::makeLoad(Pointer, Type);
+          if (Mutation == 6)
+            Statement.RetVal->MemoryOrdering = NdMemoryOrdering::Acquire;
+        } else if (Shape == 1) {
+          Statement = HighStmt{};
+          Statement.Kind = StmtKind::Store;
+          Statement.StoreAddr = Pointer;
+          Statement.StoreVal = Value;
+          if (Mutation == 6)
+            Statement.MemoryOrdering = NdMemoryOrdering::Release;
+        } else {
+          auto Store = std::make_shared<HighExpr>();
+          Store->Kind = ExprKind::Store;
+          Store->Type = Type;
+          Store->Operands = {Pointer, Value};
+          if (Mutation == 6)
+            Store->MemoryOrdering = NdMemoryOrdering::Release;
+          Statement.RetVal = Store;
+        }
+        const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+        EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0) << Bound.Limitation;
+        EXPECT_EQ(Bound.LocalStorageExtents.empty(),
+                  Mutation != 0 && Mutation != 7);
+        if (!Mutation || Mutation == 7)
+          EXPECT_EQ(Bound.LocalStorageExtents,
+                    (std::map<va_t, uint64_t>{{Address, 8}}));
+      }
+}
+
 TEST(ObjCSourceBindings,
      NamedWritableAggregateFieldsShareOneRebuiltStorage) {
   Fixture F;

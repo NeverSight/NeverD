@@ -355,6 +355,11 @@ localStorageAccessHint(const BinaryImage &Image, va_t Address,
 }
 
 inline bool localStorageAccessTypeSupported(const TypeRef &Type) {
+  // A pointer-typed load/store has the same complete machine-word extent as
+  // its integer carrier. Storage and initializer proofs still authenticate
+  // the cell; this does not bind the stored pointer to an image address.
+  if (Type && Type->Kind == NdTypeKind::Ptr)
+    return Type->Size == 8 && Type->Pointee;
   return Type &&
          (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Float) &&
          (Type->Kind != NdTypeKind::Float || Type->Size == 4 ||
@@ -760,6 +765,10 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
     const auto ProfileBase =
         Address ? ProfileStorage->sectionFor(*Address, Type->Size)
                 : std::nullopt;
+    // Profiling sections have a separate numeric-counter contract. A pointer
+    // access may use a proved named cell, not acquire that counter identity.
+    if (ProfileBase && Type->Kind == NdTypeKind::Ptr)
+      return false;
     auto Base = ProfileBase;
     auto Hint = Base ? profileStorageHint(Image.Arch, *Base) : std::nullopt;
     if (!Hint) {

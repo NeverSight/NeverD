@@ -579,7 +579,7 @@ void verifyRuntime(bool Chained,
                              : SwiftIntegerRuntime ? 2U
                              : SwiftTypeLookup     ? 1U
                              : DispatchOnce        ? 2U
-                             : MutableConstants    ? 5U
+                             : MutableConstants    ? 7U
                              : CStringStorage      ? 6U
                              : SwiftOnce           ? 1U
                              : NativeReturnPaths   ? 2U
@@ -689,8 +689,9 @@ void verifyRuntime(bool Chained,
   if (DispatchOnce)
     Remaining = {"shared", "initializationCount"};
   if (MutableConstants)
-    Remaining = {"value", "independent", "initial",
-                 "setValue:", "setIndependent:"};
+    Remaining = {"value",          "independent",     "initial",
+                 "setValue:",      "setIndependent:", "manualValue",
+                 "setManualValue:"};
   if (NativeReturnPaths)
     Remaining = {"adjusted:choose:output:", "wideLeaf:"};
   if (CStringStorage)
@@ -1115,7 +1116,7 @@ void verifyRuntime(bool Chained,
     EXPECT_GE(RepeatedBlockHelpers, 2U);
   EXPECT_EQ(StorageNames.size(), Profiled || ConstantStrings   ? 1U
                                  : (SwiftOnce || DispatchOnce) ? 3U
-                                 : MutableConstants            ? 2U
+                                 : MutableConstants            ? 3U
                                                                : 0U);
   if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
@@ -1272,6 +1273,7 @@ void verifyRuntime(bool Chained,
                               "once\nshared-object=pass\n"
       : MutableConstants    ? "mutable-initializers=1024\nshared-cells=pass\n"
                               "initial-identity=pass\nnull-stores=pass\n"
+                              "pointer-store-lifetimes=2048\n"
       : CStringStorage
           ? "cstring-checks=4096\ninterior-aliases=pass\nretained-label=pass\n"
       : SwiftOnce ? "swift-once-calls=8192\ninitializer-effects=once\nshared-"
