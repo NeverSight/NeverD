@@ -790,3 +790,8 @@ After re-lifting, void and scalar helpers may shed auxiliary parameters used
 only by eliminated private saves. An exhaustive HighIR use scan must preserve
 all observable inputs and reject unresolved bodies or incomplete scalar returns;
 the refined candidate then passes through lifting and source validation again.
+Entry-byte demand keeps result proof separate from effect proof. An undefined
+or partially defined return carrier may block a source result without hiding an
+independent context register consumed by a load, store or bound call. Narrow
+unsigned AArch64 extracts retain their actual input-byte boundary so unrelated
+upper register bytes do not enter either proof.

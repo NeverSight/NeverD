@@ -16,7 +16,9 @@ _nd_context_value:
   stp x19, x30, [sp, #-16]!
   mov x19, x0
   bl _nd_context_bias
-  mov x9, x0
+  add x19, x19, x0
+  bl _getpid
+  uxtw x9, w0
   ldr x8, [x20]
   add x0, x19, x8
   add x0, x0, x9
@@ -61,7 +63,9 @@ _nd_context_value:
   pushq %rbx
   movq %rdi, %rbx
   callq _nd_context_bias
-  movq %rax, %rcx
+  addq %rax, %rbx
+  callq _getpid
+  movl %eax, %ecx
   movq %rbx, %rax
   addq (%r13), %rax
   addq %rcx, %rax

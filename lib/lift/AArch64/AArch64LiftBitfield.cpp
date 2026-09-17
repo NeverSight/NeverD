@@ -72,6 +72,19 @@ bool liftBitfield(AArch64Lifter &L, AArch64Lifter::LiftState &S,
       NdVar Src = L.operandRead(S, ARM64.operands[1]);
       uint16_t Sz = Dst.Size;
       uint32_t Bits = Sz * 8;
+      auto LowUnsignedField = [&](uint64_t LSB, uint64_t Width) {
+        if (LSB || (Width != 8 && Width != 16 && Width != 32) ||
+            Width >= Bits || Width > Src.Size * 8 ||
+            (!Src.isReg() && !Src.isConst()))
+          return false;
+        // UXTW and low-byte UBFX forms do not observe the other source bits.
+        // Preserve that read boundary before SSA reconstructs wider registers,
+        // whose unobserved high bytes may be undefined after a narrow call.
+        auto Narrow = Src;
+        Narrow.Size = Width / 8;
+        S.emit(NdOp::INT_ZEXT, Dst, {Narrow});
+        return true;
+      };
 
       if (Insn->is_alias) {
         // Alias form: operands are (Rd, Rn, #lsb, #Width) for UBFIZ/UBFX
@@ -84,6 +97,8 @@ bool liftBitfield(AArch64Lifter &L, AArch64Lifter::LiftState &S,
           S.emit(NdOp::INT_AND, Masked, {Src, NdVar::cst(Mask, Sz)});
           S.emit(NdOp::INT_LEFT, Dst, {Masked, NdVar::cst(LSB, Sz)});
         } else {
+          if (LowUnsignedField(LSB, Width))
+            break;
           NdVar Shifted = S.makeTemp(Sz);
           S.emit(NdOp::INT_RIGHT, Shifted, {Src, NdVar::cst(LSB, Sz)});
           uint64_t Mask = (Width >= 64) ? ~0ULL : ((1ULL << Width) - 1);
@@ -94,6 +109,8 @@ bool liftBitfield(AArch64Lifter &L, AArch64Lifter::LiftState &S,
         uint64_t ImmS = static_cast<uint64_t>(ARM64.operands[3].imm);
         if (ImmS >= ImmR) {
           uint64_t Width = ImmS - ImmR + 1;
+          if (LowUnsignedField(ImmR, Width))
+            break;
           NdVar Shifted = S.makeTemp(Sz);
           S.emit(NdOp::INT_RIGHT, Shifted, {Src, NdVar::cst(ImmR, Sz)});
           uint64_t MaskVal = (Width >= 64) ? ~0ULL : ((1ULL << Width) - 1);

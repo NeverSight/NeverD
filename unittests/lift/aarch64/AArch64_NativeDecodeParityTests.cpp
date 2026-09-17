@@ -251,6 +251,45 @@ TEST_F(A64NativeParity, CondSelectAndMulDivSweep) {
 // and every declined case (Rn==31 BFM, 32-bit oversized field) is lifted both
 // ways.  This is the class where the lifter reads the alias mnemonic/id, so
 // only this lift-parity check (not the field probe) proves it.
+TEST_F(A64NativeParity, LowUnsignedFieldsReadOnlyTheirInputBytes) {
+  for (unsigned Width : {8u, 16u, 32u})
+    for (unsigned Rn : {1u, 31u})
+      for (bool Native : {false, true}) {
+        const uint32_t Word =
+            0xd3400000u | ((Width - 1) << 10) | (Rn << 5) | 2u;
+        SCOPED_TRACE(Word);
+        SCOPED_TRACE(Native);
+        std::vector<LowOp> Ops;
+        if (Native) {
+          cs_insn Insn{};
+          cs_detail Detail{};
+          ASSERT_TRUE(a64native::tryDecode(Word, 0x1000, Insn, Detail));
+          nativeLift(Word, 0x1000, Insn, Ops);
+        } else {
+          ASSERT_TRUE(O.lift(Word, 0x1000, Ops));
+        }
+        ASSERT_FALSE(Ops.empty());
+        for (const auto &Op : Ops)
+          for (unsigned I = 0; I < Op.NumInputs; ++I)
+            if (Op.Inputs[I].isReg() && Op.Inputs[I].Offset == a64reg::X1)
+              EXPECT_LE(Op.Inputs[I].Size, Width / 8);
+        for (unsigned Bit = 0; Bit < 64; ++Bit)
+          for (bool Invert : {false, true}) {
+            const uint64_t Input =
+                Invert ? ~(UINT64_C(1) << Bit) : UINT64_C(1) << Bit;
+            BinaryImage Image;
+            Image.Arch = Arch::AArch64;
+            NdOpEmulator Emu(Image);
+            Emu.setRegister(a64reg::X1, Input);
+            Emu.setRegister(a64reg::XZR, UINT64_MAX);
+            for (const auto &Op : Ops)
+              ASSERT_TRUE(Emu.step(Op));
+            EXPECT_EQ(Emu.getRegister(a64reg::X2),
+                      Rn == 31 ? 0 : Input & ((UINT64_C(1) << Width) - 1));
+          }
+      }
+}
+
 TEST_F(A64NativeParity, BitfieldSweep) {
   const va_t A = 0xC00000;
   for (uint32_t Sf = 0; Sf < 2; ++Sf) {

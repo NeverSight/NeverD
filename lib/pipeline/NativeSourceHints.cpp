@@ -63,7 +63,14 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return {};
-  const auto Observed = observedMedSourceEntryRegisters(Med, Hint);
+  auto Observed = observedMedSourceEntryRegisters(Med, Hint);
+  // An earlier, narrow call result can leave an unobserved high word in a
+  // return register. It cannot invalidate independent evidence that an entry
+  // context reaches an effect. This fallback only adds observed inputs; result
+  // proof and final source validation remain separate requirements.
+  if (!Observed)
+    Observed = observedMedSourceEntryRegisters(Med, Hint,
+                                               SourceEntryDemand::EffectsOnly);
   if (!Observed)
     return {};
   const auto &TRI = getTargetRegInfo(Hint.Architecture);
@@ -929,6 +936,8 @@ refineNativeSourceTypeHint(const HighFunc &Function,
     return std::nullopt;
   bool Valid = true, HasReturn = false;
   size_t Remaining = 65536;
+  std::vector<MedVar> RegisterUses;
+  std::map<HighSourceLocalIdentity, std::pair<uint64_t, uint16_t>> RegisterDefs;
   auto Observe = [&](const MedVar &Value) {
     if (Value.Kind == MedVar::Param) {
       if (Value.Id < 0 || size_t(Value.Id) >= Function.Params.size())
@@ -936,13 +945,7 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       else
         Unused.erase(Value.Id);
     } else if (Value.Kind == MedVar::Reg) {
-      std::erase_if(Unused, [&](size_t I) {
-        const auto &Location = Original.Parameters[I].Location;
-        return Value.RegOff <= Location.RegisterOffset
-                   ? Location.RegisterOffset - Value.RegOff < Value.Size
-                   : Value.RegOff - Location.RegisterOffset <
-                         Location.ValueBytes;
-      });
+      RegisterUses.push_back(Value);
     }
   };
   const auto Scan = [&](auto &&Self, const ExprPtr &Expression,
@@ -984,6 +987,17 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       return std::nullopt;
     const auto &Statement = *Pending.back();
     Pending.pop_back();
+    if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+        Statement.Dst->Kind == ExprKind::Var &&
+        Statement.Dst->Var.Kind == MedVar::Reg) {
+      const auto &V = Statement.Dst->Var;
+      const auto [It, Added] = RegisterDefs.emplace(
+          highSourceLocalIdentity(V), std::pair{V.RegOff, V.Size});
+      if (!Added)
+        It->second.second = It->second.first == V.RegOff
+                                ? std::min(It->second.second, V.Size)
+                                : 0;
+    }
     if (Statement.Kind == StmtKind::Return) {
       HasReturn = true;
       if (Original.ReturnType->Kind != NdTypeKind::Void &&
@@ -1016,6 +1030,31 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       Add(Body);
   }
   if (!Valid || !HasReturn || Unused.empty())
+    return std::nullopt;
+  std::optional<bool> DefinedLocals;
+  for (const auto &Value : RegisterUses) {
+    const auto Definition = RegisterDefs.find(highSourceLocalIdentity(Value));
+    if (Definition != RegisterDefs.end() &&
+        Definition->second.first == Value.RegOff &&
+        Definition->second.second >= Value.Size) {
+      if (!DefinedLocals) {
+        const auto Flow = analyzeHighSourceFlow(
+            Function, Original.ReturnType->Kind != NdTypeKind::Void);
+        DefinedLocals = Flow.Complete && Flow.Items.empty();
+      }
+      // Renaming retains the original physical register on a local. A value
+      // defined on every reaching path is not an incoming register parameter.
+      if (*DefinedLocals)
+        continue;
+    }
+    std::erase_if(Unused, [&](size_t I) {
+      const auto &Location = Original.Parameters[I].Location;
+      return Value.RegOff <= Location.RegisterOffset
+                 ? Location.RegisterOffset - Value.RegOff < Value.Size
+                 : Value.RegOff - Location.RegisterOffset < Location.ValueBytes;
+    });
+  }
+  if (Unused.empty())
     return std::nullopt;
   auto Refined = Original;
   for (auto I = Unused.rbegin(); I != Unused.rend(); ++I)

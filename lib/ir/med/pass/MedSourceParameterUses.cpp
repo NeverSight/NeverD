@@ -28,7 +28,8 @@ struct ValueUses {
 
 std::optional<std::map<uint64_t, uint64_t>>
 observedMedSourceEntryBytes(const MedFunc &Function,
-                            const SourceFunctionTypeHint &Hint) {
+                            const SourceFunctionTypeHint &Hint,
+                            SourceEntryDemand Demand) {
   std::string Error;
   if (Function.Blocks.empty() || !Hint.HasExplicitABI ||
       !validateSourceABI(Hint, Error))
@@ -137,12 +138,16 @@ observedMedSourceEntryBytes(const MedFunc &Function,
       Need(V, Required);
     }
   };
-  RootReturn(Hint.ReturnLocation);
-  for (const auto &Location : Hint.ReturnComponents)
-    RootReturn(Location);
+  if (Demand == SourceEntryDemand::EffectsAndReturns) {
+    RootReturn(Hint.ReturnLocation);
+    for (const auto &Location : Hint.ReturnComponents)
+      RootReturn(Location);
+  }
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode == NdOp::RETURN) {
+        if (Demand == SourceEntryDemand::EffectsOnly)
+          continue;
         for (unsigned I = 0; I < Op.NumInputs; ++I)
           if (Op.Inputs[I].Kind != MedVar::Reg)
             Need(Op.Inputs[I], Mask(Op.Inputs[I].Size));
@@ -243,8 +248,9 @@ observedMedSourceEntryBytes(const MedFunc &Function,
 
 std::optional<std::set<uint64_t>>
 observedMedSourceEntryRegisters(const MedFunc &Function,
-                                const SourceFunctionTypeHint &Hint) {
-  const auto Bytes = observedMedSourceEntryBytes(Function, Hint);
+                                const SourceFunctionTypeHint &Hint,
+                                SourceEntryDemand Demand) {
+  const auto Bytes = observedMedSourceEntryBytes(Function, Hint, Demand);
   if (!Bytes)
     return std::nullopt;
   std::set<uint64_t> Registers;

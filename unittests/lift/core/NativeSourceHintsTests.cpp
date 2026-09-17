@@ -1260,6 +1260,52 @@ TEST(NativeSourceHints, ScalarInputRefinementPreservesReturnEvidence) {
     }
 }
 
+TEST(NativeSourceHints, DefinedLocalsDoNotRetainUnusedPhysicalInputRegisters) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto [Function, Audit] = nativeVoidInputCandidate(Architecture);
+      auto &Hint = *Function.SourceTypeHint;
+      Hint.ReturnType = Function.ReturnType = NdType::makeInt(8);
+      Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                             getTargetRegInfo(Architecture).IntReturnReg, 0, 8};
+      MedVar Local;
+      Local.Kind = MedVar::Reg;
+      Local.Id = 50001;
+      Local.RegOff = Hint.Parameters[1].Location.RegisterOffset;
+      Local.Size = 8;
+      Local.TheArch = Architecture;
+      Function.Body.front().RetVal =
+          HighExpr::makeVar(Local, NdType::makeInt(8));
+      HighStmt Assign;
+      Assign.Kind = StmtKind::Assign;
+      auto Dst = Local;
+      if (Mutation == 4)
+        Dst.Size = 4;
+      Assign.Dst = HighExpr::makeVar(Dst, NdType::makeInt(Dst.Size));
+      Assign.Val = HighExpr::makeConst(19, Dst.Size);
+      if (Mutation == 2 || Mutation == 3) {
+        HighStmt Branch;
+        Branch.Kind = StmtKind::If;
+        auto Input = Local;
+        Input.Kind = MedVar::Param;
+        Input.Id = 0;
+        Input.RegOff = Hint.Parameters[0].Location.RegisterOffset;
+        Branch.Cond = HighExpr::makeVar(Input, NdType::makeInt(8));
+        Branch.Body = {Assign};
+        if (Mutation == 3)
+          Branch.ElseBody = {Assign};
+        Function.Body.insert(Function.Body.begin(), Branch);
+      } else if (Mutation != 1) {
+        Function.Body.insert(Function.Body.begin(), Assign);
+      }
+      const auto Refined = refineNativeSourceTypeHint(Function, Audit);
+      EXPECT_EQ(bool(Refined), Mutation == 0);
+      if (Refined)
+        EXPECT_EQ(Refined->Parameters.size(), 1U);
+    }
+}
+
 TEST(NativeSourceHints, SourceInputRefinementRetainsUsesAndIncompleteBodies) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 23; ++Mutation) {

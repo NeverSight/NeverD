@@ -1239,6 +1239,55 @@ TEST(SourceABI, EntryDemandsTraceOnlyProvenCallPreservedPrefixes) {
   }
 }
 
+TEST(SourceABI, EffectEntryDemandsDoNotCertifyUnprovenReturnBytes) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      SourceFunctionTypeHint Hint;
+      Hint.ReturnType = NdType::makeInt(8);
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error));
+      MedVar Context;
+      Context.Kind = MedVar::Reg;
+      Context.Id = 10;
+      Context.RegOff =
+          Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13;
+      Context.Size = 8;
+      Context.TheArch = Architecture;
+      auto Unknown = Context;
+      Unknown.Id = 11;
+      Unknown.RegOff = TRI.IntReturnReg;
+      Unknown.SSAVer = 1;
+      MedOp Load;
+      Load.Opcode = NdOp::LOAD;
+      Load.Output = Context;
+      Load.Output.Kind = MedVar::Temp;
+      Load.Output.Id = 12;
+      Load.addInput(Mutation == 1 ? Unknown : Context);
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      MedFunc Function;
+      Function.Blocks.resize(1);
+      Function.Blocks[0].Ops = {Load, Return};
+      Function.CallClobbers.push_back({Unknown, 1});
+      if (Mutation == 2)
+        Function.CallClobbers.push_back({Context, 1});
+      if (Mutation == 3)
+        Function.Blocks[0].Ops.pop_back();
+      EXPECT_FALSE(observedMedSourceEntryBytes(Function, Hint));
+      const auto Effects = observedMedSourceEntryBytes(
+          Function, Hint, SourceEntryDemand::EffectsOnly);
+      if (Mutation) {
+        EXPECT_FALSE(Effects);
+      } else {
+        ASSERT_TRUE(Effects);
+        EXPECT_EQ(*Effects,
+                  (std::map<uint64_t, uint64_t>{{Context.RegOff, 0xff}}));
+      }
+    }
+}
+
 TEST(SourceABI, IntegerPairCallsPreserveBothWordsThroughSSAAndReturns) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     SCOPED_TRACE(static_cast<int>(Architecture));
