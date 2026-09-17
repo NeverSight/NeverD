@@ -239,7 +239,7 @@ std::string typeToCLLVM(llvm::Type *Ty) {
       return "uint32_t";
     if (Bits <= 64)
       return "uint64_t";
-    if (Bits == 128)
+    if (Bits <= 128)
       return "__uint128_t";
     return "uint64_t";
   }

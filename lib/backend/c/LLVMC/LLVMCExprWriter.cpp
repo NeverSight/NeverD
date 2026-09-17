@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 
 namespace neverd {
 
@@ -71,6 +72,16 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
   if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(C)) {
     if (CI->getType()->isIntegerTy(1))
       return CI->isZero() ? "0" : "1";
+    if (CI->getBitWidth() > 64) {
+      if (CI->getBitWidth() > 128)
+        throw std::runtime_error(
+            "LLVM C constant exceeds supported 128-bit carrier");
+      auto Value = CI->getValue().zextOrTrunc(128);
+      auto Low = Value.extractBitsAsZExtValue(64, 0);
+      auto High = Value.extractBitsAsZExtValue(64, 64);
+      return "(((__uint128_t)0x" + llvm::utohexstr(High) +
+             "ULL << 64) | (__uint128_t)0x" + llvm::utohexstr(Low) + "ULL)";
+    }
     if (CI->isNegative() && CI->getBitWidth() <= 64)
       return std::to_string(CI->getSExtValue());
     return std::to_string(CI->getZExtValue());
