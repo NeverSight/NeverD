@@ -201,6 +201,12 @@ struct RegionCandidate {
   ExceptionAddressRange Range;
   std::vector<HighEHClause> Clauses;
   unsigned NativeRegionCount = 0;
+  /// Native C++ try-map states.  Nested tries can collapse to the same IP
+  /// interval when inner-only states appear in the function body; those must
+  /// stay separate HighIR tries, not sibling `catch` clauses.
+  int32_t TryLow = 0;
+  int32_t TryHigh = 0;
+  bool HasTryStates = false;
 };
 
 std::vector<ExceptionAddressRange>
@@ -375,6 +381,9 @@ void addCxxCandidates(const ExceptionFunction &EH, const BinaryImage *Img,
     Candidate.Kind = StmtKind::CxxTry;
     Candidate.Range = Ranges.front();
     Candidate.NativeRegionCount = 1;
+    Candidate.TryLow = Try.TryLow;
+    Candidate.TryHigh = Try.TryHigh;
+    Candidate.HasTryStates = true;
     for (const CxxCatchHandler &Catch : Try.Handlers) {
       HighEHClause Clause;
       Clause.Kind = HighEHClauseKind::CxxCatch;
@@ -714,26 +723,39 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
   // explicit EHRange, so nesting never relies on incidental statement order.
   std::stable_sort(Candidates.begin(), Candidates.end(),
                    [](const RegionCandidate &A, const RegionCandidate &B) {
-                     return std::make_tuple(A.Range.size(), A.Range.Begin,
-                                            A.Range.End, A.Kind) <
-                            std::make_tuple(B.Range.size(), B.Range.Begin,
-                                            B.Range.End, B.Kind);
+                     const auto Span = [](const RegionCandidate &C) {
+                       return C.HasTryStates ? (C.TryHigh - C.TryLow) : 0;
+                     };
+                     return std::make_tuple(A.Range.size(), Span(A),
+                                            A.Range.Begin, A.Range.End,
+                                            A.Kind) <
+                            std::make_tuple(B.Range.size(), Span(B),
+                                            B.Range.Begin, B.Range.End,
+                                            B.Kind);
                    });
 
   // Several native try-map records may share one code interval (for example,
   // distinct ordered catch clauses).  Keep one HighIR try node and retain the
-  // native-record count for completeness accounting.
+  // native-record count for completeness accounting.  Nested C++ tries that
+  // collapse to the same IPs keep separate nodes so inner `try` stays nested.
   std::vector<RegionCandidate> Merged;
   for (RegionCandidate &Candidate : Candidates) {
     if (!Merged.empty() && Merged.back().Kind == Candidate.Kind &&
         Merged.back().Range.Begin == Candidate.Range.Begin &&
         Merged.back().Range.End == Candidate.Range.End) {
-      Merged.back().Clauses.insert(
-          Merged.back().Clauses.end(),
-          std::make_move_iterator(Candidate.Clauses.begin()),
-          std::make_move_iterator(Candidate.Clauses.end()));
-      Merged.back().NativeRegionCount += Candidate.NativeRegionCount;
-      continue;
+      const bool DistinctCxxTries =
+          Candidate.Kind == StmtKind::CxxTry &&
+          (Merged.back().HasTryStates != Candidate.HasTryStates ||
+           Merged.back().TryLow != Candidate.TryLow ||
+           Merged.back().TryHigh != Candidate.TryHigh);
+      if (!DistinctCxxTries) {
+        Merged.back().Clauses.insert(
+            Merged.back().Clauses.end(),
+            std::make_move_iterator(Candidate.Clauses.begin()),
+            std::make_move_iterator(Candidate.Clauses.end()));
+        Merged.back().NativeRegionCount += Candidate.NativeRegionCount;
+        continue;
+      }
     }
     Merged.push_back(std::move(Candidate));
   }

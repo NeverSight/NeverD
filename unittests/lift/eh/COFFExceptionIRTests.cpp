@@ -964,6 +964,74 @@ TEST(COFFExceptionIR, StructuresReducibleSEHAndCxxRegionsInHighIR) {
   EXPECT_EQ(Cleanup.UnwindObjectOffset, -0x20);
 }
 
+TEST(COFFExceptionIR, NestsCxxTriesThatShareIpInterval) {
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "nested_cxx";
+  Func.ReturnType = NdType::makeVoid();
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = Func.Entry;
+  Protected.EndAddr = Func.Entry + 0x20;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Func.Entry + 8;
+  Call.addInput(MedVar::makeConst(Func.Entry + 0x100, 8));
+  Protected.Ops.push_back(Call);
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = Func.Entry + 0x10;
+  Protected.Ops.push_back(Ret);
+  Func.Blocks.push_back(std::move(Protected));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {Func.Entry, Func.Entry + 0x20};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler4;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 4;
+  Cxx.UnwindMap = {{-1, 0}, {0, 0}, {0, 0}, {-1, 0}};
+  Cxx.IPMap = {{Func.Entry, -1},
+               {Func.Entry + 4, 1},
+               {Func.Entry + 0x18, -1}};
+  CxxTryBlock Inner;
+  Inner.TryLow = 1;
+  Inner.TryHigh = 1;
+  Inner.CatchHigh = 2;
+  CxxCatchHandler InnerCatch;
+  InnerCatch.HandlerVA = Func.Entry + 0x40;
+  InnerCatch.Adjectives = 0x9;
+  Inner.Handlers.push_back(InnerCatch);
+  CxxTryBlock Outer;
+  Outer.TryLow = 0;
+  Outer.TryHigh = 2;
+  Outer.CatchHigh = 3;
+  CxxCatchHandler OuterCatch;
+  OuterCatch.HandlerVA = Func.Entry + 0x50;
+  OuterCatch.Adjectives = 0x9;
+  Outer.Handlers.push_back(OuterCatch);
+  Cxx.TryBlocks.push_back(std::move(Inner));
+  Cxx.TryBlocks.push_back(std::move(Outer));
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  ASSERT_GE(High.StructuredExceptionRegions, 2u);
+  ASSERT_FALSE(High.Body.empty());
+  const HighStmt *OuterTry = nullptr;
+  for (const HighStmt &S : High.Body)
+    if (S.Kind == StmtKind::CxxTry)
+      OuterTry = &S;
+  ASSERT_NE(OuterTry, nullptr);
+  bool Nested = false;
+  for (const HighStmt &S : OuterTry->Body)
+    if (S.Kind == StmtKind::CxxTry)
+      Nested = true;
+  EXPECT_TRUE(Nested) << "inner try must stay nested, not a sibling catch";
+  EXPECT_EQ(OuterTry->EHClauses.size(), 1u);
+}
+
 TEST(COFFExceptionIR, StructuresSingleBlockSEHHandlerBody) {
   constexpr va_t FunctionVA = 0x140001000;
   constexpr va_t HandlerVA = FunctionVA + 0x20;

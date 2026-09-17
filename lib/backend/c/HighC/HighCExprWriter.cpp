@@ -780,6 +780,18 @@ bool HighCWriter::stmtHiddenFromC(const HighStmt &Stmt) const {
     // must print when the value is used (NtCurrentTeb / __readgsqword).
     return HideEHRuntimeMemory && Space == NdMemoryAddressSpace::X86FS;
   };
+  auto IsForeignFuncletParam = [&](const HighExpr &E) {
+    if (!InEHClauseBody || !CurrentFunc || !isParamCopy(E))
+      return false;
+    const HighExpr *Src = unwrapIntegerView(&E);
+    if (!Src)
+      return false;
+    const std::string Name = varName(Src->Var);
+    for (const auto &Param : CurrentFunc->Params)
+      if (Param.Name == Name)
+        return false;
+    return true;
+  };
 
   if (Stmt.Kind == StmtKind::If)
     return !Stmt.Cond || stmtsEffectivelyEmpty(Stmt.Body);
@@ -789,6 +801,8 @@ bool HighCWriter::stmtHiddenFromC(const HighStmt &Stmt) const {
 
   if (Stmt.Kind == StmtKind::Assign) {
     if (!Stmt.Dst || !Stmt.Val)
+      return true;
+    if (IsForeignFuncletParam(*Stmt.Val))
       return true;
     if (Stmt.Val->Kind == ExprKind::Load &&
         HiddenEH(Stmt.Val->MemoryAddressSpace))
@@ -819,6 +833,8 @@ bool HighCWriter::stmtHiddenFromC(const HighStmt &Stmt) const {
 
   if (Stmt.Kind == StmtKind::Store) {
     if (!Stmt.StoreAddr || !Stmt.StoreVal)
+      return true;
+    if (IsForeignFuncletParam(*Stmt.StoreVal))
       return true;
     if (HiddenEH(Stmt.MemoryAddressSpace))
       return true;
