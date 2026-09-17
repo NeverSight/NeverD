@@ -13,6 +13,18 @@ struct BinaryImage;
 std::optional<SourceCallTypeHint>
 darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot);
 
+struct DarwinBlockParameterContract {
+  enum class Lifetime { NonEscaping, Copied };
+  SourceFunctionTypeHint Signature;
+  Lifetime Storage;
+};
+
+/// Exact imported block consumer with a compiler-derived callback ABI and
+/// either a noescape attribute or an audited runtime copying contract.
+std::optional<DarwinBlockParameterContract>
+darwinBlockParameterContract(const BinaryImage &Image, va_t ImportSlot,
+                             unsigned Parameter);
+
 /// A compiler-declared block parameter whose references and copies cannot
 /// survive the imported call. Includes the complete fixed callback ABI; this
 /// is not a read-only memory contract and never describes function pointers.

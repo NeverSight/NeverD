@@ -873,63 +873,74 @@ TEST(ObjCBlockSources, ImageWritesKeepPrivateBlockAddressesConfined) {
 
 TEST(ObjCBlockSources, DeclaredConsumerRequiresExactImportAndCallbackABI) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})
-    for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
-      SCOPED_TRACE(Mutation);
-      SourceFixture F(true, Architecture);
-      constexpr va_t Slot = 0x2800;
-      F.Image.ImportPtrSlots[Slot] = "_dispatch_sync";
-      F.Image.DyldBindSlots[Slot] = {
-          "_dispatch_sync", 0, "/usr/lib/system/libdispatch.dylib", false};
-      auto Binding = darwinRuntimeSourceCallHint(F.Image, Slot);
-      auto Callback = darwinNonEscapingBlockSignature(F.Image, Slot, 1);
-      ASSERT_TRUE(Binding);
-      ASSERT_TRUE(Callback);
-      EXPECT_FALSE(darwinNonEscapingBlockSignature(F.Image, Slot, 0));
-      EXPECT_FALSE(darwinNonEscapingBlockSignature(F.Image, Slot, 2));
-      F.string(F.Signature, "v8@?0");
-      auto &Invoke = F.Result.HighFuncs[0];
-      Invoke.SourceTypeHint = Callback;
-      Invoke.ReturnType = NdType::makeVoid();
-      Invoke.Params.resize(1);
-      Invoke.Body = {ret(nullptr)};
-      auto Call = HighExpr::makeCall(
-          "dispatch_sync", 0,
-          {parameter(0, F.caller().Params[0].Type), frame(F.Image, -48)});
-      Call->Type = NdType::makeVoid();
-      if (Mutation == 1)
-        F.Image.DyldBindSlots[Slot].Module = "/usr/lib/unrelated.dylib";
-      if (Mutation == 2)
-        F.Image.DyldBindSlots[Slot].WeakImport = true;
-      if (Mutation == 3)
-        F.string(F.Signature, "i12@?0i8");
-      if (Mutation == 4)
-        std::swap(Call->Operands[0], Call->Operands[1]);
-      if (Mutation == 5)
-        Binding->TargetName = "dispatch_async";
-      if (Mutation == 6)
-        Binding->Signature.ReturnType = NdType::makeInt(4);
-      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Binding);
-      F.caller().Body.back() = ret(Call);
-      if (Mutation >= 7) {
-        auto Original = F.caller().Body;
-        auto &First = F.caller().Body.back();
-        First.Kind = StmtKind::Call;
-        First.CallExpr = First.RetVal;
-        First.RetVal.reset();
-        if (Mutation == 8)
-          F.caller().Body.insert(F.caller().Body.end(), Original.begin(),
-                                 Original.end());
-        else
-          F.caller().Body.push_back(ret(Call));
+    for (const auto *Name :
+         {"dispatch_sync", "dispatch_async", "dispatch_barrier_async"})
+      for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        SourceFixture F(true, Architecture);
+        constexpr va_t Slot = 0x2800;
+        const std::string Import = std::string("_") + Name;
+        F.Image.ImportPtrSlots[Slot] = Import;
+        F.Image.DyldBindSlots[Slot] = {
+            Import, 0, "/usr/lib/system/libdispatch.dylib", false};
+        auto Binding = darwinRuntimeSourceCallHint(F.Image, Slot);
+        auto Contract = darwinBlockParameterContract(F.Image, Slot, 1);
+        ASSERT_TRUE(Contract);
+        auto Callback = std::optional(Contract->Signature);
+        const bool Copies = std::string(Name) != "dispatch_sync";
+        EXPECT_EQ(Contract->Storage ==
+                      DarwinBlockParameterContract::Lifetime::Copied,
+                  Copies);
+        EXPECT_EQ(bool(darwinNonEscapingBlockSignature(F.Image, Slot, 1)),
+                  !Copies);
+        ASSERT_TRUE(Binding);
+        ASSERT_TRUE(Callback);
+        EXPECT_FALSE(darwinBlockParameterContract(F.Image, Slot, 0));
+        EXPECT_FALSE(darwinBlockParameterContract(F.Image, Slot, 2));
+        F.string(F.Signature, "v8@?0");
+        auto &Invoke = F.Result.HighFuncs[0];
+        Invoke.SourceTypeHint = Callback;
+        Invoke.ReturnType = NdType::makeVoid();
+        Invoke.Params.resize(1);
+        Invoke.Body = {ret(nullptr)};
+        auto Call = HighExpr::makeCall(
+            Name, 0,
+            {parameter(0, F.caller().Params[0].Type), frame(F.Image, -48)});
+        Call->Type = NdType::makeVoid();
+        if (Mutation == 1)
+          F.Image.DyldBindSlots[Slot].Module = "/usr/lib/unrelated.dylib";
+        if (Mutation == 2)
+          F.Image.DyldBindSlots[Slot].WeakImport = true;
+        if (Mutation == 3)
+          F.string(F.Signature, "i12@?0i8");
+        if (Mutation == 4)
+          std::swap(Call->Operands[0], Call->Operands[1]);
+        if (Mutation == 5)
+          Binding->TargetName = "dispatch_apply";
+        if (Mutation == 6)
+          Binding->Signature.ReturnType = NdType::makeInt(4);
+        Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Binding);
+        F.caller().Body.back() = ret(Call);
+        if (Mutation >= 7) {
+          auto Original = F.caller().Body;
+          auto &First = F.caller().Body.back();
+          First.Kind = StmtKind::Call;
+          First.CallExpr = First.RetVal;
+          First.RetVal.reset();
+          if (Mutation == 8)
+            F.caller().Body.insert(F.caller().Body.end(), Original.begin(),
+                                   Original.end());
+          else
+            F.caller().Body.push_back(ret(Call));
+        }
+        F.caller().ReturnType = NdType::makeVoid();
+        F.caller().SourceTypeHint->ReturnType = NdType::makeVoid();
+        const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+        const auto Bound = bindObjCBlockSourceReferences(F.caller(), F.Image,
+                                                         Plan, F.functions());
+        EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0 || Mutation == 8)
+            << Bound.Limitation;
       }
-      F.caller().ReturnType = NdType::makeVoid();
-      F.caller().SourceTypeHint->ReturnType = NdType::makeVoid();
-      const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
-      const auto Bound = bindObjCBlockSourceReferences(F.caller(), F.Image,
-                                                       Plan, F.functions());
-      EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0 || Mutation == 8)
-          << Bound.Limitation;
-    }
 }
 
 TEST(ObjCBlockSources, ConstructionRejectsLateUnsafeEdgesTransactionally) {

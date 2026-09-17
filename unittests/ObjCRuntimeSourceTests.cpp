@@ -607,7 +607,7 @@ void verifyRuntime(bool Chained,
                              : IndirectFields      ? 5U
                              : SystemData          ? 9U
                              : Graphics            ? 6U
-                             : BlockLifetimes      ? (ManualBlocks ? 7U : 6U)
+                             : BlockLifetimes      ? (ManualBlocks ? 9U : 8U)
                              : Foundation          ? 13U
                              : Protocols           ? 6U
                              : DiagnosticReports   ? 5U
@@ -894,6 +894,8 @@ void verifyRuntime(bool Chained,
                  "duplicateBlock:",
                  "releaseBlock:",
                  "copiedCountForArray:offset:",
+                 "asynchronouslyAppend:toArray:queue:",
+                 "barrierAppend:toArray:queue:",
                  "synchronouslyAppend:toArray:queue:"};
   if (ManualBlocks)
     Remaining.insert("holderForBlock:");
@@ -1331,7 +1333,7 @@ void verifyRuntime(bool Chained,
       : BlockLifetimes
           ? "escaping-blocks=1024\ncopy-dispose=pass\nmutated-captures=pass\n"
             "conditional-invokes=1024\nconditional-construction=pass\n"
-            "synchronous-mutations=1024\n"
+            "synchronous-mutations=1024\nasync-copied-captures=2\n"
       : Foundation ? "variadic-formats=2276\nframework-iterations=2048\narray-"
                      "dictionaries=17\nnil-"
                      "dispatch=pass\n"

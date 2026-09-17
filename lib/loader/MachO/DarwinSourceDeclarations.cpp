@@ -119,9 +119,9 @@ darwinDeclaredSourceGlobalAddressHint(const BinaryImage &Image,
   return Result;
 }
 
-std::optional<SourceFunctionTypeHint>
-darwinNonEscapingBlockSignature(const BinaryImage &Image, va_t ImportSlot,
-                                unsigned Parameter) {
+std::optional<DarwinBlockParameterContract>
+darwinBlockParameterContract(const BinaryImage &Image, va_t ImportSlot,
+                             unsigned Parameter) {
   const auto Call = darwinDeclaredSourceCallHint(Image, ImportSlot);
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
   if (!Call || Bind == Image.DyldBindSlots.end() ||
@@ -136,10 +136,11 @@ darwinNonEscapingBlockSignature(const BinaryImage &Image, va_t ImportSlot,
     const char *X64Callback;
     const char *AArch64Modules;
     const char *X64Modules;
+    DarwinBlockParameterContract::Lifetime Storage;
   } Declarations[] = {
 #include "DarwinBlockDeclarations.inc"
   };
-  std::optional<SourceFunctionTypeHint> Result;
+  std::optional<DarwinBlockParameterContract> Result;
   for (const auto &D : Declarations) {
     if (D.Name != Call->TargetName || D.Parameter != Parameter)
       continue;
@@ -165,9 +166,19 @@ darwinNonEscapingBlockSignature(const BinaryImage &Image, va_t ImportSlot,
         return std::nullopt;
     if (Parent->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr)
       return std::nullopt;
-    Result = std::move(Callback);
+    Result = DarwinBlockParameterContract{std::move(*Callback), D.Storage};
   }
   return Result;
+}
+
+std::optional<SourceFunctionTypeHint>
+darwinNonEscapingBlockSignature(const BinaryImage &Image, va_t ImportSlot,
+                                unsigned Parameter) {
+  auto Contract = darwinBlockParameterContract(Image, ImportSlot, Parameter);
+  if (!Contract ||
+      Contract->Storage != DarwinBlockParameterContract::Lifetime::NonEscaping)
+    return std::nullopt;
+  return std::move(Contract->Signature);
 }
 
 std::optional<DarwinFormatDeclaration>

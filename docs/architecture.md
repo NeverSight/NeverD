@@ -92,6 +92,17 @@ neither an inferred signature nor its refinement certifies a publishable body.
 
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
+Darwin block consumers have one loader-owned callback and lifetime contract.
+The generated catalog distinguishes compiler-declared `noescape` parameters
+from audited runtime copying consumers. The latter currently includes only
+`dispatch_async` and `dispatch_barrier_async`, whose SDK contract specifies
+copying and releasing the block. Both require exact import/provider identity,
+four-profile compiler agreement, and a matching complete callback ABI.
+Source publication still proves the stack header, initialized captures,
+copy/dispose helpers, and invoke dependency. Either kind of consumer invalidates
+the caller's construction facts after use; a copied consumer is never reported
+as nonescaping. Unannotated block parameters confer no lifetime permission.
+
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an
 authenticated `objc_retainBlock` or `_Block_copy` supplies a copied-block

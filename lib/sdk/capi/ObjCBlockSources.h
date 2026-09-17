@@ -795,15 +795,14 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
              (Binding->CallKind == CallKind::DarwinRuntimeCall &&
               Binding->TargetName == "_Block_copy")) &&
             objcSourceCallBound(E, Image, Functions);
-        const auto NonEscaping =
+        const auto Consumer =
             Binding && Binding->CallKind == CallKind::DarwinRuntimeCall
-                ? darwinNonEscapingBlockSignature(Image, Binding->TargetAddress,
-                                                  I)
+                ? darwinBlockParameterContract(Image, Binding->TargetAddress, I)
                 : std::nullopt;
         const bool DeclaredConsumer =
-            NonEscaping && Block.Descriptor.InvokeTypeHint &&
+            Consumer && Block.Descriptor.InvokeTypeHint &&
             objc_projection_detail::sameHint(*Block.Descriptor.InvokeTypeHint,
-                                             *NonEscaping) &&
+                                             Consumer->Signature) &&
             objcSourceCallBound(E, Image, Functions);
         if (!Direct && !Runtime && !DeclaredConsumer &&
             (!Binding || Binding->CallKind != CallKind::Native ||
@@ -811,7 +810,7 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
              !noEscape(Source, Functions, Binding->TargetAddress, I, nullptr,
                        Active, Error)))
           throw Invalid(
-              "stack block flows to an unproven synchronous consumer: " +
+              "stack block flows to a consumer without a lifetime proof: " +
               Error);
         if (DeclaredConsumer)
           InvalidatedBlocks.emplace(Block.FrameOffset,
