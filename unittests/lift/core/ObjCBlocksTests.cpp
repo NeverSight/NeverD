@@ -269,6 +269,55 @@ TEST(ObjCBlocks, ExtendedOwnershipBytecodeIsBoundedAndReportsUnknownOpcodes) {
             ObjCBlockCaptureRange::Kind::Unknown);
 }
 
+TEST(ObjCBlocks, RelocatedLowLayoutAddressIsNotAnInlineCount) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (bool Chained : {false, true}) {
+      BlockFixture F;
+      F.Image.Arch = Architecture;
+      Segment Low;
+      Low.VA = 0x800;
+      Low.Size = Low.FileSz = 8;
+      Low.FileOff = 0x4000;
+      Low.Flags = SegmentFlags::Readable;
+      Low.Data.resize(8);
+      F.Image.Segments.push_back(Low);
+      Section S;
+      S.VA = Low.VA;
+      S.Size = S.FileSz = Low.Size;
+      S.FileOff = Low.FileOff;
+      S.Flags = Low.Flags;
+      F.Image.Sections.push_back(S);
+      F.put64(BlockFixture::Descriptor + 8, 40);
+      F.put64(BlockFixture::Descriptor + 24, Low.VA);
+      F.Image.MachOHasChainedFixups = Chained;
+      F.Image.MachOResolvedChainedPointerSlots.insert(BlockFixture::Descriptor +
+                                                      16);
+      if (Chained)
+        F.Image.MachOResolvedChainedPointerSlots.insert(
+            BlockFixture::Descriptor + 24);
+      else
+        F.Image.DataPtrRelocSlots.insert(BlockFixture::Descriptor + 24);
+      std::string Error;
+      auto D = readObjCBlockDescriptor(F.Image, BlockFixture::Descriptor,
+                                       0xc0000000, Error);
+      ASSERT_TRUE(D) << Error;
+      EXPECT_TRUE(D->Limitations.empty());
+      EXPECT_EQ(D->LayoutBytes, std::vector<uint8_t>{0});
+      ASSERT_EQ(D->Captures.size(), 1U);
+      EXPECT_EQ(D->Captures[0].StorageKind,
+                ObjCBlockCaptureRange::Kind::NonObjectBytes);
+      F.Image.DataPtrRelocSlots.clear();
+      F.Image.MachOResolvedChainedPointerSlots.erase(BlockFixture::Descriptor +
+                                                     24);
+      D = readObjCBlockDescriptor(F.Image, BlockFixture::Descriptor, 0xc0000000,
+                                  Error);
+      ASSERT_TRUE(D);
+      EXPECT_FALSE(D->Limitations.empty());
+      EXPECT_TRUE(D->LayoutBytes.empty());
+    }
+  }
+}
+
 TEST(ObjCBlocks, InlineLayoutCountsAreScalarsEvenInChainedImages) {
   BlockFixture Fixture;
   Fixture.Image.MachOHasChainedFixups = true;

@@ -47,8 +47,8 @@ bool stackIsa(llvm::StringRef Name) {
   return Name == "__NSConcreteStackBlock" || Name == "_NSConcreteStackBlock";
 }
 
-void captureLayout(const objc::RuntimeData &Data, ObjCBlockDescriptor &Result,
-                   va_t LayoutSlot) {
+void captureLayout(const BinaryImage &Image, const objc::RuntimeData &Data,
+                   ObjCBlockDescriptor &Result, va_t LayoutSlot) {
   using Kind = ObjCBlockCaptureRange::Kind;
   uint64_t Cursor = HeaderSize;
   auto Append = [&](Kind StorageKind, uint64_t Size) {
@@ -75,7 +75,12 @@ void captureLayout(const objc::RuntimeData &Data, ObjCBlockDescriptor &Result,
     return;
   }
   Result.LayoutValue = *RawLayout;
-  if (*RawLayout < 4096) {
+  // A low preferred address can still be a real pointer in a rebased image.
+  // Relocation evidence distinguishes that address from inline ownership bits.
+  const bool PointerStorage =
+      Image.hasRelocationProvenanceAt(LayoutSlot) ||
+      Image.MachOResolvedChainedPointerSlots.count(LayoutSlot);
+  if (*RawLayout < 4096 && !PointerStorage) {
     // Inline xyz counts represent strong, byref, weak pointers in that order.
     // These are scalar bits and must not require a pointer fixup certificate.
     if (!Append(Kind::Strong, ((*RawLayout >> 8) & 15) * 8) ||
@@ -87,7 +92,7 @@ void captureLayout(const objc::RuntimeData &Data, ObjCBlockDescriptor &Result,
     Append(Kind::NonObjectBytes, Result.LiteralSize - Cursor);
     return;
   }
-  const auto Layout = Data.pointer(LayoutSlot);
+  const auto Layout = Data.localPointer(LayoutSlot);
   if (!Layout) {
     Unknown("block layout pointer has an unresolved fixup");
     return;
@@ -253,7 +258,7 @@ readObjCBlockDescriptor(const BinaryImage &Image, va_t Address, uint32_t Flags,
     if (!Result.InvokeTypeHint)
       Result.Limitations.push_back(std::move(SignatureError));
   }
-  captureLayout(Data, Result, Cursor + 8);
+  captureLayout(Image, Data, Result, Cursor + 8);
   return Result;
 }
 

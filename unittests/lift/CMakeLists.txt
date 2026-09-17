@@ -941,6 +941,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/ObjCPropertyTests.cpp
   core/NativeSourceHintsTests.cpp
   core/ObjCStorageTests.cpp
+  core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
   core/HighCSourceCallTests.cpp
   sdk/ObjCBlockSourceTests.cpp
