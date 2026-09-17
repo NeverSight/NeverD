@@ -645,7 +645,8 @@ TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
       {"$ss018_bridgeAnyObjectToB0yypyXlSgF", Shape::IndirectAnyResult},
       {"$ss27_bridgeAnythingToObjectiveCyyXlxlF", Shape::GenericToObject},
   };
-  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  constexpr llvm::StringLiteral Provider =
+      "/usr/lib/swift/libswiftCore.dylib";
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (const auto &Bridge : Bridges) {
       SCOPED_TRACE(std::string(Bridge.Name) + ":" +
@@ -692,7 +693,8 @@ TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Wrong = Image;
         if (Mutation == 0)
-          Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+          Wrong.DyldBindSlots[0x2180].Module =
+              "/tmp/libswiftCore.dylib";
         else if (Mutation == 1)
           Wrong.DyldBindSlots[0x2180].Addend = 1;
         else if (Mutation == 2)
@@ -746,7 +748,8 @@ TEST(ObjCCallHints, DispatchSemaphoreMethodsKeepCompilerObservedSwiftABI) {
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Wrong = Image;
         if (Mutation == 0)
-          Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftDispatch.dylib";
+          Wrong.DyldBindSlots[0x2180].Module =
+              "/tmp/libswiftDispatch.dylib";
         else if (Mutation == 1)
           Wrong.DyldBindSlots[0x2180].Addend = 1;
         else if (Mutation == 2)
@@ -3228,8 +3231,8 @@ TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
 
 TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
-    for (const char *Module :
-         {"/usr/lib/libSystem.B.dylib", "/usr/lib/system/libdispatch.dylib"}) {
+    for (const char *Module : {"/usr/lib/libSystem.B.dylib",
+                               "/usr/lib/system/libdispatch.dylib"}) {
       auto Image = runtimeImage("_dispatch_once_f", Architecture);
       Image.DyldBindSlots[0x2180] = {"_dispatch_once_f", 0, Module, false};
       const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
@@ -3257,8 +3260,8 @@ TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
     }
 
     auto Image = runtimeImage("_dispatch_once_f", Architecture);
-    Image.DyldBindSlots[0x2180] = {"_dispatch_once_f", 0,
-                                   "/usr/lib/libSystem.B.dylib", false};
+    Image.DyldBindSlots[0x2180] = {
+        "_dispatch_once_f", 0, "/usr/lib/libSystem.B.dylib", false};
     for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
       auto Changed = Image;
       if (Mutation == 0)
@@ -3568,8 +3571,8 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
           "UIViewNoIntrinsicMetric"}) {
       SCOPED_TRACE(Name.str());
       auto Image = runtimeImage(("_" + Name).str(), Architecture);
-      Image.DyldBindSlots[0x2180] = {("_" + Name).str(), 0, Module.str(),
-                                     false};
+      Image.DyldBindSlots[0x2180] = {
+          ("_" + Name).str(), 0, Module.str(), false};
       const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
       ASSERT_TRUE(Binding);
       EXPECT_EQ(Binding->TargetName, Name);
@@ -3699,7 +3702,8 @@ TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactExternalStorageIdentity) {
           Changed.DyldBindSlots.clear();
         if (Mutation == 4) {
           Changed.ImportPtrSlots[0x2180] += "Suffix";
-          Changed.DyldBindSlots[0x2180].Name = Changed.ImportPtrSlots[0x2180];
+          Changed.DyldBindSlots[0x2180].Name =
+              Changed.ImportPtrSlots[0x2180];
         }
         EXPECT_FALSE(darwinRuntimeGlobalAddressHint(Changed, 0x2180))
             << Import << " " << Mutation;
