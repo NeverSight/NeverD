@@ -17,6 +17,8 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/BinaryLoading.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -34,10 +36,16 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
+
+#ifndef NEVERD_BINARY_CORPUS_ROOT
+#define NEVERD_BINARY_CORPUS_ROOT ""
+#endif
 
 namespace {
 using namespace neverd;
@@ -2756,6 +2764,169 @@ TEST(LLVMCPointerAddresses, CookieCmpRolTestDoesNotEmitPopcount) {
   OS.flush();
   EXPECT_EQ(Source.find("__builtin_popcount"), std::string::npos) << Source;
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, FuncLoadCxxThrowThunkPrintsThrowWithoutDebugBreak) {
+  // `--func` skips scanImportThunks.  `call jmp-[IAT]; int3` must still
+  // print `throw` from the import name, not `sub_*` plus `__debugbreak`.
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Thunk = 0x140001020;
+  constexpr va_t IAT = 0x140003000;
+  Img.Entry = Entry;
+  Img.LoadOnlyFunctionEntries.insert(Entry);
+  const int32_t CallRel = static_cast<int32_t>(Thunk - (Entry + 5));
+  const int32_t ThunkDisp = static_cast<int32_t>(IAT - (Thunk + 6));
+  std::vector<uint8_t> Text(0x30, 0xcc);
+  Text[0] = 0xe8;
+  std::memcpy(Text.data() + 1, &CallRel, sizeof(CallRel));
+  Text[5] = 0xcc;
+  Text[6] = 0xc3;
+  Text[0x20] = 0xff;
+  Text[0x21] = 0x25;
+  std::memcpy(Text.data() + 0x22, &ThunkDisp, sizeof(ThunkDisp));
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = Text.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = Text;
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = Text.size();
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + 7);
+  Symbol FuncSym = Symbol::makeFunc(Entry, 7);
+  FuncSym.Name = "throws";
+  Img.Symbols.push_back(std::move(FuncSym));
+  Import Imp;
+  Imp.Name = "_CxxThrowException";
+  Imp.IATAddr = IAT;
+  Img.Imports.push_back(std::move(Imp));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_FALSE(Result.HighFuncs.empty());
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("throw"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("sub_140001020"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const std::filesystem::path Path =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+      "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+      "cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+
+  va_t ThrowIAT = 0;
+  for (const Import &Imp : DiscoverImg->Imports)
+    if (stripLeadingUnderscores(Imp.Name) == "CxxThrowException")
+      ThrowIAT = Imp.IATAddr;
+  ASSERT_NE(ThrowIAT, 0u);
+
+  va_t Thunk = 0;
+  va_t CallSite = 0;
+  for (const Segment &Seg : DiscoverImg->Segments) {
+    if (!Seg.isExecutable() || Seg.Data.size() < x86::kJmpIndirectLen)
+      continue;
+    for (size_t I = 0; I + x86::kJmpIndirectLen <= Seg.Data.size(); ++I) {
+      if (Seg.Data[I] != x86::kJmpIndirectOp ||
+          Seg.Data[I + 1] != x86::kJmpIndirectModRM)
+        continue;
+      int32_t Disp = 0;
+      std::memcpy(&Disp, Seg.Data.data() + I + x86::kJmpIndirectDispOffset,
+                  sizeof(Disp));
+      const va_t Insn = Seg.VA + I;
+      if (Insn + x86::kJmpIndirectLen + static_cast<int64_t>(Disp) == ThrowIAT)
+        Thunk = Insn;
+    }
+  }
+  ASSERT_NE(Thunk, 0u);
+  for (const Segment &Seg : DiscoverImg->Segments) {
+    if (!Seg.isExecutable() || Seg.Data.size() < x86::kCallRel32Len)
+      continue;
+    for (size_t I = 0; I + x86::kCallRel32Len <= Seg.Data.size(); ++I) {
+      if (Seg.Data[I] != x86::kCallRel32)
+        continue;
+      int32_t Rel = 0;
+      std::memcpy(&Rel, Seg.Data.data() + I + x86::kRel32DispOffset,
+                  sizeof(Rel));
+      const va_t Insn = Seg.VA + I;
+      if (Insn + x86::kCallRel32Len + static_cast<int64_t>(Rel) == Thunk) {
+        CallSite = Insn;
+        break;
+      }
+    }
+    if (CallSite)
+      break;
+  }
+  ASSERT_NE(CallSite, 0u);
+
+  va_t Entry = 0;
+  for (const auto &Rec : DiscoverImg->COFFPDataRecords) {
+    const va_t Begin = DiscoverImg->Base + Rec.BeginRVA;
+    const va_t End = DiscoverImg->Base + Rec.EndRVA;
+    if (CallSite >= Begin && CallSite < End) {
+      Entry = Begin;
+      break;
+    }
+  }
+  ASSERT_NE(Entry, 0u);
+
+  BinaryLoadOptions FuncOpts;
+  FuncOpts.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, FuncOpts);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  EXPECT_TRUE(Img->ImportStubIndices.empty());
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(*Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_FALSE(Result.HighFuncs.empty());
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Img->Arch;
+  Options.Format = Img->Format;
+  Options.Image = &*Img;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("throw"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
 }
 
 } // namespace

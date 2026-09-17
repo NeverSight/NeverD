@@ -9,6 +9,9 @@
 #include "FunctionDiscoveryDetail.h"
 
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
+
+#include <cstring>
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -20,6 +23,42 @@
 #define DEBUG_TYPE "neverd-func-discovery"
 
 namespace neverd {
+
+const Import *BinaryImage::decodeImportThunkAt(va_t Addr) const {
+  if (Addr == 0 || Addr == InvalidVA || Imports.empty())
+    return nullptr;
+  const Segment *Seg = getSegmentFor(Addr);
+  if (!Seg || !Seg->isExecutable())
+    return nullptr;
+
+  auto ByIAT = [&](va_t Slot) -> const Import * {
+    if (Slot == 0)
+      return nullptr;
+    for (const Import &Imp : Imports)
+      if (Imp.IATAddr == Slot)
+        return &Imp;
+    return nullptr;
+  };
+
+  if (Arch == Arch::X64 || Arch == Arch::X86) {
+    const uint8_t *Bytes = readVA(Addr, x86::kJmpIndirectLen);
+    if (!Bytes || Bytes[0] != x86::kJmpIndirectOp ||
+        Bytes[1] != x86::kJmpIndirectModRM)
+      return nullptr;
+    va_t Slot = 0;
+    if (Arch == Arch::X64) {
+      int32_t Disp = 0;
+      std::memcpy(&Disp, Bytes + x86::kJmpIndirectDispOffset, sizeof(Disp));
+      Slot = Addr + x86::kJmpIndirectLen + static_cast<int64_t>(Disp);
+    } else {
+      uint32_t Abs = 0;
+      std::memcpy(&Abs, Bytes + x86::kJmpIndirectDispOffset, sizeof(Abs));
+      Slot = Abs;
+    }
+    return ByIAT(Slot);
+  }
+  return nullptr;
+}
 
 // ===--------------------------------------------------------------------===//
 // Import thunk scanning — shared by COFF (IAT thunks) and ELF (PLT stubs)

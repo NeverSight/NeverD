@@ -72,6 +72,7 @@ a regression, then delete the row.
 | Call result used by `test eax` is assigned | `HighCPointerAddresses.CallResultUsedByTestEaxIsAssigned`; `analyzeInferredNoreturn` does not treat an assigned SSAVer-0 RAX as a bare void return |
 | MedDCE runs after flag elimination | `LLVMCPointerAddresses.TestRcxDoesNotEmitPopcount`; unused PF/POPCOUNT ops are erased before LLVM emit |
 | Call followed by `int3`/`ud2` is noreturn | `HighCPointerAddresses.CallFollowedByInt3OmitsDebugBreakAndReturn`; `MedNoReturn.CallFollowedByInt3IsNoreturn`; HighC omits `__debugbreak` and the success `return`; LLVM emits `noreturn`+unreachable |
+| `--func` still names IAT veneers | `HighCPointerAddresses.FuncLoadCxxThrowThunkPrintsThrowWithoutDebugBreak`; `HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow`; `FunctionDiscoveryAlignment.FuncLoadNamesImportThunkWithoutScan`; `decodeImportThunkAt` peeks `jmp [rip+IAT]` without scanning every executable byte |
 | Unused flag/temp PHIs are not DCE seeds | `LLVMCPointerAddresses.CookieCmpRolTestDoesNotEmitPopcount`; cookie LLVM-to-C has no `__builtin_popcount` |
 
 ## Next x64 exe pass
