@@ -80,17 +80,12 @@ std::string HighCWriter::constStr(uint64_t Val) {
   if (Val <= limits::kDecimalConstThreshold)
     return std::to_string(Val);
 
-  if (Val == 0xFFFFFFFF || Val == 0xFFFFFFFFFFFFFFFFULL)
+  if (Val == 0xFFFFFFFFFFFFFFFFULL)
     return "-1";
 
   int64_t SV = static_cast<int64_t>(Val);
   if (SV < 0 && SV >= -static_cast<int64_t>(limits::kDecimalConstThreshold))
     return std::to_string(SV);
-
-  int32_t SV32 = static_cast<int32_t>(Val & 0xFFFFFFFF);
-  if (Val <= 0xFFFFFFFF && SV32 < 0 &&
-      SV32 >= -static_cast<int32_t>(limits::kDecimalConstThreshold))
-    return std::to_string(SV32);
 
   return "0x" + llvm::utohexstr(Val);
 }
@@ -392,8 +387,20 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return "(uintptr_t)" + Name;
     return Name;
   }
-  case ExprKind::Const:
-    return constStr(E.ConstVal);
+  case ExprKind::Const: {
+    // A word-shaped bit pattern is negative only in a signed narrow type.
+    // In a 64-bit mask, 0x00000000ffffffff must keep its zero upper word.
+    uint64_t Value = E.ConstVal;
+    if (E.Type && E.Type->Kind == NdTypeKind::Int && E.Type->Size &&
+        E.Type->Size < 8) {
+      const unsigned Bits = E.Type->Size * 8;
+      const uint64_t Mask = (UINT64_C(1) << Bits) - 1;
+      Value &= Mask;
+      if (E.Type->IsSigned && (Value & (UINT64_C(1) << (Bits - 1))))
+        Value |= ~Mask;
+    }
+    return constStr(Value);
+  }
   case ExprKind::Undef:
     // Do not emit the former clobber-0 operand comment. Keep a short unknown
     // marker so ABI tests can still see that high bits were not invented.

@@ -226,6 +226,54 @@ TEST(HighCIntegerWidths, ArithmeticWrapsBeforeWideningWithoutSignedOverflow) {
                     true);
 }
 
+TEST(HighCIntegerWidths, WordShapedConstantsKeepTheirFullWidthValue) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (bool Signed : {false, true})
+    for (uint64_t Bits : {UINT64_C(0x7fffffff), UINT64_C(0x80000000),
+                          UINT64_C(0xfffffffe), UINT64_C(0xffffffff),
+                          UINT64_C(0x100000000), UINT64_MAX - 1, UINT64_MAX}) {
+      const auto Type = NdType::makeInt(8, Signed);
+      HighFunc F;
+      F.Name = std::string("constant_") + (Signed ? "s_" : "u_") +
+               std::to_string(Bits);
+      F.ReturnType = Type;
+      auto Constant = HighExpr::makeConst(Bits, 8);
+      Constant->Type = Type;
+      returnValue(F, Constant);
+      appendCheck(Checks, F.Name, "", std::to_string(Bits).c_str());
+      Functions.push_back(F);
+      F.Name += "_mask";
+      F.Params = {{"arg0", Type}};
+      F.Body.clear();
+      auto Masked =
+          HighExpr::makeBinop(NdOp::INT_AND, parameter(0, Type), Constant);
+      Masked->Type = Type;
+      returnValue(F, Masked);
+      for (uint64_t Input : {UINT64_C(0), UINT64_C(0xffffffff),
+                             UINT64_C(0x8000000100000001), UINT64_MAX})
+        appendCheck(Checks, F.Name,
+                    argument(Type, std::to_string(Input).c_str()),
+                    std::to_string(Input & Bits).c_str());
+      Functions.push_back(F);
+    }
+  for (uint16_t Width : {1, 2, 4})
+    for (bool Signed : {false, true}) {
+      HighFunc F;
+      F.Name =
+          "narrow_constant_" + std::to_string(Width) + (Signed ? "s" : "u");
+      F.ReturnType = NdType::makeInt(8, Signed);
+      const uint64_t Bits = (UINT64_C(1) << (Width * 8)) - 1;
+      auto Constant = HighExpr::makeConst(Bits, Width);
+      Constant->Type = NdType::makeInt(Width, Signed);
+      returnValue(F, Constant);
+      appendCheck(Checks, F.Name, "",
+                  std::to_string(Signed ? UINT64_MAX : Bits).c_str());
+      Functions.push_back(F);
+    }
+  compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), false);
+}
+
 TEST(HighCIntegerWidths, NegationWrapsAndNestedNegativeConstantsCompile) {
   std::vector<HighFunc> Functions;
   std::string Checks;
