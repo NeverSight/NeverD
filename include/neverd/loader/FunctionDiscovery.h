@@ -15,8 +15,8 @@
 #ifndef NEVERD_LOADER_FUNCTIONDISCOVERY_H
 #define NEVERD_LOADER_FUNCTIONDISCOVERY_H
 
-#include "neverd/support/ProloguePatterns.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -73,13 +73,15 @@ inline void runPostLoadDiscovery(BinaryImage &Img,
   // x64/ARM PE .pdata is the format-native function table, the same role as
   // Mach-O LC_FUNCTION_STARTS.  Padding and data-pointer scans walk every
   // executable/rodata byte and then linearly probe those ranges; on a
-  // 100k-function image that dominates `--func` load.  Import thunks stay:
-  // IAT veneers are often outside pdata.
-  const bool ExceptionDirectoryOwnsFunctions =
+  // 100k-function image that dominates `--func` load.  Full-image PE still
+  // needs those scans: catch labels and data-pointer callees can sit outside
+  // materialized RUNTIME_FUNCTION bodies.  Skip them only for `--func`.
+  const bool RestrictToExceptionDirectory =
       Img.Format == BinaryFormat::COFF &&
+      !Img.LoadOnlyFunctionEntries.empty() &&
       (!Img.ExceptionMetadata.Functions.empty() ||
        !Img.COFFPDataRecords.empty() || !Img.KnownCodeRanges.empty());
-  if (!ExceptionDirectoryOwnsFunctions) {
+  if (!RestrictToExceptionDirectory) {
     scanPaddingBoundaries(Img);
     scanDataFuncPointers(Img);
   }
