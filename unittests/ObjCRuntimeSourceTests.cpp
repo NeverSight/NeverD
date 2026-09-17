@@ -2105,8 +2105,12 @@ TEST(ObjCRuntimeSource,
 }
 
 TEST(ObjCRuntimeSource, SwiftOncePreservesInitializationAndSharedStorage) {
+#ifdef __APPLE__
   for (bool Chained : {false, true})
     ASSERT_NO_FATAL_FAILURE(verifyRuntime(Chained, RuntimeFixture::SwiftOnce));
+#else
+  GTEST_SKIP() << "Requires macOS Foundation and Swift runtime";
+#endif
 }
 
 TEST(ObjCRuntimeSource, DispatchOncePreservesCapturedClassAndSharedObject) {
@@ -2121,7 +2125,11 @@ TEST(ObjCRuntimeSource, DispatchOncePreservesCapturedClassAndSharedObject) {
 
 TEST(ObjCRuntimeSource,
      MutableConstantInitializersPreserveIdentityAndLaterStores) {
+#ifdef __APPLE__
   for (bool Chained : {false, true})
     ASSERT_NO_FATAL_FAILURE(
         verifyRuntime(Chained, RuntimeFixture::MutableConstants));
+#else
+  GTEST_SKIP() << "Requires macOS Foundation and Objective-C runtime";
+#endif
 }
