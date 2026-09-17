@@ -522,6 +522,145 @@ TEST(ObjCSourceBindings,
   }
 }
 
+TEST(ObjCSourceBindings,
+     CStringPoolsPreserveInteriorOffsetsAndRevalidateStorage) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F;
+    F.Image.Arch = Architecture;
+    F.Image.ObjCSourceReferences.clear();
+    F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+    F.Function.ReturnType = NdType::makePtr(NdType::makeInt(1));
+    const std::array<uint8_t, 9> Bytes{'a', 0,   'b',  '?', '?',
+                                       '/', '"', '\\', 0xff};
+    std::copy(Bytes.begin(), Bytes.end(), F.Image.Segments[0].Data.begin());
+    for (va_t Address : {0x1000, 0x1001, 0x1002, 0x10ff}) {
+      F.Function.Body[0].RetVal = HighExpr::makeConst(Address, 8);
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      EXPECT_EQ(Bound.CStringSections, std::set<va_t>{0x1000});
+      auto Helper = Bound.Function.Body[0].RetVal;
+      if (Address != 0x1000) {
+        ASSERT_EQ(Helper->Kind, ExprKind::BinOp);
+        EXPECT_EQ(Helper->Operands[1]->ConstVal, Address - 0x1000);
+        Helper = Helper->Operands[0];
+      }
+      ASSERT_TRUE(Helper->SourceCallHint);
+      EXPECT_EQ(Helper->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeCStringStorage);
+      EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}));
+      auto Forged =
+          std::make_shared<SourceCallTypeHint>(*Helper->SourceCallHint);
+      Forged->ByteCount--;
+      Helper->SourceCallHint = std::move(Forged);
+      EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
+    }
+    std::set<std::string> Helpers;
+    const auto Source = renderCStringStorageHelpers(F.Image, {0x1000}, Helpers);
+    EXPECT_NE(Source.find("a\\000b\\077\\077/\\042\\134\\377"),
+              std::string::npos);
+    EXPECT_NE(Source.find("storage[256]"), std::string::npos);
+    EXPECT_FALSE(objc_binding_detail::associationKeyHint(F.Image, 0x1002));
+    F.Image.DataPtrRelocSlots.insert(0x10f8);
+    EXPECT_FALSE(cstringStorageSourceHint(F.Image, 0x1000));
+    EXPECT_THROW(renderCStringStorageHelpers(F.Image, {0x1000}, Helpers),
+                 std::runtime_error);
+  }
+}
+
+TEST(ObjCSourceBindings, CStringPoolsRejectPartialAmbiguousAndMutableStorage) {
+  for (unsigned Case = 0; Case != 9; ++Case) {
+    SCOPED_TRACE(Case);
+    Fixture F;
+    F.Image.ObjCSourceReferences.clear();
+    F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+    switch (Case) {
+    case 0:
+      F.Image.Sections[0].Type = llvm::MachO::S_REGULAR;
+      break;
+    case 1:
+      F.Image.Segments[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      break;
+    case 2:
+      F.Image.Sections[0].FileSz--;
+      break;
+    case 3:
+      F.Image.Sections.push_back(F.Image.Sections[0]);
+      break;
+    case 4:
+      F.Image.ImportPtrSlots[0x10f8] = "_other";
+      break;
+    case 5:
+      F.Image.MachOChainedFixupsAmbiguous = true;
+      break;
+    case 6:
+      F.Image.IsRelocatable = true;
+      break;
+    case 7:
+      F.Image.Sections[0].Size = 1024 * 1024 + 1;
+      break;
+    case 8:
+      F.Image.Segments[0].Data.pop_back();
+      break;
+    }
+    EXPECT_FALSE(cstringStorageSourceHint(F.Image, 0x1000));
+  }
+}
+
+TEST(ObjCSourceBindings, CStringPoolsExecuteEveryByteWithoutChangingIdentity) {
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+  for (unsigned I = 0; I != 256; ++I)
+    F.Image.Segments[0].Data[I] = uint8_t(I);
+  std::set<std::string> Helpers;
+  std::string Source = "#include <stdint.h>\n" +
+                       renderCStringStorageHelpers(F.Image, {0x1000}, Helpers);
+  Source += R"(
+int main(void) {
+  const unsigned char *bytes =
+      (const unsigned char *)neverd_cstring_storage_1000_address();
+  for (unsigned i = 0; i != 256; ++i) {
+    if (bytes[i] != i) return 1;
+    const unsigned char *alias =
+        (const unsigned char *)neverd_cstring_storage_1000_address() + i;
+    if (alias != bytes + i || *alias != i) return 2;
+  }
+  return 0;
+}
+)";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-cstring-storage",
+                                                    Directory));
+  const std::filesystem::path Work(Directory.str().str());
+  struct Cleanup {
+    std::filesystem::path Work;
+    ~Cleanup() {
+      std::error_code Error;
+      std::filesystem::remove_all(Work, Error);
+    }
+  } Cleanup{Work};
+  const auto Path = (Work / "literal.c").string();
+  const auto Executable = (Work / "literal").string();
+  const auto ErrorPath = (Work / "stderr").string();
+  std::ofstream(Path) << Source;
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  const std::vector<std::string> Arguments{
+      Compiler, "-std=c11", "-O3", "-Werror", Path, "-o", Executable};
+  std::vector<llvm::StringRef> Refs(Arguments.begin(), Arguments.end());
+  const std::optional<llvm::StringRef> Redirects[] = {std::nullopt,
+                                                      std::nullopt, ErrorPath};
+  std::string Error;
+  const auto Status = llvm::sys::ExecuteAndWait(Compiler, Refs, std::nullopt,
+                                                Redirects, 60, 0, &Error);
+  auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+  ASSERT_EQ(Status, 0) << Error << (Errors ? (*Errors)->getBuffer().str() : "");
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable, {Executable}, std::nullopt,
+                                      Redirects, 30, 0, &Error),
+            0)
+      << Error;
+}
+
 TEST(ObjCSourceBindings, ImmutableScalarsPreserveWidthSignAndFloatingBits) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &Type :
@@ -1091,6 +1230,7 @@ TEST(ObjCSourceBindings, StrongStoresAuthenticateTheirSharedPointerCell) {
     F.Image.Symbols.push_back({"_mutableString", 0x3000, 8, false});
     F.Image.recordDyldBindSlot(0x3100, "_objc_storeStrong", 0,
                                "/usr/lib/libobjc.A.dylib", false);
+    F.Image.ImportPtrSlots[0x3100] = "_objc_storeStrong";
     const auto Hint = objcRuntimeSourceCallHint(F.Image, 0x3100);
     ASSERT_TRUE(Hint);
     auto Call = HighExpr::makeCall(
@@ -1106,9 +1246,14 @@ TEST(ObjCSourceBindings, StrongStoresAuthenticateTheirSharedPointerCell) {
     EXPECT_EQ(Storage->SourceCallHint->TargetAddress, 0x3000U);
     EXPECT_EQ(Storage->SourceCallHint->ByteCount, 8U);
     EXPECT_TRUE(objcSourceCallBound(*Storage, F.Image, {}));
-    Call->SourceCallHint->Signature.Parameters[0].Location.RegisterOffset += 8;
+    auto Forged = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+    Forged->Signature.Parameters[0].Location.RegisterOffset += 8;
+    Call->SourceCallHint = std::move(Forged);
     Bound = bindObjCSourceReferences(F.Function, F.Image);
-    EXPECT_FALSE(Bound.Limitation.empty());
+    EXPECT_FALSE(
+        objcSourceCallBound(*Bound.Function.Body[0].RetVal, F.Image, {}));
+    EXPECT_EQ(Bound.Function.Body[0].RetVal->Operands[0]->Kind,
+              ExprKind::Const);
     EXPECT_TRUE(Bound.LocalStorageExtents.empty());
   }
 }
@@ -1360,7 +1505,8 @@ TEST(ObjCSourceBindings, ConstantObjectGraphsPreserveNestedAliasesAndStrings) {
       std::set<std::string> Shared;
       const auto Source = renderObjCConstantObjectHelpers(
           F.Image, {0x3018, 0x4018}, {0x2000}, Shared);
-      EXPECT_EQ(Shared.size(), 7U);
+      EXPECT_EQ(Shared.size(), 8U);
+      EXPECT_EQ(Shared.count("neverd_cstring_storage_1000_address"), 1U);
       EXPECT_EQ(Shared.count("neverd_objc_constant_string_2000_address"), 1U);
       EXPECT_NE(Source.find("UINT64_C(0xfedcba9876543210)"), std::string::npos);
       EXPECT_EQ(F.Function.Body[0].RetVal->Kind, ExprKind::Const);
@@ -1619,6 +1765,8 @@ TEST(ObjCSourceBindings, ConstantStringsKeepBytesUnicodeAndObjectIdentity) {
       ASSERT_TRUE(A && U);
       EXPECT_FALSE(A->UTF16);
       EXPECT_TRUE(U->UTF16);
+      EXPECT_EQ(A->ContentsAddress, 0x1000U);
+      EXPECT_EQ(U->ContentsAddress, 0x1100U);
       EXPECT_EQ(A->Units, (std::vector<uint16_t>{'a', '\n', '"'}));
       EXPECT_EQ(U->Units, (std::vector<uint16_t>{0x767e, 0, 0xd83d, 0xde00}));
       auto Result = bindObjCSourceReferences(F.Function, F.Image);
@@ -1630,8 +1778,8 @@ TEST(ObjCSourceBindings, ConstantStringsKeepBytesUnicodeAndObjectIdentity) {
       std::set<std::string> Shared;
       const auto Helpers =
           renderObjCConstantStringHelpers(F.Image, {0x2000, 0x2020}, Shared);
-      EXPECT_EQ(Shared.size(), 2U);
-      EXPECT_NE(Helpers.find("97, 10, 34, 0"), std::string::npos);
+      EXPECT_EQ(Shared.size(), 3U);
+      EXPECT_NE(Helpers.find("a\\012\\042\\000"), std::string::npos);
       EXPECT_NE(Helpers.find("30334, 0, 55357, 56832, 0"), std::string::npos);
       EXPECT_EQ(F.Function.Body[0].RetVal->Kind, ExprKind::Const);
     }

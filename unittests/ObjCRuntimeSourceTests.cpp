@@ -45,6 +45,7 @@ enum class RuntimeFixture {
   AtomicARC,
   DispatchOnce,
   MutableConstants,
+  CStringStorage,
   ARC,
   Associations,
   SwiftCalls,
@@ -132,6 +133,7 @@ void verifyRuntime(bool Chained,
       FixtureKind == RuntimeFixture::SwiftIntegerRuntime;
   const bool DispatchOnce = FixtureKind == RuntimeFixture::DispatchOnce;
   const bool MutableConstants = FixtureKind == RuntimeFixture::MutableConstants;
+  const bool CStringStorage = FixtureKind == RuntimeFixture::CStringStorage;
   const bool AtomicARC = FixtureKind == RuntimeFixture::AtomicARC;
   const bool SwiftOnce = FixtureKind == RuntimeFixture::SwiftOnce;
   const bool NativeReturnPaths =
@@ -213,6 +215,7 @@ void verifyRuntime(bool Chained,
                         : SwiftTypeLookup     ? "ObjCSwiftTypeLookup.m"
                         : DispatchOnce        ? "ObjCDispatchOnce.m"
                         : MutableConstants    ? "ObjCMutableConstants.m"
+                        : CStringStorage      ? "ObjCCStringStorage.m"
                         : SwiftOnce           ? "ObjCSwiftOnce.m"
                         : NativeReturnPaths   ? "ObjCNativeReturnPaths.m"
                         : IncomingResults     ? "ObjCIncomingResults.m"
@@ -271,6 +274,7 @@ void verifyRuntime(bool Chained,
                         : SwiftTypeLookup   ? "ObjCSwiftTypeLookupHarness.m"
                         : DispatchOnce      ? "ObjCDispatchOnceHarness.m"
                         : MutableConstants  ? "ObjCMutableConstantsHarness.m"
+                        : CStringStorage    ? "ObjCCStringStorageHarness.m"
                         : SwiftOnce         ? "ObjCSwiftOnceHarness.m"
                         : NativeReturnPaths ? "ObjCNativeReturnPathsHarness.m"
                         : IncomingResults   ? "ObjCIncomingResultsHarness.m"
@@ -576,6 +580,7 @@ void verifyRuntime(bool Chained,
                              : SwiftTypeLookup     ? 1U
                              : DispatchOnce        ? 2U
                              : MutableConstants    ? 5U
+                             : CStringStorage      ? 6U
                              : SwiftOnce           ? 1U
                              : NativeReturnPaths   ? 2U
                              : IncomingResults     ? 2U
@@ -608,7 +613,7 @@ void verifyRuntime(bool Chained,
                              : DiagnosticReports   ? 5U
                              : SwiftStrings        ? 2U
                              : ConstantObjects     ? 5U
-                             : ConstantStrings     ? 12U
+                             : ConstantStrings     ? 13U
                              : SwiftCalls          ? 9U
                                                    : 7U);
   std::set<std::string> Remaining{"item",         "setItem:", "observer",
@@ -684,6 +689,9 @@ void verifyRuntime(bool Chained,
                  "setValue:", "setIndependent:"};
   if (NativeReturnPaths)
     Remaining = {"adjusted:choose:output:", "wideLeaf:"};
+  if (CStringStorage)
+    Remaining = {"label",  "suffix", "newQueue",
+                 "string", "stored", "setStored:"};
   if (IncomingResults)
     Remaining = {"word:flags:", "word:memory:"};
   if (NativeContext)
@@ -755,9 +763,10 @@ void verifyRuntime(bool Chained,
     Remaining = {"words", "nested", "signedNumber", "unsignedNumber",
                  "mapping"};
   if (ConstantStrings)
-    Remaining = {"ascii",         "alias",          "unicode", "embedded",
-                 "empty",         "first",          "second",  "indirectASCII",
-                 "indirectAlias", "indirectUnicode"};
+    Remaining = {"ascii",           "alias",         "unicode",
+                 "embedded",        "empty",         "first",
+                 "second",          "indirectASCII", "indirectAlias",
+                 "indirectUnicode", "mutableValue",  "setMutableValue:"};
   if (UnfairLocks)
     Remaining = {"add:",   "value",       "tryAdd:",       "lock",
                  "unlock", "assertOwner", "assertNotOwner"};
@@ -898,6 +907,7 @@ void verifyRuntime(bool Chained,
                   : SwiftTypeLookup     ? "NDSwiftTypeLookup"
                   : DispatchOnce        ? "NDDispatchOnce"
                   : MutableConstants    ? "NDMutableConstants"
+                  : CStringStorage      ? "NDCStringStorage"
                   : SwiftOnce           ? "NDSwiftOnce"
                   : NativeReturnPaths   ? "NDNativeReturnPaths"
                   : IncomingResults     ? "NDIncomingResults"
@@ -942,10 +952,11 @@ void verifyRuntime(bool Chained,
   std::map<std::string, std::string> BlockHelpers;
   unsigned RepeatedBlockHelpers = 0;
   std::set<std::string> RejectedConstantUses =
-      ConstantStrings ? std::set<std::string>{"mutableValue", "slotAddress"}
+      ConstantStrings ? std::set<std::string>{"slotAddress"}
                       : std::set<std::string>{};
   std::string NativeHelper;
   std::set<std::string> StorageNames;
+  std::set<std::string> CStringNames;
   for (const auto &Value : *Methods) {
     const auto *Method = Value.getAsObject();
     ASSERT_NE(Method, nullptr);
@@ -1052,6 +1063,8 @@ void verifyRuntime(bool Chained,
           ASSERT_TRUE(Helper);
           if (llvm::StringRef(Inventory) == "shared_storage_functions")
             StorageNames.insert(Helper->str());
+          if (Helper->starts_with("neverd_cstring_storage_"))
+            CStringNames.insert(Helper->str());
           const auto Begin =
               MethodSource.find("\nuintptr_t " + Helper->str() + "(void) {\n");
           ASSERT_NE(Begin, std::string::npos);
@@ -1079,17 +1092,18 @@ void verifyRuntime(bool Chained,
   EXPECT_TRUE(RejectedConstantUses.empty());
   if (BlockLifetimes)
     EXPECT_GE(RepeatedBlockHelpers, 2U);
-  EXPECT_EQ(StorageNames.size(), Profiled                      ? 1U
+  EXPECT_EQ(StorageNames.size(), Profiled || ConstantStrings   ? 1U
                                  : (SwiftOnce || DispatchOnce) ? 3U
                                  : MutableConstants            ? 2U
                                                                : 0U);
   if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
   else
-    EXPECT_EQ(IdentityHelpers.size(), (Associations       ? 2U
+    EXPECT_EQ(IdentityHelpers.size(), (Associations       ? 0U
                                        : ConstantObjects  ? 13U
-                                       : ConstantStrings  ? 6U
+                                       : ConstantStrings  ? 7U
                                        : MutableConstants ? 1U
+                                       : CStringStorage   ? 1U
                                        : Foundation       ? 6U
                                        : SwiftLiterals    ? 2U
                                        : StoredStrings    ? 4U
@@ -1098,7 +1112,8 @@ void verifyRuntime(bool Chained,
                                        : FrameSelectors   ? 1U
                                        : PredicateFormats ? 8U
                                                           : 0U) +
-                                          StorageNames.size());
+                                          StorageNames.size() +
+                                          CStringNames.size());
   if (!IdentityHelpers.empty()) {
     std::string Shared = "#include <stdint.h>\n";
     for (const auto &[Name, Definition] : IdentityHelpers)
@@ -1236,6 +1251,8 @@ void verifyRuntime(bool Chained,
                               "once\nshared-object=pass\n"
       : MutableConstants    ? "mutable-initializers=1024\nshared-cells=pass\n"
                               "initial-identity=pass\nnull-stores=pass\n"
+      : CStringStorage
+          ? "cstring-checks=4096\ninterior-aliases=pass\nretained-label=pass\n"
       : SwiftOnce ? "swift-once-calls=8192\ninitializer-effects=once\nshared-"
                     "state=pass\n"
       : NativeReturnPaths ? "native-return-cases=16384\nreturns-and-stores="
@@ -2120,6 +2137,17 @@ TEST(ObjCRuntimeSource, DispatchOncePreservesCapturedClassAndSharedObject) {
         verifyRuntime(Chained, RuntimeFixture::DispatchOnce));
 #else
   GTEST_SKIP() << "Requires macOS Foundation and Objective-C runtime";
+#endif
+}
+
+TEST(ObjCRuntimeSource,
+     CStringStoragePreservesInteriorAliasesAndRetainedLabels) {
+#ifdef __APPLE__
+  for (bool Chained : {false, true})
+    ASSERT_NO_FATAL_FAILURE(
+        verifyRuntime(Chained, RuntimeFixture::CStringStorage));
+#else
+  GTEST_SKIP() << "Requires macOS Foundation and libdispatch";
 #endif
 }
 

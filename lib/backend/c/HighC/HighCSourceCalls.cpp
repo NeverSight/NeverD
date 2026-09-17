@@ -187,6 +187,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
       Hint.CallKind == Kind::RuntimeReadOnlyBytes ||
+      Hint.CallKind == Kind::RuntimeCStringStorage ||
       Hint.CallKind == Kind::DarwinRuntimeGlobalAddress ||
       Hint.CallKind == Kind::RuntimeProfileCounterStorage) {
     if (!E.Operands.empty() || !Signature.Parameters.empty() ||
@@ -232,6 +233,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Value = "neverd_borrowed_bytes_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_" +
               std::to_string(Hint.ByteCount) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeCStringStorage) {
+      if (!Hint.TargetAddress || !Hint.ByteCount ||
+          Hint.ByteCount > limits::kMaxSourceCallBorrowedBytes)
+        return bad("C string storage has no complete bounded source extent");
+      Value = "neverd_cstring_storage_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeConstantString ||
                Hint.CallKind == Kind::RuntimeConstantObject) {
       if (!Hint.TargetAddress)

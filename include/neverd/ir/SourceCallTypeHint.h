@@ -114,7 +114,11 @@ struct SourceCallTypeHint {
     RuntimeConstantObject,
     /// Immutable scalar table bytes, confined to proven indexed source loads.
     /// Bounds and every helper occurrence must be revalidated in the caller.
-    RuntimeReadOnlyBytes
+    RuntimeReadOnlyBytes,
+    /// Complete immutable C-string literal section, rebuilt once per image.
+    /// Interior offsets, embedded NULs and retained pointers share its
+    /// identity.
+    RuntimeCStringStorage
   };
   Kind CallKind = Kind::Native;
   enum class SwiftValueWitnessKind {

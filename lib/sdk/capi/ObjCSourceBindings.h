@@ -3,6 +3,7 @@
 
 #include "../../loader/ObjC/ObjCRuntimeData.h"
 #include "BorrowedByteSources.h"
+#include "CStringStorageSources.h"
 #include "ObjCConstantObjectSources.h"
 #include "ObjCProfileStorage.h"
 #include "ObjCReadOnlyScalarSources.h"
@@ -36,6 +37,7 @@ struct ObjCSourceBindingResult {
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;
   std::set<BorrowedByteRange> BorrowedBytes;
+  std::set<va_t> CStringSections;
   SourceProjectionDiagnostics Diagnostics{};
 };
 
@@ -173,6 +175,10 @@ associationKeyHint(const BinaryImage &Image, va_t Address) {
       (Section->Type & llvm::MachO::SECTION_TYPE) !=
           llvm::MachO::S_CSTRING_LITERALS ||
       !Image.readVA(Address, 1))
+    return std::nullopt;
+  // A pool with complete byte/identity evidence must use the same address
+  // helper in key consumers and ordinary pointer uses.
+  if (cstringStorageSourceHint(Image, Section->VA))
     return std::nullopt;
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeAssociationKey;
@@ -824,6 +830,26 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
             std::make_shared<SourceCallTypeHint>(std::move(*Hint));
         return Expression;
       }
+      if (Address) {
+        const auto *Section = Image.getSectionFor(*Address);
+        auto CString = Section ? cstringStorageSourceHint(Image, Section->VA)
+                               : std::nullopt;
+        if (CString) {
+          const auto Base = CString->TargetAddress;
+          auto Storage = HighExpr::makeCall({}, 0, {});
+          Storage->Type = NdType::makeInt(8, false);
+          Storage->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*CString));
+          if (*Address != Base)
+            Storage = HighExpr::makeBinop(
+                NdOp::INT_ADD, Storage,
+                HighExpr::makeConst(*Address - Base, 8,
+                                    ConstantAddressProvenance::Scalar));
+          *Expression = *Storage;
+          Result.CStringSections.insert(Base);
+          return Expression;
+        }
+      }
     }
     if (Original->Kind == ExprKind::Load && Original->Type &&
         Original->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -1354,6 +1380,19 @@ inline bool objcSourceCallBound(
         Image, Binding.TargetAddress, Binding.ImmutablePointerSlot);
     return Expected && Binding.TargetName.empty() && Binding.Selector.empty() &&
            Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeCStringStorage) {
+    const auto Expected =
+        cstringStorageSourceHint(Image, Binding.TargetAddress);
+    return Expected && !Expression.IsIndirectCall && !Expression.CallAddr &&
+           Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() && Binding.TargetName.empty() &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress &&
+           Binding.ByteCount == Expected->ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeReadOnlyBytes &&

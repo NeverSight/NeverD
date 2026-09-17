@@ -130,6 +130,7 @@ readObjCConstantString(const BinaryImage &Image, va_t Address) {
 
   ObjCConstantString Result;
   Result.UTF16 = UTF16;
+  Result.ContentsAddress = *Contents;
   for (uint64_t I = 0; I <= Length; ++I) {
     const uint16_t Unit =
         UTF16 ? llvm::support::endian::read16le(Payload + I * 2) : Payload[I];

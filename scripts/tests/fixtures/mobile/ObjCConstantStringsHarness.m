@@ -20,6 +20,7 @@ extern NSString *NDMutableString;
 - (NSString *)indirectAlias;
 - (NSString *)indirectUnicode;
 - (NSString *)mutableValue;
+- (void)setMutableValue:(NSString *)value;
 - (const void *)slotAddress;
 @end
 
@@ -47,8 +48,9 @@ int main(void) {
       check([calls ascii] == [calls indirectASCII]);
       check([calls indirectASCII] == [calls indirectAlias]);
       check([calls unicode] == [calls indirectUnicode]);
-      NDMutableString = round & 1 ? @"odd" : @"even";
-      check([calls mutableValue] == NDMutableString);
+      NSString *replacement = round & 1 ? @"odd" : @"even";
+      [calls setMutableValue:replacement];
+      check([calls mutableValue] == replacement);
       check([calls slotAddress] == &NDConstantASCII);
       check([[calls unicode] isEqualToString:@"百科😀"]);
       check([[calls unicode] length] == 4);

@@ -14,6 +14,8 @@ struct BinaryImage;
 struct ObjCConstantString {
   bool UTF16 = false;
   std::vector<uint16_t> Units;
+  /// Verified backing bytes; ASCII strings can share a rebuilt literal pool.
+  va_t ContentsAddress = 0;
 };
 
 std::optional<ObjCConstantString>

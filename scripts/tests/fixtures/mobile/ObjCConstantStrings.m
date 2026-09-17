@@ -45,6 +45,7 @@ extern NSString *NDMutableString;
 - (NSString *)indirectAlias;
 - (NSString *)indirectUnicode;
 - (NSString *)mutableValue;
+- (void)setMutableValue:(NSString *)value;
 - (const void *)slotAddress;
 @end
 
@@ -60,6 +61,9 @@ extern NSString *NDMutableString;
 }
 - (NSString *)mutableValue {
   return NDMutableString;
+}
+- (void)setMutableValue:(NSString *)value {
+  NDMutableString = value;
 }
 - (const void *)slotAddress {
   return &NDConstantASCII;
