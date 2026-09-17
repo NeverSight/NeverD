@@ -11,6 +11,7 @@
 #include "ObjCSourceBindings.h"
 #include "ObjCSourceInputs.h"
 #include "ObjCSourceProjection.h"
+#include "ObjCSwiftOnceSources.h"
 #include "SessionImpl.h"
 #include "SourceProjectionEvidenceJSON.h"
 
@@ -81,13 +82,21 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     std::map<va_t, std::string> NativeDependencies;
     const ObjCBlockSourceContext BlockSource(S->Img);
     ObjCBlockSourcePlan BlockPlan;
+    SwiftOnceSourcePlan OncePlan;
+    std::set<va_t> OnceRoots;
     for (unsigned Depth = 0; Depth < 16; ++Depth) {
+      OncePlan = discoverSwiftOnceSources(S->Img, Result);
+      const bool OnceChanged =
+          applySwiftOnceSourceHints(OncePlan, Options) != 0;
+      OnceRoots.clear();
+      for (const auto &[Address, Hint] : OncePlan.CallbackHints)
+        OnceRoots.insert(Address);
       const bool NativeChanged = inferObjCNativeDependencies(
-          S->Img, Result, Options, NativeDependencies);
+          S->Img, Result, Options, NativeDependencies, OnceRoots);
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
-      if (!NativeChanged && !BlocksChanged)
+      if (!NativeChanged && !BlocksChanged && !OnceChanged)
         break;
       Result = RunPipeline(Depth + 1);
       if (!Result.Success) {
@@ -101,9 +110,13 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
 
     // Stack expression identities belong to the final pipeline result.
     BlockPlan = discoverObjCBlockSources(BlockSource, Result);
+    OncePlan = discoverSwiftOnceSources(S->Img, Result);
+    OnceRoots.clear();
+    for (const auto &[Address, Hint] : OncePlan.CallbackHints)
+      OnceRoots.insert(Address);
     NativeSourceDependencyEvidence NativeEvidence;
     const auto NativeTargets =
-        walkObjCNativeDependencies(S->Img, Result, &NativeEvidence);
+        walkObjCNativeDependencies(S->Img, Result, &NativeEvidence, OnceRoots);
 
     CEmitterOptions COptions;
     COptions.TheArch = S->Img.Arch;
@@ -152,7 +165,15 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                                         BlockPlan, Functions);
       auto Inputs =
           snapshotObjCEntryInputs(BlockBinding.Function, S->Img, Functions);
-      auto Binding = bindObjCSourceReferences(Inputs, S->Img, &ProfileStorage);
+      auto OnceBinding =
+          bindSwiftOnceSourceReferences(Inputs, S->Img, OncePlan, Functions);
+      auto Binding = bindObjCSourceReferences(OnceBinding.Function, S->Img,
+                                              &ProfileStorage);
+      Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
+                                  OnceBinding.Dependencies.end());
+      for (const auto &[Address, Width] : OnceBinding.LocalStorageExtents)
+        Binding.LocalStorageExtents[Address] =
+            std::max(Binding.LocalStorageExtents[Address], Width);
       Binding.Dependencies.insert(BlockBinding.Dependencies.begin(),
                                   BlockBinding.Dependencies.end());
       std::string Reason = BlockBinding.Limitation.empty()
@@ -168,6 +189,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers) ||
+                     swiftOnceCallbackBound(Expression, S->Img, OncePlan,
+                                            Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
                                               BlockPlan, Functions);
             });
@@ -239,6 +262,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers) ||
+                     swiftOnceCallbackBound(Expression, S->Img, OncePlan,
+                                            Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
                                               BlockPlan, Functions);
             });
@@ -301,6 +326,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         auto CallAllowed = [&](const HighExpr &Expression) {
           return objcSourceCallBound(Expression, S->Img, Functions,
                                      &ProfileStorage, &ReadOnlyHelpers) ||
+                 swiftOnceCallbackBound(Expression, S->Img, OncePlan,
+                                        Functions) ||
                  objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
                                           Functions);
         };

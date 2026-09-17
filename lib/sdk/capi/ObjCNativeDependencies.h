@@ -29,7 +29,8 @@ struct NativeSourceDependencyEvidence {
 inline std::set<va_t>
 walkObjCNativeDependencies(const BinaryImage &Image,
                            const PipelineResult &Result,
-                           NativeSourceDependencyEvidence *Evidence = nullptr) {
+                           NativeSourceDependencyEvidence *Evidence = nullptr,
+                           const std::set<va_t> &CallbackRoots = {}) {
   if (Result.SourceImage != &Image)
     throw std::invalid_argument(
         "native source dependency evidence belongs to another image");
@@ -47,6 +48,8 @@ walkObjCNativeDependencies(const BinaryImage &Image,
     }
   std::set<va_t> Seen;
   std::set<va_t> Targets;
+  Targets.insert(CallbackRoots.begin(), CallbackRoots.end());
+  Pending.insert(Pending.end(), CallbackRoots.begin(), CallbackRoots.end());
   while (!Pending.empty()) {
     const auto Entry = Pending.back();
     Pending.pop_back();
@@ -93,8 +96,10 @@ walkObjCNativeDependencies(const BinaryImage &Image,
 /// must be re-lifted with their explicit ABI before they can become evidence.
 inline size_t inferObjCNativeDependencies(
     const BinaryImage &Image, const PipelineResult &Result,
-    PipelineOptions &Options, std::map<va_t, std::string> &Diagnostics) {
-  const auto Targets = walkObjCNativeDependencies(Image, Result);
+    PipelineOptions &Options, std::map<va_t, std::string> &Diagnostics,
+    const std::set<va_t> &CallbackRoots = {}) {
+  const auto Targets =
+      walkObjCNativeDependencies(Image, Result, nullptr, CallbackRoots);
   std::map<va_t, const LowFunc *> Low;
   std::map<va_t, const MedFunc *> Med;
   std::map<va_t, const HighFunc *> High;

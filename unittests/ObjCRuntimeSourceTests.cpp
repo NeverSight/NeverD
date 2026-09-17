@@ -74,6 +74,7 @@ enum class RuntimeFixture {
   FramePadding,
   FrameSelectors,
   NativeReturnPaths,
+  SwiftOnce,
   IncomingResults,
   NativeContext,
   AuxiliaryInputs,
@@ -126,6 +127,7 @@ void verifyRuntime(bool Chained,
       FixtureKind == RuntimeFixture::SwiftRecordRuntime;
   const bool SwiftIntegerRuntime =
       FixtureKind == RuntimeFixture::SwiftIntegerRuntime;
+  const bool SwiftOnce = FixtureKind == RuntimeFixture::SwiftOnce;
   const bool NativeReturnPaths =
       FixtureKind == RuntimeFixture::NativeReturnPaths;
   const bool IncomingResults = FixtureKind == RuntimeFixture::IncomingResults;
@@ -203,6 +205,7 @@ void verifyRuntime(bool Chained,
                         : SwiftRecordRuntime  ? "ObjCSwiftRecordRuntime.m"
                         : SwiftIntegerRuntime ? "ObjCSwiftIntegerRuntime.m"
                         : SwiftTypeLookup     ? "ObjCSwiftTypeLookup.m"
+                        : SwiftOnce           ? "ObjCSwiftOnce.m"
                         : NativeReturnPaths   ? "ObjCNativeReturnPaths.m"
                         : IncomingResults     ? "ObjCIncomingResults.m"
                         : RuntimeIvars        ? "ObjCRuntimeIvars.swift"
@@ -258,6 +261,7 @@ void verifyRuntime(bool Chained,
                         : SwiftIntegerRuntime
                             ? "ObjCSwiftIntegerRuntimeHarness.m"
                         : SwiftTypeLookup   ? "ObjCSwiftTypeLookupHarness.m"
+                        : SwiftOnce         ? "ObjCSwiftOnceHarness.m"
                         : NativeReturnPaths ? "ObjCNativeReturnPathsHarness.m"
                         : IncomingResults   ? "ObjCIncomingResultsHarness.m"
                         : RuntimeIvars      ? "ObjCRuntimeIvarsHarness.m"
@@ -358,7 +362,8 @@ void verifyRuntime(bool Chained,
     Compile.push_back("-DNEVERD_NATIVE_POINTERS");
   if (SwiftCalls || SwiftStrings || DiagnosticReports || SwiftAllocation ||
       SwiftTypeLookup || SwiftIntegerRuntime || SwiftRecordRuntime ||
-      NativeRecords || NativeVoid || NativeVoidFrames || RuntimeIvars)
+      NativeRecords || NativeVoid || NativeVoidFrames || RuntimeIvars ||
+      SwiftOnce)
     Compile.insert(Compile.end(), {"-L/usr/lib/swift", "-lswiftCore",
                                    "-Wl,-rpath,/usr/lib/swift"});
   if (SwiftStrings)
@@ -557,6 +562,7 @@ void verifyRuntime(bool Chained,
                              : SwiftRecordRuntime  ? 2U
                              : SwiftIntegerRuntime ? 2U
                              : SwiftTypeLookup     ? 1U
+                             : SwiftOnce           ? 1U
                              : NativeReturnPaths   ? 2U
                              : IncomingResults     ? 2U
                              : RuntimeIvars        ? 4U
@@ -655,6 +661,8 @@ void verifyRuntime(bool Chained,
     Remaining = {"newBox:value:storage:", "metadataState:request:result:"};
   if (SwiftIntegerRuntime)
     Remaining = {"retainObject:times:", "object:canCastToClass:"};
+  if (SwiftOnce)
+    Remaining = {"value"};
   if (NativeReturnPaths)
     Remaining = {"adjusted:choose:output:", "wideLeaf:"};
   if (IncomingResults)
@@ -868,6 +876,7 @@ void verifyRuntime(bool Chained,
                   : SwiftRecordRuntime  ? "NDSwiftRecordRuntime"
                   : SwiftIntegerRuntime ? "NDSwiftIntegerRuntime"
                   : SwiftTypeLookup     ? "NDSwiftTypeLookup"
+                  : SwiftOnce           ? "NDSwiftOnce"
                   : NativeReturnPaths   ? "NDNativeReturnPaths"
                   : IncomingResults     ? "NDIncomingResults"
                   : RuntimeIvars        ? "NDRuntimeIvars"
@@ -1046,7 +1055,7 @@ void verifyRuntime(bool Chained,
   EXPECT_TRUE(RejectedConstantUses.empty());
   if (BlockLifetimes)
     EXPECT_GE(RepeatedBlockHelpers, 2U);
-  EXPECT_EQ(StorageNames.size(), Profiled ? 1U : 0U);
+  EXPECT_EQ(StorageNames.size(), Profiled ? 1U : SwiftOnce ? 3U : 0U);
   if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
   else
@@ -1105,7 +1114,8 @@ void verifyRuntime(bool Chained,
                    {"-framework", "CoreGraphics", "-framework", "ImageIO"});
   if (SwiftCalls || SwiftStrings || DiagnosticReports || SwiftAllocation ||
       SwiftTypeLookup || SwiftIntegerRuntime || SwiftRecordRuntime ||
-      NativeRecords || NativeVoid || NativeVoidFrames || RuntimeIvars)
+      NativeRecords || NativeVoid || NativeVoidFrames || RuntimeIvars ||
+      SwiftOnce)
     Compile.insert(Compile.end() - 2, {"-L/usr/lib/swift", "-lswiftCore",
                                        "-Wl,-rpath,/usr/lib/swift"});
   if (SwiftStrings) {
@@ -1192,12 +1202,14 @@ void verifyRuntime(bool Chained,
                              "pass\nmetadata-response=pass\n"
       : SwiftIntegerRuntime ? "runtime-integer-cases=4096\ncast-results="
                               "pass\nreference-counts=pass\n"
-      : NativeReturnPaths   ? "native-return-cases=16384\nreturns-and-stores="
+      : SwiftOnce ? "swift-once-calls=8192\ninitializer-effects=once\nshared-"
+                    "state=pass\n"
+      : NativeReturnPaths ? "native-return-cases=16384\nreturns-and-stores="
                             "pass\nwide-leaf-cases=4096\n"
-      : IncomingResults ? "incoming-result-cases=16384\nbit-patterns=pass\n"
-                          "memory-input=pass\n"
-      : RuntimeIvars    ? "runtime-ivar-cases=16384\nproperty-bits=pass\n"
-                          "resilient-field=pass\n"
+      : IncomingResults   ? "incoming-result-cases=16384\nbit-patterns=pass\n"
+                            "memory-input=pass\n"
+      : RuntimeIvars      ? "runtime-ivar-cases=16384\nproperty-bits=pass\n"
+                            "resilient-field=pass\n"
       : AuxiliaryInputs ? "native-auxiliary-cases=16384\nresult-buffers=pass\n"
                           "scalar-results=pass\n"
       : NativeContext   ? "native-context-cases=16384\ncontext-bits=pass\n"
@@ -2047,4 +2059,9 @@ TEST(ObjCRuntimeSource,
 #else
   GTEST_SKIP() << "requires the actual Darwin Objective-C runtime";
 #endif
+}
+
+TEST(ObjCRuntimeSource, SwiftOncePreservesInitializationAndSharedStorage) {
+  for (bool Chained : {false, true})
+    ASSERT_NO_FATAL_FAILURE(verifyRuntime(Chained, RuntimeFixture::SwiftOnce));
 }
