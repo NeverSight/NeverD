@@ -110,6 +110,12 @@ exhausted budgets reject the binding. Generated C repeats the table lookup
 through the live metadata; it never retains the witness address from the
 analyzed image.
 
+Standard Swift metadata storage addresses use compiler-generated `.self`
+queries and matching SDK exports across ARM64/x86-64 macOS and Mac Catalyst.
+Only direct external, non-TLS globals qualify. The loader authenticates each
+symbol and provider before binding its runtime address; this supplies neither
+a metadata layout nor a call ABI for accessors or arbitrary mangled symbols.
+
 Objective-C property metadata supplies accessor declarations independently of
 method implementations, including dynamic, readonly and custom accessors.
 The loader checks the class, category or protocol record layout and derives

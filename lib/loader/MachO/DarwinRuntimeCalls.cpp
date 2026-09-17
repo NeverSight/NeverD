@@ -184,7 +184,26 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
       !SwiftEmptyCollection.empty() && Bind != Image.DyldBindSlots.end() &&
       darwinExportModuleMatches("/usr/lib/swift/libswiftCore.dylib",
                                 Bind->second.Module);
-  if (!UIKitStorage && !SwiftEmptyStorage && *Import != "___stack_chk_guard")
+  // Compiler .self queries prove these are external non-TLS data addresses,
+  // not metadata accessors. Exact per-architecture exports authenticate the
+  // provider; neither a mangled-name suffix nor metadata contents are guessed.
+  static constexpr struct {
+    const char *Name;
+    const char *AArch64Modules;
+    const char *X64Modules;
+  } SwiftData[] = {
+#include "SwiftSourceDataDeclarations.inc"
+  };
+  llvm::StringRef SwiftMetadata;
+  if (Import->starts_with("_") && Bind != Image.DyldBindSlots.end())
+    for (const auto &D : SwiftData)
+      if (Import->drop_front() == D.Name &&
+          darwinExportModuleMatches(
+              Image.Arch == Arch::AArch64 ? D.AArch64Modules : D.X64Modules,
+              Bind->second.Module))
+        SwiftMetadata = D.Name;
+  if (!UIKitStorage && !SwiftEmptyStorage && SwiftMetadata.empty() &&
+      *Import != "___stack_chk_guard")
     return darwinDeclaredSourceGlobalAddressHint(Image, ImportSlot);
 
   SourceCallTypeHint Result;
@@ -194,8 +213,9 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
     Result.TargetName = UIKitData.str();
     Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
     Result.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
-  } else if (SwiftEmptyStorage) {
-    Result.TargetName = SwiftEmptyCollection.str();
+  } else if (SwiftEmptyStorage || !SwiftMetadata.empty()) {
+    Result.TargetName =
+        (SwiftEmptyStorage ? SwiftEmptyCollection : SwiftMetadata).str();
     Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
     Result.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   } else {

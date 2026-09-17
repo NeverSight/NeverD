@@ -3,8 +3,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+extern const unsigned char nd_string_metadata[] __asm__("_$sSSN");
+extern const unsigned char nd_int_metadata[] __asm__("_$sSiN");
 
 @interface NDSwiftRuntimeCalls : NSObject
+- (const void *)stringMetadata;
+- (const void *)integerMetadata;
 - (void *)keep:(void *)object;
 - (void)drop:(void *)object;
 - (void *)weakInitialize:(void *)reference object:(void *)object;
@@ -45,6 +49,9 @@ int main(void) {
 #endif
     NDSwiftRuntimeCalls *calls = [NDSwiftRuntimeCalls new];
     for (unsigned i = 0; i < 64; ++i) {
+      check([calls stringMetadata] == nd_string_metadata);
+      check([calls integerMetadata] == nd_int_metadata);
+      check([calls stringMetadata] != [calls integerMetadata]);
       // Runtime storage is opaque to these methods. Supply aligned space for
       // the runtime to initialize, and verify its actual object-lifetime
       // effects.

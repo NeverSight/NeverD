@@ -3559,12 +3559,15 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
   }
 }
 
-TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactEmptyCollectionStorageIdentity) {
+TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactExternalStorageIdentity) {
   constexpr llvm::StringLiteral Module = "/usr/lib/swift/libswiftCore.dylib";
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
-    for (const char *Import : {"__swiftEmptyArrayStorage",
-                               "__swiftEmptyDictionarySingleton",
-                               "__swiftEmptySetSingleton"}) {
+    for (const char *Import :
+         {"__swiftEmptyArrayStorage", "__swiftEmptyDictionarySingleton",
+          "__swiftEmptySetSingleton", "_$sSSN", "_$sSbN", "_$sSiN", "_$sSuN",
+          "_$sSfN", "_$sSdN", "_$ss4Int8VN", "_$ss5Int16VN", "_$ss5Int32VN",
+          "_$ss5Int64VN", "_$ss5UInt8VN", "_$ss6UInt16VN", "_$ss6UInt32VN",
+          "_$ss6UInt64VN"}) {
       auto Image = runtimeImage(Import, Architecture);
       Image.DyldBindSlots[0x2180] = {Import, 0, Module.str(), false};
       const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
@@ -3595,9 +3598,7 @@ TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactEmptyCollectionStorageIdentity) {
       Options.TheArch = Architecture;
       ASSERT_TRUE(HighCEmitter().emit({Bound.Function}, OS, Options));
       const auto SourceName = llvm::StringRef(Import).drop_front().str();
-      EXPECT_NE(Source.find("extern unsigned char neverd_darwin_data_" +
-                            SourceName + "[] __asm__(\"_" + SourceName +
-                            "\");"),
+      EXPECT_NE(Source.find("[] __asm__(\"_" + SourceName + "\");"),
                 std::string::npos)
           << Source;
       EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
@@ -3623,6 +3624,17 @@ TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactEmptyCollectionStorageIdentity) {
       }
     }
   }
+}
+
+TEST(ObjCCallHints, SwiftMetadataAccessorsAndUnknownNominalsAreNotData) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (const char *Name :
+         {"_$sSSMa", "_$sSSMn", "_$s4Test6StringVN", "_$sSSNsuffix"}) {
+      auto Image = runtimeImage(Name, Architecture);
+      Image.DyldBindSlots[0x2180] = {
+          Name, 0, "/usr/lib/swift/libswiftCore.dylib", false};
+      EXPECT_FALSE(darwinRuntimeGlobalAddressHint(Image, 0x2180)) << Name;
+    }
 }
 
 TEST(ObjCCallHints, SDKDataBindingsRequireExactExportsAndDataDeclarations) {

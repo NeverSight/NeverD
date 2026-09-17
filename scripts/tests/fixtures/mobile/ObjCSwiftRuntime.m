@@ -10,10 +10,18 @@ extern void swift_unknownObjectWeakDestroy(void *);
 extern void *swift_getObjectType(void *);
 extern void swift_beginAccess(void *, void *, uintptr_t, void *);
 extern void swift_endAccess(void *);
+extern const unsigned char nd_string_metadata[] __asm__("_$sSSN");
+extern const unsigned char nd_int_metadata[] __asm__("_$sSiN");
 
 @interface NDSwiftRuntimeCalls : NSObject
 @end
 @implementation NDSwiftRuntimeCalls
+- (const void *)stringMetadata {
+  return nd_string_metadata;
+}
+- (const void *)integerMetadata {
+  return nd_int_metadata;
+}
 - (void *)keep:(void *)object {
   return swift_unknownObjectRetain(object);
 }

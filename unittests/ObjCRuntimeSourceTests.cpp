@@ -614,7 +614,7 @@ void verifyRuntime(bool Chained,
                              : SwiftStrings        ? 2U
                              : ConstantObjects     ? 5U
                              : ConstantStrings     ? 13U
-                             : SwiftCalls          ? 9U
+                             : SwiftCalls          ? 11U
                                                    : 7U);
   std::set<std::string> Remaining{"item",         "setItem:", "observer",
                                   "setObserver:", "title",    "setTitle:",
@@ -753,7 +753,9 @@ void verifyRuntime(bool Chained,
                  "objectForInteriorKey",
                  "storeObjectForInteriorKey:"};
   if (SwiftCalls)
-    Remaining = {"keep:",
+    Remaining = {"stringMetadata",
+                 "integerMetadata",
+                 "keep:",
                  "drop:",
                  "weakInitialize:object:",
                  "weakAssign:object:",
