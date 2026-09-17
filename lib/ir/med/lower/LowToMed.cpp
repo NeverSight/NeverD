@@ -405,196 +405,204 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   if (Low.DecodedInstructionCount >
           static_cast<uint64_t>(limits::kMaxSSANodes) ||
       CopiedOps > static_cast<size_t>(limits::kMaxSSANodes)) {
-    LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for "
-                            << Func.Name << " insns="
-                            << Low.DecodedInstructionCount << " ops="
-                            << CopiedOps << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for " << Func.Name
+                            << " insns=" << Low.DecodedInstructionCount
+                            << " ops=" << CopiedOps << "\n");
     return Func;
   }
 
   try {
-  bindSourceCalls(Func, Low, Fmt);
-  modelKnownWideCallReturns(Func);
-  debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
+    bindSourceCalls(Func, Low, Fmt);
+    modelKnownWideCallReturns(Func);
+    debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
-  fixupSubRegisters(Func);
-  debugVerifyMedFunc(Func, "fixupSubRegisters");
+    fixupSubRegisters(Func);
+    debugVerifyMedFunc(Func, "fixupSubRegisters");
 
-  simplifyCfg(Func);
-  debugVerifyMedFunc(Func, "simplifyCfg");
+    simplifyCfg(Func);
+    debugVerifyMedFunc(Func, "simplifyCfg");
 
-  // ARM predication is flattened in LowIR as an instruction-local guard plus
-  // its same-address effects.  Materialize that micro-CFG before SSA so the
-  // skip path keeps the incoming architectural registers while the effect path
-  // receives the new definitions.  Doing this in the LLVM emitter would be too
-  // late: SSA would already have treated every effect as unconditional.
-  materializePredicatedEffects(Func);
-  debugVerifyMedFunc(Func, "materializePredicatedEffects");
+    // ARM predication is flattened in LowIR as an instruction-local guard plus
+    // its same-address effects.  Materialize that micro-CFG before SSA so the
+    // skip path keeps the incoming architectural registers while the effect
+    // path receives the new definitions.  Doing this in the LLVM emitter would
+    // be too late: SSA would already have treated every effect as
+    // unconditional.
+    materializePredicatedEffects(Func);
+    debugVerifyMedFunc(Func, "materializePredicatedEffects");
 
-  // Apple clang's prologue stack-probe (____chkstk_darwin) is modeled as an
-  // ordinary call returning in x0; clear that spurious output before SSA so its
-  // liveness does not kill the live-in argument registers (the probe preserves
-  // every register except x16/x17).  No-op unless the pipeline provided the
-  // chkstk slot set (Mach-O only).
-  neutralizeStackProbeCalls(Func);
-  debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
+    // Apple clang's prologue stack-probe (____chkstk_darwin) is modeled as an
+    // ordinary call returning in x0; clear that spurious output before SSA so
+    // its liveness does not kill the live-in argument registers (the probe
+    // preserves every register except x16/x17).  No-op unless the pipeline
+    // provided the chkstk slot set (Mach-O only).
+    neutralizeStackProbeCalls(Func);
+    debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
 
-  buildSsa(Func);
-  debugVerifyMedFunc(Func, "buildSsa");
+    buildSsa(Func);
+    debugVerifyMedFunc(Func, "buildSsa");
 
-  // Model a call's floating-point/vector return (x86-64 returns it in XMM0, a
-  // caller-saved vector register the lifter did not model the call as
-  // defining). Done before copy propagation so a post-call read of the result
-  // register is not folded back to the pre-call argument value. Model a direct
-  // call's small struct-by-value return across multiple registers (x86-64
-  // eightbytes / AArch64 HFA) before modelCallFPReturn so it claims the FP
-  // return register of a struct-returning call as one of the aggregate fields
-  // rather than the lone scalar FP result.
-  modelCallStructReturn(Func);
-  debugVerifyMedFunc(Func, "modelCallStructReturn");
+    // Model a call's floating-point/vector return (x86-64 returns it in XMM0, a
+    // caller-saved vector register the lifter did not model the call as
+    // defining). Done before copy propagation so a post-call read of the result
+    // register is not folded back to the pre-call argument value. Model a
+    // direct call's small struct-by-value return across multiple registers
+    // (x86-64 eightbytes / AArch64 HFA) before modelCallFPReturn so it claims
+    // the FP return register of a struct-returning call as one of the aggregate
+    // fields rather than the lone scalar FP result.
+    modelCallStructReturn(Func);
+    debugVerifyMedFunc(Func, "modelCallStructReturn");
 
-  modelCallFPReturn(Func);
-  debugVerifyMedFunc(Func, "modelCallFPReturn");
+    modelCallFPReturn(Func);
+    debugVerifyMedFunc(Func, "modelCallFPReturn");
 
-  // Model a call's x87 floating-point return on i386 (the cdecl convention
-  // leaves it on the x87 top-of-stack, st0): reconnect the post-call `fstp`
-  // read of st0 to the call's result, which the lifter did not model.
-  modelCallX87Return(Func);
-  debugVerifyMedFunc(Func, "modelCallX87Return");
+    // Model a call's x87 floating-point return on i386 (the cdecl convention
+    // leaves it on the x87 top-of-stack, st0): reconnect the post-call `fstp`
+    // read of st0 to the call's result, which the lifter did not model.
+    modelCallX87Return(Func);
+    debugVerifyMedFunc(Func, "modelCallX87Return");
 
-  // Model a call's 64-bit integer return on 32-bit targets (i386 EDX:EAX, ARM32
-  // R1:R0): the lifter did not model the call as defining the high-half
-  // register, so reconnect post-call reads of it to the call's high result.
-  modelCallWideIntReturn(Func, TargetArch);
-  debugVerifyMedFunc(Func, "modelCallWideIntReturn");
+    // Model a call's 64-bit integer return on 32-bit targets (i386 EDX:EAX,
+    // ARM32 R1:R0): the lifter did not model the call as defining the high-half
+    // register, so reconnect post-call reads of it to the call's high result.
+    modelCallWideIntReturn(Func, TargetArch);
+    debugVerifyMedFunc(Func, "modelCallWideIntReturn");
 
-  // Post-SSA pass: fix sub-register reads that should reference a loop PHI.
-  // When a sub-register (e.g. SIL) has SSAVer=0 (entry block definition)
-  // but the current block has a PHI for a wider register (RSI), insert a
-  // SUBBYTES and update the read to use the extracted value.
-  {
-    int MaxSSAVer = 0;
-    for (auto &MB : Func.Blocks)
-      for (auto &Op : MB.Ops)
-        if (Op.Output.SSAVer > MaxSSAVer)
-          MaxSSAVer = Op.Output.SSAVer;
-    int NextVer = MaxSSAVer + 100;
+    // Post-SSA pass: fix sub-register reads that should reference a loop PHI.
+    // When a sub-register (e.g. SIL) has SSAVer=0 (entry block definition)
+    // but the current block has a PHI for a wider register (RSI), insert a
+    // SUBBYTES and update the read to use the extracted value.
+    {
+      int MaxSSAVer = 0;
+      for (auto &MB : Func.Blocks)
+        for (auto &Op : MB.Ops)
+          if (Op.Output.SSAVer > MaxSSAVer)
+            MaxSSAVer = Op.Output.SSAVer;
+      int NextVer = MaxSSAVer + 100;
 
-    for (auto &MB : Func.Blocks) {
-      if (MB.Phis.empty())
-        continue;
-      // Only apply to loop headers (blocks that have themselves as a
-      // predecessor).
-      bool IsLoopHeader = false;
-      for (int P : MB.Preds)
-        if (P == MB.Id)
-          IsLoopHeader = true;
-      if (!IsLoopHeader)
-        continue;
-      std::map<uint64_t, const PhiNode *> PhiByRegOff;
-      for (const auto &Phi : MB.Phis) {
-        if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0) {
-          PhiByRegOff[Phi.Output.RegOff] = &Phi;
-        }
-      }
-      if (PhiByRegOff.empty())
-        continue;
-
-      struct PostSSASub {
-        size_t InsertBefore;
-        MedOp Op;
-        size_t OpIdx;
-        uint8_t InpIdx;
-        int NewVer;
-      };
-      std::vector<PostSSASub> Fixes;
-      std::map<std::pair<int, uint64_t>, int> AlreadyFixed;
-
-      for (size_t OI = 0; OI < MB.Ops.size(); ++OI) {
-        auto &MOp = MB.Ops[OI];
-        for (uint8_t I = 0; I < MOp.NumInputs; ++I) {
-          auto &Inp = MOp.Inputs[I];
-          if (Inp.Kind != MedVar::Reg || Inp.Size == 0 || Inp.SSAVer != 0)
-            continue;
-          // Direct RegOff match: if a PHI at the same RegOff has a wider
-          // size, the current register is a sub-register of the PHI.
-          {
-            auto PhiIt = PhiByRegOff.find(Inp.RegOff);
-            if (PhiIt == PhiByRegOff.end() ||
-                PhiIt->second->Output.Size <= Inp.Size)
-              continue;
-            auto FixKey = std::make_pair(Inp.Id, Inp.RegOff);
-            auto FIt = AlreadyFixed.find(FixKey);
-            int NewVarVer;
-            if (FIt != AlreadyFixed.end()) {
-              NewVarVer = FIt->second;
-            } else {
-              NewVarVer = NextVer++;
-              AlreadyFixed[FixKey] = NewVarVer;
-              MedOp Sub;
-              Sub.Opcode = NdOp::SUBBYTES;
-              Sub.Addr = MOp.Addr;
-              Sub.Output = Inp;
-              Sub.Output.SSAVer = NewVarVer;
-              const auto &PhiOut = PhiIt->second->Output;
-              MedVar Wide;
-              Wide.Kind = MedVar::Reg;
-              Wide.Id = PhiOut.Id;
-              Wide.Size = PhiOut.Size;
-              Wide.RegOff = PhiOut.RegOff;
-              Wide.SSAVer = PhiOut.SSAVer;
-              Wide.TheArch = TargetArch;
-              Sub.addInput(Wide);
-              Sub.addInput(MedVar::makeConst(0, 4));
-              Fixes.push_back({OI, std::move(Sub), OI, I, NewVarVer});
-            }
-            Inp.SSAVer = NewVarVer;
+      for (auto &MB : Func.Blocks) {
+        if (MB.Phis.empty())
+          continue;
+        // Only apply to loop headers (blocks that have themselves as a
+        // predecessor).
+        bool IsLoopHeader = false;
+        for (int P : MB.Preds)
+          if (P == MB.Id)
+            IsLoopHeader = true;
+        if (!IsLoopHeader)
+          continue;
+        std::map<uint64_t, const PhiNode *> PhiByRegOff;
+        for (const auto &Phi : MB.Phis) {
+          if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0) {
+            PhiByRegOff[Phi.Output.RegOff] = &Phi;
           }
         }
+        if (PhiByRegOff.empty())
+          continue;
+
+        struct PostSSASub {
+          size_t InsertBefore;
+          MedOp Op;
+          size_t OpIdx;
+          uint8_t InpIdx;
+          int NewVer;
+        };
+        std::vector<PostSSASub> Fixes;
+        std::map<std::pair<int, uint64_t>, int> AlreadyFixed;
+
+        for (size_t OI = 0; OI < MB.Ops.size(); ++OI) {
+          auto &MOp = MB.Ops[OI];
+          for (uint8_t I = 0; I < MOp.NumInputs; ++I) {
+            auto &Inp = MOp.Inputs[I];
+            if (Inp.Kind != MedVar::Reg || Inp.Size == 0 || Inp.SSAVer != 0)
+              continue;
+            // Direct RegOff match: if a PHI at the same RegOff has a wider
+            // size, the current register is a sub-register of the PHI.
+            {
+              auto PhiIt = PhiByRegOff.find(Inp.RegOff);
+              if (PhiIt == PhiByRegOff.end() ||
+                  PhiIt->second->Output.Size <= Inp.Size)
+                continue;
+              auto FixKey = std::make_pair(Inp.Id, Inp.RegOff);
+              auto FIt = AlreadyFixed.find(FixKey);
+              int NewVarVer;
+              if (FIt != AlreadyFixed.end()) {
+                NewVarVer = FIt->second;
+              } else {
+                NewVarVer = NextVer++;
+                AlreadyFixed[FixKey] = NewVarVer;
+                MedOp Sub;
+                Sub.Opcode = NdOp::SUBBYTES;
+                Sub.Addr = MOp.Addr;
+                Sub.Output = Inp;
+                Sub.Output.SSAVer = NewVarVer;
+                const auto &PhiOut = PhiIt->second->Output;
+                MedVar Wide;
+                Wide.Kind = MedVar::Reg;
+                Wide.Id = PhiOut.Id;
+                Wide.Size = PhiOut.Size;
+                Wide.RegOff = PhiOut.RegOff;
+                Wide.SSAVer = PhiOut.SSAVer;
+                Wide.TheArch = TargetArch;
+                Sub.addInput(Wide);
+                Sub.addInput(MedVar::makeConst(0, 4));
+                Fixes.push_back({OI, std::move(Sub), OI, I, NewVarVer});
+              }
+              Inp.SSAVer = NewVarVer;
+            }
+          }
+        }
+        for (auto It = Fixes.rbegin(); It != Fixes.rend(); ++It)
+          MB.Ops.insert(MB.Ops.begin() + static_cast<long>(It->InsertBefore),
+                        std::move(It->Op));
       }
-      for (auto It = Fixes.rbegin(); It != Fixes.rend(); ++It)
-        MB.Ops.insert(MB.Ops.begin() + static_cast<long>(It->InsertBefore),
-                      std::move(It->Op));
     }
-  }
 
-  // Complementary direction: the block above fixes a narrow read that should
-  // come from a wider loop PHI; this fixes a WIDE read that must merge a
-  // narrower loop-carried sub-register PHI (e.g. byte-popcount `movl %edi` over
-  // `shrb %dil`).  Runs post-SSA so the narrow phi is visible.
-  mergeLoopCarriedPartialReads(Func);
-  debugVerifyMedFunc(Func, "mergeLoopCarriedPartialReads");
+    // Complementary direction: the block above fixes a narrow read that should
+    // come from a wider loop PHI; this fixes a WIDE read that must merge a
+    // narrower loop-carried sub-register PHI (e.g. byte-popcount `movl %edi`
+    // over `shrb %dil`).  Runs post-SSA so the narrow phi is visible.
+    mergeLoopCarriedPartialReads(Func);
+    debugVerifyMedFunc(Func, "mergeLoopCarriedPartialReads");
 
-  // ARM/AArch64 analogue: a wide vector (Q) read at a loop header that resolves
-  // to the loop-invariant preamble value because only its 64-bit halves (D
-  // sub-registers) are loop-carried via phis.  Reconstruct from the half phis.
-  mergeLoopCarriedVectorReads(Func);
-  debugVerifyMedFunc(Func, "mergeLoopCarriedVectorReads");
+    // ARM/AArch64 analogue: a wide vector (Q) read at a loop header that
+    // resolves to the loop-invariant preamble value because only its 64-bit
+    // halves (D sub-registers) are loop-carried via phis.  Reconstruct from the
+    // half phis.
+    mergeLoopCarriedVectorReads(Func);
+    debugVerifyMedFunc(Func, "mergeLoopCarriedVectorReads");
 
-  detectCc(Func, TheArch, Fmt);
-  debugVerifyMedFunc(Func, "detectCc");
+    detectCc(Func, TheArch, Fmt);
+    debugVerifyMedFunc(Func, "detectCc");
 
-  propagate(Func);
-  debugVerifyMedFunc(Func, "propagate");
+    propagate(Func);
+    debugVerifyMedFunc(Func, "propagate");
 
-  eliminateFlags(Func);
-  debugVerifyMedFunc(Func, "eliminateFlags");
+    eliminateFlags(Func);
+    debugVerifyMedFunc(Func, "eliminateFlags");
 
-  // Bind public LowIR selector occurrences only after every MedIR rewrite and
-  // SSA/propagation pass has finished.  A source op that disappeared, was
-  // duplicated, or no longer has the certified operand role deliberately
-  // yields no plan; backends must fail closed rather than fall back to a
-  // physical register-number scan.
-  resolveSwitchSelectorPlans(Func);
-  resolveScalarAddressModels(Func,
-                             Low.RelocatedInstructionScalarModelOccurrences);
-  resolveI386GetPcModels(Func, Low.I386GetPcOccurrences);
-  resolveCxxContinuationExits(
-      Func, Low, static_cast<uint16_t>(getTargetRegInfo(TheArch).PointerSize));
+    // Flag lowering leaves PF/AF/OF writes that no remaining COND_BR reads.
+    // Without DCE those become LLVMC `__builtin_popcount` / flag SSA noise on
+    // `test`/`cmp` that only consume ZF.
+    runDce(Func);
+    debugVerifyMedFunc(Func, "runDce");
 
-  LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
-                          << " blocks, " << Func.Params.size() << " params, "
-                          << Func.Locals.size() << " locals\n");
+    // Bind public LowIR selector occurrences only after every MedIR rewrite and
+    // SSA/propagation pass has finished.  A source op that disappeared, was
+    // duplicated, or no longer has the certified operand role deliberately
+    // yields no plan; backends must fail closed rather than fall back to a
+    // physical register-number scan.
+    resolveSwitchSelectorPlans(Func);
+    resolveScalarAddressModels(Func,
+                               Low.RelocatedInstructionScalarModelOccurrences);
+    resolveI386GetPcModels(Func, Low.I386GetPcOccurrences);
+    resolveCxxContinuationExits(
+        Func, Low,
+        static_cast<uint16_t>(getTargetRegInfo(TheArch).PointerSize));
+
+    LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: " << Func.Blocks.size()
+                            << " blocks, " << Func.Params.size() << " params, "
+                            << Func.Locals.size() << " locals\n");
   } catch (const std::exception &) {
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: SSA/rewrite threw; keeping "
                                "copied blocks for "

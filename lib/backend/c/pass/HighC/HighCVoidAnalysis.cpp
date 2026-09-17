@@ -31,13 +31,25 @@ bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E) {
 void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
                              VarNameFn VarFn) {
   State.InferredNoreturnCallAddrs.clear();
-  auto IsBareReturnValue = [](const HighExpr *Ret) -> bool {
+  std::map<std::string, const HighExpr *> VarSources;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S))
+      return;
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var &&
+        S.Val)
+      VarSources[VarFn(S.Dst->Var)] = S.Val.get();
+  });
+  auto IsBareReturnValue = [&](const HighExpr *Ret) -> bool {
     if (!Ret || Ret->Kind == ExprKind::Undef)
       return true;
     if (Ret->Kind != ExprKind::Var)
       return false;
     // Incoming EAX/RAX with no assignment is the MSVC `ret` success path on
-    // a void cookie helper, not a value the caller can read.
+    // a void cookie helper, not a value the caller can read.  A SSAVer-0
+    // register that this function assigned (call result, etc.) is a real
+    // value; treating it as bare made `call(); if (v0_0)` drop the dest.
+    if (VarSources.count(VarFn(Ret->Var)))
+      return false;
     return Ret->Var.Kind == MedVar::Reg && Ret->Var.SSAVer == 0;
   };
   bool HasBareReturn = false;
@@ -47,15 +59,6 @@ void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
   });
   if (!HasBareReturn)
     return;
-
-  std::map<std::string, const HighExpr *> VarSources;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (State.DeadStmts.count(&S))
-      return;
-    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var &&
-        S.Val)
-      VarSources[VarFn(S.Dst->Var)] = S.Val.get();
-  });
 
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind != StmtKind::Return || !S.RetVal)
