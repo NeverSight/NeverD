@@ -182,6 +182,24 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Argument = Load.Output;
           Ops.push_back(std::move(Address));
           Ops.push_back(std::move(Load));
+        } else if (TargetArch == Arch::AArch64 &&
+                   Location.Kind == SourceABICarrierKind::IntegerRegister &&
+                   Location.ValueBytes < 4) {
+          // AArch64 writes to Wn define the complete 32-bit register, even
+          // when the source value carried by a call is only a byte or half.
+          // Publish that architectural carrier before SSA, then extract the
+          // declared source lane. Reading the narrow physical alias directly
+          // would create a separate SSA web that misses converging Wn writes.
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Addr = Op.Addr;
+          Extract.Output = Temporary(Location.ValueBytes);
+          Extract.addInput(
+              ndVarToMedVar(NdVar::reg(Location.RegisterOffset, 4)));
+          Extract.addInput(
+              MedVar::makeConst(0, 4, ConstantAddressProvenance::Scalar));
+          Argument = Extract.Output;
+          Ops.push_back(std::move(Extract));
         } else {
           Argument = ndVarToMedVar(
               NdVar::reg(Location.RegisterOffset, Location.ValueBytes));

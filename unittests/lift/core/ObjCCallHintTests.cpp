@@ -645,8 +645,7 @@ TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
       {"$ss018_bridgeAnyObjectToB0yypyXlSgF", Shape::IndirectAnyResult},
       {"$ss27_bridgeAnythingToObjectiveCyyXlxlF", Shape::GenericToObject},
   };
-  constexpr llvm::StringLiteral Provider =
-      "/usr/lib/swift/libswiftCore.dylib";
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (const auto &Bridge : Bridges) {
       SCOPED_TRACE(std::string(Bridge.Name) + ":" +
@@ -693,8 +692,7 @@ TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Wrong = Image;
         if (Mutation == 0)
-          Wrong.DyldBindSlots[0x2180].Module =
-              "/tmp/libswiftCore.dylib";
+          Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
         else if (Mutation == 1)
           Wrong.DyldBindSlots[0x2180].Addend = 1;
         else if (Mutation == 2)
@@ -748,8 +746,7 @@ TEST(ObjCCallHints, DispatchSemaphoreMethodsKeepCompilerObservedSwiftABI) {
       for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
         auto Wrong = Image;
         if (Mutation == 0)
-          Wrong.DyldBindSlots[0x2180].Module =
-              "/tmp/libswiftDispatch.dylib";
+          Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftDispatch.dylib";
         else if (Mutation == 1)
           Wrong.DyldBindSlots[0x2180].Addend = 1;
         else if (Mutation == 2)
@@ -2989,6 +2986,75 @@ TEST(ObjCCallHints, NativeHintsPreserveIndependentFloatingRegisterBank) {
             getTargetRegInfo(Arch::AArch64).FPReturnReg);
 }
 
+TEST(ObjCCallHints, AArch64NarrowArgumentsUseDefinedWRegisterAcrossJoin) {
+  auto Hint = signature(Arch::AArch64, 6);
+  Hint.Parameters.back().Type = NdType::makeInt(1, false);
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(Hint, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  ASSERT_EQ(Hint.Parameters.back().Location.RegisterOffset, a64reg::X7);
+  ASSERT_EQ(Hint.Parameters.back().Location.ValueBytes, 1U);
+  std::map<va_t, SourceFunctionTypeHint> Hints{{0x1600, Hint}};
+
+  LowFunc Low;
+  Low.Entry = 0x1200;
+  Low.Name = "narrow_join_caller";
+  LowBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = 0x1200;
+  Entry.Succs = {1, 2};
+  LowBlock Left;
+  Left.Id = 1;
+  Left.StartAddr = 0x1210;
+  Left.Preds = {0};
+  Left.Succs = {3};
+  Left.Ops = {operation(NdOp::INT_ZEXT, NdVar::reg(a64reg::X7, 4),
+                        {NdVar::cst(0x7f, 1)}, 0x1210)};
+  LowBlock Right;
+  Right.Id = 2;
+  Right.StartAddr = 0x1220;
+  Right.Preds = {0};
+  Right.Succs = {3};
+  Right.Ops = {operation(NdOp::COPY, NdVar::reg(a64reg::X7, 4),
+                         {NdVar::cst(0, 4)}, 0x1220)};
+  LowBlock Join;
+  Join.Id = 3;
+  Join.StartAddr = 0x1230;
+  Join.Preds = {1, 2};
+  Join.Ops = {operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                        {NdVar::cst(0x1600, 8)}, 0x1230),
+              operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 4)}, 0x1234)};
+  Low.Blocks = {Entry, Left, Right, Join};
+
+  LowToMedConverter Converter;
+  Converter.setSourceCalleeTypeHints(&Hints);
+  Converter.setSourceCallHintsEnabled(true);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  recoverCallAbi(Med, Arch::AArch64, {});
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  const auto &Call = Med.CallInfos.front();
+  ASSERT_TRUE(Call.SourceCallHint);
+  ASSERT_EQ(Call.Args.size(), 8U);
+  const auto Narrow = Call.Args.back();
+  ASSERT_EQ(Narrow.Kind, MedVar::Temp);
+  ASSERT_EQ(Narrow.Size, 1U);
+
+  const MedOp *Extract = nullptr;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Output.Kind == Narrow.Kind && Op.Output.Id == Narrow.Id &&
+          Op.Output.SSAVer == Narrow.SSAVer)
+        Extract = &Op;
+  ASSERT_NE(Extract, nullptr);
+  EXPECT_EQ(Extract->Opcode, NdOp::SUBBYTES);
+  ASSERT_EQ(Extract->NumInputs, 2U);
+  EXPECT_EQ(Extract->Inputs[0].Kind, MedVar::Reg);
+  EXPECT_EQ(Extract->Inputs[0].RegOff, a64reg::X7);
+  EXPECT_EQ(Extract->Inputs[0].Size, 4U);
+  EXPECT_TRUE(Extract->Inputs[1].isConst());
+  EXPECT_EQ(Extract->Inputs[1].ConstVal, 0U);
+}
+
 TEST(ObjCCallHints, SuperDispatchUsesVerifiedRuntimeVeneerAndLoadedSelector) {
   auto Image = image();
   Image.ImportPtrSlots[0x2180] = "_objc_msgSendSuper2";
@@ -3162,8 +3228,8 @@ TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
 
 TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
-    for (const char *Module : {"/usr/lib/libSystem.B.dylib",
-                               "/usr/lib/system/libdispatch.dylib"}) {
+    for (const char *Module :
+         {"/usr/lib/libSystem.B.dylib", "/usr/lib/system/libdispatch.dylib"}) {
       auto Image = runtimeImage("_dispatch_once_f", Architecture);
       Image.DyldBindSlots[0x2180] = {"_dispatch_once_f", 0, Module, false};
       const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
@@ -3191,8 +3257,8 @@ TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
     }
 
     auto Image = runtimeImage("_dispatch_once_f", Architecture);
-    Image.DyldBindSlots[0x2180] = {
-        "_dispatch_once_f", 0, "/usr/lib/libSystem.B.dylib", false};
+    Image.DyldBindSlots[0x2180] = {"_dispatch_once_f", 0,
+                                   "/usr/lib/libSystem.B.dylib", false};
     for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
       auto Changed = Image;
       if (Mutation == 0)
@@ -3502,8 +3568,8 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
           "UIViewNoIntrinsicMetric"}) {
       SCOPED_TRACE(Name.str());
       auto Image = runtimeImage(("_" + Name).str(), Architecture);
-      Image.DyldBindSlots[0x2180] = {
-          ("_" + Name).str(), 0, Module.str(), false};
+      Image.DyldBindSlots[0x2180] = {("_" + Name).str(), 0, Module.str(),
+                                     false};
       const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
       ASSERT_TRUE(Binding);
       EXPECT_EQ(Binding->TargetName, Name);
@@ -3633,8 +3699,7 @@ TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactExternalStorageIdentity) {
           Changed.DyldBindSlots.clear();
         if (Mutation == 4) {
           Changed.ImportPtrSlots[0x2180] += "Suffix";
-          Changed.DyldBindSlots[0x2180].Name =
-              Changed.ImportPtrSlots[0x2180];
+          Changed.DyldBindSlots[0x2180].Name = Changed.ImportPtrSlots[0x2180];
         }
         EXPECT_FALSE(darwinRuntimeGlobalAddressHint(Changed, 0x2180))
             << Import << " " << Mutation;
