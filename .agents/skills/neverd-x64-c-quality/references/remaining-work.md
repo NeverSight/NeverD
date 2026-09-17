@@ -11,7 +11,7 @@ a regression, then delete the row.
 | C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
-| Flag / popcount noise | lift + LLVMC | Corpus dump still materializes PF/AF/OF, `__builtin_popcount`, and `*(T*)0 =` clobbers. Junk on obfuscated x64 will be worse until DCE owns it in LLVM, not the C printer. |
+| Flag / popcount noise | lift + LLVMC | Simple `test`/`je` no longer emits `__builtin_popcount` (`LLVMCPointerAddresses.TestRcxDoesNotEmitPopcount`; MedDCE after flag elim). CMP+ROL cookie still has leftover PF chains. `*(T*)0` clobbers remain. |
 | Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
 | Wrapping casts | HighC | `return (int32_t)(uint32_t)((uint32_t)var + 1)` is required by sanitizer tests. Do not strip. |
 | Source names | both | No PDB → `var_m18` / `arg0` / `g_1400050E0` / `sub_1400024E0`, not `Result` / `Value` / `ProbeSink` / `probe_filter`. MSVC `?A@B@@` now prints `B_A` instead of `_x3F_`. Hex-Rays still wins C++ types/`::`. |
@@ -69,6 +69,8 @@ a regression, then delete the row.
 | `--func` PE skips padding/data scans | `FunctionDiscoveryAlignment.CoffFuncLoadSkipsPaddingAndDataScans`; full-image still runs `scanDataFuncPointers` (`CoffFullLoadStillScansDataFuncPointers`) |
 | `--func` PE skips image-wide `.reloc` and Go pclntab | `COFFFunctionListingTest.LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies`; `parseBaseRelocations` / `parseGoExceptions` return when `LoadOnlyFunctionEntries` is set |
 | Catch-funclet attach does not recurse on cyclic handler VA | `HighCPointerAddresses.AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch`; `attachCxxFuncletBodies` keeps an in-flight HandlerVA set |
+| Call result used by `test eax` is assigned | `HighCPointerAddresses.CallResultUsedByTestEaxIsAssigned`; `analyzeInferredNoreturn` does not treat an assigned SSAVer-0 RAX as a bare void return |
+| MedDCE runs after flag elimination | `LLVMCPointerAddresses.TestRcxDoesNotEmitPopcount`; unused PF/POPCOUNT ops are erased before LLVM emit |
 
 ## Next x64 exe pass
 

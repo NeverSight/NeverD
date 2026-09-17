@@ -2519,4 +2519,121 @@ TEST(HighCPointerAddresses, GsHandlerDataBit2AlignBranchIsPrinted) {
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, CallResultUsedByTestEaxIsAssigned) {
+  // `call helper / test eax, eax / je` must keep the call result. Dropping
+  // the dest turns the compare into an uninitialized temp (cxx_eh_probe
+  // 0x140001570 and MapleStory2 throw).
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Helper = 0x140001020;
+  Img.Entry = Entry;
+  static const uint8_t kBytes[] = {
+      0xe8, 0x1b, 0x00, 0x00, 0x00, // call helper
+      0x85, 0xc0,                   // test eax, eax
+      0x74, 0x01,                   // je +1
+      0xc3,                         // ret
+      0xc3,                         // ret
+  };
+  static const uint8_t kHelper[] = {
+      0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+      0xc3,
+  };
+  std::vector<uint8_t> Text(0x30, 0xcc);
+  std::copy(std::begin(kBytes), std::end(kBytes), Text.begin());
+  std::copy(std::begin(kHelper), std::end(kHelper), Text.begin() + 0x20);
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = Text.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = Text;
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = Text.size();
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
+  Img.KnownCodeRanges.emplace_back(Helper, Helper + sizeof(kHelper));
+  Symbol Main = Symbol::makeFunc(Entry, sizeof(kBytes));
+  Main.Name = "uses_call_result";
+  Img.Symbols.push_back(std::move(Main));
+  Symbol Help = Symbol::makeFunc(Helper, sizeof(kHelper));
+  Help.Name = "ret_one";
+  Img.Symbols.push_back(std::move(Help));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_FALSE(Result.HighFuncs.empty());
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_NE(Source.find("= ret_one("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("\n    ret_one();"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, TestRcxDoesNotEmitPopcount) {
+  // `test rcx, rcx / je` only consumes ZF. PF via POPCOUNT must not appear in
+  // --no-opt LLVM-to-C (cookie / seh_probe SSA noise).
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t Entry = 0x140001000;
+  Img.Entry = Entry;
+  static const uint8_t kBytes[] = {
+      0x48, 0x85, 0xc9, // test rcx, rcx
+      0x74, 0x01,       // je +1
+      0xc3,             // ret
+      0xc3,             // ret
+  };
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = sizeof(kBytes);
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data.assign(std::begin(kBytes), std::end(kBytes));
+  Img.Segments.push_back(std::move(Seg));
+  Section Sec;
+  Sec.Name = ".text";
+  Sec.VA = Entry;
+  Sec.Size = sizeof(kBytes);
+  Sec.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Sec));
+  Img.KnownCodeRanges.emplace_back(Entry, Entry + sizeof(kBytes));
+  Symbol FuncSym = Symbol::makeFunc(Entry, sizeof(kBytes));
+  FuncSym.Name = "test_rcx";
+  Img.Symbols.push_back(std::move(FuncSym));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.NoOpt = true;
+  Opts.LiftMode = true;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_NE(Result.LlvmModule, nullptr);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, OS, Options));
+  OS.flush();
+  EXPECT_EQ(Source.find("__builtin_popcount"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
+}
+
 } // namespace
