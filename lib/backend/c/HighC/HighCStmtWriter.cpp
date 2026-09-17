@@ -643,9 +643,12 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
         OS << " */\n";
         if (I < Stmt.EHClauseBodies.size()) {
           const bool SavedHandler = InEHClauseBody;
+          const bool SavedCleanup = InCxxCleanupBody;
           InEHClauseBody = true;
+          InCxxCleanupBody = true;
           writeStmts(Stmt.EHClauseBodies[I], Indent);
           InEHClauseBody = SavedHandler;
+          InCxxCleanupBody = SavedCleanup;
         }
         continue;
       }
@@ -827,6 +830,25 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
     }
     if (stmtHiddenFromC(S))
       continue;
+    if (InCxxCleanupBody && S.Kind == StmtKind::Return)
+      continue;
+    if (InCxxCleanupBody && S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call) {
+      const HighStmt *Ret = nullptr;
+      for (size_t K = I + 1; K < Stmts.size(); ++K) {
+        if (stmtHiddenFromC(Stmts[K]) || Stmts[K].Kind == StmtKind::Nop)
+          continue;
+        if (Stmts[K].Kind == StmtKind::Return)
+          Ret = &Stmts[K];
+        break;
+      }
+      if (Ret) {
+        emitIndent(Indent);
+        OS << exprStr(*S.Val) << ";\n";
+        AfterNoReturn = isNoreturnCallExpr(Analysis, *S.Val);
+        continue;
+      }
+    }
     if (InEHClauseBody && !InferredVoid) {
       if (const HighExpr *Stored = parentFrameStoredValue(S)) {
         size_t J = I + 1;

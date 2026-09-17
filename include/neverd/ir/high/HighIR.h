@@ -458,8 +458,9 @@ struct HighFunc {
   unsigned UnstructuredExceptionRegions = 0;
 };
 
-/// Copy catch-funclet HighFunc bodies into empty `CxxCatch` clause slots of
-/// the parent. MSVC x64 catch handlers are separate pdata functions.
+/// Copy catch-funclet and C++ unwind-funclet HighFunc bodies into empty
+/// `CxxCatch` / `CxxCleanup` clause slots of the parent. MSVC x64 catch
+/// handlers and destructor unwind actions are separate pdata functions.
 /// A funclet body may itself be a structured `CxxTry` whose handler VA is
 /// this function or another funclet already on the attach stack; copying
 /// those bodies without a cycle guard overflows the stack on full-image
@@ -479,16 +480,19 @@ inline void attachCxxFuncletBodies(std::vector<HighFunc> &Funcs) {
           for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
             if (Stmt.EHClauseBodies[I].empty()) {
               const HighEHClause &Clause = Stmt.EHClauses[I];
-              if (Clause.Kind == HighEHClauseKind::CxxCatch &&
-                  Clause.HandlerVA && Clause.HandlerVA != Func.Entry &&
-                  !Active.count(Clause.HandlerVA)) {
-                auto It = ByEntry.find(Clause.HandlerVA);
+              va_t Target = 0;
+              if (Clause.Kind == HighEHClauseKind::CxxCatch)
+                Target = Clause.HandlerVA;
+              else if (Clause.Kind == HighEHClauseKind::CxxCleanup)
+                Target = Clause.FilterOrActionVA;
+              if (Target && Target != Func.Entry && !Active.count(Target)) {
+                auto It = ByEntry.find(Target);
                 if (It != ByEntry.end() && It->second != nullptr &&
                     It->second != &Func) {
-                  Active.insert(Clause.HandlerVA);
+                  Active.insert(Target);
                   Stmt.EHClauseBodies[I] = It->second->Body;
                   Self(Self, Stmt.EHClauseBodies[I]);
-                  Active.erase(Clause.HandlerVA);
+                  Active.erase(Target);
                   continue;
                 }
               }

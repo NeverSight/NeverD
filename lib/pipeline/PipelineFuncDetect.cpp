@@ -156,8 +156,9 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   if (!Opts.OnlyFunctionEntries.empty()) {
     // Single-function CLI export must not scan the whole image: call-target
     // detection on a 100k-function PE is the work we are trying to skip.
-    // Catch funclets are separate pdata functions; include them so HighC can
-    // embed their bodies in `catch` clauses of the requested parent.
+    // Catch and C++ unwind funclets are separate pdata functions; include
+    // them so HighC can embed their bodies in `catch` / destructor clauses
+    // of the requested parent.
     std::set<va_t> Wanted(Opts.OnlyFunctionEntries.begin(),
                           Opts.OnlyFunctionEntries.end());
     std::vector<va_t> Work(Wanted.begin(), Wanted.end());
@@ -170,6 +171,9 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
         for (const CxxCatchHandler &Handler : Try.Handlers)
           if (Handler.HandlerVA && Wanted.insert(Handler.HandlerVA).second)
             Work.push_back(Handler.HandlerVA);
+      for (const CxxUnwindAction &Action : EH->Cxx->UnwindMap)
+        if (Action.ActionVA && Wanted.insert(Action.ActionVA).second)
+          Work.push_back(Action.ActionVA);
     }
     FuncEntries.reserve(Wanted.size());
     for (va_t Addr : Wanted) {

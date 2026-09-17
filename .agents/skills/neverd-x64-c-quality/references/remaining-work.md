@@ -7,7 +7,6 @@ a regression, then delete the row.
 
 | Gap | Surface | Notes |
 |---|---|---|
-| C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
 | Flag / popcount noise | lift + LLVMC | Simple `test`/`je` and cookie `cmp`/`rol`/`test` joins no longer emit `__builtin_popcount` (unused flag/temp PHIs are not DCE seeds). `*(T*)0` clobbers and extra Win64 params on the LLVM route remain. |
@@ -76,15 +75,15 @@ a regression, then delete the row.
 | Nested C++ tries that share an IP interval stay nested | `COFFExceptionIR.NestsCxxTriesThatShareIpInterval`; do not merge distinct TryLow/TryHigh into sibling `catch` |
 | Null `_CxxThrowException` object prints `throw;` | `HighCPointerAddresses.CxxRethrowNullObjectPrintsBareThrow` |
 | Catch-funclet `rdx` is the parent frame, not `arg1` | `HighCPointerAddresses.CatchFuncletParentFrameStoreBecomesReturn`; public `cxx_eh_probe`: `CorpusFuncLoadCxxEhProbeCatchReturnsValue`; nested `return -200`: `CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues`. Last `[rdx+k]=val; ret` prints `return val`. PDB `Error.Value` is still source names. |
+| C++ unwind funclets print as destructor calls | `HighCPointerAddresses.AttachesCxxUnwindFuncletAsDestructorCall`; public `cxx_eh_probe` nested Cleanup: `CorpusFuncLoadCxxEhProbePrintsUnwindDestructor`. `--func` expands UnwindMap ActionVA; cleanup `ret` is not a parent return. |
 
 ## Next x64 exe pass
 
 Prefer HighC on reducible MSVC, LLVMC on obfuscated guests. Sequence:
 
-1. Print C++ ctor destructor unwind as source-like C; keep corpus `cxx_eh_probe` as the gate, re-dump one guest throw site only to scratch.
-2. Use PDB names for callees and image objects when debug info actually loaded.
-3. Make default `--llvm` (with opt) complete without shard `input-invalid` on the EH corpus.
-4. Kill flag/popcount/`*(T*)0` in LLVM (or mark them analysis-only) before pretty-print.
-5. Compact unused Win64 params on the LLVM route the same way HighC does.
+1. Use PDB names for callees and image objects when debug info actually loaded.
+2. Make default `--llvm` (with opt) complete without shard `input-invalid` on the EH corpus.
+3. Kill flag/popcount/`*(T*)0` in LLVM (or mark them analysis-only) before pretty-print.
+4. Compact unused Win64 params on the LLVM route the same way HighC does.
 
 Private PE/PDB fixtures are not the contract. Re-dump corpus `probe_plain_seh` after each of those layers.
