@@ -35,6 +35,7 @@ struct WindowsEHArtifactExpectation {
   std::string Optimization;
   std::string CxxFormat;
   std::string Execution;
+  int VisualStudioYear = 2022;
   bool SecurityCookie = false;
   CorpusValidationLevel ValidationLevel = CorpusValidationLevel::LoadOnly;
   std::vector<std::string> AllowedParseStatuses;
