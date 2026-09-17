@@ -140,6 +140,10 @@ public:
   forwardedStoreValue(const HighExpr &Addr, const std::string &Printed) const;
   bool isCopyForwardDestination(const MedVar &V) const;
   bool isParamCopy(const HighExpr &E) const;
+  /// x64 catch funclets receive the parent frame in rdx (`Param` id 1). After
+  /// attach that param is not the parent's rdx argument.
+  bool isCatchFuncletParentFrame(const MedVar &V) const;
+  const HighExpr *parentFrameStoredValue(const HighStmt &Stmt) const;
   std::optional<std::string> copyForwardSource(const HighExpr &E) const;
   bool isHiddenCopyForwardAssign(const HighStmt &Stmt) const;
   bool stmtHiddenFromC(const HighStmt &Stmt) const;

@@ -39,11 +39,13 @@ void collectUsedVarsExpr(const HighExpr &Expr,
   walkExprNodes(Expr, [&](const HighExpr &E) {
     if (isNamedValueExpr(E)) {
       std::string Name = VarFn(E.Var);
-      if (Vars.find(Name) == Vars.end())
+      if (!Name.empty() && Vars.find(Name) == Vars.end())
         Vars[Name] = E.Type;
     }
     for (auto &CO : E.IntrinsicOutputs) {
       std::string Name = VarFn(CO);
+      if (Name.empty())
+        continue;
       auto Ty = NdType::makeInt(CO.Size, false);
       if (Vars.find(Name) == Vars.end())
         Vars[Name] = Ty;
