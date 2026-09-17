@@ -118,8 +118,8 @@ std::string cellKey(StringRef Toolchain, StringRef Architecture,
   std::string ToolchainKey = Toolchain.str();
   if (Toolchain == "msvc" && VisualStudioYear != 2022)
     ToolchainKey += "/vs" + std::to_string(VisualStudioYear);
-  return ToolchainKey + "|" + Architecture.str() + "|" + CxxFormat.str() +
-         "|" + (SecurityCookie ? "gs" : "no-gs") + "|" + Optimization.str();
+  return ToolchainKey + "|" + Architecture.str() + "|" + CxxFormat.str() + "|" +
+         (SecurityCookie ? "gs" : "no-gs") + "|" + Optimization.str();
 }
 
 Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
@@ -362,27 +362,34 @@ std::map<std::string, std::set<std::string>> expectedInventory() {
   };
   const std::set<std::string> NativeClangNames{"nested_collided", "seh_probe",
                                                "cxx_eh_probe"};
-  for (StringRef Toolchain : {"msvc", "clang-cl"}) {
-    for (StringRef Architecture : {"x86", "x86_64", "arm", "aarch64"}) {
-      if (Toolchain == "clang-cl" && Architecture == "arm")
+  for (int VsYear : {2022, 2026}) {
+    for (StringRef Toolchain : {"msvc", "clang-cl"}) {
+      if (Toolchain == "clang-cl" && VsYear != 2022)
         continue;
-      SmallVector<StringRef, 2> Formats;
-      if (Architecture != "x86_64")
-        Formats.push_back("native");
-      else if (Toolchain == "msvc") {
-        Formats.push_back("fh3");
-        Formats.push_back("fh4");
-      } else
-        Formats.push_back("fh3");
-      for (StringRef Format : Formats)
-        for (bool SecurityCookie : {false, true})
-          for (StringRef Optimization : {"o0", "o2"})
-            Result.emplace(cellKey(Toolchain, Architecture, Format,
-                                   SecurityCookie, Optimization),
-                           Toolchain == "clang-cl" && (Architecture == "x86" ||
-                                                       Architecture == "x86_64")
-                               ? NativeClangNames
-                               : FullNames);
+      for (StringRef Architecture : {"x86", "x86_64", "arm", "aarch64"}) {
+        if (Toolchain == "clang-cl" && Architecture == "arm")
+          continue;
+        if (Toolchain == "msvc" && VsYear == 2026 && Architecture == "arm")
+          continue;
+        SmallVector<StringRef, 2> Formats;
+        if (Architecture != "x86_64")
+          Formats.push_back("native");
+        else if (Toolchain == "msvc") {
+          Formats.push_back("fh3");
+          Formats.push_back("fh4");
+        } else
+          Formats.push_back("fh3");
+        for (StringRef Format : Formats)
+          for (bool SecurityCookie : {false, true})
+            for (StringRef Optimization : {"o0", "o2"})
+              Result.emplace(
+                  cellKey(Toolchain, Architecture, Format, SecurityCookie,
+                          Optimization, VsYear),
+                  Toolchain == "clang-cl" &&
+                          (Architecture == "x86" || Architecture == "x86_64")
+                      ? NativeClangNames
+                      : FullNames);
+      }
     }
   }
   return Result;
@@ -392,10 +399,10 @@ Error verifyCompleteMatrix(
     ArrayRef<WindowsEHArtifactExpectation> Expectations) {
   std::map<std::string, std::set<std::string>> NamesByCell;
   for (const WindowsEHArtifactExpectation &Expectation : Expectations) {
-    std::string Key = cellKey(Expectation.Toolchain, Expectation.Architecture,
-                              Expectation.CxxFormat, Expectation.SecurityCookie,
-                              Expectation.Optimization,
-                              Expectation.VisualStudioYear);
+    std::string Key =
+        cellKey(Expectation.Toolchain, Expectation.Architecture,
+                Expectation.CxxFormat, Expectation.SecurityCookie,
+                Expectation.Optimization, Expectation.VisualStudioYear);
     if (!NamesByCell[Key].insert(Expectation.Name).second)
       return manifestError("duplicate artifact name in corpus matrix cell");
   }
