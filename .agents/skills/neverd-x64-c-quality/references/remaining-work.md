@@ -12,8 +12,9 @@ a regression, then delete the row.
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
 | Flag / popcount noise | lift + LLVMC | Simple `test`/`je` and cookie `cmp`/`rol`/`test` joins no longer emit `__builtin_popcount` (unused flag/temp PHIs are not DCE seeds). `*(T*)0` clobbers and extra Win64 params on the LLVM route remain. |
-| Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
+| Catch-funclet `rdx` | HighC | x64 catch bodies still name the parent frame `arg1` and write `Error.Value` through frame stores (`return v0` / `*(arg1+36)`). Hex-Rays uses PDB `Error.Value`. Nested `try`/`throw;` on `cxx_eh_probe` rethrow is in place. |
 | Wrapping casts | HighC | `return (int32_t)(uint32_t)((uint32_t)var + 1)` is required by sanitizer tests. Do not strip. |
+| Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
 | Source names | both | No PDB → `var_m18` / `arg0` / `g_1400050E0` / `sub_1400024E0`, not `Result` / `Value` / `ProbeSink` / `probe_filter`. MSVC `?A@B@@` now prints `B_A` instead of `_x3F_`. Hex-Rays still wins C++ types/`::`. |
 | x86 outlined except | HighC | Handler body can sit outside the function range; epilogue may read an adjacent slot instead of the try Result. |
 
@@ -74,6 +75,8 @@ a regression, then delete the row.
 | Call followed by `int3`/`ud2` is noreturn | `HighCPointerAddresses.CallFollowedByInt3OmitsDebugBreakAndReturn`; `MedNoReturn.CallFollowedByInt3IsNoreturn`; HighC omits `__debugbreak` and the success `return`; LLVM emits `noreturn`+unreachable |
 | `--func` still names IAT veneers | `HighCPointerAddresses.FuncLoadCxxThrowThunkPrintsThrowWithoutDebugBreak`; `HighCPointerAddresses.CorpusFuncLoadCxxEhProbePrintsThrow`; `FunctionDiscoveryAlignment.FuncLoadNamesImportThunkWithoutScan`; `decodeImportThunkAt` peeks `jmp [rip+IAT]` without scanning every executable byte |
 | Unused flag/temp PHIs are not DCE seeds | `LLVMCPointerAddresses.CookieCmpRolTestDoesNotEmitPopcount`; cookie LLVM-to-C has no `__builtin_popcount` |
+| Nested C++ tries that share an IP interval stay nested | `COFFExceptionIR.NestsCxxTriesThatShareIpInterval`; do not merge distinct TryLow/TryHigh into sibling `catch` |
+| Null `_CxxThrowException` object prints `throw;` | `HighCPointerAddresses.CxxRethrowNullObjectPrintsBareThrow` |
 
 ## Next x64 exe pass
 

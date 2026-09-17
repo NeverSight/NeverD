@@ -46,6 +46,21 @@ bool isCxxThrowExpr(const HighExpr *E) {
          isMsvcCxxThrowCallName(E->CallTarget);
 }
 
+bool isCxxRethrowObject(const HighExpr *Obj) {
+  const HighExpr *Cur = Obj;
+  for (int Depth = 0; Cur && Depth < 8; ++Depth) {
+    if (Cur->Kind == ExprKind::Const)
+      return Cur->ConstVal == 0;
+    if ((Cur->Kind == ExprKind::Cast || Cur->Kind == ExprKind::UnaryOp) &&
+        !Cur->Operands.empty()) {
+      Cur = Cur->Operands[0].get();
+      continue;
+    }
+    break;
+  }
+  return !Obj;
+}
+
 bool isFastFailExpr(const HighExpr *E) { return E && isX86FastFailCall(*E); }
 
 bool isDebugTrapStmt(const HighStmt &Stmt) {
@@ -132,7 +147,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     if (isCxxThrowExpr(Stmt.Val.get())) {
       emitIndent(Indent);
       OS << "throw";
-      if (!Stmt.Val->Operands.empty() && Stmt.Val->Operands[0])
+      if (!Stmt.Val->Operands.empty() && Stmt.Val->Operands[0] &&
+          !isCxxRethrowObject(Stmt.Val->Operands[0].get()))
         OS << " " << exprStr(*Stmt.Val->Operands[0]);
       OS << ";\n";
       break;
@@ -344,7 +360,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     if (isCxxThrowExpr(Stmt.CallExpr.get())) {
       emitIndent(Indent);
       OS << "throw";
-      if (!Stmt.CallExpr->Operands.empty() && Stmt.CallExpr->Operands[0])
+      if (!Stmt.CallExpr->Operands.empty() && Stmt.CallExpr->Operands[0] &&
+          !isCxxRethrowObject(Stmt.CallExpr->Operands[0].get()))
         OS << " " << exprStr(*Stmt.CallExpr->Operands[0]);
       OS << ";\n";
       break;
@@ -388,8 +405,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     if (InferredVoid || !Stmt.RetVal || Stmt.RetVal->Kind == ExprKind::Undef)
       OS << "return;\n";
     else if (Stmt.RetVal->Kind == ExprKind::Var &&
-             Stmt.RetVal->Var.Kind != MedVar::Param &&
-             !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)))
+             !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
+             (Stmt.RetVal->Var.Kind != MedVar::Param || InEHClauseBody))
       OS << "return;\n";
     else
       OS << "return " << formatReturnExpr(*Stmt.RetVal) << ";\n";
@@ -517,7 +534,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       if (isCxxThrowExpr(Stmt.Val.get())) {
         emitIndent(Indent);
         OS << "throw";
-        if (!Stmt.Val->Operands.empty() && Stmt.Val->Operands[0])
+        if (!Stmt.Val->Operands.empty() && Stmt.Val->Operands[0] &&
+            !isCxxRethrowObject(Stmt.Val->Operands[0].get()))
           OS << " " << exprStr(*Stmt.Val->Operands[0]);
         OS << ";\n";
         break;
@@ -807,6 +825,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
       OS << ";\n";
       continue;
     }
+    if (stmtHiddenFromC(S))
+      continue;
     writeStmt(S, Indent);
     AfterNoReturn = isNoReturnCallStmt(Analysis, S);
   }

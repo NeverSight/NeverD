@@ -885,6 +885,22 @@ TEST(HighCPointerAddresses, UndefOperandIsNotClobberComment) {
       << Source;
 }
 
+TEST(HighCPointerAddresses, CxxRethrowNullObjectPrintsBareThrow) {
+  HighFunc Func;
+  Func.Name = "rethrows";
+  Func.Entry = 0x140001000;
+  Func.ReturnType = NdType::makeVoid();
+  HighStmt Throw;
+  Throw.Kind = StmtKind::Call;
+  Throw.CallExpr = HighExpr::makeCall(
+      "_CxxThrowException", 0x140002000,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8)});
+  Func.Body.push_back(std::move(Throw));
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("throw;"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("throw 0"), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, CxxThrowCallPrintsThrowWithoutDebugBreak) {
   HighFunc Func;
   Func.Name = "throws";
@@ -2916,6 +2932,13 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   auto Result = Pipeline().run(*Img, Ctx, Opts);
   ASSERT_TRUE(Result.Success) << Result.Error;
   ASSERT_FALSE(Result.HighFuncs.empty());
+  std::vector<HighFunc> Related = Result.HighFuncs;
+  attachCxxFuncletBodies(Related);
+  const HighFunc *Attached = nullptr;
+  for (const HighFunc &Func : Related)
+    if (Func.Entry == Entry)
+      Attached = &Func;
+  ASSERT_NE(Attached, nullptr);
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -2923,10 +2946,11 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsThrow) {
   Options.TheArch = Img->Arch;
   Options.Format = Img->Format;
   Options.Image = &*Img;
-  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  ASSERT_TRUE(HighCEmitter().emit({*Attached}, OS, Options));
   OS.flush();
   EXPECT_NE(Source.find("throw"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__debugbreak"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("throw 0"), std::string::npos) << Source;
 }
 
 } // namespace
