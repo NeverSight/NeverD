@@ -764,3 +764,10 @@ MedIR source parameter validation traces demanded bytes backward from declared r
 Conditional structuring keeps fallthrough PHI copies on their original edge. Their provenance address cannot become a newly invented continuation target; when moving a run would require that target, the shared continuation remains in place. An unconditional synthetic loop also shares its first native instruction’s continuation when there are no operations before that exact header; conditional tests and preceding effects prevent this equivalence.
 
 Native source helper inference proves a complete integer result on every machine return path with a bounded CFG analysis. Predecessor facts meet across shared exits; entry paths prevent unseeded loops from proving themselves. Calls and partial writes invalidate the carrier until another complete computation. Malformed graphs, input-only returns and x86-64 epilogue restores remain rejected. This produces only a candidate source signature: the second pipeline run must still validate the body and its dependency closure, without changing the rewriting ABI.
+
+Bound MedIR calls carry one operand per physical ABI component, plus their
+call target. Native source inference and call-ABI recovery use
+`sourceABIParameters` to validate that count, as call lowering does. A record's
+logical parameter count cannot validate its split register operands; accepting
+a missing component or replacing renamed operands with a register scan loses
+source semantics.

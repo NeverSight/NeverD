@@ -77,6 +77,53 @@ TEST(SourceABI, EmptyBoundCallDoesNotAcquireUnrelatedRegisterArguments) {
   }
 }
 
+TEST(SourceABI, BoundRecordCallAbiRetainsEveryRenamedComponent) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Floating : {false, true}) {
+      const auto Member = Floating ? NdType::makeFloat(8) : NdType::makeInt(8);
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->TargetAddress = 0x2000;
+      Hint->TargetName = "bound_record";
+      Hint->Signature.ReturnType = NdType::makeVoid();
+      Hint->Signature.Parameters = {
+          {"pair", NdType::makeStruct({Member, Member})}};
+      std::string Error;
+      if (Floating && Architecture == Arch::X64) {
+        // Darwin x64 floating records are outside the supported fixed layout.
+        EXPECT_FALSE(assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error));
+        continue;
+      }
+      ASSERT_TRUE(
+          assignDarwinFixedSourceABI(Hint->Signature, Architecture, Error)) << Error;
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.SourceCallHint = Hint;
+      Call.addInput(MedVar::makeConst(0x2000, 8));
+      for (unsigned I = 0; I < 2; ++I) {
+        MedVar V;
+        V.Kind = MedVar::Temp;
+        V.Id = 73 + I;
+        V.SSAVer = 9;
+        V.Size = 8;
+        V.TheArch = Architecture;
+        Call.addInput(V);
+      }
+      MedFunc Function;
+      Function.Blocks.resize(1);
+      Function.Blocks[0].Id = 0;
+      Function.Blocks[0].Ops = {Call};
+      recoverCallAbi(Function, Architecture, {});
+      ASSERT_EQ(Function.CallInfos.size(), 1U);
+      const auto &Info = Function.CallInfos[0];
+      EXPECT_EQ(Info.SourceCallHint, Hint);
+      ASSERT_EQ(Info.Args.size(), 2U);
+      for (unsigned I = 0; I < 2; ++I) {
+        EXPECT_EQ(Info.Args[I].Id, 73 + I);
+        EXPECT_EQ(Info.Args[I].SSAVer, 9);
+      }
+    }
+}
+
 TEST(SourceABI, AddressUsesDoNotRewriteDeclaredIntegerParameters) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     SourceFunctionTypeHint Hint;

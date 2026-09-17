@@ -405,7 +405,8 @@ integerPairReturn(const MedFunc &Med, const SourceFunctionTypeHint &Scalar) {
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
         if (!Op.SourceCallHint ||
             !validateSourceABI(Op.SourceCallHint->Signature, Error) ||
-            Op.NumInputs != Op.SourceCallHint->Signature.Parameters.size() + 1)
+            Op.NumInputs !=
+                sourceABIParameters(Op.SourceCallHint->Signature).size() + 1)
           return std::nullopt;
     }
   }
@@ -783,7 +784,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
             !validateSourceABI(Op.SourceCallHint->Signature, Error) ||
             (NoReturn &&
              Op.DoesNotReturn != Op.SourceCallHint->DoesNotReturn) ||
-            Op.NumInputs != Op.SourceCallHint->Signature.Parameters.size() + 1)
+            Op.NumInputs !=
+                sourceABIParameters(Op.SourceCallHint->Signature).size() + 1)
           return Reject(
               "native function calls a target without a source binding");
       }

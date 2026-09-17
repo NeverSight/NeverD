@@ -17,6 +17,16 @@ extern void swift_release(void *);
 - (NSUInteger)metadataState:(const void *)metadata
                     request:(NSUInteger)request
                      result:(const void **)result;
+- (NSUInteger)unionStart:(NSUInteger)a
+                  length:(NSUInteger)b
+              otherStart:(NSUInteger)c
+                  length:(NSUInteger)d
+                  output:(NSUInteger *)output;
+- (NSUInteger)intersectionStart:(NSUInteger)a
+                         length:(NSUInteger)b
+                     otherStart:(NSUInteger)c
+                         length:(NSUInteger)d
+                         output:(NSUInteger *)output;
 @end
 #ifdef NEVERD_RECOVERED_ARC
 #include "replacements.h"
@@ -52,8 +62,34 @@ int main(void) {
       if (result != metadata || state != 0)
         abort();
     }
+    for (unsigned i = 0; i < 8192; ++i) {
+      random ^= random << 13;
+      random ^= random >> 7;
+      random ^= random << 17;
+      const NSRange a = NSMakeRange(random & 0xffff, (random >> 16) & 0xffff);
+      const NSRange b =
+          NSMakeRange((random >> 32) & 0xffff, (random >> 48) & 0xffff);
+      const NSRange u = NSUnionRange(a, b), x = NSIntersectionRange(a, b);
+      NSUInteger output[] = {UINT64_MAX, 17, UINT64_C(0xfedcba9876543210)};
+      NSUInteger first = [driver unionStart:a.location
+                                     length:a.length
+                                 otherStart:b.location
+                                     length:b.length
+                                     output:output];
+      if (first != u.location || output[0] != u.length || output[1] != 18 ||
+          output[2] != UINT64_C(0xfedcba9876543210))
+        abort();
+      NSUInteger second = [driver intersectionStart:a.location
+                                             length:a.length
+                                         otherStart:b.location
+                                             length:b.length
+                                             output:output];
+      if (second != x.length || output[0] != x.location || output[1] != 19 ||
+          output[2] != UINT64_C(0xfedcba9876543210))
+        abort();
+    }
     [driver release];
     puts("native-record-result-cases=16384\nbox-storage=pass\nmetadata-"
-         "response=pass");
+         "response=pass\nnative-record-argument-cases=16384");
   }
 }

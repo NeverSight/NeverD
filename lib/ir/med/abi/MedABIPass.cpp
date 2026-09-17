@@ -15,6 +15,7 @@
 #include "MedABIPassDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
@@ -436,7 +437,15 @@ void recoverCallAbi(MedFunc &Func, Arch TheArch,
         const auto &Hint = *Op.SourceCallHint;
         // These are actual operands renamed by SSA and visited by every
         // liveness/propagation pass, not a later physical-register guess.
-        if (Op.NumInputs == Hint.Signature.Parameters.size() + 1) {
+        std::string SourceABIError;
+        const bool Explicit = Hint.Signature.HasExplicitABI;
+        const bool Valid =
+            !Explicit || (Hint.Signature.Architecture == TheArch &&
+                          validateSourceABI(Hint.Signature, SourceABIError));
+        const size_t Count = Explicit
+                                 ? sourceABIParameters(Hint.Signature).size()
+                                 : Hint.Signature.Parameters.size();
+        if (Valid && Op.NumInputs == Count + 1) {
           CI.SourceCallHint = Op.SourceCallHint;
           CI.TargetAddr = Hint.TargetAddress;
           auto Name = FuncNames.find(CI.TargetAddr);

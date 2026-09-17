@@ -1516,6 +1516,37 @@ struct NativeRecordResultFixture : NativeFixture {
   }
 };
 
+TEST(NativeSourceHints, BoundRecordArgumentsUsePhysicalComponents) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool PairResult : {false, true})
+      for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        NativeRecordResultFixture F(Architecture);
+        auto &Call = F.Med.Blocks[0].Ops[0];
+        auto Binding =
+            std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+        Binding->Signature.Parameters = {
+            {"range", NdType::makeStruct({NdType::makeInt(8, false),
+                                          NdType::makeInt(8, false)})}};
+        std::string Error;
+        ASSERT_TRUE(assignDarwinFixedSourceABI(Binding->Signature, Architecture,
+                                               Error));
+        Call.addInput(MedVar::makeConst(17, 8));
+        if (Mutation != 1)
+          Call.addInput(MedVar::makeConst(31, 8));
+        if (Mutation == 2)
+          Call.addInput(MedVar::makeConst(91, 8));
+        if (Mutation == 3)
+          Binding->Signature.Parameters[0].Components.pop_back();
+        Call.SourceCallHint = Binding;
+        const auto Hint = inferNativeSourceTypeHint(
+            F.Image, F.Med, F.High, F.Audit, Error, nullptr, PairResult);
+        EXPECT_EQ(bool(Hint), Mutation == 0) << Error;
+        if (Hint)
+          EXPECT_EQ(Hint->ReturnComponents.size(), PairResult ? 2U : 0U);
+      }
+}
+
 TEST(NativeSourceHints, TypedRecordCallResultsDefineTheNativeReturnCarrier) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (bool Swift : {false, true})

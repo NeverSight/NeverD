@@ -18,6 +18,16 @@ swift_checkMetadataState(uintptr_t, const void *);
 - (NSUInteger)metadataState:(const void *)metadata
                     request:(NSUInteger)request
                      result:(const void **)result;
+- (NSUInteger)unionStart:(NSUInteger)a
+                  length:(NSUInteger)b
+              otherStart:(NSUInteger)c
+                  length:(NSUInteger)d
+                  output:(NSUInteger *)output;
+- (NSUInteger)intersectionStart:(NSUInteger)a
+                         length:(NSUInteger)b
+                     otherStart:(NSUInteger)c
+                         length:(NSUInteger)d
+                         output:(NSUInteger *)output;
 @end
 static __attribute__((noinline)) void *
 makeBox(const void *metadata, NSUInteger value, void **storage) {
@@ -33,6 +43,22 @@ static __attribute__((noinline)) NSUInteger readState(const void *metadata,
   *result = response.metadata;
   return response.state;
 }
+static __attribute__((noinline)) NSUInteger
+unionRangeWords(NSUInteger a, NSUInteger b, NSUInteger c, NSUInteger d,
+                NSUInteger *output) {
+  NSRange value = NSUnionRange(NSMakeRange(a, b), NSMakeRange(c, d));
+  output[0] = value.length;
+  ++output[1];
+  return value.location;
+}
+static __attribute__((noinline)) NSUInteger
+intersectionRangeWords(NSUInteger a, NSUInteger b, NSUInteger c, NSUInteger d,
+                       NSUInteger *output) {
+  NSRange value = NSIntersectionRange(NSMakeRange(a, b), NSMakeRange(c, d));
+  output[0] = value.location;
+  ++output[1];
+  return value.length;
+}
 @implementation NDNativeRecordResults
 - (void *)newBox:(const void *)metadata
            value:(NSUInteger)value
@@ -43,5 +69,19 @@ static __attribute__((noinline)) NSUInteger readState(const void *metadata,
                     request:(NSUInteger)request
                      result:(const void **)result {
   return readState(metadata, request, result);
+}
+- (NSUInteger)unionStart:(NSUInteger)a
+                  length:(NSUInteger)b
+              otherStart:(NSUInteger)c
+                  length:(NSUInteger)d
+                  output:(NSUInteger *)output {
+  return unionRangeWords(a, b, c, d, output);
+}
+- (NSUInteger)intersectionStart:(NSUInteger)a
+                         length:(NSUInteger)b
+                     otherStart:(NSUInteger)c
+                         length:(NSUInteger)d
+                         output:(NSUInteger *)output {
+  return intersectionRangeWords(a, b, c, d, output);
 }
 @end

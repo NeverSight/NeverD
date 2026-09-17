@@ -579,7 +579,7 @@ void verifyRuntime(bool Chained,
                              : NativeVoidFrames    ? 6U
                              : NativeVoid          ? 3U
                              : NativeFloating      ? 3U
-                             : NativeRecords       ? 2U
+                             : NativeRecords       ? 4U
                              : NativeIntegerPairs  ? 1U
                              : SwiftRecordRuntime  ? 2U
                              : SwiftIntegerRuntime ? 2U
@@ -685,7 +685,9 @@ void verifyRuntime(bool Chained,
     Remaining = {"doubleValue:other:mode:output:",
                  "floatValue:other:mode:output:", "compare:other:bias:"};
   if (NativeRecords)
-    Remaining = {"newBox:value:storage:", "metadataState:request:result:"};
+    Remaining = {"newBox:value:storage:", "metadataState:request:result:",
+                 "unionStart:length:otherStart:length:output:",
+                 "intersectionStart:length:otherStart:length:output:"};
   if (NativeIntegerPairs)
     Remaining = {"first:second:mode:output:"};
   if (SwiftRecordRuntime)
@@ -1273,7 +1275,7 @@ void verifyRuntime(bool Chained,
       : NativeFloating     ? "native-floating-cases=24576\nfloating-bits=pass\n"
                              "memory-effects=pass\n"
       : NativeRecords      ? "native-record-result-cases=16384\nbox-storage="
-                             "pass\nmetadata-response=pass\n"
+                             "pass\nmetadata-response=pass\nnative-record-argument-cases=16384\n"
       : NativeIntegerPairs ? "native-pair-cases=8192\nboth-words=pass\n"
                              "call-effects=24576\n"
       : SwiftRecordRuntime ? "swift-record-runtime-cases=16384\nbox-storage="
