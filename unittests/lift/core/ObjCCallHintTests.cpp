@@ -2579,6 +2579,30 @@ TEST(ObjCCallHints,
     }
 }
 
+TEST(ObjCCallHints, PropertyGetterKeepsSignedOffsetAndPlatformBoolABI) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage("_objc_getProperty", Architecture);
+    EXPECT_FALSE(objcRuntimeSourceCallHint(Image, 0x2180));
+    auto &Binding = Image.DyldBindSlots[0x2180];
+    Binding.Name = "_objc_getProperty";
+    Binding.Module = "/usr/lib/libobjc.A.dylib";
+    const auto Hint = objcRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    const auto &Signature = Hint->Signature;
+    ASSERT_EQ(Signature.Parameters.size(), 4U);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Signature.Parameters[2].Type->Size, 8U);
+    EXPECT_TRUE(Signature.Parameters[2].Type->IsSigned);
+    EXPECT_EQ(Signature.Parameters[3].Type->Size, 1U);
+    EXPECT_EQ(Signature.Parameters[3].Type->IsSigned,
+              Architecture == Arch::X64);
+    EXPECT_EQ(Signature.Parameters[3].Location.RegisterOffset,
+              getTargetRegInfo(Architecture).IntParamRegs[3]);
+    Binding.Module = "/tmp/libobjc.A.dylib";
+    EXPECT_FALSE(objcRuntimeSourceCallHint(Image, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, PropertyRuntimeKeepsValueBeforeSignedOffset) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     auto Image = runtimeImage("_objc_setProperty_nonatomic_copy", Architecture);

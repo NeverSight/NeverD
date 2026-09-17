@@ -337,6 +337,20 @@ objcRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
              Canonical == "objc_enumerationMutation") {
     Signature.ReturnType = NdType::makeVoid();
     Signature.Parameters = {{"object", Object}};
+  } else if (Canonical == "objc_getProperty") {
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Bind == Image.DyldBindSlots.end() ||
+        Bind->second.Module != "/usr/lib/libobjc.A.dylib")
+      return std::nullopt;
+    // objc4/runtime/objc-accessors.mm: id, SEL, ptrdiff_t, BOOL. Preserve the
+    // runtime operation: an atomic getter retains under the property lock and
+    // autoreleases its result. Reading the ivar directly is not equivalent.
+    Signature.ReturnType = Object;
+    Signature.Parameters = {
+        {"object", Object},
+        {"selector", Object},
+        {"offset", NdType::makeInt(8)},
+        {"atomic", NdType::makeInt(1, Image.Arch == Arch::X64)}};
   } else if (Canonical == "objc_setProperty_atomic" ||
              Canonical == "objc_setProperty_nonatomic" ||
              Canonical == "objc_setProperty_atomic_copy" ||

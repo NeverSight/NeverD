@@ -42,6 +42,7 @@ void run(const std::vector<std::string> &Arguments,
 }
 
 enum class RuntimeFixture {
+  AtomicARC,
   ARC,
   Associations,
   SwiftCalls,
@@ -127,6 +128,7 @@ void verifyRuntime(bool Chained,
       FixtureKind == RuntimeFixture::SwiftRecordRuntime;
   const bool SwiftIntegerRuntime =
       FixtureKind == RuntimeFixture::SwiftIntegerRuntime;
+  const bool AtomicARC = FixtureKind == RuntimeFixture::AtomicARC;
   const bool SwiftOnce = FixtureKind == RuntimeFixture::SwiftOnce;
   const bool NativeReturnPaths =
       FixtureKind == RuntimeFixture::NativeReturnPaths;
@@ -315,6 +317,8 @@ void verifyRuntime(bool Chained,
                                    "-dynamiclib", "-framework",
                                    "Foundation",  (Fixtures / Fixture).string(),
                                    "-o",          Original};
+  if (AtomicARC)
+    Compile.push_back("-DNEVERD_ATOMIC_PROPERTIES");
   if (ReceiverAliases) {
     auto Flag = std::find(Compile.begin(), Compile.end(), "-fobjc-arc");
     ASSERT_NE(Flag, Compile.end());
@@ -950,6 +954,8 @@ void verifyRuntime(bool Chained,
     auto Name = Method->getString("function_name");
     auto Source = Method->getString("source");
     ASSERT_TRUE(Selector && Name && Source);
+    if (AtomicARC && *Selector == "item")
+      EXPECT_TRUE(Source->contains("objc_getProperty(")) << Source->str();
     std::string Identity = Selector->str();
     if (ReceiverTypes || ReceiverFields || ReceiverAliases || ReceiverResults) {
       const auto Class = Method->getString("class_name");
@@ -1095,6 +1101,8 @@ void verifyRuntime(bool Chained,
              Original,
              "-o",
              Baseline};
+  if (AtomicARC)
+    Compile.insert(Compile.end() - 2, "-DNEVERD_ATOMIC_PROPERTIES");
   if (ManualBlocks)
     Compile.insert(Compile.end() - 2, "-DNEVERD_MANUAL_BLOCKS");
   if (ReceiverResults)
@@ -1301,6 +1309,15 @@ TEST(ObjCRuntimeSource, RecompiledARCMethodsPreserveActualObjectLifetimes) {
     SCOPED_TRACE(Chained ? "default fixups" : "classic fixups");
     ASSERT_NO_FATAL_FAILURE(verifyRuntime(Chained));
   }
+#else
+  GTEST_SKIP() << "Requires macOS Foundation and Objective-C runtime";
+#endif
+}
+
+TEST(ObjCRuntimeSource, AtomicPropertyGettersPreserveObjectLifetimes) {
+#ifdef __APPLE__
+  for (bool Chained : {false, true})
+    ASSERT_NO_FATAL_FAILURE(verifyRuntime(Chained, RuntimeFixture::AtomicARC));
 #else
   GTEST_SKIP() << "Requires macOS Foundation and Objective-C runtime";
 #endif

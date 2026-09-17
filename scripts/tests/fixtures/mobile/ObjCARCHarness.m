@@ -3,7 +3,11 @@
 #include <stdio.h>
 
 @interface NDARCBox : NSObject
+#ifdef NEVERD_ATOMIC_PROPERTIES
+@property(atomic, strong) id item;
+#else
 @property(nonatomic, strong) id item;
+#endif
 @property(nonatomic, weak) id observer;
 @property(nonatomic, copy) NSString *title;
 @end
@@ -31,8 +35,19 @@ int main(void) {
   NDTracked *First = [NDTracked new];
   Box.item = First;
   [First release];
+#ifdef NEVERD_ATOMIC_PROPERTIES
+  NSAutoreleasePool *ReadPool = [NSAutoreleasePool new];
+#endif
   if (Destroyed || Box.item != First)
     return 1;
+#ifdef NEVERD_ATOMIC_PROPERTIES
+  // The atomic getter owns an autoreleased retain. Clearing the property must
+  // leave the object alive until that read's autorelease pool is drained.
+  Box.item = nil;
+  if (Destroyed)
+    return 7;
+  [ReadPool drain];
+#endif
   Box.item = nil;
   if (Destroyed != 1)
     return 2;
