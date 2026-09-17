@@ -78,13 +78,13 @@ const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
   return nullptr;
 }
 
-bool isNoReturnCallStmt(const HighCAnalysisState &State, const HighStmt &Stmt) {
+bool isNoReturnCallStmt(const HighStmt &Stmt) {
   if (isCxxThrowStmt(Stmt))
     return true;
   const HighExpr *E = stmtCallExpr(Stmt);
   if (!E)
     return false;
-  return isNoreturnCallExpr(State, *E);
+  return isNoreturnCallExpr(*E);
 }
 
 void writeCxxCatchType(llvm::raw_ostream &OS, const HighEHClause &Clause) {
@@ -137,7 +137,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       OS << ";\n";
       break;
     }
-    if (isNoreturnCallExpr(Analysis, *Stmt.Val)) {
+    if (isNoreturnCallExpr(*Stmt.Val)) {
       emitIndent(Indent);
       OS << exprStr(*Stmt.Val) << ";\n";
       break;
@@ -789,7 +789,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
           else
             OS << "return;\n";
           AfterNoReturn = isCxxThrowExpr(AssignCall->Val.get()) ||
-                          isNoreturnCallExpr(Analysis, *AssignCall->Val);
+                          isNoreturnCallExpr(*AssignCall->Val);
           ++I;
           continue;
         }
@@ -808,7 +808,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
       continue;
     }
     writeStmt(S, Indent);
-    AfterNoReturn = isNoReturnCallStmt(Analysis, S);
+    AfterNoReturn = isNoReturnCallStmt(S);
   }
 }
 

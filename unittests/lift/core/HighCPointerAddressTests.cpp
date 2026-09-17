@@ -2069,7 +2069,8 @@ TEST(HighCPointerAddresses, ConstantReturnIsNotInferredVoid) {
   EXPECT_EQ(Source.find("void GSHandlerCheck"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UnnamedGsFailureCallOmitsSuccessReturn) {
+TEST(HighCPointerAddresses,
+     UnknownCalleeReturnIsNotDiscardedByBareSiblingReturn) {
   HighFunc Func;
   Func.Name = "cookie";
   Func.Entry = 0x140001350;
@@ -2106,10 +2107,10 @@ TEST(HighCPointerAddresses, UnnamedGsFailureCallOmitsSuccessReturn) {
   Func.Body.push_back(std::move(Ret));
 
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("void cookie"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("void cookie"), std::string::npos) << Source;
   EXPECT_NE(Source.find("sub_14000173C("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t3 ="), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, GetCurrentProcessTakesNoArguments) {

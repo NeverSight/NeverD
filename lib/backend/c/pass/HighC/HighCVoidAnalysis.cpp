@@ -19,61 +19,12 @@
 
 namespace neverd {
 
-bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E) {
-  if (E.Kind != ExprKind::Call)
-    return false;
-  if (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E))
-    return true;
-  return E.CallAddr != 0 && E.CallAddr != InvalidVA &&
-         State.InferredNoreturnCallAddrs.count(E.CallAddr) != 0;
-}
-
-void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
-                             VarNameFn VarFn) {
-  State.InferredNoreturnCallAddrs.clear();
-  auto IsBareReturnValue = [](const HighExpr *Ret) -> bool {
-    if (!Ret || Ret->Kind == ExprKind::Undef)
-      return true;
-    if (Ret->Kind != ExprKind::Var)
-      return false;
-    // Incoming EAX/RAX with no assignment is the MSVC `ret` success path on
-    // a void cookie helper, not a value the caller can read.
-    return Ret->Var.Kind == MedVar::Reg && Ret->Var.SSAVer == 0;
-  };
-  bool HasBareReturn = false;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (S.Kind == StmtKind::Return && IsBareReturnValue(S.RetVal.get()))
-      HasBareReturn = true;
-  });
-  if (!HasBareReturn)
-    return;
-
-  std::map<std::string, const HighExpr *> VarSources;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (State.DeadStmts.count(&S))
-      return;
-    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var &&
-        S.Val)
-      VarSources[VarFn(S.Dst->Var)] = S.Val.get();
-  });
-
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    if (S.Kind != StmtKind::Return || !S.RetVal)
-      return;
-    const HighExpr *Ret = S.RetVal.get();
-    if (Ret->Kind == ExprKind::Call) {
-      if (Ret->CallAddr != 0 && Ret->CallAddr != InvalidVA)
-        State.InferredNoreturnCallAddrs.insert(Ret->CallAddr);
-      return;
-    }
-    if (Ret->Kind != ExprKind::Var)
-      return;
-    auto It = VarSources.find(VarFn(Ret->Var));
-    if (It == VarSources.end() || It->second->Kind != ExprKind::Call)
-      return;
-    if (It->second->CallAddr != 0 && It->second->CallAddr != InvalidVA)
-      State.InferredNoreturnCallAddrs.insert(It->second->CallAddr);
-  });
+bool isNoreturnCallExpr(const HighExpr &E) {
+  // A bare return in the caller says nothing about whether another callee
+  // returns. In particular, HighIR can assign a result to register version 0.
+  // Only a known terminating operation authorizes omitting its result.
+  return E.Kind == ExprKind::Call &&
+         (libc::isNoReturnFunction(E.CallTarget) || isX86FastFailCall(E));
 }
 
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
@@ -150,8 +101,7 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
     if (It != VarSources.end()) {
       auto *Src = It->second;
       if (Src->Kind == ExprKind::Call) {
-        if (isMsvcCxxThrowCallName(Src->CallTarget) ||
-            isNoreturnCallExpr(State, *Src))
+        if (isMsvcCxxThrowCallName(Src->CallTarget) || isNoreturnCallExpr(*Src))
           return true;
         if (Src->IntrinsicId != Intrinsic::None)
           return isSideeffectIntrinsic(Src->IntrinsicId) ||
@@ -207,8 +157,7 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
       return true;
     }
     if (E.Kind == ExprKind::Call)
-      return isMsvcCxxThrowCallName(E.CallTarget) ||
-             isNoreturnCallExpr(State, E);
+      return isMsvcCxxThrowCallName(E.CallTarget) || isNoreturnCallExpr(E);
     return false;
   };
 

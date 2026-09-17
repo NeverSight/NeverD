@@ -1889,3 +1889,34 @@ TEST(HighCSourceCalls, PartialIntegerAtomicsRejectWidenedMemoryAccess) {
   EXPECT_DEATH(emit({Function}),
                "atomic access requires a supported machine width");
 }
+
+TEST(HighCSourceCalls, AssignedVersionZeroRegisterKeepsReturningCallResult) {
+  const auto I64 = NdType::makeInt(8, false);
+  for (bool Typed : {false, true}) {
+    HighFunc F;
+    F.Name = "read_value";
+    F.ReturnType = I64;
+    if (Typed)
+      F.SourceTypeHint = native(F.Name, I64, {}).Signature;
+    MedVar Value;
+    Value.Kind = MedVar::Reg;
+    Value.Id = 0;
+    Value.SSAVer = 0;
+    Value.Size = 8;
+    Value.TheArch = Arch::X64;
+    auto Hint = native("value_provider", I64, {});
+    Hint.TargetAddress = 0x1234;
+    HighStmt Assign;
+    Assign.Kind = StmtKind::Assign;
+    Assign.Dst = HighExpr::makeVar(Value, I64);
+    Assign.Val = call(Hint, I64);
+    HighStmt Ret;
+    Ret.Kind = StmtKind::Return;
+    Ret.RetVal = HighExpr::makeVar(Value, I64);
+    F.Body = {Assign, Ret};
+    compileAndRun(emit({F}) + R"(
+uint64_t value_provider(void) { return UINT64_C(0x123456789abcdef0); }
+int main(void) { return read_value() != UINT64_C(0x123456789abcdef0); }
+)");
+  }
+}
