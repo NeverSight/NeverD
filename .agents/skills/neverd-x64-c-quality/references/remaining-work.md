@@ -7,7 +7,6 @@ a regression, then delete the row.
 
 | Gap | Surface | Notes |
 |---|---|---|
-| Live x64 PE vs Hex-Rays | HighC | Cookie is `void` + unnamed `jmp` fail helper treated as noreturn when a sibling path is a bare `return`. Rotate prints `__builtin_rotateleft64`. `__GSHandlerCheck` keeps `return 1` (Const is not void). `__GSHandlerCheckCommon` prints the GS_HANDLER_DATA bit-2 align branch (`test [r8],4` / `and i8 …, 4`). Hex-Rays still wins PDB types/struct fields (non-goal), `capture_previous_context` vs `sub_*`, and `__wind` ctor unwind. Release `--func` CLI of MapleStory2 cookie/GS is 0.06–0.07s (includes PE load). Post-load `neverd_decompile` is 12–17ms vs Hex-Rays uncached 18–64ms and Ghidra UDS 0.25–0.37s. |
 | C++ ctor unwind | HighC | Destructor `__unwind` vs unstructured `__try` on large ctors is still open. Catch funclets now attach into `catch` bodies on `--func`. |
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
@@ -35,8 +34,8 @@ a regression, then delete the row.
 | Unnamed x64 pdata with MSVC `mov [rsp+8], ecx` home | `COFFFunctionListingTest.UnnamedPdataAcceptsWin64RegisterHome`; `export --func 0x140001050` |
 | Named frame slots stay declared after copy-forward | `NeverDHighCStoreForwardingTests`; FrameSlots emit even if DeadVars |
 | LLVMC PHI edge copies, not `/* phi: */` | `LLVMCPointerAddresses.AssignsPhiAtPredecessorEdges` |
-| Const `return 1` is not void | `HighCPointerAddresses.ConstantReturnIsNotInferredVoid` |
-| Unnamed cookie fail + bare `return` is noreturn/void | `HighCPointerAddresses.UnnamedGsFailureCallOmitsSuccessReturn` |
+| Const `return 1` is not void | `HighCPointerAddresses.ConstantReturnIsNotInferredVoid`; public `/GS` `seh_probe` GSHandlerCheck: `HighCPointerAddresses.CorpusFuncLoadGsHandlerCheckReturnsOne` |
+| Unnamed cookie fail + bare `return` is noreturn/void | `HighCPointerAddresses.UnnamedGsFailureCallOmitsSuccessReturn`; public `/GS` `seh_probe` cookie: `HighCPointerAddresses.CorpusFuncLoadGsCookieIsVoidNoreturnFail` |
 | `GetCurrentProcess()` is 0-arg | `HighCPointerAddresses.GetCurrentProcessTakesNoArguments` |
 | `TerminateProcess` is noreturn | `HighCPointerAddresses.TerminateProcessOmitsSuccessReturn`; `LLVMCPointerAddresses.TerminateProcessOmitsSuccessReturn` |
 | Image function exclusive-end code pointer | `LLVMCodePointerInvariantBoundary.UnliftedFunctionExclusiveEndResolvesAsGep` |
@@ -82,8 +81,8 @@ a regression, then delete the row.
 
 Prefer HighC on reducible MSVC, LLVMC on obfuscated guests. Sequence:
 
-1. Kill HighC caller-saved `0 /* clobbered */` operands and uninitialized success returns on the CRT cookie / GS-handler shapes (public `seh_probe` plus a single `--func` dump, not a full-image guest decompile).
-2. Print C++ `throw` and ctor destructor unwind as source-like C; keep corpus `cxx_eh_probe` as the gate, re-dump one guest throw site only to scratch.
+1. Print catch-funclet parent-frame `rdx` as a frame, not `arg1`, and `Error.Value` instead of `return v0` / `*(arg1+36)` on `cxx_eh_probe`.
+2. Print C++ ctor destructor unwind as source-like C; keep corpus `cxx_eh_probe` as the gate, re-dump one guest throw site only to scratch.
 3. Use PDB names for callees and image objects when debug info actually loaded.
 4. Make default `--llvm` (with opt) complete without shard `input-invalid` on the EH corpus.
 5. Kill flag/popcount/`*(T*)0` in LLVM (or mark them analysis-only) before pretty-print.
