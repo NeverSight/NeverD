@@ -299,13 +299,9 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
         objc_binding_detail::constantAddress(*E->Operands[C.Initializer]);
     if (!P || !S || !I || (*P > *S ? *P - *S : *S - *P) < 8)
       return E;
-    auto Predicate = objc_binding_detail::localStorageHint(Image, *P, 8);
+    auto Predicate = objc_binding_detail::oncePredicateStorageHint(Image, *P);
     auto Storage = objc_binding_detail::localStorageHint(Image, *S, 8);
     if (!Predicate || !Storage)
-      return E;
-    const auto *Token = Image.readVA(*P, 8);
-    if (!Token ||
-        !std::all_of(Token, Token + 8, [](uint8_t B) { return B == 0; }))
       return E;
     auto Address = HighExpr::makeCall({}, 0, {});
     auto Hint = std::make_shared<SourceCallTypeHint>();

@@ -43,6 +43,7 @@ void run(const std::vector<std::string> &Arguments,
 
 enum class RuntimeFixture {
   AtomicARC,
+  DispatchOnce,
   ARC,
   Associations,
   SwiftCalls,
@@ -128,6 +129,7 @@ void verifyRuntime(bool Chained,
       FixtureKind == RuntimeFixture::SwiftRecordRuntime;
   const bool SwiftIntegerRuntime =
       FixtureKind == RuntimeFixture::SwiftIntegerRuntime;
+  const bool DispatchOnce = FixtureKind == RuntimeFixture::DispatchOnce;
   const bool AtomicARC = FixtureKind == RuntimeFixture::AtomicARC;
   const bool SwiftOnce = FixtureKind == RuntimeFixture::SwiftOnce;
   const bool NativeReturnPaths =
@@ -207,6 +209,7 @@ void verifyRuntime(bool Chained,
                         : SwiftRecordRuntime  ? "ObjCSwiftRecordRuntime.m"
                         : SwiftIntegerRuntime ? "ObjCSwiftIntegerRuntime.m"
                         : SwiftTypeLookup     ? "ObjCSwiftTypeLookup.m"
+                        : DispatchOnce        ? "ObjCDispatchOnce.m"
                         : SwiftOnce           ? "ObjCSwiftOnce.m"
                         : NativeReturnPaths   ? "ObjCNativeReturnPaths.m"
                         : IncomingResults     ? "ObjCIncomingResults.m"
@@ -263,6 +266,7 @@ void verifyRuntime(bool Chained,
                         : SwiftIntegerRuntime
                             ? "ObjCSwiftIntegerRuntimeHarness.m"
                         : SwiftTypeLookup   ? "ObjCSwiftTypeLookupHarness.m"
+                        : DispatchOnce      ? "ObjCDispatchOnceHarness.m"
                         : SwiftOnce         ? "ObjCSwiftOnceHarness.m"
                         : NativeReturnPaths ? "ObjCNativeReturnPathsHarness.m"
                         : IncomingResults   ? "ObjCIncomingResultsHarness.m"
@@ -566,6 +570,7 @@ void verifyRuntime(bool Chained,
                              : SwiftRecordRuntime  ? 2U
                              : SwiftIntegerRuntime ? 2U
                              : SwiftTypeLookup     ? 1U
+                             : DispatchOnce        ? 2U
                              : SwiftOnce           ? 1U
                              : NativeReturnPaths   ? 2U
                              : IncomingResults     ? 2U
@@ -667,6 +672,8 @@ void verifyRuntime(bool Chained,
     Remaining = {"retainObject:times:", "object:canCastToClass:"};
   if (SwiftOnce)
     Remaining = {"value"};
+  if (DispatchOnce)
+    Remaining = {"shared", "initializationCount"};
   if (NativeReturnPaths)
     Remaining = {"adjusted:choose:output:", "wideLeaf:"};
   if (IncomingResults)
@@ -880,6 +887,7 @@ void verifyRuntime(bool Chained,
                   : SwiftRecordRuntime  ? "NDSwiftRecordRuntime"
                   : SwiftIntegerRuntime ? "NDSwiftIntegerRuntime"
                   : SwiftTypeLookup     ? "NDSwiftTypeLookup"
+                  : DispatchOnce        ? "NDDispatchOnce"
                   : SwiftOnce           ? "NDSwiftOnce"
                   : NativeReturnPaths   ? "NDNativeReturnPaths"
                   : IncomingResults     ? "NDIncomingResults"
@@ -1061,7 +1069,9 @@ void verifyRuntime(bool Chained,
   EXPECT_TRUE(RejectedConstantUses.empty());
   if (BlockLifetimes)
     EXPECT_GE(RepeatedBlockHelpers, 2U);
-  EXPECT_EQ(StorageNames.size(), Profiled ? 1U : SwiftOnce ? 3U : 0U);
+  EXPECT_EQ(StorageNames.size(), Profiled                      ? 1U
+                                 : (SwiftOnce || DispatchOnce) ? 3U
+                                                               : 0U);
   if (DiagnosticReports)
     EXPECT_FALSE(IdentityHelpers.empty());
   else
@@ -1210,6 +1220,8 @@ void verifyRuntime(bool Chained,
                              "pass\nmetadata-response=pass\n"
       : SwiftIntegerRuntime ? "runtime-integer-cases=4096\ncast-results="
                               "pass\nreference-counts=pass\n"
+      : DispatchOnce        ? "dispatch-once-calls=8192\ninitializer-effects="
+                       "once\nshared-object=pass\n"
       : SwiftOnce ? "swift-once-calls=8192\ninitializer-effects=once\nshared-"
                     "state=pass\n"
       : NativeReturnPaths ? "native-return-cases=16384\nreturns-and-stores="
@@ -2081,4 +2093,14 @@ TEST(ObjCRuntimeSource,
 TEST(ObjCRuntimeSource, SwiftOncePreservesInitializationAndSharedStorage) {
   for (bool Chained : {false, true})
     ASSERT_NO_FATAL_FAILURE(verifyRuntime(Chained, RuntimeFixture::SwiftOnce));
+}
+
+TEST(ObjCRuntimeSource, DispatchOncePreservesCapturedClassAndSharedObject) {
+#ifdef __APPLE__
+  for (bool Chained : {false, true})
+    ASSERT_NO_FATAL_FAILURE(
+        verifyRuntime(Chained, RuntimeFixture::DispatchOnce));
+#else
+  GTEST_SKIP() << "Requires macOS Foundation and Objective-C runtime";
+#endif
 }

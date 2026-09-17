@@ -2350,6 +2350,56 @@ TEST(ObjCSourceBindings,
   EXPECT_TRUE(Overlapping.LocalStorageExtents.empty());
 }
 
+TEST(ObjCSourceBindings,
+     OnceTokensBindOnlyAuthenticatedZeroInitializedStorage) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F;
+    F.Image.Arch = Architecture;
+    constexpr va_t Address = 0x1040;
+    constexpr va_t Slot = 0x10e0;
+    F.Image.ObjCSourceReferences.clear();
+    F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+    F.Image.Symbols.push_back({"_onceToken", Address, 8, false});
+    F.Image.ImportPtrSlots[Slot] = "_dispatch_once";
+    ASSERT_TRUE(F.Image.recordDyldBindSlot(
+        Slot, "_dispatch_once", 0, "/usr/lib/system/libdispatch.dylib", false));
+    const auto Hint = darwinRuntimeSourceCallHint(F.Image, Slot);
+    ASSERT_TRUE(Hint);
+    auto Call = HighExpr::makeCall(
+        "dispatch_once", Slot,
+        {HighExpr::makeConst(Address, 8,
+                             ConstantAddressProvenance::DataAddress),
+         HighExpr::makeConst(0, 8)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    F.Function.Body[0].RetVal = Call;
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{Address, 8}}));
+    EXPECT_TRUE(objcSourceCallBound(*Bound.Function.Body[0].RetVal->Operands[0],
+                                    F.Image, {}));
+    for (unsigned Case = 0; Case < 4; ++Case) {
+      auto Image = F.Image;
+      auto Forged = *Hint;
+      if (Case == 0)
+        Image.Segments[0].Data[Address - Image.Segments[0].VA] = 1;
+      if (Case == 1)
+        Image.Symbols.clear();
+      if (Case == 2)
+        Forged.Signature.Parameters[0].Location.RegisterOffset += 8;
+      if (Case == 3)
+        Image.DyldBindSlots[Slot].Module = "/tmp/libdispatch.dylib";
+      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Forged);
+      EXPECT_TRUE(bindObjCSourceReferences(F.Function, Image)
+                      .LocalStorageExtents.empty())
+          << Case;
+    }
+    EXPECT_FALSE(
+        objc_binding_detail::oncePredicateStorageHint(F.Image, Address + 1));
+  }
+}
+
 TEST(ObjCSourceBindings, UnfairLocksBindExactNamedFourByteStorage) {
   Fixture F;
   constexpr va_t Address = 0x1040;

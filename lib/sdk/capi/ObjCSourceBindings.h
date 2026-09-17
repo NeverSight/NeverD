@@ -286,6 +286,22 @@ localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   return Hint;
 }
 
+// Darwin dispatch_once_t (also used by swift_once) is an intptr_t, initialized
+// to zero in static storage. A completed token cannot be transplanted without
+// its initialized state. Keep token storage shared through the normal helpers.
+inline std::optional<SourceCallTypeHint>
+oncePredicateStorageHint(const BinaryImage &Image, va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
+      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) || Address % 8)
+    return std::nullopt;
+  auto Hint = localStorageHint(Image, Address, 8);
+  const auto *Bytes = Hint ? Image.readVA(Address, 8) : nullptr;
+  if (!Bytes ||
+      !std::all_of(Bytes, Bytes + 8, [](uint8_t B) { return B == 0; }))
+    return std::nullopt;
+  return Hint;
+}
+
 /// Bind a direct scalar access inside named writable storage to the symbol's
 /// base helper. Mach-O nlist entries commonly omit data-object sizes, so the
 /// access itself proves only the required prefix. Keeping that prefix rooted
@@ -1090,14 +1106,15 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
                "address",
                Operand.get());
       }
-      // The public unfair-lock routines consume one four-byte opaque lock
-      // object. Bind only their exact first argument and keep the platform
-      // implementation responsible for lock ownership and synchronization.
+      // Known Darwin synchronization calls consume exactly one opaque lock
+      // or once token. Bind only that argument and keep the platform runtime
+      // responsible for lock ownership, ordering, and initialization.
       if (Index == 0 && Operand && Expression->Kind == ExprKind::Call &&
           Expression->SourceCallHint &&
           Expression->SourceCallHint->CallKind ==
               SourceCallTypeHint::Kind::DarwinRuntimeCall &&
-          (Expression->SourceCallHint->TargetName == "os_unfair_lock_lock" ||
+          (Expression->SourceCallHint->TargetName == "dispatch_once" ||
+           Expression->SourceCallHint->TargetName == "os_unfair_lock_lock" ||
            Expression->SourceCallHint->TargetName == "os_unfair_lock_unlock" ||
            Expression->SourceCallHint->TargetName ==
                "os_unfair_lock_assert_owner" ||
@@ -1111,7 +1128,10 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
             !runtimeBindingMatches(*Expression->SourceCallHint, *Expected))
           continue;
         const auto Address = constantAddress(*Operand);
-        auto Hint = Address ? localStorageHint(Image, *Address, 4)
+        const bool Once = Expected->TargetName == "dispatch_once";
+        const uint64_t Width = Once ? 8 : 4;
+        auto Hint = Address ? (Once ? oncePredicateStorageHint(Image, *Address)
+                                    : localStorageHint(Image, *Address, Width))
                             : std::nullopt;
         if (Hint) {
           auto Storage = HighExpr::makeCall({}, 0, {});
@@ -1119,7 +1139,7 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
           Storage->SourceCallHint =
               std::make_shared<SourceCallTypeHint>(std::move(*Hint));
           Result.LocalStorageExtents[*Address] =
-              std::max<uint64_t>(Result.LocalStorageExtents[*Address], 4);
+              std::max<uint64_t>(Result.LocalStorageExtents[*Address], Width);
           Operand = std::move(Storage);
           continue;
         }
