@@ -456,6 +456,8 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   }
 
   for (auto &BB : Fn) {
+    if (&BB != &Fn.getEntryBlock() && llvm::pred_empty(&BB))
+      continue;
     AfterCxxThrow = false;
     if (!isSimpleEntry(&BB, Fn))
       OS << blockLabel(&BB) << ":\n";

@@ -51,6 +51,7 @@ std::string LLVMCWriter::functionIdentifier(const llvm::Function &Fn) const {
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   OnlyFunction = Only;
+  CurMod = &Mod;
   prepareFunctionIdentifiers(Mod);
   writeIncludes(Mod);
   OS << "\n";
@@ -59,6 +60,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     writeGlobals(Mod);
     writeForwardDecls(Mod);
     OS << "\n";
+  } else {
+    writeReferencedImageObjects(*OnlyFunction);
   }
 
   for (auto &Fn : Mod) {
@@ -200,6 +203,32 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       OS << " = " << constStr(Init);
     OS << ";\n";
   }
+}
+
+void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
+  std::map<std::string, llvm::Type *> Objs;
+  auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty) {
+    std::string Name = imageDataCName(Ptr);
+    if (Name.empty() || !Ty)
+      return;
+    auto It = Objs.find(Name);
+    if (It == Objs.end() ||
+        (Ty->isIntegerTy() && It->second->isIntegerTy() &&
+         Ty->getIntegerBitWidth() > It->second->getIntegerBitWidth()))
+      Objs[Name] = Ty;
+  };
+  for (const auto &BB : Fn) {
+    for (const auto &Inst : BB) {
+      if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+        Note(LI->getPointerOperand(), LI->getType());
+      else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+        Note(SI->getPointerOperand(), SI->getValueOperand()->getType());
+    }
+  }
+  for (const auto &[Name, Ty] : Objs)
+    OS << "extern " << typeToCLLVM(Ty) << " " << Name << ";\n";
+  if (!Objs.empty())
+    OS << "\n";
 }
 
 void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {

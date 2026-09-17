@@ -134,6 +134,9 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     }
     if (const llvm::AllocaInst *Slot = asAllocaPointer(LI->getPointerOperand()))
       OS << Name << " = " << getName(Slot) << ";\n";
+    else if (std::string Image = imageDataCName(LI->getPointerOperand());
+             !Image.empty())
+      OS << Name << " = " << Image << ";\n";
     else
       OS << Name << " = *(" << typeToCLLVM(LI->getType()) << "*)"
          << valueStr(LI->getPointerOperand()) << ";\n";
@@ -144,6 +147,9 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     emitIndent(Indent);
     if (const llvm::AllocaInst *Slot = asAllocaPointer(SI->getPointerOperand()))
       OS << getName(Slot) << " = " << valueStr(SI->getValueOperand()) << ";\n";
+    else if (std::string Image = imageDataCName(SI->getPointerOperand());
+             !Image.empty())
+      OS << Image << " = " << valueStr(SI->getValueOperand()) << ";\n";
     else
       OS << "*(" << typeToCLLVM(SI->getValueOperand()->getType()) << "*)"
          << valueStr(SI->getPointerOperand()) << " = "

@@ -39,6 +39,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -63,6 +64,7 @@ public:
   void writeIncludes(llvm::Module &Mod);
   void writeStructDefs(llvm::Module &Mod);
   void writeGlobals(llvm::Module &Mod);
+  void writeReferencedImageObjects(const llvm::Function &Fn);
   void writeForwardDecls(llvm::Module &Mod);
 
   //--- Function rendering (LLVMCFuncWriter.cpp) ---
@@ -109,6 +111,8 @@ public:
 
   //--- Expression rendering (LLVMCExprWriter.cpp) ---
   std::string resolveNdDataName(llvm::StringRef Name) const;
+  std::optional<va_t> imageDataVA(const llvm::Value *V) const;
+  std::string imageDataCName(const llvm::Value *V) const;
   std::string getName(const llvm::Value *V);
   std::string freshVar(const std::string &Hint = "v");
   std::string valueStr(const llvm::Value *V);
@@ -127,6 +131,7 @@ public:
   CEmitterOptions Opts;
   DebugContext *Dbg;
   const BinaryImage *Img;
+  const llvm::Module *CurMod = nullptr;
   bool GuardAnalysisOnlyFunctions;
   const llvm::Function *OnlyFunction = nullptr;
   /// When false, emit recovered statements without a C wrapper so analysis-only

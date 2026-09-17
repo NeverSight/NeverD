@@ -35,6 +35,53 @@ std::string LLVMCWriter::resolveNdDataName(llvm::StringRef Name) const {
   return makeSyntheticGlobalName(*Addr);
 }
 
+std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
+  if (!V)
+    return std::nullopt;
+  if (auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(V)) {
+    switch (CE->getOpcode()) {
+    case llvm::Instruction::BitCast:
+    case llvm::Instruction::AddrSpaceCast:
+    case llvm::Instruction::IntToPtr:
+    case llvm::Instruction::PtrToInt:
+      return imageDataVA(CE->getOperand(0));
+    case llvm::Instruction::GetElementPtr: {
+      auto Base = imageDataVA(CE->getOperand(0));
+      if (!Base)
+        return std::nullopt;
+      llvm::APInt Off(64, 0);
+      const auto *GEP = llvm::cast<llvm::GEPOperator>(CE);
+      if (CurMod &&
+          GEP->accumulateConstantOffset(CurMod->getDataLayout(), Off))
+        return static_cast<va_t>(static_cast<int64_t>(*Base) +
+                                 Off.getSExtValue());
+      if (CE->getNumOperands() == 2) {
+        if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(CE->getOperand(1)))
+          return static_cast<va_t>(static_cast<int64_t>(*Base) +
+                                   CI->getSExtValue());
+      }
+      return std::nullopt;
+    }
+    default:
+      return std::nullopt;
+    }
+  }
+  if (auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(V)) {
+    if (auto Addr = parseNdDataSymbol(GV->getName()))
+      return Addr;
+    if (auto Addr = parseNdCodePtrSymbol(GV->getName()))
+      return Addr;
+  }
+  return std::nullopt;
+}
+
+std::string LLVMCWriter::imageDataCName(const llvm::Value *V) const {
+  const auto VA = imageDataVA(V);
+  if (!VA)
+    return {};
+  return resolveNdDataName(makeNdDataSymbol(*VA));
+}
+
 std::string LLVMCWriter::freshVar(const std::string &Hint) {
   std::string Name;
   do {
@@ -90,6 +137,9 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C) {
 
   if (auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(C)) {
     if (CE->getOpcode() == llvm::Instruction::GetElementPtr) {
+      std::string Image = imageDataCName(CE);
+      if (!Image.empty())
+        return "&" + Image;
       if (CE->getNumOperands() >= 3) {
         if (auto *GV =
                 llvm::dyn_cast<llvm::GlobalVariable>(CE->getOperand(0))) {

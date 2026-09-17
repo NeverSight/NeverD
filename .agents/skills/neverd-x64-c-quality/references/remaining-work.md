@@ -9,9 +9,7 @@ a regression, then delete the row.
 |---|---|---|
 | LLVMC EH is a wrap | LLVMC | Whole-function `__try` + goto, not nested `__try`/`__except` regions. HighC structured regions are the readable target. |
 | `--llvm` shard opt quality | pipeline | Default `decompile --llvm` now still emits C if a shard's input fails verifier/EH contracts (opt skipped). The IR is still not a valid opt input; flag/popcount/`*(T*)0` DCE in LLVM remains the real fix. |
-| Flag / popcount noise | lift + LLVMC | Simple `test`/`je` and cookie `cmp`/`rol`/`test` joins no longer emit `__builtin_popcount` (unused flag/temp PHIs are not DCE seeds). `*(T*)0` clobbers and extra Win64 params on the LLVM route remain. |
 | Wrapping casts | HighC | `return (int32_t)(uint32_t)((uint32_t)var + 1)` is required by sanitizer tests. Do not strip. |
-| Extra Win64 params on LLVM route | MedLLVM / LLVMC | HighC compacted `probe_plain_seh` to `int32_t arg0`. LLVMC still showed `arg0..arg7`. GUI can show LLVM C via representation `llvmc` (`neverd_decompile_llvm`); default **C** tab remains HighC. |
 | Source names | both | No PDB → `var_m18` / `arg0` / `g_1400050E0` / `sub_1400024E0`, not `Result` / `Value` / `ProbeSink` / `probe_filter`. MSVC `?A@B@@` now prints `B_A` instead of `_x3F_`. Hex-Rays still wins C++ types/`::`. |
 | x86 outlined except | HighC | Handler body can sit outside the function range; epilogue may read an adjacent slot instead of the try Result. |
 
@@ -76,6 +74,8 @@ a regression, then delete the row.
 | Null `_CxxThrowException` object prints `throw;` | `HighCPointerAddresses.CxxRethrowNullObjectPrintsBareThrow` |
 | Catch-funclet `rdx` is the parent frame, not `arg1` | `HighCPointerAddresses.CatchFuncletParentFrameStoreBecomesReturn`; public `cxx_eh_probe`: `CorpusFuncLoadCxxEhProbeCatchReturnsValue`; nested `return -200`: `CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues`. Last `[rdx+k]=val; ret` prints `return val`. PDB `Error.Value` is still source names. |
 | C++ unwind funclets print as destructor calls | `HighCPointerAddresses.AttachesCxxUnwindFuncletAsDestructorCall`; public `cxx_eh_probe` nested Cleanup: `CorpusFuncLoadCxxEhProbePrintsUnwindDestructor`. `--func` expands UnwindMap ActionVA; cleanup `ret` is not a parent return. |
+| LLVMC image GEP is `g_<va>`, not `*(T*)0` | `LLVMCPointerAddresses.NdDataGepPrintsSyntheticGlobalNotNullLoad`; public `/GS` cookie: `CorpusFuncLoadGsCookieDoesNotLoadNull`; `seh_probe`: `CorpusFuncLoadSehProbeHasSingleWin64Arg`. ConstantExpr GEP of `__nd_data_*` / `__nd_codeptr_*` names the object; unreachable blocks are not printed. |
+| Unused Win64 params compacted on LLVM-to-C | `LLVMCPointerAddresses.CorpusFuncLoadSehProbeHasSingleWin64Arg`; public `probe_plain_seh` is `uint32_t arg0`, not `arg0..arg7`. |
 
 ## Next x64 exe pass
 
@@ -83,7 +83,5 @@ Prefer HighC on reducible MSVC, LLVMC on obfuscated guests. Sequence:
 
 1. Use PDB names for callees and image objects when debug info actually loaded.
 2. Make default `--llvm` (with opt) complete without shard `input-invalid` on the EH corpus.
-3. Kill flag/popcount/`*(T*)0` in LLVM (or mark them analysis-only) before pretty-print.
-4. Compact unused Win64 params on the LLVM route the same way HighC does.
 
 Private PE/PDB fixtures are not the contract. Re-dump corpus `probe_plain_seh` after each of those layers.
