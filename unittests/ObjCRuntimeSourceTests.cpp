@@ -610,7 +610,7 @@ void verifyRuntime(bool Chained,
                              : BlockLifetimes      ? (ManualBlocks ? 9U : 8U)
                              : Foundation          ? 13U
                              : Protocols           ? 6U
-                             : DiagnosticReports   ? 5U
+                             : DiagnosticReports   ? 6U
                              : SwiftStrings        ? 2U
                              : ConstantObjects     ? 5U
                              : ConstantStrings     ? 13U
@@ -778,8 +778,8 @@ void verifyRuntime(bool Chained,
   if (SwiftStrings)
     Remaining = {"bridgeWord:storage:", "roundTrip:"};
   if (DiagnosticReports)
-    Remaining = {"initializer", "initializerInFile", "fatal", "fatalInFile",
-                 "terminal"};
+    Remaining = {"initializer", "initializerInFile", "fatal",
+                 "fatalInFile", "terminal",          "terminalViaNative:"};
   if (Protocols) {
     Remaining = {"enumerate:state:objects:count:",
                  "metricOf:",
@@ -1339,8 +1339,8 @@ void verifyRuntime(bool Chained,
                      "dispatch=pass\n"
       : Protocols  ? "enumerated=132096\nmutations=2048\nloop-mutations=4\n"
                      "integer-bits=4096\nguard-check=pass\n"
-      : DiagnosticReports
-          ? "diagnostic-runtime=pass\ncontents=pass\ntrap=pass\n"
+      : DiagnosticReports ? "diagnostic-runtime=pass\ncontents=pass\ntrap="
+                            "pass\nnative-traps=2\n"
       : SwiftStrings    ? "swift-string=pass\ncontents=pass\nlifetime=pass\n"
       : UnfairLocks     ? "unfair-locks=pass\ntrylock=pass\nownership=pass\n"
                           "concurrency=pass\n"

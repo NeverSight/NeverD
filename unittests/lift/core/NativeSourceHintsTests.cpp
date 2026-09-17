@@ -79,6 +79,66 @@ struct NativeFixture {
   }
 };
 
+TEST(NativeSourceHints, NonReturningContractsRequireTerminalFlowAndBoundCalls) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      NativeFixture F(Architecture);
+      F.Med.DoesNotReturn = F.High.DoesNotReturn = true;
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+      Binding->TargetAddress = 0x3000;
+      Binding->TargetName = "abort";
+      Binding->DoesNotReturn = true;
+      Binding->Signature.ReturnType = NdType::makeVoid();
+      std::string Error;
+      ASSERT_TRUE(
+          assignDarwinScalarSourceABI(Binding->Signature, Architecture, Error));
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.DoesNotReturn = true;
+      Call.SourceCallHint = Binding;
+      Call.addInput(MedVar::makeConst(0x3000, 8));
+      F.Med.Blocks[0].Ops = {Call};
+      auto Expression = HighExpr::makeCall("abort", 0x3000, {});
+      Expression->SourceCallHint = Binding;
+      Expression->Type = NdType::makeVoid();
+      HighStmt Statement;
+      Statement.Kind = StmtKind::Call;
+      Statement.CallExpr = Expression;
+      F.High.Body = {Statement};
+      if (Mutation == 1)
+        F.Med.DoesNotReturn = false;
+      if (Mutation == 2)
+        F.High.DoesNotReturn = false;
+      if (Mutation == 3) {
+        F.Med.Blocks[0].Ops[0].DoesNotReturn = false;
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        F.Med.Blocks[0].Ops.push_back(Return);
+      }
+      if (Mutation == 4)
+        F.Med.Blocks[0].Ops.clear();
+      if (Mutation == 5)
+        F.Med.Blocks[0].Ops[0].Opcode = NdOp::INTRINSIC;
+      if (Mutation == 6)
+        F.Med.Blocks[0].Ops[0].SourceCallHint.reset();
+      if (Mutation == 7)
+        Binding->DoesNotReturn = false;
+      if (Mutation == 8)
+        F.Med.Blocks[0].ExceptionalSuccs.emplace_back();
+      if (Mutation == 9)
+        F.Med.Blocks[0].Ops[0].addInput(MedVar::makeConst(0, 8));
+      auto Hint = F.infer(Error);
+      EXPECT_EQ(bool(Hint), Mutation == 0) << Error;
+      if (Hint) {
+        EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+        EXPECT_EQ(Hint->ReturnLocation.Kind, SourceABICarrierKind::None);
+        EXPECT_EQ(Hint->ReturnLocation.ValueBytes, 0U);
+      }
+    }
+}
+
 TEST(NativeSourceHints, KeepsObservedIntegerLocationsWithoutUsingNames) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     NativeFixture Fixture(Architecture);

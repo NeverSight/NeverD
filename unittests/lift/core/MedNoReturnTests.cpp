@@ -2,6 +2,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedNoReturn.h"
 
@@ -81,4 +82,24 @@ TEST(MedNoReturn, PropagatesOnlyFromExplicitTerminatingFacts) {
   propagateInternalNoReturn(Funcs, Arch::AArch64);
   EXPECT_TRUE(Funcs[0].DoesNotReturn);
   EXPECT_TRUE(Funcs[1].Blocks[1].Ops[0].DoesNotReturn);
+}
+
+TEST(MedNoReturn, NativeSourceEffectsFollowCurrentProofWithoutSharedMutation) {
+  auto Call = callOp(0x2000);
+  auto Hint = std::make_shared<SourceCallTypeHint>();
+  Hint->CallKind = SourceCallTypeHint::Kind::Native;
+  Hint->TargetAddress = 0x2000;
+  Call.SourceCallHint = Hint;
+  std::vector<MedFunc> Functions = {
+      function(0x1000, {block(0, {Call, returnOp()})}),
+      function(0x2000, {block(0, {trapOp()})})};
+  propagateInternalNoReturn(Functions, Arch::AArch64);
+  EXPECT_TRUE(Functions[0].Blocks[0].Ops[0].SourceCallHint->DoesNotReturn);
+  EXPECT_FALSE(Hint->DoesNotReturn);
+  EXPECT_TRUE(hasProvenNoReturnExit(Functions[1], Arch::AArch64));
+  Functions[1].Blocks[0].Ops = {returnOp()};
+  EXPECT_FALSE(hasProvenNoReturnExit(Functions[1], Arch::AArch64));
+  propagateInternalNoReturn(Functions, Arch::AArch64);
+  EXPECT_FALSE(Functions[0].DoesNotReturn);
+  EXPECT_FALSE(Functions[0].Blocks[0].Ops[0].SourceCallHint->DoesNotReturn);
 }

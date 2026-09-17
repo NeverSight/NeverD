@@ -1346,9 +1346,11 @@ inline bool objcSourceCallBound(
       Binding.CallKind != SourceCallTypeHint::Kind::SwiftStringBridge)
     return false;
   std::string Reason;
-  // Only catalogued runtime calls currently establish source noreturn
-  // effects. A native function flag or a forged reference hint cannot.
+  // Runtime effects are checked against their catalog. A native effect also
+  // requires the exact typed callee and its complete terminating source flow;
+  // its function flag alone is insufficient.
   if (Binding.DoesNotReturn &&
+      Binding.CallKind != SourceCallTypeHint::Kind::Native &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall &&
       Binding.CallKind != SourceCallTypeHint::Kind::SwiftRuntimeCall &&
       Binding.CallKind != SourceCallTypeHint::Kind::SwiftStringBridge &&
@@ -1465,6 +1467,15 @@ inline bool objcSourceCallBound(
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::Native) {
     auto Found = Functions.find(Binding.TargetAddress);
+    if (Binding.DoesNotReturn) {
+      if (Expression.IsIndirectCall ||
+          Expression.CallAddr != Binding.TargetAddress ||
+          Found == Functions.end() || !Found->second->DoesNotReturn)
+        return false;
+      const auto Flow = analyzeHighSourceFlow(*Found->second, false);
+      if (!Flow.Complete || !Flow.Items.empty())
+        return false;
+    }
     return Found != Functions.end() && Found->second->SourceTypeHint &&
            objc_projection_detail::sameHint(Hint,
                                             *Found->second->SourceTypeHint);

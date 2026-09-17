@@ -16,6 +16,7 @@
 - (uint64_t)fatal;
 - (uint64_t)fatalInFile;
 - (void)terminal;
+- (void)terminalViaNative:(unsigned)value;
 @end
 
 #ifdef NEVERD_RECOVERED_ARC
@@ -44,7 +45,7 @@ int main(int argc, char **argv) {
     installRecovered();
 #endif
     NDDiagnosticReports *object = [NDDiagnosticReports new];
-    if (argc == 3 && !strcmp(argv[1], "--trap")) {
+    if (argc == 4 && !strcmp(argv[1], "--trap")) {
       char *end = NULL;
       long fd = strtol(argv[2], &end, 10);
       if (end == argv[2] || *end || fd < 0 || fd > INT_MAX)
@@ -55,42 +56,48 @@ int main(int argc, char **argv) {
       sigemptyset(&action.sa_mask);
       if (sigaction(SIGTRAP, &action, NULL) || sigaction(SIGILL, &action, NULL))
         return 9;
-      [object terminal];
+      if (!strcmp(argv[3], "0"))
+        [object terminal];
+      else
+        [object terminalViaNative:!strcmp(argv[3], "1") ? 17 : 0];
       return 3;
     }
     if ([object initializer] != 42 || [object initializerInFile] != 91 ||
         [object fatal] != 137 || [object fatalInFile] != 251)
       return 4;
     [object release];
-    int receiptPipe[2];
-    if (pipe(receiptPipe))
-      return 10;
-    char descriptor[32];
-    snprintf(descriptor, sizeof(descriptor), "%d", receiptPipe[1]);
-    pid_t pid = fork();
-    if (pid < 0)
-      return 5;
-    if (!pid) {
+    for (unsigned mode = 0; mode < 3; ++mode) {
+      int receiptPipe[2];
+      if (pipe(receiptPipe))
+        return 10;
+      char descriptor[32];
+      snprintf(descriptor, sizeof(descriptor), "%d", receiptPipe[1]);
+      pid_t pid = fork();
+      if (pid < 0)
+        return 5;
+      if (!pid) {
+        close(receiptPipe[0]);
+        char choice[2] = {(char)('0' + mode), 0};
+        execl(argv[0], argv[0], "--trap", descriptor, choice, NULL);
+        _exit(6);
+      }
+      close(receiptPipe[1]);
+      int status;
+      if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+        return 7;
+      unsigned char receipt = 0;
+      const ssize_t received = read(receiptPipe[0], &receipt, 1);
       close(receiptPipe[0]);
-      execl(argv[0], argv[0], "--trap", descriptor, NULL);
-      _exit(6);
-    }
-    close(receiptPipe[1]);
-    int status;
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
-      return 7;
-    unsigned char receipt = 0;
-    const ssize_t received = read(receiptPipe[0], &receipt, 1);
-    close(receiptPipe[0]);
 #if defined(__arm64__)
-    if (received != 1 || receipt != SIGTRAP ||
-        WEXITSTATUS(status) != 128 + SIGTRAP)
-      return 8;
+      if (received != 1 || receipt != SIGTRAP ||
+          WEXITSTATUS(status) != 128 + SIGTRAP)
+        return 8;
 #else
-    if (received != 1 || receipt != SIGILL ||
-        WEXITSTATUS(status) != 128 + SIGILL)
-      return 8;
+      if (received != 1 || receipt != SIGILL ||
+          WEXITSTATUS(status) != 128 + SIGILL)
+        return 8;
 #endif
-    puts("diagnostic-runtime=pass\ncontents=pass\ntrap=pass");
+    }
+    puts("diagnostic-runtime=pass\ncontents=pass\ntrap=pass\nnative-traps=2");
   }
 }

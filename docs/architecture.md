@@ -90,6 +90,17 @@ adding another store-elimination rule. Canonical parameters and auxiliary
 reads or writes remain intact. Changed signatures require another pipeline run;
 neither an inferred signature nor its refinement certifies a publishable body.
 
+Non-returning native source helpers use an internal void ABI only when both
+IR stages agree and the shared MedIR termination analysis independently
+rechecks the current graph. Bound calls retain their exact parameters and
+effects; only recognized architectural terminators bypass the ordinary
+intrinsic restriction. The final interprocedural no-return fixed point copies
+its result into each exact native source-call hint, including clearing stale
+effects on a later run. HighIR therefore sees the same termination boundary.
+Publication revalidates the typed callee's complete source flow and requires
+its dependency closure; a function flag alone never authorizes a terminating
+source call. Reports, writes and traps before termination remain observable.
+
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
 Darwin block consumers have one loader-owned callback and lifetime contract.

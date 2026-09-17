@@ -17,6 +17,56 @@
 
 using namespace neverd;
 using namespace neverd::sdk;
+TEST(ObjCSourceBindings, NativeTerminationRequiresExactCalleeAndCompleteFlow) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Format = BinaryFormat::MachO;
+      Image.Bits = Bitness::Bits64;
+      HighFunc Callee;
+      Callee.Entry = 0x2000;
+      Callee.DoesNotReturn = true;
+      Callee.ReturnType = NdType::makeVoid();
+      SourceFunctionTypeHint Signature;
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Signature.ReturnType = Callee.ReturnType;
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error));
+      Callee.SourceTypeHint = Signature;
+      HighStmt Trap;
+      Trap.Kind = StmtKind::Call;
+      Trap.CallExpr = HighExpr::makeCall("trap", 0, {});
+      Trap.CallExpr->IntrinsicId =
+          Architecture == Arch::AArch64 ? Intrinsic::Brk : Intrinsic::Ud2;
+      Callee.Body = {Trap};
+      auto Call = HighExpr::makeCall("native_terminator", Callee.Entry, {});
+      Call->Type = NdType::makeVoid();
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->TargetAddress = Callee.Entry;
+      Binding->Signature = Signature;
+      Binding->DoesNotReturn = true;
+      Call->SourceCallHint = Binding;
+      if (Mutation == 1)
+        Callee.DoesNotReturn = false;
+      if (Mutation == 2)
+        Callee.Body.clear();
+      if (Mutation == 3) {
+        Callee.Body[0] = HighStmt{};
+        Callee.Body[0].Kind = StmtKind::Return;
+      }
+      if (Mutation == 4)
+        Call->CallAddr += 4;
+      if (Mutation == 5)
+        Call->IsIndirectCall = true;
+      if (Mutation == 6)
+        Binding->Signature.ReturnType = NdType::makeInt(8);
+      EXPECT_EQ(objcSourceCallBound(*Call, Image, {{Callee.Entry, &Callee}}),
+                Mutation == 0);
+    }
+}
+
 namespace {
 struct EntryInputFixture {
   BinaryImage Image;

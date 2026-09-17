@@ -15,6 +15,7 @@
 
 #include "neverd/ir/med/MedNoReturn.h"
 
+#include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include <map>
@@ -23,7 +24,6 @@
 #include <vector>
 
 namespace neverd {
-namespace {
 
 bool isArchitecturalNoReturn(const MedOp &Op, Arch TheArch) {
   if (Op.Opcode != NdOp::INTRINSIC || Op.NumInputs < 1 ||
@@ -40,6 +40,7 @@ bool isArchitecturalNoReturn(const MedOp &Op, Arch TheArch) {
   return false;
 }
 
+namespace {
 bool isDirectCallTo(const MedOp &Op, const std::set<va_t> &Targets) {
   return Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
          Op.Inputs[0].isConst() && Targets.count(Op.Inputs[0].ConstVal) != 0;
@@ -100,6 +101,10 @@ bool provesNoReturn(const MedFunc &Func, Arch TheArch,
 
 } // namespace
 
+bool hasProvenNoReturnExit(const MedFunc &Func, Arch TheArch) {
+  return provesNoReturn(Func, TheArch, {});
+}
+
 void propagateInternalNoReturn(std::vector<MedFunc> &Funcs, Arch TheArch) {
   std::set<va_t> InternalEntries;
   for (const MedFunc &Func : Funcs)
@@ -159,9 +164,21 @@ void propagateInternalNoReturn(std::vector<MedFunc> &Funcs, Arch TheArch) {
   for (MedFunc &Func : Funcs) {
     Func.DoesNotReturn = NoReturnEntries.count(Func.Entry) != 0;
     for (MedBlock &Block : Func.Blocks)
-      for (MedOp &Op : Block.Ops)
+      for (MedOp &Op : Block.Ops) {
         if (isDirectCallTo(Op, NoReturnEntries))
           Op.DoesNotReturn = true;
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+            Op.SourceCallHint &&
+            Op.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
+            Op.SourceCallHint->TargetAddress == Op.Inputs[0].ConstVal &&
+            InternalEntries.count(Op.Inputs[0].ConstVal)) {
+          // HighIR's source-flow owner consumes the bound call effect. Clone
+          // it so a later proof refresh cannot mutate another call's contract.
+          auto Hint = std::make_shared<SourceCallTypeHint>(*Op.SourceCallHint);
+          Hint->DoesNotReturn = Op.DoesNotReturn;
+          Op.SourceCallHint = std::move(Hint);
+        }
+      }
   }
 }
 

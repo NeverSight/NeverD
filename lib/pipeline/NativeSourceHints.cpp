@@ -5,6 +5,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighSourceFlow.h"
+#include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -551,8 +552,10 @@ inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
     return Reject("native source inference requires complete verified lifting");
   if (Med.SourceTypeHint || High.SourceTypeHint || Med.SourceParametersBound)
     return Reject("native function already has a source declaration");
+  const bool NoReturn = Med.DoesNotReturn && High.DoesNotReturn &&
+                        hasProvenNoReturnExit(Med, Image.Arch);
   if (Med.IsVariadic || !Med.MultiReturn.empty() || Med.FPReturnViaX87 ||
-      Med.DoesNotReturn || High.DoesNotReturn)
+      ((Med.DoesNotReturn || High.DoesNotReturn) && !NoReturn))
     return Reject("native function has a non-scalar or non-returning ABI");
   if (Med.Blocks.empty() || High.Body.empty() ||
       Med.Params.size() != Med.TypedParams.size() || Med.Params.size() > 64 ||
@@ -567,13 +570,15 @@ inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
   Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   Hint.Architecture = Image.Arch;
   Hint.HasExplicitABI = true;
-  Hint.ReturnType = Med.ReturnType;
+  Hint.ReturnType = NoReturn ? NdType::makeVoid() : Med.ReturnType;
   const bool FloatingReturn = Hint.ReturnType->Kind == NdTypeKind::Float;
-  Hint.ReturnLocation.Kind = FloatingReturn
+  Hint.ReturnLocation.Kind = NoReturn ? SourceABICarrierKind::None
+                             : FloatingReturn
                                  ? SourceABICarrierKind::FloatingRegister
                                  : SourceABICarrierKind::IntegerRegister;
-  Hint.ReturnLocation.RegisterOffset =
-      FloatingReturn ? TRI.FPReturnReg : TRI.IntReturnReg;
+  Hint.ReturnLocation.RegisterOffset = NoReturn         ? 0
+                                       : FloatingReturn ? TRI.FPReturnReg
+                                                        : TRI.IntReturnReg;
   Hint.ReturnLocation.ValueBytes = Hint.ReturnType->Size;
   const auto EntryBytes = observedMedSourceEntryBytes(Med, Hint);
   std::set<uint64_t> ParameterRegisters;
@@ -669,12 +674,18 @@ inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
     if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
       return Reject("native exception-dependent parameters are unsupported");
     for (const auto &Op : Block.Ops) {
-      if (Op.Opcode == NdOp::INTRINSIC)
+      // Generic lifting may attach a placeholder register output to a trap.
+      // It is never a result carrier: the shared termination proof cuts the
+      // path and HighIR lowers the intrinsic as a terminal statement.
+      if (Op.Opcode == NdOp::INTRINSIC &&
+          !(NoReturn && isArchitecturalNoReturn(Op, Image.Arch)))
         return Reject("native intrinsic requires explicit scalar ABI evidence");
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         std::string Error;
         if (!Op.SourceCallHint ||
             !validateSourceABI(Op.SourceCallHint->Signature, Error) ||
+            (NoReturn &&
+             Op.DoesNotReturn != Op.SourceCallHint->DoesNotReturn) ||
             Op.NumInputs != Op.SourceCallHint->Signature.Parameters.size() + 1)
           return Reject(
               "native function calls a target without a source binding");
@@ -701,14 +712,15 @@ inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
         if (Input.Kind == MedVar::Param && Input.RegOff == kNoParamReg)
           return Reject("native stack parameter PHI requires range recovery");
   }
-  if (!HasReturn)
+  if (!HasReturn && !NoReturn)
     return Reject("native function has no machine return");
-  if (completeIntegerLeafReturn(Med, High, Image.Arch, Hint.ReturnLocation)) {
+  if (!NoReturn &&
+      completeIntegerLeafReturn(Med, High, Image.Arch, Hint.ReturnLocation)) {
     Hint.ReturnType = NdType::makeInt(8, false);
     Hint.ReturnLocation.ValueBytes = 8;
   }
-  if (!definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
-                          IncomingReturnParameter)) {
+  if (!NoReturn && !definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
+                                       IncomingReturnParameter)) {
     if (!hasVoidRuntimeContract(Image, Low, Med) ||
         !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
       return Reject("native result has no complete defined carrier on every "
