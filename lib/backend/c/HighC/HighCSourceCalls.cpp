@@ -189,6 +189,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
       Hint.CallKind == Kind::RuntimeReadOnlyBytes ||
       Hint.CallKind == Kind::RuntimeCStringStorage ||
+      Hint.CallKind == Kind::RuntimeConstantObjectTable ||
       Hint.CallKind == Kind::DarwinRuntimeGlobalAddress ||
       Hint.CallKind == Kind::RuntimeProfileCounterStorage) {
     if (!E.Operands.empty() || !Signature.Parameters.empty() ||
@@ -245,6 +246,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                                                     : Hint.TargetAddress,
                           true) +
           "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeConstantObjectTable) {
+      if (!Hint.TargetAddress || !Hint.ByteCount || Hint.ByteCount > 65536 ||
+          Hint.ByteCount % 8)
+        return bad("constant-object table has no complete bounded extent");
+      Value = "neverd_objc_constant_object_table_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeConstantString ||
                Hint.CallKind == Kind::RuntimeConstantObject) {
       if (!Hint.TargetAddress)

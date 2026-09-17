@@ -1273,7 +1273,178 @@ ConstantStringFixture immutablePointerFixture(Arch Architecture, bool Chained) {
       HighExpr::makeConst(0x3000, 8), NdType::makePtr(NdType::makeVoid()));
   return F;
 }
+
+ConstantStringFixture objectPointerTableFixture(Arch Architecture,
+                                                bool Chained) {
+  auto F = immutablePointerFixture(Architecture, Chained);
+  llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8, 0);
+  F.Image.DataPtrRelocSlots.erase(0x3008);
+  F.Image.DataPtrRelocTargetOwners.erase(0x3008);
+  F.Image.MachOResolvedChainedPointerSlots.erase(0x3008);
+
+  MedVar V;
+  V.Kind = MedVar::Param;
+  V.Size = 4;
+  auto Index = HighExpr::makeVar(V, NdType::makeInt(4, false));
+  auto Wide = HighExpr::makeUnary(NdOp::INT_ZEXT, Index);
+  Wide->Type = NdType::makeInt(8, false);
+  MedVar WideV;
+  WideV.Kind = MedVar::Temp;
+  WideV.Id = 88;
+  WideV.Size = 8;
+  auto WideIndex = HighExpr::makeVar(WideV, NdType::makeInt(8, false));
+  HighStmt Assign;
+  Assign.Kind = StmtKind::Assign;
+  Assign.Dst = WideIndex;
+  Assign.Val = Wide;
+  auto Guard = HighExpr::makeBinop(NdOp::INT_LESS,
+                                   HighExpr::makeConst(1, 4), WideIndex);
+  Guard->Type = NdType::makeInt(4, false);
+  auto Offset =
+      HighExpr::makeBinop(NdOp::INT_MULT, WideIndex,
+                          HighExpr::makeConst(8, 8));
+  auto Address = HighExpr::makeBinop(NdOp::INT_ADD,
+                                     HighExpr::makeConst(0x3000, 8), Offset);
+  HighStmt Load;
+  Load.Kind = StmtKind::Assign;
+  // Machine pointer loads retain their integer carrier until the surrounding
+  // pointer consumer supplies source-level type context.
+  MedVar LoadedV;
+  LoadedV.Kind = MedVar::Temp;
+  LoadedV.Id = 89;
+  LoadedV.Size = 8;
+  Load.Dst = HighExpr::makeVar(LoadedV, NdType::makeInt(8, false));
+  Load.Val = HighExpr::makeLoad(Address, NdType::makeInt(8, false));
+  MedVar CopyV = LoadedV;
+  CopyV.Id = 90;
+  HighStmt Copy;
+  Copy.Kind = StmtKind::Assign;
+  Copy.Dst = HighExpr::makeVar(CopyV, NdType::makeInt(8, false));
+  Copy.Val = HighExpr::makeVar(LoadedV, NdType::makeInt(8, false));
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeVar(CopyV, NdType::makeInt(8, false));
+  auto Null = HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar);
+  Null->Type = NdType::makePtr(NdType::makeVoid());
+  HighStmt Other;
+  Other.Kind = StmtKind::Return;
+  Other.RetVal = Null;
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = Guard;
+  Branch.Body = {Other};
+  Branch.ElseBody = {Load, Copy, Return};
+  F.Function.Body = {Assign, Branch};
+  F.Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+  return F;
+}
 } // namespace
+
+TEST(ObjCSourceBindings,
+     BoundedObjectPointerTablesRebuildConstantObjectsAndNulls) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Chained : {false, true}) {
+      auto F = objectPointerTableFixture(Architecture, Chained);
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      ASSERT_EQ(Bound.ConstantObjectTables,
+                (std::map<va_t, uint32_t>{{0x3000, 16}}));
+      EXPECT_EQ(Bound.ConstantStrings, std::set<va_t>{0x2020});
+      EXPECT_TRUE(Bound.ConstantObjects.empty());
+      const auto &Load = Bound.Function.Body[1].ElseBody[0].Val;
+      ASSERT_EQ(Load->Kind, ExprKind::Load);
+      EXPECT_EQ(Load->Type->Kind, NdTypeKind::Ptr);
+      const auto &Helper = Load->Operands[0]->Operands[0];
+      ASSERT_TRUE(Helper->SourceCallHint);
+      EXPECT_EQ(Helper->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeConstantObjectTable);
+      EXPECT_EQ(Helper->SourceCallHint->TargetAddress, 0x3000U);
+      EXPECT_EQ(Helper->SourceCallHint->ByteCount, 16U);
+      auto Allowed =
+          readOnlyObjectPointerSourceHelpers(Bound.Function, F.Image);
+      ASSERT_EQ(Allowed.size(), 1U);
+      EXPECT_TRUE(
+          objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+      EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
+
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCConstantObjectTableHelpers(
+          F.Image, Bound.ConstantObjectTables, Helpers);
+      EXPECT_TRUE(Helpers.count(
+          "neverd_objc_constant_object_table_3000_address"));
+      EXPECT_NE(Source.find(
+                    "entries[0] = (const void *)"
+                    "neverd_objc_constant_string_2020_address()"),
+                std::string::npos);
+      EXPECT_NE(Source.find("entries[1] = 0"), std::string::npos);
+    }
+}
+
+TEST(ObjCSourceBindings,
+     BoundedObjectPointerTablesRejectUnprovedSlotsAndStalePublication) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = objectPointerTableFixture(Arch::AArch64, true);
+    auto &Branch = F.Function.Body[1];
+    auto &Load = Branch.ElseBody[0].Val;
+    auto &Offset = Load->Operands[0]->Operands[1];
+    if (Mutation == 0)
+      Branch.Cond = HighExpr::makeConst(1, 1);
+    if (Mutation == 1)
+      Offset->Operands[1] = HighExpr::makeConst(4, 8);
+    if (Mutation == 2)
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+    if (Mutation == 3)
+      F.Image.DataPtrRelocSlots.erase(0x3000);
+    if (Mutation == 4)
+      F.Image.DataPtrRelocTargetOwners[0x3000] = 0x1000;
+    if (Mutation == 5)
+      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8,
+                                       1);
+    if (Mutation == 6)
+      Load->MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Mutation == 7) {
+      auto &Value = Branch.ElseBody[2].RetVal;
+      Value = HighExpr::makeBinop(NdOp::INT_ADD, Value,
+                                  HighExpr::makeConst(1, 8));
+    }
+    if (Mutation == 8)
+      Branch.ElseBody.pop_back();
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_TRUE(Bound.ConstantObjectTables.empty());
+  }
+
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = objectPointerTableFixture(Arch::X64, false);
+    auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    const auto Helper = Bound.Function.Body[1]
+                            .ElseBody[0]
+                            .Val->Operands[0]
+                            ->Operands[0];
+    ASSERT_TRUE(Helper->SourceCallHint);
+    if (Mutation == 0) {
+      HighStmt Escape;
+      Escape.Kind = StmtKind::Return;
+      Escape.RetVal = Helper;
+      Bound.Function.Body.push_back(Escape);
+    }
+    if (Mutation == 1) {
+      auto Changed =
+          std::make_shared<SourceCallTypeHint>(*Helper->SourceCallHint);
+      Changed->ByteCount = 8;
+      Helper->SourceCallHint = std::move(Changed);
+    }
+    if (Mutation == 2)
+      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8,
+                                       1);
+    const auto Allowed =
+        readOnlyObjectPointerSourceHelpers(Bound.Function, F.Image);
+    EXPECT_TRUE(Allowed.empty());
+    EXPECT_FALSE(
+        objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+  }
+}
 
 TEST(ObjCSourceBindings, MutableStringPointersKeepTheirSharedStorage) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64})

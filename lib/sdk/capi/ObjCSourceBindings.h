@@ -37,6 +37,7 @@ struct ObjCSourceBindingResult {
   std::set<va_t> ProfileCounterSections;
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;
+  std::map<va_t, uint32_t> ConstantObjectTables;
   std::set<BorrowedByteRange> BorrowedBytes;
   std::set<va_t> CStringSections, CStringPointerSlots;
   SourceProjectionDiagnostics Diagnostics{};
@@ -275,6 +276,57 @@ kvoContextHint(const BinaryImage &Image, va_t Address) {
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeKVOContext;
   Hint.TargetAddress = Address;
   Hint.TargetName = Symbol->Name;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
+}
+
+struct ConstantObjectTableEntry {
+  va_t Target = 0;
+  bool IsString = false;
+};
+
+inline std::optional<std::vector<ConstantObjectTableEntry>>
+constantObjectTableEntries(const BinaryImage &Image, va_t Address,
+                           uint32_t ByteCount) {
+  if (!Address || !ByteCount || ByteCount > 65536 || ByteCount % 8 ||
+      ByteCount > InvalidVA - Address)
+    return std::nullopt;
+  std::vector<ConstantObjectTableEntry> Entries;
+  Entries.reserve(ByteCount / 8);
+  for (uint32_t Offset = 0; Offset < ByteCount; Offset += 8) {
+    const va_t Slot = Address + Offset;
+    const auto Target = readImmutableImagePointer(Image, Slot);
+    if (!Target) {
+      const auto Bytes = readImmutableImageBytes(Image, Slot, 8);
+      if (!Bytes || !std::all_of(Bytes->begin(), Bytes->end(),
+                                 [](uint8_t Byte) { return Byte == 0; }))
+        return std::nullopt;
+      Entries.push_back({});
+      continue;
+    }
+    if (constantStringSourceHint(Image, *Target)) {
+      Entries.push_back({*Target, true});
+      continue;
+    }
+    if (!constantObjectSourceHint(Image, *Target))
+      return std::nullopt;
+    Entries.push_back({*Target, false});
+  }
+  return Entries;
+}
+
+inline std::optional<SourceCallTypeHint>
+constantObjectTableHint(const BinaryImage &Image, va_t Address,
+                        uint32_t ByteCount) {
+  if (!constantObjectTableEntries(Image, Address, ByteCount))
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeConstantObjectTable;
+  Hint.TargetAddress = Address;
+  Hint.ByteCount = ByteCount;
   Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   std::string Reason;
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
@@ -873,6 +925,10 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
   }
   const auto ClassObjects = classObjectIdentities(Image);
   const auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
+  const auto ObjectPointerLoads =
+      readOnlyObjectPointerLoadPlans(Function, Image);
+  const auto ObjectPointerConsumers =
+      readOnlyObjectPointerLoadConsumers(Function, ObjectPointerLoads);
   const auto DirectLocalStorage =
       directLocalStorageAccessExtents(Function, Image);
   const auto KVOCallbackParameter =
@@ -1129,6 +1185,39 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
             *Expression = *HighExpr::makeBitCast(Value, Type);
             return Expression;
           }
+        }
+      }
+    }
+    if (Original->Kind == ExprKind::Load &&
+        (AddressContext || ObjectPointerConsumers.count(Original.get())) &&
+        !NumericOperand && !MemoryAddress) {
+      if (const auto Found = ObjectPointerLoads.find(Original.get());
+          Found != ObjectPointerLoads.end()) {
+        const auto &Plan = Found->second;
+        const auto Entries = constantObjectTableEntries(
+            Image, Plan.Base, Plan.Extent);
+        auto Hint = Entries ? constantObjectTableHint(Image, Plan.Base,
+                                                      Plan.Extent)
+                            : std::nullopt;
+        if (Hint) {
+          auto Base = HighExpr::makeCall({}, 0, {});
+          Base->Type = NdType::makeInt(8, false);
+          Base->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+          Expression->Operands = {HighExpr::makeBinop(
+              NdOp::INT_ADD, Base,
+              Copy(Plan.Offset, Depth + 1, false, false, false))};
+          Expression->Type = NdType::makePtr(NdType::makeVoid());
+          Result.ConstantObjectTables[Plan.Base] = std::max<uint32_t>(
+              Result.ConstantObjectTables[Plan.Base], Plan.Extent);
+          for (const auto &Entry : *Entries) {
+            if (!Entry.Target)
+              continue;
+            (Entry.IsString ? Result.ConstantStrings
+                            : Result.ConstantObjects)
+                .insert(Entry.Target);
+          }
+          return Expression;
         }
       }
     }
@@ -1596,6 +1685,20 @@ inline bool objcSourceCallBound(
            Binding.SwiftStringInputs.empty() &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeConstantObjectTable) {
+    if (!ReadOnlyHelpers || !ReadOnlyHelpers->count(&Expression) ||
+        Expression.IsIndirectCall || Expression.CallAddr ||
+        !Expression.CallTarget.empty() || !Expression.IntrinsicOutputs.empty())
+      return false;
+    const auto Expected = constantObjectTableHint(
+        Image, Binding.TargetAddress, Binding.ByteCount);
+    return Expected && Binding.TargetName.empty() && Binding.Selector.empty() &&
+           Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeReadOnlyBytes &&
       (!ReadOnlyHelpers || !ReadOnlyHelpers->count(&Expression) ||
        Expression.IsIndirectCall || Expression.CallAddr ||
@@ -1810,6 +1913,56 @@ renderObjCKVOContextHelpers(const std::set<va_t> &Contexts,
               "(void) {\n"
               "  static unsigned char context;\n"
               "  return (uintptr_t)&context;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCConstantObjectTableHelpers(
+    const BinaryImage &Image, const std::map<va_t, uint32_t> &Tables,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto &[Address, ByteCount] : Tables) {
+    const auto Entries =
+        objc_binding_detail::constantObjectTableEntries(Image, Address,
+                                                        ByteCount);
+    if (!Entries)
+      throw std::runtime_error("constant-object table is no longer valid");
+    const std::string Name = "neverd_objc_constant_object_table_" +
+                             llvm::utohexstr(Address, true) + "_address";
+    SharedFunctions.insert(Name);
+    Source += "\nuintptr_t " + Name + "(void) {\n";
+    std::set<std::pair<va_t, bool>> Declared;
+    for (const auto &Entry : *Entries) {
+      if (!Entry.Target ||
+          !Declared.emplace(Entry.Target, Entry.IsString).second)
+        continue;
+      Source += "  extern uintptr_t neverd_objc_constant_" +
+                std::string(Entry.IsString ? "string_" : "object_") +
+                llvm::utohexstr(Entry.Target, true) + "_address(void);\n";
+    }
+    Source += "  static const void *entries[" +
+              std::to_string(Entries->size()) + "];\n"
+              "  static unsigned state;\n"
+              "  if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {\n"
+              "    unsigned expected = 0;\n"
+              "    if (__atomic_compare_exchange_n(&state, &expected, 1, 0, "
+              "__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {\n";
+    for (size_t Index = 0; Index < Entries->size(); ++Index) {
+      const auto &Entry = (*Entries)[Index];
+      Source += "      entries[" + std::to_string(Index) + "] = ";
+      if (!Entry.Target)
+        Source += "0;\n";
+      else
+        Source += "(const void *)neverd_objc_constant_" +
+                  std::string(Entry.IsString ? "string_" : "object_") +
+                  llvm::utohexstr(Entry.Target, true) + "_address();\n";
+    }
+    Source +=
+        "      __atomic_store_n(&state, 2, __ATOMIC_RELEASE);\n"
+        "    } else {\n"
+        "      while (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {}\n"
+        "    }\n  }\n"
+        "  return (uintptr_t)entries;\n}\n";
   }
   return Source;
 }

@@ -123,7 +123,11 @@ struct SourceCallTypeHint {
     /// Complete immutable C-string literal section, rebuilt once per image.
     /// Interior offsets, embedded NULs and retained pointers share its
     /// identity.
-    RuntimeCStringStorage
+    RuntimeCStringStorage,
+    /// A bounded immutable table whose full-width slots are authenticated
+    /// relocations to rebuildable constant Objective-C objects or exact nulls.
+    /// ByteCount is the complete table prefix used by proven indexed loads.
+    RuntimeConstantObjectTable
   };
   Kind CallKind = Kind::Native;
   enum class SwiftValueWitnessKind {

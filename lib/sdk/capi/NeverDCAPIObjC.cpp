@@ -180,8 +180,12 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                ? Binding.Limitation
                                : BlockBinding.Limitation;
       if (Reason.empty()) {
-        const auto ReadOnlyHelpers =
+        auto ReadOnlyHelpers =
             readOnlyScalarSourceHelpers(Binding.Function, S->Img);
+        const auto ObjectPointerHelpers =
+            readOnlyObjectPointerSourceHelpers(Binding.Function, S->Img);
+        ReadOnlyHelpers.insert(ObjectPointerHelpers.begin(),
+                               ObjectPointerHelpers.end());
         const auto Audit = Audits.find(Entry);
         Reason = sourceBodyLimitation(
             Binding.Function, *Func->SourceTypeHint,
@@ -321,8 +325,12 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         auto It = Audits.find(Method.Implementation);
         const auto &Projection = Projections.at(Method.Implementation);
         const auto *Audit = It == Audits.end() ? nullptr : It->second;
-        const auto ReadOnlyHelpers =
+        auto ReadOnlyHelpers =
             readOnlyScalarSourceHelpers(Projection.Function, S->Img);
+        const auto ObjectPointerHelpers =
+            readOnlyObjectPointerSourceHelpers(Projection.Function, S->Img);
+        ReadOnlyHelpers.insert(ObjectPointerHelpers.begin(),
+                               ObjectPointerHelpers.end());
         auto CallAllowed = [&](const HighExpr &Expression) {
           return objcSourceCallBound(Expression, S->Img, Functions,
                                      &ProfileStorage, &ReadOnlyHelpers) ||
@@ -414,6 +422,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::set<va_t> ProfileSections;
       std::set<va_t> ConstantStrings;
       std::set<va_t> ConstantObjects;
+      std::map<va_t, uint32_t> ConstantObjectTables;
       std::set<BorrowedByteRange> BorrowedBytes;
       std::set<va_t> CStringSections, CStringPointerSlots;
       for (va_t Entry : Included) {
@@ -433,6 +442,10 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         ConstantStrings.insert(Strings.begin(), Strings.end());
         const auto &Objects = Projections.at(Entry).ConstantObjects;
         ConstantObjects.insert(Objects.begin(), Objects.end());
+        for (const auto &[Address, ByteCount] :
+             Projections.at(Entry).ConstantObjectTables)
+          ConstantObjectTables[Address] =
+              std::max(ConstantObjectTables[Address], ByteCount);
         const auto &Bytes = Projections.at(Entry).BorrowedBytes;
         BorrowedBytes.insert(Bytes.begin(), Bytes.end());
         const auto &CStrings = Projections.at(Entry).CStringSections;
@@ -454,6 +467,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           StaticIdentities, SharedIdentityFunctions);
       IdentityHelpers += renderObjCConstantObjectHelpers(
           S->Img, ConstantObjects, ConstantStrings, SharedIdentityFunctions);
+      IdentityHelpers += renderObjCConstantObjectTableHelpers(
+          S->Img, ConstantObjectTables, SharedIdentityFunctions);
       IdentityHelpers += renderBorrowedByteHelpers(S->Img, BorrowedBytes,
                                                    SharedIdentityFunctions);
       IdentityHelpers += renderCStringStorageHelpers(S->Img, CStringSections,
@@ -553,6 +568,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         "definition of each shared_identity_functions helper. Equal original "
         "object addresses share one rebuilt object; these identities are "
         "independent of the original loaded image.");
+    Limitations.push_back(
+        "Bounded immutable Objective-C object-pointer tables rebuild every "
+        "reachable slot from a verified constant object identity or exact "
+        "null. Only proven in-range full-width loads use the shared table; "
+        "its address is independent of the original loaded image.");
     Limitations.push_back(
         "Numeric profiling counters retain their captured initial bytes and "
         "updates in shared rebuilt storage. Link one definition of each "

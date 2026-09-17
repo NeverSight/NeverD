@@ -26,13 +26,18 @@ inline bool ordinary(const ExprPtr &E) {
          E->MemoryOrdering == NdMemoryOrdering::None &&
          E->MemoryAddressSpace == NdMemoryAddressSpace::Default;
 }
-inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound) {
+inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
+                                        bool ObjectPointers) {
   if (!ordinary(E) || E->Kind != ExprKind::Load || E->Operands.size() != 1 ||
-      !((E->Type->Kind == NdTypeKind::Int &&
-         (E->Type->Size == 1 || E->Type->Size == 2 || E->Type->Size == 4 ||
-          E->Type->Size == 8)) ||
-        (E->Type->Kind == NdTypeKind::Float &&
-         (E->Type->Size == 4 || E->Type->Size == 8))))
+      (ObjectPointers
+           ? (E->Type->Kind != NdTypeKind::Ptr &&
+              E->Type->Kind != NdTypeKind::Int) ||
+                 E->Type->Size != 8
+           : !((E->Type->Kind == NdTypeKind::Int &&
+                (E->Type->Size == 1 || E->Type->Size == 2 ||
+                 E->Type->Size == 4 || E->Type->Size == 8)) ||
+               (E->Type->Kind == NdTypeKind::Float &&
+                (E->Type->Size == 4 || E->Type->Size == 8)))))
     return std::nullopt;
   const auto &Address = E->Operands[0];
   if (!ordinary(Address) || Address->Type->Size != 8 ||
@@ -49,7 +54,9 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound) {
       P.Base = Base->ConstVal;
     } else if (Bound && Base->Kind == ExprKind::Call && Base->SourceCallHint &&
                Base->SourceCallHint->CallKind ==
-                   SourceCallTypeHint::Kind::RuntimeReadOnlyBytes) {
+                   (ObjectPointers
+                        ? SourceCallTypeHint::Kind::RuntimeConstantObjectTable
+                        : SourceCallTypeHint::Kind::RuntimeReadOnlyBytes)) {
       P.Base = Base->SourceCallHint->TargetAddress;
       P.Extent = Base->SourceCallHint->ByteCount;
     } else {
@@ -101,11 +108,12 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound) {
 }
 } // namespace readonly_scalar_detail
 
-/// Every occurrence of a shared load must fit the same immutable byte copy.
-/// A pointer-valued or escaping consumer is separately excluded by projection.
+/// Every occurrence of a shared load must fit the same immutable table prefix.
+/// Pointer tables additionally require full-width slots; their object targets
+/// are validated by the Objective-C binder and publication gate.
 inline std::map<const HighExpr *, readonly_scalar_detail::LoadPlan>
-readOnlyScalarLoadPlans(const HighFunc &Function, const BinaryImage &Image,
-                        bool Bound = false) {
+readOnlyLoadPlans(const HighFunc &Function, const BinaryImage &Image, bool Bound,
+                  bool ObjectPointers) {
   using namespace readonly_scalar_detail;
   struct Occurrence {
     ExprPtr Load;
@@ -127,7 +135,7 @@ readOnlyScalarLoadPlans(const HighFunc &Function, const BinaryImage &Image,
         Pending.pop_back();
         if (!E || !Seen.insert(E.get()).second)
           continue;
-        if (auto P = loadPlan(E, Bound)) {
+        if (auto P = loadPlan(E, Bound, ObjectPointers)) {
           if (Queries.size() == 128) {
             Budget = 0;
             return;
@@ -161,21 +169,31 @@ readOnlyScalarLoadPlans(const HighFunc &Function, const BinaryImage &Image,
     }
     if (!Bound)
       P.Extent = Extent;
-    const auto Bytes = readImmutableImageBytes(Image, P.Base, P.Extent);
-    if (!Bytes) {
-      Rejected.insert(Load.get());
-      continue;
+    bool Valid = true;
+    if (ObjectPointers) {
+      if (P.Stride != 8)
+        Valid = false;
+      for (uint64_t Entry = 0; Entry <= *Upper && Valid; ++Entry) {
+        const va_t Slot = P.Base + Entry * 8;
+        if (readImmutableImagePointer(Image, Slot))
+          continue;
+        const auto Bytes = readImmutableImageBytes(Image, Slot, 8);
+        Valid = Bytes && std::all_of(Bytes->begin(), Bytes->end(),
+                                    [](uint8_t Byte) { return Byte == 0; });
+      }
+    } else {
+      const auto Bytes = readImmutableImageBytes(Image, P.Base, P.Extent);
+      Valid = bool(Bytes);
+      // Scalar copies do not relocate pointers, including unmarked values that
+      // happen to point into this image. The existing pointer reader owns them.
+      for (uint64_t Entry = 0; Entry <= *Upper && Valid; ++Entry) {
+        uint64_t Bits = 0;
+        for (unsigned B = 0; B < Load->Type->Size; ++B)
+          Bits |= uint64_t((*Bytes)[Entry * P.Stride + B]) << (B * 8);
+        Valid = !isImagePointerBitPattern(Image, Bits, Load->Type->Size);
+      }
     }
-    // Scalar copies do not relocate pointers, including unmarked values that
-    // happen to point into this image. The existing pointer reader owns them.
-    bool Scalar = true;
-    for (uint64_t Entry = 0; Entry <= *Upper && Scalar; ++Entry) {
-      uint64_t Bits = 0;
-      for (unsigned B = 0; B < Load->Type->Size; ++B)
-        Bits |= uint64_t((*Bytes)[Entry * P.Stride + B]) << (B * 8);
-      Scalar = !isImagePointerBitPattern(Image, Bits, Load->Type->Size);
-    }
-    if (!Scalar) {
+    if (!Valid) {
       Rejected.insert(Load.get());
       continue;
     }
@@ -188,8 +206,102 @@ readOnlyScalarLoadPlans(const HighFunc &Function, const BinaryImage &Image,
   return Plans;
 }
 
+inline std::map<const HighExpr *, readonly_scalar_detail::LoadPlan>
+readOnlyScalarLoadPlans(const HighFunc &Function, const BinaryImage &Image,
+                        bool Bound = false) {
+  return readOnlyLoadPlans(Function, Image, Bound, false);
+}
+
+inline std::map<const HighExpr *, readonly_scalar_detail::LoadPlan>
+readOnlyObjectPointerLoadPlans(const HighFunc &Function,
+                               const BinaryImage &Image, bool Bound = false) {
+  return readOnlyLoadPlans(Function, Image, Bound, true);
+}
+
+/// Prove that an object-table load is transported only through direct local
+/// copies to pointer parameters or a pointer return. Integer carriers acquire
+/// pointer meaning from those consumers; arithmetic, conditions, stores and
+/// indirect wrappers keep the load unbound.
+inline std::set<const HighExpr *> readOnlyObjectPointerLoadConsumers(
+    const HighFunc &Function,
+    const std::map<const HighExpr *, readonly_scalar_detail::LoadPlan> &Plans) {
+  using Identity = HighSourceLocalIdentity;
+  auto Local = [](const ExprPtr &E) -> std::optional<Identity> {
+    if (!E || (E->Kind != ExprKind::Var && E->Kind != ExprKind::Phi) ||
+        !E->Operands.empty())
+      return std::nullopt;
+    return highSourceLocalIdentity(E->Var);
+  };
+  std::set<const HighExpr *> Result;
+  for (const auto &[Candidate, Unused] : Plans) {
+    (void)Unused;
+    std::set<Identity> Values;
+    bool Changed = true;
+    size_t Budget = 100000;
+    while (Changed && Budget) {
+      Changed = false;
+      walkStmts(Function.Body, [&](const HighStmt &S) {
+        if (!Budget || S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
+          return;
+        --Budget;
+        const auto Dst = Local(S.Dst);
+        const auto Src = Local(S.Val);
+        if (Dst && (S.Val.get() == Candidate ||
+                    (Src && Values.count(*Src))))
+          Changed |= Values.insert(*Dst).second;
+      });
+    }
+    if (!Budget)
+      continue;
+
+    bool Seen = false, Consumed = false, Valid = true;
+    walkStmts(Function.Body, [&](const HighStmt &S) {
+      if (!Valid || !Budget)
+        return;
+      forEachExpr(S, [&](const ExprPtr &Root) {
+        if (!Valid || !Budget || !Root || Root == S.Dst)
+          return;
+        const bool DirectCopy =
+            S.Kind == StmtKind::Assign && Root == S.Val && Local(S.Dst);
+        const bool DirectReturn =
+            Root == S.RetVal && Function.ReturnType &&
+            Function.ReturnType->Kind == NdTypeKind::Ptr;
+        std::function<void(const ExprPtr &, const HighExpr *, size_t)> Visit;
+        Visit = [&](const ExprPtr &E, const HighExpr *Parent, size_t Index) {
+          if (!Valid || !E || !Budget)
+            return;
+          --Budget;
+          const auto L = Local(E);
+          if (E.get() == Candidate || (L && Values.count(*L))) {
+            Seen = true;
+            bool PointerArgument = false;
+            if (Parent && Parent->Kind == ExprKind::Call &&
+                Parent->SourceCallHint &&
+                Index < Parent->SourceCallHint->Signature.Parameters.size()) {
+              const auto &Type =
+                  Parent->SourceCallHint->Signature.Parameters[Index].Type;
+              PointerArgument = Type && Type->Kind == NdTypeKind::Ptr;
+            }
+            Consumed |= (DirectReturn && E == Root) || PointerArgument;
+            if (!(DirectCopy && E == Root) &&
+                !(DirectReturn && E == Root) && !PointerArgument)
+              Valid = false;
+            return;
+          }
+          for (size_t I = 0; I < E->Operands.size(); ++I)
+            Visit(E->Operands[I], E.get(), I);
+        };
+        Visit(Root, nullptr, 0);
+      });
+    });
+    if (Budget && Seen && Consumed && Valid)
+      Result.insert(Candidate);
+  }
+  return Result;
+}
+
 /// Revalidate current bounds, bytes and every occurrence of each helper.
-/// A table address has no authority outside its proven scalar loads.
+/// A table address has no authority outside its proven loads.
 inline std::set<const HighExpr *>
 readOnlyScalarSourceHelpers(const HighFunc &Function,
                             const BinaryImage &Image) {
@@ -217,6 +329,48 @@ readOnlyScalarSourceHelpers(const HighFunc &Function,
         if (E->SourceCallHint &&
             E->SourceCallHint->CallKind ==
                 SourceCallTypeHint::Kind::RuntimeReadOnlyBytes)
+          Escaped.insert(E.get());
+        Pending.insert(Pending.end(), E->Operands.begin(), E->Operands.end());
+      }
+    });
+  });
+  if (!Budget)
+    return {};
+  for (const auto *E : Escaped)
+    Allowed.erase(E);
+  return Allowed;
+}
+
+inline std::set<const HighExpr *>
+readOnlyObjectPointerSourceHelpers(const HighFunc &Function,
+                                   const BinaryImage &Image) {
+  const auto Plans = readOnlyObjectPointerLoadPlans(Function, Image, true);
+  const auto Consumers =
+      readOnlyObjectPointerLoadConsumers(Function, Plans);
+  std::set<const HighExpr *> Allowed, Escaped;
+  size_t Budget = 100000;
+  walkStmts(Function.Body, [&](const HighStmt &S) {
+    if (!Budget)
+      return;
+    --Budget;
+    forEachExpr(S, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Pending{Root};
+      std::set<const HighExpr *> Seen;
+      while (!Pending.empty() && Budget) {
+        --Budget;
+        auto E = Pending.back();
+        Pending.pop_back();
+        if (!E || !Seen.insert(E.get()).second)
+          continue;
+        if (const auto P = Plans.find(E.get());
+            P != Plans.end() && Consumers.count(E.get())) {
+          Allowed.insert(P->second.BaseExpression.get());
+          Pending.push_back(P->second.Offset);
+          continue;
+        }
+        if (E->SourceCallHint &&
+            E->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::RuntimeConstantObjectTable)
           Escaped.insert(E.get());
         Pending.insert(Pending.end(), E->Operands.begin(), E->Operands.end());
       }

@@ -774,6 +774,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                                 true) +
                 "_address");
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeConstantObjectTable) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_objc_constant_object_table_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeConstantString ||
                    Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeConstantObject) {

@@ -724,7 +724,9 @@ class SourceFlow {
       const auto &Value = Test->Operands[Side];
       const auto &Constant = Test->Operands[1 - Side];
       if (Constant->Kind != ExprKind::Const ||
-          Constant->Type->Size != Index->Type->Size ||
+          !Constant->Type || Constant->Type->Kind != NdTypeKind::Int ||
+          !Constant->Type->Size ||
+          Constant->Type->Size > Index->Type->Size ||
           !Value->structuralEq(*Index))
         continue;
       const auto Limit = Constant->ConstVal;
