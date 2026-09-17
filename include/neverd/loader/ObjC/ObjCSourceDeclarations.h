@@ -18,6 +18,15 @@ struct BinaryImage;
 std::optional<SourceFunctionTypeHint>
 objcSelectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector);
 
+/// Resolve an otherwise conflicting selector only when one complete declared
+/// signature uniquely defines every byte of a caller-observed result-register
+/// read. RequiredResult describes the exact physical read, not a guessed
+/// source type. Missing declarations, incompatible carriers, and multiple
+/// compatible signatures remain unresolved.
+std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceABIValueLocation &RequiredResult);
+
 /// Unsupported or conflicting declarations veto a narrowed call contract.
 /// Missing external hierarchy instead requires selector-wide agreement: it
 /// cannot justify excluding other owners. Self includes known subclasses.

@@ -147,6 +147,18 @@ physical alias writes, unknown calls and instruction-local temporaries cannot
 carry stale facts into a later block. Invalid edges or exhausted work budgets
 reject the proof.
 
+Selector-wide Objective-C lookup normally requires every complete local,
+protocol, property and active SDK declaration to agree. When complete
+declarations disagree only in their result contract, an exact post-call
+integer-register read may narrow the set if exactly one declared result carrier
+defines every observed byte. Full-width copies can transport that evidence;
+recognized runtime calls can preserve only ABI-preserved aliases. Unknown
+calls, overlapping writes, unused results, incomplete declarations and multiple
+matching carriers leave the message unresolved. The selected carrier range is
+stored with the source-call hint and revalidated against the current image at
+publication, so a local dataflow observation cannot bypass global declaration
+checks.
+
 Required Swift value-witness operations have a separate symbol-independent call
 proof. A bounded backward trace must show that the indirect target is loaded
 from the operation's required `metadata[-1][slot]` entry and that the same

@@ -187,6 +187,11 @@ struct SourceCallTypeHint {
   std::optional<FormatArguments> Format;
   /// Restricts declaration agreement using revalidated receiver provenance.
   std::optional<ObjCReceiverTypeHint> Receiver;
+  /// An exact post-call integer-register read that uniquely selected one
+  /// otherwise conflicting Objective-C selector declaration. This is machine
+  /// dataflow evidence, not a source type guess; publication revalidates the
+  /// complete declaration set against the same carrier range.
+  std::optional<SourceABIValueLocation> SelectorResultUse;
   /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded

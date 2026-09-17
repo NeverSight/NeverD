@@ -274,6 +274,78 @@ TEST(ObjCCallHints, FrameworkProvidersRequireExactActivationAndAgreement) {
   }
 }
 
+TEST(ObjCCallHints, ResultUseDisambiguatesConflictingSelectorDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "save:";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+  ObjCMethod VoidSave;
+  VoidSave.ClassName = "ApplicationController";
+  VoidSave.Selector = "save:";
+  VoidSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(VoidSave.TypeHint);
+  Image.ObjCMethods.push_back(VoidSave);
+
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "save:"));
+  auto Function = caller();
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1200);
+  EXPECT_EQ(Hint.Selector, "save:");
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Hint.Signature.ReturnType->Size, 1U);
+  EXPECT_TRUE(Hint.Signature.ReturnLocation.ExtendTo32Bits);
+  ASSERT_TRUE(Hint.SelectorResultUse);
+  EXPECT_EQ(Hint.SelectorResultUse->RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint.SelectorResultUse->ValueBytes, 4U);
+
+  // A full-width save can transport the narrow result so long as its later
+  // use proves that only the declared W0 bytes are consumed.
+  Function = caller();
+  Function.Blocks[0].Ops.insert(Function.Blocks[0].Ops.begin() + 1,
+                                operation(NdOp::COPY,
+                                          NdVar::reg(a64reg::X20, 8),
+                                          {NdVar::reg(a64reg::X0, 8)}, 0x1202));
+  Function.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(a64reg::X20, 4);
+  Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).SelectorResultUse);
+  EXPECT_EQ(Hints.at(0x1200).SelectorResultUse->ValueBytes, 4U);
+
+  // An intervening call with no authenticated ABI revokes the saved alias.
+  Function.Blocks[0].Ops.insert(Function.Blocks[0].Ops.end() - 1,
+                                operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                                          {NdVar::cst(0x1500, 8)}, 0x1203));
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+
+  // No observed result read leaves both declarations possible.
+  Function.Blocks[0].Ops[1].NumInputs = 0;
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
+  // A new definition before the read severs the call-result provenance.
+  Function = caller();
+  Function.Blocks[0].Ops.insert(Function.Blocks[0].Ops.begin() + 1,
+                                operation(NdOp::COPY, NdVar::reg(a64reg::X0, 4),
+                                          {NdVar::cst(1, 4)}, 0x1202));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
+  // BOOL defines W0 on arm64, not the full X0 read requested here.
+  Function = caller();
+  Function.Blocks[0].Ops[1].Inputs[0] = NdVar::reg(a64reg::X0, 8);
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
+  // Any incomplete declaration remains a veto even when another candidate
+  // happens to fit the observed carrier.
+  ObjCMethod Unknown = VoidSave;
+  Unknown.ClassName = "UnknownController";
+  Unknown.TypeHint.reset();
+  Image.ObjCMethods.push_back(std::move(Unknown));
+  Function = caller();
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
 TEST(ObjCCallHints, FrameworkVariadicAndUnsupportedRecordsRemainUnbound) {
   auto Image = image();
   Image.ObjCMethods.clear();

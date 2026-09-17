@@ -76,7 +76,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.RuntimeObjCResultType == Expected.RuntimeObjCResultType &&
          Binding.TargetName == Expected.TargetName &&
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
-         !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+         !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
+         !Binding.ByteCount &&
          bool(Binding.Format) == bool(Expected.Format) &&
          (!Binding.Format ||
           (Binding.Format->FixedCount == Expected.Format->FixedCount &&
@@ -1363,6 +1364,11 @@ inline bool objcSourceCallBound(
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Format))
     return false;
+  if (Binding.SelectorResultUse &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       Binding.Receiver || Binding.Format ||
+       Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+    return false;
   if (Binding.Format &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage &&
       Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall)
@@ -1591,7 +1597,12 @@ inline bool objcSourceCallBound(
         !objc_projection_detail::sameHint(Hint, *Expected.Signature))
       return false;
   } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK) {
-    const auto Expected = objcSelectorSourceTypeHint(Image, Binding.Selector);
+    const auto Expected = Binding.SelectorResultUse
+                              ? objcSelectorSourceTypeHintForResultUse(
+                                    Image, Binding.Selector,
+                                    *Binding.SelectorResultUse)
+                              : objcSelectorSourceTypeHint(Image,
+                                                           Binding.Selector);
     if (!Expected || !objc_projection_detail::sameHint(Hint, *Expected))
       return false;
   }

@@ -120,14 +120,30 @@ bool usesFramework(const BinaryImage &Image,
 }
 } // namespace
 
-static std::optional<SourceFunctionTypeHint>
-selectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
-                       const SourceFunctionTypeHint *FormatSignature) {
+using SelectorSignatures = std::vector<SourceFunctionTypeHint>;
+
+static std::optional<SelectorSignatures>
+selectorSourceTypeHints(const BinaryImage &Image, llvm::StringRef Selector,
+                        const SourceFunctionTypeHint *FormatSignature) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
     return std::nullopt;
-  std::optional<SourceFunctionTypeHint> Result;
+  SelectorSignatures Result;
+  auto Add = [&](SourceFunctionTypeHint Hint, bool SDK = false) {
+    for (auto &Candidate : Result) {
+      auto Merged = Candidate;
+      if (!mergeSignature(Merged, Hint))
+        continue;
+      Candidate = std::move(Merged);
+      if (SDK)
+        Candidate.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+      return;
+    }
+    if (SDK)
+      Hint.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+    Result.push_back(std::move(Hint));
+  };
   // The dynamic receiver class is unknown. No declaration is selected by
   // visitation order or by assuming that the receiver has a framework class.
   auto Include = [&](const auto &Method) {
@@ -137,11 +153,9 @@ selectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
       return false;
     auto Hint = *Method.TypeHint;
     std::string Diagnostic;
-    if (!assignDarwinObjCSourceABI(Hint, Image.Arch, Diagnostic) ||
-        (Result && !mergeSignature(*Result, Hint)))
+    if (!assignDarwinObjCSourceABI(Hint, Image.Arch, Diagnostic))
       return false;
-    if (!Result)
-      Result = std::move(Hint);
+    Add(std::move(Hint));
     return true;
   };
   for (const auto &Method : Image.ObjCMethods)
@@ -157,10 +171,9 @@ selectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
           std::pair{&Property.Setter, &Property.SetterTypeHint}}) {
       if (Name->empty() || *Name != Selector)
         continue;
-      if (!*Hint || (Result && !mergeSignature(*Result, **Hint)))
+      if (!*Hint)
         return std::nullopt;
-      if (!Result)
-        Result = **Hint;
+      Add(**Hint);
     }
   }
   if (const auto *Catalog = frameworkDeclarations(Image.Arch))
@@ -175,18 +188,55 @@ selectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
       const auto *Declared = Found->second          ? &*Found->second
                              : Name == "Foundation" ? FormatSignature
                                                     : nullptr;
-      if (!Declared || (Result && !mergeSignature(*Result, *Declared)))
+      if (!Declared)
         return std::nullopt;
-      if (!Result)
-        Result = *Declared;
-      Result->Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+      Add(*Declared, true);
     }
   return Result;
+}
+
+static std::optional<SourceFunctionTypeHint>
+selectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
+                       const SourceFunctionTypeHint *FormatSignature) {
+  auto Candidates = selectorSourceTypeHints(Image, Selector, FormatSignature);
+  if (!Candidates || Candidates->size() != 1)
+    return std::nullopt;
+  return std::move(Candidates->front());
 }
 
 std::optional<SourceFunctionTypeHint>
 objcSelectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector) {
   return selectorSourceTypeHint(Image, Selector, nullptr);
+}
+
+std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceABIValueLocation &RequiredResult) {
+  if (RequiredResult.Kind != SourceABICarrierKind::IntegerRegister ||
+      !RequiredResult.ValueBytes)
+    return std::nullopt;
+  auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
+  if (!Candidates)
+    return std::nullopt;
+  std::optional<SourceFunctionTypeHint> Result;
+  for (auto &Candidate : *Candidates) {
+    const auto &Location = Candidate.ReturnLocation;
+    const uint16_t DefinedBytes =
+        Location.ExtendTo32Bits ? std::max<uint16_t>(Location.ValueBytes, 4)
+                                : Location.ValueBytes;
+    if (Location.Kind != SourceABICarrierKind::IntegerRegister ||
+        Location.RegisterOffset > RequiredResult.RegisterOffset ||
+        RequiredResult.RegisterOffset - Location.RegisterOffset >
+            DefinedBytes ||
+        RequiredResult.ValueBytes >
+            DefinedBytes -
+                (RequiredResult.RegisterOffset - Location.RegisterOffset))
+      continue;
+    if (Result)
+      return std::nullopt;
+    Result = std::move(Candidate);
+  }
+  return Result;
 }
 
 std::optional<ObjCReceiverTypeHint>

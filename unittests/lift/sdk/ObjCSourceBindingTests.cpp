@@ -5,6 +5,8 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/AArch64Regs.h"
+#include "neverd/loader/ObjC/ObjCEncoding.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
@@ -3217,6 +3219,55 @@ TEST(ObjCSourceBindings, ExplicitABIPositionDriftIsDetected) {
   Changed = Hint;
   Changed.ReturnLocation.RegisterOffset += 8;
   EXPECT_FALSE(objc_projection_detail::sameHint(Hint, Changed));
+}
+
+TEST(ObjCSourceBindings,
+     ConflictingSelectorResultUseIsRevalidatedAtPublication) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+  ObjCMethod VoidSave;
+  VoidSave.ClassName = "ApplicationController";
+  VoidSave.Selector = "save:";
+  VoidSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(VoidSave.TypeHint);
+  Image.ObjCMethods.push_back(VoidSave);
+
+  SourceABIValueLocation Use;
+  Use.Kind = SourceABICarrierKind::IntegerRegister;
+  Use.RegisterOffset = a64reg::X0;
+  Use.ValueBytes = 4;
+  const auto Signature =
+      objcSelectorSourceTypeHintForResultUse(Image, "save:", Use);
+  ASSERT_TRUE(Signature);
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding->TargetName = "objc_msgSend";
+  Binding->Selector = "save:";
+  Binding->Signature = *Signature;
+  Binding->SelectorResultUse = Use;
+  auto Call =
+      HighExpr::makeCall("objc_msgSend", 0,
+                         {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
+                          HighExpr::makeConst(0, 8)});
+  Call->Type = Signature->ReturnType;
+  Call->SourceCallHint = Binding;
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
+
+  Binding->SelectorResultUse->ValueBytes = 8;
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultUse = Use;
+  Binding->Signature.ReturnType = NdType::makeVoid();
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->Signature = *Signature;
+  Binding->SelectorResultUse.reset();
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultUse = Use;
+  Image.ObjCMethods.back().TypeHint.reset();
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
 }
 
 namespace {

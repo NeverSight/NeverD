@@ -672,8 +672,8 @@ bool isSwiftValueWitnessSourceCallHint(const SourceCallTypeHint &Hint,
          Hint.SelectorReferenceAddress == 0 && !Hint.DoesNotReturn &&
          !Hint.ReturnedArgument && !Hint.RuntimeObjCResultType &&
          Hint.BorrowedByteInputs.empty() && Hint.SwiftStringInputs.empty() &&
-         !Hint.Format && !Hint.Receiver && Hint.ByteCount == 0 &&
-         Hint.ImmutablePointerSlot == 0 &&
+         !Hint.Format && !Hint.Receiver && !Hint.SelectorResultUse &&
+         Hint.ByteCount == 0 && Hint.ImmutablePointerSlot == 0 &&
          equalSourceABIs(Hint.Signature, Expected->Signature);
 }
 
