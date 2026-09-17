@@ -13768,6 +13768,29 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
+     UnliftedFunctionExclusiveEndResolvesAsGep) {
+  constexpr uint64_t SlotOffset = 8;
+  constexpr va_t SlotVA = DataVA + SlotOffset;
+  constexpr uint64_t FuncSize = 0x20;
+  BinaryImage Image =
+      makeMixedPointerRecordImage(Arch::X64, BinaryFormat::COFF);
+  Image.CodePtrRelocSlots.clear();
+  Image.DataPtrRelocSlots.clear();
+  writeObject(Image.Segments[1].Data, SlotOffset, CodeVA);
+  Image.CodePtrRelocSlots.insert(SlotVA);
+  Image.Symbols.push_back(Symbol::makeFunc(CodeVA - FuncSize, FuncSize));
+  MedFunc Caller =
+      makeExactMixedPointerSlotIndirectCaller(Arch::X64, SlotOffset);
+
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Caller}, Context, "exclusive-end-code-ptr",
+                            Arch::X64, {}, &Image, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectValidModule(*Module);
+}
+
+TEST(LLVMCodePointerInvariantBoundary,
      RuntimeCallableCodeFallbackStillRequiresLiftedOwner) {
   constexpr uint64_t SlotOffset = 8;
   constexpr va_t SlotVA = DataVA + SlotOffset;

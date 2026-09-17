@@ -267,6 +267,16 @@ TEST(LibCArity, ExceptionRuntimeFunctions) {
   auto Raise = libcArity("raise_securityfailure");
   ASSERT_TRUE(Raise.has_value());
   EXPECT_EQ(Raise->IntArgs, 1);
+
+  auto GetCurrentProcess = libcArity("GetCurrentProcess");
+  ASSERT_TRUE(GetCurrentProcess.has_value());
+  EXPECT_EQ(GetCurrentProcess->IntArgs, 0);
+  EXPECT_EQ(GetCurrentProcess->FpArgs, 0);
+  auto Terminate = libcArity("TerminateProcess");
+  ASSERT_TRUE(Terminate.has_value());
+  EXPECT_EQ(Terminate->IntArgs, 2);
+  EXPECT_TRUE(libcArityForSymbol("IsProcessorFeaturePresent").has_value());
+  EXPECT_EQ(libcArityForSymbol("IsProcessorFeaturePresent")->IntArgs, 1);
 }
 
 TEST(LibCArity, VaListConsumersHaveFixedPrototypes) {
@@ -380,6 +390,7 @@ TEST(IsNoReturnFunction, MsvcGsHelpers) {
   EXPECT_TRUE(isNoReturnFunction("_report_gsfailure"));
   EXPECT_TRUE(isNoReturnFunction("raise_securityfailure"));
   EXPECT_TRUE(isNoReturnFunction("_raise_securityfailure"));
+  EXPECT_TRUE(isNoReturnFunction("TerminateProcess"));
 }
 
 TEST(IsNoReturnFunction, SometimesReturningExcluded) {

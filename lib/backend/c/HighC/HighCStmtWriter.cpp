@@ -78,13 +78,13 @@ const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
   return nullptr;
 }
 
-bool isNoReturnCallStmt(const HighStmt &Stmt) {
+bool isNoReturnCallStmt(const HighCAnalysisState &State, const HighStmt &Stmt) {
   if (isCxxThrowStmt(Stmt))
     return true;
   const HighExpr *E = stmtCallExpr(Stmt);
-  if (!E || E->Kind != ExprKind::Call)
+  if (!E)
     return false;
-  return libc::isNoReturnFunction(E->CallTarget) || isFastFailExpr(E);
+  return isNoreturnCallExpr(State, *E);
 }
 
 void writeCxxCatchType(llvm::raw_ostream &OS, const HighEHClause &Clause) {
@@ -137,9 +137,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       OS << ";\n";
       break;
     }
-    if (Stmt.Val->Kind == ExprKind::Call &&
-        (libc::isNoReturnFunction(Stmt.Val->CallTarget) ||
-         isFastFailExpr(Stmt.Val.get()))) {
+    if (isNoreturnCallExpr(Analysis, *Stmt.Val)) {
       emitIndent(Indent);
       OS << exprStr(*Stmt.Val) << ";\n";
       break;
@@ -790,11 +788,8 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
             OS << "return " << formatReturnExpr(*ThenVal) << ";\n";
           else
             OS << "return;\n";
-          AfterNoReturn =
-              isCxxThrowExpr(AssignCall->Val.get()) ||
-              (AssignCall->Val->Kind == ExprKind::Call &&
-               (libc::isNoReturnFunction(AssignCall->Val->CallTarget) ||
-                isFastFailExpr(AssignCall->Val.get())));
+          AfterNoReturn = isCxxThrowExpr(AssignCall->Val.get()) ||
+                          isNoreturnCallExpr(Analysis, *AssignCall->Val);
           ++I;
           continue;
         }
@@ -813,7 +808,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
       continue;
     }
     writeStmt(S, Indent);
-    AfterNoReturn = isNoReturnCallStmt(S);
+    AfterNoReturn = isNoReturnCallStmt(Analysis, S);
   }
 }
 

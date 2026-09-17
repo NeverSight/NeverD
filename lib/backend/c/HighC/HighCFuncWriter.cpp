@@ -235,6 +235,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   analyzeDeadStores(Analysis, Func, VarFn, ExprFn);
   analyzeUnusedAssigns(Analysis, Func, VarFn);
   analyzeStoreForwarding(Analysis, Func, VarFn, ExprFn);
+  analyzeInferredNoreturn(Analysis, Func, VarFn);
   Analysis.AssignedVars.clear();
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (Analysis.DeadStmts.count(&S))
@@ -242,8 +243,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
     if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
       return;
     const HighExpr *Val = S.Val.get();
-    if (Val && Val->Kind == ExprKind::Call &&
-        (libc::isNoReturnFunction(Val->CallTarget) || isX86FastFailCall(*Val)))
+    if (Val && isNoreturnCallExpr(Analysis, *Val))
       return;
     Analysis.AssignedVars.insert(VarFn(S.Dst->Var));
   });
@@ -350,9 +350,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
         (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
         !isHiddenCopyForwardAssign(S)) {
       const HighExpr *Val = S.Val.get();
-      const bool ResultOmitted = Val && Val->Kind == ExprKind::Call &&
-                                 (libc::isNoReturnFunction(Val->CallTarget) ||
-                                  isX86FastFailCall(*Val));
+      const bool ResultOmitted = Val && isNoreturnCallExpr(Analysis, *Val);
       if (!ResultOmitted) {
         collectUsedVarsExpr(*S.Dst, UsedVars, VarFn);
         VisibleAssigned.insert(varName(S.Dst->Var));

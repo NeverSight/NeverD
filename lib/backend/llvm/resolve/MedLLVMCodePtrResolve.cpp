@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
@@ -23,6 +24,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/WithColor.h"
 
 #include <cstdlib>
@@ -73,6 +75,64 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
       return llvm::BlockAddress::get(Block->getParent(), Block);
   }
   return nullptr;
+}
+
+llvm::Function *
+MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
+                                                    llvm::StringRef Name) {
+  if (!Mod || !Ctx)
+    return nullptr;
+  if (llvm::Function *Existing = resolveLiftedFunctionEntry(Entry))
+    return Existing;
+  std::string Emitted;
+  if (!Name.empty() && !Name.starts_with(kAutoFuncPrefix))
+    Emitted =
+        Img ? llvm_name::fromObjectSymbol(Name, Img->Format).str() : Name.str();
+  else
+    Emitted = (kAutoFuncPrefix + llvm::utohexstr(Entry)).str();
+  if (llvm::Function *Existing = Mod->getFunction(Emitted))
+    return Existing;
+  if (Mod->getNamedValue(Emitted))
+    Emitted = (kAutoFuncPrefix + llvm::utohexstr(Entry)).str();
+  if (llvm::Function *Existing = Mod->getFunction(Emitted))
+    return Existing;
+  auto *FT = llvm::FunctionType::get(llvm::Type::getInt64Ty(*Ctx), false);
+  auto *Function = llvm::Function::Create(
+      FT, llvm::GlobalValue::ExternalLinkage, Emitted, Mod);
+  Function->addFnAttr(llvm::Attribute::NullPointerIsValid);
+  return Function;
+}
+
+llvm::Constant *MedLLVMEmitter::resolveImageFunctionAddress(va_t Address) {
+  if (llvm::Constant *Lifted = resolveLiftedCodeAddress(Address))
+    return Lifted;
+  if (!Img || !Mod || !Ctx)
+    return nullptr;
+  const Symbol *Exact = nullptr;
+  const Symbol *Ending = nullptr;
+  for (const Symbol &Sym : Img->Symbols) {
+    if (!Sym.IsFunc)
+      continue;
+    const va_t Entry = normalizeCodeAddress(Sym.Addr, Img->Arch, Img->Mode);
+    if (Entry == Address)
+      Exact = &Sym;
+    if (Sym.Size != 0 && Entry <= Address && Address - Entry == Sym.Size)
+      Ending = &Sym;
+  }
+  const Symbol *Use = Exact ? Exact : Ending;
+  if (!Use)
+    return nullptr;
+  const va_t Entry = normalizeCodeAddress(Use->Addr, Img->Arch, Img->Mode);
+  llvm::Function *Function =
+      materializeImageFunctionDeclaration(Entry, Use->Name);
+  if (!Function)
+    return nullptr;
+  if (Exact)
+    return Function;
+  llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+  llvm::Constant *Offset =
+      llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Use->Size);
+  return llvm::ConstantExpr::getGetElementPtr(I8Ty, Function, Offset);
 }
 
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
@@ -265,7 +325,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
       if (Imported && !Imported->Name.empty()) {
         Kind = PtrSlotKind::Import;
         ImportName = Imported->Name;
-      } else if (!resolveLiftedCodeAddress(TargetVA)) {
+      } else if (!resolveImageFunctionAddress(TargetVA)) {
         if (!FatalCodePointerResolution)
           llvm::WithColor::error()
               << "med_llvm_emitter: relocation-proven code pointer at 0x"
@@ -346,7 +406,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(uint64_t SlotVA,
     addBytes(Cursor, K.Off);
     llvm::Constant *FieldVal = nullptr;
     if (K.Kind == PtrSlotKind::Code) {
-      llvm::Constant *Target = resolveLiftedCodeAddress(K.TargetVA);
+      llvm::Constant *Target = resolveImageFunctionAddress(K.TargetVA);
       if (!Target) {
         FatalCodePointerResolution = true;
         return nullptr;

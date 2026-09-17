@@ -43,6 +43,10 @@ struct HighCAnalysisState {
   std::map<std::string, std::set<std::string>> StoreFwdDeps;
   std::map<std::string, std::set<std::string>> ForwardedAddressDeps;
   std::set<std::string> AssignedVars;
+  /// Callee VAs whose result is only consumed as a return, while another path
+  /// is a bare `return`.  Cookie-style MSVC helpers (`ret` vs
+  /// `jmp report_gsfailure`) have no libc name when the image is stripped.
+  std::set<va_t> InferredNoreturnCallAddrs;
 };
 
 void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
@@ -53,6 +57,15 @@ void analyzeStoreForwarding(HighCAnalysisState &State, const HighFunc &Func,
 
 bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
                        VarNameFn VarFn, ExprStrFn ExprFn);
+
+/// Record unnamed noreturn helpers (cookie fail path: bare `return` plus
+/// `return call()`).  Must run before AssignedVars is collected.
+void analyzeInferredNoreturn(HighCAnalysisState &State, const HighFunc &Func,
+                             VarNameFn VarFn);
+
+/// True when a call never returns: libc noreturn, x86 `__fastfail`, or an
+/// inferred cookie-style fail helper.
+bool isNoreturnCallExpr(const HighCAnalysisState &State, const HighExpr &E);
 
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars, VarNameFn VarFn);

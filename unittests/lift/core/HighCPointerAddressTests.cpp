@@ -2056,6 +2056,162 @@ TEST(HighCPointerAddresses, FastFailPrintsIntrinsicWithoutAssign) {
   EXPECT_EQ(Source.find("t1 ="), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, ConstantReturnIsNotInferredVoid) {
+  HighFunc Func;
+  Func.Name = "GSHandlerCheck";
+  Func.ReturnType = NdType::makeInt(8);
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeConst(1, 4);
+  Func.Body.push_back(std::move(Ret));
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("return 1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("void GSHandlerCheck"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, UnnamedGsFailureCallOmitsSuccessReturn) {
+  HighFunc Func;
+  Func.Name = "cookie";
+  Func.Entry = 0x140001350;
+  Func.ReturnType = NdType::makeInt(8);
+  Func.Params = {{"arg0", NdType::makeInt(8)}};
+
+  HighStmt IfElse;
+  IfElse.Kind = StmtKind::IfElse;
+  IfElse.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, parameter(0),
+                                    HighExpr::makeConst(1, 8));
+  HighStmt Ok;
+  Ok.Kind = StmtKind::Return;
+  MedVar Rax;
+  Rax.Kind = MedVar::Reg;
+  Rax.Id = 0;
+  Rax.SSAVer = 0;
+  Rax.Size = 8;
+  Ok.RetVal = HighExpr::makeVar(Rax);
+  IfElse.Body.push_back(std::move(Ok));
+  Func.Body.push_back(std::move(IfElse));
+
+  MedVar Dst;
+  Dst.Kind = MedVar::Temp;
+  Dst.Id = 3;
+  Dst.Size = 8;
+  HighStmt Call;
+  Call.Kind = StmtKind::Assign;
+  Call.Dst = HighExpr::makeVar(Dst);
+  Call.Val = HighExpr::makeCall("sub_14000173C", 0x14000173C, {parameter(0)});
+  Func.Body.push_back(std::move(Call));
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeVar(Dst);
+  Func.Body.push_back(std::move(Ret));
+
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("void cookie"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("sub_14000173C("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, GetCurrentProcessTakesNoArguments) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+
+  auto Reg = [](int Id, int SSA, uint64_t Off) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::X64;
+    V.Id = Id;
+    V.SSAVer = SSA;
+    V.Size = 8;
+    V.RegOff = Off;
+    return V;
+  };
+  auto Copy = [](MedVar Dst, MedVar Src, va_t Addr) {
+    MedOp Op;
+    Op.Opcode = NdOp::COPY;
+    Op.Output = Dst;
+    Op.addInput(Src);
+    Op.Addr = Addr;
+    return Op;
+  };
+
+  MedFunc Med;
+  Med.Entry = 0x140001000;
+  Med.Name = "raise_securityfailure";
+  Med.CC = CallingConv::Win64;
+  const uint64_t ParamOffs[] = {x86reg::RCX, x86reg::RDX, x86reg::R8,
+                                x86reg::R9};
+  for (int I = 0; I < 4; ++I) {
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.TheArch = Arch::X64;
+    P.Id = I;
+    P.Size = 8;
+    P.RegOff = ParamOffs[I];
+    Med.Params.push_back(P);
+  }
+
+  const MedVar RCX0 = Reg(10, 0, x86reg::RCX);
+  const MedVar RDX0 = Reg(11, 0, x86reg::RDX);
+  const MedVar R80 = Reg(12, 0, x86reg::R8);
+  const MedVar R90 = Reg(13, 0, x86reg::R9);
+
+  MedBlock Block;
+  Block.Id = 0;
+  Block.Ops.push_back(Copy(RCX0, RCX0, 0x140001000));
+  Block.Ops.push_back(Copy(RDX0, RDX0, 0x140001001));
+  Block.Ops.push_back(Copy(R80, R80, 0x140001002));
+  Block.Ops.push_back(Copy(R90, R90, 0x140001003));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x140001018;
+  Call.addInput(MedVar::makeConst(0x140002000, 8));
+  Block.Ops.push_back(std::move(Call));
+  Med.Blocks.push_back(std::move(Block));
+
+  std::map<va_t, std::string> Names;
+  Names[0x140002000] = "GetCurrentProcess";
+  MedToHighConverter Converter;
+  Converter.setBinaryImage(&Img);
+  Converter.setFuncNames(&Names);
+  HighFunc High = Converter.convert(Med, Arch::X64);
+  const std::string Source = emitFunctions({High}, Arch::X64, &Img);
+  const auto At = Source.rfind("GetCurrentProcess(");
+  ASSERT_NE(At, std::string::npos) << Source;
+  const auto Open = Source.find('(', At);
+  const auto Close = Source.find(')', Open);
+  ASSERT_NE(Close, std::string::npos) << Source;
+  const std::string Args = Source.substr(Open + 1, Close - Open - 1);
+  EXPECT_TRUE(Args.empty()) << Source;
+}
+
+TEST(HighCPointerAddresses, TerminateProcessOmitsSuccessReturn) {
+  HighFunc Func;
+  Func.Name = "raise";
+  Func.ReturnType = NdType::makeInt(8);
+  MedVar Dst;
+  Dst.Kind = MedVar::Temp;
+  Dst.Id = 3;
+  Dst.Size = 8;
+  HighStmt Call;
+  Call.Kind = StmtKind::Assign;
+  Call.Dst = HighExpr::makeVar(Dst);
+  Call.Val = HighExpr::makeCall(
+      "TerminateProcess", 0x140002000,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0xC0000409, 4)});
+  Func.Body.push_back(std::move(Call));
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeVar(Dst);
+  Func.Body.push_back(std::move(Ret));
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("TerminateProcess("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, RaiseSecurityFailureOmitsSuccessReturn) {
   HighFunc Func;
   Func.Name = "report";
@@ -2192,6 +2348,36 @@ TEST(LLVMCPointerAddresses, RaiseSecurityFailureOmitsSuccessReturn) {
   EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("return"), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, TerminateProcessOmitsSuccessReturn) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-terminate", Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *TermTy = llvm::FunctionType::get(I64, {I64, I32}, false);
+  llvm::Function *TermFn = llvm::Function::Create(
+      TermTy, llvm::GlobalValue::ExternalLinkage, "TerminateProcess", Module);
+  llvm::FunctionType *FnTy = llvm::FunctionType::get(I64, false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnTy, llvm::GlobalValue::ExternalLinkage, "raise", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Value *Result = Builder.CreateCall(
+      TermFn,
+      {llvm::ConstantInt::get(I64, 0), llvm::ConstantInt::get(I32, 0xC0000409)},
+      "t3");
+  Builder.CreateRet(Result);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("TerminateProcess("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return t3"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("t3 ="), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, GsTebLoadPrintsReadGsQword) {

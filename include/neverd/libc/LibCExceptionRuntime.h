@@ -14,53 +14,62 @@ namespace neverd::libc {
 /// These signatures bound call-argument recovery just like libc signatures do;
 /// in particular they preserve live-in exception objects passed through tiny
 /// compiler-generated catch/terminate helpers.
-inline constexpr auto kExceptionRuntimeArity =
-    std::to_array<LibCArityEntry>({
-        // Itanium C++ ABI and LLVM unwinder.
-        {"cxa_allocate_exception", {1, 0}},
-        {"cxa_free_exception", {1, 0}},
-        {"cxa_throw", {3, 0}},
-        {"cxa_rethrow", {0, 0}},
-        {"cxa_begin_catch", {1, 0}},
-        {"cxa_end_catch", {0, 0}},
-        {"cxa_get_exception_ptr", {1, 0}},
-        {"cxa_current_exception_type", {0, 0}},
-        {"cxa_call_terminate", {1, 0}},
-        {"clang_call_terminate", {1, 0}},
-        {"ZSt9terminatev", {0, 0}},
-        {"Unwind_Resume", {1, 0}},
-        {"Unwind_DeleteException", {1, 0}},
-        {"Unwind_RaiseException", {1, 0}},
-        {"Unwind_ForcedUnwind", {3, 0}},
-        {"Unwind_Backtrace", {2, 0}},
+inline constexpr auto kExceptionRuntimeArity = std::to_array<LibCArityEntry>({
+    // Itanium C++ ABI and LLVM unwinder.
+    {"cxa_allocate_exception", {1, 0}},
+    {"cxa_free_exception", {1, 0}},
+    {"cxa_throw", {3, 0}},
+    {"cxa_rethrow", {0, 0}},
+    {"cxa_begin_catch", {1, 0}},
+    {"cxa_end_catch", {0, 0}},
+    {"cxa_get_exception_ptr", {1, 0}},
+    {"cxa_current_exception_type", {0, 0}},
+    {"cxa_call_terminate", {1, 0}},
+    {"clang_call_terminate", {1, 0}},
+    {"ZSt9terminatev", {0, 0}},
+    {"Unwind_Resume", {1, 0}},
+    {"Unwind_DeleteException", {1, 0}},
+    {"Unwind_RaiseException", {1, 0}},
+    {"Unwind_ForcedUnwind", {3, 0}},
+    {"Unwind_Backtrace", {2, 0}},
 
-        // Objective-C table and fragile runtimes.
-        {"objc_exception_throw", {1, 0}},
-        {"objc_exception_rethrow", {0, 0}},
-        {"objc_begin_catch", {1, 0}},
-        {"objc_end_catch", {0, 0}},
-        {"objc_terminate", {0, 0}},
-        {"objc_sync_enter", {1, 0}},
-        {"objc_sync_exit", {1, 0}},
-        {"objc_exception_try_enter", {1, 0}},
-        {"objc_exception_try_exit", {1, 0}},
-        {"objc_exception_extract", {1, 0}},
-        {"objc_exception_match", {2, 0}},
+    // Objective-C table and fragile runtimes.
+    {"objc_exception_throw", {1, 0}},
+    {"objc_exception_rethrow", {0, 0}},
+    {"objc_begin_catch", {1, 0}},
+    {"objc_end_catch", {0, 0}},
+    {"objc_terminate", {0, 0}},
+    {"objc_sync_enter", {1, 0}},
+    {"objc_sync_exit", {1, 0}},
+    {"objc_exception_try_enter", {1, 0}},
+    {"objc_exception_try_exit", {1, 0}},
+    {"objc_exception_extract", {1, 0}},
+    {"objc_exception_match", {2, 0}},
 
-        // Microsoft C++/SEH throw and unwind entry points.
-        {"CxxThrowException", {2, 0}},
-        {"RaiseException", {4, 0}},
-        {"RtlRaiseException", {1, 0}},
-        {"RtlUnwindEx", {6, 0}},
+    // Microsoft C++/SEH throw and unwind entry points.
+    {"CxxThrowException", {2, 0}},
+    {"RaiseException", {4, 0}},
+    {"RtlRaiseException", {1, 0}},
+    {"RtlUnwindEx", {6, 0}},
 
-        // MSVC /GS cookie helpers.  Intra-image CRT copies are not imports, so
-        // call-argument recovery would otherwise treat leftover rdx/r8/r9 as
-        // extra parameters of __security_check_cookie.
-        {"security_check_cookie", {1, 0}},
-        {"report_gsfailure", {1, 0}},
-        {"raise_securityfailure", {1, 0}},
-        {"GSHandlerCheckCommon", {3, 0}},
-    });
+    // MSVC /GS cookie helpers.  Intra-image CRT copies are not imports, so
+    // call-argument recovery would otherwise treat leftover rdx/r8/r9 as
+    // extra parameters of __security_check_cookie.
+    {"security_check_cookie", {1, 0}},
+    {"report_gsfailure", {1, 0}},
+    {"raise_securityfailure", {1, 0}},
+    {"GSHandlerCheckCommon", {3, 0}},
+
+    // kernel32 helpers used by MSVC /GS report paths.  Intra-image
+    // wrappers call these as imports; leftover rcx/rdx must not become
+    // extra arguments of GetCurrentProcess.
+    {"GetCurrentProcess", {0, 0}},
+    {"GetCurrentProcessId", {0, 0}},
+    {"TerminateProcess", {2, 0}},
+    {"SetUnhandledExceptionFilter", {1, 0}},
+    {"UnhandledExceptionFilter", {1, 0}},
+    {"IsProcessorFeaturePresent", {1, 0}},
+});
 
 } // namespace neverd::libc
 

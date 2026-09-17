@@ -1414,6 +1414,15 @@ private:
   /// an emitted function become llvm::BlockAddress constants.
   llvm::Constant *resolveLiftedCodeAddress(va_t Address);
 
+  /// Resolve a relocation-proven executable VA that may not have a lifted
+  /// body: an image function symbol at \p Address, or the exclusive end of
+  /// one (`pdata` EndAddress).  Returns a function constant or a GEP past
+  /// the last byte; null if the image has no such function identity.
+  llvm::Constant *resolveImageFunctionAddress(va_t Address);
+
+  llvm::Function *materializeImageFunctionDeclaration(va_t Entry,
+                                                      llvm::StringRef Name);
+
   /// Build (and cache) a constant global mirroring the entire read-only data
   /// segment that contains \p SlotVA, with every code-pointer relocation slot
   /// emitted as a relocatable `ptrtoint @func` or
