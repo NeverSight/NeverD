@@ -114,10 +114,12 @@ bool isLowerSHA256(StringRef Hash) {
 
 std::string cellKey(StringRef Toolchain, StringRef Architecture,
                     StringRef CxxFormat, bool SecurityCookie,
-                    StringRef Optimization) {
-  return (Toolchain + "|" + Architecture + "|" + CxxFormat + "|" +
-          (SecurityCookie ? "gs" : "no-gs") + "|" + Optimization)
-      .str();
+                    StringRef Optimization, int VisualStudioYear = 2022) {
+  std::string ToolchainKey = Toolchain.str();
+  if (Toolchain == "msvc" && VisualStudioYear != 2022)
+    ToolchainKey += "/vs" + std::to_string(VisualStudioYear);
+  return ToolchainKey + "|" + Architecture.str() + "|" + CxxFormat.str() +
+         "|" + (SecurityCookie ? "gs" : "no-gs") + "|" + Optimization.str();
 }
 
 Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
@@ -179,6 +181,17 @@ Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
   Result.Toolchain = std::move(*Toolchain);
   if (Result.Toolchain != "msvc" && Result.Toolchain != "clang-cl")
     return manifestError(Context + ": unsupported toolchain");
+  if (const json::Value *YearValue = Build->get("visual_studio_year")) {
+    std::optional<int64_t> Year = YearValue->getAsInteger();
+    if (!Year || (*Year != 2022 && *Year != 2026))
+      return manifestError(Context + ": unsupported visual_studio_year");
+    Result.VisualStudioYear = static_cast<int>(*Year);
+  } else {
+    Result.VisualStudioYear = 2022;
+  }
+  if (Result.Toolchain != "msvc" && Result.VisualStudioYear != 2022)
+    return manifestError(Context +
+                         ": visual_studio_year applies only to MSVC cells");
   auto Optimization = requireString(*Build, "optimization", Context + ".build");
   if (!Optimization)
     return Optimization.takeError();
@@ -262,10 +275,13 @@ Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
       Result.Name + "-" + Result.Toolchain + "-" + Result.Architecture + "-" +
       Result.CxxFormat + "-" + CookieLabel + "-" + Result.Optimization +
       Identity->Extension.str();
+  std::string ToolchainDir = Result.Toolchain;
+  if (Result.Toolchain == "msvc" && Result.VisualStudioYear != 2022)
+    ToolchainDir += "/vs" + std::to_string(Result.VisualStudioYear);
   const std::string ExpectedPath =
-      "corpus/windows-eh/" + Result.Toolchain + "/" + Result.Architecture +
-      "/" + Result.CxxFormat + "/" + CookieLabel + "/" + Result.Optimization +
-      "/" + Identity->Suite.str() + "/" + ExpectedFilename;
+      "corpus/windows-eh/" + ToolchainDir + "/" + Result.Architecture + "/" +
+      Result.CxxFormat + "/" + CookieLabel + "/" + Result.Optimization + "/" +
+      Identity->Suite.str() + "/" + ExpectedFilename;
   if (Result.Path != ExpectedPath)
     return manifestError(Context + ": artifact path disagrees with build axes");
 
@@ -378,7 +394,8 @@ Error verifyCompleteMatrix(
   for (const WindowsEHArtifactExpectation &Expectation : Expectations) {
     std::string Key = cellKey(Expectation.Toolchain, Expectation.Architecture,
                               Expectation.CxxFormat, Expectation.SecurityCookie,
-                              Expectation.Optimization);
+                              Expectation.Optimization,
+                              Expectation.VisualStudioYear);
     if (!NamesByCell[Key].insert(Expectation.Name).second)
       return manifestError("duplicate artifact name in corpus matrix cell");
   }
