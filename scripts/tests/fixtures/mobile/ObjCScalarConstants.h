@@ -7,4 +7,5 @@
 - (float)finiteFloat;
 - (float)negativeZeroFloat;
 - (float)payloadFloat;
+- (void)fillWide:(void *)buffer;
 @end

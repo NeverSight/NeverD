@@ -589,7 +589,7 @@ void verifyRuntime(bool Chained,
                              : DynamicProperties   ? 6U
                              : CoreData            ? 3U
                              : ReadOnlyTables      ? 4U
-                             : ScalarConstants     ? 6U
+                             : ScalarConstants     ? 7U
                              : SwiftLiterals       ? 3U
                              : StoredStrings       ? 4U
                              : SwiftAllocation     ? 4U
@@ -814,7 +814,8 @@ void verifyRuntime(bool Chained,
         "registeredObjectsInContext:"};
   if (ScalarConstants)
     Remaining = {"finiteDouble", "negativeZeroDouble", "payloadDouble",
-                 "finiteFloat",  "negativeZeroFloat",  "payloadFloat"};
+                 "finiteFloat",  "negativeZeroFloat",  "payloadFloat",
+                 "fillWide:"};
   if (Graphics)
     Remaining = {"widthOfImage:", "heightOfImage:",     "retainImage:",
                  "alphaOfColor:", "componentsInColor:", "imageCountInSource:"};
@@ -1221,7 +1222,7 @@ void verifyRuntime(bool Chained,
       : SwiftIntegerRuntime ? "runtime-integer-cases=4096\ncast-results="
                               "pass\nreference-counts=pass\n"
       : DispatchOnce        ? "dispatch-once-calls=8192\ninitializer-effects="
-                       "once\nshared-object=pass\n"
+                              "once\nshared-object=pass\n"
       : SwiftOnce ? "swift-once-calls=8192\ninitializer-effects=once\nshared-"
                     "state=pass\n"
       : NativeReturnPaths ? "native-return-cases=16384\nreturns-and-stores="
@@ -1272,8 +1273,8 @@ void verifyRuntime(bool Chained,
       : CoreData
           ? "core-data-fetches=1024\ncontext-identity=pass\nfetch-count=16\n"
             "nil-context=pass\n"
-      : ScalarConstants
-          ? "scalar-bit-checks=6144\nsigned-zero=pass\nnan-payload=pass\n"
+      : ScalarConstants ? "scalar-bit-checks=7168\nsigned-zero=pass\nnan-"
+                          "payload=pass\nwide-lanes=pass\n"
       : SwiftLiterals ? "swift-literals=3072\nutf8=pass\nlifetime="
                         "pass\nidentical-objects=0\n"
       : SystemData    ? "system-data=9216\nsingletons=pass\nframework-identity="

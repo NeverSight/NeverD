@@ -562,6 +562,56 @@ TEST(ObjCSourceBindings, ImmutableScalarsPreserveWidthSignAndFloatingBits) {
   }
 }
 
+TEST(ObjCSourceBindings,
+     ImmutableWideScalarsPreserveBothLanesAndRejectPointers) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Case = 0; Case != 7; ++Case) {
+      SCOPED_TRACE(Case);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.Image.ObjCSourceReferences.clear();
+      uint64_t Low = 0xfedcba9876543210ULL, High = 0x8123456789abcdefULL;
+      if (Case == 1)
+        Low = 0x1040;
+      if (Case == 2)
+        High = 0x1040;
+      llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                       Low);
+      llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x48,
+                                       High);
+      if (Case == 3)
+        F.Image.DataPtrRelocSlots.insert(0x1048);
+      if (Case == 4)
+        F.Image.Sections[0].FileSz = 0x4f;
+      if (Case == 5)
+        F.Image.Sections[0].Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Function.ReturnType = NdType::makeInt(16, Case == 6);
+      auto Load = HighExpr::makeLoad(HighExpr::makeConst(0x1040, 8),
+                                     F.Function.ReturnType);
+      F.Function.Body[0].RetVal = Load;
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      if (Case >= 1 && Case <= 5) {
+        EXPECT_FALSE(Bound.Limitation.empty());
+        continue;
+      }
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      const auto Value = Bound.Function.Body[0].RetVal;
+      ASSERT_EQ(Value->Kind, ExprKind::BitCast);
+      EXPECT_EQ(Value->Type->str(), F.Function.ReturnType->str());
+      const auto Joined = Value->Operands[0];
+      ASSERT_EQ(Joined->Kind, ExprKind::BinOp);
+      ASSERT_EQ(Joined->Op, NdOp::CONCAT);
+      EXPECT_EQ(Joined->Type->Size, 16U);
+      EXPECT_EQ(Joined->Operands[0]->ConstVal, High);
+      EXPECT_EQ(Joined->Operands[1]->ConstVal, Low);
+      for (const auto &Lane : Joined->Operands)
+        EXPECT_EQ(Lane->ConstProvenance, ConstantAddressProvenance::Scalar);
+      EXPECT_EQ(Load->Kind, ExprKind::Load);
+    }
+  }
+}
+
 TEST(ObjCSourceBindings, ImmutableScalarsRejectUnprovedStorageAndAddressUses) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Case = 0; Case < 22; ++Case) {
@@ -617,7 +667,7 @@ TEST(ObjCSourceBindings, ImmutableScalarsRejectUnprovedStorageAndAddressUses) {
         Load->Type = NdType::makeFloat(16);
         break;
       case 12:
-        Load->Type = NdType::makeInt(16, false);
+        Load->Type = NdType::makeInt(32, false);
         break;
       case 13:
         Load->MemoryOrdering = NdMemoryOrdering::Acquire;

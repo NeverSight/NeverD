@@ -892,23 +892,34 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
         }
       }
       const auto &Type = Original->Type;
-      const bool Scalar = (Type->Kind == NdTypeKind::Int &&
-                           (Type->Size == 1 || Type->Size == 2 ||
-                            Type->Size == 4 || Type->Size == 8)) ||
-                          (Type->Kind == NdTypeKind::Float &&
-                           (Type->Size == 4 || Type->Size == 8));
+      const bool Scalar =
+          (Type->Kind == NdTypeKind::Int &&
+           (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
+            Type->Size == 8 || Type->Size == 16)) ||
+          (Type->Kind == NdTypeKind::Float &&
+           (Type->Size == 4 || Type->Size == 8));
       if (Address && Scalar && !AddressContext && !MemoryAddress) {
         if (const auto Bytes =
                 readImmutableImageBytes(Image, *Address, Type->Size)) {
-          uint64_t Bits = 0;
+          uint64_t Bits = 0, Upper = 0;
           for (unsigned I = 0; I < Bytes->size(); ++I)
-            Bits |= uint64_t((*Bytes)[I]) << (I * 8);
+            (I < 8 ? Bits : Upper) |= uint64_t((*Bytes)[I]) << ((I % 8) * 8);
           // Reproduce a scalar value, never an original image pointer. The
           // byte reader excludes mutable, overlapping and relocated storage;
           // mapped values remain subject to ordinary address binding.
-          if (!isImagePointerBitPattern(Image, Bits, Type->Size)) {
-            auto Value = HighExpr::makeConst(Bits, Type->Size,
+          // Wide integer carriers may contain two pointer-sized lanes. Neither
+          // lane may transplant an image address into the emitted constant.
+          const auto LaneWidth = std::min<uint16_t>(Type->Size, 8);
+          if (!isImagePointerBitPattern(Image, Bits, LaneWidth) &&
+              !isImagePointerBitPattern(Image, Upper, LaneWidth)) {
+            auto Value = HighExpr::makeConst(Bits, LaneWidth,
                                              ConstantAddressProvenance::Scalar);
+            if (Type->Size == 16)
+              Value = HighExpr::makeBinop(
+                  NdOp::CONCAT,
+                  HighExpr::makeConst(Upper, 8,
+                                      ConstantAddressProvenance::Scalar),
+                  Value);
             Value->Type = NdType::makeInt(Type->Size, false);
             *Expression = *HighExpr::makeBitCast(Value, Type);
             return Expression;
