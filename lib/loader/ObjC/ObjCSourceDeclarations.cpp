@@ -212,7 +212,8 @@ objcSelectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector) {
 std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceABIValueLocation &RequiredResult) {
-  if (RequiredResult.Kind != SourceABICarrierKind::IntegerRegister ||
+  if ((RequiredResult.Kind != SourceABICarrierKind::IntegerRegister &&
+       RequiredResult.Kind != SourceABICarrierKind::FloatingRegister) ||
       !RequiredResult.ValueBytes)
     return std::nullopt;
   auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
@@ -224,13 +225,18 @@ std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const uint16_t DefinedBytes =
         Location.ExtendTo32Bits ? std::max<uint16_t>(Location.ValueBytes, 4)
                                 : Location.ValueBytes;
-    if (Location.Kind != SourceABICarrierKind::IntegerRegister ||
+    const bool ExactFloating =
+        RequiredResult.Kind == SourceABICarrierKind::FloatingRegister;
+    if (Location.Kind != RequiredResult.Kind ||
         Location.RegisterOffset > RequiredResult.RegisterOffset ||
         RequiredResult.RegisterOffset - Location.RegisterOffset >
             DefinedBytes ||
         RequiredResult.ValueBytes >
             DefinedBytes -
-                (RequiredResult.RegisterOffset - Location.RegisterOffset))
+                (RequiredResult.RegisterOffset - Location.RegisterOffset) ||
+        (ExactFloating &&
+         (Location.RegisterOffset != RequiredResult.RegisterOffset ||
+          Location.ValueBytes != RequiredResult.ValueBytes)))
       continue;
     if (Result)
       return std::nullopt;

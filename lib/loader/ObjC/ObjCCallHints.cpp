@@ -181,28 +181,18 @@ bool fitsUnsignedValue(uint64_t Value, unsigned Bytes) {
          (Bytes == 8 || Value < (UINT64_C(1) << (Bytes * 8)));
 }
 
-std::optional<SourceABIValueLocation>
-localIntegerResultUse(const LowBlock &Block, size_t CallIndex,
-                      const TargetRegInfo &TRI, const BinaryImage &Image) {
-  constexpr uint16_t FullWidth = 8;
-  const uint64_t Begin = TRI.IntReturnReg;
-  const uint64_t End = Begin + FullWidth;
+std::optional<SourceABIValueLocation> localResultUse(const LowBlock &Block,
+                                                     size_t CallIndex,
+                                                     const TargetRegInfo &TRI,
+                                                     const BinaryImage &Image) {
   struct Alias {
     NdVar Value;
     uint16_t SourceOffset = 0;
   };
-  std::vector<Alias> Aliases{{NdVar::reg(Begin, FullWidth), 0}};
   auto Overlap = [](const NdVar &A, const NdVar &B) {
     return A.Space == VnodeSpace::REG && B.Space == VnodeSpace::REG && A.Size &&
            B.Size && A.Offset < B.Offset + B.Size &&
            B.Offset < A.Offset + A.Size;
-  };
-  auto ExactAlias = [&](const NdVar &V) -> std::optional<Alias> {
-    for (const auto &Alias : Aliases)
-      if (V.Space == VnodeSpace::REG && V.Offset == Alias.Value.Offset &&
-          V.Size == Alias.Value.Size)
-        return Alias;
-    return std::nullopt;
   };
   auto KnownCall = [&](const LowOp &Op) {
     if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
@@ -216,46 +206,75 @@ localIntegerResultUse(const LowBlock &Block, size_t CallIndex,
            bool(darwinRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
            bool(swiftStringSourceCallHint(Image, Target->ImportSlot));
   };
-  for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
-    const auto &Op = Block.Ops[I];
-    const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                      Op.Output.Space == VnodeSpace::REG;
-    const auto Copied = Copy ? ExactAlias(Op.Inputs[0]) : std::nullopt;
-    for (uint8_t J = 0; J < Op.NumInputs; ++J) {
-      const auto &Input = Op.Inputs[J];
-      for (const auto &Alias : Aliases) {
-        if (!Overlap(Input, Alias.Value) || (Copied && J == 0))
-          continue;
-        const uint64_t AliasBegin =
-            std::max<uint64_t>(Input.Offset, Alias.Value.Offset);
-        const uint64_t AliasEnd = std::min<uint64_t>(
-            Input.Offset + Input.Size, Alias.Value.Offset + Alias.Value.Size);
-        SourceABIValueLocation Result;
-        Result.Kind = SourceABICarrierKind::IntegerRegister;
-        Result.RegisterOffset =
-            Begin + Alias.SourceOffset + (AliasBegin - Alias.Value.Offset);
-        Result.ValueBytes = static_cast<uint16_t>(AliasEnd - AliasBegin);
-        return Result;
-      }
-    }
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-        Op.Opcode == NdOp::INTRINSIC) {
-      if (!KnownCall(Op))
-        return std::nullopt;
-      std::erase_if(Aliases, [&](const Alias &Alias) {
-        return !TRI.isCallPreserved(Alias.Value.Offset, Alias.Value.Size);
-      });
-    }
-    if (Op.Output.Space == VnodeSpace::REG && Op.Output.Size)
-      std::erase_if(Aliases, [&](const Alias &Alias) {
-        return Overlap(Op.Output, Alias.Value);
-      });
-    if (Copied && Op.Output.Size == Copied->Value.Size)
-      Aliases.push_back({Op.Output, Copied->SourceOffset});
-    if (Aliases.empty())
+  auto Scan = [&](SourceABICarrierKind Kind, uint64_t Begin,
+                  uint16_t FullWidth) -> std::optional<SourceABIValueLocation> {
+    if (!FullWidth)
       return std::nullopt;
-  }
-  return std::nullopt;
+    std::vector<Alias> Aliases{{NdVar::reg(Begin, FullWidth), 0}};
+    auto ExactAlias = [&](const NdVar &V) -> std::optional<Alias> {
+      for (const auto &Alias : Aliases)
+        if (V.Space == VnodeSpace::REG && V.Offset == Alias.Value.Offset &&
+            V.Size == Alias.Value.Size)
+          return Alias;
+      return std::nullopt;
+    };
+    for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
+      const auto &Op = Block.Ops[I];
+      const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                        Op.Output.Space == VnodeSpace::REG;
+      const auto Copied = Copy ? ExactAlias(Op.Inputs[0]) : std::nullopt;
+      for (uint8_t J = 0; J < Op.NumInputs; ++J) {
+        const auto &Input = Op.Inputs[J];
+        for (const auto &Alias : Aliases) {
+          if (!Overlap(Input, Alias.Value) || (Copied && J == 0))
+            continue;
+          const uint64_t AliasBegin =
+              std::max<uint64_t>(Input.Offset, Alias.Value.Offset);
+          const uint64_t AliasEnd = std::min<uint64_t>(
+              Input.Offset + Input.Size, Alias.Value.Offset + Alias.Value.Size);
+          SourceABIValueLocation Result;
+          Result.Kind = Kind;
+          Result.RegisterOffset =
+              Begin + Alias.SourceOffset + (AliasBegin - Alias.Value.Offset);
+          Result.ValueBytes = static_cast<uint16_t>(AliasEnd - AliasBegin);
+          return Result;
+        }
+      }
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INTRINSIC) {
+        if (!KnownCall(Op))
+          return std::nullopt;
+        for (auto It = Aliases.begin(); It != Aliases.end();) {
+          const auto Preserved =
+              TRI.callPreservedPrefixSize(It->Value.Offset, It->Value.Size);
+          if (!Preserved)
+            It = Aliases.erase(It);
+          else {
+            It->Value.Size = Preserved;
+            ++It;
+          }
+        }
+      }
+      if (Op.Output.Space == VnodeSpace::REG && Op.Output.Size)
+        std::erase_if(Aliases, [&](const Alias &Alias) {
+          return Overlap(Op.Output, Alias.Value);
+        });
+      if (Copied && Op.Output.Size == Copied->Value.Size)
+        Aliases.push_back({Op.Output, Copied->SourceOffset});
+      if (Aliases.empty())
+        return std::nullopt;
+    }
+    return std::nullopt;
+  };
+  const auto Integer = Scan(SourceABICarrierKind::IntegerRegister,
+                            TRI.IntReturnReg, TRI.FullRegWidth);
+  const auto FPWidth = !TRI.hasFPReturnReg() ? 0
+                       : TRI.FPABIRegWidth
+                           ? TRI.FPABIRegWidth
+                           : TRI.maxRegisterWidth(TRI.FPReturnReg);
+  const auto Floating =
+      Scan(SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, FPWidth);
+  return Integer && Floating ? std::nullopt : Integer ? Integer : Floating;
 }
 
 std::optional<Value> adjustedFrame(Value Base, uint64_t Amount, bool Subtract) {
@@ -954,7 +973,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           std::optional<SourceABIValueLocation> SelectorResultUse;
           if (!Signature && !Qualified)
             if (const auto Required =
-                    localIntegerResultUse(Block, OpIndex, TRI, Image)) {
+                    localResultUse(Block, OpIndex, TRI, Image)) {
               Signature = objcSelectorSourceTypeHintForResultUse(
                   Image, Target->Selector, *Required);
               if (Signature)

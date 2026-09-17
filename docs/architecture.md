@@ -163,9 +163,13 @@ reject the proof.
 Selector-wide Objective-C lookup normally requires every complete local,
 protocol, property and active SDK declaration to agree. When complete
 declarations disagree only in their result contract, an exact post-call
-integer-register read may narrow the set if exactly one declared result carrier
-defines every observed byte. Full-width copies can transport that evidence;
-recognized runtime calls can preserve only ABI-preserved aliases. Unknown
+scalar-register read may narrow the set if exactly one declared result carrier
+defines the observation. Integer observations may consume a fully defined
+subrange, including an explicitly extended narrow result. Floating observations
+must match the declared register, offset and width exactly; reading four bytes
+does not reinterpret a declared double as a float. Full-width copies can
+transport that evidence. Recognized runtime calls preserve only ABI-preserved
+aliases, including only the low 64-bit prefix of AArch64 `Q8`-`Q15`. Unknown
 calls, overlapping writes, unused results, incomplete declarations and multiple
 matching carriers leave the message unresolved. The selected carrier range is
 stored with the source-call hint and revalidated against the current image at

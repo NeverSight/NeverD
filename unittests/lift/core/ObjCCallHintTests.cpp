@@ -346,6 +346,58 @@ TEST(ObjCCallHints, ResultUseDisambiguatesConflictingSelectorDeclarations) {
   EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
 }
 
+TEST(ObjCCallHints,
+     FloatingResultUseSurvivesThePreservedHalfOfAnAArch64Vector) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "duration";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlight",
+      "/System/Library/Frameworks/QuartzCore.framework/QuartzCore"};
+  ASSERT_FALSE(objcSelectorSourceTypeHint(Image, "duration"));
+
+  Image.ImportPtrSlots[0x2190] = "_objc_release";
+  const uint32_t ReleaseStub[] = {0xb0000010, 0xf940ca10, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, ReleaseStub[I]);
+
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  auto Function = caller();
+  Function.Blocks[0].EndAddr = 0x1218;
+  Function.Blocks[0].Ops = {
+      operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::COPY, NdVar::reg(a64reg::V(8), 16),
+                {NdVar::reg(TRI.FPReturnReg, 16)}, 0x1204),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::cst(0, 8)}, 0x1208),
+      operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                {NdVar::cst(0x1140, 8)}, 0x120c),
+      operation(NdOp::COPY, NdVar::reg(TRI.FPReturnReg, 16),
+                {NdVar::reg(a64reg::V(8), 16)}, 0x1210),
+      operation(NdOp::RETURN, {}, {NdVar::reg(TRI.FPReturnReg, 8)}, 0x1214)};
+
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  const auto &Hint = Hints.at(0x1200);
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint.Signature.ReturnType->Size, 8U);
+  ASSERT_TRUE(Hint.SelectorResultUse);
+  EXPECT_EQ(Hint.SelectorResultUse->Kind,
+            SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hint.SelectorResultUse->RegisterOffset, TRI.FPReturnReg);
+  EXPECT_EQ(Hint.SelectorResultUse->ValueBytes, 8U);
+
+  Function.Blocks[0].Ops[1].Output = NdVar::reg(a64reg::V(8), 4);
+  Function.Blocks[0].Ops[1].Inputs[0] = NdVar::reg(TRI.FPReturnReg, 4);
+  Function.Blocks[0].Ops[4].Output = NdVar::reg(TRI.FPReturnReg, 4);
+  Function.Blocks[0].Ops[4].Inputs[0] = NdVar::reg(a64reg::V(8), 4);
+  Function.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(TRI.FPReturnReg, 4);
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+}
+
 TEST(ObjCCallHints, FrameworkVariadicAndUnsupportedRecordsRemainUnbound) {
   auto Image = image();
   Image.ObjCMethods.clear();
