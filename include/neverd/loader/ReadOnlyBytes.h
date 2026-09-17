@@ -28,5 +28,12 @@ bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
 /// permission to copy the target object.
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
                                               va_t Address);
+
+/// Read the initial value of an authenticated local data-pointer relocation.
+/// Storage may be writable: this is an initializer recipe, never permission
+/// to replace subsequent loads with the initial value. The caller must rebuild
+/// the slot's shared mutable identity and separately validate the target.
+std::optional<va_t> readInitialImagePointer(const BinaryImage &Image,
+                                            va_t Address);
 } // namespace neverd
 #endif

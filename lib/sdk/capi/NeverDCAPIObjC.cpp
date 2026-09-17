@@ -433,6 +433,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         BorrowedBytes.insert(Bytes.begin(), Bytes.end());
       }
       std::set<std::string> SharedIdentityFunctions;
+      for (const auto &[Address, Width] : LocalStorageExtents)
+        if (const auto Target =
+                objc_binding_detail::localStringPointerInitializer(
+                    S->Img, Address, Width))
+          ConstantStrings.insert(*Target);
       std::string IdentityHelpers = renderObjCAssociationKeyHelpers(
           AssociationKeys, SharedIdentityFunctions);
       IdentityHelpers += renderObjCStaticIdentityHelpers(

@@ -263,6 +263,17 @@ inline bool overlapsPointerStorage(const BinaryImage &Image, va_t Address,
          MapOverlaps(Image.DyldBindSlots);
 }
 
+inline std::optional<va_t>
+localStringPointerInitializer(const BinaryImage &Image, va_t Address,
+                              uint64_t Width) {
+  if (Width != 8 || Address % 8 ||
+      !uniqueWritableDataSymbol(Image, Address, Width))
+    return std::nullopt;
+  const auto Target = readInitialImagePointer(Image, Address);
+  return Target && constantStringSourceHint(Image, *Target) ? Target
+                                                            : std::nullopt;
+}
+
 inline std::optional<SourceCallTypeHint>
 localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   const auto *Symbol = uniqueWritableDataSymbol(Image, Address, Width);
@@ -271,8 +282,11 @@ localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   if (Bytes && Width <= 8)
     for (uint64_t I = 0; I < Width; ++I)
       Bits |= uint64_t(Bytes[I]) << (I * 8);
-  if (!Symbol || !Bytes || overlapsPointerStorage(Image, Address, Width) ||
-      (Width <= 8 && isImagePointerBitPattern(Image, Bits, Width)))
+  if (!Symbol || !Bytes)
+    return std::nullopt;
+  if ((overlapsPointerStorage(Image, Address, Width) ||
+       (Width <= 8 && isImagePointerBitPattern(Image, Bits, Width))) &&
+      !localStringPointerInitializer(Image, Address, Width))
     return std::nullopt;
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeLocalStorageAddress;
@@ -1117,22 +1131,25 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
                "address",
                Operand.get());
       }
-      // Known Darwin synchronization calls consume exactly one opaque lock
-      // or once token. Bind only that argument and keep the platform runtime
-      // responsible for lock ownership, ordering, and initialization.
+      // Authenticated runtime operations consume a known storage cell. Bind
+      // only that argument; ownership and synchronization stay in the runtime.
       if (Index == 0 && Operand && Expression->Kind == ExprKind::Call &&
           Expression->SourceCallHint &&
-          Expression->SourceCallHint->CallKind ==
-              SourceCallTypeHint::Kind::DarwinRuntimeCall &&
-          (Expression->SourceCallHint->TargetName == "dispatch_once" ||
-           Expression->SourceCallHint->TargetName == "os_unfair_lock_lock" ||
-           Expression->SourceCallHint->TargetName == "os_unfair_lock_unlock" ||
-           Expression->SourceCallHint->TargetName ==
-               "os_unfair_lock_assert_owner" ||
-           Expression->SourceCallHint->TargetName ==
-               "os_unfair_lock_assert_not_owner" ||
-           Expression->SourceCallHint->TargetName ==
-               "os_unfair_lock_trylock")) {
+          ((Expression->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::DarwinRuntimeCall &&
+            (Expression->SourceCallHint->TargetName == "dispatch_once" ||
+             Expression->SourceCallHint->TargetName == "os_unfair_lock_lock" ||
+             Expression->SourceCallHint->TargetName ==
+                 "os_unfair_lock_unlock" ||
+             Expression->SourceCallHint->TargetName ==
+                 "os_unfair_lock_assert_owner" ||
+             Expression->SourceCallHint->TargetName ==
+                 "os_unfair_lock_assert_not_owner" ||
+             Expression->SourceCallHint->TargetName ==
+                 "os_unfair_lock_trylock")) ||
+           (Expression->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+            Expression->SourceCallHint->TargetName == "objc_storeStrong"))) {
         const auto Expected =
             runtimeSourceCallHint(Image, *Expression->SourceCallHint);
         if (!Expected ||
@@ -1140,7 +1157,8 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
           continue;
         const auto Address = constantAddress(*Operand);
         const bool Once = Expected->TargetName == "dispatch_once";
-        const uint64_t Width = Once ? 8 : 4;
+        const uint64_t Width =
+            Once || Expected->TargetName == "objc_storeStrong" ? 8 : 4;
         auto Hint = Address ? (Once ? oncePredicateStorageHint(Image, *Address)
                                     : localStorageHint(Image, *Address, Width))
                             : std::nullopt;
@@ -1539,12 +1557,42 @@ inline std::string renderObjCLocalStorageHelpers(
     std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (const auto &[Address, Width] : Storage) {
+    if (!objc_binding_detail::localStorageHint(Image, Address, Width))
+      throw std::runtime_error("local-storage initializer is no longer valid");
     const auto *Bytes = Image.readVA(Address, Width);
     if (!Bytes)
       continue;
     const std::string Name = "neverd_local_storage_" +
                              llvm::utohexstr(Address, true) + "_address";
     SharedFunctions.insert(Name);
+    if (const auto Target = objc_binding_detail::localStringPointerInitializer(
+            Image, Address, Width)) {
+      const auto ObjectName = "neverd_objc_constant_string_" +
+                              llvm::utohexstr(*Target, true) + "_address";
+      // The shared cell is initialized before its address is exposed. After
+      // that, ordinary source loads/stores observe the same mutable storage;
+      // even a later null store must never trigger initialization again.
+      Source +=
+          "\nuintptr_t " + Name +
+          "(void) {\n"
+          "  extern uintptr_t " +
+          ObjectName +
+          "(void);\n"
+          "  static _Alignas(16) uintptr_t storage;\n"
+          "  static unsigned state;\n"
+          "  if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {\n"
+          "    unsigned expected = 0;\n"
+          "    if (__atomic_compare_exchange_n(&state, &expected, 1, 0, "
+          "__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {\n"
+          "      storage = " +
+          ObjectName +
+          "();\n"
+          "      __atomic_store_n(&state, 2, __ATOMIC_RELEASE);\n"
+          "    } else {\n"
+          "      while (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {}\n"
+          "    }\n  }\n  return (uintptr_t)&storage;\n}\n";
+      continue;
+    }
     Source += "\nuintptr_t " + Name +
               "(void) {\n"
               "  static _Alignas(16) unsigned char storage[" +

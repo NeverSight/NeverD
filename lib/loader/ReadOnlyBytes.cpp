@@ -110,14 +110,15 @@ bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
          Image.getSectionFor(Bits);
 }
 
-std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
-                                              va_t Address) {
+namespace {
+std::optional<va_t> readResolvedPointer(const BinaryImage &Image, va_t Address,
+                                        bool Immutable) {
   if (!supportedImage(Image) || !Image.DataPtrRelocSlots.count(Address) ||
       (Image.MachOHasChainedFixups &&
        !Image.MachOResolvedChainedPointerSlots.count(Address)))
     return std::nullopt;
   const auto Owner = Image.DataPtrRelocTargetOwners.find(Address);
-  const auto *Bytes = mappedBytes(Image, Address, 8, true);
+  const auto *Bytes = mappedBytes(Image, Address, 8, Immutable);
   if (!Bytes || Owner == Image.DataPtrRelocTargetOwners.end() ||
       hasConflictingFixups(Image, Address, 8, true))
     return std::nullopt;
@@ -126,5 +127,16 @@ std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
       Image.getSectionFor(Target)->VA != Owner->second)
     return std::nullopt;
   return Target;
+}
+} // namespace
+
+std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
+                                              va_t Address) {
+  return readResolvedPointer(Image, Address, true);
+}
+
+std::optional<va_t> readInitialImagePointer(const BinaryImage &Image,
+                                            va_t Address) {
+  return readResolvedPointer(Image, Address, false);
 }
 } // namespace neverd

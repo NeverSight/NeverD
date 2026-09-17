@@ -992,6 +992,127 @@ ConstantStringFixture immutablePointerFixture(Arch Architecture, bool Chained) {
 }
 } // namespace
 
+TEST(ObjCSourceBindings, MutableStringPointersKeepTheirSharedStorage) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Chained : {false, true}) {
+      auto F = immutablePointerFixture(Architecture, Chained);
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+      F.Image.Symbols.push_back({"_mutableString", 0x3000, 8, false});
+      F.Function.Body[0].RetVal->Type = NdType::makeInt(8, false);
+      EXPECT_FALSE(readImmutableImagePointer(F.Image, 0x3000));
+      EXPECT_EQ(readInitialImagePointer(F.Image, 0x3000), 0x2020U);
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      const auto Load = Bound.Function.Body[0].RetVal;
+      ASSERT_EQ(Load->Kind, ExprKind::Load);
+      const auto Helper = Load->Operands[0];
+      ASSERT_TRUE(Helper->SourceCallHint);
+      EXPECT_EQ(Helper->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+      EXPECT_EQ(Helper->SourceCallHint->TargetAddress, 0x3000U);
+      EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}));
+      EXPECT_EQ(Bound.LocalStorageExtents,
+                (std::map<va_t, uint64_t>{{0x3000, 8}}));
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCLocalStorageHelpers(
+          F.Image, Bound.LocalStorageExtents, Helpers);
+      EXPECT_NE(
+          Source.find("storage = neverd_objc_constant_string_2020_address()"),
+          std::string::npos);
+      EXPECT_NE(Source.find("return (uintptr_t)&storage"), std::string::npos);
+      F.Image.DataPtrRelocTargetOwners.erase(0x3000);
+      EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
+      EXPECT_THROW(renderObjCLocalStorageHelpers(
+                       F.Image, Bound.LocalStorageExtents, Helpers),
+                   std::runtime_error);
+    }
+}
+
+TEST(ObjCSourceBindings, MutableStringPointersRejectUnprovedInitializers) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Case = 0; Case != 13; ++Case) {
+      SCOPED_TRACE(Case);
+      auto F = immutablePointerFixture(Architecture, true);
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+      F.Image.Symbols.push_back({"_mutableString", 0x3000, 8, false});
+      F.Function.Body[0].RetVal->Type = NdType::makeInt(8, false);
+      switch (Case) {
+      case 0:
+        F.Image.Symbols.clear();
+        break;
+      case 1:
+        F.Image.DataPtrRelocSlots.erase(0x3000);
+        break;
+      case 2:
+        F.Image.DataPtrRelocTargetOwners.erase(0x3000);
+        break;
+      case 3:
+        F.Image.DataPtrRelocTargetOwners[0x3000] = 0x1000;
+        break;
+      case 4:
+        F.Image.MachOResolvedChainedPointerSlots.erase(0x3000);
+        break;
+      case 5:
+        F.Image.DyldBindSlots[0x3000] = {};
+        break;
+      case 6:
+        F.Image.DataPtrRelocSlots.insert(0x3004);
+        break;
+      case 7:
+        F.Image.Segments[2].FileSz = 7;
+        break;
+      case 8:
+        F.Image.Sections.push_back(F.Image.Sections[3]);
+        break;
+      case 9:
+        F.Function.Body[0].RetVal->Type = NdType::makeInt(4);
+        break;
+      case 10:
+        F.Function.Body[0].RetVal->Type = NdType::makeInt(16);
+        break;
+      case 11:
+        F.Image.Symbols[0].Size = 4;
+        break;
+      case 12:
+        llvm::support::endian::write64le(F.Image.Segments[2].Data.data(),
+                                         0x2040);
+        break;
+      }
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      EXPECT_FALSE(Bound.Limitation.empty());
+      EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+    }
+}
+
+TEST(ObjCSourceBindings, StrongStoresAuthenticateTheirSharedPointerCell) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto F = immutablePointerFixture(Architecture, true);
+    F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+    F.Image.Symbols.push_back({"_mutableString", 0x3000, 8, false});
+    F.Image.recordDyldBindSlot(0x3100, "_objc_storeStrong", 0,
+                               "/usr/lib/libobjc.A.dylib", false);
+    const auto Hint = objcRuntimeSourceCallHint(F.Image, 0x3100);
+    ASSERT_TRUE(Hint);
+    auto Call = HighExpr::makeCall(
+        "objc_storeStrong", 0x3100,
+        {HighExpr::makeConst(0x3000, 8), HighExpr::makeConst(0, 8)});
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    Call->Type = NdType::makeVoid();
+    F.Function.Body[0].RetVal = Call;
+    auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    const auto Storage = Bound.Function.Body[0].RetVal->Operands[0];
+    ASSERT_TRUE(Storage->SourceCallHint);
+    EXPECT_EQ(Storage->SourceCallHint->TargetAddress, 0x3000U);
+    EXPECT_EQ(Storage->SourceCallHint->ByteCount, 8U);
+    EXPECT_TRUE(objcSourceCallBound(*Storage, F.Image, {}));
+    Call->SourceCallHint->Signature.Parameters[0].Location.RegisterOffset += 8;
+    Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Bound.Limitation.empty());
+    EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+  }
+}
+
 TEST(ObjCSourceBindings, ImmutablePointerLoadsShareTheTargetObjectIdentity) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64})
     for (bool Chained : {false, true}) {
