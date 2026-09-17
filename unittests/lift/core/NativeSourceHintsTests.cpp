@@ -961,6 +961,38 @@ TEST(NativeSourceHints, VoidFramesRestoreEntryBytesAcrossBranchesAndLoops) {
     }
 }
 
+TEST(NativeSourceHints, BoundObjCDispatchRequiresCompleteFramedCallEvidence) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (auto Kind : {SourceCallTypeHint::Kind::ObjCMessage,
+                      SourceCallTypeHint::Kind::ObjCSuper2})
+      for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+        SCOPED_TRACE(Mutation);
+        NativeVoidFrameFixture F(Architecture);
+        auto &Call = F.Med.Blocks[0].Ops[0];
+        auto Hint = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+        Hint->CallKind = Kind;
+        Hint->Signature.Origin =
+            SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+        Hint->Signature.Parameters.push_back(
+            {"selector", NdType::makePtr(NdType::makeVoid())});
+        std::string Error;
+        ASSERT_TRUE(
+            assignDarwinObjCSourceABI(Hint->Signature, Architecture, Error));
+        Call.addInput(MedVar::makeConst(0x1030, 8));
+        Call.SourceCallHint = Hint;
+        if (Mutation == 1)
+          Hint->Signature.Origin =
+              SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+        if (Mutation == 2)
+          Hint->Signature.HasExplicitABI = false;
+        if (Mutation == 3)
+          Hint->DoesNotReturn = true;
+        if (Mutation == 4)
+          ++Call.OriginSeq;
+        EXPECT_EQ(bool(F.inferVoid(Error)), Mutation == 0) << Error;
+      }
+}
+
 TEST(NativeSourceHints, VoidFramesKeepBoundCallResultsInsideTheHelper) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
@@ -1188,6 +1220,44 @@ TEST(NativeSourceHints, RefinesOnlyUnusedAuxiliaryVoidSourceInputs) {
     std::string Error;
     EXPECT_TRUE(validateSourceABI(*Refined, Error)) << Error;
   }
+}
+
+TEST(NativeSourceHints, ScalarInputRefinementPreservesReturnEvidence) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto [Function, Audit] = nativeVoidInputCandidate(Architecture);
+      auto &Hint = *Function.SourceTypeHint;
+      Hint.ReturnType = Function.ReturnType = NdType::makeInt(8);
+      Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                             getTargetRegInfo(Architecture).IntReturnReg, 0, 8};
+      auto &Value = Function.Body.front().RetVal;
+      Value = HighExpr::makeConst(19, 8);
+      if (Mutation == 1) {
+        MedVar Input;
+        Input.Kind = MedVar::Param;
+        Input.Id = 1;
+        Input.Size = 8;
+        Value = HighExpr::makeVar(Input, NdType::makeInt(8));
+      } else if (Mutation == 2) {
+        Value.reset();
+      } else if (Mutation == 3) {
+        Value = HighExpr::makeUndef(8);
+      } else if (Mutation == 4) {
+        Value = HighExpr::makeConst(19, 4);
+      }
+      const auto Refined = refineNativeSourceTypeHint(Function, Audit);
+      if (Mutation) {
+        EXPECT_FALSE(Refined);
+        continue;
+      }
+      ASSERT_TRUE(Refined);
+      ASSERT_EQ(Refined->Parameters.size(), 1U);
+      EXPECT_EQ(Refined->Parameters[0].Name, "ordinary");
+      EXPECT_TRUE(equalSourceTypes(Refined->ReturnType, Hint.ReturnType));
+      EXPECT_EQ(Refined->ReturnLocation.RegisterOffset,
+                Hint.ReturnLocation.RegisterOffset);
+    }
 }
 
 TEST(NativeSourceHints, SourceInputRefinementRetainsUsesAndIncompleteBodies) {
@@ -1812,6 +1882,59 @@ TEST(NativeSourceHints, AuxiliaryCallClobbersCannotBecomeEntryParameters) {
     const auto Hint = Fixture.inferContext(Error);
     ASSERT_TRUE(Hint) << Error;
     EXPECT_EQ(Hint->Parameters.size(), 1U);
+  }
+}
+
+TEST(NativeSourceHints,
+     ContextInputsSurviveProvenRestorationOfScratchRegisters) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    std::vector<uint64_t> Preserved;
+    for (auto R : TRI.CalleeSaveRegs)
+      if (!TRI.isFrameOrLinkReg(R) && !TRI.isVectorReg(R))
+        Preserved.push_back(R);
+    ASSERT_GE(Preserved.size(), 2U);
+    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      NativeContextFixture F(Architecture, Preserved[0]);
+      auto &Ops = F.Low.Blocks[0].Ops;
+      LowOp Save;
+      Save.Opcode = NdOp::COPY;
+      Save.Output = NdVar::tmp(TmpBase + 16, 8);
+      Save.addInput(NdVar::reg(Preserved[1], 8));
+      LowOp Write;
+      Write.Opcode = NdOp::COPY;
+      Write.Output = NdVar::reg(Preserved[1], 8);
+      Write.addInput(NdVar::cst(19, 8));
+      LowOp Restore;
+      Restore.Opcode = NdOp::COPY;
+      Restore.Output = Write.Output;
+      Restore.addInput(Save.Output);
+      LowOp Return;
+      Return.Opcode = NdOp::RETURN;
+      if (Architecture == Arch::AArch64)
+        Return.addInput(NdVar::reg(TRI.LinkRegister, 8));
+      Ops.insert(Ops.begin(), Save);
+      Ops.push_back(Write);
+      if (Mutation == 2)
+        Restore.Output.Size = Restore.Inputs[0].Size = 4;
+      if (Mutation != 1)
+        Ops.push_back(Restore);
+      if (Mutation == 3) {
+        Write.Output = NdVar::reg(TRI.StackPointer, 8);
+        Ops.push_back(Write);
+      }
+      Ops.push_back(Return);
+      if (Mutation == 4)
+        F.Low.Blocks[0].ExceptionalSuccs.emplace_back();
+      if (Mutation == 5) {
+        F.Low.Blocks[0].Succs = {99};
+      }
+      std::string Error;
+      const auto Hint = F.inferContext(Error);
+      ASSERT_TRUE(Hint) << Error;
+      EXPECT_EQ(Hint->Parameters.size(), Mutation == 0 ? 2U : 1U);
+    }
   }
 }
 

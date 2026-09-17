@@ -46,9 +46,9 @@ std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
 /// remain unchanged; this does not modify generic lifting or rewrite types.
 /// When Low is supplied from the same pipeline, observed full-width integer
 /// entry registers can become explicit auxiliary parameters. Caller-saved
-/// inputs may later be overwritten; preserved context inputs require that the
-/// native body never writes preserved non-frame/link registers. Implicit call
-/// definitions do not establish entry inputs, including SSA version zero.
+/// inputs may later be overwritten; preserved context inputs require either no
+/// preserved non-frame/link writes or a complete native state-restoration proof.
+/// Implicit call definitions do not establish entry inputs, including SSA zero.
 /// Both callers and definitions must use the resulting source projection;
 /// these parameters do not describe an external C or Swift calling convention.
 /// ObserveIntegerPair requests a two-field internal record only when both
@@ -68,12 +68,13 @@ std::optional<SourceFunctionTypeHint>
 refineNativeIntegerPairReturnHint(const MedFunc &Med, const HighFunc &High,
                                   const PipelineFunctionAudit &Audit);
 
-/// Refine a re-lifted native void candidate by removing auxiliary register
-/// inputs with no occurrence in its complete HighIR body. Canonical parameters
-/// and observable auxiliary inputs remain unchanged. This reuses HighIR's
-/// existing private-frame cleanup; it does not independently discard stores.
-/// The audit must prove that this HighIR came from complete verified lifting.
-/// The returned candidate requires another pipeline run and source validation.
+/// Refine a re-lifted native void or scalar candidate by removing auxiliary
+/// register inputs with no occurrence in its complete HighIR body. Canonical
+/// parameters and observable auxiliary inputs remain unchanged. This reuses
+/// HighIR's existing private-frame cleanup; it does not independently discard
+/// stores. The audit must prove that this HighIR came from complete verified
+/// lifting. The returned candidate requires another pipeline run and source
+/// validation.
 std::optional<SourceFunctionTypeHint>
 refineNativeSourceTypeHint(const HighFunc &Function,
                            const PipelineFunctionAudit &Audit);

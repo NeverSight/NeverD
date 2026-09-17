@@ -46,13 +46,18 @@ bool completeNativeAudit(va_t Entry, const PipelineFunctionAudit &Audit) {
          Audit.UnsupportedInstructions.empty() && Audit.TruncatedPaths.empty();
 }
 
+bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
+                                  const MedFunc &Med, bool RequireCalls);
+
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
 // reads. Caller-saved input registers may subsequently become scratch values.
-// Preserved context inputs additionally require no native writes to preserved
-// non-frame registers: hidden outputs cannot acquire a scalar call contract.
+// Preserved context inputs require either no native writes to preserved
+// non-frame registers or an independent proof that every exit restores state.
+// Saving and restoring scratch registers does not create hidden outputs.
 // The complete source body and its callers still require validation.
-std::vector<uint64_t> nativeEntryRegisters(const LowFunc *Low,
+std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
+                                           const LowFunc *Low,
                                            const MedFunc &Med,
                                            const SourceFunctionTypeHint &Hint) {
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
@@ -94,7 +99,12 @@ std::vector<uint64_t> nativeEntryRegisters(const LowFunc *Low,
           Reads.insert(Input.Offset);
       }
     }
-  if (PreservedWrite)
+  const bool ReadsPreserved =
+      std::any_of(Reads.begin(), Reads.end(), [&](uint64_t Register) {
+        return TRI.isCallPreserved(Register, 8);
+      });
+  if (PreservedWrite && ReadsPreserved &&
+      !hasNativeSourceStateContract(Image, Low, Med, false))
     std::erase_if(Reads, [&](uint64_t Register) {
       return TRI.isCallPreserved(Register, 8);
     });
@@ -140,8 +150,8 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
 // Framed and ordinary-call shapes require exact state restoration;
 // the established frameless tail shape uses the narrower no-write proof plus
 // byte-taint rejection of stack-derived arguments and stores.
-bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
-                            const MedFunc &Med) {
+bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
+                                  const MedFunc &Med, bool RequireCalls) {
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return false;
@@ -162,6 +172,15 @@ bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
                                  (Binding.CallKind == Kind::ObjCRuntimeCall ||
                                   Binding.CallKind == Kind::SwiftRuntimeCall ||
                                   Binding.CallKind == Kind::DarwinRuntimeCall);
+      const bool StaticMessage =
+          Op.Inputs[0].isConst() &&
+          (Binding.CallKind == Kind::ObjCMessage ||
+           Binding.CallKind == Kind::ObjCSuper2) &&
+          (Binding.Signature.Origin ==
+               SourceFunctionTypeHint::OriginKind::ObjCRuntime ||
+           Binding.Signature.Origin ==
+               SourceFunctionTypeHint::OriginKind::ObjCSDK) &&
+          Binding.Signature.HasExplicitABI;
       const bool StaticNative =
           Op.Inputs[0].isConst() && Binding.CallKind == Kind::Native &&
           Binding.TargetAddress == Op.Inputs[0].ConstVal &&
@@ -173,7 +192,8 @@ bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
-      if ((!StaticRuntime && !StaticNative && !DynamicWitness) ||
+      if ((!StaticRuntime && !StaticNative && !StaticMessage &&
+           !DynamicWitness) ||
           Binding.DoesNotReturn || !Binding.Signature.ReturnType ||
           !Image.isCodeAddress(Op.Addr) ||
           !Calls
@@ -186,7 +206,7 @@ bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
                .second)
         return false;
     }
-  if (Calls.empty())
+  if (RequireCalls && Calls.empty())
     return false;
   std::set<NativeSourceCallKey> NativeCalls;
   for (const auto &Block : Low->Blocks)
@@ -820,7 +840,7 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   if (!NoReturn && !definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
                                        IncomingReturnParameter)) {
-    if (!hasVoidRuntimeContract(Image, Low, Med) ||
+    if (!hasNativeSourceStateContract(Image, Low, Med, true) ||
         !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
       return Reject("native result has no complete defined carrier on every "
                     "return path");
@@ -838,7 +858,7 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   if (!validateSourceABI(Hint, Diagnostic))
     return std::nullopt;
-  const auto EntryRegisters = nativeEntryRegisters(Low, Med, Hint);
+  const auto EntryRegisters = nativeEntryRegisters(Image, Low, Med, Hint);
   for (uint64_t Register : AuxiliaryRegisters)
     if (std::find(EntryRegisters.begin(), EntryRegisters.end(), Register) ==
         EntryRegisters.end())
@@ -887,7 +907,8 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       (Original.Architecture != Arch::AArch64 &&
        Original.Architecture != Arch::X64) ||
       !Original.HasExplicitABI || !Original.ReturnType ||
-      Original.ReturnType->Kind != NdTypeKind::Void ||
+      (Original.ReturnType->Kind != NdTypeKind::Void &&
+       !scalarCarrier(Original.ReturnType)) ||
       !equalSourceTypes(Original.ReturnType, Function.ReturnType) ||
       Original.Parameters.size() != Function.Params.size() ||
       Original.Parameters.size() > 64 || !validateSourceABI(Original, Error))
@@ -963,7 +984,13 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       return std::nullopt;
     const auto &Statement = *Pending.back();
     Pending.pop_back();
-    HasReturn |= Statement.Kind == StmtKind::Return;
+    if (Statement.Kind == StmtKind::Return) {
+      HasReturn = true;
+      if (Original.ReturnType->Kind != NdTypeKind::Void &&
+          (!Statement.RetVal || !Statement.RetVal->Type ||
+           Statement.RetVal->Type->Size != Original.ReturnType->Size))
+        Valid = false;
+    }
     forEachExpr(Statement,
                 [&](const ExprPtr &Expression) { Scan(Scan, Expression, 0); });
     auto Add = [&](const std::vector<HighStmt> &Body) {

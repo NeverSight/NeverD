@@ -778,3 +778,15 @@ interior offset, then return that offset within the same permanent pool used
 by direct pointers. Mutable, unresolved, partially mapped or conflicting slots
 remain unsupported; the loaded value does not authorize use of the slot's
 image address.
+
+Native context inputs still require observable complete entry bytes and an
+independent full-width machine read. A helper that writes preserved registers
+must additionally prove that every exit restores the incoming preserved,
+stack and link state; exact private spills may satisfy this proof. The same
+state analysis handles framed leaf bodies and source-bound runtime, native or
+Objective-C dispatch calls. Missing call-site evidence, frame escapes, partial
+restoration and hidden preserved-register outputs cannot supply this proof.
+After re-lifting, void and scalar helpers may shed auxiliary parameters used
+only by eliminated private saves. An exhaustive HighIR use scan must preserve
+all observable inputs and reject unresolved bodies or incomplete scalar returns;
+the refined candidate then passes through lifting and source validation again.

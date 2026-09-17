@@ -364,7 +364,7 @@ private:
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls) {
   const size_t Count = Function.Blocks.size();
-  if (!Count || Count > 16384 || Calls.empty() ||
+  if (!Count || Count > 16384 ||
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
     return false;
   for (const auto &[Site, Signature] : Calls) {

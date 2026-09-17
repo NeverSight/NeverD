@@ -25,7 +25,7 @@ int main(void) {
       uint64_t context =
           i < 64 ? UINT64_C(1) << i : state ^ UINT64_C(0x8000000000000001);
       const uint64_t saved = context;
-      if ([driver word:value context:&context] != value + context ||
+      if ([driver word:value context:&context] != value + context + 19 ||
           [driver contextWord:&context] != context || context != saved)
         abort();
       cases += 2;
