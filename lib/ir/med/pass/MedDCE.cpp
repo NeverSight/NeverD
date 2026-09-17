@@ -209,10 +209,34 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     }
   }
 
-  // Seed: all PHI arguments
+  auto isFlagVar = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Flag)
+      return true;
+    if (V.Kind != MedVar::Reg)
+      return false;
+    if (TRI.isFlag(V.RegOff, V.Size ? V.Size : 1))
+      return true;
+    return V.RegOff == TRI.FlagCF || V.RegOff == TRI.FlagZF ||
+           V.RegOff == TRI.FlagNF || V.RegOff == TRI.FlagVF ||
+           (TRI.FlagPF != 0 && V.RegOff == TRI.FlagPF) ||
+           (TRI.FlagDF != 0 && V.RegOff == TRI.FlagDF);
+  };
+
+  // Seed PHIs that can be implicit ABI live-ins (call args, returns,
+  // callee-saves, SP/FP).  Flag and temp PHIs stay live only when a later
+  // essential op reads them; otherwise CMP/TEST leftover PF popcount and
+  // flag SSA survive at joins (cookie / seh_probe LLVM-to-C).
   for (auto &Blk : Func.Blocks) {
     for (auto &Phi : Blk.Phis) {
-      MarkLive(Phi.Output);
+      const MedVar &V = Phi.Output;
+      if (isFlagVar(V) || V.Kind != MedVar::Reg)
+        continue;
+      if (!(TRI.isParamReg(V.RegOff) || TRI.isReturnReg(V.RegOff) ||
+            TRI.isCalleeSaveReg(V.RegOff) || TRI.isStackPointer(V.RegOff) ||
+            TRI.isFramePointer(V.RegOff) || TRI.isLinkRegister(V.RegOff) ||
+            TRI.isVectorReg(V.RegOff)))
+        continue;
+      MarkLive(V);
       for (auto &[PredId, Arg] : Phi.Args)
         MarkLive(Arg);
     }
@@ -277,6 +301,14 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     Blk.Ops.erase(std::remove_if(Blk.Ops.begin(), Blk.Ops.end(),
                                  [](const MedOp &Op) { return Op.Dead; }),
                   Blk.Ops.end());
+    Blk.Phis.erase(std::remove_if(Blk.Phis.begin(), Blk.Phis.end(),
+                                  [&](const PhiNode &Phi) {
+                                    if (Phi.Output.Id < 0)
+                                      return false;
+                                    return !LiveDefs.count(
+                                        {Phi.Output.Id, Phi.Output.SSAVer});
+                                  }),
+                   Blk.Phis.end());
   }
 }
 
