@@ -224,7 +224,9 @@ COFFLoader::load(const std::filesystem::path &Path) {
         kCOFFAlignShift;
     Sec.Alignment = AlignField > 0 ? (1u << (AlignField - 1)) : 1;
     Sec.Flags = coffFlagsToNd(CoffSec->Characteristics);
-    if (!Contents.empty())
+    // Segment.Data already holds the bytes.  A second copy of every section
+    // doubled `--func` load of a large PE.
+    if (Img.LoadOnlyFunctionEntries.empty() && !Contents.empty())
       Sec.Data.assign(Contents.begin(), Contents.end());
     Img.Sections.push_back(std::move(Sec));
   }

@@ -314,7 +314,8 @@ std::vector<uint8_t> makeTwoFunctionX64PE() {
   return Bytes;
 }
 
-TEST_F(COFFFunctionListingTest, LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies) {
+TEST_F(COFFFunctionListingTest,
+       LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies) {
   const auto Bytes = makeTwoFunctionX64PE();
   const fs::path Path = writeFixture(Bytes);
   const va_t First = imageBase(Arch::X64) + TextRVA;
@@ -335,6 +336,8 @@ TEST_F(COFFFunctionListingTest, LoadOnlyFunctionEntriesSkipsUnrelatedPdataBodies
   EXPECT_EQ(One->ExceptionMetadata.findFunction(Second), nullptr);
   EXPECT_GE(One->KnownCodeRanges.size(), 2u);
   EXPECT_FALSE(One->COFFPDataRecords.empty());
+  EXPECT_TRUE(One->BaseRelocations.empty())
+      << "--func PE load must not walk the image-wide .reloc directory";
 
   ASSERT_TRUE(coff_loader::ensureX64RuntimeFunction(*One, Second));
   ASSERT_NE(One->ExceptionMetadata.findFunction(Second), nullptr);
