@@ -203,6 +203,15 @@ Padding, packed fields, mixed floating/integer classes and incomplete components
 remain explicitly unsupported. Source record carriers never authorize binary
 rewriting.
 
+Fixed Darwin C imports may use a public declaration outside the generated
+command-line-tools catalog only at an exact symbol and dyld provider boundary.
+`NSStringFromCGSize` is such a UIKit declaration on ARM64: its natural
+two-double `CGSize` parameter uses the shared homogeneous-record ABI and its
+object result uses the ordinary pointer carrier. Weak imports, addends,
+conflicting storage identities, other providers and architectures without a
+complete record ABI remain unbound. The final source check rebuilds the hint
+from the current image instead of trusting an earlier call-site annotation.
+
 Objective-C receiver facts distinguish method-entry self from an exact class
 reference. All metadata records sharing an entry must agree before self is
 seeded. Full-width copies and ABI-preserved registers carry the fact through

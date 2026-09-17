@@ -66,6 +66,36 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
+  // UIKit declares this fixed function with one by-value CGSize. The
+  // command-line-tools SDK used for DarwinSourceDeclarations.inc has no
+  // UIKit headers or binary, so retain the public contract at the same exact
+  // symbol/provider boundary as the UIKit external storage below.
+  // https://developer.apple.com/documentation/uikit/nsstringfromcgsize
+  if (Name == "NSStringFromCGSize") {
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Image.Arch != Arch::AArch64 || Bind == Image.DyldBindSlots.end() ||
+        !darwinExportModuleMatches(
+            "/System/Library/Frameworks/UIKit.framework/UIKit",
+            Bind->second.Module))
+      return std::nullopt;
+    SourceCallTypeHint Result;
+    Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+    Result.TargetAddress = ImportSlot;
+    Result.TargetName = Name.str();
+    auto &Signature = Result.Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+    const auto Size =
+        NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
+    if (!Size)
+      return std::nullopt;
+    Signature.Parameters = {{"size", Size}};
+    std::string Diagnostic;
+    if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))
+      return std::nullopt;
+    return Result;
+  }
+
   // dispatch_once_f has a fixed callback contract that the generated Clang
   // encoding can only spell as the intentionally unsupported opaque `^?`.
   // Preserve the complete public prototype here rather than accepting unknown

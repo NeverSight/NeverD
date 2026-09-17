@@ -3257,6 +3257,62 @@ TEST(ObjCCallHints, SDKCDeclarationsPreservePointerIntegerAndFloatCarriers) {
   }
 }
 
+TEST(ObjCCallHints, UIKitCGSizeStringKeepsExactProviderAndRecordABI) {
+  auto Image = runtimeImage("_NSStringFromCGSize", Arch::AArch64);
+  Image.DyldBindSlots[0x2180] = {
+      "_NSStringFromCGSize", 0,
+      "/System/Library/Frameworks/UIKit.framework/UIKit", false};
+  const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+  EXPECT_EQ(Hint->TargetName, "NSStringFromCGSize");
+  EXPECT_EQ(Hint->Signature.Origin,
+            SourceFunctionTypeHint::OriginKind::DarwinSDK);
+  ASSERT_TRUE(Hint->Signature.ReturnType);
+  EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Ptr);
+  ASSERT_EQ(Hint->Signature.Parameters.size(), 1U);
+  const auto &Size = Hint->Signature.Parameters.front();
+  ASSERT_TRUE(Size.Type);
+  EXPECT_EQ(Size.Type->Kind, NdTypeKind::Struct);
+  EXPECT_EQ(Size.Type->Size, 16U);
+  ASSERT_EQ(Size.Type->Fields.size(), 2U);
+  ASSERT_EQ(Size.Components.size(), 2U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (unsigned I = 0; I != 2; ++I) {
+    EXPECT_EQ(Size.Type->Fields[I]->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Size.Type->Fields[I]->Size, 8U);
+    EXPECT_EQ(Size.Components[I].Kind,
+              SourceABICarrierKind::FloatingRegister);
+    EXPECT_EQ(Size.Components[I].RegisterOffset, TRI.FPParamRegs[I]);
+    EXPECT_EQ(Size.Components[I].ValueBytes, 8U);
+  }
+  std::string Diagnostic;
+  EXPECT_TRUE(validateSourceABI(Hint->Signature, Diagnostic)) << Diagnostic;
+
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.Arch = Arch::X64;
+    if (Mutation == 1)
+      Changed.DyldBindSlots.clear();
+    if (Mutation == 2)
+      Changed.DyldBindSlots[0x2180].Module =
+          "/System/Library/Frameworks/Foundation.framework/Foundation";
+    if (Mutation == 3)
+      Changed.DyldBindSlots[0x2180].Module =
+          "/tmp/UIKit.framework/UIKit";
+    if (Mutation == 4)
+      Changed.DyldBindSlots[0x2180].Name = "_other";
+    if (Mutation == 5)
+      Changed.DyldBindSlots[0x2180].Addend = 8;
+    if (Mutation == 6)
+      Changed.DyldBindSlots[0x2180].WeakImport = true;
+    if (Mutation == 7)
+      Changed.ConflictingImportStorageSlots.insert(0x2180);
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(Changed, 0x2180)) << Mutation;
+  }
+}
+
 TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {

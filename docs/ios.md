@@ -140,6 +140,8 @@ An authenticated Objective-C message target preserves receiver identities held i
 
 The C declaration catalog also covers CoreGraphics and ImageIO exports. Opaque image and color pointers, integer counts and floating results retain their declared ABI. Public system framework aliases are generated alongside export facts; private paths, different framework versions and undeclared symbols gain no binding. Mobile declarations now use the loader’s type grammar too: well-formed aggregate pointees become opaque pointers without assuming their layout.
 
+UIKit fixed C functions absent from the command-line-tools catalog require an exact symbol and dyld provider match. On ARM64, `NSStringFromCGSize` uses the shared fixed-record ABI: the two-double `CGSize` value is read from its two floating-point carriers and the real UIKit function remains in the generated call. Weak imports, addends, conflicting storage, other providers and unsupported architectures stay unbound.
+
 Large immortal Swift string literals can bind their UTF-8 bytes to shared static storage at an established Foundation bridge. The count, flags, terminator, valid UTF-8, immutable storage and exact import must agree. The original tagged representation and bridge remain intact; embedded-zero literals and other storage forms remain unbound.
 
 Validated constant NSString objects also retain shared identity when an integer carrier with complete data-address provenance is assigned or stored. Scalar immediates, incomplete addresses, numeric operations and accesses to private object bytes do not gain that binding.
