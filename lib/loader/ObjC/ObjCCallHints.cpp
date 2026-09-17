@@ -690,7 +690,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           BlockIdentity{CopySite, D->Number, Invoke->Number, uint32_t(*Flags)};
       return V;
     };
-    auto Clobber = [&](const SourceFunctionTypeHint *Signature) {
+    auto Clobber = [&](const SourceFunctionTypeHint *Signature,
+                       bool PreserveReceiverRegisters = false) {
       const bool KnownABI = Signature && Signature->HasExplicitABI;
       if (!KnownABI) {
         State.escapeFrame();
@@ -739,9 +740,18 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       }
       for (auto It = Values.begin(); It != Values.end();) {
         const auto &[Space, Offset, Size] = It->first;
-        if (!KnownABI || Space != VnodeSpace::REG ||
-            (!(Offset == TRI.StackPointer && Size == 8) &&
-             !TRI.isCallPreserved(Offset, Size)))
+        // The exact libobjc dispatch entry still obeys Darwin's preserved
+        // register contract when its selector ABI is unavailable. Keep only
+        // receiver type identity there; unknown arguments can escape the
+        // frame, and no other value fact crosses an unbound call.
+        const bool PreservedReceiver =
+            PreserveReceiverRegisters &&
+            It->second.TheKind == Value::Kind::Receiver &&
+            Space == VnodeSpace::REG && TRI.isCallPreserved(Offset, Size);
+        if ((!KnownABI && !PreservedReceiver) ||
+            (KnownABI && (Space != VnodeSpace::REG ||
+                          (!(Offset == TRI.StackPointer && Size == 8) &&
+                           !TRI.isCallPreserved(Offset, Size)))))
           It = Values.erase(It);
         else
           ++It;
@@ -999,7 +1009,11 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Bound->second.Receiver)
           ReturnedReceiver = objcReceiverCallResultTypeHint(
               Image, *Bound->second.Receiver, Bound->second.Selector);
-        Clobber(Bound != BlockHints.end() ? &Bound->second.Signature : nullptr);
+        const bool AuthenticatedMessageDispatch =
+            Target && (Target->Name == "objc_msgSend" ||
+                       Target->Name == "objc_msgSendSuper2");
+        Clobber(Bound != BlockHints.end() ? &Bound->second.Signature : nullptr,
+                AuthenticatedMessageDispatch);
         if (ReturnedReceiver) {
           const auto &Location = Bound->second.Signature.ReturnLocation;
           if (Location.Kind == SourceABICarrierKind::IntegerRegister &&

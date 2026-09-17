@@ -213,6 +213,12 @@ catalogs retain declaration owners and hierarchy separately from selector-wide
 agreement. The SDK revalidates the receiver origin and applicable declarations
 against the current image before publishing source. These facts neither select
 an IMP nor authorize binary rewriting.
+An authenticated `objc_msgSend` or `objc_msgSendSuper2` target has the Darwin
+call-preservation contract even when its selector declaration is unavailable.
+Across such a call, the dataflow may retain only receiver identities held in
+complete call-preserved registers. It still marks private frame storage as
+escaped and discards caller-saved, selector, import, block and numeric facts.
+A later message still needs its own exact receiver declaration and source ABI.
 Missing external hierarchy requires selector-wide agreement instead of a receiver-specific signature; explicit unsupported or conflicting declarations remain negative evidence.
 
 Declared object ivars extend a receiver proof through at most eight full-width

@@ -3929,6 +3929,40 @@ ExprPtr receiverCallExpression(const SourceCallTypeHint &Binding) {
 }
 } // namespace
 
+TEST(ObjCCallHints,
+     AuthenticatedUnknownMessagesPreserveCalleeSavedReceiverIdentity) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const bool Restore : {false, true}) {
+      const auto Image = receiverImage(Architecture);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Saved = NdVar::reg(preservedFactRegister(Architecture), 8);
+      auto Function = receiverCaller(Architecture);
+      auto &Ops = Function.Blocks.front().Ops;
+      Ops = {
+          operation(NdOp::COPY, Saved,
+                    {NdVar::reg(TRI.IntParamRegs[0], 8)}, 0x1200),
+          operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1204),
+          operation(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8),
+                    {NdVar::cst(0x2100, 8)}, 0x120c),
+          operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1210),
+          operation(NdOp::RETURN, {}, {}, 0x1214),
+      };
+      if (Restore)
+        Ops.insert(Ops.begin() + 2,
+                   operation(NdOp::COPY,
+                             NdVar::reg(TRI.IntParamRegs[0], 8), {Saved},
+                             0x1208));
+      Function.Blocks.front().EndAddr = 0x1218;
+      const auto Hints = buildObjCSourceCallHints(Image, Function);
+      EXPECT_EQ(Hints.count(0x1204), 0U);
+      EXPECT_EQ(Hints.count(0x1210), Restore ? 1U : 0U);
+      if (Restore) {
+        ASSERT_TRUE(Hints.at(0x1210).Receiver);
+        EXPECT_EQ(Hints.at(0x1210).Receiver->ClassName, "First");
+      }
+    }
+}
+
 TEST(ObjCCallHints, ReceiverDeclarationsSeparateOwnersAndDispatchRoles) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (const bool ClassMethod : {false, true}) {
