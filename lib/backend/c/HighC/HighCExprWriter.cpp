@@ -285,6 +285,13 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
     if (!Cur)
       return std::nullopt;
     if (Cur->Kind == ExprKind::Var) {
+      if (isCatchFuncletParentFrame(Cur->Var)) {
+        // rdx is the parent's established frame, the same rebase SEH handlers
+        // use so [rdx+k] names the try body's var_mN slots.
+        if (CurrentFunc->FrameSize > 0)
+          return Acc - CurrentFunc->FrameSize;
+        return Acc;
+      }
       if (isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch)) {
         // x64 SEH handlers are exceptional entries: LowIR models their RSP as
         // the function-entry value, but the unwinder has already established
@@ -729,6 +736,38 @@ bool HighCWriter::isParamCopy(const HighExpr &E) const {
   const HighExpr *Cur = unwrapIntegerView(&E);
   return Cur && (Cur->Kind == ExprKind::Var || Cur->Kind == ExprKind::Phi) &&
          Cur->Var.Kind == MedVar::Param;
+}
+
+bool HighCWriter::isCatchFuncletParentFrame(const MedVar &V) const {
+  if (!CurrentFunc || Opts.TheArch != Arch::X64)
+    return false;
+  if (V.Kind != MedVar::Param || V.Id != 1)
+    return false;
+  // Inside a catch body, rdx is always the establisher frame, even when the
+  // parent also has an rdx argument.
+  if (InEHClauseBody)
+    return true;
+  // Whole-function walks (local decls) do not set InEHClauseBody. A Param 1
+  // the parent does not own is the attached funclet frame pointer.
+  return static_cast<size_t>(V.Id) >= CurrentFunc->Params.size();
+}
+
+const HighExpr *HighCWriter::parentFrameStoredValue(const HighStmt &Stmt) const {
+  if (!InEHClauseBody)
+    return nullptr;
+  const HighExpr *Addr = nullptr;
+  const HighExpr *Val = nullptr;
+  if (Stmt.Kind == StmtKind::Store && Stmt.StoreAddr && Stmt.StoreVal) {
+    Addr = Stmt.StoreAddr.get();
+    Val = Stmt.StoreVal.get();
+  } else if (Stmt.Kind == StmtKind::Assign && Stmt.Dst && Stmt.Val &&
+             Stmt.Dst->Kind == ExprKind::Load && !Stmt.Dst->Operands.empty()) {
+    Addr = Stmt.Dst->Operands[0].get();
+    Val = Stmt.Val.get();
+  }
+  if (!Addr || !Val)
+    return nullptr;
+  return frameDisplacement(*Addr) ? Val : nullptr;
 }
 
 std::optional<std::string>

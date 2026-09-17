@@ -827,6 +827,44 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
     }
     if (stmtHiddenFromC(S))
       continue;
+    if (InEHClauseBody && !InferredVoid) {
+      if (const HighExpr *Stored = parentFrameStoredValue(S)) {
+        size_t J = I + 1;
+        while (J < Stmts.size() && (stmtHiddenFromC(Stmts[J]) ||
+                                    Stmts[J].Kind == StmtKind::Nop))
+          ++J;
+        if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Return) {
+          if (auto Slot = namedFrameSlot(
+                  S.Kind == StmtKind::Store ? *S.StoreAddr
+                                            : *S.Dst->Operands[0]))
+            Analysis.DeadVars.insert(*Slot);
+          emitIndent(Indent);
+          OS << "return " << formatReturnExpr(*Stored) << ";\n";
+          I = J;
+          AfterNoReturn = false;
+          continue;
+        }
+      }
+    }
+    if (InEHClauseBody && S.Kind == StmtKind::Return && S.RetVal &&
+        S.RetVal->Kind == ExprKind::Var) {
+      const std::string Name = varName(S.RetVal->Var);
+      bool AssignedHere = false;
+      for (size_t K = 0; K < I; ++K) {
+        const HighStmt &Prev = Stmts[K];
+        if (Prev.Kind != StmtKind::Assign || !Prev.Dst)
+          continue;
+        if (Prev.Dst->Kind != ExprKind::Var && Prev.Dst->Kind != ExprKind::Phi)
+          continue;
+        if (varName(Prev.Dst->Var) == Name)
+          AssignedHere = true;
+      }
+      if (!AssignedHere) {
+        emitIndent(Indent);
+        OS << "return;\n";
+        continue;
+      }
+    }
     writeStmt(S, Indent);
     AfterNoReturn = isNoReturnCallStmt(Analysis, S);
   }
@@ -846,16 +884,13 @@ void HighCWriter::writeTryBody(const std::vector<HighStmt> &Stmts, int Indent) {
     }
     break;
   }
-  va_t LastLabel = InvalidVA;
-  for (size_t I = 0; I < End; ++I) {
-    const HighStmt &S = Stmts[I];
-    if (S.Addr != 0 && S.Addr != InvalidVA && GotoTargets.count(S.Addr) &&
-        S.Addr != LastLabel) {
-      OS << "L_" + llvm::utohexstr(S.Addr) + ":\n";
-      LastLabel = S.Addr;
-    }
-    writeStmt(S, Indent);
+  if (End == Stmts.size()) {
+    writeStmts(Stmts, Indent);
+    return;
   }
+  std::vector<HighStmt> Prefix(Stmts.begin(),
+                               Stmts.begin() + static_cast<std::ptrdiff_t>(End));
+  writeStmts(Prefix, Indent);
 }
 
 bool HighCWriter::isCompilerEHConstant(const HighExpr &Val) const {

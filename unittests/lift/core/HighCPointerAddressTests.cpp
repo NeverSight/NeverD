@@ -979,6 +979,76 @@ TEST(HighCPointerAddresses, AttachesCxxFuncletBodyIntoCatch) {
   EXPECT_EQ(Source.find("handler @"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, CatchFuncletParentFrameStoreBecomesReturn) {
+  // x64 catch funclets write the result to [rdx+k] then ret. rdx is the parent
+  // frame, not a parent parameter, so HighC must not print arg1 / return v0.
+  HighFunc Parent;
+  Parent.Name = "parent";
+  Parent.Entry = 0x140001000;
+  Parent.ReturnType = NdType::makeInt(4);
+  Parent.FrameSize = 0x40;
+  HighStmt Try;
+  Try.Kind = StmtKind::CxxTry;
+  Try.EHIsReducible = true;
+  HighStmt TryReturn;
+  TryReturn.Kind = StmtKind::Return;
+  TryReturn.RetVal = HighExpr::makeConst(static_cast<uint64_t>(-100), 4);
+  Try.Body.push_back(std::move(TryReturn));
+
+  MedVar T11;
+  T11.Kind = MedVar::Temp;
+  T11.Id = 11;
+  T11.Size = 8;
+  MedVar T25;
+  T25.Kind = MedVar::Temp;
+  T25.Id = 25;
+  T25.Size = 4;
+  HighStmt LoadPtr;
+  LoadPtr.Kind = StmtKind::Assign;
+  LoadPtr.Dst = HighExpr::makeVar(T11);
+  LoadPtr.Val = HighExpr::makeLoad(
+      HighExpr::makeBinop(NdOp::INT_ADD, parameter(1),
+                          HighExpr::makeConst(40, 8)),
+      NdType::makeInt(8));
+  HighStmt LoadVal;
+  LoadVal.Kind = StmtKind::Assign;
+  LoadVal.Dst = HighExpr::makeVar(T25);
+  LoadVal.Val = HighExpr::makeLoad(HighExpr::makeVar(T11), NdType::makeInt(4));
+  HighStmt Home;
+  Home.Kind = StmtKind::Store;
+  Home.StoreAddr = HighExpr::makeBinop(NdOp::INT_ADD, parameter(1),
+                                       HighExpr::makeConst(36, 8));
+  Home.StoreVal = HighExpr::makeVar(T25, NdType::makeInt(4));
+  HighStmt CatchRet;
+  CatchRet.Kind = StmtKind::Return;
+  MedVar Rax;
+  Rax.Kind = MedVar::Reg;
+  Rax.Id = 0;
+  Rax.SSAVer = 3;
+  Rax.RenameTag = 0;
+  Rax.Size = 8;
+  CatchRet.RetVal = HighExpr::makeVar(Rax);
+
+  HighEHClause Catch;
+  Catch.Kind = HighEHClauseKind::CxxCatch;
+  Catch.TypeName = "ProbeError";
+  Catch.Adjectives = 0x9;
+  Catch.CatchObjectOffset = 40;
+  Try.EHClauses.push_back(std::move(Catch));
+  std::vector<HighStmt> CatchBody;
+  CatchBody.push_back(std::move(LoadPtr));
+  CatchBody.push_back(std::move(LoadVal));
+  CatchBody.push_back(std::move(Home));
+  CatchBody.push_back(std::move(CatchRet));
+  Try.EHClauseBodies.push_back(std::move(CatchBody));
+  Parent.Body.push_back(std::move(Try));
+
+  const std::string Source = emitFunctions({Parent});
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v0"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return t25"), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch) {
   HighFunc Parent;
   Parent.Name = "parent";
@@ -2992,8 +3062,10 @@ std::string highcOnlyFunction(BinaryImage Img, va_t Entry) {
   auto Result = Pipeline().run(Img, Ctx, Opts);
   if (!Result.Success || Result.HighFuncs.empty())
     return Result.Error;
+  std::vector<HighFunc> Related = Result.HighFuncs;
+  attachCxxFuncletBodies(Related);
   const HighFunc *Attached = nullptr;
-  for (const HighFunc &Func : Result.HighFuncs)
+  for (const HighFunc &Func : Related)
     if (Func.Entry == Entry)
       Attached = &Func;
   if (!Attached)
@@ -3098,6 +3170,85 @@ TEST(HighCPointerAddresses, CorpusFuncLoadGsHandlerCheckReturnsOne) {
   ASSERT_FALSE(Source.empty()) << Source;
   EXPECT_NE(Source.find("return 1"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("void sub_"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbeCatchReturnsValue) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+
+  va_t Entry = 0;
+  std::string Source;
+  for (const auto &Rec : DiscoverImg->COFFPDataRecords) {
+    const va_t Begin = DiscoverImg->Base + Rec.BeginRVA;
+    BinaryLoadOptions FuncOpts;
+    FuncOpts.OnlyFunctionEntries.insert(Begin);
+    auto Img = loadBinary(Path, FuncOpts);
+    if (!Img)
+      continue;
+    std::string Text = highcOnlyFunction(*Img, Begin);
+    if (Text.find("throw;") == std::string::npos ||
+        Text.find("catch") == std::string::npos)
+      continue;
+    Entry = Begin;
+    Source = std::move(Text);
+    break;
+  }
+  ASSERT_NE(Entry, 0u) << "no nested rethrow with catch";
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v1"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("throw;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return t"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbeNestedCatchReturnsValues) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+
+  va_t Entry = 0;
+  std::string Source;
+  for (const auto &Rec : DiscoverImg->COFFPDataRecords) {
+    const va_t Begin = DiscoverImg->Base + Rec.BeginRVA;
+    BinaryLoadOptions FuncOpts;
+    FuncOpts.OnlyFunctionEntries.insert(Begin);
+    auto Img = loadBinary(Path, FuncOpts);
+    if (!Img)
+      continue;
+    std::string Text = highcOnlyFunction(*Img, Begin);
+    if (Text.find("return -200") == std::string::npos ||
+        Text.find("catch") == std::string::npos)
+      continue;
+    Entry = Begin;
+    Source = std::move(Text);
+    break;
+  }
+  ASSERT_NE(Entry, 0u) << "no nested catch returning -200";
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v2"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return v0"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return -200"), std::string::npos) << Source;
 }
 
 } // namespace

@@ -300,10 +300,16 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
 
 void HighCWriter::emitLocalDecls(const HighFunc &Func,
                                  const std::set<std::string> &ParamNames) {
-  auto VarFn = [this](const MedVar &V) { return varName(V); };
+  auto VarFn = [this](const MedVar &V) {
+    if (isCatchFuncletParentFrame(V))
+      return std::string();
+    return varName(V);
+  };
   // Copy-forwarded temps print as their source (`arg0`), so collecting the
   // IR destination would declare a name that never appears in the body.
   auto PrintedVarFn = [this, &VarFn](const MedVar &V) {
+    if (isCatchFuncletParentFrame(V))
+      return std::string();
     return copyForwardName(VarFn(V));
   };
 
@@ -406,7 +412,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   }
 
   for (auto &[Name, Ty] : UsedVars) {
-    if (DeclaredNames.count(Name))
+    if (Name.empty() || DeclaredNames.count(Name))
       continue;
     if (CopyForward.count(Name) && !VisibleAssigned.count(Name))
       continue;
