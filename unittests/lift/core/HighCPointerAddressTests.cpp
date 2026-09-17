@@ -3108,6 +3108,44 @@ va_t findExecutableBytes(const BinaryImage &Img, llvm::ArrayRef<uint8_t> Needle)
   return 0;
 }
 
+std::string llvmcOnlyFunction(BinaryImage Img, va_t Entry) {
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.NoOpt = true;
+  Opts.LiftMode = true;
+  Opts.OnlyFunctionEntries.insert(Entry);
+  auto Result = Pipeline().run(Img, Ctx, Opts);
+  if (!Result.Success || !Result.LlvmModule)
+    return Result.Error;
+  llvm::Function *Keep = nullptr;
+  const std::string Want = "sub_" + llvm::utohexstr(Entry);
+  for (llvm::Function &Fn : *Result.LlvmModule) {
+    if (Fn.isDeclaration())
+      continue;
+    if (Fn.getName() == Want) {
+      Keep = &Fn;
+      break;
+    }
+    if (!Keep)
+      Keep = &Fn;
+  }
+  if (!Keep)
+    return {};
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  if (!LLVMCEmitter().emit(*Result.LlvmModule, OS, Options, nullptr, &Img,
+                           Keep))
+    return {};
+  OS.flush();
+  return Source;
+}
+
 std::string highcOnlyFunction(BinaryImage Img, va_t Entry) {
   llvm::LLVMContext Ctx;
   PipelineOptions Opts;
@@ -3344,6 +3382,89 @@ TEST(HighCPointerAddresses, CorpusFuncLoadCxxEhProbePrintsUnwindDestructor) {
   EXPECT_NE(After.find("sub_"), std::string::npos) << After;
   EXPECT_NE(After.find("&var_m"), std::string::npos) << After;
   EXPECT_EQ(After.find("arg1"), std::string::npos) << After;
+}
+
+TEST(LLVMCPointerAddresses, NdDataGepPrintsSyntheticGlobalNotNullLoad) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-nd-data-gep", Context);
+  Module.setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-"
+                       "n8:16:32:64-S128");
+  llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  auto *BlobTy = llvm::ArrayType::get(I8, 256);
+  auto *GV = new llvm::GlobalVariable(
+      Module, BlobTy, /*isConstant=*/false, llvm::GlobalValue::ExternalLinkage,
+      llvm::Constant::getNullValue(BlobTy), "__nd_data_140005000.data");
+  auto *Off = llvm::ConstantInt::get(I64, 64);
+  auto *GEP = llvm::ConstantExpr::getGetElementPtr(I8, GV, Off);
+  llvm::FunctionType *FnTy = llvm::FunctionType::get(I64, false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnTy, llvm::GlobalValue::ExternalLinkage, "load_cookie", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Value *Ld = Builder.CreateLoad(I64, GEP, "ld");
+  Builder.CreateRet(Ld);
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr,
+                                  Function));
+  OS.flush();
+  EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("g_140005040"), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, CorpusFuncLoadGsCookieDoesNotLoadNull) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = gsSehProbePath();
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions Discover;
+  Discover.OnlyFunctionEntries.insert(1);
+  auto DiscoverImg = loadBinary(Path, Discover);
+  ASSERT_TRUE(static_cast<bool>(DiscoverImg))
+      << llvm::toString(DiscoverImg.takeError());
+  const uint8_t RolRcx16[] = {0x48, 0xc1, 0xc1, 0x10};
+  const va_t Rol = findExecutableBytes(*DiscoverImg, RolRcx16);
+  ASSERT_NE(Rol, 0u);
+  const va_t Entry = pdataEntryContaining(*DiscoverImg, Rol);
+  ASSERT_NE(Entry, 0u);
+
+  BinaryLoadOptions FuncOpts;
+  FuncOpts.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, FuncOpts);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = llvmcOnlyFunction(std::move(*Img), Entry);
+  ASSERT_FALSE(Source.empty()) << Source;
+  EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("*(uint32_t*)0"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("g_"), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "seh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+
+  BinaryLoadOptions FuncOpts;
+  FuncOpts.OnlyFunctionEntries.insert(0x140001050);
+  auto Img = loadBinary(Path, FuncOpts);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = llvmcOnlyFunction(std::move(*Img), 0x140001050);
+  ASSERT_FALSE(Source.empty()) << Source;
+  EXPECT_NE(Source.find("arg0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("arg7"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("*(uint32_t*)0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
 }
 
 } // namespace
