@@ -133,9 +133,11 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
   return true;
 }
 
-// A cleanup forwarder can have no usable scalar result. An internal void
+// A source-bound helper can have no usable scalar result. An internal void
 // summary preserves its effects and deliberately supplies no result to
-// callers. Framed and ordinary-call shapes require exact state restoration;
+// callers. Callees may return values used inside the helper; those values do
+// not establish a result on every exit from the helper itself.
+// Framed and ordinary-call shapes require exact state restoration;
 // the established frameless tail shape uses the narrower no-write proof plus
 // byte-taint rejection of stack-derived arguments and stores.
 bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
@@ -173,7 +175,6 @@ bool hasVoidRuntimeContract(const BinaryImage &Image, const LowFunc *Low,
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
       if ((!StaticRuntime && !StaticNative && !DynamicWitness) ||
           Binding.DoesNotReturn || !Binding.Signature.ReturnType ||
-          Binding.Signature.ReturnType->Kind != NdTypeKind::Void ||
           !Image.isCodeAddress(Op.Addr) ||
           !Calls
                .emplace(NativeSourceCallKey{Op.Addr, Op.OriginSeq, Op.Opcode,

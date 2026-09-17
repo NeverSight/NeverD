@@ -66,8 +66,10 @@ control-flow positions remain unchanged. Unknown lanes are never filled in.
 
 An internal void summary for a native cleanup forwarder does not assert an
 original void prototype. It contributes no result carrier. Calls must match
-validated external void declarations or a canonical dynamically loaded Swift
-value-witness destroy declaration. MedIR and LowIR must agree on the exact
+validated runtime declarations, exact native source contracts or canonical
+dynamically loaded Swift value-witness declarations. A callee may return a
+value used inside the helper: that value does not establish a return carrier
+on every exit from the helper itself. MedIR and LowIR must agree on the exact
 instruction address and operation sequence, direct or indirect call form, and
 static target when one exists. A bounded LowIR fixed point tracks exact incoming
 register bytes and private stack spills, requiring restored preserved registers,

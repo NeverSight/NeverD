@@ -540,10 +540,9 @@ TEST(NativeSourceHints,
         auto Hint = std::make_shared<SourceCallTypeHint>(
             *Fixture.Med.Blocks[0].Ops[0].SourceCallHint);
         if (Mutation == 6) {
+          // A changed return type without its matching ABI is not a valid
+          // source contract, even when the helper supplies no result.
           Hint->Signature.ReturnType = NdType::makeInt(8);
-          std::string Error;
-          ASSERT_TRUE(assignDarwinScalarSourceABI(Hint->Signature, Architecture,
-                                                  Error));
         } else if (Mutation == 7) {
           Hint->CallKind = SourceCallTypeHint::Kind::Native;
         } else {
@@ -797,6 +796,66 @@ TEST(NativeSourceHints, VoidFramesRestoreEntryBytesAcrossBranchesAndLoops) {
       EXPECT_EQ(Hint->ReturnLocation.Kind, SourceABICarrierKind::None);
       EXPECT_EQ(Fixture.Med.ReturnValueEvidence,
                 MedReturnValueEvidence::Unknown);
+    }
+}
+
+TEST(NativeSourceHints, VoidFramesKeepBoundCallResultsInsideTheHelper) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      NativeVoidFrameFixture Fixture(Architecture);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      auto Hint = std::make_shared<SourceCallTypeHint>(
+          *Fixture.Med.Blocks[0].Ops[0].SourceCallHint);
+      Hint->Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+      std::string Error;
+      ASSERT_TRUE(
+          assignDarwinScalarSourceABI(Hint->Signature, Architecture, Error));
+      auto Call = Fixture.Med.Blocks[0].Ops[0];
+      Call.Addr = 0x100c;
+      Call.OriginSeq = 3;
+      Call.SourceCallHint = Hint;
+      Call.Output.Kind = MedVar::Reg;
+      Call.Output.Id = 30;
+      Call.Output.SSAVer = 1;
+      Call.Output.TheArch = Architecture;
+      Call.Output.RegOff = TRI.IntReturnReg;
+      Call.Output.Size = 8;
+      // The returned object is consumed by the following void release. It
+      // cannot become a result of the enclosing helper after that call.
+      Fixture.Med.Blocks[0].Ops[0].Inputs[1] = Call.Output;
+      Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin(), Call);
+      auto NativeCall = Fixture.Low.Blocks[0].Ops[Fixture.CallIndex];
+      NativeCall.Addr = Call.Addr;
+      NativeCall.Seq = Call.OriginSeq;
+      Fixture.Low.Blocks[0].Ops.insert(
+          Fixture.Low.Blocks[0].Ops.begin() + Fixture.CallIndex, NativeCall);
+      if (Mutation == 1)
+        Hint->Signature.ReturnLocation.ValueBytes = 4;
+      if (Mutation == 2)
+        Fixture.Med.Blocks[0].Ops[0].SourceCallHint.reset();
+      if (Mutation == 3)
+        ++Fixture.Low.Blocks[0].Ops[Fixture.CallIndex].Seq;
+      if (Mutation == 4)
+        Hint->DoesNotReturn = true;
+      if (Mutation == 5) {
+        // A typed result does not justify passing the private frame to a
+        // callee or skipping the existing preservation/escape proof.
+        Fixture.Low.Blocks[0].Ops.insert(
+            Fixture.Low.Blocks[0].Ops.begin() + Fixture.CallIndex,
+            NativeVoidFrameFixture::op(NdOp::COPY,
+                                       NdVar::reg(TRI.IntParamRegs[0], 8),
+                                       {NdVar::reg(TRI.StackPointer, 8)}));
+      }
+      const auto Result = Fixture.inferVoid(Error);
+      if (Mutation) {
+        EXPECT_FALSE(Result) << Error;
+      } else {
+        ASSERT_TRUE(Result) << Error;
+        EXPECT_EQ(Result->ReturnType->Kind, NdTypeKind::Void);
+        EXPECT_EQ(Result->ReturnLocation.Kind, SourceABICarrierKind::None);
+        EXPECT_EQ(Result->ReturnLocation.ValueBytes, 0U);
+      }
     }
 }
 

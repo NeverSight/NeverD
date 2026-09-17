@@ -571,7 +571,7 @@ void verifyRuntime(bool Chained,
                              : WordRecords         ? 11U
                              : PredicateFormats    ? 8U
                              : CRecords            ? CRecordMethods
-                             : NativeVoidFrames    ? 3U
+                             : NativeVoidFrames    ? 6U
                              : NativeVoid          ? 3U
                              : NativeFloating      ? 3U
                              : NativeRecords       ? 2U
@@ -670,8 +670,9 @@ void verifyRuntime(bool Chained,
   if (SwiftTypeLookup)
     Remaining = {"lookup:length:"};
   if (NativeVoidFrames)
-    Remaining = {"releaseFirst:second:active:",
-                 "releaseFirst:second:active:result:"};
+    Remaining = {
+        "releaseFirst:second:active:", "releaseFirst:second:active:result:",
+        "touchFirst:second:active:", "touchFirst:second:active:result:"};
   if (NativeVoid)
     Remaining = {"releaseObject:active:", "releaseObject:active:result:"};
   if (NativeFloating)
@@ -975,7 +976,9 @@ void verifyRuntime(bool Chained,
     auto Selector = Method->getString("selector");
     ASSERT_TRUE(Selector);
     if ((NativeVoid && *Selector == "unprovenResult:active:") ||
-        (NativeVoidFrames && *Selector == "unprovenResult:second:active:")) {
+        (NativeVoidFrames &&
+         (*Selector == "unprovenResult:second:active:" ||
+          *Selector == "unprovenMixedResult:second:active:"))) {
       EXPECT_EQ(Method->getString("status"), "unrecovered");
       EXPECT_EQ(Method->getString("reason"),
                 "method contains an unresolved value");
@@ -1041,6 +1044,9 @@ void verifyRuntime(bool Chained,
     const char *NativeSignature =
         NativeVoid
             ? "void releaseIfActive(void* native_arg0, int64_t native_arg1)"
+        : NativeVoidFrames && Selector->starts_with("touchFirst:")
+            ? "void retainAndReleasePair(void* native_arg0, void* native_arg1, "
+              "int64_t native_arg2)"
         : NativePointers && (*Selector == "ascii" || *Selector == "unicode")
             ? "int64_t NDForwardPointer(void* native_arg0)"
         : IndirectFields && (*Selector == "first" || *Selector == "second")
@@ -1049,8 +1055,9 @@ void verifyRuntime(bool Chained,
     if (NativeSignature) {
       EXPECT_NE(MethodSource.find(NativeSignature), std::string::npos)
           << MethodSource;
-      EXPECT_NE(MethodSource.find(NativeVoid ? "swift_unknownObjectRelease"
-                                             : "objc_retain"),
+      EXPECT_NE(MethodSource.find(NativeVoid || NativeVoidFrames
+                                      ? "swift_unknownObjectRelease"
+                                      : "objc_retain"),
                 std::string::npos);
       // Each C API method includes its complete native dependency group.
       // Link the common helper once when combining these two independent units.
@@ -1247,8 +1254,8 @@ void verifyRuntime(bool Chained,
       : SwiftTypeLookup ? "swift-type-lookup-cases=20480\nmetadata-identity="
                           "pass\nbyte-length=pass\n"
       : NativeVoidFrames
-          ? "native-void-frame-cases=16384\nrelease-effects=pass\n"
-            "independent-results=pass\n"
+          ? "native-void-frame-cases=32768\nrelease-effects=pass\n"
+            "independent-results=pass\nmixed-call-results=pass\n"
       : NativeVoid         ? "native-void-cases=16384\nrelease-effects=pass\n"
                              "independent-results=pass\n"
       : NativeFloating     ? "native-floating-cases=24576\nfloating-bits=pass\n"
@@ -1341,9 +1348,9 @@ void verifyRuntime(bool Chained,
                      "integer-bits=4096\nguard-check=pass\n"
       : DiagnosticReports ? "diagnostic-runtime=pass\ncontents=pass\ntrap="
                             "pass\nnative-traps=2\n"
-      : SwiftStrings    ? "swift-string=pass\ncontents=pass\nlifetime=pass\n"
-      : UnfairLocks     ? "unfair-locks=pass\ntrylock=pass\nownership=pass\n"
-                          "concurrency=pass\n"
+      : SwiftStrings      ? "swift-string=pass\ncontents=pass\nlifetime=pass\n"
+      : UnfairLocks       ? "unfair-locks=pass\ntrylock=pass\nownership=pass\n"
+                            "concurrency=pass\n"
       : ConstantObjects ? "constant-object-checks=32768\ncontents-and-aliases="
                           "pass\nconcurrent-initialization=pass\n"
       : ConstantStrings ? "constant-strings=pass\nunicode=pass\nidentity="

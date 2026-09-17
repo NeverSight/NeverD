@@ -13,6 +13,13 @@ static NSUInteger destructions;
 - (void)releaseFirst:(void *)first second:(void *)second active:(NSUInteger)active;
 - (NSUInteger)releaseFirst:(void *)first second:(void *)second
                    active:(NSUInteger)active result:(NSUInteger)value;
+- (void)touchFirst:(void *)first
+            second:(void *)second
+            active:(NSUInteger)active;
+- (NSUInteger)touchFirst:(void *)first
+                  second:(void *)second
+                  active:(NSUInteger)active
+                  result:(NSUInteger)value;
 @end
 #ifdef NEVERD_RECOVERED_ARC
 #include "replacements.h"
@@ -40,9 +47,32 @@ int main(void) {
       if ([driver releaseFirst:first second:second active:active result:value] != value ||
           destructions != before + (active ? 2 : 0)) abort();
       if (!active) { [first release]; [second release]; }
+      for (unsigned mixed = 0; mixed < 2; ++mixed) {
+        active = (i >> mixed) & 1;
+        first = [NDFrameTracked new];
+        second = [NDFrameTracked new];
+        before = destructions;
+        if (mixed) {
+          if ([driver touchFirst:first
+                          second:second
+                          active:active
+                          result:value] != value)
+            abort();
+        } else {
+          [driver touchFirst:first second:second active:active];
+        }
+        if (destructions != before + (active ? 1 : 0) ||
+            [first retainCount] != 1)
+          abort();
+        [first release];
+        if (!active)
+          [second release];
+      }
     }
-    if (destructions != 32768) abort();
+    if (destructions != 65536)
+      abort();
     [driver release];
-    puts("native-void-frame-cases=16384\nrelease-effects=pass\nindependent-results=pass");
+    puts("native-void-frame-cases=32768\nrelease-effects=pass\nindependent-"
+         "results=pass\nmixed-call-results=pass");
   }
 }
