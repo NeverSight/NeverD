@@ -378,6 +378,58 @@ bool definedReturnPaths(const MedFunc &Function, Arch Architecture,
   return !Returns.empty();
 }
 
+std::optional<SourceFunctionTypeHint>
+integerPairReturn(const MedFunc &Med, const SourceFunctionTypeHint &Scalar) {
+  const auto Architecture = Scalar.Architecture;
+  if (Architecture != Arch::AArch64 && Architecture != Arch::X64)
+    return std::nullopt;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  std::string Error;
+  if (Scalar.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      !Scalar.HasExplicitABI || !validateSourceABI(Scalar, Error) ||
+      !integerCarrier(Scalar.ReturnType) || Scalar.ReturnType->Size != 8 ||
+      !Scalar.ReturnComponents.empty() ||
+      Scalar.ReturnLocation.Kind != SourceABICarrierKind::IntegerRegister ||
+      TRI.IntReturnRegs.size() < 2 || Med.DoesNotReturn || Med.IsVariadic ||
+      Scalar.ReturnLocation.RegisterOffset != TRI.IntReturnRegs[0] ||
+      Scalar.ReturnLocation.ValueBytes != 8 || !Med.MultiReturn.empty() ||
+      Med.FPReturnViaX87)
+    return std::nullopt;
+  size_t Remaining = 262144;
+  for (const auto &Block : Med.Blocks) {
+    if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
+      return std::nullopt;
+    for (const auto &Op : Block.Ops) {
+      if (!Remaining-- || Op.Opcode == NdOp::INTRINSIC)
+        return std::nullopt;
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        if (!Op.SourceCallHint ||
+            !validateSourceABI(Op.SourceCallHint->Signature, Error) ||
+            Op.NumInputs != Op.SourceCallHint->Signature.Parameters.size() + 1)
+          return std::nullopt;
+    }
+  }
+  SourceFunctionTypeHint Pair = Scalar;
+  Pair.ReturnType =
+      NdType::makeStruct({Scalar.ReturnType, NdType::makeInt(8, false)});
+  Pair.ReturnLocation = {};
+  for (unsigned I = 0; I < 2; ++I) {
+    SourceABIValueLocation Location{SourceABICarrierKind::IntegerRegister,
+                                    TRI.IntReturnRegs[I], 0, 8};
+    std::optional<MedVar> Incoming;
+    for (const auto &Parameter : Med.Params)
+      if (Parameter.Kind == MedVar::Param && Parameter.Id >= 0 &&
+          Parameter.RegOff == Location.RegisterOffset && Parameter.Size == 8)
+        Incoming = Parameter;
+    if (!definedReturnPaths(Med, Architecture, Location, Incoming))
+      return std::nullopt;
+    Pair.ReturnComponents.push_back(Location);
+  }
+  return validateSourceABI(Pair, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Pair))
+             : std::nullopt;
+}
+
 struct ExactNativeContract {
   bool Recognized = false;
   std::optional<SourceFunctionTypeHint> Signature;
@@ -532,11 +584,55 @@ compilerRTPlatformVersionContract(const BinaryImage &Image, const MedFunc &Med,
 }
 } // namespace
 
-std::optional<SourceFunctionTypeHint>
-inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
-                          const HighFunc &High,
-                          const PipelineFunctionAudit &Audit,
-                          std::string &Diagnostic, const LowFunc *Low) {
+std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
+                                                Arch Architecture) {
+  if ((Architecture != Arch::AArch64 && Architecture != Arch::X64) ||
+      Function.Blocks.size() > 16384)
+    return {};
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (TRI.IntReturnRegs.size() < 2)
+    return {};
+  const auto Register = TRI.IntReturnRegs[1];
+  std::set<va_t> Targets;
+  size_t Remaining = 262144;
+  for (const auto &Block : Function.Blocks) {
+    std::optional<va_t> Pending;
+    for (const auto &Op : Block.Ops) {
+      if (!Remaining-- || Op.NumInputs > 6)
+        return {};
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::INDIR_BR ||
+          Op.Opcode == NdOp::RETURN) {
+        Pending.reset();
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
+            Op.Inputs[0].isConst())
+          Pending = Op.Inputs[0].Offset;
+        continue;
+      }
+      if (!Pending)
+        continue;
+      const bool SelfZero =
+          (Op.Opcode == NdOp::INT_XOR || Op.Opcode == NdOp::INT_SUB) &&
+          Op.NumInputs == 2 && Op.Inputs[0] == Op.Inputs[1];
+      if (!SelfZero)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (Op.Inputs[I].isReg() && Op.Inputs[I].Offset == Register &&
+              Op.Inputs[I].Size == 8)
+            Targets.insert(*Pending);
+      if (Op.Output.isReg() && Op.Output.Size &&
+          (Op.Output.Offset <= Register
+               ? Register - Op.Output.Offset < Op.Output.Size
+               : Op.Output.Offset - Register < 8))
+        Pending.reset();
+    }
+  }
+  return Targets;
+}
+
+std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
+    const BinaryImage &Image, const MedFunc &Med, const HighFunc &High,
+    const PipelineFunctionAudit &Audit, std::string &Diagnostic,
+    const LowFunc *Low, bool ObserveIntegerPair) {
   Diagnostic.clear();
   auto Reject =
       [&](const char *Reason) -> std::optional<SourceFunctionTypeHint> {
@@ -757,7 +853,23 @@ inferNativeSourceTypeHint(const BinaryImage &Image, const MedFunc &Med,
   auto Exact = compilerRTPlatformVersionContract(Image, Med, Hint, Diagnostic);
   if (Exact.Recognized)
     return Exact.Signature;
+  if (ObserveIntegerPair)
+    if (auto Pair = integerPairReturn(Med, Hint))
+      return Pair;
   return Hint;
+}
+
+std::optional<SourceFunctionTypeHint>
+refineNativeIntegerPairReturnHint(const MedFunc &Med, const HighFunc &High,
+                                  const PipelineFunctionAudit &Audit) {
+  if (Med.Entry != High.Entry || !completeNativeAudit(Med.Entry, Audit) ||
+      !Med.SourceParametersBound || !Med.SourceTypeHint ||
+      !High.SourceTypeHint || High.DoesNotReturn || High.Body.empty() ||
+      !equalSourceABIs(*Med.SourceTypeHint, *High.SourceTypeHint) ||
+      !equalSourceTypes(Med.ReturnType, Med.SourceTypeHint->ReturnType) ||
+      !equalSourceTypes(High.ReturnType, Med.SourceTypeHint->ReturnType))
+    return std::nullopt;
+  return integerPairReturn(Med, *Med.SourceTypeHint);
 }
 
 std::optional<SourceFunctionTypeHint>

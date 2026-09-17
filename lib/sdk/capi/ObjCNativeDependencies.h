@@ -104,8 +104,13 @@ inline size_t inferObjCNativeDependencies(
   std::map<va_t, const MedFunc *> Med;
   std::map<va_t, const HighFunc *> High;
   std::map<va_t, const PipelineFunctionAudit *> Audits;
-  for (const auto &Function : Result.LowFuncs)
+  std::set<va_t> IntegerPairReturns;
+  for (const auto &Function : Result.LowFuncs) {
     Low.emplace(Function.Entry, &Function);
+    const auto Observed =
+        observedNativeIntegerPairReturns(Function, Image.Arch);
+    IntegerPairReturns.insert(Observed.begin(), Observed.end());
+  }
   for (const auto &Function : Result.MedFuncs)
     Med.emplace(Function.Entry, &Function);
   for (const auto &Function : Result.HighFuncs)
@@ -117,7 +122,16 @@ inline size_t inferObjCNativeDependencies(
     if (const auto Existing = Options.SourceTypeHints.find(Target);
         Existing != Options.SourceTypeHints.end()) {
       const auto Found = High.find(Target);
+      const auto M = Med.find(Target);
       const auto A = Audits.find(Target);
+      if (IntegerPairReturns.count(Target) && Found != High.end() &&
+          M != Med.end() && A != Audits.end())
+        if (auto Pair = refineNativeIntegerPairReturnHint(
+                *M->second, *Found->second, *A->second)) {
+          Existing->second = std::move(*Pair);
+          ++Added;
+          continue;
+        }
       if (Found != High.end() && A != Audits.end())
         if (auto Refined =
                 refineNativeSourceTypeHint(*Found->second, *A->second)) {
@@ -137,9 +151,9 @@ inline size_t inferObjCNativeDependencies(
     }
     if (M->second->SourceTypeHint || H->second->SourceTypeHint)
       continue;
-    auto Hint =
-        inferNativeSourceTypeHint(Image, *M->second, *H->second, *A->second,
-                                  Diagnostics[Target], L->second);
+    auto Hint = inferNativeSourceTypeHint(
+        Image, *M->second, *H->second, *A->second, Diagnostics[Target],
+        L->second, IntegerPairReturns.count(Target));
     if (Hint) {
       Options.SourceTypeHints.emplace(Target, std::move(*Hint));
       ++Added;

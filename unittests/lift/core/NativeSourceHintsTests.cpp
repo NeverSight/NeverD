@@ -79,6 +79,168 @@ struct NativeFixture {
   }
 };
 
+NativeFixture nativePairFixture(Arch Architecture) {
+  NativeFixture F(Architecture);
+  const auto &TRI = getTargetRegInfo(Architecture);
+  F.Med.ReturnType = F.High.ReturnType = NdType::makeInt(8, false);
+  for (size_t I = 0; I < F.Med.Params.size(); ++I) {
+    F.Med.Params[I].Size = 8;
+    F.Med.TypedParams[I].Type = F.High.Params[I].Type = NdType::makeInt(8);
+  }
+  F.Med.Params[1].Id = -1;
+  auto &Primary = F.Med.Blocks[0].Ops[0];
+  Primary.Output.Size = 8;
+  Primary.Inputs[0] = F.Med.Params[0];
+  Primary.Inputs[1] = MedVar::makeConst(17, 8);
+  auto Secondary = Primary;
+  Secondary.Opcode = NdOp::INT_XOR;
+  Secondary.Output.RegOff = TRI.IntReturnRegs[1];
+  Secondary.Output.Id = 11;
+  Secondary.Inputs[1] = MedVar::makeConst(UINT64_C(0xfedcba9876543210), 8);
+  F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.begin() + 1, Secondary);
+  return F;
+}
+
+TEST(NativeSourceHints, IntegerPairDemandStopsAtClobbersAndPartialReads) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      LowFunc F;
+      F.Blocks.emplace_back();
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(0x1080, 8));
+      LowOp Read;
+      Read.Opcode = NdOp::COPY;
+      Read.Output = NdVar::reg(TRI.IntReturnRegs[0], 8);
+      Read.addInput(NdVar::reg(TRI.IntReturnRegs[1], 8));
+      if (Mutation == 1)
+        Read.Inputs[0].Size = 4;
+      if (Mutation == 2)
+        Call.Opcode = NdOp::INDIR_CALL;
+      F.Blocks[0].Ops = {Call, Read};
+      if (Mutation >= 3 && Mutation <= 5) {
+        LowOp Stop;
+        Stop.Opcode = Mutation == 3 ? NdOp::INTRINSIC : NdOp::COPY;
+        Stop.Output = NdVar::reg(TRI.IntReturnRegs[1], Mutation == 4 ? 4 : 8);
+        Stop.addInput(NdVar::cst(0, 8));
+        F.Blocks[0].Ops.insert(F.Blocks[0].Ops.begin() + 1, Stop);
+      }
+      if (Mutation == 6) {
+        F.Blocks[0].Ops.back().Opcode = NdOp::INT_XOR;
+        F.Blocks[0].Ops.back().addInput(Read.Inputs[0]);
+      }
+      if (Mutation == 7) {
+        F.Blocks[0].Ops.pop_back();
+        F.Blocks.emplace_back();
+        F.Blocks.back().Ops.push_back(Read);
+      }
+      EXPECT_EQ(observedNativeIntegerPairReturns(F, Architecture),
+                Mutation == 0 ? std::set<va_t>{0x1080} : std::set<va_t>{});
+    }
+}
+
+TEST(NativeSourceHints, IntegerPairsRequireBothCompleteReturnCarriers) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto F = nativePairFixture(Architecture);
+      auto &Ops = F.Med.Blocks[0].Ops;
+      if (Mutation == 1)
+        Ops[1].Output.Size = 4;
+      if (Mutation == 2)
+        Ops.erase(Ops.begin() + 1);
+      if (Mutation == 3)
+        F.Med.Blocks[0].Preds = {99};
+      if (Mutation == 4)
+        F.Med.Blocks[0].ExceptionalSuccs.emplace_back();
+      std::string Error;
+      const auto Pair = inferNativeSourceTypeHint(
+          F.Image, F.Med, F.High, F.Audit, Error, nullptr, true);
+      if (Mutation) {
+        EXPECT_TRUE(!Pair || Pair->ReturnType->Kind != NdTypeKind::Struct);
+      } else {
+        ASSERT_TRUE(Pair) << Error;
+        EXPECT_EQ(Pair->ReturnType->Kind, NdTypeKind::Struct);
+        EXPECT_EQ(Pair->ReturnType->Size, 16U);
+        ASSERT_EQ(Pair->ReturnComponents.size(), 2U);
+        for (unsigned I = 0; I < 2; ++I) {
+          EXPECT_EQ(Pair->ReturnComponents[I].RegisterOffset,
+                    getTargetRegInfo(Architecture).IntReturnRegs[I]);
+          EXPECT_EQ(Pair->ReturnComponents[I].ValueBytes, 8U);
+        }
+        const auto Scalar = F.infer(Error);
+        ASSERT_TRUE(Scalar) << Error;
+        EXPECT_EQ(Scalar->ReturnType->Kind, NdTypeKind::Int);
+      }
+    }
+}
+
+TEST(NativeSourceHints,
+     IntegerPairRefinementRequiresTheInferredNativeIdentity) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+      auto F = nativePairFixture(Architecture);
+      std::string Error;
+      const auto Scalar = F.infer(Error);
+      ASSERT_TRUE(Scalar) << Error;
+      F.Med.SourceTypeHint = F.High.SourceTypeHint = *Scalar;
+      F.Med.SourceParametersBound = true;
+      if (Mutation == 1)
+        F.Med.SourceTypeHint->Origin = F.High.SourceTypeHint->Origin =
+            SourceFunctionTypeHint::OriginKind::DarwinSDK;
+      if (Mutation == 2)
+        F.Audit.Entry += 4;
+      if (Mutation == 3)
+        F.Med.SourceParametersBound = false;
+      if (Mutation == 4)
+        F.High.SourceTypeHint->ReturnType = NdType::makeInt(4);
+      if (Mutation == 5)
+        F.Med.Blocks[0].Ops[1].Output.Size = 4;
+      const auto Pair =
+          refineNativeIntegerPairReturnHint(F.Med, F.High, F.Audit);
+      EXPECT_EQ(bool(Pair), Mutation == 0);
+      if (Pair) {
+        F.Med.SourceTypeHint = F.High.SourceTypeHint = *Pair;
+        F.Med.ReturnType = F.High.ReturnType = Pair->ReturnType;
+        EXPECT_FALSE(refineNativeIntegerPairReturnHint(F.Med, F.High, F.Audit));
+      }
+    }
+}
+
+TEST(NativeSourceHints, IntegerPairPathsMeetBothWordsAcrossJoinsAndBackedges) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Loop : {false, true})
+      for (bool MissingWord : {false, true}) {
+        auto F = nativePairFixture(Architecture);
+        const auto Primary = F.Med.Blocks[0].Ops[0];
+        const auto Secondary = F.Med.Blocks[0].Ops[1];
+        const auto Return = F.Med.Blocks[0].Ops.back();
+        F.Med.Blocks[0].Ops = {Primary};
+        F.Med.Blocks[0].Succs = {1, 2};
+        F.Med.Blocks.resize(4);
+        for (int I = 1; I <= 3; ++I)
+          F.Med.Blocks[I].Id = I;
+        F.Med.Blocks[1].Preds =
+            Loop ? std::vector<int>{0, 1} : std::vector<int>{0};
+        F.Med.Blocks[1].Succs =
+            Loop ? std::vector<int>{1, 3} : std::vector<int>{3};
+        F.Med.Blocks[1].Ops = {Secondary};
+        F.Med.Blocks[2].Preds = {0};
+        F.Med.Blocks[2].Succs = {3};
+        F.Med.Blocks[2].Ops =
+            MissingWord ? std::vector<MedOp>{} : std::vector<MedOp>{Secondary};
+        F.Med.Blocks[3].Preds = {1, 2};
+        F.Med.Blocks[3].Ops = {Return};
+        std::string Error;
+        const auto Hint = inferNativeSourceTypeHint(
+            F.Image, F.Med, F.High, F.Audit, Error, nullptr, true);
+        ASSERT_TRUE(Hint) << Error;
+        EXPECT_EQ(Hint->ReturnType->Kind == NdTypeKind::Struct, !MissingWord);
+      }
+}
+
 TEST(NativeSourceHints, NonReturningContractsRequireTerminalFlowAndBoundCalls) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
@@ -1378,6 +1540,33 @@ TEST(NativeSourceHints, TypedRecordCallResultsDefineTheNativeReturnCarrier) {
         EXPECT_EQ(Fixture.Med.ReturnValueEvidence,
                   MedReturnValueEvidence::Unknown);
       }
+}
+
+TEST(NativeSourceHints, IntegerPairReturnsPreserveBothWordsOfBoundRecordCalls) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Swift : {false, true}) {
+      NativeRecordResultFixture F(Architecture, Swift);
+      std::string Error;
+      const auto Pair = inferNativeSourceTypeHint(
+          F.Image, F.Med, F.High, F.Audit, Error, nullptr, true);
+      ASSERT_TRUE(Pair) << Error;
+      EXPECT_EQ(Pair->ReturnType->Kind, NdTypeKind::Struct);
+      EXPECT_EQ(Pair->ReturnComponents.size(), 2U);
+      // A later scalar call clobbers the second result even when its first
+      // result is a complete eight-byte value.
+      auto Call = F.Med.Blocks[0].Ops[0];
+      auto Binding = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+      Binding->Signature.ReturnType = NdType::makeInt(8);
+      ASSERT_TRUE(
+          assignDarwinFixedSourceABI(Binding->Signature, Architecture, Error));
+      Call.SourceCallHint = Binding;
+      Call.Output = F.Med.Blocks[0].Ops[1].Output;
+      F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.end() - 1, Call);
+      const auto Scalar = inferNativeSourceTypeHint(
+          F.Image, F.Med, F.High, F.Audit, Error, nullptr, true);
+      ASSERT_TRUE(Scalar) << Error;
+      EXPECT_TRUE(Scalar->ReturnComponents.empty());
+    }
 }
 
 TEST(NativeSourceHints, RecordResultDefinitionsRequireTheCompleteCallPrefix) {

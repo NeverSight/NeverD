@@ -103,6 +103,17 @@ Publication revalidates the typed callee's complete source flow and requires
 its dependency closure; a function flag alone never authorizes a terminating
 source call. Reports, writes and traps before termination remain observable.
 
+Native two-word integer returns are requested by an observed complete read of
+the second return register after an exact direct call in the same LowIR block.
+An intervening call, intrinsic or overlapping register write ends that demand;
+the demand itself proves no ABI. Both result registers must independently pass
+the existing bounded MedIR return-path proof. The candidate then uses an
+internal two-field record and the shared `ReturnComponents` lowering for calls
+and returns. A later dependency iteration may extend an inferred native scalar
+contract when its second word becomes provable; external and declared source
+contracts are never extended. Re-lifting and the normal source body/closure
+checks remain mandatory, and an unproved second result remains unresolved.
+
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
 Darwin block consumers have one loader-owned callback and lifetime contract.

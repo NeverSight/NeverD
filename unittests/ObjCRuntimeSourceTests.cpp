@@ -87,6 +87,7 @@ enum class RuntimeFixture {
   SwiftIntegerRuntime,
   SwiftRecordRuntime,
   NativeRecords,
+  NativeIntegerPairs,
   NativeFloating,
   NativeVoid,
   NativeVoidFrames,
@@ -127,6 +128,8 @@ void verifyRuntime(bool Chained,
   const bool NativeVoidFrames = FixtureKind == RuntimeFixture::NativeVoidFrames;
   const bool NativeFloating = FixtureKind == RuntimeFixture::NativeFloating;
   const bool NativeRecords = FixtureKind == RuntimeFixture::NativeRecords;
+  const bool NativeIntegerPairs =
+      FixtureKind == RuntimeFixture::NativeIntegerPairs;
   const bool SwiftRecordRuntime =
       FixtureKind == RuntimeFixture::SwiftRecordRuntime;
   const bool SwiftIntegerRuntime =
@@ -210,6 +213,7 @@ void verifyRuntime(bool Chained,
                         : NativeVoid          ? "ObjCNativeVoid.m"
                         : NativeFloating      ? "ObjCNativeFloating.m"
                         : NativeRecords       ? "ObjCNativeRecordResults.m"
+                        : NativeIntegerPairs  ? "ObjCNativeIntegerPairs.m"
                         : SwiftRecordRuntime  ? "ObjCSwiftRecordRuntime.m"
                         : SwiftIntegerRuntime ? "ObjCSwiftIntegerRuntime.m"
                         : SwiftTypeLookup     ? "ObjCSwiftTypeLookup.m"
@@ -268,6 +272,7 @@ void verifyRuntime(bool Chained,
                         : NativeVoid       ? "ObjCNativeVoidHarness.m"
                         : NativeFloating   ? "ObjCNativeFloatingHarness.m"
                         : NativeRecords    ? "ObjCNativeRecordResultsHarness.m"
+                        : NativeIntegerPairs ? "ObjCNativeIntegerPairsHarness.m"
                         : SwiftRecordRuntime ? "ObjCSwiftRecordRuntimeHarness.m"
                         : SwiftIntegerRuntime
                             ? "ObjCSwiftIntegerRuntimeHarness.m"
@@ -575,6 +580,7 @@ void verifyRuntime(bool Chained,
                              : NativeVoid          ? 3U
                              : NativeFloating      ? 3U
                              : NativeRecords       ? 2U
+                             : NativeIntegerPairs  ? 1U
                              : SwiftRecordRuntime  ? 2U
                              : SwiftIntegerRuntime ? 2U
                              : SwiftTypeLookup     ? 1U
@@ -680,6 +686,8 @@ void verifyRuntime(bool Chained,
                  "floatValue:other:mode:output:", "compare:other:bias:"};
   if (NativeRecords)
     Remaining = {"newBox:value:storage:", "metadataState:request:result:"};
+  if (NativeIntegerPairs)
+    Remaining = {"first:second:mode:output:"};
   if (SwiftRecordRuntime)
     Remaining = {"newBox:value:storage:", "metadataState:request:result:"};
   if (SwiftIntegerRuntime)
@@ -918,6 +926,7 @@ void verifyRuntime(bool Chained,
                   : NativeVoid          ? "NDVoidForwarders"
                   : NativeFloating      ? "NDNativeFloating"
                   : NativeRecords       ? "NDNativeRecordResults"
+                  : NativeIntegerPairs  ? "NDNativeIntegerPairs"
                   : SwiftRecordRuntime  ? "NDSwiftRecordRuntime"
                   : SwiftIntegerRuntime ? "NDSwiftIntegerRuntime"
                   : SwiftTypeLookup     ? "NDSwiftTypeLookup"
@@ -1265,6 +1274,8 @@ void verifyRuntime(bool Chained,
                              "memory-effects=pass\n"
       : NativeRecords      ? "native-record-result-cases=16384\nbox-storage="
                              "pass\nmetadata-response=pass\n"
+      : NativeIntegerPairs ? "native-pair-cases=8192\nboth-words=pass\n"
+                             "call-effects=24576\n"
       : SwiftRecordRuntime ? "swift-record-runtime-cases=16384\nbox-storage="
                              "pass\nmetadata-response=pass\n"
       : SwiftIntegerRuntime ? "runtime-integer-cases=4096\ncast-results="
@@ -2108,6 +2119,16 @@ TEST(ObjCRuntimeSource, NativeRecordMembersPreserveScalarResultsAndEffects) {
   for (const bool Chained : {false, true})
     ASSERT_NO_FATAL_FAILURE(
         verifyRuntime(Chained, RuntimeFixture::NativeRecords));
+#else
+  GTEST_SKIP() << "requires the actual Darwin Objective-C runtime";
+#endif
+}
+
+TEST(ObjCRuntimeSource, NativeIntegerPairsPreserveBothWordsAndEveryCallEffect) {
+#ifdef __APPLE__
+  for (const bool Chained : {false, true})
+    ASSERT_NO_FATAL_FAILURE(
+        verifyRuntime(Chained, RuntimeFixture::NativeIntegerPairs));
 #else
   GTEST_SKIP() << "requires the actual Darwin Objective-C runtime";
 #endif
