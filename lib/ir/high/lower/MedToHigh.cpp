@@ -402,8 +402,12 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
   // must not keep the clobbered or reused argument register. MedIR may bump
   // the SSA version of rdi without a new def (`COPY r9.2 = rdi.2`); match the
   // register as well as the exact SSA pair.
+  // A PHI of this register is a join, not the entry parameter copy.  MSVC
+  // `__GSHandlerCheckCommon` saves rcx in r10, then overwrites r10 on the
+  // GS_HANDLER_DATA bit-2 align edge; mapping every later r10 SSA to arg0
+  // deletes that edge.
   if (CurMed && V.Kind == MedVar::Reg && TargetArch == Arch::X64 && Image &&
-      Image->Format == BinaryFormat::COFF) {
+      Image->Format == BinaryFormat::COFF && !PhiOutputVars.count(varKey(V))) {
     int Fallback = -1;
     for (const auto &Blk : CurMed->Blocks) {
       for (const auto &Op : Blk.Ops) {
@@ -430,12 +434,25 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
             return SourceParameter(Param, static_cast<size_t>(Idx));
           return HighExpr::makeVar(Param, TypeRef{});
         }
-        // Parameter registers (rcx/rdx/r8/r9) are reused as scratch after a
-        // call. Mapping every later SSA version to the entry argument turns
-        // GS flags and `rol cookie` into the raw parameter. Saved copies live
-        // in non-argument registers (rbp/rsi/rdi/r14), including Win64 rsi/rdi.
-        if (Fallback < 0 && regToArgIdx(V.RegOff) < 0)
-          Fallback = Idx;
+        // SSA-bumped callee-saves with no new def (`rdi.2` after `mov rdi, r9`)
+        // still hold the parameter.  A later computed def (INT_AND of r10 on
+        // the GS_HANDLER_DATA bit-2 edge) does not.
+        if (Fallback < 0 && regToArgIdx(V.RegOff) < 0) {
+          bool Computed = PhiOutputVars.count(varKey(V));
+          for (const auto &B2 : CurMed->Blocks) {
+            if (Computed)
+              break;
+            for (const auto &O2 : B2.Ops) {
+              if (O2.Output.Id == V.Id && O2.Output.SSAVer == V.SSAVer &&
+                  O2.Opcode != NdOp::COPY) {
+                Computed = true;
+                break;
+              }
+            }
+          }
+          if (!Computed)
+            Fallback = Idx;
+        }
       }
     }
     if (Fallback >= 0) {
