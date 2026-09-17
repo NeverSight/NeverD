@@ -72,11 +72,14 @@ void normalizeBinaryMetadata(BinaryImage &Img) {
   }
 }
 
-Expected<BinaryImage> loadBinary(const std::filesystem::path &Path) {
+Expected<BinaryImage> loadBinary(const std::filesystem::path &Path,
+                                 const BinaryLoadOptions &Opts) {
   auto TheLoader = Loader::create(Path);
   if (!TheLoader)
     return make_error<StringError>("unknown binary format: " + Path.string(),
                                    inconvertibleErrorCode());
+  if (!Opts.OnlyFunctionEntries.empty())
+    TheLoader->restrictFunctions(Opts.OnlyFunctionEntries);
   auto ImgOrErr = TheLoader->load(Path);
   if (!ImgOrErr)
     return ImgOrErr.takeError();

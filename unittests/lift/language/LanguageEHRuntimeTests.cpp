@@ -173,6 +173,21 @@ TEST(LanguageRuntimeDetection, IdentifiesRustFromStandardLibrarySymbols) {
   EXPECT_FALSE(Info.Evidence.empty());
 }
 
+TEST(LanguageRuntimeDetection, IdentifiesGoFromBuildInfoInDataNotText) {
+  BinaryImage Img = makeImage();
+  const char Banner[] = "\xff Go buildinf:";
+  ASSERT_TRUE(Img.writeVA(kDataVA, reinterpret_cast<const uint8_t *>(Banner),
+                          sizeof(Banner) - 1));
+  LanguageRuntimeInfo Info = detectLanguageRuntime(Img);
+  EXPECT_EQ(Info.Runtime, SourceLanguageRuntime::Go);
+
+  BinaryImage TextOnly = makeImage();
+  ASSERT_TRUE(TextOnly.writeVA(kTextVA, reinterpret_cast<const uint8_t *>(Banner),
+                              sizeof(Banner) - 1));
+  LanguageRuntimeInfo TextInfo = detectLanguageRuntime(TextOnly);
+  EXPECT_EQ(TextInfo.Runtime, SourceLanguageRuntime::Unknown);
+}
+
 TEST(LanguageRuntimeDetection, IdentifiesGoFromItsFunctionTableSection) {
   BinaryImage Img = makeImage();
   Section Pcln;

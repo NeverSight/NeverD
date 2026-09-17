@@ -623,6 +623,8 @@ _C_TYPES: dict[str, object] = {
     "neverd_translate_semantic_stop_t": ctypes.c_uint32,
     "neverd_translate_proof_status_t": ctypes.c_uint32,
     "neverd_sanitize_status_t": ctypes.c_uint32,
+    "void *": ctypes.c_void_p,
+    "neverd_load_progress_fn": ctypes.c_void_p,
     "const char *": ctypes.c_char_p,
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -705,6 +707,16 @@ def _declare(
 _declare("neverd_session_create", "neverd_session_t", [])
 _declare("neverd_session_destroy", "void", ["neverd_session_t"])
 _declare("neverd_session_load", "int", ["neverd_session_t", "const char *"])
+_declare(
+    "neverd_session_restrict_function",
+    "void",
+    ["neverd_session_t", "neverd_va_t"],
+)
+_declare(
+    "neverd_session_set_load_progress",
+    "void",
+    ["neverd_session_t", "neverd_load_progress_fn", "void *"],
+)
 _declare("neverd_session_is_loaded", "int", ["neverd_session_t"])
 _declare("neverd_session_analyze", "int", ["neverd_session_t"])
 _declare(
@@ -771,6 +783,12 @@ _declare(
 )
 _declare(
     "neverd_decompile",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_decompile_llvm",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],
     ownership=Ownership.OWNED_STRING,

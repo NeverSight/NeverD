@@ -18,8 +18,15 @@
 #include "llvm/Support/Error.h"
 
 #include <filesystem>
+#include <set>
 
 namespace neverd {
+
+/// Load-time work-set for a single-function CLI/C-API request.  Empty keeps
+/// the historical full-image decode.
+struct BinaryLoadOptions {
+  std::set<va_t> OnlyFunctionEntries;
+};
 
 /// Normalize every externally sourced text field in an already loaded image so
 /// downstream diagnostics and JSON writers receive valid UTF-8.
@@ -27,7 +34,9 @@ void normalizeBinaryMetadata(BinaryImage &Img);
 
 /// Auto-detect binary format from magic bytes and load via the appropriate
 /// loader. Returns an error if the format is unrecognized.
-llvm::Expected<BinaryImage> loadBinary(const std::filesystem::path &Path);
+llvm::Expected<BinaryImage>
+loadBinary(const std::filesystem::path &Path,
+           const BinaryLoadOptions &Opts = {});
 
 } // namespace neverd
 

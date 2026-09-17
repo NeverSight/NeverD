@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/loader/ExceptionInfo.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -288,6 +289,31 @@ TEST(FunctionDiscoveryAlignment,
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_EQ(Img.Symbols.front().Addr, 4u);
   EXPECT_TRUE(Img.Symbols.front().IsFunc);
+}
+
+TEST(FunctionDiscoveryAlignment,
+     CoffExceptionDirectorySkipsPaddingAndDataScans) {
+  std::vector<uint8_t> Text(16, 0xcc);
+  Text[8] = 0x55;
+  Text[9] = 0x48;
+  Text[10] = 0x89;
+  Text[11] = 0xe5;
+  Text[12] = 0xc3;
+
+  BinaryImage WithPdata;
+  WithPdata.Arch = Arch::X64;
+  WithPdata.Bits = Bitness::Bits64;
+  WithPdata.Format = BinaryFormat::COFF;
+  WithPdata.Segments.push_back(executableSegment(0x1000, Text));
+  WithPdata.KnownCodeRanges.push_back({0x1000, 0x1008});
+  ExceptionFunction Owned;
+  Owned.CodeRange = ExceptionAddressRange{0x1000, 0x1008};
+  WithPdata.ExceptionMetadata.Functions.push_back(Owned);
+  WithPdata.Symbols.push_back(Symbol::makeFunc(0x1000, 8));
+  const size_t Before = WithPdata.Symbols.size();
+  runPostLoadDiscovery(WithPdata, "coff-pdata");
+  EXPECT_EQ(WithPdata.Symbols.size(), Before)
+      << "pdata already named functions; padding scan must not walk the image";
 }
 
 } // namespace

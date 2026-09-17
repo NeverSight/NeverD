@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace neverd::coff_loader {
@@ -87,7 +88,9 @@ bool parseMinGWLSDA(ExceptionFunction &F, const BinaryImage &Img) {
 ///
 /// One address serves every frame that installs it, so proving it once settles
 /// the frames whose own data is cleanup-only and could not have proved it.
-std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
+std::set<va_t> findUnnamedMinGWPersonalities(
+    BinaryImage &Img,
+    std::unordered_map<va_t, std::pair<va_t, std::string>> &PersonalityCache) {
   // Most frames installing the routine cannot prove anything about it: a scope
   // with destructors and no handler is cleanup-only, and at `-O0` those come
   // first.  So an address is retried on later frames rather than written off by
@@ -96,6 +99,12 @@ std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
   constexpr unsigned MaxProofAttempts = 32;
   std::set<va_t> Proven;
   std::map<va_t, unsigned> Attempts;
+  auto Resolve = [&](va_t VA) -> const std::pair<va_t, std::string> & {
+    auto [It, Inserted] = PersonalityCache.try_emplace(VA);
+    if (Inserted)
+      It->second = detail::resolvePersonality(Img, VA);
+    return It->second;
+  };
   for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
     if (F.PersonalityVA == 0 || F.HandlerDataVA == 0)
       continue;
@@ -105,8 +114,7 @@ std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
     if (Tries >= MaxProofAttempts)
       continue;
     ++Tries;
-    if (detail::classifyPersonality(
-            detail::resolvePersonality(Img, F.PersonalityVA).second) !=
+    if (detail::classifyPersonality(Resolve(F.PersonalityVA).second) !=
         ExceptionPersonality::Unknown)
       continue;
 
@@ -127,129 +135,202 @@ std::set<va_t> findUnnamedMinGWPersonalities(BinaryImage &Img) {
   return Proven;
 }
 
+bool functionOverlapsWanted(const ExceptionFunction &F,
+                            const std::set<va_t> &Wanted) {
+  if (Wanted.empty())
+    return true;
+  if (!F.CodeRange.isValid())
+    return false;
+  for (va_t Addr : Wanted)
+    if (F.CodeRange.contains(Addr) || F.CodeRange.Begin == Addr)
+      return true;
+  return false;
+}
+
 } // namespace
 
-void resolveExceptionHandlers(BinaryImage &Img) {
-  const std::set<va_t> UnnamedMinGW = findUnnamedMinGWPersonalities(Img);
-  const detail::CxxFuncInfoGroups CxxGroups = detail::buildCxxFuncInfoGroups(Img);
+void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
+  std::set<va_t> Wanted = Entries;
+  if (Wanted.empty())
+    Wanted = Img.LoadOnlyFunctionEntries;
+  for (va_t Addr : Wanted)
+    ensureX64RuntimeFunction(Img, Addr);
+
+  std::unordered_map<va_t, std::pair<va_t, std::string>> PersonalityCache;
+  PersonalityCache.reserve(64);
+  std::unordered_map<va_t, ExceptionPersonality> InferredGS;
+  const std::set<va_t> UnnamedMinGW =
+      findUnnamedMinGWPersonalities(Img, PersonalityCache);
+  const bool DecodeAll = Wanted.empty();
+  detail::CxxFuncInfoGroups CxxGroups;
+  const detail::CxxFuncInfoGroups *CxxGroupPtr = nullptr;
+  if (DecodeAll) {
+    CxxGroups = detail::buildCxxFuncInfoGroups(Img);
+    CxxGroupPtr = &CxxGroups;
+  }
   const detail::PrimaryFunctionByBegin PrimaryByBegin =
       detail::indexPrimaryFunctionsByBegin(Img);
-  for (ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
-    if (F.PersonalityVA == 0)
-      continue;
-    auto [ResolvedVA, Name] = detail::resolvePersonality(Img, F.PersonalityVA);
-    F.PersonalityName = Name;
-    F.Personality = detail::classifyPersonality(Name);
-    if (F.Personality == ExceptionPersonality::Unknown)
-      if (std::optional<ExceptionPersonality> Inferred =
-              detail::inferGSPersonality(F, Img, &PrimaryByBegin)) {
-        F.Personality = *Inferred;
-        F.PersonalityName = getExceptionPersonalityName(*Inferred);
+
+  bool Progress = true;
+  while (Progress) {
+    Progress = false;
+    const size_t Count = Img.ExceptionMetadata.Functions.size();
+    for (size_t I = 0; I < Count; ++I) {
+      ExceptionFunction &F = Img.ExceptionMetadata.Functions[I];
+      if (F.LanguageTablesResolved)
+        continue;
+      if (F.PersonalityVA == 0) {
+        F.LanguageTablesResolved = true;
+        continue;
+      }
+      if (!functionOverlapsWanted(F, Wanted))
+        continue;
+
+      auto [It, Inserted] = PersonalityCache.try_emplace(F.PersonalityVA);
+      if (Inserted)
+        It->second = detail::resolvePersonality(Img, F.PersonalityVA);
+      auto [ResolvedVA, Name] = It->second;
+      F.PersonalityName = Name;
+      F.Personality = detail::classifyPersonality(Name);
+      if (F.Personality == ExceptionPersonality::Unknown) {
+        auto Cached = InferredGS.find(F.PersonalityVA);
+        if (Cached != InferredGS.end()) {
+          F.Personality = Cached->second;
+          F.PersonalityName = getExceptionPersonalityName(Cached->second);
+          ResolvedVA = F.PersonalityVA;
+        } else if (std::optional<ExceptionPersonality> Inferred =
+                       detail::inferGSPersonality(F, Img, &PrimaryByBegin)) {
+          F.Personality = *Inferred;
+          F.PersonalityName = getExceptionPersonalityName(*Inferred);
+          ResolvedVA = F.PersonalityVA;
+          InferredGS.emplace(F.PersonalityVA, *Inferred);
+        }
+      }
+      if (F.Personality == ExceptionPersonality::Unknown &&
+          UnnamedMinGW.count(F.PersonalityVA)) {
+        F.Personality = ExceptionPersonality::GxxPersonalitySEH0;
+        F.PersonalityName = getExceptionPersonalityName(
+            ExceptionPersonality::GxxPersonalitySEH0);
         ResolvedVA = F.PersonalityVA;
       }
-    if (F.Personality == ExceptionPersonality::Unknown &&
-        UnnamedMinGW.count(F.PersonalityVA)) {
-      F.Personality = ExceptionPersonality::GxxPersonalitySEH0;
-      F.PersonalityName =
-          getExceptionPersonalityName(ExceptionPersonality::GxxPersonalitySEH0);
-      ResolvedVA = F.PersonalityVA;
-    }
-    if (F.Personality == ExceptionPersonality::Unknown) {
-      // An unknown personality is an incomplete decode only when the record
-      // carries language data that went uninterpreted.  A hand-written handler
-      // installed with an empty data slot -- the CRT emits several, such as the
-      // ARM64 routine that steps over an unsupported `mrs` -- has nothing more
-      // in the image to read, so the record is as complete as it will ever be
-      // and only the dispatch semantics are unnamed.  Every Windows dialect
-      // begins its language data with either a scope count or a table pointer,
-      // so a leading zero word is an empty slot under all of them.
-      const bool HasLanguageData =
-          F.HandlerDataVA != 0 &&
-          detail::readScalar<uint32_t>(Img, F.HandlerDataVA).value_or(0) != 0;
-      detail::diagnose(
-          F,
-          HasLanguageData ? ExceptionParseStatus::Partial
-                          : ExceptionParseStatus::Complete,
-          HasLanguageData
-              ? "unknown Windows language personality"
-              : "unknown Windows personality, installed with no language "
-                "data");
+      if (F.Personality == ExceptionPersonality::Unknown) {
+        // An unknown personality is an incomplete decode only when the record
+        // carries language data that went uninterpreted.  A hand-written
+        // handler installed with an empty data slot -- the CRT emits several,
+        // such as the ARM64 routine that steps over an unsupported `mrs` --
+        // has nothing more in the image to read, so the record is as complete
+        // as it will ever be and only the dispatch semantics are unnamed.
+        // Every Windows dialect begins its language data with either a scope
+        // count or a table pointer, so a leading zero word is an empty slot
+        // under all of them.
+        const bool HasLanguageData =
+            F.HandlerDataVA != 0 &&
+            detail::readScalar<uint32_t>(Img, F.HandlerDataVA).value_or(0) !=
+                0;
+        detail::diagnose(
+            F,
+            HasLanguageData ? ExceptionParseStatus::Partial
+                            : ExceptionParseStatus::Complete,
+            HasLanguageData
+                ? "unknown Windows language personality"
+                : "unknown Windows personality, installed with no language "
+                  "data");
+        Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
+            Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
+        F.LanguageTablesResolved = true;
+        Progress = true;
+        continue;
+      }
+      if (!detail::isExecutableAddress(Img, ResolvedVA))
+        detail::diagnose(F, ExceptionParseStatus::Partial,
+                         "resolved personality is not executable");
+
+      switch (F.Personality) {
+      case ExceptionPersonality::CSpecificHandler:
+        detail::parseSEH(F, Img);
+        break;
+      case ExceptionPersonality::CxxFrameHandler3:
+        detail::parseFH3(F, Img, CxxGroupPtr);
+        break;
+      case ExceptionPersonality::CxxFrameHandler4:
+        detail::parseFH4(F, Img);
+        break;
+      case ExceptionPersonality::GSHandlerCheckSEH: {
+        if (!detail::parseSEH(F, Img))
+          break;
+        std::optional<va_t> CookieVA = detail::sehGSCookieAddress(F, Img);
+        if (!CookieVA) {
+          detail::diagnose(F, ExceptionParseStatus::Malformed,
+                           "GS SEH payload address overflows");
+          break;
+        }
+        detail::parseGSCookie(F, Img, *CookieVA);
+        break;
+      }
+      case ExceptionPersonality::GSHandlerCheckEH:
+        if (detail::parseFH3(F, Img, CxxGroupPtr)) {
+          if (F.HandlerDataVA > InvalidVA - sizeof(uint32_t))
+            detail::diagnose(F, ExceptionParseStatus::Malformed,
+                             "GS FH3 payload address overflows");
+          else
+            detail::parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
+        }
+        break;
+      case ExceptionPersonality::GSHandlerCheckEH4:
+        if (detail::parseFH4(F, Img)) {
+          if (F.HandlerDataVA > InvalidVA - sizeof(uint32_t))
+            detail::diagnose(F, ExceptionParseStatus::Malformed,
+                             "GS FH4 payload address overflows");
+          else
+            detail::parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
+        }
+        break;
+      case ExceptionPersonality::GxxPersonalitySEH0:
+      case ExceptionPersonality::GccPersonalitySEH0:
+        parseMinGWLSDA(F, Img);
+        break;
+      case ExceptionPersonality::DelphiExceptionHandler: {
+        // Delphi's x86-64 compiler installs no registration record: it uses
+        // the ordinary table mechanism and puts a `TExcData` scope array in
+        // the handler data.  A frame whose array does not check out stays
+        // Partial rather than being reported as fully understood, because a
+        // Delphi `try` would then read as a function that installs a handler
+        // and has none.
+        if (F.HandlerDataVA == 0)
+          break;
+        std::string Reason;
+        if (!parseDelphiScopeTable(Img, F, Reason))
+          detail::diagnose(
+              F, ExceptionParseStatus::Partial,
+              "Delphi x64 scope table at " + llvm::utohexstr(F.HandlerDataVA) +
+                  " was not decoded: " +
+                  (Reason.empty() ? "it does not read as a TExcData" : Reason));
+        break;
+      }
+      default:
+        break;
+      }
       Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
           Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
-      continue;
-    }
-    if (!detail::isExecutableAddress(Img, ResolvedVA))
-      detail::diagnose(F, ExceptionParseStatus::Partial,
-                       "resolved personality is not executable");
-
-    switch (F.Personality) {
-    case ExceptionPersonality::CSpecificHandler:
-      detail::parseSEH(F, Img);
-      break;
-    case ExceptionPersonality::CxxFrameHandler3:
-      detail::parseFH3(F, Img, &CxxGroups);
-      break;
-    case ExceptionPersonality::CxxFrameHandler4:
-      detail::parseFH4(F, Img);
-      break;
-    case ExceptionPersonality::GSHandlerCheckSEH: {
-      if (!detail::parseSEH(F, Img))
-        break;
-      std::optional<va_t> CookieVA = detail::sehGSCookieAddress(F, Img);
-      if (!CookieVA) {
-        detail::diagnose(F, ExceptionParseStatus::Malformed,
-                         "GS SEH payload address overflows");
-        break;
+      F.LanguageTablesResolved = true;
+      Progress = true;
+      if (!Wanted.empty() && F.Cxx) {
+        for (const CxxTryBlock &Try : F.Cxx->TryBlocks) {
+          for (const CxxCatchHandler &Handler : Try.Handlers) {
+            if (Handler.HandlerVA == 0 || !Wanted.insert(Handler.HandlerVA).second)
+              continue;
+            if (ensureX64RuntimeFunction(Img, Handler.HandlerVA))
+              Progress = true;
+          }
+        }
       }
-      detail::parseGSCookie(F, Img, *CookieVA);
-      break;
     }
-    case ExceptionPersonality::GSHandlerCheckEH:
-      if (detail::parseFH3(F, Img, &CxxGroups)) {
-        if (F.HandlerDataVA > InvalidVA - sizeof(uint32_t))
-          detail::diagnose(F, ExceptionParseStatus::Malformed,
-                           "GS FH3 payload address overflows");
-        else
-          detail::parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
-      }
-      break;
-    case ExceptionPersonality::GSHandlerCheckEH4:
-      if (detail::parseFH4(F, Img)) {
-        if (F.HandlerDataVA > InvalidVA - sizeof(uint32_t))
-          detail::diagnose(F, ExceptionParseStatus::Malformed,
-                           "GS FH4 payload address overflows");
-        else
-          detail::parseGSCookie(F, Img, F.HandlerDataVA + sizeof(uint32_t));
-      }
-      break;
-    case ExceptionPersonality::GxxPersonalitySEH0:
-    case ExceptionPersonality::GccPersonalitySEH0:
-      parseMinGWLSDA(F, Img);
-      break;
-    case ExceptionPersonality::DelphiExceptionHandler: {
-      // Delphi's x86-64 compiler installs no registration record: it uses the
-      // ordinary table mechanism and puts a `TExcData` scope array in the
-      // handler data.  A frame whose array does not check out stays Partial
-      // rather than being reported as fully understood, because a Delphi `try`
-      // would then read as a function that installs a handler and has none.
-      if (F.HandlerDataVA == 0)
-        break;
-      std::string Reason;
-      if (!parseDelphiScopeTable(Img, F, Reason))
-        detail::diagnose(
-            F, ExceptionParseStatus::Partial,
-            "Delphi x64 scope table at " + llvm::utohexstr(F.HandlerDataVA) +
-                " was not decoded: " +
-                (Reason.empty() ? "it does not read as a TExcData" : Reason));
-      break;
-    }
-    default:
-      break;
-    }
-    Img.ExceptionMetadata.ParseStatus = mergeExceptionParseStatus(
-        Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
   }
   Img.ExceptionMetadata.rebuildIndex();
+}
+
+void resolveExceptionHandlers(BinaryImage &Img) {
+  ensureExceptionHandlers(Img, Img.LoadOnlyFunctionEntries);
 }
 
 } // namespace neverd::coff_loader

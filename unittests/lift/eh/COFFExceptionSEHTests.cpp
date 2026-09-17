@@ -22,6 +22,47 @@ namespace {
 using namespace neverd;
 using namespace neverd::coff_eh_test;
 
+TEST(COFFExceptionParser, LoadOnlyFunctionEntriesSkipsUnrelatedLanguageTables) {
+  BinaryImage Img = makeX64ExceptionImage(0x40);
+  addPersonalityImport(Img, Img.Base + 0x11f0, "__C_specific_handler");
+  uint8_t *X = Img.Segments[1].Data.data();
+  writeLE<uint32_t>(X, 1);
+  writeLE<uint32_t>(X + 4, 0x1000);
+  writeLE<uint32_t>(X + 8, 0x1040);
+  writeLE<uint32_t>(X + 12, 1);
+  writeLE<uint32_t>(X + 16, 0x1080);
+  writeLE<uint32_t>(X + 20, 1);
+  writeLE<uint32_t>(X + 24, 0x1100);
+  writeLE<uint32_t>(X + 28, 0x1140);
+  writeLE<uint32_t>(X + 32, 1);
+  writeLE<uint32_t>(X + 36, 0x1180);
+
+  ExceptionFunction First;
+  First.CodeRange = {Img.Base + 0x1000, Img.Base + 0x10c0};
+  First.PersonalityVA = Img.Base + 0x11f0;
+  First.HandlerDataVA = Img.Base + 0x3000;
+  ExceptionFunction Second;
+  Second.CodeRange = {Img.Base + 0x1100, Img.Base + 0x11c0};
+  Second.PersonalityVA = Img.Base + 0x11f0;
+  Second.HandlerDataVA = Img.Base + 0x3014;
+  Img.ExceptionMetadata.Functions.push_back(std::move(First));
+  Img.ExceptionMetadata.Functions.push_back(std::move(Second));
+  Img.LoadOnlyFunctionEntries.insert(Img.Base + 0x1000);
+
+  coff_loader::resolveExceptionHandlers(Img);
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 2u);
+  EXPECT_TRUE(Img.ExceptionMetadata.Functions[0].SEH.has_value());
+  EXPECT_TRUE(Img.ExceptionMetadata.Functions[0].LanguageTablesResolved);
+  EXPECT_FALSE(Img.ExceptionMetadata.Functions[1].SEH.has_value());
+  EXPECT_FALSE(Img.ExceptionMetadata.Functions[1].LanguageTablesResolved);
+
+  coff_loader::ensureExceptionHandlers(Img, {Img.Base + 0x1100});
+  ASSERT_TRUE(Img.ExceptionMetadata.Functions[1].SEH.has_value());
+  EXPECT_EQ(Img.ExceptionMetadata.Functions[1].SEH->Scopes.size(), 1u);
+  EXPECT_EQ(Img.ExceptionMetadata.Functions[1].SEH->Scopes[0].HandlerVA,
+            Img.Base + 0x1180);
+}
+
 TEST(COFFExceptionParser, ReconstructsCSpecificScopeTable) {
   BinaryImage Img = makeX64ExceptionImage(0x200);
   addPersonalityImport(Img, Img.Base + 0x1100, "__C_specific_handler");

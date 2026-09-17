@@ -16,6 +16,7 @@
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/evm/emit/EVMCEmitter.h"
 #include "neverd/evm/emit/EVMSolidityEmitter.h"
@@ -195,6 +196,9 @@ const char *neverd_decompile(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
 
+  if (S->Img.Format == BinaryFormat::COFF)
+    coff_loader::ensureExceptionHandlers(S->Img, {FuncEntry});
+
   if (!S->PipeRan)
     S->OnlyFunctionEntries.insert(FuncEntry);
   else if (!S->OnlyFunctionEntries.empty() &&
@@ -259,6 +263,9 @@ const char *neverd_decompile_llvm(neverd_session_t Sess,
                                   neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
+
+  if (S->Img.Format == BinaryFormat::COFF)
+    coff_loader::ensureExceptionHandlers(S->Img, {FuncEntry});
 
   if (!S->PipeRan)
     S->OnlyFunctionEntries.insert(FuncEntry);

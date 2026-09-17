@@ -263,7 +263,9 @@ int neverd_session_load(neverd_session_t Sess, const char *Path) {
   }
 
   S->LoadProgressCb.report("image", 0, 1, "reading binary");
-  auto ImgOrErr = loadBinary(P);
+  BinaryLoadOptions LoadOpts;
+  LoadOpts.OnlyFunctionEntries = S->OnlyFunctionEntries;
+  auto ImgOrErr = loadBinary(P, LoadOpts);
   if (!ImgOrErr) {
     std::string Err;
     llvm::raw_string_ostream OS(Err);
@@ -345,6 +347,16 @@ void neverd_session_set_map_path(neverd_session_t Sess, const char *Path) {
 void neverd_session_set_debug_info_enabled(neverd_session_t Sess, int Enabled) {
   if (auto *S = toSession(Sess))
     S->DbgRequest.Enabled = Enabled != 0;
+}
+
+void neverd_session_restrict_function(neverd_session_t Sess,
+                                      neverd_va_t Entry) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return;
+  S->OnlyFunctionEntries.clear();
+  if (Entry)
+    S->OnlyFunctionEntries.insert(Entry);
 }
 
 void neverd_session_set_load_progress(neverd_session_t Sess,

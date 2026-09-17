@@ -1359,6 +1359,64 @@ TEST(COFFExceptionIR, DecompileRetainsFaithfulCxxAnnotation) {
   EXPECT_NE(Source.find("continuations=0x140001038"), std::string::npos);
 }
 
+TEST(COFFExceptionIR, PdataRangeStartsKeepTailJmpFromFusingCallee) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t First = 0x140001000;
+  constexpr va_t Second = 0x140001005;
+  Img.Entry = First;
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = First;
+  Text.Size = 0x10;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  // jmp rel8 to Second, then the callee body `mov eax, 0x2b; ret`.
+  Text.Data[0] = 0xeb;
+  Text.Data[1] = 0x03;
+  Text.Data[Second - First] = 0xb8;
+  Text.Data[Second - First + 1] = 0x2b;
+  Text.Data[Second - First + 2] = 0;
+  Text.Data[Second - First + 3] = 0;
+  Text.Data[Second - First + 4] = 0;
+  Text.Data[Second - First + 5] = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = First;
+  TextSection.Size = 0x10;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(First, Second);
+  Img.KnownCodeRanges.emplace_back(Second, Second + 6);
+  Img.Symbols.push_back(Symbol::makeFunc(First, Second - First));
+  ExceptionFunction EH;
+  EH.CodeRange = {First, Second};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(First);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_EQ(Source.find("0x2b"), std::string::npos)
+      << "tail jmp to the next pdata function must not fuse its body:\n"
+      << Source;
+}
+
 TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsUnrequestedFunctions) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <cstring>
 #include <map>
 #include <optional>
@@ -470,6 +471,21 @@ struct BinaryImage {
   /// Includes BOTH primary RUNTIME_FUNCTION entries and chained-info
   /// continuation chunks.
   std::vector<std::pair<va_t, va_t>> KnownCodeRanges;
+  /// When nonempty, PE language-table decode and x64 unwind materialization
+  /// are limited to these entries and the catch funclets they name.
+  /// Exclusive-end ranges for the rest of `.pdata` still populate
+  /// KnownCodeRanges.
+  std::set<va_t> LoadOnlyFunctionEntries;
+  /// Compact x64 `.pdata` index used when LoadOnlyFunctionEntries is set so
+  /// unrequested RUNTIME_FUNCTION bodies are not materialized as
+  /// ExceptionFunction records.  Sorted by BeginRVA.  Empty on a full load.
+  struct COFFPDataRecord {
+    uint32_t BeginRVA = 0;
+    uint32_t EndRVA = 0;
+    uint32_t UnwindInfoRVA = 0;
+    uint32_t RecordRVA = 0;
+  };
+  std::vector<COFFPDataRecord> COFFPDataRecords;
   /// Checked, normalized table-based unwind and language exception metadata.
   /// Empty for formats/targets without a supported exception directory.
   ExceptionInfo ExceptionMetadata;
@@ -1352,9 +1368,21 @@ struct BinaryImage {
     for (const auto &[RangeStart, RangeEnd] : ImportStubRanges)
       if (Start >= RangeStart && Last < RangeEnd)
         return true;
-    for (const auto &[RangeStart, RangeEnd] : KnownCodeRanges)
-      if (Start >= RangeStart && Last < RangeEnd)
-        return true;
+    // KnownCodeRanges is sorted by start after exception parse.  A linear
+    // walk of a 100k-entry .pdata table on every padding/prologue probe is
+    // what made `--func` on a large PE take seconds.
+    if (!KnownCodeRanges.empty()) {
+      const auto It = std::upper_bound(
+          KnownCodeRanges.begin(), KnownCodeRanges.end(), Start,
+          [](va_t Addr, const std::pair<va_t, va_t> &Range) {
+            return Addr < Range.first;
+          });
+      if (It != KnownCodeRanges.begin()) {
+        const auto Prev = std::prev(It);
+        if (Start >= Prev->first && Last < Prev->second)
+          return true;
+      }
+    }
     for (const Symbol &Sym : Symbols) {
       if (!Sym.IsFunc)
         continue;

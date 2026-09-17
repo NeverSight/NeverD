@@ -84,6 +84,13 @@ NEVERD_API void neverd_session_set_map_path(neverd_session_t Sess,
 NEVERD_API void neverd_session_set_debug_info_enabled(neverd_session_t Sess,
                                                       int Enabled);
 
+/// Limit the next `neverd_session_load()` PE exception-table decode to this
+/// function entry.  Catch funclets named by that frame are still decoded.
+/// Pass 0 to clear.  Analysis of a different entry after load decodes that
+/// entry on demand.
+NEVERD_API void neverd_session_restrict_function(neverd_session_t Sess,
+                                                 neverd_va_t Entry);
+
 /// Called from `neverd_session_load` on the same thread.  \p phase is a
 /// stable token (`image`, `debug`, `ready`).  \p done/\p total are 0 when
 /// the step is indeterminate.  \p detail may be empty.  Pass NULL to clear.

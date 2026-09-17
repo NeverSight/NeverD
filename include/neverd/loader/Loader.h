@@ -22,6 +22,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -37,6 +38,13 @@ public:
   virtual llvm::Expected<BinaryImage>
   load(const std::filesystem::path &Path) = 0;
 
+  /// Limit PE unwind/language materialization to these entries on the next
+  /// load.  Empty means decode every runtime-function record.  Exclusive-end
+  /// ranges from the rest of `.pdata` are still recorded.
+  void restrictFunctions(std::set<va_t> Entries) {
+    RestrictFunctionEntries = std::move(Entries);
+  }
+
   /// Auto-detect the binary format from file content and return the
   /// appropriate loader.  Follows LLVM's factory pattern
   /// (cf. llvm::object::ObjectFile::createObjectFile).
@@ -46,6 +54,8 @@ public:
   static std::unique_ptr<Loader> create(BinaryFormat Format);
 
 protected:
+  std::set<va_t> RestrictFunctionEntries;
+
   /// Read a file into a MemoryBuffer and copy raw bytes into \p Img.Raw.
   /// Returns the buffer or an error.  Shared by all format loaders.
   static llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
