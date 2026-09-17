@@ -260,11 +260,82 @@ TEST(ObjCBlockSources,
   Forged.SourceCallHint = WrongEffect;
   EXPECT_FALSE(objcBlockSourceCallBound(Forged, F.Image, Plan, F.functions()));
   std::set<std::string> Shared;
-  auto Text = renderObjCBlockSourceHelpers(Plan, Bound.Descriptors, Shared);
+  auto Text = renderObjCBlockSourceHelpers(
+      Plan, Bound.Descriptors, Bound.Literals, Shared);
   EXPECT_NE(Text.find("&neverd_block_invoke_1100"), std::string::npos);
   EXPECT_NE(Text.find("&storage.descriptor"), std::string::npos);
   EXPECT_EQ(Shared.size(), 3U);
   EXPECT_EQ(F.caller().Body.back().RetVal->Operands[0]->Kind, ExprKind::Const);
+}
+TEST(ObjCBlockSources,
+     GlobalLiteralDoesNotRequireUnusedInvokeSharingItsDescriptor) {
+  SourceFixture F(false);
+  constexpr va_t OtherLiteral = 0x2180, MissingInvoke = 0x1180;
+  F.Image.ImportPtrSlots[OtherLiteral] = "__NSConcreteGlobalBlock";
+  F.put32(OtherLiteral + 8, 0x50000000);
+  F.put64(OtherLiteral + 16, MissingInvoke);
+  F.put64(OtherLiteral + 24, F.Descriptor);
+  const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+  ASSERT_EQ(Plan.Globals.size(), 2U);
+  const auto Bound = bindObjCBlockSourceReferences(
+      F.caller(), F.Image, Plan, F.functions());
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_EQ(Bound.Dependencies, std::set<va_t>{F.Invoke});
+  EXPECT_EQ(Bound.Literals, std::set<va_t>{F.Literal});
+  std::set<std::string> Shared;
+  const auto Text = renderObjCBlockSourceHelpers(
+      Plan, Bound.Descriptors, Bound.Literals, Shared);
+  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)),
+            std::string::npos);
+  EXPECT_EQ(Text.find(objcBlockHelperName(true, OtherLiteral)),
+            std::string::npos);
+}
+TEST(ObjCBlockSources, BlockHelpersPartitionLiteralsByDescriptor) {
+  SourceFixture F(false);
+  constexpr va_t OtherLiteral = 0x2180, OtherDescriptor = 0x2280;
+  F.Image.ImportPtrSlots[OtherLiteral] = "__NSConcreteGlobalBlock";
+  F.put32(OtherLiteral + 8, 0x50000000);
+  F.put64(OtherLiteral + 16, F.Invoke);
+  F.put64(OtherLiteral + 24, OtherDescriptor);
+  F.put64(OtherDescriptor, 0);
+  F.put64(OtherDescriptor + 8, 32);
+  F.put64(OtherDescriptor + 16, F.Signature);
+  const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+  ASSERT_EQ(Plan.Globals.size(), 2U);
+  ASSERT_EQ(Plan.Descriptors.size(), 2U);
+  std::set<std::string> Shared;
+  const auto Text = renderObjCBlockSourceHelpers(
+      Plan, {F.Descriptor, OtherDescriptor}, {F.Literal, OtherLiteral},
+      Shared);
+  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)),
+            std::string::npos);
+  EXPECT_NE(Text.find(objcBlockHelperName(true, OtherLiteral)),
+            std::string::npos);
+}
+TEST(ObjCBlockSources,
+     GlobalInvokeMayPassFreshFrameStorageButNotAFrameHoldingContext) {
+  for (bool StoreContext : {false, true}) {
+    SourceFixture F(false);
+    auto &Invoke = F.Result.HighFuncs[0];
+    Invoke.FrameSize = 32;
+    Invoke.Body.insert(Invoke.Body.begin(),
+                       store(frame(F.Image, -8),
+                             HighExpr::makeConst(0, 8)));
+    if (StoreContext)
+      Invoke.Body.insert(
+          Invoke.Body.begin() + 1,
+          store(frame(F.Image, -24),
+                parameter(0, Invoke.Params[0].Type)));
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall({}, 0, {frame(F.Image, -8)});
+    Invoke.Body.insert(Invoke.Body.end() - 1, std::move(Call));
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    const auto Bound = bindObjCBlockSourceReferences(
+        F.caller(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Limitation.empty(), !StoreContext)
+        << Bound.Limitation;
+  }
 }
 TEST(ObjCBlockSources, EmptyEntryLabelsPreserveTheStraightLineEscapeProof) {
   for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
@@ -1087,7 +1158,8 @@ TEST(ObjCBlockSources,
       EXPECT_EQ(applyObjCBlockInvokeHints(Plan, Options), 3U);
       EXPECT_EQ(applyObjCBlockInvokeHints(Plan, Options), 0U);
       std::set<std::string> Shared;
-      auto Text = renderObjCBlockSourceHelpers(Plan, Bound.Descriptors, Shared);
+      auto Text = renderObjCBlockSourceHelpers(
+          Plan, Bound.Descriptors, Bound.Literals, Shared);
       EXPECT_NE(Text.find("void (*copy)(void *, void *)"), std::string::npos);
       EXPECT_NE(Text.find("&neverd_block_helper_1400"), std::string::npos);
       EXPECT_NE(Text.find("&neverd_block_helper_1410"), std::string::npos);

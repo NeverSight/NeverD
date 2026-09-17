@@ -165,6 +165,9 @@ public:
   Values(ObjCBlockSourceContext &&, const HighFunc &,
          std::optional<size_t> = std::nullopt) = delete;
   Facts facts() const { return {Locals, FrameValues, FrameIdentityBytes}; }
+  bool frameContainsPointerIdentity() const {
+    return !FrameIdentityBytes.empty();
+  }
   void restore(const Facts &F) {
     Locals = F.Locals;
     FrameValues = F.FrameValues;
@@ -475,6 +478,13 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
       }
       for (size_t I = 0; I < Arguments.size(); ++I) {
         const auto &A = Arguments[I];
+        // An invoke's own fresh stack storage is not the block context. It can
+        // be passed to a bound call while the frame contains no context,
+        // invoke, ISA, or other pointer identity. Once any such identity has
+        // been stored, an unbounded frame pointer could expose it and remains
+        // rejected conservatively.
+        if (A.K == Value::Frame && !State.frameContainsPointerIdentity())
+          continue;
         if (A.K == Value::Frame || A.K == Value::Invoke)
           throw Invalid("block consumer exposes private context storage");
         if (A.K != Value::Context)
@@ -1097,15 +1107,6 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
           !sameDescriptor(Found->second, Descriptor))
         throw Invalid("block descriptor has conflicting source evidence");
       Result.Descriptors.insert(Descriptor.Address);
-      // A shared descriptor helper owns all its known global literals. Keeping
-      // this set stable makes the same global object identical across methods.
-      for (const auto &[Address, Global] : Plan.Globals) {
-        if (Global.Descriptor.Address != Descriptor.Address)
-          continue;
-        RequireInvoke(Global.InvokeEntry, Global.Descriptor, {});
-        RequireOwnership(Global.Descriptor, {});
-        Result.Literals.insert(Address);
-      }
     };
     if (auto Stack = Plan.StackBlocks.find(Function.Entry);
         Stack != Plan.StackBlocks.end()) {
@@ -1156,6 +1157,10 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
         if (auto Global = Plan.Globals.find(Original->ConstVal);
             Global != Plan.Globals.end()) {
           RequireDescriptor(Global->second.Descriptor);
+          RequireInvoke(Global->second.InvokeEntry,
+                        Global->second.Descriptor, {});
+          RequireOwnership(Global->second.Descriptor, {});
+          Result.Literals.insert(Global->first);
           Address = ObjCBlockAddressBinding{
               CallKind::RuntimeBlockLiteral, Global->first, {}};
         }
@@ -1291,6 +1296,7 @@ objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
 inline std::string
 renderObjCBlockSourceHelpers(const ObjCBlockSourcePlan &Plan,
                              const std::set<va_t> &Descriptors,
+                             const std::set<va_t> &Literals,
                              std::set<std::string> &SharedFunctions) {
   using namespace objc_block_source_detail;
   std::string Source;
@@ -1309,9 +1315,14 @@ renderObjCBlockSourceHelpers(const ObjCBlockSourcePlan &Plan,
     if (!validDescriptor(D))
       throw Invalid("block helper requires a complete scalar descriptor");
     std::vector<const ObjCBlockLiteral *> Globals;
-    for (const auto &[LiteralAddress, G] : Plan.Globals)
-      if (G.Descriptor.Address == Address)
-        Globals.push_back(&G);
+    for (va_t LiteralAddress : Literals) {
+      const auto Global = Plan.Globals.find(LiteralAddress);
+      if (Global == Plan.Globals.end())
+        throw Invalid("block helper literal has no source plan");
+      if (Global->second.Descriptor.Address != Address)
+        continue;
+      Globals.push_back(&Global->second);
+    }
     const bool Layout = D.Flags & (UINT32_C(1) << 31);
     const std::string Name = objcBlockHelperName(false, Address);
     SharedFunctions.insert(Name);

@@ -116,6 +116,19 @@ checks remain mandatory, and an unproved second result remains unresolved.
 
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
+A block invoke may pass an address in its own fresh frame to a bound call only
+while that frame contains no context, invoke, ISA, or other proven pointer
+identity. Storing any such identity makes an unbounded frame argument an
+escape again. This distinguishes ordinary callback locals such as an error
+result slot from the block context without weakening the context escape proof.
+
+Capture-free global block literals may share one compiler descriptor. Source
+dependencies and generated helpers follow the exact literal references in the
+current source closure: an unreferenced literal sharing that descriptor neither
+adds its invoke dependency nor appears in the emitted storage. The descriptor
+remains shared, and the same original literal keeps one shared generated
+identity across methods.
+
 Darwin block consumers have one loader-owned callback and lifetime contract.
 The generated catalog distinguishes compiler-declared `noescape` parameters
 from audited runtime copying consumers. The latter currently includes only

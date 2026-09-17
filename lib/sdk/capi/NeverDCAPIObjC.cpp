@@ -405,13 +405,16 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                        Dependency.Dependencies.end());
       }
       std::set<va_t> BlockDescriptors;
+      std::set<va_t> BlockLiterals;
       for (va_t Entry : Included) {
         const auto &Descriptors = BlockProjections.at(Entry).Descriptors;
         BlockDescriptors.insert(Descriptors.begin(), Descriptors.end());
+        const auto &Literals = BlockProjections.at(Entry).Literals;
+        BlockLiterals.insert(Literals.begin(), Literals.end());
       }
       std::set<std::string> SharedBlockFunctions;
       const std::string BlockHelpers = renderObjCBlockSourceHelpers(
-          BlockPlan, BlockDescriptors, SharedBlockFunctions);
+          BlockPlan, BlockDescriptors, BlockLiterals, SharedBlockFunctions);
       for (va_t Entry : Included)
         if (BlockPlan.InvokeHints.count(Entry))
           SharedBlockFunctions.insert(objcBlockInvokeName(Entry));
