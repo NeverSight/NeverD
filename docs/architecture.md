@@ -160,6 +160,13 @@ physical alias writes, unknown calls and instruction-local temporaries cannot
 carry stale facts into a later block. Invalid edges or exhausted work budgets
 reject the proof.
 
+At a validated source-call boundary, an exact integer constant zero may supply
+a pointer parameter even when the machine expression uses a narrower integer
+carrier than the declared pointer. Generated C emits an explicit null pointer
+constant. This exception applies only to the literal zero and only to a
+declared pointer parameter; nonzero integers and other width mismatches remain
+explicit source-call failures.
+
 Selector-wide Objective-C lookup normally requires every complete local,
 protocol, property and active SDK declaration to agree. When complete
 declarations disagree only in their result contract, an exact post-call

@@ -129,6 +129,33 @@ void compileAndRun(const std::string &Source) {
   ASSERT_EQ(Ran, 0) << Error << "\n" << Source;
 }
 
+TEST(HighCSourceCalls, ExactNarrowZeroSuppliesOnlyPointerNullArguments) {
+  auto Binding = native("fixture_pointer_consumer", NdType::makeVoid(),
+                        {NdType::makePtr(NdType::makeVoid())});
+  Binding.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+
+  const auto Render = [&](uint64_t Value) {
+    HighFunc Function;
+    Function.Name = "null_pointer_caller";
+    Function.ReturnType = NdType::makeVoid();
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Call;
+    Statement.CallExpr = call(Binding, NdType::makeVoid(),
+                              {HighExpr::makeConst(Value, 4)});
+    Function.Body = {std::move(Statement)};
+    return emit({Function});
+  };
+
+  const auto Null = Render(0);
+  EXPECT_NE(Null.find("fixture_pointer_consumer((void*)0)"),
+            std::string::npos)
+      << Null;
+  EXPECT_EQ(Null.find("bad source call"), std::string::npos) << Null;
+
+  const auto Nonnull = Render(1);
+  EXPECT_NE(Nonnull.find("bad source call"), std::string::npos) << Nonnull;
+}
+
 TEST(HighCSourceCalls, ConditionalCopiesKeepTheirReachingDefinitions) {
   const auto Integer = NdType::makeInt(8);
   MedVar Temporary;

@@ -503,8 +503,20 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (auto Declared = declaredParamType(Argument.Var);
           Declared && Declared->Kind == NdTypeKind::Float)
         Carrier = Declared;
-    auto Value =
-        sourceValue(exprStr(Argument), Carrier, Signature.Parameters[I].Type);
+    const auto &SourceType = Signature.Parameters[I].Type;
+    // A machine register may carry a null pointer through a subregister (for
+    // example W0 on AArch64).  Preserve the exact zero as a C null pointer
+    // constant instead of requiring the integer carrier to have pointer width.
+    // Do not widen any nonzero integer here: those still require an explicit,
+    // size-compatible pointer carrier.
+    auto Value = Argument.Kind == ExprKind::Const && Carrier &&
+                         Carrier->Kind == NdTypeKind::Int &&
+                         Argument.ConstVal == 0 && SourceType &&
+                         SourceType->Kind == NdTypeKind::Ptr &&
+                         Carrier->Size != SourceType->Size
+                     ? std::optional<std::string>("(" + typeToC(SourceType) +
+                                                  ")0")
+                     : sourceValue(exprStr(Argument), Carrier, SourceType);
     if (!Value)
       return bad("argument carrier disagrees with the source declaration");
     if (I != FirstArgument)
