@@ -235,6 +235,14 @@ conflicting storage identities, other providers and architectures without a
 complete record ABI remain unbound. The final source check rebuilds the hint
 from the current image instead of trusting an earlier call-site annotation.
 
+The ARM64 UIKit Objective-C catalog has the same evidence boundary. Each row
+must agree between compiler-produced iPhoneOS and arm64 iPhoneSimulator
+artifacts, retain its declaring framework owner and require the exact system
+UIKit provider. Selector-wide lookup still rejects incompatible declarations.
+Receiver provenance or an exact observed result carrier may narrow that set,
+but cannot supply a declaration or widen an unsupported carrier. Architectures
+without matching compiler evidence remain unsupported.
+
 Objective-C receiver facts distinguish method-entry self from an exact class
 reference. All metadata records sharing an entry must agree before self is
 seeded. Full-width copies and ABI-preserved registers carry the fact through

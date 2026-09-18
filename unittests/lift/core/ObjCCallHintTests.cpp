@@ -5490,6 +5490,13 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
     unsigned Parameters;
   } Cases[] = {
       {"CGImage", NdTypeKind::Ptr, 2},
+      {"CGColor", NdTypeKind::Ptr, 2},
+      {"CIImage", NdTypeKind::Ptr, 2},
+      {"CGSizeValue", NdTypeKind::Struct, 2},
+      {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
+      {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
+      {"imageOrientation", NdTypeKind::Int, 2},
+      {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
       {"setActivityIndicatorViewStyle:", NdTypeKind::Void, 3},
   };
@@ -5516,6 +5523,32 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
     Unsupported.DynInfo.NeededLibs = {Module};
     EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Case.Selector));
   }
+}
+
+TEST(ObjCCallHints, IOSScaleUsesObservedFloatingResultToRejectConflicts) {
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "scale"));
+
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto Hint = objcSelectorSourceTypeHintForResultUse(
+      Image, "scale",
+      {SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, 0, 8});
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint->ReturnType->Size, 8U);
+  EXPECT_EQ(Hint->ReturnLocation.Kind,
+            SourceABICarrierKind::FloatingRegister);
+
+  auto Changed = Image;
+  Changed.DynInfo.NeededLibs.back() = "/tmp/UIKit.framework/UIKit";
+  EXPECT_FALSE(objcSelectorSourceTypeHintForResultUse(
+      Changed, "scale",
+      {SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, 0, 8}));
 }
 
 TEST(ObjCCallHints, SharedFrameworkRecordsUseTheSupportedArchitectureLayout) {
