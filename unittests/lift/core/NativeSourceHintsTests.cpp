@@ -1011,6 +1011,77 @@ TEST(NativeSourceHints, BoundObjCDispatchRequiresCompleteFramedCallEvidence) {
       }
 }
 
+TEST(NativeSourceHints,
+     PreservedContextSurvivesBorrowedObjCSuperFrameArgument) {
+  NativeVoidFrameFixture Fixture(Arch::AArch64);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto Context = a64reg::X19;
+
+  auto CallHint = std::make_shared<SourceCallTypeHint>(
+      *Fixture.Med.Blocks[0].Ops[0].SourceCallHint);
+  CallHint->CallKind = SourceCallTypeHint::Kind::ObjCSuper2;
+  CallHint->Signature.Origin =
+      SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+  CallHint->Signature.Parameters.push_back(
+      {"selector", NdType::makePtr(NdType::makeVoid())});
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(CallHint->Signature, Arch::AArch64,
+                                       Error));
+  auto &MedCall = Fixture.Med.Blocks[0].Ops[0];
+  MedCall.SourceCallHint = CallHint;
+
+  MedVar ContextValue;
+  ContextValue.Kind = MedVar::Reg;
+  ContextValue.Id = 200;
+  ContextValue.RegOff = Context;
+  ContextValue.Size = 8;
+  ContextValue.TheArch = Arch::AArch64;
+  MedCall.addInput(ContextValue);
+
+  auto &Ops = Fixture.Low.Blocks[0].Ops;
+  // Keep the saved context live until the call instead of using it as a
+  // scratch value immediately after the spill.
+  ASSERT_EQ(Ops[3].Output, NdVar::reg(Context, 8));
+  Ops.erase(Ops.begin() + 3);
+  --Fixture.CallIndex;
+  --Fixture.RestoreIndex;
+  using F = NativeVoidFrameFixture;
+  const auto SP = NdVar::reg(TRI.StackPointer, 8);
+  Ops.insert(Ops.begin() + Fixture.CallIndex,
+             {F::op(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8), {SP}),
+              F::op(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[1], 8),
+                    {NdVar::reg(Context, 8)})});
+
+  const auto Hint = Fixture.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  ASSERT_EQ(Hint->Parameters.size(), 2U);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, Context);
+  EXPECT_EQ(Hint->Parameters[1].Location.ValueBytes, 8U);
+
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    auto Changed = Fixture;
+    auto &ChangedOps = Changed.Low.Blocks[0].Ops;
+    auto &FrameArgument = ChangedOps[Changed.CallIndex];
+    if (Mutation == 0) {
+      auto Other = std::make_shared<SourceCallTypeHint>(
+          *Changed.Med.Blocks[0].Ops[0].SourceCallHint);
+      Other->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+      Changed.Med.Blocks[0].Ops[0].SourceCallHint = std::move(Other);
+    } else if (Mutation == 1) {
+      FrameArgument.Output.Size = FrameArgument.Inputs[0].Size = 4;
+    } else if (Mutation < 4) {
+      FrameArgument.Opcode = NdOp::INT_ADD;
+      FrameArgument.addInput(NdVar::cst(Mutation == 2 ? 24 : uint64_t(-8), 8));
+    } else
+      ChangedOps[Changed.CallIndex + 1].Inputs[0] = NdVar::cst(0x1030, 8);
+    const auto Rejected = Changed.inferVoid(Error);
+    if (Rejected)
+      EXPECT_EQ(Rejected->Parameters.size(), 1U) << Mutation;
+    else
+      EXPECT_FALSE(Error.empty()) << Mutation;
+  }
+}
+
 TEST(NativeSourceHints, VoidFramesKeepBoundCallResultsInsideTheHelper) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
@@ -2020,6 +2091,51 @@ TEST(NativeSourceHints,
       ASSERT_TRUE(Hint) << Error;
       EXPECT_EQ(Hint->Parameters.size(), Mutation == 0 ? 2U : 1U);
     }
+  }
+}
+
+TEST(NativeSourceHints,
+     RestoredContextRequiresANonPreservationEntryUse) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto Context = *std::find_if(
+        TRI.CalleeSaveRegs.begin(), TRI.CalleeSaveRegs.end(), [&](uint64_t R) {
+          return !TRI.isFrameOrLinkReg(R) && !TRI.isVectorReg(R);
+        });
+    NativeContextFixture Fixture(Architecture, Context);
+    auto &Ops = Fixture.Low.Blocks[0].Ops;
+    LowOp Save;
+    Save.Opcode = NdOp::COPY;
+    Save.Output = NdVar::tmp(TmpBase + 16, 8);
+    Save.addInput(NdVar::reg(Context, 8));
+    LowOp Write;
+    Write.Opcode = NdOp::COPY;
+    Write.Output = NdVar::reg(Context, 8);
+    Write.addInput(NdVar::cst(19, 8));
+    LowOp Restore;
+    Restore.Opcode = NdOp::COPY;
+    Restore.Output = Write.Output;
+    Restore.addInput(Save.Output);
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    if (Architecture == Arch::AArch64)
+      Return.addInput(NdVar::reg(TRI.LinkRegister, 8));
+    Ops.insert(Ops.begin(), Save);
+    Ops.push_back(Write);
+    Ops.push_back(Restore);
+    Ops.push_back(Return);
+
+    std::string Error;
+    const auto Used = Fixture.inferContext(Error);
+    ASSERT_TRUE(Used) << Error;
+    ASSERT_EQ(Used->Parameters.size(), 2U);
+    EXPECT_EQ(Used->Parameters[1].Location.RegisterOffset, Context);
+
+    auto SpillOnly = Fixture;
+    SpillOnly.Low.Blocks[0].Ops[1].Inputs[0] = NdVar::cst(0x2000, 8);
+    const auto Omitted = SpillOnly.inferContext(Error);
+    ASSERT_TRUE(Omitted) << Error;
+    EXPECT_EQ(Omitted->Parameters.size(), 1U);
   }
 }
 

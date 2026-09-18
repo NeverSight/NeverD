@@ -6,6 +6,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <tuple>
 #include <utility>
 
@@ -24,8 +25,15 @@ struct NativeSourceCallKey {
   }
 };
 
+struct NativeSourceCallContract {
+  const SourceFunctionTypeHint *Signature = nullptr;
+  // Parameter indexes whose exact private-frame address is borrowed
+  // synchronously and read-only by an independently known call contract.
+  std::map<size_t, size_t> ReadOnlyFrameParameters;
+};
+
 using NativeSourceCalls =
-    std::map<NativeSourceCallKey, const SourceFunctionTypeHint *>;
+    std::map<NativeSourceCallKey, NativeSourceCallContract>;
 
 /// Identify one exact LowIR call occurrence. Direct calls require a static
 /// target; indirect calls retain it only when the machine operand is constant.
@@ -38,7 +46,9 @@ std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation);
 /// values and incomplete graphs fail closed.
 /// This does not prove a result type or authorize machine-code rewriting.
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
-                               const NativeSourceCalls &Calls);
+                               const NativeSourceCalls &Calls,
+                               std::set<uint64_t> *UsedEntryRegisters =
+                                   nullptr);
 
 /// Prove the narrower frameless tail-call shape without requiring a synthetic
 /// frame reconstruction. The function may not write any preserved, frame,

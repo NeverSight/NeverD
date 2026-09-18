@@ -84,8 +84,12 @@ implicit zero extensions, call clobbers and overlapping stores invalidate the
 affected identities. A store through an address with no frame-derived bytes is
 disjoint from the current invocation's private frame and keeps its exact spill
 facts. Partial or exact frame-derived addresses still reject possible escapes;
-frame-address spills and call arguments are rejected. Unallocated stack bytes
-cannot survive a call.
+frame-address spills and call arguments are rejected, except that an exact
+`objc_msgSendSuper2` binding may synchronously borrow its first argument as a
+read-only 16-byte `objc_super` object. The proof requires the complete pointer
+and object to stay inside the currently allocated frame; ordinary messages,
+partial pointers and objects crossing either frame boundary remain rejected.
+Unallocated stack bytes cannot survive a call.
 The ordinary CFG and source dependency proofs still apply.
 Re-lifted callers that observe a missing result retain their unknown value and
 cannot pass source publication.
@@ -910,9 +914,16 @@ image address.
 Native context inputs still require observable complete entry bytes and an
 independent full-width machine read. A helper that writes preserved registers
 must additionally prove that every exit restores the incoming preserved,
-stack and link state; exact private spills may satisfy this proof. The same
+stack and link state; exact private spills may satisfy this proof. If the
+candidate context register is itself overwritten, its complete entry identity
+must first reach a non-preservation use such as a bound call or an address
+calculation. COPY operations, returns, prologue spills into the private frame
+and their matching restores cannot invent a source parameter. The same
 state analysis handles framed leaf bodies and source-bound runtime, native or
-Objective-C dispatch calls. Missing call-site evidence, frame escapes, partial
+Objective-C dispatch calls. Its one frame-borrow exception is the exact
+two-word `objc_super` input to a bound `objc_msgSendSuper2` call; the runtime
+contract is synchronous and read-only, and both words must lie in the allocated
+private frame. Missing call-site evidence, other frame escapes, partial
 restoration and hidden preserved-register outputs cannot supply this proof.
 After re-lifting, void and scalar helpers may shed auxiliary parameters used
 only by eliminated private saves. An exhaustive HighIR use scan must preserve

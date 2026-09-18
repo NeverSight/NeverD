@@ -47,14 +47,18 @@ bool completeNativeAudit(va_t Entry, const PipelineFunctionAudit &Audit) {
 }
 
 bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
-                                  const MedFunc &Med, bool RequireCalls);
+                                  const MedFunc &Med, bool RequireCalls,
+                                  std::set<uint64_t> *UsedEntryRegisters =
+                                      nullptr);
 
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
 // reads. Caller-saved input registers may subsequently become scratch values.
-// Preserved context inputs require either no native writes to preserved
-// non-frame registers or an independent proof that every exit restores state.
-// Saving and restoring scratch registers does not create hidden outputs.
+// Preserved context inputs require an independent proof that every exit
+// restores state after any preserved-register write. An input register that is
+// itself overwritten must first reach a complete non-preservation use; a
+// prologue spill alone cannot invent a source parameter. Saving and restoring
+// scratch registers does not create hidden outputs.
 // The complete source body and its callers still require validation.
 std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
                                            const LowFunc *Low,
@@ -83,7 +87,7 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
   const auto Preserved = TRI.callPreservedRanges(BinaryFormat::MachO);
   size_t Remaining = 262144;
   std::set<uint64_t> Reads;
-  bool PreservedWrite = false;
+  std::set<uint64_t> WrittenPreserved;
   for (const auto &Block : Low->Blocks)
     for (const auto &Op : Block.Ops) {
       if (!Remaining-- || Op.NumInputs > 6)
@@ -96,7 +100,7 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
               (Output.Offset <= Range.Offset
                    ? Range.Offset - Output.Offset < Output.Size
                    : Output.Offset - Range.Offset < Range.Bytes))
-            PreservedWrite = true;
+            WrittenPreserved.insert(Range.Offset);
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
         if (!Remaining--)
           return {};
@@ -110,11 +114,17 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
       std::any_of(Reads.begin(), Reads.end(), [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8);
       });
-  if (PreservedWrite && ReadsPreserved &&
-      !hasNativeSourceStateContract(Image, Low, Med, false))
-    std::erase_if(Reads, [&](uint64_t Register) {
-      return TRI.isCallPreserved(Register, 8);
-    });
+  if (!WrittenPreserved.empty() && ReadsPreserved) {
+    std::set<uint64_t> Used;
+    if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used))
+      std::erase_if(Reads, [&](uint64_t Register) {
+        return TRI.isCallPreserved(Register, 8);
+      });
+    else
+      std::erase_if(Reads, [&](uint64_t Register) {
+        return WrittenPreserved.count(Register) && !Used.count(Register);
+      });
+  }
   return {Reads.begin(), Reads.end()};
 }
 
@@ -158,7 +168,8 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
 // the established frameless tail shape uses the narrower no-write proof plus
 // byte-taint rejection of stack-derived arguments and stores.
 bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
-                                  const MedFunc &Med, bool RequireCalls) {
+                                  const MedFunc &Med, bool RequireCalls,
+                                  std::set<uint64_t> *UsedEntryRegisters) {
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return false;
@@ -202,6 +213,10 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
+      NativeSourceCallContract Contract;
+      Contract.Signature = &Binding.Signature;
+      if (StaticMessage && Binding.CallKind == Kind::ObjCSuper2)
+        Contract.ReadOnlyFrameParameters.emplace(0, 16);
       if ((!StaticRuntime && !StaticNative && !StaticMessage &&
            !DynamicWitness) ||
           Binding.DoesNotReturn || !Binding.Signature.ReturnType ||
@@ -212,7 +227,7 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
                                                 ? std::optional<va_t>(
                                                       Op.Inputs[0].ConstVal)
                                                 : std::nullopt},
-                        &Binding.Signature)
+                        std::move(Contract))
                .second)
         return false;
     }
@@ -231,9 +246,15 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
       if (!Calls.count(*Key) || !NativeCalls.insert(*Key).second)
         return false;
     }
-  return NativeCalls.size() == Calls.size() &&
-         (restoresNativeSourceState(*Low, Image.Arch, Calls) ||
-          preservesNativeSourceLeafState(*Low, Image.Arch, Calls));
+  if (NativeCalls.size() != Calls.size())
+    return false;
+  std::set<uint64_t> Used;
+  if (restoresNativeSourceState(*Low, Image.Arch, Calls, &Used)) {
+    if (UsedEntryRegisters)
+      *UsedEntryRegisters = std::move(Used);
+    return true;
+  }
+  return preservesNativeSourceLeafState(*Low, Image.Arch, Calls);
 }
 
 // This proves a defined machine carrier, not an original return declaration.

@@ -116,7 +116,8 @@ public:
   State Initial;
   size_t Remaining = 262144;
 
-  bool transfer(const LowBlock &Block, State &Current, bool CheckExits) {
+  bool transfer(const LowBlock &Block, State &Current, bool CheckExits,
+                std::set<uint64_t> *UsedEntryRegisters = nullptr) {
     RegisterFacts Temps;
     va_t Instruction = InvalidVA;
     auto Read = [&](const NdVar &Value, unsigned Byte) {
@@ -169,17 +170,47 @@ public:
       if (Remaining < Cost || Op.Output.Offset > UINT64_MAX - Op.Output.Size)
         return false;
       Remaining -= Cost;
+      if (UsedEntryRegisters && Op.Opcode != NdOp::COPY &&
+          Op.Opcode != NdOp::RETURN) {
+        std::optional<LowMemoryOperandView> Memory;
+        std::optional<int64_t> MemoryAddress;
+        if (Op.Opcode == NdOp::STORE) {
+          Memory = lowMemoryOperands(Op);
+          if (!Memory->Complete || !Memory->Address || !Memory->StoredValue)
+            return false;
+          MemoryAddress = FrameOffset(*Memory->Address);
+        }
+        for (unsigned InputIndex = 0; InputIndex < Op.NumInputs;
+             ++InputIndex) {
+          const auto &Input = Op.Inputs[InputIndex];
+          if ((!Input.isReg() && !Input.isTemp()) || Input.Size != 8 ||
+              (MemoryAddress && Memory->StoredValue &&
+               Input == *Memory->StoredValue))
+            continue;
+          const auto First = Read(Input, 0);
+          if (First.TheKind != ByteFact::Entry || First.Value < 0)
+            continue;
+          bool Complete = true;
+          for (unsigned I = 0; I < Input.Size; ++I)
+            Complete &= Read(Input, I) ==
+                        ByteFact{ByteFact::Entry, First.Value + I};
+          if (Complete)
+            UsedEntryRegisters->insert(static_cast<uint64_t>(First.Value));
+        }
+      }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         const auto Key = nativeSourceCallKey(Op);
         if (!Key)
           return false;
         const auto Found = Calls.find(*Key);
-        if (Found == Calls.end() || !Found->second)
+        if (Found == Calls.end())
           return false;
         for (unsigned I = 0; I < Op.Inputs[0].Size; ++I)
           if (Read(Op.Inputs[0], I).MayBeFrame)
             return false;
-        const auto &Signature = *Found->second;
+        if (!Found->second.Signature)
+          return false;
+        const auto &Signature = *Found->second.Signature;
         const bool Tail = Index + 1 < Block.Ops.size() &&
                           Block.Ops[Index + 1].Opcode == NdOp::RETURN &&
                           Block.Ops[Index + 1].Addr == Op.Addr;
@@ -192,16 +223,49 @@ public:
         } else if ((*SP + (Architecture == Arch::X64 ? 8 : 0)) % 16 != 0) {
           return false;
         }
-        for (const auto &Parameter : Signature.Parameters) {
+        for (size_t ParameterIndex = 0;
+             ParameterIndex < Signature.Parameters.size(); ++ParameterIndex) {
+          const auto &Parameter = Signature.Parameters[ParameterIndex];
           const auto &Location = Parameter.Location;
           if ((Location.Kind != SourceABICarrierKind::IntegerRegister &&
                Location.Kind != SourceABICarrierKind::FloatingRegister) ||
               Location.ValueBytes > 64)
             return false;
+          bool HasFrameByte = false;
           for (unsigned I = 0; I < Location.ValueBytes; ++I)
-            if (lookup(Current.Registers, Location.RegisterOffset + I)
-                    .MayBeFrame)
+            HasFrameByte |=
+                lookup(Current.Registers, Location.RegisterOffset + I)
+                    .MayBeFrame;
+          if (HasFrameByte) {
+            const auto Borrowed =
+                Found->second.ReadOnlyFrameParameters.find(ParameterIndex);
+            if (Borrowed == Found->second.ReadOnlyFrameParameters.end() ||
+                Location.Kind != SourceABICarrierKind::IntegerRegister ||
+                Location.ValueBytes != 8 || !Borrowed->second ||
+                Borrowed->second > MaxFrame)
               return false;
+            const auto Address = FrameOffset(
+                NdVar::reg(Location.RegisterOffset, Location.ValueBytes));
+            if (!Address || *Address < *SP ||
+                *Address > -static_cast<int64_t>(Borrowed->second))
+              return false;
+          }
+          if (UsedEntryRegisters &&
+              Location.Kind == SourceABICarrierKind::IntegerRegister &&
+              Location.ValueBytes == 8) {
+            const auto First =
+                lookup(Current.Registers, Location.RegisterOffset);
+            if (First.TheKind == ByteFact::Entry) {
+              bool Complete = true;
+              for (unsigned I = 0; I < Location.ValueBytes; ++I)
+                Complete &=
+                    lookup(Current.Registers, Location.RegisterOffset + I) ==
+                    ByteFact{ByteFact::Entry, First.Value + I};
+              if (Complete && First.Value >= 0)
+                UsedEntryRegisters->insert(
+                    static_cast<uint64_t>(First.Value));
+            }
+          }
         }
         if (!Tail) {
           std::erase_if(Current.Registers, [&](const auto &Item) {
@@ -367,12 +431,14 @@ private:
 } // namespace
 
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
-                               const NativeSourceCalls &Calls) {
+                               const NativeSourceCalls &Calls,
+                               std::set<uint64_t> *UsedEntryRegisters) {
   const size_t Count = Function.Blocks.size();
   if (!Count || Count > 16384 ||
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
     return false;
-  for (const auto &[Site, Signature] : Calls) {
+  for (const auto &[Site, Contract] : Calls) {
+    const auto *Signature = Contract.Signature;
     std::string Error;
     if (!Signature || Signature->Architecture != Architecture ||
         !validateSourceABI(*Signature, Error))
@@ -454,9 +520,13 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
       }
     }
   }
+  std::set<uint64_t> Used;
   for (size_t I = 0; I < Count; ++I)
-    if (!Incoming[I] || !Proof.transfer(Function.Blocks[I], *Incoming[I], true))
+    if (!Incoming[I] ||
+        !Proof.transfer(Function.Blocks[I], *Incoming[I], true, &Used))
       return false;
+  if (UsedEntryRegisters)
+    *UsedEntryRegisters = std::move(Used);
   return true;
 }
 
@@ -467,7 +537,8 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
     return false;
   const auto &TRI = getTargetRegInfo(Architecture);
-  for (const auto &[Site, Signature] : Calls) {
+  for (const auto &[Site, Contract] : Calls) {
+    const auto *Signature = Contract.Signature;
     std::string Error;
     if (!Signature || Signature->Architecture != Architecture ||
         !validateSourceABI(*Signature, Error))
@@ -595,7 +666,9 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
         for (unsigned I = 0; I < Op.Inputs[0].Size; ++I)
           if (Tainted(Op.Inputs[0], I))
             return false;
-        for (const auto &Parameter : Found->second->Parameters) {
+        if (!Found->second.Signature)
+          return false;
+        for (const auto &Parameter : Found->second.Signature->Parameters) {
           const auto &Location = Parameter.Location;
           if ((Location.Kind != SourceABICarrierKind::IntegerRegister &&
                Location.Kind != SourceABICarrierKind::FloatingRegister) ||
