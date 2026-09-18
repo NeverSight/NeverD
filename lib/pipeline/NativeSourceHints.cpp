@@ -175,10 +175,13 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
         return false;
       const auto &Binding = *Op.SourceCallHint;
       using Kind = SourceCallTypeHint::Kind;
-      const bool StaticRuntime = Op.Inputs[0].isConst() &&
-                                 (Binding.CallKind == Kind::ObjCRuntimeCall ||
-                                  Binding.CallKind == Kind::SwiftRuntimeCall ||
-                                  Binding.CallKind == Kind::DarwinRuntimeCall);
+      const bool StaticRuntime =
+          Op.Inputs[0].isConst() &&
+          (Binding.CallKind == Kind::ObjCRuntimeCall ||
+           Binding.CallKind == Kind::SwiftRuntimeCall ||
+           Binding.CallKind == Kind::DarwinRuntimeCall ||
+           Binding.CallKind == Kind::SwiftStringBridge ||
+           Binding.CallKind == Kind::SwiftStringFromNSString);
       const bool StaticMessage =
           Op.Inputs[0].isConst() &&
           (Binding.CallKind == Kind::ObjCMessage ||

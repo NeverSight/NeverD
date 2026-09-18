@@ -664,6 +664,24 @@ TEST(NativeSourceHints, VoidContractsPropagateAcrossExactNativeCallees) {
   }
 }
 
+TEST(NativeSourceHints, VoidContractsAcceptExactSwiftStringBridgeCallBindings) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (auto Kind : {SourceCallTypeHint::Kind::SwiftStringBridge,
+                      SourceCallTypeHint::Kind::SwiftStringFromNSString}) {
+      NativeVoidFixture Fixture(Architecture);
+      auto Hint = std::make_shared<SourceCallTypeHint>(
+          *Fixture.Med.Blocks[0].Ops[0].SourceCallHint);
+      Hint->CallKind = Kind;
+      Hint->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::SwiftStringBridge;
+      Fixture.Med.Blocks[0].Ops[0].SourceCallHint = std::move(Hint);
+      std::string Error;
+      const auto Result = Fixture.inferVoid(Error);
+      ASSERT_TRUE(Result) << Error;
+      EXPECT_EQ(Result->ReturnType->Kind, NdTypeKind::Void);
+    }
+}
+
 TEST(NativeSourceHints,
      VoidTailContractsRejectHiddenOutputsAndIncompleteEvidence) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
@@ -1053,6 +1071,22 @@ TEST(NativeSourceHints, VoidFramesKeepBoundCallResultsInsideTheHelper) {
     }
 }
 
+TEST(NativeSourceHints, VoidFramesKeepSpillsAcrossDisjointExternalStores) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    NativeVoidFrameFixture Fixture(Architecture);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    Fixture.Low.Blocks[0].Ops.insert(
+        Fixture.Low.Blocks[0].Ops.begin() + Fixture.CallIndex,
+        NativeVoidFrameFixture::op(
+            NdOp::STORE, {},
+            {NdVar::reg(TRI.IntParamRegs[0], 8), NdVar::cst(0, 8)}));
+    std::string Error;
+    const auto Result = Fixture.inferVoid(Error);
+    ASSERT_TRUE(Result) << unsigned(Architecture) << ": " << Error;
+    EXPECT_EQ(Result->ReturnType->Kind, NdTypeKind::Void);
+  }
+}
+
 TEST(NativeSourceHints, VoidFramesRejectClobbersEscapesAndStaleSpills) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 19; ++Mutation) {
@@ -1070,12 +1104,17 @@ TEST(NativeSourceHints, VoidFramesRejectClobbersEscapesAndStaleSpills) {
         Ops.insert(Ops.begin() + Fixture.CallIndex,
                    F::op(NdOp::STORE, {}, {SP, NdVar::cst(0, 1)}));
         break;
-      case 2:
+      case 2: {
+        // A partially copied stack address remains a possible private-frame
+        // alias even though it is not a complete, exact frame address.
         Ops.insert(
             Ops.begin() + Fixture.CallIndex,
-            F::op(NdOp::STORE, {},
-                  {NdVar::reg(TRI.IntParamRegs[0], 8), NdVar::cst(0, 8)}));
+            {F::op(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 4),
+                   {NdVar::reg(TRI.StackPointer, 4)}),
+             F::op(NdOp::STORE, {},
+                   {NdVar::reg(TRI.IntParamRegs[0], 8), NdVar::cst(0, 8)})});
         break;
+      }
       case 3:
         Ops.insert(Ops.begin() + Fixture.CallIndex,
                    F::op(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8), {SP}));

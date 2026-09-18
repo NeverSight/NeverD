@@ -323,9 +323,14 @@ public:
               return false;
             for (unsigned I = 0; I < Memory.AccessSize; ++I)
               put(Current.Stack, *Address + I, Read(*Memory.StoredValue, I));
-          } else {
-            Current.Stack.clear();
-          }
+          } else
+            // A value with any frame-derived byte may be a partial or
+            // inexact alias of private storage. A completely non-frame
+            // address names storage outside this invocation's private frame,
+            // so the write cannot invalidate its exact spill identities.
+            for (unsigned I = 0; I < Memory.Address->Size; ++I)
+              if (Read(*Memory.Address, I).MayBeFrame)
+                return false;
         } else {
           for (unsigned I = 0; I < Value.size(); ++I)
             Value[I] =

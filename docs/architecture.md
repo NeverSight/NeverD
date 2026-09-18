@@ -71,16 +71,21 @@ dynamically loaded Swift value-witness declarations. A callee may return a
 value used inside the helper: that value does not establish a return carrier
 on every exit from the helper itself. MedIR and LowIR must agree on the exact
 instruction address and operation sequence, direct or indirect call form, and
-static target when one exists. A bounded LowIR fixed point tracks exact incoming
-register bytes and private stack spills, requiring restored preserved registers,
+static target when one exists. Exact Swift String bridge imports participate
+through their own validated static target and source ABI. A bounded LowIR fixed
+point tracks exact incoming register bytes and private stack spills, requiring
+restored preserved registers,
 stack pointer and link register at every exit. The frameless source-bound tail
 shape instead proves that those registers are never written and uses a bounded
 byte-taint fixed point to reject stack-derived call targets, arguments or stored
 values.
 Partial writes,
 implicit zero extensions, call clobbers and overlapping stores invalidate the
-affected identities. Unknown stores invalidate spill facts; frame-address spills
-and call arguments are rejected. Unallocated stack bytes cannot survive a call.
+affected identities. A store through an address with no frame-derived bytes is
+disjoint from the current invocation's private frame and keeps its exact spill
+facts. Partial or exact frame-derived addresses still reject possible escapes;
+frame-address spills and call arguments are rejected. Unallocated stack bytes
+cannot survive a call.
 The ordinary CFG and source dependency proofs still apply.
 Re-lifted callers that observe a missing result retain their unknown value and
 cannot pass source publication.
