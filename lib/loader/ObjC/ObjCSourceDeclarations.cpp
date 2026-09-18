@@ -245,6 +245,72 @@ std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
   return Result;
 }
 
+static bool sameLocation(const SourceABIValueLocation &A,
+                         const SourceABIValueLocation &B) {
+  return A.Kind == B.Kind && A.RegisterOffset == B.RegisterOffset &&
+         A.EntryStackOffset == B.EntryStackOffset &&
+         A.ValueBytes == B.ValueBytes && A.ExtendTo32Bits == B.ExtendTo32Bits;
+}
+
+std::optional<SourceFunctionTypeHint>
+objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry) {
+  std::optional<SourceFunctionTypeHint> Result;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.Implementation != Entry)
+      continue;
+    if (!Method.TypeHint)
+      return std::nullopt;
+    auto Hint = *Method.TypeHint;
+    std::string Diagnostic;
+    if (!assignDarwinObjCSourceABI(Hint, Image.Arch, Diagnostic))
+      return std::nullopt;
+    if (Result && !equalSourceABIs(*Result, Hint))
+      return std::nullopt;
+    Result = std::move(Hint);
+  }
+  return Result;
+}
+
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForArgumentTypeUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorArgumentTypeEvidence &Evidence) {
+  if (!Evidence.MethodEntry || Evidence.Parameter < 2)
+    return std::nullopt;
+  const auto Caller = objcMethodSourceTypeHint(Image, Evidence.MethodEntry);
+  if (!Caller)
+    return std::nullopt;
+  const SourceParameterTypeHint *Source = nullptr;
+  for (const auto &Parameter : Caller->Parameters)
+    if (sameLocation(Parameter.Location, Evidence.Source)) {
+      if (Source)
+        return std::nullopt;
+      Source = &Parameter;
+    }
+  // Restrict this evidence to a complete pointer-to-pointer source type. A
+  // bare id/object pointer has the same machine carrier as many unrelated
+  // declarations and cannot narrow dynamic dispatch.
+  if (!Source || !Source->Type || Source->Type->Kind != NdTypeKind::Ptr ||
+      Source->Type->Size != 8 || !Source->Type->Pointee ||
+      Source->Type->Pointee->Kind != NdTypeKind::Ptr ||
+      Source->Type->Pointee->Size != 8)
+    return std::nullopt;
+  auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
+  if (!Candidates)
+    return std::nullopt;
+  std::optional<SourceFunctionTypeHint> Result;
+  for (auto &Candidate : *Candidates) {
+    if (Evidence.Parameter >= Candidate.Parameters.size() ||
+        !equalSourceTypes(Candidate.Parameters[Evidence.Parameter].Type,
+                          Source->Type))
+      continue;
+    if (Result)
+      return std::nullopt;
+    Result = std::move(Candidate);
+  }
+  return Result;
+}
+
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry) {
   if (!Entry || Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||

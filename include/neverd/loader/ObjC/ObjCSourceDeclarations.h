@@ -27,6 +27,15 @@ std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceABIValueLocation &RequiredResult);
 
+/// Resolve a selector conflict when a caller's exact declared pointer-to-
+/// pointer parameter reaches one message argument unchanged. MethodEntry and
+/// Source are revalidated against all runtime method records sharing the
+/// entry; bare object pointers and other source types supply no evidence.
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForArgumentTypeUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorArgumentTypeEvidence &Evidence);
+
 /// Unsupported or conflicting declarations veto a narrowed call contract.
 /// Missing external hierarchy instead requires selector-wide agreement: it
 /// cannot justify excluding other owners. Self includes known subclasses.
@@ -44,6 +53,8 @@ objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
 
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry);
+std::optional<SourceFunctionTypeHint>
+objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry);
 bool objcReceiverTypeHintValid(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver);
 

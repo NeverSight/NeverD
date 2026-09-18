@@ -347,6 +347,82 @@ TEST(ObjCCallHints, ResultUseDisambiguatesConflictingSelectorDeclarations) {
 }
 
 TEST(ObjCCallHints,
+     DeclaredEntryArgumentTypeDisambiguatesConflictingSelectorDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "save:";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+
+  ObjCMethod VoidSave;
+  VoidSave.ClassName = "ApplicationController";
+  VoidSave.Selector = "save:";
+  VoidSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(VoidSave.TypeHint);
+  Image.ObjCMethods.push_back(VoidSave);
+
+  ObjCMethod Caller;
+  Caller.ClassName = "Migrator";
+  Caller.Selector = "runWithObject:error:";
+  Caller.Implementation = 0x1200;
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, "v32@0:8@16^@24");
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+  const auto CallerSignature =
+      objcMethodSourceTypeHint(Image, Caller.Implementation);
+  ASSERT_TRUE(CallerSignature);
+  ASSERT_EQ(CallerSignature->Parameters.size(), 4U);
+  EXPECT_EQ(CallerSignature->Parameters[3].Location.RegisterOffset, a64reg::X3);
+  SourceCallTypeHint::SelectorArgumentTypeEvidence DirectEvidence;
+  DirectEvidence.Parameter = 2;
+  DirectEvidence.MethodEntry = Caller.Implementation;
+  DirectEvidence.Source = CallerSignature->Parameters[3].Location;
+  EXPECT_TRUE(objcSelectorSourceTypeHintForArgumentTypeUse(
+      Image, "save:", DirectEvidence));
+
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "typed_argument_caller";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = 0x1200;
+  Block.EndAddr = 0x120c;
+  Block.Ops = {operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                         {NdVar::reg(a64reg::X3, 8)}, 0x1200),
+               operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                         {NdVar::cst(0x1100, 8)}, 0x1204),
+               operation(NdOp::RETURN, {}, {}, 0x1208)};
+  Function.Blocks.push_back(Block);
+
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1204);
+  ASSERT_TRUE(Hint.SelectorArgumentTypeUse);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->Parameter, 2U);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->MethodEntry, 0x1200U);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->Source.Kind,
+            SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->Source.RegisterOffset, a64reg::X3);
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 3U);
+  ASSERT_TRUE(Hint.Signature.Parameters[2].Type->Pointee);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Type->Pointee->Kind, NdTypeKind::Ptr);
+
+  // Bare object parameters have the same machine width but do not prove an
+  // NSError ** contract.
+  Image.ObjCMethods.back().TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, "v32@0:8@16@24");
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
+  // Every method record sharing the entry must agree on the source type.
+  Image.ObjCMethods.back().TypeHint = Caller.TypeHint;
+  auto Alias = Image.ObjCMethods.back();
+  Alias.Selector = "aliasWithObject:error:";
+  Alias.TypeHint = parseObjCMethodEncoding(Alias.Selector, "v32@0:8@16@24");
+  Image.ObjCMethods.push_back(std::move(Alias));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
+TEST(ObjCCallHints,
      FloatingResultUseSurvivesThePreservedHalfOfAnAArch64Vector) {
   auto Image = image();
   Image.ObjCMethods.clear();

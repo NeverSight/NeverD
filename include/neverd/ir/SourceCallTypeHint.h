@@ -201,6 +201,16 @@ struct SourceCallTypeHint {
   /// dataflow evidence, not a source type guess; publication revalidates the
   /// complete declaration set against the same carrier range.
   std::optional<SourceABIValueLocation> SelectorResultUse;
+  /// An exact Objective-C method-entry parameter flowed to one message
+  /// argument without changing its source type. This may select one otherwise
+  /// conflicting selector declaration only when the current method metadata,
+  /// physical source carrier and complete parameter type still agree.
+  struct SelectorArgumentTypeEvidence {
+    unsigned Parameter = 0;
+    va_t MethodEntry = 0;
+    SourceABIValueLocation Source;
+  };
+  std::optional<SelectorArgumentTypeEvidence> SelectorArgumentTypeUse;
   /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded

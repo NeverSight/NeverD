@@ -79,7 +79,7 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.TargetName == Expected.TargetName &&
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
-         !Binding.ByteCount &&
+         !Binding.SelectorArgumentTypeUse && !Binding.ByteCount &&
          bool(Binding.Format) == bool(Expected.Format) &&
          (!Binding.Format ||
           (Binding.Format->FixedCount == Expected.Format->FixedCount &&
@@ -552,9 +552,10 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
-      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
-      Hint.RuntimeObjCResultType || Hint.ValueWitness ||
-      !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
+      Hint.SelectorArgumentTypeUse || Hint.DoesNotReturn || Hint.WeakImport ||
+      Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
+      Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
+      !Hint.SwiftStringInputs.empty() ||
       Expression.Operands.size() != Hint.Signature.Parameters.size() ||
       ContextParameter >= Expression.Operands.size())
     return std::nullopt;
@@ -1621,6 +1622,11 @@ inline bool objcSourceCallBound(
        Binding.Receiver || Binding.Format ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
+  if (Binding.SelectorArgumentTypeUse &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+    return false;
   if (Binding.Format &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage &&
       Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall)
@@ -1892,12 +1898,14 @@ inline bool objcSourceCallBound(
         !objc_projection_detail::sameHint(Hint, *Expected.Signature))
       return false;
   } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK) {
-    const auto Expected = Binding.SelectorResultUse
-                              ? objcSelectorSourceTypeHintForResultUse(
-                                    Image, Binding.Selector,
-                                    *Binding.SelectorResultUse)
-                              : objcSelectorSourceTypeHint(Image,
-                                                           Binding.Selector);
+    const auto Expected =
+        Binding.SelectorResultUse
+            ? objcSelectorSourceTypeHintForResultUse(Image, Binding.Selector,
+                                                     *Binding.SelectorResultUse)
+        : Binding.SelectorArgumentTypeUse
+            ? objcSelectorSourceTypeHintForArgumentTypeUse(
+                  Image, Binding.Selector, *Binding.SelectorArgumentTypeUse)
+            : objcSelectorSourceTypeHint(Image, Binding.Selector);
     if (!Expected || !objc_projection_detail::sameHint(Hint, *Expected))
       return false;
   }

@@ -158,17 +158,28 @@ struct Value {
     BlockIsa,
     ImageBytes,
     CopiedBlock,
-    BlockInvoke
+    BlockInvoke,
+    SourceParameter
   };
   Kind TheKind = Kind::Number;
   uint64_t Number = 0;
   std::string Name;
   std::optional<ObjCReceiverTypeHint> Object;
   std::optional<BlockIdentity> Block;
+  va_t SourceMethodEntry = 0;
+  SourceABIValueLocation SourceLocation;
   bool operator==(const Value &Other) const {
-    return std::tie(TheKind, Number, Name, Object, Block) ==
+    return std::tie(TheKind, Number, Name, Object, Block, SourceMethodEntry,
+                    SourceLocation.Kind, SourceLocation.RegisterOffset,
+                    SourceLocation.EntryStackOffset, SourceLocation.ValueBytes,
+                    SourceLocation.ExtendTo32Bits) ==
            std::tie(Other.TheKind, Other.Number, Other.Name, Other.Object,
-                    Other.Block);
+                    Other.Block, Other.SourceMethodEntry,
+                    Other.SourceLocation.Kind,
+                    Other.SourceLocation.RegisterOffset,
+                    Other.SourceLocation.EntryStackOffset,
+                    Other.SourceLocation.ValueBytes,
+                    Other.SourceLocation.ExtendTo32Bits);
   }
 };
 using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
@@ -618,6 +629,23 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
     if (const auto Receiver = objcMethodReceiverTypeHint(Image, Function.Entry))
       EntryFacts.Values.emplace(key(NdVar::reg(TRI.IntParamRegs[0], 8)),
                                 Value{Value::Kind::Receiver, 0, {}, *Receiver});
+    if (const auto Signature = objcMethodSourceTypeHint(Image, Function.Entry))
+      for (const auto &Parameter : Signature->Parameters) {
+        const auto &Type = Parameter.Type;
+        const auto &Location = Parameter.Location;
+        if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
+            !Type->Pointee || Type->Pointee->Kind != NdTypeKind::Ptr ||
+            Type->Pointee->Size != 8 ||
+            Location.Kind != SourceABICarrierKind::IntegerRegister ||
+            Location.ValueBytes != 8)
+          continue;
+        Value V;
+        V.TheKind = Value::Kind::SourceParameter;
+        V.SourceMethodEntry = Function.Entry;
+        V.SourceLocation = Location;
+        EntryFacts.Values.emplace(key(NdVar::reg(Location.RegisterOffset, 8)),
+                                  std::move(V));
+      }
   }
   // Enumerate preserved physical bytes through the authoritative ABI policy.
   // This retains upper bytes of partial integer aliases and only the preserved
@@ -971,6 +999,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               Qualified ? Declaration.Signature
                         : objcSelectorSourceTypeHint(Image, Target->Selector);
           std::optional<SourceABIValueLocation> SelectorResultUse;
+          std::optional<SourceCallTypeHint::SelectorArgumentTypeEvidence>
+              SelectorArgumentTypeUse;
           if (!Signature && !Qualified)
             if (const auto Required =
                     localResultUse(Block, OpIndex, TRI, Image)) {
@@ -979,6 +1009,31 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               if (Signature)
                 SelectorResultUse = *Required;
             }
+          if (!Signature && !Qualified) {
+            for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
+                 ++Parameter) {
+              const auto Argument =
+                  Read(NdVar::reg(TRI.IntParamRegs[Parameter], 8));
+              if (!Argument ||
+                  Argument->TheKind != Value::Kind::SourceParameter)
+                continue;
+              SourceCallTypeHint::SelectorArgumentTypeEvidence Evidence;
+              Evidence.Parameter = static_cast<unsigned>(Parameter);
+              Evidence.MethodEntry = Argument->SourceMethodEntry;
+              Evidence.Source = Argument->SourceLocation;
+              auto Candidate = objcSelectorSourceTypeHintForArgumentTypeUse(
+                  Image, Target->Selector, Evidence);
+              if (!Candidate)
+                continue;
+              if (SelectorArgumentTypeUse) {
+                Signature.reset();
+                SelectorArgumentTypeUse.reset();
+                break;
+              }
+              Signature = std::move(Candidate);
+              SelectorArgumentTypeUse = Evidence;
+            }
+          }
           if (Signature) {
             SourceCallTypeHint Hint;
             Hint.CallKind = Target->Name == "objc_msgSendSuper2"
@@ -991,6 +1046,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Hint.Selector = Target->Selector;
             Hint.SelectorReferenceAddress = Target->SelectorSlot;
             Hint.SelectorResultUse = SelectorResultUse;
+            Hint.SelectorArgumentTypeUse = SelectorArgumentTypeUse;
             if (Qualified)
               Hint.Receiver = std::move(Receiver);
             BlockHints.emplace(Op.Addr, std::move(Hint));

@@ -176,6 +176,16 @@ stored with the source-call hint and revalidated against the current image at
 publication, so a local dataflow observation cannot bypass global declaration
 checks.
 
+An exact pointer-to-pointer parameter from the enclosing Objective-C method may
+also narrow incompatible declarations when that unchanged entry value reaches
+one message argument and exactly one complete declaration has the same source
+type at that position. Every method record sharing the entry must agree before
+the parameter fact is seeded. Bare object pointers, stack reloads after the
+frame escapes, transformed values, multiple matching arguments and incomplete
+declarations remain unresolved. The hint records the method entry, source ABI
+carrier and message parameter index; publication rebuilds the method and
+selector declarations from the current image before accepting the call.
+
 Required Swift value-witness operations have a separate symbol-independent call
 proof. A bounded backward trace must show that the indirect target is loaded
 from the operation's required `metadata[-1][slot]` entry and that the same
