@@ -121,7 +121,7 @@ C 声明库也覆盖 CoreGraphics 和 ImageIO 的导出。不透明的图像及�
 
 当声明参数是指针时，即使 ARM64 通过较窄的 `W` 寄存器构造精确整数零，该值仍表示空指针。源码生成只对这一情况输出显式空指针常量；非零窄整数和缺少声明的指针用途继续按载体不匹配拒绝。
 
-命令行工具 SDK 的声明库未覆盖 UIKit 固定 C 函数，因此这类绑定必须同时精确匹配符号和 dyld 提供库。在 ARM64 上，`NSStringFromCGSize` 复用共享的固定 record ABI：由两个 `double` 组成的 `CGSize` 从两个浮点载体读取，生成的调用仍执行真实 UIKit 函数。弱导入、非零 addend、冲突存储、其他提供库及尚未支持的架构保持未绑定。
+命令行工具 SDK 的声明库未覆盖 UIKit 固定 C 函数，因此这类绑定必须同时精确匹配符号和 dyld 提供库。在 ARM64 上，`NSStringFromCGSize` 与 `UIGraphicsBeginImageContext` 复用共享的固定 record ABI：由两个 `double` 组成的 `CGSize` 从两个浮点载体读取。`UIGraphicsGetCurrentContext` 与 `UIGraphicsGetImageFromCurrentImageContext` 返回不透明指针，`UIGraphicsEndImageContext` 返回 void。生成的源码保留每个真实 UIKit 调用。弱导入、非零 addend、冲突存储、其他提供库及尚未支持的架构保持未绑定。
 
 对于已建立 Foundation 桥接绑定的 Swift 大型永久字符串字面量，可将其 UTF-8 字节重建为共享静态存储。长度、标记、终止字节、UTF-8 有效性、存储不可变性及确切导入必须同时得到验证。原有带标记的表示和桥接调用保持完整；含内嵌零字节的字面量及其他存储形式仍保持未绑定。
 

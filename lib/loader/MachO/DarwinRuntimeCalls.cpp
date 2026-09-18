@@ -66,12 +66,18 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
-  // UIKit declares this fixed function with one by-value CGSize. The
-  // command-line-tools SDK used for DarwinSourceDeclarations.inc has no
-  // UIKit headers or binary, so retain the public contract at the same exact
-  // symbol/provider boundary as the UIKit external storage below.
+  // UIKit declares these fixed functions, including two with a by-value
+  // CGSize. The command-line-tools SDK used for DarwinSourceDeclarations.inc
+  // has no UIKit headers or binary, so retain the public contracts at the same
+  // exact symbol/provider boundary as the UIKit external storage below.
   // https://developer.apple.com/documentation/uikit/nsstringfromcgsize
-  if (Name == "NSStringFromCGSize") {
+  // https://developer.apple.com/documentation/uikit/uigraphicsbeginimagecontext(_:)
+  const bool UIKitFixedFunction =
+      Name == "NSStringFromCGSize" || Name == "UIGraphicsBeginImageContext" ||
+      Name == "UIGraphicsGetCurrentContext" ||
+      Name == "UIGraphicsGetImageFromCurrentImageContext" ||
+      Name == "UIGraphicsEndImageContext";
+  if (UIKitFixedFunction) {
     const auto Bind = Image.DyldBindSlots.find(ImportSlot);
     if (Image.Arch != Arch::AArch64 || Bind == Image.DyldBindSlots.end() ||
         !darwinExportModuleMatches(
@@ -84,12 +90,18 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
     Result.TargetName = Name.str();
     auto &Signature = Result.Signature;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
-    Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
-    const auto Size =
-        NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
-    if (!Size)
-      return std::nullopt;
-    Signature.Parameters = {{"size", Size}};
+    const bool ReturnsPointer =
+        Name == "NSStringFromCGSize" || Name == "UIGraphicsGetCurrentContext" ||
+        Name == "UIGraphicsGetImageFromCurrentImageContext";
+    Signature.ReturnType = ReturnsPointer ? NdType::makePtr(NdType::makeVoid())
+                                          : NdType::makeVoid();
+    if (Name == "NSStringFromCGSize" || Name == "UIGraphicsBeginImageContext") {
+      const auto Size =
+          NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
+      if (!Size)
+        return std::nullopt;
+      Signature.Parameters = {{"size", Size}};
+    }
     std::string Diagnostic;
     if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))
       return std::nullopt;

@@ -277,12 +277,15 @@ authorize a call.
 
 Fixed Darwin C imports may use a public declaration outside the generated
 command-line-tools catalog only at an exact symbol and dyld provider boundary.
-`NSStringFromCGSize` is such a UIKit declaration on ARM64: its natural
-two-double `CGSize` parameter uses the shared homogeneous-record ABI and its
-object result uses the ordinary pointer carrier. Weak imports, addends,
-conflicting storage identities, other providers and architectures without a
-complete record ABI remain unbound. The final source check rebuilds the hint
-from the current image instead of trusting an earlier call-site annotation.
+On ARM64, `NSStringFromCGSize` and `UIGraphicsBeginImageContext` use the shared
+homogeneous-record ABI for their natural two-double `CGSize` parameter.
+`UIGraphicsGetCurrentContext` and
+`UIGraphicsGetImageFromCurrentImageContext` return opaque pointers, while
+`UIGraphicsEndImageContext` returns void; generated source keeps every real
+UIKit call. Weak imports, addends, conflicting storage identities, other
+providers and architectures without the same compiler evidence remain
+unbound. The final source check rebuilds the hint from the current image
+instead of trusting an earlier call-site annotation.
 
 The ARM64 UIKit Objective-C catalog has the same evidence boundary. Each row
 must agree between compiler-produced iPhoneOS and arm64 iPhoneSimulator
