@@ -1297,12 +1297,11 @@ ConstantStringFixture objectPointerTableFixture(Arch Architecture,
   Assign.Kind = StmtKind::Assign;
   Assign.Dst = WideIndex;
   Assign.Val = Wide;
-  auto Guard = HighExpr::makeBinop(NdOp::INT_LESS,
-                                   HighExpr::makeConst(1, 4), WideIndex);
+  auto Guard =
+      HighExpr::makeBinop(NdOp::INT_LESS, HighExpr::makeConst(1, 4), WideIndex);
   Guard->Type = NdType::makeInt(4, false);
   auto Offset =
-      HighExpr::makeBinop(NdOp::INT_MULT, WideIndex,
-                          HighExpr::makeConst(8, 8));
+      HighExpr::makeBinop(NdOp::INT_MULT, WideIndex, HighExpr::makeConst(8, 8));
   auto Address = HighExpr::makeBinop(NdOp::INT_ADD,
                                      HighExpr::makeConst(0x3000, 8), Offset);
   HighStmt Load;
@@ -1363,18 +1362,16 @@ TEST(ObjCSourceBindings,
       auto Allowed =
           readOnlyObjectPointerSourceHelpers(Bound.Function, F.Image);
       ASSERT_EQ(Allowed.size(), 1U);
-      EXPECT_TRUE(
-          objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+      EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
       EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
 
       std::set<std::string> Helpers;
       const auto Source = renderObjCConstantObjectTableHelpers(
           F.Image, Bound.ConstantObjectTables, Helpers);
-      EXPECT_TRUE(Helpers.count(
-          "neverd_objc_constant_object_table_3000_address"));
-      EXPECT_NE(Source.find(
-                    "entries[0] = (const void *)"
-                    "neverd_objc_constant_string_2020_address()"),
+      EXPECT_TRUE(
+          Helpers.count("neverd_objc_constant_object_table_3000_address"));
+      EXPECT_NE(Source.find("entries[0] = (const void *)"
+                            "neverd_objc_constant_string_2020_address()"),
                 std::string::npos);
       EXPECT_NE(Source.find("entries[1] = 0"), std::string::npos);
     }
@@ -1399,14 +1396,13 @@ TEST(ObjCSourceBindings,
     if (Mutation == 4)
       F.Image.DataPtrRelocTargetOwners[0x3000] = 0x1000;
     if (Mutation == 5)
-      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8,
-                                       1);
+      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8, 1);
     if (Mutation == 6)
       Load->MemoryOrdering = NdMemoryOrdering::Acquire;
     if (Mutation == 7) {
       auto &Value = Branch.ElseBody[2].RetVal;
-      Value = HighExpr::makeBinop(NdOp::INT_ADD, Value,
-                                  HighExpr::makeConst(1, 8));
+      Value =
+          HighExpr::makeBinop(NdOp::INT_ADD, Value, HighExpr::makeConst(1, 8));
     }
     if (Mutation == 8)
       Branch.ElseBody.pop_back();
@@ -1418,10 +1414,8 @@ TEST(ObjCSourceBindings,
     SCOPED_TRACE(Mutation);
     auto F = objectPointerTableFixture(Arch::X64, false);
     auto Bound = bindObjCSourceReferences(F.Function, F.Image);
-    const auto Helper = Bound.Function.Body[1]
-                            .ElseBody[0]
-                            .Val->Operands[0]
-                            ->Operands[0];
+    const auto Helper =
+        Bound.Function.Body[1].ElseBody[0].Val->Operands[0]->Operands[0];
     ASSERT_TRUE(Helper->SourceCallHint);
     if (Mutation == 0) {
       HighStmt Escape;
@@ -1436,13 +1430,11 @@ TEST(ObjCSourceBindings,
       Helper->SourceCallHint = std::move(Changed);
     }
     if (Mutation == 2)
-      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8,
-                                       1);
+      llvm::support::endian::write64le(F.Image.Segments[2].Data.data() + 8, 1);
     const auto Allowed =
         readOnlyObjectPointerSourceHelpers(Bound.Function, F.Image);
     EXPECT_TRUE(Allowed.empty());
-    EXPECT_FALSE(
-        objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+    EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
   }
 }
 
@@ -2695,8 +2687,7 @@ TEST(ObjCSourceBindings,
   }
 }
 
-TEST(ObjCSourceBindings,
-     DispatchSpecificKeysKeepExactNamedReadonlyIdentity) {
+TEST(ObjCSourceBindings, DispatchSpecificKeysKeepExactNamedReadonlyIdentity) {
   struct Consumer {
     const char *Name;
     size_t KeyIndex;
@@ -2722,8 +2713,7 @@ TEST(ObjCSourceBindings,
       F.Image.ImportPtrSlots[Slot] = Symbol;
       ASSERT_TRUE(F.Image.recordDyldBindSlot(
           Slot, Symbol, 0, "/usr/lib/system/libdispatch.dylib", false));
-      F.Image.Symbols.push_back(
-          {"_GlobalQueueIdentityKey", Address, 1, false});
+      F.Image.Symbols.push_back({"_GlobalQueueIdentityKey", Address, 1, false});
       const auto Hint = darwinRuntimeSourceCallHint(F.Image, Slot);
       ASSERT_TRUE(Hint);
       ASSERT_LT(KeyIndex, Hint->Signature.Parameters.size());
@@ -2746,8 +2736,7 @@ TEST(ObjCSourceBindings,
       EXPECT_EQ(Bound->SourceCallHint->CallKind,
                 SourceCallTypeHint::Kind::RuntimeAssociationKey);
       EXPECT_EQ(Bound->SourceCallHint->TargetAddress, Address);
-      EXPECT_EQ(Bound->SourceCallHint->TargetName,
-                "_GlobalQueueIdentityKey");
+      EXPECT_EQ(Bound->SourceCallHint->TargetName, "_GlobalQueueIdentityKey");
       EXPECT_TRUE(objcSourceCallBound(*Bound, F.Image, {}));
 
       auto Forged = *Bound->SourceCallHint;
@@ -2758,16 +2747,15 @@ TEST(ObjCSourceBindings,
   }
 }
 
-TEST(ObjCSourceBindings,
-     DispatchSpecificKeysRejectUnprovedIdentityOrContext) {
+TEST(ObjCSourceBindings, DispatchSpecificKeysRejectUnprovedIdentityOrContext) {
   Fixture F;
   F.Image.ObjCSourceReferences.clear();
   constexpr va_t Slot = 0x1020;
   constexpr va_t Address = 0x1040;
   F.Image.ImportPtrSlots[Slot] = "_dispatch_get_specific";
-  ASSERT_TRUE(F.Image.recordDyldBindSlot(
-      Slot, "_dispatch_get_specific", 0,
-      "/usr/lib/system/libdispatch.dylib", false));
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(Slot, "_dispatch_get_specific", 0,
+                                         "/usr/lib/system/libdispatch.dylib",
+                                         false));
   F.Image.Symbols.push_back({"_GlobalQueueIdentityKey", Address, 1, false});
   const auto Hint = darwinRuntimeSourceCallHint(F.Image, Slot);
   ASSERT_TRUE(Hint);
@@ -2782,8 +2770,8 @@ TEST(ObjCSourceBindings,
     SCOPED_TRACE(Case);
     auto Image = F.Image;
     auto Changed = *Hint;
-    Call->Operands[0] = HighExpr::makeConst(
-        Address, 8, ConstantAddressProvenance::DataAddress);
+    Call->Operands[0] =
+        HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
     if (Case == 0)
       Image.Symbols.clear();
     else if (Case == 1)
@@ -2805,8 +2793,8 @@ TEST(ObjCSourceBindings,
   }
 
   // The address is identity-only only in the authenticated key argument.
-  F.Function.Body[0].RetVal = HighExpr::makeConst(
-      Address, 8, ConstantAddressProvenance::DataAddress);
+  F.Function.Body[0].RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
   const auto Ordinary = bindObjCSourceReferences(F.Function, F.Image);
   EXPECT_FALSE(Ordinary.Limitation.empty());
   EXPECT_TRUE(Ordinary.AssociationKeys.empty());
@@ -2825,8 +2813,7 @@ TEST(ObjCSourceBindings,
     Fixture F;
     F.Image.Arch = Architecture;
     F.Image.ObjCSourceReferences.clear();
-    F.Image.Segments[0].Flags =
-        SegmentFlags::Readable | SegmentFlags::Writable;
+    F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
     F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
     F.Image.Symbols.push_back({"_ObserverContext", Address, 1, false});
     F.Image.DynInfo.NeededLibs = {
@@ -2842,10 +2829,10 @@ TEST(ObjCSourceBindings,
     RegistrationHint->Signature = *RegistrationSignature;
     std::vector<ExprPtr> Arguments;
     for (size_t I = 0; I < RegistrationSignature->Parameters.size(); ++I)
-      Arguments.push_back(HighExpr::makeConst(
-          I == 5 ? Address : 0, 8,
-          I == 5 ? ConstantAddressProvenance::DataAddress
-                 : ConstantAddressProvenance::Unknown));
+      Arguments.push_back(
+          HighExpr::makeConst(I == 5 ? Address : 0, 8,
+                              I == 5 ? ConstantAddressProvenance::DataAddress
+                                     : ConstantAddressProvenance::Unknown));
     auto Register = HighExpr::makeCall("objc_msgSend", 0, Arguments);
     Register->Type = RegistrationSignature->ReturnType;
     Register->SourceCallHint = RegistrationHint;
@@ -2853,8 +2840,7 @@ TEST(ObjCSourceBindings,
     auto Bound = bindObjCSourceReferences(F.Function, F.Image);
     ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
     EXPECT_EQ(Bound.KVOContexts, std::set<va_t>{Address});
-    const auto RegisteredContext =
-        Bound.Function.Body[0].RetVal->Operands[5];
+    const auto RegisteredContext = Bound.Function.Body[0].RetVal->Operands[5];
     ASSERT_TRUE(RegisteredContext->SourceCallHint);
     EXPECT_EQ(RegisteredContext->SourceCallHint->CallKind,
               SourceCallTypeHint::Kind::RuntimeKVOContext);
@@ -2883,10 +2869,10 @@ TEST(ObjCSourceBindings,
     ContextParameter.Kind = MedVar::Param;
     ContextParameter.Id = 5;
     ContextParameter.Size = 8;
-    auto Context = HighExpr::makeVar(
-        ContextParameter, Method.TypeHint->Parameters[5].Type);
-    auto Token = HighExpr::makeConst(
-        Address, 8, ConstantAddressProvenance::DataAddress);
+    auto Context = HighExpr::makeVar(ContextParameter,
+                                     Method.TypeHint->Parameters[5].Type);
+    auto Token =
+        HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
     F.Function.Body[0].RetVal =
         HighExpr::makeBinop(NdOp::INT_EQUAL, Context, Token);
     Bound = bindObjCSourceReferences(F.Function, F.Image);
@@ -2906,8 +2892,7 @@ TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
       "observeValueForKeyPath:ofObject:change:context:";
   Fixture F;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
   F.Image.Symbols.push_back({"_ObserverContext", Address, 1, false});
   ObjCMethod Method;
@@ -2920,7 +2905,8 @@ TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
       parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
   ASSERT_TRUE(Method.TypeHint);
   std::string Reason;
-  ASSERT_TRUE(assignDarwinObjCSourceABI(*Method.TypeHint, F.Image.Arch, Reason));
+  ASSERT_TRUE(
+      assignDarwinObjCSourceABI(*Method.TypeHint, F.Image.Arch, Reason));
   F.Image.ObjCMethods = {Method};
   F.Function.Entry = Method.Implementation;
   F.Function.SourceTypeHint = Method.TypeHint;
@@ -2930,12 +2916,11 @@ TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
   ContextParameter.Kind = MedVar::Param;
   ContextParameter.Id = 5;
   ContextParameter.Size = 8;
-  auto Context = HighExpr::makeVar(ContextParameter,
-                                   Method.TypeHint->Parameters[5].Type);
+  auto Context =
+      HighExpr::makeVar(ContextParameter, Method.TypeHint->Parameters[5].Type);
   auto Comparison = HighExpr::makeBinop(
       NdOp::INT_EQUAL, Context,
-      HighExpr::makeConst(Address, 8,
-                          ConstantAddressProvenance::DataAddress));
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress));
   F.Function.Body[0].RetVal = Comparison;
 
   for (unsigned Case = 0; Case < 6; ++Case) {
@@ -2963,8 +2948,8 @@ TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
     EXPECT_TRUE(Result.KVOContexts.empty());
   }
 
-  F.Function.Body[0].RetVal = HighExpr::makeConst(
-      Address, 8, ConstantAddressProvenance::DataAddress);
+  F.Function.Body[0].RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
   const auto Ordinary = bindObjCSourceReferences(F.Function, F.Image);
   EXPECT_FALSE(Ordinary.Limitation.empty());
   EXPECT_TRUE(Ordinary.KVOContexts.empty());
@@ -2974,8 +2959,7 @@ TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
   Fixture F;
   constexpr va_t Address = 0x1040;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
   F.Image.Symbols.push_back({"_ObserverContext", Address, 8, false});
   F.Image.MachOHasChainedFixups = true;
@@ -2983,8 +2967,7 @@ TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
   llvm::support::endian::write64le(
       F.Image.Segments[0].Data.data() + Address - 0x1000, Address);
   F.Function.Body[0].RetVal = HighExpr::makeLoad(
-      HighExpr::makeConst(Address, 8,
-                         ConstantAddressProvenance::DataAddress),
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
       NdType::makeInt(8, false));
 
   auto Result = bindObjCSourceReferences(F.Function, F.Image);
@@ -3013,15 +2996,13 @@ TEST(ObjCSourceBindings, NamedWritableScalarsUseSharedRebuiltStorage) {
   Fixture F;
   constexpr va_t Address = 0x1040;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
   F.Image.Symbols.push_back({"_captureLevel", Address, 8, false});
   llvm::support::endian::write64le(
       F.Image.Segments[0].Data.data() + Address - 0x1000, 31);
   F.Function.Body[0].RetVal = HighExpr::makeLoad(
-      HighExpr::makeConst(Address, 8,
-                         ConstantAddressProvenance::DataAddress),
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
       NdType::makeInt(8, false));
 
   const auto Result = bindObjCSourceReferences(F.Function, F.Image);
@@ -3117,13 +3098,11 @@ TEST(ObjCSourceBindings, PointerAccessesKeepStorageAndValueProofsSeparate) {
       }
 }
 
-TEST(ObjCSourceBindings,
-     NamedWritableAggregateFieldsShareOneRebuiltStorage) {
+TEST(ObjCSourceBindings, NamedWritableAggregateFieldsShareOneRebuiltStorage) {
   Fixture F;
   constexpr va_t Base = 0x1020;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
   F.Image.Symbols.push_back({"_MergedGlobals", Base, 0, false});
   F.Image.Symbols.push_back({"_nextStorage", Base + 0x20, 0, false});
@@ -3133,18 +3112,16 @@ TEST(ObjCSourceBindings,
       F.Image.Segments[0].Data.data() + Base + 20 - 0x1000, 29);
   const auto Field = [](va_t Address) {
     return HighExpr::makeLoad(
-        HighExpr::makeConst(Address, 8,
-                            ConstantAddressProvenance::DataAddress),
+        HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
         NdType::makeInt(4, false));
   };
   F.Function.ReturnType = NdType::makeInt(4, false);
-  F.Function.Body[0].RetVal = HighExpr::makeBinop(
-      NdOp::INT_ADD, Field(Base + 4), Field(Base + 20));
+  F.Function.Body[0].RetVal =
+      HighExpr::makeBinop(NdOp::INT_ADD, Field(Base + 4), Field(Base + 20));
 
   const auto Result = bindObjCSourceReferences(F.Function, F.Image);
   ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
-  EXPECT_EQ(Result.LocalStorageExtents,
-            (std::map<va_t, uint64_t>{{Base, 24}}));
+  EXPECT_EQ(Result.LocalStorageExtents, (std::map<va_t, uint64_t>{{Base, 24}}));
   EXPECT_TRUE(Result.ProfileCounterSections.empty());
   const auto &LeftAddress =
       Result.Function.Body[0].RetVal->Operands[0]->Operands[0];
@@ -3177,8 +3154,7 @@ TEST(ObjCSourceBindings,
 
   auto Relocated = F.Image;
   Relocated.DataPtrRelocSlots.insert(Base + 16);
-  const auto PointerRejected =
-      bindObjCSourceReferences(F.Function, Relocated);
+  const auto PointerRejected = bindObjCSourceReferences(F.Function, Relocated);
   EXPECT_FALSE(PointerRejected.Limitation.empty());
   EXPECT_EQ(PointerRejected.LocalStorageExtents,
             (std::map<va_t, uint64_t>{{Base, 8}}));
@@ -3190,23 +3166,20 @@ TEST(ObjCSourceBindings,
   constexpr va_t Address = 0x1040;
   constexpr va_t Slot = 0x10e0;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
-  F.Image.Symbols.push_back(
-      {"_$s4Test3BoxC7enabledSbvpZ", Address, 1, false});
+  F.Image.Symbols.push_back({"_$s4Test3BoxC7enabledSbvpZ", Address, 1, false});
   F.Image.Segments[0].Data[Address - 0x1000] = 1;
   F.Image.ImportPtrSlots[Slot] = "_swift_beginAccess";
-  ASSERT_TRUE(F.Image.recordDyldBindSlot(
-      Slot, "_swift_beginAccess", 0, "/usr/lib/swift/libswiftCore.dylib",
-      false));
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(Slot, "_swift_beginAccess", 0,
+                                         "/usr/lib/swift/libswiftCore.dylib",
+                                         false));
   const auto Hint = swiftRuntimeSourceCallHint(F.Image, Slot);
   ASSERT_TRUE(Hint);
 
   auto Call = HighExpr::makeCall(
       "swift_beginAccess", Slot,
-      {HighExpr::makeConst(Address, 8,
-                           ConstantAddressProvenance::DataAddress),
+      {HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
        HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
        HighExpr::makeConst(0, 8)});
   Call->Type = NdType::makeVoid();
@@ -3217,8 +3190,7 @@ TEST(ObjCSourceBindings,
   HighStmt Return;
   Return.Kind = StmtKind::Return;
   Return.RetVal = HighExpr::makeLoad(
-      HighExpr::makeConst(Address, 8,
-                         ConstantAddressProvenance::DataAddress),
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
       NdType::makeInt(1, false));
   F.Function.ReturnType = NdType::makeInt(1, false);
   F.Function.Body = {Access, Return};
@@ -3277,15 +3249,13 @@ TEST(ObjCSourceBindings,
   EXPECT_EQ(Typed.LocalStorageExtents,
             (std::map<va_t, uint64_t>{{Address, 1}}));
   ASSERT_TRUE(Typed.Function.Body[0].CallExpr->Operands[0]->SourceCallHint);
-  EXPECT_EQ(Typed.Function.Body[0]
-                .CallExpr->Operands[0]
-                ->SourceCallHint->ByteCount,
-            1U);
+  EXPECT_EQ(
+      Typed.Function.Body[0].CallExpr->Operands[0]->SourceCallHint->ByteCount,
+      1U);
 
   auto InvalidShift = HighExpr::makeBinop(
       NdOp::INT_LEFT,
-      HighExpr::makeConst(Address, 8,
-                         ConstantAddressProvenance::DataAddress),
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
       HighExpr::makeConst(64, 8));
   InvalidShift->Type = NdType::makeInt(8, false);
   const auto UnboundedShift = bindObjCSourceReferences(
@@ -3293,9 +3263,8 @@ TEST(ObjCSourceBindings,
   EXPECT_FALSE(UnboundedShift.Limitation.empty());
   EXPECT_TRUE(UnboundedShift.LocalStorageExtents.empty());
 
-  for (const char *Name :
-       {"_untypedStorage", "_$s4Test3BoxC5valueSSvpZ",
-        "_$s4Test3BoxC7enabledSbvgZ"}) {
+  for (const char *Name : {"_untypedStorage", "_$s4Test3BoxC5valueSSvpZ",
+                           "_$s4Test3BoxC7enabledSbvgZ"}) {
     SCOPED_TRACE(Name);
     const auto Symbol = llvm::find_if(F.Image.Symbols, [](const auto &S) {
       return S.Addr == Address && !S.IsFunc;
@@ -3304,9 +3273,9 @@ TEST(ObjCSourceBindings,
     Symbol->Name = Name;
     EXPECT_FALSE(swiftStaticScalarStorageWidth(Symbol->Name));
     const auto Function = MarkerFunction(RebuiltAddress());
-    EXPECT_TRUE(objc_binding_detail::directLocalStorageAccessExtents(
-                    Function, F.Image)
-                    .empty());
+    EXPECT_TRUE(
+        objc_binding_detail::directLocalStorageAccessExtents(Function, F.Image)
+            .empty());
     const auto Unproved = bindObjCSourceReferences(Function, F.Image);
     EXPECT_FALSE(Unproved.Limitation.empty());
     EXPECT_TRUE(Unproved.LocalStorageExtents.empty());
@@ -3320,8 +3289,8 @@ TEST(ObjCSourceBindings,
   ASSERT_NE(Symbol, F.Image.Symbols.end());
   Symbol->Name = "_$s4Test3BoxC5countSivpZ";
   F.Image.Symbols.push_back({"_nextStorage", Address + 4, 1, false});
-  const auto Overlapping = bindObjCSourceReferences(
-      MarkerFunction(RebuiltAddress()), F.Image);
+  const auto Overlapping =
+      bindObjCSourceReferences(MarkerFunction(RebuiltAddress()), F.Image);
   EXPECT_FALSE(Overlapping.Limitation.empty());
   EXPECT_TRUE(Overlapping.LocalStorageExtents.empty());
 }
@@ -3381,8 +3350,7 @@ TEST(ObjCSourceBindings, UnfairLocksBindExactNamedFourByteStorage) {
   constexpr va_t Address = 0x1040;
   constexpr va_t Slot = 0x10e0;
   F.Image.ObjCSourceReferences.clear();
-  F.Image.Segments[0].Flags =
-      SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
   F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
   F.Image.Symbols.push_back({"_providerLock", Address, 4, false});
   F.Image.ImportPtrSlots[Slot] = "_os_unfair_lock_lock";
@@ -3416,8 +3384,8 @@ TEST(ObjCSourceBindings, UnfairLocksBindExactNamedFourByteStorage) {
   EXPECT_TRUE(Rejected.LocalStorageExtents.empty());
   EXPECT_EQ(Rejected.Function.Body[0].RetVal->Operands[0]->Kind,
             ExprKind::Const);
-  EXPECT_FALSE(objcSourceCallBound(*Rejected.Function.Body[0].RetVal, F.Image,
-                                   {}));
+  EXPECT_FALSE(
+      objcSourceCallBound(*Rejected.Function.Body[0].RetVal, F.Image, {}));
 }
 
 namespace {
@@ -3470,6 +3438,149 @@ TEST(ObjCSourceBindings, ProfileCountersKeepOverlappingStorageAndAccessWidths) {
             std::set<std::string>{"neverd_profile_counters_1000_address"});
   EXPECT_NE(Source.find("[0] = 9"), std::string::npos);
   EXPECT_NE(Source.find("counters[256]"), std::string::npos);
+}
+
+TEST(ObjCSourceBindings,
+     NativeProfileCounterArgumentsRequireBoundedCalleeAccesses) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    ProfileFixture F;
+    F.Image.Arch = Architecture;
+    const ObjCProfileStorage Storage(F.Image);
+
+    HighFunc Callee;
+    Callee.Entry = 0x2000;
+    Callee.Name = "increment_profile_counter";
+    Callee.ReturnType = NdType::makeVoid();
+    const auto PointerType = NdType::makePtr(NdType::makeVoid());
+    Callee.Params = {{"counter", PointerType}};
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = Callee.ReturnType;
+    Signature.Parameters = {{"counter", PointerType}};
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error))
+        << Error;
+    Callee.SourceTypeHint = Signature;
+
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 0;
+    Parameter.Size = 8;
+    Parameter.TheArch = Architecture;
+    const auto Counter = HighExpr::makeVar(Parameter, NdType::makeInt(8));
+    const auto ValueType = NdType::makeInt(8, false);
+    auto Load = HighExpr::makeLoad(Counter, ValueType);
+    HighStmt Store;
+    Store.Kind = StmtKind::Store;
+    Store.StoreAddr = Counter;
+    Store.StoreVal =
+        HighExpr::makeBinop(NdOp::INT_ADD, Load, HighExpr::makeConst(1, 8));
+    HighStmt CalleeReturn;
+    CalleeReturn.Kind = StmtKind::Return;
+    Callee.Body = {Store, CalleeReturn};
+
+    auto Binding = std::make_shared<SourceCallTypeHint>();
+    Binding->CallKind = SourceCallTypeHint::Kind::Native;
+    Binding->TargetAddress = Callee.Entry;
+    Binding->TargetName = Callee.Name;
+    Binding->Signature = Signature;
+    auto Call = HighExpr::makeCall(
+        Callee.Name, Callee.Entry,
+        {HighExpr::makeConst(0x1040, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = Binding;
+    HighStmt CallerReturn;
+    CallerReturn.Kind = StmtKind::Return;
+    CallerReturn.RetVal = Call;
+    F.Function.ReturnType = NdType::makeVoid();
+    F.Function.Body = {CallerReturn};
+    const std::map<va_t, const HighFunc *> Functions{{Callee.Entry, &Callee}};
+
+    const auto Result =
+        bindObjCSourceReferences(F.Function, F.Image, &Storage, &Functions);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    EXPECT_EQ(Result.ProfileCounterSections, std::set<va_t>{0x1000});
+    const auto Argument = Result.Function.Body[0].RetVal->Operands[0];
+    ASSERT_EQ(Argument->Kind, ExprKind::BinOp);
+    ASSERT_EQ(Argument->Operands.size(), 2U);
+    EXPECT_EQ(Argument->Operands[1]->ConstVal, 0x40U);
+    ASSERT_TRUE(Argument->Operands[0]->SourceCallHint);
+    EXPECT_EQ(Argument->Operands[0]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeProfileCounterStorage);
+    EXPECT_TRUE(objcSourceCallBound(*Argument->Operands[0], F.Image, Functions,
+                                    &Storage));
+    EXPECT_TRUE(objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image,
+                                    Functions, &Storage));
+  }
+}
+
+TEST(ObjCSourceBindings,
+     NativeProfileCounterArgumentsRejectEscapesAndUnprovedAccesses) {
+  for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ProfileFixture F;
+    const ObjCProfileStorage Storage(F.Image);
+    const auto PointerType = NdType::makePtr(NdType::makeVoid());
+    HighFunc Callee;
+    Callee.Entry = 0x2000;
+    Callee.Name = "profile_counter_user";
+    Callee.ReturnType = NdType::makeVoid();
+    Callee.Params = {{"counter", PointerType}};
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = Callee.ReturnType;
+    Signature.Parameters = {{"counter", PointerType}};
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, F.Image.Arch, Error));
+    Callee.SourceTypeHint = Signature;
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 0;
+    Parameter.Size = 8;
+    Parameter.TheArch = F.Image.Arch;
+    const auto Counter = HighExpr::makeVar(Parameter, NdType::makeInt(8));
+    auto Load = HighExpr::makeLoad(Counter, NdType::makeInt(8, false));
+    HighStmt Use;
+    Use.Kind = StmtKind::Return;
+    Use.RetVal = Load;
+    Callee.Body = {Use};
+    if (Mutation == 0)
+      Use.RetVal = Counter;
+    else if (Mutation == 1)
+      Use.RetVal = HighExpr::makeCall("escape", 0x3000, {Counter});
+    else if (Mutation == 2)
+      Load->MemoryOrdering = NdMemoryOrdering::Acquire;
+    else if (Mutation == 3)
+      Load->Type = NdType::makePtr(NdType::makeVoid());
+    else if (Mutation == 4)
+      Load->Operands[0] = HighExpr::makeBinop(NdOp::INT_ADD, Counter,
+                                              HighExpr::makeConst(8, 8));
+    Callee.Body = {Use};
+
+    auto Binding = std::make_shared<SourceCallTypeHint>();
+    Binding->CallKind = SourceCallTypeHint::Kind::Native;
+    Binding->TargetAddress = Callee.Entry;
+    Binding->TargetName = Callee.Name;
+    Binding->Signature = Signature;
+    const va_t Address = Mutation == 5 ? 0x10f9 : 0x1040;
+    auto Call = HighExpr::makeCall(
+        Callee.Name, Callee.Entry,
+        {HighExpr::makeConst(Address, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = Binding;
+    F.Function.Body[0].RetVal = Call;
+    const std::map<va_t, const HighFunc *> Present{{Callee.Entry, &Callee}};
+    const std::map<va_t, const HighFunc *> Missing;
+    const auto &Functions = Mutation == 6 ? Missing : Present;
+    const auto Result =
+        bindObjCSourceReferences(F.Function, F.Image, &Storage, &Functions);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.ProfileCounterSections.empty());
+    EXPECT_EQ(Result.Function.Body[0].RetVal->Operands[0]->Kind,
+              ExprKind::Const);
+  }
 }
 
 TEST(ObjCSourceBindings, ProfileCountersRejectUnprovedStorageAndEffects) {
@@ -3826,16 +3937,13 @@ TEST(ObjCSourceBindings,
   EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
   EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
   Binding->SelectorArgumentStorageUse->FrameOffset = -24;
-  EXPECT_FALSE(
-      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
   Binding->SelectorArgumentStorageUse = Use;
   Owner.FrameSize = 24;
-  EXPECT_FALSE(
-      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
   Owner.FrameSize = 64;
   Binding->SelectorArgumentStorageUse.reset();
-  EXPECT_FALSE(
-      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
 }
 
 namespace {
@@ -3911,8 +4019,7 @@ struct ObjectFixture {
     auto Call = HighExpr::makeCall("objc_opt_self", RuntimeSlot, {Object});
     Call->Type = NdType::makePtr(NdType::makeVoid());
     if (Binding)
-      Call->SourceCallHint =
-          std::make_shared<SourceCallTypeHint>(*Binding);
+      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Binding);
     HighFunc Function;
     Function.ReturnType = Call->Type;
     HighStmt Return;
@@ -3944,8 +4051,7 @@ TEST(ObjCSourceBindings,
   }
 }
 
-TEST(ObjCSourceBindings,
-     DirectClassRuntimeArgumentsUseVerifiedObjectIdentity) {
+TEST(ObjCSourceBindings, DirectClassRuntimeArgumentsUseVerifiedObjectIdentity) {
   ObjectFixture Fixture;
   for (va_t Address :
        {ObjectFixture::ClassAddress, ObjectFixture::MetaAddress}) {
@@ -3972,8 +4078,8 @@ TEST(ObjCSourceBindings,
      DirectClassRuntimeArgumentsRequireAnExactImportedBinding) {
   for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
     ObjectFixture Fixture;
-    auto Function = Fixture.runtime(
-        HighExpr::makeConst(ObjectFixture::ClassAddress, 8));
+    auto Function =
+        Fixture.runtime(HighExpr::makeConst(ObjectFixture::ClassAddress, 8));
     if (Mutation == 0)
       Fixture.Image.DyldBindSlots[ObjectFixture::RuntimeSlot].Module =
           "/tmp/libobjc.A.dylib";

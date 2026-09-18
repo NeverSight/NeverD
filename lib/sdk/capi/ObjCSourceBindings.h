@@ -1,6 +1,7 @@
 #ifndef NEVERD_SDK_CAPI_OBJCSOURCEBINDINGS_H
 #define NEVERD_SDK_CAPI_OBJCSOURCEBINDINGS_H
 
+#include "../../ir/high/pass/HighFrameAddress.h"
 #include "../../loader/ObjC/ObjCRuntimeData.h"
 #include "BorrowedByteSources.h"
 #include "CStringStorageSources.h"
@@ -8,7 +9,6 @@
 #include "ObjCProfileStorage.h"
 #include "ObjCReadOnlyScalarSources.h"
 #include "ObjCSourceProjection.h"
-#include "../../ir/high/pass/HighFrameAddress.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
@@ -215,14 +215,12 @@ associationKeyHint(const BinaryImage &Image, va_t Address) {
 }
 
 inline const Symbol *uniqueWritableDataSymbol(const BinaryImage &Image,
-                                              va_t Address,
-                                              uint64_t Width) {
+                                              va_t Address, uint64_t Width) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
       Image.MachOChainedFixupsAmbiguous || !Address || !Width ||
-      Width > 1024 * 1024 ||
-      Width > InvalidVA - Address)
+      Width > 1024 * 1024 || Width > InvalidVA - Address)
     return nullptr;
   const auto *Section = Image.getSectionFor(Address);
   const auto *Segment = Image.getSegmentFor(Address);
@@ -230,7 +228,8 @@ inline const Symbol *uniqueWritableDataSymbol(const BinaryImage &Image,
       !Section->isWritable() || Section->isExecutable() ||
       !Segment->isReadable() || !Segment->isWritable() ||
       Segment->isExecutable() || Address < Section->VA ||
-      Address < Segment->VA || Width > Section->Size - (Address - Section->VA) ||
+      Address < Segment->VA ||
+      Width > Section->Size - (Address - Section->VA) ||
       Width > Segment->Size - (Address - Segment->VA) ||
       !Image.readVA(Address, Width))
     return nullptr;
@@ -253,8 +252,8 @@ inline const Symbol *uniqueWritableDataSymbol(const BinaryImage &Image,
 inline std::optional<SourceCallTypeHint>
 staticIdentityHint(const BinaryImage &Image, va_t Address) {
   const auto *Symbol = uniqueWritableDataSymbol(Image, Address, 8);
-  const auto Value = Symbol ? objc::RuntimeData(Image).localPointer(Address)
-                            : std::nullopt;
+  const auto Value =
+      Symbol ? objc::RuntimeData(Image).localPointer(Address) : std::nullopt;
   if (!Symbol || !Value || *Value != Address ||
       !Image.MachOResolvedChainedPointerSlots.count(Address))
     return std::nullopt;
@@ -425,8 +424,7 @@ oncePredicateStorageHint(const BinaryImage &Image, va_t Address) {
 /// emitted field accesses without treating the distance to the next symbol as
 /// an object extent.
 inline std::optional<SourceCallTypeHint>
-localStorageAccessHint(const BinaryImage &Image, va_t Address,
-                       uint64_t Width) {
+localStorageAccessHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   if (auto Exact = localStorageHint(Image, Address, Width))
     return Exact;
   if (!Address || !Width || Width > InvalidVA - Address)
@@ -490,8 +488,7 @@ directLocalStorageAccessExtents(const HighFunc &Function,
   std::function<void(const ExprPtr &)> Scan = [&](const ExprPtr &Expression) {
     if (!Expression || !Seen.insert(Expression.get()).second)
       return;
-    if (Expression->Kind == ExprKind::Load &&
-        Expression->Operands.size() == 1)
+    if (Expression->Kind == ExprKind::Load && Expression->Operands.size() == 1)
       Record(Expression->Operands[0], Expression->Type,
              Expression->MemoryOrdering, Expression->MemoryAddressSpace);
     if (Expression->Kind == ExprKind::Store &&
@@ -510,8 +507,8 @@ directLocalStorageAccessExtents(const HighFunc &Function,
   return Result;
 }
 
-inline std::optional<size_t>
-identityKeyParameter(const HighExpr &Expression, const BinaryImage &Image) {
+inline std::optional<size_t> identityKeyParameter(const HighExpr &Expression,
+                                                  const BinaryImage &Image) {
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -555,10 +552,9 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
       Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
-      Hint.DoesNotReturn || Hint.WeakImport ||
-      Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
-      Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
-      !Hint.SwiftStringInputs.empty() ||
+      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+      Hint.RuntimeObjCResultType || Hint.ValueWitness ||
+      !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
       Expression.Operands.size() != Hint.Signature.Parameters.size() ||
       ContextParameter >= Expression.Operands.size())
     return std::nullopt;
@@ -605,7 +601,8 @@ kvoCallbackContextParameter(const HighFunc &Function,
       Function.Params[ContextParameter].Type->Kind != NdTypeKind::Ptr)
     return std::nullopt;
   for (size_t I = 0; I < Function.Params.size(); ++I)
-    if (Function.Params[I].Name != Function.SourceTypeHint->Parameters[I].Name ||
+    if (Function.Params[I].Name !=
+            Function.SourceTypeHint->Parameters[I].Name ||
         !equalSourceTypes(Function.Params[I].Type,
                           Function.SourceTypeHint->Parameters[I].Type))
       return std::nullopt;
@@ -637,6 +634,118 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
   if (!assignDarwinScalarSourceABI(Hint.Signature, Architecture, Reason))
     return std::nullopt;
   return Hint;
+}
+
+/// A profile-counter address may cross a native source-call boundary only
+/// when the complete typed callee proves that this parameter is used solely
+/// as the exact address of bounded numeric loads/stores.  The source ABI's
+/// pointer type alone says nothing about pointee width or escape behavior.
+inline std::optional<va_t>
+nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
+                             va_t Address, const ObjCProfileStorage &Storage) {
+  if (!Function.SourceTypeHint ||
+      Function.Params.size() != Function.SourceTypeHint->Parameters.size() ||
+      Parameter >= Function.Params.size() || !Function.Params[Parameter].Type ||
+      Function.Params[Parameter].Type->Kind != NdTypeKind::Ptr ||
+      !Function.SourceTypeHint->Parameters[Parameter].Type ||
+      Function.SourceTypeHint->Parameters[Parameter].Type->Kind !=
+          NdTypeKind::Ptr ||
+      !equalSourceTypes(Function.Params[Parameter].Type,
+                        Function.SourceTypeHint->Parameters[Parameter].Type))
+    return std::nullopt;
+  for (size_t I = 0; I < Function.Params.size(); ++I)
+    if (Function.Params[I].Name !=
+            Function.SourceTypeHint->Parameters[I].Name ||
+        !equalSourceTypes(Function.Params[I].Type,
+                          Function.SourceTypeHint->Parameters[I].Type))
+      return std::nullopt;
+
+  size_t Budget = 100000;
+  bool Valid = true, Used = false;
+  std::optional<va_t> Base;
+  auto Contains = [&](const auto &Self, const ExprPtr &Expression,
+                      unsigned Depth) -> bool {
+    if (!Expression || !Budget || Depth > 200)
+      return false;
+    --Budget;
+    if (Expression->Kind == ExprKind::Var &&
+        Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
+        static_cast<size_t>(Expression->Var.Id) == Parameter)
+      return true;
+    for (const auto &Operand : Expression->Operands)
+      if (Self(Self, Operand, Depth + 1))
+        return true;
+    return false;
+  };
+  auto Access = [&](const ExprPtr &Pointer, const TypeRef &Type,
+                    NdMemoryOrdering Ordering,
+                    NdMemoryAddressSpace AddressSpace) {
+    if (!Valid || !Contains(Contains, Pointer, 0))
+      return;
+    if (!exactParameterValue(Pointer, Parameter) || !Type ||
+        Type->Kind == NdTypeKind::Ptr ||
+        !localStorageAccessTypeSupported(Type) ||
+        Ordering != NdMemoryOrdering::None ||
+        AddressSpace != NdMemoryAddressSpace::Default) {
+      Valid = false;
+      return;
+    }
+    const auto Section = Storage.sectionFor(Address, Type->Size);
+    if (!Section || (Base && *Base != *Section)) {
+      Valid = false;
+      return;
+    }
+    Base = *Section;
+    Used = true;
+  };
+  std::function<void(const ExprPtr &, unsigned)> Scan;
+  Scan = [&](const ExprPtr &Expression, unsigned Depth) {
+    if (!Expression || !Valid)
+      return;
+    if (!Budget || Depth > 200) {
+      Valid = false;
+      return;
+    }
+    --Budget;
+    if (Expression->Kind == ExprKind::Load &&
+        Expression->Operands.size() == 1) {
+      Access(Expression->Operands[0], Expression->Type,
+             Expression->MemoryOrdering, Expression->MemoryAddressSpace);
+      if (Contains(Contains, Expression->Operands[0], 0))
+        return;
+    }
+    if (Expression->Kind == ExprKind::Store &&
+        Expression->Operands.size() == 2 && Expression->Operands[1]) {
+      Access(Expression->Operands[0], Expression->Operands[1]->Type,
+             Expression->MemoryOrdering, Expression->MemoryAddressSpace);
+      if (Contains(Contains, Expression->Operands[0], 0)) {
+        Scan(Expression->Operands[1], Depth + 1);
+        return;
+      }
+    }
+    if (Expression->Kind == ExprKind::Var &&
+        Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
+        static_cast<size_t>(Expression->Var.Id) == Parameter) {
+      Valid = false;
+      return;
+    }
+    for (const auto &Operand : Expression->Operands)
+      Scan(Operand, Depth + 1);
+  };
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    const bool DirectStore = Statement.Kind == StmtKind::Store &&
+                             Statement.StoreVal &&
+                             Contains(Contains, Statement.StoreAddr, 0);
+    if (DirectStore)
+      Access(Statement.StoreAddr, Statement.StoreVal->Type,
+             Statement.MemoryOrdering, Statement.MemoryAddressSpace);
+    forEachExpr(Statement, [&](const ExprPtr &Expression) {
+      if (DirectStore && Expression == Statement.StoreAddr)
+        return;
+      Scan(Expression, 0);
+    });
+  });
+  return Valid && Used && Budget ? Base : std::nullopt;
 }
 
 struct ClassObjectIdentity {
@@ -687,12 +796,10 @@ inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
   const auto Integer = [&](const auto &Self, const HighExpr &E,
                            unsigned CurrentDepth) -> std::optional<uint64_t> {
     if (CurrentDepth > 128 || !E.Type || !E.Type->Size || E.Type->Size > 8 ||
-        (E.Type->Kind != NdTypeKind::Int &&
-         E.Type->Kind != NdTypeKind::Ptr))
+        (E.Type->Kind != NdTypeKind::Int && E.Type->Kind != NdTypeKind::Ptr))
       return std::nullopt;
     const auto Mask = [](uint16_t Bytes) {
-      return Bytes == 8 ? UINT64_MAX
-                        : (UINT64_C(1) << (Bytes * 8)) - 1;
+      return Bytes == 8 ? UINT64_MAX : (UINT64_C(1) << (Bytes * 8)) - 1;
     };
     const auto Normalize = [&](uint64_t Value) {
       return Value & Mask(E.Type->Size);
@@ -702,12 +809,12 @@ inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
     if ((E.Kind == ExprKind::Cast || E.Kind == ExprKind::BitCast) &&
         E.Operands.size() == 1 && E.Operands[0] && E.Operands[0]->Type) {
       const auto Value = Self(Self, *E.Operands[0], CurrentDepth + 1);
-      if (!Value ||
-          (E.Kind == ExprKind::BitCast &&
-           E.Operands[0]->Type->Size != E.Type->Size))
+      if (!Value || (E.Kind == ExprKind::BitCast &&
+                     E.Operands[0]->Type->Size != E.Type->Size))
         return std::nullopt;
       uint64_t Result = *Value & Mask(E.Operands[0]->Type->Size);
-      if (E.Kind == ExprKind::Cast && E.Type->Size > E.Operands[0]->Type->Size &&
+      if (E.Kind == ExprKind::Cast &&
+          E.Type->Size > E.Operands[0]->Type->Size &&
           E.Operands[0]->Type->IsSigned) {
         const unsigned Bits = E.Operands[0]->Type->Size * 8;
         if (Result & (UINT64_C(1) << (Bits - 1)))
@@ -721,8 +828,7 @@ inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
       if (!Value)
         return std::nullopt;
       uint64_t Result = *Value & Mask(E.Operands[0]->Type->Size);
-      if (E.Op == NdOp::INT_SEXT &&
-          E.Type->Size >= E.Operands[0]->Type->Size) {
+      if (E.Op == NdOp::INT_SEXT && E.Type->Size >= E.Operands[0]->Type->Size) {
         const unsigned Bits = E.Operands[0]->Type->Size * 8;
         if (Result & (UINT64_C(1) << (Bits - 1)))
           Result |= ~Mask(E.Operands[0]->Type->Size);
@@ -736,9 +842,8 @@ inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
         Result = uint64_t(0) - Result;
       return Normalize(Result);
     }
-    if (E.Kind != ExprKind::BinOp || E.Operands.size() != 2 ||
-        !E.Operands[0] || !E.Operands[1] || !E.Operands[0]->Type ||
-        !E.Operands[1]->Type)
+    if (E.Kind != ExprKind::BinOp || E.Operands.size() != 2 || !E.Operands[0] ||
+        !E.Operands[1] || !E.Operands[0]->Type || !E.Operands[1]->Type)
       return std::nullopt;
     const auto Left = Self(Self, *E.Operands[0], CurrentDepth + 1);
     const auto Right = Self(Self, *E.Operands[1], CurrentDepth + 1);
@@ -786,8 +891,8 @@ inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
     }
     case NdOp::CONCAT: {
       const unsigned LowBits = E.Operands[1]->Type->Size * 8;
-      if (E.Type->Size != E.Operands[0]->Type->Size +
-                              E.Operands[1]->Type->Size ||
+      if (E.Type->Size !=
+              E.Operands[0]->Type->Size + E.Operands[1]->Type->Size ||
           LowBits >= 64)
         return std::nullopt;
       Result = (*Left << LowBits) | *Right;
@@ -917,9 +1022,10 @@ inline bool isRuntimeReference(SourceCallTypeHint::Kind Kind) {
 /// Clone before attaching relocation bindings: other native exports keep the
 /// original HighIR. A load from a proven runtime slot is a runtime query; the
 /// address of that slot is never itself replaced with the loaded value.
-inline ObjCSourceBindingResult
-bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
-                         const ObjCProfileStorage *ProfileStorage = nullptr) {
+inline ObjCSourceBindingResult bindObjCSourceReferences(
+    const HighFunc &Function, const BinaryImage &Image,
+    const ObjCProfileStorage *ProfileStorage = nullptr,
+    const std::map<va_t, const HighFunc *> *Functions = nullptr) {
   using namespace objc_binding_detail;
   ObjCSourceBindingResult Result{Function};
   std::optional<ObjCProfileStorage> LocalStorage;
@@ -1198,11 +1304,11 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
       if (const auto Found = ObjectPointerLoads.find(Original.get());
           Found != ObjectPointerLoads.end()) {
         const auto &Plan = Found->second;
-        const auto Entries = constantObjectTableEntries(
-            Image, Plan.Base, Plan.Extent);
-        auto Hint = Entries ? constantObjectTableHint(Image, Plan.Base,
-                                                      Plan.Extent)
-                            : std::nullopt;
+        const auto Entries =
+            constantObjectTableEntries(Image, Plan.Base, Plan.Extent);
+        auto Hint = Entries
+                        ? constantObjectTableHint(Image, Plan.Base, Plan.Extent)
+                        : std::nullopt;
         if (Hint) {
           auto Base = HighExpr::makeCall({}, 0, {});
           Base->Type = NdType::makeInt(8, false);
@@ -1217,8 +1323,7 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
           for (const auto &Entry : *Entries) {
             if (!Entry.Target)
               continue;
-            (Entry.IsString ? Result.ConstantStrings
-                            : Result.ConstantObjects)
+            (Entry.IsString ? Result.ConstantStrings : Result.ConstantObjects)
                 .insert(Entry.Target);
           }
           return Expression;
@@ -1273,6 +1378,46 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
       Result.Dependencies.insert(Expression->SourceCallHint->TargetAddress);
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {
       auto &Operand = Expression->Operands[Index];
+      // Rebuild a profile-counter pointer passed to a native dependency only
+      // after that dependency's complete typed body proves bounded numeric
+      // accesses and no escape of the parameter.
+      if (Operand && Functions && Expression->Kind == ExprKind::Call &&
+          Expression->SourceCallHint &&
+          Expression->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::Native) {
+        const auto &Binding = *Expression->SourceCallHint;
+        const auto Callee = Functions->find(Binding.TargetAddress);
+        const auto Address = constantAddress(*Operand);
+        if (Callee != Functions->end() && Callee->second && Address &&
+            Index < Binding.Signature.Parameters.size() &&
+            Binding.Signature.Parameters.size() ==
+                Expression->Operands.size() &&
+            Binding.Signature.Parameters[Index].Type &&
+            Binding.Signature.Parameters[Index].Type->Kind == NdTypeKind::Ptr &&
+            Callee->second->SourceTypeHint &&
+            objc_projection_detail::sameHint(Binding.Signature,
+                                             *Callee->second->SourceTypeHint)) {
+          const auto Base = nativeProfileCounterArgument(
+              *Callee->second, Index, *Address, *ProfileStorage);
+          auto Hint =
+              Base ? profileStorageHint(Image.Arch, *Base) : std::nullopt;
+          if (Hint) {
+            auto Storage = HighExpr::makeCall({}, 0, {});
+            Storage->Type = Operand->Type;
+            Storage->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+            Operand = *Address == *Base
+                          ? Storage
+                          : HighExpr::makeBinop(
+                                NdOp::INT_ADD, Storage,
+                                HighExpr::makeConst(
+                                    *Address - *Base, 8,
+                                    ConstantAddressProvenance::Scalar));
+            Result.ProfileCounterSections.insert(*Base);
+            continue;
+          }
+        }
+      }
       // A bounded content consumer may use a copied byte buffer. This proof
       // belongs to this operand occurrence: pointer identity, ordinary loads,
       // escaping addresses and unrelated calls do not inherit it.
@@ -1375,9 +1520,8 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
       // the exact declared registration argument, or where the unique matching
       // callback compares its context parameter directly for equality. Other
       // uses of the same address remain unresolved image-data references.
-      const bool KVORegistration =
-          Operand &&
-          kvoRegistrationContextParameter(*Expression, Image) == Index;
+      const bool KVORegistration = Operand && kvoRegistrationContextParameter(
+                                                  *Expression, Image) == Index;
       const bool KVOCallbackComparison =
           Operand && KVOCallbackParameter &&
           Expression->Kind == ExprKind::BinOp &&
@@ -1411,30 +1555,29 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
         const auto Expected =
             runtimeSourceCallHint(Image, *Expression->SourceCallHint);
         const auto Address = constantAddress(*Operand);
-        const auto Extent =
-            Address ? DirectLocalStorage.find(*Address)
-                    : DirectLocalStorage.end();
+        const auto Extent = Address ? DirectLocalStorage.find(*Address)
+                                    : DirectLocalStorage.end();
         std::optional<uint64_t> Width;
         if (Extent != DirectLocalStorage.end())
           Width = Extent->second;
         else if (Address)
           if (const auto *Symbol = uniqueWritableDataSymbol(Image, *Address, 1))
             Width = swiftStaticScalarStorageWidth(Symbol->Name);
-        auto Hint =
-            Expected && runtimeBindingMatches(*Expression->SourceCallHint,
-                                              *Expected) &&
-                    Expression->Operands.size() ==
-                        Expected->Signature.Parameters.size() &&
-                    Width
-                ? localStorageHint(Image, *Address, *Width)
-                : std::nullopt;
+        auto Hint = Expected &&
+                            runtimeBindingMatches(*Expression->SourceCallHint,
+                                                  *Expected) &&
+                            Expression->Operands.size() ==
+                                Expected->Signature.Parameters.size() &&
+                            Width
+                        ? localStorageHint(Image, *Address, *Width)
+                        : std::nullopt;
         if (Hint) {
           auto Storage = HighExpr::makeCall({}, 0, {});
           Storage->Type = Operand->Type;
           Storage->SourceCallHint =
               std::make_shared<SourceCallTypeHint>(std::move(*Hint));
-          Result.LocalStorageExtents[*Address] = std::max<uint64_t>(
-              Result.LocalStorageExtents[*Address], *Width);
+          Result.LocalStorageExtents[*Address] =
+              std::max<uint64_t>(Result.LocalStorageExtents[*Address], *Width);
           Operand = std::move(Storage);
           continue;
         }
@@ -1507,8 +1650,7 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
         const auto RuntimeImport =
             Image.DyldBindSlots.find(CallBinding.TargetAddress);
         const bool RuntimeArgument =
-            ExpectedRuntime &&
-            RuntimeImport != Image.DyldBindSlots.end() &&
+            ExpectedRuntime && RuntimeImport != Image.DyldBindSlots.end() &&
             RuntimeImport->second.Module == "/usr/lib/libobjc.A.dylib" &&
             runtimeBindingMatches(CallBinding, *ExpectedRuntime);
         if ((MessageReceiver || RuntimeArgument) &&
@@ -1623,8 +1765,7 @@ privateFrameArgumentOffset(const ExprPtr &Argument, const HighFunc &Function,
   for (const auto &Statement : Function.Body) {
     if (Statement.Kind != StmtKind::Assign || !Statement.Dst ||
         !Statement.Val || Statement.Dst->Kind != ExprKind::Var ||
-        !Statement.Dst->Type ||
-        Statement.Dst->Type->Size != TRI.PointerSize ||
+        !Statement.Dst->Type || Statement.Dst->Type->Size != TRI.PointerSize ||
         Statement.Dst->Var.Size != TRI.PointerSize ||
         Statement.MemoryOrdering != NdMemoryOrdering::None ||
         Statement.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
@@ -1645,12 +1786,12 @@ privateFrameArgumentOffset(const ExprPtr &Argument, const HighFunc &Function,
   return Offset;
 }
 
-inline bool objcSourceCallBound(
-    const HighExpr &Expression, const BinaryImage &Image,
-    const std::map<va_t, const HighFunc *> &Functions,
-    const ObjCProfileStorage *ProfileStorage = nullptr,
-    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr,
-    const HighFunc *ContainingFunction = nullptr) {
+inline bool
+objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
+                    const std::map<va_t, const HighFunc *> &Functions,
+                    const ObjCProfileStorage *ProfileStorage = nullptr,
+                    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr,
+                    const HighFunc *ContainingFunction = nullptr) {
   using namespace objc_binding_detail;
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
@@ -1714,12 +1855,11 @@ inline bool objcSourceCallBound(
     return false;
   if (Binding.SelectorArgumentStorageUse) {
     const auto &Evidence = *Binding.SelectorArgumentStorageUse;
-    if (!ContainingFunction ||
-        Evidence.Parameter >= Expression.Operands.size())
+    if (!ContainingFunction || Evidence.Parameter >= Expression.Operands.size())
       return false;
-    const auto Offset = privateFrameArgumentOffset(
-        Expression.Operands[Evidence.Parameter], *ContainingFunction,
-        Image.Arch);
+    const auto Offset =
+        privateFrameArgumentOffset(Expression.Operands[Evidence.Parameter],
+                                   *ContainingFunction, Image.Arch);
     if (!Offset || *Offset != Evidence.FrameOffset)
       return false;
   }
@@ -1764,8 +1904,8 @@ inline bool objcSourceCallBound(
         Expression.IsIndirectCall || Expression.CallAddr ||
         !Expression.CallTarget.empty() || !Expression.IntrinsicOutputs.empty())
       return false;
-    const auto Expected = constantObjectTableHint(
-        Image, Binding.TargetAddress, Binding.ByteCount);
+    const auto Expected = constantObjectTableHint(Image, Binding.TargetAddress,
+                                                  Binding.ByteCount);
     return Expected && Binding.TargetName.empty() && Binding.Selector.empty() &&
            Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
            Binding.BorrowedByteInputs.empty() &&
@@ -2016,14 +2156,14 @@ renderObjCKVOContextHelpers(const std::set<va_t> &Contexts,
   return Source;
 }
 
-inline std::string renderObjCConstantObjectTableHelpers(
-    const BinaryImage &Image, const std::map<va_t, uint32_t> &Tables,
-    std::set<std::string> &SharedFunctions) {
+inline std::string
+renderObjCConstantObjectTableHelpers(const BinaryImage &Image,
+                                     const std::map<va_t, uint32_t> &Tables,
+                                     std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (const auto &[Address, ByteCount] : Tables) {
-    const auto Entries =
-        objc_binding_detail::constantObjectTableEntries(Image, Address,
-                                                        ByteCount);
+    const auto Entries = objc_binding_detail::constantObjectTableEntries(
+        Image, Address, ByteCount);
     if (!Entries)
       throw std::runtime_error("constant-object table is no longer valid");
     const std::string Name = "neverd_objc_constant_object_table_" +
@@ -2040,7 +2180,8 @@ inline std::string renderObjCConstantObjectTableHelpers(
                 llvm::utohexstr(Entry.Target, true) + "_address(void);\n";
     }
     Source += "  static const void *entries[" +
-              std::to_string(Entries->size()) + "];\n"
+              std::to_string(Entries->size()) +
+              "];\n"
               "  static unsigned state;\n"
               "  if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {\n"
               "    unsigned expected = 0;\n"
@@ -2071,8 +2212,8 @@ renderObjCStaticIdentityHelpers(const std::set<va_t> &Identities,
                                 std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (va_t Address : Identities) {
-    const std::string Name = "neverd_static_identity_" +
-                             llvm::utohexstr(Address, true) + "_address";
+    const std::string Name =
+        "neverd_static_identity_" + llvm::utohexstr(Address, true) + "_address";
     SharedFunctions.insert(Name);
     Source += "\nuintptr_t " + Name +
               "(void) {\n"
@@ -2082,9 +2223,10 @@ renderObjCStaticIdentityHelpers(const std::set<va_t> &Identities,
   return Source;
 }
 
-inline std::string renderObjCLocalStorageHelpers(
-    const BinaryImage &Image, const std::map<va_t, uint64_t> &Storage,
-    std::set<std::string> &SharedFunctions) {
+inline std::string
+renderObjCLocalStorageHelpers(const BinaryImage &Image,
+                              const std::map<va_t, uint64_t> &Storage,
+                              std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (const auto &[Address, Width] : Storage) {
     if (!objc_binding_detail::localStorageHint(Image, Address, Width))
@@ -2092,8 +2234,8 @@ inline std::string renderObjCLocalStorageHelpers(
     const auto *Bytes = Image.readVA(Address, Width);
     if (!Bytes)
       continue;
-    const std::string Name = "neverd_local_storage_" +
-                             llvm::utohexstr(Address, true) + "_address";
+    const std::string Name =
+        "neverd_local_storage_" + llvm::utohexstr(Address, true) + "_address";
     SharedFunctions.insert(Name);
     if (const auto Target = objc_binding_detail::localStringPointerInitializer(
             Image, Address, Width)) {
@@ -2133,8 +2275,7 @@ inline std::string renderObjCLocalStorageHelpers(
         continue;
       if (Any)
         Source += ", ";
-      Source += "[" + std::to_string(I) + "] = " +
-                std::to_string(Bytes[I]);
+      Source += "[" + std::to_string(I) + "] = " + std::to_string(Bytes[I]);
       Any = true;
     }
     if (!Any)

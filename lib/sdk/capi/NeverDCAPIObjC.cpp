@@ -168,7 +168,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       auto OnceBinding =
           bindSwiftOnceSourceReferences(Inputs, S->Img, OncePlan, Functions);
       auto Binding = bindObjCSourceReferences(OnceBinding.Function, S->Img,
-                                              &ProfileStorage);
+                                              &ProfileStorage, &Functions);
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
                                   OnceBinding.Dependencies.end());
       for (const auto &[Address, Width] : OnceBinding.LocalStorageExtents)
