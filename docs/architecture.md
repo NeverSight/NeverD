@@ -298,6 +298,12 @@ catalogs retain declaration owners and hierarchy separately from selector-wide
 agreement. The SDK revalidates the receiver origin and applicable declarations
 against the current image before publishing source. These facts neither select
 an IMP nor authorize binary rewriting.
+An agreed named object result extends that provenance through the declared
+message-result step. Exact ARC routines whose catalog contract returns their
+object argument preserve the complete step after normal call clobbers. For
+example, UIKit's `+[UIScreen mainScreen]` result remains a `UIScreen` receiver
+after `objc_retainAutoreleasedReturnValue`, so `-[UIScreen scale]` uses its
+owner-qualified `double` ABI instead of an incompatible selector-wide guess.
 An authenticated `objc_msgSend` or `objc_msgSendSuper2` target has the Darwin
 call-preservation contract even when its selector declaration is unavailable.
 Across such a call, the dataflow may retain only receiver identities held in

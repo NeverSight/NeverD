@@ -5935,6 +5935,8 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
       {"UIImage", "initWithCGImage:scale:orientation:", false, NdTypeKind::Ptr,
        5, "First"},
       {"UIImage", "drawInRect:", false, NdTypeKind::Void, 3, ""},
+      {"UIScreen", "mainScreen", true, NdTypeKind::Ptr, 2, "UIScreen"},
+      {"UIScreen", "scale", false, NdTypeKind::Float, 2, ""},
       {"UIGraphicsImageRendererFormat", "defaultFormat", true, NdTypeKind::Ptr,
        2, "First"},
       {"UIGraphicsImageRendererFormat", "scale", false, NdTypeKind::Float, 2,
@@ -5996,6 +5998,66 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
               .Signature)
           << Mutation;
     }
+  }
+}
+
+TEST(ObjCCallHints, UIKitScreenResultSurvivesExactArcReturnIdentity) {
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/UIKit.framework/UIKit",
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  Image.ObjCSourceReferences[0x2100] = {
+      ObjCSourceReference::Kind::Selector, 0x2100, 8, "mainScreen"};
+  Image.ObjCSourceReferences[0x2110] = {
+      ObjCSourceReference::Kind::Selector, 0x2110, 8, "scale"};
+  Image.ObjCSourceReferences[0x2200] = {
+      ObjCSourceReference::Kind::Class, 0x2200, 8, "UIScreen"};
+  receiverRuntimeImport(Image, "objc_retainAutoreleasedReturnValue");
+
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto X0 = NdVar::reg(TRI.IntParamRegs[0], 8);
+  const auto X1 = NdVar::reg(TRI.IntParamRegs[1], 8);
+  Block.Ops = {
+      operation(NdOp::LOAD, X0, {NdVar::cst(0x2200, 8)}, 0x1200),
+      operation(NdOp::LOAD, X1, {NdVar::cst(0x2100, 8)}, 0x1204),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1208),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2188, 8)}, 0x120c),
+      operation(NdOp::LOAD, X1, {NdVar::cst(0x2110, 8)}, 0x1210),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1214),
+      operation(NdOp::RETURN, {}, {}, 0x1218)};
+  Function.Blocks.push_back(Block);
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 3U);
+  ASSERT_TRUE(Hints.at(0x1208).Receiver);
+  EXPECT_EQ(Hints.at(0x1208).Receiver->ClassName, "UIScreen");
+  EXPECT_EQ(Hints.at(0x120c).ReturnedArgument, 0U);
+  const auto &Scale = Hints.at(0x1214);
+  ASSERT_TRUE(Scale.Receiver);
+  ASSERT_EQ(Scale.Receiver->Steps.size(), 1U);
+  EXPECT_EQ(Scale.Receiver->Steps.front().Selector, "mainScreen");
+  EXPECT_EQ(Scale.Signature.ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Scale.Signature.ReturnType->Size, 8U);
+  EXPECT_EQ(Scale.Signature.ReturnLocation.Kind,
+            SourceABICarrierKind::FloatingRegister);
+
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.DynInfo.NeededLibs.front() = "/tmp/UIKit.framework/UIKit";
+    if (Mutation == 1)
+      Changed.ObjCSourceReferences.at(0x2200).Size = 4;
+    if (Mutation == 2)
+      Changed.DyldBindSlots.at(0x2188).Module = "/tmp/libobjc.A.dylib";
+    const auto ChangedHints = buildObjCSourceCallHints(Changed, Function);
+    const auto It = ChangedHints.find(0x1214);
+    EXPECT_TRUE(It == ChangedHints.end() || !It->second.Receiver) << Mutation;
   }
 }
 
