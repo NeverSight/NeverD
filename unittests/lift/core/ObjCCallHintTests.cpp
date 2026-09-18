@@ -5828,6 +5828,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"CGColor", NdTypeKind::Ptr, 2},
       {"CIImage", NdTypeKind::Ptr, 2},
       {"CGSizeValue", NdTypeKind::Struct, 2},
+      {"alpha", NdTypeKind::Float, 2},
       {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
       {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
@@ -5835,6 +5836,8 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
       {"setActivityIndicatorViewStyle:", NdTypeKind::Void, 3},
+      {"superview", NdTypeKind::Ptr, 2},
+      {"window", NdTypeKind::Ptr, 2},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Selector);
