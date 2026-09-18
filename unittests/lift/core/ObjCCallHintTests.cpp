@@ -5830,6 +5830,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"CGSizeValue", NdTypeKind::Struct, 2},
       {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
+      {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
       {"imageOrientation", NdTypeKind::Int, 2},
       {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
@@ -5994,6 +5995,8 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
     const char *ReturnClass;
   } Cases[] = {
       {"UIImage", "imageOrientation", false, NdTypeKind::Int, 2, ""},
+      {"UIImage", "imageFlippedForRightToLeftLayoutDirection", false,
+       NdTypeKind::Ptr, 2, "UIImage"},
       {"UIImage", "imageWithCGImage:", true, NdTypeKind::Ptr, 3, "UIImage"},
       {"UIImage", "imageWithCGImage:scale:orientation:", true, NdTypeKind::Ptr,
        5, "UIImage"},
