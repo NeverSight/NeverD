@@ -192,7 +192,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
-                                         &ProfileStorage, &ReadOnlyHelpers) ||
+                                         &ProfileStorage, &ReadOnlyHelpers,
+                                         &Binding.Function) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
@@ -265,7 +266,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
-                                         &ProfileStorage, &ReadOnlyHelpers) ||
+                                         &ProfileStorage, &ReadOnlyHelpers,
+                                         &Binding.Function) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
@@ -333,7 +335,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                ObjectPointerHelpers.end());
         auto CallAllowed = [&](const HighExpr &Expression) {
           return objcSourceCallBound(Expression, S->Img, Functions,
-                                     &ProfileStorage, &ReadOnlyHelpers) ||
+                                     &ProfileStorage, &ReadOnlyHelpers,
+                                     &Projection.Function) ||
                  swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                         Functions) ||
                  objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,

@@ -36,6 +36,14 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorArgumentTypeEvidence &Evidence);
 
+/// Resolve a selector conflict when one argument is the exact address of
+/// private frame storage. This proves pointer-to-pointer shape only; a unique
+/// complete declaration must supply the pointee type and every other ABI fact.
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForArgumentStorageUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorArgumentStorageEvidence &Evidence);
+
 /// Unsupported or conflicting declarations veto a narrowed call contract.
 /// Missing external hierarchy instead requires selector-wide agreement: it
 /// cannot justify excluding other owners. Self includes known subclasses.

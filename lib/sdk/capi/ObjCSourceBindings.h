@@ -8,6 +8,7 @@
 #include "ObjCProfileStorage.h"
 #include "ObjCReadOnlyScalarSources.h"
 #include "ObjCSourceProjection.h"
+#include "../../ir/high/pass/HighFrameAddress.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
@@ -79,7 +80,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.TargetName == Expected.TargetName &&
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
-         !Binding.SelectorArgumentTypeUse && !Binding.ByteCount &&
+         !Binding.SelectorArgumentTypeUse &&
+         !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
          bool(Binding.Format) == bool(Expected.Format) &&
          (!Binding.Format ||
           (Binding.Format->FixedCount == Expected.Format->FixedCount &&
@@ -552,7 +554,8 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
-      Hint.SelectorArgumentTypeUse || Hint.DoesNotReturn || Hint.WeakImport ||
+      Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
+      Hint.DoesNotReturn || Hint.WeakImport ||
       Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
       Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
       !Hint.SwiftStringInputs.empty() ||
@@ -1597,11 +1600,57 @@ bindObjCSourceReferences(const HighFunc &Function, const BinaryImage &Image,
   return Result;
 }
 
+inline std::optional<int64_t>
+privateFrameArgumentOffset(const ExprPtr &Argument, const HighFunc &Function,
+                           Arch Architecture) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if (!Argument || Function.FrameSize <= 0 ||
+      (TRI.PointerSize != 4 && TRI.PointerSize != 8))
+    return std::nullopt;
+  size_t Budget = 100000;
+  VarKeyMap<unsigned> Definitions;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (!Budget)
+      return;
+    --Budget;
+    if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+        Statement.Dst->Kind == ExprKind::Var)
+      ++Definitions[varKey(Statement.Dst->Var)];
+  });
+  if (!Budget)
+    return std::nullopt;
+  VarKeyMap<ExprPtr> Aliases;
+  for (const auto &Statement : Function.Body) {
+    if (Statement.Kind != StmtKind::Assign || !Statement.Dst ||
+        !Statement.Val || Statement.Dst->Kind != ExprKind::Var ||
+        !Statement.Dst->Type ||
+        Statement.Dst->Type->Size != TRI.PointerSize ||
+        Statement.Dst->Var.Size != TRI.PointerSize ||
+        Statement.MemoryOrdering != NdMemoryOrdering::None ||
+        Statement.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Statement.Body.empty() || !Statement.ElseBody.empty() ||
+        !Statement.Cases.empty() || !Statement.DefaultBody.empty() ||
+        !Statement.EHClauseBodies.empty() ||
+        Definitions[varKey(Statement.Dst->Var)] != 1 ||
+        !high_detail::frameAddressOffset(Statement.Val, Function, Architecture,
+                                         Budget, 0, &Aliases))
+      break;
+    Aliases.emplace(varKey(Statement.Dst->Var), Statement.Val);
+  }
+  auto Offset = high_detail::frameAddressOffset(
+      Argument, Function, Architecture, Budget, 0, &Aliases);
+  if (!Offset || *Offset < -Function.FrameSize || *Offset >= 0 ||
+      uint64_t(TRI.PointerSize) > uint64_t(-*Offset))
+    return std::nullopt;
+  return Offset;
+}
+
 inline bool objcSourceCallBound(
     const HighExpr &Expression, const BinaryImage &Image,
     const std::map<va_t, const HighFunc *> &Functions,
     const ObjCProfileStorage *ProfileStorage = nullptr,
-    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr) {
+    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr,
+    const HighFunc *ContainingFunction = nullptr) {
   using namespace objc_binding_detail;
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
@@ -1625,6 +1674,13 @@ inline bool objcSourceCallBound(
   if (Binding.SelectorArgumentTypeUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Binding.SelectorArgumentStorageUse ||
+       Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+    return false;
+  if (Binding.SelectorArgumentStorageUse &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Binding.SelectorArgumentTypeUse ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.Format &&
@@ -1656,6 +1712,17 @@ inline bool objcSourceCallBound(
   if (!validateSourceABI(Hint, Reason) || Hint.Architecture != Image.Arch ||
       Expression.Operands.size() != Hint.Parameters.size())
     return false;
+  if (Binding.SelectorArgumentStorageUse) {
+    const auto &Evidence = *Binding.SelectorArgumentStorageUse;
+    if (!ContainingFunction ||
+        Evidence.Parameter >= Expression.Operands.size())
+      return false;
+    const auto Offset = privateFrameArgumentOffset(
+        Expression.Operands[Evidence.Parameter], *ContainingFunction,
+        Image.Arch);
+    if (!Offset || *Offset != Evidence.FrameOffset)
+      return false;
+  }
   if (Binding.ImmutablePointerSlot &&
       Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantString &&
       Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantObject &&
@@ -1905,6 +1972,9 @@ inline bool objcSourceCallBound(
         : Binding.SelectorArgumentTypeUse
             ? objcSelectorSourceTypeHintForArgumentTypeUse(
                   Image, Binding.Selector, *Binding.SelectorArgumentTypeUse)
+        : Binding.SelectorArgumentStorageUse
+            ? objcSelectorSourceTypeHintForArgumentStorageUse(
+                  Image, Binding.Selector, *Binding.SelectorArgumentStorageUse)
             : objcSelectorSourceTypeHint(Image, Binding.Selector);
     if (!Expected || !objc_projection_detail::sameHint(Hint, *Expected))
       return false;

@@ -1001,6 +1001,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           std::optional<SourceABIValueLocation> SelectorResultUse;
           std::optional<SourceCallTypeHint::SelectorArgumentTypeEvidence>
               SelectorArgumentTypeUse;
+          std::optional<SourceCallTypeHint::SelectorArgumentStorageEvidence>
+              SelectorArgumentStorageUse;
           if (!Signature && !Qualified)
             if (const auto Required =
                     localResultUse(Block, OpIndex, TRI, Image)) {
@@ -1034,6 +1036,30 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               SelectorArgumentTypeUse = Evidence;
             }
           }
+          if (!Signature && !Qualified) {
+            for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
+                 ++Parameter) {
+              const auto Argument =
+                  Read(NdVar::reg(TRI.IntParamRegs[Parameter], 8));
+              if (!Argument || Argument->TheKind != Value::Kind::Frame)
+                continue;
+              const int64_t Offset = static_cast<int64_t>(Argument->Number);
+              SourceCallTypeHint::SelectorArgumentStorageEvidence Evidence;
+              Evidence.Parameter = static_cast<unsigned>(Parameter);
+              Evidence.FrameOffset = Offset;
+              auto Candidate = objcSelectorSourceTypeHintForArgumentStorageUse(
+                  Image, Target->Selector, Evidence);
+              if (!Candidate)
+                continue;
+              if (SelectorArgumentStorageUse) {
+                Signature.reset();
+                SelectorArgumentStorageUse.reset();
+                break;
+              }
+              Signature = std::move(Candidate);
+              SelectorArgumentStorageUse = Evidence;
+            }
+          }
           if (Signature) {
             SourceCallTypeHint Hint;
             Hint.CallKind = Target->Name == "objc_msgSendSuper2"
@@ -1047,6 +1073,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Hint.SelectorReferenceAddress = Target->SelectorSlot;
             Hint.SelectorResultUse = SelectorResultUse;
             Hint.SelectorArgumentTypeUse = SelectorArgumentTypeUse;
+            Hint.SelectorArgumentStorageUse = SelectorArgumentStorageUse;
             if (Qualified)
               Hint.Receiver = std::move(Receiver);
             BlockHints.emplace(Op.Addr, std::move(Hint));

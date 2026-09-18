@@ -423,6 +423,80 @@ TEST(ObjCCallHints,
 }
 
 TEST(ObjCCallHints,
+     PrivateFrameStorageDisambiguatesPointerToPointerSelectorArguments) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "save:";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+  ObjCMethod VoidSave;
+  VoidSave.ClassName = "ApplicationController";
+  VoidSave.Selector = "save:";
+  VoidSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(VoidSave.TypeHint);
+  Image.ObjCMethods.push_back(VoidSave);
+
+  SourceCallTypeHint::SelectorArgumentStorageEvidence DirectEvidence;
+  DirectEvidence.Parameter = 2;
+  DirectEvidence.FrameOffset = -24;
+  auto Direct = objcSelectorSourceTypeHintForArgumentStorageUse(
+      Image, "save:", DirectEvidence);
+  ASSERT_TRUE(Direct);
+  ASSERT_EQ(Direct->Parameters.size(), 3U);
+  ASSERT_TRUE(Direct->Parameters[2].Type->Pointee);
+  EXPECT_EQ(Direct->Parameters[2].Type->Pointee->Kind, NdTypeKind::Ptr);
+  DirectEvidence.FrameOffset = 8;
+  EXPECT_FALSE(objcSelectorSourceTypeHintForArgumentStorageUse(
+      Image, "save:", DirectEvidence));
+  DirectEvidence.FrameOffset = -24;
+  auto AmbiguousImage = Image;
+  ObjCMethod OtherPointerSave;
+  OtherPointerSave.ClassName = "OtherController";
+  OtherPointerSave.Selector = "save:";
+  OtherPointerSave.TypeHint =
+      parseObjCMethodEncoding("save:", "B24@0:8^^i16");
+  ASSERT_TRUE(OtherPointerSave.TypeHint);
+  AmbiguousImage.ObjCMethods.push_back(std::move(OtherPointerSave));
+  EXPECT_FALSE(objcSelectorSourceTypeHintForArgumentStorageUse(
+      AmbiguousImage, "save:", DirectEvidence));
+
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "frame_storage_caller";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = 0x1200;
+  Block.EndAddr = 0x1210;
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::X20, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(64, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X2, 8),
+                {NdVar::reg(a64reg::X20, 8), NdVar::cst(40, 4)}, 0x1204),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1208),
+      operation(NdOp::RETURN, {}, {}, 0x120c)};
+  Function.Blocks.push_back(Block);
+
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1208);
+  ASSERT_TRUE(Hint.SelectorArgumentStorageUse);
+  EXPECT_EQ(Hint.SelectorArgumentStorageUse->Parameter, 2U);
+  EXPECT_EQ(Hint.SelectorArgumentStorageUse->FrameOffset, -24);
+  EXPECT_FALSE(Hint.SelectorArgumentTypeUse);
+  EXPECT_FALSE(Hint.SelectorResultUse);
+
+  // An incoming/caller-owned address is not private frame storage.
+  Block.Ops[0] = operation(NdOp::INT_ADD, NdVar::reg(a64reg::X20, 8),
+                           {NdVar::reg(a64reg::SP, 8), NdVar::cst(8, 4)},
+                           0x1200);
+  Block.Ops[1] = operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                           {NdVar::reg(a64reg::X20, 8)}, 0x1204);
+  Function.Blocks[0] = Block;
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
+TEST(ObjCCallHints,
      FloatingResultUseSurvivesThePreservedHalfOfAnAArch64Vector) {
   auto Image = image();
   Image.ObjCMethods.clear();

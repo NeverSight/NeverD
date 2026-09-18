@@ -311,6 +311,31 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
   return Result;
 }
 
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForArgumentStorageUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorArgumentStorageEvidence &Evidence) {
+  if (Evidence.Parameter < 2 || Evidence.FrameOffset >= 0)
+    return std::nullopt;
+  auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
+  if (!Candidates)
+    return std::nullopt;
+  std::optional<SourceFunctionTypeHint> Result;
+  for (auto &Candidate : *Candidates) {
+    if (Evidence.Parameter >= Candidate.Parameters.size())
+      continue;
+    const auto &Type = Candidate.Parameters[Evidence.Parameter].Type;
+    if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
+        !Type->Pointee || Type->Pointee->Kind != NdTypeKind::Ptr ||
+        Type->Pointee->Size != 8)
+      continue;
+    if (Result)
+      return std::nullopt;
+    Result = std::move(Candidate);
+  }
+  return Result;
+}
+
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry) {
   if (!Entry || Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||

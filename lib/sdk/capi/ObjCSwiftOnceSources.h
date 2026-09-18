@@ -248,6 +248,7 @@ swiftOnceCallbackBound(const HighExpr &E, const BinaryImage &Image,
       Binding.ByteCount || Binding.ImmutablePointerSlot ||
       Binding.SelectorReferenceAddress || Binding.Receiver || Binding.Format ||
       Binding.SelectorResultUse || Binding.SelectorArgumentTypeUse ||
+      Binding.SelectorArgumentStorageUse ||
       Binding.ValueWitness || Binding.ReturnedArgument ||
       Binding.RuntimeObjCResultType || !Binding.BorrowedByteInputs.empty() ||
       !Binding.SwiftStringInputs.empty() ||

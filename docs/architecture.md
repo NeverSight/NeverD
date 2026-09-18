@@ -193,6 +193,18 @@ declarations remain unresolved. The hint records the method entry, source ABI
 carrier and message parameter index; publication rebuilds the method and
 selector declarations from the current image before accepting the call.
 
+An exact address of bounded private frame storage may provide the same
+pointer-to-pointer shape evidence when it flows directly to one message
+argument. This fact identifies only the storage shape, not its pointee class or
+value; exactly one complete declaration must require an eight-byte
+pointer-to-pointer at that position. Positive entry-SP-relative addresses,
+loads or reloads, transformed or ambiguous values and multiple matching
+declarations remain unresolved. Publication replays only contiguous
+single-definition aliases from the function entry, checks the exact negative
+offset and private frame bounds, and rebuilds the current selector declarations.
+Address escape does not change the address category, but no fact about the
+storage contents is inferred after an escape.
+
 Required Swift value-witness operations have a separate symbol-independent call
 proof. A bounded backward trace must show that the indirect target is loaded
 from the operation's required `metadata[-1][slot]` entry and that the same

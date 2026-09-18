@@ -3775,6 +3775,69 @@ TEST(ObjCSourceBindings,
   EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
 }
 
+TEST(ObjCSourceBindings,
+     ConflictingSelectorFrameStorageIsRevalidatedAtPublication) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+  ObjCMethod VoidSave;
+  VoidSave.ClassName = "ApplicationController";
+  VoidSave.Selector = "save:";
+  VoidSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(VoidSave.TypeHint);
+  Image.ObjCMethods.push_back(VoidSave);
+
+  SourceCallTypeHint::SelectorArgumentStorageEvidence Use;
+  Use.Parameter = 2;
+  Use.FrameOffset = -32;
+  const auto Signature =
+      objcSelectorSourceTypeHintForArgumentStorageUse(Image, "save:", Use);
+  ASSERT_TRUE(Signature);
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding->TargetName = "objc_msgSend";
+  Binding->Selector = "save:";
+  Binding->Signature = *Signature;
+  Binding->SelectorArgumentStorageUse = Use;
+
+  MedVar SP;
+  SP.Kind = MedVar::Reg;
+  SP.TheArch = Arch::AArch64;
+  SP.Size = 8;
+  SP.RegOff = a64reg::SP;
+  auto Address = HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeVar(SP, NdType::makeInt(8, false)),
+      HighExpr::makeConst(32, 4));
+  auto Call = HighExpr::makeCall(
+      "objc_msgSend", 0,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8), Address});
+  Call->Type = Signature->ReturnType;
+  Call->SourceCallHint = Binding;
+  HighFunc Owner;
+  Owner.FrameSize = 64;
+  HighStmt Statement;
+  Statement.Kind = StmtKind::ExprStmt;
+  Statement.Val = Call;
+  Owner.Body.push_back(Statement);
+
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Binding->SelectorArgumentStorageUse->FrameOffset = -24;
+  EXPECT_FALSE(
+      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Binding->SelectorArgumentStorageUse = Use;
+  Owner.FrameSize = 24;
+  EXPECT_FALSE(
+      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Owner.FrameSize = 64;
+  Binding->SelectorArgumentStorageUse.reset();
+  EXPECT_FALSE(
+      objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+}
+
 namespace {
 struct ObjectFixture {
   BinaryImage Image;

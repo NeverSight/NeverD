@@ -211,6 +211,15 @@ struct SourceCallTypeHint {
     SourceABIValueLocation Source;
   };
   std::optional<SelectorArgumentTypeEvidence> SelectorArgumentTypeUse;
+  /// An exact address inside the current function's private frame flowed to
+  /// one message argument. This may distinguish a pointer-to-pointer
+  /// declaration from an object-valued declaration; publication revalidates
+  /// the same argument expression, frame offset and private-frame bounds.
+  struct SelectorArgumentStorageEvidence {
+    unsigned Parameter = 0;
+    int64_t FrameOffset = 0;
+  };
+  std::optional<SelectorArgumentStorageEvidence> SelectorArgumentStorageUse;
   /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded
