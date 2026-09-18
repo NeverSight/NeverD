@@ -407,6 +407,48 @@ TEST(ObjCCallHints,
   ASSERT_TRUE(Hint.Signature.Parameters[2].Type->Pointee);
   EXPECT_EQ(Hint.Signature.Parameters[2].Type->Pointee->Kind, NdTypeKind::Ptr);
 
+  // A typed spill below an escaped higher-addressed frame object remains
+  // private. The same spill above the escaped base cannot supply evidence.
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(64, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X20, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1204),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X20, 8), NdVar::reg(a64reg::X3, 8)},
+                0x1208),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X20, 8), {NdVar::cst(0, 8)},
+                0x120c),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1300, 8)},
+                0x1210),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X20, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1214),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X21, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(48, 4)}, 0x1218),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X22, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(56, 4)}, 0x121c),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X22, 8), NdVar::reg(a64reg::X21, 8)},
+                0x1220),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X23, 8),
+                {NdVar::reg(a64reg::X20, 8)}, 0x1224),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                {NdVar::reg(a64reg::X23, 8)}, 0x1228),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1100, 8)},
+                0x122c),
+      operation(NdOp::RETURN, {}, {}, 0x1230)};
+  Block.EndAddr = 0x1234;
+  Function.Blocks[0] = Block;
+  Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_TRUE(Hints.at(0x122c).SelectorArgumentTypeUse);
+
+  Block.Ops[6] =
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X21, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(16, 4)}, 0x1218);
+  Function.Blocks[0] = Block;
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
   // Bare object parameters have the same machine width but do not prove an
   // NSError ** contract.
   Image.ObjCMethods.back().TypeHint =
@@ -492,6 +534,84 @@ TEST(ObjCCallHints,
                            0x1200);
   Block.Ops[1] = operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
                            {NdVar::reg(a64reg::X20, 8)}, 0x1204);
+  Function.Blocks[0] = Block;
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
+TEST(ObjCCallHints, ReceiverIdentitySurvivesOnlyLowerPrivateFrameSpills) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "save:";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData"};
+
+  ObjCMethod LocalSave;
+  LocalSave.ClassName = "ExploreController";
+  LocalSave.Selector = "save:";
+  LocalSave.Implementation = 0x1400;
+  LocalSave.TypeHint = parseObjCMethodEncoding("save:", "v24@0:8@16");
+  ASSERT_TRUE(LocalSave.TypeHint);
+  Image.ObjCMethods.push_back(LocalSave);
+  ObjCMethod Caller;
+  Caller.ClassName = LocalSave.ClassName;
+  Caller.Selector = "migrate:context:";
+  Caller.Implementation = 0x1200;
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, "v32@0:8@16@24");
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+  ObjCClass Class;
+  Class.Name = LocalSave.ClassName;
+  Class.RootClass = true;
+  Class.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(std::move(Class));
+
+  LowFunc Function;
+  Function.Entry = Caller.Implementation;
+  Function.Name = "receiver_spill_caller";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1234;
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(64, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X20, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1204),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X20, 8), NdVar::reg(a64reg::X0, 8)},
+                0x1208),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X20, 8), {NdVar::cst(0, 8)},
+                0x120c),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1300, 8)},
+                0x1210),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X20, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1214),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X21, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(48, 4)}, 0x1218),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X22, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(56, 4)}, 0x121c),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X22, 8), NdVar::reg(a64reg::X21, 8)},
+                0x1220),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X20, 8)}, 0x1224),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                {NdVar::reg(a64reg::X3, 8)}, 0x1228),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1100, 8)},
+                0x122c),
+      operation(NdOp::RETURN, {}, {}, 0x1230)};
+  Function.Blocks.push_back(Block);
+
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x122c);
+  ASSERT_TRUE(Hint.Receiver);
+  EXPECT_EQ(Hint.Receiver->ClassName, LocalSave.ClassName);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  Block.Ops[6] =
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X21, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(16, 4)}, 0x1218);
   Function.Blocks[0] = Block;
   EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
 }

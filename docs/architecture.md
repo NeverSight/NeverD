@@ -193,6 +193,17 @@ declarations remain unresolved. The hint records the method entry, source ABI
 carrier and message parameter index; publication rebuilds the method and
 selector declarations from the current image before accepting the call.
 
+Full-width receiver and declared pointer-to-pointer identities may survive an
+exact private-frame spill and reload. A returning call preserves the entry-SP
+identity even when its source signature is unknown. When a frame address is
+visible to a call or stored elsewhere, only typed spills wholly below that
+address remain private: reaching them would require a backwards access outside
+the source object rooted at the escaped address. An escaped address at or below
+the spill, an inexact frame-derived carrier, an overlapping write, a partial
+load, conflicting control-flow facts, an invalid stack adjustment or an
+analysis budget limit discards the identity. Ordinary frame contents retain
+the stricter whole-frame escape rule.
+
 An exact address of bounded private frame storage may provide the same
 pointer-to-pointer shape evidence when it flows directly to one message
 argument. This fact identifies only the storage shape, not its pointee class or

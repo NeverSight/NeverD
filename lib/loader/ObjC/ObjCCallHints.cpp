@@ -303,6 +303,15 @@ std::optional<Value> adjustedFrame(Value Base, uint64_t Amount, bool Subtract) {
 struct CallFacts {
   std::map<Key, Value> Values;
   std::map<std::pair<int64_t, unsigned>, Value> FrameSlots;
+  // Receiver and declared source-parameter identities need less frame
+  // knowledge than block construction does.  A pointer to a higher-addressed
+  // frame object cannot reach storage wholly below that object's base through
+  // the source ABI without a backwards/out-of-object access.  Keep those
+  // lower spills while ordinary FrameSlots retain the stricter whole-frame
+  // escape rule.
+  std::map<std::pair<int64_t, unsigned>, Value> TypedFrameSlots;
+  std::optional<int64_t> EscapedTypedFrameFloor;
+  bool TypedFrameFullyEscaped = false;
   // Exact values are must facts. Pointer-derived bytes are may facts: a
   // conflicting predecessor or partial alias must not erase a possible escape.
   std::set<std::pair<VnodeSpace, uint64_t>> FrameBytes;
@@ -334,6 +343,43 @@ struct CallFacts {
   void escapeFrame() {
     FrameEscaped = true;
     FrameSlots.clear();
+  }
+
+  bool typedFrameRangePrivate(int64_t Offset, unsigned Size) const {
+    if (TypedFrameFullyEscaped || !Size || Offset > INT64_MAX - Size)
+      return false;
+    return !EscapedTypedFrameFloor ||
+           Offset + static_cast<int64_t>(Size) <= *EscapedTypedFrameFloor;
+  }
+
+  void invalidateTypedFrameRange(int64_t Offset, unsigned Size) {
+    for (auto It = TypedFrameSlots.begin(); It != TypedFrameSlots.end();)
+      if (It->first.first < Offset + Size &&
+          Offset < It->first.first + It->first.second)
+        It = TypedFrameSlots.erase(It);
+      else
+        ++It;
+  }
+
+  void escapeTypedFrame() {
+    TypedFrameFullyEscaped = true;
+    EscapedTypedFrameFloor.reset();
+    TypedFrameSlots.clear();
+  }
+
+  void escapeTypedFrameFrom(const std::optional<Value> &Address) {
+    if (!Address || Address->TheKind != Value::Kind::Frame) {
+      escapeTypedFrame();
+      return;
+    }
+    const auto Offset = static_cast<int64_t>(Address->Number);
+    if (!EscapedTypedFrameFloor || Offset < *EscapedTypedFrameFloor)
+      EscapedTypedFrameFloor = Offset;
+    for (auto It = TypedFrameSlots.begin(); It != TypedFrameSlots.end();)
+      if (!typedFrameRangePrivate(It->first.first, It->first.second))
+        It = TypedFrameSlots.erase(It);
+      else
+        ++It;
   }
 
   void forgetCopiedBlocks() {
@@ -383,6 +429,25 @@ struct CallFacts {
         ++It;
     }
     FrameBytes.insert(Other.FrameBytes.begin(), Other.FrameBytes.end());
+    TypedFrameFullyEscaped |= Other.TypedFrameFullyEscaped;
+    if (Other.EscapedTypedFrameFloor &&
+        (!EscapedTypedFrameFloor ||
+         *Other.EscapedTypedFrameFloor < *EscapedTypedFrameFloor))
+      EscapedTypedFrameFloor = Other.EscapedTypedFrameFloor;
+    if (TypedFrameFullyEscaped) {
+      EscapedTypedFrameFloor.reset();
+      TypedFrameSlots.clear();
+    } else {
+      for (auto It = TypedFrameSlots.begin(); It != TypedFrameSlots.end();) {
+        const auto Found = Other.TypedFrameSlots.find(It->first);
+        if (Found == Other.TypedFrameSlots.end() ||
+            !(It->second == Found->second) ||
+            !typedFrameRangePrivate(It->first.first, It->first.second))
+          It = TypedFrameSlots.erase(It);
+        else
+          ++It;
+      }
+    }
     if (FrameEscaped || Other.FrameEscaped) {
       escapeFrame();
       if (LostBlockAlias)
@@ -741,6 +806,29 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                        bool PreserveReceiverRegisters = false) {
       const bool KnownABI = Signature && Signature->HasExplicitABI;
       if (!KnownABI) {
+        for (const auto &[K, V] : Values) {
+          const auto &[Space, Offset, Size] = K;
+          if (Space != VnodeSpace::REG ||
+              (Offset == TRI.StackPointer && Size == 8) ||
+              V.TheKind != Value::Kind::Frame)
+            continue;
+          State.escapeTypedFrameFrom(V);
+        }
+        for (const auto &[Space, Byte] : State.FrameBytes) {
+          if (Space != VnodeSpace::REG ||
+              (TRI.StackPointer <= Byte && Byte < TRI.StackPointer + 8))
+            continue;
+          const bool Exact = llvm::any_of(Values, [&](const auto &Entry) {
+            const auto &[K, V] = Entry;
+            const auto &[ValueSpace, Offset, Size] = K;
+            return ValueSpace == Space && V.TheKind == Value::Kind::Frame &&
+                   Offset <= Byte && Byte < Offset + Size;
+          });
+          if (!Exact) {
+            State.escapeTypedFrame();
+            break;
+          }
+        }
         State.escapeFrame();
       } else {
         int64_t ArgumentBytes = 0;
@@ -748,15 +836,20 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         auto CheckArgument = [&](const SourceABIValueLocation &Location) {
           if (Location.Kind == SourceABICarrierKind::IntegerRegister ||
               Location.Kind == SourceABICarrierKind::FloatingRegister) {
-            if (State.mayBeFrame(
-                    NdVar::reg(Location.RegisterOffset, Location.ValueBytes)))
+            const auto Argument =
+                NdVar::reg(Location.RegisterOffset, Location.ValueBytes);
+            if (State.mayBeFrame(Argument)) {
+              State.escapeTypedFrameFrom(Read(Argument));
               State.escapeFrame();
+            }
             if (CopiedBlockInput(
                     NdVar::reg(Location.RegisterOffset, Location.ValueBytes)))
               State.forgetCopiedBlocks();
           } else if (Location.Kind == SourceABICarrierKind::Stack) {
             const int64_t Begin =
                 Location.EntryStackOffset - ReturnAddressBytes;
+            if (Begin < 0 || Begin > 4096 || Location.ValueBytes > 4096 - Begin)
+              State.escapeTypedFrame();
             if (Begin < 0 || Begin > 4096 || Location.ValueBytes > 4096 - Begin)
               State.escapeFrame();
             else
@@ -795,7 +888,10 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             PreserveReceiverRegisters &&
             It->second.TheKind == Value::Kind::Receiver &&
             Space == VnodeSpace::REG && TRI.isCallPreserved(Offset, Size);
-        if ((!KnownABI && !PreservedReceiver) ||
+        const bool StackIdentity = Space == VnodeSpace::REG &&
+                                   Offset == TRI.StackPointer && Size == 8 &&
+                                   It->second.TheKind == Value::Kind::Frame;
+        if ((!KnownABI && !PreservedReceiver && !StackIdentity) ||
             (KnownABI && (Space != VnodeSpace::REG ||
                           (!(Offset == TRI.StackPointer && Size == 8) &&
                            !TRI.isCallPreserved(Offset, Size)))))
@@ -804,8 +900,10 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           ++It;
       }
       for (auto It = State.FrameBytes.begin(); It != State.FrameBytes.end();)
-        if (!KnownABI || It->first != VnodeSpace::REG ||
-            !PreservedBytes.count(It->second))
+        if (It->first != VnodeSpace::REG ||
+            ((!KnownABI && !(TRI.StackPointer <= It->second &&
+                             It->second < TRI.StackPointer + 8)) ||
+             (KnownABI && !PreservedBytes.count(It->second))))
           It = State.FrameBytes.erase(It);
         else
           ++It;
@@ -1102,8 +1200,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             }
           }
         }
-        // Only a bound Darwin ABI establishes which physical views survive.
-        // Unknown calls may use another convention and invalidate every fact.
+        // Only a bound Darwin ABI establishes which ordinary physical views
+        // survive. A returning call must restore SP; typed frame spills below
+        // every frame address visible to an unknown convention remain private.
         const auto Bound = BlockHints.find(Op.Addr);
         std::optional<ObjCReceiverTypeHint> ReturnedReceiver;
         if (Bound != BlockHints.end() &&
@@ -1151,8 +1250,10 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       if (UsesCopiedBlock && !KeepsBlockIdentity && !ReadsBlockField)
         State.forgetCopiedBlocks();
       if (Op.Opcode == NdOp::STORE) {
-        if (Op.NumInputs == 2 && State.mayBeFrame(Op.Inputs[1]))
+        if (Op.NumInputs == 2 && State.mayBeFrame(Op.Inputs[1])) {
+          State.escapeTypedFrameFrom(Read(Op.Inputs[1]));
           State.escapeFrame();
+        }
         const auto Address = Op.NumInputs == 2 && PlainMemory
                                  ? Read(Op.Inputs[0])
                                  : std::nullopt;
@@ -1167,25 +1268,41 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           State.forgetCopiedBlocks();
         if (!Address || Address->TheKind != Value::Kind::Frame || !Stack ||
             Stack->TheKind != Value::Kind::Frame) {
-          if (!ImageStore)
+          if (!ImageStore) {
             State.FrameSlots.clear();
-        } else if (!State.FrameEscaped) {
+            State.escapeTypedFrame();
+          }
+        } else {
           const auto Offset = static_cast<int64_t>(Address->Number);
           const auto Size = Op.Inputs[1].Size;
-          State.invalidateFrameRange(Offset, Size);
+          State.invalidateTypedFrameRange(Offset, Size);
           const auto Stored = Read(Op.Inputs[1]);
+          if (Stored && Size == 8 &&
+              (Stored->TheKind == Value::Kind::Receiver ||
+               Stored->TheKind == Value::Kind::SourceParameter) &&
+              Offset >= static_cast<int64_t>(Stack->Number) &&
+              Offset <= -static_cast<int64_t>(Size) &&
+              State.typedFrameRangePrivate(Offset, Size))
+            State.TypedFrameSlots[{Offset, Size}] = *Stored;
+          if (State.TypedFrameSlots.size() > 4096)
+            return std::nullopt;
+          if (State.FrameEscaped)
+            continue;
+          State.invalidateFrameRange(Offset, Size);
           if (Stored && Size && Size <= 8 &&
               Offset >= static_cast<int64_t>(Stack->Number) &&
               Offset <= -static_cast<int64_t>(Size))
             State.FrameSlots[{Offset, Size}] = *Stored;
         }
-        if (State.FrameSlots.size() > 4096)
+        if (State.FrameSlots.size() > 4096 ||
+            State.TypedFrameSlots.size() > 4096)
           return std::nullopt;
         continue;
       }
       if (Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
           Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
         State.FrameSlots.clear();
+        State.escapeTypedFrame();
         State.forgetCopiedBlocks();
         for (unsigned I = 1; I < Op.NumInputs; ++I)
           if (State.mayBeFrame(Op.Inputs[I]))
@@ -1273,11 +1390,18 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           Out->TheKind = Value::Kind::BlockInvoke;
           Out->Number = 0;
         } else if (Address && Address->TheKind == Value::Kind::Frame &&
-                   PlainMemory && !State.FrameEscaped) {
-          const auto Found = State.FrameSlots.find(
-              {static_cast<int64_t>(Address->Number), Op.Output.Size});
-          if (Found != State.FrameSlots.end())
-            Out = Found->second;
+                   PlainMemory) {
+          const auto Slot = std::pair{static_cast<int64_t>(Address->Number),
+                                      unsigned(Op.Output.Size)};
+          const auto Typed = State.TypedFrameSlots.find(Slot);
+          if (Typed != State.TypedFrameSlots.end() &&
+              State.typedFrameRangePrivate(Slot.first, Slot.second))
+            Out = Typed->second;
+          else if (!State.FrameEscaped) {
+            const auto Found = State.FrameSlots.find(Slot);
+            if (Found != State.FrameSlots.end())
+              Out = Found->second;
+          }
         } else if (Address && Address->TheKind == Value::Kind::FieldAddress &&
                    Op.Output.Size == 8 && Address->Object)
           Out = Value{Value::Kind::Receiver, 0, {}, Address->Object};
@@ -1363,12 +1487,19 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
         if (!Stack || Stack->TheKind != Value::Kind::Frame) {
           State.FrameSlots.clear();
+          State.escapeTypedFrame();
         } else {
           const auto Begin = static_cast<int64_t>(Stack->Number);
           for (auto It = State.FrameSlots.begin();
                It != State.FrameSlots.end();)
             if (It->first.first < Begin)
               It = State.FrameSlots.erase(It);
+            else
+              ++It;
+          for (auto It = State.TypedFrameSlots.begin();
+               It != State.TypedFrameSlots.end();)
+            if (It->first.first < Begin)
+              It = State.TypedFrameSlots.erase(It);
             else
               ++It;
         }
