@@ -140,6 +140,40 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
     return Result;
   }
 
+  // dispatch_queue_set_specific has a fixed destructor callback contract that
+  // the generated Clang encoding spells as the intentionally unsupported
+  // opaque `^?`. Keep the public void (*)(void *) prototype at the same exact
+  // libdispatch export boundary instead of accepting unknown callbacks in the
+  // declaration parser.
+  if (Name == "dispatch_queue_set_specific") {
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Bind == Image.DyldBindSlots.end() ||
+        !darwinExportModuleMatches(
+            "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib",
+            Bind->second.Module))
+      return std::nullopt;
+    SourceCallTypeHint Result;
+    Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+    Result.TargetAddress = ImportSlot;
+    Result.TargetName = Name.str();
+    auto &Signature = Result.Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Signature.ReturnType = NdType::makeVoid();
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto Destructor =
+        NdType::makePtr(NdType::makeFunc(NdType::makeVoid(), {Pointer}));
+    Signature.Parameters = {
+        {"queue", Pointer},
+        {"key", Pointer},
+        {"context", Pointer},
+        {"destructor", Destructor},
+    };
+    std::string Diagnostic;
+    if (!assignDarwinScalarSourceABI(Signature, Image.Arch, Diagnostic))
+      return std::nullopt;
+    return Result;
+  }
+
   // The public lock routines use one pointer to stable, opaque lock storage.
   // Call the real platform implementation, including its ownership checks.
   // https://github.com/apple-oss-distributions/libplatform/blob/main/include/os/lock.h

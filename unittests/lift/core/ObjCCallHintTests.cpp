@@ -3860,6 +3860,60 @@ TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
   }
 }
 
+TEST(ObjCCallHints,
+     DispatchQueueSetSpecificPreservesDestructorPrototypeAndExport) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const char *Module : {"/usr/lib/libSystem.B.dylib",
+                               "/usr/lib/system/libdispatch.dylib"}) {
+      auto Image = runtimeImage("_dispatch_queue_set_specific", Architecture);
+      Image.DyldBindSlots[0x2180] = {
+          "_dispatch_queue_set_specific", 0, Module, false};
+      const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      EXPECT_EQ(Hint->TargetName, "dispatch_queue_set_specific");
+      EXPECT_EQ(Hint->Signature.Origin,
+                SourceFunctionTypeHint::OriginKind::DarwinSDK);
+      EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Void);
+      ASSERT_EQ(Hint->Signature.Parameters.size(), 4U);
+      for (unsigned I = 0; I != 3; ++I) {
+        EXPECT_EQ(Hint->Signature.Parameters[I].Type->Kind, NdTypeKind::Ptr);
+        EXPECT_EQ(Hint->Signature.Parameters[I].Location.Kind,
+                  SourceABICarrierKind::IntegerRegister);
+      }
+      const auto Destructor = Hint->Signature.Parameters[3].Type;
+      ASSERT_EQ(Destructor->Kind, NdTypeKind::Ptr);
+      ASSERT_TRUE(Destructor->Pointee);
+      EXPECT_EQ(Destructor->Pointee->Kind, NdTypeKind::Func);
+      EXPECT_EQ(Destructor->Pointee->RetType->Kind, NdTypeKind::Void);
+      ASSERT_EQ(Destructor->Pointee->ParamTypes.size(), 1U);
+      EXPECT_EQ(Destructor->Pointee->ParamTypes[0]->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Hint->Signature.Parameters[3].Location.Kind,
+                SourceABICarrierKind::IntegerRegister);
+    }
+
+    auto Image = runtimeImage("_dispatch_queue_set_specific", Architecture);
+    Image.DyldBindSlots[0x2180] = {
+        "_dispatch_queue_set_specific", 0, "/usr/lib/libSystem.B.dylib",
+        false};
+    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+      auto Changed = Image;
+      if (Mutation == 0)
+        Changed.DyldBindSlots[0x2180].Module = "/tmp/libSystem.B.dylib";
+      if (Mutation == 1)
+        Changed.DyldBindSlots[0x2180].Addend = 1;
+      if (Mutation == 2)
+        Changed.DyldBindSlots[0x2180].WeakImport = true;
+      if (Mutation == 3)
+        Changed.DyldBindSlots.clear();
+      if (Mutation == 4)
+        Changed.ImportPtrSlots[0x2180] = "_dispatch_queue_get_specific";
+      if (Mutation == 5)
+        Changed.ConflictingImportStorageSlots.insert(0x2180);
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Changed, 0x2180)) << Mutation;
+    }
+  }
+}
+
 TEST(ObjCCallHints, AvailabilityCheckPreservesExactWeakImportAndABI) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     auto Image = runtimeImage("__availability_version_check", Architecture);
@@ -5834,8 +5888,16 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
       {"imageOrientation", NdTypeKind::Int, 2},
       {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
+      {"initWithProgressViewStyle:", NdTypeKind::Ptr, 3},
+      {"initWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
+      {"instantiateWithOwner:options:", NdTypeKind::Ptr, 4},
+      {"nibWithNibName:bundle:", NdTypeKind::Ptr, 4},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
+      {"setAccessibilityIgnoresInvertColors:", NdTypeKind::Void, 3},
       {"setActivityIndicatorViewStyle:", NdTypeKind::Void, 3},
+      {"setAdjustsFontForContentSizeCategory:", NdTypeKind::Void, 3},
+      {"setProgressViewStyle:", NdTypeKind::Void, 3},
+      {"sizeToFit", NdTypeKind::Void, 2},
       {"superview", NdTypeKind::Ptr, 2},
       {"window", NdTypeKind::Ptr, 2},
   };
