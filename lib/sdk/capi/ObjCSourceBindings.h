@@ -1368,6 +1368,10 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                 Leaves.insert(Value.get());
                 return true;
               }
+              if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+                  Value->Operands.size() == 3)
+                return Self(Self, Value->Operands[1], Depth + 1) &&
+                       Self(Self, Value->Operands[2], Depth + 1);
               if (Value->Kind != ExprKind::Var &&
                   Value->Kind != ExprKind::Phi)
                 return false;
@@ -2509,6 +2513,10 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                objcSourceCallBound(*Value, Image, Functions);
       if (Value->Kind == ExprKind::Const)
         return CandidateSet.count(Value->ConstVal) != 0;
+      if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+          Value->Operands.size() == 3)
+        return Self(Self, Value->Operands[1], Depth + 1) &&
+               Self(Self, Value->Operands[2], Depth + 1);
       if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
         return false;
       const auto Key = varKey(Value->Var);

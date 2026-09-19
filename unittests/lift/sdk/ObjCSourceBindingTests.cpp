@@ -4938,6 +4938,104 @@ TEST(ObjCSourceBindings,
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, Function).empty());
 }
 
+TEST(ObjCSourceBindings,
+     FormattedLowCallSelectsExactFormatsWithTheSameVariadicABI) {
+  auto F = formatFixture(Arch::AArch64, "value == %@");
+  const std::string Alternate = "value == %@ AND enabled == YES";
+  auto *SecondRecord = F.Image.Segments[0].Data.data() + 32;
+  llvm::support::endian::write64le(SecondRecord + 8, 0x7c8);
+  llvm::support::endian::write64le(SecondRecord + 16, 0x1080);
+  llvm::support::endian::write64le(SecondRecord + 24, Alternate.size());
+  std::copy(Alternate.begin(), Alternate.end(),
+            F.Image.Segments[1].Data.begin() + 0x80);
+  F.Image.Segments[1].Data[0x80 + Alternate.size()] = 0;
+  F.Image.ImportPtrSlots[0x3000] = "_objc_msgSend";
+  F.Image.ObjCSourceReferences.emplace(
+      0x3008, ObjCSourceReference{ObjCSourceReference::Kind::Selector,
+                                  0x3008,
+                                  8,
+                                  "predicateWithFormat:",
+                                  {}});
+  const auto &TRI = getTargetRegInfo(F.Image.Arch);
+  LowFunc Function;
+  Function.Entry = 0x3000;
+  Function.Blocks.resize(1);
+  auto &Block = Function.Blocks.front();
+  Block.StartAddr = 0x3000;
+  auto Add = [&](NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs) {
+    LowOp Operation;
+    Operation.Opcode = Code;
+    Operation.Output = Output;
+    Operation.Addr = 0x3000 + Block.Ops.size() * 4;
+    for (const auto &Input : Inputs)
+      Operation.addInput(Input);
+    Block.Ops.push_back(Operation);
+  };
+  const auto First = NdVar::reg(TRI.IntParamRegs[4], 8);
+  const auto Second = NdVar::reg(TRI.IntParamRegs[5], 8);
+  Add(NdOp::COPY, First, {NdVar::cst(0x2000, 8)});
+  Add(NdOp::COPY, Second, {NdVar::cst(0x2020, 8)});
+  Add(NdOp::SELECT, NdVar::reg(TRI.IntParamRegs[2], 8),
+      {NdVar::reg(TRI.IntParamRegs[3], 1), Second, First});
+  Add(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8), {NdVar::cst(0x3008, 8)});
+  Add(NdOp::INDIR_CALL, {}, {NdVar::cst(0x3000, 8)});
+  Add(NdOp::RETURN, {}, {});
+
+  const auto Hints = buildObjCSourceCallHints(F.Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x3010);
+  ASSERT_TRUE(Hint.Format);
+  EXPECT_EQ(Hint.Format->FormatAddress, 0x2000U);
+  EXPECT_EQ(Hint.Format->AlternativeFormatAddresses, std::vector<va_t>{0x2020});
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 4U);
+
+  // A different promoted argument type, an unknown arm, or a non-constant
+  // selection cannot borrow this bounded candidate set.
+  const auto Conversion = 0x80 + Alternate.find('%') + 1;
+  F.Image.Segments[1].Data[Conversion] = 'd';
+  EXPECT_TRUE(buildObjCSourceCallHints(F.Image, Function).empty());
+  F.Image.Segments[1].Data[Conversion] = '@';
+  const auto SavedArm = Block.Ops[2].Inputs[1];
+  Block.Ops[2].Inputs[1] = NdVar::reg(TRI.IntParamRegs[6], 8);
+  EXPECT_TRUE(buildObjCSourceCallHints(F.Image, Function).empty());
+  Block.Ops[2].Inputs[1] = SavedArm;
+
+  auto Select = std::make_shared<HighExpr>();
+  Select->Kind = ExprKind::BinOp;
+  Select->Op = NdOp::SELECT;
+  Select->Type = NdType::makeInt(8, false);
+  Select->Operands = {HighExpr::makeConst(0, 1), HighExpr::makeConst(0x2020, 8),
+                      HighExpr::makeConst(0x2000, 8)};
+  auto Call =
+      HighExpr::makeCall("objc_msgSend", 0,
+                         {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
+                          Select, HighExpr::makeConst(0, 8)});
+  Call->Type = Hint.Signature.ReturnType;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Hint);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  HighFunc High;
+  High.ReturnType = Hint.Signature.ReturnType;
+  High.Body = {Return};
+  Select->Operands[1] = HighExpr::makeConst(0x2040, 8);
+  EXPECT_FALSE(objcSourceCallBound(*Call, F.Image, {}));
+  Select->Operands[1] = HighExpr::makeConst(0x2020, 8);
+  auto Bound = bindObjCSourceReferences(High, F.Image);
+  EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  const auto &BoundSelect = Bound.Function.Body.front().RetVal->Operands[2];
+  ASSERT_TRUE(BoundSelect);
+  ASSERT_EQ(BoundSelect->Operands.size(), 3U);
+  for (unsigned I : {1U, 2U}) {
+    const auto &Arm = BoundSelect->Operands[I];
+    ASSERT_TRUE(Arm && Arm->SourceCallHint);
+    EXPECT_EQ(Arm->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeConstantString);
+  }
+  EXPECT_TRUE(
+      objcSourceCallBound(*Bound.Function.Body.front().RetVal, F.Image, {}));
+}
+
 TEST(ObjCSourceBindings, DarwinFormattedCallsRequireExactImportAndFormat) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto F = formatFixture(Architecture);

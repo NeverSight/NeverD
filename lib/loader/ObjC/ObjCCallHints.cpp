@@ -185,6 +185,32 @@ struct Value {
                     Other.AlternativeNumbers);
   }
 };
+
+std::optional<Value> mergeNumberCandidates(const Value &Left,
+                                           const Value &Right) {
+  const auto IsNumber = [](const Value &Candidate) {
+    return Candidate.TheKind == Value::Kind::Number ||
+           Candidate.TheKind == Value::Kind::NumberSet;
+  };
+  if (!IsNumber(Left) || !IsNumber(Right))
+    return std::nullopt;
+  std::vector<uint64_t> Candidates{Left.Number, Right.Number};
+  Candidates.insert(Candidates.end(), Left.AlternativeNumbers.begin(),
+                    Left.AlternativeNumbers.end());
+  Candidates.insert(Candidates.end(), Right.AlternativeNumbers.begin(),
+                    Right.AlternativeNumbers.end());
+  llvm::sort(Candidates);
+  Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
+                   Candidates.end());
+  if (Candidates.empty() || Candidates.size() > 64)
+    return std::nullopt;
+  Value Result;
+  Result.TheKind =
+      Candidates.size() == 1 ? Value::Kind::Number : Value::Kind::NumberSet;
+  Result.Number = Candidates.front();
+  Result.AlternativeNumbers.assign(Candidates.begin() + 1, Candidates.end());
+  return Result;
+}
 using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
 Key key(const NdVar &V) { return {V.Space, V.Offset, V.Size}; }
 
@@ -430,29 +456,9 @@ struct CallFacts {
         It = Values.erase(It);
         continue;
       }
-      if (!(It->second == Found->second) &&
-          (It->second.TheKind == Value::Kind::Number ||
-           It->second.TheKind == Value::Kind::NumberSet) &&
-          (Found->second.TheKind == Value::Kind::Number ||
-           Found->second.TheKind == Value::Kind::NumberSet)) {
-        std::vector<uint64_t> Candidates{It->second.Number,
-                                         Found->second.Number};
-        Candidates.insert(Candidates.end(),
-                          It->second.AlternativeNumbers.begin(),
-                          It->second.AlternativeNumbers.end());
-        Candidates.insert(Candidates.end(),
-                          Found->second.AlternativeNumbers.begin(),
-                          Found->second.AlternativeNumbers.end());
-        llvm::sort(Candidates);
-        Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
-                         Candidates.end());
-        if (Candidates.size() <= 64) {
-          It->second.TheKind = Candidates.size() == 1
-                                   ? Value::Kind::Number
-                                   : Value::Kind::NumberSet;
-          It->second.Number = Candidates.front();
-          It->second.AlternativeNumbers.assign(Candidates.begin() + 1,
-                                                Candidates.end());
+      if (!(It->second == Found->second)) {
+        if (auto Merged = mergeNumberCandidates(It->second, Found->second)) {
+          It->second = std::move(*Merged);
           ++It;
           continue;
         }
@@ -1413,9 +1419,16 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       }
       if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
         Out = Read(Op.Inputs[0]);
-      else if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
-               Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
-               Op.Output.Size == 8) {
+      else if (Op.Opcode == NdOp::SELECT && Op.NumInputs == 3 &&
+               Op.Output.Size == Op.Inputs[1].Size &&
+               Op.Output.Size == Op.Inputs[2].Size) {
+        const auto TrueValue = Read(Op.Inputs[1]);
+        const auto FalseValue = Read(Op.Inputs[2]);
+        if (TrueValue && FalseValue)
+          Out = mergeNumberCandidates(*TrueValue, *FalseValue);
+      } else if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) &&
+                 Op.NumInputs == 1 && Op.Inputs[0].Size == 4 &&
+                 Op.Output.Size == 8) {
         const auto Input = Read(Op.Inputs[0]);
         // Validated runtime field offsets are bounded by the instance layout.
         // Preserve the identity only for the exact 32-bit offset carrier.
