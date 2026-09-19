@@ -390,8 +390,10 @@ inline bool overlapsPointerStorage(const BinaryImage &Image, va_t Address,
          MapOverlaps(Image.DyldBindSlots);
 }
 
-inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
-                                   llvm::StringRef Module) {
+inline bool swiftSimpleDescriptor(llvm::StringRef Symbol,
+                                  llvm::StringRef DescriptorKind,
+                                  llvm::StringRef DeclKind,
+                                  llvm::StringRef Module = {}) {
   Symbol.consume_front("_");
   llvm::SwiftDemangleOptions Options;
   Options.MaxInputBytes = 8000;
@@ -400,8 +402,8 @@ inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
   Options.MaxMemoryBytes = 1024 * 1024;
   Options.MaxOperations = 100000;
   const auto Parsed = llvm::swiftDemangle(Symbol, Options);
-  const auto Shape = [](const llvm::SwiftDemangleNode &Node, const char *Kind,
-                        size_t Children) {
+  const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind, size_t Children) {
     return Node.Kind == Kind && !Node.Text && !Node.Index &&
            Node.Children.size() == Children;
   };
@@ -409,21 +411,33 @@ inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
       !Shape(*Parsed.Root, "Global", 1))
     return false;
   const auto &Descriptor = Parsed.Root->Children[0];
-  if (!Shape(Descriptor, "NominalTypeDescriptor", 1) ||
+  if (!Shape(Descriptor, DescriptorKind, 1) ||
       !Shape(Descriptor.Children[0], "Type", 1))
     return false;
   const auto &Nominal = Descriptor.Children[0].Children[0];
-  if ((Nominal.Kind != "Structure" && Nominal.Kind != "Class" &&
-       Nominal.Kind != "Enum") ||
-      Nominal.Text || Nominal.Index || Nominal.Children.size() != 2)
+  const bool ExpectedDeclaration =
+      DeclKind.empty() ? (Nominal.Kind == "Structure" ||
+                          Nominal.Kind == "Class" || Nominal.Kind == "Enum")
+                       : Nominal.Kind == DeclKind;
+  if (!ExpectedDeclaration || Nominal.Text || Nominal.Index ||
+      Nominal.Children.size() != 2)
     return false;
   const auto &DeclaredModule = Nominal.Children[0];
   const auto &Name = Nominal.Children[1];
   return DeclaredModule.Kind == "Module" && DeclaredModule.Text &&
-         *DeclaredModule.Text == Module && !DeclaredModule.Index &&
-         DeclaredModule.Children.empty() && Name.Kind == "Identifier" &&
-         Name.Text && !Name.Text->empty() && !Name.Index &&
-         Name.Children.empty();
+         (Module.empty() || *DeclaredModule.Text == Module) &&
+         !DeclaredModule.Index && DeclaredModule.Children.empty() &&
+         Name.Kind == "Identifier" && Name.Text && !Name.Text->empty() &&
+         !Name.Index && Name.Children.empty();
+}
+
+inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
+                                   llvm::StringRef Module) {
+  return swiftSimpleDescriptor(Symbol, "NominalTypeDescriptor", {}, Module);
+}
+
+inline bool swiftProtocolDescriptor(llvm::StringRef Symbol) {
+  return swiftSimpleDescriptor(Symbol, "ProtocolDescriptor", "Protocol");
 }
 
 inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
@@ -438,6 +452,61 @@ inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
     return std::nullopt;
   return Delta < 0 ? Field - static_cast<uint64_t>(-Delta)
                    : Field + static_cast<uint64_t>(Delta);
+}
+
+inline std::optional<std::string>
+swiftLocalProtocolDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
+  const auto Imports = Image.collectImportStorageSlots();
+  const auto *SlotSection = Image.getSectionFor(DescriptorSlot);
+  const auto *SlotSegment = Image.getSegmentFor(DescriptorSlot);
+  const auto *SlotBytes = Image.readVA(DescriptorSlot, 8);
+  if (DescriptorSlot % 8 || !SlotSection || !SlotSegment || !SlotBytes ||
+      !SlotSection->isReadable() || !SlotSegment->isReadable() ||
+      !SlotSegment->ReadOnlyAfterRelocations ||
+      Image.hasExecutableCodeOwnerAt(DescriptorSlot) ||
+      !Image.DataPtrRelocSlots.count(DescriptorSlot) ||
+      !Image.MachOResolvedChainedPointerSlots.count(DescriptorSlot) ||
+      Image.CodePtrRelocSlots.count(DescriptorSlot) ||
+      Image.RelDataPtrRelocSlots.count(DescriptorSlot) ||
+      Image.RelCodeRelocSlots.count(DescriptorSlot) ||
+      Imports.Conflicts.count(DescriptorSlot) ||
+      Imports.Slots.count(DescriptorSlot) ||
+      Image.DyldBindSlots.count(DescriptorSlot))
+    return std::nullopt;
+
+  const va_t DescriptorAddress = llvm::support::endian::read64le(SlotBytes);
+  const auto *DescriptorSection = Image.getSectionFor(DescriptorAddress);
+  const auto *DescriptorSegment = Image.getSegmentFor(DescriptorAddress);
+  const auto Owner = Image.DataPtrRelocTargetOwners.find(DescriptorSlot);
+  if (!DescriptorAddress || !DescriptorSection || !DescriptorSegment ||
+      !DescriptorSection->isReadable() || !DescriptorSegment->isReadable() ||
+      Image.hasExecutableCodeOwnerAt(DescriptorAddress) ||
+      Owner == Image.DataPtrRelocTargetOwners.end() ||
+      Owner->second != DescriptorSection->VA)
+    return std::nullopt;
+
+  const Symbol *Descriptor = nullptr;
+  for (const auto &Candidate : Image.Symbols) {
+    if (Candidate.Addr != DescriptorAddress || Candidate.IsFunc ||
+        Candidate.Name.empty())
+      continue;
+    if (Descriptor)
+      return std::nullopt;
+    Descriptor = &Candidate;
+  }
+  if (!Descriptor || !swiftProtocolDescriptor(Descriptor->Name))
+    return std::nullopt;
+
+  size_t MatchingExports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr == DescriptorAddress && Export.Name == Descriptor->Name)
+      ++MatchingExports;
+    else if (Export.Addr == DescriptorAddress)
+      return std::nullopt;
+  }
+  if (MatchingExports != 1)
+    return std::nullopt;
+  return Descriptor->Name;
 }
 
 inline std::optional<SourceCallTypeHint::SwiftTypeMetadataAddress>
@@ -516,20 +585,31 @@ swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
                                      : Imports.Slots.end();
   const auto Bind = DescriptorSlot ? Image.DyldBindSlots.find(*DescriptorSlot)
                                    : Image.DyldBindSlots.end();
-  if (!DescriptorSlot || Imports.Conflicts.count(*DescriptorSlot) ||
-      Import == Imports.Slots.end() ||
-      Import->second.Evidence != ImportStorageEvidence::LoaderBind ||
-      Import->second.Addend || Bind == Image.DyldBindSlots.end() ||
-      Bind->second.Name != Import->second.Name || Bind->second.Addend ||
-      Bind->second.WeakImport ||
-      !darwinExportModuleMatches(
-          "/System/Library/Frameworks/Foundation.framework/Foundation",
-          Bind->second.Module) ||
-      !swiftNominalDescriptor(Import->second.Name, "Foundation"))
+  if (!DescriptorSlot)
     return std::nullopt;
-  llvm::StringRef Descriptor(Import->second.Name);
+  std::optional<std::string> DescriptorSymbol;
+  if (!Imports.Conflicts.count(*DescriptorSlot) &&
+      Import != Imports.Slots.end() &&
+      Import->second.Evidence == ImportStorageEvidence::LoaderBind &&
+      !Import->second.Addend && Bind != Image.DyldBindSlots.end() &&
+      Bind->second.Name == Import->second.Name && !Bind->second.Addend &&
+      !Bind->second.WeakImport &&
+      darwinExportModuleMatches(
+          "/System/Library/Frameworks/Foundation.framework/Foundation",
+          Bind->second.Module) &&
+      swiftNominalDescriptor(Import->second.Name, "Foundation"))
+    DescriptorSymbol = Import->second.Name;
+  else
+    DescriptorSymbol = swiftLocalProtocolDescriptor(Image, *DescriptorSlot);
+  if (!DescriptorSymbol)
+    return std::nullopt;
+  llvm::StringRef Descriptor(*DescriptorSymbol);
   Descriptor.consume_front("_");
-  if (!Descriptor.ends_with("Mn"))
+  if ((!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")) ||
+      (Descriptor.ends_with("Mn") !=
+       swiftNominalDescriptor(*DescriptorSymbol, "Foundation")) ||
+      (Descriptor.ends_with("Mp") !=
+       swiftProtocolDescriptor(*DescriptorSymbol)))
     return std::nullopt;
   const std::string Suffix(reinterpret_cast<const char *>(TypeBytes + 5),
                            Length - 5);
@@ -537,8 +617,8 @@ swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
     return std::nullopt;
 
   return SourceCallTypeHint::SwiftTypeMetadataAddress{
-      Cache->Addr,     Reference->Addr,     *TypeReference,
-      *DescriptorSlot, Import->second.Name, Suffix};
+      Cache->Addr,     Reference->Addr,   *TypeReference,
+      *DescriptorSlot, *DescriptorSymbol, Suffix};
 }
 
 inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
@@ -1658,9 +1738,9 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
         Expression->SourceCallHint->CallKind ==
             SourceCallTypeHint::Kind::Native &&
-        Expression->Operands.size() == 2 && Expression->Operands[0] &&
-        Expression->Operands[1] &&
-        Expression->SourceCallHint->Signature.Parameters.size() == 2) {
+        Expression->Operands.size() >= 2 && Expression->Operands.size() <= 3 &&
+        Expression->SourceCallHint->Signature.Parameters.size() ==
+            Expression->Operands.size()) {
       const auto &Signature = Expression->SourceCallHint->Signature;
       std::string Reason;
       const bool PointerParameters = std::all_of(
@@ -1668,21 +1748,48 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           [](const auto &Parameter) {
             return Parameter.Type && Parameter.Type->Kind == NdTypeKind::Ptr;
           });
-      const auto First = constantAddress(*Expression->Operands[0]);
-      const auto Second = constantAddress(*Expression->Operands[1]);
-      if (PointerParameters && validateSourceABI(Signature, Reason) && First &&
-          Second) {
-        SwiftMetadataPair = swiftTypeMetadataPair(Image, *First, *Second);
-        if (!SwiftMetadataPair)
-          SwiftMetadataPair = swiftTypeMetadataPair(Image, *Second, *First);
+      if (PointerParameters && validateSourceABI(Signature, Reason)) {
+        bool Ambiguous = false;
+        for (size_t FirstIndex = 0; FirstIndex < Expression->Operands.size();
+             ++FirstIndex) {
+          if (!Expression->Operands[FirstIndex])
+            continue;
+          const auto First = constantAddress(*Expression->Operands[FirstIndex]);
+          if (!First)
+            continue;
+          for (size_t SecondIndex = FirstIndex + 1;
+               SecondIndex < Expression->Operands.size(); ++SecondIndex) {
+            if (!Expression->Operands[SecondIndex])
+              continue;
+            const auto Second =
+                constantAddress(*Expression->Operands[SecondIndex]);
+            if (!Second)
+              continue;
+            auto Candidate = swiftTypeMetadataPair(Image, *First, *Second);
+            if (!Candidate)
+              Candidate = swiftTypeMetadataPair(Image, *Second, *First);
+            if (!Candidate)
+              continue;
+            if (SwiftMetadataPair && *SwiftMetadataPair != *Candidate) {
+              Ambiguous = true;
+              break;
+            }
+            SwiftMetadataPair = std::move(Candidate);
+          }
+          if (Ambiguous)
+            break;
+        }
+        if (Ambiguous)
+          SwiftMetadataPair.reset();
       }
     }
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {
       auto &Operand = Expression->Operands[Index];
       // The Swift outlined-destroy helper receives an exact cache/reference
       // pair. Private-linkage symbols may repeat in every compilation unit,
-      // so the native call's two typed pointer arguments provide the pairing
-      // boundary; global symbol-name order is not evidence.
+      // so the native call's uniquely matching typed pointer arguments provide
+      // the pairing boundary; other helper arguments and global symbol-name
+      // order are not evidence.
       if (Operand && SwiftMetadataPair) {
         const auto Address = constantAddress(*Operand);
         auto Hint = Address ? swiftTypeMetadataAddressHint(Image, *Address,

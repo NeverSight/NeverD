@@ -396,8 +396,11 @@ struct SwiftTypeMetadataFixture {
   static constexpr va_t TypeReference = 0x1080;
   static constexpr va_t Cache = 0x2020;
   static constexpr va_t DescriptorSlot = 0x3020;
+  static constexpr va_t LocalDescriptor = 0x4020;
 
-  explicit SwiftTypeMetadataFixture(Arch Architecture) {
+  explicit SwiftTypeMetadataFixture(Arch Architecture,
+                                    bool LocalProtocol = false,
+                                    bool LeadingValue = false) {
     Image.Format = BinaryFormat::MachO;
     Image.Arch = Architecture;
     Image.Bits = Bitness::Bits64;
@@ -430,31 +433,56 @@ struct SwiftTypeMetadataFixture {
                SegmentFlags::Readable | SegmentFlags::Writable, false);
     AddMapping("__swift_import", 0x3000,
                SegmentFlags::Readable | SegmentFlags::Writable, true);
+    if (LocalProtocol)
+      AddMapping("__swift_descriptor", 0x4000, SegmentFlags::Readable, false);
     auto &ReferenceData = Image.Segments[0].Data;
     llvm::support::endian::write32le(
         ReferenceData.data() + Reference - 0x1000,
         static_cast<uint32_t>(static_cast<int32_t>(TypeReference - Reference)));
+    const uint32_t Length = LocalProtocol ? 9 : 7;
     llvm::support::endian::write32le(
-        ReferenceData.data() + Reference + 4 - 0x1000, 7);
+        ReferenceData.data() + Reference + 4 - 0x1000, Length);
     auto *Type = ReferenceData.data() + TypeReference - 0x1000;
     Type[0] = 2;
     llvm::support::endian::write32le(
         Type + 1, static_cast<uint32_t>(static_cast<int32_t>(
                       DescriptorSlot - (TypeReference + 1))));
-    Type[5] = 'S';
-    Type[6] = 'g';
-    Type[7] = 0;
-    Image.Symbols.push_back({"_$s10Foundation3URLVSgMR", Reference, 8, false});
-    Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", Cache, 8, false});
-    EXPECT_TRUE(Image.recordDyldBindSlot(
-        DescriptorSlot, "_$s10Foundation3URLVMn", 0,
-        "/System/Library/Frameworks/Foundation.framework/Foundation", false));
+    const llvm::StringRef Suffix = LocalProtocol ? "_pSg" : "Sg";
+    std::memcpy(Type + 5, Suffix.data(), Suffix.size());
+    Type[5 + Suffix.size()] = 0;
+    if (LocalProtocol) {
+      Image.Symbols.push_back(
+          {"_$s7WMFData10WMFService_pSgMR", Reference, 8, false});
+      Image.Symbols.push_back(
+          {"_$s7WMFData10WMFService_pSgMd", Cache, 8, false});
+      Image.Symbols.push_back(
+          {"_$s7WMFData10WMFServiceMp", LocalDescriptor, 0, false});
+      Image.Exports.push_back(
+          {"_$s7WMFData10WMFServiceMp", 0, LocalDescriptor});
+      llvm::support::endian::write64le(Image.Segments[2].Data.data() +
+                                           DescriptorSlot - 0x3000,
+                                       LocalDescriptor);
+      Image.DataPtrRelocSlots.insert(DescriptorSlot);
+      Image.DataPtrRelocTargetOwners[DescriptorSlot] = 0x4000;
+      Image.MachOResolvedChainedPointerSlots.insert(DescriptorSlot);
+    } else {
+      Image.Symbols.push_back(
+          {"_$s10Foundation3URLVSgMR", Reference, 8, false});
+      Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", Cache, 8, false});
+      EXPECT_TRUE(Image.recordDyldBindSlot(
+          DescriptorSlot, "_$s10Foundation3URLVMn", 0,
+          "/System/Library/Frameworks/Foundation.framework/Foundation", false));
+    }
 
     SourceFunctionTypeHint Signature;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
     Signature.ReturnType = NdType::makeVoid();
     Signature.Parameters = {{"cache", NdType::makePtr(NdType::makeVoid())},
                             {"reference", NdType::makePtr(NdType::makeVoid())}};
+    if (LeadingValue)
+      Signature.Parameters.insert(
+          Signature.Parameters.begin(),
+          {"value", NdType::makePtr(NdType::makeVoid())});
     std::string Error;
     EXPECT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error))
         << Error;
@@ -462,11 +490,17 @@ struct SwiftTypeMetadataFixture {
     Hint->CallKind = SourceCallTypeHint::Kind::Native;
     Hint->TargetAddress = 0x5000;
     Hint->Signature = Signature;
-    auto Call = HighExpr::makeCall(
-        "metadata_user", 0x5000,
-        {HighExpr::makeConst(Cache, 8, ConstantAddressProvenance::DataAddress),
-         HighExpr::makeConst(Reference, 8,
-                             ConstantAddressProvenance::DataAddress)});
+    std::vector<ExprPtr> Arguments{
+        HighExpr::makeConst(Cache, 8, ConstantAddressProvenance::DataAddress),
+        HighExpr::makeConst(Reference, 8,
+                            ConstantAddressProvenance::DataAddress)};
+    if (LeadingValue) {
+      auto Value = HighExpr::makeConst(0, 8);
+      Value->Type = NdType::makePtr(NdType::makeVoid());
+      Arguments.insert(Arguments.begin(), std::move(Value));
+    }
+    auto Call =
+        HighExpr::makeCall("metadata_user", 0x5000, std::move(Arguments));
     Call->Type = NdType::makeVoid();
     Call->SourceCallHint = std::move(Hint);
     HighStmt Statement;
@@ -527,6 +561,103 @@ TEST(ObjCSourceBindings,
     EXPECT_NE(Source.find(".reference.length = 7"), std::string::npos);
     EXPECT_NE(Source.find("void *cache"), std::string::npos);
   }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftProtocolTypeMetadataPairsAcceptExactLocalDescriptorRebases) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftTypeMetadataFixture F(Architecture, true, true);
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+    const auto Pair =
+        Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+    EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
+    EXPECT_EQ(Pair.DescriptorSymbol, "_$s7WMFData10WMFServiceMp");
+    EXPECT_EQ(Pair.Suffix, "_pSg");
+
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftTypeMetadataHelpers(
+        F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+    EXPECT_NE(Source.find("__asm__(\"_$s7WMFData10WMFServiceMp\")"),
+              std::string::npos);
+    EXPECT_NE(Source.find(".type_reference[5] = 95"), std::string::npos);
+    const auto &Call = Result.Function.Body[0].Val;
+    ASSERT_EQ(Call->Operands.size(), 3U);
+    EXPECT_FALSE(Call->Operands[0]->SourceCallHint);
+    EXPECT_EQ(Call->Operands[1]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+    EXPECT_EQ(Call->Operands[2]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+  }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftProtocolTypeMetadataPairsRejectIncompleteOrStaleLocalRebases) {
+  for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    SwiftTypeMetadataFixture F(Arch::AArch64, true);
+    if (Mutation == 0)
+      F.Image.MachOResolvedChainedPointerSlots.clear();
+    if (Mutation == 1)
+      F.Image.DataPtrRelocSlots.clear();
+    if (Mutation == 2)
+      F.Image.DataPtrRelocTargetOwners.clear();
+    if (Mutation == 3)
+      F.Image
+          .DataPtrRelocTargetOwners[SwiftTypeMetadataFixture::DescriptorSlot] =
+          0x4010;
+    if (Mutation == 4)
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+    if (Mutation == 5) {
+      F.Image.Segments[3].Flags =
+          SegmentFlags::Readable | SegmentFlags::Executable;
+      F.Image.Sections[3].Flags =
+          SegmentFlags::Readable | SegmentFlags::Executable;
+      F.Image.Sections[3].Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    }
+    if (Mutation == 6)
+      F.Image.Exports.clear();
+    if (Mutation == 7)
+      F.Image.Exports[0].Name = "_$s7WMFData10OtherThingMp";
+    if (Mutation == 8)
+      llvm::support::endian::write64le(
+          F.Image.Segments[2].Data.data() +
+              SwiftTypeMetadataFixture::DescriptorSlot - 0x3000,
+          0x4080);
+    if (Mutation == 9) {
+      F.Image.Symbols[2].Name = "_$s7WMFData10WMFServiceMn";
+      F.Image.Exports[0].Name = F.Image.Symbols[2].Name;
+    }
+    if (Mutation == 10)
+      F.Image.Symbols.push_back(F.Image.Symbols[2]);
+    if (Mutation == 11)
+      F.Image.ConflictingImportStorageSlots.insert(
+          SwiftTypeMetadataFixture::DescriptorSlot);
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
+  }
+
+  SwiftTypeMetadataFixture F(Arch::AArch64, true);
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  auto Cache = Result.Function.Body[0].Val->Operands[0];
+  F.Image.Exports.clear();
+  EXPECT_FALSE(objcSourceCallBound(*Cache, F.Image, {}));
+  std::set<std::string> Helpers;
+  EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
+                   F.Image, Result.SwiftTypeMetadataPairs, Helpers),
+               std::runtime_error);
+
+  SwiftTypeMetadataFixture NonPointer(Arch::AArch64, true, true);
+  auto Changed = std::make_shared<SourceCallTypeHint>(
+      *NonPointer.Function.Body[0].Val->SourceCallHint);
+  Changed->Signature.Parameters[0].Type = NdType::makeInt(8, false);
+  NonPointer.Function.Body[0].Val->SourceCallHint = std::move(Changed);
+  Result = bindObjCSourceReferences(NonPointer.Function, NonPointer.Image);
+  EXPECT_FALSE(Result.Limitation.empty());
+  EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
 }
 
 TEST(ObjCSourceBindings,
