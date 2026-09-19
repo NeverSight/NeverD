@@ -5988,6 +5988,46 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   }
 }
 
+TEST(ObjCCallHints, IOSCoreImageCropKeepsExactProviderAndRecordABI) {
+  constexpr auto Module =
+      "/System/Library/Frameworks/CoreImage.framework/CoreImage";
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {Module};
+  const auto Hint =
+      objcSelectorSourceTypeHint(Image, "imageByCroppingToRect:");
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  ASSERT_TRUE(Hint->ReturnType);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Ptr);
+  ASSERT_EQ(Hint->Parameters.size(), 3U);
+  const auto &Rect = Hint->Parameters.back();
+  ASSERT_TRUE(Rect.Type);
+  EXPECT_EQ(Rect.Type->Kind, NdTypeKind::Struct);
+  EXPECT_EQ(Rect.Type->Size, 32U);
+  EXPECT_EQ(Rect.Components.size(), 4U);
+  for (const auto &Component : Rect.Components) {
+    EXPECT_EQ(Component.Kind, SourceABICarrierKind::FloatingRegister);
+    EXPECT_EQ(Component.ValueBytes, 8U);
+  }
+  std::string Diagnostic;
+  EXPECT_TRUE(validateSourceABI(*Hint, Diagnostic)) << Diagnostic;
+
+  auto Changed = Image;
+  Changed.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage"};
+  EXPECT_FALSE(
+      objcSelectorSourceTypeHint(Changed, "imageByCroppingToRect:"));
+  Changed.DynInfo.NeededLibs = {"/tmp/CoreImage.framework/CoreImage"};
+  EXPECT_FALSE(
+      objcSelectorSourceTypeHint(Changed, "imageByCroppingToRect:"));
+  Changed = image(Arch::X64);
+  Changed.ObjCMethods.clear();
+  Changed.DynInfo.NeededLibs = {Module};
+  EXPECT_FALSE(
+      objcSelectorSourceTypeHint(Changed, "imageByCroppingToRect:"));
+}
+
 TEST(ObjCCallHints, IOSScaleUsesObservedFloatingResultToRejectConflicts) {
   auto Image = image(Arch::AArch64);
   Image.ObjCMethods.clear();
