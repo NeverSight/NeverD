@@ -4032,6 +4032,57 @@ TEST(ObjCCallHints, SystemDeclarationsPreserveWidthsOpaquePointersAndExports) {
   }
 }
 
+TEST(ObjCCallHints, VectorIOAndUTTypeDeclarationsKeepExactProvidersAndABI) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto VectorIO = runtimeImage("_writev", Architecture);
+    VectorIO.DyldBindSlots[0x2180] = {
+        "_writev", 0, "/usr/lib/libSystem.B.dylib", false};
+    auto Hint = darwinRuntimeSourceCallHint(VectorIO, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->TargetName, "writev");
+    EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Hint->Signature.ReturnType->Size, 8U);
+    EXPECT_TRUE(Hint->Signature.ReturnType->IsSigned);
+    ASSERT_EQ(Hint->Signature.Parameters.size(), 3U);
+    EXPECT_EQ(Hint->Signature.Parameters[0].Type->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Hint->Signature.Parameters[0].Type->Size, 4U);
+    EXPECT_EQ(Hint->Signature.Parameters[1].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Hint->Signature.Parameters[1].Type->Pointee->Kind,
+              NdTypeKind::Void);
+    EXPECT_EQ(Hint->Signature.Parameters[2].Type->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Hint->Signature.Parameters[2].Type->Size, 4U);
+    VectorIO.DyldBindSlots[0x2180].Module = "/tmp/libSystem.B.dylib";
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(VectorIO, 0x2180));
+
+    for (const char *Module : {
+             "/System/Library/Frameworks/CoreServices.framework/CoreServices",
+             "/System/Library/Frameworks/CoreServices.framework/Versions/A/"
+             "CoreServices",
+             "/System/Library/Frameworks/CoreServices.framework/Versions/A/"
+             "Frameworks/LaunchServices.framework/Versions/A/LaunchServices"}) {
+      auto UTType = runtimeImage("_UTTypeConformsTo", Architecture);
+      UTType.DyldBindSlots[0x2180] = {
+          "_UTTypeConformsTo", 0, Module, false};
+      Hint = darwinRuntimeSourceCallHint(UTType, 0x2180);
+      ASSERT_TRUE(Hint) << Module;
+      EXPECT_EQ(Hint->TargetName, "UTTypeConformsTo");
+      EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Signature.ReturnType->Size, 1U);
+      EXPECT_FALSE(Hint->Signature.ReturnType->IsSigned);
+      ASSERT_EQ(Hint->Signature.Parameters.size(), 2U);
+      for (const auto &Parameter : Hint->Signature.Parameters) {
+        EXPECT_EQ(Parameter.Type->Kind, NdTypeKind::Ptr);
+        EXPECT_EQ(Parameter.Type->Pointee->Kind, NdTypeKind::Void);
+      }
+    }
+    auto UTType = runtimeImage("_UTTypeConformsTo", Architecture);
+    UTType.DyldBindSlots[0x2180] = {
+        "_UTTypeConformsTo", 0, "/tmp/CoreServices.framework/CoreServices",
+        false};
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(UTType, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, GraphicsDeclarationsPreserveOpaquePointersAndExactExports) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &[Name, Framework, Kind] :
