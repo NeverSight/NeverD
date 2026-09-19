@@ -30,6 +30,11 @@ struct NativeSourceCallContract {
   // Parameter indexes whose exact private-frame address is borrowed
   // synchronously and read-only by an independently known call contract.
   std::map<size_t, size_t> ReadOnlyFrameParameters;
+  // Parameter indexes whose exact private-frame address is borrowed
+  // synchronously and overwritten within this bounded extent. The proof
+  // invalidates overlapping spill bytes after the call, so writable scratch
+  // storage cannot masquerade as restored incoming machine state.
+  std::map<size_t, size_t> WritableFrameParameters;
 };
 
 using NativeSourceCalls =

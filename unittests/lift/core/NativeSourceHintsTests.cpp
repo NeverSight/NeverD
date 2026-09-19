@@ -8,6 +8,7 @@
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -1158,6 +1159,69 @@ TEST(NativeSourceHints, VoidFramesKeepSpillsAcrossDisjointExternalStores) {
   }
 }
 
+TEST(NativeSourceHints,
+     SwiftBeginAccessUsesBoundedWritablePrivateFrameScratch) {
+  NativeVoidFrameFixture Fixture(Arch::AArch64);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  constexpr va_t ImportSlot = 0x2000;
+  const std::string Import = "_swift_beginAccess";
+  Segment Data;
+  Data.VA = ImportSlot;
+  Data.Size = Data.FileSz = 8;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(8);
+  Fixture.Image.Segments.push_back(std::move(Data));
+  Fixture.Image.ImportPtrSlots[ImportSlot] = Import;
+  ASSERT_TRUE(Fixture.Image.recordDyldBindSlot(
+      ImportSlot, Import, 0, "/usr/lib/swift/libswiftCore.dylib", false));
+  const auto Runtime =
+      swiftRuntimeSourceCallHint(Fixture.Image, ImportSlot);
+  ASSERT_TRUE(Runtime);
+  ASSERT_EQ(Runtime->Signature.Parameters.size(), 4U);
+
+  auto &MedCall = Fixture.Med.Blocks[0].Ops[0];
+  MedCall.SourceCallHint =
+      std::make_shared<const SourceCallTypeHint>(*Runtime);
+  MedCall.NumInputs = 1;
+  MedCall.addInput(Fixture.Med.Params[0]);
+  MedCall.addInput(MedVar::makeConst(0, 8));
+  MedCall.addInput(MedVar::makeConst(1, 8));
+  MedCall.addInput(MedVar::makeConst(0, 8));
+
+  auto &Ops = Fixture.Low.Blocks[0].Ops;
+  const auto SP = NdVar::reg(TRI.StackPointer, 8);
+  ASSERT_EQ(Ops.front().Opcode, NdOp::INT_SUB);
+  Ops.front().Inputs[1] = NdVar::cst(96, 8);
+  ASSERT_EQ(Ops[Fixture.RestoreIndex + Fixture.Saved.size() * 2].Opcode,
+            NdOp::INT_ADD);
+  Ops[Fixture.RestoreIndex + Fixture.Saved.size() * 2].Inputs[1] =
+      NdVar::cst(96, 8);
+  Fixture.FrameBytes = 96;
+  Ops.insert(Ops.begin() + Fixture.CallIndex,
+             NativeVoidFrameFixture::op(
+                 NdOp::INT_ADD, NdVar::reg(TRI.IntParamRegs[1], 8),
+                 {SP, NdVar::cst(32, 8)}));
+  ++Fixture.CallIndex;
+  ++Fixture.RestoreIndex;
+
+  std::string Error;
+  const auto Hint = Fixture.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+
+  auto Overlap = Fixture;
+  Overlap.Low.Blocks[0].Ops[Overlap.CallIndex - 1].Inputs[1] =
+      NdVar::cst(0, 8);
+  EXPECT_FALSE(Overlap.inferVoid(Error));
+
+  auto Forged = Fixture;
+  auto ForgedBinding = std::make_shared<SourceCallTypeHint>(
+      *Forged.Med.Blocks[0].Ops[0].SourceCallHint);
+  ForgedBinding->TargetName += "_forged";
+  Forged.Med.Blocks[0].Ops[0].SourceCallHint = std::move(ForgedBinding);
+  EXPECT_FALSE(Forged.inferVoid(Error));
+}
+
 TEST(NativeSourceHints, VoidFramesRejectClobbersEscapesAndStaleSpills) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 19; ++Mutation) {
@@ -1694,6 +1758,53 @@ TEST(NativeSourceHints, FloatingParametersRequireBoundedScalarEntryBytes) {
       std::string Error;
       EXPECT_FALSE(Fixture.infer(Error)) << Mutation << ": " << Error;
     }
+}
+
+TEST(NativeSourceHints,
+     FloatingParameterEffectsSurviveAnUnprovedProvisionalReturn) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    NativeVoidFixture Fixture(Architecture);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    auto &Parameter = Fixture.Med.Params[1];
+    Parameter.Id = 1;
+    Parameter.RegOff = TRI.FPParamRegs[0];
+    Parameter.Size = 16;
+    Parameter.TheArch = Architecture;
+    Fixture.Med.TypedParams[1].Type = Fixture.High.Params[1].Type =
+        NdType::makeInt(16);
+
+    auto Binding = std::make_shared<SourceCallTypeHint>(
+        *Fixture.Med.Blocks[0].Ops[0].SourceCallHint);
+    Binding->Signature.Parameters.push_back(
+        {"value", NdType::makeFloat(8)});
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(Binding->Signature, Architecture,
+                                            Error));
+
+    MedOp Extract;
+    Extract.Opcode = NdOp::SUBBYTES;
+    Extract.Output.Kind = MedVar::Temp;
+    Extract.Output.Id = 80;
+    Extract.Output.Size = 8;
+    Extract.Output.TheArch = Architecture;
+    Extract.addInput(Parameter);
+    Extract.addInput(MedVar::makeConst(0, 8));
+    auto &Call = Fixture.Med.Blocks[0].Ops[0];
+    Call.SourceCallHint = std::move(Binding);
+    Call.addInput(Extract.Output);
+    Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin(),
+                                     std::move(Extract));
+
+    const auto Hint = Fixture.inferVoid(Error);
+    ASSERT_TRUE(Hint) << unsigned(Architecture) << ": " << Error;
+    EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+    ASSERT_EQ(Hint->Parameters.size(), 2U);
+    EXPECT_EQ(Hint->Parameters[1].Type->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Hint->Parameters[1].Type->Size, 8U);
+    EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset,
+              TRI.FPParamRegs[0]);
+    EXPECT_EQ(Hint->Parameters[1].Location.ValueBytes, 8U);
+  }
 }
 
 struct NativeRecordResultFixture : NativeFixture {

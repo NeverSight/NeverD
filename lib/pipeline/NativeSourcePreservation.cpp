@@ -223,6 +223,7 @@ public:
         } else if ((*SP + (Architecture == Arch::X64 ? 8 : 0)) % 16 != 0) {
           return false;
         }
+        std::vector<std::pair<int64_t, size_t>> WritableFrameRanges;
         for (size_t ParameterIndex = 0;
              ParameterIndex < Signature.Parameters.size(); ++ParameterIndex) {
           const auto &Parameter = Signature.Parameters[ParameterIndex];
@@ -237,18 +238,30 @@ public:
                 lookup(Current.Registers, Location.RegisterOffset + I)
                     .MayBeFrame;
           if (HasFrameByte) {
-            const auto Borrowed =
+            const auto ReadOnly =
                 Found->second.ReadOnlyFrameParameters.find(ParameterIndex);
-            if (Borrowed == Found->second.ReadOnlyFrameParameters.end() ||
+            const auto Writable =
+                Found->second.WritableFrameParameters.find(ParameterIndex);
+            if ((ReadOnly ==
+                     Found->second.ReadOnlyFrameParameters.end()) ==
+                    (Writable ==
+                     Found->second.WritableFrameParameters.end()) ||
                 Location.Kind != SourceABICarrierKind::IntegerRegister ||
-                Location.ValueBytes != 8 || !Borrowed->second ||
-                Borrowed->second > MaxFrame)
+                Location.ValueBytes != 8)
+              return false;
+            const size_t BorrowedBytes =
+                ReadOnly != Found->second.ReadOnlyFrameParameters.end()
+                    ? ReadOnly->second
+                    : Writable->second;
+            if (!BorrowedBytes || BorrowedBytes > MaxFrame)
               return false;
             const auto Address = FrameOffset(
                 NdVar::reg(Location.RegisterOffset, Location.ValueBytes));
             if (!Address || *Address < *SP ||
-                *Address > -static_cast<int64_t>(Borrowed->second))
+                *Address > -static_cast<int64_t>(BorrowedBytes))
               return false;
+            if (Writable != Found->second.WritableFrameParameters.end())
+              WritableFrameRanges.emplace_back(*Address, BorrowedBytes);
           }
           if (UsedEntryRegisters &&
               Location.Kind == SourceABICarrierKind::IntegerRegister &&
@@ -267,6 +280,11 @@ public:
             }
           }
         }
+        for (const auto &[Address, Bytes] : WritableFrameRanges)
+          std::erase_if(Current.Stack, [&](const auto &Item) {
+            return Item.first >= Address &&
+                   Item.first - Address < static_cast<int64_t>(Bytes);
+          });
         if (!Tail) {
           std::erase_if(Current.Registers, [&](const auto &Item) {
             return !Preserved.count(Item.first) ||

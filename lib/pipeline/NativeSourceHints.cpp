@@ -8,6 +8,7 @@
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/lift/AArch64Regs.h"
+#include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <algorithm>
@@ -217,6 +218,26 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
       Contract.Signature = &Binding.Signature;
       if (StaticMessage && Binding.CallKind == Kind::ObjCSuper2)
         Contract.ReadOnlyFrameParameters.emplace(0, 16);
+      // RuntimeFunctions.def declares swift_beginAccess's second argument as
+      // a ValueBuffer scratch pointer. The Swift ABI fixes ValueBuffer at
+      // three pointer words. Authenticate the exact libswiftCore import and
+      // invalidate those private-frame bytes after the call; the scratch
+      // cannot escape or preserve an overlapping saved register.
+      if (StaticRuntime && Binding.CallKind == Kind::SwiftRuntimeCall &&
+          Binding.TargetName == "swift_beginAccess" &&
+          Binding.TargetAddress && Image.Bits == Bitness::Bits64) {
+        const auto Import = Image.DyldBindSlots.find(Binding.TargetAddress);
+        const auto Expected =
+            swiftRuntimeSourceCallHint(Image, Binding.TargetAddress);
+        if (Import != Image.DyldBindSlots.end() &&
+            Import->second.Module == "/usr/lib/swift/libswiftCore.dylib" &&
+            Expected && Expected->CallKind == Binding.CallKind &&
+            Expected->TargetAddress == Binding.TargetAddress &&
+            Expected->TargetName == Binding.TargetName &&
+            Expected->DoesNotReturn == Binding.DoesNotReturn &&
+            equalSourceABIs(Expected->Signature, Binding.Signature))
+          Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
+      }
       if ((!StaticRuntime && !StaticNative && !StaticMessage &&
            !DynamicWitness) ||
           Binding.DoesNotReturn || !Binding.Signature.ReturnType ||
@@ -729,7 +750,16 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
                                        : FloatingReturn ? TRI.FPReturnReg
                                                         : TRI.IntReturnReg;
   Hint.ReturnLocation.ValueBytes = Hint.ReturnType->Size;
-  const auto EntryBytes = observedMedSourceEntryBytes(Med, Hint);
+  auto EntryBytes = observedMedSourceEntryBytes(Med, Hint);
+  // Generic recovery can provisionally expose a scalar return which a later
+  // source-bound call clobbers.  That makes the combined effect/return slice
+  // unavailable even though an incoming FP lane independently reaches a
+  // declared call argument or memory effect.  Parameter evidence does not
+  // depend on the enclosing helper's eventual result declaration, which is
+  // proved separately below, so retain the narrower effects-only certificate.
+  if (!EntryBytes)
+    EntryBytes = observedMedSourceEntryBytes(
+        Med, Hint, SourceEntryDemand::EffectsOnly);
   std::set<uint64_t> ParameterRegisters;
   std::set<uint64_t> AuxiliaryRegisters;
   std::set<int> StackSlots;
