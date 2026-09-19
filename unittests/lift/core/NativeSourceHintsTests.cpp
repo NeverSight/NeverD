@@ -1160,6 +1160,41 @@ TEST(NativeSourceHints, VoidFramesKeepSpillsAcrossDisjointExternalStores) {
 }
 
 TEST(NativeSourceHints,
+     VoidFramesPreserveRestoredLowVectorBytesThroughNormalization) {
+  NativeVoidFrameFixture Fixture(Arch::AArch64);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const uint64_t V8 = TRI.VecRegBase + 8 * TRI.VecRegStride;
+  auto &Ops = Fixture.Low.Blocks[0].Ops;
+  const auto Restore = std::find_if(
+      Ops.begin() + Fixture.RestoreIndex, Ops.end(), [&](const LowOp &Op) {
+        return Op.Opcode == NdOp::LOAD && Op.Output == NdVar::reg(V8, 8);
+      });
+  ASSERT_NE(Restore, Ops.end());
+  const size_t Insert = std::distance(Ops.begin(), Restore) + 1;
+  Ops.insert(Ops.begin() + Insert,
+             {NativeVoidFrameFixture::op(NdOp::INT_ZEXT,
+                                         NdVar::reg(V8, 16),
+                                         {NdVar::reg(V8, 8)}, 0x1020),
+              NativeVoidFrameFixture::op(
+                  NdOp::SUBBYTES, NdVar::reg(V8, 8),
+                  {NdVar::reg(V8, 16), NdVar::cst(0, 8)}, 0x1020),
+              NativeVoidFrameFixture::op(NdOp::INT_ZEXT,
+                                         NdVar::reg(V8, 16),
+                                         {NdVar::reg(V8, 8)}, 0x1020)});
+
+  std::string Error;
+  ASSERT_TRUE(Fixture.inferVoid(Error)) << Error;
+
+  auto Shifted = Fixture;
+  Shifted.Low.Blocks[0].Ops[Insert + 1].Inputs[1] = NdVar::cst(1, 8);
+  EXPECT_FALSE(Shifted.inferVoid(Error));
+
+  auto Truncated = Fixture;
+  Truncated.Low.Blocks[0].Ops[Insert].Inputs[0].Size = 4;
+  EXPECT_FALSE(Truncated.inferVoid(Error));
+}
+
+TEST(NativeSourceHints,
      SwiftBeginAccessUsesBoundedWritablePrivateFrameScratch) {
   NativeVoidFrameFixture Fixture(Arch::AArch64);
   const auto &TRI = getTargetRegInfo(Arch::AArch64);

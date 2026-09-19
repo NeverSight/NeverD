@@ -327,6 +327,21 @@ public:
           Op.Inputs[0].Size == Op.Output.Size) {
         for (unsigned I = 0; I < Value.size(); ++I)
           Value[I] = Read(Op.Inputs[0], I);
+      } else if (Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs == 1 &&
+                 Op.Inputs[0].Size <= Op.Output.Size) {
+        // LowIR register normalization can widen a restored D register to Q.
+        // The extension's upper bytes are new zeroes, but its low bytes retain
+        // their exact entry or frame identity.
+        for (unsigned I = 0; I < Op.Inputs[0].Size; ++I)
+          Value[I] = Read(Op.Inputs[0], I);
+      } else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                 Op.Inputs[1].isConst() &&
+                 Op.Inputs[1].Offset <= Op.Inputs[0].Size &&
+                 Op.Output.Size <=
+                     Op.Inputs[0].Size - Op.Inputs[1].Offset) {
+        const auto Offset = static_cast<unsigned>(Op.Inputs[1].Offset);
+        for (unsigned I = 0; I < Value.size(); ++I)
+          Value[I] = Read(Op.Inputs[0], Offset + I);
       } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
                  Op.NumInputs == 2 && Op.Output.Size == 8) {
         unsigned Base = 0, Constant = 1;

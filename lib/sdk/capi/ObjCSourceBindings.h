@@ -916,13 +916,13 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
   return Hint;
 }
 
-/// A profile-counter address may cross a native source-call boundary only
-/// when the complete typed callee proves that this parameter is used solely
-/// as the exact address of bounded numeric loads/stores.  The source ABI's
-/// pointer type alone says nothing about pointee width or escape behavior.
-inline std::optional<va_t>
-nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
-                             va_t Address, const ObjCProfileStorage &Storage) {
+/// A storage address may cross a native source-call boundary only when the
+/// complete typed callee proves that this parameter is used solely as the
+/// exact address of bounded scalar loads/stores. The source ABI's pointer type
+/// alone says nothing about pointee width or escape behavior.
+inline std::optional<uint64_t>
+nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
+                                  bool AllowPointerValues) {
   if (!Function.SourceTypeHint ||
       Function.Params.size() != Function.SourceTypeHint->Parameters.size() ||
       Parameter >= Function.Params.size() || !Function.Params[Parameter].Type ||
@@ -942,7 +942,7 @@ nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
 
   size_t Budget = 100000;
   bool Valid = true, Used = false;
-  std::optional<va_t> Base;
+  uint64_t Extent = 0;
   auto Contains = [&](const auto &Self, const ExprPtr &Expression,
                       unsigned Depth) -> bool {
     if (!Expression || !Budget || Depth > 200)
@@ -963,19 +963,14 @@ nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
     if (!Valid || !Contains(Contains, Pointer, 0))
       return;
     if (!exactParameterValue(Pointer, Parameter) || !Type ||
-        Type->Kind == NdTypeKind::Ptr ||
+        (!AllowPointerValues && Type->Kind == NdTypeKind::Ptr) ||
         !localStorageAccessTypeSupported(Type) ||
         Ordering != NdMemoryOrdering::None ||
         AddressSpace != NdMemoryAddressSpace::Default) {
       Valid = false;
       return;
     }
-    const auto Section = Storage.sectionFor(Address, Type->Size);
-    if (!Section || (Base && *Base != *Section)) {
-      Valid = false;
-      return;
-    }
-    Base = *Section;
+    Extent = std::max<uint64_t>(Extent, Type->Size);
     Used = true;
   };
   std::function<void(const ExprPtr &, unsigned)> Scan;
@@ -1025,7 +1020,16 @@ nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
       Scan(Expression, 0);
     });
   });
-  return Valid && Used && Budget ? Base : std::nullopt;
+  return Valid && Used && Budget ? std::optional<uint64_t>(Extent)
+                                 : std::nullopt;
+}
+
+inline std::optional<va_t>
+nativeProfileCounterArgument(const HighFunc &Function, size_t Parameter,
+                             va_t Address, const ObjCProfileStorage &Storage) {
+  const auto Extent =
+      nativeScalarStorageArgumentExtent(Function, Parameter, false);
+  return Extent ? Storage.sectionFor(Address, *Extent) : std::nullopt;
 }
 
 struct ClassObjectIdentity {
@@ -1848,6 +1852,34 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                                     *Address - *Base, 8,
                                     ConstantAddressProvenance::Scalar));
             Result.ProfileCounterSections.insert(*Base);
+            continue;
+          }
+
+          // Ordinary named writable storage uses the same non-escape proof,
+          // but keeps its captured initializer and aliasing through the
+          // existing shared local-storage helper.
+          const auto Extent = nativeScalarStorageArgumentExtent(
+              *Callee->second, Index, true);
+          auto LocalHint =
+              Extent ? localStorageAccessHint(Image, *Address, *Extent)
+                     : std::nullopt;
+          if (LocalHint) {
+            const va_t BaseAddress = LocalHint->TargetAddress;
+            const uint64_t ByteCount = LocalHint->ByteCount;
+            auto Storage = HighExpr::makeCall({}, 0, {});
+            Storage->Type = Operand->Type;
+            Storage->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*LocalHint));
+            Operand = *Address == BaseAddress
+                          ? Storage
+                          : HighExpr::makeBinop(
+                                NdOp::INT_ADD, Storage,
+                                HighExpr::makeConst(
+                                    *Address - BaseAddress, 8,
+                                    ConstantAddressProvenance::Scalar));
+            Result.LocalStorageExtents[BaseAddress] =
+                std::max<uint64_t>(Result.LocalStorageExtents[BaseAddress],
+                                   ByteCount);
             continue;
           }
         }

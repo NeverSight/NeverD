@@ -3851,6 +3851,106 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     NativeNamedStorageArgumentsRequireBoundedCalleeAccesses) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(Mutation);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.Image.ObjCSourceReferences.clear();
+      F.Image.Segments[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+      constexpr va_t Address = 0x1040;
+      F.Image.Symbols.push_back({"_fieldOffset", Address, 8, false});
+      llvm::support::endian::write64le(
+          F.Image.Segments[0].Data.data() + Address - 0x1000, 24);
+
+      const auto PointerType = NdType::makePtr(NdType::makeVoid());
+      const auto ValueType = NdType::makeInt(8, false);
+      HighFunc Callee;
+      Callee.Entry = 0x2000;
+      Callee.Name = "read_field_offset";
+      Callee.ReturnType = ValueType;
+      Callee.Params = {{"offset", PointerType}};
+      SourceFunctionTypeHint Signature;
+      Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Signature.ReturnType = ValueType;
+      Signature.Parameters = {{"offset", PointerType}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error))
+          << Error;
+      Callee.SourceTypeHint = Signature;
+      MedVar Parameter;
+      Parameter.Kind = MedVar::Param;
+      Parameter.Id = 0;
+      Parameter.Size = 8;
+      Parameter.TheArch = Architecture;
+      const auto Pointer = HighExpr::makeVar(Parameter, NdType::makeInt(8));
+      auto Load = HighExpr::makeLoad(Pointer, ValueType);
+      HighStmt Return;
+      Return.Kind = StmtKind::Return;
+      Return.RetVal = Load;
+      Callee.Body = {Return};
+
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->CallKind = SourceCallTypeHint::Kind::Native;
+      Binding->TargetAddress = Callee.Entry;
+      Binding->TargetName = Callee.Name;
+      Binding->Signature = Signature;
+      auto Call = HighExpr::makeCall(
+          Callee.Name, Callee.Entry,
+          {HighExpr::makeConst(Address, 8,
+                               ConstantAddressProvenance::DataAddress)});
+      Call->Type = ValueType;
+      Call->SourceCallHint = Binding;
+      F.Function.ReturnType = ValueType;
+      F.Function.Body[0].RetVal = Call;
+
+      if (Mutation == 1)
+        Callee.Body[0].RetVal = Pointer;
+      if (Mutation == 2)
+        Load->Operands[0] = HighExpr::makeBinop(
+            NdOp::INT_ADD, Pointer, HighExpr::makeConst(1, 8));
+      if (Mutation == 3)
+        Load->MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation == 4)
+        F.Image.DataPtrRelocSlots.insert(Address);
+      if (Mutation == 5)
+        Binding->Signature.Parameters[0].Location.RegisterOffset += 8;
+
+      const std::map<va_t, const HighFunc *> Present{
+          {Callee.Entry, &Callee}};
+      const std::map<va_t, const HighFunc *> Missing;
+      const auto &Functions = Mutation == 6 ? Missing : Present;
+      const auto Result =
+          bindObjCSourceReferences(F.Function, F.Image, nullptr, &Functions);
+      if (Mutation) {
+        EXPECT_FALSE(Result.Limitation.empty());
+        EXPECT_TRUE(Result.LocalStorageExtents.empty());
+        EXPECT_EQ(Result.Function.Body[0].RetVal->Operands[0]->Kind,
+                  ExprKind::Const);
+        continue;
+      }
+
+      ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      EXPECT_EQ(Result.LocalStorageExtents,
+                (std::map<va_t, uint64_t>{{Address, 8}}));
+      const auto Argument = Result.Function.Body[0].RetVal->Operands[0];
+      ASSERT_TRUE(Argument->SourceCallHint);
+      EXPECT_EQ(Argument->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+      EXPECT_EQ(Argument->SourceCallHint->TargetAddress, Address);
+      EXPECT_EQ(Argument->SourceCallHint->ByteCount, 8U);
+      EXPECT_TRUE(objcSourceCallBound(*Argument, F.Image, Functions));
+      EXPECT_TRUE(objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image,
+                                      Functions));
+    }
+}
+
+TEST(ObjCSourceBindings,
      NativeProfileCounterArgumentsRejectEscapesAndUnprovedAccesses) {
   for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
     SCOPED_TRACE(Mutation);
