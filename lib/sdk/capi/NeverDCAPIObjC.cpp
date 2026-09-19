@@ -425,6 +425,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::set<va_t> KVOContexts;
       std::set<va_t> StaticIdentities;
       std::map<va_t, uint64_t> LocalStorageExtents;
+      std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
+          SwiftTypeMetadataPairs;
       std::set<va_t> ProfileSections;
       std::set<va_t> ConstantStrings;
       std::set<va_t> ConstantObjects;
@@ -442,6 +444,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
              Projections.at(Entry).LocalStorageExtents)
           LocalStorageExtents[Address] =
               std::max(LocalStorageExtents[Address], Width);
+        for (const auto &[Address, Pair] :
+             Projections.at(Entry).SwiftTypeMetadataPairs) {
+          const auto [It, Added] =
+              SwiftTypeMetadataPairs.emplace(Address, Pair);
+          if (!Added && It->second != Pair)
+            throw std::runtime_error(
+                "conflicting Swift type metadata source pairs");
+        }
         const auto &Sections = Projections.at(Entry).ProfileCounterSections;
         ProfileSections.insert(Sections.begin(), Sections.end());
         const auto &Strings = Projections.at(Entry).ConstantStrings;
@@ -484,7 +494,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       const std::string StorageHelpers =
           ProfileStorage.render(ProfileSections, SharedStorageFunctions) +
           renderObjCLocalStorageHelpers(S->Img, LocalStorageExtents,
-                                        SharedStorageFunctions);
+                                        SharedStorageFunctions) +
+          renderObjCSwiftTypeMetadataHelpers(S->Img, SwiftTypeMetadataPairs,
+                                             SharedStorageFunctions);
       const bool Emitted = Emitter.emit(Unit, SourceOS, COptions);
       SourceOS << BlockHelpers << IdentityHelpers << StorageHelpers;
       if (!Emitted) {

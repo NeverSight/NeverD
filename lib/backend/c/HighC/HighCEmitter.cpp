@@ -822,6 +822,17 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 "neverd_local_storage_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress) {
+          if (Hint.SwiftTypeMetadata) {
+            const auto &Pair = *Hint.SwiftTypeMetadata;
+            const std::string Stem =
+                "neverd_swift_type_metadata_" +
+                llvm::utohexstr(Pair.CacheAddress, true) + "_" +
+                llvm::utohexstr(Pair.ReferenceAddress, true);
+            SourceObjectAddressHelpers.insert(Stem + "_cache_address");
+            SourceObjectAddressHelpers.insert(Stem + "_reference_address");
+          }
+        } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockDescriptor ||
                    Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockLiteral) {

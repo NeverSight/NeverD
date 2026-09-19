@@ -388,7 +388,211 @@ struct Fixture {
     Function.Body.push_back(Return);
   }
 };
+
+struct SwiftTypeMetadataFixture {
+  BinaryImage Image;
+  HighFunc Function;
+  static constexpr va_t Reference = 0x1020;
+  static constexpr va_t TypeReference = 0x1080;
+  static constexpr va_t Cache = 0x2020;
+  static constexpr va_t DescriptorSlot = 0x3020;
+
+  explicit SwiftTypeMetadataFixture(Arch Architecture) {
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Architecture;
+    Image.Bits = Bitness::Bits64;
+    Image.MachOTwoLevelNamespace = true;
+    auto AddMapping = [&](llvm::StringRef Name, va_t Address,
+                          SegmentFlags Flags, bool ReadOnlyAfterRelocations) {
+      Segment Mapping;
+      Mapping.Name = Name.str();
+      Mapping.VA = Mapping.FileOff = Address;
+      Mapping.Size = Mapping.FileSz = 0x100;
+      Mapping.Flags = Flags;
+      Mapping.ReadOnlyAfterRelocations = ReadOnlyAfterRelocations;
+      Mapping.Data.resize(0x100);
+      Image.Segments.push_back(Mapping);
+      Section Data;
+      Data.Name = Name.str();
+      Data.SegmentName = Name.str();
+      Data.VA = Data.FileOff = Address;
+      Data.Size = Data.FileSz = 0x100;
+      Data.Flags = Flags;
+      Image.Sections.push_back(Data);
+    };
+    AddMapping("__swift_reference", 0x1000, SegmentFlags::Readable, false);
+    // The loader preserves the executable __TEXT flags on __const and
+    // __swift5_typeref. Mach-O section attributes remain the authoritative
+    // code/data distinction.
+    Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections[0].Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    AddMapping("__swift_cache", 0x2000,
+               SegmentFlags::Readable | SegmentFlags::Writable, false);
+    AddMapping("__swift_import", 0x3000,
+               SegmentFlags::Readable | SegmentFlags::Writable, true);
+    auto &ReferenceData = Image.Segments[0].Data;
+    llvm::support::endian::write32le(
+        ReferenceData.data() + Reference - 0x1000,
+        static_cast<uint32_t>(static_cast<int32_t>(TypeReference - Reference)));
+    llvm::support::endian::write32le(
+        ReferenceData.data() + Reference + 4 - 0x1000, 7);
+    auto *Type = ReferenceData.data() + TypeReference - 0x1000;
+    Type[0] = 2;
+    llvm::support::endian::write32le(
+        Type + 1, static_cast<uint32_t>(static_cast<int32_t>(
+                      DescriptorSlot - (TypeReference + 1))));
+    Type[5] = 'S';
+    Type[6] = 'g';
+    Type[7] = 0;
+    Image.Symbols.push_back({"_$s10Foundation3URLVSgMR", Reference, 8, false});
+    Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", Cache, 8, false});
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        DescriptorSlot, "_$s10Foundation3URLVMn", 0,
+        "/System/Library/Frameworks/Foundation.framework/Foundation", false));
+
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = NdType::makeVoid();
+    Signature.Parameters = {{"cache", NdType::makePtr(NdType::makeVoid())},
+                            {"reference", NdType::makePtr(NdType::makeVoid())}};
+    std::string Error;
+    EXPECT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error))
+        << Error;
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->CallKind = SourceCallTypeHint::Kind::Native;
+    Hint->TargetAddress = 0x5000;
+    Hint->Signature = Signature;
+    auto Call = HighExpr::makeCall(
+        "metadata_user", 0x5000,
+        {HighExpr::makeConst(Cache, 8, ConstantAddressProvenance::DataAddress),
+         HighExpr::makeConst(Reference, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = std::move(Hint);
+    HighStmt Statement;
+    Statement.Kind = StmtKind::ExprStmt;
+    Statement.Val = std::move(Call);
+    Function.ReturnType = NdType::makeVoid();
+    Function.Body = {std::move(Statement)};
+  }
+};
 } // namespace
+
+TEST(ObjCSourceBindings,
+     SwiftConcreteTypeMetadataPairsRebuildFreshCacheAndRelativeReference) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftTypeMetadataFixture F(Architecture);
+    // Swift private-linkage symbols repeat across compilation units. The
+    // typed native call, not global symbol-name uniqueness, pairs the exact
+    // cache and reference addresses used by this function.
+    F.Image.Symbols.push_back({"_$s10Foundation3URLVSgMR", 0x1090, 8, false});
+    F.Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", 0x2030, 8, false});
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+    const auto Pair =
+        Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+    EXPECT_EQ(Pair.ReferenceAddress, SwiftTypeMetadataFixture::Reference);
+    EXPECT_EQ(Pair.TypeReferenceAddress,
+              SwiftTypeMetadataFixture::TypeReference);
+    EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
+    EXPECT_EQ(Pair.DescriptorSymbol, "_$s10Foundation3URLVMn");
+    EXPECT_EQ(Pair.Suffix, "Sg");
+
+    const auto Call = Result.Function.Body[0].Val;
+    ASSERT_EQ(Call->Operands.size(), 2U);
+    for (size_t I = 0; I < 2; ++I) {
+      const auto &Address = Call->Operands[I];
+      ASSERT_TRUE(Address->SourceCallHint);
+      EXPECT_EQ(Address->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+      EXPECT_EQ(Address->SourceCallHint->TargetAddress,
+                I ? SwiftTypeMetadataFixture::Reference
+                  : SwiftTypeMetadataFixture::Cache);
+      EXPECT_TRUE(objcSourceCallBound(*Address, F.Image, {}));
+    }
+
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftTypeMetadataHelpers(
+        F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+    EXPECT_EQ(Helpers,
+              (std::set<std::string>{
+                  "neverd_swift_type_metadata_2020_1020_cache_address",
+                  "neverd_swift_type_metadata_2020_1020_reference_address"}));
+    EXPECT_NE(Source.find("__asm__(\"_$s10Foundation3URLVMn\")"),
+              std::string::npos);
+    EXPECT_NE(Source.find(".type_reference[0] = 2"), std::string::npos);
+    EXPECT_NE(Source.find(".type_reference[5] = 83"), std::string::npos);
+    EXPECT_NE(Source.find(".type_reference[6] = 103"), std::string::npos);
+    EXPECT_NE(Source.find(".reference.length = 7"), std::string::npos);
+    EXPECT_NE(Source.find("void *cache"), std::string::npos);
+  }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftConcreteTypeMetadataPairsRejectIncompleteOrStaleEvidence) {
+  for (unsigned Mutation = 0; Mutation < 14; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    SwiftTypeMetadataFixture F(Arch::AArch64);
+    auto &ReferenceBytes = F.Image.Segments[0].Data;
+    auto &CacheBytes = F.Image.Segments[1].Data;
+    if (Mutation == 0)
+      CacheBytes[SwiftTypeMetadataFixture::Cache - 0x2000] = 1;
+    if (Mutation == 1)
+      F.Image.Symbols.pop_back();
+    if (Mutation == 2)
+      F.Image.Sections[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    if (Mutation == 3)
+      llvm::support::endian::write32le(ReferenceBytes.data() +
+                                           SwiftTypeMetadataFixture::Reference +
+                                           4 - 0x1000,
+                                       8);
+    if (Mutation == 4)
+      ReferenceBytes[SwiftTypeMetadataFixture::TypeReference - 0x1000] = 1;
+    if (Mutation == 5)
+      llvm::support::endian::write32le(
+          ReferenceBytes.data() + SwiftTypeMetadataFixture::TypeReference + 1 -
+              0x1000,
+          1);
+    if (Mutation == 6)
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::DescriptorSlot].Module =
+          "/tmp/Foundation";
+    if (Mutation == 7)
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::DescriptorSlot]
+          .WeakImport = true;
+    if (Mutation == 8) {
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::DescriptorSlot].Name =
+          "_$s10Foundation3URLVMa";
+      F.Image.ImportStorageSlots[SwiftTypeMetadataFixture::DescriptorSlot]
+          .Name = "_$s10Foundation3URLVMa";
+    }
+    if (Mutation == 9)
+      F.Image.Symbols[0].Name = "_$s10Foundation3URLVSdMR";
+    if (Mutation == 10)
+      F.Image.Symbols.push_back(F.Image.Symbols.back());
+    if (Mutation == 11)
+      F.Image.DataPtrRelocSlots.insert(SwiftTypeMetadataFixture::Reference);
+    if (Mutation == 12)
+      F.Image.MachOTwoLevelNamespace = false;
+    if (Mutation == 13)
+      F.Image.Sections[0].Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
+  }
+
+  SwiftTypeMetadataFixture F(Arch::AArch64);
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  auto Cache = Result.Function.Body[0].Val->Operands[0];
+  F.Image.Segments[1].Data[SwiftTypeMetadataFixture::Cache - 0x2000] = 1;
+  EXPECT_FALSE(objcSourceCallBound(*Cache, F.Image, {}));
+  std::set<std::string> Helpers;
+  EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
+                   F.Image, Result.SwiftTypeMetadataPairs, Helpers),
+               std::runtime_error);
+}
 
 namespace {
 Fixture readonlyTableFixture(uint16_t Width = 8) {

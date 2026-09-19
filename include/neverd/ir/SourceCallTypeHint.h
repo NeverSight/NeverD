@@ -85,6 +85,10 @@ struct SourceCallTypeHint {
     /// Exact scalar accesses rooted at a uniquely named writable data symbol.
     /// ByteCount is the proven storage prefix rebuilt across methods.
     RuntimeLocalStorageAddress,
+    /// One address in a compiler-emitted Swift concrete-type metadata pair.
+    /// The pair is a fresh zero cache plus a rebuilt relative mangled-name
+    /// record; no initialized metadata pointer from the loaded image is copied.
+    RuntimeSwiftTypeMetadataAddress,
     /// Base of a rebuilt numeric profiling-counter section. The SDK proves
     /// storage extents and permits only bounded, unordered memory accesses.
     RuntimeProfileCounterStorage,
@@ -199,6 +203,24 @@ struct SourceCallTypeHint {
     std::vector<va_t> AlternativeFormatAddresses;
   };
   std::optional<FormatArguments> Format;
+  struct SwiftTypeMetadataAddress {
+    va_t CacheAddress = 0;
+    va_t ReferenceAddress = 0;
+    va_t TypeReferenceAddress = 0;
+    va_t DescriptorSlot = 0;
+    std::string DescriptorSymbol;
+    std::string Suffix;
+    bool operator==(const SwiftTypeMetadataAddress &Other) const {
+      return std::tie(CacheAddress, ReferenceAddress, TypeReferenceAddress,
+                      DescriptorSlot, DescriptorSymbol, Suffix) ==
+             std::tie(Other.CacheAddress, Other.ReferenceAddress,
+                      Other.TypeReferenceAddress, Other.DescriptorSlot,
+                      Other.DescriptorSymbol, Other.Suffix);
+    }
+  };
+  /// Complete pair proof used by RuntimeSwiftTypeMetadataAddress. The current
+  /// TargetAddress must be exactly CacheAddress or ReferenceAddress.
+  std::optional<SwiftTypeMetadataAddress> SwiftTypeMetadata;
   /// Restricts declaration agreement using revalidated receiver provenance.
   /// For ObjCSuper2 this is the exact current-class reference stored in the
   /// objc_super record, not the dynamic receiver pointer.

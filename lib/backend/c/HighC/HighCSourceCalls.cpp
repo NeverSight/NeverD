@@ -185,6 +185,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeKVOContext ||
       Hint.CallKind == Kind::RuntimeStaticIdentity ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
       Hint.CallKind == Kind::RuntimeConstantString ||
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
@@ -286,6 +287,22 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         return bad("local storage has no source extent");
       Value = "neverd_local_storage_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress) {
+      if (!Hint.TargetAddress || !Hint.SwiftTypeMetadata || Hint.ByteCount ||
+          (Hint.TargetAddress != Hint.SwiftTypeMetadata->CacheAddress &&
+           Hint.TargetAddress != Hint.SwiftTypeMetadata->ReferenceAddress) ||
+          !Hint.SwiftTypeMetadata->CacheAddress ||
+          !Hint.SwiftTypeMetadata->ReferenceAddress ||
+          Hint.SwiftTypeMetadata->DescriptorSymbol.empty() ||
+          Hint.SwiftTypeMetadata->Suffix.empty())
+        return bad("Swift type metadata has no complete pair identity");
+      Value = "neverd_swift_type_metadata_" +
+              llvm::utohexstr(Hint.SwiftTypeMetadata->CacheAddress, true) +
+              "_" +
+              llvm::utohexstr(Hint.SwiftTypeMetadata->ReferenceAddress, true) +
+              (Hint.TargetAddress == Hint.SwiftTypeMetadata->CacheAddress
+                   ? "_cache_address()"
+                   : "_reference_address()");
     } else {
       if (!Hint.TargetAddress)
         return bad("block source address has no runtime identity");
