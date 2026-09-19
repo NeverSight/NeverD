@@ -1,7 +1,10 @@
 import copy
 import unittest
 
-from scripts.generate_swift_data_declarations import metadata_storage, render, witness_storage
+from scripts.generate_swift_data_declarations import (conformance_storage,
+                                                        metadata_storage,
+                                                        render,
+                                                        witness_storage)
 
 
 MODULE = '/usr/lib/swift/libswiftCore.dylib'
@@ -17,9 +20,75 @@ WITNESS_IR = ('@"$sSSSHsWP" = external global ptr, align 8\n'
               '  call swiftcc void @neverd_hashable_probe(ptr noalias nonnull %0, '
               'ptr nonnull @"$sSSN", ptr nonnull @"$sSSSHsWP") #2\n'
               '  ret void\n}\n')
+CONFORMANCE = '$sSSSysMc'
+CONFORMANCE_IR = (
+    '@"$sSSN" = external global %swift.type, align 8\n'
+    '@"$sS2SSysWL" = linkonce_odr hidden local_unnamed_addr global ptr null, align 8\n'
+    '@"$sSSSysMc" = external global %swift.protocol_conformance_descriptor, align 4\n'
+    'declare swiftcc void @neverd_string_protocol_probe(ptr noalias, ptr, ptr) local_unnamed_addr #0\n'
+    'declare ptr @swift_getWitnessTable(ptr, ptr, ptr) local_unnamed_addr #1\n'
+    'define void @witness_StringProtocol() #0 {\nentry:\n'
+    '  %0 = alloca i64, align 8\n'
+    '  %1 = tail call ptr @"$sS2SSysWl"() #2\n'
+    '  call swiftcc void @neverd_string_protocol_probe(ptr noalias nonnull %0, '
+    'ptr nonnull @"$sSSN", ptr %1) #3\n'
+    '  ret void\n}\n'
+    'define linkonce_odr hidden ptr @"$sS2SSysWl"() local_unnamed_addr #2 {\nentry:\n'
+    '  %0 = load ptr, ptr @"$sS2SSysWL", align 8\n'
+    '  %1 = icmp eq ptr %0, null\n'
+    '  br i1 %1, label %cacheIsNull, label %cont\n'
+    'cacheIsNull:\n'
+    '  %2 = tail call ptr @swift_getWitnessTable(ptr nonnull @"$sSSSysMc", '
+    'ptr nonnull @"$sSSN", ptr undef) #4\n'
+    '  store atomic ptr %2, ptr @"$sS2SSysWL" release, align 8\n'
+    '  br label %cont\n'
+    'cont:\n'
+    '  %3 = phi ptr [ %0, %entry ], [ %2, %cacheIsNull ]\n'
+    '  ret ptr %3\n}\n')
 
 
 class SwiftDataDeclarationTests(unittest.TestCase):
+    def test_only_lazy_witness_accessors_supply_conformance_identity(self):
+        self.assertEqual(conformance_storage(
+            CONFORMANCE_IR, ['witness_StringProtocol'], {NAME}),
+            {CONFORMANCE})
+        for invalid in [
+            CONFORMANCE_IR.replace('external global %swift.protocol_conformance_descriptor',
+                                   'external thread_local global %swift.protocol_conformance_descriptor'),
+            CONFORMANCE_IR.replace('external global %swift.protocol_conformance_descriptor',
+                                   'global %swift.protocol_conformance_descriptor'),
+            CONFORMANCE_IR.replace('%swift.protocol_conformance_descriptor', 'ptr'),
+            CONFORMANCE_IR.replace('align 4', 'align 8'),
+            CONFORMANCE_IR.replace('ptr nonnull @"$sSSSysMc"', 'ptr %descriptor'),
+            CONFORMANCE_IR.replace('ptr nonnull @"$sSSN"', 'ptr nonnull @"unknown"'),
+            CONFORMANCE_IR.replace('ptr undef)', 'ptr null)'),
+            CONFORMANCE_IR.replace('store atomic ptr %2', 'store ptr %2'),
+            CONFORMANCE_IR.replace(' release, align 8', ', align 8'),
+            CONFORMANCE_IR.replace('ptr %1) #3', 'ptr %other) #3'),
+            '@"$sSSSysMc" = external global '
+            '%swift.protocol_conformance_descriptor, align 4\n' + CONFORMANCE_IR,
+        ]:
+            with self.subTest(invalid=invalid):
+                self.assertEqual(conformance_storage(
+                    invalid, ['witness_StringProtocol'], {NAME}), set())
+
+    def test_conformance_probe_requires_unique_definition_and_exact_abis(self):
+        for invalid in [
+            '', CONFORMANCE_IR + CONFORMANCE_IR,
+            ' ' * (16 * 1024 * 1024 + 1),
+            CONFORMANCE_IR.replace('declare ptr @swift_getWitnessTable',
+                                   'declare i64 @swift_getWitnessTable'),
+            CONFORMANCE_IR.replace('declare swiftcc void '
+                                   '@neverd_string_protocol_probe',
+                                   'declare void @neverd_string_protocol_probe'),
+            CONFORMANCE_IR.replace('@witness_StringProtocol()',
+                                   '@another_probe()'),
+        ]:
+            with self.subTest(invalid=invalid[:80]), self.assertRaises(ValueError):
+                conformance_storage(invalid, ['witness_StringProtocol'], {NAME})
+        with self.assertRaises(ValueError):
+            conformance_storage(CONFORMANCE_IR, ['witness.*'], {NAME})
+
     def test_only_direct_witness_arguments_supply_storage_identity(self):
         self.assertEqual(witness_storage(WITNESS_IR, ['witness_String'], {NAME}), {WITNESS})
         for invalid in [

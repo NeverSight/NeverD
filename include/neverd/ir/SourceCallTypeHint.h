@@ -89,6 +89,16 @@ struct SourceCallTypeHint {
     /// The pair is a fresh zero cache plus a rebuilt relative mangled-name
     /// record; no initialized metadata pointer from the loaded image is copied.
     RuntimeSwiftTypeMetadataAddress,
+    /// The zero-initialized pointer cache of a compiler-emitted Swift lazy
+    /// witness-table accessor. The containing accessor proves the exact
+    /// swift_getWitnessTable call, external descriptor/metadata identities,
+    /// fast-path load, release store, and returned values.
+    RuntimeSwiftWitnessCacheAddress,
+    /// A compiler-emitted zero-argument Swift lazy witness-table accessor.
+    /// TargetAddress is the exact local accessor entry; source projection
+    /// replaces the incidental machine value in the runtime's instantiation
+    /// register with the compiler-level undef represented by a private helper.
+    RuntimeSwiftWitnessAccessor,
     /// Base of a rebuilt numeric profiling-counter section. The SDK proves
     /// storage extents and permits only bounded, unordered memory accesses.
     RuntimeProfileCounterStorage,

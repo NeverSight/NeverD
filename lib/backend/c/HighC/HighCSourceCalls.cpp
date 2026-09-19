@@ -186,6 +186,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeStaticIdentity ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor ||
       Hint.CallKind == Kind::RuntimeConstantString ||
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
@@ -303,6 +305,17 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
               (Hint.TargetAddress == Hint.SwiftTypeMetadata->CacheAddress
                    ? "_cache_address()"
                    : "_reference_address()");
+    } else if (Hint.CallKind ==
+               Kind::RuntimeSwiftWitnessCacheAddress) {
+      if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
+        return bad("Swift witness cache has no complete identity");
+      Value = "neverd_swift_witness_cache_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor) {
+      if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
+        return bad("Swift witness accessor has no complete identity");
+      Value = "neverd_swift_witness_accessor_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "()";
     } else {
       if (!Hint.TargetAddress)
         return bad("block source address has no runtime identity");

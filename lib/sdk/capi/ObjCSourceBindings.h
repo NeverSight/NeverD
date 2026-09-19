@@ -41,6 +41,8 @@ struct ObjCSourceBindingResult {
   std::map<va_t, uint64_t> LocalStorageExtents;
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
+  /// Cache address -> exact accessor entry, revalidated when helpers render.
+  std::map<va_t, va_t> SwiftWitnessCaches;
   std::set<va_t> ProfileCounterSections;
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;
@@ -643,6 +645,197 @@ inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
   return Hint;
 }
 
+inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
+                                               unsigned Depth = 0);
+
+/// Recognize the complete compiler-emitted String:StringProtocol lazy witness
+/// accessor. Private Swift cache symbols can repeat, so the proof is rooted in
+/// this exact function's dataflow rather than a suffix or global name lookup.
+inline std::optional<SourceCallTypeHint>
+swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
+                             va_t Address) {
+  if (!Function.Entry || !Function.ReturnType ||
+      Function.ReturnType->Kind == NdTypeKind::Void ||
+      Function.ReturnType->Size != 8 ||
+      Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 ||
+      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
+      Image.MachOChainedFixupsAmbiguous || !Image.MachOTwoLevelNamespace ||
+      Address % 8)
+    return std::nullopt;
+  const auto *Cache = uniqueWritableDataSymbol(Image, Address, 8);
+  const auto *Bytes = Cache ? Image.readVA(Address, 8) : nullptr;
+  if (!Cache || !Bytes ||
+      !std::all_of(Bytes, Bytes + 8, [](uint8_t Byte) { return Byte == 0; }))
+    return std::nullopt;
+
+  const Symbol *Accessor = nullptr;
+  for (const auto &Symbol : Image.Symbols) {
+    if (!Symbol.IsFunc || Symbol.Addr != Function.Entry ||
+        Symbol.Name.empty() ||
+        llvm::StringRef(Symbol.Name).starts_with(kAutoFuncPrefix))
+      continue;
+    if (Accessor)
+      return std::nullopt;
+    Accessor = &Symbol;
+  }
+  llvm::StringRef CacheName(Cache->Name);
+  if (!Accessor || !CacheName.ends_with("WL") ||
+      Accessor->Name != CacheName.drop_back(1).str() + "l" ||
+      (!Function.Name.empty() && Function.Name != Accessor->Name))
+    return std::nullopt;
+
+  VarKeyMap<std::vector<ExprPtr>> Definitions;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
+        (Statement.Dst->Kind == ExprKind::Var ||
+         Statement.Dst->Kind == ExprKind::Phi))
+      Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+  });
+  const auto Resolve = [&](auto &&Self, ExprPtr Value,
+                           unsigned Depth = 0) -> ExprPtr {
+    if (!Value || Depth > 64)
+      return nullptr;
+    if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+        Value->Operands.size() == 1 && Value->Type &&
+        Value->Operands[0] && Value->Operands[0]->Type &&
+        Value->Type->Size == Value->Operands[0]->Type->Size)
+      return Self(Self, Value->Operands[0], Depth + 1);
+    if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
+      return Value;
+    const auto Found = Definitions.find(varKey(Value->Var));
+    if (Found == Definitions.end() || Found->second.size() != 1 ||
+        Found->second.front().get() == Value.get())
+      return Value;
+    return Self(Self, Found->second.front(), Depth + 1);
+  };
+  const auto ExactAddress = [&](const ExprPtr &Value) {
+    return Value && constantAddress(*Value) == std::optional<va_t>(Address);
+  };
+
+  std::vector<ExprPtr> CacheLoads, WitnessCalls, Returns;
+  std::vector<const HighStmt *> CacheStores;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Store &&
+        ExactAddress(Statement.StoreAddr))
+      CacheStores.push_back(&Statement);
+    if (Statement.Kind == StmtKind::Return && Statement.RetVal)
+      Returns.push_back(Resolve(Resolve, Statement.RetVal));
+    forEachExpr(Statement, [&](const ExprPtr &Expression) {
+      if (!Expression)
+        return;
+      if (Expression->Kind == ExprKind::Load &&
+          Expression->Operands.size() == 1 &&
+          ExactAddress(Expression->Operands[0]))
+        CacheLoads.push_back(Expression);
+      if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
+          Expression->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::SwiftRuntimeCall &&
+          Expression->SourceCallHint->TargetName == "swift_getWitnessTable")
+        WitnessCalls.push_back(Expression);
+    });
+  });
+  if (CacheLoads.size() != 1 || CacheStores.size() != 1 ||
+      WitnessCalls.size() != 1 || Returns.size() != 2)
+    return std::nullopt;
+  const auto &Load = CacheLoads.front();
+  const auto *Store = CacheStores.front();
+  const auto &Witness = WitnessCalls.front();
+  if (!Load->Type || Load->Type->Size != 8 ||
+      Load->MemoryOrdering != NdMemoryOrdering::None ||
+      Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      !Store->StoreVal || !Store->StoreVal->Type ||
+      Store->StoreVal->Type->Size != 8 ||
+      Store->MemoryOrdering != NdMemoryOrdering::Release ||
+      Store->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Witness->IsIndirectCall || Witness->Operands.size() != 3 ||
+      Witness->MemoryOrdering != NdMemoryOrdering::None ||
+      Witness->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return std::nullopt;
+  const auto ExpectedRuntime = swiftRuntimeSourceCallHint(
+      Image, Witness->SourceCallHint->TargetAddress);
+  if (!ExpectedRuntime ||
+      !runtimeBindingMatches(*Witness->SourceCallHint, *ExpectedRuntime) ||
+      Resolve(Resolve, Store->StoreVal).get() != Witness.get())
+    return std::nullopt;
+
+  const char *ExpectedGlobals[] = {"$sSSSysMc", "$sSSN"};
+  for (size_t Index = 0; Index < 2; ++Index) {
+    const auto Value = Resolve(Resolve, Witness->Operands[Index]);
+    if (!Value || Value->Kind != ExprKind::Load ||
+        Value->Operands.size() != 1 || !Value->Type || Value->Type->Size != 8 ||
+        Value->MemoryOrdering != NdMemoryOrdering::None ||
+        Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+    const auto Slot = constantAddress(*Value->Operands[0]);
+    const auto Global = Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot)
+                             : std::nullopt;
+    if (!Global || Global->TargetName != ExpectedGlobals[Index] ||
+        Global->Signature.Origin !=
+            SourceFunctionTypeHint::OriginKind::SwiftRuntime)
+      return std::nullopt;
+  }
+  const bool ReturnsLoad = std::any_of(
+      Returns.begin(), Returns.end(),
+      [&](const ExprPtr &Value) { return Value.get() == Load.get(); });
+  const bool ReturnsWitness = std::any_of(
+      Returns.begin(), Returns.end(),
+      [&](const ExprPtr &Value) { return Value.get() == Witness.get(); });
+  if (!ReturnsLoad || !ReturnsWitness)
+    return std::nullopt;
+
+  SourceCallTypeHint Hint;
+  Hint.CallKind =
+      SourceCallTypeHint::Kind::RuntimeSwiftWitnessCacheAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = Cache->Name;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
+}
+
+/// Bind a compiler-emitted lazy witness accessor as a source helper. The
+/// compiler-level third swift_getWitnessTable operand is undef, so the
+/// incidental live machine value is deliberately not exposed as an accessor
+/// parameter. The complete accessor body above is the proof boundary.
+inline std::optional<SourceCallTypeHint>
+swiftWitnessAccessorCallHint(const HighFunc &Function,
+                             const BinaryImage &Image,
+                             va_t *CacheAddress = nullptr) {
+  const llvm::StringRef AccessorName(Function.Name);
+  if (!AccessorName.ends_with("Wl"))
+    return std::nullopt;
+  const std::string CacheName = AccessorName.drop_back(1).str() + "L";
+  std::optional<SourceCallTypeHint> Result;
+  for (const auto &Symbol : Image.Symbols) {
+    if (Symbol.IsFunc || Symbol.Name != CacheName)
+      continue;
+    const auto Cache =
+        swiftWitnessCacheAddressHint(Function, Image, Symbol.Addr);
+    if (!Cache)
+      continue;
+    if (Result)
+      return std::nullopt;
+    SourceCallTypeHint Hint;
+    Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftWitnessAccessor;
+    Hint.TargetAddress = Function.Entry;
+    Hint.TargetName = Function.Name;
+    Hint.Signature.Origin =
+        SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+    Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+    std::string Reason;
+    if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+      return std::nullopt;
+    Result = std::move(Hint);
+    if (CacheAddress)
+      *CacheAddress = Symbol.Addr;
+  }
+  return Result;
+}
+
 inline std::optional<va_t>
 localStringPointerInitializer(const BinaryImage &Image, va_t Address,
                               uint64_t Width) {
@@ -740,9 +933,6 @@ inline bool localStorageAccessTypeSupported(const TypeRef &Type) {
          (Type->Size == 1 || Type->Size == 2 || Type->Size == 4 ||
           Type->Size == 8 || Type->Size == 16);
 }
-
-inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
-                                               unsigned Depth = 0);
 
 /// Prove the extent of a named local storage address from an actual memory
 /// access in this function. Swift's exclusivity marker receives the same
@@ -1427,11 +1617,27 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
   auto BindMemoryAddress = [&](ExprPtr &Operand, const TypeRef &Type,
                                NdMemoryOrdering Ordering,
                                NdMemoryAddressSpace AddressSpace) {
-    if (!Operand || !Type || Ordering != NdMemoryOrdering::None ||
-        AddressSpace != NdMemoryAddressSpace::Default ||
+    if (!Operand || !Type || AddressSpace != NdMemoryAddressSpace::Default ||
         !localStorageAccessTypeSupported(Type))
       return false;
     const auto Address = constantAddress(*Operand);
+    auto WitnessCache =
+        Address && Type->Size == 8 &&
+                (Ordering == NdMemoryOrdering::None ||
+                 Ordering == NdMemoryOrdering::Release)
+            ? swiftWitnessCacheAddressHint(Function, Image, *Address)
+            : std::nullopt;
+    if (WitnessCache) {
+      auto Bound = HighExpr::makeCall({}, 0, {});
+      Bound->Type = NdType::makeInt(8, false);
+      Bound->SourceCallHint = std::make_shared<SourceCallTypeHint>(
+          std::move(*WitnessCache));
+      Operand = std::move(Bound);
+      Result.SwiftWitnessCaches[*Address] = Function.Entry;
+      return true;
+    }
+    if (Ordering != NdMemoryOrdering::None)
+      return false;
     const auto ProfileBase =
         Address ? ProfileStorage->sectionFor(*Address, Type->Size)
                 : std::nullopt;
@@ -1739,6 +1945,32 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       Fail("method retains an image address without a relocatable source "
            "binding",
            Expression.get());
+    // A Swift lazy witness accessor is a zero-argument compiler helper even
+    // though its body forwards an undef third argument to the runtime. Bind
+    // the exact proven accessor before native dependency collection so the
+    // incidental incoming register never becomes a public source parameter.
+    if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
+        Expression->SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::Native &&
+        !Expression->IsIndirectCall && Functions &&
+        Expression->CallAddr == Expression->SourceCallHint->TargetAddress) {
+      const va_t Target = Expression->SourceCallHint->TargetAddress;
+      const auto Callee = Functions->find(Target);
+      va_t CacheAddress = 0;
+      const auto Accessor =
+          Callee == Functions->end() || !Callee->second
+              ? std::nullopt
+              : swiftWitnessAccessorCallHint(*Callee->second, Image,
+                                             &CacheAddress);
+      if (Accessor) {
+        Expression->Operands.clear();
+        Expression->CallTarget.clear();
+        Expression->SourceCallHint =
+            std::make_shared<SourceCallTypeHint>(*Accessor);
+        Expression->Type = Accessor->Signature.ReturnType;
+        Result.SwiftWitnessCaches[CacheAddress] = Target;
+      }
+    }
     if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
         Expression->SourceCallHint->CallKind ==
             SourceCallTypeHint::Kind::Native)
@@ -2462,6 +2694,46 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftWitnessCacheAddress) {
+    const HighFunc *ProofFunction = ContainingFunction;
+    if (ContainingFunction) {
+      const auto Original = Functions.find(ContainingFunction->Entry);
+      if (Original != Functions.end())
+        ProofFunction = Original->second;
+    }
+    const auto Expected =
+        ProofFunction
+            ? swiftWitnessCacheAddressHint(*ProofFunction, Image,
+                                           Binding.TargetAddress)
+            : std::nullopt;
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftWitnessAccessor) {
+    const auto Found = Functions.find(Binding.TargetAddress);
+    const auto Expected =
+        Found == Functions.end() || !Found->second
+            ? std::nullopt
+            : swiftWitnessAccessorCallHint(*Found->second, Image);
+    return Expected && !Expression.IsIndirectCall &&
+           Expression.CallAddr == Binding.TargetAddress &&
+           Expression.Operands.empty() &&
+           Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
       SourceCallTypeHint::Kind::RuntimeLocalStorageAddress) {
     const auto Expected =
         localStorageHint(Image, Binding.TargetAddress, Binding.ByteCount);
@@ -2886,6 +3158,55 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
               "();\n"
               "  return (uintptr_t)&" +
               StorageName + ".reference;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCSwiftWitnessCacheHelpers(
+    const BinaryImage &Image, const std::map<va_t, va_t> &Caches,
+    const std::map<va_t, const HighFunc *> &Functions,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  if (!Caches.empty())
+    Source +=
+        "\nextern unsigned char neverd_swift_string_protocol_conformance[] "
+        "__asm__(\"_$sSSSysMc\");\n"
+        "extern unsigned char neverd_swift_string_metadata[] "
+        "__asm__(\"_$sSSN\");\n"
+        "extern void *neverd_swift_get_witness_table(void *, void *, void *) "
+        "__asm__(\"_swift_getWitnessTable\");\n";
+  for (const auto &[CacheAddress, AccessorAddress] : Caches) {
+    const auto Function = Functions.find(AccessorAddress);
+    const auto Current =
+        Function == Functions.end() || !Function->second
+            ? std::nullopt
+            : objc_binding_detail::swiftWitnessCacheAddressHint(
+                  *Function->second, Image, CacheAddress);
+    if (!Current)
+      throw std::runtime_error("Swift witness cache is no longer valid");
+    const std::string CacheStem = "neverd_swift_witness_cache_" +
+                                  llvm::utohexstr(CacheAddress, true);
+    const std::string CacheName = CacheStem + "_address";
+    const std::string AccessorName =
+        "neverd_swift_witness_accessor_" +
+        llvm::utohexstr(AccessorAddress, true);
+    SharedFunctions.insert(CacheName);
+    SharedFunctions.insert(AccessorName);
+    Source += "\nstatic void *" + CacheStem + ";\n"
+              "uintptr_t " + CacheName +
+              "(void) {\n"
+              "  return (uintptr_t)&" + CacheStem + ";\n}\n"
+              "uintptr_t " + AccessorName +
+              "(void) {\n"
+              "  void *value = " + CacheStem + ";\n"
+              "  if (value)\n"
+              "    return (uintptr_t)value;\n"
+              "  value = neverd_swift_get_witness_table(\n"
+              "      neverd_swift_string_protocol_conformance,\n"
+              "      neverd_swift_string_metadata, (void *)0);\n"
+              "  __atomic_store_n(&" + CacheStem +
+              ", value, __ATOMIC_RELEASE);\n"
+              "  return (uintptr_t)value;\n}\n";
   }
   return Source;
 }

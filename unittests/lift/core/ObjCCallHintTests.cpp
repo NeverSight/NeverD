@@ -1120,6 +1120,65 @@ TEST(ObjCCallHints, FoundationValueBridgesKeepCompilerObservedSwiftABI) {
   }
 }
 
+TEST(ObjCCallHints,
+     FoundationStringContainsKeepsGenericWitnessAndSwiftSelfABI) {
+  constexpr llvm::StringLiteral Name =
+      "$sSy10FoundationE8containsySbqd__SyRd__lF";
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/Foundation.framework/Foundation";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const std::string Import = "_" + Name.str();
+    auto Image = runtimeImage(Import, Architecture);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &Signature = Hint->Signature;
+    EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(Signature.ReturnType);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Signature.ReturnType->Size, 1U);
+    ASSERT_EQ(Signature.Parameters.size(), 6U);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (size_t I = 0; I < 5; ++I) {
+      EXPECT_EQ(Signature.Parameters[I].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.Parameters[I].TheRole,
+                SourceParameterTypeHint::Role::Ordinary);
+      EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                TRI.IntParamRegs[I]);
+    }
+    EXPECT_EQ(Signature.Parameters[5].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Signature.Parameters[5].TheRole,
+              SourceParameterTypeHint::Role::SwiftContext);
+    EXPECT_EQ(Signature.Parameters[5].Location.RegisterOffset,
+              Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+
+    std::vector<ExprPtr> Arguments;
+    for (const auto &Parameter : Signature.Parameters)
+      Arguments.push_back(HighExpr::makeConst(0, Parameter.Type->Size));
+    auto Call = HighExpr::makeCall("untrusted", 0x2180, Arguments);
+    Call->Type = Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+    for (llvm::StringRef Alias :
+         {"/System/Library/Frameworks/Foundation.framework/Versions/C/"
+          "Foundation",
+          "/usr/lib/swift/libswiftFoundation.dylib"}) {
+      auto Aliased = Image;
+      Aliased.DyldBindSlots[0x2180].Module = Alias.str();
+      EXPECT_TRUE(swiftRuntimeSourceCallHint(Aliased, 0x2180)) << Alias.str();
+    }
+    auto Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].Module = "/tmp/Foundation";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
   enum class Shape { IndirectAnyResult, GenericToObject };
   struct Bridge {

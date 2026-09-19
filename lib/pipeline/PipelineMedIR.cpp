@@ -60,6 +60,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   std::map<va_t, SourceFunctionTypeHint> SourceCalleeHints;
   for (const auto &[Entry, Hint] : SourceHints)
     SourceCalleeHints.emplace(Entry, *Hint);
+  if (!Opts.PatchMode && !Opts.LiftMode)
+    for (const auto &[Entry, Hint] : Opts.SourceCalleeTypeHints)
+      SourceCalleeHints.insert_or_assign(Entry, Hint);
 
   // Per-callee callee-cleanup pop (x86 `ret imm`, the i386 SysV sret hidden-
   // pointer pop) so each caller's CALL to such a callee gets a post-call stack-

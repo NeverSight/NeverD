@@ -85,6 +85,17 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     SwiftOnceSourcePlan OncePlan;
     std::set<va_t> OnceRoots;
     for (unsigned Depth = 0; Depth < 16; ++Depth) {
+      bool WitnessChanged = false;
+      for (const auto &Function : Result.HighFuncs) {
+        const auto Hint =
+            objc_binding_detail::swiftWitnessAccessorCallHint(Function,
+                                                               S->Img);
+        if (!Hint || Options.SourceCalleeTypeHints.count(Function.Entry))
+          continue;
+        Options.SourceCalleeTypeHints.emplace(Function.Entry,
+                                               Hint->Signature);
+        WitnessChanged = true;
+      }
       OncePlan = discoverSwiftOnceSources(S->Img, Result);
       const bool OnceChanged =
           applySwiftOnceSourceHints(OncePlan, Options) != 0;
@@ -96,7 +107,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
-      if (!NativeChanged && !BlocksChanged && !OnceChanged)
+      if (!NativeChanged && !BlocksChanged && !OnceChanged && !WitnessChanged)
         break;
       Result = RunPipeline(Depth + 1);
       if (!Result.Success) {
@@ -427,6 +438,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::map<va_t, uint64_t> LocalStorageExtents;
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
+      std::map<va_t, va_t> SwiftWitnessCaches;
       std::set<va_t> ProfileSections;
       std::set<va_t> ConstantStrings;
       std::set<va_t> ConstantObjects;
@@ -451,6 +463,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           if (!Added && It->second != Pair)
             throw std::runtime_error(
                 "conflicting Swift type metadata source pairs");
+        }
+        for (const auto &[Address, Accessor] :
+             Projections.at(Entry).SwiftWitnessCaches) {
+          const auto [It, Added] =
+              SwiftWitnessCaches.emplace(Address, Accessor);
+          if (!Added && It->second != Accessor)
+            throw std::runtime_error(
+                "conflicting Swift witness cache source accessors");
         }
         const auto &Sections = Projections.at(Entry).ProfileCounterSections;
         ProfileSections.insert(Sections.begin(), Sections.end());
@@ -496,7 +516,10 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           renderObjCLocalStorageHelpers(S->Img, LocalStorageExtents,
                                         SharedStorageFunctions) +
           renderObjCSwiftTypeMetadataHelpers(S->Img, SwiftTypeMetadataPairs,
-                                             SharedStorageFunctions);
+                                             SharedStorageFunctions) +
+          renderObjCSwiftWitnessCacheHelpers(
+              S->Img, SwiftWitnessCaches, Functions,
+              SharedStorageFunctions);
       const bool Emitted = Emitter.emit(Unit, SourceOS, COptions);
       SourceOS << BlockHelpers << IdentityHelpers << StorageHelpers;
       if (!Emitted) {

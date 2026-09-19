@@ -159,6 +159,14 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftDispatch.dylib", "vC"},
     {"$sSo21OS_dispatch_semaphoreC8DispatchE6signalSiyF",
      "/usr/lib/swift/libswiftDispatch.dylib", "zC"},
+    // Swift 6.1.2 emits StringProtocol.contains<String> as five ordinary
+    // pointer carriers plus the haystack value in swiftself. The generic
+    // conformance and metadata arguments remain explicit runtime inputs.
+    {"$sSy10FoundationE8containsySbqd__SyRd__lF",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "bpppppC"},
     {"$ss018_bridgeAnyObjectToB0yypyXlSgF",
      "/usr/lib/swift/libswiftCore.dylib", "vIp"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
@@ -179,6 +187,7 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
     return false;
 
   const auto Word = NdType::makeInt(8, false);
+  const auto Byte = NdType::makeInt(1, false);
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
   auto &Signature = Hint.Signature;
   Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
@@ -189,6 +198,8 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
     Signature.ReturnType = Pointer;
   else if (Encoding.consume_front("z"))
     Signature.ReturnType = Word;
+  else if (Encoding.consume_front("b"))
+    Signature.ReturnType = Byte;
   else if (Encoding.consume_front("v"))
     Signature.ReturnType = NdType::makeVoid();
   else

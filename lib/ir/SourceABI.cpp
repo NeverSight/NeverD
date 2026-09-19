@@ -122,7 +122,7 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
   }
   if (Word(Hint.ReturnType) ||
       (Hint.ReturnType->Kind == NdTypeKind::Int &&
-       Hint.ReturnType->Size == 4) ||
+       (Hint.ReturnType->Size == 1 || Hint.ReturnType->Size == 4)) ||
       Hint.ReturnType->Kind == NdTypeKind::Void ||
       (Hint.ReturnType->Kind == NdTypeKind::Int && Hint.ReturnType->Size == 16))
     return true;
@@ -573,6 +573,7 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     // width separate so a byte result is still emitted with its byte type.
     Hint.ReturnLocation.ExtendTo32Bits =
         Architecture == Arch::AArch64 &&
+        Convention == SourceFunctionTypeHint::ConventionKind::C &&
         Hint.ReturnType->Kind == NdTypeKind::Int && Hint.ReturnType->Size < 4;
   }
   Hint.Architecture = Architecture;

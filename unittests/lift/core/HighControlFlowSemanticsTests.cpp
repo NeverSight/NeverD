@@ -486,6 +486,63 @@ TEST(HighControlFlowSemantics, LowSliceFoldingKeepsEffectsAndObservedUnknowns) {
   }
 }
 
+TEST(HighControlFlowSemantics, MaskedLowBitsDiscardOnlyUnobservedConcatHigh) {
+  for (unsigned ViewCase = 0; ViewCase != 3; ++ViewCase) {
+    auto Low = byteSlice(local(0), 0, 1);
+    auto Joined = concatenate(HighExpr::makeUndef(7), Low);
+    ExprPtr Value = Joined;
+    const unsigned ResultBytes = ViewCase ? 4 : 8;
+    if (ViewCase == 1) {
+      auto Cast = std::make_shared<HighExpr>();
+      Cast->Kind = ExprKind::Cast;
+      Cast->Type = Cast->CastTo = NdType::makeInt(ResultBytes, false);
+      Cast->Operands = {Joined};
+      Value = std::move(Cast);
+    } else if (ViewCase == 2)
+      Value = byteSlice(Joined, 0, ResultBytes);
+    auto Masked = HighExpr::makeBinop(
+        NdOp::INT_AND, Value,
+        HighExpr::makeConst(1, ViewCase == 1 ? 8 : ResultBytes));
+    Masked->Type = NdType::makeInt(ResultBytes, false);
+    HighFunc Function;
+    Function.Body = {result(0, Masked)};
+
+    simplifyAllExprs(Function.Body);
+
+    ASSERT_EQ(Function.Body[0].RetVal, Masked);
+    ASSERT_EQ(Masked->Operands[0]->Kind, ExprKind::UnaryOp);
+    EXPECT_EQ(Masked->Operands[0]->Op, NdOp::INT_ZEXT);
+    EXPECT_EQ(Masked->Operands[0]->Type->Size, ResultBytes);
+    EXPECT_EQ(Masked->Operands[0]->Operands[0], Low);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{2},
+                           uint64_t{0xff}, UINT64_MAX})
+      EXPECT_EQ(execute(Function, Input), Input & 1);
+  }
+}
+
+TEST(HighControlFlowSemantics, MaskedConcatKeepsObservedOrEffectfulHigh) {
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    ExprPtr High = HighExpr::makeUndef(7);
+    if (Case == 1) {
+      High = HighExpr::makeCall("effect", 0x4000, {});
+      High->Type = NdType::makeInt(7, false);
+    }
+    auto Joined = concatenate(High, byteSlice(local(0), 0, 1));
+    auto Masked = HighExpr::makeBinop(
+        NdOp::INT_AND, Joined,
+        HighExpr::makeConst(Case == 0 ? 0x100 : 1, 8));
+    Masked->Type = NdType::makeInt(8, false);
+    if (Case == 2)
+      Joined->Type = NdType::makeInt(7, false);
+    HighFunc Function;
+    Function.Body = {result(0, Masked)};
+
+    simplifyAllExprs(Function.Body);
+
+    EXPECT_EQ(Masked->Operands[0], Joined) << Case;
+  }
+}
+
 TEST(HighControlFlowSemantics, ReconstructedEqualityKeepsOnlyFeasibleUses) {
   auto F = relationalPhiCopy(true, true);
   F.Body[2].Cond->Operands[1] =

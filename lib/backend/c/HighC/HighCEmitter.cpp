@@ -833,6 +833,18 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
             SourceObjectAddressHelpers.insert(Stem + "_reference_address");
           }
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSwiftWitnessCacheAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_witness_cache_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSwiftWitnessAccessor) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_witness_accessor_" +
+                llvm::utohexstr(Hint.TargetAddress, true));
+        } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockDescriptor ||
                    Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockLiteral) {

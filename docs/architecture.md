@@ -64,6 +64,14 @@ construct the same scalar prefix and all reads explicitly select that prefix.
 Only effect-free upper expressions are discarded; lower expressions and their
 control-flow positions remain unchanged. Unknown lanes are never filled in.
 
+HighIR may also discard undefined upper bytes from a reconstructed integer only
+when a following constant mask cannot observe any bit above the complete low
+operand. A direct `CONCAT`, a bounded integer cast, or a zero-offset `SUBBYTES`
+view may expose that low operand. The replacement is an explicit zero
+extension and the mask remains in place. The upper expression must be bounded
+and discardable; calls, loads, ordered accesses, traps, malformed widths, and
+masks that reach an upper bit retain the original unknown value.
+
 An internal void summary for a native cleanup forwarder does not assert an
 original void prototype. It contributes no result carrier. Calls must match
 validated runtime declarations, exact native source contracts or canonical
@@ -234,6 +242,16 @@ and malformed CFG edges, partial writes, ordered loads, call clobbers or
 exhausted budgets reject the binding. Generated C repeats the table lookup
 through the live metadata; it never retains the witness address from the
 analyzed image.
+
+A compiler-generated Swift protocol witness accessor uses a different exact
+proof. The loader pairs its `Wl` code symbol with the matching writable,
+zero-initialized `WL` cache, then verifies the cache load, the
+`swift_getWitnessTable` call with the exact conformance descriptor and type
+metadata objects, the release store, and both return paths. Call sites receive a
+zero-argument, pointer-result callee contract without changing the accessor's
+own machine-inferred entry signature. Generated C rebuilds a fresh shared cache
+and repeats the runtime query; it never publishes the captured process cache or
+witness pointer.
 
 Standard Swift metadata storage addresses use compiler-generated `.self`
 queries; standard Hashable witness storage uses the direct witness argument

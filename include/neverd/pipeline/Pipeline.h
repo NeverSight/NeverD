@@ -65,6 +65,11 @@ struct PipelineOptions {
   /// Explicit declarations for source rendering only; never consumed in
   /// PatchMode or LiftMode and never promoted to transformation evidence.
   std::map<va_t, SourceFunctionTypeHint> SourceTypeHints;
+  /// Exact semantic declarations used only when binding calls to a callee.
+  /// This is distinct from SourceTypeHints: compiler-generated thunks may
+  /// have a public call contract whose machine body contains incidental live
+  /// registers that are not source parameters.
+  std::map<va_t, SourceFunctionTypeHint> SourceCalleeTypeHints;
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;

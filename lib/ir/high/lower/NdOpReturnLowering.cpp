@@ -103,6 +103,19 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       UsesFPReturnReg ? TRI.FPReturnReg : TRI.IntReturnReg;
   const bool ExplicitABI =
       Med.SourceTypeHint && Med.SourceTypeHint->HasExplicitABI;
+  auto ValueFromDefinition = [&](const MedOp &Definition) -> ExprPtr {
+    ExprPtr Value;
+    if (Definition.Opcode == NdOp::CALL ||
+        Definition.Opcode == NdOp::INDIR_CALL ||
+        Definition.Opcode == NdOp::INTRINSIC ||
+        Definition.Opcode == NdOp::LOAD ||
+        Definition.MemoryOrdering != NdMemoryOrdering::None ||
+        Definition.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      Value = HighExpr::makeVar(Definition.Output);
+    else
+      Value = medOpToExpr(Definition);
+    return Value ? forceInlineExpr(Value) : nullptr;
+  };
 
   if (ExplicitABI && Med.SourceParametersBound &&
       !Med.SourceTypeHint->ReturnComponents.empty() && CurOp.NumInputs == 1 &&
@@ -122,21 +135,10 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         continue;
       if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
           RIt->Output.RegOff == ReturnReg) {
-        if (RIt->Opcode == NdOp::CALL || RIt->Opcode == NdOp::INDIR_CALL ||
-            RIt->Opcode == NdOp::INTRINSIC)
-          RetVal = HighExpr::makeVar(RIt->Output);
-        else if (RIt->Opcode == NdOp::LOAD ||
-                 RIt->MemoryOrdering != NdMemoryOrdering::None ||
-                 RIt->MemoryAddressSpace != NdMemoryAddressSpace::Default)
-          RetVal = HighExpr::makeVar(RIt->Output);
-        else {
-          // Calls materialize their output once. A later operation may use
-          // that value as one operand without itself becoming the call: keep
-          // the complete return expression (including arithmetic and casts).
-          RetVal = medOpToExpr(*RIt);
-        }
-        if (RetVal)
-          RetVal = forceInlineExpr(RetVal);
+        // Calls and memory reads materialize once. Other definitions can be
+        // followed to their right-hand side so a register-only COPY need not
+        // become a source variable with no emitted assignment.
+        RetVal = ValueFromDefinition(*RIt);
         break;
       }
     }
@@ -151,20 +153,22 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     }
   }
 
-  if (!RetVal) {
-    for (int PI : CurBlock.Preds) {
-      if (PI < 0 || PI >= static_cast<int>(Med.Blocks.size()))
-        continue;
-      auto &Pred = Med.Blocks[PI];
+  if (!RetVal && CurBlock.Preds.size() == 1) {
+    const int PI = CurBlock.Preds.front();
+    if (PI >= 0 && PI < static_cast<int>(Med.Blocks.size())) {
+      const auto &Pred = Med.Blocks[PI];
       for (auto RIt = Pred.Ops.rbegin(); RIt != Pred.Ops.rend(); ++RIt) {
-        if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-            RIt->Output.RegOff == ReturnReg) {
-          RetVal = medvarToExpr(RIt->Output);
-          goto FoundRet;
-        }
+        if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
+            RIt->Output.RegOff != ReturnReg)
+          continue;
+        // A bare RET block inherits the value established on its only incoming
+        // edge. Reconstruct the defining expression rather than naming the
+        // otherwise unused register SSA output. Multiple incoming edges need
+        // an explicit PHI; choosing one predecessor would invent semantics.
+        RetVal = ValueFromDefinition(*RIt);
+        break;
       }
     }
-  FoundRet:;
   }
 
   if (!RetVal)

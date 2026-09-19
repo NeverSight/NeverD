@@ -510,7 +510,239 @@ struct SwiftTypeMetadataFixture {
     Function.Body = {std::move(Statement)};
   }
 };
+
+struct SwiftWitnessAccessorFixture {
+  BinaryImage Image;
+  HighFunc Accessor, Caller;
+  ExprPtr CacheLoad, WitnessCall;
+  HighStmt *CacheStore = nullptr;
+  static constexpr va_t Cache = 0x2020;
+  static constexpr va_t AccessorAddress = 0x3020;
+  static constexpr va_t ConformanceSlot = 0x4020;
+  static constexpr va_t MetadataSlot = 0x4028;
+  static constexpr va_t RuntimeSlot = 0x4030;
+
+  explicit SwiftWitnessAccessorFixture(Arch Architecture) {
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Architecture;
+    Image.Bits = Bitness::Bits64;
+    Image.MachOTwoLevelNamespace = true;
+    Segment Mapping;
+    Mapping.Name = "__swift_cache";
+    Mapping.VA = Mapping.FileOff = 0x2000;
+    Mapping.Size = Mapping.FileSz = 0x100;
+    Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Mapping.Data.resize(0x100);
+    Image.Segments.push_back(Mapping);
+    Section Data;
+    Data.Name = Data.SegmentName = "__swift_cache";
+    Data.VA = Data.FileOff = 0x2000;
+    Data.Size = Data.FileSz = 0x100;
+    Data.Flags = Mapping.Flags;
+    Image.Sections.push_back(Data);
+    Mapping.Name = "__swift_imports";
+    Mapping.VA = Mapping.FileOff = 0x4000;
+    Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Mapping.ReadOnlyAfterRelocations = true;
+    Mapping.Data.assign(0x100, 0);
+    Image.Segments.push_back(Mapping);
+    Data.Name = Data.SegmentName = "__swift_imports";
+    Data.VA = Data.FileOff = 0x4000;
+    Data.Flags = Mapping.Flags;
+    Image.Sections.push_back(Data);
+    Image.Symbols.push_back({"_$sS2SSysWL", Cache, 8, false});
+    Image.Symbols.push_back(
+        {"_$sS2SSysWl", AccessorAddress, 0x40, true});
+    Image.ImportPtrSlots[ConformanceSlot] = "_$sSSSysMc";
+    Image.ImportPtrSlots[MetadataSlot] = "_$sSSN";
+    Image.ImportPtrSlots[RuntimeSlot] = "_swift_getWitnessTable";
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        ConformanceSlot, "_$sSSSysMc", 0,
+        "/usr/lib/swift/libswiftCore.dylib", false));
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        MetadataSlot, "_$sSSN", 0, "/usr/lib/swift/libswiftCore.dylib",
+        false));
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        RuntimeSlot, "_swift_getWitnessTable", 0,
+        "/usr/lib/swift/libswiftCore.dylib", false));
+
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Accessor.Entry = AccessorAddress;
+    Accessor.Name = "_$sS2SSysWl";
+    Accessor.ReturnType = Pointer;
+    MedVar CachedVar;
+    CachedVar.Kind = MedVar::Temp;
+    CachedVar.Id = 1;
+    CachedVar.Size = 8;
+    auto Cached = HighExpr::makeVar(CachedVar, Pointer);
+    CacheLoad = HighExpr::makeLoad(
+        HighExpr::makeConst(Cache, 8,
+                            ConstantAddressProvenance::DataAddress),
+        Pointer);
+    HighStmt Load;
+    Load.Kind = StmtKind::Assign;
+    Load.Dst = Cached;
+    Load.Val = CacheLoad;
+    HighStmt FastReturn;
+    FastReturn.Kind = StmtKind::Return;
+    FastReturn.RetVal = HighExpr::makeVar(CachedVar, Pointer);
+    HighStmt FastPath;
+    FastPath.Kind = StmtKind::If;
+    FastPath.Cond = HighExpr::makeBinop(
+        NdOp::INT_NOTEQUAL, HighExpr::makeVar(CachedVar, Pointer),
+        HighExpr::makeConst(0, 8));
+    FastPath.Body = {FastReturn};
+
+    auto Runtime = swiftRuntimeSourceCallHint(Image, RuntimeSlot);
+    EXPECT_TRUE(Runtime);
+    std::vector<ExprPtr> Arguments;
+    for (const va_t Slot : {ConformanceSlot, MetadataSlot})
+      Arguments.push_back(HighExpr::makeLoad(
+          HighExpr::makeConst(Slot, 8,
+                              ConstantAddressProvenance::DataAddress),
+          Pointer));
+    MedVar Incidental;
+    Incidental.Kind = MedVar::Param;
+    Incidental.Id = 0;
+    Incidental.RegOff = Architecture == Arch::AArch64 ? 16 : 16;
+    Incidental.Size = 8;
+    Incidental.TheArch = Architecture;
+    Arguments.push_back(HighExpr::makeVar(Incidental, Pointer));
+    WitnessCall = HighExpr::makeCall("swift_getWitnessTable", RuntimeSlot,
+                                     std::move(Arguments));
+    WitnessCall->Type = Pointer;
+    WitnessCall->SourceCallHint =
+        std::make_shared<SourceCallTypeHint>(std::move(*Runtime));
+    MedVar WitnessVar;
+    WitnessVar.Kind = MedVar::Temp;
+    WitnessVar.Id = 2;
+    WitnessVar.Size = 8;
+    HighStmt Build;
+    Build.Kind = StmtKind::Assign;
+    Build.Dst = HighExpr::makeVar(WitnessVar, Pointer);
+    Build.Val = WitnessCall;
+    HighStmt Store;
+    Store.Kind = StmtKind::Store;
+    Store.StoreAddr = HighExpr::makeConst(
+        Cache, 8, ConstantAddressProvenance::DataAddress);
+    Store.StoreVal = HighExpr::makeVar(WitnessVar, Pointer);
+    Store.MemoryOrdering = NdMemoryOrdering::Release;
+    HighStmt SlowReturn;
+    SlowReturn.Kind = StmtKind::Return;
+    SlowReturn.RetVal = HighExpr::makeVar(WitnessVar, Pointer);
+    Accessor.Body = {Load, FastPath, Build, Store, SlowReturn};
+    CacheStore = &Accessor.Body[3];
+
+    SourceFunctionTypeHint NativeSignature;
+    NativeSignature.Origin =
+        SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    NativeSignature.ReturnType = Pointer;
+    NativeSignature.Parameters = {{"incidental", Pointer}};
+    std::string Error;
+    EXPECT_TRUE(assignDarwinScalarSourceABI(NativeSignature, Architecture,
+                                            Error))
+        << Error;
+    auto Native = std::make_shared<SourceCallTypeHint>();
+    Native->CallKind = SourceCallTypeHint::Kind::Native;
+    Native->TargetAddress = AccessorAddress;
+    Native->TargetName = Accessor.Name;
+    Native->Signature = NativeSignature;
+    auto Call = HighExpr::makeCall(
+        Accessor.Name, AccessorAddress,
+        {HighExpr::makeConst(0xfeed, 8,
+                            ConstantAddressProvenance::Scalar)});
+    Call->Type = Pointer;
+    Call->SourceCallHint = std::move(Native);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = std::move(Call);
+    Caller.Entry = 0x5000;
+    Caller.ReturnType = Pointer;
+    Caller.Body = {std::move(Return)};
+  }
+};
 } // namespace
+
+TEST(ObjCSourceBindings,
+     SwiftWitnessAccessorRebuildsZeroArgumentCacheHelper) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftWitnessAccessorFixture F(Architecture);
+    const std::map<va_t, const HighFunc *> Functions{
+        {F.Accessor.Entry, &F.Accessor}};
+    const auto Result =
+        bindObjCSourceReferences(F.Caller, F.Image, nullptr, &Functions);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    EXPECT_TRUE(Result.Dependencies.empty());
+    EXPECT_EQ(Result.SwiftWitnessCaches,
+              (std::map<va_t, va_t>{{F.Cache, F.Accessor.Entry}}));
+    const auto Call = Result.Function.Body[0].RetVal;
+    ASSERT_TRUE(Call->SourceCallHint);
+    EXPECT_EQ(Call->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeSwiftWitnessAccessor);
+    EXPECT_TRUE(Call->Operands.empty());
+    EXPECT_TRUE(objcSourceCallBound(*Call, F.Image, Functions));
+
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftWitnessCacheHelpers(
+        F.Image, Result.SwiftWitnessCaches, Functions, Helpers);
+    EXPECT_EQ(Helpers,
+              (std::set<std::string>{
+                  "neverd_swift_witness_cache_2020_address",
+                  "neverd_swift_witness_accessor_3020"}));
+    EXPECT_NE(Source.find("__asm__(\"_$sSSSysMc\")"), std::string::npos);
+    EXPECT_NE(Source.find("__asm__(\"_$sSSN\")"), std::string::npos);
+    EXPECT_NE(Source.find("__asm__(\"_swift_getWitnessTable\")"),
+              std::string::npos);
+    EXPECT_NE(Source.find("neverd_swift_witness_accessor_3020(void)"),
+              std::string::npos);
+    EXPECT_NE(Source.find("(void *)0"), std::string::npos);
+    EXPECT_NE(Source.find("__ATOMIC_RELEASE"), std::string::npos);
+  }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftWitnessAccessorRejectsIncompleteOrStaleEvidence) {
+  for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    SwiftWitnessAccessorFixture F(Arch::AArch64);
+    if (Mutation == 0)
+      F.Image.Segments[0].Data[F.Cache - 0x2000] = 1;
+    if (Mutation == 1)
+      F.CacheStore->MemoryOrdering = NdMemoryOrdering::None;
+    if (Mutation == 2)
+      F.Accessor.Name = "_$sS2SSysWx";
+    if (Mutation == 3)
+      F.Image.ImportPtrSlots.erase(F.ConformanceSlot);
+    if (Mutation == 4)
+      F.WitnessCall->IsIndirectCall = true;
+    if (Mutation == 5)
+      F.Accessor.Body.pop_back();
+    if (Mutation == 6)
+      F.Caller.Body[0].RetVal->IsIndirectCall = true;
+    if (Mutation == 7)
+      F.Caller.Body[0].RetVal->CallAddr += 4;
+    const std::map<va_t, const HighFunc *> Functions{
+        {F.Accessor.Entry, &F.Accessor}};
+    const auto Result =
+        bindObjCSourceReferences(F.Caller, F.Image, nullptr, &Functions);
+    EXPECT_TRUE(Result.SwiftWitnessCaches.empty());
+    EXPECT_FALSE(Result.Dependencies.empty());
+  }
+
+  SwiftWitnessAccessorFixture F(Arch::AArch64);
+  const std::map<va_t, const HighFunc *> Functions{
+      {F.Accessor.Entry, &F.Accessor}};
+  auto Result = bindObjCSourceReferences(F.Caller, F.Image, nullptr,
+                                         &Functions);
+  ASSERT_EQ(Result.SwiftWitnessCaches.size(), 1U);
+  F.CacheStore->MemoryOrdering = NdMemoryOrdering::None;
+  EXPECT_FALSE(objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image,
+                                   Functions));
+  std::set<std::string> Helpers;
+  EXPECT_THROW(renderObjCSwiftWitnessCacheHelpers(
+                   F.Image, Result.SwiftWitnessCaches, Functions, Helpers),
+               std::runtime_error);
+}
 
 TEST(ObjCSourceBindings,
      SwiftConcreteTypeMetadataPairsRebuildFreshCacheAndRelativeReference) {

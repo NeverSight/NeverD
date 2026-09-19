@@ -93,6 +93,88 @@ HighFunc callArithmetic(Arch Architecture, bool Indirect, bool Subtract) {
   return Converter.convert(F, Architecture);
 }
 
+HighFunc predecessorReturnCarrier() {
+  constexpr Arch Architecture = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makeInt(8, false);
+  std::string Reason;
+  EXPECT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Reason));
+
+  MedFunc F;
+  F.Name = "predecessor_return_carrier";
+  F.Entry = 0x1000;
+  F.SourceTypeHint = Hint;
+
+  const auto Loaded = regValue(1, 0, 0, Architecture);
+  auto ReturnCarrier = regValue(2, TRI.IntReturnReg, 1, Architecture);
+  MedVar Condition;
+  Condition.Kind = MedVar::Temp;
+  Condition.Id = 3;
+  Condition.Size = 1;
+  Condition.TheArch = Architecture;
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = 0x1000;
+  Entry.EndAddr = 0x100c;
+  Entry.Succs = {1, 2};
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = 0x1000;
+  Load.Output = Loaded;
+  Load.addInput(MedVar::makeConst(0x4000, 8));
+  Entry.Ops.push_back(Load);
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Addr = 0x1004;
+  Copy.Output = ReturnCarrier;
+  Copy.addInput(Loaded);
+  Entry.Ops.push_back(Copy);
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_EQUAL;
+  Compare.Addr = 0x1008;
+  Compare.Output = Condition;
+  Compare.addInput(Loaded);
+  Compare.addInput(MedVar::makeConst(0, 8));
+  Entry.Ops.push_back(Compare);
+  MedOp Branch;
+  Branch.Opcode = NdOp::COND_BR;
+  Branch.Addr = 0x1008;
+  Branch.addInput(MedVar::makeConst(0x1010, 8));
+  Branch.addInput(Condition);
+  Entry.Ops.push_back(Branch);
+
+  MedBlock FastReturn;
+  FastReturn.Id = 1;
+  FastReturn.StartAddr = 0x100c;
+  FastReturn.EndAddr = 0x1010;
+  FastReturn.Preds = {0};
+  MedOp BareReturn;
+  BareReturn.Opcode = NdOp::RETURN;
+  BareReturn.Addr = 0x100c;
+  BareReturn.addInput(regValue(4, 240, 0, Architecture));
+  FastReturn.Ops.push_back(BareReturn);
+
+  MedBlock OtherReturn;
+  OtherReturn.Id = 2;
+  OtherReturn.StartAddr = 0x1010;
+  OtherReturn.EndAddr = 0x1014;
+  OtherReturn.Preds = {0};
+  MedOp ExplicitReturn;
+  ExplicitReturn.Opcode = NdOp::RETURN;
+  ExplicitReturn.Addr = 0x1010;
+  ExplicitReturn.addInput(ReturnCarrier);
+  OtherReturn.Ops.push_back(ExplicitReturn);
+
+  F.Blocks = {std::move(Entry), std::move(FastReturn),
+              std::move(OtherReturn)};
+  inferMedTypes(F, Architecture);
+  EXPECT_TRUE(F.SourceParametersBound);
+  return MedToHighConverter().convert(F, Architecture);
+}
+
 TEST(SourceCallReturns, DirectAndIndirectResultsKeepFollowingArithmeticOnce) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
@@ -159,5 +241,15 @@ int main(void) {
               0)
         << Error << Source;
   }
+}
+
+TEST(SourceCallReturns, BareReturnUsesOnlyPredecessorsCarrierDefinition) {
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({predecessorReturnCarrier()}, OS, Options));
+  EXPECT_NE(Source.find("return v1_0;"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("return;"), std::string::npos) << Source;
 }
 } // namespace
