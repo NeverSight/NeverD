@@ -4630,6 +4630,106 @@ ExprPtr receiverCallExpression(const SourceCallTypeHint &Binding) {
 }
 } // namespace
 
+TEST(ObjCCallHints, SuperDispatchUsesExactCurrentClassSuperclassDeclaration) {
+  auto Image = receiverImage(Arch::AArch64);
+  auto &Class = Image.ObjCClasses.front();
+  Class.RootClass = false;
+  Class.SuperclassName = "UIImage";
+  Class.InheritanceStatus = "resolved";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/UIKit.framework/UIKit",
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  Image.ImportPtrSlots[0x2180] = "_objc_msgSendSuper2";
+  Image.ObjCSourceReferences[0x2100] = {
+      ObjCSourceReference::Kind::Selector, 0x2100, 8,
+      "initWithCGImage:scale:orientation:"};
+  Image.ObjCSourceReferences[0x2120] = {
+      ObjCSourceReference::Kind::Class, 0x2120, 8, "First"};
+
+  auto Function = caller();
+  auto &Block = Function.Blocks.front();
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X8, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(16, 4)}, 0x1204),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X8, 8), NdVar::reg(a64reg::X0, 8)},
+                0x1208),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X9, 8),
+                {NdVar::reg(a64reg::X8, 8), NdVar::cst(8, 4)}, 0x120c),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X10, 8),
+                {NdVar::cst(0x2120, 8)}, 0x1210),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X9, 8), NdVar::reg(a64reg::X10, 8)},
+                0x1214),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X1, 8),
+                {NdVar::cst(0x2100, 8)}, 0x1218),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X8, 8)}, 0x121c),
+      operation(NdOp::INDIR_CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x2180, 8)}, 0x1220),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x1224)};
+  Block.EndAddr = 0x1228;
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1220);
+  EXPECT_EQ(Hint.CallKind, SourceCallTypeHint::Kind::ObjCSuper2);
+  ASSERT_TRUE(Hint.Receiver);
+  EXPECT_EQ(Hint.Receiver->Origin,
+            ObjCReceiverTypeHint::OriginKind::ClassReference);
+  EXPECT_EQ(Hint.Receiver->ClassName, "First");
+  EXPECT_EQ(Hint.Signature.Parameters.size(), 5U);
+  auto Expression = receiverCallExpression(Hint);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+
+  auto UntypedReceiver = Function;
+  UntypedReceiver.Blocks.front().Ops[2].Inputs[1] =
+      NdVar::reg(a64reg::X11, 8);
+  EXPECT_EQ(buildObjCSourceCallHints(Image, UntypedReceiver).size(), 1U);
+
+  auto EscapedHigherFrame = Function;
+  auto &EscapedOps = EscapedHigherFrame.Blocks.front().Ops;
+  for (size_t I = 1; I < EscapedOps.size(); ++I)
+    EscapedOps[I].Addr += 0x10;
+  EscapedOps.insert(
+      EscapedOps.begin() + 1,
+      {operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                 {NdVar::reg(a64reg::X0, 8)}, 0x1204),
+       operation(NdOp::INT_ADD, NdVar::reg(a64reg::X0, 8),
+                 {NdVar::reg(a64reg::SP, 8), NdVar::cst(48, 4)}, 0x1208),
+       operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2190, 8)}, 0x120c)});
+  EscapedOps[5].Inputs[1] = NdVar::reg(a64reg::X19, 8);
+  const auto EscapedHints =
+      buildObjCSourceCallHints(Image, EscapedHigherFrame);
+  EXPECT_EQ(EscapedHints.size(), 1U);
+  EXPECT_EQ(EscapedHints.count(0x1230), 1U);
+
+  auto UnprovedFrame = Function;
+  UnprovedFrame.Blocks.front().Ops[4].Inputs[0] = NdVar::cst(0x2130, 8);
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, UnprovedFrame).empty());
+  auto MismatchedClass = Image;
+  MismatchedClass.ObjCSourceReferences.at(0x2120).Name = "Other";
+  EXPECT_TRUE(buildObjCSourceCallHints(MismatchedClass, Function).empty());
+
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.ObjCSourceReferences.erase(0x2120);
+    else if (Mutation == 1)
+      Changed.ObjCSourceReferences.at(0x2120).Name = "Other";
+    else if (Mutation == 2)
+      Changed.ObjCClasses.front().InheritanceStatus = "unresolved";
+    else if (Mutation == 3)
+      Changed.ObjCClasses.front().SuperclassName.clear();
+    else
+      Changed.DynInfo.NeededLibs.front() = "/tmp/UIKit.framework/UIKit";
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}))
+        << Mutation;
+  }
+}
+
 TEST(ObjCCallHints,
      AuthenticatedUnknownMessagesPreserveCalleeSavedReceiverIdentity) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})

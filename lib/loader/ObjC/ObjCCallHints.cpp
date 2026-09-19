@@ -1090,12 +1090,37 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           if (Self && Target->Name == "objc_msgSend")
             Receiver = receiver(*Self);
           if (Self && Target->Name == "objc_msgSendSuper2" &&
-              Self->TheKind == Value::Kind::Frame &&
-              isObjCInitFamily(Target->Selector)) {
-            const auto StoredReceiver = State.FrameSlots.find(
-                {static_cast<int64_t>(Self->Number), 8});
-            if (StoredReceiver != State.FrameSlots.end())
-              SuperInitReceiver = receiver(StoredReceiver->second);
+              Self->TheKind == Value::Kind::Frame) {
+            const int64_t Base = static_cast<int64_t>(Self->Number);
+            auto StoredReceiver = [&](int64_t Offset) -> std::optional<Value> {
+              const auto Slot = std::pair{Offset, 8U};
+              const auto Exact = State.FrameSlots.find(Slot);
+              if (Exact != State.FrameSlots.end())
+                return Exact->second;
+              const auto Typed = State.TypedFrameSlots.find(Slot);
+              return Typed != State.TypedFrameSlots.end() &&
+                             State.typedFrameRangePrivate(Offset, 8)
+                         ? std::optional<Value>(Typed->second)
+                         : std::nullopt;
+            };
+            const auto DynamicValue = StoredReceiver(Base);
+            const auto ClassValue = StoredReceiver(Base + 8);
+            const auto Dynamic = DynamicValue ? receiver(*DynamicValue)
+                                              : std::nullopt;
+            const auto CurrentClass = ClassValue ? receiver(*ClassValue)
+                                                 : std::nullopt;
+            if (Dynamic && isObjCInitFamily(Target->Selector))
+              SuperInitReceiver = Dynamic;
+            // objc_msgSendSuper2 selects the declaration from current_class;
+            // the receiver word affects object identity, not the call ABI.
+            // It may be an untyped result even when the exact class slot is
+            // independently proven.
+            if (CurrentClass && CurrentClass->IsClassMethod &&
+                CurrentClass->Steps.empty()) {
+              Receiver = CurrentClass;
+              Declaration = objcSuperSourceTypeHint(Image, Target->Selector,
+                                                    *CurrentClass);
+            }
           }
           if (Receiver && Target->Name == "objc_msgSend") {
             auto [It, Inserted] = ReceiverDeclarations.try_emplace(std::tuple{

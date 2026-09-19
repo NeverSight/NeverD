@@ -1804,7 +1804,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall)
     return false;
   if (Binding.Receiver &&
-      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      ((Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage &&
+        Binding.CallKind != SourceCallTypeHint::Kind::ObjCSuper2) ||
        Binding.Format))
     return false;
   if (Binding.SelectorResultUse &&
@@ -2100,7 +2101,11 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   }
   if (Binding.Receiver) {
     const auto Expected =
-        objcReceiverSourceTypeHint(Image, Binding.Selector, *Binding.Receiver);
+        Binding.CallKind == SourceCallTypeHint::Kind::ObjCSuper2
+            ? objcSuperSourceTypeHint(Image, Binding.Selector,
+                                      *Binding.Receiver)
+            : objcReceiverSourceTypeHint(Image, Binding.Selector,
+                                         *Binding.Receiver);
     if (!Expected.HasDeclaration || !Expected.Signature ||
         !objc_projection_detail::sameHint(Hint, *Expected.Signature))
       return false;

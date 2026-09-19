@@ -59,6 +59,14 @@ ObjCReceiverDeclaration
 objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
                            const ObjCReceiverTypeHint &Receiver);
 
+/// Resolve an instance super dispatch from the exact current-class reference
+/// stored in struct objc_super. The referenced local class must have a complete
+/// superclass edge; declarations are searched from that superclass only, so
+/// overrides on the current class or its subclasses do not participate.
+ObjCReceiverDeclaration
+objcSuperSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
+                        const ObjCReceiverTypeHint &CurrentClass);
+
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry);
 std::optional<SourceFunctionTypeHint>

@@ -711,6 +711,28 @@ objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
               : ObjCReceiverDeclaration{true, std::nullopt};
 }
 
+ObjCReceiverDeclaration
+objcSuperSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
+                        const ObjCReceiverTypeHint &CurrentClass) {
+  if (CurrentClass.Origin != ObjCReceiverTypeHint::OriginKind::ClassReference ||
+      !CurrentClass.IsClassMethod || !CurrentClass.Steps.empty() ||
+      !validReceiverRoot(Image, CurrentClass))
+    return {};
+  const ObjCClass *Class = nullptr;
+  for (const auto &Candidate : Image.ObjCClasses) {
+    if (Candidate.Name != CurrentClass.ClassName)
+      continue;
+    if (Class)
+      return {};
+    Class = &Candidate;
+  }
+  if (!Class || Class->RootClass || Class->InheritanceStatus != "resolved" ||
+      Class->SuperclassName.empty())
+    return {};
+  return receiverDeclaration(Image, Selector,
+                             ReceiverType{Class->SuperclassName, false, false});
+}
+
 std::optional<ObjCReceiverTypeHint>
 objcReceiverCallResultTypeHint(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver,

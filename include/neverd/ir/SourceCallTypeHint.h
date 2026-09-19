@@ -195,6 +195,8 @@ struct SourceCallTypeHint {
   };
   std::optional<FormatArguments> Format;
   /// Restricts declaration agreement using revalidated receiver provenance.
+  /// For ObjCSuper2 this is the exact current-class reference stored in the
+  /// objc_super record, not the dynamic receiver pointer.
   std::optional<ObjCReceiverTypeHint> Receiver;
   /// An exact post-call integer-register read that uniquely selected one
   /// otherwise conflicting Objective-C selector declaration. This is machine
