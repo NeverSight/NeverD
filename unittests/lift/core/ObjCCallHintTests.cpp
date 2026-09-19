@@ -621,6 +621,16 @@ TEST(ObjCCallHints,
   auto Image = image();
   Image.ObjCMethods.clear();
   Image.ObjCSourceReferences.at(0x2100).Name = "duration";
+  ObjCSourceReference TouchReference;
+  TouchReference.Address = 0x2110;
+  TouchReference.Name = "touch";
+  Image.ObjCSourceReferences[TouchReference.Address] = TouchReference;
+  ObjCMethod Touch;
+  Touch.ClassName = "Worker";
+  Touch.Selector = TouchReference.Name;
+  Touch.TypeHint = parseObjCMethodEncoding(Touch.Selector, "v16@0:8");
+  ASSERT_TRUE(Touch.TypeHint);
+  Image.ObjCMethods.push_back(Touch);
   Image.DynInfo.NeededLibs = {
       "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlight",
       "/System/Library/Frameworks/QuartzCore.framework/QuartzCore"};
@@ -631,6 +641,13 @@ TEST(ObjCCallHints,
   for (size_t I = 0; I < 3; ++I)
     llvm::support::endian::write32le(
         Image.Segments[0].Data.data() + 0x140 + I * 4, ReleaseStub[I]);
+  // ADRP x1,0x2000; LDR x1,[x1,#0x110]; ADRP x16,0x2000;
+  // LDR x16,[x16,#0x180]; BR x16.
+  const uint32_t TouchStub[] = {
+      0xb0000001, 0xf9408821, 0xb0000010, 0xf940c210, 0xd61f0200};
+  for (size_t I = 0; I < 5; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x160 + I * 4, TouchStub[I]);
 
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   auto Function = caller();
@@ -659,6 +676,26 @@ TEST(ObjCCallHints,
             SourceABICarrierKind::FloatingRegister);
   EXPECT_EQ(Hint.SelectorResultUse->RegisterOffset, TRI.FPReturnReg);
   EXPECT_EQ(Hint.SelectorResultUse->ValueBytes, 8U);
+
+  // A fixed Objective-C declaration authenticates the intervening call's
+  // ordinary ABI just like a catalogued runtime call. The low half of v8 is
+  // call-preserved, so the later d0 use still selects the floating result.
+  Function.Blocks[0].Ops[3].Inputs[0] = NdVar::cst(0x1160, 8);
+  Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).SelectorResultUse);
+  EXPECT_EQ(Hints.at(0x1200).SelectorResultUse->Kind,
+            SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hints.at(0x1200).SelectorResultUse->ValueBytes, 8U);
+
+  ObjCMethod ConflictingTouch = Touch;
+  ConflictingTouch.ClassName = "OtherWorker";
+  ConflictingTouch.TypeHint =
+      parseObjCMethodEncoding(ConflictingTouch.Selector, "q16@0:8");
+  ASSERT_TRUE(ConflictingTouch.TypeHint);
+  Image.ObjCMethods.push_back(ConflictingTouch);
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+  Image.ObjCMethods.pop_back();
 
   Function.Blocks[0].Ops[1].Output = NdVar::reg(a64reg::V(8), 4);
   Function.Blocks[0].Ops[1].Inputs[0] = NdVar::reg(TRI.FPReturnReg, 4);
@@ -6236,8 +6273,24 @@ TEST(ObjCCallHints, IOSScaleUsesObservedFloatingResultToRejectConflicts) {
   EXPECT_EQ(Hint->ReturnLocation.Kind,
             SourceABICarrierKind::FloatingRegister);
 
-  auto Changed = Image;
-  Changed.DynInfo.NeededLibs.back() = "/tmp/UIKit.framework/UIKit";
+  // QuartzCore contains both float and double declarations for this selector.
+  // Their complete alternatives must remain available for an exact carrier
+  // use to select the double result; the unqualified selector stays ambiguous.
+  Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/QuartzCore.framework/QuartzCore");
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "scale"));
+  const auto WithQuartzCore = objcSelectorSourceTypeHintForResultUse(
+      Image, "scale",
+      {SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, 0, 8});
+  ASSERT_TRUE(WithQuartzCore);
+  EXPECT_EQ(WithQuartzCore->ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(WithQuartzCore->ReturnType->Size, 8U);
+
+  auto Changed = image(Arch::AArch64);
+  Changed.ObjCMethods.clear();
+  Changed.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/tmp/UIKit.framework/UIKit"};
   EXPECT_FALSE(objcSelectorSourceTypeHintForResultUse(
       Changed, "scale",
       {SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, 0, 8}));

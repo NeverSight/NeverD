@@ -241,7 +241,9 @@ std::optional<SourceABIValueLocation> localResultUse(const LowBlock &Block,
     const auto Target = veneer(Image, Op.Inputs[0].Offset);
     if (!Target)
       return false;
-    return bool(objcRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
+    return (Target->Name == "objc_msgSend" && !Target->Selector.empty() &&
+            bool(objcSelectorSourceTypeHint(Image, Target->Selector))) ||
+           bool(objcRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
            bool(swiftRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
            bool(darwinRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
            bool(swiftStringSourceCallHint(Image, Target->ImportSlot));

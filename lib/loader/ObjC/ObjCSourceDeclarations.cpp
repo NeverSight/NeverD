@@ -31,8 +31,9 @@ bool mergeSignature(SourceFunctionTypeHint &A,
   return true;
 }
 
+using SelectorSignatures = std::vector<SourceFunctionTypeHint>;
 using DeclarationIndex =
-    std::map<std::string, std::optional<SourceFunctionTypeHint>, std::less<>>;
+    std::map<std::string, std::optional<SelectorSignatures>, std::less<>>;
 
 struct FrameworkDeclarations {
   std::string Modules;
@@ -53,11 +54,22 @@ FrameworkCatalog buildFrameworkDeclarations(Arch Architecture) {
       if (!assignDarwinObjCSourceABI(*Hint, Architecture, Diagnostic))
         Hint.reset();
     }
-    auto [It, Inserted] = Index.try_emplace(Selector, Hint);
+    auto It = Index.try_emplace(Selector, SelectorSignatures{}).first;
     // Negative evidence survives later valid declarations and their order.
-    if (!Inserted && It->second &&
-        (!Hint || !mergeSignature(*It->second, *Hint)))
+    if (!It->second)
+      return;
+    if (!Hint) {
       It->second.reset();
+      return;
+    }
+    for (auto &Candidate : *It->second) {
+      auto Merged = Candidate;
+      if (!mergeSignature(Merged, *Hint))
+        continue;
+      Candidate = std::move(Merged);
+      return;
+    }
+    It->second->push_back(std::move(*Hint));
   };
   static constexpr struct {
     const char *Selector;
@@ -119,8 +131,6 @@ bool usesFramework(const BinaryImage &Image,
   return false;
 }
 } // namespace
-
-using SelectorSignatures = std::vector<SourceFunctionTypeHint>;
 
 static std::optional<SelectorSignatures>
 selectorSourceTypeHints(const BinaryImage &Image, llvm::StringRef Selector,
@@ -185,12 +195,15 @@ selectorSourceTypeHints(const BinaryImage &Image, llvm::StringRef Selector,
         continue;
       // The format catalog currently belongs to Foundation. A negative
       // declaration from another framework must not inherit that contract.
-      const auto *Declared = Found->second          ? &*Found->second
-                             : Name == "Foundation" ? FormatSignature
-                                                    : nullptr;
-      if (!Declared)
+      if (!Found->second) {
+        if (Name == "Foundation" && FormatSignature) {
+          Add(*FormatSignature, true);
+          continue;
+        }
         return std::nullopt;
-      Add(*Declared, true);
+      }
+      for (const auto &Declared : *Found->second)
+        Add(Declared, true);
     }
   return Result;
 }
