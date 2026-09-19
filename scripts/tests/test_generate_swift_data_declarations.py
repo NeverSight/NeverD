@@ -2,6 +2,8 @@ import copy
 import unittest
 
 from scripts.generate_swift_data_declarations import (conformance_storage,
+                                                        HASHABLE_TYPES,
+                                                        METADATA_TYPES,
                                                         metadata_storage,
                                                         render,
                                                         witness_storage)
@@ -12,6 +14,10 @@ NAME = '$sSSN'
 IR = ('@"$sSSN" = external global %swift.type, align 8\n'
       'define nonnull ptr @metadata_String() #0 {\nentry:\n'
       '  ret ptr @"$sSSN"\n}\n')
+ANY = '$sypN'
+ANY_IR = ('@"$sypN" = external global %swift.full_existential_type\n'
+          'define nonnull ptr @metadata_Any() #0 {\nentry:\n'
+          '  ret ptr getelementptr inbounds (i8, ptr @"$sypN", i64 8)\n}\n')
 WITNESS = '$sSSSHsWP'
 WITNESS_IR = ('@"$sSSSHsWP" = external global ptr, align 8\n'
               'declare swiftcc void @neverd_hashable_probe(ptr noalias, ptr, ptr) local_unnamed_addr #0\n'
@@ -48,6 +54,21 @@ CONFORMANCE_IR = (
 
 
 class SwiftDataDeclarationTests(unittest.TestCase):
+    def test_any_has_metadata_identity_without_inventing_hashable_witness(self):
+        self.assertIn('Any', METADATA_TYPES)
+        self.assertNotIn('Any', HASHABLE_TYPES)
+        self.assertEqual(set(METADATA_TYPES) - set(HASHABLE_TYPES), {'Any'})
+        self.assertEqual(metadata_storage(ANY_IR, ['metadata_Any']), {ANY})
+        for invalid in [
+            ANY_IR.replace('external global', 'external thread_local global'),
+            ANY_IR.replace('%swift.full_existential_type', '%swift.type'),
+            ANY_IR.replace('i64 8', 'i64 0'),
+            ANY_IR.replace('getelementptr inbounds', 'getelementptr'),
+        ]:
+            with self.subTest(invalid=invalid):
+                self.assertEqual(metadata_storage(
+                    invalid, ['metadata_Any']), set())
+
     def test_only_lazy_witness_accessors_supply_conformance_identity(self):
         self.assertEqual(conformance_storage(
             CONFORMANCE_IR, ['witness_StringProtocol'], {NAME}),

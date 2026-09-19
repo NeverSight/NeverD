@@ -19,8 +19,10 @@ except ImportError:
     from generate_swift_metadata_declarations import TARGETS, EXPORT_TARGETS
 
 
-TYPES = ("String", "Bool", "Int", "Int8", "Int16", "Int32", "Int64",
-         "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double")
+METADATA_TYPES = ("Any", "String", "Bool", "Int", "Int8", "Int16", "Int32",
+                  "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
+                  "Float", "Double")
+HASHABLE_TYPES = tuple(name for name in METADATA_TYPES if name != "Any")
 
 
 def metadata_storage(ir, probes):
@@ -41,13 +43,21 @@ def metadata_storage(ir, probes):
                 if line.strip() and not line.lstrip().startswith(';')]
         if body and body[0] == 'entry:':
             body.pop(0)
-        returned = re.fullmatch(r'ret ptr @"([^"\n]+)"', body[0]) if len(body) == 1 else None
+        direct = (re.fullmatch(r'ret ptr @"([^"\n]+)"', body[0])
+                  if len(body) == 1 else None)
+        # Any.self is the metadata member embedded eight bytes into Swift's
+        # exported full-existential storage, rather than the storage base.
+        existential = (re.fullmatch(
+            r'ret ptr getelementptr inbounds \(i8, ptr @"([^"\n]+)", i64 8\)',
+            body[0]) if len(body) == 1 else None)
+        returned = direct or existential
         if not returned:
             continue
         name = returned[1]
         values = declarations.get(name, [])
-        if (len(values) == 1 and re.fullmatch(
-                r'external global %swift\.type, align 8', values[0])):
+        expected = ('external global %swift.type, align 8' if direct else
+                    'external global %swift.full_existential_type')
+        if len(values) == 1 and values[0] == expected:
             result.add(name)
     return result
 
@@ -198,20 +208,21 @@ def main():
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     sdk = args.sdk.resolve(strict=True)
-    probes = ['metadata_' + name for name in TYPES]
-    witnesses = ['witness_' + name for name in TYPES]
+    probes = ['metadata_' + name for name in METADATA_TYPES]
+    witnesses = ['witness_' + name for name in HASHABLE_TYPES]
     conformances = ['witness_StringProtocol']
     with tempfile.TemporaryDirectory(prefix='neverd-swift-data-') as work:
         source = Path(work) / 'metadata.swift'
         source.write_text('\n'.join(
             f'@_cdecl("{probe}") public func {probe}() -> UnsafeRawPointer {{ '
-            f'unsafeBitCast(Swift.{name}.self, to: UnsafeRawPointer.self) }}'
-            for probe, name in zip(probes, TYPES)) + '\n' +
+            f'unsafeBitCast({"Any" if name == "Any" else "Swift." + name}.self, '
+            'to: UnsafeRawPointer.self) }'
+            for probe, name in zip(probes, METADATA_TYPES)) + '\n' +
             '@_silgen_name("neverd_hashable_probe") '
             'func observe<T: Hashable>(_ value: T)\n' + '\n'.join(
                 f'@_cdecl("{probe}") public func {probe}() {{ '
                 f'observe(Swift.{name}()) }}'
-                for probe, name in zip(witnesses, TYPES)) + '\n' +
+                for probe, name in zip(witnesses, HASHABLE_TYPES)) + '\n' +
             '@_silgen_name("neverd_string_protocol_probe") '
             'func observeStringProtocol<T: StringProtocol>(_ value: T)\n' +
             '@_cdecl("witness_StringProtocol") public func '
@@ -237,8 +248,10 @@ def main():
                     json.loads((sdk / 'SDKSettings.json').read_text())['Version'],
                     run([str(args.swiftc), '--version']).strip())
     count = sum(line.startswith('{') for line in output.splitlines())
-    if count != 2 * len(TYPES) + len(conformances):
-        parser.error('not all standard storage queries have complete evidence')
+    expected = len(METADATA_TYPES) + len(HASHABLE_TYPES) + len(conformances)
+    if count != expected:
+        parser.error('not all standard storage queries have complete evidence '
+                     f'({count}/{expected})')
     if args.check:
         if args.output.read_text() != output:
             parser.error('generated Swift data catalog differs')

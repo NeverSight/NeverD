@@ -257,6 +257,11 @@ Standard Swift metadata storage addresses use compiler-generated `.self`
 queries; standard Hashable witness storage uses the direct witness argument
 of a compiler-generated constrained generic call. Both require matching SDK
 exports across ARM64/x86-64 macOS and Mac Catalyst.
+`Any.self` is the one supported full-existential exception: compiler IR must
+return the exact eight-byte interior metadata member of an externally exported
+`%swift.full_existential_type`, while the catalog records and rebuilds the
+owning `$sypN` storage base. This does not authorize any other interior pointer
+or infer the full-existential layout from a mangled name.
 Only direct external, non-TLS globals qualify. The loader authenticates each
 symbol and provider before binding its runtime address; this supplies neither
 a metadata/witness layout nor a call ABI for accessors, witness members or

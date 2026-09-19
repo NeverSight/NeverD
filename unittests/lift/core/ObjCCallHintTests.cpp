@@ -4563,6 +4563,7 @@ TEST(ObjCCallHints, SwiftRuntimeDataKeepsExactExternalStorageIdentity) {
                                "_$sSuN",
                                "_$sSfN",
                                "_$sSdN",
+                               "_$sypN",
                                "_$ss4Int8VN",
                                "_$ss5Int16VN",
                                "_$ss5Int32VN",
@@ -4639,7 +4640,7 @@ TEST(ObjCCallHints, SwiftMetadataAccessorsAndUnknownNominalsAreNotData) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64})
     for (const char *Name :
          {"_$sSSMa", "_$sSSMn", "_$s4Test6StringVN", "_$sSSNsuffix",
-          "_$sSSSHsWPsuffix", "_$s4Test6StringVSHsWP"}) {
+          "_$sypNsuffix", "_$sSSSHsWPsuffix", "_$s4Test6StringVSHsWP"}) {
       auto Image = runtimeImage(Name, Architecture);
       Image.DyldBindSlots[0x2180] = {
           Name, 0, "/usr/lib/swift/libswiftCore.dylib", false};
