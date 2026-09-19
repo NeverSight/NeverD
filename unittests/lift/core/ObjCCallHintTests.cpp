@@ -3504,6 +3504,95 @@ TEST(ObjCCallHints, SuperDispatchUsesVerifiedRuntimeVeneerAndLoadedSelector) {
   EXPECT_TRUE(buildObjCSourceCallHints(Image, Low).empty());
 }
 
+TEST(ObjCCallHints, SuperInitResultKeepsTheStoredDynamicReceiver) {
+  auto Image = image();
+  Image.ObjCMethods.front().Implementation = 0x1200;
+  ObjCClass First;
+  First.Name = "First";
+  First.SuperclassName = "NSObject";
+  First.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(First);
+  ObjCClass NSObject;
+  NSObject.Name = "NSObject";
+  NSObject.RootClass = true;
+  NSObject.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(NSObject);
+  Image.ObjCClasses.front().RootClass = false;
+  Image.ObjCClasses.front().SuperclassName = "NSObject";
+  Image.ObjCClasses.front().InheritanceStatus = "resolved";
+  Image.ImportPtrSlots[0x2180] = "_objc_msgSendSuper2";
+  Image.ImportPtrSlots[0x2188] = "_objc_msgSend";
+  Image.ObjCSourceReferences[0x2100] = {
+      ObjCSourceReference::Kind::Selector, 0x2100, 8, "init"};
+  Image.ObjCSourceReferences[0x2110] = {
+      ObjCSourceReference::Kind::Selector, 0x2110, 8, "setIndex:"};
+
+  auto Init = Image.ObjCMethods.front();
+  Init.ClassName = "NSObject";
+  Init.Selector = "init";
+  Init.Implementation = 0x1500;
+  Init.TypeHint = signature(Arch::AArch64, 0);
+  Init.TypeHint->ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(*Init.TypeHint, Arch::AArch64,
+                                       Diagnostic));
+  Image.ObjCMethods.push_back(Init);
+  auto Setter = Image.ObjCMethods.front();
+  Setter.ClassName = "First";
+  Setter.Selector = "setIndex:";
+  Setter.Implementation = 0x1510;
+  Image.ObjCMethods.push_back(Setter);
+  auto Conflicting = Setter;
+  Conflicting.ClassName = "Other";
+  Conflicting.Implementation = 0x1520;
+  Conflicting.TypeHint->Parameters.back().Type =
+      NdType::makePtr(NdType::makeVoid());
+  Diagnostic.clear();
+  ASSERT_TRUE(assignDarwinObjCSourceABI(*Conflicting.TypeHint, Arch::AArch64,
+                                       Diagnostic));
+  Image.ObjCMethods.push_back(Conflicting);
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "setIndex:"));
+
+  auto Function = caller();
+  auto &Block = Function.Blocks.front();
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(32, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X8, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(16, 4)}, 0x1204),
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X8, 8), NdVar::reg(a64reg::X0, 8)},
+                0x1208),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X1, 8),
+                {NdVar::cst(0x2100, 8)}, 0x120c),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X8, 8)}, 0x1210),
+      operation(NdOp::INDIR_CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x2180, 8)}, 0x1214),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(a64reg::X0, 8)}, 0x1218),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X1, 8),
+                {NdVar::cst(0x2110, 8)}, 0x121c),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x1220),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                {NdVar::cst(7, 8)}, 0x1224),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2188, 8)}, 0x1228),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X19, 8)}, 0x122c)};
+  Block.EndAddr = 0x1230;
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  EXPECT_EQ(Hints.count(0x1214), 1U);
+  EXPECT_EQ(Hints.count(0x1228), 1U);
+  ASSERT_EQ(Hints.size(), 2U);
+  ASSERT_TRUE(Hints.at(0x1228).Receiver);
+  EXPECT_EQ(Hints.at(0x1228).Receiver->ClassName, "First");
+
+  Block.Ops[3] = operation(NdOp::LOAD, NdVar::reg(a64reg::X1, 8),
+                           {NdVar::cst(0x2110, 8)}, 0x120c);
+  EXPECT_EQ(buildObjCSourceCallHints(Image, Function).count(0x1228), 0U);
+}
+
 TEST(ObjCCallHints, ExplicitNativeStackHintsRequireKnownX64CallInstruction) {
   auto Image = image(Arch::X64);
   auto Hint = signature(Arch::X64, 5); // seven values, one stack argument

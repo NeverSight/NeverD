@@ -469,6 +469,12 @@ struct CallFacts {
 std::optional<ObjCReceiverTypeHint> receiver(const Value &V) {
   return V.TheKind == Value::Kind::Receiver ? V.Object : std::nullopt;
 }
+
+bool isObjCInitFamily(llvm::StringRef Selector) {
+  if (!Selector.consume_front("init"))
+    return false;
+  return Selector.empty() || Selector.front() < 'a' || Selector.front() > 'z';
+}
 } // namespace
 
 std::optional<SourceCallTypeHint>
@@ -1076,13 +1082,22 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           if (Name && Name->TheKind == Value::Kind::Selector)
             Target->Selector = Name->Name;
         }
+        std::optional<ObjCReceiverTypeHint> SuperInitReceiver;
         if (Target && !Target->Selector.empty()) {
           std::optional<ObjCReceiverTypeHint> Receiver;
           ObjCReceiverDeclaration Declaration;
           const auto Self = Read(NdVar::reg(TRI.IntParamRegs[0], 8));
           if (Self && Target->Name == "objc_msgSend")
             Receiver = receiver(*Self);
-          if (Receiver) {
+          if (Self && Target->Name == "objc_msgSendSuper2" &&
+              Self->TheKind == Value::Kind::Frame &&
+              isObjCInitFamily(Target->Selector)) {
+            const auto StoredReceiver = State.FrameSlots.find(
+                {static_cast<int64_t>(Self->Number), 8});
+            if (StoredReceiver != State.FrameSlots.end())
+              SuperInitReceiver = receiver(StoredReceiver->second);
+          }
+          if (Receiver && Target->Name == "objc_msgSend") {
             auto [It, Inserted] = ReceiverDeclarations.try_emplace(std::tuple{
                 Receiver->Origin, Receiver->Address, Receiver->ClassName,
                 Receiver->IsClassMethod, Receiver->Steps, Target->Selector});
@@ -1210,6 +1225,11 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Bound->second.Receiver)
           ReturnedReceiver = objcReceiverCallResultTypeHint(
               Image, *Bound->second.Receiver, Bound->second.Selector);
+        if (Bound != BlockHints.end() && SuperInitReceiver &&
+            Bound->second.CallKind == SourceCallTypeHint::Kind::ObjCSuper2 &&
+            Bound->second.Signature.ReturnType &&
+            Bound->second.Signature.ReturnType->Kind == NdTypeKind::Ptr)
+          ReturnedReceiver = std::move(SuperInitReceiver);
         const bool AuthenticatedMessageDispatch =
             Target && (Target->Name == "objc_msgSend" ||
                        Target->Name == "objc_msgSendSuper2");
