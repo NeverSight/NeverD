@@ -103,6 +103,7 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.TargetName == Expected.TargetName &&
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
+         !Binding.SelectorResultTypeUse &&
          !Binding.SelectorArgumentTypeUse &&
          !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
          !Binding.SwiftTypeMetadata &&
@@ -829,6 +830,7 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
+      Hint.SelectorResultTypeUse ||
       Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
       Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
       Hint.RuntimeObjCResultType || Hint.ValueWitness ||
@@ -2243,17 +2245,28 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   if (Binding.SelectorResultUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format ||
-       Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+       (Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK &&
+        !(Binding.SelectorResultTypeUse &&
+          Hint.Origin ==
+              SourceFunctionTypeHint::OriginKind::ObjCRuntime))))
+    return false;
+  if (Binding.SelectorResultTypeUse &&
+      (!Binding.SelectorResultUse ||
+       (*Binding.SelectorResultTypeUse != NdTypeKind::Int &&
+        *Binding.SelectorResultTypeUse != NdTypeKind::Ptr &&
+        *Binding.SelectorResultTypeUse != NdTypeKind::Float)))
     return false;
   if (Binding.SelectorArgumentTypeUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Binding.SelectorResultTypeUse ||
        Binding.SelectorArgumentStorageUse ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.SelectorArgumentStorageUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Binding.SelectorResultTypeUse ||
        Binding.SelectorArgumentTypeUse ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
@@ -2607,11 +2620,15 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     if (!Expected.HasDeclaration || !Expected.Signature ||
         !objc_projection_detail::sameHint(Hint, *Expected.Signature))
       return false;
-  } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK) {
+  } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK ||
+             (Hint.Origin ==
+                  SourceFunctionTypeHint::OriginKind::ObjCRuntime &&
+              Binding.SelectorResultUse && Binding.SelectorResultTypeUse)) {
     const auto Expected =
         Binding.SelectorResultUse
             ? objcSelectorSourceTypeHintForResultUse(Image, Binding.Selector,
-                                                     *Binding.SelectorResultUse)
+                                                     *Binding.SelectorResultUse,
+                                                     Binding.SelectorResultTypeUse)
         : Binding.SelectorArgumentTypeUse
             ? objcSelectorSourceTypeHintForArgumentTypeUse(
                   Image, Binding.Selector, *Binding.SelectorArgumentTypeUse)

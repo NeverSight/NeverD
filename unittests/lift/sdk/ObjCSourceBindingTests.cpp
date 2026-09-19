@@ -4149,6 +4149,12 @@ TEST(ObjCSourceBindings,
   Call->SourceCallHint = Binding;
   EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
 
+  Binding->SelectorResultTypeUse = NdTypeKind::Int;
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultTypeUse = NdTypeKind::Ptr;
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultTypeUse.reset();
+
   Binding->SelectorResultUse->ValueBytes = 8;
   EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
   Binding->SelectorResultUse = Use;
@@ -4158,6 +4164,51 @@ TEST(ObjCSourceBindings,
   Binding->SelectorResultUse.reset();
   EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
   Binding->SelectorResultUse = Use;
+  Image.ObjCMethods.back().TypeHint.reset();
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+}
+
+TEST(ObjCSourceBindings,
+     DeclaredConsumerTypeRevalidatesLocalSelectorResultCandidate) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCMethod ObjectCode;
+  ObjectCode.ClassName = "ApplicationValue";
+  ObjectCode.Selector = "code";
+  ObjectCode.TypeHint = parseObjCMethodEncoding("code", "@16@0:8");
+  ASSERT_TRUE(ObjectCode.TypeHint);
+  Image.ObjCMethods.push_back(ObjectCode);
+
+  SourceABIValueLocation Use{SourceABICarrierKind::IntegerRegister,
+                             a64reg::X0, 0, 8};
+  const auto Signature = objcSelectorSourceTypeHintForResultUse(
+      Image, "code", Use, NdTypeKind::Ptr);
+  ASSERT_TRUE(Signature);
+  EXPECT_EQ(Signature->Origin,
+            SourceFunctionTypeHint::OriginKind::ObjCRuntime);
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding->TargetName = "objc_msgSend";
+  Binding->Selector = "code";
+  Binding->Signature = *Signature;
+  Binding->SelectorResultUse = Use;
+  Binding->SelectorResultTypeUse = NdTypeKind::Ptr;
+  auto Call = HighExpr::makeCall(
+      "objc_msgSend", 0,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8)});
+  Call->Type = Signature->ReturnType;
+  Call->SourceCallHint = Binding;
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
+
+  Binding->SelectorResultTypeUse = NdTypeKind::Int;
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultTypeUse.reset();
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  Binding->SelectorResultTypeUse = NdTypeKind::Ptr;
   Image.ObjCMethods.back().TypeHint.reset();
   EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
 }

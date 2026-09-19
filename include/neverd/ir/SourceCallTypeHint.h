@@ -230,6 +230,11 @@ struct SourceCallTypeHint {
   /// dataflow evidence, not a source type guess; publication revalidates the
   /// complete declaration set against the same carrier range.
   std::optional<SourceABIValueLocation> SelectorResultUse;
+  /// Complete source kind required by the first authenticated consumer of the
+  /// result. This is present only with SelectorResultUse. The consumer must
+  /// have a complete source declaration; untyped machine operations and
+  /// equal-width carriers alone prove no source kind.
+  std::optional<NdTypeKind> SelectorResultTypeUse;
   /// An exact Objective-C method-entry parameter flowed to one message
   /// argument without changing its source type. This may select one otherwise
   /// conflicting selector declaration only when the current method metadata,

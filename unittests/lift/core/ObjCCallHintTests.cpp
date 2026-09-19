@@ -347,6 +347,60 @@ TEST(ObjCCallHints, ResultUseDisambiguatesConflictingSelectorDeclarations) {
 }
 
 TEST(ObjCCallHints,
+     ResultConsumerTypeDisambiguatesEqualWidthSelectorDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "code";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCMethod ObjectCode;
+  ObjectCode.ClassName = "ApplicationValue";
+  ObjectCode.Selector = "code";
+  ObjectCode.TypeHint = parseObjCMethodEncoding("code", "@16@0:8");
+  ASSERT_TRUE(ObjectCode.TypeHint);
+  Image.ObjCMethods.push_back(ObjectCode);
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "code"));
+
+  // A catalogued retain consumes its first parameter as an object pointer.
+  // The call boundary is an implicit register use in LowIR, so it supplies
+  // type evidence before the ordinary caller-saved clobber kills X0.
+  Image.ImportPtrSlots[0x2190] = "_objc_retainAutoreleasedReturnValue";
+  const uint32_t RetainStub[] = {0xb0000010, 0xf940ca10, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, RetainStub[I]);
+  auto Function = caller();
+  Function.Blocks[0].EndAddr = 0x120c;
+  Function.Blocks[0].Ops = {
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1140, 8)}, 0x1204),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x1208)};
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  EXPECT_EQ(Hints.at(0x1200).Signature.ReturnType->Kind, NdTypeKind::Ptr);
+  ASSERT_TRUE(Hints.at(0x1200).SelectorResultTypeUse);
+  EXPECT_EQ(*Hints.at(0x1200).SelectorResultTypeUse, NdTypeKind::Ptr);
+
+  // An untyped integer operation is not a declared source consumer: a casted
+  // object pointer has the same machine operation. Equal width remains
+  // ambiguous rather than guessing the dynamic receiver's implementation.
+  Function.Blocks[0].Ops = {
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::X8, 8),
+                {NdVar::reg(a64reg::X0, 8), NdVar::cst(4, 8)}, 0x1204),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X8, 8)}, 0x1208)};
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+
+  Function.Blocks[0].Ops[1] =
+      operation(NdOp::COPY, NdVar::reg(a64reg::X8, 8),
+                {NdVar::reg(a64reg::X0, 8)}, 0x1204);
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
+TEST(ObjCCallHints,
      DeclaredEntryArgumentTypeDisambiguatesConflictingSelectorDeclarations) {
   auto Image = image();
   Image.ObjCMethods.clear();

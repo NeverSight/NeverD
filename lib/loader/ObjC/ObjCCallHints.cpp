@@ -221,10 +221,15 @@ bool fitsUnsignedValue(uint64_t Value, unsigned Bytes) {
          (Bytes == 8 || Value < (UINT64_C(1) << (Bytes * 8)));
 }
 
-std::optional<SourceABIValueLocation> localResultUse(const LowBlock &Block,
-                                                     size_t CallIndex,
-                                                     const TargetRegInfo &TRI,
-                                                     const BinaryImage &Image) {
+struct LocalResultUse {
+  SourceABIValueLocation Location;
+  std::optional<NdTypeKind> TypeKind;
+};
+
+std::optional<LocalResultUse> localResultUse(const LowBlock &Block,
+                                             size_t CallIndex,
+                                             const TargetRegInfo &TRI,
+                                             const BinaryImage &Image) {
   struct Alias {
     NdVar Value;
     uint16_t SourceOffset = 0;
@@ -234,22 +239,26 @@ std::optional<SourceABIValueLocation> localResultUse(const LowBlock &Block,
            B.Size && A.Offset < B.Offset + B.Size &&
            B.Offset < A.Offset + A.Size;
   };
-  auto KnownCall = [&](const LowOp &Op) {
+  auto KnownCallSignature = [&](const LowOp &Op)
+      -> std::optional<SourceFunctionTypeHint> {
     if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
         Op.Inputs[0].Space != VnodeSpace::CONST)
-      return false;
+      return std::nullopt;
     const auto Target = veneer(Image, Op.Inputs[0].Offset);
     if (!Target)
-      return false;
-    return (Target->Name == "objc_msgSend" && !Target->Selector.empty() &&
-            bool(objcSelectorSourceTypeHint(Image, Target->Selector))) ||
-           bool(objcRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
-           bool(swiftRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
-           bool(darwinRuntimeSourceCallHint(Image, Target->ImportSlot)) ||
-           bool(swiftStringSourceCallHint(Image, Target->ImportSlot));
+      return std::nullopt;
+    if (Target->Name == "objc_msgSend" && !Target->Selector.empty())
+      return objcSelectorSourceTypeHint(Image, Target->Selector);
+    for (auto Hint : {objcRuntimeSourceCallHint(Image, Target->ImportSlot),
+                      swiftRuntimeSourceCallHint(Image, Target->ImportSlot),
+                      darwinRuntimeSourceCallHint(Image, Target->ImportSlot),
+                      swiftStringSourceCallHint(Image, Target->ImportSlot)})
+      if (Hint)
+        return Hint->Signature;
+    return std::nullopt;
   };
   auto Scan = [&](SourceABICarrierKind Kind, uint64_t Begin,
-                  uint16_t FullWidth) -> std::optional<SourceABIValueLocation> {
+                  uint16_t FullWidth) -> std::optional<LocalResultUse> {
     if (!FullWidth)
       return std::nullopt;
     std::vector<Alias> Aliases{{NdVar::reg(Begin, FullWidth), 0}};
@@ -274,18 +283,44 @@ std::optional<SourceABIValueLocation> localResultUse(const LowBlock &Block,
               std::max<uint64_t>(Input.Offset, Alias.Value.Offset);
           const uint64_t AliasEnd = std::min<uint64_t>(
               Input.Offset + Input.Size, Alias.Value.Offset + Alias.Value.Size);
-          SourceABIValueLocation Result;
-          Result.Kind = Kind;
-          Result.RegisterOffset =
+          LocalResultUse Result;
+          Result.Location.Kind = Kind;
+          Result.Location.RegisterOffset =
               Begin + Alias.SourceOffset + (AliasBegin - Alias.Value.Offset);
-          Result.ValueBytes = static_cast<uint16_t>(AliasEnd - AliasBegin);
+          Result.Location.ValueBytes =
+              static_cast<uint16_t>(AliasEnd - AliasBegin);
           return Result;
         }
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           Op.Opcode == NdOp::INTRINSIC) {
-        if (!KnownCall(Op))
+        const auto Signature = KnownCallSignature(Op);
+        if (!Signature)
           return std::nullopt;
+        std::optional<LocalResultUse> ArgumentUse;
+        for (const auto &Parameter : sourceABIParameters(*Signature)) {
+          const auto &Location = Parameter.Location;
+          if (Location.Kind != SourceABICarrierKind::IntegerRegister &&
+              Location.Kind != SourceABICarrierKind::FloatingRegister)
+            continue;
+          for (const auto &Alias : Aliases) {
+            if (Alias.Value.Offset != Location.RegisterOffset ||
+                Alias.Value.Size < Location.ValueBytes ||
+                Alias.SourceOffset > FullWidth - Location.ValueBytes)
+              continue;
+            if (!Parameter.Type ||
+                (Parameter.Type->Kind != NdTypeKind::Int &&
+                 Parameter.Type->Kind != NdTypeKind::Ptr &&
+                 Parameter.Type->Kind != NdTypeKind::Float) ||
+                ArgumentUse)
+              return std::nullopt;
+            ArgumentUse = LocalResultUse{
+                {Kind, Begin + Alias.SourceOffset, 0, Location.ValueBytes},
+                Parameter.Type->Kind};
+          }
+        }
+        if (ArgumentUse)
+          return ArgumentUse;
         for (auto It = Aliases.begin(); It != Aliases.end();) {
           const auto Preserved =
               TRI.callPreservedPrefixSize(It->Value.Offset, It->Value.Size);
@@ -1179,6 +1214,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               Qualified ? Declaration.Signature
                         : objcSelectorSourceTypeHint(Image, Target->Selector);
           std::optional<SourceABIValueLocation> SelectorResultUse;
+          std::optional<NdTypeKind> SelectorResultTypeUse;
           std::optional<SourceCallTypeHint::SelectorArgumentTypeEvidence>
               SelectorArgumentTypeUse;
           std::optional<SourceCallTypeHint::SelectorArgumentStorageEvidence>
@@ -1187,9 +1223,12 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             if (const auto Required =
                     localResultUse(Block, OpIndex, TRI, Image)) {
               Signature = objcSelectorSourceTypeHintForResultUse(
-                  Image, Target->Selector, *Required);
-              if (Signature)
-                SelectorResultUse = *Required;
+                  Image, Target->Selector, Required->Location,
+                  Required->TypeKind);
+              if (Signature) {
+                SelectorResultUse = Required->Location;
+                SelectorResultTypeUse = Required->TypeKind;
+              }
             }
           if (!Signature && !Qualified) {
             for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
@@ -1252,6 +1291,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Hint.Selector = Target->Selector;
             Hint.SelectorReferenceAddress = Target->SelectorSlot;
             Hint.SelectorResultUse = SelectorResultUse;
+            Hint.SelectorResultTypeUse = SelectorResultTypeUse;
             Hint.SelectorArgumentTypeUse = SelectorArgumentTypeUse;
             Hint.SelectorArgumentStorageUse = SelectorArgumentStorageUse;
             if (Qualified)

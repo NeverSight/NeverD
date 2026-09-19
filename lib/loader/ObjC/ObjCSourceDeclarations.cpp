@@ -224,16 +224,23 @@ objcSelectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector) {
 
 std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const BinaryImage &Image, llvm::StringRef Selector,
-    const SourceABIValueLocation &RequiredResult) {
+    const SourceABIValueLocation &RequiredResult,
+    std::optional<NdTypeKind> RequiredType) {
   if ((RequiredResult.Kind != SourceABICarrierKind::IntegerRegister &&
        RequiredResult.Kind != SourceABICarrierKind::FloatingRegister) ||
-      !RequiredResult.ValueBytes)
+      !RequiredResult.ValueBytes ||
+      (RequiredType && *RequiredType != NdTypeKind::Int &&
+       *RequiredType != NdTypeKind::Ptr &&
+       *RequiredType != NdTypeKind::Float))
     return std::nullopt;
   auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
   if (!Candidates)
     return std::nullopt;
   std::optional<SourceFunctionTypeHint> Result;
   for (auto &Candidate : *Candidates) {
+    if (RequiredType &&
+        (!Candidate.ReturnType || Candidate.ReturnType->Kind != *RequiredType))
+      continue;
     const auto &Location = Candidate.ReturnLocation;
     const uint16_t DefinedBytes =
         Location.ExtendTo32Bits ? std::max<uint16_t>(Location.ValueBytes, 4)

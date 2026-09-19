@@ -21,11 +21,14 @@ objcSelectorSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector);
 /// Resolve an otherwise conflicting selector only when one complete declared
 /// signature uniquely defines every byte of a caller-observed result-register
 /// read. RequiredResult describes the exact physical read, not a guessed
-/// source type. Missing declarations, incompatible carriers, and multiple
-/// compatible signatures remain unresolved.
+/// source type. RequiredType, when present, comes from an authenticated first
+/// consumer and further requires that complete source kind. Missing
+/// declarations, incompatible carriers, and multiple compatible signatures
+/// remain unresolved.
 std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const BinaryImage &Image, llvm::StringRef Selector,
-    const SourceABIValueLocation &RequiredResult);
+    const SourceABIValueLocation &RequiredResult,
+    std::optional<NdTypeKind> RequiredType = std::nullopt);
 
 /// Resolve a selector conflict when a caller's exact declared pointer-to-
 /// pointer parameter reaches one message argument unchanged. MethodEntry and
