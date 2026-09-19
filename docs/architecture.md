@@ -328,6 +328,14 @@ catalogs retain declaration owners and hierarchy separately from selector-wide
 agreement. The SDK revalidates the receiver origin and applicable declarations
 against the current image before publishing source. These facts neither select
 an IMP nor authorize binary rewriting.
+A compiler-shared native thunk may receive the address of a validated
+Objective-C class-reference slot instead of the class object stored in it.
+Source recovery preserves that extra indirection with one rebuilt cell per
+original slot, initialized through `objc_getClass` or `objc_getMetaClass`.
+The binding is permitted only when the exact typed native dependency proves
+only full-width loads from that parameter with no store, offset, escape or
+unsupported memory effect. A bare slot address still cannot act as a message
+receiver or acquire class-object identity.
 An agreed named object result extends that provenance through the declared
 message-result step. Exact ARC routines whose catalog contract returns their
 object argument preserve the complete step after normal call clobbers. For

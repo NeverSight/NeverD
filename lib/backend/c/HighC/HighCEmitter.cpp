@@ -643,6 +643,11 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
             Hint.CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall &&
             Hint.Signature.Origin ==
                 SourceFunctionTypeHint::OriginKind::DarwinSDK;
+        const bool ClassReferenceAddress =
+            Hint.CallKind ==
+                SourceCallTypeHint::Kind::RuntimeClassReferenceAddress ||
+            Hint.CallKind ==
+                SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress;
         if (Hint.CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall &&
             !DeclaredC) {
           if (Hint.TargetName == "__stack_chk_fail")
@@ -814,6 +819,11 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(
                 "neverd_static_identity_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (ClassReferenceAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_objc_class_reference_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::RuntimeLocalStorageAddress) {

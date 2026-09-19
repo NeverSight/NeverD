@@ -38,6 +38,7 @@ struct ObjCSourceBindingResult {
   std::set<va_t> AssociationKeys;
   std::set<va_t> KVOContexts;
   std::set<va_t> StaticIdentities;
+  std::set<va_t> ClassReferenceCells;
   std::map<va_t, uint64_t> LocalStorageExtents;
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
@@ -1112,7 +1113,8 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
 /// alone says nothing about pointee width or escape behavior.
 inline std::optional<uint64_t>
 nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
-                                  bool AllowPointerValues) {
+                                  bool AllowPointerValues,
+                                  bool AllowStores = true) {
   if (!Function.SourceTypeHint ||
       Function.Params.size() != Function.SourceTypeHint->Parameters.size() ||
       Parameter >= Function.Params.size() || !Function.Params[Parameter].Type ||
@@ -1149,12 +1151,12 @@ nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
   };
   auto Access = [&](const ExprPtr &Pointer, const TypeRef &Type,
                     NdMemoryOrdering Ordering,
-                    NdMemoryAddressSpace AddressSpace) {
+                    NdMemoryAddressSpace AddressSpace, bool Store) {
     if (!Valid || !Contains(Contains, Pointer, 0))
       return;
     if (!exactParameterValue(Pointer, Parameter) || !Type ||
         (!AllowPointerValues && Type->Kind == NdTypeKind::Ptr) ||
-        !localStorageAccessTypeSupported(Type) ||
+        (Store && !AllowStores) || !localStorageAccessTypeSupported(Type) ||
         Ordering != NdMemoryOrdering::None ||
         AddressSpace != NdMemoryAddressSpace::Default) {
       Valid = false;
@@ -1175,14 +1177,14 @@ nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
     if (Expression->Kind == ExprKind::Load &&
         Expression->Operands.size() == 1) {
       Access(Expression->Operands[0], Expression->Type,
-             Expression->MemoryOrdering, Expression->MemoryAddressSpace);
+             Expression->MemoryOrdering, Expression->MemoryAddressSpace, false);
       if (Contains(Contains, Expression->Operands[0], 0))
         return;
     }
     if (Expression->Kind == ExprKind::Store &&
         Expression->Operands.size() == 2 && Expression->Operands[1]) {
       Access(Expression->Operands[0], Expression->Operands[1]->Type,
-             Expression->MemoryOrdering, Expression->MemoryAddressSpace);
+             Expression->MemoryOrdering, Expression->MemoryAddressSpace, true);
       if (Contains(Contains, Expression->Operands[0], 0)) {
         Scan(Expression->Operands[1], Depth + 1);
         return;
@@ -1203,7 +1205,7 @@ nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
                              Contains(Contains, Statement.StoreAddr, 0);
     if (DirectStore)
       Access(Statement.StoreAddr, Statement.StoreVal->Type,
-             Statement.MemoryOrdering, Statement.MemoryAddressSpace);
+             Statement.MemoryOrdering, Statement.MemoryAddressSpace, true);
     forEachExpr(Statement, [&](const ExprPtr &Expression) {
       if (DirectStore && Expression == Statement.StoreAddr)
         return;
@@ -1226,6 +1228,34 @@ struct ClassObjectIdentity {
   SourceCallTypeHint::Kind Kind;
   std::string Name;
 };
+
+inline std::optional<SourceCallTypeHint>
+classReferenceAddressHint(const BinaryImage &Image, va_t Address) {
+  const auto Found = Image.ObjCSourceReferences.find(Address);
+  if (Found == Image.ObjCSourceReferences.end() ||
+      Found->second.Address != Address || Found->second.Size != 8 ||
+      Found->second.Name.empty() || Found->second.Name.size() > 1024)
+    return std::nullopt;
+  const auto Kind = Found->second.TheKind;
+  if (Kind != ObjCSourceReference::Kind::Class &&
+      Kind != ObjCSourceReference::Kind::Metaclass)
+    return std::nullopt;
+  for (const char C : Found->second.Name)
+    if (!llvm::isAlnum(C) && C != '_' && C != '.' && C != '$')
+      return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind =
+      Kind == ObjCSourceReference::Kind::Class
+          ? SourceCallTypeHint::Kind::RuntimeClassReferenceAddress
+          : SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = Found->second.Name;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
+}
 
 inline std::map<va_t, ClassObjectIdentity>
 classObjectIdentities(const BinaryImage &Image) {
@@ -2067,6 +2097,25 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
             Callee->second->SourceTypeHint &&
             objc_projection_detail::sameHint(Binding.Signature,
                                              *Callee->second->SourceTypeHint)) {
+          // Swift can coalesce imported Objective-C class references into an
+          // ordinary GOT cell and pass that cell's address to a shared thunk.
+          // Preserve the extra indirection only when the complete callee
+          // proves only exact pointer-sized loads and no store or escape.
+          const auto ReferenceExtent = nativeScalarStorageArgumentExtent(
+              *Callee->second, Index, true, false);
+          auto Reference = ReferenceExtent && *ReferenceExtent == 8
+                               ? classReferenceAddressHint(Image, *Address)
+                               : std::nullopt;
+          if (Reference) {
+            auto Storage = HighExpr::makeCall({}, 0, {});
+            Storage->Type = Operand->Type;
+            Storage->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*Reference));
+            Operand = std::move(Storage);
+            Result.ClassReferenceCells.insert(*Address);
+            continue;
+          }
+
           const auto Base = nativeProfileCounterArgument(
               *Callee->second, Index, *Address, *ProfileStorage);
           auto Hint =
@@ -2742,6 +2791,22 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            !Binding.SelectorReferenceAddress &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
+  if (Binding.CallKind ==
+          SourceCallTypeHint::Kind::RuntimeClassReferenceAddress ||
+      Binding.CallKind ==
+          SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress) {
+    const auto Expected =
+        classReferenceAddressHint(Image, Binding.TargetAddress);
+    return Expected && Binding.CallKind == Expected->CallKind &&
+           Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.Operands.empty() && Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
   if (isRuntimeReference(Binding.CallKind)) {
     auto Found = Image.ObjCSourceReferences.find(Binding.TargetAddress);
     if (Expression.Operands.empty() &&
@@ -3043,6 +3108,45 @@ renderObjCStaticIdentityHelpers(const std::set<va_t> &Identities,
               "(void) {\n"
               "  static unsigned char identity;\n"
               "  return (uintptr_t)&identity;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string
+renderObjCClassReferenceHelpers(const BinaryImage &Image,
+                                const std::set<va_t> &References,
+                                std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const va_t Address : References) {
+    const auto Hint =
+        objc_binding_detail::classReferenceAddressHint(Image, Address);
+    if (!Hint)
+      throw std::runtime_error(
+          "Objective-C class-reference cell is no longer valid");
+    const bool Metaclass =
+        Hint->CallKind ==
+        SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress;
+    const std::string Name = "neverd_objc_class_reference_" +
+                             llvm::utohexstr(Address, true) + "_address";
+    SharedFunctions.insert(Name);
+    Source += "\nuintptr_t " + Name +
+              "(void) {\n"
+              "  static void *reference;\n"
+              "  static unsigned state;\n"
+              "  if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) {\n"
+              "    unsigned expected = 0;\n"
+              "    if (__atomic_compare_exchange_n(&state, &expected, 1, 0, "
+              "__ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {\n"
+              "      reference = " +
+              std::string(Metaclass ? "objc_getMetaClass" : "objc_getClass") +
+              "(\"" + Hint->TargetName +
+              "\");\n"
+              "      __atomic_store_n(&state, 2, __ATOMIC_RELEASE);\n"
+              "    } else {\n"
+              "      while (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != 2) "
+              "{}\n"
+              "    }\n  }\n"
+              "  return (uintptr_t)&reference;\n}\n";
   }
   return Source;
 }

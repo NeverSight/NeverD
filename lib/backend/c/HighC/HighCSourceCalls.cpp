@@ -184,6 +184,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeAssociationKey ||
       Hint.CallKind == Kind::RuntimeKVOContext ||
       Hint.CallKind == Kind::RuntimeStaticIdentity ||
+      Hint.CallKind == Kind::RuntimeClassReferenceAddress ||
+      Hint.CallKind == Kind::RuntimeMetaclassReferenceAddress ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
@@ -283,6 +285,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress)
         return bad("static identity has no source identity");
       Value = "neverd_static_identity_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeClassReferenceAddress ||
+               Hint.CallKind == Kind::RuntimeMetaclassReferenceAddress) {
+      if (!Hint.TargetAddress || Hint.TargetName.empty())
+        return bad("Objective-C class-reference cell has no identity");
+      Value = "neverd_objc_class_reference_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeLocalStorageAddress) {
       if (!Hint.TargetAddress || !Hint.ByteCount)

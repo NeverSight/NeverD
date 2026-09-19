@@ -61,6 +61,11 @@ struct SourceCallTypeHint {
     RuntimeSelector,
     RuntimeClass,
     RuntimeMetaclass,
+    /// Address of one validated Objective-C class-reference pointer cell.
+    /// The rebuilt cell is initialized from the named runtime class and keeps
+    /// the original extra level of indirection; it is not a class object.
+    RuntimeClassReferenceAddress,
+    RuntimeMetaclassReferenceAddress,
     RuntimeIvarOffset,
     NativeAddress,
     RuntimeBlockIsa,

@@ -4845,6 +4845,153 @@ TEST(ObjCSourceBindings, ClassrefSlotAddressCannotBecomeClassObjectReceiver) {
   EXPECT_EQ(Receiver->SourceCallHint->TargetAddress, ObjectFixture::ClassSlot);
 }
 
+TEST(ObjCSourceBindings,
+     NativeClassReferenceAddressRequiresOneReadOnlyPointerCell) {
+  for (const bool Metaclass : {false, true}) {
+    SCOPED_TRACE(Metaclass);
+    ObjectFixture Fixture;
+    auto &Reference =
+        Fixture.Image.ObjCSourceReferences.at(ObjectFixture::ClassSlot);
+    Reference.TheKind = Metaclass ? ObjCSourceReference::Kind::Metaclass
+                                  : ObjCSourceReference::Kind::Class;
+
+    const auto PointerType = NdType::makePtr(NdType::makeVoid());
+    HighFunc Callee;
+    Callee.Entry = 0x3000;
+    Callee.Name = "read_class_reference";
+    Callee.ReturnType = PointerType;
+    Callee.Params = {{"reference", PointerType}};
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = PointerType;
+    Signature.Parameters = {{"reference", PointerType}};
+    std::string Error;
+    ASSERT_TRUE(
+        assignDarwinScalarSourceABI(Signature, Fixture.Image.Arch, Error));
+    Callee.SourceTypeHint = Signature;
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 0;
+    Parameter.Size = 8;
+    Parameter.TheArch = Fixture.Image.Arch;
+    auto ParameterValue = HighExpr::makeVar(Parameter, NdType::makeInt(8));
+    HighStmt CalleeReturn;
+    CalleeReturn.Kind = StmtKind::Return;
+    CalleeReturn.RetVal = HighExpr::makeLoad(ParameterValue, PointerType);
+    Callee.Body = {CalleeReturn};
+
+    auto Binding = std::make_shared<SourceCallTypeHint>();
+    Binding->CallKind = SourceCallTypeHint::Kind::Native;
+    Binding->TargetAddress = Callee.Entry;
+    Binding->TargetName = Callee.Name;
+    Binding->Signature = Signature;
+    auto Call = HighExpr::makeCall(
+        Callee.Name, Callee.Entry,
+        {HighExpr::makeConst(ObjectFixture::ClassSlot, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = PointerType;
+    Call->SourceCallHint = Binding;
+    HighFunc Caller;
+    Caller.ReturnType = PointerType;
+    HighStmt CallerReturn;
+    CallerReturn.Kind = StmtKind::Return;
+    CallerReturn.RetVal = Call;
+    Caller.Body = {CallerReturn};
+    const std::map<va_t, const HighFunc *> Functions{{Callee.Entry, &Callee}};
+
+    const auto Result =
+        bindObjCSourceReferences(Caller, Fixture.Image, nullptr, &Functions);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    EXPECT_EQ(Result.ClassReferenceCells,
+              std::set<va_t>{ObjectFixture::ClassSlot});
+    const auto Argument = Result.Function.Body[0].RetVal->Operands[0];
+    ASSERT_TRUE(Argument->SourceCallHint);
+    EXPECT_EQ(Argument->SourceCallHint->CallKind,
+              Metaclass
+                  ? SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress
+                  : SourceCallTypeHint::Kind::RuntimeClassReferenceAddress);
+    EXPECT_TRUE(objcSourceCallBound(*Argument, Fixture.Image, Functions));
+    EXPECT_TRUE(objcSourceCallBound(*Result.Function.Body[0].RetVal,
+                                    Fixture.Image, Functions));
+
+    std::set<std::string> Shared;
+    const auto Helpers = renderObjCClassReferenceHelpers(
+        Fixture.Image, Result.ClassReferenceCells, Shared);
+    EXPECT_NE(Helpers.find(Metaclass ? "objc_getMetaClass" : "objc_getClass"),
+              std::string::npos);
+    EXPECT_EQ(Helpers.find("extern void *objc_get"), std::string::npos);
+    EXPECT_EQ(Shared, std::set<std::string>{
+                          "neverd_objc_class_reference_2010_address"});
+
+    Fixture.Image.ObjCSourceReferences.clear();
+    EXPECT_FALSE(objcSourceCallBound(*Argument, Fixture.Image, Functions));
+  }
+}
+
+TEST(ObjCSourceBindings,
+     NativeClassReferenceAddressRejectsStoresEscapesAndWrongWidths) {
+  for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ObjectFixture Fixture;
+    const auto PointerType = NdType::makePtr(NdType::makeVoid());
+    HighFunc Callee;
+    Callee.Entry = 0x3000;
+    Callee.Name = "unsafe_class_reference";
+    Callee.ReturnType = NdType::makeVoid();
+    Callee.Params = {{"reference", PointerType}};
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = Callee.ReturnType;
+    Signature.Parameters = {{"reference", PointerType}};
+    std::string Error;
+    ASSERT_TRUE(
+        assignDarwinScalarSourceABI(Signature, Fixture.Image.Arch, Error));
+    Callee.SourceTypeHint = Signature;
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 0;
+    Parameter.Size = 8;
+    Parameter.TheArch = Fixture.Image.Arch;
+    auto ParameterValue = HighExpr::makeVar(Parameter, NdType::makeInt(8));
+    HighStmt Use;
+    if (Mutation == 0) {
+      Use.Kind = StmtKind::Store;
+      Use.StoreAddr = ParameterValue;
+      Use.StoreVal = HighExpr::makeConst(0, 8);
+    } else {
+      Use.Kind = StmtKind::ExprStmt;
+      Use.Val =
+          Mutation == 1
+              ? HighExpr::makeCall("escape", 0x4000, {ParameterValue})
+              : HighExpr::makeLoad(ParameterValue, NdType::makeInt(4, false));
+    }
+    Callee.Body = {Use};
+
+    auto Binding = std::make_shared<SourceCallTypeHint>();
+    Binding->CallKind = SourceCallTypeHint::Kind::Native;
+    Binding->TargetAddress = Callee.Entry;
+    Binding->TargetName = Callee.Name;
+    Binding->Signature = Signature;
+    auto Call = HighExpr::makeCall(
+        Callee.Name, Callee.Entry,
+        {HighExpr::makeConst(ObjectFixture::ClassSlot, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = Binding;
+    HighFunc Caller;
+    HighStmt Statement;
+    Statement.Kind = StmtKind::ExprStmt;
+    Statement.Val = Call;
+    Caller.Body = {Statement};
+    const std::map<va_t, const HighFunc *> Functions{{Callee.Entry, &Callee}};
+    const auto Result =
+        bindObjCSourceReferences(Caller, Fixture.Image, nullptr, &Functions);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.ClassReferenceCells.empty());
+    EXPECT_EQ(Result.Function.Body[0].Val->Operands[0]->Kind, ExprKind::Const);
+  }
+}
+
 TEST(ObjCSourceBindings, MetaObjectNeedsResolvedIsaAndMatchingMetadata) {
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     ObjectFixture Fixture;

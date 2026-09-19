@@ -435,6 +435,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::set<va_t> AssociationKeys;
       std::set<va_t> KVOContexts;
       std::set<va_t> StaticIdentities;
+      std::set<va_t> ClassReferenceCells;
       std::map<va_t, uint64_t> LocalStorageExtents;
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
@@ -452,6 +453,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         KVOContexts.insert(Contexts.begin(), Contexts.end());
         const auto &Identities = Projections.at(Entry).StaticIdentities;
         StaticIdentities.insert(Identities.begin(), Identities.end());
+        const auto &ClassReferences = Projections.at(Entry).ClassReferenceCells;
+        ClassReferenceCells.insert(ClassReferences.begin(),
+                                   ClassReferences.end());
         for (const auto &[Address, Width] :
              Projections.at(Entry).LocalStorageExtents)
           LocalStorageExtents[Address] =
@@ -501,6 +505,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           renderObjCKVOContextHelpers(KVOContexts, SharedIdentityFunctions);
       IdentityHelpers += renderObjCStaticIdentityHelpers(
           StaticIdentities, SharedIdentityFunctions);
+      IdentityHelpers += renderObjCClassReferenceHelpers(
+          S->Img, ClassReferenceCells, SharedIdentityFunctions);
       IdentityHelpers += renderObjCConstantObjectHelpers(
           S->Img, ConstantObjects, ConstantStrings, SharedIdentityFunctions);
       IdentityHelpers += renderObjCConstantObjectTableHelpers(
