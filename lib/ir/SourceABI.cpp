@@ -181,18 +181,47 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
             {Member.Type->Fields[I],
              uint16_t(Member.ByteOffset + Member.Type->FieldOffsets[I])});
     } else {
-      const bool Floating = Member.Type->Kind == NdTypeKind::Float;
-      if (!scalarType(Member.Type) || (!Floating && Member.Type->Size != 8) ||
-          Result.size() >= (Floating ? 4U : 2U) ||
-          Member.ByteOffset != Result.size() * Member.Type->Size ||
-          (!Result.empty() &&
-           (Result.front().Type->Size != Member.Type->Size ||
-            (Result.front().Type->Kind == NdTypeKind::Float) != Floating)))
+      if (!scalarType(Member.Type))
         return {};
       Result.push_back(std::move(Member));
     }
   }
-  if (Result.empty() || Result.size() * Result.front().Type->Size != Type->Size)
+  if (Result.empty())
+    return {};
+  const bool Floating = Result.front().Type->Kind == NdTypeKind::Float;
+  if (Floating) {
+    if (Result.size() > 4 ||
+        !std::all_of(Result.begin(), Result.end(),
+                     [&](const auto &Member) {
+                       return Member.Type->Kind == NdTypeKind::Float &&
+                              Member.Type->Size == Result.front().Type->Size &&
+                              Member.ByteOffset ==
+                                  (&Member - Result.data()) * Member.Type->Size;
+                     }) ||
+        Result.size() * Result.front().Type->Size != Type->Size)
+      return {};
+    return Result;
+  }
+  const bool FullWords =
+      Result.size() <= 2 &&
+      std::all_of(Result.begin(), Result.end(),
+                  [&](const auto &Member) {
+                    return Member.Type->Kind != NdTypeKind::Float &&
+                           Member.Type->Size == 8 &&
+                           Member.ByteOffset == (&Member - Result.data()) * 8;
+                  }) &&
+      Result.size() * 8 == Type->Size;
+  // Both Darwin arm64 and x86_64 classify this natural 16-byte layout as two
+  // INTEGER eightbytes. Only four bytes of the first carrier are meaningful;
+  // the padding is not a source field and must never become a value. Keep the
+  // exception exact until other mixed layouts have their own compiler-backed
+  // classification and lowering tests.
+  const bool NarrowLeadingWord =
+      Result.size() == 2 && Type->Size == 16 &&
+      Result[0].Type->Kind == NdTypeKind::Int && Result[0].Type->Size == 4 &&
+      Result[0].ByteOffset == 0 && Result[1].Type->Kind == NdTypeKind::Int &&
+      Result[1].Type->Size == 8 && Result[1].ByteOffset == 8;
+  if (!FullWords && !NarrowLeadingWord)
     return {};
   return Result;
 }
@@ -674,8 +703,7 @@ bool isSwiftValueWitnessSourceCallHint(const SourceCallTypeHint &Hint,
          Hint.BorrowedByteInputs.empty() && Hint.SwiftStringInputs.empty() &&
          !Hint.Format && !Hint.Receiver && !Hint.SelectorResultUse &&
          !Hint.SelectorArgumentTypeUse && !Hint.SelectorArgumentStorageUse &&
-         Hint.ByteCount == 0 &&
-         Hint.ImmutablePointerSlot == 0 &&
+         Hint.ByteCount == 0 && Hint.ImmutablePointerSlot == 0 &&
          equalSourceABIs(Hint.Signature, Expected->Signature);
 }
 

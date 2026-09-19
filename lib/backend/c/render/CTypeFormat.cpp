@@ -163,6 +163,11 @@ std::string typeToC(const TypeRef &Ty) {
     std::function<std::string(const TypeRef &)> Code = [&](const TypeRef &T) {
       if (T->Kind == NdTypeKind::Float)
         return std::string(T->Size == 4 ? "f" : "d");
+      // Preserve the historical name for full-width word leaves while giving
+      // newly supported narrow record fields a layout-distinct C tag.
+      if (T->Kind == NdTypeKind::Int && T->Size != 8)
+        return std::string(T->IsSigned ? "i" : "u") +
+               std::to_string(T->Size * 8);
       std::string Result = "r" + std::to_string(T->Fields.size());
       for (const auto &Field : T->Fields)
         Result += "_" + Code(Field);

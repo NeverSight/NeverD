@@ -214,16 +214,18 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       std::vector<MedOp> ReturnOps;
       if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
-        uint16_t Offset = 0;
-        for (const auto &Piece : Signature.ReturnComponents) {
+        const auto Members = sourceAggregateMembers(Signature.ReturnType);
+        for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {
+          const auto &Piece = Signature.ReturnComponents[I];
           MedOp Extract;
           Extract.Opcode = NdOp::SUBBYTES;
           Extract.Addr = Op.Addr;
           Extract.Output =
               ndVarToMedVar(NdVar::reg(Piece.RegisterOffset, Piece.ValueBytes));
           Extract.addInput(Op.Output);
-          Extract.addInput(MedVar::makeConst(Offset, 4));
-          Offset += Piece.ValueBytes;
+          Extract.addInput(MedVar::makeConst(
+              Members.empty() ? I * Piece.ValueBytes : Members[I].ByteOffset,
+              4));
           ReturnOps.push_back(std::move(Extract));
         }
       } else if (Return.Kind == SourceABICarrierKind::IntegerRegister &&

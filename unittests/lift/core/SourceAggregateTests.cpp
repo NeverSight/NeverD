@@ -258,6 +258,94 @@ TEST(SourceAggregate, WordRecordsPreserveTypedMembersAndIntegerCarriers) {
   }
 }
 
+TEST(SourceAggregate,
+     NarrowLeadingWordRecordUsesDistinctIntegerReturnCarriers) {
+  const auto Record = NdType::makeStruct(
+      {NdType::makeInt(4, false), NdType::makeInt(8, false)});
+  ASSERT_TRUE(Record);
+  const auto Members = sourceAggregateMembers(Record);
+  ASSERT_EQ(Members.size(), 2U);
+  EXPECT_EQ(Members[0].ByteOffset, 0U);
+  EXPECT_EQ(Members[0].Type->Size, 4U);
+  EXPECT_EQ(Members[1].ByteOffset, 8U);
+  EXPECT_EQ(Members[1].Type->Size, 8U);
+
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Hint = parseObjCMethodEncoding("preferredPixelFormat:",
+                                        "{SDImagePixelFormat=IQ}20@0:8B16");
+    ASSERT_TRUE(Hint);
+    std::string Error;
+    ASSERT_TRUE(assignDarwinObjCSourceABI(*Hint, Architecture, Error)) << Error;
+    ASSERT_EQ(Hint->ReturnComponents.size(), 2U);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    EXPECT_EQ(Hint->ReturnComponents[0].RegisterOffset, TRI.IntReturnRegs[0]);
+    EXPECT_EQ(Hint->ReturnComponents[0].ValueBytes, 4U);
+    EXPECT_EQ(Hint->ReturnComponents[1].RegisterOffset, TRI.IntReturnRegs[1]);
+    EXPECT_EQ(Hint->ReturnComponents[1].ValueBytes, 8U);
+    EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+    auto Bad = *Hint;
+    Bad.ReturnComponents[0].ValueBytes = 8;
+    EXPECT_FALSE(validateSourceABI(Bad, Error));
+
+    SourceFunctionTypeHint ParameterHint;
+    ParameterHint.ReturnType = NdType::makeVoid();
+    ParameterHint.Parameters = {{"value", Record}};
+    ASSERT_TRUE(assignDarwinFixedSourceABI(ParameterHint, Architecture, Error))
+        << Error;
+    ASSERT_EQ(ParameterHint.Parameters[0].Components.size(), 2U);
+    const auto Physical = sourceABIParameters(ParameterHint);
+    ASSERT_EQ(Physical.size(), 2U);
+    EXPECT_EQ(Physical[0].ByteOffset, 0U);
+    EXPECT_EQ(Physical[0].Location.ValueBytes, 4U);
+    EXPECT_EQ(Physical[1].ByteOffset, 8U);
+    EXPECT_EQ(Physical[1].Location.ValueBytes, 8U);
+  }
+}
+
+TEST(SourceAggregate,
+     NarrowLeadingWordRecordCallExtractsFieldsAtNaturalOffsets) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SourceFunctionTypeHint Hint;
+    Hint.ReturnType = NdType::makeStruct(
+        {NdType::makeInt(4, false), NdType::makeInt(8, false)});
+    std::string Error;
+    ASSERT_TRUE(assignDarwinFixedSourceABI(Hint, Architecture, Error)) << Error;
+
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = 0x1000;
+    Block.EndAddr = 0x1008;
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = 0x1000;
+    Call.addInput(NdVar::cst(0x2000, 8));
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = 0x1004;
+    Block.Ops = {Call, Return};
+    Low.Blocks = {Block};
+    std::map<va_t, SourceFunctionTypeHint> Hints{{0x2000, Hint}};
+    LowToMedConverter Converter;
+    Converter.setSourceCallHintsEnabled(true);
+    Converter.setSourceCalleeTypeHints(&Hints);
+    const auto Med = Converter.convert(Low, Architecture, BinaryFormat::MachO);
+    ASSERT_GE(Med.Blocks[0].Ops.size(), 4U);
+    const auto &BoundCall = Med.Blocks[0].Ops[0];
+    ASSERT_TRUE(BoundCall.SourceCallHint);
+    ASSERT_EQ(BoundCall.Output.Size, 16U);
+    std::map<uint64_t, uint16_t> Extracts;
+    for (const auto &Operation : Med.Blocks[0].Ops)
+      if (Operation.Opcode == NdOp::SUBBYTES && Operation.NumInputs == 2 &&
+          Operation.Inputs[0] == BoundCall.Output &&
+          Operation.Inputs[1].isConst())
+        Extracts.emplace(Operation.Inputs[1].ConstVal, Operation.Output.Size);
+    EXPECT_EQ(Extracts, (std::map<uint64_t, uint16_t>{{0, 4}, {8, 8}}));
+  }
+}
+
 TEST(SourceAggregate, WordRecordSpillsKeepArchitectureSpecificBankState) {
   const auto Word = NdType::makeInt(8, false);
   for (Arch A : {Arch::AArch64, Arch::X64})
