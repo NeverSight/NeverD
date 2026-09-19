@@ -149,6 +149,7 @@ struct BlockIdentity {
 struct Value {
   enum class Kind {
     Number,
+    NumberSet,
     Selector,
     Import,
     Receiver,
@@ -168,18 +169,20 @@ struct Value {
   std::optional<BlockIdentity> Block;
   va_t SourceMethodEntry = 0;
   SourceABIValueLocation SourceLocation;
+  std::vector<uint64_t> AlternativeNumbers;
   bool operator==(const Value &Other) const {
     return std::tie(TheKind, Number, Name, Object, Block, SourceMethodEntry,
                     SourceLocation.Kind, SourceLocation.RegisterOffset,
                     SourceLocation.EntryStackOffset, SourceLocation.ValueBytes,
-                    SourceLocation.ExtendTo32Bits) ==
+                    SourceLocation.ExtendTo32Bits, AlternativeNumbers) ==
            std::tie(Other.TheKind, Other.Number, Other.Name, Other.Object,
                     Other.Block, Other.SourceMethodEntry,
                     Other.SourceLocation.Kind,
                     Other.SourceLocation.RegisterOffset,
                     Other.SourceLocation.EntryStackOffset,
                     Other.SourceLocation.ValueBytes,
-                    Other.SourceLocation.ExtendTo32Bits);
+                    Other.SourceLocation.ExtendTo32Bits,
+                    Other.AlternativeNumbers);
   }
 };
 using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
@@ -423,7 +426,38 @@ struct CallFacts {
         ConflictingBlocks(Other.FrameSlots, FrameSlots);
     for (auto It = Values.begin(); It != Values.end();) {
       const auto Found = Other.Values.find(It->first);
-      if (Found == Other.Values.end() || !(It->second == Found->second))
+      if (Found == Other.Values.end()) {
+        It = Values.erase(It);
+        continue;
+      }
+      if (!(It->second == Found->second) &&
+          (It->second.TheKind == Value::Kind::Number ||
+           It->second.TheKind == Value::Kind::NumberSet) &&
+          (Found->second.TheKind == Value::Kind::Number ||
+           Found->second.TheKind == Value::Kind::NumberSet)) {
+        std::vector<uint64_t> Candidates{It->second.Number,
+                                         Found->second.Number};
+        Candidates.insert(Candidates.end(),
+                          It->second.AlternativeNumbers.begin(),
+                          It->second.AlternativeNumbers.end());
+        Candidates.insert(Candidates.end(),
+                          Found->second.AlternativeNumbers.begin(),
+                          Found->second.AlternativeNumbers.end());
+        llvm::sort(Candidates);
+        Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
+                         Candidates.end());
+        if (Candidates.size() <= 64) {
+          It->second.TheKind = Candidates.size() == 1
+                                   ? Value::Kind::Number
+                                   : Value::Kind::NumberSet;
+          It->second.Number = Candidates.front();
+          It->second.AlternativeNumbers.assign(Candidates.begin() + 1,
+                                                Candidates.end());
+          ++It;
+          continue;
+        }
+      }
+      if (!(It->second == Found->second))
         It = Values.erase(It);
       else
         ++It;
@@ -1227,10 +1261,19 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                   Location.Kind == SourceABICarrierKind::IntegerRegister
                       ? Read(NdVar::reg(Location.RegisterOffset, 8))
                       : std::nullopt;
-              auto Hint = Format && Format->TheKind == Value::Kind::Number
-                              ? objcFormattedSourceCallHint(
-                                    Image, Target->Selector, Format->Number)
-                              : std::nullopt;
+              std::optional<SourceCallTypeHint> Hint;
+              if (Format && Format->TheKind == Value::Kind::Number)
+                Hint = objcFormattedSourceCallHint(
+                    Image, Target->Selector, Format->Number);
+              else if (Format &&
+                       Format->TheKind == Value::Kind::NumberSet) {
+                std::vector<va_t> Candidates{Format->Number};
+                Candidates.insert(Candidates.end(),
+                                  Format->AlternativeNumbers.begin(),
+                                  Format->AlternativeNumbers.end());
+                Hint = objcFormattedSourceCallHint(Image, Target->Selector,
+                                                   Candidates);
+              }
               if (Hint) {
                 Hint->TargetAddress =
                     V && V->TheKind == Value::Kind::Number ? V->Number : 0;

@@ -277,4 +277,36 @@ objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
                                  Declaration->FormatParameter, FormatAddress,
                                  Declaration->Syntax);
 }
+
+std::optional<SourceCallTypeHint>
+objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
+                            llvm::ArrayRef<va_t> FormatAddresses) {
+  if (FormatAddresses.empty() || FormatAddresses.size() > 64)
+    return std::nullopt;
+  std::vector<va_t> Addresses(FormatAddresses.begin(), FormatAddresses.end());
+  llvm::sort(Addresses);
+  if (!Addresses.front() ||
+      std::adjacent_find(Addresses.begin(), Addresses.end()) != Addresses.end())
+    return std::nullopt;
+  auto Result = objcFormattedSourceCallHint(Image, Selector, Addresses.front());
+  if (!Result || !Result->Format)
+    return std::nullopt;
+  for (size_t I = 1; I < Addresses.size(); ++I) {
+    auto Candidate =
+        objcFormattedSourceCallHint(Image, Selector, Addresses[I]);
+    if (!Candidate || !Candidate->Format ||
+        Candidate->CallKind != Result->CallKind ||
+        Candidate->TargetName != Result->TargetName ||
+        Candidate->Selector != Result->Selector ||
+        Candidate->Format->FixedCount != Result->Format->FixedCount ||
+        Candidate->Format->FormatParameter !=
+            Result->Format->FormatParameter ||
+        Candidate->Format->Syntax != Result->Format->Syntax ||
+        !equalSourceABIs(Candidate->Signature, Result->Signature))
+      return std::nullopt;
+  }
+  Result->Format->AlternativeFormatAddresses.assign(Addresses.begin() + 1,
+                                                     Addresses.end());
+  return Result;
+}
 } // namespace neverd

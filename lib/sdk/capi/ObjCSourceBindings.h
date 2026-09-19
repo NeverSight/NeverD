@@ -21,6 +21,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace neverd::sdk {
@@ -45,6 +46,23 @@ struct ObjCSourceBindingResult {
 };
 
 namespace objc_binding_detail {
+
+inline std::optional<std::vector<va_t>>
+formatAddresses(const SourceCallTypeHint::FormatArguments &Format) {
+  if (!Format.FormatAddress || Format.AlternativeFormatAddresses.size() >= 64 ||
+      !std::is_sorted(Format.AlternativeFormatAddresses.begin(),
+                      Format.AlternativeFormatAddresses.end()) ||
+      std::adjacent_find(Format.AlternativeFormatAddresses.begin(),
+                         Format.AlternativeFormatAddresses.end()) !=
+          Format.AlternativeFormatAddresses.end() ||
+      (!Format.AlternativeFormatAddresses.empty() &&
+       Format.AlternativeFormatAddresses.front() <= Format.FormatAddress))
+    return std::nullopt;
+  std::vector<va_t> Result{Format.FormatAddress};
+  Result.insert(Result.end(), Format.AlternativeFormatAddresses.begin(),
+                Format.AlternativeFormatAddresses.end());
+  return Result;
+}
 
 inline std::optional<SourceCallTypeHint>
 runtimeSourceCallHint(const BinaryImage &Image,
@@ -88,7 +106,9 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
            Binding.Format->Syntax == Expected.Format->Syntax &&
            Binding.Format->FormatParameter ==
                Expected.Format->FormatParameter &&
-           Binding.Format->FormatAddress == Expected.Format->FormatAddress)) &&
+           Binding.Format->FormatAddress == Expected.Format->FormatAddress &&
+           Binding.Format->AlternativeFormatAddresses ==
+               Expected.Format->AlternativeFormatAddresses)) &&
          Binding.BorrowedByteInputs == Expected.BorrowedByteInputs &&
          Binding.SwiftStringInputs == Expected.SwiftStringInputs &&
          objc_projection_detail::sameHint(Binding.Signature,
@@ -1043,6 +1063,81 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       directLocalStorageAccessExtents(Function, Image);
   const auto KVOCallbackParameter =
       kvoCallbackContextParameter(Function, Image);
+  // A control-flow-selected format remains an address-valued local until the
+  // call. Trace only that operand's complete definition family so unrelated
+  // scalar occurrences with the same bits never acquire object identity.
+  VarKeyMap<std::vector<ExprPtr>> FormatDefinitions;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
+        (Statement.Dst->Kind == ExprKind::Var ||
+         Statement.Dst->Kind == ExprKind::Phi))
+      FormatDefinitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+  });
+  std::set<const HighExpr *> FormatObjectExpressions;
+  std::set<const HighExpr *> FormatScanSeen;
+  std::function<void(const ExprPtr &)> ScanFormats =
+      [&](const ExprPtr &Expression) {
+        if (!Expression || !FormatScanSeen.insert(Expression.get()).second)
+          return;
+        if (Expression->SourceCallHint && Expression->SourceCallHint->Format) {
+          const auto &Format = *Expression->SourceCallHint->Format;
+          const auto Addresses = formatAddresses(Format);
+          if (Addresses &&
+              Format.FormatParameter < Expression->Operands.size()) {
+            const std::set<va_t> Candidates(Addresses->begin(),
+                                            Addresses->end());
+            std::set<const HighExpr *> Leaves;
+            std::set<VarKey> Active;
+            size_t TraceBudget = 4096;
+            const auto Trace = [&](auto &&Self, const ExprPtr &Value,
+                                   unsigned Depth) -> bool {
+              if (!Value || !TraceBudget-- || Depth > 64)
+                return false;
+              if ((Value->Kind == ExprKind::Cast ||
+                   Value->Kind == ExprKind::BitCast) &&
+                  Value->Operands.size() == 1 && Value->Type &&
+                  Value->Type->Size == 8)
+                return Self(Self, Value->Operands.front(), Depth + 1);
+              if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
+                  Value->SourceCallHint->CallKind ==
+                      SourceCallTypeHint::Kind::RuntimeConstantString)
+                return Value->Operands.empty() &&
+                       Candidates.count(
+                           Value->SourceCallHint->TargetAddress) != 0;
+              if (Value->Kind == ExprKind::Const) {
+                if (!Candidates.count(Value->ConstVal))
+                  return false;
+                Leaves.insert(Value.get());
+                return true;
+              }
+              if (Value->Kind != ExprKind::Var &&
+                  Value->Kind != ExprKind::Phi)
+                return false;
+              const auto Key = varKey(Value->Var);
+              if (!Active.insert(Key).second)
+                return false;
+              const auto Found = FormatDefinitions.find(Key);
+              bool Valid = Found != FormatDefinitions.end() &&
+                           !Found->second.empty();
+              if (Valid)
+                for (const auto &Definition : Found->second)
+                  if (!Self(Self, Definition, Depth + 1)) {
+                    Valid = false;
+                    break;
+                  }
+              Active.erase(Key);
+              return Valid;
+            };
+            if (Trace(Trace, Expression->Operands[Format.FormatParameter], 0))
+              FormatObjectExpressions.insert(Leaves.begin(), Leaves.end());
+          }
+        }
+        for (const auto &Operand : Expression->Operands)
+          ScanFormats(Operand);
+      };
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, ScanFormats);
+  });
   // Contextual bindings create temporary input nodes. Retain those nodes for
   // the lifetime of their memoized copies so allocator address reuse cannot
   // make a later argument borrow an earlier argument's binding.
@@ -1126,7 +1221,11 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         !isCodeAddressProvenance(Original->ConstProvenance) &&
         (Original->AddressOwnerVA == InvalidVA ||
          Original->AddressOwnerVA == Original->ConstVal);
-    if ((AddressContext || ObjectAddress) && !MemoryAddress &&
+    const bool AuthenticatedFormatObject =
+        Original->Kind == ExprKind::Const &&
+        FormatObjectExpressions.count(Original.get()) != 0;
+    if ((AddressContext || ObjectAddress || AuthenticatedFormatObject) &&
+        !MemoryAddress &&
         !NumericOperand &&
         !(Original->Kind == ExprKind::Const &&
           Original->ConstProvenance == ConstantAddressProvenance::Scalar)) {
@@ -2009,35 +2108,74 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
   if (Binding.Format) {
     const auto &Format = *Binding.Format;
+    const auto Addresses = formatAddresses(Format);
+    if (!Addresses)
+      return false;
     const bool Message =
         Binding.CallKind == SourceCallTypeHint::Kind::ObjCMessage;
     const auto Expected =
         Message ? objcFormattedSourceCallHint(Image, Binding.Selector,
-                                              Format.FormatAddress)
+                                              *Addresses)
                 : darwinFormattedSourceCallHint(Image, Binding.TargetAddress,
                                                 Format.FormatAddress);
     if (!Expected || !Expected->Format || Binding.DoesNotReturn ||
         Format.Syntax != Expected->Format->Syntax ||
         Format.FixedCount != Expected->Format->FixedCount ||
         Format.FormatParameter != Expected->Format->FormatParameter ||
+        Format.AlternativeFormatAddresses !=
+            Expected->Format->AlternativeFormatAddresses ||
         Format.FormatParameter >= Expression.Operands.size() ||
         !objc_projection_detail::sameHint(Hint, Expected->Signature) ||
         (!Message && !runtimeBindingMatches(Binding, *Expected)))
       return false;
     auto Argument = Expression.Operands[Format.FormatParameter];
-    unsigned Depth = 0;
-    while (Argument && Argument->Kind == ExprKind::Cast &&
-           Argument->Operands.size() == 1 && Argument->Type &&
-           Argument->Type->Size == 8 && Depth++ < 32)
-      Argument = Argument->Operands.front();
-    if (!Argument)
-      return false;
-    if (Argument->Kind == ExprKind::Call && Argument->SourceCallHint &&
-        Argument->SourceCallHint->CallKind ==
-            SourceCallTypeHint::Kind::RuntimeConstantString)
-      return Argument->Operands.empty() &&
-             Argument->SourceCallHint->TargetAddress == Format.FormatAddress &&
-             objcSourceCallBound(*Argument, Image, Functions);
+    const std::set<va_t> CandidateSet(Addresses->begin(), Addresses->end());
+    VarKeyMap<std::vector<ExprPtr>> Definitions;
+    if (ContainingFunction)
+      walkStmts(ContainingFunction->Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+            Statement.Val &&
+            (Statement.Dst->Kind == ExprKind::Var ||
+             Statement.Dst->Kind == ExprKind::Phi))
+          Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+      });
+    size_t CandidateBudget = 4096;
+    std::set<VarKey> ActiveVariables;
+    const auto MatchesCandidate =
+        [&](auto &&Self, const ExprPtr &Value, unsigned Depth) -> bool {
+      if (!Value || !CandidateBudget-- || Depth > 64)
+        return false;
+      if ((Value->Kind == ExprKind::Cast ||
+           Value->Kind == ExprKind::BitCast) &&
+          Value->Operands.size() == 1 && Value->Type &&
+          Value->Type->Size == 8)
+        return Self(Self, Value->Operands.front(), Depth + 1);
+      if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
+          Value->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::RuntimeConstantString)
+        return Value->Operands.empty() &&
+               CandidateSet.count(Value->SourceCallHint->TargetAddress) &&
+               objcSourceCallBound(*Value, Image, Functions);
+      if (Value->Kind == ExprKind::Const)
+        return CandidateSet.count(Value->ConstVal) != 0;
+      if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
+        return false;
+      const auto Key = varKey(Value->Var);
+      if (!ActiveVariables.insert(Key).second)
+        return false;
+      const auto Found = Definitions.find(Key);
+      bool Valid = Found != Definitions.end() && !Found->second.empty();
+      if (Valid)
+        for (const auto &Definition : Found->second)
+          if (!Self(Self, Definition, Depth + 1)) {
+            Valid = false;
+            break;
+          }
+      ActiveVariables.erase(Key);
+      return Valid;
+    };
+    if (MatchesCandidate(MatchesCandidate, Argument, 0))
+      return true;
     if (Format.Syntax == SourceCallTypeHint::FormatSyntax::Printf) {
       auto CStringBase = [&](const ExprPtr &Value) -> std::optional<va_t> {
         if (!Value || Value->Kind != ExprKind::Call || !Value->SourceCallHint ||
@@ -2048,18 +2186,19 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         return Value->SourceCallHint->TargetAddress;
       };
       if (const auto Base = CStringBase(Argument))
-        return *Base == Format.FormatAddress;
+        return CandidateSet.count(*Base) != 0;
       if (Argument->Kind == ExprKind::BinOp && Argument->Op == NdOp::INT_ADD &&
           Argument->Operands.size() == 2) {
         for (unsigned I = 0; I < 2; ++I) {
           const auto Base = CStringBase(Argument->Operands[I]);
           const auto Offset = constantAddress(*Argument->Operands[1 - I]);
           if (Base && Offset && *Base <= InvalidVA - *Offset)
-            return *Base + *Offset == Format.FormatAddress;
+            return CandidateSet.count(*Base + *Offset) != 0;
         }
       }
     }
-    return constantAddress(*Argument) == Format.FormatAddress;
+    const auto Constant = constantAddress(*Argument);
+    return Constant && CandidateSet.count(*Constant) != 0;
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
       Binding.CallKind == SourceCallTypeHint::Kind::SwiftRuntimeCall ||

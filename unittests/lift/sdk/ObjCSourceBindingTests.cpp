@@ -4369,6 +4369,72 @@ TEST(ObjCSourceBindings, FormattedMessagesRevalidateFormatAndActualArguments) {
 }
 
 TEST(ObjCSourceBindings,
+     FormattedControlFlowCandidatesRequireOneExactABIAndDefinitions) {
+  auto F = formatFixture(Arch::AArch64, "%@");
+  const std::string Alternate = "prefix-%@";
+  auto *SecondRecord = F.Image.Segments[0].Data.data() + 32;
+  llvm::support::endian::write64le(SecondRecord + 8, 0x7c8);
+  llvm::support::endian::write64le(SecondRecord + 16, 0x1080);
+  llvm::support::endian::write64le(SecondRecord + 24, Alternate.size());
+  std::copy(Alternate.begin(), Alternate.end(),
+            F.Image.Segments[1].Data.begin() + 0x80);
+  F.Image.Segments[1].Data[0x80 + Alternate.size()] = 0;
+
+  const std::array<va_t, 2> Formats{0x2000, 0x2020};
+  auto Hint = objcFormattedSourceCallHint(
+      F.Image, "stringWithFormat:", llvm::ArrayRef<va_t>(Formats));
+  ASSERT_TRUE(Hint);
+  ASSERT_TRUE(Hint->Format);
+  EXPECT_EQ(Hint->Format->FormatAddress, 0x2000U);
+  EXPECT_EQ(Hint->Format->AlternativeFormatAddresses,
+            std::vector<va_t>{0x2020});
+  ASSERT_EQ(Hint->Signature.Parameters.size(), 4U);
+
+  MedVar FormatVariable;
+  FormatVariable.Kind = MedVar::Temp;
+  FormatVariable.Id = 17;
+  FormatVariable.Size = 8;
+  auto Local = HighExpr::makeVar(FormatVariable, NdType::makeInt(8, false));
+  HighStmt First;
+  First.Kind = StmtKind::Assign;
+  First.Dst = Local;
+  First.Val = HighExpr::makeConst(0x2000, 8);
+  HighStmt Second = First;
+  Second.Val = HighExpr::makeConst(0x2020, 8);
+  auto Call = HighExpr::makeCall(
+      "objc_msgSend", 0,
+      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8), Local,
+       HighExpr::makeConst(0, 8)});
+  Call->Type = Hint->Signature.ReturnType;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  HighFunc Function;
+  Function.ReturnType = Hint->Signature.ReturnType;
+  Function.Body = {First, Second, Return};
+  EXPECT_FALSE(objcSourceCallBound(*Call, F.Image, {}));
+  auto Bound = bindObjCSourceReferences(Function, F.Image);
+  EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  const auto &BoundCall = Bound.Function.Body.back().RetVal;
+  ASSERT_TRUE(BoundCall);
+  EXPECT_TRUE(objcSourceCallBound(*BoundCall, F.Image, {}, nullptr, nullptr,
+                                  &Bound.Function));
+  for (unsigned I : {0U, 1U}) {
+    const auto &Definition = Bound.Function.Body[I].Val;
+    ASSERT_TRUE(Definition && Definition->SourceCallHint);
+    EXPECT_EQ(Definition->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeConstantString);
+  }
+
+  // The same selector and exact objects are insufficient when the formats
+  // disagree about the promoted variadic carrier.
+  F.Image.Segments[1].Data[0x80 + Alternate.size() - 1] = 'd';
+  EXPECT_FALSE(objcFormattedSourceCallHint(
+      F.Image, "stringWithFormat:", llvm::ArrayRef<va_t>(Formats)));
+}
+
+TEST(ObjCSourceBindings,
      FormattedMessagesRespectEveryDeclarationAndImageProof) {
   auto F = formatFixture(Arch::AArch64);
   auto Declared = objcSelectorFormatDeclaration(F.Image, "stringWithFormat:");
@@ -4467,6 +4533,74 @@ TEST(ObjCSourceBindings, FormattedLowCallsReadDarwinStackArgumentsBeforeSSA) {
   Block.Ops.insert(Block.Ops.begin() + 2, Block.Ops[1]);
   Block.Ops[2].Inputs[0] = NdVar::reg(TRI.IntParamRegs[3], 8);
   EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
+}
+
+TEST(ObjCSourceBindings,
+     FormattedLowCallJoinsExactFormatsWithTheSameVariadicABI) {
+  auto F = formatFixture(Arch::AArch64, "%@");
+  const std::string Alternate = "prefix-%@";
+  auto *SecondRecord = F.Image.Segments[0].Data.data() + 32;
+  llvm::support::endian::write64le(SecondRecord + 8, 0x7c8);
+  llvm::support::endian::write64le(SecondRecord + 16, 0x1080);
+  llvm::support::endian::write64le(SecondRecord + 24, Alternate.size());
+  std::copy(Alternate.begin(), Alternate.end(),
+            F.Image.Segments[1].Data.begin() + 0x80);
+  F.Image.Segments[1].Data[0x80 + Alternate.size()] = 0;
+  F.Image.ImportPtrSlots[0x3000] = "_objc_msgSend";
+  F.Image.ObjCSourceReferences.emplace(
+      0x3008, ObjCSourceReference{ObjCSourceReference::Kind::Selector,
+                                  0x3008,
+                                  8,
+                                  "stringWithFormat:",
+                                  {}});
+  const auto &TRI = getTargetRegInfo(F.Image.Arch);
+  auto Op = [](NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs,
+               va_t Address) {
+    LowOp Result;
+    Result.Opcode = Code;
+    Result.Output = Output;
+    Result.Addr = Address;
+    for (const auto &Input : Inputs)
+      Result.addInput(Input);
+    return Result;
+  };
+  LowFunc Function;
+  Function.Entry = 0x3000;
+  Function.Blocks.resize(4);
+  for (unsigned I = 0; I < 4; ++I) {
+    Function.Blocks[I].Id = I;
+    Function.Blocks[I].StartAddr = 0x3000 + I * 0x10;
+  }
+  Function.Blocks[0].Succs = {1, 2};
+  for (unsigned I : {1U, 2U}) {
+    Function.Blocks[I].Preds = {0};
+    Function.Blocks[I].Succs = {3};
+    Function.Blocks[I].Ops = {Op(
+        NdOp::COPY, NdVar::reg(TRI.IntParamRegs[2], 8),
+        {NdVar::cst(I == 1 ? 0x2000 : 0x2020, 8)}, 0x3000 + I * 0x10)};
+  }
+  auto &Join = Function.Blocks[3];
+  Join.Preds = {1, 2};
+  Join.Ops = {
+      Op(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8),
+         {NdVar::cst(0x3008, 8)}, 0x3030),
+      Op(NdOp::INDIR_CALL, {}, {NdVar::cst(0x3000, 8)}, 0x3034),
+      Op(NdOp::RETURN, {}, {}, 0x3038)};
+  const auto Hints = buildObjCSourceCallHints(F.Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x3034);
+  ASSERT_TRUE(Hint.Format);
+  EXPECT_EQ(Hint.Format->FormatAddress, 0x2000U);
+  EXPECT_EQ(Hint.Format->AlternativeFormatAddresses,
+            std::vector<va_t>{0x2020});
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 4U);
+
+  // Changing either predecessor to a different variadic type revokes it.
+  const std::string Different = "%d";
+  std::copy(Different.begin(), Different.end(),
+            F.Image.Segments[1].Data.begin() + 0x80);
+  llvm::support::endian::write64le(SecondRecord + 24, Different.size());
+  EXPECT_TRUE(buildObjCSourceCallHints(F.Image, Function).empty());
 }
 
 TEST(ObjCSourceBindings, DarwinFormattedCallsRequireExactImportAndFormat) {

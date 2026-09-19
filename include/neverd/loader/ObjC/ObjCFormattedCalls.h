@@ -37,5 +37,12 @@ std::optional<SourceCallTypeHint> bindCFormatArguments(const BinaryImage &Image,
 std::optional<SourceCallTypeHint>
 objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
                             va_t FormatAddress);
+
+/// Bind one control-flow join whose exact immutable format-object candidates
+/// all require the same variadic ABI. A differing, duplicate, malformed, or
+/// oversized candidate set is rejected rather than approximated.
+std::optional<SourceCallTypeHint>
+objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
+                            llvm::ArrayRef<va_t> FormatAddresses);
 } // namespace neverd
 #endif

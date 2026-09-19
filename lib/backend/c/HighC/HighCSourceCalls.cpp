@@ -6,6 +6,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace neverd {
@@ -378,6 +379,14 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Hint.CallKind == Kind::DarwinRuntimeCall &&
         Signature.Origin == SourceFunctionTypeHint::OriginKind::DarwinSDK;
     if ((!DeclaredMessage && !DeclaredC) || !Format.FormatAddress ||
+        Format.AlternativeFormatAddresses.size() >= 64 ||
+        !std::is_sorted(Format.AlternativeFormatAddresses.begin(),
+                        Format.AlternativeFormatAddresses.end()) ||
+        std::adjacent_find(Format.AlternativeFormatAddresses.begin(),
+                           Format.AlternativeFormatAddresses.end()) !=
+            Format.AlternativeFormatAddresses.end() ||
+        (!Format.AlternativeFormatAddresses.empty() &&
+         Format.AlternativeFormatAddresses.front() <= Format.FormatAddress) ||
         Format.FixedCount < (Message ? 3U : 1U) ||
         Format.FixedCount > Signature.Parameters.size() ||
         (Message && Format.FormatParameter < 2) ||

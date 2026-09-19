@@ -192,6 +192,11 @@ struct SourceCallTypeHint {
     unsigned FormatParameter = 0;
     va_t FormatAddress = 0;
     FormatSyntax Syntax = FormatSyntax::NSString;
+    /// Additional exact immutable format objects that can reach the same call
+    /// through control flow. Every candidate is independently parsed and must
+    /// produce the identical promoted variadic ABI. Kept sorted and distinct
+    /// from FormatAddress so a single-format binding retains its old shape.
+    std::vector<va_t> AlternativeFormatAddresses;
   };
   std::optional<FormatArguments> Format;
   /// Restricts declaration agreement using revalidated receiver provenance.
