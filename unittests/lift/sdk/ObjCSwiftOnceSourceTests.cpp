@@ -104,6 +104,67 @@ struct OnceFixture {
   }
 };
 
+struct StringOnceFixture : OnceFixture {
+  ExprPtr Bridge;
+  explicit StringOnceFixture(Arch Architecture) : OnceFixture(Architecture) {
+    constexpr va_t BridgeSlot = 0x2088;
+    const std::string BridgeName =
+        "_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF";
+    Image.Symbols.push_back({"_string", 0x2020, 16, false});
+    Image.ImportPtrSlots[BridgeSlot] = BridgeName;
+    Image.DyldBindSlots[BridgeSlot] = {
+        BridgeName, 0,
+        "/System/Library/Frameworks/Foundation.framework/Foundation", false};
+
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto Integer = NdType::makeInt(8, false);
+    auto Param = [&](unsigned Id, const TypeRef &Type) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      return HighExpr::makeVar(V, Type);
+    };
+    auto &Getter = Pipeline.HighFuncs[0];
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Signature.ReturnType = Pointer;
+    Signature.Parameters = {{"predicate", Pointer},
+                            {"string_word", Integer},
+                            {"string_storage", Integer},
+                            {"initializer", Pointer}};
+    std::string Error;
+    EXPECT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error));
+    Getter.SourceTypeHint = Signature;
+    Getter.Params = {{"predicate", Pointer},
+                     {"string_word", Integer},
+                     {"string_storage", Integer},
+                     {"initializer", Pointer}};
+    Once->Operands[1] = Param(3, Pointer);
+    Bridge =
+        HighExpr::makeCall(BridgeName, BridgeSlot,
+                           {HighExpr::makeLoad(Param(1, Integer), Integer),
+                            HighExpr::makeLoad(Param(2, Integer), Integer)});
+    Bridge->Type = Pointer;
+    const auto BridgeHint = swiftStringSourceCallHint(Image, BridgeSlot);
+    EXPECT_TRUE(BridgeHint);
+    Bridge->SourceCallHint = std::make_shared<SourceCallTypeHint>(*BridgeHint);
+    Getter.Body[2].RetVal = Bridge;
+
+    auto &Caller = Pipeline.HighFuncs[2];
+    Caller.Body[0].RetVal = HighExpr::makeCall(
+        Getter.Name, Getter.Entry,
+        {HighExpr::makeConst(0x2000, 8), HighExpr::makeConst(0x2020, 8),
+         HighExpr::makeConst(0x2028, 8), HighExpr::makeConst(0x1080, 8)});
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->CallKind = SourceCallTypeHint::Kind::Native;
+    Hint->TargetAddress = Getter.Entry;
+    Hint->Signature = Signature;
+    Caller.Body[0].RetVal->SourceCallHint = std::move(Hint);
+    Caller.Body[0].RetVal->Type = Pointer;
+  }
+};
+
 TEST(SwiftOnceSources, BindsStorageAndCallbackAsOneDependencyGroup) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     OnceFixture F(Architecture);
@@ -212,6 +273,86 @@ TEST(SwiftOnceSources, OrdinaryDirectCallerPreventsCallbackABIOverride) {
       F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
   EXPECT_TRUE(Bound.Dependencies.empty());
   EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+}
+
+TEST(SwiftOnceSources, BindsContiguousSwiftStringStorageAsOneSharedObject) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    StringOnceFixture F(Architecture);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Getters.size(), 1U);
+    ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+    const auto &Contract = Plan.Getters.begin()->second;
+    EXPECT_EQ(Contract.parameterCount(), 4U);
+    EXPECT_EQ(Contract.storageWidth(), 16U);
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+    EXPECT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{0x2000, 8}, {0x2020, 16}}));
+    const auto Call = Bound.Function.Body[0].RetVal;
+    ASSERT_EQ(Call->Operands.size(), 4U);
+    ASSERT_EQ(Call->Operands[2]->Kind, ExprKind::BinOp);
+    EXPECT_EQ(Call->Operands[2]->Op, NdOp::INT_ADD);
+    ASSERT_EQ(Call->Operands[2]->Operands.size(), 2U);
+    EXPECT_EQ(Call->Operands[2]->Operands[1]->ConstVal, 8U);
+    EXPECT_EQ(Call->Operands[1]->SourceCallHint->TargetAddress, 0x2020U);
+    EXPECT_EQ(Call->Operands[2]->Operands[0]->SourceCallHint->TargetAddress,
+              0x2020U);
+    EXPECT_TRUE(swiftOnceCallbackBound(*Call->Operands[3], F.Image, Plan,
+                                       F.functions()));
+    EXPECT_TRUE(
+        bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
+  }
+}
+
+TEST(SwiftOnceSources, RejectsUnprovedSwiftStringOnceContractsAndStorage) {
+  for (unsigned Case = 0; Case < 10; ++Case) {
+    SCOPED_TRACE(Case);
+    StringOnceFixture F(Arch::AArch64);
+    auto &Getter = F.Pipeline.HighFuncs[0];
+    auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
+    if (Case == 0)
+      std::swap(F.Bridge->Operands[0], F.Bridge->Operands[1]);
+    if (Case == 1)
+      Call->Operands[2] = HighExpr::makeConst(0x2030, 8);
+    if (Case == 2) {
+      HighStmt Escape;
+      Escape.Kind = StmtKind::ExprStmt;
+      Escape.Val = F.Bridge->Operands[0]->Operands[0];
+      Getter.Body.insert(Getter.Body.begin(), Escape);
+    }
+    if (Case == 3) {
+      auto Hint =
+          std::make_shared<SourceCallTypeHint>(*F.Bridge->SourceCallHint);
+      Hint->CallKind = SourceCallTypeHint::Kind::SwiftRuntimeCall;
+      F.Bridge->SourceCallHint = std::move(Hint);
+    }
+    if (Case == 4)
+      F.Bridge->Operands[0]->Type = NdType::makeInt(4, false);
+    if (Case == 5) {
+      HighStmt Duplicate;
+      Duplicate.Kind = StmtKind::ExprStmt;
+      Duplicate.Val = F.Bridge;
+      Getter.Body.insert(Getter.Body.end() - 1, Duplicate);
+    }
+    if (Case == 6)
+      F.Image.Symbols.back().Size = 8;
+    if (Case == 7)
+      F.Image.Symbols.push_back({"_split_string", 0x2028, 8, false});
+    if (Case == 8)
+      Call->Operands[0] = HighExpr::makeConst(0x2028, 8);
+    if (Case == 9) {
+      auto Hint =
+          std::make_shared<SourceCallTypeHint>(*F.Bridge->SourceCallHint);
+      Hint->Signature.Parameters[1].Type = NdType::makeInt(8, false);
+      F.Bridge->SourceCallHint = std::move(Hint);
+    }
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_TRUE(Bound.Dependencies.empty());
+    EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+  }
 }
 
 } // namespace

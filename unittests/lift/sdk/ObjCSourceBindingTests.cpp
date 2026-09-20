@@ -202,6 +202,126 @@ TEST(ObjCSourceInputs, EntrySnapshotUsesRuntimeOffsetWithoutChangingNativeABI) {
   }
 }
 
+namespace {
+struct MergedIvarOffsetFixture {
+  BinaryImage Image;
+  HighFunc Function;
+  ExprPtr First, Second, Load;
+  MedVar Selected;
+  explicit MergedIvarOffsetFixture(Arch Architecture = Arch::AArch64) {
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Architecture;
+    Image.Bits = Bitness::Bits64;
+    Image.ObjCSourceReferences.emplace(
+        0x1100, ObjCSourceReference{ObjCSourceReference::Kind::IvarOffset,
+                                    0x1100, 4, "left", "Owner"});
+    Image.ObjCSourceReferences.emplace(
+        0x1110, ObjCSourceReference{ObjCSourceReference::Kind::IvarOffset,
+                                    0x1110, 4, "right", "Owner"});
+    Function.ReturnType = NdType::makeInt(4, false);
+    Function.Params = {{"choose", NdType::makeInt(4, false)}};
+    MedVar Choice;
+    Choice.Kind = MedVar::Param;
+    Choice.Id = 0;
+    Choice.Size = 4;
+    Selected.Kind = MedVar::Temp;
+    Selected.Id = 20;
+    Selected.Size = 8;
+    const auto SelectedValue = [&] {
+      return HighExpr::makeVar(Selected, NdType::makeInt(8, false));
+    };
+    First =
+        HighExpr::makeConst(0x1100, 8, ConstantAddressProvenance::DataAddress);
+    Second =
+        HighExpr::makeConst(0x1110, 8, ConstantAddressProvenance::DataAddress);
+    HighStmt Choose;
+    Choose.Kind = StmtKind::IfElse;
+    Choose.Cond = HighExpr::makeVar(Choice, NdType::makeInt(4, false));
+    HighStmt Left, Right;
+    Left.Kind = Right.Kind = StmtKind::Assign;
+    Left.Dst = SelectedValue();
+    Left.Val = First;
+    Right.Dst = SelectedValue();
+    Right.Val = Second;
+    Choose.Body = {Left};
+    Choose.ElseBody = {Right};
+    Load = HighExpr::makeLoad(SelectedValue(), Function.ReturnType);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Load;
+    Function.Body = {Choose, Return};
+  }
+};
+} // namespace
+
+TEST(ObjCSourceBindings,
+     MergedIvarOffsetAddressesBecomeRuntimeValuesBeforeTheMerge) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    MergedIvarOffsetFixture F(Architecture);
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.InstanceLayoutClasses, std::set<std::string>{"Owner"});
+    const auto &If = Bound.Function.Body[0];
+    for (const auto *Arm : {&If.Body, &If.ElseBody}) {
+      ASSERT_EQ(Arm->size(), 1U);
+      const auto Value = Arm->front().Val;
+      ASSERT_EQ(Value->Kind, ExprKind::Call);
+      ASSERT_TRUE(Value->SourceCallHint);
+      EXPECT_EQ(Value->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeIvarOffset);
+      EXPECT_TRUE(objcSourceCallBound(*Value, F.Image, {}));
+    }
+    const auto Value = Bound.Function.Body[1].RetVal;
+    ASSERT_EQ(Value->Kind, ExprKind::Cast);
+    ASSERT_EQ(Value->Operands.size(), 1U);
+    EXPECT_EQ(Value->Type->Size, 4U);
+    EXPECT_EQ(Value->Operands[0]->Kind, ExprKind::Var);
+  }
+}
+
+TEST(ObjCSourceBindings, MergedIvarOffsetProofRejectsMixedAndEscapingUses) {
+  for (unsigned Case = 0; Case < 8; ++Case) {
+    SCOPED_TRACE(Case);
+    MergedIvarOffsetFixture F;
+    if (Case == 0)
+      F.Image.ObjCSourceReferences.at(0x1110).ClassName = "Other";
+    if (Case == 1)
+      F.Load->MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Case == 2)
+      F.Function.Body[0].ElseBody[0].Val = HighExpr::makeBinop(
+          NdOp::INT_ADD, F.Second, HighExpr::makeConst(0, 8));
+    if (Case == 3) {
+      HighStmt Escape;
+      Escape.Kind = StmtKind::ExprStmt;
+      Escape.Val = HighExpr::makeVar(F.Selected, NdType::makeInt(8, false));
+      F.Function.Body.insert(F.Function.Body.end() - 1, Escape);
+    }
+    if (Case == 4) {
+      HighStmt Extra;
+      Extra.Kind = StmtKind::ExprStmt;
+      Extra.Val = HighExpr::makeLoad(
+          HighExpr::makeVar(F.Selected, NdType::makeInt(8, false)),
+          NdType::makeInt(4, false));
+      F.Function.Body.insert(F.Function.Body.end() - 1, Extra);
+    }
+    if (Case == 5)
+      F.Image.ObjCSourceReferences.at(0x1110).Size = 8;
+    if (Case == 6)
+      F.Image.ObjCSourceReferences.erase(0x1110);
+    if (Case == 7) {
+      HighStmt Store;
+      Store.Kind = StmtKind::Store;
+      Store.StoreAddr =
+          HighExpr::makeVar(F.Selected, NdType::makeInt(8, false));
+      Store.StoreVal = HighExpr::makeConst(0, 4);
+      F.Function.Body.insert(F.Function.Body.end() - 1, Store);
+    }
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_TRUE(Bound.InstanceLayoutClasses.empty());
+    EXPECT_EQ(Bound.Function.Body.back().RetVal->Kind, ExprKind::Load);
+  }
+}
+
 TEST(ObjCSourceInputs, EntryReadRejectsEffectsEscapesControlAndMalformedUses) {
   for (unsigned Case = 0; Case < 22; ++Case) {
     SCOPED_TRACE(Case);
@@ -551,20 +671,18 @@ struct SwiftWitnessAccessorFixture {
     Data.Flags = Mapping.Flags;
     Image.Sections.push_back(Data);
     Image.Symbols.push_back({"_$sS2SSysWL", Cache, 8, false});
-    Image.Symbols.push_back(
-        {"_$sS2SSysWl", AccessorAddress, 0x40, true});
+    Image.Symbols.push_back({"_$sS2SSysWl", AccessorAddress, 0x40, true});
     Image.ImportPtrSlots[ConformanceSlot] = "_$sSSSysMc";
     Image.ImportPtrSlots[MetadataSlot] = "_$sSSN";
     Image.ImportPtrSlots[RuntimeSlot] = "_swift_getWitnessTable";
+    EXPECT_TRUE(Image.recordDyldBindSlot(ConformanceSlot, "_$sSSSysMc", 0,
+                                         "/usr/lib/swift/libswiftCore.dylib",
+                                         false));
     EXPECT_TRUE(Image.recordDyldBindSlot(
-        ConformanceSlot, "_$sSSSysMc", 0,
-        "/usr/lib/swift/libswiftCore.dylib", false));
-    EXPECT_TRUE(Image.recordDyldBindSlot(
-        MetadataSlot, "_$sSSN", 0, "/usr/lib/swift/libswiftCore.dylib",
-        false));
-    EXPECT_TRUE(Image.recordDyldBindSlot(
-        RuntimeSlot, "_swift_getWitnessTable", 0,
-        "/usr/lib/swift/libswiftCore.dylib", false));
+        MetadataSlot, "_$sSSN", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+    EXPECT_TRUE(Image.recordDyldBindSlot(RuntimeSlot, "_swift_getWitnessTable",
+                                         0, "/usr/lib/swift/libswiftCore.dylib",
+                                         false));
 
     const auto Pointer = NdType::makePtr(NdType::makeVoid());
     Accessor.Entry = AccessorAddress;
@@ -576,8 +694,7 @@ struct SwiftWitnessAccessorFixture {
     CachedVar.Size = 8;
     auto Cached = HighExpr::makeVar(CachedVar, Pointer);
     CacheLoad = HighExpr::makeLoad(
-        HighExpr::makeConst(Cache, 8,
-                            ConstantAddressProvenance::DataAddress),
+        HighExpr::makeConst(Cache, 8, ConstantAddressProvenance::DataAddress),
         Pointer);
     HighStmt Load;
     Load.Kind = StmtKind::Assign;
@@ -588,9 +705,9 @@ struct SwiftWitnessAccessorFixture {
     FastReturn.RetVal = HighExpr::makeVar(CachedVar, Pointer);
     HighStmt FastPath;
     FastPath.Kind = StmtKind::If;
-    FastPath.Cond = HighExpr::makeBinop(
-        NdOp::INT_NOTEQUAL, HighExpr::makeVar(CachedVar, Pointer),
-        HighExpr::makeConst(0, 8));
+    FastPath.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL,
+                                        HighExpr::makeVar(CachedVar, Pointer),
+                                        HighExpr::makeConst(0, 8));
     FastPath.Body = {FastReturn};
 
     auto Runtime = swiftRuntimeSourceCallHint(Image, RuntimeSlot);
@@ -598,8 +715,7 @@ struct SwiftWitnessAccessorFixture {
     std::vector<ExprPtr> Arguments;
     for (const va_t Slot : {ConformanceSlot, MetadataSlot})
       Arguments.push_back(HighExpr::makeLoad(
-          HighExpr::makeConst(Slot, 8,
-                              ConstantAddressProvenance::DataAddress),
+          HighExpr::makeConst(Slot, 8, ConstantAddressProvenance::DataAddress),
           Pointer));
     MedVar Incidental;
     Incidental.Kind = MedVar::Param;
@@ -623,8 +739,8 @@ struct SwiftWitnessAccessorFixture {
     Build.Val = WitnessCall;
     HighStmt Store;
     Store.Kind = StmtKind::Store;
-    Store.StoreAddr = HighExpr::makeConst(
-        Cache, 8, ConstantAddressProvenance::DataAddress);
+    Store.StoreAddr =
+        HighExpr::makeConst(Cache, 8, ConstantAddressProvenance::DataAddress);
     Store.StoreVal = HighExpr::makeVar(WitnessVar, Pointer);
     Store.MemoryOrdering = NdMemoryOrdering::Release;
     HighStmt SlowReturn;
@@ -634,13 +750,12 @@ struct SwiftWitnessAccessorFixture {
     CacheStore = &Accessor.Body[3];
 
     SourceFunctionTypeHint NativeSignature;
-    NativeSignature.Origin =
-        SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    NativeSignature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
     NativeSignature.ReturnType = Pointer;
     NativeSignature.Parameters = {{"incidental", Pointer}};
     std::string Error;
-    EXPECT_TRUE(assignDarwinScalarSourceABI(NativeSignature, Architecture,
-                                            Error))
+    EXPECT_TRUE(
+        assignDarwinScalarSourceABI(NativeSignature, Architecture, Error))
         << Error;
     auto Native = std::make_shared<SourceCallTypeHint>();
     Native->CallKind = SourceCallTypeHint::Kind::Native;
@@ -649,8 +764,7 @@ struct SwiftWitnessAccessorFixture {
     Native->Signature = NativeSignature;
     auto Call = HighExpr::makeCall(
         Accessor.Name, AccessorAddress,
-        {HighExpr::makeConst(0xfeed, 8,
-                            ConstantAddressProvenance::Scalar)});
+        {HighExpr::makeConst(0xfeed, 8, ConstantAddressProvenance::Scalar)});
     Call->Type = Pointer;
     Call->SourceCallHint = std::move(Native);
     HighStmt Return;
@@ -663,8 +777,7 @@ struct SwiftWitnessAccessorFixture {
 };
 } // namespace
 
-TEST(ObjCSourceBindings,
-     SwiftWitnessAccessorRebuildsZeroArgumentCacheHelper) {
+TEST(ObjCSourceBindings, SwiftWitnessAccessorRebuildsZeroArgumentCacheHelper) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     SwiftWitnessAccessorFixture F(Architecture);
     const std::map<va_t, const HighFunc *> Functions{
@@ -686,9 +799,8 @@ TEST(ObjCSourceBindings,
     const auto Source = renderObjCSwiftWitnessCacheHelpers(
         F.Image, Result.SwiftWitnessCaches, Functions, Helpers);
     EXPECT_EQ(Helpers,
-              (std::set<std::string>{
-                  "neverd_swift_witness_cache_2020_address",
-                  "neverd_swift_witness_accessor_3020"}));
+              (std::set<std::string>{"neverd_swift_witness_cache_2020_address",
+                                     "neverd_swift_witness_accessor_3020"}));
     EXPECT_NE(Source.find("__asm__(\"_$sSSSysMc\")"), std::string::npos);
     EXPECT_NE(Source.find("__asm__(\"_$sSSN\")"), std::string::npos);
     EXPECT_NE(Source.find("__asm__(\"_swift_getWitnessTable\")"),
@@ -700,8 +812,7 @@ TEST(ObjCSourceBindings,
   }
 }
 
-TEST(ObjCSourceBindings,
-     SwiftWitnessAccessorRejectsIncompleteOrStaleEvidence) {
+TEST(ObjCSourceBindings, SwiftWitnessAccessorRejectsIncompleteOrStaleEvidence) {
   for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
     SwiftWitnessAccessorFixture F(Arch::AArch64);
@@ -732,12 +843,12 @@ TEST(ObjCSourceBindings,
   SwiftWitnessAccessorFixture F(Arch::AArch64);
   const std::map<va_t, const HighFunc *> Functions{
       {F.Accessor.Entry, &F.Accessor}};
-  auto Result = bindObjCSourceReferences(F.Caller, F.Image, nullptr,
-                                         &Functions);
+  auto Result =
+      bindObjCSourceReferences(F.Caller, F.Image, nullptr, &Functions);
   ASSERT_EQ(Result.SwiftWitnessCaches.size(), 1U);
   F.CacheStore->MemoryOrdering = NdMemoryOrdering::None;
-  EXPECT_FALSE(objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image,
-                                   Functions));
+  EXPECT_FALSE(
+      objcSourceCallBound(*Result.Function.Body[0].RetVal, F.Image, Functions));
   std::set<std::string> Helpers;
   EXPECT_THROW(renderObjCSwiftWitnessCacheHelpers(
                    F.Image, Result.SwiftWitnessCaches, Functions, Helpers),
@@ -4107,8 +4218,7 @@ TEST(ObjCSourceBindings,
       Callee.ReturnType = ValueType;
       Callee.Params = {{"offset", PointerType}};
       SourceFunctionTypeHint Signature;
-      Signature.Origin =
-          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
       Signature.ReturnType = ValueType;
       Signature.Parameters = {{"offset", PointerType}};
       std::string Error;
@@ -4144,8 +4254,8 @@ TEST(ObjCSourceBindings,
       if (Mutation == 1)
         Callee.Body[0].RetVal = Pointer;
       if (Mutation == 2)
-        Load->Operands[0] = HighExpr::makeBinop(
-            NdOp::INT_ADD, Pointer, HighExpr::makeConst(1, 8));
+        Load->Operands[0] = HighExpr::makeBinop(NdOp::INT_ADD, Pointer,
+                                                HighExpr::makeConst(1, 8));
       if (Mutation == 3)
         Load->MemoryOrdering = NdMemoryOrdering::Acquire;
       if (Mutation == 4)
@@ -4153,8 +4263,7 @@ TEST(ObjCSourceBindings,
       if (Mutation == 5)
         Binding->Signature.Parameters[0].Location.RegisterOffset += 8;
 
-      const std::map<va_t, const HighFunc *> Present{
-          {Callee.Entry, &Callee}};
+      const std::map<va_t, const HighFunc *> Present{{Callee.Entry, &Callee}};
       const std::map<va_t, const HighFunc *> Missing;
       const auto &Functions = Mutation == 6 ? Missing : Present;
       const auto Result =
@@ -4515,13 +4624,12 @@ TEST(ObjCSourceBindings,
   ASSERT_TRUE(ObjectCode.TypeHint);
   Image.ObjCMethods.push_back(ObjectCode);
 
-  SourceABIValueLocation Use{SourceABICarrierKind::IntegerRegister,
-                             a64reg::X0, 0, 8};
+  SourceABIValueLocation Use{SourceABICarrierKind::IntegerRegister, a64reg::X0,
+                             0, 8};
   const auto Signature = objcSelectorSourceTypeHintForResultUse(
       Image, "code", Use, NdTypeKind::Ptr);
   ASSERT_TRUE(Signature);
-  EXPECT_EQ(Signature->Origin,
-            SourceFunctionTypeHint::OriginKind::ObjCRuntime);
+  EXPECT_EQ(Signature->Origin, SourceFunctionTypeHint::OriginKind::ObjCRuntime);
   auto Binding = std::make_shared<SourceCallTypeHint>();
   Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
   Binding->TargetName = "objc_msgSend";
@@ -5266,10 +5374,10 @@ TEST(ObjCSourceBindings,
   First.Val = HighExpr::makeConst(0x2000, 8);
   HighStmt Second = First;
   Second.Val = HighExpr::makeConst(0x2020, 8);
-  auto Call = HighExpr::makeCall(
-      "objc_msgSend", 0,
-      {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8), Local,
-       HighExpr::makeConst(0, 8)});
+  auto Call =
+      HighExpr::makeCall("objc_msgSend", 0,
+                         {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
+                          Local, HighExpr::makeConst(0, 8)});
   Call->Type = Hint->Signature.ReturnType;
   Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
   HighStmt Return;
@@ -5440,24 +5548,22 @@ TEST(ObjCSourceBindings,
   for (unsigned I : {1U, 2U}) {
     Function.Blocks[I].Preds = {0};
     Function.Blocks[I].Succs = {3};
-    Function.Blocks[I].Ops = {Op(
-        NdOp::COPY, NdVar::reg(TRI.IntParamRegs[2], 8),
-        {NdVar::cst(I == 1 ? 0x2000 : 0x2020, 8)}, 0x3000 + I * 0x10)};
+    Function.Blocks[I].Ops = {Op(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[2], 8),
+                                 {NdVar::cst(I == 1 ? 0x2000 : 0x2020, 8)},
+                                 0x3000 + I * 0x10)};
   }
   auto &Join = Function.Blocks[3];
   Join.Preds = {1, 2};
-  Join.Ops = {
-      Op(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8),
-         {NdVar::cst(0x3008, 8)}, 0x3030),
-      Op(NdOp::INDIR_CALL, {}, {NdVar::cst(0x3000, 8)}, 0x3034),
-      Op(NdOp::RETURN, {}, {}, 0x3038)};
+  Join.Ops = {Op(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8),
+                 {NdVar::cst(0x3008, 8)}, 0x3030),
+              Op(NdOp::INDIR_CALL, {}, {NdVar::cst(0x3000, 8)}, 0x3034),
+              Op(NdOp::RETURN, {}, {}, 0x3038)};
   const auto Hints = buildObjCSourceCallHints(F.Image, Function);
   ASSERT_EQ(Hints.size(), 1U);
   const auto &Hint = Hints.at(0x3034);
   ASSERT_TRUE(Hint.Format);
   EXPECT_EQ(Hint.Format->FormatAddress, 0x2000U);
-  EXPECT_EQ(Hint.Format->AlternativeFormatAddresses,
-            std::vector<va_t>{0x2020});
+  EXPECT_EQ(Hint.Format->AlternativeFormatAddresses, std::vector<va_t>{0x2020});
   ASSERT_EQ(Hint.Signature.Parameters.size(), 4U);
 
   // Changing either predecessor to a different variadic type revokes it.

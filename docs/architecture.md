@@ -360,7 +360,24 @@ not provide class facts. Source validation repeats the entire path against the
 current image. These facts describe declared types, not object identity or
 permission to remove memory operations.
 
+When control flow selects among authenticated Objective-C ivar-offset cells,
+the source binding may move the runtime offset values to the predecessor edges
+and merge those values instead of merging cell addresses. Every reaching leaf
+must name an ivar of the same class with the same carrier width, the address
+chain may contain only same-width local or SSA aliases, and the merged address
+must feed exactly one full-width load. Mixed classes or widths, arithmetic,
+stores, escapes and additional loads retain the unresolved address diagnostic.
+
 Writable pointer initializers require the same resolved local data-pointer relocation and target-owner proof as immutable pointer loads, without treating writable contents as a constant value. The source layer admits only complete, uniquely named eight-byte cells initialized with validated constant strings. Shared storage helpers initialize those cells before exposing their addresses; subsequent loads, stores and authenticated `objc_storeStrong` calls use the mutable cells. Initializer objects share the ordinary constant-object identities. A null store does not repeat initialization.
+
+A shared Swift once getter may expose the two machine words of a `String` only
+under one exact four-carrier contract: predicate, initializer, and two ordered
+storage words. The getter must make one authenticated `swift_once` call, feed
+the two unmodified words to the exact Swift `String`-to-`NSString` bridge, and
+use each address parameter only through pure same-width aliases and the proven
+loads. Callers must pass adjacent words of one named writable 16-byte object.
+The callback and all dependencies still require ordinary source closure; the
+storage proof does not authorize skipping an initializer or inventing contents.
 
 An explicit pointer-typed load or store supplies the same eight-byte cell extent
 as an integer machine carrier. It uses the existing named writable-storage and

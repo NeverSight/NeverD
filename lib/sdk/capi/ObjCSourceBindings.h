@@ -106,8 +106,7 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.TargetName == Expected.TargetName &&
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
-         !Binding.SelectorResultTypeUse &&
-         !Binding.SelectorArgumentTypeUse &&
+         !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
          !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
          !Binding.SwiftTypeMetadata &&
          bool(Binding.Format) == bool(Expected.Format) &&
@@ -657,9 +656,8 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
                              va_t Address) {
   if (!Function.Entry || !Function.ReturnType ||
       Function.ReturnType->Kind == NdTypeKind::Void ||
-      Function.ReturnType->Size != 8 ||
-      Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
-      Image.Bits != Bitness::Bits64 ||
+      Function.ReturnType->Size != 8 || Image.Format != BinaryFormat::MachO ||
+      Image.IsRelocatable || Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
       Image.MachOChainedFixupsAmbiguous || !Image.MachOTwoLevelNamespace ||
       Address % 8)
@@ -698,8 +696,8 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
     if (!Value || Depth > 64)
       return nullptr;
     if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
-        Value->Operands.size() == 1 && Value->Type &&
-        Value->Operands[0] && Value->Operands[0]->Type &&
+        Value->Operands.size() == 1 && Value->Type && Value->Operands[0] &&
+        Value->Operands[0]->Type &&
         Value->Type->Size == Value->Operands[0]->Type->Size)
       return Self(Self, Value->Operands[0], Depth + 1);
     if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
@@ -717,8 +715,7 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
   std::vector<ExprPtr> CacheLoads, WitnessCalls, Returns;
   std::vector<const HighStmt *> CacheStores;
   walkStmts(Function.Body, [&](const HighStmt &Statement) {
-    if (Statement.Kind == StmtKind::Store &&
-        ExactAddress(Statement.StoreAddr))
+    if (Statement.Kind == StmtKind::Store && ExactAddress(Statement.StoreAddr))
       CacheStores.push_back(&Statement);
     if (Statement.Kind == StmtKind::Return && Statement.RetVal)
       Returns.push_back(Resolve(Resolve, Statement.RetVal));
@@ -753,8 +750,8 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
       Witness->MemoryOrdering != NdMemoryOrdering::None ||
       Witness->MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return std::nullopt;
-  const auto ExpectedRuntime = swiftRuntimeSourceCallHint(
-      Image, Witness->SourceCallHint->TargetAddress);
+  const auto ExpectedRuntime =
+      swiftRuntimeSourceCallHint(Image, Witness->SourceCallHint->TargetAddress);
   if (!ExpectedRuntime ||
       !runtimeBindingMatches(*Witness->SourceCallHint, *ExpectedRuntime) ||
       Resolve(Resolve, Store->StoreVal).get() != Witness.get())
@@ -769,25 +766,26 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
         Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return std::nullopt;
     const auto Slot = constantAddress(*Value->Operands[0]);
-    const auto Global = Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot)
-                             : std::nullopt;
+    const auto Global =
+        Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot) : std::nullopt;
     if (!Global || Global->TargetName != ExpectedGlobals[Index] ||
         Global->Signature.Origin !=
             SourceFunctionTypeHint::OriginKind::SwiftRuntime)
       return std::nullopt;
   }
-  const bool ReturnsLoad = std::any_of(
-      Returns.begin(), Returns.end(),
-      [&](const ExprPtr &Value) { return Value.get() == Load.get(); });
-  const bool ReturnsWitness = std::any_of(
-      Returns.begin(), Returns.end(),
-      [&](const ExprPtr &Value) { return Value.get() == Witness.get(); });
+  const bool ReturnsLoad =
+      std::any_of(Returns.begin(), Returns.end(), [&](const ExprPtr &Value) {
+        return Value.get() == Load.get();
+      });
+  const bool ReturnsWitness =
+      std::any_of(Returns.begin(), Returns.end(), [&](const ExprPtr &Value) {
+        return Value.get() == Witness.get();
+      });
   if (!ReturnsLoad || !ReturnsWitness)
     return std::nullopt;
 
   SourceCallTypeHint Hint;
-  Hint.CallKind =
-      SourceCallTypeHint::Kind::RuntimeSwiftWitnessCacheAddress;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftWitnessCacheAddress;
   Hint.TargetAddress = Address;
   Hint.TargetName = Cache->Name;
   Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
@@ -803,8 +801,7 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
 /// incidental live machine value is deliberately not exposed as an accessor
 /// parameter. The complete accessor body above is the proof boundary.
 inline std::optional<SourceCallTypeHint>
-swiftWitnessAccessorCallHint(const HighFunc &Function,
-                             const BinaryImage &Image,
+swiftWitnessAccessorCallHint(const HighFunc &Function, const BinaryImage &Image,
                              va_t *CacheAddress = nullptr) {
   const llvm::StringRef AccessorName(Function.Name);
   if (!AccessorName.ends_with("Wl"))
@@ -824,8 +821,7 @@ swiftWitnessAccessorCallHint(const HighFunc &Function,
     Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftWitnessAccessor;
     Hint.TargetAddress = Function.Entry;
     Hint.TargetName = Function.Name;
-    Hint.Signature.Origin =
-        SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
     Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
     std::string Reason;
     if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
@@ -1021,11 +1017,11 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
-      Hint.SelectorResultTypeUse ||
-      Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
-      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
-      Hint.RuntimeObjCResultType || Hint.ValueWitness ||
-      !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
+      Hint.SelectorResultTypeUse || Hint.SelectorArgumentTypeUse ||
+      Hint.SelectorArgumentStorageUse || Hint.DoesNotReturn ||
+      Hint.WeakImport || Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
+      Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
+      !Hint.SwiftStringInputs.empty() ||
       Expression.Operands.size() != Hint.Signature.Parameters.size() ||
       ContextParameter >= Expression.Operands.size())
     return std::nullopt;
@@ -1436,6 +1432,210 @@ inline SourceCallTypeHint::Kind runtimeKind(ObjCSourceReference::Kind Kind) {
   return K::Native;
 }
 
+struct MergedIvarOffsetPlans {
+  std::map<const HighExpr *, ObjCSourceReference> Leaves;
+  std::map<const HighExpr *, TypeRef> Loads;
+};
+
+/// Clang may merge addresses of two ivar-offset cells through a local and load
+/// the selected cell after the branch. Rebuild the source values before that
+/// merge only when every reaching definition is an authenticated ivar offset
+/// from the same class and the address-valued local has no other use.
+inline MergedIvarOffsetPlans mergedIvarOffsetPlans(const HighFunc &Function,
+                                                   const BinaryImage &Image) {
+  using Local = HighSourceLocalIdentity;
+  std::map<Local, std::vector<ExprPtr>> Definitions;
+  walkStmts(Function.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
+        S.Dst->Operands.empty() && S.Dst->Type && S.Dst->Type->Size == 8 &&
+        (S.Dst->Var.Kind == MedVar::Reg || S.Dst->Var.Kind == MedVar::Temp))
+      Definitions[highSourceLocalIdentity(S.Dst->Var)].push_back(S.Val);
+  });
+  struct Resolution {
+    std::map<const HighExpr *, ObjCSourceReference> Leaves;
+    std::set<Local> Locals;
+    std::string ClassName;
+  };
+  auto Resolve = [&](const auto &Self, const ExprPtr &Value, uint16_t Width,
+                     std::set<Local> &Visiting,
+                     unsigned Depth) -> std::optional<Resolution> {
+    if (!Value || Depth > 64 || !Value->Type || Value->Type->Size != 8 ||
+        Value->IntrinsicId != Intrinsic::None ||
+        !Value->IntrinsicOutputs.empty() ||
+        Value->MemoryOrdering != NdMemoryOrdering::None ||
+        Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+    if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+        Value->Operands.size() == 1)
+      return Self(Self, Value->Operands[0], Width, Visiting, Depth + 1);
+    if (Value->Kind == ExprKind::Const && Value->Operands.empty()) {
+      const auto Address = constantAddress(*Value);
+      const auto Found = Address ? Image.ObjCSourceReferences.find(*Address)
+                                 : Image.ObjCSourceReferences.end();
+      if (Found == Image.ObjCSourceReferences.end() ||
+          Found->second.TheKind != ObjCSourceReference::Kind::IvarOffset ||
+          Found->second.Size != Width || Found->second.Name.empty() ||
+          Found->second.ClassName.empty())
+        return std::nullopt;
+      Resolution Result;
+      Result.Leaves.emplace(Value.get(), Found->second);
+      Result.ClassName = Found->second.ClassName;
+      return Result;
+    }
+    std::vector<ExprPtr> Sources;
+    std::optional<Local> Identity;
+    if ((Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+        !Value->Operands.empty()) {
+      Sources = Value->Operands;
+    } else if ((Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+               Value->Operands.empty() &&
+               (Value->Var.Kind == MedVar::Reg ||
+                Value->Var.Kind == MedVar::Temp)) {
+      Identity = highSourceLocalIdentity(Value->Var);
+      const auto Found = Definitions.find(*Identity);
+      if (Found == Definitions.end() || Found->second.empty() ||
+          !Visiting.insert(*Identity).second)
+        return std::nullopt;
+      Sources = Found->second;
+    } else {
+      return std::nullopt;
+    }
+    Resolution Result;
+    for (const auto &Source : Sources) {
+      auto Part = Self(Self, Source, Width, Visiting, Depth + 1);
+      if (!Part ||
+          (!Result.ClassName.empty() && Result.ClassName != Part->ClassName)) {
+        if (Identity)
+          Visiting.erase(*Identity);
+        return std::nullopt;
+      }
+      Result.ClassName = Part->ClassName;
+      Result.Locals.insert(Part->Locals.begin(), Part->Locals.end());
+      for (const auto &[Leaf, Reference] : Part->Leaves) {
+        auto [It, Fresh] = Result.Leaves.emplace(Leaf, Reference);
+        if (!Fresh && (It->second.Address != Reference.Address ||
+                       It->second.Name != Reference.Name ||
+                       It->second.ClassName != Reference.ClassName)) {
+          if (Identity)
+            Visiting.erase(*Identity);
+          return std::nullopt;
+        }
+      }
+    }
+    if (Identity)
+      Visiting.erase(*Identity);
+    if (Identity)
+      Result.Locals.insert(*Identity);
+    return Result.Leaves.empty() ? std::nullopt
+                                 : std::optional<Resolution>(std::move(Result));
+  };
+
+  std::vector<ExprPtr> Candidates;
+  size_t Budget = 100000;
+  walkStmts(Function.Body, [&](const HighStmt &S) {
+    forEachRhsExpr(S, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Pending{Root};
+      std::set<const HighExpr *> Seen;
+      while (!Pending.empty() && Budget) {
+        --Budget;
+        auto E = Pending.back();
+        Pending.pop_back();
+        if (!E || !Seen.insert(E.get()).second)
+          continue;
+        if (E->Kind == ExprKind::Load && E->Operands.size() == 1 && E->Type &&
+            E->Type->Kind == NdTypeKind::Int &&
+            (E->Type->Size == 4 || E->Type->Size == 8) &&
+            !constantAddress(*E->Operands[0]) &&
+            E->IntrinsicId == Intrinsic::None && E->IntrinsicOutputs.empty() &&
+            E->MemoryOrdering == NdMemoryOrdering::None &&
+            E->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          std::set<Local> Visiting;
+          if (Resolve(Resolve, E->Operands[0], E->Type->Size, Visiting, 0))
+            Candidates.push_back(E);
+        }
+        Pending.insert(Pending.end(), E->Operands.begin(), E->Operands.end());
+      }
+    });
+  });
+  MergedIvarOffsetPlans Plans;
+  if (!Budget)
+    return Plans;
+  for (const auto &Candidate : Candidates) {
+    std::set<Local> Visiting;
+    const auto Current = Resolve(Resolve, Candidate->Operands[0],
+                                 Candidate->Type->Size, Visiting, 0);
+    if (!Current)
+      continue;
+    bool Valid = true;
+    size_t UsesBudget = 100000;
+    const auto Related = [&](const Resolution &Other) {
+      for (const auto &[Leaf, Reference] : Other.Leaves) {
+        (void)Reference;
+        if (Current->Leaves.count(Leaf))
+          return true;
+      }
+      for (const auto &Local : Other.Locals)
+        if (Current->Locals.count(Local))
+          return true;
+      return false;
+    };
+    walkStmts(Function.Body, [&](const HighStmt &S) {
+      if (!Valid || !UsesBudget)
+        return;
+      forEachRhsExpr(S, [&](const ExprPtr &Root) {
+        if (!Valid || !UsesBudget || !Root)
+          return;
+        std::set<Local> RootVisiting;
+        const auto RootResolution =
+            Resolve(Resolve, Root, Candidate->Type->Size, RootVisiting, 0);
+        const bool AliasDefinition =
+            S.Kind == StmtKind::Assign && Root == S.Val && S.Dst &&
+            (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
+            RootResolution && Related(*RootResolution);
+        if (AliasDefinition)
+          return;
+        const auto Visit = [&](const auto &Self, const ExprPtr &E,
+                               unsigned Depth) -> void {
+          if (!Valid || !E || !UsesBudget || Depth > 128) {
+            Valid = false;
+            return;
+          }
+          --UsesBudget;
+          if (E.get() == Candidate.get())
+            return;
+          std::set<Local> Active;
+          const auto Use =
+              Resolve(Resolve, E, Candidate->Type->Size, Active, 0);
+          if (Use && Related(*Use)) {
+            Valid = false;
+            return;
+          }
+          for (const auto &Operand : E->Operands)
+            Self(Self, Operand, Depth + 1);
+        };
+        Visit(Visit, Root, 0);
+      });
+    });
+    if (!Valid || !UsesBudget)
+      continue;
+    bool Conflict = false;
+    for (const auto &[Leaf, Reference] : Current->Leaves) {
+      const auto Existing = Plans.Leaves.find(Leaf);
+      if (Existing != Plans.Leaves.end() &&
+          (Existing->second.Address != Reference.Address ||
+           Existing->second.Name != Reference.Name ||
+           Existing->second.ClassName != Reference.ClassName))
+        Conflict = true;
+    }
+    if (Conflict)
+      continue;
+    Plans.Loads.emplace(Candidate.get(), Candidate->Type);
+    Plans.Leaves.insert(Current->Leaves.begin(), Current->Leaves.end());
+  }
+  return Plans;
+}
+
 inline std::optional<uint64_t> swiftLiteralStorageWord(const ExprPtr &Value) {
   size_t Budget = 256;
   const auto Evaluate = [&](auto &&Self, const ExprPtr &Current,
@@ -1539,6 +1739,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
   }
   const auto ClassObjects = classObjectIdentities(Image);
   const auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
+  const auto MergedIvarOffsets = mergedIvarOffsetPlans(Function, Image);
   const auto ObjectPointerLoads =
       readOnlyObjectPointerLoadPlans(Function, Image);
   const auto ObjectPointerConsumers =
@@ -1586,8 +1787,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                   Value->SourceCallHint->CallKind ==
                       SourceCallTypeHint::Kind::RuntimeConstantString)
                 return Value->Operands.empty() &&
-                       Candidates.count(
-                           Value->SourceCallHint->TargetAddress) != 0;
+                       Candidates.count(Value->SourceCallHint->TargetAddress) !=
+                           0;
               if (Value->Kind == ExprKind::Const) {
                 if (!Candidates.count(Value->ConstVal))
                   return false;
@@ -1598,15 +1799,14 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                   Value->Operands.size() == 3)
                 return Self(Self, Value->Operands[1], Depth + 1) &&
                        Self(Self, Value->Operands[2], Depth + 1);
-              if (Value->Kind != ExprKind::Var &&
-                  Value->Kind != ExprKind::Phi)
+              if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
                 return false;
               const auto Key = varKey(Value->Var);
               if (!Active.insert(Key).second)
                 return false;
               const auto Found = FormatDefinitions.find(Key);
-              bool Valid = Found != FormatDefinitions.end() &&
-                           !Found->second.empty();
+              bool Valid =
+                  Found != FormatDefinitions.end() && !Found->second.empty();
               if (Valid)
                 for (const auto &Definition : Found->second)
                   if (!Self(Self, Definition, Depth + 1)) {
@@ -1660,8 +1860,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     if (WitnessCache) {
       auto Bound = HighExpr::makeCall({}, 0, {});
       Bound->Type = NdType::makeInt(8, false);
-      Bound->SourceCallHint = std::make_shared<SourceCallTypeHint>(
-          std::move(*WitnessCache));
+      Bound->SourceCallHint =
+          std::make_shared<SourceCallTypeHint>(std::move(*WitnessCache));
       Operand = std::move(Bound);
       Result.SwiftWitnessCaches[*Address] = Function.Entry;
       return true;
@@ -1715,6 +1915,38 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       return Found->second;
     auto Expression = std::make_shared<HighExpr>(*Original);
     Copies.emplace(Key, Expression);
+    if (const auto Found = MergedIvarOffsets.Leaves.find(Original.get());
+        Found != MergedIvarOffsets.Leaves.end()) {
+      const auto &Reference = Found->second;
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->CallKind = SourceCallTypeHint::Kind::RuntimeIvarOffset;
+      Binding->TargetAddress = Reference.Address;
+      Binding->TargetName = Reference.Name;
+      Binding->OwnerClass = Reference.ClassName;
+      auto &Hint = Binding->Signature;
+      Hint.Architecture = Image.Arch;
+      Hint.HasExplicitABI = true;
+      Hint.ReturnType = NdType::makeInt(Reference.Size, false);
+      Hint.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                             getTargetRegInfo(Image.Arch).IntReturnReg, 0,
+                             Reference.Size};
+      *Expression = *HighExpr::makeCall({}, 0, {});
+      Expression->Type = Hint.ReturnType;
+      Expression->SourceCallHint = std::move(Binding);
+      Result.InstanceLayoutClasses.insert(Reference.ClassName);
+      return Expression;
+    }
+    if (const auto Found = MergedIvarOffsets.Loads.find(Original.get());
+        Found != MergedIvarOffsets.Loads.end()) {
+      auto Value = Copy(Original->Operands[0], Depth + 1, false, false, false);
+      auto Cast = std::make_shared<HighExpr>();
+      Cast->Kind = ExprKind::Cast;
+      Cast->Type = Found->second;
+      Cast->CastTo = Found->second;
+      Cast->Operands = {std::move(Value)};
+      Copies[Key] = Cast;
+      return Cast;
+    }
     // Machine pointer stores use integer carriers. Preserve the occurrence's
     // complete address provenance even without a pointer-typed consumer; a
     // stored constant object must retain the identity of a directly used one.
@@ -1729,8 +1961,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         Original->Kind == ExprKind::Const &&
         FormatObjectExpressions.count(Original.get()) != 0;
     if ((AddressContext || ObjectAddress || AuthenticatedFormatObject) &&
-        !MemoryAddress &&
-        !NumericOperand &&
+        !MemoryAddress && !NumericOperand &&
         !(Original->Kind == ExprKind::Const &&
           Original->ConstProvenance == ConstantAddressProvenance::Scalar)) {
       const auto Address = constantAddress(*Original);
@@ -1987,11 +2218,10 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       const va_t Target = Expression->SourceCallHint->TargetAddress;
       const auto Callee = Functions->find(Target);
       va_t CacheAddress = 0;
-      const auto Accessor =
-          Callee == Functions->end() || !Callee->second
-              ? std::nullopt
-              : swiftWitnessAccessorCallHint(*Callee->second, Image,
-                                             &CacheAddress);
+      const auto Accessor = Callee == Functions->end() || !Callee->second
+                                ? std::nullopt
+                                : swiftWitnessAccessorCallHint(
+                                      *Callee->second, Image, &CacheAddress);
       if (Accessor) {
         Expression->Operands.clear();
         Expression->CallTarget.clear();
@@ -2139,8 +2369,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           // Ordinary named writable storage uses the same non-escape proof,
           // but keeps its captured initializer and aliasing through the
           // existing shared local-storage helper.
-          const auto Extent = nativeScalarStorageArgumentExtent(
-              *Callee->second, Index, true);
+          const auto Extent =
+              nativeScalarStorageArgumentExtent(*Callee->second, Index, true);
           auto LocalHint =
               Extent ? localStorageAccessHint(Image, *Address, *Extent)
                      : std::nullopt;
@@ -2158,9 +2388,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                                 HighExpr::makeConst(
                                     *Address - BaseAddress, 8,
                                     ConstantAddressProvenance::Scalar));
-            Result.LocalStorageExtents[BaseAddress] =
-                std::max<uint64_t>(Result.LocalStorageExtents[BaseAddress],
-                                   ByteCount);
+            Result.LocalStorageExtents[BaseAddress] = std::max<uint64_t>(
+                Result.LocalStorageExtents[BaseAddress], ByteCount);
             continue;
           }
         }
@@ -2560,8 +2789,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
        Binding.Receiver || Binding.Format ||
        (Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK &&
         !(Binding.SelectorResultTypeUse &&
-          Hint.Origin ==
-              SourceFunctionTypeHint::OriginKind::ObjCRuntime))))
+          Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCRuntime))))
     return false;
   if (Binding.SelectorResultTypeUse &&
       (!Binding.SelectorResultUse ||
@@ -2572,15 +2800,13 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   if (Binding.SelectorArgumentTypeUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
-       Binding.SelectorResultTypeUse ||
-       Binding.SelectorArgumentStorageUse ||
+       Binding.SelectorResultTypeUse || Binding.SelectorArgumentStorageUse ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.SelectorArgumentStorageUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
-       Binding.SelectorResultTypeUse ||
-       Binding.SelectorArgumentTypeUse ||
+       Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.Format &&
@@ -2751,10 +2977,9 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         ProofFunction = Original->second;
     }
     const auto Expected =
-        ProofFunction
-            ? swiftWitnessCacheAddressHint(*ProofFunction, Image,
-                                           Binding.TargetAddress)
-            : std::nullopt;
+        ProofFunction ? swiftWitnessCacheAddressHint(*ProofFunction, Image,
+                                                     Binding.TargetAddress)
+                      : std::nullopt;
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
@@ -2851,10 +3076,10 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     const bool Message =
         Binding.CallKind == SourceCallTypeHint::Kind::ObjCMessage;
     const auto Expected =
-        Message ? objcFormattedSourceCallHint(Image, Binding.Selector,
-                                              *Addresses)
-                : darwinFormattedSourceCallHint(Image, Binding.TargetAddress,
-                                                Format.FormatAddress);
+        Message
+            ? objcFormattedSourceCallHint(Image, Binding.Selector, *Addresses)
+            : darwinFormattedSourceCallHint(Image, Binding.TargetAddress,
+                                            Format.FormatAddress);
     if (!Expected || !Expected->Format || Binding.DoesNotReturn ||
         Format.Syntax != Expected->Format->Syntax ||
         Format.FixedCount != Expected->Format->FixedCount ||
@@ -2878,14 +3103,12 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       });
     size_t CandidateBudget = 4096;
     std::set<VarKey> ActiveVariables;
-    const auto MatchesCandidate =
-        [&](auto &&Self, const ExprPtr &Value, unsigned Depth) -> bool {
+    const auto MatchesCandidate = [&](auto &&Self, const ExprPtr &Value,
+                                      unsigned Depth) -> bool {
       if (!Value || !CandidateBudget-- || Depth > 64)
         return false;
-      if ((Value->Kind == ExprKind::Cast ||
-           Value->Kind == ExprKind::BitCast) &&
-          Value->Operands.size() == 1 && Value->Type &&
-          Value->Type->Size == 8)
+      if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+          Value->Operands.size() == 1 && Value->Type && Value->Type->Size == 8)
         return Self(Self, Value->Operands.front(), Depth + 1);
       if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
           Value->SourceCallHint->CallKind ==
@@ -2990,14 +3213,13 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         !objc_projection_detail::sameHint(Hint, *Expected.Signature))
       return false;
   } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK ||
-             (Hint.Origin ==
-                  SourceFunctionTypeHint::OriginKind::ObjCRuntime &&
+             (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCRuntime &&
               Binding.SelectorResultUse && Binding.SelectorResultTypeUse)) {
     const auto Expected =
         Binding.SelectorResultUse
-            ? objcSelectorSourceTypeHintForResultUse(Image, Binding.Selector,
-                                                     *Binding.SelectorResultUse,
-                                                     Binding.SelectorResultTypeUse)
+            ? objcSelectorSourceTypeHintForResultUse(
+                  Image, Binding.Selector, *Binding.SelectorResultUse,
+                  Binding.SelectorResultTypeUse)
         : Binding.SelectorArgumentTypeUse
             ? objcSelectorSourceTypeHintForArgumentTypeUse(
                   Image, Binding.Selector, *Binding.SelectorArgumentTypeUse)
@@ -3288,27 +3510,34 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
                   *Function->second, Image, CacheAddress);
     if (!Current)
       throw std::runtime_error("Swift witness cache is no longer valid");
-    const std::string CacheStem = "neverd_swift_witness_cache_" +
-                                  llvm::utohexstr(CacheAddress, true);
+    const std::string CacheStem =
+        "neverd_swift_witness_cache_" + llvm::utohexstr(CacheAddress, true);
     const std::string CacheName = CacheStem + "_address";
-    const std::string AccessorName =
-        "neverd_swift_witness_accessor_" +
-        llvm::utohexstr(AccessorAddress, true);
+    const std::string AccessorName = "neverd_swift_witness_accessor_" +
+                                     llvm::utohexstr(AccessorAddress, true);
     SharedFunctions.insert(CacheName);
     SharedFunctions.insert(AccessorName);
-    Source += "\nstatic void *" + CacheStem + ";\n"
-              "uintptr_t " + CacheName +
+    Source += "\nstatic void *" + CacheStem +
+              ";\n"
+              "uintptr_t " +
+              CacheName +
               "(void) {\n"
-              "  return (uintptr_t)&" + CacheStem + ";\n}\n"
-              "uintptr_t " + AccessorName +
+              "  return (uintptr_t)&" +
+              CacheStem +
+              ";\n}\n"
+              "uintptr_t " +
+              AccessorName +
               "(void) {\n"
-              "  void *value = " + CacheStem + ";\n"
+              "  void *value = " +
+              CacheStem +
+              ";\n"
               "  if (value)\n"
               "    return (uintptr_t)value;\n"
               "  value = neverd_swift_get_witness_table(\n"
               "      neverd_swift_string_protocol_conformance,\n"
               "      neverd_swift_string_metadata, (void *)0);\n"
-              "  __atomic_store_n(&" + CacheStem +
+              "  __atomic_store_n(&" +
+              CacheStem +
               ", value, __ATOMIC_RELEASE);\n"
               "  return (uintptr_t)value;\n}\n";
   }
