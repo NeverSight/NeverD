@@ -3185,7 +3185,7 @@ TEST(ObjCSourceBindings, SwiftMetadataCallsRevalidateDeclarationAndConvention) {
     }
     Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
     const auto Bind = F.Image.DyldBindSlots.at(Slot);
-    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+    for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
       F.Image.DyldBindSlots[Slot] = Bind;
       F.Image.ImportPtrSlots[Slot] = Symbol;
       if (Mutation == 0)
@@ -3198,8 +3198,9 @@ TEST(ObjCSourceBindings, SwiftMetadataCallsRevalidateDeclarationAndConvention) {
       else if (Mutation == 3)
         F.Image.DyldBindSlots.erase(Slot);
       else {
-        const std::string Unknown =
-            Mutation == 4 ? Symbol + ".fake" : "_$s4Test3BoxVMa";
+        const std::string Unknown = Mutation == 4   ? Symbol + ".fake"
+                                    : Mutation == 5 ? "_$s4Test3BoxVMa"
+                                                    : "_$s10Foundation4FakeVMa";
         F.Image.ImportPtrSlots[Slot] = Unknown;
         F.Image.DyldBindSlots[Slot].Name = Unknown;
       }
@@ -4292,6 +4293,120 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     NativeStorageProofFollowsAuthenticatedCalleeParameters) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(Mutation);
+      const auto PointerType = NdType::makePtr(NdType::makeVoid());
+      const auto Signature = [&] {
+        SourceFunctionTypeHint Hint;
+        Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+        Hint.ReturnType = NdType::makeVoid();
+        Hint.Parameters = {{"cache", PointerType}, {"reference", PointerType}};
+        std::string Error;
+        EXPECT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error))
+            << Error;
+        return Hint;
+      }();
+      const auto Parameter = [&](size_t Index) {
+        MedVar Value;
+        Value.Kind = MedVar::Param;
+        Value.Id = Index;
+        Value.Size = 8;
+        Value.TheArch = Architecture;
+        return HighExpr::makeVar(Value, PointerType);
+      };
+
+      HighFunc Leaf;
+      Leaf.Entry = 0x2200;
+      Leaf.Name = "metadata_cache_leaf";
+      Leaf.ReturnType = NdType::makeVoid();
+      Leaf.Params = {{"cache", PointerType}, {"reference", PointerType}};
+      Leaf.SourceTypeHint = Signature;
+      HighStmt CacheLoad, ReferenceLoad, CacheStore, LeafReturn;
+      CacheLoad.Kind = ReferenceLoad.Kind = StmtKind::ExprStmt;
+      CacheLoad.Val = HighExpr::makeLoad(Parameter(0), PointerType);
+      ReferenceLoad.Val = HighExpr::makeLoad(Parameter(1), PointerType);
+      CacheStore.Kind = StmtKind::Store;
+      CacheStore.StoreAddr = Parameter(0);
+      CacheStore.StoreVal = HighExpr::makeConst(0, 8);
+      CacheStore.MemoryOrdering = NdMemoryOrdering::Release;
+      LeafReturn.Kind = StmtKind::Return;
+      Leaf.Body = {CacheLoad, ReferenceLoad, CacheStore, LeafReturn};
+
+      HighFunc Forwarder;
+      Forwarder.Entry = 0x2100;
+      Forwarder.Name = "metadata_cache_forwarder";
+      Forwarder.ReturnType = NdType::makeVoid();
+      Forwarder.Params = {{"cache", PointerType}, {"reference", PointerType}};
+      Forwarder.SourceTypeHint = Signature;
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->CallKind = SourceCallTypeHint::Kind::Native;
+      Binding->TargetAddress = Leaf.Entry;
+      Binding->TargetName = Leaf.Name;
+      Binding->Signature = Signature;
+      auto Call = HighExpr::makeCall(Leaf.Name, Leaf.Entry,
+                                     {Parameter(0), Parameter(1)});
+      Call->Type = NdType::makeVoid();
+      Call->SourceCallHint = Binding;
+      HighStmt Forward, ForwardReturn;
+      Forward.Kind = StmtKind::ExprStmt;
+      Forward.Val = Call;
+      ForwardReturn.Kind = StmtKind::Return;
+      Forwarder.Body = {Forward, ForwardReturn};
+
+      std::map<va_t, const HighFunc *> Functions{{Forwarder.Entry, &Forwarder},
+                                                 {Leaf.Entry, &Leaf}};
+      if (Mutation == 1)
+        Binding->Signature.Parameters[0].Location.RegisterOffset += 8;
+      if (Mutation == 2)
+        Call->Operands[0] = HighExpr::makeBinop(NdOp::INT_ADD, Parameter(0),
+                                                HighExpr::makeConst(0, 8));
+      if (Mutation == 3)
+        Functions.erase(Leaf.Entry);
+      if (Mutation == 4) {
+        Binding->TargetAddress = Forwarder.Entry;
+        Binding->TargetName = Forwarder.Name;
+        Call->CallAddr = Forwarder.Entry;
+      }
+      if (Mutation == 5)
+        Call->CallAddr += 4;
+      if (Mutation == 6)
+        Leaf.Body[2].MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+      if (Mutation == 7) {
+        ++Binding->Signature.Parameters[0].Location.ValueBytes;
+        Leaf.SourceTypeHint = Binding->Signature;
+      }
+
+      const auto Cache = objc_binding_detail::nativeScalarStorageArgumentExtent(
+          Forwarder, 0, true, true, &Functions);
+      const auto ReadOnlyCache =
+          objc_binding_detail::nativeScalarStorageArgumentExtent(
+              Forwarder, 0, true, false, &Functions);
+      const auto Reference =
+          objc_binding_detail::nativeScalarStorageArgumentExtent(
+              Forwarder, 1, true, false, &Functions);
+      if (Mutation && Mutation != 2 && Mutation != 6) {
+        EXPECT_FALSE(Cache);
+        EXPECT_FALSE(ReadOnlyCache);
+        EXPECT_FALSE(Reference);
+      } else {
+        if (Mutation == 2 || Mutation == 6) {
+          EXPECT_FALSE(Cache);
+          EXPECT_FALSE(ReadOnlyCache);
+        } else {
+          ASSERT_TRUE(Cache);
+          EXPECT_EQ(*Cache, 8U);
+          EXPECT_FALSE(ReadOnlyCache);
+        }
+        ASSERT_TRUE(Reference);
+        EXPECT_EQ(*Reference, 8U);
+      }
+    }
+}
+
+TEST(ObjCSourceBindings,
      NativeProfileCounterArgumentsRejectEscapesAndUnprovedAccesses) {
   for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -5027,7 +5142,18 @@ TEST(ObjCSourceBindings,
         Fixture.Image, Result.ClassReferenceCells, Shared);
     EXPECT_NE(Helpers.find(Metaclass ? "objc_getMetaClass" : "objc_getClass"),
               std::string::npos);
+    const std::string Declaration =
+        Metaclass ? "extern struct objc_class *objc_getMetaClass(const char *);"
+                  : "extern struct objc_class *objc_getClass(const char *);";
+    EXPECT_NE(Helpers.find("struct objc_class;"), std::string::npos);
+    EXPECT_NE(Helpers.find(Declaration), std::string::npos);
     EXPECT_EQ(Helpers.find("extern void *objc_get"), std::string::npos);
+    EXPECT_EQ(
+        Helpers.find(
+            Metaclass
+                ? "extern struct objc_class *objc_getClass(const char *)"
+                : "extern struct objc_class *objc_getMetaClass(const char *)"),
+        std::string::npos);
     EXPECT_EQ(Shared, std::set<std::string>{
                           "neverd_objc_class_reference_2010_address"});
 

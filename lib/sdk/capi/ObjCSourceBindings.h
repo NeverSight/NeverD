@@ -1107,109 +1107,166 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
 /// complete typed callee proves that this parameter is used solely as the
 /// exact address of bounded scalar loads/stores. The source ABI's pointer type
 /// alone says nothing about pointee width or escape behavior.
-inline std::optional<uint64_t>
-nativeScalarStorageArgumentExtent(const HighFunc &Function, size_t Parameter,
-                                  bool AllowPointerValues,
-                                  bool AllowStores = true) {
-  if (!Function.SourceTypeHint ||
-      Function.Params.size() != Function.SourceTypeHint->Parameters.size() ||
-      Parameter >= Function.Params.size() || !Function.Params[Parameter].Type ||
-      Function.Params[Parameter].Type->Kind != NdTypeKind::Ptr ||
-      !Function.SourceTypeHint->Parameters[Parameter].Type ||
-      Function.SourceTypeHint->Parameters[Parameter].Type->Kind !=
-          NdTypeKind::Ptr ||
-      !equalSourceTypes(Function.Params[Parameter].Type,
-                        Function.SourceTypeHint->Parameters[Parameter].Type))
-    return std::nullopt;
-  for (size_t I = 0; I < Function.Params.size(); ++I)
-    if (Function.Params[I].Name !=
-            Function.SourceTypeHint->Parameters[I].Name ||
-        !equalSourceTypes(Function.Params[I].Type,
-                          Function.SourceTypeHint->Parameters[I].Type))
-      return std::nullopt;
-
+inline std::optional<uint64_t> nativeScalarStorageArgumentExtent(
+    const HighFunc &Function, size_t Parameter, bool AllowPointerValues,
+    bool AllowStores = true,
+    const std::map<va_t, const HighFunc *> *Functions = nullptr) {
   size_t Budget = 100000;
-  bool Valid = true, Used = false;
-  uint64_t Extent = 0;
-  auto Contains = [&](const auto &Self, const ExprPtr &Expression,
-                      unsigned Depth) -> bool {
-    if (!Expression || !Budget || Depth > 200)
-      return false;
-    --Budget;
-    if (Expression->Kind == ExprKind::Var &&
-        Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
-        static_cast<size_t>(Expression->Var.Id) == Parameter)
-      return true;
-    for (const auto &Operand : Expression->Operands)
-      if (Self(Self, Operand, Depth + 1))
+  std::set<std::pair<const HighFunc *, size_t>> Active;
+  const auto Analyze = [&](const auto &Self, const HighFunc &Current,
+                           size_t CurrentParameter,
+                           unsigned CallDepth) -> std::optional<uint64_t> {
+    if (!Budget || CallDepth > 32 || !Current.SourceTypeHint ||
+        Current.Params.size() != Current.SourceTypeHint->Parameters.size() ||
+        CurrentParameter >= Current.Params.size() ||
+        !Current.Params[CurrentParameter].Type ||
+        Current.Params[CurrentParameter].Type->Kind != NdTypeKind::Ptr ||
+        !Current.SourceTypeHint->Parameters[CurrentParameter].Type ||
+        Current.SourceTypeHint->Parameters[CurrentParameter].Type->Kind !=
+            NdTypeKind::Ptr ||
+        !equalSourceTypes(
+            Current.Params[CurrentParameter].Type,
+            Current.SourceTypeHint->Parameters[CurrentParameter].Type))
+      return std::nullopt;
+    std::string ABIError;
+    if (!validateSourceABI(*Current.SourceTypeHint, ABIError) ||
+        !Active.emplace(&Current, CurrentParameter).second)
+      return std::nullopt;
+    for (size_t I = 0; I < Current.Params.size(); ++I)
+      if (Current.Params[I].Name !=
+              Current.SourceTypeHint->Parameters[I].Name ||
+          !equalSourceTypes(Current.Params[I].Type,
+                            Current.SourceTypeHint->Parameters[I].Type)) {
+        Active.erase({&Current, CurrentParameter});
+        return std::nullopt;
+      }
+
+    bool Valid = true, Used = false;
+    uint64_t Extent = 0;
+    auto Contains = [&](const auto &ContainsSelf, const ExprPtr &Expression,
+                        unsigned Depth) -> bool {
+      if (!Expression || !Budget || Depth > 200)
+        return false;
+      --Budget;
+      if (Expression->Kind == ExprKind::Var &&
+          Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
+          static_cast<size_t>(Expression->Var.Id) == CurrentParameter)
         return true;
-    return false;
-  };
-  auto Access = [&](const ExprPtr &Pointer, const TypeRef &Type,
-                    NdMemoryOrdering Ordering,
-                    NdMemoryAddressSpace AddressSpace, bool Store) {
-    if (!Valid || !Contains(Contains, Pointer, 0))
-      return;
-    if (!exactParameterValue(Pointer, Parameter) || !Type ||
-        (!AllowPointerValues && Type->Kind == NdTypeKind::Ptr) ||
-        (Store && !AllowStores) || !localStorageAccessTypeSupported(Type) ||
-        Ordering != NdMemoryOrdering::None ||
-        AddressSpace != NdMemoryAddressSpace::Default) {
-      Valid = false;
-      return;
-    }
-    Extent = std::max<uint64_t>(Extent, Type->Size);
-    Used = true;
-  };
-  std::function<void(const ExprPtr &, unsigned)> Scan;
-  Scan = [&](const ExprPtr &Expression, unsigned Depth) {
-    if (!Expression || !Valid)
-      return;
-    if (!Budget || Depth > 200) {
-      Valid = false;
-      return;
-    }
-    --Budget;
-    if (Expression->Kind == ExprKind::Load &&
-        Expression->Operands.size() == 1) {
-      Access(Expression->Operands[0], Expression->Type,
-             Expression->MemoryOrdering, Expression->MemoryAddressSpace, false);
-      if (Contains(Contains, Expression->Operands[0], 0))
+      for (const auto &Operand : Expression->Operands)
+        if (ContainsSelf(ContainsSelf, Operand, Depth + 1))
+          return true;
+      return false;
+    };
+    auto Access = [&](const ExprPtr &Pointer, const TypeRef &Type,
+                      NdMemoryOrdering Ordering,
+                      NdMemoryAddressSpace AddressSpace, bool Store) {
+      if (!Valid || !Contains(Contains, Pointer, 0))
         return;
-    }
-    if (Expression->Kind == ExprKind::Store &&
-        Expression->Operands.size() == 2 && Expression->Operands[1]) {
-      Access(Expression->Operands[0], Expression->Operands[1]->Type,
-             Expression->MemoryOrdering, Expression->MemoryAddressSpace, true);
-      if (Contains(Contains, Expression->Operands[0], 0)) {
-        Scan(Expression->Operands[1], Depth + 1);
+      const bool SupportedOrdering =
+          Ordering == NdMemoryOrdering::None ||
+          (Store && AllowStores && Ordering == NdMemoryOrdering::Release);
+      if (!exactParameterValue(Pointer, CurrentParameter) || !Type ||
+          (!AllowPointerValues && Type->Kind == NdTypeKind::Ptr) ||
+          (Store && !AllowStores) || !localStorageAccessTypeSupported(Type) ||
+          !SupportedOrdering || AddressSpace != NdMemoryAddressSpace::Default) {
+        Valid = false;
         return;
       }
-    }
-    if (Expression->Kind == ExprKind::Var &&
-        Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
-        static_cast<size_t>(Expression->Var.Id) == Parameter) {
-      Valid = false;
-      return;
-    }
-    for (const auto &Operand : Expression->Operands)
-      Scan(Operand, Depth + 1);
-  };
-  walkStmts(Function.Body, [&](const HighStmt &Statement) {
-    const bool DirectStore = Statement.Kind == StmtKind::Store &&
-                             Statement.StoreVal &&
-                             Contains(Contains, Statement.StoreAddr, 0);
-    if (DirectStore)
-      Access(Statement.StoreAddr, Statement.StoreVal->Type,
-             Statement.MemoryOrdering, Statement.MemoryAddressSpace, true);
-    forEachExpr(Statement, [&](const ExprPtr &Expression) {
-      if (DirectStore && Expression == Statement.StoreAddr)
+      Extent = std::max<uint64_t>(Extent, Type->Size);
+      Used = true;
+    };
+    std::function<void(const ExprPtr &, unsigned)> Scan;
+    Scan = [&](const ExprPtr &Expression, unsigned Depth) {
+      if (!Expression || !Valid)
         return;
-      Scan(Expression, 0);
+      if (!Budget || Depth > 200) {
+        Valid = false;
+        return;
+      }
+      --Budget;
+      if (Expression->Kind == ExprKind::Load &&
+          Expression->Operands.size() == 1) {
+        Access(Expression->Operands[0], Expression->Type,
+               Expression->MemoryOrdering, Expression->MemoryAddressSpace,
+               false);
+        if (Contains(Contains, Expression->Operands[0], 0))
+          return;
+      }
+      if (Expression->Kind == ExprKind::Store &&
+          Expression->Operands.size() == 2 && Expression->Operands[1]) {
+        Access(Expression->Operands[0], Expression->Operands[1]->Type,
+               Expression->MemoryOrdering, Expression->MemoryAddressSpace,
+               true);
+        if (Contains(Contains, Expression->Operands[0], 0)) {
+          Scan(Expression->Operands[1], Depth + 1);
+          return;
+        }
+      }
+      if (Functions && Expression->Kind == ExprKind::Call &&
+          Expression->SourceCallHint && !Expression->IsIndirectCall &&
+          Expression->IntrinsicId == Intrinsic::None &&
+          Expression->IntrinsicOutputs.empty() &&
+          Expression->MemoryOrdering == NdMemoryOrdering::None &&
+          Expression->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Expression->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::Native) {
+        const auto &Binding = *Expression->SourceCallHint;
+        const auto Callee = Functions->find(Binding.TargetAddress);
+        bool Forwarded = false;
+        for (size_t I = 0; I < Expression->Operands.size(); ++I) {
+          if (!Contains(Contains, Expression->Operands[I], 0))
+            continue;
+          Forwarded = true;
+          if (!exactParameterValue(Expression->Operands[I], CurrentParameter) ||
+              Expression->CallAddr != Binding.TargetAddress ||
+              Callee == Functions->end() || !Callee->second ||
+              !Callee->second->SourceTypeHint ||
+              Binding.Signature.Parameters.size() !=
+                  Expression->Operands.size() ||
+              !objc_projection_detail::sameHint(
+                  Binding.Signature, *Callee->second->SourceTypeHint)) {
+            Valid = false;
+            return;
+          }
+          const auto ForwardedExtent =
+              Self(Self, *Callee->second, I, CallDepth + 1);
+          if (!ForwardedExtent) {
+            Valid = false;
+            return;
+          }
+          Extent = std::max(Extent, *ForwardedExtent);
+          Used = true;
+        }
+        if (Forwarded)
+          return;
+      }
+      if (Expression->Kind == ExprKind::Var &&
+          Expression->Var.Kind == MedVar::Param && Expression->Var.Id >= 0 &&
+          static_cast<size_t>(Expression->Var.Id) == CurrentParameter) {
+        Valid = false;
+        return;
+      }
+      for (const auto &Operand : Expression->Operands)
+        Scan(Operand, Depth + 1);
+    };
+    walkStmts(Current.Body, [&](const HighStmt &Statement) {
+      const bool DirectStore = Statement.Kind == StmtKind::Store &&
+                               Statement.StoreVal &&
+                               Contains(Contains, Statement.StoreAddr, 0);
+      if (DirectStore)
+        Access(Statement.StoreAddr, Statement.StoreVal->Type,
+               Statement.MemoryOrdering, Statement.MemoryAddressSpace, true);
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (DirectStore && Expression == Statement.StoreAddr)
+          return;
+        Scan(Expression, 0);
+      });
     });
-  });
-  return Valid && Used && Budget ? std::optional<uint64_t>(Extent)
-                                 : std::nullopt;
+    Active.erase({&Current, CurrentParameter});
+    return Valid && Used && Budget ? std::optional<uint64_t>(Extent)
+                                   : std::nullopt;
+  };
+  return Analyze(Analyze, Function, Parameter, 0);
 }
 
 inline std::optional<va_t>
@@ -2332,7 +2389,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           // Preserve the extra indirection only when the complete callee
           // proves only exact pointer-sized loads and no store or escape.
           const auto ReferenceExtent = nativeScalarStorageArgumentExtent(
-              *Callee->second, Index, true, false);
+              *Callee->second, Index, true, false, Functions);
           auto Reference = ReferenceExtent && *ReferenceExtent == 8
                                ? classReferenceAddressHint(Image, *Address)
                                : std::nullopt;
@@ -2369,8 +2426,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           // Ordinary named writable storage uses the same non-escape proof,
           // but keeps its captured initializer and aliasing through the
           // existing shared local-storage helper.
-          const auto Extent =
-              nativeScalarStorageArgumentExtent(*Callee->second, Index, true);
+          const auto Extent = nativeScalarStorageArgumentExtent(
+              *Callee->second, Index, true, true, Functions);
           auto LocalHint =
               Extent ? localStorageAccessHint(Image, *Address, *Extent)
                      : std::nullopt;
@@ -3339,6 +3396,8 @@ renderObjCClassReferenceHelpers(const BinaryImage &Image,
                                 const std::set<va_t> &References,
                                 std::set<std::string> &SharedFunctions) {
   std::string Source;
+  bool NeedsClassLookup = false;
+  bool NeedsMetaclassLookup = false;
   for (const va_t Address : References) {
     const auto Hint =
         objc_binding_detail::classReferenceAddressHint(Image, Address);
@@ -3348,6 +3407,7 @@ renderObjCClassReferenceHelpers(const BinaryImage &Image,
     const bool Metaclass =
         Hint->CallKind ==
         SourceCallTypeHint::Kind::RuntimeMetaclassReferenceAddress;
+    (Metaclass ? NeedsMetaclassLookup : NeedsClassLookup) = true;
     const std::string Name = "neverd_objc_class_reference_" +
                              llvm::utohexstr(Address, true) + "_address";
     SharedFunctions.insert(Name);
@@ -3370,7 +3430,15 @@ renderObjCClassReferenceHelpers(const BinaryImage &Image,
               "    }\n  }\n"
               "  return (uintptr_t)&reference;\n}\n";
   }
-  return Source;
+  std::string Declarations;
+  if (NeedsClassLookup || NeedsMetaclassLookup)
+    Declarations += "\nstruct objc_class;\n";
+  if (NeedsClassLookup)
+    Declarations += "extern struct objc_class *objc_getClass(const char *);\n";
+  if (NeedsMetaclassLookup)
+    Declarations +=
+        "extern struct objc_class *objc_getMetaClass(const char *);\n";
+  return Declarations + Source;
 }
 
 inline std::string renderObjCSwiftTypeMetadataHelpers(

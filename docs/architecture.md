@@ -385,6 +385,15 @@ initializer proofs, including zero-initialized cells. The pointer value itself
 still requires its ordinary source binding; an accepted destination cell does
 not authorize an unbound image pointer or change retain/release effects.
 
+An exact named-storage argument proof may follow a direct native call chain
+when every edge has a complete matching source ABI and forwards the same
+pointer parameter without arithmetic. The terminal callees must still use the
+parameter only for bounded full-width accesses. Ordinary loads and stores are
+accepted; a writable cache may additionally use an exact release store because
+the emitted dependency preserves that atomic ordering. Read-only class-reference
+cells still reject every store. Indirect or mismatched calls, other atomic
+orders, escapes, cycles, depth or evidence-budget exhaustion fail closed.
+
 A profiling-counter address may pass into an exact native source dependency
 when that dependency's complete typed HighIR uses the corresponding pointer
 parameter only as the exact address of bounded, unordered numeric loads and
