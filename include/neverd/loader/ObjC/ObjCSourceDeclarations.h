@@ -95,6 +95,15 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver,
                                llvm::StringRef Selector);
 
+/// Return a compiler-declared nonescaping block ABI only when the current
+/// message binding still matches the SDK parent method, parameter, receiver
+/// hierarchy (when present), and callback declaration. Dynamic dispatch is
+/// preserved; this proves only the caller-side lifetime contract.
+std::optional<SourceFunctionTypeHint>
+objcNonEscapingBlockSignature(const BinaryImage &Image,
+                              const SourceCallTypeHint &Call,
+                              unsigned Parameter);
+
 struct ObjCFormatDeclaration {
   SourceFunctionTypeHint Signature;
   unsigned FormatParameter = 0;

@@ -133,6 +133,19 @@ checks remain mandatory, and an unproved second result remains unresolved.
 
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
+An exact zero-offset `SUBBYTES` view may preserve a complete low pointer word
+from a wider physical register view. Partial frame, context, and invoke-pointer
+views retain their source identity and byte interval; only ordered, contiguous,
+same-source `CONCAT` operations that cover the complete pointer restore an
+address. Every other partial view remains tainted and is rejected if it reaches
+memory, a call, control flow, storage, or an observable return. Equal scalar
+bits never acquire pointer identity.
+When an exact source ABI declares a narrow scalar result, an explicit
+`CONCAT` may contribute undefined high physical-return padding. Escape
+analysis checks the complete declared low result and ignores only that
+structured high padding; a context pointer in any observable return byte is
+still rejected.
+
 A block invoke may pass an address in its own fresh frame to a bound call only
 while that frame contains no context, invoke, ISA, or other proven pointer
 identity. Storing any such identity makes an unbounded frame argument an
@@ -165,6 +178,16 @@ Source publication still proves the stack header, initialized captures,
 copy/dispose helpers, and invoke dependency. Either kind of consumer invalidates
 the caller's construction facts after use; a copied consumer is never reported
 as nonescaping. Unannotated block parameters confer no lifetime permission.
+
+Objective-C SDK `noescape` block parameters use the same loader-owned
+boundary. A catalog row is accepted only when the current message still has
+the exact SDK parent-method ABI and parameter position, its block descriptor
+has the exact compiler callback ABI, and any qualified receiver follows a
+complete, conflict-free class hierarchy to the declaring owner. An
+unqualified selector is usable only when all matching catalog rows agree on
+one callback contract. This proves the caller-side lifetime only: dispatch
+remains dynamic, no implementation address is selected, and methods without a
+cataloged `noescape` declaration continue to reject stack-block escape.
 
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an

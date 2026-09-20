@@ -12,6 +12,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 
 namespace neverd::sdk {
@@ -71,6 +72,7 @@ struct Value {
     Context,
     Invoke,
     Isa,
+    PointerBits,
     UnprovenIdentity
   } K = Scalar;
   int64_t Offset = 0;
@@ -80,7 +82,8 @@ struct Value {
 };
 inline bool pointerIdentity(const Value &V) {
   return V.K == Value::Frame || V.K == Value::Context || V.K == Value::Invoke ||
-         V.K == Value::Isa || V.K == Value::UnprovenIdentity;
+         V.K == Value::Isa || V.K == Value::PointerBits ||
+         V.K == Value::UnprovenIdentity;
 }
 inline bool scalarWidth(unsigned Bytes) {
   return Bytes == 1 || Bytes == 2 || Bytes == 4 || Bytes == 8;
@@ -249,6 +252,45 @@ public:
       Inputs.push_back(eval(Input, Depth + 1));
     if (E->Kind == ExprKind::Call)
       return Call ? Call(*E, Inputs) : Value{};
+    // PointerBits packs one exact source kind and byte interval in Bits. It
+    // remains tainted through ordinary scalar operations. Only complete,
+    // ordered slices from the same identity can become an address again.
+    auto PointerPiece = [](const Value &V)
+        -> std::optional<std::tuple<Value::Kind, unsigned, unsigned>> {
+      if (V.K != Value::PointerBits || !V.Bits)
+        return std::nullopt;
+      const auto Source = static_cast<Value::Kind>(V.Bits & 255);
+      const unsigned Start = (V.Bits >> 8) & 255;
+      const unsigned Size = (V.Bits >> 16) & 255;
+      if ((Source != Value::Frame && Source != Value::Context &&
+           Source != Value::Invoke) ||
+          !Size || Start + Size > 8)
+        return std::nullopt;
+      return std::tuple{Source, Start, Size};
+    };
+    auto PointerSlice = [&](const Value &V, unsigned Start, unsigned Size,
+                            const HighExpr *Producer) -> std::optional<Value> {
+      Value::Kind Source = V.K;
+      unsigned ExistingStart = 0, ExistingSize = 8;
+      if (V.K == Value::PointerBits) {
+        auto Piece = PointerPiece(V);
+        if (!Piece)
+          return std::nullopt;
+        std::tie(Source, ExistingStart, ExistingSize) = *Piece;
+      } else if (V.K != Value::Frame && V.K != Value::Context &&
+                 V.K != Value::Invoke) {
+        return std::nullopt;
+      }
+      if (!Size || Start > ExistingSize || Size > ExistingSize - Start)
+        return std::nullopt;
+      Start += ExistingStart;
+      if (!Start && Size == 8)
+        return Value{Source, V.Offset, 0, V.Name, Producer};
+      return Value{Value::PointerBits, V.Offset,
+                   uint64_t(Source) | (uint64_t(Start) << 8) |
+                       (uint64_t(Size) << 16),
+                   V.Name, Producer};
+    };
     if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast ||
          E->Kind == ExprKind::UnaryOp) &&
         Inputs.size() == 1 &&
@@ -273,9 +315,45 @@ public:
       // Deferred image bytes are an ordinary loaded value, not a pointer
       // identity. A width conversion loses the raw header-byte recipe while
       // preserving the scalar expression for the source emitter.
+      if (V.K == Value::Frame || V.K == Value::Context ||
+          V.K == Value::Invoke || V.K == Value::Isa ||
+          V.K == Value::PointerBits) {
+        if (Bytes <= E->Operands[0]->Type->Size)
+          if (auto Slice = PointerSlice(V, 0, Bytes, E.get()))
+            return *Slice;
+        return {Value::PointerBits, 0, 0, {}, E.get()};
+      }
       if (V.K != Value::Scalar && V.K != Value::ImageBits)
         throw Invalid("block pointer is consumed through a partial value");
       return {};
+    }
+    if (E->Kind == ExprKind::BinOp && Inputs.size() == 2 &&
+        E->Op == NdOp::SUBBYTES && Inputs[1].K == Value::Number &&
+        E->Operands[0]->Type &&
+        Inputs[1].Bits <= std::numeric_limits<unsigned>::max() &&
+        Bytes <= E->Operands[0]->Type->Size &&
+        Inputs[1].Bits <= E->Operands[0]->Type->Size - Bytes)
+      if (auto Slice = PointerSlice(Inputs[0], Inputs[1].Bits, Bytes, E.get()))
+        return *Slice;
+    if (E->Kind == ExprKind::BinOp && Inputs.size() == 2 &&
+        E->Op == NdOp::CONCAT) {
+      const auto High = PointerPiece(Inputs[0]);
+      const auto Low = PointerPiece(Inputs[1]);
+      if (High && Low && std::get<0>(*High) == std::get<0>(*Low) &&
+          Inputs[0].Offset == Inputs[1].Offset &&
+          Inputs[0].Name == Inputs[1].Name &&
+          std::get<1>(*Low) + std::get<2>(*Low) == std::get<1>(*High) &&
+          std::get<2>(*High) + std::get<2>(*Low) == Bytes) {
+        const auto Source = std::get<0>(*Low);
+        const unsigned Start = std::get<1>(*Low);
+        const unsigned Size = std::get<2>(*High) + std::get<2>(*Low);
+        if (!Start && Size == 8)
+          return {Source, Inputs[1].Offset, 0, Inputs[1].Name, E.get()};
+        return {Value::PointerBits, Inputs[1].Offset,
+                uint64_t(Source) | (uint64_t(Start) << 8) |
+                    (uint64_t(Size) << 16),
+                Inputs[1].Name, E.get()};
+      }
     }
     if (E->Kind == ExprKind::BinOp && Inputs.size() == 2 &&
         (E->Op == NdOp::INT_ADD || E->Op == NdOp::INT_SUB)) {
@@ -330,11 +408,16 @@ public:
         // Loaded bits never supply an invoke/descriptor address identity.
         return {Value::ImageBits, 0, Address.Bits, {}, E.get()};
       }
+      if (pointerIdentity(Address))
+        throw Invalid(
+            "pointer-derived block bits are used as a memory address");
     }
     for (const auto &V : Inputs)
-      if (V.K == Value::Frame || V.K == Value::Context || V.K == Value::Invoke)
-        throw Invalid(
-            "block pointer escapes its proven byte-address operations");
+      if (V.K == Value::UnprovenIdentity)
+        throw Invalid("block address has inconsistent reaching identities");
+      else if (pointerIdentity(V))
+        return {
+            Value::PointerBits, 0, 0, {}, V.Producer ? V.Producer : E.get()};
     return {};
   }
   void assign(const HighStmt &S) {
@@ -470,8 +553,7 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
           !Arguments.empty() && Arguments[0].K == Value::Context &&
           Arguments[0].Offset == 0) {
         for (size_t I = 1; I < Arguments.size(); ++I)
-          if (Arguments[I].K == Value::Context ||
-              Arguments[I].K == Value::Frame || Arguments[I].K == Value::Invoke)
+          if (pointerIdentity(Arguments[I]))
             throw Invalid("block invocation exposes a context address as an "
                           "explicit argument");
         return {};
@@ -485,7 +567,8 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
         // rejected conservatively.
         if (A.K == Value::Frame && !State.frameContainsPointerIdentity())
           continue;
-        if (A.K == Value::Frame || A.K == Value::Invoke)
+        if (A.K == Value::Frame || A.K == Value::Invoke || A.K == Value::Isa ||
+            A.K == Value::PointerBits || A.K == Value::UnprovenIdentity)
           throw Invalid("block consumer exposes private context storage");
         if (A.K != Value::Context)
           continue;
@@ -500,7 +583,8 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
     };
     auto Evaluate = [&](const HighSourceFlowNode &Node) {
       if (Node.Test) {
-        (void)State.eval(Node.Test);
+        if (pointerIdentity(State.eval(Node.Test)))
+          throw Invalid("block-derived pointer bits control source flow");
         return;
       }
       if (!Node.Statement)
@@ -527,7 +611,8 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
         (void)State.eval(S.CallExpr);
         break;
       case StmtKind::ExprStmt:
-        (void)State.eval(S.Val);
+        if (pointerIdentity(State.eval(S.Val)))
+          throw Invalid("block-derived pointer bits remain observable");
         break;
       case StmtKind::Store: {
         auto Address = State.eval(S.StoreAddr), V = State.eval(S.StoreVal);
@@ -558,9 +643,25 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
       }
       case StmtKind::Return:
         if (S.RetVal) {
-          auto V = State.eval(S.RetVal);
-          if (V.K == Value::Context || V.K == Value::Frame ||
-              V.K == Value::Invoke)
+          auto Observable = S.RetVal;
+          const auto SourceReturn =
+              F.SourceTypeHint ? F.SourceTypeHint->ReturnType : nullptr;
+          if (SourceReturn && SourceReturn->Kind != NdTypeKind::Void &&
+              SourceReturn->Size) {
+            // A narrow source result may leave the high bytes of its physical
+            // return carrier undefined. Ignore only an explicit high/low
+            // CONCAT wrapper; the declared low bytes remain fully checked.
+            while (Observable && Observable->Type &&
+                   Observable->Type->Size > SourceReturn->Size &&
+                   Observable->Kind == ExprKind::BinOp &&
+                   Observable->Op == NdOp::CONCAT &&
+                   Observable->Operands.size() == 2 &&
+                   Observable->Operands[1] && Observable->Operands[1]->Type &&
+                   Observable->Operands[1]->Type->Size >= SourceReturn->Size)
+              Observable = Observable->Operands[1];
+          }
+          auto V = State.eval(Observable);
+          if (pointerIdentity(V))
             throw Invalid(
                 "block consumer returns a context or private frame address");
         }
@@ -817,14 +918,19 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
              (Binding->CallKind == CallKind::DarwinRuntimeCall &&
               Binding->TargetName == "_Block_copy")) &&
             objcSourceCallBound(E, Image, Functions);
-        const auto Consumer =
-            Binding && Binding->CallKind == CallKind::DarwinRuntimeCall
-                ? darwinBlockParameterContract(Image, Binding->TargetAddress, I)
-                : std::nullopt;
+        std::optional<SourceFunctionTypeHint> Consumer;
+        if (Binding && Binding->CallKind == CallKind::DarwinRuntimeCall) {
+          const auto Contract =
+              darwinBlockParameterContract(Image, Binding->TargetAddress, I);
+          if (Contract)
+            Consumer = Contract->Signature;
+        } else if (Binding && Binding->CallKind == CallKind::ObjCMessage) {
+          Consumer = objcNonEscapingBlockSignature(Image, *Binding, I);
+        }
         const bool DeclaredConsumer =
             Consumer && Block.Descriptor.InvokeTypeHint &&
             objc_projection_detail::sameHint(*Block.Descriptor.InvokeTypeHint,
-                                             Consumer->Signature) &&
+                                             *Consumer) &&
             objcSourceCallBound(E, Image, Functions);
         if (!Direct && !Runtime && !DeclaredConsumer &&
             (!Binding || Binding->CallKind != CallKind::Native ||

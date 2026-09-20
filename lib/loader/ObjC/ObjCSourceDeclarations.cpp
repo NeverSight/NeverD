@@ -4,6 +4,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
 #include <map>
@@ -769,6 +770,119 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
   Step.TheKind = ObjCReceiverTypeHint::TypeStep::Kind::MessageResult;
   Step.Selector = Selector.str();
   Result.Steps.push_back(std::move(Step));
+  return Result;
+}
+
+std::optional<SourceFunctionTypeHint>
+objcNonEscapingBlockSignature(const BinaryImage &Image,
+                              const SourceCallTypeHint &Call,
+                              unsigned Parameter) {
+  if (Call.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      Call.Selector.empty() || Parameter >= Call.Signature.Parameters.size())
+    return std::nullopt;
+  std::optional<SourceFunctionTypeHint> Expected;
+  std::optional<ReceiverType> Type;
+  if (Call.Receiver) {
+    Type = receiverType(Image, *Call.Receiver);
+    const auto Declaration =
+        objcReceiverSourceTypeHint(Image, Call.Selector, *Call.Receiver);
+    if (Type && Declaration.HasDeclaration && Declaration.Signature)
+      Expected = *Declaration.Signature;
+  } else if (Call.Signature.Origin ==
+             SourceFunctionTypeHint::OriginKind::ObjCSDK) {
+    Expected = objcSelectorSourceTypeHint(Image, Call.Selector);
+  }
+  auto SameDeclaration = [&](const SourceFunctionTypeHint &Left,
+                             const SourceFunctionTypeHint &Right) {
+    auto Merged = Left;
+    return equalSourceABIs(Left, Right) && mergeSignature(Merged, Right);
+  };
+  if (!Expected || !SameDeclaration(Call.Signature, *Expected))
+    return std::nullopt;
+
+  auto DerivesFrom = [&](llvm::StringRef ClassName, llvm::StringRef Base) {
+    std::set<std::string> Visited;
+    std::string Current = ClassName.str();
+    while (!Current.empty() && Visited.size() < 256) {
+      if (Current == Base)
+        return true;
+      if (!Visited.insert(Current).second)
+        return false;
+      std::optional<std::string> Superclass;
+      const auto SDK =
+          objc::sdkReceiverDeclarations(Image, Current, false, false, {});
+      if (SDK.Present) {
+        if (!SDK.Complete || !SDK.Superclass)
+          return false;
+        Superclass = *SDK.Superclass;
+      }
+      for (const auto &Class : Image.ObjCClasses) {
+        if (Class.Name != Current)
+          continue;
+        const bool Root = Class.RootClass &&
+                          Class.InheritanceStatus == "root" &&
+                          Class.SuperclassName.empty();
+        if (!Root && (Class.InheritanceStatus != "resolved" ||
+                      Class.SuperclassName.empty()))
+          return false;
+        if (Superclass && *Superclass != Class.SuperclassName)
+          return false;
+        Superclass = Class.SuperclassName;
+      }
+      if (!Superclass || Superclass->empty())
+        return false;
+      Current = *Superclass;
+    }
+    return false;
+  };
+
+  struct Declaration {
+    const char *Selector;
+    const char *AArch64Parent;
+    const char *X64Parent;
+    unsigned Parameter;
+    const char *AArch64Callback;
+    const char *X64Callback;
+    const char *Owner;
+  };
+  // Compiler-derived from Foundation SDK 15.5 public NS_NOESCAPE method
+  // parameters. Parent and callback ABIs agree across the corresponding
+  // macOS/iOS and simulator/device profiles; no implementation is included.
+  static constexpr Declaration Declarations[] = {
+      {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v32@?0@8Q16^B24", "v32@?0@8Q16^B24", "NSArray"},
+      {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v32@?0@8Q16^B24", "v32@?0@8Q16^B24", "NSOrderedSet"},
+      {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v24@?0@8^B16", "v24@?0@8^B16", "NSSet"},
+      {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
+       "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSArray"},
+      {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
+       "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSOrderedSet"},
+  };
+  std::optional<SourceFunctionTypeHint> Result;
+  for (const auto &D : Declarations) {
+    if (Call.Selector != D.Selector || Parameter != D.Parameter)
+      continue;
+    auto Parent = parseObjCMethodEncoding(
+        D.Selector,
+        Image.Arch == Arch::AArch64 ? D.AArch64Parent : D.X64Parent);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature(
+        Image.Arch == Arch::AArch64 ? D.AArch64Callback : D.X64Callback,
+        Image.Arch, Error);
+    if (Parent)
+      Parent->Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    if (Type && !DerivesFrom(Type->ClassName, D.Owner))
+      continue;
+    if (Result && !SameDeclaration(*Result, *Callback))
+      return std::nullopt;
+    Result = std::move(*Callback);
+  }
   return Result;
 }
 

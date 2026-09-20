@@ -4781,6 +4781,95 @@ ExprPtr receiverCallExpression(const SourceCallTypeHint &Binding) {
 }
 } // namespace
 
+TEST(ObjCCallHints,
+     FoundationNonescapingBlocksRequireExactParentAndCallbackDeclarations) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = image(Architecture);
+    Image.ObjCMethods.clear();
+    Image.ObjCProtocols.clear();
+    Image.ObjCProperties.clear();
+    Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "indexesOfObjectsPassingTest:";
+    const auto Parent = objcSelectorSourceTypeHint(Image, Call.Selector);
+    ASSERT_TRUE(Parent);
+    Call.Signature = *Parent;
+    const auto Callback = objcNonEscapingBlockSignature(Image, Call, 2);
+    ASSERT_TRUE(Callback);
+    EXPECT_EQ(Callback->ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Callback->ReturnType->Size, 1U);
+    EXPECT_EQ(Callback->Parameters.size(), 4U);
+
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      auto ChangedImage = Image;
+      auto ChangedCall = Call;
+      unsigned Parameter = 2;
+      if (Mutation == 0)
+        ChangedImage.DynInfo.NeededLibs.front() =
+            "/tmp/Foundation.framework/Foundation";
+      if (Mutation == 1)
+        ChangedCall.Signature.Parameters.pop_back();
+      if (Mutation == 2)
+        ChangedCall.Signature.Origin =
+            SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      if (Mutation == 3)
+        ChangedCall.Selector = "enumerateObjectsUsingBlock:";
+      if (Mutation == 4)
+        Parameter = 1;
+      EXPECT_FALSE(
+          objcNonEscapingBlockSignature(ChangedImage, ChangedCall, Parameter))
+          << Mutation;
+    }
+  }
+}
+
+TEST(ObjCCallHints,
+     FoundationNonescapingBlocksFollowRevalidatedReceiverHierarchy) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = receiverImage(Architecture);
+    auto &Class = Image.ObjCClasses.front();
+    Class.RootClass = false;
+    Class.InheritanceStatus = "resolved";
+    Class.SuperclassName = "NSArray";
+    Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    const auto Receiver = objcMethodReceiverTypeHint(Image, 0x1200);
+    ASSERT_TRUE(Receiver);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "enumerateObjectsUsingBlock:";
+    Call.Receiver = *Receiver;
+    const auto Parent =
+        objcReceiverSourceTypeHint(Image, Call.Selector, *Receiver);
+    ASSERT_TRUE(Parent.Signature);
+    Call.Signature = *Parent.Signature;
+    const auto ArrayCallback = objcNonEscapingBlockSignature(Image, Call, 2);
+    ASSERT_TRUE(ArrayCallback);
+    EXPECT_EQ(ArrayCallback->Parameters.size(), 4U);
+
+    auto SetImage = Image;
+    SetImage.ObjCClasses.front().SuperclassName = "NSSet";
+    const auto SetParent =
+        objcReceiverSourceTypeHint(SetImage, Call.Selector, *Receiver);
+    ASSERT_TRUE(SetParent.Signature);
+    auto SetCall = Call;
+    SetCall.Signature = *SetParent.Signature;
+    const auto SetCallback =
+        objcNonEscapingBlockSignature(SetImage, SetCall, 2);
+    ASSERT_TRUE(SetCallback);
+    EXPECT_EQ(SetCallback->Parameters.size(), 3U);
+
+    auto Unqualified = Call;
+    Unqualified.Receiver.reset();
+    EXPECT_FALSE(objcNonEscapingBlockSignature(Image, Unqualified, 2));
+    auto Unknown = Image;
+    Unknown.ObjCClasses.front().SuperclassName = "UnknownCollection";
+    EXPECT_FALSE(objcNonEscapingBlockSignature(Unknown, Call, 2));
+  }
+}
+
 TEST(ObjCCallHints, SuperDispatchUsesExactCurrentClassSuperclassDeclaration) {
   auto Image = receiverImage(Arch::AArch64);
   auto &Class = Image.ObjCClasses.front();

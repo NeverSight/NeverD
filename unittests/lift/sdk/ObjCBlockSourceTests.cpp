@@ -337,6 +337,81 @@ TEST(ObjCBlockSources,
         << Bound.Limitation;
   }
 }
+TEST(ObjCBlockSources, InvokePreservesOnlyACompleteLowPointerSubbytesView) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SourceFixture F(true);
+    auto &Invoke = F.Result.HighFuncs[0];
+    auto &Context =
+        Invoke.Body[0].RetVal->Operands[1]->Operands[0]->Operands[0];
+    auto Wide = Context;
+    Wide->Type = NdType::makeInt(16);
+    auto Slice = HighExpr::makeBinop(
+        NdOp::SUBBYTES, Wide, HighExpr::makeConst(Mutation == 1 ? 1 : 0, 4));
+    Slice->Type = Mutation == 2 ? NdType::makeInt(4) : NdType::makeInt(8);
+    Context = std::move(Slice);
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    const auto Bound =
+        bindObjCBlockSourceReferences(F.caller(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0)
+        << Mutation << ": " << Bound.Limitation;
+  }
+}
+TEST(ObjCBlockSources, InvokeReassemblesOnlyCompleteOrderedPointerSlices) {
+  for (unsigned Mutation = 0; Mutation != 2; ++Mutation) {
+    SourceFixture F(true);
+    auto &Invoke = F.Result.HighFuncs[0];
+    auto &Context =
+        Invoke.Body[0].RetVal->Operands[1]->Operands[0]->Operands[0];
+    auto Slice = [&](unsigned Offset, unsigned Size) {
+      auto Result = HighExpr::makeBinop(NdOp::SUBBYTES, Context,
+                                        HighExpr::makeConst(Offset, 4));
+      Result->Type = NdType::makeInt(Size);
+      return Result;
+    };
+    auto Low2 = HighExpr::makeBinop(NdOp::CONCAT, Slice(Mutation ? 0 : 1, 1),
+                                    Slice(0, 1));
+    Low2->Type = NdType::makeInt(2);
+    auto Low4 = HighExpr::makeBinop(NdOp::CONCAT, Slice(2, 2), Low2);
+    Low4->Type = NdType::makeInt(4);
+    auto Whole = HighExpr::makeBinop(NdOp::CONCAT, Slice(4, 4), Low4);
+    Whole->Type = NdType::makeInt(8);
+    Context = std::move(Whole);
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    const auto Bound =
+        bindObjCBlockSourceReferences(F.caller(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0)
+        << Mutation << ": " << Bound.Limitation;
+  }
+}
+TEST(ObjCBlockSources, InvokeIgnoresOnlyUndefinedHighReturnCarrierPadding) {
+  for (unsigned Mutation = 0; Mutation != 2; ++Mutation) {
+    SourceFixture F(true);
+    auto &Invoke = F.Result.HighFuncs[0];
+    const auto Context = parameter(0, Invoke.Params[0].Type);
+    auto High =
+        HighExpr::makeBinop(NdOp::SUBBYTES, Context, HighExpr::makeConst(4, 4));
+    High->Type = NdType::makeInt(4);
+    MedVar Temporary;
+    Temporary.Kind = MedVar::Temp;
+    Temporary.Id = 91;
+    Temporary.Size = 4;
+    const auto HighLocal = HighExpr::makeVar(Temporary, High->Type);
+    HighStmt SaveHigh;
+    SaveHigh.Kind = StmtKind::Assign;
+    SaveHigh.Dst = HighLocal;
+    SaveHigh.Val = High;
+    auto Result = HighExpr::makeBinop(
+        NdOp::CONCAT, HighLocal, Mutation ? Context : Invoke.Body[0].RetVal);
+    Result->Type = NdType::makeInt(8);
+    Invoke.Body.insert(Invoke.Body.begin(), std::move(SaveHigh));
+    Invoke.Body[1].RetVal = std::move(Result);
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    const auto Bound =
+        bindObjCBlockSourceReferences(F.caller(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Limitation.empty(), Mutation == 0)
+        << Mutation << ": " << Bound.Limitation;
+  }
+}
 TEST(ObjCBlockSources, EmptyEntryLabelsPreserveTheStraightLineEscapeProof) {
   for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
     SourceFixture F(false);
