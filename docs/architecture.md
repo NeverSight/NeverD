@@ -139,6 +139,15 @@ identity. Storing any such identity makes an unbounded frame argument an
 escape again. This distinguishes ordinary callback locals such as an error
 result slot from the block context without weakening the context escape proof.
 
+Stack-block construction distinguishes an exact literal base from other frame
+arguments before interpreting a call as a block consumer. Ordinary frame
+arrays may therefore be passed before construction; wide frame initialization
+is retained as poisoned byte coverage, so it cannot satisfy a block header or
+owned capture. Once an ISA identity is live, other frame arguments remain
+rejected until a declared copying or nonescaping consumer invalidates the
+literal storage. This keeps later unrelated frame calls available without
+forgetting a block identity that still exists on any reaching path.
+
 Capture-free global block literals may share one compiler descriptor. Source
 dependencies and generated helpers follow the exact literal references in the
 current source closure: an unreferenced literal sharing that descriptor neither

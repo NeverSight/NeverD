@@ -614,6 +614,32 @@ TEST(ObjCBlockSources,
       bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
 }
 
+TEST(ObjCBlockSources,
+     OrdinaryFrameArgumentsBeforeConstructionDoNotHideLaterStackBlocks) {
+  for (bool AfterConstruction : {false, true}) {
+    SourceFixture F(true);
+    F.caller().Body.insert(
+        F.caller().Body.begin(),
+        store(frame(F.Image, -64), HighExpr::makeConst(0, 16)));
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall("unknown", 0, {frame(F.Image, -56)});
+    if (AfterConstruction)
+      F.caller().Body.insert(F.caller().Body.end() - 1, std::move(Call));
+    else
+      F.caller().Body.insert(F.caller().Body.begin() + 1, std::move(Call));
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    const auto Rejection = Plan.Rejections.find(F.Caller);
+    EXPECT_EQ(Plan.StackBlocks.count(F.Caller), AfterConstruction ? 0U : 1U)
+        << (Rejection == Plan.Rejections.end() ? "" : Rejection->second);
+    if (AfterConstruction) {
+      ASSERT_NE(Rejection, Plan.Rejections.end());
+      EXPECT_NE(Rejection->second.find("nonliteral private frame"),
+                std::string::npos);
+    }
+  }
+}
+
 TEST(ObjCBlockSources, CopiedStackBlockCallsKeepDescriptorAcrossBranches) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 18; ++Mutation) {
@@ -991,7 +1017,20 @@ TEST(ObjCBlockSources, DeclaredConsumerRequiresExactImportAndCallbackABI) {
         if (Mutation == 6)
           Binding->Signature.ReturnType = NdType::makeInt(4);
         Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Binding);
-        F.caller().Body.back() = ret(Call);
+        if (Mutation == 0 && Copies) {
+          HighStmt Dispatch;
+          Dispatch.Kind = StmtKind::Call;
+          Dispatch.CallExpr = Call;
+          HighStmt OrdinaryFrameCall;
+          OrdinaryFrameCall.Kind = StmtKind::Call;
+          OrdinaryFrameCall.CallExpr =
+              HighExpr::makeCall("unknown", 0, {frame(F.Image, -56)});
+          F.caller().Body.back() = std::move(Dispatch);
+          F.caller().Body.push_back(std::move(OrdinaryFrameCall));
+          F.caller().Body.push_back(ret(nullptr));
+        } else {
+          F.caller().Body.back() = ret(Call);
+        }
         if (Mutation >= 7) {
           auto Original = F.caller().Body;
           auto &First = F.caller().Body.back();

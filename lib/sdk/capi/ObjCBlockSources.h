@@ -789,6 +789,18 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
       for (size_t I = 0; I < Arguments.size(); ++I) {
         if (Arguments[I].K != Value::Frame)
           continue;
+        const auto Header = Memory.find(Arguments[I].Offset);
+        const bool ExactBlockBase =
+            Header != Memory.end() && Header->second.Index == 0 &&
+            Header->second.Width == 8 && Header->second.V.K == Value::Isa &&
+            Header->second.V.Name == "_NSConcreteStackBlock";
+        if (!ExactBlockBase) {
+          if (Blocks.count(Arguments[I].Offset) ||
+              State.frameContainsPointerIdentity())
+            throw Invalid("stack block construction exposes a nonliteral "
+                          "private frame address");
+          continue;
+        }
         auto Block = Constructed(Arguments[I].Offset);
         const auto &Binding = E.SourceCallHint;
         std::string Error;
@@ -910,14 +922,21 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           break;
         }
         if (!S.StoreVal || !S.StoreVal->Type ||
-            !scalarWidth(S.StoreVal->Type->Size) ||
             S.MemoryOrdering != NdMemoryOrdering::None ||
             S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
           throw Invalid("block construction has an unsupported memory write");
         const unsigned Bytes = S.StoreVal->Type->Size;
-        State.storeFrame(Address, Bytes, V);
+        if (!Bytes)
+          throw Invalid("block construction has an unsupported memory write");
+        // Wide frame initialization is common for unrelated local arrays.
+        // Preserve its byte coverage as poisoned identity: a disjoint later
+        // block remains discoverable, while any header or owned capture that
+        // relies on these untyped bytes still fails closed.
+        const Value Stored =
+            scalarWidth(Bytes) ? V : Value{Value::UnprovenIdentity};
+        State.storeFrame(Address, Bytes, Stored);
         for (unsigned I = 0; I < Bytes; ++I)
-          Memory[Address.Offset + I] = {V, I, Bytes};
+          Memory[Address.Offset + I] = {Stored, I, Bytes};
         break;
       }
       case StmtKind::Return:
