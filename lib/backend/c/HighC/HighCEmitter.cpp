@@ -855,6 +855,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 "neverd_swift_witness_accessor_" +
                 llvm::utohexstr(Hint.TargetAddress, true));
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSwiftOnceAccessor) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_swift_once_accessor_" +
+                llvm::utohexstr(Hint.TargetAddress, true));
+        } else if (Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockDescriptor ||
                    Hint.CallKind ==
                        SourceCallTypeHint::Kind::RuntimeBlockLiteral) {

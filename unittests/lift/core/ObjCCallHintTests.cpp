@@ -3683,6 +3683,46 @@ TEST(ObjCCallHints, NativeHintsPreserveIndependentFloatingRegisterBank) {
             getTargetRegInfo(Arch::AArch64).FPReturnReg);
 }
 
+TEST(ObjCCallHints, CallOnlyHintDoesNotReplaceCurrentFunctionEntryABI) {
+  auto EntryHint = signature(Arch::AArch64, 1);
+  std::string Diagnostic;
+
+  SourceFunctionTypeHint CallOnlyHint;
+  CallOnlyHint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(CallOnlyHint, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  std::map<va_t, SourceFunctionTypeHint> EntryHints{{0x1200, EntryHint}};
+  std::map<va_t, SourceFunctionTypeHint> CalleeHints{{0x1200, CallOnlyHint},
+                                                     {0x1600, CallOnlyHint}};
+
+  auto Low = caller();
+  Low.Blocks[0].Ops[0].Inputs[0] = NdVar::cst(0x1600, 8);
+  Low.Blocks[0].Ops.back().Inputs[0] = NdVar::cst(0x2200, 8);
+  LowToMedConverter Converter;
+  Converter.setSourceEntryTypeHints(&EntryHints);
+  Converter.setSourceCalleeTypeHints(&CalleeHints);
+  Converter.setSourceCallHintsEnabled(true);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  recoverCallAbi(Med, Arch::AArch64, {});
+
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  ASSERT_TRUE(Med.CallInfos[0].SourceCallHint);
+  EXPECT_TRUE(Med.CallInfos[0].Args.empty());
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  bool FoundEntryReturn = false;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::RETURN) {
+        ASSERT_EQ(Op.NumInputs, 1U);
+        EXPECT_EQ(Op.Inputs[0].Kind, MedVar::Reg);
+        EXPECT_EQ(Op.Inputs[0].RegOff, TRI.IntReturnReg);
+        EXPECT_EQ(Op.Inputs[0].Size, 4U);
+        FoundEntryReturn = true;
+      }
+  EXPECT_TRUE(FoundEntryReturn);
+}
+
 TEST(ObjCCallHints, AArch64NarrowArgumentsUseDefinedWRegisterAcrossJoin) {
   auto Hint = signature(Arch::AArch64, 6);
   Hint.Parameters.back().Type = NdType::makeInt(1, false);

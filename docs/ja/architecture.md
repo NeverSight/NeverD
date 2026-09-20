@@ -546,6 +546,8 @@ MedIR のソース引数検証は、宣言された戻り値、制御フロー�
 - `Any.self` は、完全な existential container の正確な内部メンバーまたは公開エクスポート `$sypN` がメタデータの同一性を証明した場合だけ定数化します。
 - Objective-C の class-reference cell は追加の間接参照を保持し、曖昧な用途がない型付きネイティブ load にだけ使用できます。
 - ivar offset はクラスと幅が一致し、load が一つだけの場合に限り CFG 上で統合します。2 ワード Swift `String` の once getter には、4 個すべての carrier に対する正確な契約も必要です。
+- コンパイラ生成の引数なし Swift 遅延グローバル addressor は、正確な `vau`/`vpZ`/`_Wz`/`_WZ` シンボル群が、一つの load、完了テスト、認証済み `swift_once` 呼び出し、および両経路で同じストレージアドレスを返す構造と一致する場合にだけ再構築します。initializer は付随する context を無視し、通常のソースと同様に依存関係を閉じる必要があります。投影は共有 once predicate と値セルを新しく作り、ロード済みイメージ内のそれらのアドレスや initializer アドレスを保持しません。引数なしのソース callee ABI は呼び出し箇所だけに適用し、付随する context carrier を契約の証明に利用できるよう、ネイティブ entry ABI は分離したままにします。
+- この initializer がコンパイラ生成のインポート Objective-C クラス metadata accessor を呼ぶ場合、投影はゼロ cache、クラス参照、`objc_opt_self`、`swift_getObjCClassMetadata`、release publish が正確に一致するテンプレートだけを受理します。認証済み runtime lookup を直接出力し、イメージ内の cache は保持しません。
 - 名前付きネイティブストレージは、各関数がシグネチャと限定されたストレージ利用を証明する正確なネイティブ呼び出しチェーンだけを通過できます。
 - Swift の具体型メタデータ参照とキャッシュは、descriptor、export、provider が一致する場合だけ再構築します。イメージ内の初期化済みメタデータポインタはコピーしません。
 - ネスト型またはローカル型の nominal metadata reference には、有界なコンテキストパスと一意な demangle 結果が必要です。曖昧なものは拒否します。

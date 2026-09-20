@@ -1108,6 +1108,19 @@ TEST(ObjCSourceProjection, NativeDependencyGraphKeepsSharedCallsAndCycles) {
                 llvm::json::Value(nullptr));
 }
 
+TEST(ObjCSourceProjection, NativeInferenceSkipsCallOnlyThunkTargets) {
+  NativeDependencyFixture F;
+  F.call(0, 0x3000);
+  PipelineOptions Options;
+  std::map<va_t, std::string> Diagnostics;
+  const std::set<va_t> CallOnlyTargets{0x3000};
+  EXPECT_EQ(inferObjCNativeDependencies(F.Image, F.Result, Options, Diagnostics,
+                                        {}, CallOnlyTargets),
+            0U);
+  EXPECT_TRUE(Options.SourceTypeHints.empty());
+  EXPECT_FALSE(Diagnostics.count(0x3000));
+}
+
 TEST(ObjCSourceProjection, NativeDependencyGraphTracksMissingAndFinalEvidence) {
   NativeDependencyFixture F;
   F.call(0, 0x3000);

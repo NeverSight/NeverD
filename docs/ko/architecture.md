@@ -524,6 +524,8 @@ MedIR 소스 매개변수 검증은 선언된 반환값, 제어 흐름, 메모�
 - `Any.self`는 전체 existential container의 정확한 내부 멤버나 공개 export `$sypN`이 메타데이터 정체성을 증명할 때만 상수로 만듭니다.
 - Objective-C class-reference cell은 추가 간접 참조 단계를 유지하며, 모호한 사용이 없는 타입 지정 네이티브 load에서만 허용됩니다.
 - ivar offset은 클래스와 폭이 같고 load가 하나뿐일 때만 CFG 전반에서 병합합니다. 두 단어 Swift `String` once getter에는 네 carrier 모두에 대한 정확한 계약도 필요합니다.
+- 컴파일러가 생성한 인자 없는 Swift 지연 전역 addressor는 정확한 `vau`/`vpZ`/`_Wz`/`_WZ` 심볼군이 하나의 load, 완료 검사, 인증된 `swift_once` 호출, 양쪽 경로의 동일한 저장소 주소 반환과 일치할 때만 재구축합니다. initializer는 부수적인 context를 무시하고 일반 소스와 같은 방식으로 의존성을 완전히 닫아야 합니다. 투영은 새 공유 once predicate와 값 셀을 만들며 로드된 이미지의 해당 주소나 initializer 주소를 유지하지 않습니다. 인자 없는 소스 callee ABI는 호출 지점에만 적용하며, 부수적인 context carrier가 계약 증명에 계속 사용될 수 있도록 네이티브 entry ABI는 분리해 둡니다.
+- 이러한 initializer가 컴파일러 생성 imported Objective-C 클래스 metadata accessor를 호출하면, 투영은 zero cache, 클래스 참조, `objc_opt_self`, `swift_getObjCClassMetadata`, release publish가 정확히 일치하는 템플릿만 허용합니다. 인증된 runtime lookup을 직접 출력하며 이미지의 cache를 유지하지 않습니다.
 - 이름 있는 네이티브 저장소는 각 함수가 시그니처와 제한된 저장소 사용을 증명하는 정확한 네이티브 호출 체인만 통과할 수 있습니다.
 - Swift 구체 타입 메타데이터 참조와 캐시는 descriptor, export, provider가 일치할 때만 재구축합니다. 이미지의 초기화된 메타데이터 포인터는 복사하지 않습니다.
 - 중첩 또는 로컬 Swift 타입의 nominal metadata reference에는 제한된 컨텍스트 경로와 모호하지 않은 demangle 결과가 필요합니다. 모호하면 거부합니다.

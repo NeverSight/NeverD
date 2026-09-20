@@ -44,6 +44,8 @@ struct ObjCSourceBindingResult {
       SwiftTypeMetadataPairs;
   /// Cache address -> exact accessor entry, revalidated when helpers render.
   std::map<va_t, va_t> SwiftWitnessCaches;
+  /// Exact compiler-emitted Swift lazy global addressors used by this body.
+  std::set<va_t> SwiftOnceAccessors;
   std::set<va_t> ProfileCounterSections;
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;

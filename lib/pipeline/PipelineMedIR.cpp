@@ -57,9 +57,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         SourceHints.emplace(Method.Implementation, &*Method.TypeHint);
   }
 
-  std::map<va_t, SourceFunctionTypeHint> SourceCalleeHints;
+  std::map<va_t, SourceFunctionTypeHint> SourceEntryHints;
   for (const auto &[Entry, Hint] : SourceHints)
-    SourceCalleeHints.emplace(Entry, *Hint);
+    SourceEntryHints.emplace(Entry, *Hint);
+  auto SourceCalleeHints = SourceEntryHints;
   if (!Opts.PatchMode && !Opts.LiftMode)
     for (const auto &[Entry, Hint] : Opts.SourceCalleeTypeHints)
       SourceCalleeHints.insert_or_assign(Entry, Hint);
@@ -100,6 +101,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     LowToMedConverter Local;
     Local.setBinaryImage(&Img);
     Local.setSourceCallHintsEnabled(!Opts.PatchMode && !Opts.LiftMode);
+    Local.setSourceEntryTypeHints(&SourceEntryHints);
     Local.setSourceCalleeTypeHints(&SourceCalleeHints);
     Local.setCalleePopMap(&CalleePop);
     Local.setStackProbeSlots(&StackProbeSlots);

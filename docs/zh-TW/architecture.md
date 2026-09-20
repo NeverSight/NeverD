@@ -476,6 +476,8 @@ MedIR 原始碼參數驗證從宣告的回傳值、控制流程、記憶體副�
 - `Any.self` 只有在完整 existential container 的精確內部成員或公開匯出 `$sypN` 證明中繼資料身分時才會成為常數。
 - Objective-C class-reference cell 會保留額外的間接層級，且只允許沒有歧義用途的具型別原生 load。
 - ivar offset 只有在類別與寬度一致且僅有一次 load 時，才能跨 CFG 合併。雙字 Swift `String` once getter 還需要四個 carrier 的精確契約。
+- 編譯器產生的無參數 Swift 延遲全域 addressor，只有在精確的 `vau`/`vpZ`/`_Wz`/`_WZ` 符號族符合一次 load、一次完成狀態檢查、一次已驗證的 `swift_once` 呼叫，且兩條路徑回傳同一儲存位址時才會重建。initializer 必須忽略附帶的 context，並像一般原始碼一樣完成依賴閉包。投影會新建共用 once predicate 和數值 cell，不保留載入映像中的這些位址或 initializer 位址。其無參數原始碼 callee ABI 只套用於呼叫點；原生入口 ABI 保持分離，讓附帶的 context carrier 仍可用於契約證明。
+- 如果該 initializer 呼叫編譯器產生的匯入 Objective-C 類別 metadata accessor，投影只接受零值 cache、類別參照、`objc_opt_self`、`swift_getObjCClassMetadata` 與 release 發布完全吻合的精確模板。投影直接輸出已驗證的 runtime lookup，不保留映像 cache。
 - 具名原生儲存只能經過精確的原生呼叫鏈傳遞，而且每個函式都必須證明其簽章及受限的儲存用途。
 - Swift 具體型別中繼資料參照與快取只有在 descriptor、export 和 provider 一致時才會重建；不會從映像複製已初始化的中繼資料指標。
 - 巢狀或區域 Swift 型別的 nominal metadata reference 需要有界的 context path 及唯一的 demangle 結果；歧義會被拒絕。

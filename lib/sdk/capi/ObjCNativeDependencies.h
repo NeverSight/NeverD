@@ -97,7 +97,8 @@ walkObjCNativeDependencies(const BinaryImage &Image,
 inline size_t inferObjCNativeDependencies(
     const BinaryImage &Image, const PipelineResult &Result,
     PipelineOptions &Options, std::map<va_t, std::string> &Diagnostics,
-    const std::set<va_t> &CallbackRoots = {}) {
+    const std::set<va_t> &CallbackRoots = {},
+    const std::set<va_t> &CallOnlyTargets = {}) {
   const auto Targets =
       walkObjCNativeDependencies(Image, Result, nullptr, CallbackRoots);
   std::map<va_t, const LowFunc *> Low;
@@ -119,6 +120,11 @@ inline size_t inferObjCNativeDependencies(
     Audits.emplace(Audit.Entry, &Audit);
   size_t Added = 0;
   for (va_t Target : Targets) {
+    // Some compiler thunks expose a source-level callee contract which is
+    // intentionally narrower than the machine body's live-in contract. Their
+    // call-only hint must not be promoted back into an entry SourceTypeHint.
+    if (CallOnlyTargets.count(Target))
+      continue;
     if (const auto Existing = Options.SourceTypeHints.find(Target);
         Existing != Options.SourceTypeHints.end()) {
       const auto Found = High.find(Target);

@@ -84,6 +84,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     ObjCBlockSourcePlan BlockPlan;
     SwiftOnceSourcePlan OncePlan;
     std::set<va_t> OnceRoots;
+    std::set<va_t> OnceCallOnlyTargets;
     for (unsigned Depth = 0; Depth < 16; ++Depth) {
       bool WitnessChanged = false;
       for (const auto &Function : Result.HighFuncs) {
@@ -102,8 +103,12 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       OnceRoots.clear();
       for (const auto &[Address, Hint] : OncePlan.CallbackHints)
         OnceRoots.insert(Address);
+      OnceCallOnlyTargets.clear();
+      for (const auto &[Address, Contract] : OncePlan.Addressors)
+        OnceCallOnlyTargets.insert(Address);
       const bool NativeChanged = inferObjCNativeDependencies(
-          S->Img, Result, Options, NativeDependencies, OnceRoots);
+          S->Img, Result, Options, NativeDependencies, OnceRoots,
+          OnceCallOnlyTargets);
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
@@ -182,6 +187,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                               &ProfileStorage, &Functions);
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
                                   OnceBinding.Dependencies.end());
+      Binding.SwiftOnceAccessors.insert(OnceBinding.SwiftOnceAccessors.begin(),
+                                        OnceBinding.SwiftOnceAccessors.end());
       for (const auto &[Address, Width] : OnceBinding.LocalStorageExtents)
         Binding.LocalStorageExtents[Address] =
             std::max(Binding.LocalStorageExtents[Address], Width);
@@ -207,6 +214,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                          &Binding.Function) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
+                     swiftOnceAddressorBound(Expression, S->Img, OncePlan,
+                                             Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
                                               BlockPlan, Functions);
             });
@@ -281,6 +290,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                          &Binding.Function) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
+                     swiftOnceAddressorBound(Expression, S->Img, OncePlan,
+                                             Functions) ||
                      objcBlockSourceCallBound(Expression, BlockSource,
                                               BlockPlan, Functions);
             });
@@ -350,6 +361,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                      &Projection.Function) ||
                  swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                         Functions) ||
+                 swiftOnceAddressorBound(Expression, S->Img, OncePlan,
+                                         Functions) ||
                  objcBlockSourceCallBound(Expression, BlockSource, BlockPlan,
                                           Functions);
         };
@@ -440,6 +453,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
       std::map<va_t, va_t> SwiftWitnessCaches;
+      std::set<va_t> SwiftOnceAccessors;
       std::set<va_t> ProfileSections;
       std::set<va_t> ConstantStrings;
       std::set<va_t> ConstantObjects;
@@ -476,6 +490,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             throw std::runtime_error(
                 "conflicting Swift witness cache source accessors");
         }
+        const auto &OnceAccessors = Projections.at(Entry).SwiftOnceAccessors;
+        SwiftOnceAccessors.insert(OnceAccessors.begin(), OnceAccessors.end());
         const auto &Sections = Projections.at(Entry).ProfileCounterSections;
         ProfileSections.insert(Sections.begin(), Sections.end());
         const auto &Strings = Projections.at(Entry).ConstantStrings;
@@ -524,8 +540,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           renderObjCSwiftTypeMetadataHelpers(S->Img, SwiftTypeMetadataPairs,
                                              SharedStorageFunctions) +
           renderObjCSwiftWitnessCacheHelpers(
-              S->Img, SwiftWitnessCaches, Functions,
-              SharedStorageFunctions);
+              S->Img, SwiftWitnessCaches, Functions, SharedStorageFunctions) +
+          renderSwiftOnceAddressorHelpers(S->Img, SwiftOnceAccessors, OncePlan,
+                                          Functions, SharedStorageFunctions);
       const bool Emitted = Emitter.emit(Unit, SourceOS, COptions);
       SourceOS << BlockHelpers << IdentityHelpers << StorageHelpers;
       if (!Emitted) {

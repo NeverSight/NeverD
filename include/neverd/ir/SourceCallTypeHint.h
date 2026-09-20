@@ -104,6 +104,12 @@ struct SourceCallTypeHint {
     /// replaces the incidental machine value in the runtime's instantiation
     /// register with the compiler-level undef represented by a private helper.
     RuntimeSwiftWitnessAccessor,
+    /// A compiler-emitted zero-argument Swift lazy global addressor. The exact
+    /// body proves one zero-initialized once token, one writable value cell,
+    /// one nonescaping initializer, and returns the value-cell address on
+    /// every path. Source projection rebuilds those identities and the once
+    /// operation rather than retaining their original image addresses.
+    RuntimeSwiftOnceAccessor,
     /// Base of a rebuilt numeric profiling-counter section. The SDK proves
     /// storage extents and permits only bounded, unordered memory accesses.
     RuntimeProfileCounterStorage,

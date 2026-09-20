@@ -411,6 +411,21 @@ loads. Callers must pass adjacent words of one named writable 16-byte object.
 The callback and all dependencies still require ordinary source closure; the
 storage proof does not authorize skipping an initializer or inventing contents.
 
+A compiler-emitted zero-argument Swift lazy-global addressor is rebuilt only
+when the exact `vau`/`vpZ`/`_Wz`/`_WZ` symbol family agrees with one canonical
+load, completion test, authenticated `swift_once` call, and the same storage
+return on both paths. Its initializer must ignore the incidental context and
+close as ordinary source. Projection creates a fresh shared once token and
+value cell; no predicate, value, or initializer address from the loaded image
+is retained. Its zero-argument source callee ABI applies only at call sites;
+the native entry ABI remains separate so incidental context carriers stay
+available to the contract proof.
+
+If such an initializer calls a compiler-emitted imported Objective-C class
+metadata accessor, projection requires the exact zero-cache, class-reference,
+`objc_opt_self`, `swift_getObjCClassMetadata`, and release-publication template.
+It emits the authenticated runtime lookup directly and retains no image cache.
+
 A Swift concrete-metadata cache/reference pair may rebuild its mangled type
 reference only when the zero cache, immutable metadata-reference record, every
 relative descriptor slot, and the exact `MR`/`Md` symbol spelling agree. The

@@ -190,6 +190,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor ||
+      Hint.CallKind == Kind::RuntimeSwiftOnceAccessor ||
       Hint.CallKind == Kind::RuntimeConstantString ||
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
@@ -324,6 +325,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
         return bad("Swift witness accessor has no complete identity");
       Value = "neverd_swift_witness_accessor_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftOnceAccessor) {
+      if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
+        return bad("Swift once accessor has no complete identity");
+      Value = "neverd_swift_once_accessor_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "()";
     } else {
       if (!Hint.TargetAddress)

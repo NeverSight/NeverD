@@ -46,6 +46,13 @@ public:
   void setSourceCallHintsEnabled(bool Enabled) {
     SourceCallHintsEnabled = Enabled;
   }
+  /// Source rendering only. Entry contracts describe the function currently
+  /// being converted and must remain independent from call-only overrides for
+  /// compiler thunks whose public source ABI differs from their machine body.
+  void
+  setSourceEntryTypeHints(const std::map<va_t, SourceFunctionTypeHint> *Hints) {
+    SourceEntryTypeHints = Hints;
+  }
   void setSourceCalleeTypeHints(
       const std::map<va_t, SourceFunctionTypeHint> *Hints) {
     SourceCalleeTypeHints = Hints;
@@ -218,6 +225,7 @@ private:
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;
+  const std::map<va_t, SourceFunctionTypeHint> *SourceEntryTypeHints = nullptr;
   const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;
 
   std::vector<StackSlot> StackSlots;

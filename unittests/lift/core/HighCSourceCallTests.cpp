@@ -866,6 +866,26 @@ int main(void) {
 )");
 }
 
+TEST(HighCSourceCalls, SwiftOnceAddressorUsesRebuiltHelper) {
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftOnceAccessor;
+  Hint.TargetAddress = 0x1234;
+  Hint.TargetName = "_$s4Test5valueSo8NSObjectCvau";
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Hint.Signature, Arch::X64, Error));
+  auto Address = call(Hint, Hint.Signature.ReturnType);
+  Address->CallTarget.clear();
+  const auto Source = emit({returning("read_value", Address)});
+  EXPECT_NE(Source.find("extern uintptr_t neverd_swift_once_accessor_1234("),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("neverd_swift_once_accessor_1234()"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+}
+
 TEST(HighCSourceCalls, NoncontiguousOrNestedEntriesRemainAmbiguous) {
   for (bool Nested : {false, true}) {
     auto Function = returning("ambiguous_entry", HighExpr::makeConst(1, 4));

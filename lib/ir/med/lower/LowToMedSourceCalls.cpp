@@ -56,9 +56,13 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     }
   }
   const SourceFunctionTypeHint *EntrySignature = nullptr;
-  if (SourceCalleeTypeHints)
-    if (auto It = SourceCalleeTypeHints->find(Low.Entry);
-        It != SourceCalleeTypeHints->end()) {
+  // Standalone clients historically supplied one shared map. The pipeline
+  // supplies a distinct entry map so call-only thunk overrides cannot rewrite
+  // the machine body's return and live-in contract.
+  const auto *EntryHints =
+      SourceEntryTypeHints ? SourceEntryTypeHints : SourceCalleeTypeHints;
+  if (EntryHints)
+    if (auto It = EntryHints->find(Low.Entry); It != EntryHints->end()) {
       std::string Diagnostic;
       if (It->second.Architecture == TargetArch &&
           validateSourceABI(It->second, Diagnostic))
