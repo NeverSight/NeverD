@@ -63,6 +63,14 @@ Fat 바이너리에서 `--arch=auto`는 arm64, arm, x86_64, i386 순으로 우�
 
 ## Objective-C 소스와 런타임 구조
 
+두 소스 보고 모드 모두 `source_projection_graph`를 포함합니다. 노드는 최종 타입 지정 네이티브 본문, 로컬 진단, 병합된 native/Block `dependencies`, 실제 `closure_closed` 결과를 보여 줍니다. 로컬 검사와 전파된 의존성 실패는 서로 다른 이유를 가지며, 타입 지정 본문이 없으면 진단도 불완전합니다. 미바인딩 호출을 해결하면 새 의존성이 나타날 수 있습니다. 닫힌 노드는 의존성 단계만 통과한 것이며 `recovered`가 되려면 생성과 소스 텍스트 검사도 통과해야 합니다. `native_dependency_graph`는 별도의 LowIR 호출 목록입니다.
+
+반복적인 범위 분석에는 다음 명령이 `--format=objc-methods`와 같은 분석 및 게시 검사를 실행하면서 `native_source`와 각 메서드의 `source`를 생략합니다. JSON은 `sources_omitted=true`를 추가하며 메서드 식별자, 상태, 진단, 시그니처, 공유 도우미 참조와 의존성 증거의 의미를 그대로 유지합니다. 렌더링 검사도 계속 실행되고, 전체 모드는 컴파일 가능한 소스를 만듭니다. 대응 C 진입점은 `neverd_objc_methods_summary_json(session, max_functions)`이며 결과는 `neverd_free_string`으로 해제합니다.
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 네이티브 로더는 런타임 메서드 기록, 실행 가능한 IMP 주소, 지원되는 타입 인코딩을 명시적인 소스 ABI 위치에 연결합니다. 고정 스칼라/포인터 바인딩은 숨겨진 `self`/`_cmd`, 사용하지 않는 인자, 독립적인 정수/부동소수점 레지스터 뱅크와 지원되는 스택 위치를 유지합니다. float/double 비트 재해석과 수치 변환은 구분합니다. 타입 힌트는 소스 출력 입력일 뿐 인증된 ABI 증거나 실행 코드 패치 권한이 아닙니다.
 
 `sources/objc.m`은 실제 복원한 문장을 `@implementation` 본문에 넣고 필요한 C 도우미와 타입이 연결된 호출을 보존합니다. 호출 대상에는 지원되는 소스 바인딩이 필요하며 알 수 없는 대상과 불완전한 의존성 그룹은 미복원입니다. 정의 누락, 실행 불가능한 주소, 충돌 인코딩, 미지원 ABI, 불완전한 디코딩, 거부된 IR은 선언이 있다는 이유만으로 복원 완료가 되지 않습니다.

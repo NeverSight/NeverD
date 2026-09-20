@@ -417,7 +417,13 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     const bool DeclaredC =
         Hint.CallKind == Kind::DarwinRuntimeCall &&
         Signature.Origin == SourceFunctionTypeHint::OriginKind::DarwinSDK;
-    if ((!DeclaredMessage && !DeclaredC) || !Format.FormatAddress ||
+    const bool DynamicWithoutArguments =
+        Format.DynamicWithoutArguments && DeclaredMessage &&
+        !Format.FormatAddress && Format.AlternativeFormatAddresses.empty() &&
+        Format.FixedCount == Signature.Parameters.size();
+    if ((!DeclaredMessage && !DeclaredC) ||
+        (!Format.FormatAddress && !DynamicWithoutArguments) ||
+        (Format.DynamicWithoutArguments && !DynamicWithoutArguments) ||
         Format.AlternativeFormatAddresses.size() >= 64 ||
         !std::is_sorted(Format.AlternativeFormatAddresses.begin(),
                         Format.AlternativeFormatAddresses.end()) ||

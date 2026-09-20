@@ -611,3 +611,17 @@ La validation des paramètres source MedIR remonte les octets requis depuis les 
 La structuration conditionnelle conserve les copies PHI de continuation sur leur arête initiale. Leur adresse de provenance ne peut pas devenir une nouvelle cible de saut ; si déplacer une séquence exige cette cible, la continuation partagée reste en place. Une boucle synthétique inconditionnelle partage aussi la continuation de sa première instruction native si aucune opération ne précède cet en-tête exact ; un test conditionnel ou des effets antérieurs empêchent cette équivalence.
 
 L’inférence de signature source des fonctions auxiliaires natives prouve un résultat entier complet sur chaque chemin de retour machine grâce à une analyse CFG bornée. Les sorties partagées croisent les faits des prédécesseurs ; les chemins d’entrée empêchent les boucles non initialisées de se prouver elles-mêmes. Les appels et écritures partielles invalident la preuve jusqu’au prochain calcul complet. Les graphes mal formés, les retours limités à une entrée et les restaurations d’épilogue x86-64 restent rejetés. Seule une signature candidate est produite : le second passage doit encore valider le corps et la fermeture des dépendances, sans modifier l’ABI de réécriture.
+
+## Limites récentes de reconstruction de source
+
+- Un accesseur différé de table de témoins Swift n’est reconstruit qu’après preuve du motif de cache `Wl`/`WL`, de la requête exacte au runtime et d’un cache rebâti ; l’adresse originale du cache n’est jamais copiée.
+- `Any.self` ne devient une constante que si un membre intérieur exact du conteneur existentiel complet ou l’export public `$sypN` prouve l’identité des métadonnées.
+- Une cellule de référence de classe Objective-C conserve son niveau d’indirection supplémentaire et n’est admise que pour un chargement natif typé sans utilisation ambiguë.
+- Les décalages d’ivar ne sont fusionnés dans le CFG que si la classe et la largeur concordent et qu’un seul chargement existe. Le getter once d’un `String` Swift de deux mots exige aussi le contrat exact de ses quatre porteurs.
+- Un stockage natif nommé ne peut traverser une chaîne exacte d’appels natifs que si chaque fonction prouve sa signature et son usage borné du stockage.
+- Les références et caches de métadonnées de types concrets Swift ne sont rebâtis qu’après concordance du descripteur, de l’export et du fournisseur ; aucun pointeur de métadonnées initialisé n’est copié depuis l’image.
+- Les références nominales de métadonnées des types Swift imbriqués ou locaux requièrent un chemin de contexte borné et un démanglage sans ambiguïté ; toute ambiguïté est refusée.
+- Les noms imprimables des références de métadonnées ne sont reconstruits qu’à partir d’enregistrements complets, non symboliques et non privés. Les entrées mal formées ou contradictoires restent non résolues.
+- Un block sur la pile reste vivant pendant les usages ordinaires de la frame. Seuls un consommateur prouvé, une fuite ou une écriture chevauchante révoquent cette preuve.
+- Les paramètres block `noescape` du SDK Objective-C ne sont acceptés que si la déclaration parente, le receveur et la position du callback concordent exactement.
+- Un stub Objective-C exact et propre à un selector ne peut lier un format dynamique que si l’appel s’arrête au préfixe fixe des paramètres. Tout argument supplémentaire, stub non exact, conflit de déclaration ou désaccord d’ABI physique reste non résolu.

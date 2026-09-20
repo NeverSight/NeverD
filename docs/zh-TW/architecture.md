@@ -469,3 +469,17 @@ MedIR 原始碼參數驗證從宣告的回傳值、控制流程、記憶體副�
 條件結構化保留原有邊上的未跳轉路徑 PHI 賦值。其來源位址不能成為新建的延續跳轉目標；若移動程式碼段需要這樣的目標，共享延續路徑就保留在原處。 無條件的合成迴圈在精確迴圈頭之前沒有任何操作時，也與內部首條原生指令共享延續入口；有條件的測試或前置副作用不具備這種等價性。
 
 原生輔助函式的原始碼簽章推斷透過有界 CFG 分析，證明每條機器返回路徑都具有完整的整數結果。共享出口匯合前驅事實，入口路徑阻止未初始化的迴圈自證。呼叫和局部寫入會撤銷返回暫存器的證明，直到再次完整計算。畸形控制流、僅返回傳入值的路徑以及 x86-64 尾聲恢復仍會被拒絕。這只產生候選原始碼簽章；第二次管線仍須驗證函式本體及其相依閉包，不會改變重寫 ABI。
+
+## 最近的原始碼復原邊界
+
+- Swift 延遲 witness table accessor 只有在證明 `Wl`/`WL` 快取模式、精確 runtime 查詢及重新建立的快取後才會復原；不會複製原始快取位址。
+- `Any.self` 只有在完整 existential container 的精確內部成員或公開匯出 `$sypN` 證明中繼資料身分時才會成為常數。
+- Objective-C class-reference cell 會保留額外的間接層級，且只允許沒有歧義用途的具型別原生 load。
+- ivar offset 只有在類別與寬度一致且僅有一次 load 時，才能跨 CFG 合併。雙字 Swift `String` once getter 還需要四個 carrier 的精確契約。
+- 具名原生儲存只能經過精確的原生呼叫鏈傳遞，而且每個函式都必須證明其簽章及受限的儲存用途。
+- Swift 具體型別中繼資料參照與快取只有在 descriptor、export 和 provider 一致時才會重建；不會從映像複製已初始化的中繼資料指標。
+- 巢狀或區域 Swift 型別的 nominal metadata reference 需要有界的 context path 及唯一的 demangle 結果；歧義會被拒絕。
+- 可列印的中繼資料參照名稱只會從完整、非 symbolic 且非 private 的記錄復原。畸形或衝突項目保持未解析。
+- stack block 在一般 frame 使用期間仍保持有效。只有精確證明的 consumer、escape 或重疊 write 會撤銷此證明。
+- Objective-C SDK 的 `noescape` block 參數只有在父宣告、receiver 和 callback 位置完全一致時才會接受。
+- 精確且 selector 專用的 Objective-C stub 只有在呼叫止於固定參數 prefix 時，才能繫結動態 format。任何額外實參、不精確的 stub、宣告衝突或物理 ABI 不匹配都保持未解析。

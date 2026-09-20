@@ -708,6 +708,25 @@ bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address) {
          Target->SelectorSlot != 0 && !Target->Selector.empty();
 }
 
+std::optional<SourceCallTypeHint>
+objcSelectorStubDynamicFormatSourceCallHint(const BinaryImage &Image,
+                                            va_t Address) {
+  if (!objcSelectorStubOverwritesCommand(Image, Address))
+    return std::nullopt;
+  const auto Target = veneer(Image, Address);
+  if (!Target || Target->Name != "objc_msgSend" || Target->Selector.empty() ||
+      !Target->SelectorSlot)
+    return std::nullopt;
+  auto Hint =
+      objcDynamicFormatWithoutArgumentsSourceCallHint(Image, Target->Selector);
+  if (!Hint || !Hint->Format ||
+      Hint->Format->FixedCount != Hint->Signature.Parameters.size())
+    return std::nullopt;
+  Hint->TargetAddress = Address;
+  Hint->SelectorReferenceAddress = Target->SelectorSlot;
+  return Hint;
+}
+
 std::map<va_t, SourceCallTypeHint>
 buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
   std::map<va_t, SourceCallTypeHint> Result;

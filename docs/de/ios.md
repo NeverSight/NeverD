@@ -63,6 +63,14 @@ Der Arbeitsbereich wird überwacht und darf für bereitgestellte Eingaben und Zw
 
 ## Objective-C-Quelltext und Laufzeitstruktur
 
+Beide Quellberichtmodi enthalten `source_projection_graph`. Seine Knoten zeigen die endgültig typisierten nativen Funktionskörper, lokale Diagnosen, zusammengeführte native/Block-`dependencies` und das produktive Ergebnis `closure_closed`. Lokale Prüfungen und fortgepflanzte Abhängigkeitsfehler haben getrennte Gründe; fehlende typisierte Körper besitzen unvollständige Diagnosen. Das Binden eines bislang ungebundenen Aufrufs kann weitere Abhängigkeiten sichtbar machen. Ein geschlossener Knoten hat nur die Abhängigkeitsphase bestanden: Erst Emission und Quelltextprüfung machen eine Methode zu `recovered`. `native_dependency_graph` bleibt davon getrennt und inventarisiert LowIR-Aufrufe.
+
+Für wiederholte Deckungsanalysen führt der folgende Befehl dieselben Analyse- und Veröffentlichungsprüfungen wie `--format=objc-methods` aus, lässt aber `native_source` und das `source`-Feld jeder Methode weg. Das JSON ergänzt `sources_omitted=true`; Methodenidentitäten, Zustände, Diagnosen, Signaturen, gemeinsame Hilfsreferenzen und Abhängigkeitsbelege behalten ihre vollständige Bedeutung. Rendering-Prüfungen laufen weiterhin. Der vollständige Modus liefert kompilierbare Quellen. Der entsprechende C-Einstieg ist `neverd_objc_methods_summary_json(session, max_functions)`; das Ergebnis wird mit `neverd_free_string` freigegeben.
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 Der native Loader verbindet Methodenrecord, ausführbare IMP-Adresse und unterstützte Typkodierung mit expliziten Quell-ABI-Positionen. Feste Skalar-/Zeigerbindungen erhalten versteckte `self`/`_cmd`, ungenutzte Argumente, getrennte Ganzzahl-/Gleitkommaregister und unterstützte Stackpositionen. Die Bit-Neuinterpretation von float/double ist von numerischer Konvertierung getrennt. Typhinweise dienen ausschließlich der Quelltextprojektion; sie sind weder authentifizierte ABI-Nachweise noch eine Erlaubnis zum Patchen ausführbaren Codes.
 
 `sources/objc.m` enthält tatsächlich rekonstruierte Anweisungen in `@implementation`-Methoden sowie erforderliche C-Hilfsfunktionen und typgebundene Aufrufe. Aufrufziele benötigen eine unterstützte Quellbindung; unbekannte Ziele und unvollständige Abhängigkeitsgruppen bleiben nicht rekonstruiert. Fehlende Definitionen, ungültige Codeadressen, widersprüchliche Kodierungen, nicht unterstützte ABI-Abbildungen, unvollständiges Decoding und abgelehnte IR werden nicht allein aufgrund einer Deklaration als rekonstruiert gewertet.

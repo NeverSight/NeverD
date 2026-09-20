@@ -63,6 +63,14 @@ Fat 二进制的 `--arch=auto` 优先顺序是 arm64、arm、x86_64、i386。缺
 
 ## Objective-C 源码与运行时结构
 
+两种源码报告模式都包含 `source_projection_graph`。其节点记录最终带类型的原生函数体、本地诊断、合并后的原生/Block `dependencies` 以及生产路径的 `closure_closed` 结果。本地检查失败与传播而来的依赖失败使用不同原因；缺少带类型函数体时，诊断也标为不完整。修复一个未绑定调用可能暴露新的依赖。闭合节点仅表示通过依赖阶段；每个方法还须通过生成及源码文本检查，状态才会成为 `recovered`。`native_dependency_graph` 仍是独立的 LowIR 调用清单。
+
+反复分析覆盖率时，下面的命令执行与 `--format=objc-methods` 相同的分析和发布检查，但省略 `native_source` 及每个方法的 `source`。JSON 增加 `sources_omitted=true`，方法身份、状态、诊断、签名、共享辅助函数引用和依赖证据仍保留完整含义。渲染检查仍会执行；需要可编译源码时应使用完整模式。对应的 C 入口是 `neverd_objc_methods_summary_json(session, max_functions)`，结果用 `neverd_free_string` 释放。
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 原生加载器把运行时方法记录、可执行 IMP 地址和受支持的类型编码绑定到明确的源码 ABI 位置。固定标量/指针绑定包含隐藏的 `self`/`_cmd`、未使用参数、独立的整数/浮点寄存器组，以及受支持的栈参数位置。float/double 的位重解释与数值转换分别处理。类型提示只是源码输出的输入，不是经过认证的 ABI 证据，也不授权修改可执行代码。
 
 `sources/objc.m` 将实际恢复语句放入 `@implementation` 方法体，保留必要的 C 辅助函数和具有类型绑定的调用。可输出的调用目标必须有受支持的源码绑定；未知目标或不完整依赖组仍是未恢复项。缺失定义、无效可执行地址、冲突编码、不支持的 ABI 映射、不完整解码和被 IR 校验拒绝的结果，不会仅因存在声明就被标为已恢复。

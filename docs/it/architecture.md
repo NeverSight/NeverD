@@ -603,3 +603,17 @@ La convalida dei parametri sorgente MedIR risale ai byte richiesti dai risultati
 La strutturazione condizionale mantiene le copie PHI di prosecuzione sul loro arco originale. L’indirizzo di provenienza non può diventare una nuova destinazione di salto; se spostare una sequenza richiede tale destinazione, la continuazione condivisa resta al suo posto. Un ciclo sintetico incondizionato condivide inoltre la continuazione della prima istruzione nativa se nessuna operazione precede quella precisa intestazione; verifiche condizionali ed effetti precedenti impediscono tale equivalenza.
 
 L’inferenza della firma sorgente degli ausiliari nativi dimostra un risultato intero completo su ogni percorso di ritorno macchina tramite un’analisi CFG limitata. Le uscite condivise intersecano i fatti dei predecessori; i percorsi d’ingresso impediscono ai cicli non inizializzati di dimostrarsi da soli. Chiamate e scritture parziali invalidano la prova fino al successivo calcolo completo. Grafi malformati, ritorni che conservano soltanto un ingresso e ripristini dell’epilogo x86-64 restano rifiutati. Viene prodotta solo una firma candidata: il secondo passaggio deve ancora validare corpo e chiusura delle dipendenze, senza cambiare l’ABI di riscrittura.
+
+## Limiti recenti del recupero sorgente
+
+- Un accessor lazy della witness table Swift viene ricostruito solo dopo aver provato il modello di cache `Wl`/`WL`, la query runtime esatta e una cache ricostruita; l’indirizzo originale non viene copiato.
+- `Any.self` diventa una costante solo quando un membro interno esatto dell’intero contenitore esistenziale o l’export pubblico `$sypN` dimostra l’identità dei metadati.
+- Una cella di riferimento a classe Objective-C conserva il livello aggiuntivo di indirezione ed è ammessa solo per un caricamento nativo tipizzato, senza usi ambigui.
+- Gli offset degli ivar si uniscono nel CFG solo con classe e larghezza uguali e un singolo caricamento. Il getter once di una `String` Swift a due parole richiede inoltre il contratto esatto dei quattro portatori.
+- La memoria nativa con nome può attraversare una catena esatta di chiamate native solo se ogni funzione dimostra la propria firma e l’uso limitato della memoria.
+- Riferimenti e cache dei metadati concreti Swift vengono ricostruiti solo quando descrittore, export e provider concordano; i puntatori ai metadati inizializzati non vengono copiati dall’immagine.
+- I riferimenti nominali ai metadati dei tipi Swift annidati o locali richiedono un percorso di contesto limitato e un demangling univoco; le ambiguità vengono rifiutate.
+- I nomi stampabili dei riferimenti ai metadati vengono ricostruiti solo da record completi, non simbolici e non privati. Le voci malformate o in conflitto restano irrisolte.
+- Un block sullo stack resta vivo durante gli usi ordinari del frame. Solo un consumatore provato, una fuga o una scrittura sovrapposta revocano la prova.
+- I parametri block `noescape` dell’SDK Objective-C sono accettati solo quando dichiarazione genitore, ricevitore e posizione del callback coincidono esattamente.
+- Uno stub Objective-C esatto e specifico del selector può collegare un formato dinamico solo quando la chiamata termina al prefisso fisso dei parametri. Ogni argomento aggiuntivo, stub non esatto, conflitto di dichiarazione o mancata corrispondenza dell’ABI fisico resta irrisolto.

@@ -63,6 +63,14 @@ L’area di lavoro è monitorata e può usare fino a tre volte i budget di voci/
 
 ## Sorgenti Objective-C e struttura runtime
 
+Entrambe le modalità di rapporto sorgente includono `source_projection_graph`. I nodi mostrano i corpi nativi tipizzati finali, la diagnostica locale, le `dependencies` native e Block aggregate e il risultato effettivo `closure_closed`. I controlli locali e gli errori propagati dalle dipendenze hanno motivi distinti; i corpi tipizzati mancanti mantengono diagnostica incompleta. Risolvere una chiamata non collegata può introdurre altre dipendenze. Un nodo chiuso ha superato solo la fase delle dipendenze: emissione e controlli del testo restano necessari prima di `recovered`. `native_dependency_graph` rimane un inventario LowIR separato.
+
+Per analisi ripetute della copertura, il comando seguente esegue le stesse analisi e verifiche di pubblicazione di `--format=objc-methods`, ma omette `native_source` e il campo `source` di ogni metodo. Il JSON aggiunge `sources_omitted=true` e conserva il significato completo di identità, stati, diagnostica, firme, riferimenti agli helper condivisi e prove delle dipendenze. I controlli di rendering vengono comunque eseguiti; la modalità completa produce sorgenti compilabili. Il punto di ingresso C corrispondente è `neverd_objc_methods_summary_json(session, max_functions)`; liberare il risultato con `neverd_free_string`.
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 Il loader nativo collega record del metodo, indirizzo IMP eseguibile e codifica di tipo supportata a posizioni ABI sorgente esplicite. I parametri fissi scalari/puntatori mantengono `self`/`_cmd`, argomenti inutilizzati, banchi interi/flottanti separati e posizioni sullo stack supportate. Reinterpretazione dei bit float/double e conversione numerica sono distinte. I suggerimenti di tipo sono input per la proiezione sorgente, non prove ABI autenticate né autorizzazione a modificare codice eseguibile.
 
 `sources/objc.m` colloca le istruzioni realmente ricostruite nei metodi `@implementation`, mantenendo helper C e chiamate tipizzate necessarie. Le destinazioni richiedono un collegamento sorgente supportato; destinazioni ignote e gruppi di dipendenze incompleti restano non recuperati. Definizioni mancanti, indirizzi non eseguibili, codifiche discordanti, ABI non gestite, decodifica incompleta e IR rifiutato non diventano metodi recuperati solo perché esiste una dichiarazione.

@@ -44,5 +44,12 @@ objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
 std::optional<SourceCallTypeHint>
 objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
                             llvm::ArrayRef<va_t> FormatAddresses);
+
+/// Bind a declared format message whose format object is dynamic but whose
+/// actual argument list ends at the fixed prefix. No format contents are
+/// inferred: the absence of a variadic tail is the complete ABI proof.
+std::optional<SourceCallTypeHint>
+objcDynamicFormatWithoutArgumentsSourceCallHint(const BinaryImage &Image,
+                                                llvm::StringRef Selector);
 } // namespace neverd
 #endif

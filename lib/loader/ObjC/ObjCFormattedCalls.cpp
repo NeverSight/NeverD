@@ -309,4 +309,25 @@ objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
                                                      Addresses.end());
   return Result;
 }
+
+std::optional<SourceCallTypeHint>
+objcDynamicFormatWithoutArgumentsSourceCallHint(const BinaryImage &Image,
+                                                llvm::StringRef Selector) {
+  auto Declaration = objcSelectorFormatDeclaration(Image, Selector);
+  if (!Declaration)
+    return std::nullopt;
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = Selector.str();
+  Call.TargetName = "objc_msgSend";
+  Call.Signature = std::move(Declaration->Signature);
+  const auto Fixed = unsigned(Call.Signature.Parameters.size());
+  Call.Format = SourceCallTypeHint::FormatArguments{
+      Fixed, Declaration->FormatParameter, 0, Declaration->Syntax, {}, true};
+  std::string Diagnostic;
+  if (!assignDarwinVariadicSourceABI(Call.Signature, Fixed, Image.Arch,
+                                     Diagnostic))
+    return std::nullopt;
+  return Call;
+}
 } // namespace neverd

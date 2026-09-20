@@ -3379,6 +3379,121 @@ TEST(ObjCCallHints, SelectorStubCommandProofDoesNotRequireMethodSignature) {
   }
 }
 
+TEST(ObjCCallHints, DynamicFormatStubBindsOnlyCallsWithoutVariadicArguments) {
+  auto Image = selectorStubImage();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/Foundation.framework/Foundation");
+  Image.ObjCSourceReferences.at(0x2100).Name = "localizedStringWithFormat:";
+  const auto Declared =
+      objcSelectorStubDynamicFormatSourceCallHint(Image, 0x1100);
+  ASSERT_TRUE(Declared);
+  ASSERT_TRUE(Declared->Format);
+  EXPECT_TRUE(Declared->Format->DynamicWithoutArguments);
+  EXPECT_EQ(Declared->Format->FixedCount, 3U);
+  EXPECT_EQ(Declared->Format->FormatParameter, 2U);
+  EXPECT_EQ(Declared->Format->FormatAddress, 0U);
+  EXPECT_TRUE(Declared->Format->AlternativeFormatAddresses.empty());
+  EXPECT_EQ(Declared->SelectorReferenceAddress, 0x2100U);
+
+  auto Native = std::make_shared<SourceCallTypeHint>(*Declared);
+  Native->CallKind = SourceCallTypeHint::Kind::Native;
+  Native->TargetName = "sub_1100";
+  Native->Selector.clear();
+  Native->SelectorReferenceAddress = 0;
+  Native->Format.reset();
+  Native->Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Native->Signature.ReturnType = NdType::makeInt(8, false);
+  for (auto &Parameter : Native->Signature.Parameters)
+    Parameter.Type = NdType::makeInt(8, false);
+
+  MedVar DynamicFormat;
+  DynamicFormat.Kind = MedVar::Param;
+  DynamicFormat.Id = 0;
+  DynamicFormat.Size = 8;
+  DynamicFormat.TheArch = Arch::AArch64;
+  auto MakeCall = [&] {
+    auto Call = HighExpr::makeCall(
+        Native->TargetName, Native->TargetAddress,
+        {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
+         HighExpr::makeVar(DynamicFormat, NdType::makeInt(8, false))});
+    Call->Type = Native->Signature.ReturnType;
+    Call->SourceCallHint = Native;
+    HighFunc Function;
+    Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+    Function.Params = {{"format", NdType::makePtr(NdType::makeVoid())}};
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Call;
+    Function.Body = {Return};
+    return Function;
+  };
+
+  auto Function = MakeCall();
+  auto Bound = sdk::bindObjCSourceReferences(Function, Image);
+  EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  const auto &Call = Bound.Function.Body.front().RetVal;
+  ASSERT_TRUE(Call && Call->SourceCallHint);
+  EXPECT_EQ(Call->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::ObjCMessage);
+  EXPECT_TRUE(Call->SourceCallHint->Format->DynamicWithoutArguments);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}, nullptr, nullptr,
+                                       &Bound.Function));
+
+  // A raw direct call may not have a native source hint: selector stubs are
+  // not ordinary function entries. The exact stub plus every fixed scalar
+  // carrier is sufficient physical proof for the zero-tail call.
+  Function = MakeCall();
+  Function.Body.front().RetVal->SourceCallHint.reset();
+  Function.Body.front().RetVal->Type.reset();
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  const auto &RawCall = Bound.Function.Body.front().RetVal;
+  ASSERT_TRUE(RawCall && RawCall->SourceCallHint);
+  EXPECT_EQ(RawCall->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::ObjCMessage);
+  EXPECT_TRUE(RawCall->SourceCallHint->Format->DynamicWithoutArguments);
+
+  Function = MakeCall();
+  Function.Body.front().RetVal->SourceCallHint.reset();
+  Function.Body.front().RetVal->Type = NdType::makeFloat(8);
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  EXPECT_FALSE(Bound.Function.Body.front().RetVal->SourceCallHint);
+
+  Function = MakeCall();
+  Function.Body.front().RetVal->SourceCallHint.reset();
+  Function.Body.front().RetVal->Operands[2]->Type = NdType::makeFloat(8);
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  EXPECT_FALSE(Bound.Function.Body.front().RetVal->SourceCallHint);
+
+  Function = MakeCall();
+  Function.Body.front().RetVal->SourceCallHint.reset();
+  Function.Body.front().RetVal->Operands.push_back(HighExpr::makeConst(7, 8));
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  EXPECT_FALSE(Bound.Function.Body.front().RetVal->SourceCallHint);
+
+  // One untyped tail operand is already too much: without the format object's
+  // exact contents there is no source type for that value.
+  Function = MakeCall();
+  Function.Body.front().RetVal->Operands.push_back(HighExpr::makeConst(7, 8));
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  ASSERT_TRUE(Bound.Function.Body.front().RetVal->SourceCallHint);
+  EXPECT_EQ(Bound.Function.Body.front().RetVal->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::Native);
+
+  // The selector stub and native carrier proof are both authoritative.
+  Function = MakeCall();
+  auto WrongABI = std::make_shared<SourceCallTypeHint>(
+      *Function.Body.front().RetVal->SourceCallHint);
+  WrongABI->Signature.Parameters[2].Location.RegisterOffset += 8;
+  Function.Body.front().RetVal->SourceCallHint = WrongABI;
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  ASSERT_TRUE(Bound.Function.Body.front().RetVal->SourceCallHint);
+  EXPECT_EQ(Bound.Function.Body.front().RetVal->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::Native);
+  Image.ObjCSourceReferences.at(0x2100).Name = "stringWithFormat:";
+  EXPECT_FALSE(objcSelectorStubDynamicFormatSourceCallHint(Image, 0x1104));
+}
+
 TEST(ObjCCallHints, SelectorStubCommandProofRejectsUnverifiedCodeAndSlots) {
   for (unsigned Mutation = 0; Mutation < 16; ++Mutation) {
     SCOPED_TRACE(Mutation);

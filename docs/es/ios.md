@@ -63,6 +63,14 @@ Se supervisa el área de trabajo, permitiendo hasta tres veces los presupuestos 
 
 ## Fuentes Objective-C y estructura del runtime
 
+Ambos modos de informe fuente incluyen `source_projection_graph`. Sus nodos muestran los cuerpos nativos tipados finales, diagnósticos locales, `dependencies` nativas y de Block combinadas, y el resultado de producción `closure_closed`. Las comprobaciones locales y los fallos propagados de dependencias tienen razones distintas; los cuerpos tipados ausentes conservan diagnósticos incompletos. Vincular una llamada pendiente puede revelar nuevas dependencias. Un nodo cerrado solo ha superado la fase de dependencias: cada método aún debe superar la emisión y las comprobaciones de texto antes de ser `recovered`. `native_dependency_graph` sigue siendo un inventario LowIR separado.
+
+Para análisis repetidos de cobertura, la orden siguiente ejecuta las mismas comprobaciones de análisis y publicación que `--format=objc-methods`, pero omite `native_source` y el campo `source` de cada método. El JSON añade `sources_omitted=true` y conserva el significado completo de identidades, estados, diagnósticos, firmas, auxiliares compartidos y pruebas de dependencias. Las comprobaciones de renderizado siguen ejecutándose; el modo completo produce fuentes compilables. La entrada C correspondiente es `neverd_objc_methods_summary_json(session, max_functions)` y su resultado se libera con `neverd_free_string`.
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 El cargador nativo vincula registro de método, dirección IMP ejecutable y codificación de tipo compatible con posiciones ABI fuente explícitas. Los parámetros fijos escalares/punteros conservan `self`/`_cmd`, argumentos sin usar, bancos enteros/flotantes separados y posiciones de pila compatibles. La reinterpretación de bits float/double se distingue de la conversión numérica. Las pistas de tipo sirven para proyectar fuentes; no son pruebas ABI autenticadas ni permiso para parchear código ejecutable.
 
 `sources/objc.m` coloca las instrucciones realmente reconstruidas dentro de `@implementation` y conserva auxiliares C y llamadas tipadas necesarias. Los destinos requieren una vinculación fuente compatible; destinos desconocidos y grupos de dependencias incompletos quedan sin recuperar. Definiciones ausentes, direcciones no ejecutables, tipos contradictorios, ABI no compatibles, decodificación incompleta o IR rechazado no se convierten en métodos recuperados solo por tener declaración.

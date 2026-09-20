@@ -63,6 +63,14 @@ Le répertoire de travail est surveillé et peut utiliser jusqu’à trois fois 
 
 ## Sources Objective-C et structure du runtime
 
+Les deux modes de rapport source incluent `source_projection_graph`. Ses nœuds décrivent les corps natifs typés finaux, les diagnostics locaux, les `dependencies` natives et Block fusionnées, ainsi que le résultat de production `closure_closed`. Les contrôles locaux et les échecs de dépendances propagés ont des raisons distinctes ; un corps typé absent garde des diagnostics incomplets. Résoudre un appel non lié peut révéler d’autres dépendances. Un nœud fermé n’a franchi que l’étape des dépendances : émission et contrôles du texte restent nécessaires avant l’état `recovered`. `native_dependency_graph` demeure un inventaire LowIR séparé.
+
+Pour les analyses répétées de couverture, la commande suivante exécute les mêmes analyses et contrôles de publication que `--format=objc-methods`, mais omet `native_source` et le champ `source` de chaque méthode. Le JSON ajoute `sources_omitted=true` tout en conservant la portée complète des identités, états, diagnostics, signatures, références d’auxiliaires partagés et preuves de dépendances. Les contrôles de rendu restent actifs ; le mode complet produit les sources compilables. Le point d’entrée C correspondant est `neverd_objc_methods_summary_json(session, max_functions)` ; son résultat se libère avec `neverd_free_string`.
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 Le chargeur natif associe enregistrement de méthode, adresse IMP exécutable et encodage de type pris en charge à des emplacements ABI source explicites. Les arguments fixes scalaires/pointeurs conservent `self`/`_cmd`, paramètres inutilisés, banques séparées d’entiers/flottants et positions de pile prises en charge. Réinterprétation des bits float/double et conversion numérique restent distinctes. Les indications de type servent à la projection source ; elles ne constituent ni preuve ABI authentifiée ni autorisation de modifier le code exécutable.
 
 `sources/objc.m` place les instructions réellement reconstruites dans des corps `@implementation` et conserve auxiliaires C et appels typés nécessaires. Les cibles d’appel exigent une liaison source prise en charge ; cibles inconnues et groupes de dépendances incomplets restent non récupérés. Définitions absentes, adresses non exécutables, encodages contradictoires, ABI non gérées, décodage incomplet ou IR refusé ne deviennent pas des méthodes récupérées du seul fait d’une déclaration.

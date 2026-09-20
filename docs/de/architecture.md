@@ -609,3 +609,17 @@ Die MedIR-Quellparameterprüfung verfolgt benötigte Bytes rückwärts von dekla
 Die bedingte Strukturierung behält PHI-Kopien des nicht genommenen Zweigs auf ihrer ursprünglichen Kante. Ihre Herkunftsadresse darf kein neues Sprungziel werden; würde das Verschieben einer Folge dieses Ziel erfordern, bleibt die gemeinsame Fortsetzung an ihrer Stelle. Eine bedingungslose synthetische Schleife teilt zudem die Fortsetzung ihrer ersten nativen Anweisung, wenn vor dem exakten Schleifenkopf keine Operation liegt; bedingte Prüfungen und vorherige Effekte verhindern diese Gleichwertigkeit.
 
 Die Quellsignatur-Inferenz für native Hilfsfunktionen weist durch eine begrenzte CFG-Analyse auf jedem Maschinenrückgabepfad ein vollständig berechnetes Ganzzahlergebnis nach. Gemeinsame Ausgänge schneiden Vorgängerfakten; Eintrittspfade verhindern, dass uninitialisierte Schleifen sich selbst beweisen. Aufrufe und Teilzugriffe entwerten den Nachweis bis zur nächsten vollständigen Berechnung. Fehlerhafte Graphen, reine Eingaberückgaben und x86-64-Epilogwiederherstellungen werden weiterhin abgelehnt. Es entsteht nur eine Kandidatensignatur; der zweite Pipeline-Durchlauf muss Funktionskörper und Abhängigkeitshülle prüfen, ohne die Umschreibungs-ABI zu ändern.
+
+## Aktuelle Grenzen der Quelltextrekonstruktion
+
+- Ein träger Swift-Zeugentabellen-Accessor wird nur nach Nachweis des `Wl`/`WL`-Cachemusters, der exakten Laufzeitabfrage und eines neu aufgebauten Caches rekonstruiert; die ursprüngliche Cacheadresse wird nicht kopiert.
+- `Any.self` wird nur dann zur Konstante, wenn ein exaktes inneres Element des vollständigen Existential-Containers oder der öffentliche Export `$sypN` die Metadatenidentität belegt.
+- Eine Objective-C-Klassenreferenzzelle behält ihre zusätzliche Indirektion und ist nur für einen typisierten nativen Ladezugriff ohne mehrdeutige Verwendungen zulässig.
+- Ivar-Offsets dürfen über den CFG nur bei gleicher Klasse, gleicher Breite und genau einem Ladezugriff zusammengeführt werden. Der Once-Getter eines zweiwortigen Swift-Strings verlangt außerdem den exakten Vertrag aller vier Träger.
+- Benannter nativer Speicher darf nur durch eine exakte native Aufrufkette weitergereicht werden, wenn jede Funktion ihre Signatur und den begrenzten Speichergebrauch nachweist.
+- Swift-Referenzen und Caches für konkrete Typmetadaten werden nur nach Übereinstimmung von Deskriptor, Export und Anbieter rekonstruiert; initialisierte Metadatenzeiger aus dem Image werden nicht kopiert.
+- Nominale Metadatenreferenzen verschachtelter oder lokaler Swift-Typen benötigen einen begrenzten Kontextpfad und eine eindeutige Demanglierung; Mehrdeutigkeit wird abgelehnt.
+- Druckbare Metadatenreferenznamen werden nur aus vollständigen, nicht symbolischen und nicht privaten Datensätzen erzeugt. Fehlerhafte oder widersprüchliche Einträge bleiben unaufgelöst.
+- Ein Stack-Block bleibt bei gewöhnlicher Frame-Nutzung gültig. Nur ein exakt nachgewiesener Verbraucher, ein Entweichen oder eine überlappende Schreiboperation hebt den Nachweis auf.
+- Mit `noescape` markierte Objective-C-SDK-Blockparameter werden nur bei exakter Übereinstimmung von übergeordneter Deklaration, Empfänger und Callback-Position akzeptiert.
+- Ein exakter selectorspezifischer Objective-C-Stub darf ein dynamisches Format nur binden, wenn der Aufruf an der festen Parameterpräfixgrenze endet. Jedes zusätzliche Argument, jeder ungenaue Stub, Deklarationskonflikt oder physische ABI-Konflikt bleibt unaufgelöst.

@@ -72,6 +72,84 @@ formatAddresses(const SourceCallTypeHint::FormatArguments &Format) {
   return Result;
 }
 
+inline bool sameSourceLocation(const SourceABIValueLocation &Left,
+                               const SourceABIValueLocation &Right) {
+  return Left.Kind == Right.Kind &&
+         Left.RegisterOffset == Right.RegisterOffset &&
+         Left.EntryStackOffset == Right.EntryStackOffset &&
+         Left.ValueBytes == Right.ValueBytes &&
+         Left.ExtendTo32Bits == Right.ExtendTo32Bits;
+}
+
+inline bool sameScalarCarrier(const TypeRef &Observed,
+                              const TypeRef &Declared) {
+  if (!Observed || !Declared || Observed->Size != Declared->Size)
+    return false;
+  if (Declared->Kind == NdTypeKind::Void)
+    return Observed->Kind == NdTypeKind::Void;
+  if (Declared->Kind == NdTypeKind::Float)
+    return Observed->Kind == NdTypeKind::Float;
+  if (Declared->Kind == NdTypeKind::Ptr)
+    return Observed->Size == 8 && (Observed->Kind == NdTypeKind::Ptr ||
+                                   Observed->Kind == NdTypeKind::Int);
+  if (Declared->Kind == NdTypeKind::Int)
+    return Observed->Kind == NdTypeKind::Int;
+  return equalSourceTypes(Observed, Declared);
+}
+
+/// A native-analysis call can be reclassified only when it describes exactly
+/// the same physical scalar call as the authoritative SDK declaration. Source
+/// pointer spelling may be absent from native analysis; register class, width,
+/// extension, stack location, and every aggregate component may not differ.
+inline bool samePhysicalSourceCall(const SourceFunctionTypeHint &Observed,
+                                   const SourceFunctionTypeHint &Declared) {
+  std::string ObservedError, DeclaredError;
+  if (Observed.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      !validateSourceABI(Observed, ObservedError) ||
+      !validateSourceABI(Declared, DeclaredError) ||
+      Observed.Architecture != Declared.Architecture ||
+      Observed.Convention != Declared.Convention || !Observed.HasExplicitABI ||
+      !Declared.HasExplicitABI ||
+      !sameScalarCarrier(Observed.ReturnType, Declared.ReturnType) ||
+      !sameSourceLocation(Observed.ReturnLocation, Declared.ReturnLocation) ||
+      Observed.ReturnComponents.size() != Declared.ReturnComponents.size() ||
+      Observed.Parameters.size() != Declared.Parameters.size())
+    return false;
+  for (size_t I = 0; I < Observed.ReturnComponents.size(); ++I)
+    if (!sameSourceLocation(Observed.ReturnComponents[I],
+                            Declared.ReturnComponents[I]))
+      return false;
+  for (size_t I = 0; I < Observed.Parameters.size(); ++I) {
+    const auto &Left = Observed.Parameters[I];
+    const auto &Right = Declared.Parameters[I];
+    if (Left.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+        Right.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+        !sameScalarCarrier(Left.Type, Right.Type) ||
+        !sameSourceLocation(Left.Location, Right.Location) ||
+        Left.Components.size() != Right.Components.size())
+      return false;
+    for (size_t J = 0; J < Left.Components.size(); ++J)
+      if (!sameSourceLocation(Left.Components[J], Right.Components[J]))
+        return false;
+  }
+  return true;
+}
+
+inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
+  return Binding.CallKind == SourceCallTypeHint::Kind::Native &&
+         !Binding.ValueWitness && !Binding.DoesNotReturn &&
+         !Binding.WeakImport && !Binding.ReturnedArgument &&
+         !Binding.RuntimeObjCResultType && Binding.Selector.empty() &&
+         Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
+         Binding.BorrowedByteInputs.empty() &&
+         Binding.SwiftStringInputs.empty() && !Binding.Format &&
+         !Binding.SwiftTypeMetadata && !Binding.Receiver &&
+         !Binding.SelectorResultUse && !Binding.SelectorResultTypeUse &&
+         !Binding.SelectorArgumentTypeUse &&
+         !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+         !Binding.ImmutablePointerSlot;
+}
+
 inline std::optional<SourceCallTypeHint>
 runtimeSourceCallHint(const BinaryImage &Image,
                       const SourceCallTypeHint &Binding) {
@@ -116,6 +194,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
            Binding.Format->FormatParameter ==
                Expected.Format->FormatParameter &&
            Binding.Format->FormatAddress == Expected.Format->FormatAddress &&
+           Binding.Format->DynamicWithoutArguments ==
+               Expected.Format->DynamicWithoutArguments &&
            Binding.Format->AlternativeFormatAddresses ==
                Expected.Format->AlternativeFormatAddresses)) &&
          Binding.BorrowedByteInputs == Expected.BorrowedByteInputs &&
@@ -2425,6 +2505,49 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         Result.SwiftWitnessCaches[CacheAddress] = Target;
       }
     }
+    // A selector-specific stub may look like an ordinary local function after
+    // native lifting. Reclassify it only when the compiler declaration has a
+    // format contract, the physical native ABI agrees exactly, and the call
+    // ends at the fixed prefix. A dynamic format with any variadic operand
+    // remains unbound because its argument types cannot be inferred.
+    if (Expression->Kind == ExprKind::Call && !Expression->IsIndirectCall &&
+        Expression->CallAddr && Expression->IntrinsicId == Intrinsic::None &&
+        Expression->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+        Expression->MemoryOrdering == NdMemoryOrdering::None) {
+      const auto Expected = objcSelectorStubDynamicFormatSourceCallHint(
+          Image, Expression->CallAddr);
+      bool PhysicalCall = false;
+      if (Expected && Expected->Format && Expression->SourceCallHint &&
+          plainNativeBinding(*Expression->SourceCallHint) &&
+          Expression->CallAddr == Expression->SourceCallHint->TargetAddress &&
+          Expression->Operands.size() ==
+              Expression->SourceCallHint->Signature.Parameters.size())
+        PhysicalCall = samePhysicalSourceCall(
+            Expression->SourceCallHint->Signature, Expected->Signature);
+      else if (Expected && Expected->Format && !Expression->SourceCallHint &&
+               (!Expression->Type ||
+                sameScalarCarrier(Expression->Type,
+                                  Expected->Signature.ReturnType)) &&
+               Expression->Operands.size() ==
+                   Expected->Signature.Parameters.size()) {
+        PhysicalCall = true;
+        for (size_t I = 0; I < Expression->Operands.size(); ++I)
+          if (!Expression->Operands[I] ||
+              !sameScalarCarrier(Expression->Operands[I]->Type,
+                                 Expected->Signature.Parameters[I].Type)) {
+            PhysicalCall = false;
+            break;
+          }
+      }
+      if (Expected && Expected->Format &&
+          Expression->Operands.size() == Expected->Format->FixedCount &&
+          PhysicalCall) {
+        Expression->CallTarget.clear();
+        Expression->SourceCallHint =
+            std::make_shared<SourceCallTypeHint>(*Expected);
+        Expression->Type = Expected->Signature.ReturnType;
+      }
+    }
     if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
         Expression->SourceCallHint->CallKind ==
             SourceCallTypeHint::Kind::Native)
@@ -3264,6 +3387,38 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
   if (Binding.Format) {
     const auto &Format = *Binding.Format;
+    if (Format.DynamicWithoutArguments) {
+      const auto Expected = objcSelectorStubDynamicFormatSourceCallHint(
+          Image, Binding.TargetAddress);
+      return Expected && Expected->Format && !Expression.IsIndirectCall &&
+             Expression.CallAddr == Binding.TargetAddress &&
+             Expression.CallTarget.empty() &&
+             Binding.CallKind == SourceCallTypeHint::Kind::ObjCMessage &&
+             Binding.TargetName == Expected->TargetName &&
+             Binding.Selector == Expected->Selector &&
+             Binding.SelectorReferenceAddress ==
+                 Expected->SelectorReferenceAddress &&
+             !Binding.DoesNotReturn && !Binding.WeakImport &&
+             !Binding.ReturnedArgument && !Binding.RuntimeObjCResultType &&
+             Binding.OwnerClass.empty() && Binding.BorrowedByteInputs.empty() &&
+             Binding.SwiftStringInputs.empty() && !Binding.SwiftTypeMetadata &&
+             !Binding.Receiver && !Binding.SelectorResultUse &&
+             !Binding.SelectorResultTypeUse &&
+             !Binding.SelectorArgumentTypeUse &&
+             !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+             !Binding.ImmutablePointerSlot && !Format.FormatAddress &&
+             Format.AlternativeFormatAddresses.empty() &&
+             std::all_of(
+                 Expression.Operands.begin(), Expression.Operands.end(),
+                 [](const ExprPtr &Operand) { return bool(Operand); }) &&
+             Format.FixedCount == Expression.Operands.size() &&
+             Format.FixedCount == Hint.Parameters.size() &&
+             Format.FormatParameter < Format.FixedCount &&
+             Format.FixedCount == Expected->Format->FixedCount &&
+             Format.FormatParameter == Expected->Format->FormatParameter &&
+             Format.Syntax == Expected->Format->Syntax &&
+             objc_projection_detail::sameHint(Hint, Expected->Signature);
+    }
     const auto Addresses = formatAddresses(Format);
     if (!Addresses)
       return false;
@@ -3278,6 +3433,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         Format.Syntax != Expected->Format->Syntax ||
         Format.FixedCount != Expected->Format->FixedCount ||
         Format.FormatParameter != Expected->Format->FormatParameter ||
+        Format.DynamicWithoutArguments !=
+            Expected->Format->DynamicWithoutArguments ||
         Format.AlternativeFormatAddresses !=
             Expected->Format->AlternativeFormatAddresses ||
         Format.FormatParameter >= Expression.Operands.size() ||

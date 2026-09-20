@@ -63,6 +63,14 @@ Fat 二進位檔案的 `--arch=auto` 優先順序是 arm64、arm、x86_64、i386
 
 ## Objective-C 原始碼與執行階段結構
 
+兩種原始碼報告模式都包含 `source_projection_graph`。其節點記錄最終具型別的原生函式本體、本地診斷、合併後的原生/Block `dependencies`，以及正式流程的 `closure_closed` 結果。本地檢查失敗與傳播而來的相依失敗使用不同原因；缺少具型別函式本體時，診斷也標為不完整。修正未繫結呼叫可能顯示新的相依。閉合節點只代表通過相依階段；每個方法還須通過產生及原始碼文字檢查，狀態才會成為 `recovered`。`native_dependency_graph` 仍是獨立的 LowIR 呼叫清單。
+
+重複分析覆蓋率時，下列命令執行與 `--format=objc-methods` 相同的分析和發布檢查，但省略 `native_source` 及每個方法的 `source`。JSON 會加入 `sources_omitted=true`，方法身分、狀態、診斷、簽章、共用輔助函式參照和相依證據仍保留完整意義。渲染檢查仍會執行；需要可編譯原始碼時應使用完整模式。對應的 C 入口為 `neverd_objc_methods_summary_json(session, max_functions)`，結果以 `neverd_free_string` 釋放。
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 原生載入器把執行階段方法記錄、可執行 IMP 地址和受支援的型別編碼繫結到明確的原始碼 ABI 位置。固定標量/指標繫結包含隱藏的 `self`/`_cmd`、未使用引數、獨立的整數/浮點暫存器組，以及受支援的棧引數位置。float/double 的位重解釋與數值轉換分別處理。型別提示只是原始碼輸出的輸入，不是經過認證的 ABI 證據，也不授權修改可執行程式碼。
 
 `sources/objc.m` 將實際恢復語句放入 `@implementation` 方法本體，保留必要的 C 輔助函式和具有型別繫結的呼叫。可輸出的呼叫目標必須有受支援的原始碼繫結；未知目標或不完整依賴組仍是未恢復項。缺失定義、無效可執行地址、衝突編碼、不支援的 ABI 對映、不完整解碼和被 IR 校驗拒絕的結果，不會僅因存在宣告就被標為已恢復。

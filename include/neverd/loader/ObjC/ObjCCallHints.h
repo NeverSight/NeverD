@@ -14,6 +14,14 @@ struct LowFunc;
 /// before dispatch. This machine fact does not establish a method signature.
 bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address);
 
+/// Authenticate an exact selector-loading objc_msgSend stub and return its
+/// declared dynamic-format signature only when the call has no variadic tail.
+/// The caller must independently prove that its actual argument count equals
+/// the returned fixed parameter count.
+std::optional<SourceCallTypeHint>
+objcSelectorStubDynamicFormatSourceCallHint(const BinaryImage &Image,
+                                            va_t Address);
+
 /// Bind a known ARC runtime routine through an exact imported pointer slot.
 /// Register-specific ARM64 entry points retain their machine argument location
 /// while TargetName names the corresponding ordinary C runtime operation.

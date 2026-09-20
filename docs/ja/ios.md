@@ -63,6 +63,14 @@ Fat バイナリの `--arch=auto` は arm64、arm、x86_64、i386 の順に優�
 
 ## Objective-C ソースとランタイム構造
 
+どちらのソースレポートモードも `source_projection_graph` を含みます。各ノードは最終的な型付きネイティブ本体、ローカル診断、統合された native/Block の `dependencies`、実運用の `closure_closed` 結果を示します。ローカル検査と伝播した依存失敗は別の理由を持ち、型付き本体がなければ診断も未完了です。未束縛呼び出しを解決すると新たな依存が現れる場合があります。閉じたノードは依存段階を通過しただけで、`recovered` になるには生成とソーステキスト検査も必要です。`native_dependency_graph` は別の LowIR 呼び出し一覧です。
+
+繰り返しカバレッジを調べる場合、次のコマンドは `--format=objc-methods` と同じ解析・公開検査を実行しつつ、`native_source` と各メソッドの `source` を省略します。JSON は `sources_omitted=true` を追加し、メソッドの識別子、状態、診断、シグネチャ、共有ヘルパー参照、依存証拠の意味を保持します。レンダリング検査は実行され、完全モードはコンパイル可能なソースを出力します。対応する C API は `neverd_objc_methods_summary_json(session, max_functions)` で、結果は `neverd_free_string` で解放します。
+
+```sh
+neverd export WMF --format=objc-methods-summary -o summary.json
+```
+
 ネイティブローダーはメソッド記録、実行可能な IMP アドレス、対応する型エンコーディングを明示的なソース ABI 位置に結び付けます。固定のスカラー/ポインター引数は隠れた `self`/`_cmd`、未使用引数、独立した整数/浮動小数点レジスタ群、対応するスタック位置を保持します。float/double のビット再解釈と数値変換は区別します。型ヒントはソース出力の入力であり、認証済み ABI 証拠や実行コードのパッチ許可ではありません。
 
 `sources/objc.m` は実際に復元した文を `@implementation` 本体に置き、必要な C ヘルパーと型付き呼び出しを保持します。呼び出し先には対応するソース結合が必要で、未知の相手や不完全な依存グループは未復元です。定義欠落、不正な実行アドレス、競合する型、未対応 ABI、不完全なデコード、IR 検証拒否は、宣言があるだけで復元済みにはなりません。

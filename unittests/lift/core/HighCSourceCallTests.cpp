@@ -1465,6 +1465,50 @@ int main(void) {
 })");
 }
 
+TEST(HighCSourceCalls, DynamicFormatsPermitOnlyAnEmptyVariadicTail) {
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  auto Hint = native("objc_msgSend", Pointer, {Pointer, Pointer, Pointer});
+  Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Hint.Selector = "localizedStringWithFormat:";
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+  Hint.Format = SourceCallTypeHint::FormatArguments{
+      3, 2, 0, SourceCallTypeHint::FormatSyntax::NSString, {}, true};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinVariadicSourceABI(Hint.Signature, 3, Arch::X64, Error));
+  auto Expression = call(
+      Hint, Pointer,
+      {parameter(0, Pointer), parameter(1, Pointer), parameter(2, Pointer)});
+  const auto Source = emit({returning("send_dynamic_format", Expression,
+                                      {Pointer, Pointer, Pointer})},
+                           false);
+  EXPECT_NE(Source.find("(*)(id, SEL, void*, ...)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    auto Bad = Hint;
+    if (Mutation == 0)
+      Bad.Format->FormatAddress = 0x2000;
+    if (Mutation == 1)
+      Bad.Format->AlternativeFormatAddresses = {0x2020};
+    if (Mutation == 2)
+      Bad.Format->FixedCount = 2;
+    if (Mutation == 3)
+      Bad.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+    EXPECT_NE(
+        emit({returning("bad_dynamic_format_" + std::to_string(Mutation),
+                        call(Bad, Pointer,
+                             {parameter(0, Pointer), parameter(1, Pointer),
+                              parameter(2, Pointer)}),
+                        {Pointer, Pointer, Pointer})},
+             false)
+            .find("bad source call: invalid variadic source declaration"),
+        std::string::npos)
+        << Mutation;
+  }
+}
+
 TEST(HighCSourceCalls, VariadicCDeclarationsMergeOnlyTheirFixedPrefixes) {
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
   const auto I32 = NdType::makeInt(4);

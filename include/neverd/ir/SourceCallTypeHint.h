@@ -216,6 +216,12 @@ struct SourceCallTypeHint {
     /// produce the identical promoted variadic ABI. Kept sorted and distinct
     /// from FormatAddress so a single-format binding retains its old shape.
     std::vector<va_t> AlternativeFormatAddresses;
+    /// The format value is dynamic, but the call supplies no variadic tail.
+    /// Its contents therefore cannot change the emitted argument ABI. This is
+    /// valid only for an exact declared message whose parameter count equals
+    /// FixedCount; calls with even one variadic operand still require an exact
+    /// immutable format object and parsed argument types.
+    bool DynamicWithoutArguments = false;
   };
   std::optional<FormatArguments> Format;
   struct SwiftTypeMetadataAddress {
