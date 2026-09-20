@@ -380,14 +380,17 @@ The callback and all dependencies still require ordinary source closure; the
 storage proof does not authorize skipping an initializer or inventing contents.
 
 A Swift concrete-metadata cache/reference pair may rebuild its mangled type
-reference only when the zero cache, immutable metadata-reference record,
-relative descriptor slot, and exact symbol spelling agree. Imported nominal
-descriptors require a bounded demangle and the exact system-framework install
-name derived from the declared module. Local protocol or simple top-level
-nominal descriptors require a resolved read-only relocation to one unique data
-symbol with exactly one matching export. Nested or private symbolic references,
-weak or mismatched providers, malformed records, and ambiguous symbols remain
-unsupported.
+reference only when the zero cache, immutable metadata-reference record, every
+relative descriptor slot, and the exact `MR`/`Md` symbol spelling agree. The
+type reference may contain at most eight indirect `0x02` context descriptors
+among printable mangling bytes; expanding every descriptor must reproduce the
+complete symbol name. Imported nominal descriptors require a bounded demangle
+and the exact system-framework install name derived from the declared module.
+Local protocols and bounded module/class/structure/enum nominal paths require a
+resolved read-only relocation to one unique data symbol with exactly one
+matching export. Direct `0x01` or other symbolic references, unexported private
+contexts, weak or mismatched providers, malformed records, and ambiguous
+symbols remain unsupported.
 
 An explicit pointer-typed load or store supplies the same eight-byte cell extent
 as an integer machine carrier. It uses the existing named writable-storage and

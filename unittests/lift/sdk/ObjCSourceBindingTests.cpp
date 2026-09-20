@@ -516,15 +516,16 @@ struct SwiftTypeMetadataFixture {
   static constexpr va_t TypeReference = 0x1080;
   static constexpr va_t Cache = 0x2020;
   static constexpr va_t DescriptorSlot = 0x3020;
+  static constexpr va_t NestedDescriptorSlot = 0x3028;
   static constexpr va_t LocalDescriptor = 0x4020;
 
-  explicit SwiftTypeMetadataFixture(Arch Architecture,
-                                    bool LocalProtocol = false,
-                                    bool LeadingValue = false,
-                                    bool CombineNominal = false,
-                                    bool LocalNominal = false) {
+  explicit SwiftTypeMetadataFixture(
+      Arch Architecture, bool LocalProtocol = false, bool LeadingValue = false,
+      bool CombineNominal = false, bool LocalNominal = false,
+      bool NestedLocalNominal = false, bool NestedFoundationNominal = false) {
     EXPECT_LE(unsigned(LocalProtocol) + unsigned(CombineNominal) +
-                  unsigned(LocalNominal),
+                  unsigned(LocalNominal) + unsigned(NestedLocalNominal) +
+                  unsigned(NestedFoundationNominal),
               1U);
     Image.Format = BinaryFormat::MachO;
     Image.Arch = Architecture;
@@ -558,16 +559,19 @@ struct SwiftTypeMetadataFixture {
                SegmentFlags::Readable | SegmentFlags::Writable, false);
     AddMapping("__swift_import", 0x3000,
                SegmentFlags::Readable | SegmentFlags::Writable, true);
-    if (LocalProtocol || LocalNominal)
+    if (LocalProtocol || LocalNominal || NestedLocalNominal)
       AddMapping("__swift_descriptor", 0x4000, SegmentFlags::Readable, false);
     auto &ReferenceData = Image.Segments[0].Data;
     llvm::support::endian::write32le(
         ReferenceData.data() + Reference - 0x1000,
         static_cast<uint32_t>(static_cast<int32_t>(TypeReference - Reference)));
+    const bool Nested = NestedLocalNominal || NestedFoundationNominal;
     const llvm::StringRef Suffix = LocalProtocol    ? "_pSg"
                                    : CombineNominal ? "ySbG"
                                                     : "Sg";
-    const uint32_t Length = 5 + Suffix.size();
+    const llvm::StringRef NestedSuffix = NestedLocalNominal ? "SgG" : "G";
+    const uint32_t Length =
+        Nested ? 5 + 1 + 5 + NestedSuffix.size() : 5 + Suffix.size();
     llvm::support::endian::write32le(
         ReferenceData.data() + Reference + 4 - 0x1000, Length);
     auto *Type = ReferenceData.data() + TypeReference - 0x1000;
@@ -575,9 +579,48 @@ struct SwiftTypeMetadataFixture {
     llvm::support::endian::write32le(
         Type + 1, static_cast<uint32_t>(static_cast<int32_t>(
                       DescriptorSlot - (TypeReference + 1))));
-    std::memcpy(Type + 5, Suffix.data(), Suffix.size());
-    Type[5 + Suffix.size()] = 0;
-    if (LocalProtocol || LocalNominal) {
+    if (Nested) {
+      Type[5] = 'y';
+      Type[6] = 2;
+      llvm::support::endian::write32le(
+          Type + 7, static_cast<uint32_t>(static_cast<int32_t>(
+                        NestedDescriptorSlot - (TypeReference + 7))));
+      std::memcpy(Type + 11, NestedSuffix.data(), NestedSuffix.size());
+      Type[11 + NestedSuffix.size()] = 0;
+      const std::string Base =
+          NestedLocalNominal ? "_$"
+                               "s7Combine9PublishedVy7WMFData33WMFDonationRemin"
+                               "derDataControllerC20ExperimentAssignmentOSgG"
+                             : "_$s7Combine9PublishedVy10Foundation4DateVG";
+      Image.Symbols.push_back({Base + "MR", Reference, 8, false});
+      Image.Symbols.push_back({Base + "Md", Cache, 8, false});
+      EXPECT_TRUE(Image.recordDyldBindSlot(
+          DescriptorSlot, "_$s7Combine9PublishedVMn", 0,
+          "/System/Library/Frameworks/Combine.framework/Combine", false));
+      if (NestedLocalNominal) {
+        constexpr llvm::StringLiteral Descriptor =
+            "_$"
+            "s7WMFData33WMFDonationReminderDataControllerC20ExperimentAssignmen"
+            "tOMn";
+        Image.Symbols.push_back({Descriptor.str(), LocalDescriptor, 0, false});
+        Image.Exports.push_back({Descriptor.str(), 0, LocalDescriptor});
+        llvm::support::endian::write64le(Image.Segments[2].Data.data() +
+                                             NestedDescriptorSlot - 0x3000,
+                                         LocalDescriptor);
+        Image.DataPtrRelocSlots.insert(NestedDescriptorSlot);
+        Image.DataPtrRelocTargetOwners[NestedDescriptorSlot] = 0x4000;
+        Image.MachOResolvedChainedPointerSlots.insert(NestedDescriptorSlot);
+      } else {
+        EXPECT_TRUE(Image.recordDyldBindSlot(
+            NestedDescriptorSlot, "_$s10Foundation4DateVMn", 0,
+            "/System/Library/Frameworks/Foundation.framework/Foundation",
+            false));
+      }
+    } else {
+      std::memcpy(Type + 5, Suffix.data(), Suffix.size());
+      Type[5 + Suffix.size()] = 0;
+    }
+    if (!Nested && (LocalProtocol || LocalNominal)) {
       const std::string Base = LocalNominal
                                    ? "_$s7WMFData24WMFFeatureConfigResponseVSg"
                                    : "_$s7WMFData10WMFService_pSg";
@@ -594,7 +637,7 @@ struct SwiftTypeMetadataFixture {
       Image.DataPtrRelocSlots.insert(DescriptorSlot);
       Image.DataPtrRelocTargetOwners[DescriptorSlot] = 0x4000;
       Image.MachOResolvedChainedPointerSlots.insert(DescriptorSlot);
-    } else if (CombineNominal) {
+    } else if (!Nested && CombineNominal) {
       Image.Symbols.push_back(
           {"_$s7Combine9PublishedVySbGMR", Reference, 8, false});
       Image.Symbols.push_back(
@@ -602,7 +645,7 @@ struct SwiftTypeMetadataFixture {
       EXPECT_TRUE(Image.recordDyldBindSlot(
           DescriptorSlot, "_$s7Combine9PublishedVMn", 0,
           "/System/Library/Frameworks/Combine.framework/Combine", false));
-    } else {
+    } else if (!Nested) {
       Image.Symbols.push_back(
           {"_$s10Foundation3URLVSgMR", Reference, 8, false});
       Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", Cache, 8, false});
@@ -1012,8 +1055,97 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     SwiftTypeMetadataPairsAcceptExactNestedIndirectDescriptors) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const bool LocalNestedDescriptor : {false, true}) {
+      SCOPED_TRACE(LocalNestedDescriptor);
+      SwiftTypeMetadataFixture F(Architecture, false, false, false, false,
+                                 LocalNestedDescriptor, !LocalNestedDescriptor);
+      const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+      const auto Pair =
+          Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+      EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
+      EXPECT_EQ(Pair.DescriptorSymbol, "_$s7Combine9PublishedVMn");
+      ASSERT_EQ(Pair.Suffix.size(), LocalNestedDescriptor ? 9U : 7U);
+      EXPECT_EQ(static_cast<unsigned char>(Pair.Suffix[1]), 2U);
+
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCSwiftTypeMetadataHelpers(
+          F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+      EXPECT_NE(Source.find("__asm__(\"_$s7Combine9PublishedVMn\")"),
+                std::string::npos);
+      const llvm::StringRef NestedDescriptor =
+          LocalNestedDescriptor ? "_$"
+                                  "s7WMFData33WMFDonationReminderDataController"
+                                  "C20ExperimentAssignmentOMn"
+                                : "_$s10Foundation4DateVMn";
+      EXPECT_NE(Source.find("__asm__(\"" + NestedDescriptor.str() + "\")"),
+                std::string::npos);
+      EXPECT_NE(Source.find("const void *descriptor_1"), std::string::npos);
+      EXPECT_NE(Source.find(".type_reference[6] = 2"), std::string::npos);
+      EXPECT_NE(Source.find("descriptor_delta_1"), std::string::npos);
+      EXPECT_NE(Source.find(".reference.length = " +
+                            std::to_string(LocalNestedDescriptor ? 14 : 12)),
+                std::string::npos);
+    }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftTypeMetadataPairsRejectUnprovenNestedIndirectDescriptors) {
+  for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+    const bool SystemDescriptor = Mutation >= 5;
+    SwiftTypeMetadataFixture F(Arch::AArch64, false, false, false, false,
+                               !SystemDescriptor, SystemDescriptor);
+    auto *Type = F.Image.Segments[0].Data.data() +
+                 SwiftTypeMetadataFixture::TypeReference - 0x1000;
+    if (Mutation == 0)
+      Type[6] = 1;
+    if (Mutation == 1)
+      Type[7] = 0;
+    if (Mutation == 2)
+      F.Image.Exports.clear();
+    if (Mutation == 3)
+      F.Image.DataPtrRelocSlots.erase(
+          SwiftTypeMetadataFixture::NestedDescriptorSlot);
+    if (Mutation == 4)
+      F.Image.DataPtrRelocTargetOwners
+          [SwiftTypeMetadataFixture::NestedDescriptorSlot] = 0x1000;
+    if (Mutation == 5)
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::NestedDescriptorSlot]
+          .WeakImport = true;
+    if (Mutation == 6)
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::NestedDescriptorSlot]
+          .Module = "/System/Library/Frameworks/Combine.framework/Combine";
+    if (Mutation == 7)
+      F.Image.DyldBindSlots[SwiftTypeMetadataFixture::NestedDescriptorSlot]
+          .Name = "_$s10Foundation3URLVMn";
+    if (Mutation == 8) {
+      constexpr uint32_t Length = 9 * 5;
+      for (uint32_t I = 0; I < 9; ++I) {
+        Type[I * 5] = 2;
+        llvm::support::endian::write32le(
+            Type + I * 5 + 1,
+            static_cast<uint32_t>(static_cast<int32_t>(
+                SwiftTypeMetadataFixture::DescriptorSlot -
+                (SwiftTypeMetadataFixture::TypeReference + I * 5 + 1))));
+      }
+      Type[Length] = 0;
+      llvm::support::endian::write32le(F.Image.Segments[0].Data.data() +
+                                           SwiftTypeMetadataFixture::Reference +
+                                           4 - 0x1000,
+                                       Length);
+    }
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Result.Limitation.empty()) << Mutation;
+    EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty()) << Mutation;
+  }
+}
+
+TEST(ObjCSourceBindings,
      SwiftProtocolTypeMetadataPairsRejectIncompleteOrStaleLocalRebases) {
-  for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation < 13; ++Mutation) {
     SCOPED_TRACE(Mutation);
     SwiftTypeMetadataFixture F(Arch::AArch64, true);
     if (Mutation == 0)
@@ -1053,6 +1185,12 @@ TEST(ObjCSourceBindings,
     if (Mutation == 11)
       F.Image.ConflictingImportStorageSlots.insert(
           SwiftTypeMetadataFixture::DescriptorSlot);
+    if (Mutation == 12) {
+      F.Image.Segments[3].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Image.Sections[3].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    }
     const auto Result = bindObjCSourceReferences(F.Function, F.Image);
     EXPECT_FALSE(Result.Limitation.empty());
     EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());

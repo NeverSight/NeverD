@@ -449,6 +449,48 @@ inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
   return swiftSimpleDescriptor(Symbol, "NominalTypeDescriptor", {}, Module);
 }
 
+inline bool swiftExportedNominalDescriptor(llvm::StringRef Symbol) {
+  Symbol.consume_front("_");
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto Parsed = llvm::swiftDemangle(Symbol, Options);
+  const auto Shape = [](const llvm::SwiftDemangleNode &Node,
+                        llvm::StringRef Kind, size_t Children) {
+    return Node.Kind == Kind && !Node.Text && !Node.Index &&
+           Node.Children.size() == Children;
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "NominalTypeDescriptor", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Type", 1))
+    return false;
+
+  const auto ValidDeclaration = [&](const auto &Self,
+                                    const llvm::SwiftDemangleNode &Node,
+                                    unsigned Depth) -> bool {
+    if (Depth >= 8 ||
+        (Node.Kind != "Structure" && Node.Kind != "Class" &&
+         Node.Kind != "Enum") ||
+        Node.Text || Node.Index || Node.Children.size() != 2)
+      return false;
+    const auto &Context = Node.Children[0];
+    const auto &Name = Node.Children[1];
+    if (Name.Kind != "Identifier" || !Name.Text || Name.Text->empty() ||
+        Name.Index || !Name.Children.empty())
+      return false;
+    if (Context.Kind == "Module")
+      return Context.Text && !Context.Text->empty() && !Context.Index &&
+             Context.Children.empty();
+    return Self(Self, Context, Depth + 1);
+  };
+  return ValidDeclaration(ValidDeclaration,
+                          Parsed.Root->Children[0].Children[0].Children[0], 0);
+}
+
 inline bool swiftProtocolDescriptor(llvm::StringRef Symbol) {
   return swiftSimpleDescriptor(Symbol, "ProtocolDescriptor", "Protocol");
 }
@@ -507,6 +549,7 @@ swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
   const auto Owner = Image.DataPtrRelocTargetOwners.find(DescriptorSlot);
   if (!DescriptorAddress || !DescriptorSection || !DescriptorSegment ||
       !DescriptorSection->isReadable() || !DescriptorSegment->isReadable() ||
+      DescriptorSection->isWritable() || DescriptorSegment->isWritable() ||
       Image.hasExecutableCodeOwnerAt(DescriptorAddress) ||
       Owner == Image.DataPtrRelocTargetOwners.end() ||
       Owner->second != DescriptorSection->VA)
@@ -522,7 +565,7 @@ swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
     Descriptor = &Candidate;
   }
   if (!Descriptor || (!swiftProtocolDescriptor(Descriptor->Name) &&
-                      !swiftNominalDescriptor(Descriptor->Name, {})))
+                      !swiftExportedNominalDescriptor(Descriptor->Name)))
     return std::nullopt;
 
   size_t MatchingExports = 0;
@@ -537,9 +580,56 @@ swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
   return Descriptor->Name;
 }
 
-inline std::optional<SourceCallTypeHint::SwiftTypeMetadataAddress>
-swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
-                      va_t ReferenceAddress) {
+inline std::optional<std::string>
+swiftTypeMetadataDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
+  const auto Imports = Image.collectImportStorageSlots();
+  const auto Import = Imports.Slots.find(DescriptorSlot);
+  const auto Bind = Image.DyldBindSlots.find(DescriptorSlot);
+  std::optional<std::string> DescriptorSymbol;
+  if (!Imports.Conflicts.count(DescriptorSlot) &&
+      Import != Imports.Slots.end() &&
+      Import->second.Evidence == ImportStorageEvidence::LoaderBind &&
+      !Import->second.Addend && Bind != Image.DyldBindSlots.end() &&
+      Bind->second.Name == Import->second.Name && !Bind->second.Addend &&
+      !Bind->second.WeakImport &&
+      swiftSystemFrameworkNominalDescriptor(Import->second.Name,
+                                            Bind->second.Module))
+    DescriptorSymbol = Import->second.Name;
+  else
+    DescriptorSymbol = swiftLocalExportedDescriptor(Image, DescriptorSlot);
+  if (!DescriptorSymbol)
+    return std::nullopt;
+
+  llvm::StringRef Descriptor(*DescriptorSymbol);
+  Descriptor.consume_front("_");
+  const bool Nominal = Descriptor.ends_with("Mn");
+  const bool Protocol = Descriptor.ends_with("Mp");
+  const bool ValidNominal =
+      Nominal && (Bind != Image.DyldBindSlots.end()
+                      ? swiftSystemFrameworkNominalDescriptor(
+                            *DescriptorSymbol, Bind->second.Module)
+                      : swiftExportedNominalDescriptor(*DescriptorSymbol));
+  if ((!Nominal && !Protocol) || (Nominal && !ValidNominal) ||
+      (Protocol != swiftProtocolDescriptor(*DescriptorSymbol)))
+    return std::nullopt;
+  return DescriptorSymbol;
+}
+
+struct SwiftTypeMetadataDescriptorReference {
+  uint32_t Offset = 0;
+  va_t Slot = 0;
+  std::string Symbol;
+};
+
+struct SwiftTypeMetadataPairProof {
+  SourceCallTypeHint::SwiftTypeMetadataAddress Address;
+  std::vector<SwiftTypeMetadataDescriptorReference> Descriptors;
+  std::string TypeReference;
+};
+
+inline std::optional<SwiftTypeMetadataPairProof>
+swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
+                           va_t ReferenceAddress) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
@@ -598,58 +688,65 @@ swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
   const auto *TypeBytes =
       TypeReference ? Image.readVA(*TypeReference, uint64_t(Length) + 1)
                     : nullptr;
-  if (!TypeReference || !TypeBytes || TypeBytes[0] != 2 ||
-      *TypeReference > InvalidVA - Length || TypeBytes[Length] != 0 ||
+  if (!TypeReference || !TypeBytes || *TypeReference > InvalidVA - Length ||
+      TypeBytes[Length] != 0 ||
       Image.hasExecutableCodeOwnerAt(*TypeReference) ||
       Image.hasExecutableCodeOwnerAt(*TypeReference + Length) ||
       overlapsPointerStorage(Image, *TypeReference, uint64_t(Length) + 1))
     return std::nullopt;
-  for (uint32_t I = 5; I < Length; ++I)
-    if (TypeBytes[I] < 0x21 || TypeBytes[I] > 0x7e)
+
+  constexpr size_t MaxDescriptors = 8;
+  std::vector<SwiftTypeMetadataDescriptorReference> Descriptors;
+  std::string Expanded;
+  for (uint32_t I = 0; I < Length;) {
+    if (TypeBytes[I] != 2) {
+      if (TypeBytes[I] < 0x21 || TypeBytes[I] > 0x7e)
+        return std::nullopt;
+      Expanded.push_back(static_cast<char>(TypeBytes[I++]));
+      continue;
+    }
+    if (I > Length - 5 || Descriptors.size() >= MaxDescriptors)
       return std::nullopt;
-  const auto DescriptorSlot = swiftRelativeAddress(Image, *TypeReference + 1);
-  const auto Imports = Image.collectImportStorageSlots();
-  const auto Import = DescriptorSlot ? Imports.Slots.find(*DescriptorSlot)
-                                     : Imports.Slots.end();
-  const auto Bind = DescriptorSlot ? Image.DyldBindSlots.find(*DescriptorSlot)
-                                   : Image.DyldBindSlots.end();
-  if (!DescriptorSlot)
-    return std::nullopt;
-  std::optional<std::string> DescriptorSymbol;
-  if (!Imports.Conflicts.count(*DescriptorSlot) &&
-      Import != Imports.Slots.end() &&
-      Import->second.Evidence == ImportStorageEvidence::LoaderBind &&
-      !Import->second.Addend && Bind != Image.DyldBindSlots.end() &&
-      Bind->second.Name == Import->second.Name && !Bind->second.Addend &&
-      !Bind->second.WeakImport &&
-      swiftSystemFrameworkNominalDescriptor(Import->second.Name,
-                                            Bind->second.Module))
-    DescriptorSymbol = Import->second.Name;
-  else
-    DescriptorSymbol = swiftLocalExportedDescriptor(Image, *DescriptorSlot);
-  if (!DescriptorSymbol)
-    return std::nullopt;
-  llvm::StringRef Descriptor(*DescriptorSymbol);
-  Descriptor.consume_front("_");
-  const bool Nominal = Descriptor.ends_with("Mn");
-  const bool Protocol = Descriptor.ends_with("Mp");
-  const bool ValidNominal =
-      Nominal && (Bind != Image.DyldBindSlots.end()
-                      ? swiftSystemFrameworkNominalDescriptor(
-                            *DescriptorSymbol, Bind->second.Module)
-                      : swiftNominalDescriptor(*DescriptorSymbol, {}));
-  if ((!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")) ||
-      (Nominal && !ValidNominal) ||
-      (Protocol != swiftProtocolDescriptor(*DescriptorSymbol)))
-    return std::nullopt;
-  const std::string Suffix(reinterpret_cast<const char *>(TypeBytes + 5),
-                           Length - 5);
-  if (Descriptor.drop_back(2).str() + Suffix != Base)
+    const auto DescriptorSlot =
+        swiftRelativeAddress(Image, *TypeReference + I + 1);
+    const auto DescriptorSymbol =
+        DescriptorSlot ? swiftTypeMetadataDescriptor(Image, *DescriptorSlot)
+                       : std::nullopt;
+    if (!DescriptorSlot || !DescriptorSymbol)
+      return std::nullopt;
+    llvm::StringRef Descriptor(*DescriptorSymbol);
+    Descriptor.consume_front("_");
+    if (!Descriptor.consume_front("$s") ||
+        (!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")))
+      return std::nullopt;
+    if (Descriptors.empty())
+      Expanded += "$s";
+    Expanded += Descriptor.drop_back(2).str();
+    Descriptors.push_back({I, *DescriptorSlot, *DescriptorSymbol});
+    I += 5;
+  }
+  if (Descriptors.empty() || Descriptors.front().Offset != 0 ||
+      Expanded != Base)
     return std::nullopt;
 
-  return SourceCallTypeHint::SwiftTypeMetadataAddress{
-      Cache->Addr,     Reference->Addr,   *TypeReference,
-      *DescriptorSlot, *DescriptorSymbol, Suffix};
+  const std::string TypeReferenceBytes(
+      reinterpret_cast<const char *>(TypeBytes), Length);
+  return SwiftTypeMetadataPairProof{
+      SourceCallTypeHint::SwiftTypeMetadataAddress{
+          Cache->Addr, Reference->Addr, *TypeReference,
+          Descriptors.front().Slot, Descriptors.front().Symbol,
+          TypeReferenceBytes.substr(5)},
+      std::move(Descriptors), TypeReferenceBytes};
+}
+
+inline std::optional<SourceCallTypeHint::SwiftTypeMetadataAddress>
+swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
+                      va_t ReferenceAddress) {
+  const auto Proof =
+      swiftTypeMetadataPairProof(Image, CacheAddress, ReferenceAddress);
+  if (!Proof)
+    return std::nullopt;
+  return Proof->Address;
 }
 
 inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
@@ -3475,9 +3572,9 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
     std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (const auto &[CacheAddress, Pair] : Pairs) {
-    const auto Current = objc_binding_detail::swiftTypeMetadataPair(
+    const auto Proof = objc_binding_detail::swiftTypeMetadataPairProof(
         Image, CacheAddress, Pair.ReferenceAddress);
-    if (!Current || *Current != Pair)
+    if (!Proof || Proof->Address != Pair)
       throw std::runtime_error("Swift type metadata pair is no longer valid");
     const std::string Stem = "neverd_swift_type_metadata_" +
                              llvm::utohexstr(Pair.CacheAddress, true) + "_" +
@@ -3490,15 +3587,20 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
     const std::string InitializeName = Stem + "_initialize";
     SharedFunctions.insert(CacheName);
     SharedFunctions.insert(ReferenceName);
-    const uint64_t Length = 5 + Pair.Suffix.size();
-    Source += "\nextern unsigned char " + DescriptorName + "[] __asm__(\"" +
-              Pair.DescriptorSymbol + "\");\n";
+    const uint64_t Length = Proof->TypeReference.size();
+    const auto IndexedName = [](llvm::StringRef Base, size_t I) {
+      return I ? Base.str() + "_" + std::to_string(I) : Base.str();
+    };
+    for (size_t I = 0; I < Proof->Descriptors.size(); ++I)
+      Source += (I ? "extern unsigned char " : "\nextern unsigned char ") +
+                IndexedName(DescriptorName, I) + "[] __asm__(\"" +
+                Proof->Descriptors[I].Symbol + "\");\n";
     Source += "struct " + StorageType +
               " {\n"
-              "  void *cache;\n"
-              "  const void *descriptor;\n"
-              "  unsigned char type_reference[" +
-              std::to_string(Length + 1) +
+              "  void *cache;\n";
+    for (size_t I = 0; I < Proof->Descriptors.size(); ++I)
+      Source += "  const void *" + IndexedName("descriptor", I) + ";\n";
+    Source += "  unsigned char type_reference[" + std::to_string(Length + 1) +
               "];\n"
               "  struct { int32_t relative; uint32_t length; } reference;\n"
               "  unsigned state;\n"
@@ -3516,27 +3618,45 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
               "    if (__atomic_compare_exchange_n(&" +
               StorageName +
               ".state, &expected, 1, 0, __ATOMIC_ACQUIRE, "
-              "__ATOMIC_ACQUIRE)) {\n"
-              "      " +
-              StorageName + ".descriptor = " + DescriptorName +
-              ";\n"
-              "      " +
-              StorageName +
-              ".type_reference[0] = 2;\n"
-              "      intptr_t descriptor_delta = (const unsigned char *)&" +
-              StorageName + ".descriptor - (const unsigned char *)&" +
-              StorageName +
-              ".type_reference[1];\n"
-              "      if (descriptor_delta < INT32_MIN || descriptor_delta > "
-              "INT32_MAX) __builtin_trap();\n"
-              "      int32_t descriptor_relative = (int32_t)descriptor_delta;\n"
-              "      __builtin_memcpy(&" +
-              StorageName + ".type_reference[1], &descriptor_relative, 4);\n";
-    for (size_t I = 0; I < Pair.Suffix.size(); ++I)
+              "__ATOMIC_ACQUIRE)) {\n";
+    for (size_t I = 0; I < Proof->Descriptors.size(); ++I)
+      Source += "      " + StorageName + "." + IndexedName("descriptor", I) +
+                " = " + IndexedName(DescriptorName, I) + ";\n";
+    size_t DescriptorIndex = 0;
+    for (size_t I = 0; I < Proof->TypeReference.size();) {
+      if (DescriptorIndex < Proof->Descriptors.size() &&
+          Proof->Descriptors[DescriptorIndex].Offset == I) {
+        const std::string Index =
+            DescriptorIndex ? "_" + std::to_string(DescriptorIndex) : "";
+        Source += "      " + StorageName + ".type_reference[" +
+                  std::to_string(I) +
+                  "] = 2;\n"
+                  "      intptr_t descriptor_delta" +
+                  Index + " = (const unsigned char *)&" + StorageName + "." +
+                  IndexedName("descriptor", DescriptorIndex) +
+                  " - (const unsigned char *)&" + StorageName +
+                  ".type_reference[" + std::to_string(I + 1) +
+                  "];\n"
+                  "      if (descriptor_delta" +
+                  Index + " < INT32_MIN || descriptor_delta" + Index +
+                  " > INT32_MAX) __builtin_trap();\n"
+                  "      int32_t descriptor_relative" +
+                  Index + " = (int32_t)descriptor_delta" + Index +
+                  ";\n"
+                  "      __builtin_memcpy(&" +
+                  StorageName + ".type_reference[" + std::to_string(I + 1) +
+                  "], &descriptor_relative" + Index + ", 4);\n";
+        ++DescriptorIndex;
+        I += 5;
+        continue;
+      }
       Source +=
-          "      " + StorageName + ".type_reference[" + std::to_string(5 + I) +
-          "] = " + std::to_string(static_cast<unsigned char>(Pair.Suffix[I])) +
+          "      " + StorageName + ".type_reference[" + std::to_string(I) +
+          "] = " +
+          std::to_string(static_cast<unsigned char>(Proof->TypeReference[I])) +
           ";\n";
+      ++I;
+    }
     Source += "      " + StorageName + ".type_reference[" +
               std::to_string(Length) +
               "] = 0;\n"
