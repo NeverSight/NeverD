@@ -10,14 +10,22 @@
 //   iPhoneSimulator:707c4d1d4bf7f49570de9ad5f880a9398cd16b594468177307ba53332ba418b7
 // No x86_64 iPhoneSimulator declaration artifact was available, so that
 // architecture remains unsupported instead of borrowing Mac Catalyst facts.
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "contextWithOptions:", "@24@0:8@16", nullptr},
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "createCGImage:fromRect:", "^{CGImage=}56@0:8@16{CGRect={CGPoint=dd}{CGSize=dd}}24", nullptr},
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "detectorOfType:context:options:", "@40@0:8@16@24@32", nullptr},
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "extent", "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8", nullptr},
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "filterWithName:", "@24@0:8@16", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "imageByCroppingToRect:", "@48@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16", nullptr},
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "outputImage", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGColor", "^{CGColor=}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGImage", "^{CGImage=}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGSizeValue", "{CGSize=dd}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CIImage", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "addSubview:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "alpha", "d16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "blackColor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clearColor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithAlphaComponent:", "@24@0:8d16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentDevice", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentEDRHeadroom", "d16@0:8", nullptr},
@@ -55,4 +63,5 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "traitCollection", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "userInterfaceIdiom", "q16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "window", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "whiteColor", "@16@0:8", nullptr},
     // clang-format on

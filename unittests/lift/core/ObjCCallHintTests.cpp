@@ -6519,6 +6519,8 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"CIImage", NdTypeKind::Ptr, 2},
       {"CGSizeValue", NdTypeKind::Struct, 2},
       {"alpha", NdTypeKind::Float, 2},
+      {"blackColor", NdTypeKind::Ptr, 2},
+      {"colorWithAlphaComponent:", NdTypeKind::Ptr, 3},
       {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
       {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
@@ -6546,6 +6548,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"superview", NdTypeKind::Ptr, 2},
       {"topViewController", NdTypeKind::Ptr, 2},
       {"window", NdTypeKind::Ptr, 2},
+      {"whiteColor", NdTypeKind::Ptr, 2},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Selector);
@@ -6578,6 +6581,32 @@ TEST(ObjCCallHints, IOSCoreImageCropKeepsExactProviderAndRecordABI) {
   auto Image = image(Arch::AArch64);
   Image.ObjCMethods.clear();
   Image.DynInfo.NeededLibs = {Module};
+  for (const auto &[Selector, ReturnKind, Parameters] :
+       {std::tuple{"contextWithOptions:", NdTypeKind::Ptr, 3U},
+        std::tuple{"createCGImage:fromRect:", NdTypeKind::Ptr, 4U},
+        std::tuple{"detectorOfType:context:options:", NdTypeKind::Ptr, 5U},
+        std::tuple{"extent", NdTypeKind::Struct, 2U},
+        std::tuple{"filterWithName:", NdTypeKind::Ptr, 3U},
+        std::tuple{"outputImage", NdTypeKind::Ptr, 2U}}) {
+    SCOPED_TRACE(Selector);
+    const auto Declaration = objcSelectorSourceTypeHint(Image, Selector);
+    ASSERT_TRUE(Declaration);
+    EXPECT_EQ(Declaration->Origin,
+              SourceFunctionTypeHint::OriginKind::ObjCSDK);
+    ASSERT_TRUE(Declaration->ReturnType);
+    EXPECT_EQ(Declaration->ReturnType->Kind, ReturnKind);
+    EXPECT_EQ(Declaration->Parameters.size(), Parameters);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(*Declaration, Diagnostic)) << Diagnostic;
+
+    auto Changed = Image;
+    Changed.DynInfo.NeededLibs = {"/tmp/CoreImage.framework/CoreImage"};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Changed, Selector));
+    Changed = image(Arch::X64);
+    Changed.ObjCMethods.clear();
+    Changed.DynInfo.NeededLibs = {Module};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Changed, Selector));
+  }
   const auto Hint =
       objcSelectorSourceTypeHint(Image, "imageByCroppingToRect:");
   ASSERT_TRUE(Hint);
