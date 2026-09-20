@@ -1391,6 +1391,25 @@ TEST(HighCSourceCalls,
                 .find("bad source call: invalid source address"),
             std::string::npos);
 }
+
+TEST(HighCSourceCalls,
+     SwiftTypeMetadataAddressesAcceptDescriptorFreePrintableReferences) {
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  auto Hint = native("", Pointer, {});
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress;
+  Hint.TargetAddress = 0x1000;
+  Hint.SwiftTypeMetadata = SourceCallTypeHint::SwiftTypeMetadataAddress{
+      0x1000, 0x1010, 0x1020, 0, "", "ScPSg"};
+  const auto Source = emit({returning("metadata_cache", call(Hint, Pointer))});
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos);
+  EXPECT_NE(Source.find("neverd_swift_type_metadata_1000_1010_cache_address()"),
+            std::string::npos);
+
+  Hint.SwiftTypeMetadata->DescriptorSlot = 0x1030;
+  EXPECT_NE(emit({returning("bad_descriptor", call(Hint, Pointer))})
+                .find("bad source call: Swift type metadata"),
+            std::string::npos);
+}
 } // namespace
 
 TEST(HighCSourceCalls, VariadicMessageCompilesAndPreservesPromotedArguments) {

@@ -303,7 +303,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
            Hint.TargetAddress != Hint.SwiftTypeMetadata->ReferenceAddress) ||
           !Hint.SwiftTypeMetadata->CacheAddress ||
           !Hint.SwiftTypeMetadata->ReferenceAddress ||
-          Hint.SwiftTypeMetadata->DescriptorSymbol.empty() ||
+          ((Hint.SwiftTypeMetadata->DescriptorSlot == 0) !=
+           Hint.SwiftTypeMetadata->DescriptorSymbol.empty()) ||
           Hint.SwiftTypeMetadata->Suffix.empty())
         return bad("Swift type metadata has no complete pair identity");
       Value = "neverd_swift_type_metadata_" +

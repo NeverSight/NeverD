@@ -382,10 +382,11 @@ storage proof does not authorize skipping an initializer or inventing contents.
 A Swift concrete-metadata cache/reference pair may rebuild its mangled type
 reference only when the zero cache, immutable metadata-reference record, every
 relative descriptor slot, and the exact `MR`/`Md` symbol spelling agree. The
-type reference may contain at most eight indirect `0x02` context descriptors
-among printable mangling bytes; expanding every descriptor must reproduce the
-complete symbol name. Imported nominal descriptors require a bounded demangle
-and the exact system-framework install name derived from the declared module.
+type reference consists of printable mangling bytes and at most eight indirect
+`0x02` context descriptors; expanding every descriptor must reproduce a
+complete symbol name that itself passes a bounded Swift type demangle. Imported
+nominal descriptors require a bounded demangle and the exact system-framework
+install name derived from the declared module.
 Local protocols and bounded module/class/structure/enum nominal paths require a
 resolved read-only relocation to one unique data symbol with exactly one
 matching export. Direct `0x01` or other symbolic references, unexported private

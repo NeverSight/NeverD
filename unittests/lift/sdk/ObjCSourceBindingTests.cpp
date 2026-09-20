@@ -691,6 +691,27 @@ struct SwiftTypeMetadataFixture {
   }
 };
 
+SwiftTypeMetadataFixture
+printableSwiftTypeMetadataFixture(Arch Architecture,
+                                  llvm::StringRef TypeReference) {
+  SwiftTypeMetadataFixture F(Architecture);
+  F.Image.ImportPtrSlots.clear();
+  F.Image.ImportStorageSlots.clear();
+  F.Image.DyldBindSlots.clear();
+  F.Image.ConflictingImportStorageSlots.clear();
+  const std::string Base = "_$s" + TypeReference.str();
+  F.Image.Symbols[0].Name = Base + "MR";
+  F.Image.Symbols[1].Name = Base + "Md";
+  auto &Data = F.Image.Segments[0].Data;
+  llvm::support::endian::write32le(
+      Data.data() + SwiftTypeMetadataFixture::Reference + 4 - 0x1000,
+      TypeReference.size());
+  auto *Type = Data.data() + SwiftTypeMetadataFixture::TypeReference - 0x1000;
+  std::fill(Type, Type + 0x80, 0);
+  std::memcpy(Type, TypeReference.data(), TypeReference.size());
+  return F;
+}
+
 struct SwiftWitnessAccessorFixture {
   BinaryImage Image;
   HighFunc Accessor, Caller;
@@ -1051,6 +1072,61 @@ TEST(ObjCSourceBindings,
     EXPECT_NE(
         Source.find("__asm__(\"_$s7WMFData24WMFFeatureConfigResponseVMn\")"),
         std::string::npos);
+  }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftTypeMetadataPairsAcceptExactPrintableTypeReferences) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const llvm::StringRef TypeReference : {"yXlXp", "ypSg", "ScPSg"}) {
+      SCOPED_TRACE(TypeReference.str());
+      auto F = printableSwiftTypeMetadataFixture(Architecture, TypeReference);
+      const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+      const auto Pair =
+          Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+      EXPECT_EQ(Pair.DescriptorSlot, 0U);
+      EXPECT_TRUE(Pair.DescriptorSymbol.empty());
+      EXPECT_EQ(Pair.Suffix, TypeReference);
+
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCSwiftTypeMetadataHelpers(
+          F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+      EXPECT_EQ(Source.find("__asm__("), std::string::npos);
+      EXPECT_EQ(Source.find("const void *descriptor"), std::string::npos);
+      for (size_t I = 0; I < TypeReference.size(); ++I)
+        EXPECT_NE(Source.find(".type_reference[" + std::to_string(I) + "] = " +
+                              std::to_string(uint8_t(TypeReference[I]))),
+                  std::string::npos);
+      EXPECT_NE(Source.find(".reference.length = " +
+                            std::to_string(TypeReference.size())),
+                std::string::npos);
+    }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftTypeMetadataPairsRejectMalformedPrintableTypeReferences) {
+  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+    auto F = printableSwiftTypeMetadataFixture(
+        Arch::AArch64, Mutation == 5 ? "!!!!!" : "ScPSg");
+    auto &Data = F.Image.Segments[0].Data;
+    auto *Type = Data.data() + SwiftTypeMetadataFixture::TypeReference - 0x1000;
+    if (Mutation == 0)
+      llvm::support::endian::write32le(
+          Data.data() + SwiftTypeMetadataFixture::Reference + 4 - 0x1000, 0);
+    if (Mutation == 1)
+      Type[1] = 1;
+    if (Mutation == 2)
+      F.Image.Symbols[0].Name = "_$sScPSg_GMR";
+    if (Mutation == 3)
+      Type[5] = '!';
+    if (Mutation == 4)
+      F.Image.DataPtrRelocSlots.insert(SwiftTypeMetadataFixture::TypeReference +
+                                       1);
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Result.Limitation.empty()) << Mutation;
+    EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty()) << Mutation;
   }
 }
 

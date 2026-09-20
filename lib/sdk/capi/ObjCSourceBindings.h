@@ -495,6 +495,19 @@ inline bool swiftProtocolDescriptor(llvm::StringRef Symbol) {
   return swiftSimpleDescriptor(Symbol, "ProtocolDescriptor", "Protocol");
 }
 
+inline bool swiftMangledType(llvm::StringRef Symbol) {
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto Parsed = llvm::swiftDemangle(Symbol, Options);
+  return Parsed.Root && Parsed.Error.empty() && Parsed.Root->Kind == "Global" &&
+         !Parsed.Root->Text && !Parsed.Root->Index &&
+         Parsed.Root->Children.size() == 1;
+}
+
 inline bool swiftSystemFrameworkNominalDescriptor(llvm::StringRef Symbol,
                                                   llvm::StringRef Provider) {
   const auto Module =
@@ -682,7 +695,7 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
       overlapsPointerStorage(Image, Reference->Addr, 8))
     return std::nullopt;
   const uint32_t Length = llvm::support::endian::read32le(ReferenceBytes + 4);
-  if (Length < 6 || Length > 128)
+  if (!Length || Length > 128)
     return std::nullopt;
   const auto TypeReference = swiftRelativeAddress(Image, Reference->Addr);
   const auto *TypeBytes =
@@ -697,7 +710,7 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
 
   constexpr size_t MaxDescriptors = 8;
   std::vector<SwiftTypeMetadataDescriptorReference> Descriptors;
-  std::string Expanded;
+  std::string Expanded = "$s";
   for (uint32_t I = 0; I < Length;) {
     if (TypeBytes[I] != 2) {
       if (TypeBytes[I] < 0x21 || TypeBytes[I] > 0x7e)
@@ -719,14 +732,11 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
     if (!Descriptor.consume_front("$s") ||
         (!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")))
       return std::nullopt;
-    if (Descriptors.empty())
-      Expanded += "$s";
     Expanded += Descriptor.drop_back(2).str();
     Descriptors.push_back({I, *DescriptorSlot, *DescriptorSymbol});
     I += 5;
   }
-  if (Descriptors.empty() || Descriptors.front().Offset != 0 ||
-      Expanded != Base)
+  if (Expanded != Base || !swiftMangledType(Expanded))
     return std::nullopt;
 
   const std::string TypeReferenceBytes(
@@ -734,8 +744,10 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
   return SwiftTypeMetadataPairProof{
       SourceCallTypeHint::SwiftTypeMetadataAddress{
           Cache->Addr, Reference->Addr, *TypeReference,
-          Descriptors.front().Slot, Descriptors.front().Symbol,
-          TypeReferenceBytes.substr(5)},
+          Descriptors.empty() ? 0 : Descriptors.front().Slot,
+          Descriptors.empty() ? std::string{} : Descriptors.front().Symbol,
+          Descriptors.empty() ? TypeReferenceBytes
+                              : TypeReferenceBytes.substr(5)},
       std::move(Descriptors), TypeReferenceBytes};
 }
 
@@ -3595,6 +3607,8 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
       Source += (I ? "extern unsigned char " : "\nextern unsigned char ") +
                 IndexedName(DescriptorName, I) + "[] __asm__(\"" +
                 Proof->Descriptors[I].Symbol + "\");\n";
+    if (Proof->Descriptors.empty())
+      Source += "\n";
     Source += "struct " + StorageType +
               " {\n"
               "  void *cache;\n";
