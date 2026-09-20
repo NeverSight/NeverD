@@ -520,7 +520,12 @@ struct SwiftTypeMetadataFixture {
 
   explicit SwiftTypeMetadataFixture(Arch Architecture,
                                     bool LocalProtocol = false,
-                                    bool LeadingValue = false) {
+                                    bool LeadingValue = false,
+                                    bool CombineNominal = false,
+                                    bool LocalNominal = false) {
+    EXPECT_LE(unsigned(LocalProtocol) + unsigned(CombineNominal) +
+                  unsigned(LocalNominal),
+              1U);
     Image.Format = BinaryFormat::MachO;
     Image.Arch = Architecture;
     Image.Bits = Bitness::Bits64;
@@ -553,13 +558,16 @@ struct SwiftTypeMetadataFixture {
                SegmentFlags::Readable | SegmentFlags::Writable, false);
     AddMapping("__swift_import", 0x3000,
                SegmentFlags::Readable | SegmentFlags::Writable, true);
-    if (LocalProtocol)
+    if (LocalProtocol || LocalNominal)
       AddMapping("__swift_descriptor", 0x4000, SegmentFlags::Readable, false);
     auto &ReferenceData = Image.Segments[0].Data;
     llvm::support::endian::write32le(
         ReferenceData.data() + Reference - 0x1000,
         static_cast<uint32_t>(static_cast<int32_t>(TypeReference - Reference)));
-    const uint32_t Length = LocalProtocol ? 9 : 7;
+    const llvm::StringRef Suffix = LocalProtocol    ? "_pSg"
+                                   : CombineNominal ? "ySbG"
+                                                    : "Sg";
+    const uint32_t Length = 5 + Suffix.size();
     llvm::support::endian::write32le(
         ReferenceData.data() + Reference + 4 - 0x1000, Length);
     auto *Type = ReferenceData.data() + TypeReference - 0x1000;
@@ -567,24 +575,33 @@ struct SwiftTypeMetadataFixture {
     llvm::support::endian::write32le(
         Type + 1, static_cast<uint32_t>(static_cast<int32_t>(
                       DescriptorSlot - (TypeReference + 1))));
-    const llvm::StringRef Suffix = LocalProtocol ? "_pSg" : "Sg";
     std::memcpy(Type + 5, Suffix.data(), Suffix.size());
     Type[5 + Suffix.size()] = 0;
-    if (LocalProtocol) {
-      Image.Symbols.push_back(
-          {"_$s7WMFData10WMFService_pSgMR", Reference, 8, false});
-      Image.Symbols.push_back(
-          {"_$s7WMFData10WMFService_pSgMd", Cache, 8, false});
-      Image.Symbols.push_back(
-          {"_$s7WMFData10WMFServiceMp", LocalDescriptor, 0, false});
-      Image.Exports.push_back(
-          {"_$s7WMFData10WMFServiceMp", 0, LocalDescriptor});
+    if (LocalProtocol || LocalNominal) {
+      const std::string Base = LocalNominal
+                                   ? "_$s7WMFData24WMFFeatureConfigResponseVSg"
+                                   : "_$s7WMFData10WMFService_pSg";
+      const std::string Descriptor =
+          LocalNominal ? "_$s7WMFData24WMFFeatureConfigResponseVMn"
+                       : "_$s7WMFData10WMFServiceMp";
+      Image.Symbols.push_back({Base + "MR", Reference, 8, false});
+      Image.Symbols.push_back({Base + "Md", Cache, 8, false});
+      Image.Symbols.push_back({Descriptor, LocalDescriptor, 0, false});
+      Image.Exports.push_back({Descriptor, 0, LocalDescriptor});
       llvm::support::endian::write64le(Image.Segments[2].Data.data() +
                                            DescriptorSlot - 0x3000,
                                        LocalDescriptor);
       Image.DataPtrRelocSlots.insert(DescriptorSlot);
       Image.DataPtrRelocTargetOwners[DescriptorSlot] = 0x4000;
       Image.MachOResolvedChainedPointerSlots.insert(DescriptorSlot);
+    } else if (CombineNominal) {
+      Image.Symbols.push_back(
+          {"_$s7Combine9PublishedVySbGMR", Reference, 8, false});
+      Image.Symbols.push_back(
+          {"_$s7Combine9PublishedVySbGMd", Cache, 8, false});
+      EXPECT_TRUE(Image.recordDyldBindSlot(
+          DescriptorSlot, "_$s7Combine9PublishedVMn", 0,
+          "/System/Library/Frameworks/Combine.framework/Combine", false));
     } else {
       Image.Symbols.push_back(
           {"_$s10Foundation3URLVSgMR", Reference, 8, false});
@@ -857,53 +874,89 @@ TEST(ObjCSourceBindings, SwiftWitnessAccessorRejectsIncompleteOrStaleEvidence) {
 
 TEST(ObjCSourceBindings,
      SwiftConcreteTypeMetadataPairsRebuildFreshCacheAndRelativeReference) {
-  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
-    SwiftTypeMetadataFixture F(Architecture);
-    // Swift private-linkage symbols repeat across compilation units. The
-    // typed native call, not global symbol-name uniqueness, pairs the exact
-    // cache and reference addresses used by this function.
-    F.Image.Symbols.push_back({"_$s10Foundation3URLVSgMR", 0x1090, 8, false});
-    F.Image.Symbols.push_back({"_$s10Foundation3URLVSgMd", 0x2030, 8, false});
-    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
-    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
-    ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
-    const auto Pair =
-        Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
-    EXPECT_EQ(Pair.ReferenceAddress, SwiftTypeMetadataFixture::Reference);
-    EXPECT_EQ(Pair.TypeReferenceAddress,
-              SwiftTypeMetadataFixture::TypeReference);
-    EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
-    EXPECT_EQ(Pair.DescriptorSymbol, "_$s10Foundation3URLVMn");
-    EXPECT_EQ(Pair.Suffix, "Sg");
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const bool CombineNominal : {false, true}) {
+      SCOPED_TRACE(CombineNominal);
+      SwiftTypeMetadataFixture F(Architecture, false, false, CombineNominal);
+      // Swift private-linkage symbols repeat across compilation units. The
+      // typed native call, not global symbol-name uniqueness, pairs the exact
+      // cache and reference addresses used by this function.
+      const std::string ReferenceName = CombineNominal
+                                            ? "_$s7Combine9PublishedVySbGMR"
+                                            : "_$s10Foundation3URLVSgMR";
+      const std::string CacheName = CombineNominal
+                                        ? "_$s7Combine9PublishedVySbGMd"
+                                        : "_$s10Foundation3URLVSgMd";
+      F.Image.Symbols.push_back({ReferenceName, 0x1090, 8, false});
+      F.Image.Symbols.push_back({CacheName, 0x2030, 8, false});
+      const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+      const auto Pair =
+          Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+      EXPECT_EQ(Pair.ReferenceAddress, SwiftTypeMetadataFixture::Reference);
+      EXPECT_EQ(Pair.TypeReferenceAddress,
+                SwiftTypeMetadataFixture::TypeReference);
+      EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
+      const std::string Descriptor = CombineNominal ? "_$s7Combine9PublishedVMn"
+                                                    : "_$s10Foundation3URLVMn";
+      const std::string Suffix = CombineNominal ? "ySbG" : "Sg";
+      EXPECT_EQ(Pair.DescriptorSymbol, Descriptor);
+      EXPECT_EQ(Pair.Suffix, Suffix);
 
-    const auto Call = Result.Function.Body[0].Val;
-    ASSERT_EQ(Call->Operands.size(), 2U);
-    for (size_t I = 0; I < 2; ++I) {
-      const auto &Address = Call->Operands[I];
-      ASSERT_TRUE(Address->SourceCallHint);
-      EXPECT_EQ(Address->SourceCallHint->CallKind,
-                SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
-      EXPECT_EQ(Address->SourceCallHint->TargetAddress,
-                I ? SwiftTypeMetadataFixture::Reference
-                  : SwiftTypeMetadataFixture::Cache);
-      EXPECT_TRUE(objcSourceCallBound(*Address, F.Image, {}));
+      const auto Call = Result.Function.Body[0].Val;
+      ASSERT_EQ(Call->Operands.size(), 2U);
+      for (size_t I = 0; I < 2; ++I) {
+        const auto &Address = Call->Operands[I];
+        ASSERT_TRUE(Address->SourceCallHint);
+        EXPECT_EQ(Address->SourceCallHint->CallKind,
+                  SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+        EXPECT_EQ(Address->SourceCallHint->TargetAddress,
+                  I ? SwiftTypeMetadataFixture::Reference
+                    : SwiftTypeMetadataFixture::Cache);
+        EXPECT_TRUE(objcSourceCallBound(*Address, F.Image, {}));
+      }
+
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCSwiftTypeMetadataHelpers(
+          F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+      EXPECT_EQ(Helpers,
+                (std::set<std::string>{
+                    "neverd_swift_type_metadata_2020_1020_cache_address",
+                    "neverd_swift_type_metadata_2020_1020_reference_address"}));
+      EXPECT_NE(Source.find("__asm__(\"" + Descriptor + "\")"),
+                std::string::npos);
+      EXPECT_NE(Source.find(".type_reference[0] = 2"), std::string::npos);
+      for (size_t I = 0; I < Suffix.size(); ++I)
+        EXPECT_NE(Source.find(".type_reference[" + std::to_string(5 + I) +
+                              "] = " + std::to_string(uint8_t(Suffix[I]))),
+                  std::string::npos);
+      EXPECT_NE(Source.find(".reference.length = " +
+                            std::to_string(5 + Suffix.size())),
+                std::string::npos);
+      EXPECT_NE(Source.find("void *cache"), std::string::npos);
     }
+}
 
-    std::set<std::string> Helpers;
-    const auto Source = renderObjCSwiftTypeMetadataHelpers(
-        F.Image, Result.SwiftTypeMetadataPairs, Helpers);
-    EXPECT_EQ(Helpers,
-              (std::set<std::string>{
-                  "neverd_swift_type_metadata_2020_1020_cache_address",
-                  "neverd_swift_type_metadata_2020_1020_reference_address"}));
-    EXPECT_NE(Source.find("__asm__(\"_$s10Foundation3URLVMn\")"),
-              std::string::npos);
-    EXPECT_NE(Source.find(".type_reference[0] = 2"), std::string::npos);
-    EXPECT_NE(Source.find(".type_reference[5] = 83"), std::string::npos);
-    EXPECT_NE(Source.find(".type_reference[6] = 103"), std::string::npos);
-    EXPECT_NE(Source.find(".reference.length = 7"), std::string::npos);
-    EXPECT_NE(Source.find("void *cache"), std::string::npos);
-  }
+TEST(ObjCSourceBindings,
+     SwiftSystemFrameworkDescriptorsRequireMatchingInstallNames) {
+  constexpr llvm::StringLiteral Descriptor = "_$s7Combine9PublishedVMn";
+  EXPECT_TRUE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      Descriptor, "/System/Library/Frameworks/Combine.framework/Combine"));
+  EXPECT_TRUE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      Descriptor,
+      "/System/Library/Frameworks/Combine.framework/Versions/A/Combine"));
+  EXPECT_FALSE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      Descriptor,
+      "/System/Library/Frameworks/Foundation.framework/Foundation"));
+  EXPECT_FALSE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      Descriptor, "/tmp/Combine.framework/Combine"));
+  EXPECT_FALSE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      "_$s7Combine9PublishedVMa",
+      "/System/Library/Frameworks/Combine.framework/Combine"));
+  EXPECT_FALSE(objc_binding_detail::swiftSystemFrameworkNominalDescriptor(
+      "_$s7Combine9PublisherMp",
+      "/System/Library/Frameworks/Combine.framework/Combine"));
 }
 
 TEST(ObjCSourceBindings,
@@ -932,6 +985,29 @@ TEST(ObjCSourceBindings,
               SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
     EXPECT_EQ(Call->Operands[2]->SourceCallHint->CallKind,
               SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+  }
+}
+
+TEST(ObjCSourceBindings,
+     SwiftNominalTypeMetadataPairsAcceptExactLocalDescriptorRebases) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftTypeMetadataFixture F(Architecture, false, false, false, true);
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+    const auto Pair =
+        Result.SwiftTypeMetadataPairs.at(SwiftTypeMetadataFixture::Cache);
+    EXPECT_EQ(Pair.DescriptorSlot, SwiftTypeMetadataFixture::DescriptorSlot);
+    EXPECT_EQ(Pair.DescriptorSymbol,
+              "_$s7WMFData24WMFFeatureConfigResponseVMn");
+    EXPECT_EQ(Pair.Suffix, "Sg");
+
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftTypeMetadataHelpers(
+        F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+    EXPECT_NE(
+        Source.find("__asm__(\"_$s7WMFData24WMFFeatureConfigResponseVMn\")"),
+        std::string::npos);
   }
 }
 

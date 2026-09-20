@@ -393,10 +393,10 @@ inline bool overlapsPointerStorage(const BinaryImage &Image, va_t Address,
          MapOverlaps(Image.DyldBindSlots);
 }
 
-inline bool swiftSimpleDescriptor(llvm::StringRef Symbol,
-                                  llvm::StringRef DescriptorKind,
-                                  llvm::StringRef DeclKind,
-                                  llvm::StringRef Module = {}) {
+inline std::optional<std::string>
+swiftSimpleDescriptorModule(llvm::StringRef Symbol,
+                            llvm::StringRef DescriptorKind,
+                            llvm::StringRef DeclKind) {
   Symbol.consume_front("_");
   llvm::SwiftDemangleOptions Options;
   Options.MaxInputBytes = 8000;
@@ -412,11 +412,11 @@ inline bool swiftSimpleDescriptor(llvm::StringRef Symbol,
   };
   if (!Parsed.Root || !Parsed.Error.empty() ||
       !Shape(*Parsed.Root, "Global", 1))
-    return false;
+    return std::nullopt;
   const auto &Descriptor = Parsed.Root->Children[0];
   if (!Shape(Descriptor, DescriptorKind, 1) ||
       !Shape(Descriptor.Children[0], "Type", 1))
-    return false;
+    return std::nullopt;
   const auto &Nominal = Descriptor.Children[0].Children[0];
   const bool ExpectedDeclaration =
       DeclKind.empty() ? (Nominal.Kind == "Structure" ||
@@ -424,14 +424,24 @@ inline bool swiftSimpleDescriptor(llvm::StringRef Symbol,
                        : Nominal.Kind == DeclKind;
   if (!ExpectedDeclaration || Nominal.Text || Nominal.Index ||
       Nominal.Children.size() != 2)
-    return false;
+    return std::nullopt;
   const auto &DeclaredModule = Nominal.Children[0];
   const auto &Name = Nominal.Children[1];
-  return DeclaredModule.Kind == "Module" && DeclaredModule.Text &&
-         (Module.empty() || *DeclaredModule.Text == Module) &&
-         !DeclaredModule.Index && DeclaredModule.Children.empty() &&
-         Name.Kind == "Identifier" && Name.Text && !Name.Text->empty() &&
-         !Name.Index && Name.Children.empty();
+  if (DeclaredModule.Kind != "Module" || !DeclaredModule.Text ||
+      DeclaredModule.Text->empty() || DeclaredModule.Index ||
+      !DeclaredModule.Children.empty() || Name.Kind != "Identifier" ||
+      !Name.Text || Name.Text->empty() || Name.Index || !Name.Children.empty())
+    return std::nullopt;
+  return *DeclaredModule.Text;
+}
+
+inline bool swiftSimpleDescriptor(llvm::StringRef Symbol,
+                                  llvm::StringRef DescriptorKind,
+                                  llvm::StringRef DeclKind,
+                                  llvm::StringRef Module = {}) {
+  const auto DeclaredModule =
+      swiftSimpleDescriptorModule(Symbol, DescriptorKind, DeclKind);
+  return DeclaredModule && (Module.empty() || *DeclaredModule == Module.str());
 }
 
 inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
@@ -441,6 +451,20 @@ inline bool swiftNominalDescriptor(llvm::StringRef Symbol,
 
 inline bool swiftProtocolDescriptor(llvm::StringRef Symbol) {
   return swiftSimpleDescriptor(Symbol, "ProtocolDescriptor", "Protocol");
+}
+
+inline bool swiftSystemFrameworkNominalDescriptor(llvm::StringRef Symbol,
+                                                  llvm::StringRef Provider) {
+  const auto Module =
+      swiftSimpleDescriptorModule(Symbol, "NominalTypeDescriptor", {});
+  if (!Module || !std::all_of(Module->begin(), Module->end(), [](char C) {
+        return llvm::isAlnum(C) || C == '_';
+      }))
+    return false;
+  const std::string Prefix =
+      "/System/Library/Frameworks/" + *Module + ".framework/";
+  return Provider == Prefix + *Module ||
+         Provider == Prefix + "Versions/A/" + *Module;
 }
 
 inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
@@ -458,7 +482,7 @@ inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
 }
 
 inline std::optional<std::string>
-swiftLocalProtocolDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
+swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
   const auto Imports = Image.collectImportStorageSlots();
   const auto *SlotSection = Image.getSectionFor(DescriptorSlot);
   const auto *SlotSegment = Image.getSegmentFor(DescriptorSlot);
@@ -497,7 +521,8 @@ swiftLocalProtocolDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
       return std::nullopt;
     Descriptor = &Candidate;
   }
-  if (!Descriptor || !swiftProtocolDescriptor(Descriptor->Name))
+  if (!Descriptor || (!swiftProtocolDescriptor(Descriptor->Name) &&
+                      !swiftNominalDescriptor(Descriptor->Name, {})))
     return std::nullopt;
 
   size_t MatchingExports = 0;
@@ -597,22 +622,25 @@ swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
       !Import->second.Addend && Bind != Image.DyldBindSlots.end() &&
       Bind->second.Name == Import->second.Name && !Bind->second.Addend &&
       !Bind->second.WeakImport &&
-      darwinExportModuleMatches(
-          "/System/Library/Frameworks/Foundation.framework/Foundation",
-          Bind->second.Module) &&
-      swiftNominalDescriptor(Import->second.Name, "Foundation"))
+      swiftSystemFrameworkNominalDescriptor(Import->second.Name,
+                                            Bind->second.Module))
     DescriptorSymbol = Import->second.Name;
   else
-    DescriptorSymbol = swiftLocalProtocolDescriptor(Image, *DescriptorSlot);
+    DescriptorSymbol = swiftLocalExportedDescriptor(Image, *DescriptorSlot);
   if (!DescriptorSymbol)
     return std::nullopt;
   llvm::StringRef Descriptor(*DescriptorSymbol);
   Descriptor.consume_front("_");
+  const bool Nominal = Descriptor.ends_with("Mn");
+  const bool Protocol = Descriptor.ends_with("Mp");
+  const bool ValidNominal =
+      Nominal && (Bind != Image.DyldBindSlots.end()
+                      ? swiftSystemFrameworkNominalDescriptor(
+                            *DescriptorSymbol, Bind->second.Module)
+                      : swiftNominalDescriptor(*DescriptorSymbol, {}));
   if ((!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")) ||
-      (Descriptor.ends_with("Mn") !=
-       swiftNominalDescriptor(*DescriptorSymbol, "Foundation")) ||
-      (Descriptor.ends_with("Mp") !=
-       swiftProtocolDescriptor(*DescriptorSymbol)))
+      (Nominal && !ValidNominal) ||
+      (Protocol != swiftProtocolDescriptor(*DescriptorSymbol)))
     return std::nullopt;
   const std::string Suffix(reinterpret_cast<const char *>(TypeBytes + 5),
                            Length - 5);
