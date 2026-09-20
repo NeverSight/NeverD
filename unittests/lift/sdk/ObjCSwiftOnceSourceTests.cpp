@@ -824,4 +824,135 @@ TEST(SwiftOnceSources, RejectsUnprovedSwiftStringOnceContractsAndStorage) {
   }
 }
 
+TEST(SwiftOnceSources, RebuildsDispatchOncePredicateAndCallbackAddress) {
+  OnceFixture F(Arch::AArch64);
+  constexpr va_t DispatchSlot = 0x2088;
+  auto &Wrapper = F.Pipeline.HighFuncs[0];
+  auto &Callback = F.Pipeline.HighFuncs[1];
+  F.Image.Symbols.erase(F.Image.Symbols.begin());
+  F.Image.Sections[1].Type = llvm::MachO::S_ZEROFILL;
+  F.Image.ImportPtrSlots[DispatchSlot] = "_dispatch_once_f";
+  F.Image.DyldBindSlots[DispatchSlot] = {
+      "_dispatch_once_f", 0, "/usr/lib/system/libdispatch.dylib", false};
+  const auto Runtime = darwinRuntimeSourceCallHint(F.Image, DispatchSlot);
+  ASSERT_TRUE(Runtime);
+  auto Call = HighExpr::makeCall("dispatch_once_f", DispatchSlot,
+                                 {HighExpr::makeConst(0x2000, 8),
+                                  HighExpr::makeConst(0, 8),
+                                  HighExpr::makeConst(Callback.Entry, 8)});
+  Call->Type = NdType::makeVoid();
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Runtime);
+  HighStmt Invoke;
+  Invoke.Kind = StmtKind::Call;
+  Invoke.CallExpr = Call;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Wrapper.Params.clear();
+  Wrapper.ReturnType = NdType::makeVoid();
+  Wrapper.SourceTypeHint->Parameters.clear();
+  Wrapper.SourceTypeHint->ReturnType = NdType::makeVoid();
+  Wrapper.Body = {Invoke, Return};
+  Callback.SourceTypeHint =
+      swift_once_source_detail::dispatchCallbackHint(F.Image.Arch);
+  Callback.Params = {{"once_context", NdType::makePtr(NdType::makeVoid())}};
+  HighStmt Use;
+  Use.Kind = StmtKind::ExprStmt;
+  MedVar Context;
+  Context.Kind = MedVar::Param;
+  Context.Id = 0;
+  Context.Size = 8;
+  Use.Val = HighExpr::makeVar(Context, NdType::makePtr(NdType::makeVoid()));
+  Callback.Body.insert(Callback.Body.begin(), Use);
+
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  EXPECT_EQ(Plan.DispatchOnceCallbacks, std::set<va_t>{Callback.Entry});
+  ASSERT_EQ(Plan.CallbackHints.count(Callback.Entry), 1U);
+  PipelineOptions Options;
+  EXPECT_EQ(applySwiftOnceSourceHints(Plan, Options), 1U);
+  EXPECT_EQ(Options.SourceTypeHints.at(Callback.Entry).Origin,
+            SourceFunctionTypeHint::OriginKind::DarwinSDK);
+
+  const auto Bound =
+      bindSwiftOnceSourceReferences(Wrapper, F.Image, Plan, F.functions());
+  EXPECT_EQ(Bound.Dependencies, std::set<va_t>{Callback.Entry});
+  EXPECT_EQ(Bound.LocalStorageExtents, (std::map<va_t, uint64_t>{{0x2000, 8}}));
+  const auto BoundCall = Bound.Function.Body[0].CallExpr;
+  ASSERT_TRUE(BoundCall);
+  ASSERT_EQ(BoundCall->Operands.size(), 3U);
+  ASSERT_TRUE(BoundCall->Operands[0]->SourceCallHint);
+  EXPECT_EQ(BoundCall->Operands[0]->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(BoundCall->Operands[0]->SourceCallHint->TargetAddress, 0x2000U);
+  ASSERT_TRUE(BoundCall->Operands[2]->SourceCallHint);
+  EXPECT_EQ(BoundCall->Operands[2]->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::NativeAddress);
+  EXPECT_TRUE(swiftOnceCallbackBound(*BoundCall->Operands[2], F.Image, Plan,
+                                     F.functions()));
+  EXPECT_TRUE(
+      bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
+}
+
+TEST(SwiftOnceSources, RejectsUnprovedDispatchOnceReferences) {
+  for (unsigned Case = 0; Case < 8; ++Case) {
+    OnceFixture F(Arch::AArch64);
+    constexpr va_t DispatchSlot = 0x2088;
+    F.Image.ImportPtrSlots[DispatchSlot] = "_dispatch_once_f";
+    F.Image.DyldBindSlots[DispatchSlot] = {
+        "_dispatch_once_f", 0, "/usr/lib/system/libdispatch.dylib", false};
+    const auto Runtime = darwinRuntimeSourceCallHint(F.Image, DispatchSlot);
+    ASSERT_TRUE(Runtime);
+    auto &Wrapper = F.Pipeline.HighFuncs[0];
+    auto &Callback = F.Pipeline.HighFuncs[1];
+    F.Image.Symbols.erase(F.Image.Symbols.begin());
+    F.Image.Sections[1].Type = llvm::MachO::S_ZEROFILL;
+    auto Call = HighExpr::makeCall("dispatch_once_f", DispatchSlot,
+                                   {HighExpr::makeConst(0x2000, 8),
+                                    HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(Callback.Entry, 8)});
+    Call->Type = NdType::makeVoid();
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Runtime);
+    HighStmt Invoke;
+    Invoke.Kind = StmtKind::Call;
+    Invoke.CallExpr = Call;
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Wrapper.Params.clear();
+    Wrapper.ReturnType = NdType::makeVoid();
+    Wrapper.SourceTypeHint->Parameters.clear();
+    Wrapper.SourceTypeHint->ReturnType = NdType::makeVoid();
+    Wrapper.Body = {Invoke, Return};
+    Callback.SourceTypeHint =
+        swift_once_source_detail::dispatchCallbackHint(F.Image.Arch);
+    Callback.Params = {{"once_context", NdType::makePtr(NdType::makeVoid())}};
+    if (Case == 0)
+      F.Image.DyldBindSlots[DispatchSlot].Module = "/tmp/libdispatch.dylib";
+    if (Case == 1)
+      Call->Operands[0] = HighExpr::makeConst(0x2001, 8);
+    if (Case == 2)
+      Call->Operands[2] = HighExpr::makeConst(0x2010, 8);
+    if (Case == 3) {
+      LowFunc Direct;
+      Direct.Blocks.emplace_back();
+      LowOp Op;
+      Op.Opcode = NdOp::CALL;
+      Op.addInput(NdVar::cst(Callback.Entry, 8));
+      Direct.Blocks[0].Ops.push_back(Op);
+      F.Pipeline.LowFuncs.push_back(Direct);
+    }
+    if (Case == 4)
+      Callback.SourceTypeHint->ReturnType = NdType::makeInt(8);
+    if (Case == 5)
+      F.Image.Sections[1].Type = 0;
+    if (Case == 6)
+      F.Image.Segments[1].Data[0] = 1;
+    if (Case == 7)
+      F.Image.Symbols.push_back({"_overlap", 0x1ff8, 16, false});
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    const auto Bound =
+        bindSwiftOnceSourceReferences(Wrapper, F.Image, Plan, F.functions());
+    EXPECT_TRUE(Bound.Dependencies.empty()) << Case;
+    EXPECT_TRUE(Bound.LocalStorageExtents.empty()) << Case;
+  }
+}
+
 } // namespace

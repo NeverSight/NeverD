@@ -1094,10 +1094,45 @@ localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
 // its initialized state. Keep token storage shared through the normal helpers.
 inline std::optional<SourceCallTypeHint>
 oncePredicateStorageHint(const BinaryImage &Image, va_t Address) {
-  if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.MachOChainedFixupsAmbiguous ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) || Address % 8)
     return std::nullopt;
   auto Hint = localStorageHint(Image, Address, 8);
+  if (!Hint) {
+    const auto *Section = Image.getSectionFor(Address);
+    const auto *Segment = Image.getSegmentFor(Address);
+    if (!Section || !Segment || !Section->isReadable() ||
+        !Section->isWritable() || Section->isExecutable() ||
+        !Segment->isReadable() || !Segment->isWritable() ||
+        Segment->isExecutable() ||
+        (Section->Type & llvm::MachO::SECTION_TYPE) !=
+            llvm::MachO::S_ZEROFILL ||
+        Address < Section->VA || Address < Segment->VA ||
+        8 > Section->Size - (Address - Section->VA) ||
+        8 > Segment->Size - (Address - Segment->VA) ||
+        overlapsPointerStorage(Image, Address, 8))
+      return std::nullopt;
+    for (const auto &Symbol : Image.Symbols) {
+      if (Symbol.IsFunc)
+        continue;
+      if ((Symbol.Addr >= Address && Symbol.Addr < Address + 8) ||
+          (Symbol.Size && Symbol.Addr <= InvalidVA - Symbol.Size &&
+           Symbol.Addr < Address + 8 && Address < Symbol.Addr + Symbol.Size))
+        return std::nullopt;
+    }
+    SourceCallTypeHint Anonymous;
+    Anonymous.CallKind = SourceCallTypeHint::Kind::RuntimeLocalStorageAddress;
+    Anonymous.TargetAddress = Address;
+    Anonymous.TargetName =
+        "dispatch_once_predicate_" + llvm::utohexstr(Address, true);
+    Anonymous.ByteCount = 8;
+    Anonymous.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+    std::string Reason;
+    if (!assignDarwinScalarSourceABI(Anonymous.Signature, Image.Arch, Reason))
+      return std::nullopt;
+    Hint = std::move(Anonymous);
+  }
   const auto *Bytes = Hint ? Image.readVA(Address, 8) : nullptr;
   if (!Bytes ||
       !std::all_of(Bytes, Bytes + 8, [](uint8_t B) { return B == 0; }))
@@ -3328,8 +3363,10 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   }
   if (Binding.CallKind ==
       SourceCallTypeHint::Kind::RuntimeLocalStorageAddress) {
-    const auto Expected =
+    auto Expected =
         localStorageHint(Image, Binding.TargetAddress, Binding.ByteCount);
+    if (!Expected && Binding.ByteCount == 8)
+      Expected = oncePredicateStorageHint(Image, Binding.TargetAddress);
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress &&
@@ -3939,7 +3976,10 @@ renderObjCLocalStorageHelpers(const BinaryImage &Image,
                               std::set<std::string> &SharedFunctions) {
   std::string Source;
   for (const auto &[Address, Width] : Storage) {
-    if (!objc_binding_detail::localStorageHint(Image, Address, Width))
+    auto Hint = objc_binding_detail::localStorageHint(Image, Address, Width);
+    if (!Hint && Width == 8)
+      Hint = objc_binding_detail::oncePredicateStorageHint(Image, Address);
+    if (!Hint)
       throw std::runtime_error("local-storage initializer is no longer valid");
     const auto *Bytes = Image.readVA(Address, Width);
     if (!Bytes)

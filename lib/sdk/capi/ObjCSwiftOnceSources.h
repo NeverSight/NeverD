@@ -48,6 +48,7 @@ struct SwiftOnceSourcePlan {
       ObjCClassMetadataAccessors;
   std::map<va_t, SourceFunctionTypeHint> AddressorHints;
   std::map<va_t, SourceFunctionTypeHint> CallbackHints;
+  std::set<va_t> DispatchOnceCallbacks;
 };
 
 namespace swift_once_source_detail {
@@ -83,6 +84,23 @@ inline bool onceCall(const HighExpr &E, const BinaryImage &Image) {
       Hint.ImmutablePointerSlot)
     return false;
   const auto Expected = swiftRuntimeSourceCallHint(Image, Hint.TargetAddress);
+  return Expected &&
+         objc_binding_detail::runtimeBindingMatches(Hint, *Expected);
+}
+
+inline bool dispatchOnceCall(const HighExpr &E, const BinaryImage &Image) {
+  if (E.Kind != ExprKind::Call || E.IsIndirectCall || !E.SourceCallHint ||
+      E.Operands.size() != 3 || E.IntrinsicId != Intrinsic::None ||
+      !E.IntrinsicOutputs.empty() ||
+      E.MemoryOrdering != NdMemoryOrdering::None ||
+      E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  const auto &Hint = *E.SourceCallHint;
+  if (Hint.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall ||
+      Hint.TargetName != "dispatch_once_f" || Hint.Receiver ||
+      Hint.ValueWitness || Hint.ImmutablePointerSlot)
+    return false;
+  const auto Expected = darwinRuntimeSourceCallHint(Image, Hint.TargetAddress);
   return Expected &&
          objc_binding_detail::runtimeBindingMatches(Hint, *Expected);
 }
@@ -639,6 +657,12 @@ inline SourceFunctionTypeHint callbackHint(Arch Architecture) {
   return Hint;
 }
 
+inline SourceFunctionTypeHint dispatchCallbackHint(Arch Architecture) {
+  auto Hint = callbackHint(Architecture);
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+  return Hint;
+}
+
 inline SourceFunctionTypeHint addressorHint(Arch Architecture) {
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
@@ -722,6 +746,25 @@ discoverSwiftOnceSources(const BinaryImage &Image,
           Pending.pop_back();
           if (!E)
             continue;
+          if (dispatchOnceCall(*E, Image)) {
+            const auto Predicate =
+                objc_binding_detail::constantAddress(*E->Operands[0]);
+            const auto Callback =
+                objc_binding_detail::constantAddress(*E->Operands[2]);
+            if (Predicate && Callback && Functions.count(*Callback) &&
+                Image.isCodeAddress(*Callback) &&
+                !DirectTargets.count(*Callback) &&
+                objc_binding_detail::oncePredicateStorageHint(Image,
+                                                              *Predicate)) {
+              const auto Hint = dispatchCallbackHint(Image.Arch);
+              const auto [It, Added] =
+                  Plan.CallbackHints.emplace(*Callback, Hint);
+              if ((Added ||
+                   objc_projection_detail::sameHint(It->second, Hint)) &&
+                  !Plan.Addressors.count(*Callback))
+                Plan.DispatchOnceCallbacks.insert(*Callback);
+            }
+          }
           if (E->Kind == ExprKind::Call && E->SourceCallHint &&
               E->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
               objcSourceCallBound(*E, Image, Functions)) {
@@ -854,9 +897,11 @@ swiftOnceCallbackBound(const HighExpr &E, const BinaryImage &Image,
   SourceFunctionTypeHint Address;
   Address.ReturnType = NdType::makePtr(NdType::makeVoid());
   std::string Error;
+  const bool Dispatch =
+      Plan.DispatchOnceCallbacks.count(Binding.TargetAddress) != 0;
   return assignDarwinScalarSourceABI(Address, Image.Arch, Error) &&
          objc_projection_detail::sameHint(Binding.Signature, Address) &&
-         swift_once_source_detail::ignoresContext(*F->second);
+         (Dispatch || swift_once_source_detail::ignoresContext(*F->second));
 }
 
 inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
@@ -877,6 +922,41 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     Copies.emplace(Original.get(), E);
     for (auto &Op : E->Operands)
       Op = Copy(Op, Depth + 1);
+    if (swift_once_source_detail::dispatchOnceCall(*E, Image)) {
+      const auto Predicate =
+          objc_binding_detail::constantAddress(*E->Operands[0]);
+      const auto Callback =
+          objc_binding_detail::constantAddress(*E->Operands[2]);
+      auto PredicateHint =
+          Predicate
+              ? objc_binding_detail::oncePredicateStorageHint(Image, *Predicate)
+              : std::nullopt;
+      if (Predicate && Callback && PredicateHint &&
+          Plan.DispatchOnceCallbacks.count(*Callback)) {
+        auto Address = HighExpr::makeCall({}, 0, {});
+        auto AddressHint = std::make_shared<SourceCallTypeHint>();
+        AddressHint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
+        AddressHint->TargetAddress = *Callback;
+        AddressHint->Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+        std::string Error;
+        if (assignDarwinScalarSourceABI(AddressHint->Signature, Image.Arch,
+                                        Error)) {
+          Address->Type = AddressHint->Signature.ReturnType;
+          Address->SourceCallHint = std::move(AddressHint);
+          if (swiftOnceCallbackBound(*Address, Image, Plan, Functions)) {
+            auto Storage = HighExpr::makeCall({}, 0, {});
+            Storage->Type = E->Operands[0]->Type;
+            Storage->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*PredicateHint));
+            E->Operands[0] = std::move(Storage);
+            E->Operands[2] = std::move(Address);
+            Result.LocalStorageExtents[*Predicate] = 8;
+            Result.Dependencies.insert(*Callback);
+            return E;
+          }
+        }
+      }
+    }
     if (E->Kind == ExprKind::Call && !E->IsIndirectCall &&
         E->Operands.size() <= 1 && E->SourceCallHint &&
         E->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&

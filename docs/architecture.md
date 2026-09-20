@@ -421,6 +421,15 @@ is retained. Its zero-argument source callee ABI applies only at call sites;
 the native entry ABI remains separate so incidental context carriers stay
 available to the contract proof.
 
+An authenticated `dispatch_once_f` call may likewise rebuild its predicate and
+local callback address. The loader must prove the exact libdispatch export,
+the complete writable predicate cell, a unique code target that has no ordinary
+direct callers, and the public `void (*)(void *)` callback ABI. The callback is
+re-lifted with that contract and remains an ordinary source dependency. The
+generated unit uses fresh shared predicate storage and the recovered callback
+definition; neither original image address is retained. Unknown providers,
+unproved storage, non-code targets and conflicting call ABIs remain unbound.
+
 If such an initializer calls a compiler-emitted imported Objective-C class
 metadata accessor, projection requires the exact zero-cache, class-reference,
 `objc_opt_self`, `swift_getObjCClassMetadata`, and release-publication template.
