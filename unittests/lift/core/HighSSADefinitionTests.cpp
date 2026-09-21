@@ -385,6 +385,91 @@ TEST(HighPrivateFrameStores,
   }
 }
 
+TEST(HighPrivateFrameStores,
+     ObjCSuperRecordReadDoesNotExposeDisjointPrivateBytes) {
+  auto Function = privateFrameStore(Arch::AArch64);
+  auto &Store = Function.Body[0];
+  Store.StoreVal = paddedInteger();
+  const auto Base = Store.StoreAddr->Operands[0]->Operands[0];
+  const auto SuperAddress =
+      HighExpr::makeBinop(NdOp::INT_SUB, Base, HighExpr::makeConst(16, 8));
+
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::ObjCSuper2;
+  Hint.TargetName = "objc_msgSendSuper2";
+  Hint.Selector = "init";
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Hint.Signature.ReturnType = Pointer;
+  Hint.Signature.Parameters = {{"receiver", Pointer}, {"command", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Hint.Signature, Arch::AArch64, Error))
+      << Error;
+  auto Call = HighExpr::makeCall(
+      Hint.TargetName, 0x2000, {SuperAddress, HighExpr::makeConst(0x3000, 8)});
+  Call->Type = Pointer;
+  Call->SourceCallHint =
+      std::make_shared<const SourceCallTypeHint>(std::move(Hint));
+  HighStmt CallStatement;
+  CallStatement.Kind = StmtKind::Call;
+  CallStatement.CallExpr = Call;
+  Function.Body.insert(Function.Body.begin() + 1, CallStatement);
+  Function.Body.back().RetVal =
+      HighExpr::makeLoad(Function.Body[0].StoreAddr, NdType::makeInt(4, false));
+
+  elimUnreadPrivateFrameStores(Function, Arch::AArch64);
+
+  ASSERT_EQ(Function.Body[0].Kind, StmtKind::Store);
+  ASSERT_TRUE(Function.Body[0].StoreVal);
+  EXPECT_EQ(Function.Body[0].StoreVal->Type->Size, 4U);
+
+  // objc_msgSendSuper2 reads the complete two-pointer objc_super record. A
+  // store overlapping that bounded range cannot discard any observed byte.
+  auto Overlapping = privateFrameStore(Arch::AArch64);
+  Overlapping.Body[0].StoreVal = paddedInteger();
+  Overlapping.Body.insert(Overlapping.Body.begin() + 1,
+                          std::move(CallStatement));
+  Overlapping.Body.back().RetVal = HighExpr::makeLoad(
+      Overlapping.Body[0].StoreAddr, NdType::makeInt(4, false));
+  Overlapping.Body[1].CallExpr->Operands[0] = Overlapping.Body[0].StoreAddr;
+  elimUnreadPrivateFrameStores(Overlapping, Arch::AArch64);
+  EXPECT_EQ(Overlapping.Body[0].StoreVal->Type->Size, 8U);
+}
+
+TEST(HighPrivateFrameStores,
+     StackValueReadsTrackTheirBytesWithoutExposingTheFrame) {
+  auto Function = privateFrameStore(Arch::AArch64);
+  Function.Body[0].StoreVal = paddedInteger();
+  MedVar Incoming;
+  Incoming.Kind = MedVar::Stack;
+  Incoming.Id = 17;
+  Incoming.Size = 8;
+  Incoming.StackOff = 0;
+  Function.Body.insert(Function.Body.begin() + 1,
+                       assign(variable(18), HighExpr::makeVar(Incoming)));
+  Function.Body.back().RetVal =
+      HighExpr::makeLoad(Function.Body[0].StoreAddr, NdType::makeInt(4, false));
+
+  elimUnreadPrivateFrameStores(Function, Arch::AArch64);
+
+  ASSERT_EQ(Function.Body[0].Kind, StmtKind::Store);
+  EXPECT_EQ(Function.Body[0].StoreVal->Type->Size, 4U);
+
+  auto Overlapping = privateFrameStore(Arch::AArch64);
+  Overlapping.Body[0].StoreVal = paddedInteger();
+  MedVar Local = Incoming;
+  Local.Id = 19;
+  Local.Size = 8;
+  Local.StackOff = -24;
+  Overlapping.Body.insert(Overlapping.Body.begin() + 1,
+                          assign(variable(20), HighExpr::makeVar(Local)));
+  Overlapping.Body.back().RetVal = HighExpr::makeLoad(
+      Overlapping.Body[0].StoreAddr, NdType::makeInt(4, false));
+
+  elimUnreadPrivateFrameStores(Overlapping, Arch::AArch64);
+
+  EXPECT_EQ(Overlapping.Body[0].StoreVal->Type->Size, 8U);
+}
+
 TEST(HighPrivateFrameStores, ExhaustedByteReadProofLeavesEveryStoreUnchanged) {
   auto Function = privateFrameStore(Arch::AArch64);
   Function.FrameSize = 131072;

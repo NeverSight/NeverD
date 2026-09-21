@@ -344,6 +344,16 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
   };
   std::vector<Candidate> Candidates;
   std::set<int64_t> ReadBytes;
+  const auto RecordReadBytes = [&](int64_t At, uint16_t Bytes) {
+    if (Bytes > Budget) {
+      Budget = 0;
+      return false;
+    }
+    Budget -= Bytes;
+    for (unsigned I = 0; I < Bytes; ++I)
+      ReadBytes.insert(At + I);
+    return true;
+  };
   std::unordered_set<const HighExpr *> Seen;
   bool Escaped = false;
   walkStmts(Func.Body, [&](HighStmt &S) {
@@ -374,17 +384,13 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
         --Budget;
         if (E->IntrinsicId != Intrinsic::None)
           Escaped = true;
+        std::unordered_set<const HighExpr *> BoundedFrameInputs;
         if (E->Kind == ExprKind::Load && E->Type && E->Operands.size() == 1 &&
             E->MemoryOrdering == NdMemoryOrdering::None &&
             E->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
           if (const auto At = Address(E->Operands[0], E->Type->Size)) {
-            if (E->Type->Size > Budget) {
-              Budget = 0;
+            if (!RecordReadBytes(*At, E->Type->Size))
               return;
-            }
-            Budget -= E->Type->Size;
-            for (unsigned I = 0; I < E->Type->Size; ++I)
-              ReadBytes.insert(*At + I);
             continue;
           }
         }
@@ -395,15 +401,51 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
               E->Operands.size() !=
                   E->SourceCallHint->Signature.Parameters.size())
             Escaped = true;
+          else if (E->SourceCallHint->CallKind ==
+                   SourceCallTypeHint::Kind::ObjCSuper2) {
+            // objc_msgSendSuper2 consumes the two-pointer objc_super record
+            // synchronously and passes only its receiver to the selected
+            // method. Treat that exact record as a bounded read instead of
+            // exposing every otherwise private byte in the caller's frame.
+            const uint16_t Bytes = 2 * TRI.PointerSize;
+            if (!E->Operands.empty())
+              if (const auto At = Address(E->Operands[0], Bytes)) {
+                if (!RecordReadBytes(*At, Bytes))
+                  return;
+                BoundedFrameInputs.insert(E->Operands[0].get());
+              }
+          }
         }
-        if (E->Kind == ExprKind::Var &&
-            (Aliases.count(varKey(E->Var)) || E->Var.Kind == MedVar::Stack ||
-             (E->Var.Kind == MedVar::Reg &&
-              (E->Var.RegOff == TRI.StackPointer ||
-               E->Var.RegOff == TRI.FramePointer))))
+        if (E->Kind == ExprKind::Addr && E->Operands.size() == 1 &&
+            E->Operands[0] && E->Operands[0]->Kind == ExprKind::Var &&
+            E->Operands[0]->Var.Kind == MedVar::Stack) {
           Escaped = true;
+        } else if (E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Stack) {
+          // A stack variable is the value stored in that exact slot, not the
+          // slot's address. Incoming nonnegative slots cannot expose private
+          // frame bytes; local negative slots contribute only their concrete
+          // overlap to byte liveness. Taking a slot's address remains a
+          // conservative escape in the separate case above.
+          const uint16_t Bytes = E->Type ? E->Type->Size : 0;
+          if (!Bytes || E->Var.Size != Bytes ||
+              E->Var.StackOff < -Func.FrameSize) {
+            Escaped = true;
+          } else if (E->Var.StackOff < 0) {
+            const auto PrivateBytes = static_cast<uint16_t>(
+                std::min<uint64_t>(Bytes, uint64_t(-E->Var.StackOff)));
+            if (!RecordReadBytes(E->Var.StackOff, PrivateBytes))
+              return;
+          }
+        } else if (E->Kind == ExprKind::Var &&
+                   (Aliases.count(varKey(E->Var)) ||
+                    (E->Var.Kind == MedVar::Reg &&
+                     (E->Var.RegOff == TRI.StackPointer ||
+                      E->Var.RegOff == TRI.FramePointer)))) {
+          Escaped = true;
+        }
         for (const auto &Operand : E->Operands)
-          Pending.push_back(Operand.get());
+          if (!BoundedFrameInputs.count(Operand.get()))
+            Pending.push_back(Operand.get());
       }
     });
   });
