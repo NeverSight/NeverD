@@ -12,6 +12,7 @@
 #include "ObjCSourceBindings.h"
 #include "ObjCSourceInputs.h"
 #include "ObjCSourceProjection.h"
+#include "ObjCSuperGetterSources.h"
 #include "ObjCSwiftOnceSources.h"
 #include "SessionImpl.h"
 #include "SourceProjectionEvidenceJSON.h"
@@ -208,6 +209,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     std::map<va_t, ObjCSourceBindingResult> Projections;
     const ObjCProfileStorage ProfileStorage(S->Img);
     std::map<va_t, ObjCBlockSourceBindingResult> BlockProjections;
+    const auto SuperGetterPlan = discoverObjCSuperGetterSources(S->Img, Result);
+    std::set<va_t> SuperGetterProjections;
     std::map<va_t, std::string> ProjectionReasons;
     std::set<va_t> Closed;
     for (const auto &[Entry, Func] : Functions) {
@@ -232,8 +235,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             Nested->second.LocalStorageExtents.begin(),
             Nested->second.LocalStorageExtents.end());
       }
-      auto Binding = bindObjCSourceReferences(OnceBinding.Function, S->Img,
-                                              &ProfileStorage, &Functions);
+      auto SuperGetterBinding =
+          projectObjCSuperGetter(OnceBinding.Function, S->Img, SuperGetterPlan);
+      if (SuperGetterBinding.Projected)
+        SuperGetterProjections.insert(Entry);
+      auto Binding = bindObjCSourceReferences(
+          SuperGetterBinding.Function, S->Img, &ProfileStorage, &Functions);
+      Binding.Dependencies.insert(SuperGetterBinding.Dependencies.begin(),
+                                  SuperGetterBinding.Dependencies.end());
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
                                   OnceBinding.Dependencies.end());
       Binding.SwiftOnceAccessors.insert(OnceBinding.SwiftOnceAccessors.begin(),
@@ -264,6 +273,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers,
                                          &Binding.Function) ||
+                     objCSuperGetterSourceCallBound(
+                         Expression, S->Img, SuperGetterPlan, Binding.Function,
+                         Functions) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
                      swiftOnceAddressorBound(Expression, S->Img, OncePlan,
@@ -340,6 +352,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers,
                                          &Binding.Function) ||
+                     objCSuperGetterSourceCallBound(
+                         Expression, S->Img, SuperGetterPlan, Binding.Function,
+                         Functions) ||
                      swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                             Functions) ||
                      swiftOnceAddressorBound(Expression, S->Img, OncePlan,
@@ -411,6 +426,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           return objcSourceCallBound(Expression, S->Img, Functions,
                                      &ProfileStorage, &ReadOnlyHelpers,
                                      &Projection.Function) ||
+                 objCSuperGetterSourceCallBound(
+                     Expression, S->Img, SuperGetterPlan, Projection.Function,
+                     Functions) ||
                  swiftOnceCallbackBound(Expression, S->Img, OncePlan,
                                         Functions) ||
                  swiftOnceAddressorBound(Expression, S->Img, OncePlan,
@@ -584,6 +602,12 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       IdentityHelpers += renderCStringStorageHelpers(S->Img, CStringSections,
                                                      SharedIdentityFunctions,
                                                      CStringPointerSlots);
+      std::set<va_t> SuperGetters;
+      for (const auto Entry : Included)
+        if (SuperGetterProjections.count(Entry))
+          SuperGetters.insert(Entry);
+      IdentityHelpers += renderObjCSuperGetterHelpers(
+          S->Img, SuperGetterPlan, SuperGetters, SharedIdentityFunctions);
       std::set<std::string> SharedStorageFunctions;
       const std::string StorageHelpers =
           ProfileStorage.render(ProfileSections, SharedStorageFunctions) +

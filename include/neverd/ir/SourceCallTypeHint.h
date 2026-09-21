@@ -152,7 +152,14 @@ struct SourceCallTypeHint {
     /// A bounded immutable table whose full-width slots are authenticated
     /// relocations to rebuildable constant Objective-C objects or exact nulls.
     /// ByteCount is the complete table prefix used by proven indexed loads.
-    RuntimeConstantObjectTable
+    RuntimeConstantObjectTable,
+    /// A complete compiler-emitted superclass getter, projected only in its
+    /// verified Objective-C callers. The SDK retains the metadata accessor,
+    /// dynamic selector load and super dispatch under one shared contract.
+    RuntimeObjCSuperGetter,
+    /// One rebuilt selector-reference cell used by a verified super getter.
+    /// The source helper loads the cell after its metadata accessor call.
+    RuntimeSelectorReferenceAddress
   };
   Kind CallKind = Kind::Native;
   enum class SwiftValueWitnessKind {

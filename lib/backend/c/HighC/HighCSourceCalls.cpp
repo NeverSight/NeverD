@@ -218,6 +218,36 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
        Hint.CallKind == Kind::SwiftStringFromNSString) &&
       Signature.Convention != SourceFunctionTypeHint::ConventionKind::Swift)
     return bad("Swift string call has the wrong calling convention");
+  if (Hint.CallKind == Kind::RuntimeObjCSuperGetter) {
+    const auto Name =
+        "neverd_objc_super_getter_" + llvm::utohexstr(Hint.TargetAddress, true);
+    if (!Hint.TargetAddress || Hint.TargetName != Name ||
+        E.CallAddr != Hint.TargetAddress || !E.CallTarget.empty() ||
+        E.IsIndirectCall || !E.IntrinsicOutputs.empty() ||
+        Signature.Architecture != Arch::AArch64 ||
+        Signature.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        Signature.Origin !=
+            SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+        !Signature.ReturnType ||
+        Signature.ReturnType->Kind != NdTypeKind::Int ||
+        Signature.ReturnType->Size != 1 || Signature.Parameters.size() != 4 ||
+        Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+        Hint.RuntimeObjCResultType || Hint.ValueWitness || Hint.Receiver ||
+        !Hint.Selector.empty() || !Hint.OwnerClass.empty() ||
+        Hint.SelectorReferenceAddress || !Hint.BorrowedByteInputs.empty() ||
+        !Hint.SwiftStringInputs.empty() || Hint.Format || Hint.NilTerminated ||
+        Hint.SwiftTypeMetadata || Hint.SelectorResultUse ||
+        Hint.SelectorResultTypeUse || Hint.SelectorArgumentTypeUse ||
+        Hint.SelectorArgumentStorageUse || Hint.ByteCount ||
+        Hint.ImmutablePointerSlot ||
+        std::any_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                    [](const auto &Parameter) {
+                      return !Parameter.Type ||
+                             Parameter.Type->Kind != NdTypeKind::Ptr ||
+                             Parameter.Type->Size != 8;
+                    }))
+      return bad("invalid compiler super getter declaration");
+  }
   if (Hint.CallKind == Kind::NativeAddress ||
       Hint.CallKind == Kind::RuntimeBlockIsa ||
       Hint.CallKind == Kind::RuntimeBlockDescriptor ||
@@ -232,6 +262,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor ||
       Hint.CallKind == Kind::RuntimeSwiftOnceAccessor ||
+      Hint.CallKind == Kind::RuntimeSelectorReferenceAddress ||
       Hint.CallKind == Kind::RuntimeConstantString ||
       Hint.CallKind == Kind::RuntimeConstantObject ||
       Hint.CallKind == Kind::RuntimeBorrowedBytes ||
@@ -367,6 +398,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         return bad("Swift witness accessor has no complete identity");
       Value = "neverd_swift_witness_accessor_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "()";
+    } else if (Hint.CallKind == Kind::RuntimeSelectorReferenceAddress) {
+      const auto Name = "neverd_objc_selector_reference_" +
+                        llvm::utohexstr(Hint.TargetAddress, true) + "_address";
+      if (!Hint.TargetAddress || Hint.TargetName != Name || Hint.ByteCount)
+        return bad("selector-reference cell has no complete identity");
+      Value = Name + "()";
     } else if (Hint.CallKind == Kind::RuntimeSwiftOnceAccessor) {
       if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
         return bad("Swift once accessor has no complete identity");
@@ -427,7 +464,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind != Kind::SwiftRuntimeCall &&
       Hint.CallKind != Kind::SwiftStringBridge &&
       Hint.CallKind != Kind::SwiftStringFromNSString &&
-      Hint.CallKind != Kind::DarwinRuntimeCall)
+      Hint.CallKind != Kind::DarwinRuntimeCall &&
+      Hint.CallKind != Kind::RuntimeObjCSuperGetter)
     return bad("unknown binding kind");
   if (Signature.Parameters.size() > 64 ||
       E.Operands.size() != Signature.Parameters.size())
@@ -529,7 +567,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                          Hint.CallKind == Kind::SwiftRuntimeCall ||
                          Hint.CallKind == Kind::SwiftStringBridge ||
                          Hint.CallKind == Kind::SwiftStringFromNSString ||
-                         Hint.CallKind == Kind::DarwinRuntimeCall;
+                         Hint.CallKind == Kind::DarwinRuntimeCall ||
+                         Hint.CallKind == Kind::RuntimeObjCSuperGetter;
     if (Runtime)
       Name = Hint.TargetName;
     if (Hint.CallKind == Kind::SwiftStringBridge)

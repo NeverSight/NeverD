@@ -682,11 +682,15 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
         } else if (Hint.CallKind == SourceCallTypeHint::Kind::Native ||
                    Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
                    Hint.CallKind ==
+                       SourceCallTypeHint::Kind::RuntimeObjCSuperGetter ||
+                   Hint.CallKind ==
                        SourceCallTypeHint::Kind::SwiftRuntimeCall ||
                    DeclaredC) {
           const bool Runtime =
               Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
               Hint.CallKind == SourceCallTypeHint::Kind::SwiftRuntimeCall ||
+              Hint.CallKind ==
+                  SourceCallTypeHint::Kind::RuntimeObjCSuperGetter ||
               DeclaredC;
           // Scalar ABI declarations use private C identifiers and exact linker
           // names, avoiding conflicting SDK typedefs or libc header prototypes.
@@ -824,6 +828,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
           if (Hint.TargetAddress)
             SourceObjectAddressHelpers.insert(
                 "neverd_objc_class_reference_" +
+                llvm::utohexstr(Hint.TargetAddress, true) + "_address");
+        } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::RuntimeSelectorReferenceAddress) {
+          if (Hint.TargetAddress)
+            SourceObjectAddressHelpers.insert(
+                "neverd_objc_selector_reference_" +
                 llvm::utohexstr(Hint.TargetAddress, true) + "_address");
         } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::RuntimeLocalStorageAddress) {
