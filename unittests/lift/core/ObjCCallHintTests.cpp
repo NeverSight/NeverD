@@ -7370,6 +7370,19 @@ TEST(ObjCCallHints, PrivateFrameSelectorSurvivesADeclaredCall) {
   }
 }
 
+TEST(ObjCCallHints, IndirectMessageResultsRequireNilStorageModeling) {
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  Image.ObjCSourceReferences.at(0x2100).Name = "operatingSystemVersion";
+  // The compiler-backed Foundation declaration has three signed words, but
+  // nil objc_msgSend preserves the caller's old result buffer. A fixed C
+  // record result does not supply that dispatch-specific storage behavior.
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "operatingSystemVersion"));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, caller()).empty());
+}
+
 TEST(ObjCCallHints, FrameSelectorsRejectEscapesOverwritesAndUnknownCalls) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Case = 0; Case < 8; ++Case) {

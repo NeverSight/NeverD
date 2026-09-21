@@ -329,6 +329,18 @@ call argument or result. Structural C declarations include layout assertions.
 Darwin ARM64 and x86_64 also support nested records containing one or two
 64-bit integers or pointers. When the whole record spills, ARM64 exhausts the
 integer bank; x86_64 leaves unused registers available to later arguments.
+Fixed C calls on Darwin ARM64 may also return records of three signed
+64-bit integers through the hidden x8 result pointer. The source ABI owns
+that classification. Low-to-Med lowering preserves the pre-call pointer,
+produces one logical record result, and writes its three fields into the
+caller-owned storage. Ordinary arguments keep their original registers; x0 is
+still clobbered and does not acquire a result. Call-hint discovery invalidates
+facts about escaped result storage. Entry projection and native preservation
+proofs reject these indirect results until their own storage proofs exist;
+Objective-C indirect results remain rejected: nil message dispatch leaves the
+original result buffer untouched and needs its own storage model.
+Three-word records with unsigned or pointer fields, three-word parameters and
+x86_64 indirect results remain unsupported.
 Padding, packed fields, mixed floating/integer classes and incomplete components
 remain explicitly unsupported. Source record carriers never authorize binary
 rewriting.

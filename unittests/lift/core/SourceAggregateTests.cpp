@@ -245,8 +245,7 @@ TEST(SourceAggregate, WordRecordsPreserveTypedMembersAndIntegerCarriers) {
           EXPECT_EQ(H.Parameters[4].Location.RegisterOffset,
                     TRI.IntParamRegs[Count + 2]);
         }
-  for (auto Bad : {NdType::makeStruct({Unsigned, Unsigned, Unsigned}),
-                   NdType::makeStruct({Unsigned, NdType::makeFloat(8)}),
+  for (auto Bad : {NdType::makeStruct({Unsigned, NdType::makeFloat(8)}),
                    NdType::makeStruct({NdType::makeInt(4), NdType::makeInt(4)}),
                    NdType::makeStruct({NdType::makeInt(1), Pointer})}) {
     EXPECT_TRUE(sourceAggregateMembers(Bad).empty());
@@ -256,6 +255,104 @@ TEST(SourceAggregate, WordRecordsPreserveTypedMembersAndIntegerCarriers) {
       EXPECT_FALSE(assignDarwinObjCSourceABI(H, A, Error));
     }
   }
+}
+
+TEST(SourceAggregate, ThreeWordResultsUseOnlyTheDarwinArm64IndirectPointer) {
+  auto Hint =
+      parseObjCMethodEncoding("operatingSystemVersion", "{?=qqq}16@0:8");
+  ASSERT_TRUE(Hint);
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(*Hint, Arch::AArch64, Error)) << Error;
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  EXPECT_EQ(Hint->ReturnLocation.Kind,
+            SourceABICarrierKind::IndirectResultPointer);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, TRI.indirectResultReg());
+  EXPECT_EQ(Hint->ReturnLocation.ValueBytes, 8U);
+  EXPECT_TRUE(Hint->ReturnComponents.empty());
+  ASSERT_EQ(sourceABIParameters(*Hint).size(), 2U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, TRI.IntParamRegs[0]);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, TRI.IntParamRegs[1]);
+  EXPECT_EQ(sourceAggregateMembers(Hint->ReturnType).size(), 3U);
+  const auto Signed = NdType::makeInt(8, true);
+  auto Nested = *Hint;
+  Nested.ReturnType =
+      NdType::makeStruct({NdType::makeStruct({Signed, Signed}), Signed});
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Nested, Arch::AArch64, Error));
+  const auto Members = sourceAggregateMembers(Nested.ReturnType);
+  ASSERT_EQ(Members.size(), 3U);
+  EXPECT_EQ(Members[2].ByteOffset, 16U);
+  EXPECT_TRUE(equalSourceTypes(Members[2].Type, Signed));
+  EXPECT_TRUE(Nested.ReturnComponents.empty());
+  for (const auto &Other :
+       {NdType::makeInt(8, false), NdType::makePtr(NdType::makeVoid())}) {
+    for (const auto &Fields : {std::vector<TypeRef>{Other, Other, Other},
+                               std::vector<TypeRef>{Signed, Other, Signed}}) {
+      auto Bad = *Hint;
+      Bad.ReturnType = NdType::makeStruct(Fields);
+      EXPECT_TRUE(sourceAggregateMembers(Bad.ReturnType).empty());
+      EXPECT_FALSE(validateSourceABI(Bad, Error));
+      EXPECT_FALSE(assignDarwinFixedSourceABI(Bad, Arch::AArch64, Error));
+    }
+  }
+  auto Unsupported = *Hint;
+  EXPECT_FALSE(assignDarwinObjCSourceABI(Unsupported, Arch::AArch64, Error));
+  Unsupported = *Hint;
+  EXPECT_FALSE(assignDarwinObjCSourceABI(Unsupported, Arch::X64, Error));
+  Unsupported = *Hint;
+  EXPECT_FALSE(assignDarwinScalarSourceABI(Unsupported, Arch::AArch64, Error));
+  Unsupported = *Hint;
+  EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::AArch64, Error));
+  Unsupported = *Hint;
+  Unsupported.Parameters.push_back({"record", Hint->ReturnType});
+  EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Bad = *Hint;
+    switch (Mutation) {
+    case 0:
+      Bad.ReturnLocation.RegisterOffset = TRI.IntReturnReg;
+      break;
+    case 1:
+      Bad.ReturnLocation.ValueBytes = 24;
+      break;
+    case 2:
+      Bad.ReturnLocation.EntryStackOffset = 8;
+      break;
+    case 3:
+      Bad.ReturnLocation.ExtendTo32Bits = true;
+      break;
+    case 4:
+      Bad.ReturnComponents.push_back(Bad.Parameters[0].Location);
+      break;
+    case 5:
+      Bad.ReturnType = NdType::makeStruct(
+          {NdType::makeFloat(8), NdType::makeFloat(8), NdType::makeFloat(8)});
+      break;
+    case 6:
+      Bad.ReturnType = NdType::makeInt(8);
+      break;
+    case 7:
+      Bad.Parameters[0].Location.RegisterOffset = TRI.indirectResultReg();
+      break;
+    case 8:
+      Bad.Architecture = Arch::X64;
+      break;
+    }
+    EXPECT_FALSE(validateSourceABI(Bad, Error));
+  }
+}
+
+TEST(SourceAggregate, IndirectResultEntryRequiresASeparateStorageProof) {
+  auto Hint =
+      parseObjCMethodEncoding("operatingSystemVersion", "{?=qqq}16@0:8");
+  ASSERT_TRUE(Hint);
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(*Hint, Arch::AArch64, Error));
+  MedFunc Function;
+  Function.SourceTypeHint = *Hint;
+  inferMedTypes(Function, Arch::AArch64);
+  EXPECT_FALSE(Function.SourceTypeHint);
+  EXPECT_FALSE(Function.SourceParametersBound);
 }
 
 TEST(SourceAggregate,

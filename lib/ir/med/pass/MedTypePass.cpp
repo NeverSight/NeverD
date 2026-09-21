@@ -703,6 +703,9 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
   if ((!Hint.HasExplicitABI &&
        !assignDarwinObjCSourceABI(Hint, TheArch, Diagnostic)) ||
       Hint.Architecture != TheArch || !validateSourceABI(Hint, Diagnostic) ||
+      // Call lowering owns the hidden result-buffer writes. Entry projection
+      // has no proof relating writes through incoming x8 to a logical return.
+      Hint.ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer ||
       !Func.MutableStackParamHomes.empty()) {
     Func.SourceTypeHint.reset();
     return;

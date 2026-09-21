@@ -1006,7 +1006,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         const int64_t ReturnAddressBytes = Image.Arch == Arch::X64 ? 8 : 0;
         auto CheckArgument = [&](const SourceABIValueLocation &Location) {
           if (Location.Kind == SourceABICarrierKind::IntegerRegister ||
-              Location.Kind == SourceABICarrierKind::FloatingRegister) {
+              Location.Kind == SourceABICarrierKind::FloatingRegister ||
+              Location.Kind == SourceABICarrierKind::IndirectResultPointer) {
             const auto Argument =
                 NdVar::reg(Location.RegisterOffset, Location.ValueBytes);
             if (State.mayBeFrame(Argument)) {
@@ -1033,6 +1034,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           for (const auto &Component : Parameter.Components)
             CheckArgument(Component);
         }
+        if (Signature->ReturnLocation.Kind ==
+            SourceABICarrierKind::IndirectResultPointer)
+          CheckArgument(Signature->ReturnLocation);
         const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
         if (!Stack || Stack->TheKind != Value::Kind::Frame) {
           State.FrameSlots.clear();

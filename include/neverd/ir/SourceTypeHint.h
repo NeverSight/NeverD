@@ -9,7 +9,10 @@ enum class SourceABICarrierKind : uint8_t {
   None,
   IntegerRegister,
   FloatingRegister,
-  Stack
+  Stack,
+  /// A hidden pointer to caller-owned result storage, separate from ordinary
+  /// parameters. ValueBytes describes the pointer, not the returned record.
+  IndirectResultPointer
 };
 
 /// Physical location of one scalar source value. Stack offsets are relative

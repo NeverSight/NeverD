@@ -473,7 +473,11 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
   for (const auto &[Site, Contract] : Calls) {
     const auto *Signature = Contract.Signature;
     std::string Error;
+    // Hidden result storage needs its own bounded frame-write proof before
+    // this analysis can treat it as preserving saved machine state.
     if (!Signature || Signature->Architecture != Architecture ||
+        Signature->ReturnLocation.Kind ==
+            SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Signature, Error))
       return false;
   }
@@ -574,6 +578,8 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
     const auto *Signature = Contract.Signature;
     std::string Error;
     if (!Signature || Signature->Architecture != Architecture ||
+        Signature->ReturnLocation.Kind ==
+            SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Signature, Error))
       return false;
   }

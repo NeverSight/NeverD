@@ -202,8 +202,16 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
       return {};
     return Result;
   }
+  // Bound indirect results to the three signed words used by Darwin's
+  // NSOperatingSystemVersion. Other three-word leaf types need distinct C
+  // record identities before their source declarations can safely coexist.
+  if (Result.size() == 3 &&
+      !std::all_of(Result.begin(), Result.end(), [](const auto &Member) {
+        return Member.Type->Kind == NdTypeKind::Int && Member.Type->IsSigned;
+      }))
+    return {};
   const bool FullWords =
-      Result.size() <= 2 &&
+      Result.size() <= 3 &&
       std::all_of(Result.begin(), Result.end(),
                   [&](const auto &Member) {
                     return Member.Type->Kind != NdTypeKind::Float &&
@@ -345,6 +353,8 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (Members.empty() || Parts.size() != Members.size())
       return false;
     const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+    if (!Floating && Members.size() > 2)
+      return false;
     if (Floating && Hint.Architecture != Arch::AArch64)
       return false;
     const auto Bank = Floating   ? TRI.FPParamRegs
@@ -376,8 +386,20 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     return true;
   };
   if (Hint.ReturnType->Kind == NdTypeKind::Struct) {
-    if (!EmptyLocation(Hint.ReturnLocation) ||
-        !AggregateLocations(Hint.ReturnType, Hint.ReturnComponents, true))
+    const auto &Return = Hint.ReturnLocation;
+    if (Return.Kind == SourceABICarrierKind::IndirectResultPointer) {
+      const auto Members = sourceAggregateMembers(Hint.ReturnType);
+      if (Hint.Architecture != Arch::AArch64 ||
+          Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+          Members.size() != 3 || Hint.ReturnType->Size != 24 ||
+          Members.front().Type->Kind == NdTypeKind::Float ||
+          Return.RegisterOffset != TRI.indirectResultReg() ||
+          Return.EntryStackOffset != 0 || Return.ValueBytes != 8 ||
+          Return.ExtendTo32Bits || !Hint.ReturnComponents.empty())
+        return fail(Diagnostic, "Unsupported source indirect record result");
+    } else if (!EmptyLocation(Return) ||
+               !AggregateLocations(Hint.ReturnType, Hint.ReturnComponents,
+                                   true))
       return fail(Diagnostic, "Unsupported source record return carriers");
   } else if (!Hint.ReturnComponents.empty()) {
     if (Hint.ReturnType->Kind != NdTypeKind::Int ||
@@ -400,6 +422,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     return fail(Diagnostic, "Unsupported source return carrier");
   }
   std::set<std::pair<SourceABICarrierKind, uint64_t>> Registers;
+  if (Hint.ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer)
+    Registers.emplace(SourceABICarrierKind::IntegerRegister,
+                      Hint.ReturnLocation.RegisterOffset);
   std::vector<std::pair<int64_t, int64_t>> StackRanges;
   size_t PhysicalCount = 0;
   for (const auto &Parameter : Hint.Parameters) {
@@ -481,7 +506,8 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       if (Members.empty())
         return fail(Diagnostic, "Unsupported Darwin record parameter ABI");
       const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
-      if (Floating && Architecture != Arch::AArch64)
+      if ((Floating && Architecture != Arch::AArch64) ||
+          (!Floating && Members.size() > 2))
         return fail(Diagnostic, "Unsupported Darwin record parameter ABI");
       Parameter.Location = {};
       auto &Index = Floating ? FloatIndex : IntegerIndex;
@@ -546,10 +572,16 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       return fail(Diagnostic, "Unsupported Darwin record return ABI");
     const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
     const auto Bank = Floating ? TRI.FPParamRegs : TRI.IntReturnRegs;
-    if ((Floating && Architecture != Arch::AArch64) ||
-        Members.size() > Bank.size())
+    const bool Indirect =
+        !Floating && Members.size() == 3 && Architecture == Arch::AArch64 &&
+        Convention == SourceFunctionTypeHint::ConventionKind::C;
+    if (Indirect)
+      Hint.ReturnLocation = {SourceABICarrierKind::IndirectResultPointer,
+                             TRI.indirectResultReg(), 0, 8};
+    else if ((Floating && Architecture != Arch::AArch64) ||
+             Members.size() > Bank.size())
       return fail(Diagnostic, "Unsupported Darwin record return ABI");
-    for (size_t I = 0; I < Members.size(); ++I)
+    for (size_t I = 0; !Indirect && I < Members.size(); ++I)
       Hint.ReturnComponents.push_back(
           {Floating ? SourceABICarrierKind::FloatingRegister
                     : SourceABICarrierKind::IntegerRegister,
@@ -715,7 +747,17 @@ bool assignDarwinObjCSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK) ||
       Hint.Parameters.size() < 2)
     return fail(Diagnostic, "Unsupported Objective-C source ABI");
-  return assignDarwinFixedSourceABI(Hint, Architecture, Diagnostic);
+  if (!assignDarwinFixedSourceABI(Hint, Architecture, Diagnostic))
+    return false;
+  // Unlike an ordinary C callee, objc_msgSend with a nil receiver leaves an
+  // indirect result buffer untouched. The logical-record call projection
+  // cannot supply that storage behavior until it models nil dispatch.
+  if (Hint.ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer) {
+    Hint.HasExplicitABI = false;
+    return fail(Diagnostic,
+                "Objective-C indirect results require nil storage modeling");
+  }
+  return true;
 }
 
 bool assignDarwinVariadicSourceABI(SourceFunctionTypeHint &Hint,

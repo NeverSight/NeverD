@@ -93,7 +93,9 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         // source projection.
         Op.NumInputs = 0;
       } else if (Op.Opcode == NdOp::RETURN && EntrySignature &&
-          EntrySignature->ReturnType->Kind == NdTypeKind::Struct) {
+                 EntrySignature->ReturnType->Kind == NdTypeKind::Struct &&
+                 EntrySignature->ReturnLocation.Kind !=
+                     SourceABICarrierKind::IndirectResultPointer) {
         Op.NumInputs = 0;
         for (const auto &Piece : EntrySignature->ReturnComponents)
           Op.addInput(ndVarToMedVar(
@@ -219,12 +221,49 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Op.addInput(Argument);
       }
       const auto &Return = Signature.ReturnLocation;
-      Op.Output = Return.Kind == SourceABICarrierKind::None
+      const bool IndirectResult =
+          Return.Kind == SourceABICarrierKind::IndirectResultPointer;
+      Op.Output = Return.Kind == SourceABICarrierKind::None || IndirectResult
                       ? MedVar()
                       : ndVarToMedVar(NdVar::reg(Return.RegisterOffset,
                                                  Return.ValueBytes));
       std::vector<MedOp> ReturnOps;
-      if (!Signature.ReturnComponents.empty()) {
+      if (IndirectResult) {
+        // Preserve the pre-call hidden pointer before SSA introduces the
+        // caller-saved x8 clobber. A declared result initializes every record
+        // field; the logical call keeps the ordinary source parameter list.
+        MedOp Address;
+        Address.Opcode = NdOp::COPY;
+        Address.Addr = Op.Addr;
+        Address.Output = Temporary(8);
+        Address.addInput(ndVarToMedVar(NdVar::reg(Return.RegisterOffset, 8)));
+        const auto Buffer = Address.Output;
+        Ops.push_back(std::move(Address));
+        Op.Output = Temporary(Signature.ReturnType->Size);
+        for (const auto &Member :
+             sourceAggregateMembers(Signature.ReturnType)) {
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Addr = Op.Addr;
+          Extract.Output = Temporary(Member.Type->Size);
+          Extract.addInput(Op.Output);
+          Extract.addInput(MedVar::makeConst(Member.ByteOffset, 4));
+          MedOp Field;
+          Field.Opcode = NdOp::INT_ADD;
+          Field.Addr = Op.Addr;
+          Field.Output = Temporary(8);
+          Field.addInput(Buffer);
+          Field.addInput(MedVar::makeConst(Member.ByteOffset, 8));
+          MedOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.Addr = Op.Addr;
+          Store.addInput(Field.Output);
+          Store.addInput(Extract.Output);
+          ReturnOps.push_back(std::move(Extract));
+          ReturnOps.push_back(std::move(Field));
+          ReturnOps.push_back(std::move(Store));
+        }
+      } else if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
         const auto Members = sourceAggregateMembers(Signature.ReturnType);
         for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {

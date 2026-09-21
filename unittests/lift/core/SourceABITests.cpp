@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -975,6 +976,112 @@ void executeC(const std::string &Source, bool Math = false) {
     EXPECT_EQ(Status, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << '\n'
                          << Source;
+  }
+}
+
+TEST(SourceABI, IndirectRecordCallInitializesAllFieldsAndKeepsReturnClobbers) {
+  const auto Architecture = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto Word = NdType::makeInt(8, false);
+  const auto SignedWord = NdType::makeInt(8, true);
+  const auto Record = NdType::makeStruct({SignedWord, SignedWord, SignedWord});
+  SourceFunctionTypeHint Entry;
+  Entry.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Entry.ReturnType = Word;
+  Entry.Parameters = {{"value", Word}, {"output", NdType::makePtr(Word)}};
+  SourceFunctionTypeHint Callee;
+  Callee.ReturnType = Record;
+  Callee.Parameters = {{"value", Word}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Entry, Architecture, Error));
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Callee, Architecture, Error));
+  for (bool ReadUnspecifiedResult : {false, true}) {
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.Name = "indirect_record";
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Low.Entry;
+    auto Add = [&](NdOp Opcode, NdVar Output,
+                   std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Opcode = Opcode;
+      Op.Addr = Low.Entry + Block.Ops.size() * 4;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      Block.Ops.push_back(Op);
+    };
+    const auto X0 = NdVar::reg(TRI.IntReturnReg, 8);
+    const auto X8 = NdVar::reg(TRI.indirectResultReg(), 8);
+    const auto Buffer = NdVar::reg(a64reg::X19, 8);
+    Add(NdOp::COPY, Buffer, {NdVar::reg(TRI.IntParamRegs[1], 8)});
+    Add(NdOp::COPY, X8, {Buffer});
+    Add(NdOp::CALL, {}, {NdVar::cst(0x2000, 8)});
+    // The hidden pointer is caller-saved. Post-call stores must retain the
+    // pre-call address even after this register is overwritten.
+    Add(NdOp::COPY, X8, {NdVar::cst(0, 8)});
+    if (!ReadUnspecifiedResult) {
+      Add(NdOp::LOAD, NdVar::tmp(0, 8), {Buffer});
+      Add(NdOp::INT_ADD, NdVar::tmp(1, 8), {Buffer, NdVar::cst(8, 8)});
+      Add(NdOp::LOAD, NdVar::tmp(2, 8), {NdVar::tmp(1, 8)});
+      Add(NdOp::INT_ADD, NdVar::tmp(3, 8), {Buffer, NdVar::cst(16, 8)});
+      Add(NdOp::LOAD, NdVar::tmp(4, 8), {NdVar::tmp(3, 8)});
+      Add(NdOp::INT_ADD, NdVar::tmp(5, 8),
+          {NdVar::tmp(0, 8), NdVar::tmp(2, 8)});
+      Add(NdOp::INT_ADD, X0, {NdVar::tmp(5, 8), NdVar::tmp(4, 8)});
+    }
+    Add(NdOp::RETURN, {}, {X0});
+    Block.EndAddr = Low.Entry + Block.Ops.size() * 4;
+    Low.Blocks.push_back(Block);
+    std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, Entry},
+                                                 {0x2000, Callee}};
+    LowToMedConverter Converter;
+    Converter.setSourceCallHintsEnabled(true);
+    Converter.setSourceCalleeTypeHints(&Hints);
+    auto Med = Converter.convert(Low, Architecture, BinaryFormat::MachO);
+    Med.SourceTypeHint = Entry;
+    const std::map<va_t, std::string> Names{{0x2000, "make_three"}};
+    recoverCallAbi(Med, Architecture, Names);
+    inferMedTypes(Med, Architecture);
+    MedToHighConverter HighConverter;
+    HighConverter.setFuncNames(&Names);
+    auto High = HighConverter.convert(Med, Architecture);
+    unsigned Unknown = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        Unknown += Expression && Expression->Kind == ExprKind::Undef;
+      });
+    });
+    if (ReadUnspecifiedResult) {
+      EXPECT_GT(Unknown, 0U);
+      continue;
+    }
+    EXPECT_EQ(Unknown, 0U);
+    ASSERT_TRUE(High.SourceTypeHint);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+    Source += "\nstatic unsigned calls;\n" + typeToC(Record) +
+              " make_three(uint64_t value) { ++calls; " + typeToC(Record) +
+              " result; uint64_t words[] = {value, value + 7, value * 3}; "
+              "memcpy(&result, words, sizeof(result)); return result; }\n";
+    executeC(Source + R"(
+int main(void) {
+    const uint64_t inputs[] = {0, 1, 17, UINT64_MAX, UINT64_C(0x8000000000000000)};
+    for (unsigned i = 0; i != 5; ++i) {
+        uint64_t output[] = {101, 102, 103, 104};
+        uint64_t value = inputs[i];
+        unsigned before = calls;
+        if (indirect_record(value, output) != value + (value + 7) + value * 3) return 1;
+        if (output[0] != value || output[1] != value + 7 || output[2] != value * 3) return 2;
+        if (output[3] != 104 || calls != before + 1) return 3;
+    }
+    return 0;
+}
+)");
   }
 }
 

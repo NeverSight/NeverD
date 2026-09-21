@@ -1083,6 +1083,38 @@ TEST(NativeSourceHints, BoundObjCDispatchRequiresCompleteFramedCallEvidence) {
       }
 }
 
+TEST(NativeSourceHints, IndirectResultsNeedAnExplicitFramePreservationProof) {
+  for (bool Framed : {false, true}) {
+    NativeVoidFixture Fixture =
+        Framed ? NativeVoidFixture(NativeVoidFrameFixture(Arch::AArch64))
+               : NativeVoidFixture(Arch::AArch64);
+    std::string Error;
+    ASSERT_TRUE(Fixture.inferVoid(Error)) << Error;
+    auto &Call = Fixture.Med.Blocks[0].Ops[0];
+    auto Hint = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+    Hint->CallKind = SourceCallTypeHint::Kind::Native;
+    Hint->TargetAddress = 0x1080;
+    Hint->Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Hint->Signature.ReturnType = NdType::makeStruct(
+        {NdType::makeInt(8), NdType::makeInt(8), NdType::makeInt(8)});
+    ASSERT_TRUE(
+        assignDarwinFixedSourceABI(Hint->Signature, Arch::AArch64, Error));
+    Call.SourceCallHint = Hint;
+    // The apparently unchanged explicit arguments hide a writable result
+    // pointer into the frame. It may overwrite the saved register spills.
+    auto &Ops = Fixture.Low.Blocks[0].Ops;
+    const auto Where = std::find_if(Ops.begin(), Ops.end(), [](const auto &Op) {
+      return Op.Opcode == NdOp::CALL;
+    });
+    ASSERT_NE(Where, Ops.end());
+    const auto &TRI = getTargetRegInfo(Arch::AArch64);
+    Ops.insert(Where, NativeVoidFrameFixture::op(
+                          NdOp::COPY, NdVar::reg(TRI.indirectResultReg(), 8),
+                          {NdVar::reg(TRI.StackPointer, 8)}, 0x100c));
+    EXPECT_FALSE(Fixture.inferVoid(Error));
+  }
+}
+
 TEST(NativeSourceHints,
      PreservedContextSurvivesBorrowedObjCSuperFrameArgument) {
   NativeVoidFrameFixture Fixture(Arch::AArch64);
