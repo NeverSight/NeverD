@@ -1485,7 +1485,7 @@ int main(void) {
 })");
 }
 
-TEST(HighCSourceCalls, DynamicFormatsPermitOnlyAnEmptyVariadicTail) {
+TEST(HighCSourceCalls, DynamicFormatsPermitEmptyOrPointerVariadicTails) {
   auto Pointer = NdType::makePtr(NdType::makeVoid());
   auto Hint = native("objc_msgSend", Pointer, {Pointer, Pointer, Pointer});
   Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
@@ -1505,6 +1505,40 @@ TEST(HighCSourceCalls, DynamicFormatsPermitOnlyAnEmptyVariadicTail) {
   EXPECT_NE(Source.find("(*)(id, SEL, void*, ...)"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+
+  auto PointerTail = Hint;
+  PointerTail.Format = SourceCallTypeHint::FormatArguments{
+      3, 2, 0, SourceCallTypeHint::FormatSyntax::NSString, {}, false, true};
+  PointerTail.Signature.Parameters.push_back({"first", Pointer});
+  PointerTail.Signature.Parameters.push_back({"second", Pointer});
+  ASSERT_TRUE(assignDarwinVariadicSourceABI(PointerTail.Signature, 3,
+                                             Arch::X64, Error));
+  const auto PointerTailSource = emit(
+      {returning("send_dynamic_pointer_format",
+                 call(PointerTail, Pointer,
+                      {parameter(0, Pointer), parameter(1, Pointer),
+                       parameter(2, Pointer), parameter(3, Pointer),
+                       parameter(4, Pointer)}),
+                 {Pointer, Pointer, Pointer, Pointer, Pointer})},
+      false);
+  EXPECT_NE(PointerTailSource.find("(*)(id, SEL, void*, ...)"),
+            std::string::npos)
+      << PointerTailSource;
+  EXPECT_EQ(PointerTailSource.find("bad source call"), std::string::npos)
+      << PointerTailSource;
+
+  auto ConflictingDynamic = PointerTail;
+  ConflictingDynamic.Format->DynamicWithoutArguments = true;
+  EXPECT_NE(emit({returning(
+                      "bad_conflicting_dynamic_format",
+                      call(ConflictingDynamic, Pointer,
+                           {parameter(0, Pointer), parameter(1, Pointer),
+                            parameter(2, Pointer), parameter(3, Pointer),
+                            parameter(4, Pointer)}),
+                      {Pointer, Pointer, Pointer, Pointer, Pointer})},
+                 false)
+                .find("bad source call: invalid variadic source declaration"),
+            std::string::npos);
 
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     auto Bad = Hint;

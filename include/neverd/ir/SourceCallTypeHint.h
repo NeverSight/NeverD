@@ -225,9 +225,13 @@ struct SourceCallTypeHint {
     /// The format value is dynamic, but the call supplies no variadic tail.
     /// Its contents therefore cannot change the emitted argument ABI. This is
     /// valid only for an exact declared message whose parameter count equals
-    /// FixedCount; calls with even one variadic operand still require an exact
-    /// immutable format object and parsed argument types.
+    /// FixedCount.
     bool DynamicWithoutArguments = false;
+    /// The format value is dynamic and every supplied variadic value is an
+    /// already typed source pointer. Pointer values have one complete promoted
+    /// variadic carrier without inspecting the format text. Integer and
+    /// floating tails still require an immutable parsed format object.
+    bool DynamicPointerArguments = false;
   };
   std::optional<FormatArguments> Format;
   struct SwiftTypeMetadataAddress {

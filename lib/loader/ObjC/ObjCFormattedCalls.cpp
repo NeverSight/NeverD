@@ -313,8 +313,16 @@ objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
 std::optional<SourceCallTypeHint>
 objcDynamicFormatWithoutArgumentsSourceCallHint(const BinaryImage &Image,
                                                 llvm::StringRef Selector) {
+  return objcDynamicFormatPointerArgumentsSourceCallHint(Image, Selector, 0);
+}
+
+std::optional<SourceCallTypeHint>
+objcDynamicFormatPointerArgumentsSourceCallHint(const BinaryImage &Image,
+                                                llvm::StringRef Selector,
+                                                unsigned PointerArguments) {
   auto Declaration = objcSelectorFormatDeclaration(Image, Selector);
-  if (!Declaration)
+  if (!Declaration || PointerArguments > 64 ||
+      Declaration->Signature.Parameters.size() + PointerArguments > 64)
     return std::nullopt;
   SourceCallTypeHint Call;
   Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
@@ -322,8 +330,12 @@ objcDynamicFormatWithoutArgumentsSourceCallHint(const BinaryImage &Image,
   Call.TargetName = "objc_msgSend";
   Call.Signature = std::move(Declaration->Signature);
   const auto Fixed = unsigned(Call.Signature.Parameters.size());
+  for (unsigned I = 0; I < PointerArguments; ++I)
+    Call.Signature.Parameters.push_back(
+        {"format_pointer_arg", NdType::makePtr(NdType::makeVoid())});
   Call.Format = SourceCallTypeHint::FormatArguments{
-      Fixed, Declaration->FormatParameter, 0, Declaration->Syntax, {}, true};
+      Fixed, Declaration->FormatParameter, 0, Declaration->Syntax, {},
+      PointerArguments == 0, PointerArguments != 0};
   std::string Diagnostic;
   if (!assignDarwinVariadicSourceABI(Call.Signature, Fixed, Image.Arch,
                                      Diagnostic))

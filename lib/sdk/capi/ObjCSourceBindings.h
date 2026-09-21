@@ -198,12 +198,76 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
            Binding.Format->FormatAddress == Expected.Format->FormatAddress &&
            Binding.Format->DynamicWithoutArguments ==
                Expected.Format->DynamicWithoutArguments &&
+           Binding.Format->DynamicPointerArguments ==
+               Expected.Format->DynamicPointerArguments &&
            Binding.Format->AlternativeFormatAddresses ==
                Expected.Format->AlternativeFormatAddresses)) &&
          Binding.BorrowedByteInputs == Expected.BorrowedByteInputs &&
          Binding.SwiftStringInputs == Expected.SwiftStringInputs &&
          objc_projection_detail::sameHint(Binding.Signature,
                                           Expected.Signature);
+}
+
+/// Prove that a value has a complete pointer source carrier even when native
+/// SSA still spells the receiving variable as an integer. Every definition of
+/// a merged value must resolve to a pointer-typed value or to an authenticated
+/// Objective-C runtime call whose catalogued result is a pointer.
+inline bool
+provenSourcePointerValue(const ExprPtr &Value,
+                         const VarKeyMap<std::vector<ExprPtr>> &Definitions,
+                         const BinaryImage &Image, size_t &Budget,
+                         std::set<VarKey> &Active, unsigned Depth = 0) {
+  if (!Value || !Budget-- || Depth > 64)
+    return false;
+  if (Value->Type && Value->Type->Kind == NdTypeKind::Ptr &&
+      Value->Type->Size == 8)
+    return true;
+  if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+      Value->Operands.size() == 1 && Value->Type && Value->Operands.front() &&
+      Value->Operands.front()->Type && Value->Type->Size == 8 &&
+      Value->Operands.front()->Type->Size == 8)
+    return provenSourcePointerValue(Value->Operands.front(), Definitions, Image,
+                                    Budget, Active, Depth + 1);
+  if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+      Value->Operands.size() == 3)
+    return provenSourcePointerValue(Value->Operands[1], Definitions, Image,
+                                    Budget, Active, Depth + 1) &&
+           provenSourcePointerValue(Value->Operands[2], Definitions, Image,
+                                    Budget, Active, Depth + 1);
+  if (Value->Kind == ExprKind::Call && Value->SourceCallHint) {
+    const auto &Binding = *Value->SourceCallHint;
+    const auto Expected =
+        Binding.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall
+            ? runtimeSourceCallHint(Image, Binding)
+            : std::nullopt;
+    std::string Reason;
+    return Expected && Expected->Signature.ReturnType &&
+           Expected->Signature.ReturnType->Kind == NdTypeKind::Ptr &&
+           Expected->Signature.ReturnType->Size == 8 &&
+           Value->IntrinsicId == Intrinsic::None &&
+           Value->MemoryOrdering == NdMemoryOrdering::None &&
+           Value->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           Value->Operands.size() == Binding.Signature.Parameters.size() &&
+           validateSourceABI(Binding.Signature, Reason) &&
+           Binding.Signature.Architecture == Image.Arch &&
+           runtimeBindingMatches(Binding, *Expected);
+  }
+  if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
+    return false;
+  const auto Key = varKey(Value->Var);
+  if (!Active.insert(Key).second)
+    return false;
+  const auto Found = Definitions.find(Key);
+  bool Valid = Found != Definitions.end() && !Found->second.empty();
+  if (Valid)
+    for (const auto &Definition : Found->second)
+      if (!provenSourcePointerValue(Definition, Definitions, Image, Budget,
+                                    Active, Depth + 1)) {
+        Valid = false;
+        break;
+      }
+  Active.erase(Key);
+  return Valid;
 }
 
 inline std::optional<uint32_t> constantBorrowedByteCount(const ExprPtr &Value,
@@ -2544,15 +2608,38 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     }
     // A selector-specific stub may look like an ordinary local function after
     // native lifting. Reclassify it only when the compiler declaration has a
-    // format contract, the physical native ABI agrees exactly, and the call
-    // ends at the fixed prefix. A dynamic format with any variadic operand
-    // remains unbound because its argument types cannot be inferred.
+    // format contract and the physical native ABI agrees exactly. A dynamic
+    // format may have no tail, or a tail whose already typed source values are
+    // all pointers. Integer and floating tails still require parsed format
+    // text because their promotions cannot be inferred from the selector.
     if (Expression->Kind == ExprKind::Call && !Expression->IsIndirectCall &&
         Expression->CallAddr && Expression->IntrinsicId == Intrinsic::None &&
         Expression->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         Expression->MemoryOrdering == NdMemoryOrdering::None) {
-      const auto Expected = objcSelectorStubDynamicFormatSourceCallHint(
+      const auto Stub = objcSelectorStubDynamicFormatSourceCallHint(
           Image, Expression->CallAddr);
+      std::optional<SourceCallTypeHint> Expected;
+      if (Stub && Stub->Format &&
+          Expression->Operands.size() >= Stub->Format->FixedCount) {
+        const auto Fixed = Stub->Format->FixedCount;
+        size_t PointerBudget = 4096;
+        std::set<VarKey> ActivePointers;
+        const bool PointerTail = std::all_of(
+            Expression->Operands.begin() + Fixed, Expression->Operands.end(),
+            [&](const ExprPtr &Operand) {
+              return provenSourcePointerValue(Operand, FormatDefinitions, Image,
+                                              PointerBudget, ActivePointers);
+            });
+        if (PointerTail) {
+          Expected = objcDynamicFormatPointerArgumentsSourceCallHint(
+              Image, Stub->Selector,
+              unsigned(Expression->Operands.size() - Fixed));
+          if (Expected) {
+            Expected->TargetAddress = Stub->TargetAddress;
+            Expected->SelectorReferenceAddress = Stub->SelectorReferenceAddress;
+          }
+        }
+      }
       bool PhysicalCall = false;
       if (Expected && Expected->Format && Expression->SourceCallHint &&
           plainNativeBinding(*Expression->SourceCallHint) &&
@@ -2576,9 +2663,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
             break;
           }
       }
-      if (Expected && Expected->Format &&
-          Expression->Operands.size() == Expected->Format->FixedCount &&
-          PhysicalCall) {
+      if (Expected && Expected->Format && PhysicalCall) {
         Expression->CallTarget.clear();
         Expression->SourceCallHint =
             std::make_shared<SourceCallTypeHint>(*Expected);
@@ -3426,9 +3511,44 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
   if (Binding.Format) {
     const auto &Format = *Binding.Format;
-    if (Format.DynamicWithoutArguments) {
-      const auto Expected = objcSelectorStubDynamicFormatSourceCallHint(
+    if (Format.DynamicWithoutArguments || Format.DynamicPointerArguments) {
+      const auto Stub = objcSelectorStubDynamicFormatSourceCallHint(
           Image, Binding.TargetAddress);
+      const unsigned PointerArguments =
+          Hint.Parameters.size() >= Format.FixedCount
+              ? unsigned(Hint.Parameters.size() - Format.FixedCount)
+              : 0;
+      auto Expected = Stub && Stub->Format
+                          ? objcDynamicFormatPointerArgumentsSourceCallHint(
+                                Image, Stub->Selector, PointerArguments)
+                          : std::nullopt;
+      if (Expected && Stub) {
+        Expected->TargetAddress = Stub->TargetAddress;
+        Expected->SelectorReferenceAddress = Stub->SelectorReferenceAddress;
+      }
+      const bool PointerTail =
+          Format.DynamicPointerArguments && PointerArguments &&
+          Expression.Operands.size() == Hint.Parameters.size() &&
+          ContainingFunction && [&] {
+            VarKeyMap<std::vector<ExprPtr>> Definitions;
+            walkStmts(ContainingFunction->Body, [&](const HighStmt &Statement) {
+              if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+                  Statement.Val &&
+                  (Statement.Dst->Kind == ExprKind::Var ||
+                   Statement.Dst->Kind == ExprKind::Phi))
+                Definitions[varKey(Statement.Dst->Var)].push_back(
+                    Statement.Val);
+            });
+            size_t PointerBudget = 4096;
+            std::set<VarKey> ActivePointers;
+            return std::all_of(Expression.Operands.begin() + Format.FixedCount,
+                               Expression.Operands.end(),
+                               [&](const ExprPtr &Operand) {
+                                 return provenSourcePointerValue(
+                                     Operand, Definitions, Image, PointerBudget,
+                                     ActivePointers);
+                               });
+          }();
       return Expected && Expected->Format && !Expression.IsIndirectCall &&
              Expression.CallAddr == Binding.TargetAddress &&
              Expression.CallTarget.empty() &&
@@ -3447,15 +3567,22 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
              !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
              !Binding.ImmutablePointerSlot && !Format.FormatAddress &&
              Format.AlternativeFormatAddresses.empty() &&
+             (Format.DynamicWithoutArguments !=
+              Format.DynamicPointerArguments) &&
              std::all_of(
                  Expression.Operands.begin(), Expression.Operands.end(),
                  [](const ExprPtr &Operand) { return bool(Operand); }) &&
-             Format.FixedCount == Expression.Operands.size() &&
-             Format.FixedCount == Hint.Parameters.size() &&
+             ((Format.DynamicWithoutArguments && !PointerArguments &&
+               Format.FixedCount == Expression.Operands.size()) ||
+              PointerTail) &&
              Format.FormatParameter < Format.FixedCount &&
              Format.FixedCount == Expected->Format->FixedCount &&
              Format.FormatParameter == Expected->Format->FormatParameter &&
              Format.Syntax == Expected->Format->Syntax &&
+             Format.DynamicWithoutArguments ==
+                 Expected->Format->DynamicWithoutArguments &&
+             Format.DynamicPointerArguments ==
+                 Expected->Format->DynamicPointerArguments &&
              objc_projection_detail::sameHint(Hint, Expected->Signature);
     }
     const auto Addresses = formatAddresses(Format);
@@ -3474,6 +3601,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         Format.FormatParameter != Expected->Format->FormatParameter ||
         Format.DynamicWithoutArguments !=
             Expected->Format->DynamicWithoutArguments ||
+        Format.DynamicPointerArguments !=
+            Expected->Format->DynamicPointerArguments ||
         Format.AlternativeFormatAddresses !=
             Expected->Format->AlternativeFormatAddresses ||
         Format.FormatParameter >= Expression.Operands.size() ||

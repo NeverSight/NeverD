@@ -427,9 +427,22 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Format.DynamicWithoutArguments && DeclaredMessage &&
         !Format.FormatAddress && Format.AlternativeFormatAddresses.empty() &&
         Format.FixedCount == Signature.Parameters.size();
+    const bool DynamicPointerArguments =
+        Format.DynamicPointerArguments && DeclaredMessage &&
+        !Format.DynamicWithoutArguments && !Format.FormatAddress &&
+        Format.AlternativeFormatAddresses.empty() &&
+        Format.FixedCount < Signature.Parameters.size() &&
+        std::all_of(Signature.Parameters.begin() + Format.FixedCount,
+                    Signature.Parameters.end(), [](const auto &Parameter) {
+                      return Parameter.Type &&
+                             Parameter.Type->Kind == NdTypeKind::Ptr &&
+                             Parameter.Type->Size == 8;
+                    });
     if ((!DeclaredMessage && !DeclaredC) ||
-        (!Format.FormatAddress && !DynamicWithoutArguments) ||
+        (!Format.FormatAddress && !DynamicWithoutArguments &&
+         !DynamicPointerArguments) ||
         (Format.DynamicWithoutArguments && !DynamicWithoutArguments) ||
+        (Format.DynamicPointerArguments && !DynamicPointerArguments) ||
         Format.AlternativeFormatAddresses.size() >= 64 ||
         !std::is_sorted(Format.AlternativeFormatAddresses.begin(),
                         Format.AlternativeFormatAddresses.end()) ||

@@ -51,5 +51,13 @@ objcFormattedSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
 std::optional<SourceCallTypeHint>
 objcDynamicFormatWithoutArgumentsSourceCallHint(const BinaryImage &Image,
                                                 llvm::StringRef Selector);
+
+/// Bind a declared format message whose dynamic format is followed only by
+/// proven source pointers. This preserves their complete variadic carriers
+/// without inferring what the runtime format text contains.
+std::optional<SourceCallTypeHint>
+objcDynamicFormatPointerArgumentsSourceCallHint(const BinaryImage &Image,
+                                                llvm::StringRef Selector,
+                                                unsigned PointerArguments);
 } // namespace neverd
 #endif

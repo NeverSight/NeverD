@@ -3379,7 +3379,7 @@ TEST(ObjCCallHints, SelectorStubCommandProofDoesNotRequireMethodSignature) {
   }
 }
 
-TEST(ObjCCallHints, DynamicFormatStubBindsOnlyCallsWithoutVariadicArguments) {
+TEST(ObjCCallHints, DynamicFormatStubBindsEmptyAndProvenPointerTails) {
   auto Image = selectorStubImage();
   Image.ObjCMethods.clear();
   Image.DynInfo.NeededLibs.push_back(
@@ -3453,6 +3453,119 @@ TEST(ObjCCallHints, DynamicFormatStubBindsOnlyCallsWithoutVariadicArguments) {
             SourceCallTypeHint::Kind::ObjCMessage);
   EXPECT_TRUE(RawCall->SourceCallHint->Format->DynamicWithoutArguments);
 
+  // A dynamic format can also preserve a nonempty variadic tail when every
+  // actual value already has a source pointer type. No format-text type is
+  // inferred; the pointer type itself proves the promoted physical carrier.
+  const auto PointerTail = objcDynamicFormatPointerArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", 2);
+  ASSERT_TRUE(PointerTail);
+  ASSERT_TRUE(PointerTail->Format);
+  EXPECT_FALSE(PointerTail->Format->DynamicWithoutArguments);
+  EXPECT_TRUE(PointerTail->Format->DynamicPointerArguments);
+  ASSERT_EQ(PointerTail->Signature.Parameters.size(), 5U);
+  EXPECT_EQ(PointerTail->Signature.Parameters[3].Location.Kind,
+            SourceABICarrierKind::Stack);
+  EXPECT_EQ(PointerTail->Signature.Parameters[3].Location.EntryStackOffset, 0);
+  EXPECT_EQ(PointerTail->Signature.Parameters[4].Location.EntryStackOffset, 8);
+
+  Function = MakeCall();
+  auto &PointerCall = Function.Body.front().RetVal;
+  auto PointerNative = std::make_shared<SourceCallTypeHint>(*Native);
+  PointerNative->Signature = PointerTail->Signature;
+  PointerNative->Signature.Origin =
+      SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  for (auto &Parameter : PointerNative->Signature.Parameters)
+    Parameter.Type = NdType::makeInt(8, false);
+  PointerCall->SourceCallHint = PointerNative;
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  MedVar FirstPointer = DynamicFormat;
+  FirstPointer.Id = 1;
+  MedVar SecondPointer = DynamicFormat;
+  SecondPointer.Id = 2;
+  PointerCall->Operands.push_back(HighExpr::makeVar(FirstPointer, Pointer));
+  PointerCall->Operands.push_back(HighExpr::makeVar(SecondPointer, Pointer));
+  Function.Params.push_back({"first", Pointer});
+  Function.Params.push_back({"second", Pointer});
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  const auto &BoundPointerCall = Bound.Function.Body.front().RetVal;
+  ASSERT_TRUE(BoundPointerCall && BoundPointerCall->SourceCallHint);
+  EXPECT_EQ(BoundPointerCall->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::ObjCMessage);
+  ASSERT_TRUE(BoundPointerCall->SourceCallHint->Format);
+  EXPECT_TRUE(
+      BoundPointerCall->SourceCallHint->Format->DynamicPointerArguments);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*BoundPointerCall, Image, {}, nullptr,
+                                       nullptr, &Bound.Function));
+
+  PointerCall->SourceCallHint.reset();
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  ASSERT_TRUE(Bound.Function.Body.front().RetVal->SourceCallHint);
+  EXPECT_EQ(Bound.Function.Body.front().RetVal->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::ObjCMessage);
+
+  // Native SSA can retain a scalar spelling after an authenticated ARC call
+  // has proved that the value is an Objective-C pointer. Follow the complete
+  // definition family instead of treating every 64-bit scalar as a pointer.
+  constexpr va_t RetainSlot = 0x2188;
+  Image.ImportPtrSlots[RetainSlot] = "_objc_retainAutoreleasedReturnValue";
+  Image.DyldBindSlots[RetainSlot] = {"_objc_retainAutoreleasedReturnValue", 0,
+                                     "/usr/lib/libobjc.A.dylib", false};
+  const auto RetainHint = objcRuntimeSourceCallHint(Image, RetainSlot);
+  ASSERT_TRUE(RetainHint);
+  Function = MakeCall();
+  auto &ProvenCall = Function.Body.front().RetVal;
+  const auto OnePointerTail = objcDynamicFormatPointerArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", 1);
+  ASSERT_TRUE(OnePointerTail);
+  auto ProvenNative = std::make_shared<SourceCallTypeHint>(*Native);
+  ProvenNative->Signature = OnePointerTail->Signature;
+  ProvenNative->Signature.Origin =
+      SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  for (auto &Parameter : ProvenNative->Signature.Parameters)
+    Parameter.Type = NdType::makeInt(8, false);
+  ProvenCall->SourceCallHint = ProvenNative;
+  MedVar Retained = DynamicFormat;
+  Retained.Kind = MedVar::Temp;
+  Retained.Id = 3;
+  auto RetainedValue = HighExpr::makeVar(Retained, NdType::makeInt(8, false));
+  ProvenCall->Operands.push_back(RetainedValue);
+  auto Retain = HighExpr::makeCall("objc_retainAutoreleasedReturnValue",
+                                   RetainSlot, {HighExpr::makeConst(0, 8)});
+  Retain->Type = NdType::makeInt(8, false);
+  Retain->SourceCallHint = std::make_shared<SourceCallTypeHint>(*RetainHint);
+  HighStmt DefineRetained;
+  DefineRetained.Kind = StmtKind::Assign;
+  DefineRetained.Dst = RetainedValue;
+  DefineRetained.Val = Retain;
+  Function.Body.insert(Function.Body.begin(), DefineRetained);
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  const auto &ProvenPointerCall = Bound.Function.Body.back().RetVal;
+  ASSERT_TRUE(ProvenPointerCall && ProvenPointerCall->SourceCallHint);
+  EXPECT_EQ(ProvenPointerCall->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::ObjCMessage);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*ProvenPointerCall, Image, {}, nullptr,
+                                       nullptr, &Bound.Function));
+
+  HighStmt ConflictingDefinition = DefineRetained;
+  ConflictingDefinition.Val = HighExpr::makeConst(7, 8);
+  Function.Body.insert(Function.Body.begin(), ConflictingDefinition);
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  ASSERT_TRUE(Bound.Function.Body.back().RetVal->SourceCallHint);
+  EXPECT_EQ(Bound.Function.Body.back().RetVal->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::Native);
+
+  Function = MakeCall();
+  auto &IntegerTailCall = Function.Body.front().RetVal;
+  IntegerTailCall->SourceCallHint = PointerNative;
+  IntegerTailCall->Operands.push_back(HighExpr::makeVar(FirstPointer, Pointer));
+  IntegerTailCall->Operands.push_back(HighExpr::makeConst(7, 8));
+  Bound = sdk::bindObjCSourceReferences(Function, Image);
+  ASSERT_TRUE(Bound.Function.Body.front().RetVal->SourceCallHint);
+  EXPECT_EQ(Bound.Function.Body.front().RetVal->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::Native);
+  EXPECT_FALSE(objcDynamicFormatPointerArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", 62));
+
   Function = MakeCall();
   Function.Body.front().RetVal->SourceCallHint.reset();
   Function.Body.front().RetVal->Type = NdType::makeFloat(8);
@@ -3471,8 +3584,8 @@ TEST(ObjCCallHints, DynamicFormatStubBindsOnlyCallsWithoutVariadicArguments) {
   Bound = sdk::bindObjCSourceReferences(Function, Image);
   EXPECT_FALSE(Bound.Function.Body.front().RetVal->SourceCallHint);
 
-  // One untyped tail operand is already too much: without the format object's
-  // exact contents there is no source type for that value.
+  // One untyped tail operand is still too much: without the format object's
+  // exact contents there is no promoted source type for an integer value.
   Function = MakeCall();
   Function.Body.front().RetVal->Operands.push_back(HighExpr::makeConst(7, 8));
   Bound = sdk::bindObjCSourceReferences(Function, Image);
