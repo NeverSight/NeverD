@@ -1020,6 +1020,126 @@ struct NativeVoidFrameFixture : NativeVoidFixture {
   }
 };
 
+struct NativeOutgoingStackFixture : NativeVoidFrameFixture {
+  size_t ArgumentStore;
+  std::shared_ptr<SourceCallTypeHint> Binding;
+
+  explicit NativeOutgoingStackFixture(Arch Architecture = Arch::AArch64)
+      : NativeVoidFrameFixture(Architecture) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    // Reserve a separate outgoing word below all saved-register identities.
+    FrameBytes += 16;
+    auto &Ops = Low.Blocks[0].Ops;
+    for (auto &Op : Ops) {
+      if ((Op.Opcode == NdOp::INT_SUB || Op.Opcode == NdOp::INT_ADD) &&
+          Op.Output == NdVar::reg(TRI.StackPointer, 8))
+        Op.Inputs[1] = NdVar::cst(FrameBytes, 8);
+      else if (Op.Opcode == NdOp::INT_ADD &&
+               Op.Output == NdVar::tmp(TmpBase, 8))
+        Op.Inputs[1].Offset += 16;
+    }
+    ArgumentStore = CallIndex;
+    Ops.insert(Ops.begin() + CallIndex,
+               op(NdOp::STORE, {},
+                  {NdVar::reg(TRI.StackPointer, 8), NdVar::cst(0x7777, 8)},
+                  0x100c));
+    ++CallIndex;
+    ++RestoreIndex;
+    auto &Call = Med.Blocks[0].Ops[0];
+    Binding = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+    Binding->Signature.Parameters.push_back(
+        {"word", NdType::makeInt(8), {SourceABICarrierKind::Stack, 0, 0, 8}});
+    Call.SourceCallHint = Binding;
+    Call.addInput(MedVar::makeConst(0x7777, 8));
+  }
+};
+
+TEST(NativeSourceHints, ReturningCallsConsumeCompletelyWrittenStackWords) {
+  for (unsigned Mutation = 0; Mutation < 13; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeOutgoingStackFixture F(Mutation == 10 ? Arch::X64 : Arch::AArch64);
+    const auto &TRI = getTargetRegInfo(F.Architecture);
+    auto &Ops = F.Low.Blocks[0].Ops;
+    if (Mutation == 1)
+      Ops[F.ArgumentStore].Inputs[1].Size = 4;
+    if (Mutation == 2)
+      Ops[F.ArgumentStore] = NativeVoidFrameFixture::op(NdOp::NOP, {}, {});
+    if (Mutation == 3)
+      Ops[F.ArgumentStore].Inputs[1] = NdVar::reg(TRI.StackPointer, 8);
+    if (Mutation == 4) {
+      // The existing spill is fully written and contains a valid entry value.
+      // Passing it by value lets the callee overwrite it, so that slot cannot
+      // still restore the preserved register on return.
+      F.Binding->Signature.Parameters.back().Location.EntryStackOffset = 16;
+    }
+    if (Mutation == 5)
+      Ops[F.RestoreIndex + 1].Opcode = NdOp::NOP;
+    if (Mutation == 6)
+      F.Binding->Signature.Parameters.back().Location.EntryStackOffset =
+          F.FrameBytes;
+    if (Mutation == 7) {
+      LowBlock CallBlock;
+      CallBlock.Id = 1;
+      CallBlock.Preds = {0};
+      CallBlock.Ops.assign(Ops.begin() + F.CallIndex, Ops.end());
+      Ops.resize(F.CallIndex);
+      F.Low.Blocks[0].Succs = {1};
+      F.Low.Blocks.push_back(std::move(CallBlock));
+    }
+    if (Mutation == 8 || Mutation == 9) {
+      auto Second = F.Med.Blocks[0].Ops[0];
+      Second.Addr += 4;
+      ++Second.OriginSeq;
+      F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.begin() + 1, Second);
+      auto SecondLow = Ops[F.CallIndex];
+      SecondLow.Addr = Second.Addr;
+      SecondLow.Seq = Second.OriginSeq;
+      Ops.insert(Ops.begin() + F.RestoreIndex, SecondLow);
+      if (Mutation == 9) {
+        auto Rewrite = Ops[F.ArgumentStore];
+        Rewrite.Addr = Second.Addr;
+        Ops.insert(Ops.begin() + F.RestoreIndex, Rewrite);
+      }
+    }
+    if (Mutation == 10)
+      // The x64 return address is below the caller's SP. This is a valid
+      // x64 ABI declaration; only the ARM64 extension remains unavailable.
+      F.Binding->Signature.Parameters.back().Location.EntryStackOffset = 8;
+    if (Mutation == 11) {
+      F.Binding->Signature.Parameters.back().Type = NdType::makeInt(4);
+      F.Binding->Signature.Parameters.back().Location.ValueBytes = 4;
+      F.Med.Blocks[0].Ops[0].Inputs[2].Size = 4;
+    }
+    if (Mutation == 12) {
+      // The actual argument at SP+24 is separate from both saved values in
+      // the preceding gap. The entire incoming argument area may be changed,
+      // so preserving only the individual argument slot would be unsound.
+      for (auto &Op : Ops)
+        if (Op.Opcode == NdOp::INT_ADD && Op.Output == NdVar::tmp(TmpBase, 8) &&
+            Op.Inputs[1].Offset == 24)
+          Op.Inputs[1].Offset = 8;
+      F.Binding->Signature.Parameters.back().Location.EntryStackOffset = 24;
+      const auto Address = NdVar::tmp(TmpBase + 8, 8);
+      Ops[F.ArgumentStore].Inputs[0] = Address;
+      Ops.insert(Ops.begin() + F.ArgumentStore,
+                 NativeVoidFrameFixture::op(
+                     NdOp::INT_ADD, Address,
+                     {NdVar::reg(TRI.StackPointer, 8), NdVar::cst(24, 8)},
+                     0x100c));
+    }
+    std::string Error;
+    ASSERT_TRUE(validateSourceABI(F.Binding->Signature, Error)) << Error;
+    const auto Hint = F.inferVoid(Error);
+    if (Mutation == 0 || Mutation == 9) {
+      ASSERT_TRUE(Hint) << Error;
+      EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+    } else {
+      EXPECT_FALSE(Hint);
+      EXPECT_FALSE(Error.empty());
+    }
+  }
+}
+
 TEST(NativeSourceHints, IndependentCallOnlyContractsRetainObservedContext) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {

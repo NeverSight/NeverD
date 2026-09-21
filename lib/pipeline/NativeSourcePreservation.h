@@ -51,7 +51,11 @@ std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation);
 /// stack pointer and link register. Calls must already have validated source
 /// declarations. Exact private spills may carry these identities across calls;
 /// unknown writes invalidate spills; frame-address spills, escaping frame
-/// values and incomplete graphs fail closed.
+/// values and incomplete graphs fail closed. Ordinary ARM64 calls may consume
+/// aligned scalar eight-byte stack arguments written completely in the same
+/// block. The callee may overwrite the entire incoming argument area, so its
+/// slots and padding lose spill and written-byte facts before subsequent
+/// restoration or argument checks.
 /// This does not prove a result type or authorize machine-code rewriting.
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls,

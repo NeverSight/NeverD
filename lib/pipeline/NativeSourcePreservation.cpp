@@ -99,7 +99,14 @@ public:
   PreservationProof(Arch Architecture, const NativeSourceCalls &Calls,
                     bool TerminalOnly = false)
       : Architecture(Architecture), Calls(Calls),
-        TRI(getTargetRegInfo(Architecture)), TerminalOnly(TerminalOnly) {
+        TRI(getTargetRegInfo(Architecture)), TerminalOnly(TerminalOnly),
+        TrackStackArguments(TerminalOnly) {
+    if (Architecture == Arch::AArch64)
+      for (const auto &[Site, Contract] : Calls)
+        if (Contract.Signature)
+          for (const auto &Parameter : Contract.Signature->Parameters)
+            TrackStackArguments |=
+                Parameter.Location.Kind == SourceABICarrierKind::Stack;
     for (const auto &Range : TRI.callPreservedRanges(BinaryFormat::MachO))
       for (unsigned I = 0; I < Range.Bytes; ++I)
         Preserved.insert(Range.Offset + I);
@@ -121,8 +128,8 @@ public:
   bool transfer(const LowBlock &Block, State &Current, bool CheckExits,
                 std::set<uint64_t> *UsedEntryRegisters = nullptr) {
     RegisterFacts Temps;
-    // Only the single-block terminal proof accepts outgoing stack arguments.
-    // Its declaration may read a byte only after a complete private write.
+    // Outgoing arguments require a complete private write in this same block.
+    // This local set deliberately does not infer definitions across CFG edges.
     std::set<int64_t> WrittenStack;
     va_t Instruction = InvalidVA;
     auto Read = [&](const NdVar &Value, unsigned Byte) {
@@ -236,7 +243,17 @@ public:
           const auto &Parameter = Signature.Parameters[ParameterIndex];
           const auto &Location = Parameter.Location;
           if (Location.Kind == SourceABICarrierKind::Stack) {
-            if (!TerminalOnly || !Found->second.Terminates ||
+            const bool TerminalArgument =
+                TerminalOnly && Found->second.Terminates;
+            const bool ReturningArgument =
+                !TerminalOnly && Architecture == Arch::AArch64 && !Tail &&
+                Parameter.Components.empty() && Parameter.Type &&
+                (Parameter.Type->Kind == NdTypeKind::Int ||
+                 Parameter.Type->Kind == NdTypeKind::Ptr ||
+                 Parameter.Type->Kind == NdTypeKind::Float) &&
+                Parameter.Type->Size == 8 && Location.ValueBytes == 8 &&
+                Location.EntryStackOffset % 8 == 0;
+            if ((!TerminalArgument && !ReturningArgument) ||
                 !Location.ValueBytes || Location.ValueBytes > 64 ||
                 Location.EntryStackOffset < 0 ||
                 Location.EntryStackOffset > MaxFrame)
@@ -248,6 +265,13 @@ public:
               if (!WrittenStack.count(Start + I) ||
                   lookup(Current.Stack, Start + I).MayBeFrame)
                 return false;
+            // AAPCS64 permits the callee to overwrite its incoming argument
+            // area. A by-value argument does not lend a frame pointer, but its
+            // complete area, including padding before/between parameters,
+            // cannot restore a spill after this call. These prefix ranges
+            // together cover call SP through the final stacked argument.
+            if (ReturningArgument)
+              WritableFrameRanges.emplace_back(*SP, Start - *SP + 8);
             continue;
           }
           if ((Location.Kind != SourceABICarrierKind::IntegerRegister &&
@@ -453,7 +477,7 @@ public:
               return false;
             for (unsigned I = 0; I < Memory.AccessSize; ++I)
               put(Current.Stack, *Address + I, Read(*Memory.StoredValue, I));
-            if (TerminalOnly)
+            if (TrackStackArguments)
               for (unsigned I = 0; I < Memory.AccessSize; ++I)
                 WrittenStack.insert(*Address + I);
           } else
@@ -498,6 +522,7 @@ private:
   const TargetRegInfo &TRI;
   std::set<uint64_t> Preserved;
   bool TerminalOnly;
+  bool TrackStackArguments;
 };
 } // namespace
 
