@@ -194,7 +194,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     std::map<va_t, std::string> ProjectionReasons;
     std::set<va_t> Closed;
     for (const auto &[Entry, Func] : Functions) {
-      if (!Func->SourceTypeHint)
+      const bool ObjCOnceThunk = OncePlan.ObjCThunks.count(Entry) != 0;
+      if (!Func->SourceTypeHint && !ObjCOnceThunk)
         continue;
       auto BlockBinding = bindObjCBlockSourceReferences(*Func, BlockSource,
                                                         BlockPlan, Functions);
@@ -202,12 +203,19 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           snapshotObjCEntryInputs(BlockBinding.Function, S->Img, Functions);
       auto OnceBinding =
           bindSwiftOnceSourceReferences(Inputs, S->Img, OncePlan, Functions);
+      if (ObjCOnceThunk && (!OnceBinding.SwiftOnceObjCThunks.count(Entry) ||
+                            !finalizeSwiftOnceObjCThunkProjection(
+                                OnceBinding.Function, OncePlan)))
+        continue;
       auto Binding = bindObjCSourceReferences(OnceBinding.Function, S->Img,
                                               &ProfileStorage, &Functions);
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
                                   OnceBinding.Dependencies.end());
       Binding.SwiftOnceAccessors.insert(OnceBinding.SwiftOnceAccessors.begin(),
                                         OnceBinding.SwiftOnceAccessors.end());
+      Binding.SwiftOnceObjCThunks.insert(
+          OnceBinding.SwiftOnceObjCThunks.begin(),
+          OnceBinding.SwiftOnceObjCThunks.end());
       for (const auto &[Address, Width] : OnceBinding.LocalStorageExtents)
         Binding.LocalStorageExtents[Address] =
             std::max(Binding.LocalStorageExtents[Address], Width);
@@ -225,7 +233,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                ObjectPointerHelpers.end());
         const auto Audit = Audits.find(Entry);
         Reason = sourceBodyLimitation(
-            Binding.Function, *Func->SourceTypeHint,
+            Binding.Function, *Binding.Function.SourceTypeHint,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
@@ -301,7 +309,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         const auto ReadOnlyHelpers =
             readOnlyScalarSourceHelpers(Binding.Function, S->Img);
         Evidence = sourceBodyDiagnostics(
-            Binding.Function, *Functions.at(Entry)->SourceTypeHint,
+            Binding.Function, *Binding.Function.SourceTypeHint,
             Audit == Audits.end() ? nullptr : Audit->second,
             [&](const HighExpr &Expression) {
               return objcSourceCallBound(Expression, S->Img, Functions,
@@ -359,7 +367,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         Reason = "runtime method signature is not supported: " + Method.Status;
         Evidence.Complete = false;
         Evidence.add(SourceProjectionIssue::Signature, Reason);
-      } else if (!Func || !Func->SourceTypeHint) {
+      } else if (!Func || !Projections.count(Method.Implementation)) {
         Reason = "method has no complete typed source body (possibly limited "
                  "by max-func)";
         Evidence.Complete = false;

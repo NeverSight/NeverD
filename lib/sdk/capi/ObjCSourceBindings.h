@@ -46,6 +46,8 @@ struct ObjCSourceBindingResult {
   std::map<va_t, va_t> SwiftWitnessCaches;
   /// Exact compiler-emitted Swift lazy global addressors used by this body.
   std::set<va_t> SwiftOnceAccessors;
+  /// Exact Objective-C entry thunks for Swift lazy static object properties.
+  std::set<va_t> SwiftOnceObjCThunks;
   std::set<va_t> ProfileCounterSections;
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;

@@ -245,6 +245,8 @@ Native 純量回傳值推斷可識別已驗證呼叫結果 ABI 後緊接的完�
 
 繫結原始碼呼叫後，Objective-C 原生相依性推斷可將 `NativeAnalysis` 得到的 64 位元整數暫存器參數進一步縮窄為 32 位元。窮盡式 HighIR 使用證明必須確認該參數的每次出現都只精確觀察低 4 位元組：或經由零偏移位元組擷取，或作為已精確繫結呼叫的整數實參。證明按參數獨立進行；任何全寬、非零偏移、格式錯誤或耗盡預算的使用都會保留原始寬度。縮窄後的輔助函式會重新提升，且仍須通過一般函式本體與相依性閉包檢查；重寫 ABI 維持不變。
 
+透過 Objective-C 入口 thunk 公開的 Swift 延遲初始化靜態物件 getter，僅在 `vgZTo` 符號、執行期方法簽章、述詞測試、`swift_once` 呼叫、儲存載入與 `objc_retainAutoreleaseReturnValue` 結果共同構成精確的編譯器模式時才能投影。述詞 `_Wz`、初始化器 `_WZ` 與儲存 `vpZ` 符號必須彼此吻合；原始第三個暫存器只能作為 once context，初始化器必須忽略該 context，且不得有一般直接呼叫端。投影會重建述詞與物件儲存，將 null 作為無關 context 傳入，並把初始化器保留為已檢查的相依項目。形狀、符號、參數用途或 callback 有任何偏差時均維持未復原。
+
 ## 驗證與故障排查
 
 macOS 上啟用 `BUILD_TESTING` 的建置提供 `check-neverd-mobile-ios`，透過 CTest 執行三組原生還原驗證。

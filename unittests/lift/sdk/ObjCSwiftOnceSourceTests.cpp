@@ -1,6 +1,8 @@
 #include "../../../lib/sdk/capi/ObjCSwiftOnceSources.h"
 #include "gtest/gtest.h"
 
+#include "neverd/loader/ObjC/ObjCEncoding.h"
+
 using namespace neverd;
 using namespace neverd::sdk;
 
@@ -315,6 +317,122 @@ struct AddressorFixture {
   }
 };
 
+struct ObjCThunkFixture : AddressorFixture {
+  static constexpr va_t ThunkAddress = 0x10e0;
+  static constexpr va_t RetainSlot = 0x2088;
+  static constexpr const char *ThunkName = "_$s4Test5valueSo8NSObjectCvgZTo";
+
+  explicit ObjCThunkFixture(Arch Architecture)
+      : AddressorFixture(Architecture) {
+    Image.Symbols.push_back({ThunkName, ThunkAddress, 0, true});
+    Image.ImportPtrSlots[RetainSlot] = "_objc_retainAutoreleaseReturnValue";
+    Image.DyldBindSlots[RetainSlot] = {"_objc_retainAutoreleaseReturnValue", 0,
+                                       "/usr/lib/libobjc.A.dylib", false};
+    ObjCMethod Method;
+    Method.Status = "supported";
+    Method.Implementation = ThunkAddress;
+    Method.Selector = "value";
+    Method.TypeEncoding = "@16@0:8";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    std::string Error;
+    EXPECT_TRUE(Method.TypeHint);
+    if (!Method.TypeHint)
+      return;
+    EXPECT_TRUE(
+        assignDarwinObjCSourceABI(*Method.TypeHint, Architecture, Error))
+        << Error;
+    Image.ObjCMethods.push_back(Method);
+
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto Integer = NdType::makeInt(8);
+    auto Param = [&](unsigned Id) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      return HighExpr::makeVar(V, Integer);
+    };
+    auto Local = [&](unsigned Id, const TypeRef &Type) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = Id;
+      V.Size = Type->Size;
+      return HighExpr::makeVar(V, Type);
+    };
+    HighFunc Thunk;
+    Thunk.Entry = ThunkAddress;
+    Thunk.Name = ThunkName;
+    Thunk.ReturnType = Integer;
+    Thunk.Params = {{"arg0", Integer}, {"arg1", Integer}, {"arg2", Integer}};
+    auto PredicateValue = Local(1, Integer);
+    HighStmt LoadPredicate;
+    LoadPredicate.Kind = StmtKind::Assign;
+    LoadPredicate.Dst = PredicateValue;
+    LoadPredicate.Val = HighExpr::makeLoad(
+        HighExpr::makeConst(PredicateAddress, 8,
+                            ConstantAddressProvenance::DataAddress),
+        Integer);
+    const auto Runtime = swiftRuntimeSourceCallHint(Image, RuntimeSlot);
+    EXPECT_TRUE(Runtime);
+    if (!Runtime)
+      return;
+    auto OnceCall = HighExpr::makeCall(
+        "swift_once", RuntimeSlot,
+        {HighExpr::makeConst(PredicateAddress, 8,
+                             ConstantAddressProvenance::DataAddress),
+         HighExpr::makeConst(InitializerAddress, 8,
+                             ConstantAddressProvenance::CodeAddress),
+         Param(2)});
+    OnceCall->Type = NdType::makeVoid();
+    OnceCall->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Runtime);
+    HighStmt Invoke;
+    Invoke.Kind = StmtKind::Call;
+    Invoke.CallExpr = OnceCall;
+    HighStmt Jump;
+    Jump.Kind = StmtKind::Goto;
+    Jump.GotoTarget = ThunkAddress + 0x3c;
+    HighStmt Initialize;
+    Initialize.Kind = StmtKind::If;
+    Initialize.Cond =
+        HighExpr::makeBinop(NdOp::INT_NOTEQUAL,
+                            HighExpr::makeBinop(NdOp::INT_ADD, PredicateValue,
+                                                HighExpr::makeConst(1, 8)),
+                            HighExpr::makeConst(0, 8));
+    Initialize.Body = {Invoke, Jump};
+    HighStmt Label;
+    Label.Kind = StmtKind::Block;
+    Label.Addr = Jump.GotoTarget;
+    auto StorageValue = Local(2, Integer);
+    HighStmt LoadStorage;
+    LoadStorage.Kind = StmtKind::Assign;
+    LoadStorage.Dst = StorageValue;
+    LoadStorage.Val = HighExpr::makeLoad(
+        HighExpr::makeConst(StorageAddress, 8,
+                            ConstantAddressProvenance::DataAddress),
+        Integer);
+    const auto Retain = objcRuntimeSourceCallHint(Image, RetainSlot);
+    EXPECT_TRUE(Retain);
+    if (!Retain)
+      return;
+    auto ResultValue = Local(3, Pointer);
+    HighStmt RetainResult;
+    RetainResult.Kind = StmtKind::Assign;
+    RetainResult.Dst = ResultValue;
+    RetainResult.Val =
+        HighExpr::makeCall(Retain->TargetName, RetainSlot, {StorageValue});
+    RetainResult.Val->Type = Pointer;
+    RetainResult.Val->SourceCallHint =
+        std::make_shared<SourceCallTypeHint>(*Retain);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = ResultValue;
+    Thunk.Body = {LoadPredicate, Initialize,   Label,
+                  LoadStorage,   RetainResult, Return};
+    Pipeline.HighFuncs[0] = std::move(Thunk);
+  }
+};
+
 TEST(SwiftOnceSources, BindsStorageAndCallbackAsOneDependencyGroup) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     OnceFixture F(Architecture);
@@ -408,6 +526,69 @@ TEST(SwiftOnceSources, BindsCanonicalZeroArgumentAddressor) {
     EXPECT_NE(Helpers.find("neverd_swift_once_initializer_1080"),
               std::string::npos);
     EXPECT_EQ(Shared, std::set<std::string>{"neverd_swift_once_accessor_1000"});
+  }
+}
+
+TEST(SwiftOnceSources, ProjectsCanonicalObjCLazyStaticGetterThunk) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    ObjCThunkFixture F(Architecture);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+    ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+    EXPECT_TRUE(Plan.ObjCThunks.count(ObjCThunkFixture::ThunkAddress));
+    PipelineOptions Options;
+    EXPECT_EQ(applySwiftOnceSourceHints(Plan, Options), 1U);
+    EXPECT_TRUE(
+        Options.SourceTypeHints.count(AddressorFixture::InitializerAddress));
+
+    auto Bound = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[0], F.Image,
+                                               Plan, F.functions());
+    EXPECT_EQ(Bound.Dependencies,
+              std::set<va_t>{AddressorFixture::InitializerAddress});
+    EXPECT_EQ(
+        Bound.LocalStorageExtents,
+        (std::map<va_t, uint64_t>{{AddressorFixture::PredicateAddress, 8},
+                                  {AddressorFixture::StorageAddress, 8}}));
+    EXPECT_EQ(Bound.SwiftOnceObjCThunks,
+              std::set<va_t>{ObjCThunkFixture::ThunkAddress});
+    ASSERT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+    ASSERT_TRUE(Bound.Function.SourceTypeHint);
+    EXPECT_EQ(Bound.Function.Params.size(), 2U);
+    const auto &Once = *Bound.Function.Body[1].Body[0].CallExpr;
+    ASSERT_EQ(Once.Operands.size(), 3U);
+    EXPECT_EQ(Once.Operands[2]->Kind, ExprKind::Const);
+    EXPECT_EQ(Once.Operands[2]->ConstVal, 0U);
+    EXPECT_EQ(Once.Operands[2]->Type->Kind, NdTypeKind::Ptr);
+    const auto Functions = F.functions();
+    const auto Projection =
+        bindObjCSourceReferences(Bound.Function, F.Image, nullptr, &Functions);
+    EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
+  }
+}
+
+TEST(SwiftOnceSources, RejectsObjCLazyStaticGetterEvidenceDrift) {
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    ObjCThunkFixture F(Arch::AArch64);
+    auto &Thunk = F.Pipeline.HighFuncs[0];
+    if (Mutation == 0)
+      Thunk.Name = "forged";
+    if (Mutation == 1)
+      F.Image.Symbols.back().Name = "forged";
+    if (Mutation == 2)
+      Thunk.Body[1].Body[0].CallExpr->Operands[2] = HighExpr::makeConst(0, 8);
+    if (Mutation == 3) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Id = 2;
+      Context.Size = 8;
+      Use.Val = HighExpr::makeVar(Context, NdType::makeInt(8));
+      Thunk.Body.insert(Thunk.Body.begin() + 3, std::move(Use));
+    }
+    EXPECT_TRUE(
+        discoverSwiftOnceSources(F.Image, F.Pipeline).ObjCThunks.empty())
+        << Mutation;
   }
 }
 

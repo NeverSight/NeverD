@@ -278,6 +278,8 @@ For an already loaded Mach-O session, `neverd_objc_methods_json(session, max_fun
 
 Objective-C native dependency inference may further narrow a `NativeAnalysis` 64-bit integer register parameter to 32 bits after source calls are bound. An exhaustive HighIR use proof must show that every occurrence observes exactly the low four bytes, either through a zero-offset byte extraction or an exact bound integer call argument. The proof is independent for each parameter; full-width, nonzero-offset, malformed, or budget-exhausted uses keep the original width. The refined helper is re-lifted and must pass the ordinary body and dependency-closure checks; the rewrite ABI is unchanged.
 
+Swift lazy static object getters exposed through Objective-C entry thunks can be projected only when the `vgZTo` symbol, runtime method signature, predicate test, `swift_once` call, storage load, and `objc_retainAutoreleaseReturnValue` result form one exact compiler pattern. The `_Wz` predicate, `_WZ` initializer, and `vpZ` storage symbols must agree; the raw third register may occur only as the once context, and the initializer must ignore that context and have no ordinary direct caller. The projection rebuilds predicate and object storage, passes null as the irrelevant context, and keeps the initializer as a checked dependency. Any shape, symbol, parameter-use, or callback drift remains unrecovered.
+
 ## Verification and troubleshooting
 
 On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.

@@ -28,6 +28,19 @@ struct SwiftOnceAddressorContract {
   }
 };
 
+struct SwiftOnceObjCThunkContract {
+  va_t Predicate = 0;
+  va_t Storage = 0;
+  va_t Initializer = 0;
+  SourceFunctionTypeHint Signature;
+
+  bool sameIdentity(const SwiftOnceObjCThunkContract &Other) const {
+    return Predicate == Other.Predicate && Storage == Other.Storage &&
+           Initializer == Other.Initializer &&
+           objc_projection_detail::sameHint(Signature, Other.Signature);
+  }
+};
+
 struct SwiftObjCClassMetadataAccessorContract {
   va_t Cache = 0;
   va_t ClassReference = 0;
@@ -44,6 +57,7 @@ struct SwiftObjCClassMetadataAccessorContract {
 struct SwiftOnceSourcePlan {
   std::map<va_t, SwiftOnceGetterContract> Getters;
   std::map<va_t, SwiftOnceAddressorContract> Addressors;
+  std::map<va_t, SwiftOnceObjCThunkContract> ObjCThunks;
   std::map<va_t, SwiftObjCClassMetadataAccessorContract>
       ObjCClassMetadataAccessors;
   std::map<va_t, SourceFunctionTypeHint> AddressorHints;
@@ -646,6 +660,199 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
   return SwiftOnceAddressorContract{*Predicate, *FirstStorage, *Initializer};
 }
 
+/// Prove the Objective-C entry thunk emitted for a Swift lazy static object
+/// property. The machine thunk forwards the otherwise unspecified third
+/// Objective-C argument register as swift_once context, but the exact
+/// initializer ignores that context. A source projection may therefore pass
+/// null and retain only the declared receiver and selector parameters.
+inline std::optional<SwiftOnceObjCThunkContract>
+objcThunkContract(const HighFunc &F, const BinaryImage &Image) {
+  const ObjCMethod *Method = nullptr;
+  for (const auto &Candidate : Image.ObjCMethods) {
+    if (Candidate.Implementation != F.Entry)
+      continue;
+    if (Method || Candidate.Status != "supported" || !Candidate.TypeHint)
+      return std::nullopt;
+    Method = &Candidate;
+  }
+  if (!Method || F.Params.size() != 3 || !F.ReturnType ||
+      F.ReturnType->Size != 8 || F.Body.size() != 6)
+    return std::nullopt;
+  const auto Parameters = sourceABIParameters(*Method->TypeHint);
+  if (Parameters.size() != 2 || !Method->TypeHint->ReturnType ||
+      Method->TypeHint->ReturnType->Kind != NdTypeKind::Ptr ||
+      Method->TypeHint->ReturnType->Size != 8)
+    return std::nullopt;
+  for (const auto &Parameter : Parameters)
+    if (!Parameter.Type || Parameter.Type->Kind != NdTypeKind::Ptr ||
+        Parameter.Type->Size != 8)
+      return std::nullopt;
+  for (const auto &Parameter : F.Params)
+    if (!Parameter.Type || Parameter.Type->Size != 8 ||
+        (Parameter.Type->Kind != NdTypeKind::Int &&
+         Parameter.Type->Kind != NdTypeKind::Ptr))
+      return std::nullopt;
+
+  size_t ThunkSymbols = 0;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr == F.Entry && Symbol.Name == F.Name &&
+        llvm::StringRef(Symbol.Name).ends_with("vgZTo"))
+      ++ThunkSymbols;
+  if (ThunkSymbols != 1)
+    return std::nullopt;
+
+  const auto Plain = [](ExprPtr Value) {
+    unsigned Depth = 0;
+    while (
+        Value &&
+        (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+        Value->Operands.size() == 1 && Depth++ < 16)
+      Value = Value->Operands.front();
+    return Value;
+  };
+  const auto Assignment = [&](size_t I) -> const HighStmt * {
+    const auto &Statement = F.Body[I];
+    if (Statement.Kind != StmtKind::Assign || !Statement.Dst ||
+        !Statement.Val ||
+        (Statement.Dst->Kind != ExprKind::Var &&
+         Statement.Dst->Kind != ExprKind::Phi) ||
+        !Statement.Dst->Operands.empty())
+      return nullptr;
+    return &Statement;
+  };
+  const auto SameLocal = [&](const ExprPtr &Value, const ExprPtr &Definition) {
+    const auto E = Plain(Value);
+    return E && Definition &&
+           (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+           highSourceLocalIdentity(E->Var) ==
+               highSourceLocalIdentity(Definition->Var);
+  };
+  const auto LoadAddress = [&](const ExprPtr &Value) -> std::optional<va_t> {
+    const auto E = Plain(Value);
+    if (!E || E->Kind != ExprKind::Load || E->Operands.size() != 1 ||
+        !E->Type || E->Type->Size != 8 ||
+        E->MemoryOrdering != NdMemoryOrdering::None ||
+        E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        E->IntrinsicId != Intrinsic::None || !E->IntrinsicOutputs.empty())
+      return std::nullopt;
+    return objc_binding_detail::constantAddress(*E->Operands.front());
+  };
+  const auto IsConstant = [&](const ExprPtr &Value, uint64_t Expected) {
+    const auto E = Plain(Value);
+    return E && E->Kind == ExprKind::Const && E->ConstVal == Expected;
+  };
+
+  const auto *PredicateAssignment = Assignment(0);
+  const auto *StorageAssignment = Assignment(3);
+  const auto *RetainAssignment = Assignment(4);
+  const auto &Branch = F.Body[1];
+  const auto &Label = F.Body[2];
+  const auto &Return = F.Body[5];
+  if (!PredicateAssignment || !StorageAssignment || !RetainAssignment ||
+      Branch.Kind != StmtKind::If || !Branch.Cond || !Branch.ElseBody.empty() ||
+      Branch.Body.size() != 2 || Branch.Body[0].Kind != StmtKind::Call ||
+      !Branch.Body[0].CallExpr || Branch.Body[1].Kind != StmtKind::Goto ||
+      !Branch.Body[1].GotoTarget || Label.Kind != StmtKind::Block ||
+      Label.Addr != Branch.Body[1].GotoTarget || !Label.Body.empty() ||
+      !Label.ElseBody.empty() || Return.Kind != StmtKind::Return ||
+      !Return.RetVal || !SameLocal(Return.RetVal, RetainAssignment->Dst))
+    return std::nullopt;
+
+  const auto Predicate = LoadAddress(PredicateAssignment->Val);
+  const auto Storage = LoadAddress(StorageAssignment->Val);
+  if (!Predicate || !Storage || *Predicate == *Storage)
+    return std::nullopt;
+  auto Condition = Plain(Branch.Cond);
+  if (!Condition || Condition->Kind != ExprKind::BinOp ||
+      Condition->Op != NdOp::INT_NOTEQUAL || Condition->Operands.size() != 2)
+    return std::nullopt;
+  ExprPtr Added;
+  if (IsConstant(Condition->Operands[0], 0))
+    Added = Plain(Condition->Operands[1]);
+  else if (IsConstant(Condition->Operands[1], 0))
+    Added = Plain(Condition->Operands[0]);
+  if (!Added || Added->Kind != ExprKind::BinOp || Added->Op != NdOp::INT_ADD ||
+      Added->Operands.size() != 2)
+    return std::nullopt;
+  ExprPtr Loaded;
+  if (IsConstant(Added->Operands[0], 1))
+    Loaded = Plain(Added->Operands[1]);
+  else if (IsConstant(Added->Operands[1], 1))
+    Loaded = Plain(Added->Operands[0]);
+  if (!SameLocal(Loaded, PredicateAssignment->Dst))
+    return std::nullopt;
+
+  const auto &Once = *Branch.Body[0].CallExpr;
+  if (!onceCall(Once, Image))
+    return std::nullopt;
+  const auto OncePredicate =
+      objc_binding_detail::constantAddress(*Once.Operands[0]);
+  const auto Initializer =
+      objc_binding_detail::constantAddress(*Once.Operands[1]);
+  const auto Context = parameter(Once.Operands[2]);
+  if (!OncePredicate || *OncePredicate != *Predicate || !Initializer ||
+      !Context || *Context != 2 || !Image.isCodeAddress(*Initializer))
+    return std::nullopt;
+
+  const auto Retain = Plain(RetainAssignment->Val);
+  if (!Retain || Retain->Kind != ExprKind::Call || Retain->IsIndirectCall ||
+      Retain->Operands.size() != 1 || !Retain->SourceCallHint ||
+      Retain->SourceCallHint->CallKind !=
+          SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+      Retain->SourceCallHint->TargetName !=
+          "objc_retainAutoreleaseReturnValue" ||
+      Retain->SourceCallHint->ReturnedArgument != 0 ||
+      !SameLocal(Retain->Operands[0], StorageAssignment->Dst))
+    return std::nullopt;
+  const auto ExpectedRetain =
+      objcRuntimeSourceCallHint(Image, Retain->SourceCallHint->TargetAddress);
+  if (!ExpectedRetain || !objc_binding_detail::runtimeBindingMatches(
+                             *Retain->SourceCallHint, *ExpectedRetain))
+    return std::nullopt;
+
+  size_t ContextUses = 0;
+  walkStmts(F.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Pending{Root};
+      while (!Pending.empty()) {
+        auto Expression = Pending.back();
+        Pending.pop_back();
+        if (!Expression)
+          continue;
+        if (Expression->Kind == ExprKind::Var &&
+            Expression->Var.Kind == MedVar::Param && Expression->Var.Id == 2)
+          ++ContextUses;
+        Pending.insert(Pending.end(), Expression->Operands.begin(),
+                       Expression->Operands.end());
+      }
+    });
+  });
+  if (ContextUses != 1)
+    return std::nullopt;
+
+  const auto PredicateHint =
+      objc_binding_detail::oncePredicateStorageHint(Image, *Predicate);
+  const auto StorageHint =
+      objc_binding_detail::localStorageHint(Image, *Storage, 8);
+  if (!PredicateHint || !StorageHint ||
+      !llvm::StringRef(PredicateHint->TargetName).ends_with("_Wz") ||
+      !llvm::StringRef(StorageHint->TargetName).ends_with("vpZ"))
+    return std::nullopt;
+  const std::string Prefix =
+      llvm::StringRef(PredicateHint->TargetName).drop_back(3).str();
+  if (!llvm::StringRef(StorageHint->TargetName).starts_with(Prefix))
+    return std::nullopt;
+  bool ExactInitializer = false;
+  for (const auto &Symbol : Image.Symbols)
+    ExactInitializer |= Symbol.IsFunc && Symbol.Addr == *Initializer &&
+                        Symbol.Name == Prefix + "_WZ";
+  if (!ExactInitializer)
+    return std::nullopt;
+
+  return SwiftOnceObjCThunkContract{*Predicate, *Storage, *Initializer,
+                                    *Method->TypeHint};
+}
+
 inline SourceFunctionTypeHint callbackHint(Arch Architecture) {
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
@@ -728,10 +935,19 @@ discoverSwiftOnceSources(const BinaryImage &Image,
     else if (auto Contract = addressorContract(F, Image)) {
       Plan.Addressors.emplace(F.Entry, *Contract);
       Plan.AddressorHints.emplace(F.Entry, addressorHint(Image.Arch));
+    } else if (auto Contract = objcThunkContract(F, Image)) {
+      Plan.ObjCThunks.emplace(F.Entry, *Contract);
     }
   for (const auto &[_, Contract] : Plan.Addressors)
     if (Functions.count(Contract.Initializer) &&
         !DirectTargets.count(Contract.Initializer))
+      Plan.CallbackHints.emplace(Contract.Initializer,
+                                 callbackHint(Image.Arch));
+  for (const auto &[_, Contract] : Plan.ObjCThunks)
+    if (const auto Callback = Functions.find(Contract.Initializer);
+        Callback != Functions.end() && Callback->second &&
+        !DirectTargets.count(Contract.Initializer) &&
+        ignoresContext(*Callback->second))
       Plan.CallbackHints.emplace(Contract.Initializer,
                                  callbackHint(Image.Arch));
   for (const auto &F : Result.HighFuncs) {
@@ -922,6 +1138,57 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     Copies.emplace(Original.get(), E);
     for (auto &Op : E->Operands)
       Op = Copy(Op, Depth + 1);
+    if (swift_once_source_detail::onceCall(*E, Image)) {
+      const auto Planned = Plan.ObjCThunks.find(Function.Entry);
+      const auto Current =
+          swift_once_source_detail::objcThunkContract(Function, Image);
+      if (Planned != Plan.ObjCThunks.end() && Current &&
+          Current->sameIdentity(Planned->second)) {
+        const auto Predicate =
+            objc_binding_detail::constantAddress(*E->Operands[0]);
+        const auto Initializer =
+            objc_binding_detail::constantAddress(*E->Operands[1]);
+        const auto Context =
+            swift_once_source_detail::parameter(E->Operands[2]);
+        auto PredicateHint =
+            Predicate ? objc_binding_detail::oncePredicateStorageHint(
+                            Image, *Predicate)
+                      : std::nullopt;
+        if (Predicate && *Predicate == Planned->second.Predicate &&
+            Initializer && *Initializer == Planned->second.Initializer &&
+            Context && *Context == 2 && PredicateHint) {
+          auto Address = HighExpr::makeCall({}, 0, {});
+          auto AddressHint = std::make_shared<SourceCallTypeHint>();
+          AddressHint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
+          AddressHint->TargetAddress = *Initializer;
+          AddressHint->Signature.ReturnType =
+              NdType::makePtr(NdType::makeVoid());
+          std::string Error;
+          if (assignDarwinScalarSourceABI(AddressHint->Signature, Image.Arch,
+                                          Error)) {
+            Address->Type = AddressHint->Signature.ReturnType;
+            Address->SourceCallHint = std::move(AddressHint);
+            if (swiftOnceCallbackBound(*Address, Image, Plan, Functions)) {
+              auto Storage = HighExpr::makeCall({}, 0, {});
+              Storage->Type = E->Operands[0]->Type;
+              Storage->SourceCallHint = std::make_shared<SourceCallTypeHint>(
+                  std::move(*PredicateHint));
+              auto Null =
+                  HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar);
+              Null->Type = NdType::makePtr(NdType::makeVoid());
+              E->Operands[0] = std::move(Storage);
+              E->Operands[1] = std::move(Address);
+              E->Operands[2] = std::move(Null);
+              Result.LocalStorageExtents[Planned->second.Predicate] = 8;
+              Result.LocalStorageExtents[Planned->second.Storage] = 8;
+              Result.Dependencies.insert(Planned->second.Initializer);
+              Result.SwiftOnceObjCThunks.insert(Function.Entry);
+              return E;
+            }
+          }
+        }
+      }
+    }
     if (swift_once_source_detail::dispatchOnceCall(*E, Image)) {
       const auto Predicate =
           objc_binding_detail::constantAddress(*E->Operands[0]);
@@ -1149,16 +1416,67 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
   walkStmts(Result.Function.Body, [&](HighStmt &S) {
     forEachExpr(S, [&](ExprPtr &E) { E = Copy(E, 0); });
   });
-  const bool IsAddressorInitializer = std::any_of(
-      Plan.Addressors.begin(), Plan.Addressors.end(), [&](const auto &Entry) {
-        return Entry.second.Initializer == Function.Entry;
-      });
+  const bool IsAddressorInitializer =
+      std::any_of(Plan.Addressors.begin(), Plan.Addressors.end(),
+                  [&](const auto &Entry) {
+                    return Entry.second.Initializer == Function.Entry;
+                  }) ||
+      std::any_of(Plan.ObjCThunks.begin(), Plan.ObjCThunks.end(),
+                  [&](const auto &Entry) {
+                    return Entry.second.Initializer == Function.Entry;
+                  });
   if (IsAddressorInitializer) {
     Result.Function.Name = swiftOnceInitializerName(Function.Entry);
     Result.Function.DebugName.clear();
     Result.Function.SourceFile.clear();
   }
   return Result;
+}
+
+inline bool
+finalizeSwiftOnceObjCThunkProjection(HighFunc &Function,
+                                     const SwiftOnceSourcePlan &Plan) {
+  const auto Planned = Plan.ObjCThunks.find(Function.Entry);
+  if (Planned == Plan.ObjCThunks.end() || Function.SourceTypeHint ||
+      Function.Params.size() != 3)
+    return false;
+  const auto Parameters = sourceABIParameters(Planned->second.Signature);
+  if (Parameters.size() != 2)
+    return false;
+  bool Valid = true;
+  std::set<HighExpr *> Seen;
+  walkStmts(Function.Body, [&](HighStmt &Statement) {
+    forEachExpr(Statement, [&](ExprPtr &Root) {
+      std::vector<ExprPtr> Pending{Root};
+      while (!Pending.empty()) {
+        auto Expression = Pending.back();
+        Pending.pop_back();
+        if (!Expression || !Seen.insert(Expression.get()).second)
+          continue;
+        if (Expression->Kind == ExprKind::Var &&
+            Expression->Var.Kind == MedVar::Param) {
+          if (Expression->Var.Id < 0 ||
+              size_t(Expression->Var.Id) >= Parameters.size()) {
+            Valid = false;
+          } else {
+            const auto &Declared = Parameters[Expression->Var.Id];
+            Expression->Type = Declared.Type;
+            Expression->Var.Size = Declared.Type->Size;
+          }
+        }
+        Pending.insert(Pending.end(), Expression->Operands.begin(),
+                       Expression->Operands.end());
+      }
+    });
+  });
+  if (!Valid)
+    return false;
+  Function.Params.clear();
+  for (const auto &Parameter : Parameters)
+    Function.Params.push_back({Parameter.Name, Parameter.Type});
+  Function.ReturnType = Planned->second.Signature.ReturnType;
+  Function.SourceTypeHint = Planned->second.Signature;
+  return true;
 }
 
 inline std::string renderSwiftOnceAddressorHelpers(
