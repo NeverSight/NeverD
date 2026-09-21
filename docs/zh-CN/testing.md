@@ -589,4 +589,4 @@ deterministic 与 offline。
 
 ## 移动 SDK 导出证据
 
-手动工作流 `Mobile SDK Export Evidence` 针对固定的 Xcode SDK 运行 `collect_mobile_ios_sdk_declarations.py --exports-only`。它原样留存 iOS 真机和模拟器 SDK 的 Foundation、CoreFoundation 链接器映射，并记录目标、SDK 版本、SDK 设置哈希、文件大小和 SHA-256。常规声明收集器也会留存这些映射。文件缺失、为空、超出大小限制或位于 SDK 外部时，收集失败，并保留已完成的证据。链接器映射提供符号导出证据，不能证明调用 ABI 或方法恢复成功。
+手动工作流 `Mobile SDK Export Evidence` 针对固定的 Xcode SDK 运行 `collect_mobile_ios_sdk_declarations.py --exports-only`。它原样留存 iOS 真机和模拟器 SDK 的 Foundation、CoreFoundation、UIKit 链接器映射，并记录目标、SDK 版本、SDK 设置哈希、文件大小和 SHA-256。常规声明收集器也会留存这些映射。文件缺失、为空、超出大小限制或位于 SDK 外部时，收集失败，并保留已完成的证据。链接器映射提供符号导出证据，不能证明调用 ABI 或方法恢复成功。

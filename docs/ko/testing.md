@@ -649,4 +649,4 @@ offline으로 유지하면서 `RPC activation audit`를 가능하게 합니다.
 
 ## 모바일 SDK 내보내기 증거
 
-수동 `Mobile SDK Export Evidence` 워크플로는 고정된 Xcode SDK에서 `collect_mobile_ios_sdk_declarations.py --exports-only`를 실행합니다. iOS 기기 및 시뮬레이터 SDK의 Foundation과 CoreFoundation 링커 맵을 그대로 보존하고 대상, SDK 버전, SDK 설정 해시, 파일 크기, SHA-256을 기록합니다. 일반 선언 수집기도 이 맵을 보존합니다. 파일 누락, 빈 파일, 크기 제한 초과 또는 SDK 외부 파일은 수집 실패로 처리하며 완료된 증거는 유지합니다. 링커 맵은 심볼 내보내기 증거이며 호출 ABI나 메서드 복원 성공을 증명하지 않습니다.
+수동 `Mobile SDK Export Evidence` 워크플로는 고정된 Xcode SDK에서 `collect_mobile_ios_sdk_declarations.py --exports-only`를 실행합니다. iOS 기기 및 시뮬레이터 SDK의 Foundation, CoreFoundation, UIKit 링커 맵을 그대로 보존하고 대상, SDK 버전, SDK 설정 해시, 파일 크기, SHA-256을 기록합니다. 일반 선언 수집기도 이 맵을 보존합니다. 파일 누락, 빈 파일, 크기 제한 초과 또는 SDK 외부 파일은 수집 실패로 처리하며 완료된 증거는 유지합니다. 링커 맵은 심볼 내보내기 증거이며 호출 ABI나 메서드 복원 성공을 증명하지 않습니다.

@@ -78,7 +78,7 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
             root = self.root / (sdk + "26.5.sdk")
             root.mkdir()
             (root / "SDKSettings.json").write_text(json.dumps({"sdk": sdk, "version": "26.5"}))
-            for framework in ("Foundation", "CoreFoundation"):
+            for framework in ("Foundation", "CoreFoundation", "UIKit"):
                 export = root / f"System/Library/Frameworks/{framework}.framework/{framework}.tbd"
                 export.parent.mkdir(parents=True)
                 export.write_bytes(f"SDK export fixture: {sdk}/{framework}\n".encode())
@@ -218,9 +218,9 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
         self.assertEqual(report["imports"], [])
         self.assertEqual(report["source_profiles"], [])
         self.assertEqual(report["sdks"], [])
-        self.assertEqual(len(report["export_maps"]), 4)
+        self.assertEqual(len(report["export_maps"]), 6)
         self.assertEqual({(r["sdk"], r["framework"]) for r in report["export_maps"]},
-                         {(s, f) for s in self.TARGETS for f in ("Foundation", "CoreFoundation")})
+                         {(s, f) for s in self.TARGETS for f in ("Foundation", "CoreFoundation", "UIKit")})
         for row in report["export_maps"]:
             source = self.sdk_roots[row["sdk"]] / row["sdk_relative_path"]
             retained = self.output / row["path"]
@@ -259,6 +259,18 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "retention budget"):
             self.collect(exports_only=True)
 
+    def test_missing_uikit_map_preserves_foundation_evidence(self):
+        missing = self.sdk_roots["iphoneos"] / "System/Library/Frameworks/UIKit.framework/UIKit.tbd"
+        missing.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.collect(exports_only=True)
+        report = self.report()
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual([r["framework"] for r in report["export_maps"]],
+                         ["Foundation", "CoreFoundation"])
+        for row in report["export_maps"]:
+            self.assertEqual(row["sha256"], self.sha(self.output / row["path"]))
+
     def test_collect_preserves_legacy_records_and_independent_complete_source_profiles(self):
         report = self.collect()
         self.assertEqual(report["status"], "success")
@@ -266,7 +278,7 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
         self.assertEqual(report["scope"], "sdk-declarations-only")
         self.assertEqual(report["consumer_commit"], "a" * 40)
         self.assertEqual(report["imports"], list(self.LEGACY))
-        self.assertEqual(len(report["export_maps"]), 4)
+        self.assertEqual(len(report["export_maps"]), 6)
         expected_ids = {sdk + "/" + profile for sdk in self.TARGETS for profile in self.PROFILES}
         self.assertEqual(set(report["expected_source_profile_ids"]), expected_ids)
         self.assertEqual(len(report["expected_source_profile_ids"]), 8)

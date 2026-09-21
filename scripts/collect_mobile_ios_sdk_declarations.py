@@ -23,7 +23,7 @@ import time
 MAX_AST_BYTES = 384 * 1024 * 1024
 MAX_MACRO_BYTES = 16 * 1024 * 1024
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
-EXPORT_FRAMEWORKS = ("Foundation", "CoreFoundation")
+EXPORT_FRAMEWORKS = ("Foundation", "CoreFoundation", "UIKit")
 IMPORTS = {"Messages/Messages.h": "MSStickerBrowserViewController",
            "UserNotifications/UserNotifications.h": "UNNotificationServiceExtension"}
 SDK_TARGETS = (("iphoneos", "arm64-apple-ios18.0"),
