@@ -1058,11 +1058,15 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
     proveSourceFlow(
         Function, Current,
         [&](ConstructionFacts &Facts, const HighSourceFlowNode &Node) {
-          Current = Facts;
+          // The transfer owns its Output copy. Borrow those maps as scratch
+          // instead of copying every byte/local fact twice per graph node.
+          // An exception abandons the whole proof; normal exits swap back the
+          // identical result before the worklist joins or charges its size.
+          std::swap(Current, Facts);
           State.restore(Current.Values);
           Evaluate(Node);
           Current.Values = State.facts();
-          Facts = Current;
+          std::swap(Current, Facts);
         },
         Merge);
     std::vector<ObjCStackBlockSource> Result;
