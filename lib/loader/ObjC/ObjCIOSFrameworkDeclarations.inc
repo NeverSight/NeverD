@@ -61,6 +61,11 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAdjustsFontForContentSizeCategory:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setCenter:", "v32@0:8{CGPoint=dd}16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setLayoutMargins:", "v48@0:8{UIEdgeInsets=dddd}16", nullptr},
+// Both ASTs cited above also declare setProgress: with incompatible owners:
+// UIProgressView takes float, while UIPageControl takes an object pointer.
+// Keep both alternatives; only receiver evidence may select either one.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:", "v20@0:8f16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:animated:", "v24@0:8f16B20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgressViewStyle:", "v24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setText:", "v24@0:8@16", nullptr},

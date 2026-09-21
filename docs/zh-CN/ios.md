@@ -300,3 +300,5 @@ macOS 上的 Objective-C 验证脚本先编译原样本，再恢复 `.m`，最�
 arm64 UIKit 目录还绑定 `UIProgressView` 的 `observedProgress` 对象结果及 `setProgress:animated:`；后者保留独立的 `float` 和布尔参数寄存器。两项声明都要求编译器生成的 iPhoneOS 与 arm64 iPhoneSimulator 证据一致，并且提供库必须是精确的系统 UIKit；其他架构仍不受支持。
 
 带标签的字面量字可以保留不可变 C 字符串池中的完整映像地址及精确最高位标签。源码绑定只将已证明的地址重定位到现有的永久共享池，保留整数 OR、标签和池内偏移。数值或部分地址碰撞、来源冲突、可写或带重定位的池，以及直接作为内存地址的用法仍被拒绝；这不会推断 Swift String 对象布局。
+
+`UIProgressView` 的 `setProgress:` 要求已证明的接收者，可来自经过精确 ARC 身份调用保持的类型化属性结果。已验证的父类与协议闭包选择 `float` 参数。没有接收者限定的调用仍有歧义，因为 UIKit 和本地类还为同一 selector 声明了对象参数 setter。

@@ -7011,6 +7011,76 @@ TEST(ObjCCallHints, IOSProgressKeepsFloatAndBooleanInSeparateABIRegisters) {
   }
 }
 
+TEST(ObjCCallHints, IOSProgressSetterRequiresPropertyReceiverAcrossARC) {
+  const auto Architecture = Arch::AArch64;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  auto Image = receiverResultImage(Architecture);
+  Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/UIKit.framework/UIKit");
+  Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/QuartzCore.framework/QuartzCore");
+  Image.ObjCProperties.front().TypeEncoding = "@\"UIProgressView\"";
+  Image.ObjCSourceReferences.at(0x2100).Name = "setProgress:";
+  auto ObjectSetter = Image.ObjCMethods.back();
+  ObjectSetter.ClassName = "Other";
+  ObjectSetter.Selector = "setProgress:";
+  ObjectSetter.TypeEncoding = "v24@0:8@16";
+  ObjectSetter.TypeHint =
+      parseObjCMethodEncoding(ObjectSetter.Selector, ObjectSetter.TypeEncoding);
+  Image.ObjCMethods.push_back(ObjectSetter);
+  receiverRuntimeImport(Image, "objc_retainAutoreleasedReturnValue");
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "setProgress:"));
+
+  auto Function = receiverCaller(Architecture);
+  auto &Ops = Function.Blocks.front().Ops;
+  Ops.back().NumInputs = 0;
+  const std::vector<LowOp> Prefix{
+      operation(NdOp::LOAD, NdVar::reg(TRI.IntParamRegs[1], 8),
+                {NdVar::cst(0x2110, 8)}, 0x11e0),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x11e4),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2188, 8)}, 0x11e8),
+      operation(NdOp::COPY, NdVar::reg(TRI.FPParamRegs[0], 4),
+                {NdVar::cst(0x3f800000, 4)}, 0x11ec)};
+  Ops.insert(Ops.begin(), Prefix.begin(), Prefix.end());
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 3U);
+  const auto &Hint = Hints.at(0x1204);
+  ASSERT_TRUE(Hint.Receiver);
+  ASSERT_EQ(Hint.Receiver->Steps.size(), 1U);
+  EXPECT_EQ(Hint.Receiver->Steps.front().Selector, "error");
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 3U);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Type->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Type->Size, 4U);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Location.RegisterOffset,
+            TRI.FPParamRegs[0]);
+  auto Expression = receiverCallExpression(Hint);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.ObjCProperties.front().TypeEncoding = "@";
+    else if (Mutation == 1)
+      Changed.ObjCProperties.front().TypeEncoding = "@\"UIPageControl\"";
+    else if (Mutation == 2)
+      Changed.DyldBindSlots.at(0x2188).Module = "/tmp/libobjc.A.dylib";
+    else if (Mutation == 3) {
+      ObjCClass Child;
+      Child.Name = "Other";
+      Child.SuperclassName = "UIProgressView";
+      Child.InheritanceStatus = "resolved";
+      Changed.ObjCClasses.push_back(Child);
+    } else
+      Changed.DynInfo.NeededLibs.pop_back(); // Missing QuartzCore parent proof.
+    // The float constant is not receiver evidence. Neither the SDK object
+    // alternative nor the unrelated local object setter can win by order.
+    EXPECT_EQ(buildObjCSourceCallHints(Changed, Function).count(0x1204), 0U);
+    if (Mutation != 2)
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}));
+  }
+}
+
 TEST(ObjCCallHints, IOSCoreImageCropKeepsExactProviderAndRecordABI) {
   constexpr auto Module =
       "/System/Library/Frameworks/CoreImage.framework/CoreImage";

@@ -32,4 +32,24 @@ ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clas
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsRendererFormat", "", true, "defaultFormat", "@16@0:8", "", true, nullptr, "", false)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRendererFormat", "", false, "scale", "d16@0:8", "", false, nullptr, "", false)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRendererFormat", "", false, "setScale:", "v24@0:8d16", "", false, nullptr, "", false)
+// UIProgressView receiver closure, observed in the complete Xcode 26.5 ASTs
+// from GitHub Actions artifact 10653622473. Every superclass/protocol edge
+// agrees; no parent declares setProgress:. Foundation and QuartzCore retain
+// ownership of their existing parent declarations. Apple Clang independently
+// encodes setProgress:(float) on both arm64 iOS targets as v20@0:8f16.
+// iPhoneOS SHA-256: dc99c06a9e4aab8015f8675b08ac55e042201401c21d39a4df4535aa63e0303f
+// Simulator SHA-256: c443f389aae208205f42b4a592859ffb45766cc6e2f663b6ef919528e2676b61
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIProgressView", "", "C:UIView|P:NSCoding", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIResponder", "", "C:NSObject|P:UIResponderStandardEditActions", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIView", "", "C:UIResponder|P:NSCoding|P:UIAppearance|P:UIAppearanceContainer|P:UIDynamicItem|P:UITraitEnvironment|P:UICoordinateSpace|P:UIFocusItem|P:UIFocusItemContainer|P:CALayerDelegate", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIAppearance", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIAppearanceContainer", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UICoordinateSpace", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIDynamicItem", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIFocusEnvironment", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIFocusItem", "", "P:UIFocusEnvironment", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIFocusItemContainer", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIResponderStandardEditActions", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UITraitEnvironment", "", "P:NSObject", nullptr)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIProgressView", "", false, "setProgress:", "v20@0:8f16", "", false, nullptr, "", false)
 // clang-format on
