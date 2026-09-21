@@ -78,6 +78,10 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
             root = self.root / (sdk + "26.5.sdk")
             root.mkdir()
             (root / "SDKSettings.json").write_text(json.dumps({"sdk": sdk, "version": "26.5"}))
+            for framework in ("Foundation", "CoreFoundation"):
+                export = root / f"System/Library/Frameworks/{framework}.framework/{framework}.tbd"
+                export.parent.mkdir(parents=True)
+                export.write_bytes(f"SDK export fixture: {sdk}/{framework}\n".encode())
             self.sdk_roots[sdk] = root
         self.now = 0.0
         self.calls = []
@@ -193,7 +197,7 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
         self.after_command(call)
         return subprocess.CompletedProcess(args, failure or 0)
 
-    def collect(self):
+    def collect(self, exports_only=False):
         environment = {"GITHUB_ACTIONS": "true", "CONSUMER_COMMIT": "a" * 40,
                        "CPATH": "/ignored/include", "C_INCLUDE_PATH": "/ignored/include",
                        "CPLUS_INCLUDE_PATH": "/ignored/include", "OBJC_INCLUDE_PATH": "/ignored/include"}
@@ -201,11 +205,59 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
                 mock.patch.object(collector.sys, "platform", "darwin"), \
                 mock.patch.object(collector.time, "monotonic", side_effect=lambda: self.now), \
                 mock.patch.object(collector.subprocess, "run", side_effect=self.run_command):
-            collector.collect(self.output, "26.5")
+            collector.collect(self.output, "26.5", exports_only)
         return self.report()
 
     def report(self):
         return json.loads((self.output / "sdk-declarations.json").read_text())
+
+    def test_exports_only_retains_both_sdk_maps_without_compiling_probes(self):
+        report = self.collect(exports_only=True)
+        self.assertEqual(report["status"], "success")
+        self.assertEqual(report["scope"], "sdk-exports-only")
+        self.assertEqual(report["imports"], [])
+        self.assertEqual(report["source_profiles"], [])
+        self.assertEqual(report["sdks"], [])
+        self.assertEqual(len(report["export_maps"]), 4)
+        self.assertEqual({(r["sdk"], r["framework"]) for r in report["export_maps"]},
+                         {(s, f) for s in self.TARGETS for f in ("Foundation", "CoreFoundation")})
+        for row in report["export_maps"]:
+            source = self.sdk_roots[row["sdk"]] / row["sdk_relative_path"]
+            retained = self.output / row["path"]
+            self.assertEqual(retained.read_bytes(), source.read_bytes())
+            self.assertEqual(row["sha256"], self.sha(source))
+            self.assertEqual(row["size"], source.stat().st_size)
+            self.assertEqual(row["target"], self.TARGETS[row["sdk"]])
+            self.assertEqual(row["sdk_settings_sha256"],
+                             self.sha(self.sdk_roots[row["sdk"]] / "SDKSettings.json"))
+        self.assertTrue(all(r["name"].endswith(("-version", "-root"))
+                            for r in report["commands"]))
+
+    def test_missing_export_map_fails_and_preserves_completed_evidence(self):
+        missing = self.sdk_roots["iphoneos"] / "System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd"
+        missing.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.collect(exports_only=True)
+        report = self.report()
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(len(report["export_maps"]), 1)
+        row = report["export_maps"][0]
+        self.assertEqual(row["sha256"], self.sha(self.output / row["path"]))
+
+    def test_export_map_cannot_escape_sdk_or_exceed_budget(self):
+        source = self.sdk_roots["iphoneos"] / "System/Library/Frameworks/Foundation.framework/Foundation.tbd"
+        outside = self.root / "outside.tbd"
+        outside.write_bytes(b"outside SDK")
+        source.unlink()
+        source.symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, "outside its SDK root"):
+            self.collect(exports_only=True)
+        source.unlink()
+        source.write_bytes(b"bounded SDK data")
+        self.output = self.root / "bounded-evidence"
+        with mock.patch.object(collector, "MAX_EXPORT_BYTES", 4), \
+                self.assertRaisesRegex(RuntimeError, "retention budget"):
+            self.collect(exports_only=True)
 
     def test_collect_preserves_legacy_records_and_independent_complete_source_profiles(self):
         report = self.collect()
@@ -214,6 +266,7 @@ class SDKCollectionIntegrationTests(unittest.TestCase):
         self.assertEqual(report["scope"], "sdk-declarations-only")
         self.assertEqual(report["consumer_commit"], "a" * 40)
         self.assertEqual(report["imports"], list(self.LEGACY))
+        self.assertEqual(len(report["export_maps"]), 4)
         expected_ids = {sdk + "/" + profile for sdk in self.TARGETS for profile in self.PROFILES}
         self.assertEqual(set(report["expected_source_profile_ids"]), expected_ids)
         self.assertEqual(len(report["expected_source_profile_ids"]), 8)

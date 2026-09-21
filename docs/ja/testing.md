@@ -656,3 +656,7 @@ provenance/test のみです。`SBFFaultCodes.def` は execution fault の安定
 10,000 scale fixture が worklist、function ownership、multi-latch を守り、
 machine 固有時間は固定しません。cluster/account/slot row は通常 test を
 deterministic/offline に保ったまま `RPC activation audit` を可能にします。
+
+## モバイル SDK のエクスポート証拠
+
+手動ワークフロー `Mobile SDK Export Evidence` は、固定した Xcode SDK に対して `collect_mobile_ios_sdk_declarations.py --exports-only` を実行します。iOS 実機用とシミュレータ用の両 SDK から Foundation と CoreFoundation のリンカーマップをそのまま保存し、ターゲット、SDK バージョン、SDK 設定のハッシュ、ファイルサイズ、SHA-256 を記録します。通常の宣言収集でも同じマップを保存します。ファイルの欠落、空ファイル、サイズ超過、SDK 外のファイルは収集を失敗させ、完了済みの証拠は保持します。リンカーマップはシンボルのエクスポートの証拠であり、呼び出し ABI やメソッド復元の成功を証明するものではありません。

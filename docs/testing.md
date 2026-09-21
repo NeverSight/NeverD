@@ -812,3 +812,7 @@ python3 scripts/audit_ci_test_results.py check-tool
 python3 -m unittest scripts.tests.test_audit_ci_test_inventory \
   scripts.tests.test_audit_ci_test_results scripts.tests.test_ci_configuration -v
 ```
+
+## Mobile SDK export evidence
+
+The manual `Mobile SDK Export Evidence` workflow runs `collect_mobile_ios_sdk_declarations.py --exports-only` against the pinned Xcode SDKs. It retains the exact Foundation and CoreFoundation linker maps for both the iOS device and simulator SDKs, with target, SDK version, SDK settings hash, file size, and SHA-256. The normal declaration collector retains these maps too. Missing, empty, oversized, or SDK-external files fail collection while preserving completed evidence. Linker maps establish symbol export evidence; they do not prove a call ABI or method recovery.

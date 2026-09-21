@@ -22,6 +22,8 @@ import time
 # the full declaration closure and a finite ceiling above that measured input.
 MAX_AST_BYTES = 384 * 1024 * 1024
 MAX_MACRO_BYTES = 16 * 1024 * 1024
+MAX_EXPORT_BYTES = 16 * 1024 * 1024
+EXPORT_FRAMEWORKS = ("Foundation", "CoreFoundation")
 IMPORTS = {"Messages/Messages.h": "MSStickerBrowserViewController",
            "UserNotifications/UserNotifications.h": "UNNotificationServiceExtension"}
 SDK_TARGETS = (("iphoneos", "arm64-apple-ios18.0"),
@@ -204,15 +206,41 @@ def check_source_profiles(records, sdk_version):
                 raise ValueError("SDK source subclass probe has incomplete or mismatched evidence")
 
 
-def collect(output, sdk_version):
+def retain_sdk_exports(output, root, sdk, target, version, deadline, records):
+    """Retain exact public linker maps, without treating them as call ABIs."""
+    root = root.resolve(strict=True)
+    for framework in EXPORT_FRAMEWORKS:
+        deadline.check()
+        relative = f"System/Library/Frameworks/{framework}.framework/{framework}.tbd"
+        source = (root / relative).resolve(strict=True)
+        if not source.is_relative_to(root) or not source.is_file():
+            raise RuntimeError("SDK export evidence is outside its SDK root")
+        if source.stat().st_size > MAX_EXPORT_BYTES:
+            raise RuntimeError("SDK export evidence exceeds its retention budget")
+        data = source.read_bytes()
+        if not data or len(data) > MAX_EXPORT_BYTES:
+            raise RuntimeError("SDK export evidence is empty or exceeds its retention budget")
+        destination = output / f"{sdk}-{framework}-exports.tbd"
+        destination.write_bytes(data)
+        records.append({"sdk": sdk, "target": target, "version": version,
+                        "framework": framework, "kind": "sdk-linker-export-map",
+                        "sdk_relative_path": relative, "path": destination.name,
+                        "size": len(data), "sha256": digest(destination, deadline.check),
+                        "sdk_settings_sha256": digest(root / "SDKSettings.json", deadline.check)})
+
+
+def collect(output, sdk_version, exports_only=False):
     if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
         raise RuntimeError("SDK declaration collection must run on macOS GitHub Actions")
     output.mkdir(parents=True, exist_ok=False)
     deadline = CollectionDeadline()
-    evidence = {"schema_version": 1, "scope": "sdk-declarations-only", "status": "incomplete",
-                "imports": list(IMPORTS), "commands": [], "sdks": [],
+    evidence = {"schema_version": 1,
+                "scope": "sdk-exports-only" if exports_only else "sdk-declarations-only",
+                "status": "incomplete",
+                "imports": [] if exports_only else list(IMPORTS), "commands": [], "sdks": [],
                 "consumer_commit": os.environ.get("CONSUMER_COMMIT"),
-                "source_profiles": source_profile_records(sdk_version)}
+                "export_maps": [],
+                "source_profiles": [] if exports_only else source_profile_records(sdk_version)}
     evidence["expected_source_profile_ids"] = [row["sdk"] + "/" + row["profile_id"]
                                                for row in evidence["source_profiles"]]
 
@@ -287,6 +315,10 @@ def collect(output, sdk_version):
             if version != sdk_version:
                 raise RuntimeError(f"{sdk} SDK version differs from the configured {sdk_version}")
             root = Path(command(sdk + "-root", [*prefix, "--show-sdk-path"]).read_text().strip())
+            retain_sdk_exports(output, root, sdk, target, version, deadline,
+                               evidence["export_maps"])
+            if exports_only:
+                continue
             clang = Path(command(sdk + "-clang", [*prefix, "--find", "clang"]).read_text().strip())
             command(sdk + "-compiler-version", [clang, "--version"])
             target_args = [clang, "-x", "objective-c", "-std=gnu11", "-fobjc-arc", "-fno-modules",
@@ -352,7 +384,8 @@ def collect(output, sdk_version):
                     record.update(status="failed", error=str(error))
                     raise
         deadline.check()
-        check_source_profiles(evidence["source_profiles"], sdk_version)
+        if not exports_only:
+            check_source_profiles(evidence["source_profiles"], sdk_version)
         evidence["status"] = "success"
     except Exception as error:
         evidence["status"], evidence["error"] = "failed", str(error)
@@ -365,9 +398,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--sdk-version", required=True)
+    parser.add_argument("--exports-only", action="store_true",
+                        help="retain framework linker maps without compiling declaration probes")
     args = parser.parse_args()
     try:
-        collect(args.output.resolve(), args.sdk_version)
+        collect(args.output.resolve(), args.sdk_version, args.exports_only)
     except Exception as error:
         print(f"SDK declaration collection failed: {error}", file=sys.stderr)
         return 1

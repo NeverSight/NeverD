@@ -713,3 +713,7 @@ Fixtures de escala 10,000 protegen worklist, function ownership y multi-latch
 sin fijar tiempo de máquina. Las filas cluster/account/slot permiten un
 `RPC activation audit` mientras las pruebas normales siguen deterministic y
 offline.
+
+## Evidencia de exportaciones de los SDK móviles
+
+El flujo manual `Mobile SDK Export Evidence` ejecuta `collect_mobile_ios_sdk_declarations.py --exports-only` con los SDK de Xcode fijados. Conserva sin cambios los mapas del enlazador de Foundation y CoreFoundation de los SDK iOS para dispositivo y simulador, con destino, versión del SDK, hash de su configuración, tamaño y SHA-256. El recopilador habitual de declaraciones también conserva estos mapas. Los archivos ausentes, vacíos, demasiado grandes o externos al SDK hacen fallar la recopilación, preservando la evidencia ya completada. Los mapas acreditan las exportaciones de símbolos, pero no una ABI de llamada ni la recuperación de un método.

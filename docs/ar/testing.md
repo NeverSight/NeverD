@@ -655,3 +655,7 @@ generated-source ABI المستقل.
 تحرس fixtures بحجم 10,000 خصائص worklist/function ownership/multi-latch من دون
 تثبيت زمن جهاز. وتتيح rows الخاصة بالـcluster/account/slot تنفيذ
 `RPC activation audit` مع بقاء الاختبارات العادية deterministic وoffline.
+
+## أدلة تصدير SDK للأجهزة المحمولة
+
+يشغّل سير العمل اليدوي `Mobile SDK Export Evidence` الأمر `collect_mobile_ios_sdk_declarations.py --exports-only` على إصدارات Xcode SDK المثبتة. ويحتفظ بخرائط الرابط الأصلية لكل من Foundation وCoreFoundation من حزم iOS للأجهزة والمحاكي، مع الهدف وإصدار SDK وبصمة إعداداته وحجم الملف وSHA-256. ويحتفظ جامع التصريحات المعتاد بهذه الخرائط أيضًا. يفشل الجمع عند غياب الملفات أو فراغها أو تجاوز حجمها الحد أو وجودها خارج SDK، مع الاحتفاظ بالأدلة المكتملة. تثبت خرائط الرابط تصدير الرموز، لكنها لا تثبت ABI الاستدعاء أو نجاح استعادة الطريقة.

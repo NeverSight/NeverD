@@ -730,3 +730,7 @@ Fault-Werte, `SBFSourceStatuses.def` getrennt die Generated-Source-ABI.
 Multi-Latch-Verhalten ohne eine Maschinenzeit zu fixieren. Cluster-/Account-/
 Slot-Zeilen ermöglichen einen `RPC activation audit`, während normale Tests
 deterministisch und offline bleiben.
+
+## Exportnachweise der mobilen SDKs
+
+Der manuelle Workflow `Mobile SDK Export Evidence` führt `collect_mobile_ios_sdk_declarations.py --exports-only` mit den festgelegten Xcode-SDKs aus. Er bewahrt die Linkerdateien von Foundation und CoreFoundation für iOS-Geräte und Simulatoren unverändert auf, einschließlich Ziel, SDK-Version, Hash der SDK-Einstellungen, Dateigröße und SHA-256. Der reguläre Deklarationssammler bewahrt diese Dateien ebenfalls auf. Fehlende, leere, zu große oder außerhalb des SDK liegende Dateien lassen die Erfassung scheitern; bereits erfasste Nachweise bleiben erhalten. Die Linkerdateien belegen Symbolexporte, jedoch keine Aufruf-ABI oder erfolgreiche Methodenwiederherstellung.
