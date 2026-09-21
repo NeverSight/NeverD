@@ -342,4 +342,31 @@ objcDynamicFormatPointerArgumentsSourceCallHint(const BinaryImage &Image,
     return std::nullopt;
   return Call;
 }
+
+std::optional<SourceCallTypeHint>
+objcDynamicFormatInteger64ArgumentsSourceCallHint(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    llvm::ArrayRef<TypeRef> IntegerArguments) {
+  if (Image.Arch != Arch::AArch64 || IntegerArguments.empty() ||
+      IntegerArguments.size() > 64 ||
+      !std::all_of(IntegerArguments.begin(), IntegerArguments.end(),
+                   [](const TypeRef &Type) {
+                     return Type && Type->Kind == NdTypeKind::Int &&
+                            Type->Size == 8;
+                   }))
+    return std::nullopt;
+  auto Call = objcDynamicFormatWithoutArgumentsSourceCallHint(Image, Selector);
+  if (!Call || !Call->Format ||
+      Call->Signature.Parameters.size() + IntegerArguments.size() > 64)
+    return std::nullopt;
+  for (const auto &Type : IntegerArguments)
+    Call->Signature.Parameters.push_back({"format_integer_arg", Type});
+  Call->Format->DynamicWithoutArguments = false;
+  Call->Format->DynamicInteger64Arguments = true;
+  std::string Diagnostic;
+  if (!assignDarwinVariadicSourceABI(Call->Signature, Call->Format->FixedCount,
+                                     Image.Arch, Diagnostic))
+    return std::nullopt;
+  return Call;
+}
 } // namespace neverd

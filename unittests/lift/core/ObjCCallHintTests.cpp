@@ -8010,3 +8010,219 @@ TEST(ObjCCallHints, FrameBackedgesRevokeProvisionalSpillBindings) {
                 Overwrite ? 0U : 1U);
     }
 }
+
+TEST(ObjCCallHints, DynamicFormatInteger64TailRequiresDeclaredCompleteValues) {
+  auto Image = selectorStubImage();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/Foundation.framework/Foundation");
+  Image.ObjCSourceReferences.at(0x2100).Name = "localizedStringWithFormat:";
+  const auto Day = objcSelectorSourceTypeHint(Image, "day");
+  ASSERT_TRUE(Day);
+  ASSERT_TRUE(Day->ReturnType);
+  ASSERT_EQ(Day->ReturnType->Kind, NdTypeKind::Int);
+  ASSERT_EQ(Day->ReturnType->Size, 8U);
+  const auto Integer = Day->ReturnType;
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  const auto Tail = objcDynamicFormatInteger64ArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", {Integer});
+  ASSERT_TRUE(Tail);
+  ASSERT_TRUE(Tail->Format);
+  EXPECT_TRUE(Tail->Format->DynamicInteger64Arguments);
+  EXPECT_FALSE(Tail->Format->DynamicWithoutArguments);
+  EXPECT_FALSE(Tail->Format->DynamicPointerArguments);
+  ASSERT_EQ(Tail->Signature.Parameters.size(), 4U);
+  EXPECT_EQ(Tail->Signature.Parameters[3].Location.Kind,
+            SourceABICarrierKind::Stack);
+  EXPECT_EQ(Tail->Signature.Parameters[3].Location.EntryStackOffset, 0);
+  EXPECT_EQ(Tail->Signature.Parameters[3].Location.ValueBytes, 8U);
+
+  auto Cast = [](const ExprPtr &Value, const TypeRef &Type) {
+    auto E = std::make_shared<HighExpr>();
+    E->Kind = ExprKind::Cast;
+    E->Type = E->CastTo = Type;
+    E->Operands = {Value};
+    return E;
+  };
+  auto Leaf = [&] {
+    auto E = HighExpr::makeCall(
+        "objc_msgSend", 0,
+        {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8)});
+    E->Type = Integer;
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Hint->TargetName = "objc_msgSend";
+    Hint->Selector = "day";
+    Hint->Signature = *Day;
+    E->SourceCallHint = std::move(Hint);
+    return E;
+  };
+  MedVar V;
+  V.Kind = MedVar::Temp;
+  V.Id = 42;
+  V.Size = 8;
+  V.TheArch = Arch::AArch64;
+  auto Value = [&] { return HighExpr::makeVar(V, Integer); };
+  auto Make = [&] {
+    HighFunc F;
+    F.ReturnType = Pointer;
+    HighStmt Assign;
+    Assign.Kind = StmtKind::Assign;
+    Assign.Dst = Value();
+    Assign.Val = Leaf();
+    F.Body.push_back(Assign);
+    auto Native = std::make_shared<SourceCallTypeHint>(*Tail);
+    Native->CallKind = SourceCallTypeHint::Kind::Native;
+    Native->TargetAddress = 0x1100;
+    Native->TargetName = "sub_1100";
+    Native->Selector.clear();
+    Native->Format.reset();
+    Native->Signature.Origin =
+        SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Native->Signature.ReturnType = NdType::makeInt(8, false);
+    for (auto &P : Native->Signature.Parameters)
+      P.Type = NdType::makeInt(8, false);
+    auto Call = HighExpr::makeCall("sub_1100", 0x1100,
+                                   {HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8), Value()});
+    Call->Type = Native->Signature.ReturnType;
+    Call->SourceCallHint = std::move(Native);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Call;
+    F.Body.push_back(Return);
+    return F;
+  };
+  auto Check = [&](const HighFunc &F, bool Expected) {
+    const auto Bound = sdk::bindObjCSourceReferences(F, Image);
+    const auto &Call = Bound.Function.Body.back().RetVal;
+    ASSERT_TRUE(Call && Call->SourceCallHint);
+    const bool Recovered =
+        Call->SourceCallHint->CallKind == SourceCallTypeHint::Kind::ObjCMessage;
+    EXPECT_EQ(Recovered, Expected) << Bound.Limitation;
+    if (Recovered) {
+      ASSERT_TRUE(Call->SourceCallHint->Format);
+      EXPECT_TRUE(Call->SourceCallHint->Format->DynamicInteger64Arguments);
+      EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}, nullptr, nullptr,
+                                           &Bound.Function));
+    }
+  };
+  Check(Make(), true);
+  auto Casted = Make();
+  Casted.Body.front().Val =
+      Cast(Casted.Body.front().Val, NdType::makeInt(8, !Integer->IsSigned));
+  Check(Casted, true);
+  auto Joined = Make();
+  Joined.Body.insert(Joined.Body.begin(), Joined.Body.front());
+  Check(Joined, true);
+  auto Selected = Make();
+  Selected.Body.front().Val =
+      HighExpr::makeBinop(NdOp::SELECT, HighExpr::makeConst(1, 1), Leaf());
+  Selected.Body.front().Val->Operands.push_back(Leaf());
+  Selected.Body.front().Val->Type = Integer;
+  Check(Selected, true);
+
+  for (unsigned Mutation = 0; Mutation < 13; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = Make();
+    auto &Call = F.Body.back().RetVal;
+    if (Mutation == 0)
+      F.Body.front().Val = HighExpr::makeConst(7, 8);
+    if (Mutation == 1)
+      F.Body.front().Val =
+          HighExpr::makeLoad(HighExpr::makeConst(0, 8), Integer);
+    if (Mutation == 2) {
+      auto P = V;
+      P.Kind = MedVar::Param;
+      P.Id = 0;
+      F.Params.push_back({"unproved_integer", Integer});
+      F.Body.front().Val = HighExpr::makeVar(P, Integer);
+    }
+    if (Mutation == 3)
+      F.Body.front().Val->Type = NdType::makeInt(4, true);
+    if (Mutation == 4) {
+      F.Body.front().Val->Type = NdType::makeFloat(8);
+      F.Body.front().Val = Cast(F.Body.front().Val, Integer);
+    }
+    if (Mutation == 5) {
+      F.Body.front().Val = Cast(F.Body.front().Val, Integer);
+      F.Body.front().Val->CastTo = NdType::makeInt(4, true);
+    }
+    if (Mutation == 6) {
+      auto Bad = std::make_shared<SourceCallTypeHint>(
+          *F.Body.front().Val->SourceCallHint);
+      Bad->Signature.ReturnType = NdType::makeInt(8, !Integer->IsSigned);
+      F.Body.front().Val->SourceCallHint = Bad;
+    }
+    if (Mutation == 7)
+      F.Body.front().Val = Value();
+    if (Mutation == 8) {
+      auto Unknown = F.Body.front();
+      Unknown.Val = HighExpr::makeConst(0, 8);
+      F.Body.insert(F.Body.begin(), Unknown);
+    }
+    if (Mutation == 9 || Mutation == 10) {
+      auto Bad = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+      if (Mutation == 9)
+        Bad->Signature.Parameters[3].Location.EntryStackOffset = 8;
+      else
+        Bad->Signature.Parameters[3].Location.ValueBytes = 4;
+      Call->SourceCallHint = Bad;
+    }
+    if (Mutation == 11)
+      Call->SourceCallHint.reset();
+    if (Mutation == 12) {
+      auto Other = Leaf();
+      auto OtherHint =
+          std::make_shared<SourceCallTypeHint>(*Other->SourceCallHint);
+      OtherHint->Signature = *objcSelectorSourceTypeHint(Image, "length");
+      OtherHint->Selector = "length";
+      Other->SourceCallHint = OtherHint;
+      Other->Type = Other->SourceCallHint->Signature.ReturnType;
+      auto Define = F.Body.front();
+      Define.Val = Other;
+      F.Body.insert(F.Body.begin(), Define);
+    }
+    if (Mutation == 11) {
+      const auto Bound = sdk::bindObjCSourceReferences(F, Image);
+      EXPECT_FALSE(Bound.Function.Body.back().RetVal->SourceCallHint);
+    } else {
+      Check(F, false);
+    }
+  }
+
+  const auto Bound = sdk::bindObjCSourceReferences(Make(), Image);
+  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+    auto F = Bound.Function;
+    auto Call = std::make_shared<HighExpr>(*F.Body.back().RetVal);
+    auto MutableHint =
+        std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+    Call->SourceCallHint = MutableHint;
+    F.Body.back().RetVal = Call;
+    auto &Format = *MutableHint->Format;
+    if (Mutation == 0)
+      Format.DynamicWithoutArguments = true;
+    if (Mutation == 1)
+      Format.DynamicPointerArguments = true;
+    if (Mutation == 2)
+      Format.FormatAddress = 0x4000;
+    if (Mutation == 3)
+      Format.AlternativeFormatAddresses = {0x4000};
+    if (Mutation == 4)
+      MutableHint->Signature.Parameters[3].Type = Pointer;
+    if (Mutation == 5)
+      F.Body.front().Val = HighExpr::makeConst(1, 8);
+    EXPECT_FALSE(
+        sdk::objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &F));
+  }
+  for (const auto &Bad :
+       {NdType::makeInt(4, true), NdType::makeFloat(8), Pointer})
+    EXPECT_FALSE(objcDynamicFormatInteger64ArgumentsSourceCallHint(
+        Image, "localizedStringWithFormat:", {Bad}));
+  EXPECT_FALSE(objcDynamicFormatInteger64ArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", {}));
+  Image.Arch = Arch::X64;
+  EXPECT_FALSE(objcDynamicFormatInteger64ArgumentsSourceCallHint(
+      Image, "localizedStringWithFormat:", {Integer}));
+}

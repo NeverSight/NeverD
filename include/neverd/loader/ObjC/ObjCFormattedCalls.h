@@ -59,5 +59,12 @@ std::optional<SourceCallTypeHint>
 objcDynamicFormatPointerArgumentsSourceCallHint(const BinaryImage &Image,
                                                 llvm::StringRef Selector,
                                                 unsigned PointerArguments);
+
+/// Bind a nonempty tail of independently proven, already promoted 64-bit
+/// integers. The caller must prove every value and the complete physical ABI.
+std::optional<SourceCallTypeHint>
+objcDynamicFormatInteger64ArgumentsSourceCallHint(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    llvm::ArrayRef<TypeRef> IntegerArguments);
 } // namespace neverd
 #endif

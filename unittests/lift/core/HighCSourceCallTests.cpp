@@ -2064,3 +2064,110 @@ int main(void) { return read_value() != UINT64_C(0x123456789abcdef0); }
 )");
   }
 }
+
+TEST(HighCSourceCalls, DynamicInteger64FormatsKeepTrueVariadicCalls) {
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  const auto Signed = NdType::makeInt(8, true);
+  const auto Unsigned = NdType::makeInt(8, false);
+  auto Hint = native("objc_msgSend", Pointer,
+                     {Pointer, Pointer, Pointer, Signed, Unsigned});
+  Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Hint.Selector = "localizedStringWithFormat:";
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+  Hint.Format = SourceCallTypeHint::FormatArguments{
+      3,  2,     0,     SourceCallTypeHint::FormatSyntax::NSString,
+      {}, false, false, true};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinVariadicSourceABI(Hint.Signature, 3, Arch::AArch64, Error));
+  const auto Render = [&](const SourceCallTypeHint &Binding) {
+    std::vector<TypeRef> Types;
+    std::vector<ExprPtr> Arguments;
+    for (size_t I = 0; I < Binding.Signature.Parameters.size(); ++I) {
+      const auto &Type = Binding.Signature.Parameters[I].Type;
+      Types.push_back(Type);
+      auto V = parameter(unsigned(I), Type);
+      V->Var.TheArch = Arch::AArch64;
+      Arguments.push_back(V);
+    }
+    auto F = returning("send_dynamic_integer_format",
+                       call(Binding, Pointer, Arguments), Types);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.EmitIncludes = false;
+    Options.EmitComments = false;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    EXPECT_TRUE(HighCEmitter().emit({F}, OS, Options));
+    return Source;
+  };
+  const auto Source = Render(Hint);
+  EXPECT_NE(Source.find("(*)(id, SEL, void*, ...)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  compileAndRun(R"(
+#include <stdint.h>
+#include <stdarg.h>
+typedef void *id;
+typedef void *SEL;
+static int64_t observed_signed;
+static uint64_t observed_unsigned;
+static void *implementation(id receiver, SEL selector, void *format, ...) {
+  va_list args;
+  va_start(args, format);
+  observed_signed = va_arg(args, int64_t);
+  observed_unsigned = va_arg(args, uint64_t);
+  va_end(args);
+  return receiver == (void*)1 && selector == (void*)2 ? format : (void*)0;
+}
+static void *(*objc_msgSend)(id, SEL, void*, ...) = implementation;
+)" + Source + R"(
+int main(void) {
+  const int64_t signed_values[] = { INT64_MIN, -1, 0, 1, INT64_MAX };
+  const uint64_t unsigned_values[] = { 0, 1, UINT64_C(0x8000000000000000), UINT64_MAX };
+  for (unsigned i = 0; i < 5; ++i) for (unsigned j = 0; j < 4; ++j) {
+    void *format = (void*)(uintptr_t)(3+i+j);
+    if (send_dynamic_integer_format((void*)1, (void*)2, format,
+                                   signed_values[i], unsigned_values[j]) != format)
+      return 1;
+    if (observed_signed != signed_values[i] || observed_unsigned != unsigned_values[j])
+      return 2;
+  }
+  return 0;
+})");
+  for (unsigned Mutation = 0; Mutation < 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Bad = Hint;
+    if (Mutation == 0)
+      Bad.Format->DynamicPointerArguments = true;
+    if (Mutation == 1)
+      Bad.Format->DynamicWithoutArguments = true;
+    if (Mutation == 2)
+      Bad.Format->FormatAddress = 0x1234;
+    if (Mutation == 3)
+      Bad.Format->AlternativeFormatAddresses = {0x1234};
+    if (Mutation == 4)
+      Bad.Signature.Parameters[3].Type = NdType::makeFloat(8);
+    if (Mutation == 5)
+      Bad.Signature.Parameters[3].Type = Pointer;
+    if (Mutation == 6) {
+      Bad.Signature.Parameters.resize(3);
+      ASSERT_TRUE(assignDarwinVariadicSourceABI(Bad.Signature, 3, Arch::AArch64,
+                                                Error));
+    }
+    if (Mutation == 7)
+      ASSERT_TRUE(
+          assignDarwinVariadicSourceABI(Bad.Signature, 3, Arch::X64, Error));
+    if (Mutation == 8)
+      Bad.Signature.HasExplicitABI = false;
+    if (Mutation == 9) {
+      Bad.Signature.Parameters[3].Location.EntryStackOffset = 8;
+      Bad.Signature.Parameters[4].Location.EntryStackOffset = 16;
+    }
+    if (Mutation == 10) {
+      ASSERT_TRUE(assignDarwinFixedSourceABI(Bad.Signature, Arch::AArch64, Error));
+      ASSERT_TRUE(validateSourceABI(Bad.Signature, Error));
+    }
+    EXPECT_NE(Render(Bad).find("bad source call"), std::string::npos);
+  }
+}

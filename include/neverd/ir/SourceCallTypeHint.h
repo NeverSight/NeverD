@@ -239,6 +239,10 @@ struct SourceCallTypeHint {
     /// variadic carrier without inspecting the format text. Integer and
     /// floating tails still require an immutable parsed format object.
     bool DynamicPointerArguments = false;
+    /// An independent dynamic format contract whose nonempty tail consists
+    /// only of declaration-proven 64-bit integers. These values are already
+    /// promoted; all reaching definitions must agree on signedness and width.
+    bool DynamicInteger64Arguments = false;
   };
   std::optional<FormatArguments> Format;
   /// Proven non-null object arguments in order, followed by the first nil.

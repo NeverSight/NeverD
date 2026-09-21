@@ -31,6 +31,13 @@
 
 namespace neverd::sdk {
 
+inline bool
+objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
+                    const std::map<va_t, const HighFunc *> &Functions,
+                    const ObjCProfileStorage *ProfileStorage,
+                    const std::set<const HighExpr *> *ReadOnlyHelpers,
+                    const HighFunc *ContainingFunction);
+
 struct ObjCSourceBindingResult {
   HighFunc Function;
   std::string Limitation;
@@ -206,6 +213,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
                Expected.Format->DynamicWithoutArguments &&
            Binding.Format->DynamicPointerArguments ==
                Expected.Format->DynamicPointerArguments &&
+           Binding.Format->DynamicInteger64Arguments ==
+               Expected.Format->DynamicInteger64Arguments &&
            Binding.Format->AlternativeFormatAddresses ==
                Expected.Format->AlternativeFormatAddresses)) &&
          Binding.BorrowedByteInputs == Expected.BorrowedByteInputs &&
@@ -274,6 +283,86 @@ provenSourcePointerValue(const ExprPtr &Value,
       }
   Active.erase(Key);
   return Valid;
+}
+
+/// An integer spelling alone is not a source declaration. Trace every
+/// definition to an independently validated message result, keeping the
+/// declaration's signedness. Narrowing, raw loads and unknown values cannot
+/// acquire a complete variadic carrier through this proof.
+inline TypeRef
+provenSourceInteger64Value(const ExprPtr &Value,
+                           const VarKeyMap<std::vector<ExprPtr>> &Definitions,
+                           const BinaryImage &Image, size_t &Budget,
+                           std::set<VarKey> &Active, unsigned Depth = 0) {
+  if (!Value || !Budget || Depth > 64 || !Value->Type ||
+      Value->Type->Kind != NdTypeKind::Int || Value->Type->Size != 8 ||
+      Value->IntrinsicId != Intrinsic::None ||
+      !Value->IntrinsicOutputs.empty() ||
+      Value->MemoryOrdering != NdMemoryOrdering::None ||
+      Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return {};
+  --Budget;
+  if (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) {
+    if (Value->Operands.size() != 1 ||
+        (Value->Kind == ExprKind::Cast && !Value->CastTo) ||
+        (Value->CastTo && !equalSourceTypes(Value->Type, Value->CastTo)))
+      return {};
+    return provenSourceInteger64Value(Value->Operands.front(), Definitions,
+                                      Image, Budget, Active, Depth + 1);
+  }
+  if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+      Value->Operands.size() == 3) {
+    const auto Left = provenSourceInteger64Value(
+        Value->Operands[1], Definitions, Image, Budget, Active, Depth + 1);
+    const auto Right = provenSourceInteger64Value(
+        Value->Operands[2], Definitions, Image, Budget, Active, Depth + 1);
+    return Left && Right && equalSourceTypes(Left, Right) ? Left : TypeRef{};
+  }
+  if (Value->Kind == ExprKind::Call && Value->SourceCallHint) {
+    const auto &Binding = *Value->SourceCallHint;
+    const auto &Signature = Binding.Signature;
+    const auto &Return = Signature.ReturnType;
+    std::string Error;
+    if (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+        Binding.Format || Binding.NilTerminated || Binding.DoesNotReturn ||
+        !Return || Return->Kind != NdTypeKind::Int || Return->Size != 8 ||
+        !Signature.HasExplicitABI || Signature.Architecture != Image.Arch ||
+        Value->Operands.size() != Signature.Parameters.size() ||
+        !validateSourceABI(Signature, Error) ||
+        !objcSourceCallBound(*Value, Image, {}, nullptr, nullptr, nullptr))
+      return {};
+    // The ordinary publication gate also accepts body-proven runtime calls.
+    // This narrower type proof additionally requires a current declaration.
+    if (!Binding.Receiver &&
+        Signature.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK &&
+        !(Binding.SelectorResultUse && Binding.SelectorResultTypeUse)) {
+      const auto Expected = objcSelectorSourceTypeHint(Image, Binding.Selector);
+      if (!Expected || !objc_projection_detail::sameHint(Signature, *Expected))
+        return {};
+    }
+    return Return;
+  }
+  if ((Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi) ||
+      (Value->Var.Kind != MedVar::Reg && Value->Var.Kind != MedVar::Temp) ||
+      Value->Var.Size != 8)
+    return {};
+  const auto Key = varKey(Value->Var);
+  if (!Active.insert(Key).second)
+    return {};
+  TypeRef Result;
+  const auto Found = Definitions.find(Key);
+  if (Found != Definitions.end())
+    for (const auto &Definition : Found->second) {
+      const auto Type = provenSourceInteger64Value(
+          Definition, Definitions, Image, Budget, Active, Depth + 1);
+      if (!Type || (Result && !equalSourceTypes(Result, Type))) {
+        Result.reset();
+        break;
+      }
+      Result = Type;
+    }
+  Active.erase(Key);
+  return Result;
 }
 
 inline std::optional<uint32_t> constantBorrowedByteCount(const ExprPtr &Value,
@@ -2655,9 +2744,9 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     // A selector-specific stub may look like an ordinary local function after
     // native lifting. Reclassify it only when the compiler declaration has a
     // format contract and the physical native ABI agrees exactly. A dynamic
-    // format may have no tail, or a tail whose already typed source values are
-    // all pointers. Integer and floating tails still require parsed format
-    // text because their promotions cannot be inferred from the selector.
+    // format may have no tail, a proven pointer tail, or a tail of declared
+    // 64-bit integer results. Each independent contract keeps the complete
+    // promoted carriers without inferring conversions from the selector.
     if (Expression->Kind == ExprKind::Call && !Expression->IsIndirectCall &&
         Expression->CallAddr && Expression->IntrinsicId == Intrinsic::None &&
         Expression->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -2680,10 +2769,28 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Expected = objcDynamicFormatPointerArgumentsSourceCallHint(
               Image, Stub->Selector,
               unsigned(Expression->Operands.size() - Fixed));
-          if (Expected) {
-            Expected->TargetAddress = Stub->TargetAddress;
-            Expected->SelectorReferenceAddress = Stub->SelectorReferenceAddress;
+        } else if (Expression->SourceCallHint &&
+                   plainNativeBinding(*Expression->SourceCallHint)) {
+          size_t IntegerBudget = 4096;
+          std::set<VarKey> ActiveIntegers;
+          std::vector<TypeRef> Types;
+          for (size_t I = Fixed; I < Expression->Operands.size(); ++I) {
+            auto Type = provenSourceInteger64Value(
+                Expression->Operands[I], FormatDefinitions, Image,
+                IntegerBudget, ActiveIntegers);
+            if (!Type) {
+              Types.clear();
+              break;
+            }
+            Types.push_back(std::move(Type));
           }
+          if (Types.size() == Expression->Operands.size() - Fixed)
+            Expected = objcDynamicFormatInteger64ArgumentsSourceCallHint(
+                Image, Stub->Selector, Types);
+        }
+        if (Expected) {
+          Expected->TargetAddress = Stub->TargetAddress;
+          Expected->SelectorReferenceAddress = Stub->SelectorReferenceAddress;
         }
       }
       bool PhysicalCall = false;
@@ -2695,6 +2802,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         PhysicalCall = samePhysicalSourceCall(
             Expression->SourceCallHint->Signature, Expected->Signature);
       else if (Expected && Expected->Format && !Expression->SourceCallHint &&
+               !Expected->Format->DynamicInteger64Arguments &&
                (!Expression->Type ||
                 sameScalarCarrier(Expression->Type,
                                   Expected->Signature.ReturnType)) &&
@@ -3725,23 +3833,34 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   }
   if (Binding.Format) {
     const auto &Format = *Binding.Format;
-    if (Format.DynamicWithoutArguments || Format.DynamicPointerArguments) {
+    if (Format.DynamicWithoutArguments || Format.DynamicPointerArguments ||
+        Format.DynamicInteger64Arguments) {
       const auto Stub = objcSelectorStubDynamicFormatSourceCallHint(
           Image, Binding.TargetAddress);
-      const unsigned PointerArguments =
+      const unsigned TailArguments =
           Hint.Parameters.size() >= Format.FixedCount
               ? unsigned(Hint.Parameters.size() - Format.FixedCount)
               : 0;
-      auto Expected = Stub && Stub->Format
-                          ? objcDynamicFormatPointerArgumentsSourceCallHint(
-                                Image, Stub->Selector, PointerArguments)
-                          : std::nullopt;
+      std::vector<TypeRef> IntegerTypes;
+      if (Format.DynamicInteger64Arguments && TailArguments)
+        for (size_t I = Format.FixedCount; I < Hint.Parameters.size(); ++I)
+          IntegerTypes.push_back(Hint.Parameters[I].Type);
+      auto Expected =
+          Stub && Stub->Format
+              ? (Format.DynamicInteger64Arguments
+                     ? objcDynamicFormatInteger64ArgumentsSourceCallHint(
+                           Image, Stub->Selector, IntegerTypes)
+                     : objcDynamicFormatPointerArgumentsSourceCallHint(
+                           Image, Stub->Selector, TailArguments))
+              : std::nullopt;
       if (Expected && Stub) {
         Expected->TargetAddress = Stub->TargetAddress;
         Expected->SelectorReferenceAddress = Stub->SelectorReferenceAddress;
       }
-      const bool PointerTail =
-          Format.DynamicPointerArguments && PointerArguments &&
+      const bool ProvenTail =
+          (Format.DynamicPointerArguments ||
+           Format.DynamicInteger64Arguments) &&
+          TailArguments &&
           Expression.Operands.size() == Hint.Parameters.size() &&
           ContainingFunction && [&] {
             VarKeyMap<std::vector<ExprPtr>> Definitions;
@@ -3753,15 +3872,22 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                 Definitions[varKey(Statement.Dst->Var)].push_back(
                     Statement.Val);
             });
-            size_t PointerBudget = 4096;
-            std::set<VarKey> ActivePointers;
-            return std::all_of(Expression.Operands.begin() + Format.FixedCount,
-                               Expression.Operands.end(),
-                               [&](const ExprPtr &Operand) {
-                                 return provenSourcePointerValue(
-                                     Operand, Definitions, Image, PointerBudget,
-                                     ActivePointers);
-                               });
+            size_t Budget = 4096;
+            std::set<VarKey> Active;
+            for (size_t I = Format.FixedCount; I < Expression.Operands.size();
+                 ++I) {
+              if (Format.DynamicInteger64Arguments) {
+                const auto Type = provenSourceInteger64Value(
+                    Expression.Operands[I], Definitions, Image, Budget, Active);
+                if (!Type || !equalSourceTypes(Type, Hint.Parameters[I].Type))
+                  return false;
+              } else if (!provenSourcePointerValue(Expression.Operands[I],
+                                                   Definitions, Image, Budget,
+                                                   Active)) {
+                return false;
+              }
+            }
+            return true;
           }();
       return Expected && Expected->Format && !Expression.IsIndirectCall &&
              Expression.CallAddr == Binding.TargetAddress &&
@@ -3781,14 +3907,16 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
              !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
              !Binding.ImmutablePointerSlot && !Format.FormatAddress &&
              Format.AlternativeFormatAddresses.empty() &&
-             (Format.DynamicWithoutArguments !=
-              Format.DynamicPointerArguments) &&
+             (unsigned(Format.DynamicWithoutArguments) +
+                  unsigned(Format.DynamicPointerArguments) +
+                  unsigned(Format.DynamicInteger64Arguments) ==
+              1) &&
              std::all_of(
                  Expression.Operands.begin(), Expression.Operands.end(),
                  [](const ExprPtr &Operand) { return bool(Operand); }) &&
-             ((Format.DynamicWithoutArguments && !PointerArguments &&
+             ((Format.DynamicWithoutArguments && !TailArguments &&
                Format.FixedCount == Expression.Operands.size()) ||
-              PointerTail) &&
+              ProvenTail) &&
              Format.FormatParameter < Format.FixedCount &&
              Format.FixedCount == Expected->Format->FixedCount &&
              Format.FormatParameter == Expected->Format->FormatParameter &&
@@ -3797,6 +3925,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                  Expected->Format->DynamicWithoutArguments &&
              Format.DynamicPointerArguments ==
                  Expected->Format->DynamicPointerArguments &&
+             Format.DynamicInteger64Arguments ==
+                 Expected->Format->DynamicInteger64Arguments &&
              objc_projection_detail::sameHint(Hint, Expected->Signature);
     }
     const auto Addresses = formatAddresses(Format);
@@ -3817,6 +3947,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
             Expected->Format->DynamicWithoutArguments ||
         Format.DynamicPointerArguments !=
             Expected->Format->DynamicPointerArguments ||
+        Format.DynamicInteger64Arguments !=
+            Expected->Format->DynamicInteger64Arguments ||
         Format.AlternativeFormatAddresses !=
             Expected->Format->AlternativeFormatAddresses ||
         Format.FormatParameter >= Expression.Operands.size() ||

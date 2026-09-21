@@ -504,24 +504,49 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Signature.Origin == SourceFunctionTypeHint::OriginKind::DarwinSDK;
     const bool DynamicWithoutArguments =
         Format.DynamicWithoutArguments && DeclaredMessage &&
+        !Format.DynamicPointerArguments && !Format.DynamicInteger64Arguments &&
         !Format.FormatAddress && Format.AlternativeFormatAddresses.empty() &&
         Format.FixedCount == Signature.Parameters.size();
     const bool DynamicPointerArguments =
         Format.DynamicPointerArguments && DeclaredMessage &&
-        !Format.DynamicWithoutArguments && !Format.FormatAddress &&
-        Format.AlternativeFormatAddresses.empty() &&
+        !Format.DynamicInteger64Arguments && !Format.DynamicWithoutArguments &&
+        !Format.FormatAddress && Format.AlternativeFormatAddresses.empty() &&
         Format.FixedCount < Signature.Parameters.size() &&
-        std::all_of(Signature.Parameters.begin() + Format.FixedCount,
-                    Signature.Parameters.end(), [](const auto &Parameter) {
-                      return Parameter.Type &&
-                             Parameter.Type->Kind == NdTypeKind::Ptr &&
-                             Parameter.Type->Size == 8;
-                    });
+        std::all_of(
+            Signature.Parameters.begin() + Format.FixedCount,
+            Signature.Parameters.end(),
+            [](const auto &Parameter) {
+              return Parameter.Type &&
+                     Parameter.Type->Kind == NdTypeKind::Ptr &&
+                     Parameter.Type->Size == 8;
+            });
+    const bool DynamicInteger64Arguments =
+        Format.DynamicInteger64Arguments && DeclaredMessage &&
+        Signature.Architecture == Arch::AArch64 && Signature.HasExplicitABI &&
+        !Format.DynamicWithoutArguments && !Format.DynamicPointerArguments &&
+        !Format.FormatAddress && Format.AlternativeFormatAddresses.empty() &&
+        Format.FixedCount < Signature.Parameters.size() &&
+        std::all_of(
+            Signature.Parameters.begin() + Format.FixedCount,
+            Signature.Parameters.end(),
+            [](const auto &Parameter) {
+              return Parameter.Type &&
+                     Parameter.Type->Kind == NdTypeKind::Int &&
+                     Parameter.Type->Size == 8;
+            }) &&
+        [&] {
+          auto Expected = Signature;
+          std::string Error;
+          return assignDarwinVariadicSourceABI(Expected, Format.FixedCount,
+                                               Arch::AArch64, Error) &&
+                 equalSourceABIs(Signature, Expected);
+        }();
     if ((!DeclaredMessage && !DeclaredC) ||
         (!Format.FormatAddress && !DynamicWithoutArguments &&
-         !DynamicPointerArguments) ||
+         !DynamicPointerArguments && !DynamicInteger64Arguments) ||
         (Format.DynamicWithoutArguments && !DynamicWithoutArguments) ||
         (Format.DynamicPointerArguments && !DynamicPointerArguments) ||
+        (Format.DynamicInteger64Arguments && !DynamicInteger64Arguments) ||
         Format.AlternativeFormatAddresses.size() >= 64 ||
         !std::is_sorted(Format.AlternativeFormatAddresses.begin(),
                         Format.AlternativeFormatAddresses.end()) ||
