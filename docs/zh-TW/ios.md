@@ -247,6 +247,8 @@ Native 純量回傳值推斷可識別已驗證呼叫結果 ABI 後緊接的完�
 
 透過 Objective-C 入口 thunk 公開的 Swift 延遲初始化靜態物件 getter，僅在 `vgZTo` 符號、執行期方法簽章、述詞測試、`swift_once` 呼叫、儲存載入與 `objc_retainAutoreleaseReturnValue` 結果共同構成精確的編譯器模式時才能投影。述詞 `_Wz`、初始化器 `_WZ` 與儲存 `vpZ` 符號必須彼此吻合；原始第三個暫存器只能作為 once context，初始化器必須忽略該 context，且不得有一般直接呼叫端。投影會重建述詞與物件儲存，將 null 作為無關 context 傳入，並把初始化器保留為已檢查的相依項目。形狀、符號、參數用途或 callback 有任何偏差時均維持未復原。
 
+具有已驗證 `cfcTo` 符號及執行期 `init` 簽章的 Swift Objective-C 建構子 thunk，也可在未宣告的第三參數暫存器僅作為一次精確 `swift_once` 呼叫的上下文出現時將其移除。述詞 `_Wz` 與初始化器 `_WZ` 必須相符；回呼必須忽略該上下文，且不得有一般直接呼叫端。投影傳入 null，僅推導述詞的八位元組儲存範圍，並保留其他所有控制流程、記憶體及呼叫效果；一般原始碼主體與相依閉合檢查仍然適用。
+
 ## 驗證與故障排查
 
 macOS 上啟用 `BUILD_TESTING` 的建置提供 `check-neverd-mobile-ios`，透過 CTest 執行三組原生還原驗證。

@@ -433,6 +433,29 @@ struct ObjCThunkFixture : AddressorFixture {
   }
 };
 
+struct ObjCConstructorFixture : ObjCThunkFixture {
+  explicit ObjCConstructorFixture(Arch Architecture)
+      : ObjCThunkFixture(Architecture) {
+    auto &Constructor = Pipeline.HighFuncs[0];
+    Constructor.Name = "_$s4Test6ObjectCACycfcTo";
+    Image.Symbols.back().Name = Constructor.Name;
+    Image.ObjCMethods[0].Selector = "init";
+    MedVar Self;
+    Self.Kind = MedVar::Param;
+    Self.Id = 0;
+    Self.Size = 8;
+    // A constructor uses its declared receiver and publishes the initialized
+    // object. These effects must survive removal of the unused context.
+    HighStmt Publish;
+    Publish.Kind = StmtKind::Store;
+    Publish.StoreAddr = HighExpr::makeBinop(
+        NdOp::INT_ADD, HighExpr::makeVar(Self, NdType::makeInt(8)),
+        HighExpr::makeConst(8, 8));
+    Publish.StoreVal = Constructor.Body[3].Dst;
+    Constructor.Body.insert(Constructor.Body.begin() + 4, Publish);
+  }
+};
+
 TEST(SwiftOnceSources, BindsStorageAndCallbackAsOneDependencyGroup) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     OnceFixture F(Architecture);
@@ -588,6 +611,105 @@ TEST(SwiftOnceSources, RejectsObjCLazyStaticGetterEvidenceDrift) {
     }
     EXPECT_TRUE(
         discoverSwiftOnceSources(F.Image, F.Pipeline).ObjCThunks.empty())
+        << Mutation;
+  }
+}
+
+TEST(SwiftOnceSources, ProjectsConstructorOnceContextAndPreservesEffects) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    ObjCConstructorFixture F(Architecture);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+    ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+    auto Bound = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[0], F.Image,
+                                               Plan, F.functions());
+    ASSERT_EQ(Bound.SwiftOnceObjCThunks.size(), 1U);
+    EXPECT_EQ(Bound.Dependencies,
+              std::set<va_t>{AddressorFixture::InitializerAddress});
+    EXPECT_EQ(
+        Bound.LocalStorageExtents,
+        (std::map<va_t, uint64_t>{{AddressorFixture::PredicateAddress, 8}}));
+    ASSERT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+    ASSERT_EQ(Bound.Function.Params.size(), 2U);
+    ASSERT_EQ(Bound.Function.Body.size(), 7U);
+    const auto &Once = *Bound.Function.Body[1].Body[0].CallExpr;
+    ASSERT_EQ(Once.Operands[2]->Kind, ExprKind::Const);
+    EXPECT_EQ(Once.Operands[2]->ConstVal, 0U);
+    const auto &Publish = Bound.Function.Body[4];
+    EXPECT_EQ(Publish.Kind, StmtKind::Store);
+    EXPECT_EQ(Publish.StoreAddr->Operands[0]->Var.Id, 0);
+    EXPECT_EQ(Publish.StoreAddr->Operands[1]->ConstVal, 8U);
+    EXPECT_EQ(Publish.StoreVal->Var,
+              F.Pipeline.HighFuncs[0].Body[4].StoreVal->Var);
+    EXPECT_EQ(Bound.Function.Body[5].Val->SourceCallHint->TargetName,
+              "objc_retainAutoreleaseReturnValue");
+    EXPECT_EQ(Bound.Function.Body[6].RetVal->Var,
+              F.Pipeline.HighFuncs[0].Body[6].RetVal->Var);
+    // Projection works on copies; it cannot erase context in the machine body.
+    EXPECT_EQ(
+        F.Pipeline.HighFuncs[0].Body[1].Body[0].CallExpr->Operands[2]->Var.Id,
+        2);
+  }
+}
+
+TEST(SwiftOnceSources, RejectsConstructorOnceContextEvidenceDrift) {
+  for (unsigned Mutation = 0; Mutation < 13; ++Mutation) {
+    ObjCConstructorFixture F(Arch::AArch64);
+    auto &Constructor = F.Pipeline.HighFuncs[0];
+    auto &Once = Constructor.Body[1].Body[0].CallExpr;
+    if (Mutation == 0)
+      F.Image.ObjCMethods[0].Selector = "value";
+    if (Mutation == 1)
+      Constructor.Name = "unrelated";
+    if (Mutation == 2)
+      Constructor.Body[4].StoreVal = Once->Operands[2];
+    if (Mutation == 3)
+      Constructor.Body[1].Cond = Once->Operands[2];
+    if (Mutation == 4)
+      Once->Operands[2] = HighExpr::makeConst(0, 8);
+    if (Mutation == 5)
+      Constructor.ReturnType = NdType::makeFloat(8);
+    if (Mutation == 6)
+      for (auto &Symbol : F.Image.Symbols)
+        if (Symbol.Addr == AddressorFixture::InitializerAddress)
+          Symbol.Name = "wrong_initializer";
+    if (Mutation == 7) {
+      auto Hint = std::make_shared<SourceCallTypeHint>(*Once->SourceCallHint);
+      Hint->WeakImport = true;
+      Once->SourceCallHint = std::move(Hint);
+    }
+    if (Mutation == 8)
+      F.Image.Symbols.push_back(F.Image.Symbols.back());
+    if (Mutation == 9)
+      Constructor.Body.push_back(Constructor.Body[1].Body[0]);
+    if (Mutation == 10) {
+      HighStmt Read;
+      Read.Kind = StmtKind::ExprStmt;
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Id = 0;
+      Context.Size = 8;
+      Read.Val =
+          HighExpr::makeVar(Context, NdType::makePtr(NdType::makeVoid()));
+      F.Pipeline.HighFuncs[1].Body.insert(F.Pipeline.HighFuncs[1].Body.begin(),
+                                          Read);
+    }
+    if (Mutation == 11) {
+      LowFunc DirectCaller;
+      DirectCaller.Blocks.emplace_back();
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(AddressorFixture::InitializerAddress, 8));
+      DirectCaller.Blocks[0].Ops.push_back(Call);
+      F.Pipeline.LowFuncs.push_back(DirectCaller);
+    }
+    if (Mutation == 12)
+      F.Image.ObjCMethods[0].IsClassMethod = true;
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    auto Bound = bindSwiftOnceSourceReferences(Constructor, F.Image, Plan,
+                                               F.functions());
+    EXPECT_TRUE(Bound.SwiftOnceObjCThunks.empty()) << Mutation;
+    EXPECT_FALSE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan))
         << Mutation;
   }
 }

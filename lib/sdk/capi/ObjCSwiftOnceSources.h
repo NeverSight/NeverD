@@ -30,7 +30,7 @@ struct SwiftOnceAddressorContract {
 
 struct SwiftOnceObjCThunkContract {
   va_t Predicate = 0;
-  va_t Storage = 0;
+  std::optional<va_t> Storage;
   va_t Initializer = 0;
   SourceFunctionTypeHint Signature;
 
@@ -666,7 +666,7 @@ addressorContract(const HighFunc &F, const BinaryImage &Image) {
 /// initializer ignores that context. A source projection may therefore pass
 /// null and retain only the declared receiver and selector parameters.
 inline std::optional<SwiftOnceObjCThunkContract>
-objcThunkContract(const HighFunc &F, const BinaryImage &Image) {
+objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   const ObjCMethod *Method = nullptr;
   for (const auto &Candidate : Image.ObjCMethods) {
     if (Candidate.Implementation != F.Entry)
@@ -851,6 +851,114 @@ objcThunkContract(const HighFunc &F, const BinaryImage &Image) {
 
   return SwiftOnceObjCThunkContract{*Predicate, *Storage, *Initializer,
                                     *Method->TypeHint};
+}
+
+/// A Swift Objective-C constructor can forward an unspecified third argument
+/// to swift_once while using its declared receiver normally. Only erase that
+/// context after the exact initializer is independently proved not to read it.
+/// The constructor's control flow, memory effects and other calls are retained
+/// and must pass the ordinary source-body and dependency checks.
+inline std::optional<SwiftOnceObjCThunkContract>
+objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
+  const ObjCMethod *Method = nullptr;
+  for (const auto &Candidate : Image.ObjCMethods) {
+    if (Candidate.Implementation != F.Entry)
+      continue;
+    if (Method || Candidate.Status != "supported" || !Candidate.TypeHint)
+      return std::nullopt;
+    Method = &Candidate;
+  }
+  if (!Method || Method->IsClassMethod || Method->Selector != "init" ||
+      F.SourceTypeHint || F.Params.size() != 3 || !F.ReturnType ||
+      F.ReturnType->Size != 8 ||
+      (F.ReturnType->Kind != NdTypeKind::Int &&
+       F.ReturnType->Kind != NdTypeKind::Ptr))
+    return std::nullopt;
+  const auto Parameters = sourceABIParameters(*Method->TypeHint);
+  if (Parameters.size() != 2 || !Method->TypeHint->ReturnType ||
+      Method->TypeHint->ReturnType->Kind != NdTypeKind::Ptr ||
+      Method->TypeHint->ReturnType->Size != 8)
+    return std::nullopt;
+  for (const auto &Parameter : Parameters)
+    if (!Parameter.Type || Parameter.Type->Kind != NdTypeKind::Ptr ||
+        Parameter.Type->Size != 8)
+      return std::nullopt;
+  for (const auto &Parameter : F.Params)
+    if (!Parameter.Type || Parameter.Type->Size != 8 ||
+        (Parameter.Type->Kind != NdTypeKind::Int &&
+         Parameter.Type->Kind != NdTypeKind::Ptr))
+      return std::nullopt;
+  size_t ThunkSymbols = 0;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr == F.Entry && Symbol.Name == F.Name &&
+        llvm::StringRef(Symbol.Name).ends_with("cfcTo"))
+      ++ThunkSymbols;
+  if (ThunkSymbols != 1)
+    return std::nullopt;
+
+  const auto Flow = buildHighSourceFlowGraph(F);
+  if (!Flow.Diagnostics.Complete || !Flow.Diagnostics.Items.empty())
+    return std::nullopt;
+  size_t Budget = 100000;
+  size_t ContextUses = 0;
+  const HighExpr *Once = nullptr;
+  bool Valid = true;
+  std::function<void(const ExprPtr &, unsigned)> Visit = [&](const ExprPtr &E,
+                                                             unsigned Depth) {
+    if (!Valid)
+      return;
+    if (!E || !Budget-- || Depth > 128 || E->Kind == ExprKind::Undef) {
+      Valid = false;
+      return;
+    }
+    if (E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Param) {
+      if (E->Var.Id == 2)
+        ++ContextUses;
+      else if (E->Var.Id < 0 || E->Var.Id > 2)
+        Valid = false;
+    }
+    if (onceCall(*E, Image)) {
+      if (Once || parameter(E->Operands[2]) != std::optional<size_t>{2})
+        Valid = false;
+      Once = E.get();
+    }
+    for (const auto &Operand : E->Operands)
+      Visit(Operand, Depth + 1);
+  };
+  walkStmts(F.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, [&](const ExprPtr &E) { Visit(E, 0); });
+  });
+  if (!Valid || !Once || ContextUses != 1)
+    return std::nullopt;
+  const auto Predicate =
+      objc_binding_detail::constantAddress(*Once->Operands[0]);
+  const auto Initializer =
+      objc_binding_detail::constantAddress(*Once->Operands[1]);
+  const auto PredicateHint =
+      Predicate
+          ? objc_binding_detail::oncePredicateStorageHint(Image, *Predicate)
+          : std::nullopt;
+  if (!PredicateHint || !Initializer || !Image.isCodeAddress(*Initializer) ||
+      !llvm::StringRef(PredicateHint->TargetName).ends_with("_Wz"))
+    return std::nullopt;
+  const auto InitializerName =
+      llvm::StringRef(PredicateHint->TargetName).drop_back(3).str() + "_WZ";
+  size_t InitializerSymbols = 0;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr == *Initializer &&
+        Symbol.Name == InitializerName)
+      ++InitializerSymbols;
+  if (InitializerSymbols != 1)
+    return std::nullopt;
+  return SwiftOnceObjCThunkContract{*Predicate, std::nullopt, *Initializer,
+                                    *Method->TypeHint};
+}
+
+inline std::optional<SwiftOnceObjCThunkContract>
+objcThunkContract(const HighFunc &F, const BinaryImage &Image) {
+  if (auto Contract = objcGetterThunkContract(F, Image))
+    return Contract;
+  return objcConstructorThunkContract(F, Image);
 }
 
 inline SourceFunctionTypeHint callbackHint(Arch Architecture) {
@@ -1180,7 +1288,8 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
               E->Operands[1] = std::move(Address);
               E->Operands[2] = std::move(Null);
               Result.LocalStorageExtents[Planned->second.Predicate] = 8;
-              Result.LocalStorageExtents[Planned->second.Storage] = 8;
+              if (Planned->second.Storage)
+                Result.LocalStorageExtents[*Planned->second.Storage] = 8;
               Result.Dependencies.insert(Planned->second.Initializer);
               Result.SwiftOnceObjCThunks.insert(Function.Entry);
               return E;

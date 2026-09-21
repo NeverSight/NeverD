@@ -280,6 +280,8 @@ Objective-C native dependency inference may further narrow a `NativeAnalysis` 64
 
 Swift lazy static object getters exposed through Objective-C entry thunks can be projected only when the `vgZTo` symbol, runtime method signature, predicate test, `swift_once` call, storage load, and `objc_retainAutoreleaseReturnValue` result form one exact compiler pattern. The `_Wz` predicate, `_WZ` initializer, and `vpZ` storage symbols must agree; the raw third register may occur only as the once context, and the initializer must ignore that context and have no ordinary direct caller. The projection rebuilds predicate and object storage, passes null as the irrelevant context, and keeps the initializer as a checked dependency. Any shape, symbol, parameter-use, or callback drift remains unrecovered.
 
+Swift Objective-C constructor thunks with an authenticated `cfcTo` symbol and the runtime `init` signature can also discard an undeclared third argument register when its sole occurrence is the context of one exact `swift_once` call. The predicate `_Wz` and initializer `_WZ` must match; the callback must ignore the context and have no ordinary direct caller. The projection passes null, infers only the predicate’s eight-byte storage extent, and preserves every other control-flow, memory and call effect; normal source-body and dependency-closure checks still apply.
+
 ## Verification and troubleshooting
 
 On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.
