@@ -38,6 +38,7 @@ struct CallArgScan {
   Arch TheArch = Arch::Unknown;
   int MaxArgs = 0;
   int FirstStackSlot = 0;
+  int StoreScanWindow = 0;
   llvm::function_ref<ExprPtr(const MedVar &)> ToExpr;
   llvm::function_ref<bool(const MedVar &)> IsCalleeSave;
 };

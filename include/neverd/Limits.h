@@ -352,6 +352,12 @@ constexpr int64_t kMaxFrameSize = 16 * 1024 * 1024; // 16 MiB
 /// How many stores before a call to scan for stack-passed arguments.
 constexpr int kCallArgStoreScanWindow = 12;
 
+/// AArch64 calls with the complete x0-x7 prefix can have an integer argument
+/// at [sp]. Materializing eight constants may expand into several MedIR ops per
+/// register, so keep a larger but finite window once the full bank itself
+/// proves that stack overflow is ABI-plausible.
+constexpr int kAArch64FullBankCallArgStoreScanWindow = 64;
+
 //===----------------------------------------------------------------------===//
 // Backend / code generation
 //===----------------------------------------------------------------------===//

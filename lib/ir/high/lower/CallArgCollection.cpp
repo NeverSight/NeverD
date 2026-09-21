@@ -40,8 +40,8 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
   const auto &Ops = *Scan.Ops;
   const TargetRegInfo &TRI = *Scan.TRI;
   const int64_t SlotBytes = static_cast<int64_t>(TRI.PointerSize);
-  const int StoreScanStart = std::max(0, static_cast<int>(Scan.CallIdx) -
-                                             limits::kCallArgStoreScanWindow);
+  const int StoreScanStart =
+      std::max(0, static_cast<int>(Scan.CallIdx) - Scan.StoreScanWindow);
 
   for (int J = static_cast<int>(Scan.CallIdx) - 1; J >= StoreScanStart; --J) {
     const MedOp &Prev = Ops[J];
@@ -314,6 +314,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   Scan.TheArch = TargetArch;
   Scan.MaxArgs = MaxArgs;
   Scan.FirstStackSlot = FirstStackSlot;
+  Scan.StoreScanWindow = limits::kCallArgStoreScanWindow;
   auto ToExpr = [this](const MedVar &V) { return medvarToExpr(V); };
   Scan.ToExpr = ToExpr;
   Scan.IsCalleeSave = IsCalleeSave;

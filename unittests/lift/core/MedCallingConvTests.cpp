@@ -470,6 +470,60 @@ TEST(MedABIPass, ForwardedLiveInKeepsParameterProvenance) {
   EXPECT_EQ(Func.CallInfos[0].Args[1].RegOff, TRI.IntParamRegs[1]);
 }
 
+TEST(HighCallArguments, AArch64FullRegisterBankExtendsStackStoreScan) {
+  constexpr Arch TheArch = Arch::AArch64;
+  constexpr va_t Callee = 0x2000;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "long_call_setup";
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  Block.Id = 0;
+
+  const MedVar EntrySP =
+      reg(1, 0, TRI.PointerSize, TRI.StackPointer, TheArch);
+  addLiveIn(Block, EntrySP);
+
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(EntrySP);
+  Store.addInput(MedVar::makeConst(0x9000, TRI.PointerSize));
+  Block.Ops.push_back(Store);
+
+  // Keep the outgoing stack store farther from the generic local scan window.
+  // AArch64 constant materialization can need several MedIR operations for
+  // each of x0-x7 before the call, but a complete register bank proves that a
+  // following [sp] slot is ABI-plausible as argument 8.
+  for (int I = 0; I < 5; ++I)
+    Block.Ops.push_back(unary(
+        NdOp::COPY, temp(10 + I, 0, TRI.PointerSize, TheArch),
+        MedVar::makeConst(0x100 + I, TRI.PointerSize)));
+  for (int I = 0; I < 8; ++I)
+    Block.Ops.push_back(unary(
+        NdOp::COPY,
+        reg(20 + I, 0, TRI.PointerSize, TRI.IntParamRegs[I], TheArch),
+        MedVar::makeConst(I + 1, TRI.PointerSize)));
+
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x1100;
+  Call.addInput(MedVar::makeConst(Callee, TRI.PointerSize));
+  Block.Ops.push_back(Call);
+
+  MedToHighConverter Converter;
+  HighFunc High = Converter.convert(Func, TheArch);
+  auto HighCall = std::find_if(
+      High.Body.begin(), High.Body.end(),
+      [](const HighStmt &Stmt) { return Stmt.Kind == StmtKind::Call; });
+  ASSERT_NE(HighCall, High.Body.end());
+  ASSERT_TRUE(HighCall->CallExpr);
+  ASSERT_EQ(HighCall->CallExpr->Operands.size(), 9u);
+  ASSERT_EQ(HighCall->CallExpr->Operands.back()->Kind, ExprKind::Const);
+  EXPECT_EQ(HighCall->CallExpr->Operands.back()->ConstVal, 0x9000u);
+}
+
 TEST(MedABIPass, PromotedRegisterParamsRebaseMutableStackHomes) {
   constexpr Arch TheArch = Arch::X86;
   constexpr va_t Callee = 0x2000;
