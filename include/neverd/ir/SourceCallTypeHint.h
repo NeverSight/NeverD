@@ -159,7 +159,10 @@ struct SourceCallTypeHint {
     RuntimeObjCSuperGetter,
     /// One rebuilt selector-reference cell used by a verified super getter.
     /// The source helper loads the cell after its metadata accessor call.
-    RuntimeSelectorReferenceAddress
+    RuntimeSelectorReferenceAddress,
+    /// A complete counter/metadata factory projected only in one verified
+    /// Objective-C caller. Its counter retains the shared profiling storage.
+    RuntimeObjCMetadataFactory
   };
   Kind CallKind = Kind::Native;
   enum class SwiftValueWitnessKind {

@@ -218,9 +218,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
        Hint.CallKind == Kind::SwiftStringFromNSString) &&
       Signature.Convention != SourceFunctionTypeHint::ConventionKind::Swift)
     return bad("Swift string call has the wrong calling convention");
-  if (Hint.CallKind == Kind::RuntimeObjCSuperGetter) {
-    const auto Name =
-        "neverd_objc_super_getter_" + llvm::utohexstr(Hint.TargetAddress, true);
+  if (Hint.CallKind == Kind::RuntimeObjCSuperGetter ||
+      Hint.CallKind == Kind::RuntimeObjCMetadataFactory) {
+    const bool Factory = Hint.CallKind == Kind::RuntimeObjCMetadataFactory;
+    const auto Name = std::string(Factory ? "neverd_objc_metadata_factory_"
+                                          : "neverd_objc_super_getter_") +
+                      llvm::utohexstr(Hint.TargetAddress, true);
     if (!Hint.TargetAddress || Hint.TargetName != Name ||
         E.CallAddr != Hint.TargetAddress || !E.CallTarget.empty() ||
         E.IsIndirectCall || !E.IntrinsicOutputs.empty() ||
@@ -229,24 +232,31 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Signature.Origin !=
             SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
         !Signature.ReturnType ||
-        Signature.ReturnType->Kind != NdTypeKind::Int ||
-        Signature.ReturnType->Size != 1 || Signature.Parameters.size() != 4 ||
-        Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
-        Hint.RuntimeObjCResultType || Hint.ValueWitness || Hint.Receiver ||
-        !Hint.Selector.empty() || !Hint.OwnerClass.empty() ||
-        Hint.SelectorReferenceAddress || !Hint.BorrowedByteInputs.empty() ||
-        !Hint.SwiftStringInputs.empty() || Hint.Format || Hint.NilTerminated ||
-        Hint.SwiftTypeMetadata || Hint.SelectorResultUse ||
-        Hint.SelectorResultTypeUse || Hint.SelectorArgumentTypeUse ||
-        Hint.SelectorArgumentStorageUse || Hint.ByteCount ||
-        Hint.ImmutablePointerSlot ||
+        Signature.ReturnType->Kind !=
+            (Factory ? NdTypeKind::Ptr : NdTypeKind::Int) ||
+        Signature.ReturnType->Size != (Factory ? 8U : 1U) ||
+        Signature.Parameters.size() != (Factory ? 2U : 4U) ||
+        !Signature.HasExplicitABI || Hint.DoesNotReturn || Hint.WeakImport ||
+        Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
+        Hint.ValueWitness || Hint.Receiver || !Hint.Selector.empty() ||
+        !Hint.OwnerClass.empty() || Hint.SelectorReferenceAddress ||
+        !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
+        Hint.Format || Hint.NilTerminated || Hint.SwiftTypeMetadata ||
+        Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
+        Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
+        Hint.ByteCount || Hint.ImmutablePointerSlot ||
         std::any_of(Signature.Parameters.begin(), Signature.Parameters.end(),
                     [](const auto &Parameter) {
                       return !Parameter.Type ||
                              Parameter.Type->Kind != NdTypeKind::Ptr ||
                              Parameter.Type->Size != 8;
                     }))
-      return bad("invalid compiler super getter declaration");
+      return bad("invalid compiler getter/factory declaration");
+    auto Expected = Signature;
+    std::string Diagnostic;
+    if (!assignDarwinScalarSourceABI(Expected, Arch::AArch64, Diagnostic) ||
+        !equalSourceABIs(Signature, Expected))
+      return bad("compiler getter/factory ABI is not canonical");
   }
   if (Hint.CallKind == Kind::NativeAddress ||
       Hint.CallKind == Kind::RuntimeBlockIsa ||
@@ -465,7 +475,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind != Kind::SwiftStringBridge &&
       Hint.CallKind != Kind::SwiftStringFromNSString &&
       Hint.CallKind != Kind::DarwinRuntimeCall &&
-      Hint.CallKind != Kind::RuntimeObjCSuperGetter)
+      Hint.CallKind != Kind::RuntimeObjCSuperGetter &&
+      Hint.CallKind != Kind::RuntimeObjCMetadataFactory)
     return bad("unknown binding kind");
   if (Signature.Parameters.size() > 64 ||
       E.Operands.size() != Signature.Parameters.size())
@@ -593,7 +604,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                          Hint.CallKind == Kind::SwiftStringBridge ||
                          Hint.CallKind == Kind::SwiftStringFromNSString ||
                          Hint.CallKind == Kind::DarwinRuntimeCall ||
-                         Hint.CallKind == Kind::RuntimeObjCSuperGetter;
+                         Hint.CallKind == Kind::RuntimeObjCSuperGetter ||
+                         Hint.CallKind == Kind::RuntimeObjCMetadataFactory;
     if (Runtime)
       Name = Hint.TargetName;
     if (Hint.CallKind == Kind::SwiftStringBridge)

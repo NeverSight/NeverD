@@ -9,6 +9,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/Support/Endian.h"
@@ -180,6 +181,74 @@ inline bool canonicalBoolGetter(const SourceFunctionTypeHint &Signature) {
   return equalSourceABIs(Normalized, *Expected);
 }
 
+struct ObjCClassAccessorContract {
+  va_t Entry = 0;
+  va_t ClassAddress = 0;
+  SourceFunctionTypeHint Signature;
+};
+
+// The complete accessor overwrites x0 before its only call, independently
+// proving that an incoming metadata request is unused. Both projections retain
+// the accessor as a dependency; this proof does not establish source closure.
+inline std::optional<ObjCClassAccessorContract>
+validatedClassAccessor(const BinaryImage &Image, const PipelineResult &Result,
+                       va_t Entry) {
+  if (Result.SourceImage != &Image || Image.Format != BinaryFormat::MachO ||
+      Image.Arch != Arch::AArch64 || Image.Bits != Bitness::Bits64 ||
+      Image.IsRelocatable ||
+      !objc::RuntimeData(Image).supportsPlainObjectPointers())
+    return std::nullopt;
+  const auto ImmutableBytes = readImmutableCodeBytes(Image, Entry, 32);
+  const auto *AccessorBytes = ImmutableBytes ? ImmutableBytes->data() : nullptr;
+  const auto *AccessorLow = completeLow(Result, Entry, 8);
+  const auto *AccessorHigh = uniqueEntry(Result.HighFuncs, Entry);
+  if (!AccessorBytes || !AccessorLow || !AccessorHigh ||
+      !AccessorHigh->SourceTypeHint || AccessorHigh->DoesNotReturn ||
+      AccessorHigh->StructuredExceptionRegions ||
+      AccessorHigh->UnstructuredExceptionRegions ||
+      !AccessorHigh->Params.empty())
+    return std::nullopt;
+  const auto AccessorWord = [&](unsigned I) {
+    return llvm::support::endian::read32le(AccessorBytes + I * 4);
+  };
+  if (AccessorWord(0) != 0xa9bf7bfd || AccessorWord(1) != 0x910003fd ||
+      AccessorWord(5) != 0xd2800001 || AccessorWord(6) != 0xa8c17bfd ||
+      AccessorWord(7) != 0xd65f03c0)
+    return std::nullopt;
+  const auto ClassAddress =
+      pageAddress(AccessorWord(2), AccessorWord(3), Entry + 8, 0);
+  const auto SelfTarget = branch(AccessorWord(4), Entry + 16, true);
+  const auto SelfSlot = SelfTarget
+                            ? runtimeSlot(Image, *SelfTarget, "_objc_opt_self")
+                            : std::nullopt;
+  const auto SelfHint =
+      SelfSlot ? objcRuntimeSourceCallHint(Image, *SelfSlot) : std::nullopt;
+  if (!ClassAddress || !SelfTarget || !SelfHint ||
+      !readImmutableCodeBytes(Image, *SelfTarget, 12))
+    return std::nullopt;
+  const auto Classes = objc_binding_detail::classObjectIdentities(Image);
+  const auto ClassIdentity = Classes.find(*ClassAddress);
+  if (ClassIdentity == Classes.end() ||
+      ClassIdentity->second.Kind != SourceCallTypeHint::Kind::RuntimeClass)
+    return std::nullopt;
+  const auto &Signature = *AccessorHigh->SourceTypeHint;
+  if (!Signature.Parameters.empty() || !Signature.ReturnType ||
+      Signature.ReturnType->Size != 8 ||
+      (Signature.ReturnType->Kind != NdTypeKind::Int &&
+       Signature.ReturnType->Kind != NdTypeKind::Ptr) ||
+      !equalSourceTypes(AccessorHigh->ReturnType, Signature.ReturnType))
+    return std::nullopt;
+  SourceFunctionTypeHint Expected;
+  Expected.Origin = Signature.Origin;
+  Expected.ReturnType = Signature.ReturnType;
+  std::string Error;
+  if (!assignDarwinScalarSourceABI(Expected, Arch::AArch64, Error) ||
+      !equalSourceABIs(Signature, Expected) ||
+      !callsRestore(*AccessorLow, Entry + 16, *SelfTarget, SelfHint->Signature))
+    return std::nullopt;
+  return ObjCClassAccessorContract{Entry, *ClassAddress, Signature};
+}
+
 inline std::optional<ObjCSuperGetterContract>
 prove(const BinaryImage &Image, const PipelineResult &Result, va_t Entry,
       va_t Root) {
@@ -215,41 +284,19 @@ prove(const BinaryImage &Image, const PipelineResult &Result, va_t Entry,
       !runtimeSlot(Image, *Dispatch, "_objc_msgSendSuper2"))
     return std::nullopt;
 
-  const auto *AccessorBytes = code(Image, *Accessor, 32);
-  const auto *AccessorLow = completeLow(Result, *Accessor, 8);
-  const auto *AccessorHigh = uniqueEntry(Result.HighFuncs, *Accessor);
-  if (!AccessorBytes || !AccessorLow || !AccessorHigh ||
-      !AccessorHigh->SourceTypeHint || AccessorHigh->DoesNotReturn ||
-      AccessorHigh->StructuredExceptionRegions ||
-      AccessorHigh->UnstructuredExceptionRegions ||
-      !AccessorHigh->Params.empty())
+  const auto AccessorContract =
+      validatedClassAccessor(Image, Result, *Accessor);
+  if (!AccessorContract)
     return std::nullopt;
-  const auto AccessorWord = [&](unsigned I) {
-    return llvm::support::endian::read32le(AccessorBytes + I * 4);
-  };
-  if (AccessorWord(0) != 0xa9bf7bfd || AccessorWord(1) != 0x910003fd ||
-      AccessorWord(5) != 0xd2800001 || AccessorWord(6) != 0xa8c17bfd ||
-      AccessorWord(7) != 0xd65f03c0)
-    return std::nullopt;
-  const auto ClassAddress =
-      pageAddress(AccessorWord(2), AccessorWord(3), *Accessor + 8, 0);
-  const auto SelfTarget = branch(AccessorWord(4), *Accessor + 16, true);
-  const auto SelfSlot = SelfTarget
-                            ? runtimeSlot(Image, *SelfTarget, "_objc_opt_self")
-                            : std::nullopt;
-  const auto SelfHint =
-      SelfSlot ? objcRuntimeSourceCallHint(Image, *SelfSlot) : std::nullopt;
-  if (!ClassAddress || !SelfTarget || !SelfHint)
-    return std::nullopt;
+  const auto ClassAddress = AccessorContract->ClassAddress;
   const auto Classes = objc_binding_detail::classObjectIdentities(Image);
-  const auto ClassIdentity = Classes.find(*ClassAddress);
-  if (ClassIdentity == Classes.end() ||
-      ClassIdentity->second.Kind != SourceCallTypeHint::Kind::RuntimeClass)
+  const auto ClassIdentity = Classes.find(ClassAddress);
+  if (ClassIdentity == Classes.end())
     return std::nullopt;
   const ObjCClass *Class = nullptr;
   for (const auto &Candidate : Image.ObjCClasses)
     if (Candidate.Name == ClassIdentity->second.Name) {
-      if (Class || Candidate.Address != *ClassAddress || Candidate.RootClass ||
+      if (Class || Candidate.Address != ClassAddress || Candidate.RootClass ||
           Candidate.InheritanceStatus != "resolved" ||
           Candidate.SuperclassName.empty())
         return std::nullopt;
@@ -257,27 +304,14 @@ prove(const BinaryImage &Image, const PipelineResult &Result, va_t Entry,
     }
   if (!Class)
     return std::nullopt;
-  const auto &MetadataSignature = *AccessorHigh->SourceTypeHint;
-  std::string Error;
-  if (!MetadataSignature.Parameters.empty() || !MetadataSignature.ReturnType ||
-      MetadataSignature.ReturnType->Size != 8 ||
-      (MetadataSignature.ReturnType->Kind != NdTypeKind::Int &&
-       MetadataSignature.ReturnType->Kind != NdTypeKind::Ptr) ||
-      MetadataSignature.Convention !=
-          SourceFunctionTypeHint::ConventionKind::C ||
-      !equalSourceTypes(AccessorHigh->ReturnType,
-                        MetadataSignature.ReturnType) ||
-      !validateSourceABI(MetadataSignature, Error) ||
-      !callsRestore(*AccessorLow, *Accessor + 16, *SelfTarget,
-                    SelfHint->Signature))
-    return std::nullopt;
+  const auto &MetadataSignature = AccessorContract->Signature;
 
   if (Root > InvalidVA - 8 || !isMachOLocalFunctionRange(Image, Entry, 60))
     return std::nullopt;
   ObjCSuperGetterContract Contract;
   Contract.Entry = Entry;
   Contract.MetadataAccessor = *Accessor;
-  Contract.CurrentClass = *ClassAddress;
+  Contract.CurrentClass = ClassAddress;
   Contract.ClassName = Class->Name;
   Contract.SuperDispatch = *Dispatch;
   Contract.MetadataSignature = MetadataSignature;

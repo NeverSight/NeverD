@@ -8,6 +8,7 @@
 #include "JSONText.h"
 #include "NativePhaseTrace.h"
 #include "ObjCBlockSources.h"
+#include "ObjCMetadataFactorySources.h"
 #include "ObjCNativeDependencies.h"
 #include "ObjCSourceBindings.h"
 #include "ObjCSourceInputs.h"
@@ -211,6 +212,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     std::map<va_t, ObjCBlockSourceBindingResult> BlockProjections;
     const auto SuperGetterPlan = discoverObjCSuperGetterSources(S->Img, Result);
     std::set<va_t> SuperGetterProjections;
+    const auto MetadataFactoryPlan =
+        discoverObjCMetadataFactorySources(S->Img, Result, ProfileStorage);
+    std::set<va_t> MetadataFactoryProjections;
     std::map<va_t, std::string> ProjectionReasons;
     std::set<va_t> Closed;
     for (const auto &[Entry, Func] : Functions) {
@@ -239,8 +243,18 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           projectObjCSuperGetter(OnceBinding.Function, S->Img, SuperGetterPlan);
       if (SuperGetterBinding.Projected)
         SuperGetterProjections.insert(Entry);
+      auto MetadataFactoryBinding =
+          projectObjCMetadataFactory(SuperGetterBinding.Function, S->Img,
+                                     MetadataFactoryPlan, ProfileStorage);
+      if (MetadataFactoryBinding.Projected)
+        MetadataFactoryProjections.insert(Entry);
       auto Binding = bindObjCSourceReferences(
-          SuperGetterBinding.Function, S->Img, &ProfileStorage, &Functions);
+          MetadataFactoryBinding.Function, S->Img, &ProfileStorage, &Functions);
+      Binding.Dependencies.insert(MetadataFactoryBinding.Dependencies.begin(),
+                                  MetadataFactoryBinding.Dependencies.end());
+      Binding.ProfileCounterSections.insert(
+          MetadataFactoryBinding.ProfileSections.begin(),
+          MetadataFactoryBinding.ProfileSections.end());
       Binding.Dependencies.insert(SuperGetterBinding.Dependencies.begin(),
                                   SuperGetterBinding.Dependencies.end());
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),
@@ -273,6 +287,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers,
                                          &Binding.Function) ||
+                     objCMetadataFactorySourceCallBound(
+                         Expression, S->Img, MetadataFactoryPlan,
+                         ProfileStorage, Binding.Function, Functions) ||
                      objCSuperGetterSourceCallBound(
                          Expression, S->Img, SuperGetterPlan, Binding.Function,
                          Functions) ||
@@ -352,6 +369,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
               return objcSourceCallBound(Expression, S->Img, Functions,
                                          &ProfileStorage, &ReadOnlyHelpers,
                                          &Binding.Function) ||
+                     objCMetadataFactorySourceCallBound(
+                         Expression, S->Img, MetadataFactoryPlan,
+                         ProfileStorage, Binding.Function, Functions) ||
                      objCSuperGetterSourceCallBound(
                          Expression, S->Img, SuperGetterPlan, Binding.Function,
                          Functions) ||
@@ -426,6 +446,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           return objcSourceCallBound(Expression, S->Img, Functions,
                                      &ProfileStorage, &ReadOnlyHelpers,
                                      &Projection.Function) ||
+                 objCMetadataFactorySourceCallBound(
+                     Expression, S->Img, MetadataFactoryPlan, ProfileStorage,
+                     Projection.Function, Functions) ||
                  objCSuperGetterSourceCallBound(
                      Expression, S->Img, SuperGetterPlan, Projection.Function,
                      Functions) ||
@@ -608,6 +631,13 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           SuperGetters.insert(Entry);
       IdentityHelpers += renderObjCSuperGetterHelpers(
           S->Img, SuperGetterPlan, SuperGetters, SharedIdentityFunctions);
+      std::set<va_t> MetadataFactories;
+      for (const auto Entry : Included)
+        if (MetadataFactoryProjections.count(Entry))
+          MetadataFactories.insert(Entry);
+      IdentityHelpers += renderObjCMetadataFactoryHelpers(
+          S->Img, MetadataFactoryPlan, ProfileStorage, MetadataFactories,
+          SharedIdentityFunctions);
       std::set<std::string> SharedStorageFunctions;
       const std::string StorageHelpers =
           ProfileStorage.render(ProfileSections, SharedStorageFunctions) +
