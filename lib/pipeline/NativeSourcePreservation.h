@@ -59,7 +59,8 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                    nullptr);
 
 /// Prove entry-register uses in a single straight-line ARM64 helper ending in
-/// an exact declared runtime termination. Reuse the preservation proof's byte
+/// an exact declared runtime termination, optionally preceded by one other
+/// independently validated runtime call. Reuse the preservation proof's byte
 /// identities and private-frame escape checks, including completely written
 /// outgoing scalar stack arguments, but do not require a nonexistent return
 /// to restore state. Branches, returns and exceptional edges remain rejected.

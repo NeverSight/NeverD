@@ -2226,6 +2226,38 @@ struct NativeTerminalContextFixture : NativeFixture {
         F::op(NdOp::CALL, {}, {NdVar::cst(0x1080, 8)}, 0x1010)};
   }
 
+  static constexpr va_t ReturningImportSlot = 0x2010;
+
+  void addReturningRuntimeCall() {
+    Segment Data;
+    Data.VA = ReturningImportSlot;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    const std::string Import = "_swift_unknownObjectWeakInit";
+    Image.ImportPtrSlots[ReturningImportSlot] = Import;
+    ASSERT_TRUE(Image.recordDyldBindSlot(
+        ReturningImportSlot, Import, 0, "/usr/lib/swift/libswiftCore.dylib",
+        false));
+    const auto Runtime = swiftRuntimeSourceCallHint(Image, ReturningImportSlot);
+    ASSERT_TRUE(Runtime);
+    ASSERT_FALSE(Runtime->DoesNotReturn);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = 0x1006;
+    Call.OriginSeq = 0;
+    Call.SourceCallHint = std::make_shared<const SourceCallTypeHint>(*Runtime);
+    Call.addInput(MedVar::makeConst(0x1090, 8));
+    for (const auto &Parameter : Runtime->Signature.Parameters)
+      Call.addInput(MedVar::makeConst(0, Parameter.Type->Size));
+    Med.Blocks[0].Ops.insert(Med.Blocks[0].Ops.begin() + 1, Call);
+    Low.Blocks[0].Ops.insert(
+        Low.Blocks[0].Ops.begin() + 2,
+        NativeVoidFrameFixture::op(NdOp::CALL, {}, {NdVar::cst(0x1090, 8)},
+                                   0x1006));
+  }
+
   std::optional<SourceFunctionTypeHint> inferContext(std::string &Error) const {
     return inferNativeSourceTypeHint(Image, Med, High, Audit, Error, &Low);
   }
@@ -2272,6 +2304,96 @@ TEST(NativeSourceHints, TerminalRuntimeRetainsAnObservedUnwrittenContext) {
   const auto WithoutLow = Fixture.infer(Error);
   ASSERT_TRUE(WithoutLow) << Error;
   EXPECT_TRUE(WithoutLow->Parameters.empty());
+}
+
+TEST(NativeSourceHints, TerminalContextSurvivesAnAuthenticatedRuntimePrefix) {
+  NativeTerminalContextFixture Fixture;
+  Fixture.addReturningRuntimeCall();
+  std::string Error;
+  const auto Hint = Fixture.inferContext(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, Fixture.Context);
+  EXPECT_EQ(Hint->Parameters[0].Location.ValueBytes, 8U);
+}
+
+TEST(NativeSourceHints, TerminalRuntimePrefixRequiresIndependentCallEvidence) {
+  for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeTerminalContextFixture F;
+    F.addReturningRuntimeCall();
+    auto &Ops = F.Low.Blocks[0].Ops;
+    auto &MedOps = F.Med.Blocks[0].Ops;
+    auto Binding = std::make_shared<SourceCallTypeHint>(*MedOps[1].SourceCallHint);
+    MedOps[1].SourceCallHint = Binding;
+    using Op = NativeVoidFrameFixture;
+    const auto SP = NdVar::reg(a64reg::SP, 8);
+    switch (Mutation) {
+    case 0:
+      F.Image.DyldBindSlots[F.ReturningImportSlot].Module = "/tmp/foreign.dylib";
+      break;
+    case 1:
+      F.Image.DyldBindSlots.erase(F.ReturningImportSlot);
+      break;
+    case 2:
+      Binding->TargetName += "_forged";
+      break;
+    case 3:
+      Binding->CallKind = SourceCallTypeHint::Kind::Native;
+      Binding->TargetAddress = 0x1090;
+      Binding->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      break;
+    case 4:
+      ++Ops[2].Seq;
+      break;
+    case 5:
+      // The unique terminating call must be last even when all occurrences
+      // still match their independent runtime declarations.
+      std::swap(Ops[2], Ops.back());
+      std::swap(MedOps[1], MedOps.back());
+      break;
+    case 6:
+      // Two authentic terminal declarations cannot bypass the prefix proof.
+      MedOps[1].SourceCallHint = MedOps.back().SourceCallHint;
+      MedOps[1].DoesNotReturn = true;
+      MedOps[1].Inputs = MedOps.back().Inputs;
+      MedOps[1].NumInputs = MedOps.back().NumInputs;
+      Ops[2].Inputs[0] = Ops.back().Inputs[0];
+      break;
+    case 7:
+      // Declared stack bytes must all be written after prefix effects too.
+      Ops[3].Inputs[1].Size = 4;
+      break;
+    case 8:
+      // The returning prefix cannot borrow an arbitrary private frame value.
+      Ops.insert(Ops.begin() + 2,
+                 Op::op(NdOp::COPY, NdVar::reg(a64reg::X0, 8), {SP}, 0x1006));
+      break;
+    case 9:
+      --MedOps[1].NumInputs;
+      break;
+    case 10:
+      Binding->Signature.Parameters[0].Location.RegisterOffset = a64reg::X2;
+      break;
+    case 11:
+      // A caller-clobbered copy cannot retain the entry identity across the
+      // prefix call merely because the source graph still names X20.
+      Ops.insert(Ops.begin() + 1,
+                 Op::op(NdOp::COPY, NdVar::reg(a64reg::X9, 8),
+                        {NdVar::reg(F.Context, 8)}, 0x1004));
+      Ops[2].Inputs[0] = NdVar::cst(0x3000, 8);
+      Ops.insert(Ops.begin() + 4,
+                 Op::op(NdOp::STORE, {},
+                        {NdVar::reg(a64reg::X9, 8), NdVar::cst(0, 8)}, 0x1008));
+      break;
+    }
+    std::string Error;
+    const auto Hint = F.inferContext(Error);
+    if (Hint)
+      EXPECT_TRUE(Hint->Parameters.empty()) << Error;
+  }
 }
 
 TEST(NativeSourceHints, TerminalContextRequiresExactCallAndCompleteFrameProof) {

@@ -257,22 +257,27 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
             equalSourceABIs(Expected->Signature, Binding.Signature))
           Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
       }
-      if (TerminalContext && StaticRuntime &&
-          Binding.CallKind == Kind::SwiftRuntimeCall &&
-          Binding.DoesNotReturn && Op.DoesNotReturn) {
+      if (TerminalContext) {
         // The binding's import slot and the call's code veneer are distinct
-        // addresses. Authenticate the loader declaration, then match the
-        // complete Low/Med occurrence below; never infer termination from a
-        // candidate native signature or a name alone.
+        // addresses. Authenticate every loader declaration, including a
+        // returning prefix call, then match the complete Low/Med occurrence
+        // below. A candidate native signature or name cannot supply effects.
+        const auto Import = Image.DyldBindSlots.find(Binding.TargetAddress);
         const auto Expected =
-            swiftRuntimeSourceCallHint(Image, Binding.TargetAddress);
-        Contract.Terminates =
-            Expected && Expected->DoesNotReturn &&
-            Expected->CallKind == Binding.CallKind &&
-            Expected->TargetAddress == Binding.TargetAddress &&
-            Expected->TargetName == Binding.TargetName &&
-            equalSourceABIs(Expected->Signature, Binding.Signature) &&
-            Op.NumInputs == sourceABIParameters(Binding.Signature).size() + 1;
+            StaticRuntime && Binding.CallKind == Kind::SwiftRuntimeCall &&
+                    Import != Image.DyldBindSlots.end() &&
+                    Import->second.Module == "/usr/lib/swift/libswiftCore.dylib"
+                ? swiftRuntimeSourceCallHint(Image, Binding.TargetAddress)
+                : std::nullopt;
+        if (!Expected || Expected->DoesNotReturn != Binding.DoesNotReturn ||
+            Op.DoesNotReturn != Binding.DoesNotReturn ||
+            Expected->CallKind != Binding.CallKind ||
+            Expected->TargetAddress != Binding.TargetAddress ||
+            Expected->TargetName != Binding.TargetName ||
+            !equalSourceABIs(Expected->Signature, Binding.Signature) ||
+            Op.NumInputs != sourceABIParameters(Binding.Signature).size() + 1)
+          return false;
+        Contract.Terminates = Binding.DoesNotReturn;
       }
       if ((!StaticRuntime && !StaticNative && !StaticMessage &&
            !DynamicWitness) ||

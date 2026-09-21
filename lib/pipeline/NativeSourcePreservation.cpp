@@ -610,10 +610,11 @@ bool observesTerminalNativeSourceState(
     const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
     std::set<uint64_t> &UsedEntryRegisters) {
   // This narrow mode proves only incoming context uses in a straight-line
-  // helper with one independently declared terminating runtime call. It does
-  // not invent a general no-return exemption from machine-state validation.
+  // helper with at most two independently declared runtime calls. Exactly
+  // the last call terminates; a returning prefix uses the same clobber and
+  // frame-escape transfer as ordinary preservation proofs.
   if (Architecture != Arch::AArch64 || Function.Blocks.size() != 1 ||
-      Calls.size() != 1)
+      Calls.empty() || Calls.size() > 2)
     return false;
   const auto &Block = Function.Blocks.front();
   if (Block.Id < 0 ||
@@ -623,20 +624,30 @@ bool observesTerminalNativeSourceState(
       !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty() ||
       Block.Ops.empty() || Block.Ops.size() > 262144)
     return false;
-  const auto &Contract = Calls.begin()->second;
-  const auto *Signature = Contract.Signature;
-  std::string Error;
-  if (!Contract.Terminates || !Signature ||
-      Signature->Architecture != Architecture || !Signature->ReturnType ||
-      Signature->ReturnType->Kind != NdTypeKind::Void ||
-      !validateSourceABI(*Signature, Error))
-    return false;
-  for (const auto &Parameter : Signature->Parameters)
-    if (!Parameter.Components.empty() || !Parameter.Type ||
-        (Parameter.Type->Kind != NdTypeKind::Int &&
-         Parameter.Type->Kind != NdTypeKind::Ptr))
+  unsigned TerminatingCalls = 0;
+  for (const auto &[Site, Contract] : Calls) {
+    const auto *Signature = Contract.Signature;
+    std::string Error;
+    if (!Signature || Signature->Architecture != Architecture ||
+        !Signature->ReturnType ||
+        Signature->ReturnLocation.Kind ==
+            SourceABICarrierKind::IndirectResultPointer ||
+        !Signature->ReturnComponents.empty() ||
+        (Contract.Terminates &&
+         Signature->ReturnType->Kind != NdTypeKind::Void) ||
+        !validateSourceABI(*Signature, Error))
       return false;
+    for (const auto &Parameter : Signature->Parameters)
+      if (!Parameter.Components.empty() || !Parameter.Type ||
+          (Parameter.Type->Kind != NdTypeKind::Int &&
+           Parameter.Type->Kind != NdTypeKind::Ptr))
+        return false;
+    TerminatingCalls += Contract.Terminates;
+  }
+  if (TerminatingCalls != 1)
+    return false;
   unsigned NativeCalls = 0;
+  bool SawTerminatingCall = false;
   for (const auto &Op : Block.Ops) {
     if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
         Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
@@ -644,13 +655,16 @@ bool observesTerminalNativeSourceState(
     if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
       continue;
     const auto Key = nativeSourceCallKey(Op);
-    if (!Key || !Calls.count(*Key) || ++NativeCalls != 1)
+    if (!Key || !Calls.count(*Key) || SawTerminatingCall)
       return false;
+    ++NativeCalls;
+    SawTerminatingCall = Calls.at(*Key).Terminates;
   }
   PreservationProof Proof(Architecture, Calls, true);
   auto State = Proof.Initial;
   std::set<uint64_t> Used;
-  if (NativeCalls != 1 || !Proof.transfer(Block, State, false, &Used) ||
+  if (NativeCalls != Calls.size() || !SawTerminatingCall ||
+      !Proof.transfer(Block, State, false, &Used) ||
       !Proof.DidTerminate)
     return false;
   UsedEntryRegisters = std::move(Used);
