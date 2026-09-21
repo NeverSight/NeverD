@@ -4848,6 +4848,49 @@ TEST(ObjCCallHints, VectorIOAndUTTypeDeclarationsKeepExactProvidersAndABI) {
   }
 }
 
+TEST(ObjCCallHints, MountEnumerationKeepsArchitectureSpecificLinkerIdentity) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const char *Name : {"getmntinfo", "getmntinfo$INODE64"}) {
+      SCOPED_TRACE(Name);
+      const auto Symbol = "_" + std::string(Name);
+      auto Image = runtimeImage(Symbol, Architecture);
+      Image.DyldBindSlots[0x2180] = {Symbol, 0, "/usr/lib/libSystem.B.dylib",
+                                     false};
+      const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      const bool Supported = (Architecture == Arch::AArch64) ==
+                             (std::string(Name) == "getmntinfo");
+      ASSERT_EQ(bool(Hint), Supported);
+      if (!Hint)
+        continue;
+      EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Signature.ReturnType->Size, 4U);
+      EXPECT_TRUE(Hint->Signature.ReturnType->IsSigned);
+      ASSERT_EQ(Hint->Signature.Parameters.size(), 2U);
+      const auto &Output = Hint->Signature.Parameters[0];
+      ASSERT_EQ(Output.Type->Kind, NdTypeKind::Ptr);
+      ASSERT_EQ(Output.Type->Pointee->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Output.Type->Pointee->Pointee->Kind, NdTypeKind::Void);
+      EXPECT_EQ(Output.Location.ValueBytes, 8U);
+      EXPECT_EQ(Hint->Signature.Parameters[1].Location.ValueBytes, 4U);
+      EXPECT_TRUE(Hint->Signature.Parameters[1].Type->IsSigned);
+      for (const char *Provider : {"/usr/lib/libSystem.B.dylib",
+                                   "/usr/lib/system/libsystem_c.dylib"}) {
+        Image.DyldBindSlots[0x2180].Module = Provider;
+        EXPECT_TRUE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      }
+      Image.DyldBindSlots[0x2180].Module =
+          "/usr/lib/system/libsystem_kernel.dylib";
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      Image.DyldBindSlots[0x2180].Module = "/usr/lib/libSystem.B.dylib";
+      Image.DyldBindSlots[0x2180].Addend = 1;
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      Image.DyldBindSlots[0x2180].Addend = 0;
+      Image.DyldBindSlots[0x2180].WeakImport = true;
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+    }
+  }
+}
+
 TEST(ObjCCallHints, GraphicsDeclarationsPreserveOpaquePointersAndExactExports) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &[Name, Framework, Kind] :

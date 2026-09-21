@@ -148,6 +148,7 @@ def main():
             "#include <objc/objc-sync.h>\n#include <pthread.h>\n"
             "#include <dispatch/dispatch.h>\n#include <notify.h>\n"
             "#include <sys/uio.h>\n#include <sys/xattr.h>\n"
+            "#include <sys/mount.h>\n"
             "#include <os/log.h>\n#include <asl.h>\n"
             "#include <CommonCrypto/CommonDigest.h>\n"
             "#import <LaunchServices/UTType.h>\n" +
