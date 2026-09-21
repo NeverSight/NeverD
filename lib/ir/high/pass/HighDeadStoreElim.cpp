@@ -140,6 +140,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     uint16_t Bytes = 0;
     bool Valid = true;
     std::vector<HighStmt *> Definitions;
+    std::set<HighStmt *> ExtendedDefinitions;
     std::vector<ExprPtr *> Uses;
   };
   VarKeyMap<Candidate> Candidates;
@@ -168,27 +169,45 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     auto &C = Candidates[varKey(S->Dst->Var)];
     const auto &D = S->Dst;
     const auto &V = S->Val;
-    const bool Shape =
+    const bool DestinationShape =
         Plain(*D) && D->Operands.empty() && D->Var.Id >= 0 &&
         (D->Var.Kind == MedVar::Reg || D->Var.Kind == MedVar::Temp) &&
         D->Type && D->Type->Kind == NdTypeKind::Int && D->Type->Size == 16 &&
         D->Var.Size == 16 && D->Var.RenameTag < 0 && V && Plain(*V) &&
+        S->MemoryOrdering == NdMemoryOrdering::None &&
+        S->MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    const bool ConcatShape =
+        DestinationShape &&
         V->Kind == ExprKind::BinOp && V->Op == NdOp::CONCAT && V->Type &&
         V->Type->Kind == NdTypeKind::Int && V->Type->Size == 16 &&
         V->Operands.size() == 2 && V->Operands[0] && V->Operands[1] &&
         V->Operands[0]->Type && V->Operands[1]->Type &&
         V->Operands[1]->Type->Kind == NdTypeKind::Int &&
         (V->Operands[1]->Type->Size == 4 || V->Operands[1]->Type->Size == 8) &&
-        V->Operands[0]->Type->Size + V->Operands[1]->Type->Size == 16 &&
-        S->MemoryOrdering == NdMemoryOrdering::None &&
-        S->MemoryAddressSpace == NdMemoryAddressSpace::Default;
-    if (!Shape || !discardableIntegerValue(V->Operands[0], Budget)) {
+        V->Operands[0]->Type->Size + V->Operands[1]->Type->Size == 16;
+    const bool ExtensionShape =
+        DestinationShape && V->Type && V->Type->Kind == NdTypeKind::Int &&
+        V->Type->Size == 16 && V->Operands.size() == 1 && V->Operands[0] &&
+        V->Operands[0]->Kind != ExprKind::Undef && V->Operands[0]->Type &&
+        V->Operands[0]->Type->Kind == NdTypeKind::Int &&
+        V->Operands[0]->Type->Size && V->Operands[0]->Type->Size <= 8 &&
+        ((V->Kind == ExprKind::Cast && V->CastTo &&
+          V->CastTo->Kind == NdTypeKind::Int && V->CastTo->Size == 16) ||
+         (V->Kind == ExprKind::UnaryOp &&
+          (V->Op == NdOp::INT_ZEXT || V->Op == NdOp::INT_SEXT)));
+    if ((!ConcatShape && !ExtensionShape) ||
+        !discardableIntegerValue(
+            ConcatShape ? V->Operands[0] : V, Budget)) {
       C.Valid = false;
       continue;
     }
-    const auto Width = V->Operands[1]->Type->Size;
-    C.Valid &= !C.Bytes || C.Bytes == Width;
-    C.Bytes = Width;
+    if (ConcatShape) {
+      const auto Width = V->Operands[1]->Type->Size;
+      C.Valid &= !C.Bytes || C.Bytes == Width;
+      C.Bytes = Width;
+    } else {
+      C.ExtendedDefinitions.insert(S);
+    }
     C.Definitions.push_back(S);
   }
   struct Use {
@@ -255,7 +274,9 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       Narrow(*Slot);
     for (auto *S : C.Definitions) {
       Narrow(S->Dst);
-      S->Val = S->Val->Operands[1];
+      S->Val = C.ExtendedDefinitions.count(S)
+                   ? frameValuePrefix(S->Val, C.Bytes)
+                   : S->Val->Operands[1];
     }
   }
 }

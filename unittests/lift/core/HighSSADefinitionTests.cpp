@@ -6,6 +6,7 @@
 
 namespace neverd {
 void elimConsecutiveDeadStores(std::vector<HighStmt> &Statements);
+void eliminateUnusedValues(std::vector<HighStmt> &Statements);
 void elimUnreadPrivateFrameStores(HighFunc &Function, Arch Architecture);
 void narrowSourceConcatLocals(HighFunc &Function);
 } // namespace neverd
@@ -103,6 +104,25 @@ TEST(HighSSADefinitions, RealOverwriteKeepsCallEffectAndDependentRead) {
           returning(A)};
   elimConsecutiveDeadStores(Body);
   ASSERT_EQ(Body.size(), 3U);
+}
+
+TEST(HighSSADefinitions, DeadPhiAssignmentsAreRemovedButLivePhiValuesRemain) {
+  auto Dead = variable(3);
+  Dead->Kind = ExprKind::Phi;
+  auto Unknown = HighExpr::makeUndef(8);
+  std::vector<HighStmt> Body{assign(Dead, Unknown),
+                             returning(HighExpr::makeConst(7, 8))};
+  eliminateUnusedValues(Body);
+  ASSERT_EQ(Body.size(), 1U);
+  EXPECT_EQ(Body[0].Kind, StmtKind::Return);
+
+  auto Live = variable(4);
+  Live->Kind = ExprKind::Phi;
+  Body = {assign(Live, HighExpr::makeConst(9, 8)), returning(Live)};
+  eliminateUnusedValues(Body);
+  ASSERT_EQ(Body.size(), 2U);
+  EXPECT_EQ(Body[0].Dst->Kind, ExprKind::Phi);
+  EXPECT_EQ(Body[1].RetVal->Kind, ExprKind::Phi);
 }
 
 HighFunc privateFrameStore(Arch Architecture) {
@@ -426,6 +446,23 @@ TEST(HighSourceScalarLocals, NarrowsEveryDefinitionWithoutMovingLowEffects) {
       EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Type->Size, Width);
       EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.SSAVer, 4);
     }
+}
+
+TEST(HighSourceScalarLocals, NarrowsPureExtendedAlternativeDefinition) {
+  auto F = sourceConcatLocal(Arch::AArch64, 8);
+  auto Low = variable(7, 8);
+  auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Low);
+  Extended->Type = NdType::makeInt(16, false);
+  F.Body[0].ElseBody[0].Val = Extended;
+
+  narrowSourceConcatLocals(F);
+
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Kind, ExprKind::BinOp);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Op, NdOp::SUBBYTES);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Type->Size, 8U);
+  EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
 }
 
 TEST(HighSourceScalarLocals,

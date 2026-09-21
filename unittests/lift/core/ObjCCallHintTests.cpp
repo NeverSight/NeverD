@@ -401,6 +401,39 @@ TEST(ObjCCallHints,
 }
 
 TEST(ObjCCallHints,
+     RetainConsumerSelectsUIKitObjectFromConflictingSystemVersionDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "systemVersion";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "systemVersion"));
+
+  Image.ImportPtrSlots[0x2190] = "_objc_retainAutoreleasedReturnValue";
+  const uint32_t RetainStub[] = {0xb0000010, 0xf940ca10, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, RetainStub[I]);
+  auto Function = caller();
+  Function.Blocks[0].EndAddr = 0x120c;
+  Function.Blocks[0].Ops = {
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1140, 8)}, 0x1204),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x1208)};
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  const auto &Hint = Hints.at(0x1200);
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Ptr);
+  ASSERT_TRUE(Hint.SelectorResultTypeUse);
+  EXPECT_EQ(*Hint.SelectorResultTypeUse, NdTypeKind::Ptr);
+}
+
+TEST(ObjCCallHints,
      DeclaredEntryArgumentTypeDisambiguatesConflictingSelectorDeclarations) {
   auto Image = image();
   Image.ObjCMethods.clear();
@@ -3834,6 +3867,84 @@ TEST(ObjCCallHints, CallOnlyHintDoesNotReplaceCurrentFunctionEntryABI) {
         FoundEntryReturn = true;
       }
   EXPECT_TRUE(FoundEntryReturn);
+}
+
+TEST(ObjCCallHints, ExplicitVoidEntryDropsGenericMachineReturnCarrier) {
+  SourceFunctionTypeHint EntryHint;
+  EntryHint.ReturnType = NdType::makeVoid();
+  EntryHint.Parameters = {
+      {"objc_self", NdType::makePtr(NdType::makeVoid())},
+      {"objc_cmd", NdType::makePtr(NdType::makeVoid())}};
+  std::string Diagnostic;
+  ASSERT_TRUE(
+      assignDarwinObjCSourceABI(EntryHint, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  std::map<va_t, SourceFunctionTypeHint> EntryHints{{0x1200, EntryHint}};
+
+  auto Low = caller();
+  Low.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(a64reg::X0, 8);
+  LowToMedConverter Converter;
+  Converter.setSourceEntryTypeHints(&EntryHints);
+  Converter.setSourceCallHintsEnabled(true);
+  const auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+
+  bool FoundReturn = false;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::RETURN) {
+        EXPECT_EQ(Op.NumInputs, 0U);
+        FoundReturn = true;
+      }
+  EXPECT_TRUE(FoundReturn);
+
+  MedFunc Branching;
+  Branching.Entry = 0x1200;
+  Branching.Name = "void_fallthrough";
+  Branching.ReturnType = NdType::makeVoid();
+  Branching.SourceTypeHint = EntryHint;
+  Branching.SourceParametersBound = true;
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = 0x1200;
+  Entry.EndAddr = 0x1204;
+  Entry.Succs = {1, 2};
+  MedOp Cond;
+  Cond.Opcode = NdOp::COND_BR;
+  Cond.Addr = 0x1200;
+  Cond.addInput(MedVar::makeConst(0x1220, 8));
+  Cond.addInput(MedVar::makeConst(1, 1));
+  Entry.Ops.push_back(Cond);
+  MedBlock Returned;
+  Returned.Id = 1;
+  Returned.StartAddr = 0x1210;
+  Returned.EndAddr = 0x1214;
+  Returned.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1210;
+  Returned.Ops.push_back(Return);
+  MedBlock Fallthrough;
+  Fallthrough.Id = 2;
+  Fallthrough.StartAddr = 0x1220;
+  Fallthrough.EndAddr = 0x1224;
+  Fallthrough.Preds = {0};
+  MedOp MachineResult;
+  MachineResult.Opcode = NdOp::COPY;
+  MachineResult.Addr = 0x1220;
+  MachineResult.Output.Kind = MedVar::Reg;
+  MachineResult.Output.Id = 7;
+  MachineResult.Output.SSAVer = 1;
+  MachineResult.Output.RegOff = a64reg::X0;
+  MachineResult.Output.Size = 8;
+  MachineResult.Output.TheArch = Arch::AArch64;
+  MachineResult.addInput(MedVar::makeConst(42, 8));
+  Fallthrough.Ops.push_back(MachineResult);
+  Branching.Blocks = {Entry, Returned, Fallthrough};
+
+  const auto High = MedToHighConverter().convert(Branching, Arch::AArch64);
+  ASSERT_FALSE(High.Body.empty());
+  ASSERT_EQ(High.Body.back().Kind, StmtKind::Return);
+  EXPECT_FALSE(High.Body.back().RetVal);
 }
 
 TEST(ObjCCallHints, AArch64NarrowArgumentsUseDefinedWRegisterAcrossJoin) {

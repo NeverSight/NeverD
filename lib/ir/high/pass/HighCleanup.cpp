@@ -262,6 +262,21 @@ void MedToHighConverter::ensureTrailingReturn(HighFunc &Func,
        isNonReturningSourceCall(Last.Val)))
     return;
 
+  // A verified void source ABI owns the return contract even when imperfect
+  // structuring leaves a fallthrough after an earlier native RET.  Mirror
+  // lowerReturn: append a bare source return instead of searching X0/RAX and
+  // reviving an undefined machine carrier as a synthetic result.
+  if (Med.SourceParametersBound && Func.SourceTypeHint &&
+      Func.SourceTypeHint->HasExplicitABI &&
+      Func.SourceTypeHint->ReturnType &&
+      Func.SourceTypeHint->ReturnType->Kind == NdTypeKind::Void &&
+      Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Void) {
+    HighStmt RetStmt;
+    RetStmt.Kind = StmtKind::Return;
+    Func.Body.push_back(std::move(RetStmt));
+    return;
+  }
+
   ExprPtr RetExpr;
 
   for (auto &Blk : Med.Blocks) {

@@ -32,6 +32,10 @@
 
 namespace neverd {
 
+static bool isLocalExpr(const HighExpr &E) {
+  return E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi;
+}
+
 //===----------------------------------------------------------------------===//
 // Expression cycle detection and breaking
 //===----------------------------------------------------------------------===//
@@ -105,7 +109,7 @@ static void collectRefExpr(const ExprPtr &Root, VarKeySet &Refs) {
     Work.pop_back();
     if (!E || !Seen.insert(E).second)
       continue;
-    if (E->Kind == ExprKind::Var)
+    if (isLocalExpr(*E))
       Refs.insert(VK(E->Var));
     for (const auto &Operand : E->Operands)
       Work.push_back(Operand.get());
@@ -114,7 +118,7 @@ static void collectRefExpr(const ExprPtr &Root, VarKeySet &Refs) {
 
 static bool removableAssignment(const HighStmt &S) {
   if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
-      S.Dst->Kind != ExprKind::Var || !S.Body.empty() || !S.ElseBody.empty() ||
+      !isLocalExpr(*S.Dst) || !S.Body.empty() || !S.ElseBody.empty() ||
       !S.Cases.empty() || !S.DefaultBody.empty() || !S.EHClauseBodies.empty())
     return false;
   std::unordered_set<const HighExpr *> Seen;
@@ -166,7 +170,7 @@ static bool isDeadAssign(const HighStmt &S, const VarKeySet &Refs) {
 static bool isSelfAssign(const HighStmt &S) {
   if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
     return false;
-  if (S.Dst->Kind != ExprKind::Var || S.Val->Kind != ExprKind::Var)
+  if (!isLocalExpr(*S.Dst) || !isLocalExpr(*S.Val))
     return false;
   return VK(S.Dst->Var) == VK(S.Val->Var);
 }

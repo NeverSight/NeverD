@@ -85,6 +85,14 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     std::vector<MedOp> Ops;
     for (auto Op : Block.Ops) {
       if (Op.Opcode == NdOp::RETURN && EntrySignature &&
+          EntrySignature->ReturnType->Kind == NdTypeKind::Void) {
+        // RET reads the architecture's conventional result register in the
+        // generic LowIR model.  An authenticated source signature returning
+        // void makes that machine value unobservable; keeping it would retain
+        // an undefined caller-saved carrier and reject an otherwise complete
+        // source projection.
+        Op.NumInputs = 0;
+      } else if (Op.Opcode == NdOp::RETURN && EntrySignature &&
           EntrySignature->ReturnType->Kind == NdTypeKind::Struct) {
         Op.NumInputs = 0;
         for (const auto &Piece : EntrySignature->ReturnComponents)
