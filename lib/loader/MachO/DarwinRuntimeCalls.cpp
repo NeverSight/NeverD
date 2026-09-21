@@ -244,6 +244,13 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
         "UIViewNoIntrinsicMetric"})
     MatchFrameworkData(Name,
                        "/System/Library/Frameworks/UIKit.framework/UIKit");
+  // Both complete Xcode 26.5 ARM64 SDK ASTs declare this notification as
+  // external, non-TLS NSString pointer storage. Keep the original load.
+  // https://developer.apple.com/documentation/uikit/uiapplication/didenterbackgroundnotification
+  if (Image.Arch == Arch::AArch64)
+    MatchFrameworkData(
+        "UIApplicationDidEnterBackgroundNotification",
+        "/System/Library/Frameworks/UIKit.framework/UIKit");
   // CIContext.h imports OpenGLES on iOS, unavailable in the CLT SDK used by
   // the generated catalog. Complete Xcode 26.5 iPhoneOS and arm64 simulator
   // ASTs agree that these are external, non-TLS NSString pointer objects.

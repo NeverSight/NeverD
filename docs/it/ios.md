@@ -137,6 +137,8 @@ Le associazioni dei dati esterni richiedono dichiarazioni SDK comuni senza TLS e
 
 Su ARM64, le identità di memoria esterne di `kCIContextPriorityRequestLow` e `kCIContextUseSoftwareRenderer` usano dichiarazioni concordanti degli SDK completi iPhoneOS e arm64 iPhoneSimulator, con un’importazione CoreImage esatta. Le opzioni del contesto conservano i caricamenti effettivi dei puntatori e i valori di esecuzione; il binding non sostituisce le chiavi stringa o il comportamento di rendering.
 
+Su ARM64, anche `UIApplicationDidEnterBackgroundNotification` viene associata al proprio esatto spazio di memoria esterno UIKit. Le dichiarazioni dei due SDK concordano; il caricamento originale del puntatore e l’identità della notifica a runtime restano invariati.
+
 È una ricostruzione limitata del runtime: proprietà e protocolli completi, annotazioni originali di ownership, aggregati arbitrari, code variadiche, corpi dipendenti dalle eccezioni e layout Block/catture non modellati non sono garantiti. La codifica descrive gli argomenti fissi e non prova l’assenza di puntini di sospensione nella dichiarazione originale. I puntatori concatenati sono usati solo negli slot risolti dal loader; gli altri formati mantengono diagnostica.
 
 ## Sorgenti Swift e memoria

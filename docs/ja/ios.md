@@ -137,6 +137,8 @@ C カタログは `sys/mount.h` の宣言とアーキテクチャ固有のリン
 
 ARM64 では、外部の `kCIContextPriorityRequestLow` と `kCIContextUseSoftwareRenderer` のストレージ識別を、完全な iPhoneOS と arm64 iPhoneSimulator SDK の一致する宣言、および正確な CoreImage インポートで検証します。コンテキストのオプションは実際のポインタ読み込みとランタイム値を保持し、束縛によって文字列キーや描画動作を置き換えることはありません。
 
+ARM64 の `UIApplicationDidEnterBackgroundNotification` も正確な UIKit 外部ストレージに束縛します。両 SDK の宣言は一致しており、元のポインタ読み込みとランタイムの通知識別を保持します。
+
 ランタイム情報の復元は限定的です。完全なプロパティ・プロトコル、元の所有権注釈、任意の集約型、可変引数末尾、例外に依存する本体、モデル外の Block/キャプチャ配置は保証しません。ランタイム型記述は固定引数のみを示し、元の宣言に省略記号がなかったとは証明できません。Chained Pointer はローダーが対象スロットを解決した場合のみ利用し、未解決形式は診断を残します。
 
 ## Swift ソースと記憶配置

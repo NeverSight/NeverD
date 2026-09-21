@@ -137,6 +137,8 @@ C 目錄包含 `sys/mount.h` 宣告，並保留架構專屬的連結符號：ARM
 
 在 ARM64 上，外部 `kCIContextPriorityRequestLow` 與 `kCIContextUseSoftwareRenderer` 的儲存身分由完整 iPhoneOS 與 arm64 iPhoneSimulator SDK 中一致的宣告及精確的 CoreImage 匯入驗證。內容選項保留真實的指標載入與執行階段值；繫結不會替換字串鍵或算繪行為。
 
+ARM64 的 `UIApplicationDidEnterBackgroundNotification` 也繫結到精確的 UIKit 外部儲存。兩個 SDK 的宣告一致；原始指標載入與執行階段通知身分維持不變。
+
 這只是對執行階段資訊的有限重建，不承諾完整恢復屬性、協議、原始所有權標註、任意聚合型別、可變引數尾部、依賴異常的方法本體和模型未覆蓋的 Block/捕獲佈局。執行階段編碼只描述固定引數，不能證明原宣告不存在省略號。只有原生載入器已解析相關槽時才使用鏈式指標；未解析格式會保留診斷。
 
 ## Swift 原始碼與儲存佈局

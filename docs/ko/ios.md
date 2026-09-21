@@ -137,6 +137,8 @@ C 카탈로그는 `sys/mount.h` 선언과 아키텍처별 링크 심볼을 포�
 
 ARM64에서는 외부 `kCIContextPriorityRequestLow` 및 `kCIContextUseSoftwareRenderer` 저장소 식별을 완전한 iPhoneOS 및 arm64 iPhoneSimulator SDK의 일치하는 선언과 정확한 CoreImage 가져오기로 검증합니다. 컨텍스트 옵션은 실제 포인터 로드와 런타임 값을 유지하며, 바인딩은 문자열 키나 렌더링 동작을 대체하지 않습니다.
 
+ARM64의 `UIApplicationDidEnterBackgroundNotification`도 정확한 UIKit 외부 저장소에 바인딩됩니다. 두 SDK의 선언이 일치하며 원래 포인터 로드와 런타임 알림의 식별을 유지합니다.
+
 런타임 정보 복원은 제한적입니다. 완전한 프로퍼티·프로토콜, 원래 소유권 주석, 임의 집합형, 가변 인자 꼬리, 예외 의존 본문, 모델에 없는 Block/캡처 배치를 보장하지 않습니다. 런타임 인코딩은 고정 인자만 설명하며 원 선언에 생략 부호가 없었다고 증명할 수 없습니다. 체인 포인터는 로더가 해당 슬롯을 해결한 경우에만 사용하며 나머지 형식에는 진단을 남깁니다.
 
 ## Swift 소스와 저장 배치

@@ -137,6 +137,8 @@ Los datos externos requieren declaraciones SDK comunes sin TLS y pruebas exactas
 
 En ARM64, las identidades de almacenamiento externas de `kCIContextPriorityRequestLow` y `kCIContextUseSoftwareRenderer` usan declaraciones coincidentes de los SDK completos de iPhoneOS y arm64 iPhoneSimulator, con una importación exacta de CoreImage. Las opciones del contexto conservan las cargas reales de punteros y los valores de ejecución; la vinculación no sustituye las claves de cadena ni el comportamiento de renderizado.
 
+En ARM64, `UIApplicationDidEnterBackgroundNotification` también se vincula a su almacenamiento externo exacto de UIKit. Las declaraciones de ambos SDK coinciden; se conservan la carga original del puntero y la identidad de la notificación en ejecución.
+
 La reconstrucción del runtime es limitada. No se prometen propiedades y protocolos completos, anotaciones originales de propiedad, agregados arbitrarios, colas variádicas, cuerpos dependientes de excepciones ni disposiciones Block/capturas no modeladas. La codificación solo describe argumentos fijos y no demuestra que la declaración original careciera de puntos suspensivos. Los punteros encadenados se utilizan solo en posiciones resueltas por el cargador; los formatos no resueltos conservan diagnósticos.
 
 ## Fuentes Swift y almacenamiento

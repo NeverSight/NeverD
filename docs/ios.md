@@ -166,6 +166,8 @@ External data bindings use common non-TLS SDK declarations and exact library exp
 
 On ARM64, the external `kCIContextPriorityRequestLow` and `kCIContextUseSoftwareRenderer` storage identities use matching declarations from complete iPhoneOS and arm64 iPhoneSimulator SDKs, with an exact CoreImage import. Context options retain their real pointer loads and runtime values; the binding does not substitute string keys or rendering behavior.
 
+ARM64 `UIApplicationDidEnterBackgroundNotification` also binds to its exact UIKit external storage. Both SDK declarations agree; the original pointer load and runtime notification identity remain intact.
+
 This is a limited reconstruction of runtime information. Complete properties, protocols, original ownership annotations, arbitrary aggregates, variadic tails, exception-dependent bodies, and unmodelled Block/capture layouts are not promised. Runtime encoding describes fixed arguments and cannot prove that the original declaration had no variadic tail. Chained pointers are used only where the native loader resolved the relevant slots; unresolved formats retain diagnostics.
 
 ## Swift source and storage

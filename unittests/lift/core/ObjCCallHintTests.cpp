@@ -5062,6 +5062,7 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactFrameworkStorageIdentities) {
   const std::pair<llvm::StringRef, llvm::StringRef> Declarations[] = {
       {"UIApplicationDidReceiveMemoryWarningNotification", "UIKit"},
       {"UIApplicationWillTerminateNotification", "UIKit"},
+      {"UIApplicationDidEnterBackgroundNotification", "UIKit"},
       {"UIBackgroundTaskInvalid", "UIKit"},
       {"UIAccessibilityTraitButton", "UIKit"},
       {"UIEdgeInsetsZero", "UIKit"},
@@ -5077,8 +5078,10 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactFrameworkStorageIdentities) {
                               .str();
       Image.DyldBindSlots[0x2180] = {("_" + Name).str(), 0, Module, false};
       const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
-      // CIContext evidence covers the ARM64 device and simulator only.
-      if (Framework == "CoreImage" && Architecture == Arch::X64) {
+      // These supplemental declarations cover ARM64 device and simulator.
+      if ((Framework == "CoreImage" ||
+           Name == "UIApplicationDidEnterBackgroundNotification") &&
+          Architecture == Arch::X64) {
         EXPECT_FALSE(Binding);
         continue;
       }

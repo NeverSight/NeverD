@@ -137,6 +137,8 @@ Externe Datenbindungen erfordern gemeinsame SDK-Deklarationen ohne TLS und genau
 
 Auf ARM64 werden die externen Speicheridentitäten von `kCIContextPriorityRequestLow` und `kCIContextUseSoftwareRenderer` anhand übereinstimmender Deklarationen aus vollständigen iPhoneOS- und arm64-iPhoneSimulator-SDKs sowie eines exakten CoreImage-Imports geprüft. Kontextoptionen behalten ihre tatsächlichen Zeigerladevorgänge und Laufzeitwerte; die Bindung ersetzt weder Zeichenfolgenschlüssel noch das Renderverhalten.
 
+Auf ARM64 wird auch `UIApplicationDidEnterBackgroundNotification` an seinen exakt bestimmten externen UIKit-Speicher gebunden. Beide SDK-Deklarationen stimmen überein; der ursprüngliche Zeigerzugriff und die Laufzeitidentität der Benachrichtigung bleiben erhalten.
+
 Die Rekonstruktion von Laufzeitinformationen ist begrenzt: vollständige Properties, Protokolle, ursprüngliche Ownership-Annotationen, beliebige Aggregate, variadische Endargumente, ausnahmeabhängige Körper und nicht modellierte Block-/Capture-Layouts werden nicht versprochen. Laufzeitkodierungen beschreiben feste Argumente und können fehlende Auslassungspunkte im Original nicht beweisen. Chained Pointer werden nur für vom nativen Loader aufgelöste Slots verwendet; andere Formate behalten Diagnosen.
 
 ## Swift-Quelltext und Speicherlayout

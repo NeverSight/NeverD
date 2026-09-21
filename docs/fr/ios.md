@@ -137,6 +137,8 @@ Les liaisons de données externes exigent des déclarations SDK communes sans TL
 
 Sur ARM64, les identités de stockage externes de `kCIContextPriorityRequestLow` et `kCIContextUseSoftwareRenderer` reposent sur des déclarations concordantes des SDK complets iPhoneOS et arm64 iPhoneSimulator, avec un import CoreImage exact. Les options du contexte conservent les chargements réels de pointeurs et les valeurs d’exécution ; la liaison ne remplace ni les clés de chaîne ni le comportement de rendu.
 
+Sur ARM64, `UIApplicationDidEnterBackgroundNotification` est également lié à son stockage externe UIKit exact. Les déclarations des deux SDK concordent ; le chargement du pointeur d’origine et l’identité de la notification à l’exécution sont préservés.
+
 La reconstruction du runtime est limitée : propriétés et protocoles complets, annotations de propriété mémoire originales, agrégats arbitraires, arguments variadiques, corps dépendant d’exceptions et dispositions Block/captures non modélisées ne sont pas promis. L’encodage décrit les paramètres fixes et ne prouve pas l’absence de points de suspension dans l’original. Les pointeurs chaînés sont utilisés uniquement lorsque le chargeur a résolu leurs emplacements ; les formats non résolus conservent leurs diagnostics.
 
 ## Sources Swift et stockage
