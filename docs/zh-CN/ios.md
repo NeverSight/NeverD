@@ -316,3 +316,5 @@ arm64 UIKit 目录还绑定 `UIProgressView` 的 `observedProgress` 对象结果
 arm64 UIKit 目录也记录 `UIButton` 的 `setTitleColor:forState:`（对象参数及无符号 64 位 `UIControlState`），以及 `UIView` 的 void 方法 `invalidateIntrinsicContentSize`；完整设备和模拟器 AST 的证据一致。已观测的 `UIImageView → UIView` 继承关系使现有 receiver 证明可以区分本地对象 setter 与无关类的同名浮点 setter。未知 receiver、子类声明冲突、父类提供方缺失及 x86_64 仍不受支持。
 
 字典查询返回未限定类型的 `id` 时，即使与通过 `new` 返回已知类的路径合流，也不能获得该接收者类型。每条输入路径都必须保留接收者证据；即使参数是显式类型的指针，也不能据此在有冲突的浮点声明中选中对象参数 setter。
+
+Arm64 的 `+[NSSet setWithObjects:]` 保留 SDK 中以 nil 终止的可变参数声明。首批仅支持精确的平台类导入和 selector 桩，以及所有入边均证明完整八字节机器值的不可变 Objective-C 字符串参数。恢复在首个确定的 nil 处停止；首个对象为 nil 时无需证明栈上尾参，也不读取终止值之后的槽。共享 Darwin 可变参数 ABI 保留三个固定参数，其余对象与 nil 位于栈上。发布阶段针对当前映像重新验证声明、提供库、接收者、selector 及每个参数。动态对象、缺失或部分尾参写入、逃逸栈帧、本地覆盖和其他架构仍不受支持。 栈参数还须在线性私有栈帧中证明每次具体读取的值；后续覆盖不能改变已读出的值，重叠写入、未知调用、逃逸或控制流会阻止认证。

@@ -1348,7 +1348,8 @@ swiftOnceAddressorBound(const HighExpr &E, const BinaryImage &Image,
       Binding.WeakImport || Binding.ReturnedArgument ||
       Binding.RuntimeObjCResultType || Binding.ValueWitness ||
       !Binding.Selector.empty() || !Binding.OwnerClass.empty() ||
-      Binding.SelectorReferenceAddress || Binding.Format || Binding.Receiver ||
+      Binding.SelectorReferenceAddress || Binding.Format ||
+      Binding.NilTerminated || Binding.Receiver ||
       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
       Binding.ByteCount || Binding.ImmutablePointerSlot ||
@@ -1379,6 +1380,7 @@ swiftOnceCallbackBound(const HighExpr &E, const BinaryImage &Image,
       !Binding.Selector.empty() || !Binding.OwnerClass.empty() ||
       Binding.ByteCount || Binding.ImmutablePointerSlot ||
       Binding.SelectorReferenceAddress || Binding.Receiver || Binding.Format ||
+      Binding.NilTerminated ||
       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
       Binding.ValueWitness || Binding.ReturnedArgument ||

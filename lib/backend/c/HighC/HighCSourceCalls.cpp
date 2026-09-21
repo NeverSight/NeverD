@@ -124,6 +124,47 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       E.MemoryOrdering != NdMemoryOrdering::None)
     return bad("incompatible operation effects");
   const auto &Signature = Hint.Signature;
+  if (Hint.NilTerminated &&
+      (Hint.CallKind != Kind::ObjCMessage || Hint.Format || !Hint.Receiver ||
+       Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+       Hint.RuntimeObjCResultType || Hint.ValueWitness ||
+       !Hint.OwnerClass.empty() || !Hint.BorrowedByteInputs.empty() ||
+       !Hint.SwiftStringInputs.empty() || Hint.SwiftTypeMetadata ||
+       Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
+       Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
+       Hint.ByteCount || Hint.ImmutablePointerSlot ||
+       Hint.TargetName != "objc_msgSend" || Hint.Selector.empty() ||
+       !Hint.TargetAddress || !Hint.SelectorReferenceAddress ||
+       Hint.Receiver->Origin !=
+           ObjCReceiverTypeHint::OriginKind::ClassReference ||
+       !Hint.Receiver->IsClassMethod || !Hint.Receiver->Steps.empty() ||
+       Hint.Receiver->ClassName.empty() || !Hint.Receiver->Address ||
+       !Signature.ReturnType || Signature.ReturnType->Kind != NdTypeKind::Ptr ||
+       Signature.ReturnType->Size != 8 ||
+       Signature.Architecture != Arch::AArch64 ||
+       Opts.TheArch != Arch::AArch64 || !Signature.HasExplicitABI ||
+       Signature.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK ||
+       Hint.NilTerminated->Objects.size() > 61 ||
+       Signature.Parameters.size() != 3 + Hint.NilTerminated->Objects.size() ||
+       std::any_of(Hint.NilTerminated->Objects.begin(),
+                   Hint.NilTerminated->Objects.end(),
+                   [](va_t Address) { return !Address; }) ||
+       std::any_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                   [](const auto &Parameter) {
+                     return !Parameter.Type ||
+                            Parameter.Type->Kind != NdTypeKind::Ptr ||
+                            Parameter.Type->Size != 8;
+                   })))
+    return bad("invalid nil-terminated source declaration");
+  if (Hint.NilTerminated) {
+    auto Expected = Signature;
+    std::string Diagnostic;
+    if (!assignDarwinVariadicSourceABI(Expected, 3, Arch::AArch64,
+                                       Diagnostic) ||
+        !equalSourceABIs(Signature, Expected))
+      return bad("nil-terminated arguments disagree with the variadic ABI");
+  }
+
   if (Hint.WeakImport &&
       (Hint.CallKind != Kind::DarwinRuntimeCall ||
        Signature.Origin != SourceFunctionTypeHint::OriginKind::DarwinSDK))
@@ -544,8 +585,9 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     }
   } else {
     std::string Prototype = "(*)(";
-    const auto FixedCount =
-        Hint.Format ? Hint.Format->FixedCount : Signature.Parameters.size();
+    const auto FixedCount = Hint.Format          ? Hint.Format->FixedCount
+                            : Hint.NilTerminated ? 3U
+                                                 : Signature.Parameters.size();
     for (size_t I = 0; I < FixedCount; ++I) {
       if (I)
         Prototype += ", ";
@@ -557,7 +599,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       else
         Prototype += typeToC(Signature.Parameters[I].Type);
     }
-    if (Hint.Format)
+    if (Hint.Format || Hint.NilTerminated)
       Prototype += ", ...";
     Prototype = declarationToC(Signature.ReturnType, Prototype + ")");
     Name = "((" + Prototype + ")" +

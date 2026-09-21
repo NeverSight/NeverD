@@ -302,3 +302,5 @@ arm64 UIKit 目錄也綁定 `UIProgressView` 的 `observedProgress` 物件結果
 arm64 UIKit 目錄也記錄 `UIButton` 的 `setTitleColor:forState:`（物件參數及無號 64 位元 `UIControlState`），以及 `UIView` 的 void 方法 `invalidateIntrinsicContentSize`；完整裝置和模擬器 AST 的證據一致。已觀測的 `UIImageView → UIView` 繼承關係讓現有 receiver 證明可以區分本地物件 setter 與無關類別的同名浮點 setter。未知 receiver、子類別宣告衝突、父類別提供方缺失及 x86_64 仍不受支援。
 
 字典查詢回傳未限定型別的 `id` 時，即使與透過 `new` 回傳已知類別的路徑合流，也不能取得該接收者型別。每條輸入路徑都必須保留接收者證據；即使參數是明確型別的指標，也不能據此在有衝突的浮點宣告中選中物件參數 setter。
+
+Arm64 的 `+[NSSet setWithObjects:]` 保留 SDK 中以 nil 終止的可變參數宣告。首批僅支援精確的平台類別匯入和 selector 樁，以及所有入邊均證明完整八位元組機器值的不可變 Objective-C 字串參數。恢復在首個確定的 nil 處停止；首個物件為 nil 時無須證明堆疊尾參，也不讀取終止值之後的槽。共用 Darwin 可變參數 ABI 保留三個固定參數，其餘物件與 nil 位於堆疊上。發佈階段針對目前映像重新驗證宣告、提供程式庫、接收者、selector 及每個參數。動態物件、缺失或部分尾參寫入、逸出堆疊框架、本機覆寫和其他架構仍不受支援。 堆疊參數還須在線性私有堆疊框架中證明每次具體讀取的值；後續覆寫不能改變已讀出的值，重疊寫入、未知呼叫、逸出或控制流程會阻止認證。

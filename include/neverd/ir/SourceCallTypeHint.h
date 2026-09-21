@@ -234,6 +234,15 @@ struct SourceCallTypeHint {
     bool DynamicPointerArguments = false;
   };
   std::optional<FormatArguments> Format;
+  /// Proven non-null object arguments in order, followed by the first nil.
+  /// Empty means the fixed firstObject is nil and no tail is consumed. This
+  /// is a distinct SDK sentinel contract, never a format-string annotation.
+  struct NilTerminatedArguments {
+    std::vector<va_t> Objects;
+    bool operator==(const NilTerminatedArguments &) const = default;
+  };
+  std::optional<NilTerminatedArguments> NilTerminated;
+
   struct SwiftTypeMetadataAddress {
     va_t CacheAddress = 0;
     va_t ReferenceAddress = 0;

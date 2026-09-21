@@ -78,6 +78,7 @@ add_neverd_component_library(NeverDLoader
   ObjC/ObjCCallHints.cpp
   ObjC/ObjCSourceDeclarations.cpp
   ObjC/ObjCFormattedCalls.cpp
+  ObjC/ObjCSentinelCalls.cpp
   Swift/SwiftMetadata.cpp
   Swift/SwiftABI.cpp
   Swift/SwiftRuntimeSource.cpp

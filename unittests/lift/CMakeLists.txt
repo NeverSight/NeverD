@@ -123,6 +123,7 @@ add_neverd_unittest(NeverDLiftTests
   core/HighSSADefinitionTests.cpp
   core/HighSourceRangeTests.cpp
   core/ObjCCallHintTests.cpp
+  core/ObjCSentinelCallTests.cpp
   core/ObjCCategoryTests.cpp
   core/ObjCStorageTests.cpp
   core/HighCSourceCallTests.cpp
@@ -943,6 +944,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/ObjCStorageTests.cpp
   core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
+  core/ObjCSentinelCallTests.cpp
   core/HighCSourceCallTests.cpp
   sdk/ObjCBlockSourceTests.cpp
   sdk/ObjCSourceBindingTests.cpp

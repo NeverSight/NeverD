@@ -9,7 +9,9 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
+#include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
+#include "neverd/loader/ObjC/ObjCSentinelCalls.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
@@ -18,6 +20,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
 #include <deque>
 #include <optional>
 #include <tuple>
@@ -778,6 +781,31 @@ bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address) {
 }
 
 std::optional<SourceCallTypeHint>
+objcSelectorStubSentinelSourceCallHint(const BinaryImage &Image, va_t Address,
+                                       const ObjCReceiverTypeHint &Receiver,
+                                       llvm::ArrayRef<va_t> Objects) {
+  const auto Target = veneer(Image, Address);
+  if (!Target || Target->Name != "objc_msgSend" || !Target->SelectorSlot)
+    return std::nullopt;
+  const auto Import = Image.DyldBindSlots.find(Target->ImportSlot);
+  if (Import == Image.DyldBindSlots.end() ||
+      Import->second.Name != "_objc_msgSend" || Import->second.Addend ||
+      Import->second.WeakImport ||
+      Import->second.Module != "/usr/lib/libobjc.A.dylib" ||
+      std::find(Image.DynInfo.NeededLibs.begin(),
+                Image.DynInfo.NeededLibs.end(), Import->second.Module) ==
+          Image.DynInfo.NeededLibs.end())
+    return std::nullopt;
+  auto Hint =
+      objcSentinelSourceCallHint(Image, Target->Selector, Receiver, Objects);
+  if (Hint) {
+    Hint->TargetAddress = Address;
+    Hint->SelectorReferenceAddress = Target->SelectorSlot;
+  }
+  return Hint;
+}
+
+std::optional<SourceCallTypeHint>
 objcSelectorStubDynamicFormatSourceCallHint(const BinaryImage &Image,
                                             va_t Address) {
   if (!objcSelectorStubOverwritesCommand(Image, Address))
@@ -1420,6 +1448,46 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                 Hint->SelectorReferenceAddress = Target->SelectorSlot;
                 BlockHints.emplace(Op.Addr, std::move(*Hint));
               }
+            }
+            if (!BlockHints.count(Op.Addr) && Receiver &&
+                Target->SelectorSlot && V &&
+                V->TheKind == Value::Kind::Number &&
+                objcSentinelReceiverValid(Image, Target->Selector, *Receiver)) {
+              const auto Objects = [&]() -> std::optional<std::vector<va_t>> {
+                const auto First = Read(NdVar::reg(TRI.IntParamRegs[2], 8));
+                if (!First || First->TheKind != Value::Kind::Number)
+                  return std::nullopt;
+                // sentinel(0,1) permits firstObject itself to be nil. Do not
+                // require SP, inspect a tail slot, or introduce a tail load.
+                if (!First->Number)
+                  return std::vector<va_t>{};
+                if (!readObjCConstantString(Image, First->Number))
+                  return std::nullopt;
+                const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
+                if (!Stack || Stack->TheKind != Value::Kind::Frame ||
+                    State.FrameEscaped)
+                  return std::nullopt;
+                const int64_t Base = static_cast<int64_t>(Stack->Number);
+                std::vector<va_t> Result{First->Number};
+                for (;;) {
+                  const int64_t Offset =
+                      Base + 8 * static_cast<int64_t>(Result.size() - 1);
+                  const auto Slot = State.FrameSlots.find({Offset, 8U});
+                  if (Slot == State.FrameSlots.end() ||
+                      Slot->second.TheKind != Value::Kind::Number)
+                    return std::nullopt;
+                  if (!Slot->second.Number)
+                    return Result; // No reads beyond the first definite nil.
+                  if (Result.size() == 61 ||
+                      !readObjCConstantString(Image, Slot->second.Number))
+                    return std::nullopt;
+                  Result.push_back(Slot->second.Number);
+                }
+              }();
+              if (Objects)
+                if (auto Hint = objcSelectorStubSentinelSourceCallHint(
+                        Image, V->Number, *Receiver, *Objects))
+                  BlockHints.emplace(Op.Addr, std::move(*Hint));
             }
           }
         }

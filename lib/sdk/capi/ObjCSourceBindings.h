@@ -9,12 +9,14 @@
 #include "ObjCConstantObjectSources.h"
 #include "ObjCProfileStorage.h"
 #include "ObjCReadOnlyScalarSources.h"
+#include "ObjCSentinelStack.h"
 #include "ObjCSourceProjection.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
+#include "neverd/loader/ObjC/ObjCSentinelCalls.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
 #include "neverd/loader/Swift/SwiftMetadata.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
@@ -147,6 +149,7 @@ inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
          Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
          Binding.BorrowedByteInputs.empty() &&
          Binding.SwiftStringInputs.empty() && !Binding.Format &&
+         !Binding.NilTerminated &&
          !Binding.SwiftTypeMetadata && !Binding.Receiver &&
          !Binding.SelectorResultUse && !Binding.SelectorResultTypeUse &&
          !Binding.SelectorArgumentTypeUse &&
@@ -190,7 +193,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
          !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
-         !Binding.SwiftTypeMetadata &&
+         !Binding.SwiftTypeMetadata && !Binding.NilTerminated &&
+         !Expected.NilTerminated &&
          bool(Binding.Format) == bool(Expected.Format) &&
          (!Binding.Format ||
           (Binding.Format->FixedCount == Expected.Format->FixedCount &&
@@ -1336,7 +1340,8 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
     return std::nullopt;
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
-      Hint.Selector != Selector || Hint.Format || Hint.SelectorResultUse ||
+      Hint.Selector != Selector || Hint.Format || Hint.NilTerminated ||
+      Hint.SelectorResultUse ||
       Hint.SelectorResultTypeUse || Hint.SelectorArgumentTypeUse ||
       Hint.SelectorArgumentStorageUse || Hint.DoesNotReturn ||
       Hint.WeakImport || Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
@@ -3266,6 +3271,17 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     return false;
   const auto &Binding = *Expression.SourceCallHint;
   const auto &Hint = Binding.Signature;
+  if (Binding.NilTerminated &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       !Binding.Receiver || Binding.Format || Binding.DoesNotReturn ||
+       Binding.WeakImport || Binding.ReturnedArgument ||
+       Binding.RuntimeObjCResultType || Binding.ValueWitness ||
+       !Binding.OwnerClass.empty() || !Binding.BorrowedByteInputs.empty() ||
+       !Binding.SwiftStringInputs.empty() || Binding.SwiftTypeMetadata ||
+       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
+       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.ByteCount || Binding.ImmutablePointerSlot))
+    return false;
   if ((Binding.ReturnedArgument || Binding.RuntimeObjCResultType) &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall)
     return false;
@@ -3560,6 +3576,153 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   if (Binding.CallKind == SourceCallTypeHint::Kind::SwiftValueWitness)
     return Expression.IsIndirectCall && Expression.CallAddr == 0 &&
            isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
+  if (Binding.NilTerminated) {
+    const auto Expected = objcSelectorStubSentinelSourceCallHint(
+        Image, Binding.TargetAddress, *Binding.Receiver,
+        Binding.NilTerminated->Objects);
+    if (!Expected || !Expected->NilTerminated || Expression.IsIndirectCall ||
+        Expression.CallAddr != Binding.TargetAddress ||
+        !Expression.IntrinsicOutputs.empty() ||
+        Binding.TargetName != Expected->TargetName ||
+        Binding.Selector != Expected->Selector ||
+        Binding.SelectorReferenceAddress !=
+            Expected->SelectorReferenceAddress ||
+        !objc_projection_detail::sameHint(Hint, Expected->Signature))
+      return false;
+    const auto ObjectIdentity =
+        [&](const ExprPtr &Input) -> std::optional<va_t> {
+      auto Value = Input;
+      unsigned Depth = 0;
+      while (
+          Value && Depth++ < 64 && Value->Type && Value->Type->Size == 8 &&
+          (Value->Type->Kind == NdTypeKind::Int ||
+           Value->Type->Kind == NdTypeKind::Ptr) &&
+          Value->Operands.size() == 1 &&
+          (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast)) {
+        if ((Value->CastTo && !equalSourceTypes(Value->Type, Value->CastTo)) ||
+            (Value->Kind == ExprKind::BitCast &&
+             (!Value->Operands[0] || !Value->Operands[0]->Type ||
+              Value->Operands[0]->Type->Size != 8)))
+          return std::nullopt;
+        Value = Value->Operands.front();
+      }
+      if (!Value || !Value->Type || Value->Type->Size != 8 ||
+          (Value->Type->Kind != NdTypeKind::Int &&
+           Value->Type->Kind != NdTypeKind::Ptr))
+        return std::nullopt;
+      if (Value->Kind == ExprKind::Const &&
+          (!Value->ConstVal || readObjCConstantString(Image, Value->ConstVal)))
+        return Value->ConstVal;
+      if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
+          Value->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::RuntimeConstantString &&
+          objcSourceCallBound(*Value, Image, Functions))
+        return Value->SourceCallHint->TargetAddress;
+      return std::nullopt;
+    };
+    const auto Query = [&](const HighExpr &Value) {
+      if (!Value.SourceCallHint)
+        return false;
+      const auto Kind = Value.SourceCallHint->CallKind;
+      return (Kind == SourceCallTypeHint::Kind::RuntimeClass ||
+              Kind == SourceCallTypeHint::Kind::RuntimeSelector ||
+              Kind == SourceCallTypeHint::Kind::RuntimeConstantString) &&
+             objcSourceCallBound(Value, Image, Functions);
+    };
+    const auto StackLoads =
+        ContainingFunction
+            ? sentinelPrivateStackLoads(*ContainingFunction, Expression,
+                                        ObjectIdentity, Query)
+            : std::map<const HighExpr *, va_t>{};
+    VarKeyMap<std::vector<ExprPtr>> Definitions;
+    if (ContainingFunction)
+      walkStmts(ContainingFunction->Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+            Statement.Val &&
+            (Statement.Dst->Kind == ExprKind::Var ||
+             Statement.Dst->Kind == ExprKind::Phi))
+          Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+      });
+    enum class Identity { Object, Class, Selector };
+    size_t Budget = 4096;
+    std::set<VarKey> Active;
+    const auto Matches = [&](auto &&Self, const ExprPtr &Value, va_t Address,
+                             Identity Kind, unsigned Depth) -> bool {
+      if (!Value || !Budget-- || Depth > 64 || !Value->Type ||
+          Value->IntrinsicId != Intrinsic::None ||
+          !Value->IntrinsicOutputs.empty() ||
+          Value->MemoryOrdering != NdMemoryOrdering::None ||
+          Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return false;
+      if (Value->Kind == ExprKind::Const)
+        return Kind == Identity::Object && Value->ConstVal == Address &&
+               (Value->Type->Kind == NdTypeKind::Int ||
+                Value->Type->Kind == NdTypeKind::Ptr) &&
+               (Value->Type->Size == 8 ||
+                (!Address && Value->Type->Size && Value->Type->Size < 8));
+      if (Value->Type->Size != 8 || (Value->Type->Kind != NdTypeKind::Int &&
+                                     Value->Type->Kind != NdTypeKind::Ptr))
+        return false;
+      if (Value->Kind == ExprKind::Load) {
+        const auto Load = StackLoads.find(Value.get());
+        return Kind == Identity::Object && Load != StackLoads.end() &&
+               Load->second == Address;
+      }
+      if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+          Value->Operands.size() == 1) {
+        if ((Value->CastTo && !equalSourceTypes(Value->Type, Value->CastTo)) ||
+            (Value->Kind == ExprKind::BitCast &&
+             (!Value->Operands[0] || !Value->Operands[0]->Type ||
+              Value->Operands[0]->Type->Size != 8)))
+          return false;
+        return Self(Self, Value->Operands.front(), Address, Kind, Depth + 1);
+      }
+      if (Value->Kind == ExprKind::Call && Value->SourceCallHint) {
+        const auto &Source = *Value->SourceCallHint;
+        const auto Wanted =
+            Kind == Identity::Object
+                ? SourceCallTypeHint::Kind::RuntimeConstantString
+            : Kind == Identity::Class
+                ? SourceCallTypeHint::Kind::RuntimeClass
+                : SourceCallTypeHint::Kind::RuntimeSelector;
+        return Source.CallKind == Wanted && Source.TargetAddress == Address &&
+               Value->Operands.empty() &&
+               objcSourceCallBound(*Value, Image, Functions);
+      }
+      if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+          Value->Operands.size() == 3)
+        return Self(Self, Value->Operands[1], Address, Kind, Depth + 1) &&
+               Self(Self, Value->Operands[2], Address, Kind, Depth + 1);
+      if ((Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi) ||
+          (Value->Var.Kind != MedVar::Reg && Value->Var.Kind != MedVar::Temp))
+        return false;
+      const auto Key = varKey(Value->Var);
+      if (!Active.insert(Key).second)
+        return false;
+      const auto Found = Definitions.find(Key);
+      bool Valid = Found != Definitions.end() && !Found->second.empty();
+      if (Valid)
+        for (const auto &Definition : Found->second)
+          if (!Self(Self, Definition, Address, Kind, Depth + 1)) {
+            Valid = false;
+            break;
+          }
+      Active.erase(Key);
+      return Valid;
+    };
+    if (!Matches(Matches, Expression.Operands[0], Binding.Receiver->Address,
+                 Identity::Class, 0) ||
+        !Matches(Matches, Expression.Operands[1],
+                 Binding.SelectorReferenceAddress, Identity::Selector, 0))
+      return false;
+    const auto &Objects = Binding.NilTerminated->Objects;
+    for (size_t I = 0; I < Objects.size(); ++I)
+      if (!Matches(Matches, Expression.Operands[I + 2], Objects[I],
+                   Identity::Object, 0))
+        return false;
+    return Matches(Matches, Expression.Operands[Objects.size() + 2], 0,
+                   Identity::Object, 0);
+  }
   if (Binding.Format) {
     const auto &Format = *Binding.Format;
     if (Format.DynamicWithoutArguments || Format.DynamicPointerArguments) {
