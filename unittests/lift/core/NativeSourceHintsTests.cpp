@@ -1,6 +1,8 @@
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
 #include "gtest/gtest.h"
 
+#include "llvm/BinaryFormat/MachO.h"
+
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -9,12 +11,15 @@
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <algorithm>
 #include <array>
+#include <functional>
 
 using namespace neverd;
 
@@ -1020,6 +1025,399 @@ struct NativeVoidFrameFixture : NativeVoidFixture {
     return StackWrite;
   }
 };
+
+struct NativeFloatingFrameFixture : NativeVoidFrameFixture {
+  static constexpr va_t ImportSlot = 0x3000;
+
+  NativeFloatingFrameFixture() : NativeVoidFrameFixture(Arch::AArch64) {
+    Med.ReturnType = High.ReturnType = NdType::makeInt(8);
+    High.Body[0].RetVal = HighExpr::makeConst(42, 8);
+    Med.Blocks[0].StartAddr = Low.Blocks[0].StartAddr = Med.Entry;
+    // A source argument may occupy x3 without occupying earlier integer
+    // argument registers. Changing the result ABI must not repack this input.
+    Med.Params[0].RegOff = a64reg::X3;
+    Section Text;
+    Text.VA = Med.Entry;
+    Text.Size = Text.FileSz = Image.Segments[0].FileSz;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Image.Sections.push_back(std::move(Text));
+    Segment Data;
+    Data.VA = ImportSlot;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    constexpr auto Provider =
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    Image.ImportPtrSlots[ImportSlot] = "_CFStringGetDoubleValue";
+    Image.DyldBindSlots[ImportSlot] = {"_CFStringGetDoubleValue", 0, Provider,
+                                       false};
+    Image.DynInfo.NeededLibs.push_back(Provider);
+    const uint32_t Words[] = {0xd0000010, 0xf9400210, 0xd61f0200};
+    for (unsigned I = 0; I != 3; ++I)
+      for (unsigned J = 0; J != 4; ++J)
+        Image.Segments[0].Data[0x1080 - Med.Entry + I * 4 + J] =
+            Words[I] >> (J * 8);
+    auto &LowOps = Low.Blocks[0].Ops;
+    LowOps.insert(LowOps.begin() + CallIndex,
+                  op(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                     {NdVar::reg(a64reg::X3, 8)}, 0x100c));
+    ++CallIndex;
+    ++RestoreIndex;
+    const auto Current = buildObjCSourceCallHints(Image, Low);
+    const auto Binding = Current.find(0x1010);
+    EXPECT_NE(Binding, Current.end());
+    if (Binding == Current.end())
+      return;
+    auto &Call = Med.Blocks[0].Ops[0];
+    Call.SourceCallHint =
+        std::make_shared<const SourceCallTypeHint>(Binding->second);
+    Call.CallSiteId = 1;
+    Call.Inputs[1] = Med.Params[0];
+    Call.Output.Kind = MedVar::Reg;
+    Call.Output.Id = 10;
+    Call.Output.SSAVer = 1;
+    Call.Output.TheArch = Arch::AArch64;
+    Call.Output.RegOff = a64reg::V0;
+    Call.Output.Size = 8;
+    Med.Blocks[0].Ops.back().Addr = LowOps.back().Addr;
+  }
+};
+
+TEST(NativeSourceHints, FloatingCandidateKeepsTheExistingArgumentCarrier) {
+  NativeFloatingFrameFixture F;
+  std::string Error;
+  ASSERT_EQ(F.Med.ReturnType->Kind, NdTypeKind::Int);
+  ASSERT_EQ(F.Med.ReturnType->Size, 8U);
+  // Neither the provisional i64 result nor the floating value alone can
+  // supply the required native frame proof.
+  EXPECT_FALSE(F.infer(Error));
+  const auto Hint = F.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint->ReturnType->Size, 8U);
+  EXPECT_EQ(Hint->ReturnLocation.Kind, SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::V0);
+  EXPECT_EQ(Hint->ReturnLocation.ValueBytes, 8U);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Hint->Parameters[0].Location.Kind,
+            SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X3);
+  EXPECT_EQ(Hint->Parameters[0].Location.ValueBytes, 8U);
+  EXPECT_EQ(F.Med.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(F.High.ReturnType->Kind, NdTypeKind::Int);
+}
+
+TEST(NativeSourceHints, FloatingCandidateStillRequiresCallAndFrameEvidence) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    NativeFloatingFrameFixture F;
+    if (Mutation == 0)
+      F.Med.Blocks[0].Ops[0].SourceCallHint.reset();
+    else if (Mutation == 1)
+      ++F.Low.Blocks[0].Ops[F.CallIndex].Seq;
+    else if (Mutation == 2)
+      F.Low.Blocks[0].Ops[F.CallIndex].Inputs[0].Offset += 4;
+    else
+      F.Low.Blocks[0].Ops[F.RestoreIndex + 1].Opcode = NdOp::NOP;
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error)) << Mutation << ": " << Error;
+  }
+}
+
+TEST(NativeSourceHints, FloatingCandidateNeverReplacesADefinedIntegerResult) {
+  NativeFloatingFrameFixture F;
+  MedOp Integer;
+  Integer.Opcode = NdOp::COPY;
+  Integer.Addr = 0x1014;
+  Integer.Output = F.Med.Blocks[0].Ops[0].Output;
+  Integer.Output.Id = 11;
+  Integer.Output.RegOff = a64reg::X0;
+  Integer.addInput(MedVar::makeConst(42, 8));
+  F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.end() - 1, Integer);
+  F.Low.Blocks[0].Ops.insert(
+      F.Low.Blocks[0].Ops.begin() + F.RestoreIndex,
+      F.op(NdOp::COPY, NdVar::reg(a64reg::X0, 8), {NdVar::cst(42, 8)}, 0x1014));
+  std::string Error;
+  const auto Hint = F.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Hint->ReturnType->Size, 8U);
+  EXPECT_EQ(Hint->ReturnLocation.Kind, SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+}
+
+struct NativeMixedTerminalFixture : NativeVoidFrameFixture {
+  static constexpr va_t FailureSlot = 0x3000;
+  static constexpr va_t FailureStub = 0x10d0;
+  static constexpr va_t FailureCall = 0x1040;
+
+  NativeMixedTerminalFixture() : NativeVoidFrameFixture(Arch::AArch64) {
+    useNativeVoidCallee();
+    splitReturns();
+    Low.Blocks[0].StartAddr = Med.Entry;
+    Low.Blocks[1].StartAddr = 0x1020;
+    Low.Blocks[2].StartAddr = FailureCall;
+    auto Return = Med.Blocks[0].Ops.back();
+    Return.Addr = 0x1024;
+    Med.Blocks[0].StartAddr = Med.Entry;
+    Med.Blocks[0].Ops.pop_back();
+    Med.Blocks[0].Succs = {1, 2};
+    MedBlock Normal;
+    Normal.Id = 1;
+    Normal.StartAddr = 0x1020;
+    Normal.Preds = {0};
+    Normal.Ops = {Return};
+    MedBlock Failure;
+    Failure.Id = 2;
+    Failure.StartAddr = FailureCall;
+    Failure.Preds = {0};
+    Section Text;
+    Text.VA = Med.Entry;
+    Text.Size = Text.FileSz = Image.Segments[0].FileSz;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Image.Sections.push_back(std::move(Text));
+    Segment Data;
+    Data.VA = FailureSlot;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    Image.ImportPtrSlots[FailureSlot] = "___stack_chk_fail";
+    Image.DyldBindSlots[FailureSlot] = {"___stack_chk_fail", 0,
+                                        "/usr/lib/libSystem.B.dylib", false};
+    Image.DynInfo.NeededLibs.push_back("/usr/lib/libSystem.B.dylib");
+    // ADRP x16, 0x3000; LDR x16, [x16]; BR x16. The current loader must
+    // independently connect the executable veneer to this exact import slot.
+    const uint32_t Words[] = {0xd0000010, 0xf9400210, 0xd61f0200};
+    for (unsigned I = 0; I != 3; ++I)
+      for (unsigned J = 0; J != 4; ++J)
+        Image.Segments[0].Data[FailureStub - Med.Entry + I * 4 + J] =
+            Words[I] >> (J * 8);
+    auto Hint = darwinRuntimeSourceCallHint(Image, FailureSlot);
+    EXPECT_TRUE(Hint);
+    if (!Hint)
+      return;
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = FailureCall;
+    Call.OriginSeq = 12;
+    Call.CallSiteId = 2;
+    Call.DoesNotReturn = true;
+    Call.SourceCallHint =
+        std::make_shared<const SourceCallTypeHint>(std::move(*Hint));
+    Call.addInput(MedVar::makeConst(FailureStub, 8));
+    Failure.Ops = {Call};
+    Med.Blocks.push_back(std::move(Normal));
+    Med.Blocks.push_back(std::move(Failure));
+    auto NativeCall =
+        op(NdOp::CALL, {}, {NdVar::cst(FailureStub, 8)}, FailureCall);
+    NativeCall.Seq = Call.OriginSeq;
+    Low.Blocks[2].Ops = {NativeCall};
+  }
+
+  void
+  changeFailureHint(const std::function<void(SourceCallTypeHint &)> &Change) {
+    auto &Call = Med.Blocks[2].Ops[0];
+    auto Hint = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+    Change(*Hint);
+    Call.SourceCallHint = std::move(Hint);
+  }
+
+  NativeSourceCalls contracts() const {
+    NativeSourceCalls Calls;
+    for (const auto &B : Med.Blocks)
+      for (const auto &Op : B.Ops) {
+        if (Op.Opcode != NdOp::CALL || !Op.SourceCallHint)
+          continue;
+        NativeSourceCallContract Contract;
+        Contract.Signature = &Op.SourceCallHint->Signature;
+        if (Op.CallSiteId == 2)
+          Contract.Termination =
+              NativeSourceCallContract::TerminationKind::StackCheckFailure;
+        Calls.emplace(NativeSourceCallKey{Op.Addr, Op.OriginSeq, Op.Opcode,
+                                          Op.Inputs[0].ConstVal},
+                      Contract);
+      }
+    return Calls;
+  }
+};
+
+TEST(NativeSourceHints, MixedStackFailureKeepsEveryNormalExitRestored) {
+  NativeMixedTerminalFixture F;
+  std::string Error;
+  const auto Hint = F.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+  EXPECT_FALSE(F.Med.DoesNotReturn);
+  EXPECT_FALSE(F.High.DoesNotReturn);
+  EXPECT_EQ(F.Med.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.contracts()));
+
+  const auto Original = F.Low.Blocks[1].Ops[1];
+  F.Low.Blocks[1].Ops[1].Output = NdVar::reg(a64reg::X20, 8);
+  EXPECT_FALSE(F.inferVoid(Error));
+  F.Low.Blocks[1].Ops[1] = Original;
+  // An additional valid normal exit cannot hide another un-restored exit.
+  auto Bad = F.Low.Blocks[1];
+  Bad.Id = 3;
+  Bad.StartAddr = 0x1050;
+  Bad.Ops[1].Output = NdVar::reg(a64reg::X20, 8);
+  F.Low.Blocks.push_back(std::move(Bad));
+  F.Low.Blocks[0].Succs.push_back(3);
+  auto MedBad = F.Med.Blocks[1];
+  MedBad.Id = 3;
+  MedBad.StartAddr = 0x1050;
+  F.Med.Blocks.push_back(std::move(MedBad));
+  F.Med.Blocks[0].Succs.push_back(3);
+  EXPECT_FALSE(F.inferVoid(Error));
+}
+
+TEST(NativeSourceHints, MixedStackFailureRevalidatesExactImportAndVeneer) {
+  const std::array<std::function<void(NativeMixedTerminalFixture &)>, 12>
+      Mutations = {{
+          [](auto &F) {
+            F.Image.DyldBindSlots[F.FailureSlot].Module = "/tmp/foreign.dylib";
+          },
+          [](auto &F) {
+            F.Image.DyldBindSlots[F.FailureSlot].WeakImport = true;
+          },
+          [](auto &F) { F.Image.DyldBindSlots[F.FailureSlot].Addend = 8; },
+          [](auto &F) { F.Image.DyldBindSlots.erase(F.FailureSlot); },
+          [](auto &F) { F.Image.ImportPtrSlots[F.FailureSlot] = "_abort"; },
+          [](auto &F) {
+            F.Image.ConflictingImportStorageSlots.insert(F.FailureSlot);
+          },
+          [](auto &F) {
+            F.Image.Segments[0].Data[F.FailureStub - F.Med.Entry + 8] ^= 4;
+          },
+          [](auto &F) { F.Med.Blocks[2].Ops[0].Inputs[0].ConstVal += 4; },
+          [](auto &F) { ++F.Med.Blocks[2].Ops[0].OriginSeq; },
+          [](auto &F) { F.Image.Arch = Arch::X64; },
+          [](auto &F) { F.Image.DynInfo.NeededLibs.clear(); },
+          [](auto &F) {
+            F.Image.DynInfo.NeededLibs = {"/tmp/libSystem.B.dylib"};
+          },
+      }};
+  for (size_t I = 0; I != Mutations.size(); ++I) {
+    SCOPED_TRACE(I);
+    NativeMixedTerminalFixture F;
+    Mutations[I](F);
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error));
+  }
+}
+
+TEST(NativeSourceHints, MixedStackFailureRejectsSignatureAndEffectDrift) {
+  const std::array<std::function<void(SourceCallTypeHint &)>, 10> Mutations = {{
+      [](auto &H) { H.DoesNotReturn = false; },
+      [](auto &H) { H.TargetName = "abort"; },
+      [](auto &H) { H.CallKind = SourceCallTypeHint::Kind::SwiftRuntimeCall; },
+      [](auto &H) { H.WeakImport = true; },
+      [](auto &H) { H.Signature.ReturnType = NdType::makeInt(8); },
+      [](auto &H) {
+        H.Signature.Parameters.push_back({"extra", NdType::makeInt(8)});
+      },
+      [](auto &H) {
+        H.Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      },
+      [](auto &H) { H.ReturnedArgument = 0; },
+      [](auto &H) { H.NilTerminated.emplace(); },
+      [](auto &H) { H.ByteCount = 8; },
+  }};
+  for (size_t I = 0; I != Mutations.size(); ++I) {
+    SCOPED_TRACE(I);
+    NativeMixedTerminalFixture F;
+    F.changeFailureHint(Mutations[I]);
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error));
+  }
+  NativeMixedTerminalFixture F;
+  F.Med.Blocks[2].Ops[0].DoesNotReturn = false;
+  std::string Error;
+  EXPECT_FALSE(F.inferVoid(Error));
+  F.Med.Blocks[2].Ops[0].DoesNotReturn = true;
+  F.Med.Blocks[2].Ops[0].PreservesCallerSaved = true;
+  EXPECT_FALSE(F.inferVoid(Error));
+}
+
+TEST(NativeSourceHints, MixedStackFailureRequiresAnActualTerminalSink) {
+  const std::array<std::function<void(NativeMixedTerminalFixture &)>, 5>
+      Mutations = {{
+          [](auto &F) {
+            F.Low.Blocks[2].Ops.push_back(F.op(NdOp::NOP, {}, {}, 0x1044));
+          },
+          [](auto &F) {
+            F.Low.Blocks[2].Ops.push_back(F.Low.Blocks[1].Ops.back());
+          },
+          [](auto &F) {
+            F.Low.Blocks[2].Succs = {1};
+            F.Low.Blocks[1].Preds.push_back(2);
+          },
+          [](auto &F) {
+            F.Low.Blocks[0].Succs = {2};
+            F.Low.Blocks[1].Preds.clear();
+          },
+          [](auto &F) {
+            F.Low.Blocks[0].Succs = {2};
+            F.Low.Blocks.erase(F.Low.Blocks.begin() + 1);
+          },
+      }};
+  for (size_t I = 0; I != Mutations.size(); ++I) {
+    SCOPED_TRACE(I);
+    NativeMixedTerminalFixture F;
+    Mutations[I](F);
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error));
+    EXPECT_FALSE(
+        restoresNativeSourceState(F.Low, Arch::AArch64, F.contracts()));
+  }
+}
+
+TEST(NativeSourceHints,
+     MixedStackFailureStillChecksFrameTaintBeforeTermination) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeMixedTerminalFixture F;
+    auto &Ops = F.Low.Blocks[2].Ops;
+    if (Mutation == 0)
+      Ops.insert(Ops.begin(),
+                 F.op(NdOp::STORE, {},
+                      {NdVar::cst(0x4000, 8), NdVar::reg(a64reg::SP, 8)},
+                      0x103c));
+    else if (Mutation == 1)
+      Ops.insert(Ops.begin(), F.op(NdOp::COPY, NdVar::reg(a64reg::SP, 8),
+                                   {NdVar::cst(0, 8)}, 0x103c));
+    else
+      F.Low.Blocks[0].Ops.insert(F.Low.Blocks[0].Ops.begin() + F.CallIndex,
+                                 F.op(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                                      {NdVar::reg(a64reg::SP, 8)}, 0x100c));
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error));
+  }
+}
+
+TEST(NativeSourceHints,
+     MixedStackFailureDoesNotAcceptOtherTerminationContracts) {
+  NativeMixedTerminalFixture F;
+  for (auto Kind :
+       {NativeSourceCallContract::TerminationKind::None,
+        NativeSourceCallContract::TerminationKind::RuntimeEntry,
+        static_cast<NativeSourceCallContract::TerminationKind>(99)}) {
+    auto Calls = F.contracts();
+    const auto Key = nativeSourceCallKey(F.Low.Blocks[2].Ops[0]);
+    ASSERT_TRUE(Key);
+    Calls.at(*Key).Termination = Kind;
+    EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, Calls));
+  }
+  auto Calls = F.contracts();
+  const auto Key = nativeSourceCallKey(F.Low.Blocks[2].Ops[0]);
+  ASSERT_TRUE(Key);
+  Calls.at(*Key).ReadOnlyFrameParameters.emplace(0, 8);
+  EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, Calls));
+}
 
 struct NativeIncomingStackFixture : NativeVoidFrameFixture {
   int64_t IncomingOffset;

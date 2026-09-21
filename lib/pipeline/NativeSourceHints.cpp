@@ -1,5 +1,6 @@
 #include "neverd/pipeline/NativeSourceHints.h"
 
+#include "NativeSourceFloatingReturn.h"
 #include "NativeSourcePreservation.h"
 
 #include "neverd/ir/SourceABI.h"
@@ -8,6 +9,8 @@
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/lift/AArch64Regs.h"
+#include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -45,6 +48,52 @@ bool completeNativeAudit(va_t Entry, const PipelineFunctionAudit &Audit) {
          Audit.DecodedInstructions == Audit.LiftedInstructions &&
          Audit.DecodeFailures.empty() &&
          Audit.UnsupportedInstructions.empty() && Audit.TruncatedPaths.empty();
+}
+
+// This exceptional exit has no source arguments and never returns. Reuse the
+// loader's current machine-veneer proof rather than treating a runtime name or
+// a candidate's noreturn flag as executable identity.
+bool stackCheckFailureBinding(const BinaryImage &Image, const MedOp &Op,
+                              const SourceCallTypeHint &Current) {
+  if (Image.Arch != Arch::AArch64 || Op.Opcode != NdOp::CALL ||
+      Op.NumInputs != 1 || !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 8 ||
+      !Op.CallSiteId || !Op.DoesNotReturn || Op.PreservesCallerSaved ||
+      Op.Output.Size || !Op.SourceCallHint)
+    return false;
+  const auto &Binding = *Op.SourceCallHint;
+  const auto Import = Image.DyldBindSlots.find(Binding.TargetAddress);
+  if (Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall ||
+      Binding.TargetName != "__stack_chk_fail" || !Binding.DoesNotReturn ||
+      Binding.WeakImport || Import == Image.DyldBindSlots.end() ||
+      Import->second.Module != "/usr/lib/libSystem.B.dylib" ||
+      std::find(Image.DynInfo.NeededLibs.begin(),
+                Image.DynInfo.NeededLibs.end(), Import->second.Module) ==
+          Image.DynInfo.NeededLibs.end() ||
+      Import->second.Name != "___stack_chk_fail" || Import->second.Addend ||
+      Import->second.WeakImport || Binding.ValueWitness ||
+      Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
+      !Binding.Selector.empty() || !Binding.OwnerClass.empty() ||
+      Binding.SelectorReferenceAddress || !Binding.BorrowedByteInputs.empty() ||
+      !Binding.SwiftStringInputs.empty() || Binding.Format ||
+      Binding.NilTerminated || Binding.SwiftTypeMetadata || Binding.Receiver ||
+      Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
+      Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+      Binding.ByteCount || Binding.ImmutablePointerSlot)
+    return false;
+  const auto Expected =
+      darwinRuntimeSourceCallHint(Image, Binding.TargetAddress);
+  return Expected && Expected->DoesNotReturn &&
+         Expected->CallKind == Binding.CallKind &&
+         Expected->TargetAddress == Binding.TargetAddress &&
+         Expected->TargetName == Binding.TargetName &&
+         Expected->Signature.Origin == Binding.Signature.Origin &&
+         equalSourceABIs(Expected->Signature, Binding.Signature) &&
+         Current.CallKind == Binding.CallKind &&
+         Current.TargetAddress == Binding.TargetAddress &&
+         Current.TargetName == Binding.TargetName && Current.DoesNotReturn &&
+         !Current.WeakImport &&
+         Current.Signature.Origin == Binding.Signature.Origin &&
+         equalSourceABIs(Current.Signature, Binding.Signature);
 }
 
 bool hasNativeSourceStateContract(
@@ -226,6 +275,7 @@ bool hasNativeSourceStateContract(
       Low->Blocks.size() > 16384)
     return false;
   NativeSourceCalls Calls;
+  std::optional<std::map<va_t, SourceCallTypeHint>> CurrentCallBindings;
   size_t Remaining = 262144;
   for (const auto &Block : Med.Blocks)
     for (const auto &Op : Block.Ops) {
@@ -312,11 +362,26 @@ bool hasNativeSourceStateContract(
             !equalSourceABIs(Expected->Signature, Binding.Signature) ||
             Op.NumInputs != sourceABIParameters(Binding.Signature).size() + 1)
           return false;
-        Contract.Terminates = Binding.DoesNotReturn;
+        Contract.Termination =
+            Binding.DoesNotReturn
+                ? NativeSourceCallContract::TerminationKind::RuntimeEntry
+                : NativeSourceCallContract::TerminationKind::None;
+      } else if (Binding.DoesNotReturn && StaticRuntime &&
+                 Binding.CallKind ==
+                     SourceCallTypeHint::Kind::DarwinRuntimeCall &&
+                 Binding.TargetName == "__stack_chk_fail") {
+        if (!CurrentCallBindings)
+          CurrentCallBindings = buildObjCSourceCallHints(Image, *Low);
+        const auto Current = CurrentCallBindings->find(Op.Addr);
+        if (Current == CurrentCallBindings->end() ||
+            !stackCheckFailureBinding(Image, Op, Current->second))
+          return false;
+        Contract.Termination =
+            NativeSourceCallContract::TerminationKind::StackCheckFailure;
       }
       if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
            !StaticMessage && !DynamicWitness) ||
-          (Binding.DoesNotReturn && !Contract.Terminates) ||
+          (Binding.DoesNotReturn && !Contract.terminates()) ||
           !Binding.Signature.ReturnType || !Image.isCodeAddress(Op.Addr) ||
           !Calls
                .emplace(NativeSourceCallKey{Op.Addr, Op.OriginSeq, Op.Opcode,
@@ -986,13 +1051,30 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   if (!NoReturn && !definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
                                        IncomingReturnParameter)) {
-    if (!hasNativeSourceStateContract(Image, Low, Med, true, nullptr, false,
-                                      CalleeContracts, &Hint) ||
-        !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
-      return Reject("native result has no complete defined carrier on every "
-                    "return path");
-    Hint.ReturnType = NdType::makeVoid();
-    Hint.ReturnLocation = {};
+    auto FloatingHint = Hint;
+    FloatingHint.ReturnType = NdType::makeFloat(8);
+    FloatingHint.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
+                                   TRI.FPReturnReg, 0, 8};
+    // Generic integer inference can miss a typed double carried through Q/D
+    // identity PHIs. Require the complete value proof and the ordinary frame
+    // and return-carrier contracts before proposing this source-only result.
+    if (Hint.ReturnType->Kind == NdTypeKind::Int &&
+        Hint.ReturnType->Size == 8 &&
+        detail::hasProvenNativeSourceFloat64Return(Med, Image.Arch) &&
+        definedReturnPaths(Med, Image.Arch, FloatingHint.ReturnLocation,
+                           std::nullopt) &&
+        hasNativeSourceStateContract(Image, Low, Med, true, nullptr, false,
+                                     CalleeContracts, &FloatingHint)) {
+      Hint = std::move(FloatingHint);
+    } else {
+      if (!hasNativeSourceStateContract(Image, Low, Med, true, nullptr, false,
+                                        CalleeContracts, &Hint) ||
+          !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
+        return Reject("native result has no complete defined carrier on every "
+                      "return path");
+      Hint.ReturnType = NdType::makeVoid();
+      Hint.ReturnLocation = {};
+    }
   }
   const auto PointerParameters = inferMedSourcePointerParameters(Med);
   size_t SourceIndex = 0;

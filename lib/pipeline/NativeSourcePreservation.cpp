@@ -28,6 +28,24 @@ namespace {
 constexpr int64_t MaxFrame = 1 << 20;
 constexpr size_t MaxFacts = 4096;
 
+bool stackCheckTermination(const NativeSourceCallContract &Contract,
+                           Arch Architecture) {
+  if (Contract.Termination !=
+          NativeSourceCallContract::TerminationKind::StackCheckFailure ||
+      Architecture != Arch::AArch64 || !Contract.Signature ||
+      Contract.Signature->Origin !=
+          SourceFunctionTypeHint::OriginKind::DarwinRuntime ||
+      !Contract.ReadOnlyFrameParameters.empty() ||
+      !Contract.WritableFrameParameters.empty())
+    return false;
+  SourceFunctionTypeHint Expected;
+  Expected.Origin = SourceFunctionTypeHint::OriginKind::DarwinRuntime;
+  Expected.ReturnType = NdType::makeVoid();
+  std::string Error;
+  return assignDarwinScalarSourceABI(Expected, Architecture, Error) &&
+         equalSourceABIs(*Contract.Signature, Expected);
+}
+
 // Byte identities make partial writes and overlapping spills explicit. A
 // frame address needs all eight ordered bytes before it can name a stack slot.
 struct ByteFact {
@@ -224,7 +242,13 @@ public:
             return false;
         if (!Found->second.Signature)
           return false;
-        if (Found->second.Terminates && !TerminalOnly)
+        if (Found->second.terminates() && !TerminalOnly &&
+            !stackCheckTermination(Found->second, Architecture))
+          return false;
+        if (Found->second.Termination ==
+                NativeSourceCallContract::TerminationKind::StackCheckFailure &&
+            (TerminalOnly || Index + 1 != Block.Ops.size() ||
+             !Block.Succs.empty()))
           return false;
         const auto &Signature = *Found->second.Signature;
         const bool Tail = Index + 1 < Block.Ops.size() &&
@@ -249,7 +273,7 @@ public:
           const auto &Location = Physical.Location;
           if (Location.Kind == SourceABICarrierKind::Stack) {
             const bool TerminalArgument =
-                TerminalOnly && Found->second.Terminates;
+                TerminalOnly && Found->second.terminates();
             const bool ReturningArgument =
                 !TerminalOnly && Architecture == Arch::AArch64 && !Tail &&
                 Parameter.Components.empty() && Parameter.Type &&
@@ -345,7 +369,7 @@ public:
                    Byte - Address < static_cast<int64_t>(Bytes);
           });
         }
-        if (Found->second.Terminates) {
+        if (Found->second.terminates()) {
           DidTerminate = true;
           return true;
         }
@@ -558,8 +582,9 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     std::string Error;
     // Hidden result storage needs its own bounded frame-write proof before
     // this analysis can treat it as preserving saved machine state.
-    if (Contract.Terminates || !Signature ||
-        Signature->Architecture != Architecture ||
+    if ((Contract.terminates() &&
+         !stackCheckTermination(Contract, Architecture)) ||
+        !Signature || Signature->Architecture != Architecture ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Signature, Error))
@@ -630,7 +655,13 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     if (Declared != Preds[I] || Function.Blocks[I].Ops.empty())
       return false;
     const bool Returns = Function.Blocks[I].Ops.back().Opcode == NdOp::RETURN;
-    if (Succs[I].empty() && !Returns)
+    const auto LastCall = nativeSourceCallKey(Function.Blocks[I].Ops.back());
+    const auto Terminal = LastCall ? Calls.find(*LastCall) : Calls.end();
+    const bool StackFailure =
+        Terminal != Calls.end() &&
+        stackCheckTermination(Terminal->second, Architecture);
+    if ((Succs[I].empty() && !Returns && !StackFailure) ||
+        (StackFailure && !Succs[I].empty()))
       return false;
     HasReturn |= Returns;
   }
@@ -666,10 +697,15 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     }
   }
   std::set<uint64_t> Used;
-  for (size_t I = 0; I < Count; ++I)
+  bool HasReachableReturn = false;
+  for (size_t I = 0; I < Count; ++I) {
     if (!Incoming[I] ||
         !Proof.transfer(Function.Blocks[I], *Incoming[I], true, &Used))
       return false;
+    HasReachableReturn |= Function.Blocks[I].Ops.back().Opcode == NdOp::RETURN;
+  }
+  if (!HasReachableReturn)
+    return false;
   if (UsedEntryRegisters)
     *UsedEntryRegisters = std::move(Used);
   return true;
@@ -697,12 +733,15 @@ bool observesTerminalNativeSourceState(
   for (const auto &[Site, Contract] : Calls) {
     const auto *Signature = Contract.Signature;
     std::string Error;
-    if (!Signature || Signature->Architecture != Architecture ||
+    if ((Contract.terminates() &&
+         Contract.Termination !=
+             NativeSourceCallContract::TerminationKind::RuntimeEntry) ||
+        !Signature || Signature->Architecture != Architecture ||
         !Signature->ReturnType ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !Signature->ReturnComponents.empty() ||
-        (Contract.Terminates &&
+        (Contract.terminates() &&
          Signature->ReturnType->Kind != NdTypeKind::Void) ||
         !validateSourceABI(*Signature, Error))
       return false;
@@ -711,7 +750,7 @@ bool observesTerminalNativeSourceState(
           (Parameter.Type->Kind != NdTypeKind::Int &&
            Parameter.Type->Kind != NdTypeKind::Ptr))
         return false;
-    TerminatingCalls += Contract.Terminates;
+    TerminatingCalls += Contract.terminates();
   }
   if (TerminatingCalls != 1)
     return false;
@@ -727,7 +766,7 @@ bool observesTerminalNativeSourceState(
     if (!Key || !Calls.count(*Key) || SawTerminatingCall)
       return false;
     ++NativeCalls;
-    SawTerminatingCall = Calls.at(*Key).Terminates;
+    SawTerminatingCall = Calls.at(*Key).terminates();
   }
   PreservationProof Proof(Architecture, Calls, true);
   auto State = Proof.Initial;
@@ -750,7 +789,7 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
   for (const auto &[Site, Contract] : Calls) {
     const auto *Signature = Contract.Signature;
     std::string Error;
-    if (Contract.Terminates || !Signature ||
+    if (Contract.terminates() || !Signature ||
         Signature->Architecture != Architecture ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||

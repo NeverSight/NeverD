@@ -27,9 +27,11 @@ struct NativeSourceCallKey {
 
 struct NativeSourceCallContract {
   const SourceFunctionTypeHint *Signature = nullptr;
-  // Established from an exact external runtime declaration, independently of
-  // native signature inference. Only the terminal-entry proof consumes it.
-  bool Terminates = false;
+  // One authoritative effect/proof kind; an ordinary returning frame accepts
+  // only the exact stack-check failure contract authenticated by its caller.
+  enum class TerminationKind { None, RuntimeEntry, StackCheckFailure };
+  TerminationKind Termination = TerminationKind::None;
+  bool terminates() const { return Termination != TerminationKind::None; }
   // Parameter indexes whose exact private-frame address is borrowed
   // synchronously and read-only by an independently known call contract.
   std::map<size_t, size_t> ReadOnlyFrameParameters;
@@ -59,6 +61,9 @@ std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation);
 /// An independently inferred ARM64 entry signature may additionally authorize
 /// exact eight-byte reads of its scalar incoming stack slots. Such values are
 /// unknown input bytes, never saved-register identities or private-frame facts.
+/// A separately authenticated ARM64 stack-check failure may end a successorless
+/// block after the same transfer checks. At least one reachable normal return
+/// is required, and every normal return still restores all incoming state.
 /// This does not prove a result type or authorize machine-code rewriting.
 bool restoresNativeSourceState(
     const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
