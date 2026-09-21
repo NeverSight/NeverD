@@ -87,6 +87,8 @@ neverd export WMF --format=objc-methods-summary -o summary.json
 
 對 libobjc 最佳化後的型別與選擇子查詢，保留精確的執行階段呼叫，包括空物件處理和自訂覆寫。回傳位元組保留呼叫端的原生轉換，不替換為推測的類別繼承關係檢查。
 
+原始碼繫結僅在指標參數具有常數位址時建立經過驗證的直接類別物件身分對照。此對照僅限目前的繫結作業；後續每次作業都會重新驗證目前映像，包括類別名稱、元類別旗標及身分衝突。
+
 Objective-C 匯出也支援一組固定、使用一般 C ABI 的 Swift 執行階段匯入：參照計數、原生及未知物件弱參照、物件中繼資料，以及存取檢查的開始與結束。產生的 C 保留這些呼叫，連結時需要 Swift 執行階段。專用暫存器入口、未知的 Swift 呼叫慣例及任意 Swift 符號仍不支援；匯入身分與純量載體必須精確符合。
 
 獨立綁定支援 arm64 和 x86_64 上精確的 Darwin String → NSString 匯入 `_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF`，以及可選 NSString → String 匯入 `_$sSS10FoundationE36_unconditionallyBridgeFromObjectiveCySSSo8NSStringCSgFZ`。兩者均保留所有權語義和 Clang `swiftcall`；連結需要 Swift Foundation 與 Swift Core。反向橋接將傳回的兩個 String 機器字作為無號 128 位元整數傳遞，在建立 SSA 前拆入明確的傳回暫存器。這只是位元載體，不代表已還原 String 配置或通用聚合 ABI。未知簽章和不完整的初始化相依性仍不受支援。

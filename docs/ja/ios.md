@@ -87,6 +87,8 @@ neverd export WMF --format=objc-methods-summary -o summary.json
 
 libobjc の最適化されたクラス照会とセレクタ照会は、nil 処理と独自のオーバーライドを含む実際のランタイム呼び出しを保持します。結果のバイト値には呼び出し元のネイティブ変換が適用され、推測した継承関係の検査には置き換えません。
 
+ソースの束縛では、ポインタ引数が定数アドレスを持つ場合に限り、検証済みの直接クラスオブジェクト識別マップを構築します。マップはその束縛処理内に限定され、後続の処理ではクラス名、メタクラスのフラグ、識別の競合を含め、現在のイメージを再検証します。
+
 Objective-C 出力は、通常の C ABI を持つ限定された Swift ランタイムのインポートも扱います。対象は参照カウント、ネイティブおよび型不明オブジェクトの弱参照、オブジェクトのメタデータ、アクセス検査の開始と終了です。生成 C は呼び出しを保持し、リンクには Swift ランタイムが必要です。専用レジスタの入口、未知の Swift 呼び出し規約、任意の Swift シンボルは対象外で、インポートの識別情報とスカラーの格納位置が正確に一致する必要があります。
 
 arm64 と x86_64 では、Darwin の正確な String → NSString インポート `_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF` と、オプショナル NSString → String インポート `_$sSS10FoundationE36_unconditionallyBridgeFromObjectiveCySSSo8NSStringCSgFZ` を個別にバインドします。所有権と Clang `swiftcall` を保持し、リンクには Swift Foundation と Swift Core が必要です。逆変換は返された String の 2 ワードを符号なし 128 ビット整数で運び、SSA の構築前に明示的な戻り値レジスタへ分割します。これはビットの搬送形式であり、復元された String レイアウトや汎用の集約 ABI ではありません。未知のシグネチャと不完全な初期化依存関係は引き続き未対応です。

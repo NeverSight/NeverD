@@ -2144,7 +2144,16 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     LocalStorage.emplace(Image);
     ProfileStorage = &*LocalStorage;
   }
-  const auto ClassObjects = classObjectIdentities(Image);
+  // Most functions never consume a direct class-object constant. Defer this
+  // whole-image proof until such a use exists, but keep it local to this bind
+  // so another call always validates the current image again.
+  std::optional<std::map<va_t, ClassObjectIdentity>> ClassObjects;
+  auto ClassObjectAt = [&](va_t Address) -> const ClassObjectIdentity * {
+    if (!ClassObjects)
+      ClassObjects.emplace(classObjectIdentities(Image));
+    const auto Found = ClassObjects->find(Address);
+    return Found == ClassObjects->end() ? nullptr : &Found->second;
+  };
   const auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
   const auto MergedIvarOffsets = mergedIvarOffsetPlans(Function, Image);
   const auto ObjectPointerLoads =
@@ -3111,13 +3120,12 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
             Signature.Parameters[Index].Type->Kind == NdTypeKind::Ptr &&
             validateSourceABI(Signature, Error)) {
           const auto Address = constantAddress(*Operand);
-          const auto Object =
-              Address ? ClassObjects.find(*Address) : ClassObjects.end();
-          if (Object != ClassObjects.end()) {
+          const auto *Object = Address ? ClassObjectAt(*Address) : nullptr;
+          if (Object) {
             auto Binding = std::make_shared<SourceCallTypeHint>();
-            Binding->CallKind = Object->second.Kind;
-            Binding->TargetAddress = Object->first;
-            Binding->TargetName = Object->second.Name;
+            Binding->CallKind = Object->Kind;
+            Binding->TargetAddress = *Address;
+            Binding->TargetName = Object->Name;
             auto &Hint = Binding->Signature;
             Hint.Architecture = Image.Arch;
             Hint.HasExplicitABI = true;

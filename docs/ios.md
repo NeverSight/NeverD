@@ -104,6 +104,8 @@ Known imported Objective-C runtime calls retain explicit argument and return bin
 
 The exact libobjc optimized class and selector queries retain their runtime calls, including nil handling and custom overrides. Their byte results preserve the caller’s native conversions; they are not replaced with a guessed class hierarchy test.
 
+Source binding builds the verified direct class-object identity map only when a pointer argument has a constant address. The map is local to one binding operation; each later operation validates the current image again, including class names, metaclass flags and conflicting identities.
+
 Associated-object get/set/remove calls preserve the object, key, value, and pointer-sized policy arguments. Generated C uses the public Objective-C runtime header, and executable regression tests compare retention, copying, and removal with the original methods.
 
 Objective-C exports also bind a fixed set of ordinary C-ABI Swift runtime imports for retain/release, native and unknown-object weak references, object metadata, and begin/end access. Generated C preserves these calls and requires the Swift runtime when linked. Register-specialized entry points, unrecognized Swift calling conventions and arbitrary Swift symbols remain unsupported; import identities and exact scalar carriers must agree.

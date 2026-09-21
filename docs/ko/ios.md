@@ -87,6 +87,8 @@ neverd export WMF --format=objc-methods-summary -o summary.json
 
 libobjc의 최적화된 클래스 및 선택자 질의는 nil 처리와 사용자 정의 재정의를 포함한 실제 런타임 호출을 보존합니다. 반환 바이트에는 호출자의 원래 변환이 적용되며 추측한 클래스 계층 검사로 대체하지 않습니다.
 
+소스 바인딩은 포인터 인자가 상수 주소를 가질 때만 검증된 직접 클래스 객체 식별 맵을 구성합니다. 이 맵은 한 번의 바인딩 작업에만 사용하며, 이후 작업은 클래스 이름, 메타클래스 플래그, 식별 충돌을 포함해 현재 이미지를 다시 검증합니다.
+
 Objective-C 내보내기는 일반 C ABI를 사용하는 정해진 Swift 런타임 가져오기도 지원합니다. 참조 횟수, 네이티브 및 알 수 없는 객체의 약한 참조, 객체 메타데이터, 접근 검사 시작과 종료가 대상입니다. 생성된 C는 호출을 보존하며 링크 시 Swift 런타임이 필요합니다. 전용 레지스터 진입점, 알 수 없는 Swift 호출 규약, 임의의 Swift 심볼은 지원하지 않으며 가져오기 식별 정보와 스칼라 전달 위치가 정확히 일치해야 합니다.
 
 arm64 및 x86_64에서 정확한 Darwin String → NSString 가져오기 `_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF`와 선택적 NSString → String 가져오기 `_$sSS10FoundationE36_unconditionallyBridgeFromObjectiveCySSSo8NSStringCSgFZ`를 각각 바인딩합니다. 소유권과 Clang `swiftcall`을 보존하며, 링크에는 Swift Foundation과 Swift Core가 필요합니다. 역방향 브리지는 반환된 String의 두 워드를 부호 없는 128비트 정수로 전달하고 SSA 구성 전에 명시적인 반환 레지스터로 분리합니다. 이는 비트 전달 형식이며 복원된 String 레이아웃이나 일반 집계 ABI가 아닙니다. 알 수 없는 시그니처와 불완전한 초기화 종속성은 계속 지원하지 않습니다.
