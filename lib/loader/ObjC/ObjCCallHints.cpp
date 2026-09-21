@@ -7,6 +7,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/DarwinImportVeneer.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
@@ -89,18 +90,17 @@ struct Dispatch {
   std::string Selector;
   va_t SelectorSlot = 0;
   va_t ImportSlot = 0;
+  bool LoadsSelector = false;
 };
 
-std::optional<Dispatch> veneer(const BinaryImage &Image, va_t Address) {
+std::optional<Dispatch> veneerStorage(const BinaryImage &Image, va_t Address) {
   if (Image.Arch == Arch::X64) {
     const auto *Bytes = code(Image, Address, 6);
     if (!Bytes || Bytes[0] != 0xff || Bytes[1] != 0x25)
       return std::nullopt;
     auto Slot = addSigned(Address + 6,
                           int32_t(llvm::support::endian::read32le(Bytes + 2)));
-    const auto Name = Slot ? importAt(Image, *Slot) : std::string();
-    return Name.empty() ? std::nullopt
-                        : std::optional<Dispatch>({Name, {}, 0, *Slot});
+    return Slot ? std::optional<Dispatch>({{}, {}, 0, *Slot}) : std::nullopt;
   }
   if (Image.Arch != Arch::AArch64)
     return std::nullopt;
@@ -124,6 +124,7 @@ std::optional<Dispatch> veneer(const BinaryImage &Image, va_t Address) {
       return std::nullopt;
     Result.Selector = Reference->second.Name;
     Result.SelectorSlot = *Slot;
+    Result.LoadsSelector = true;
     Address += 8;
     Bytes = code(Image, Address, 12);
     if (!Bytes)
@@ -133,14 +134,20 @@ std::optional<Dispatch> veneer(const BinaryImage &Image, va_t Address) {
   auto Slot = Page ? ldrSlot(Word(1), *Page, 16) : std::nullopt;
   if (!Slot || Word(2) != 0xd61f0200u) // BR x16
     return std::nullopt;
-  Result.Name = importAt(Image, *Slot);
   Result.ImportSlot = *Slot;
-  // A selector-loading veneer only has a proven ABI for message dispatch.
-  if (Result.SelectorSlot && Result.Name != "objc_msgSend" &&
-      Result.Name != "objc_msgSendSuper2")
+  return Result;
+}
+
+std::optional<Dispatch> veneer(const BinaryImage &Image, va_t Address) {
+  auto Result = veneerStorage(Image, Address);
+  if (!Result)
     return std::nullopt;
-  return Result.Name.empty() ? std::nullopt
-                             : std::optional<Dispatch>(std::move(Result));
+  Result->Name = importAt(Image, Result->ImportSlot);
+  // A selector-loading veneer only has a proven ABI for message dispatch.
+  if (Result->SelectorSlot && Result->Name != "objc_msgSend" &&
+      Result->Name != "objc_msgSendSuper2")
+    return std::nullopt;
+  return Result->Name.empty() ? std::nullopt : Result;
 }
 
 struct BlockIdentity {
@@ -625,6 +632,21 @@ bool isObjCInitFamily(llvm::StringRef Selector) {
   return Selector.empty() || Selector.front() < 'a' || Selector.front() > 'z';
 }
 } // namespace
+
+std::optional<va_t> darwinImportVeneerSlot(const BinaryImage &Image,
+                                           va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 ||
+      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
+      (Image.Arch == Arch::AArch64 && Address % 4) ||
+      !readImmutableCodeBytes(Image, Address,
+                              Image.Arch == Arch::AArch64 ? 12 : 6))
+    return std::nullopt;
+  const auto Target = veneerStorage(Image, Address);
+  return Target && !Target->LoadsSelector
+             ? std::optional<va_t>(Target->ImportSlot)
+             : std::nullopt;
+}
 
 std::optional<SourceCallTypeHint>
 objcRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {

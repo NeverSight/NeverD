@@ -3,6 +3,7 @@
 #include "neverd/ir/low/LowIR.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/SourceCallOccurrence.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -12,6 +13,21 @@
 #include <limits>
 
 namespace neverd {
+std::optional<SourceCallOccurrenceKey>
+sourceCallOccurrenceKey(const LowOp &Operation) {
+  if ((Operation.Opcode != NdOp::CALL &&
+       Operation.Opcode != NdOp::INDIR_CALL) ||
+      Operation.Seq < 0 || Operation.NumInputs != 1 ||
+      Operation.Inputs[0].Size != 8 ||
+      (Operation.Opcode == NdOp::CALL && !Operation.Inputs[0].isConst()))
+    return std::nullopt;
+  return SourceCallOccurrenceKey{
+      Operation.Addr, Operation.Seq, Operation.Opcode,
+      Operation.Inputs[0].isConst()
+          ? std::optional<va_t>(Operation.Inputs[0].Offset)
+          : std::nullopt};
+}
+
 namespace {
 
 llvm::Error invalid(const llvm::Twine &Message) {

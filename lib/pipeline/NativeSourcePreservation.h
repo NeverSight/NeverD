@@ -3,27 +3,16 @@
 
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SourceCallOccurrence.h"
 
 #include <map>
 #include <optional>
 #include <set>
-#include <tuple>
 #include <utility>
 
 namespace neverd {
 
-struct NativeSourceCallKey {
-  va_t Instruction = 0;
-  int Sequence = -1;
-  NdOp Opcode = NdOp::CALL;
-  std::optional<va_t> StaticTarget;
-
-  bool operator<(const NativeSourceCallKey &Other) const {
-    return std::tie(Instruction, Sequence, Opcode, StaticTarget) <
-           std::tie(Other.Instruction, Other.Sequence, Other.Opcode,
-                    Other.StaticTarget);
-  }
-};
+using NativeSourceCallKey = SourceCallOccurrenceKey;
 
 struct NativeSourceCallContract {
   const SourceFunctionTypeHint *Signature = nullptr;

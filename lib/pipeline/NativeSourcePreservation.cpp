@@ -11,17 +11,7 @@
 
 namespace neverd {
 std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation) {
-  if ((Operation.Opcode != NdOp::CALL &&
-       Operation.Opcode != NdOp::INDIR_CALL) ||
-      Operation.Seq < 0 || Operation.NumInputs != 1 ||
-      Operation.Inputs[0].Size != 8 ||
-      (Operation.Opcode == NdOp::CALL && !Operation.Inputs[0].isConst()))
-    return std::nullopt;
-  return NativeSourceCallKey{
-      Operation.Addr, Operation.Seq, Operation.Opcode,
-      Operation.Inputs[0].isConst()
-          ? std::optional<va_t>(Operation.Inputs[0].Offset)
-          : std::nullopt};
+  return sourceCallOccurrenceKey(Operation);
 }
 
 namespace {

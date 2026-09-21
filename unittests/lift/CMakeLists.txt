@@ -130,6 +130,8 @@ add_neverd_unittest(NeverDLiftTests
   core/HighCSourceCallTests.cpp
   core/NativeSourceHintsTests.cpp
   core/NativeFloatingReturnProofTests.cpp
+  core/NativeBooleanResultProofTests.cpp
+  core/SwiftBooleanRuntimeCandidateTests.cpp
   core/ObjCBlocksTests.cpp
   core/ObjCBlockCallHintTests.cpp
   core/HighFrameTemporaryTests.cpp
@@ -946,6 +948,8 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/ObjCPropertyTests.cpp
   core/NativeSourceHintsTests.cpp
   core/NativeFloatingReturnProofTests.cpp
+  core/NativeBooleanResultProofTests.cpp
+  core/SwiftBooleanRuntimeCandidateTests.cpp
   core/ObjCStorageTests.cpp
   core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
