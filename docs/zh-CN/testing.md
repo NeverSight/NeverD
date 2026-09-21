@@ -590,3 +590,7 @@ deterministic 与 offline。
 ## 移动 SDK 导出证据
 
 手动工作流 `Mobile SDK Export Evidence` 针对固定的 Xcode SDK 运行 `collect_mobile_ios_sdk_declarations.py --exports-only`。它原样留存 iOS 真机和模拟器 SDK 的 Foundation、CoreFoundation、UIKit 链接器映射，并记录目标、SDK 版本、SDK 设置哈希、文件大小和 SHA-256。常规声明收集器也会留存这些映射。文件缺失、为空、超出大小限制或位于 SDK 外部时，收集失败，并保留已完成的证据。链接器映射提供符号导出证据，不能证明调用 ABI 或方法恢复成功。
+
+## 移动端 Swift String ABI 证据
+
+手动工作流 `Mobile Swift String ABI Evidence` 使用 Xcode 26.5，为 arm64 iOS 设备与模拟器编译固定的 Swift 相等、排序比较探针及 C `swiftcall` 探针。`collect_mobile_swift_string_abi.py` 保存源码、LLVM IR、汇编、编译器身份、SDK 设置与 `libswiftCore.tbd` 及其哈希。两种语言都必须显示精确比较导入采用五个参数并返回 `i1`；C 必须将该结果显式扩展为一字节。目标或签名不符、命令失败及超时均保留部分证据并令采集失败。这些编译器证据不会安装运行时声明，也不证明方法已恢复。可在无 SDK 环境运行 `python3 -m unittest scripts.tests.test_mobile_swift_string_abi` 验证采集器。

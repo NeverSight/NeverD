@@ -660,3 +660,7 @@ deterministic/offline に保ったまま `RPC activation audit` を可能にし�
 ## モバイル SDK のエクスポート証拠
 
 手動ワークフロー `Mobile SDK Export Evidence` は、固定した Xcode SDK に対して `collect_mobile_ios_sdk_declarations.py --exports-only` を実行します。iOS 実機用とシミュレータ用の両 SDK から Foundation、CoreFoundation、UIKit のリンカーマップをそのまま保存し、ターゲット、SDK バージョン、SDK 設定のハッシュ、ファイルサイズ、SHA-256 を記録します。通常の宣言収集でも同じマップを保存します。ファイルの欠落、空ファイル、サイズ超過、SDK 外のファイルは収集を失敗させ、完了済みの証拠は保持します。リンカーマップはシンボルのエクスポートの証拠であり、呼び出し ABI やメソッド復元の成功を証明するものではありません。
+
+## モバイル Swift String の ABI 証拠
+
+手動ワークフロー `Mobile Swift String ABI Evidence` は、Xcode 26.5 を使い、arm64 iOS 実機とシミュレーター向けに固定の Swift 等価・順序比較プローブと C の `swiftcall` プローブをコンパイルします。`collect_mobile_swift_string_abi.py` は、ソース、LLVM IR、アセンブリ、コンパイラーの識別情報、SDK 設定、`libswiftCore.tbd` をハッシュ付きで保存します。両言語とも、正確な比較インポートが 5 引数を取り `i1` を返す必要があり、C はその結果を明示的に 1 バイトへ拡張する必要があります。ターゲットやシグネチャの相違、コマンド失敗、タイムアウトでは部分的な証拠を残して収集を失敗とします。この証拠はランタイム宣言を登録せず、メソッドの復元も証明しません。SDK 不要のテストは `python3 -m unittest scripts.tests.test_mobile_swift_string_abi` で実行できます。

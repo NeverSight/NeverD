@@ -650,3 +650,7 @@ offline으로 유지하면서 `RPC activation audit`를 가능하게 합니다.
 ## 모바일 SDK 내보내기 증거
 
 수동 `Mobile SDK Export Evidence` 워크플로는 고정된 Xcode SDK에서 `collect_mobile_ios_sdk_declarations.py --exports-only`를 실행합니다. iOS 기기 및 시뮬레이터 SDK의 Foundation, CoreFoundation, UIKit 링커 맵을 그대로 보존하고 대상, SDK 버전, SDK 설정 해시, 파일 크기, SHA-256을 기록합니다. 일반 선언 수집기도 이 맵을 보존합니다. 파일 누락, 빈 파일, 크기 제한 초과 또는 SDK 외부 파일은 수집 실패로 처리하며 완료된 증거는 유지합니다. 링커 맵은 심볼 내보내기 증거이며 호출 ABI나 메서드 복원 성공을 증명하지 않습니다.
+
+## 모바일 Swift String ABI 증거
+
+수동 워크플로 `Mobile Swift String ABI Evidence`는 Xcode 26.5로 arm64 iOS 기기와 시뮬레이터용 고정 Swift 동등성·순서 비교 프로브와 C `swiftcall` 프로브를 컴파일합니다. `collect_mobile_swift_string_abi.py`는 소스, LLVM IR, 어셈블리, 컴파일러 식별 정보, SDK 설정 및 `libswiftCore.tbd`를 해시와 함께 보관합니다. 두 언어 모두 정확한 비교 임포트가 인수 5개를 받아 `i1`을 반환해야 하며, C는 그 결과를 명시적으로 1바이트로 확장해야 합니다. 잘못된 대상이나 시그니처, 명령 실패 및 시간 초과는 부분 증거를 남기고 수집을 실패로 처리합니다. 이 증거는 런타임 선언을 등록하거나 메서드 복원을 입증하지 않습니다. SDK 없이 `python3 -m unittest scripts.tests.test_mobile_swift_string_abi`로 수집기를 테스트할 수 있습니다.
