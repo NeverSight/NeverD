@@ -314,3 +314,5 @@ arm64 Swift once 初始化器可透過已有型別的 native helper，在獨立�
 同一組已驗證的 UIKit SDK 證據支援 `CGSizeFromString(NSString *)` 及其包含兩個 double 的 `CGSize` 回傳值。共用 ABI 保留 `d0` 和 `d1`，包括跨越另一次呼叫仍需使用的獨立回傳結果。目前匯入與簽章複核會拒絕錯誤提供函式庫、純量替代、修改的指標參數，以及缺失或交換的回傳載體。
 
 ARM64 原生堆疊框架保存分析可讀取目前推斷入口簽名明確描述、按八位元組對齊的完整純量入堆疊參數槽。LowIR 讀取必須與整個槽精確相符。這些位元組仍是未知輸入值，不能證明已保存暫存器的身分或被呼叫函式私有堆疊框架內的位址。寫入、部分讀取、間隙及未宣告的槽不會取得此權限。原始碼函式本體、每個呼叫端的引數值和相依性閉包仍須驗證。
+
+完整的裝置與模擬器 UIKit SDK 宣告將 `UIAccessibilityPostNotification` 綁定為 `void(uint32_t, id nullable)`：ARM64 透過 `w0` 傳遞無號通知值，透過 `x1` 傳遞物件指標。`UIAccessibilityAnnouncementNotification` 是外部 `const uint32_t` 儲存空間。精確 UIKit 匯入只證明儲存位址，原始碼保留原有四位元組讀取和實際呼叫，包括 nil 引數，不替換通知編號。錯誤提供者、弱匯入、寬度或正負號變化及回傳契約變化均被拒絕；其他延遲儲存相依性仍須獨立證明。

@@ -66,14 +66,15 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
-  // UIKit declares these fixed functions with by-value CGSize parameters
-  // and results. The command-line-tools SDK used for DarwinSourceDeclarations.inc
-  // has no UIKit headers or binary, so retain the public contracts at the same
-  // exact symbol/provider boundary as the UIKit external storage below.
+  // UIKit declares these fixed source contracts. The command-line-tools SDK
+  // used for DarwinSourceDeclarations.inc has no UIKit headers or binary, so
+  // retain the public contracts at the same exact symbol/provider boundary as
+  // the UIKit external storage below.
   // https://developer.apple.com/documentation/uikit/nsstringfromcgsize
   // https://developer.apple.com/documentation/uikit/uigraphicsbeginimagecontext(_:)
   const bool UIKitFixedFunction =
       Name == "NSStringFromCGSize" || Name == "CGSizeFromString" ||
+      Name == "UIAccessibilityPostNotification" ||
       Name == "UIGraphicsBeginImageContext" ||
       Name == "UIGraphicsBeginImageContextWithOptions" ||
       Name == "UIGraphicsGetCurrentContext" ||
@@ -113,6 +114,14 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
       if (!Signature.ReturnType)
         return std::nullopt;
       Signature.Parameters = {{"string", NdType::makePtr(NdType::makeVoid())}};
+    }
+    if (Name == "UIAccessibilityPostNotification") {
+      // Device and simulator SDK ASTs agree on void(uint32_t, id nullable).
+      // The notification is an integer value; its argument may be nil.
+      Signature.Parameters = {
+          {"notification", NdType::makeInt(4, false)},
+          {"argument", NdType::makePtr(NdType::makeVoid())},
+      };
     }
     if (Name == "UIGraphicsBeginImageContextWithOptions") {
       // Complete Xcode 26.5 device and arm64 simulator ASTs agree on
@@ -271,6 +280,12 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
     MatchFrameworkData(
         "UIApplicationDidEnterBackgroundNotification",
         "/System/Library/Frameworks/UIKit.framework/UIKit");
+  // UIAccessibilityNotifications is uint32_t in both complete ARM64 SDK
+  // ASTs. Bind the external const object's address and keep the native load;
+  // neither the notification value nor pointer-sized contents are invented.
+  if (Image.Arch == Arch::AArch64)
+    MatchFrameworkData("UIAccessibilityAnnouncementNotification",
+                       "/System/Library/Frameworks/UIKit.framework/UIKit");
   // CIContext.h imports OpenGLES on iOS, unavailable in the CLT SDK used by
   // the generated catalog. Complete Xcode 26.5 iPhoneOS and arm64 simulator
   // ASTs agree that these are external, non-TLS NSString pointer objects.

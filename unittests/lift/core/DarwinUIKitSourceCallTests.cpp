@@ -105,7 +105,9 @@ TEST(DarwinUIKitSourceCalls, OptionsKeepSizeBoolAndScaleInIndependentBanks) {
 
 TEST(DarwinUIKitSourceCalls,
      FixedCallsRequireExactImportProviderAndArchitecture) {
-  for (const auto Import : {ImportName, "_CGSizeFromString"}) {
+  for (const auto Import :
+       {ImportName, "_CGSizeFromString", "_UIAccessibilityPostNotification",
+        "_UIAccessibilityAnnouncementNotification"}) {
     SCOPED_TRACE(Import);
     for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
       auto I = image(Import);
@@ -149,9 +151,47 @@ TEST(DarwinUIKitSourceCalls,
         I.Bits = Bitness::Bits32;
         break;
       }
-      EXPECT_FALSE(darwinRuntimeSourceCallHint(I, 0x2180)) << Mutation;
+      if (llvm::StringRef(Import) == "_UIAccessibilityAnnouncementNotification")
+        EXPECT_FALSE(darwinRuntimeGlobalAddressHint(I, 0x2180)) << Mutation;
+      else
+        EXPECT_FALSE(darwinRuntimeSourceCallHint(I, 0x2180)) << Mutation;
     }
   }
+}
+
+TEST(DarwinUIKitSourceCalls,
+     AccessibilityNotificationKeepsItsUnsignedWordAndExternalStorage) {
+  const auto I = image("_UIAccessibilityPostNotification");
+  const auto H = darwinRuntimeSourceCallHint(I, 0x2180);
+  ASSERT_TRUE(H);
+  EXPECT_EQ(H->TargetName, "UIAccessibilityPostNotification");
+  EXPECT_EQ(H->Signature.Origin, SourceFunctionTypeHint::OriginKind::DarwinSDK);
+  EXPECT_EQ(H->Signature.ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(H->Signature.Parameters.size(), 2U);
+  const auto &Notification = H->Signature.Parameters[0];
+  EXPECT_EQ(Notification.Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Notification.Type->Size, 4U);
+  EXPECT_FALSE(Notification.Type->IsSigned);
+  EXPECT_EQ(Notification.Location.Kind, SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(Notification.Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Notification.Location.ValueBytes, 4U);
+  const auto &Argument = H->Signature.Parameters[1];
+  EXPECT_EQ(Argument.Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Argument.Type->Size, 8U);
+  EXPECT_EQ(Argument.Location.RegisterOffset, a64reg::X1);
+  EXPECT_EQ(Argument.Location.ValueBytes, 8U);
+  EXPECT_EQ(sourceABIParameters(H->Signature).size(), 2U);
+  const auto Storage = image("_UIAccessibilityAnnouncementNotification");
+  const auto Address = darwinRuntimeGlobalAddressHint(Storage, 0x2180);
+  ASSERT_TRUE(Address);
+  EXPECT_EQ(Address->CallKind,
+            SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress);
+  EXPECT_EQ(Address->TargetName, "UIAccessibilityAnnouncementNotification");
+  EXPECT_EQ(Address->TargetAddress, 0x2180U);
+  EXPECT_TRUE(Address->Signature.Parameters.empty());
+  EXPECT_EQ(Address->Signature.ReturnType->Kind, NdTypeKind::Ptr);
+  EXPECT_FALSE(darwinRuntimeSourceCallHint(Storage, 0x2180));
+  EXPECT_FALSE(darwinRuntimeGlobalAddressHint(I, 0x2180));
 }
 
 TEST(DarwinUIKitSourceCalls,
@@ -433,6 +473,114 @@ TEST(DarwinUIKitSourceCalls, TwoSizeResultsKeepEveryFieldAcrossTheSecondCall) {
             "observed_calls == 1 ? 2.0 : 8.0}; return result; }\n"
             "int main(void) { return size_pair() != 8421 || "
             "observed_calls != 2 || mismatch; }\n";
+  executeSource(Source);
+}
+
+TEST(DarwinUIKitSourceCalls,
+     AnnouncementLoadsStayFourBytesAndNullableArgumentsReachTheRuntime) {
+  auto I = image("_UIAccessibilityPostNotification");
+  constexpr auto Announcement = "_UIAccessibilityAnnouncementNotification";
+  I.ImportPtrSlots[0x2188] = Announcement;
+  ASSERT_TRUE(I.recordDyldBindSlot(0x2188, Announcement, 0, UIKit, false));
+  LowFunc F;
+  F.Entry = 0x1200;
+  F.Name = "post_accessibility";
+  LowBlock B;
+  B.Id = 0;
+  B.StartAddr = F.Entry;
+  const auto X8 = NdVar::reg(a64reg::X8, 8);
+  const auto W0 = NdVar::reg(a64reg::X0, 4);
+  const auto X1 = NdVar::reg(a64reg::X1, 8);
+  B.Ops = {operation(NdOp::COPY, X8, {NdVar::cst(0x2188, 8)}, 0x1200),
+           operation(NdOp::LOAD, X8, {X8}, 0x1204),
+           operation(NdOp::LOAD, W0, {X8}, 0x1208),
+           operation(NdOp::COPY, X1, {NdVar::cst(0x1234, 8)}, 0x120c),
+           operation(NdOp::CALL, {}, {NdVar::cst(0x1100, 8)}, 0x1210),
+           operation(NdOp::COPY, X8, {NdVar::cst(0x2188, 8)}, 0x1214),
+           operation(NdOp::LOAD, X8, {X8}, 0x1218),
+           operation(NdOp::LOAD, W0, {X8}, 0x121c),
+           operation(NdOp::COPY, X1, {NdVar::cst(0, 8)}, 0x1220),
+           operation(NdOp::CALL, {}, {NdVar::cst(0x1100, 8)}, 0x1224),
+           operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8), {NdVar::cst(42, 8)},
+                     0x1228),
+           operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x122c)};
+  B.EndAddr = 0x1230;
+  F.Blocks = {B};
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&I);
+  Converter.setSourceCallHintsEnabled(true);
+  auto Med = Converter.convert(F, Arch::AArch64, BinaryFormat::MachO);
+  recoverCallAbi(Med, Arch::AArch64, {}, &I);
+  SourceFunctionTypeHint Entry;
+  Entry.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Entry.ReturnType = NdType::makeInt(8);
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Entry, Arch::AArch64, Error));
+  Med.SourceTypeHint = Entry;
+  inferMedTypes(Med, Arch::AArch64);
+  auto High = MedToHighConverter().convert(Med, Arch::AArch64);
+  auto Bound = sdk::bindObjCSourceReferences(High, I);
+  unsigned Calls = 0, StorageCalls = 0, WordLoads = 0;
+  walkStmts(Bound.Function.Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (!E)
+        return;
+      if (E->Kind == ExprKind::Load && E->Type && E->Type->Size == 4)
+        ++WordLoads;
+      if (E->Kind != ExprKind::Call)
+        return;
+      ASSERT_TRUE(E->SourceCallHint);
+      EXPECT_TRUE(sdk::objcSourceCallBound(*E, I, {}));
+      if (E->SourceCallHint->CallKind ==
+          SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress) {
+        ++StorageCalls;
+        EXPECT_EQ(E->SourceCallHint->TargetAddress, 0x2188U);
+        return;
+      }
+      ++Calls;
+      ASSERT_EQ(E->Operands.size(), 2U);
+      EXPECT_EQ(E->SourceCallHint->TargetName,
+                "UIAccessibilityPostNotification");
+      for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+        auto Wrong = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+        if (Mutation == 0)
+          Wrong->Signature.Parameters[0].Type = NdType::makeInt(1, false);
+        else if (Mutation == 1)
+          Wrong->Signature.Parameters[0].Type = NdType::makeInt(4, true);
+        else if (Mutation == 2)
+          Wrong->Signature.Parameters[0].Type = NdType::makeInt(8, false);
+        else if (Mutation == 3)
+          Wrong->Signature.Parameters[1].Type = NdType::makeInt(8, false);
+        else
+          Wrong->Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+        ASSERT_TRUE(
+            assignDarwinFixedSourceABI(Wrong->Signature, Arch::AArch64, Error));
+        auto Changed = *E;
+        Changed.SourceCallHint = Wrong;
+        EXPECT_FALSE(sdk::objcSourceCallBound(Changed, I, {})) << Mutation;
+      }
+    });
+  });
+  ASSERT_EQ(Calls, 2U);
+  EXPECT_GT(StorageCalls, 0U);
+  EXPECT_EQ(WordLoads, 2U);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({Bound.Function}, OS, Options));
+  ASSERT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  Source +=
+      "\nconst uint32_t announcement_probe "
+      "__asm__(\"_UIAccessibilityAnnouncementNotification\") = 0xf1234567U;\n"
+      "static unsigned observed_calls; static int mismatch;\n"
+      "void post_probe(uint32_t, void *) "
+      "__asm__(\"_UIAccessibilityPostNotification\");\n"
+      "void post_probe(uint32_t notification, void *argument) {\n"
+      " ++observed_calls; mismatch |= notification != 0xf1234567U || "
+      "(uintptr_t)argument != (observed_calls == 1 ? 0x1234U : 0);\n}\n"
+      "int main(void) { return post_accessibility() != 42 || observed_calls "
+      "!= 2 || mismatch; }\n";
   executeSource(Source);
 }
 } // namespace
