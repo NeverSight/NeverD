@@ -4982,7 +4982,13 @@ TEST(ObjCCallHints, FrameworkAndCompilerDataKeepExactExportIdentities) {
       {"NSManagedObjectContextDidSaveNotification", "CoreData"},
       {"kCGImagePropertyGIFDictionary", "ImageIO"},
       {"CSSearchableItemActivityIdentifier", "CoreSpotlight"},
-      {"kCGColorSpaceSRGB", "CoreGraphics"}};
+      {"kCGColorSpaceSRGB", "CoreGraphics"},
+      {"CIDetectorAccuracy", "CoreImage"},
+      {"CIDetectorAccuracyLow", "CoreImage"},
+      {"CIDetectorTypeFace", "CoreImage"},
+      {"kCIInputImageKey", "CoreImage"},
+      {"CIDetectorAccuracy", "QuartzCore"},
+      {"kCIInputImageKey", "QuartzCore"}};
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (auto [Name, Framework] : Declarations) {
       SCOPED_TRACE(Name);

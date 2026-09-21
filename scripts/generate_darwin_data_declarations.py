@@ -160,7 +160,8 @@ def main():
     args = parser.parse_args()
     sdk = args.sdk.resolve(strict=True)
     clang = DataDeclarations(args.libclang)
-    frameworks = ("CoreData", "CoreGraphics", "ImageIO", "CoreSpotlight", "QuartzCore")
+    frameworks = ("CoreData", "CoreGraphics", "ImageIO", "CoreSpotlight", "QuartzCore",
+                  "CoreImage")
     with tempfile.TemporaryDirectory(prefix="neverd-darwin-data-") as work:
         source = Path(work) / "declarations.m"
         source.write_text(
@@ -170,7 +171,12 @@ def main():
             # CALayer supplies the public layer constants without pulling in
             # OpenGLES headers absent from the command-line-tools SDK.
             "".join(f"#import <{name}/{'CALayer' if name == 'QuartzCore' else name}.h>\n"
-                    for name in frameworks))
+                    for name in frameworks if name != "CoreImage") +
+            # These public CoreImage headers are complete on every target.
+            # The umbrella also imports CIContext, whose iOS OpenGLES headers
+            # are absent from the command-line-tools SDK.
+            "#import <CoreImage/CIDetector.h>\n#import <CoreImage/CIFilter.h>\n"
+            "#import <CoreImage/CIImage.h>\n")
         profiles = [clang.extract(source, sdk, target) for target in TARGETS]
         for profile, target in zip(profiles, TARGETS):
             for name, declarations in compile_literal_storage(args.clang, sdk, target).items():
