@@ -310,3 +310,5 @@ arm64 UIKit 目录还绑定 `UIProgressView` 的 `observedProgress` 对象结果
 `UIProgressView` 的 `setProgress:` 要求已证明的接收者，可来自经过精确 ARC 身份调用保持的类型化属性结果。已验证的父类与协议闭包选择 `float` 参数。没有接收者限定的调用仍有歧义，因为 UIKit 和本地类还为同一 selector 声明了对象参数 setter。
 
 arm64 UIKit 目录也记录 `UIButton` 的 `setTitleColor:forState:`（对象参数及无符号 64 位 `UIControlState`），以及 `UIView` 的 void 方法 `invalidateIntrinsicContentSize`；完整设备和模拟器 AST 的证据一致。已观测的 `UIImageView → UIView` 继承关系使现有 receiver 证明可以区分本地对象 setter 与无关类的同名浮点 setter。未知 receiver、子类声明冲突、父类提供方缺失及 x86_64 仍不受支持。
+
+字典查询返回未限定类型的 `id` 时，即使与通过 `new` 返回已知类的路径合流，也不能获得该接收者类型。每条输入路径都必须保留接收者证据；即使参数是显式类型的指针，也不能据此在有冲突的浮点声明中选中对象参数 setter。

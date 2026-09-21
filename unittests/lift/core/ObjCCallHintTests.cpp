@@ -7130,6 +7130,102 @@ TEST(ObjCCallHints, IOSProgressSetterRequiresPropertyReceiverAcrossARC) {
   }
 }
 
+TEST(ObjCCallHints, UnknownDictionaryResultCannotInheritAnotherPathsReceiver) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+  ObjCMethod EntryMethod;
+  EntryMethod.ClassName = "NSDictionary";
+  EntryMethod.Selector = "consumeProgress:";
+  EntryMethod.Implementation = 0x1200;
+  EntryMethod.TypeEncoding = "v24@0:8@16";
+  EntryMethod.TypeHint = parseObjCMethodEncoding(EntryMethod.Selector,
+                                                EntryMethod.TypeEncoding);
+  Image.ObjCMethods.push_back(EntryMethod);
+  auto Setter = EntryMethod;
+  Setter.ClassName = "Result";
+  Setter.Selector = "setProgress:";
+  Setter.Implementation = 0x1600;
+  Image.ObjCMethods.push_back(Setter);
+  ObjCClass ResultClass;
+  ResultClass.Name = "Result";
+  ResultClass.SuperclassName = "NSObject";
+  ResultClass.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(ResultClass);
+  Image.ObjCSourceReferences[0x2100].Name = "setProgress:";
+  Image.ObjCSourceReferences[0x2110] = {
+      ObjCSourceReference::Kind::Selector, 0x2110, 8, "objectForKey:"};
+  Image.ObjCSourceReferences[0x2118] = {
+      ObjCSourceReference::Kind::Selector, 0x2118, 8, "new"};
+  Image.ObjCSourceReferences[0x2200] = {
+      ObjCSourceReference::Kind::Class, 0x2200, 8, "Result"};
+  receiverRuntimeImport(Image, "objc_retainAutoreleasedReturnValue");
+  ASSERT_FALSE(objcSelectorSourceTypeHint(Image, "setProgress:"));
+
+  const auto Self = NdVar::reg(TRI.IntParamRegs[0], 8);
+  const auto Command = NdVar::reg(TRI.IntParamRegs[1], 8);
+  const auto Argument = NdVar::reg(TRI.IntParamRegs[2], 8);
+  const auto SavedArgument = NdVar::reg(a64reg::X20, 8);
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  LowBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = 0x1200;
+  Entry.Succs = {1, 2};
+  Entry.Ops = {operation(NdOp::COPY, SavedArgument, {Argument}, 0x1200)};
+  LowBlock Dictionary;
+  Dictionary.Id = 1;
+  Dictionary.StartAddr = 0x1300;
+  Dictionary.Preds = {0};
+  Dictionary.Succs = {3};
+  Dictionary.Ops = {
+      operation(NdOp::LOAD, Command, {NdVar::cst(0x2110, 8)}, 0x1300),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1304),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2188, 8)}, 0x1308)};
+  LowBlock Created;
+  Created.Id = 2;
+  Created.StartAddr = 0x1400;
+  Created.Preds = {0};
+  Created.Succs = {3};
+  Created.Ops = {
+      operation(NdOp::LOAD, Self, {NdVar::cst(0x2200, 8)}, 0x1400),
+      operation(NdOp::LOAD, Command, {NdVar::cst(0x2118, 8)}, 0x1404),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1408)};
+  LowBlock Join;
+  Join.Id = 3;
+  Join.StartAddr = 0x1500;
+  Join.Preds = {1, 2};
+  Join.Ops = {
+      operation(NdOp::COPY, Argument, {SavedArgument}, 0x1500),
+      operation(NdOp::LOAD, Command, {NdVar::cst(0x2100, 8)}, 0x1504),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1508),
+      operation(NdOp::RETURN, {}, {}, 0x150c)};
+  const std::vector<LowBlock> Blocks{Entry, Dictionary, Created, Join};
+  std::array<unsigned, 4> Order{0, 1, 2, 3};
+  do {
+    Function.Blocks.clear();
+    for (auto Index : Order)
+      Function.Blocks.push_back(Blocks[Index]);
+    const auto Hints = buildObjCSourceCallHints(Image, Function);
+    ASSERT_TRUE(Hints.count(0x1304));
+    ASSERT_TRUE(Hints.count(0x1408));
+    // A typed pointer in x2 does not prove which ABI the unknown receiver
+    // consumes. The new result on the other edge cannot supply that proof.
+    EXPECT_FALSE(Hints.count(0x1508));
+  } while (std::next_permutation(Order.begin(), Order.end()));
+
+  Entry.Succs = {2};
+  Join.Preds = {2};
+  Function.Blocks = {Entry, Created, Join};
+  const auto Known = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Known.count(0x1508));
+  ASSERT_TRUE(Known.at(0x1508).Receiver);
+  EXPECT_EQ(Known.at(0x1508).Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+}
+
 TEST(ObjCCallHints, IOSViewDeclarationsKeepVoidAndUnsignedControlState) {
   constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
