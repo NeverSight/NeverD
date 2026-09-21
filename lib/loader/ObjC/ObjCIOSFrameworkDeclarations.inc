@@ -45,6 +45,13 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "instantiateWithOwner:options:", "@32@0:8@16@24", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "mainScreen", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "nibWithNibName:bundle:", "@32@0:8@16@24", nullptr},
+// UIProgressView additions: both complete Xcode 26.5 Messages ASTs from
+// GitHub Actions artifact 10653622473 agree on every owner of these selectors.
+// iPhoneOS SHA-256: dc99c06a9e4aab8015f8675b08ac55e042201401c21d39a4df4535aa63e0303f
+// Simulator SHA-256: c443f389aae208205f42b4a592859ffb45766cc6e2f663b6ef919528e2676b61
+// Apple Clang independently encodes the observed NSProgress*, float and bool
+// declaration types for both arm64 iOS targets; neither is variadic.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "observedProgress", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "potentialEDRHeadroom", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "resignFirstResponder", "B16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "scale", "d16@0:8", nullptr},
@@ -54,6 +61,7 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAdjustsFontForContentSizeCategory:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setCenter:", "v32@0:8{CGPoint=dd}16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setLayoutMargins:", "v48@0:8{UIEdgeInsets=dddd}16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:animated:", "v24@0:8f16B20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgressViewStyle:", "v24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setText:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTranslatesAutoresizingMaskIntoConstraints:", "v20@0:8B16", nullptr},

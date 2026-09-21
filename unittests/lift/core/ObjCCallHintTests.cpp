@@ -6946,6 +6946,71 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   }
 }
 
+TEST(ObjCCallHints, IOSProgressKeepsFloatAndBooleanInSeparateABIRegisters) {
+  constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (const char *Selector : {"observedProgress", "setProgress:animated:"}) {
+    SCOPED_TRACE(Selector);
+    const bool Setter = llvm::StringRef(Selector) == "setProgress:animated:";
+    auto Image = image(Arch::AArch64);
+    Image.ObjCMethods.clear();
+    Image.DynInfo.NeededLibs = {Module};
+    Image.ObjCSourceReferences.at(0x2100).Name = Selector;
+    auto Low = caller();
+    if (Setter)
+      Low.Blocks.front().Ops.back().NumInputs = 0;
+    const auto Med = convert(Image, Low);
+    ASSERT_EQ(Med.CallInfos.size(), 1U);
+    const auto &Call = Med.CallInfos.front();
+    ASSERT_TRUE(Call.SourceCallHint);
+    const auto &Hint = *Call.SourceCallHint;
+    EXPECT_EQ(Hint.Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::ObjCSDK);
+    EXPECT_EQ(Hint.Signature.ReturnType->Kind,
+              Setter ? NdTypeKind::Void : NdTypeKind::Ptr);
+    ASSERT_EQ(Call.Args.size(), Setter ? 4U : 2U);
+    EXPECT_EQ(Call.Args[0].RegOff, TRI.IntParamRegs[0]);
+    EXPECT_EQ(Hint.Signature.Parameters[1].Location.RegisterOffset,
+              TRI.IntParamRegs[1]);
+    if (Setter) {
+      // A float in s0 must not consume x2: the following BOOL still uses w2.
+      EXPECT_EQ(Call.Args[2].RegOff, TRI.FPParamRegs[0]);
+      EXPECT_EQ(Call.Args[2].Size, 4U);
+      EXPECT_EQ(Hint.Signature.Parameters[2].Type->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Hint.Signature.Parameters[3].Location.RegisterOffset,
+                TRI.IntParamRegs[2]);
+      EXPECT_EQ(Call.Args[3].Size, 1U);
+      EXPECT_EQ(Hint.Signature.Parameters[3].Type->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Med.Blocks[Call.BlockId].Ops[Call.OpIdx].Output.Size, 0U);
+    } else {
+      EXPECT_EQ(Hint.Signature.ReturnLocation.RegisterOffset, TRI.IntReturnReg);
+      EXPECT_EQ(Hint.Signature.ReturnLocation.ValueBytes, 8U);
+    }
+    auto Expression = receiverCallExpression(Hint);
+    ASSERT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+    if (Setter) {
+      auto ChangedHint = std::make_shared<SourceCallTypeHint>(Hint);
+      ChangedHint->Signature.Parameters[2].Location.ValueBytes = 8;
+      Expression->SourceCallHint = ChangedHint;
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Image, {}));
+      Expression->SourceCallHint = std::make_shared<SourceCallTypeHint>(Hint);
+    }
+    for (const char *OtherModule :
+         {"/tmp/UIKit.framework/UIKit",
+          "/System/Library/Frameworks/UIKit.framework/Versions/A/UIKit",
+          "/System/Library/Frameworks/Foundation.framework/Foundation"}) {
+      auto Changed = Image;
+      Changed.DynInfo.NeededLibs = {OtherModule};
+      EXPECT_FALSE(objcSelectorSourceTypeHint(Changed, Selector));
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}));
+    }
+    auto Unsupported = image(Arch::X64);
+    Unsupported.ObjCMethods.clear();
+    Unsupported.DynInfo.NeededLibs = {Module};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
+  }
+}
+
 TEST(ObjCCallHints, IOSCoreImageCropKeepsExactProviderAndRecordABI) {
   constexpr auto Module =
       "/System/Library/Frameworks/CoreImage.framework/CoreImage";
