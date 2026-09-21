@@ -310,3 +310,5 @@ Arm64 的 `+[NSSet setWithObjects:]` 保留 SDK 中以 nil 終止的可變參數
 arm64 Swift once 初始化器可透過已有型別的 native helper，在獨立靜態槽之間複製物件。統一的用途契約核對所有目前參數與每條路徑，依序保留 predicate 讀取、可選的 `swift_once`、來源讀取、目的寫入、`objc_retain` 與返回。契約接受四個用途參數，或另加一個未使用的輸入；參數移除仍僅由 native 推斷負責。探索與繫結都針對目前 image 重驗同一契約、精確回呼及儲存符號、互不重疊的八位元組範圍和回呼未使用的 context。ABI、控制流程、記憶體效果及相依檢查維持完整；別名、部分或有序存取、額外用途和過期證據仍會拒絕。
 
 完整 iOS 實機與模擬器 SDK 宣告也確認 `UIGraphicsBeginImageContextWithOptions(CGSize, BOOL, CGFloat)` 是回傳 void 的固定 C 呼叫。ARM64 上，尺寸的兩個欄位使用 `d0`、`d1`，布林值使用 `w0` 攜帶的位元組，縮放值使用 `d2`。精確 UIKit 連結器匯出認證提供程式庫。原始碼保留真實呼叫與包裝函式的計數器更新；錯誤提供程式庫、不支援的架構和被變更的宣告仍遭拒絕。 本機包裝函式仍需獨立的狀態與回傳值證明。
+
+同一組已驗證的 UIKit SDK 證據支援 `CGSizeFromString(NSString *)` 及其包含兩個 double 的 `CGSize` 回傳值。共用 ABI 保留 `d0` 和 `d1`，包括跨越另一次呼叫仍需使用的獨立回傳結果。目前匯入與簽章複核會拒絕錯誤提供函式庫、純量替代、修改的指標參數，以及缺失或交換的回傳載體。
