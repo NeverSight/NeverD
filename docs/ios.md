@@ -282,6 +282,8 @@ Swift lazy static object getters exposed through Objective-C entry thunks can be
 
 Swift Objective-C constructor thunks with an authenticated `cfcTo` symbol and the runtime `init` signature can also discard an undeclared third argument register when its sole occurrence is the context of one exact `swift_once` call. The predicate `_Wz` and initializer `_WZ` must match; the callback must ignore the context and have no ordinary direct caller. The projection passes null, infers only the predicate’s eight-byte storage extent, and preserves every other control-flow, memory and call effect; normal source-body and dependency-closure checks still apply.
 
+ARM64 once callbacks can forward an otherwise unused x2 context to one nested `swift_once` when the outer `_WZ` symbol and inner `_Wz`/`_WZ` pair are exact, neither callback has an ordinary direct caller, and an independently typed leaf ignores its context. The same contract controls discovery and projection. Projection passes null and keeps every statement; the void callback ABI permits discarding only pure register/temporary or constant return carriers. Stack reads, loads or calls in return expressions, and unresolved dependencies remain rejected.
+
 ## Verification and troubleshooting
 
 On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.

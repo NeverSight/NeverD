@@ -58,6 +58,7 @@ struct SwiftOnceSourcePlan {
   std::map<va_t, SwiftOnceGetterContract> Getters;
   std::map<va_t, SwiftOnceAddressorContract> Addressors;
   std::map<va_t, SwiftOnceObjCThunkContract> ObjCThunks;
+  std::map<va_t, SwiftOnceObjCThunkContract> NestedCallbacks;
   std::map<va_t, SwiftObjCClassMetadataAccessorContract>
       ObjCClassMetadataAccessors;
   std::map<va_t, SourceFunctionTypeHint> AddressorHints;
@@ -988,6 +989,115 @@ inline SourceFunctionTypeHint addressorHint(Arch Architecture) {
   return Hint;
 }
 
+inline bool discardableCallbackReturn(ExprPtr Value) {
+  if (!Value)
+    return true;
+  const auto Plain = [](const ExprPtr &E) {
+    return E && E->Type && E->Type->Size == 8 &&
+           (E->Type->Kind == NdTypeKind::Int ||
+            E->Type->Kind == NdTypeKind::Ptr) &&
+           E->IntrinsicId == Intrinsic::None && E->IntrinsicOutputs.empty() &&
+           E->MemoryOrdering == NdMemoryOrdering::None &&
+           E->MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+  unsigned Depth = 0;
+  while (Plain(Value) &&
+         (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+         Value->Operands.size() == 1 && Depth++ < 16)
+    Value = Value->Operands.front();
+  return Plain(Value) && Value->Operands.empty() &&
+         (Value->Kind == ExprKind::Const ||
+          (Value->Kind == ExprKind::Var && (Value->Var.Kind == MedVar::Reg ||
+                                            Value->Var.Kind == MedVar::Temp)));
+}
+
+/// A callback already rooted by an authenticated once call can itself forward
+/// an undeclared x2 to one nested once initializer. Its only entry use must be
+/// that context; the independent leaf callback proof owns whether it is
+/// ignored.
+inline std::optional<SwiftOnceObjCThunkContract>
+nestedCallbackContract(const HighFunc &F, const BinaryImage &Image) {
+  if (Image.Arch != Arch::AArch64 || F.SourceTypeHint || F.Params.size() != 3 ||
+      !F.ReturnType ||
+      (F.ReturnType->Kind != NdTypeKind::Void &&
+       ((F.ReturnType->Kind != NdTypeKind::Int &&
+         F.ReturnType->Kind != NdTypeKind::Ptr) ||
+        F.ReturnType->Size != 8)))
+    return std::nullopt;
+  for (const auto &P : F.Params)
+    if (!P.Type || P.Type->Size != 8 ||
+        (P.Type->Kind != NdTypeKind::Int && P.Type->Kind != NdTypeKind::Ptr))
+      return std::nullopt;
+  size_t Symbols = 0;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr == F.Entry && Symbol.Name == F.Name &&
+        llvm::StringRef(Symbol.Name).starts_with("_$s") &&
+        llvm::StringRef(Symbol.Name).ends_with("_WZ"))
+      ++Symbols;
+  if (Symbols != 1)
+    return std::nullopt;
+  const auto Flow = buildHighSourceFlowGraph(F);
+  if (!Flow.Diagnostics.Complete || !Flow.Diagnostics.Items.empty())
+    return std::nullopt;
+  size_t Budget = 100000;
+  size_t ContextUses = 0;
+  const HighExpr *Once = nullptr;
+  bool Valid = true;
+  std::function<void(const ExprPtr &, unsigned)> Visit = [&](const ExprPtr &E,
+                                                             unsigned Depth) {
+    if (!Valid)
+      return;
+    if (!E || !Budget-- || Depth > 128 || E->Kind == ExprKind::Undef) {
+      Valid = false;
+      return;
+    }
+    if ((E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+        E->Var.Kind == MedVar::Param) {
+      if (E->Var.Id == 2)
+        ++ContextUses;
+      else
+        Valid = false;
+    }
+    if (onceCall(*E, Image)) {
+      if (Once || parameter(E->Operands[2]) != std::optional<size_t>{2})
+        Valid = false;
+      Once = E.get();
+    }
+    for (const auto &Operand : E->Operands)
+      Visit(Operand, Depth + 1);
+  };
+  walkStmts(F.Body, [&](const HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Return &&
+        !discardableCallbackReturn(Statement.RetVal))
+      Valid = false;
+    forEachExpr(Statement, [&](const ExprPtr &E) { Visit(E, 0); });
+  });
+  if (!Valid || !Once || ContextUses != 1)
+    return std::nullopt;
+  const auto Predicate =
+      objc_binding_detail::constantAddress(*Once->Operands[0]);
+  const auto Initializer =
+      objc_binding_detail::constantAddress(*Once->Operands[1]);
+  const auto PredicateHint =
+      Predicate
+          ? objc_binding_detail::oncePredicateStorageHint(Image, *Predicate)
+          : std::nullopt;
+  if (!PredicateHint || !Initializer || !Image.isCodeAddress(*Initializer) ||
+      !llvm::StringRef(PredicateHint->TargetName).ends_with("_Wz"))
+    return std::nullopt;
+  const auto InitializerName =
+      llvm::StringRef(PredicateHint->TargetName).drop_back(3).str() + "_WZ";
+  size_t InitializerSymbols = 0;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr == *Initializer &&
+        Symbol.Name == InitializerName)
+      ++InitializerSymbols;
+  if (InitializerSymbols != 1)
+    return std::nullopt;
+  return SwiftOnceObjCThunkContract{*Predicate, std::nullopt, *Initializer,
+                                    callbackHint(Image.Arch)};
+}
+
 inline bool ignoresContext(const HighFunc &F) {
   const auto Flow = buildHighSourceFlowGraph(F);
   if (!Flow.Diagnostics.Complete || !Flow.Diagnostics.Items.empty())
@@ -1109,6 +1219,25 @@ discoverSwiftOnceSources(const BinaryImage &Image,
         }
       });
     });
+  }
+  const auto RootCallbacks = Plan.CallbackHints;
+  for (const auto &[Address, Hint] : RootCallbacks) {
+    if (Plan.DispatchOnceCallbacks.count(Address) ||
+        DirectTargets.count(Address))
+      continue;
+    const auto Outer = Functions.find(Address);
+    const auto Contract = Outer == Functions.end() || !Outer->second
+                              ? std::nullopt
+                              : nestedCallbackContract(*Outer->second, Image);
+    if (!Contract || Contract->Initializer == Address ||
+        DirectTargets.count(Contract->Initializer))
+      continue;
+    const auto Inner = Functions.find(Contract->Initializer);
+    if (Inner == Functions.end() || !Inner->second ||
+        !ignoresContext(*Inner->second))
+      continue;
+    Plan.NestedCallbacks.emplace(Address, *Contract);
+    Plan.CallbackHints.emplace(Contract->Initializer, callbackHint(Image.Arch));
   }
   return Plan;
 }
@@ -1247,10 +1376,14 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     for (auto &Op : E->Operands)
       Op = Copy(Op, Depth + 1);
     if (swift_once_source_detail::onceCall(*E, Image)) {
-      const auto Planned = Plan.ObjCThunks.find(Function.Entry);
+      const bool Nested = Plan.NestedCallbacks.count(Function.Entry) != 0;
+      const auto &Contracts = Nested ? Plan.NestedCallbacks : Plan.ObjCThunks;
+      const auto Planned = Contracts.find(Function.Entry);
       const auto Current =
-          swift_once_source_detail::objcThunkContract(Function, Image);
-      if (Planned != Plan.ObjCThunks.end() && Current &&
+          Nested ? swift_once_source_detail::nestedCallbackContract(Function,
+                                                                    Image)
+                 : swift_once_source_detail::objcThunkContract(Function, Image);
+      if (Planned != Contracts.end() && Current &&
           Current->sameIdentity(Planned->second)) {
         const auto Predicate =
             objc_binding_detail::constantAddress(*E->Operands[0]);
@@ -1291,7 +1424,8 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
               if (Planned->second.Storage)
                 Result.LocalStorageExtents[*Planned->second.Storage] = 8;
               Result.Dependencies.insert(Planned->second.Initializer);
-              Result.SwiftOnceObjCThunks.insert(Function.Entry);
+              if (!Nested)
+                Result.SwiftOnceObjCThunks.insert(Function.Entry);
               return E;
             }
           }
@@ -1539,6 +1673,39 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     Result.Function.DebugName.clear();
     Result.Function.SourceFile.clear();
   }
+  return Result;
+}
+
+inline std::optional<ObjCSourceBindingResult> projectSwiftOnceNestedCallback(
+    const HighFunc &Function, const BinaryImage &Image,
+    const SwiftOnceSourcePlan &Plan,
+    const std::map<va_t, const HighFunc *> &Functions) {
+  const auto Planned = Plan.NestedCallbacks.find(Function.Entry);
+  const auto Current =
+      swift_once_source_detail::nestedCallbackContract(Function, Image);
+  const auto Callback = Plan.CallbackHints.find(Function.Entry);
+  if (Planned == Plan.NestedCallbacks.end() || !Current ||
+      !Current->sameIdentity(Planned->second) ||
+      Callback == Plan.CallbackHints.end() ||
+      !objc_projection_detail::sameHint(Callback->second, Current->Signature))
+    return std::nullopt;
+  auto Result = bindSwiftOnceSourceReferences(Function, Image, Plan, Functions);
+  if (!Result.Dependencies.count(Current->Initializer) ||
+      !Result.LocalStorageExtents.count(Current->Predicate) ||
+      !swift_once_source_detail::ignoresContext(Result.Function))
+    return std::nullopt;
+  // Failure to bind the extra context may leave the generic x0 return in
+  // HighIR even after callback discovery. The once callback ABI returns void.
+  // Discard only a side-effect-free scalar carrier, keeping every preceding
+  // call and memory operation; an embedded load/call must not disappear.
+  walkStmts(Result.Function.Body, [&](HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Return)
+      Statement.RetVal.reset();
+  });
+  Result.Function.Params = {
+      {"once_context", NdType::makePtr(NdType::makeVoid())}};
+  Result.Function.ReturnType = Current->Signature.ReturnType;
+  Result.Function.SourceTypeHint = Current->Signature;
   return Result;
 }
 

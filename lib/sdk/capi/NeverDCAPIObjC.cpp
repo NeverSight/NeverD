@@ -184,6 +184,21 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       Functions.emplace(Func.Entry, &Func);
       ++NativeFunctionCount;
     }
+    // Nested once callbacks retain their machine body until the final source
+    // projection. Publish only a separately proved copy to source consumers;
+    // Low/Med ABI inference and ordinary native calls keep the original body.
+    std::map<va_t, ObjCSourceBindingResult> NestedOnceInputs;
+    for (const auto &[Entry, Contract] : OncePlan.NestedCallbacks) {
+      const auto Found = Functions.find(Entry);
+      if (Found == Functions.end() || !Found->second)
+        continue;
+      auto Projection = projectSwiftOnceNestedCallback(*Found->second, S->Img,
+                                                       OncePlan, Functions);
+      if (Projection)
+        NestedOnceInputs.emplace(Entry, std::move(*Projection));
+    }
+    for (const auto &[Entry, Projection] : NestedOnceInputs)
+      Functions[Entry] = &Projection.Function;
     std::map<va_t, const PipelineFunctionAudit *> Audits;
     for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
       Audits.emplace(Audit.Entry, &Audit);
@@ -207,6 +222,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                             !finalizeSwiftOnceObjCThunkProjection(
                                 OnceBinding.Function, OncePlan)))
         continue;
+      if (const auto Nested = NestedOnceInputs.find(Entry);
+          Nested != NestedOnceInputs.end()) {
+        OnceBinding.Dependencies.insert(Nested->second.Dependencies.begin(),
+                                        Nested->second.Dependencies.end());
+        OnceBinding.LocalStorageExtents.insert(
+            Nested->second.LocalStorageExtents.begin(),
+            Nested->second.LocalStorageExtents.end());
+      }
       auto Binding = bindObjCSourceReferences(OnceBinding.Function, S->Img,
                                               &ProfileStorage, &Functions);
       Binding.Dependencies.insert(OnceBinding.Dependencies.begin(),

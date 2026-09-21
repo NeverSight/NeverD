@@ -249,6 +249,8 @@ Die Inferenz nativer Objective-C-Abhängigkeiten darf einen 64-Bit-Ganzzahlregis
 
 Swift-Objective-C-Konstruktorthunks mit authentifiziertem `cfcTo`-Symbol und der Laufzeitsignatur `init` können ebenfalls ein nicht deklariertes drittes Argumentregister entfernen, wenn dessen einziges Vorkommen der Kontext eines einzelnen exakt geprüften `swift_once`-Aufrufs ist. Prädikat `_Wz` und Initialisierer `_WZ` müssen zusammenpassen; der Callback muss den Kontext ignorieren und darf keinen gewöhnlichen direkten Aufrufer haben. Die Projektion übergibt null, leitet nur den acht Byte großen Speicherbereich des Prädikats ab und erhält alle übrigen Kontrollfluss-, Speicher- und Aufrufeffekte; die üblichen Prüfungen des Quellrumpfs und des Abhängigkeitsabschlusses gelten weiterhin.
 
+ARM64-Once-Callbacks dürfen einen sonst ungenutzten x2-Kontext an einen einzelnen verschachtelten `swift_once` weitergeben, wenn das äußere `_WZ`-Symbol und das innere `_Wz`/`_WZ`-Paar exakt stimmen, beide Callbacks keine gewöhnlichen direkten Aufrufer haben und der unabhängig typisierte Blatt-Callback seinen Kontext ignoriert. Erkennung und Projektion verwenden denselben Vertrag. Die Projektion übergibt null und erhält jede Anweisung; die void-Callback-ABI erlaubt nur das Verwerfen reiner Register-, Temporär- oder Konstantenrückgaben. Stack-Lesezugriffe, Ladeoperationen und Aufrufe in Rückgabeausdrücken sowie offene Abhängigkeiten bleiben ausgeschlossen.
+
 ## Verifikation und Fehlerdiagnose
 
 Unter macOS bieten Builds mit aktiviertem `BUILD_TESTING` das Ziel `check-neverd-mobile-ios`, das alle drei nativen Wiederherstellungstestsuiten über CTest ausführt.

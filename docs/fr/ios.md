@@ -249,6 +249,8 @@ Les getters d’objets statiques Swift à initialisation différée exposés par
 
 Les thunks de constructeur Swift Objective-C dotés d’un symbole `cfcTo` authentifié et de la signature d’exécution `init` peuvent aussi supprimer un troisième registre d’argument non déclaré si sa seule occurrence est le contexte d’un unique appel exact à `swift_once`. Le prédicat `_Wz` et l’initialiseur `_WZ` doivent correspondre ; le rappel doit ignorer le contexte et n’avoir aucun appelant direct ordinaire. La projection transmet null, déduit uniquement l’étendue de stockage de huit octets du prédicat et conserve tous les autres effets de contrôle, de mémoire et d’appel ; les vérifications habituelles du corps source et de la fermeture des dépendances restent applicables.
 
+Les callbacks once ARM64 peuvent transmettre un contexte x2 autrement inutilisé à un unique `swift_once` imbriqué si le symbole externe `_WZ` et la paire interne `_Wz`/`_WZ` sont exacts, si aucun callback n’a d’appelant direct ordinaire et si le callback terminal, typé indépendamment, ignore son contexte. Le même contrat régit la découverte et la projection. Celle-ci transmet null et conserve chaque instruction ; l’ABI void autorise uniquement la suppression d’un retour pur par registre, temporaire ou constante. Les lectures de pile, chargements et appels dans le retour, ainsi que les dépendances non résolues, restent rejetés.
+
 ## Vérification et dépannage
 
 Sur macOS, les builds avec `BUILD_TESTING` activé proposent `check-neverd-mobile-ios`, qui exécute les trois suites de récupération native via CTest.

@@ -456,6 +456,158 @@ struct ObjCConstructorFixture : ObjCThunkFixture {
   }
 };
 
+struct NestedCallbackFixture : OnceFixture {
+  static constexpr va_t NestedPredicate = 0x2020;
+  static constexpr va_t LeafAddress = 0x10a0;
+  ExprPtr NestedOnce;
+  NestedCallbackFixture() : OnceFixture(Arch::AArch64) {
+    Image.Symbols.push_back({"_$s4Test5outer_WZ", 0x1080, 0, true});
+    Image.Symbols.push_back({"_$s4Test4leaf_Wz", NestedPredicate, 8, false});
+    Image.Symbols.push_back({"_$s4Test4leaf_WZ", LeafAddress, 0, true});
+    auto &Outer = Pipeline.HighFuncs[1];
+    Outer.Name = "_$s4Test5outer_WZ";
+    Outer.SourceTypeHint.reset();
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Outer.Params = {{"arg0", Pointer}, {"arg1", Pointer}, {"arg2", Pointer}};
+    MedVar Context;
+    Context.Kind = MedVar::Param;
+    Context.Id = 2;
+    Context.Size = 8;
+    NestedOnce = HighExpr::makeCall(
+        "swift_once", 0x2080,
+        {HighExpr::makeConst(NestedPredicate, 8,
+                             ConstantAddressProvenance::DataAddress),
+         HighExpr::makeConst(LeafAddress, 8,
+                             ConstantAddressProvenance::CodeAddress),
+         HighExpr::makeVar(Context, Pointer)});
+    NestedOnce->Type = NdType::makeVoid();
+    NestedOnce->SourceCallHint = std::make_shared<SourceCallTypeHint>(
+        *swiftRuntimeSourceCallHint(Image, 0x2080));
+    HighStmt Invoke, Publish;
+    Invoke.Kind = StmtKind::Call;
+    Invoke.CallExpr = NestedOnce;
+    Publish.Kind = StmtKind::Store;
+    Publish.StoreAddr =
+        HighExpr::makeConst(0x2010, 8, ConstantAddressProvenance::DataAddress);
+    Publish.StoreVal = HighExpr::makeConst(7, 8);
+    Outer.Body.insert(Outer.Body.begin(), {Invoke, Publish});
+    HighFunc Leaf;
+    Leaf.Entry = LeafAddress;
+    Leaf.Name = "_$s4Test4leaf_WZ";
+    Leaf.SourceTypeHint = swift_once_source_detail::callbackHint(Image.Arch);
+    Leaf.Params = {{"once_context", Pointer}};
+    Leaf.ReturnType = NdType::makeVoid();
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Leaf.Body = {Return};
+    Pipeline.HighFuncs.push_back(std::move(Leaf));
+  }
+};
+
+TEST(SwiftOnceSources,
+     ProjectsSingleNestedCallbackWithoutDroppingOtherEffects) {
+  NestedCallbackFixture F;
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  ASSERT_EQ(Plan.NestedCallbacks.size(), 1U);
+  ASSERT_EQ(Plan.CallbackHints.size(), 2U);
+  const auto &Original = F.Pipeline.HighFuncs[1];
+  const auto Projected =
+      projectSwiftOnceNestedCallback(Original, F.Image, Plan, F.functions());
+  ASSERT_TRUE(Projected);
+  ASSERT_TRUE(Projected->Function.SourceTypeHint);
+  EXPECT_EQ(Projected->Function.Params.size(), 1U);
+  ASSERT_EQ(Projected->Function.Body.size(), Original.Body.size());
+  EXPECT_EQ(Projected->Function.Body[1].Kind, StmtKind::Store);
+  EXPECT_EQ(Projected->Function.Body[1].StoreVal->ConstVal, 7U);
+  EXPECT_EQ(Projected->Dependencies, std::set<va_t>{F.LeafAddress});
+  EXPECT_EQ(Projected->LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{F.NestedPredicate, 8}}));
+  const auto &Call = Projected->Function.Body[0].CallExpr;
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Operands[2]->Kind, ExprKind::Const);
+  EXPECT_EQ(Call->Operands[2]->ConstVal, 0U);
+  EXPECT_TRUE(
+      swiftOnceCallbackBound(*Call->Operands[1], F.Image, Plan, F.functions()));
+  EXPECT_EQ(F.NestedOnce->Operands[2]->Kind, ExprKind::Var);
+  EXPECT_FALSE(Original.SourceTypeHint);
+  auto Functions = F.functions();
+  Functions[Original.Entry] = &Projected->Function;
+  const auto Caller = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[2],
+                                                    F.Image, Plan, Functions);
+  EXPECT_EQ(Caller.Dependencies, std::set<va_t>{Original.Entry});
+}
+
+TEST(SwiftOnceSources, NestedCallbacksRequireExactIndependentLeafEvidence) {
+  for (unsigned Case = 0; Case != 9; ++Case) {
+    SCOPED_TRACE(Case);
+    NestedCallbackFixture F;
+    auto &Outer = F.Pipeline.HighFuncs[1];
+    auto &Leaf = F.Pipeline.HighFuncs.back();
+    if (Case == 0)
+      F.NestedOnce->Operands[2]->Var.Id = 0;
+    else if (Case == 1) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      Use.Val = F.NestedOnce->Operands[2];
+      Outer.Body.insert(Outer.Body.begin(), Use);
+    } else if (Case == 2)
+      Outer.Body.insert(Outer.Body.begin(), Outer.Body.front());
+    else if (Case == 3)
+      F.Image.Symbols.back().Name = "_$s4Test5other_WZ";
+    else if (Case == 4)
+      F.Image.Symbols[F.Image.Symbols.size() - 3].Name = "ordinary_callback";
+    else if (Case == 5) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      Use.Val = F.NestedOnce->Operands[2];
+      Leaf.Body.insert(Leaf.Body.begin(), Use);
+    } else if (Case == 6 || Case == 7) {
+      LowFunc Direct;
+      LowBlock Block;
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(Case == 6 ? Outer.Entry : Leaf.Entry, 8));
+      Block.Ops.push_back(Call);
+      Direct.Blocks.push_back(std::move(Block));
+      F.Pipeline.LowFuncs.push_back(std::move(Direct));
+    } else {
+      auto Changed =
+          std::make_shared<SourceCallTypeHint>(*F.NestedOnce->SourceCallHint);
+      Changed->TargetName = "other_once";
+      F.NestedOnce->SourceCallHint = std::move(Changed);
+    }
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    EXPECT_TRUE(Plan.NestedCallbacks.empty());
+  }
+  NestedCallbackFixture F;
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  F.Pipeline.HighFuncs[1].ReturnType = NdType::makeInt(8);
+  F.Pipeline.HighFuncs[1].Body.back().RetVal = HighExpr::makeConst(7, 8);
+  const auto Discarded = projectSwiftOnceNestedCallback(
+      F.Pipeline.HighFuncs[1], F.Image, Plan, F.functions());
+  ASSERT_TRUE(Discarded);
+  EXPECT_FALSE(Discarded->Function.Body.back().RetVal);
+  EXPECT_EQ(Discarded->Function.ReturnType->Kind, NdTypeKind::Void);
+  F.Pipeline.HighFuncs[1].Body.back().RetVal =
+      HighExpr::makeLoad(HighExpr::makeConst(0x2010, 8), NdType::makeInt(8));
+  EXPECT_FALSE(projectSwiftOnceNestedCallback(F.Pipeline.HighFuncs[1], F.Image,
+                                              Plan, F.functions()));
+  MedVar StackReturn;
+  StackReturn.Kind = MedVar::Stack;
+  StackReturn.Id = 1;
+  StackReturn.Size = 8;
+  StackReturn.StackOff = -8;
+  F.Pipeline.HighFuncs[1].Body.back().RetVal =
+      HighExpr::makeVar(StackReturn, NdType::makeInt(8));
+  EXPECT_FALSE(projectSwiftOnceNestedCallback(F.Pipeline.HighFuncs[1], F.Image,
+                                              Plan, F.functions()));
+  F.Pipeline.HighFuncs[1].Body.back().RetVal.reset();
+  F.Pipeline.HighFuncs[1].ReturnType = NdType::makeVoid();
+  F.Pipeline.HighFuncs.back().SourceTypeHint.reset();
+  EXPECT_FALSE(projectSwiftOnceNestedCallback(F.Pipeline.HighFuncs[1], F.Image,
+                                              Plan, F.functions()));
+}
+
 TEST(SwiftOnceSources, BindsStorageAndCallbackAsOneDependencyGroup) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     OnceFixture F(Architecture);
