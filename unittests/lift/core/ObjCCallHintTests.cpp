@@ -7,6 +7,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -1815,6 +1816,60 @@ TEST(ObjCCallHints,
     Image.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
     EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
     EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Image, {}));
+  }
+}
+
+TEST(ObjCCallHints, SwiftAssertionFailureTerminatesTheBoundMachineCall) {
+  const std::string Import =
+      "_$ss17_assertionFailure__4file4line5flagss5NeverOs12StaticStringV_"
+      "SSAHSus6UInt32VtF";
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    auto Image = runtimeImage(Import, Architecture);
+    Image.DyldBindSlots[0x2180] = {
+        Import, 0, "/usr/lib/swift/libswiftCore.dylib", false};
+    // The x64 stack arguments need the call's return-address bias.
+    if (Architecture == Arch::X64)
+      Image.Segments[0].Data[0x200] = 0xe8;
+    auto Med = convert(Image, caller(Architecture));
+    unsigned BoundCalls = 0;
+    for (const auto &Block : Med.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL) {
+          ASSERT_TRUE(Op.SourceCallHint);
+          EXPECT_TRUE(Op.DoesNotReturn);
+          EXPECT_EQ(Op.NumInputs, 11U);
+          EXPECT_EQ(Op.Inputs[0].ConstVal, 0x1100U);
+          EXPECT_EQ(Op.SourceCallHint->TargetAddress, 0x2180U);
+          ++BoundCalls;
+        }
+    ASSERT_EQ(BoundCalls, 1U);
+    std::vector<MedFunc> Functions{std::move(Med)};
+    propagateInternalNoReturn(Functions, Architecture);
+    EXPECT_TRUE(Functions[0].DoesNotReturn);
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(Functions[0], Architecture);
+    EXPECT_TRUE(High.DoesNotReturn);
+    unsigned SourceReturns = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      SourceReturns += Statement.Kind == StmtKind::Return;
+    });
+    EXPECT_EQ(SourceReturns, 0U);
+
+    // Neither disabled source binding nor a same-named foreign import grants
+    // the machine termination effect from the SDK declaration.
+    for (bool Enabled : {false, true}) {
+      if (Enabled)
+        Image.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+      const auto Unbound = convert(Image, caller(Architecture), Enabled);
+      for (const auto &Block : Unbound.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL) {
+            EXPECT_FALSE(Op.SourceCallHint);
+            EXPECT_FALSE(Op.DoesNotReturn);
+          }
+    }
   }
 }
 

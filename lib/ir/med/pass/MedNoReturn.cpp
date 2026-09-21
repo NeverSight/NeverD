@@ -15,6 +15,7 @@
 
 #include "neverd/ir/med/MedNoReturn.h"
 
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
@@ -44,6 +45,31 @@ namespace {
 bool isDirectCallTo(const MedOp &Op, const std::set<va_t> &Targets) {
   return Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
          Op.Inputs[0].isConst() && Targets.count(Op.Inputs[0].ConstVal) != 0;
+}
+
+bool hasIndependentImportNoReturn(const MedOp &Op, Arch TheArch) {
+  // Function discovery also inventories import veneers. Their presence must
+  // not revoke a call effect established from an imported declaration before
+  // this internal fixed point. Require the complete runtime binding to agree;
+  // a source hint alone never introduces the fact here, and inferred native
+  // summaries still get refreshed.
+  if (!Op.DoesNotReturn || !Op.SourceCallHint ||
+      !Op.SourceCallHint->DoesNotReturn)
+    return false;
+  const auto &Hint = *Op.SourceCallHint;
+  switch (Hint.CallKind) {
+  case SourceCallTypeHint::Kind::ObjCRuntimeCall:
+  case SourceCallTypeHint::Kind::DarwinRuntimeCall:
+  case SourceCallTypeHint::Kind::SwiftRuntimeCall:
+    break;
+  default:
+    return false;
+  }
+  std::string Diagnostic;
+  return Hint.Signature.Architecture == TheArch &&
+         validateSourceABI(Hint.Signature, Diagnostic) &&
+         Hint.Signature.ReturnType->Kind == NdTypeKind::Void &&
+         Op.NumInputs == sourceABIParameters(Hint.Signature).size() + 1;
 }
 
 bool provesNoReturn(const MedFunc &Func, Arch TheArch,
@@ -120,7 +146,8 @@ void propagateInternalNoReturn(std::vector<MedFunc> &Funcs, Arch TheArch) {
       for (MedOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
             Op.Inputs[0].isConst() &&
-            InternalEntries.count(Op.Inputs[0].ConstVal) != 0)
+            InternalEntries.count(Op.Inputs[0].ConstVal) != 0 &&
+            !hasIndependentImportNoReturn(Op, TheArch))
           Op.DoesNotReturn = false;
   }
 

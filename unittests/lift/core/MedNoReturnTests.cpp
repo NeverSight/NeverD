@@ -2,6 +2,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedNoReturn.h"
@@ -102,4 +103,64 @@ TEST(MedNoReturn, NativeSourceEffectsFollowCurrentProofWithoutSharedMutation) {
   propagateInternalNoReturn(Functions, Arch::AArch64);
   EXPECT_FALSE(Functions[0].DoesNotReturn);
   EXPECT_FALSE(Functions[0].Blocks[0].Ops[0].SourceCallHint->DoesNotReturn);
+}
+
+TEST(MedNoReturn, RuntimeImportEffectSurvivesAnInventoriedVeneer) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    for (const auto Kind : {SourceCallTypeHint::Kind::ObjCRuntimeCall,
+                            SourceCallTypeHint::Kind::DarwinRuntimeCall,
+                            SourceCallTypeHint::Kind::SwiftRuntimeCall}) {
+      SCOPED_TRACE(static_cast<int>(Kind));
+      auto Call = callOp(0x2000);
+      Call.DoesNotReturn = true;
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->CallKind = Kind;
+      Hint->TargetAddress = 0x4000; // The import slot, not the veneer entry.
+      Hint->DoesNotReturn = true;
+      Hint->Signature.ReturnType = NdType::makeVoid();
+      std::string Diagnostic;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint->Signature, Architecture,
+                                              Diagnostic))
+          << Diagnostic;
+      Call.SourceCallHint = Hint;
+      // The imported entry has no local machine termination proof. A generic
+      // inventory can still contain its veneer alongside callers and wrappers.
+      std::vector<MedFunc> Functions = {
+          function(0x1000, {block(0, {Call, returnOp()})}),
+          function(0x2000, {block(0, {MedOp{}})}),
+          function(0x3000, {block(0, {callOp(0x1000), returnOp()})})};
+      for (unsigned Iteration = 0; Iteration < 2; ++Iteration) {
+        propagateInternalNoReturn(Functions, Architecture);
+        EXPECT_TRUE(Functions[0].DoesNotReturn);
+        EXPECT_TRUE(Functions[0].Blocks[0].Ops[0].DoesNotReturn);
+        EXPECT_FALSE(Functions[1].DoesNotReturn);
+        EXPECT_TRUE(Functions[2].DoesNotReturn);
+      }
+
+      // A source declaration is not an independent machine termination fact.
+      Functions[0].Blocks[0].Ops[0].DoesNotReturn = false;
+      propagateInternalNoReturn(Functions, Architecture);
+      EXPECT_FALSE(Functions[0].DoesNotReturn);
+      EXPECT_FALSE(Functions[2].DoesNotReturn);
+
+      // Revoking the external source effect must also revoke the old marker.
+      Functions[0].Blocks[0].Ops[0].DoesNotReturn = true;
+      Hint->DoesNotReturn = false;
+      propagateInternalNoReturn(Functions, Architecture);
+      EXPECT_FALSE(Functions[0].DoesNotReturn);
+      EXPECT_FALSE(Functions[2].DoesNotReturn);
+
+      // A malformed binding cannot protect a stale internal marker either.
+      Functions[0].Blocks[0].Ops[0].DoesNotReturn = true;
+      Hint->DoesNotReturn = true;
+      Hint->Signature.Parameters = {{"missing", NdType::makeInt(8, false)}};
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint->Signature, Architecture,
+                                              Diagnostic))
+          << Diagnostic;
+      propagateInternalNoReturn(Functions, Architecture);
+      EXPECT_FALSE(Functions[0].DoesNotReturn);
+      EXPECT_FALSE(Functions[2].DoesNotReturn);
+    }
+  }
 }

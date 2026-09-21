@@ -120,6 +120,15 @@ Publication revalidates the typed callee's complete source flow and requires
 its dependency closure; a function flag alone never authorizes a terminating
 source call. Reports, writes and traps before termination remain observable.
 
+At source-bound runtime calls, Low-to-Med lowering carries the authenticated
+external no-return declaration into the MedIR call effect.
+An imported runtime veneer may also appear in the native function inventory.
+The no-return fixed point preserves an existing machine termination fact when
+the validated runtime binding and complete call operands agree; a source hint
+alone cannot create that fact. The binding names the import slot, while the
+call names the veneer. Inferred native effects are still recomputed from the
+current graph, and source publication revalidates the import identity.
+
 Native two-word integer returns are requested by an observed complete read of
 the second return register after an exact direct call in the same LowIR block.
 An intervening call, intrinsic or overlapping register write ends that demand;

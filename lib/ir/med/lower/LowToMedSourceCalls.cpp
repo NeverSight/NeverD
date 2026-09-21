@@ -304,6 +304,16 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           ReturnOps.push_back(std::move(Merge));
         }
       }
+      // These hints were matched to an exact imported runtime declaration by
+      // the loader and passed ABI validation above. Carry its termination
+      // effect into MedIR as well as source flow. Native candidate signatures
+      // are not declarations of this effect and use the separate fixed point.
+      if (Hint->DoesNotReturn &&
+          Signature.ReturnType->Kind == NdTypeKind::Void &&
+          (Hint->CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+           Hint->CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall ||
+           Hint->CallKind == SourceCallTypeHint::Kind::SwiftRuntimeCall))
+        Op.DoesNotReturn = true;
       Op.SourceCallHint =
           std::make_shared<const SourceCallTypeHint>(std::move(*Hint));
       Ops.push_back(std::move(Op));
