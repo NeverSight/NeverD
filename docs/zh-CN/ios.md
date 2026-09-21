@@ -322,3 +322,5 @@ Arm64 的 `+[NSSet setWithObjects:]` 保留 SDK 中以 nil 终止的可变参数
 源码导出可逐个投影编译器生成的 BOOL super getter，但必须由当前完整 ARM64 指令、CFG 与保存/恢复证明共同认证 Objective-C 入口、共享函数体及 metadata accessor（`CMa`）。发现、绑定与渲染共用同一契约。helper 保留实际 CMa 调用和已闭合依赖，随后读取经运行时注册的 SEL 槽，再按认证类型调用 `objc_msgSendSuper2`；不同 selector 保留独立槽。loader 通过 LLVM Mach-O 符号及 export trie，并严格核对当前 segment/section 映射，重新认证本地链接属性。投影不改变其他调用者或共享函数的全局 native ABI；缺失或过时证据继续拒绝。
 
 arm64 Swift once 初始化器可通过已具有类型的 native helper，在独立静态槽之间复制对象。统一的用途合同核对所有当前参数和每条路径，依次保留 predicate 读取、可选的 `swift_once`、源读取、目标写入、`objc_retain` 与返回。合同接受四个用途参数，或另加一个未使用的输入；参数移除仍只由 native 推断负责。发现和绑定都针对当前 image 重验同一合同、精确回调及存储符号、互不重叠的八字节范围和回调未使用的 context。ABI、控制流、内存效果及依赖检查保持完整；别名、部分或有序访问、额外用途和过期证据继续拒绝。
+
+完整 iOS 真机与模拟器 SDK 声明还确认 `UIGraphicsBeginImageContextWithOptions(CGSize, BOOL, CGFloat)` 是返回 void 的固定 C 调用。ARM64 上，尺寸的两个字段使用 `d0`、`d1`，布尔值使用 `w0` 携带的字节，缩放值使用 `d2`。精确 UIKit 链接器导出认证提供库。源码保留真实调用及包装函数的计数器更新；错误提供库、不支持的架构和被改动的声明仍被拒绝。 本地包装函数仍需独立的状态与返回值证明。

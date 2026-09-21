@@ -1,0 +1,289 @@
+#include "../../../lib/sdk/capi/ObjCSourceBindings.h"
+#include "gtest/gtest.h"
+
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
+#include "neverd/lift/AArch64Regs.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
+
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace neverd;
+namespace {
+constexpr auto UIKit = "/System/Library/Frameworks/UIKit.framework/UIKit";
+constexpr auto FunctionName = "UIGraphicsBeginImageContextWithOptions";
+constexpr auto ImportName = "_UIGraphicsBeginImageContextWithOptions";
+
+BinaryImage image() {
+  BinaryImage I;
+  I.Arch = Arch::AArch64;
+  I.Format = BinaryFormat::MachO;
+  I.Bits = Bitness::Bits64;
+  I.DynInfo.NeededLibs = {UIKit};
+  Segment S;
+  S.VA = 0x1000;
+  S.Size = S.FileSz = 0x1000;
+  S.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  S.Data.resize(0x1000);
+  const uint32_t Stub[] = {0xb0000010, 0xf940c210, 0xd61f0200};
+  for (size_t J = 0; J != 3; ++J)
+    llvm::support::endian::write32le(S.Data.data() + 0x100 + 4 * J, Stub[J]);
+  I.Segments.push_back(S);
+  Segment Storage;
+  Storage.VA = 0x2000;
+  Storage.FileOff = 0x1000;
+  Storage.Size = Storage.FileSz = 0x1000;
+  Storage.Flags = SegmentFlags::Readable;
+  Storage.Data.resize(0x1000);
+  I.Segments.push_back(Storage);
+  Section Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x1000;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+  I.Sections.push_back(Text);
+  Section Data;
+  Data.VA = 0x2000;
+  Data.FileOff = 0x1000;
+  Data.Size = Data.FileSz = 0x1000;
+  Data.Flags = SegmentFlags::Readable;
+  I.Sections.push_back(Data);
+  I.ImportPtrSlots[0x2180] = ImportName;
+  EXPECT_TRUE(I.recordDyldBindSlot(0x2180, ImportName, 0, UIKit, false));
+  return I;
+}
+
+TEST(DarwinUIKitSourceCalls, OptionsKeepSizeBoolAndScaleInIndependentBanks) {
+  const auto Image = image();
+  const auto H = darwinRuntimeSourceCallHint(Image, 0x2180);
+  ASSERT_TRUE(H);
+  EXPECT_EQ(H->TargetName, FunctionName);
+  EXPECT_EQ(H->TargetAddress, 0x2180U);
+  EXPECT_EQ(H->CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+  EXPECT_EQ(H->Signature.Origin, SourceFunctionTypeHint::OriginKind::DarwinSDK);
+  EXPECT_EQ(H->Signature.ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(H->Signature.Parameters.size(), 3U);
+  const auto &P = H->Signature.Parameters;
+  ASSERT_EQ(P[0].Type->Kind, NdTypeKind::Struct);
+  ASSERT_EQ(P[0].Type->Fields.size(), 2U);
+  EXPECT_EQ(P[0].Type->Size, 16U);
+  ASSERT_EQ(P[0].Components.size(), 2U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (size_t J = 0; J != 2; ++J) {
+    EXPECT_EQ(P[0].Type->Fields[J]->Kind, NdTypeKind::Float);
+    EXPECT_EQ(P[0].Type->Fields[J]->Size, 8U);
+    EXPECT_EQ(P[0].Components[J].Kind, SourceABICarrierKind::FloatingRegister);
+    EXPECT_EQ(P[0].Components[J].RegisterOffset, TRI.FPParamRegs[J]);
+    EXPECT_EQ(P[0].Components[J].ValueBytes, 8U);
+  }
+  EXPECT_EQ(P[1].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(P[1].Type->Size, 1U);
+  EXPECT_FALSE(P[1].Type->IsSigned);
+  EXPECT_EQ(P[1].Location.Kind, SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(P[1].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(P[1].Location.ValueBytes, 1U);
+  EXPECT_EQ(P[2].Type->Kind, NdTypeKind::Float);
+  EXPECT_EQ(P[2].Type->Size, 8U);
+  EXPECT_EQ(P[2].Location.Kind, SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(P[2].Location.RegisterOffset, TRI.FPParamRegs[2]);
+  EXPECT_EQ(P[2].Location.ValueBytes, 8U);
+  EXPECT_EQ(sourceABIParameters(H->Signature).size(), 4U);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(H->Signature, Error)) << Error;
+}
+
+TEST(DarwinUIKitSourceCalls, OptionsRequireExactImportProviderAndArchitecture) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    auto I = image();
+    switch (Mutation) {
+    case 0:
+      I.Arch = Arch::X64;
+      break;
+    case 1:
+      I.DyldBindSlots.clear();
+      break;
+    case 2:
+      I.DyldBindSlots.at(0x2180).Module = "/tmp/UIKit.framework/UIKit";
+      break;
+    case 3:
+      I.DyldBindSlots.at(0x2180).Module =
+          "/System/Library/Frameworks/UIKit.framework/Versions/A/UIKit";
+      break;
+    case 4:
+      I.DyldBindSlots.at(0x2180).Module =
+          "/System/Library/Frameworks/Foundation.framework/Foundation";
+      break;
+    case 5:
+      I.DyldBindSlots.at(0x2180).Name = "_other";
+      break;
+    case 6:
+      I.DyldBindSlots.at(0x2180).Addend = 8;
+      break;
+    case 7:
+      I.DyldBindSlots.at(0x2180).WeakImport = true;
+      break;
+    case 8:
+      I.ConflictingImportStorageSlots.insert(0x2180);
+      break;
+    case 9:
+      I.IsRelocatable = true;
+      break;
+    case 10:
+      I.Format = BinaryFormat::ELF;
+      break;
+    case 11:
+      I.Bits = Bitness::Bits32;
+      break;
+    }
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(I, 0x2180)) << Mutation;
+  }
+}
+
+LowOp operation(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs,
+                va_t Address) {
+  LowOp O;
+  O.Opcode = Code;
+  O.Output = Output;
+  O.Addr = Address;
+  for (const auto &V : Inputs)
+    O.addInput(V);
+  return O;
+}
+
+TEST(DarwinUIKitSourceCalls, BoundOptionsConsumeAllFourScalarCarriers) {
+  const auto I = image();
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  LowFunc F;
+  F.Entry = 0x1200;
+  F.Name = "begin_image_context";
+  LowBlock B;
+  B.Id = 0;
+  B.StartAddr = F.Entry;
+  B.EndAddr = 0x1220;
+  B.Ops = {operation(NdOp::COPY, NdVar::reg(TRI.FPParamRegs[0], 8),
+                     {NdVar::cst(0x402b000000000000ULL, 8)}, 0x1200), // 13.5
+           operation(NdOp::COPY, NdVar::reg(TRI.FPParamRegs[1], 8),
+                     {NdVar::cst(0x4045200000000000ULL, 8)}, 0x1204), // 42.25
+           operation(NdOp::COPY, NdVar::reg(a64reg::X0, 4), {NdVar::cst(1, 4)},
+                     0x1208),
+           operation(NdOp::COPY, NdVar::reg(TRI.FPParamRegs[2], 8),
+                     {NdVar::cst(0x4006000000000000ULL, 8)}, 0x120c), // 2.75
+           operation(NdOp::CALL, {}, {NdVar::cst(0x1100, 8)}, 0x1210),
+           operation(NdOp::COPY, NdVar::reg(a64reg::X0, 4), {NdVar::cst(42, 4)},
+                     0x1214),
+           operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 4)}, 0x1218)};
+  F.Blocks = {B};
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&I);
+  Converter.setSourceCallHintsEnabled(true);
+  auto Med = Converter.convert(F, Arch::AArch64, BinaryFormat::MachO);
+  recoverCallAbi(Med, Arch::AArch64, {}, &I);
+  bool Found = false;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &O : Block.Ops)
+      if (O.Opcode == NdOp::CALL) {
+        Found = true;
+        ASSERT_TRUE(O.SourceCallHint);
+        EXPECT_EQ(O.NumInputs, 5U);
+        EXPECT_EQ(O.Output.Size, 0U);
+      }
+  ASSERT_TRUE(Found);
+  auto High = MedToHighConverter().convert(Med, Arch::AArch64);
+  unsigned Calls = 0;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (!E || E->Kind != ExprKind::Call)
+        return;
+      ++Calls;
+      ASSERT_TRUE(E->SourceCallHint);
+      ASSERT_EQ(E->Operands.size(), 3U);
+      EXPECT_EQ(E->Operands[0]->Kind, ExprKind::Record);
+      ASSERT_EQ(E->Operands[0]->Operands.size(), 2U);
+      EXPECT_TRUE(sdk::objcSourceCallBound(*E, I, {}));
+      auto Drift = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+      Drift->Signature.Parameters[1].Type = NdType::makeInt(4, false);
+      std::string Error;
+      ASSERT_TRUE(
+          assignDarwinFixedSourceABI(Drift->Signature, Arch::AArch64, Error));
+      auto Changed = *E;
+      Changed.SourceCallHint = Drift;
+      EXPECT_FALSE(sdk::objcSourceCallBound(Changed, I, {}));
+    });
+  });
+  ASSERT_EQ(Calls, 1U);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  ASSERT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(FunctionName), std::string::npos) << Source;
+
+  const auto Declared = darwinRuntimeSourceCallHint(I, 0x2180);
+  ASSERT_TRUE(Declared);
+  const auto SizeType = typeToC(Declared->Signature.Parameters[0].Type);
+  Source += "\nstatic unsigned observed_calls;\nstatic int mismatch;\nvoid "
+            "options_probe(" +
+            SizeType +
+            ", uint8_t, double) "
+            "__asm__(\"_UIGraphicsBeginImageContextWithOptions\");\n"
+            "void options_probe(" +
+            SizeType +
+            " size, uint8_t opaque, double scale) {\n"
+            "++observed_calls; mismatch |= size.field_0 != 13.5 || "
+            "size.field_1 != 42.25 || opaque != 1 || scale != 2.75;\n}\n"
+            "int main(void) { return begin_image_context() != 42 || "
+            "observed_calls != 1 || mismatch; }\n";
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(FoundCompiler);
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, BinaryPath, ErrorPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-uikit", "c", SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-uikit", "exe", BinaryPath));
+  llvm::FileRemover RemoveBinary(BinaryPath);
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-uikit", "err", ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code FileError;
+  {
+    llvm::raw_fd_ostream Out(SourcePath, FileError);
+    ASSERT_FALSE(FileError);
+    Out << Source;
+  }
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, std::nullopt, ErrorPath.str()};
+  for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
+    llvm::SmallVector<llvm::StringRef> Args{
+        Compiler,  "-x",       "c",  "-std=gnu11", Optimization,
+        "-Werror", SourcePath, "-o", BinaryPath};
+    std::string Error;
+    const auto Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
+                                                  Redirects, 30, 0, &Error);
+    const auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (Errors ? (*Errors)->getBuffer().str() : "")
+                         << Source;
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(BinaryPath, {BinaryPath}, std::nullopt,
+                                        Redirects, 30, 0, &Error),
+              0)
+        << Error << Source;
+  }
+}
+} // namespace

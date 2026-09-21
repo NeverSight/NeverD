@@ -66,7 +66,7 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
-  // UIKit declares these fixed functions, including two with a by-value
+  // UIKit declares these fixed functions, including three with a by-value
   // CGSize. The command-line-tools SDK used for DarwinSourceDeclarations.inc
   // has no UIKit headers or binary, so retain the public contracts at the same
   // exact symbol/provider boundary as the UIKit external storage below.
@@ -74,6 +74,7 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   // https://developer.apple.com/documentation/uikit/uigraphicsbeginimagecontext(_:)
   const bool UIKitFixedFunction =
       Name == "NSStringFromCGSize" || Name == "UIGraphicsBeginImageContext" ||
+      Name == "UIGraphicsBeginImageContextWithOptions" ||
       Name == "UIGraphicsGetCurrentContext" ||
       Name == "UIGraphicsGetImageFromCurrentImageContext" ||
       Name == "UIGraphicsEndImageContext";
@@ -95,12 +96,21 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
         Name == "UIGraphicsGetImageFromCurrentImageContext";
     Signature.ReturnType = ReturnsPointer ? NdType::makePtr(NdType::makeVoid())
                                           : NdType::makeVoid();
-    if (Name == "NSStringFromCGSize" || Name == "UIGraphicsBeginImageContext") {
+    if (Name == "NSStringFromCGSize" || Name == "UIGraphicsBeginImageContext" ||
+        Name == "UIGraphicsBeginImageContextWithOptions") {
       const auto Size =
           NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
       if (!Size)
         return std::nullopt;
       Signature.Parameters = {{"size", Size}};
+    }
+    if (Name == "UIGraphicsBeginImageContextWithOptions") {
+      // Complete Xcode 26.5 device and arm64 simulator ASTs agree on
+      // void(CGSize, BOOL=bool, CGFloat=double). Their UIKit TBDs reexport
+      // this exact symbol from the embedded UIKitCore export map.
+      // SDK evidence: NeverSight/NeverD Actions run 35648792995.
+      Signature.Parameters.push_back({"opaque", NdType::makeInt(1, false)});
+      Signature.Parameters.push_back({"scale", NdType::makeFloat(8)});
     }
     std::string Diagnostic;
     if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))
