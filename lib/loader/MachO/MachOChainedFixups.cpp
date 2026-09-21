@@ -348,13 +348,15 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
           dyld_chained_ptr_64_rebase R;
           std::memcpy(&R, &Raw, sizeof(R));
           Next = R.next;
-          va_t TargetVA;
+          // Both generic64 formats carry high8. dyld adds the load address
+          // to the fully unpacked word for OFFSET, including those high bits.
+          // Keep that runtime value intact; ordinary pointer provenance must
+          // classify the complete address rather than strip an embedded tag.
+          va_t TargetVA = (static_cast<uint64_t>(R.high8) << 56) | R.target;
           if (PtrFormat == DYLD_CHAINED_PTR_64_OFFSET) {
-            if (R.target > InvalidVA - TextVMAddr)
+            if (TargetVA > InvalidVA - TextVMAddr)
               break;
-            TargetVA = TextVMAddr + R.target;
-          } else {
-            TargetVA = (static_cast<uint64_t>(R.high8) << 56) | R.target;
+            TargetVA += TextVMAddr;
           }
           if (detail::recordAbsolutePointerSlot(Img, ChainVA, TargetVA))
             ++NumRecorded;

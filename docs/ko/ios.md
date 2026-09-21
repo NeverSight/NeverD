@@ -316,3 +316,5 @@ arm64 Swift once 초기화자는 이미 타입이 확정된 native helper를 통
 ARM64 네이티브 프레임 보존 분석은 현재 추론된 진입 시그니처가 명시한 8바이트 정렬의 완전한 스칼라 입력 스택 슬롯을 읽을 수 있습니다. LowIR 읽기는 슬롯 전체와 정확히 일치해야 합니다. 해당 바이트는 알 수 없는 입력값이며 저장된 레지스터의 동일성이나 피호출 함수의 전용 프레임 내부 주소를 증명하지 않습니다. 쓰기, 부분 읽기, 간격 및 선언되지 않은 슬롯에는 이 권한이 부여되지 않습니다. 소스 본문, 각 호출자의 인자 값 및 의존성 폐쇄는 계속 검증해야 합니다.
 
 기기와 시뮬레이터의 완전한 UIKit SDK 선언은 `UIAccessibilityPostNotification`을 `void(uint32_t, id nullable)`로 바인딩합니다. ARM64는 부호 없는 알림 값을 `w0`, 객체 포인터를 `x1`으로 전달합니다. `UIAccessibilityAnnouncementNotification`은 외부 `const uint32_t` 저장소입니다. 정확한 UIKit 임포트로 저장소 주소를 확인하고 원래의 4바이트 읽기와 nil 인수를 포함한 실제 호출을 유지하며 알림 번호를 대입하지 않습니다. 잘못된 제공자, 약한 임포트, 너비·부호·반환 계약 변경은 거부하고 다른 지연 저장소 의존성에는 독립된 증명을 요구합니다.
+
+Mach-O generic64 체인 재배치는 `DYLD_CHAINED_PTR_64`와 `DYLD_CHAINED_PTR_64_OFFSET` 모두에서 인코딩된 상위 8비트를 보존합니다. 오프셋 형식은 먼저 전체 워드를 복원한 뒤 오버플로를 검사하며 기본 이미지 주소를 더해 [dyld의 실행](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/common/MachOLoaded.cpp#L771-L792)과 일치시킵니다. 로드된 바이트에는 완전한 런타임 값이 유지됩니다. 일반 코드 및 데이터 포인터의 소유 범위 검사는 전체 매핑 주소를 사용하며, 태그가 있는 Swift 문자열에는 별도의 문자열 표현 증명이 필요합니다. 적법하게 매핑된 상위 주소도 계속 지원합니다.

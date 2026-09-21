@@ -316,3 +316,5 @@ arm64 Swift once 初始化器可透過已有型別的 native helper，在獨立�
 ARM64 原生堆疊框架保存分析可讀取目前推斷入口簽名明確描述、按八位元組對齊的完整純量入堆疊參數槽。LowIR 讀取必須與整個槽精確相符。這些位元組仍是未知輸入值，不能證明已保存暫存器的身分或被呼叫函式私有堆疊框架內的位址。寫入、部分讀取、間隙及未宣告的槽不會取得此權限。原始碼函式本體、每個呼叫端的引數值和相依性閉包仍須驗證。
 
 完整的裝置與模擬器 UIKit SDK 宣告將 `UIAccessibilityPostNotification` 綁定為 `void(uint32_t, id nullable)`：ARM64 透過 `w0` 傳遞無號通知值，透過 `x1` 傳遞物件指標。`UIAccessibilityAnnouncementNotification` 是外部 `const uint32_t` 儲存空間。精確 UIKit 匯入只證明儲存位址，原始碼保留原有四位元組讀取和實際呼叫，包括 nil 引數，不替換通知編號。錯誤提供者、弱匯入、寬度或正負號變化及回傳契約變化均被拒絕；其他延遲儲存相依性仍須獨立證明。
+
+Mach-O generic64 鏈式重定位在 `DYLD_CHAINED_PTR_64` 與 `DYLD_CHAINED_PTR_64_OFFSET` 兩種格式下皆保留編碼中的高八位元。偏移格式先重建完整字組，再檢查溢位並加上偏好的映像基底位址，與 [dyld 的執行方式](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/common/MachOLoaded.cpp#L771-L792) 一致。載入後的位元組保留完整執行期值。一般程式碼與資料指標的歸屬檢查使用完整映射位址；帶標記的 Swift 字串需要獨立的字串表示證明。合法映射的高位址仍受支援。

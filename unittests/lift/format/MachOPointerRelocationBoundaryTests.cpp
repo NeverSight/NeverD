@@ -14,6 +14,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -7835,6 +7836,146 @@ TEST(MachOChainedPointerBoundary, RecordsBindAndFineGrainedRebases) {
   EXPECT_EQ(readPtr(Image.readVA(DataVA + 8, 8), true), CStringVA);
   EXPECT_EQ(readPtr(Image.readVA(DataVA + 16, 8), true), CodeVA);
   EXPECT_EQ(readPtr(Image.readVA(DataVA + 24, 8), true), WritableVA + 8);
+}
+
+TEST(MachOChainedPointerBoundary,
+     PreservesRebaseHighByteWithoutClaimingUntaggedPointerIdentity) {
+  for (const Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (const uint16_t Format :
+         {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET})
+      for (const uint8_t HighByte : {0u, 1u, 0x80u, 0xffu}) {
+        SCOPED_TRACE(static_cast<unsigned>(Architecture));
+        SCOPED_TRACE(Format);
+        SCOPED_TRACE(static_cast<unsigned>(HighByte));
+        auto Image = makeChainedImage();
+        Image.Arch = Architecture;
+        Image.MachOHasChainedFixups = true;
+        Image.Segments[1].ReadOnlyAfterRelocations = true;
+        for (auto &Section : Image.Sections)
+          Section.FileOff = Section.VA - TextVA;
+        Section Slots;
+        Slots.Name = "__const";
+        Slots.SegmentName = "__DATA_CONST";
+        Slots.VA = DataVA;
+        Slots.Size = Slots.FileSz = Image.Segments[1].Size;
+        Slots.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+        Image.Sections.push_back(Slots);
+
+        macho_loader::ChainedFixupsInfo Info;
+        auto Binary = makeChainedBlob(Info);
+        // This one segment-start record is the format authority for the
+        // complete four-slot chain below, not a guessed pointer spelling.
+        constexpr size_t FormatOffset =
+            0x100 + 0x20 + sizeof(uint32_t) * 2 +
+            offsetof(dyld_chained_starts_in_segment, pointer_format);
+        writeObject(Binary, FormatOffset, Format);
+        const va_t Targets[] = {CStringVA, CodeVA, CStringBVA, WritableVA + 8};
+        for (size_t I = 0; I < std::size(Targets); ++I) {
+          dyld_chained_ptr_64_rebase Rebase{};
+          Rebase.target = Format == DYLD_CHAINED_PTR_64_OFFSET
+                              ? Targets[I] - TextVA
+                              : Targets[I];
+          Rebase.high8 = I < 2 ? HighByte : 0;
+          Rebase.next = I + 1 < std::size(Targets) ? 2 : 0;
+          writeObject(Image.Segments[1].Data, I * 8, Rebase);
+        }
+        macho_loader::parseChainedFixupsRebases(Binary.data(), Binary.size(),
+                                                Info, TextVA, Image);
+        for (size_t I = 0; I < std::size(Targets); ++I) {
+          const va_t Slot = DataVA + I * 8;
+          const bool Tagged = I < 2 && HighByte;
+          const va_t Expected =
+              Targets[I] | (I < 2 ? uint64_t(HighByte) << 56 : 0);
+          ASSERT_NE(Image.readVA(Slot, 8), nullptr);
+          EXPECT_EQ(readPtr(Image.readVA(Slot, 8), true), Expected);
+          EXPECT_EQ(Image.MachOResolvedChainedPointerSlots.count(Slot), 1u);
+          EXPECT_EQ(Image.CodePtrRelocSlots.count(Slot),
+                    !Tagged && I == 1 ? 1u : 0u);
+          EXPECT_EQ(Image.DataPtrRelocSlots.count(Slot),
+                    !Tagged && I != 1 ? 1u : 0u);
+          if (Tagged) {
+            EXPECT_EQ(Image.DataPtrRelocTargetOwners.count(Slot), 0u);
+            EXPECT_FALSE(Image.isCodeAddress(Expected));
+            EXPECT_FALSE(Image.isDataAddress(Expected));
+            EXPECT_FALSE(readInitialImagePointer(Image, Slot));
+            EXPECT_FALSE(readImmutableImagePointer(Image, Slot));
+          }
+          // Even a rejected tagged address remains a resolved fixup, so raw
+          // immutable-byte copying cannot silently transplant its contents.
+          EXPECT_FALSE(readImmutableImageBytes(Image, Slot, 8));
+        }
+        EXPECT_EQ(readImmutableImagePointer(Image, DataVA + 16), CStringBVA);
+      }
+}
+
+TEST(MachOChainedPointerBoundary, AddsImageBaseAfterUnpackingOffsetHighByte) {
+  for (const bool Overflow : {false, true}) {
+    SCOPED_TRACE(Overflow);
+    auto Image = makeChainedImage();
+    const va_t Base =
+        Overflow ? UINT64_C(0xff00000000000000) : UINT64_C(0x0100000000000000);
+    for (auto &Segment : Image.Segments)
+      Segment.VA = Base + Segment.VA - TextVA;
+    for (auto &Section : Image.Sections)
+      Section.VA = Base + Section.VA - TextVA;
+    dyld_chained_ptr_64_rebase Rebase{};
+    Rebase.target = CStringVA - TextVA;
+    Rebase.high8 = 1;
+    writeObject(Image.Segments[1].Data, 0, Rebase);
+    const uint64_t Original = readPtr(Image.Segments[1].Data.data(), true);
+    macho_loader::ChainedFixupsInfo Info;
+    auto Binary = makeChainedBlob(Info);
+    macho_loader::parseChainedFixupsRebases(Binary.data(), Binary.size(), Info,
+                                            Base, Image);
+    const va_t Slot = Base + DataVA - TextVA;
+    ASSERT_NE(Image.readVA(Slot, 8), nullptr);
+    // Addition must carry through high8, not OR it into a separately rebased
+    // low target. An unrepresentable result follows the existing overflow
+    // rejection and leaves the encoded word unresolved.
+    EXPECT_EQ(readPtr(Image.readVA(Slot, 8), true),
+              Overflow ? Original : UINT64_C(0x0200000000000580));
+    EXPECT_EQ(Image.MachOResolvedChainedPointerSlots.count(Slot),
+              Overflow ? 0u : 1u);
+    EXPECT_EQ(Image.DataPtrRelocSlots.count(Slot), 0u);
+    EXPECT_EQ(Image.CodePtrRelocSlots.count(Slot), 0u);
+    EXPECT_EQ(Image.DataPtrRelocTargetOwners.count(Slot), 0u);
+  }
+}
+
+TEST(MachOChainedPointerBoundary, ClassifiesMappedFullHighAddressesExactly) {
+  for (const uint16_t Format :
+       {DYLD_CHAINED_PTR_64, DYLD_CHAINED_PTR_64_OFFSET}) {
+    SCOPED_TRACE(Format);
+    auto Image = makeChainedImage();
+    constexpr va_t Base = UINT64_C(0x0100000100000000);
+    for (auto &Segment : Image.Segments)
+      Segment.VA = Base + Segment.VA - TextVA;
+    for (auto &Section : Image.Sections)
+      Section.VA = Base + Section.VA - TextVA;
+    const va_t Target = Base + CStringVA - TextVA;
+    dyld_chained_ptr_64_rebase Rebase{};
+    Rebase.target = Format == DYLD_CHAINED_PTR_64_OFFSET
+                        ? CStringVA - TextVA
+                        : Target & UINT64_C(0xfffffffff);
+    Rebase.high8 = Format == DYLD_CHAINED_PTR_64 ? Target >> 56 : 0;
+    writeObject(Image.Segments[1].Data, 0, Rebase);
+    macho_loader::ChainedFixupsInfo Info;
+    auto Binary = makeChainedBlob(Info);
+    constexpr size_t FormatOffset =
+        0x100 + 0x20 + sizeof(uint32_t) * 2 +
+        offsetof(dyld_chained_starts_in_segment, pointer_format);
+    writeObject(Binary, FormatOffset, Format);
+    macho_loader::parseChainedFixupsRebases(Binary.data(), Binary.size(), Info,
+                                            Base, Image);
+    const va_t Slot = Base + DataVA - TextVA;
+    ASSERT_NE(Image.readVA(Slot, 8), nullptr);
+    EXPECT_EQ(readPtr(Image.readVA(Slot, 8), true), Target);
+    EXPECT_EQ(Image.MachOResolvedChainedPointerSlots.count(Slot), 1u);
+    EXPECT_EQ(Image.DataPtrRelocSlots.count(Slot), 1u);
+    EXPECT_EQ(Image.CodePtrRelocSlots.count(Slot), 0u);
+    ASSERT_EQ(Image.DataPtrRelocTargetOwners.count(Slot), 1u);
+    EXPECT_EQ(Image.DataPtrRelocTargetOwners.at(Slot), Target);
+  }
 }
 
 TEST(MachOChainedPointerBoundary,
