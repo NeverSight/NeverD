@@ -51,7 +51,8 @@ bool hasNativeSourceStateContract(
     const BinaryImage &Image, const LowFunc *Low, const MedFunc &Med,
     bool RequireCalls, std::set<uint64_t> *UsedEntryRegisters = nullptr,
     bool TerminalContext = false,
-    const NativeSourceCalleeContracts *Callees = nullptr);
+    const NativeSourceCalleeContracts *Callees = nullptr,
+    const SourceFunctionTypeHint *EntrySignature = nullptr);
 
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
@@ -134,7 +135,7 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
                 !Used.count(Register));
       });
     } else if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used,
-                                             false, Callees))
+                                             false, Callees, &Hint))
       std::erase_if(Reads, [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8);
       });
@@ -213,11 +214,11 @@ bool certifiedNativeCallee(const BinaryImage &Image, const MedOp &Op,
 // Framed and ordinary-call shapes require exact state restoration;
 // the established frameless tail shape uses the narrower no-write proof plus
 // byte-taint rejection of stack-derived arguments and stores.
-bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
-                                  const MedFunc &Med, bool RequireCalls,
-                                  std::set<uint64_t> *UsedEntryRegisters,
-                                  bool TerminalContext,
-                                  const NativeSourceCalleeContracts *Callees) {
+bool hasNativeSourceStateContract(
+    const BinaryImage &Image, const LowFunc *Low, const MedFunc &Med,
+    bool RequireCalls, std::set<uint64_t> *UsedEntryRegisters,
+    bool TerminalContext, const NativeSourceCalleeContracts *Callees,
+    const SourceFunctionTypeHint *EntrySignature) {
   if (TerminalContext &&
       (!Med.DoesNotReturn || !hasProvenNoReturnExit(Med, Image.Arch)))
     return false;
@@ -352,7 +353,8 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
       *UsedEntryRegisters = std::move(Used);
     return true;
   }
-  if (restoresNativeSourceState(*Low, Image.Arch, Calls, &Used)) {
+  if (restoresNativeSourceState(*Low, Image.Arch, Calls, &Used,
+                                EntrySignature)) {
     if (UsedEntryRegisters)
       *UsedEntryRegisters = std::move(Used);
     return true;
@@ -985,7 +987,7 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   if (!NoReturn && !definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
                                        IncomingReturnParameter)) {
     if (!hasNativeSourceStateContract(Image, Low, Med, true, nullptr, false,
-                                      CalleeContracts) ||
+                                      CalleeContracts, &Hint) ||
         !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
       return Reject("native result has no complete defined carrier on every "
                     "return path");

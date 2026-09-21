@@ -56,11 +56,14 @@ std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation);
 /// block. The callee may overwrite the entire incoming argument area, so its
 /// slots and padding lose spill and written-byte facts before subsequent
 /// restoration or argument checks.
+/// An independently inferred ARM64 entry signature may additionally authorize
+/// exact eight-byte reads of its scalar incoming stack slots. Such values are
+/// unknown input bytes, never saved-register identities or private-frame facts.
 /// This does not prove a result type or authorize machine-code rewriting.
-bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
-                               const NativeSourceCalls &Calls,
-                               std::set<uint64_t> *UsedEntryRegisters =
-                                   nullptr);
+bool restoresNativeSourceState(
+    const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
+    std::set<uint64_t> *UsedEntryRegisters = nullptr,
+    const SourceFunctionTypeHint *EntrySignature = nullptr);
 
 /// Prove entry-register uses in a single straight-line ARM64 helper ending in
 /// an exact declared runtime termination, optionally preceded by one other

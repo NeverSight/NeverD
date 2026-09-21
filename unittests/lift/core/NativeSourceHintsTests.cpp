@@ -1021,6 +1021,265 @@ struct NativeVoidFrameFixture : NativeVoidFixture {
   }
 };
 
+struct NativeIncomingStackFixture : NativeVoidFrameFixture {
+  int64_t IncomingOffset;
+  size_t AddressIndex;
+  size_t LoadIndex;
+
+  explicit NativeIncomingStackFixture(int64_t Offset = 0)
+      : NativeVoidFrameFixture(Arch::AArch64), IncomingOffset(Offset) {
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id =
+        getTargetRegInfo(Arch::AArch64).IntParamRegs.size() + Offset / 8;
+    Parameter.RegOff = kNoParamReg;
+    Parameter.Size = 8;
+    Parameter.TheArch = Arch::AArch64;
+    Med.Params = {Parameter};
+    Med.TypedParams = {{"incoming", NdType::makeInt(8)}};
+    High.Params = {{"incoming", NdType::makeInt(8)}};
+    Med.Blocks[0].Ops[0].Inputs[1] = Parameter;
+    useNativeVoidCallee();
+
+    AddressIndex = CallIndex;
+    LoadIndex = CallIndex + 1;
+    const auto Address = NdVar::tmp(TmpBase + 128, 8);
+    auto &Ops = Low.Blocks[0].Ops;
+    Ops.insert(
+        Ops.begin() + CallIndex,
+        {op(NdOp::INT_ADD, Address,
+            {NdVar::reg(a64reg::SP, 8), NdVar::cst(FrameBytes + Offset, 8)},
+            0x100c),
+         op(NdOp::LOAD, NdVar::reg(a64reg::X0, 8), {Address}, 0x100c)});
+    CallIndex += 2;
+    RestoreIndex += 2;
+  }
+
+  SourceFunctionTypeHint entrySignature() const {
+    SourceFunctionTypeHint Result;
+    Result.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    Result.Architecture = Arch::AArch64;
+    Result.HasExplicitABI = true;
+    Result.ReturnType = NdType::makeVoid();
+    Result.Parameters = {{"incoming",
+                          NdType::makeInt(8),
+                          {SourceABICarrierKind::Stack, 0, IncomingOffset, 8}}};
+    return Result;
+  }
+
+  NativeSourceCalls calls() const {
+    const auto Key = nativeSourceCallKey(Low.Blocks[0].Ops[CallIndex]);
+    EXPECT_TRUE(Key);
+    NativeSourceCallContract Contract;
+    Contract.Signature = &Med.Blocks[0].Ops[0].SourceCallHint->Signature;
+    return Key ? NativeSourceCalls{{*Key, Contract}} : NativeSourceCalls{};
+  }
+};
+
+TEST(NativeSourceHints, IncomingStackReadsRequireCompleteObservedSlots) {
+  for (int64_t Offset : {0, 16})
+    for (bool Repeat : {false, true}) {
+      SCOPED_TRACE(Offset);
+      SCOPED_TRACE(Repeat);
+      NativeIncomingStackFixture F(Offset);
+      if (Repeat) {
+        // Incoming values may be read again after a returning call. They are
+        // external inputs, not private spill facts surviving that call.
+        auto Address = F.Low.Blocks[0].Ops[F.AddressIndex];
+        auto Load = F.Low.Blocks[0].Ops[F.LoadIndex];
+        auto Call = F.Low.Blocks[0].Ops[F.CallIndex];
+        Address.Addr = Load.Addr = Call.Addr = 0x1014;
+        ++Call.Seq;
+        F.Low.Blocks[0].Ops.insert(F.Low.Blocks[0].Ops.begin() + F.RestoreIndex,
+                                   {Address, Load, Call});
+        auto MedCall = F.Med.Blocks[0].Ops[0];
+        MedCall.Addr = Call.Addr;
+        MedCall.OriginSeq = Call.Seq;
+        F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.begin() + 1, MedCall);
+      }
+      std::string Error;
+      const auto Hint = F.inferVoid(Error);
+      ASSERT_TRUE(Hint) << Error;
+      EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+      ASSERT_EQ(Hint->Parameters.size(), 1U);
+      EXPECT_EQ(Hint->Parameters[0].Location.Kind, SourceABICarrierKind::Stack);
+      EXPECT_EQ(Hint->Parameters[0].Location.EntryStackOffset, Offset);
+      EXPECT_EQ(Hint->Parameters[0].Location.ValueBytes, 8U);
+      EXPECT_EQ(F.Med.Params[0].RegOff, kNoParamReg);
+    }
+}
+
+TEST(NativeSourceHints, IncomingStackReadsRejectMissingOrPartialEvidence) {
+  for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeIncomingStackFixture F(16);
+    auto &Ops = F.Low.Blocks[0].Ops;
+    switch (Mutation) {
+    case 0:
+      F.Med.Params.clear();
+      F.Med.TypedParams.clear();
+      F.High.Params.clear();
+      F.Med.Blocks[0].Ops[0].Inputs[1] = MedVar::makeConst(1, 8);
+      break;
+    case 1:
+      Ops[F.LoadIndex].Output.Size = 4;
+      break;
+    case 2:
+      Ops[F.AddressIndex].Inputs[1].Offset += 8;
+      break;
+    case 3:
+      Ops[F.LoadIndex] = NativeVoidFrameFixture::op(
+          NdOp::STORE, {}, {Ops[F.LoadIndex].Inputs[0], NdVar::cst(42, 8)},
+          0x100c);
+      break;
+    case 4:
+      F.Med.Params.push_back(F.Med.Params[0]);
+      F.Med.TypedParams.push_back(F.Med.TypedParams[0]);
+      F.High.Params.push_back(F.High.Params[0]);
+      break;
+    case 5:
+      F.Med.Params[0].Size = F.Med.Blocks[0].Ops[0].Inputs[1].Size = 4;
+      F.Med.TypedParams[0].Type = F.High.Params[0].Type = NdType::makeInt(4);
+      break;
+    case 6:
+      F.Med.TypedParams[0].Type = F.High.Params[0].Type = NdType::makeFloat(8);
+      break;
+    case 7:
+      F.Med.Params[0].Id = F.Med.Blocks[0].Ops[0].Inputs[1].Id = 7;
+      break;
+    case 8:
+      // A sixteen-byte read cannot borrow permission for one eight-byte slot.
+      Ops[F.LoadIndex].Output.Size = 16;
+      break;
+    case 9:
+      Ops[F.LoadIndex].MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 10:
+      Ops[F.LoadIndex].MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 11:
+      ++Ops[F.AddressIndex].Inputs[1].Offset;
+      break;
+    case 12:
+      F.Med.TypedParams.clear();
+      break;
+    case 13:
+      F.High.Params.clear();
+      break;
+    }
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error)) << Error;
+    EXPECT_FALSE(Error.empty());
+  }
+}
+
+TEST(NativeSourceHints, IncomingStackReadsCannotRestoreMachineState) {
+  for (const auto Register :
+       {a64reg::X19, a64reg::X29, a64reg::X30, a64reg::SP})
+    for (unsigned UnknownAlias = 0; UnknownAlias != 3; ++UnknownAlias) {
+      SCOPED_TRACE(Register);
+      SCOPED_TRACE(UnknownAlias);
+      NativeIncomingStackFixture F;
+      auto &Ops = F.Low.Blocks[0].Ops;
+      // First restore the real private spills. A later incoming load cannot
+      // replace any restored identity, even when its slot and width are valid.
+      const auto Address = NdVar::tmp(TmpBase + 256, 8);
+      const auto Derive =
+          UnknownAlias == 1
+              ? NativeVoidFrameFixture::op(
+                    NdOp::INT_ADD, Address,
+                    {NdVar::reg(a64reg::SP, 8), NdVar::reg(a64reg::X1, 8)},
+                    0x1024)
+              : NativeVoidFrameFixture::op(NdOp::COPY, Address,
+                                           {NdVar::reg(a64reg::SP, 8)}, 0x1024);
+      Ops.insert(Ops.end() - 1,
+                 {Derive, NativeVoidFrameFixture::op(NdOp::LOAD,
+                                                     NdVar::reg(Register, 8),
+                                                     {Address}, 0x1024)});
+      if (UnknownAlias == 2)
+        Ops[Ops.size() - 2].Inputs[0].Size = 4;
+      const auto Signature = F.entrySignature();
+      EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, F.calls(),
+                                             nullptr, &Signature));
+      std::string Error;
+      EXPECT_FALSE(F.inferVoid(Error)) << Error;
+    }
+}
+
+TEST(NativeSourceHints, UnknownIncomingAliasDoesNotAcquireStackSlotAuthority) {
+  for (bool PartialAddress : {false, true}) {
+    SCOPED_TRACE(PartialAddress);
+    NativeIncomingStackFixture F;
+    if (PartialAddress)
+      F.Low.Blocks[0].Ops[F.LoadIndex].Inputs[0].Size = 4;
+    else
+      F.Low.Blocks[0].Ops[F.AddressIndex].Inputs[1] = NdVar::reg(a64reg::X1, 8);
+    // A read through an unresolved address already produces Unknown in the
+    // preservation analysis. No incoming-slot permission is needed or inferred;
+    // source body validity remains a separate publication requirement.
+    EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.calls()));
+    const auto Signature = F.entrySignature();
+    EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.calls(),
+                                          nullptr, &Signature));
+  }
+}
+
+TEST(NativeSourceHints, IncomingStackSignatureUsesPhysicalOffsets) {
+  for (unsigned Mutation = 0; Mutation != 14; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeIncomingStackFixture F(16);
+    auto Signature = F.entrySignature();
+    const SourceFunctionTypeHint *Entry = &Signature;
+    switch (Mutation) {
+    case 0:
+      break; // The first logical parameter occupies the physical SP+16 slot.
+    case 1:
+      Entry = nullptr;
+      break;
+    case 2:
+      Signature.Parameters.clear();
+      break;
+    case 3:
+      Signature.Parameters[0].Location.EntryStackOffset = 0;
+      break;
+    case 4:
+      Signature.Parameters[0].Location.EntryStackOffset = 17;
+      break;
+    case 5:
+      Signature.Parameters.push_back(Signature.Parameters[0]);
+      break;
+    case 6:
+      Signature.Parameters[0].Type = NdType::makeInt(4);
+      Signature.Parameters[0].Location.ValueBytes = 4;
+      break;
+    case 7:
+      Signature.Parameters[0].Type = NdType::makeFloat(8);
+      break;
+    case 8:
+      Signature.HasExplicitABI = false;
+      break;
+    case 9:
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
+      break;
+    case 10:
+      Signature.Architecture = Arch::X64;
+      break;
+    case 11:
+      Signature.Parameters[0].Location.EntryStackOffset = INT64_MAX;
+      break;
+    case 12:
+      Signature.Parameters[0].Location.EntryStackOffset = -8;
+      break;
+    case 13:
+      Signature.Parameters[0].Location.RegisterOffset = a64reg::X1;
+      break;
+    }
+    EXPECT_EQ(restoresNativeSourceState(F.Low, Arch::AArch64, F.calls(),
+                                        nullptr, Entry),
+              Mutation == 0);
+  }
+}
+
 std::shared_ptr<SourceCallTypeHint>
 useVoidRecordCallee(NativeVoidFixture &Fixture, const TypeRef &Record) {
   auto &Call = Fixture.Med.Blocks[0].Ops[0];

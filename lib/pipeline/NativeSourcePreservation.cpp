@@ -97,10 +97,12 @@ std::optional<int64_t> signedConstant(const NdVar &Value) {
 class PreservationProof {
 public:
   PreservationProof(Arch Architecture, const NativeSourceCalls &Calls,
-                    bool TerminalOnly = false)
+                    bool TerminalOnly = false,
+                    std::set<int64_t> IncomingStackSlots = {})
       : Architecture(Architecture), Calls(Calls),
         TRI(getTargetRegInfo(Architecture)), TerminalOnly(TerminalOnly),
-        TrackStackArguments(TerminalOnly) {
+        TrackStackArguments(TerminalOnly),
+        IncomingStackSlots(std::move(IncomingStackSlots)) {
     if (Architecture == Arch::AArch64)
       for (const auto &[Site, Contract] : Calls)
         if (Contract.Signature)
@@ -426,7 +428,12 @@ public:
           return false;
         const auto Address = FrameOffset(*Memory.Address);
         const auto SP = FrameOffset(NdVar::reg(TRI.StackPointer, 8));
-        if (Address) {
+        const bool IncomingRead = Address && Op.Opcode == NdOp::LOAD &&
+                                  Memory.AccessSize == 8 &&
+                                  IncomingStackSlots.count(*Address);
+        if (IncomingRead && (!SP || *SP > 0))
+          return false;
+        if (Address && !IncomingRead) {
           if (!SP || *Address > -int64_t(Memory.AccessSize))
             return false;
           int64_t StackFloor = *SP;
@@ -497,8 +504,12 @@ public:
                 return false;
         } else {
           for (unsigned I = 0; I < Value.size(); ++I)
-            Value[I] =
-                Address ? lookup(Current.Stack, *Address + I) : ByteFact{};
+            // Incoming arguments are external values. Even if a slot happens
+            // to contain a saved register's bits, it cannot certify restoration
+            // of this invocation's preserved state or a private-frame address.
+            Value[I] = Address && !IncomingRead
+                           ? lookup(Current.Stack, *Address + I)
+                           : ByteFact{};
         }
       }
       if (Op.Output.isReg() || Op.Output.isTemp()) {
@@ -530,12 +541,14 @@ private:
   std::set<uint64_t> Preserved;
   bool TerminalOnly;
   bool TrackStackArguments;
+  std::set<int64_t> IncomingStackSlots;
 };
 } // namespace
 
 bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls,
-                               std::set<uint64_t> *UsedEntryRegisters) {
+                               std::set<uint64_t> *UsedEntryRegisters,
+                               const SourceFunctionTypeHint *EntrySignature) {
   const size_t Count = Function.Blocks.size();
   if (!Count || Count > 16384 ||
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
@@ -571,7 +584,31 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     Entry = Blocks.at(0);
   if (!Entry)
     return false;
-  PreservationProof Proof(Architecture, Calls);
+  std::set<int64_t> IncomingStackSlots;
+  if (EntrySignature) {
+    std::string Error;
+    if (EntrySignature->Architecture != Architecture ||
+        EntrySignature->Origin !=
+            SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+        !validateSourceABI(*EntrySignature, Error))
+      return false;
+    for (const auto &Parameter : EntrySignature->Parameters) {
+      const auto &Location = Parameter.Location;
+      if (Location.Kind != SourceABICarrierKind::Stack)
+        continue;
+      if (Architecture != Arch::AArch64 || !Parameter.Components.empty() ||
+          !Parameter.Type || Parameter.Type->Size != 8 ||
+          (Parameter.Type->Kind != NdTypeKind::Int &&
+           Parameter.Type->Kind != NdTypeKind::Ptr) ||
+          Location.ValueBytes != 8 || Location.EntryStackOffset < 0 ||
+          Location.EntryStackOffset > MaxFrame - 8 ||
+          Location.EntryStackOffset % 8 != 0 ||
+          !IncomingStackSlots.insert(Location.EntryStackOffset).second)
+        return false;
+    }
+  }
+  PreservationProof Proof(Architecture, Calls, false,
+                          std::move(IncomingStackSlots));
   std::vector<std::set<size_t>> Preds(Count), Succs(Count);
   for (size_t I = 0; I < Count; ++I)
     for (int Id : Function.Blocks[I].Succs) {
