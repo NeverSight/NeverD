@@ -2098,6 +2098,36 @@ inline bool isRuntimeReference(SourceCallTypeHint::Kind Kind) {
          Kind == K::RuntimeProtocol;
 }
 
+inline std::optional<size_t>
+taggedCStringAddressOperand(const HighExpr &Expression,
+                            const BinaryImage &Image) {
+  if (Expression.Kind != ExprKind::BinOp || Expression.Op != NdOp::INT_OR ||
+      !Expression.Type || Expression.Type->Kind != NdTypeKind::Int ||
+      Expression.Type->Size != 8 || Expression.Operands.size() != 2)
+    return std::nullopt;
+  for (size_t Index = 0; Index != 2; ++Index) {
+    const auto &Address = Expression.Operands[Index];
+    const auto &Tag = Expression.Operands[1 - Index];
+    const auto Word = [](const ExprPtr &Value) {
+      return Value && Value->Kind == ExprKind::Const && Value->Type &&
+             Value->Type->Kind == NdTypeKind::Int && Value->Type->Size == 8;
+    };
+    if (!Word(Address) || !Word(Tag) ||
+        !isExactAddressProvenance(Address->ConstProvenance) ||
+        isCodeAddressProvenance(Address->ConstProvenance) ||
+        (Address->AddressOwnerVA != InvalidVA &&
+         Address->AddressOwnerVA != Address->ConstVal) ||
+        Tag->ConstVal != SwiftLiteralString::ImmortalTag ||
+        Tag->ConstProvenance != ConstantAddressProvenance::Scalar ||
+        Tag->AddressOwnerVA != InvalidVA || (Address->ConstVal & Tag->ConstVal))
+      continue;
+    const auto *Section = Image.getSectionFor(Address->ConstVal);
+    if (Section && cstringStorageSourceHint(Image, Section->VA))
+      return Index;
+  }
+  return std::nullopt;
+}
+
 } // namespace objc_binding_detail
 
 /// Clone before attaching relocation bindings: other native exports keep the
@@ -2726,6 +2756,10 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           SwiftMetadataPair.reset();
       }
     }
+    const auto TaggedCString =
+        !NumericOperand && !AddressContext && !MemoryAddress
+            ? taggedCStringAddressOperand(*Original, Image)
+            : std::nullopt;
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {
       auto &Operand = Expression->Operands[Index];
       // The Swift outlined-destroy helper receives an exact cache/reference
@@ -3102,6 +3136,13 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       // Numeric provenance is meaningful at an operand occurrence, not for
       // every use of the shared node. An address consumer remains strict even
       // when its arithmetic happens to contain encoded scalar immediates.
+      // A tagged literal word retains its original integer OR. Relocate only
+      // the complete address leaf into the permanent shared string pool;
+      // neither a borrowed buffer nor a decoded Swift object is substituted.
+      if (TaggedCString == Index) {
+        Operand = Copy(Operand, Depth + 1, false, true, false);
+        continue;
+      }
       bool OperandAddress =
           AddressContext ||
           (Index == 0 && (Expression->Kind == ExprKind::Load ||

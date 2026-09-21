@@ -1679,6 +1679,127 @@ TEST(ObjCSourceBindings, CStringPointerSlotsSharePoolsAndRevalidateFixups) {
       }
 }
 
+TEST(ObjCSourceBindings, TaggedCStringWordsKeepTheTagAndSharedPoolIdentity) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool TagFirst : {false, true}) {
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.Image.ObjCSourceReferences.clear();
+      F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+      F.Function.ReturnType = NdType::makeVoid();
+      const auto Address = HighExpr::makeConst(
+          0x1040, 8, ConstantAddressProvenance::DataAddress, 0x1040);
+      const auto Tag = HighExpr::makeConst(SwiftLiteralString::ImmortalTag, 8,
+                                           ConstantAddressProvenance::Scalar);
+      const auto Value = HighExpr::makeBinop(
+          NdOp::INT_OR, TagFirst ? Tag : Address, TagFirst ? Address : Tag);
+      HighStmt Store;
+      Store.Kind = StmtKind::Store;
+      Store.StoreAddr =
+          HighExpr::makeVar(MedVar{.Kind = MedVar::Param, .Size = 8});
+      Store.StoreVal = Value;
+      F.Function.Body = {Store};
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      EXPECT_EQ(Bound.CStringSections, std::set<va_t>{0x1000});
+      EXPECT_TRUE(Bound.BorrowedBytes.empty());
+      const auto Word = Bound.Function.Body[0].StoreVal;
+      ASSERT_EQ(Word->Kind, ExprKind::BinOp);
+      EXPECT_EQ(Word->Op, NdOp::INT_OR);
+      EXPECT_EQ(Word->Type->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Word->Type->Size, 8U);
+      EXPECT_EQ(Word->Operands[TagFirst ? 0 : 1]->ConstVal,
+                SwiftLiteralString::ImmortalTag);
+      const auto Relocated = Word->Operands[TagFirst ? 1 : 0];
+      ASSERT_EQ(Relocated->Kind, ExprKind::BinOp);
+      EXPECT_EQ(Relocated->Op, NdOp::INT_ADD);
+      EXPECT_EQ(Relocated->Operands[1]->ConstVal, 0x40U);
+      const auto Helper = Relocated->Operands[0];
+      ASSERT_TRUE(Helper->SourceCallHint);
+      EXPECT_EQ(Helper->SourceCallHint->CallKind,
+                SourceCallTypeHint::Kind::RuntimeCStringStorage);
+      EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}));
+      EXPECT_EQ(Address->Kind, ExprKind::Const);
+      EXPECT_EQ(Address->ConstVal, 0x1040U);
+      EXPECT_EQ(Value->Operands[TagFirst ? 1 : 0], Address);
+      F.Image.DataPtrRelocSlots.insert(0x1080);
+      EXPECT_FALSE(objcSourceCallBound(*Helper, F.Image, {}));
+    }
+}
+
+TEST(ObjCSourceBindings, TaggedCStringWordsRejectUnprovenAddressOccurrences) {
+  for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    Fixture F;
+    F.Image.ObjCSourceReferences.clear();
+    F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+    F.Function.ReturnType = NdType::makeVoid();
+    const auto Address = HighExpr::makeConst(
+        0x1040, 8, ConstantAddressProvenance::DataAddress, 0x1040);
+    const auto Tag = HighExpr::makeConst(SwiftLiteralString::ImmortalTag, 8,
+                                         ConstantAddressProvenance::Scalar);
+    auto Value = HighExpr::makeBinop(NdOp::INT_OR, Address, Tag);
+    HighStmt Store;
+    Store.Kind = StmtKind::Store;
+    Store.StoreAddr =
+        HighExpr::makeVar(MedVar{.Kind = MedVar::Param, .Size = 8});
+    Store.StoreVal = Value;
+    switch (Mutation) {
+    case 0:
+      Address->ConstProvenance = ConstantAddressProvenance::Unknown;
+      break;
+    case 1:
+      Address->ConstProvenance = ConstantAddressProvenance::Scalar;
+      break;
+    case 2:
+      Address->ConstProvenance = ConstantAddressProvenance::AddressFragment;
+      break;
+    case 3:
+      Address->ConstProvenance = ConstantAddressProvenance::CodeAddress;
+      break;
+    case 4:
+      Address->AddressOwnerVA = 0x1020;
+      break;
+    case 5:
+      Address->Type = NdType::makeInt(4);
+      break;
+    case 6:
+      Tag->ConstProvenance = ConstantAddressProvenance::DataAddress;
+      break;
+    case 7:
+      Tag->AddressOwnerVA = 0x1000;
+      break;
+    case 8:
+      Tag->ConstVal >>= 1;
+      break;
+    case 9:
+      Value->Op = NdOp::INT_ADD;
+      break;
+    case 10:
+      Value->Type = NdType::makeInt(4);
+      break;
+    case 11:
+      F.Image.Sections[0].Type = llvm::MachO::S_REGULAR;
+      break;
+    case 12:
+      F.Image.Sections[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      break;
+    case 13:
+      F.Image.DataPtrRelocSlots.insert(0x1080);
+      break;
+    case 14:
+      Store.StoreAddr = Value;
+      Store.StoreVal = HighExpr::makeConst(7, 8);
+      break;
+    }
+    F.Function.Body = {Store};
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Bound.Limitation.empty());
+    EXPECT_TRUE(Bound.CStringSections.empty());
+  }
+}
+
 TEST(ObjCSourceBindings, CStringPoolsRejectPartialAmbiguousAndMutableStorage) {
   for (unsigned Case = 0; Case != 9; ++Case) {
     SCOPED_TRACE(Case);
