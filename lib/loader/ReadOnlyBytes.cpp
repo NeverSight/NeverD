@@ -18,13 +18,14 @@ bool overlaps(va_t Address, uint64_t Extent, va_t Base, uint64_t Width) {
 }
 
 const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
-                           uint64_t Extent, bool Immutable) {
+                           uint64_t Extent, bool Immutable, bool Code = false) {
   if (!Address || Address > InvalidVA - Extent)
     return nullptr;
   const auto *Section = Image.getSectionFor(Address);
   const auto *Segment = Image.getSegmentFor(Address);
   if (!Section || !Segment || !Section->isReadable() ||
-      !Segment->isReadable() || Image.isCodeAddress(Address) ||
+      !Segment->isReadable() || Image.isCodeAddress(Address) != Code ||
+      (Code && (!Section->isExecutable() || !Segment->isExecutable())) ||
       (Immutable && !Segment->ReadOnlyAfterRelocations &&
        (Section->isWritable() || Segment->isWritable())) ||
       Section->Size > InvalidVA - Section->VA ||
@@ -100,6 +101,16 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   const uint64_t Extent = Size ? Size : 1;
   const auto *Bytes = mappedBytes(Image, Address, Extent, true);
   if (!Bytes || hasConflictingFixups(Image, Address, Extent, false))
+    return std::nullopt;
+  return std::vector<uint8_t>(Bytes, Bytes + Size);
+}
+
+std::optional<std::vector<uint8_t>>
+readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
+  if (!supportedImage(Image) || !Size || Size > 1024 * 1024)
+    return std::nullopt;
+  const auto *Bytes = mappedBytes(Image, Address, Size, true, true);
+  if (!Bytes || hasConflictingFixups(Image, Address, Size, false))
     return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }

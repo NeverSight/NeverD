@@ -19,6 +19,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -54,6 +55,106 @@ void detail::retireReplayedI386GOTPCAmbiguities(
 }
 
 namespace {
+
+// A shared ARM64 epilogue still executes in the branching caller's frame.
+// Admit only this complete machine shape, retaining every load and SP update
+// in LowIR. This is edge evidence, not a callee ABI or exclusive range owner.
+bool isBackwardSharedEpilogue(const BinaryImage &Image, va_t FunctionEntry,
+                              va_t Source, va_t Target,
+                              const std::set<va_t> *FunctionEntries) {
+  if (Image.Arch != Arch::AArch64 || Image.Format != BinaryFormat::MachO ||
+      Source % 4 || Target % 4 || Target >= FunctionEntry ||
+      Image.findImportAt(Target))
+    return false;
+  // Negative-only shape filter: ordinary tail calls need not pay the full
+  // immutable mapping/fixup proof. A match still proves every byte below.
+  const auto *FirstBytes = Image.readVA(Target, 4);
+  if (!FirstBytes)
+    return false;
+  const uint32_t FirstWord = readLE<uint32_t>(FirstBytes);
+  if ((FirstWord & 0xffc003e0) != 0xa94003e0u &&
+      (FirstWord & 0xffc003e0) != 0xa8c003e0u)
+    return false;
+  const auto HasInteriorEntry = [&](va_t End) {
+    const auto Contains = [&](const auto &Entries) {
+      const auto Next = Entries.upper_bound(Target);
+      return Next != Entries.end() && *Next < End;
+    };
+    if ((FunctionEntries && Contains(*FunctionEntries)) ||
+        Contains(Image.RuntimeFunctionAddrs) ||
+        Contains(Image.VerifiedFunctionEntries))
+      return true;
+    return std::any_of(Image.Symbols.begin(), Image.Symbols.end(),
+                       [&](const Symbol &Symbol) {
+                         return Symbol.IsFunc && Symbol.Addr > Target &&
+                                Symbol.Addr < End;
+                       });
+  };
+  const auto BranchTarget = [](uint32_t Word, va_t Address)
+      -> std::optional<va_t> {
+    if ((Word & 0xfc000000) != 0x14000000u)
+      return std::nullopt;
+    const uint32_t Immediate = Word & 0x03ffffff;
+    const int64_t Offset = (Immediate & 0x02000000
+                                ? int64_t(Immediate) - 0x04000000
+                                : int64_t(Immediate)) * 4;
+    if ((Offset < 0 && Address < uint64_t(-Offset)) ||
+        (Offset >= 0 && Address > InvalidVA - uint64_t(Offset)))
+      return std::nullopt;
+    return Offset < 0 ? Address - uint64_t(-Offset)
+                      : Address + uint64_t(Offset);
+  };
+  const auto SourceBytes = readImmutableCodeBytes(Image, Source, 4);
+  if (!SourceBytes ||
+      BranchTarget(readLE<uint32_t>(SourceBytes->data()), Source) != Target)
+    return false;
+
+  uint32_t RestoredRegisters = 0;
+  bool ReleasedStack = false;
+  for (unsigned I = 0; I < 5; ++I) {
+    const uint32_t Size = (I + 1) * 4;
+    if (FunctionEntry - Target < Size)
+      return false;
+    const auto Bytes = readImmutableCodeBytes(Image, Target, Size);
+    if (!Bytes)
+      return false;
+    const va_t Address = Target + I * 4;
+    const uint32_t Word = readLE<uint32_t>(Bytes->data() + I * 4);
+    if (const auto Exit = BranchTarget(Word, Address)) {
+      // The existing tail-call owner handles this final external transfer.
+      // Never follow another local function, veneer-like guess, or data slot.
+      return RestoredRegisters && ReleasedStack &&
+             !HasInteriorEntry(Target + Size) && Image.findImportAt(*Exit) &&
+             Image.hasExecutableCodeOwnerRange(*Exit, 4) &&
+             Image.readVA(*Exit, 4);
+    }
+    const bool Pair = (Word & 0xffc003e0) == 0xa94003e0u;
+    const bool PostPair = (Word & 0xffc003e0) == 0xa8c003e0u;
+    if (Pair || PostPair) {
+      const unsigned First = Word & 31;
+      const unsigned Second = (Word >> 10) & 31;
+      const unsigned Offset = (Word >> 15) & 127;
+      if (ReleasedStack || First < 19 || First > 30 || Second < 19 ||
+          Second > 30 || First == Second || Offset >= 64 ||
+          (RestoredRegisters & ((1u << First) | (1u << Second))) ||
+          (PostPair && (!Offset || Offset % 2)))
+        return false;
+      RestoredRegisters |= (1u << First) | (1u << Second);
+      ReleasedStack = PostPair;
+      continue;
+    }
+    // ADD sp, sp, #imm (unshifted), once, after all full-width restores.
+    if ((Word & 0xffc003ff) == 0x910003ffu) {
+      const unsigned Amount = (Word >> 10) & 4095;
+      if (!RestoredRegisters || ReleasedStack || !Amount || Amount % 16)
+        return false;
+      ReleasedStack = true;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
 
 /// True when \p Next begins an instruction that belongs to the same function as
 /// the resumable trap in front of it.
@@ -1050,11 +1151,15 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   // shared-table reconciliation cannot accidentally reuse a stale result.
   I386GOTOFFProposalRootCache.clear();
   I386GOTOFFModelReachCache.clear();
-  std::queue<va_t> Worklist;
-  Worklist.push(Addr);
+  // Only an independently authenticated direct B may authorize decoding
+  // across a known entry. Decoded blocks keep all their physical predecessors.
+  // Keeping its source on this local worklist prevents fallthrough, BL, and
+  // unrelated exploration roots from inheriting another edge's permission.
+  std::queue<std::pair<va_t, std::optional<va_t>>> Worklist;
+  Worklist.push({Addr, std::nullopt});
 
   while (!Worklist.empty()) {
-    va_t Cur = Worklist.front();
+    auto [Cur, SourceBranch] = Worklist.front();
     Worklist.pop();
 
     while (true) {
@@ -1064,8 +1169,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
       if (Cur != CurrentFuncEntry && KnownFuncEntries &&
-          KnownFuncEntries->count(Cur) != 0)
+          KnownFuncEntries->count(Cur) != 0 &&
+          (!SourceBranch || !isBackwardSharedEpilogue(
+                                Img, CurrentFuncEntry, *SourceBranch, Cur,
+                                KnownFuncEntries)))
         break;
+      SourceBranch.reset();
       // An actual graph extension invalidates every generation-local replay
       // and positive ambiguity shadow.  Pending exact query identities remain
       // fail-closed carry, but only a fresh query on this immutable graph may
@@ -1388,7 +1497,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         if (Saved.BranchTarget != InvalidVA) {
           BlockStarts.insert(Saved.BranchTarget);
           if (!ExploredAddrs.count(Saved.BranchTarget))
-            Worklist.push(Saved.BranchTarget);
+            Worklist.push({Saved.BranchTarget, std::nullopt});
         }
         break;
       }
@@ -1401,6 +1510,13 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // exploring here.
       if (Saved.IsBranch && !Saved.IsCall && !Saved.IsCond &&
           !Saved.IsIndirect && isTailCallTarget(Saved.BranchTarget)) {
+        if (isBackwardSharedEpilogue(Img, CurrentFuncEntry, Saved.Addr,
+                                     Saved.BranchTarget, KnownFuncEntries)) {
+          BlockStarts.insert(Saved.BranchTarget);
+          if (!ExploredAddrs.count(Saved.BranchTarget))
+            Worklist.push({Saved.BranchTarget, Saved.Addr});
+          break;
+        }
         rewriteAsTailCall(Saved);
         break;
       }
@@ -1413,20 +1529,20 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
             for (va_t T : Saved.JumpTableTargets) {
               BlockStarts.insert(T);
               if (!ExploredAddrs.count(T))
-                Worklist.push(T);
+                Worklist.push({T, std::nullopt});
             }
           }
         }
         if (Saved.BranchTarget != InvalidVA) {
           BlockStarts.insert(Saved.BranchTarget);
           if (!ExploredAddrs.count(Saved.BranchTarget))
-            Worklist.push(Saved.BranchTarget);
+            Worklist.push({Saved.BranchTarget, std::nullopt});
         }
         if (Saved.IsCond) {
           va_t Fall = Next;
           BlockStarts.insert(Fall);
           if (!ExploredAddrs.count(Fall))
-            Worklist.push(Fall);
+            Worklist.push({Fall, std::nullopt});
         }
         break;
       }

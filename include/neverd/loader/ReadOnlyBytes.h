@@ -15,6 +15,12 @@ struct BinaryImage;
 std::optional<std::vector<uint8_t>>
 readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
 
+/// Read uniquely mapped immutable instruction bytes without fixups. This
+/// proves byte availability only, not function ownership or instruction
+/// semantics. Ordinary data reads continue to reject executable addresses.
+std::optional<std::vector<uint8_t>>
+readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
+
 /// Prove a complete store range lies in unique file-backed writable image
 /// storage, disjoint from a function's private frame and newly allocated
 /// objects. This proves only the storage owner, never its contents or a source
