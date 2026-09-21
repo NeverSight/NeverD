@@ -1,3 +1,4 @@
+#include "../../../lib/pipeline/NativeSourcePreservation.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/SourceABI.h"
@@ -1020,6 +1021,144 @@ struct NativeVoidFrameFixture : NativeVoidFixture {
   }
 };
 
+std::shared_ptr<SourceCallTypeHint>
+useVoidRecordCallee(NativeVoidFixture &Fixture, const TypeRef &Record) {
+  auto &Call = Fixture.Med.Blocks[0].Ops[0];
+  auto Binding = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+  Binding->CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+  Binding->Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinRuntime;
+  Binding->Signature.Parameters = {{"record", Record}};
+  std::string Error;
+  EXPECT_TRUE(
+      assignDarwinFixedSourceABI(Binding->Signature, Fixture.Image.Arch, Error))
+      << Error;
+  Fixture.Med.Params.clear();
+  Fixture.Med.TypedParams.clear();
+  Fixture.High.Params.clear();
+  Call.NumInputs = 1;
+  for (const auto &Physical : sourceABIParameters(Binding->Signature))
+    Call.addInput(MedVar::makeConst(17, Physical.Type->Size));
+  Call.SourceCallHint = Binding;
+  return Binding;
+}
+
+TEST(NativeSourceHints, VoidRecordsCheckEveryPhysicalRegisterMember) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Shape = 0; Shape < 4; ++Shape)
+      for (unsigned Path = 0; Path < 3; ++Path) {
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(Shape);
+        SCOPED_TRACE(Path);
+        // Floating records currently have an authoritative ABI only on arm64.
+        if (Architecture == Arch::X64 && Shape != 2)
+          continue;
+        const auto Record =
+            Shape == 0   ? NdType::makeStruct(
+                               {NdType::makeFloat(8), NdType::makeFloat(8)})
+            : Shape == 1 ? NdType::makeStruct(
+                               {NdType::makeFloat(4), NdType::makeFloat(4)})
+            : Shape == 2
+                ? NdType::makeStruct(
+                      {NdType::makeInt(8), NdType::makePtr(NdType::makeVoid())})
+                : NdType::makeStruct(
+                      {NdType::makeFloat(8), NdType::makeFloat(8),
+                       NdType::makeFloat(8), NdType::makeFloat(8)});
+        // Exercise ordinary framed calls, the general tail-call proof, and
+        // the narrower leaf fallback independently. The fallback's harmless
+        // intrinsic is deliberately unsupported by the general frame proof.
+        NativeVoidFixture F = Path == 0 ? NativeVoidFrameFixture(Architecture)
+                                        : NativeVoidFixture(Architecture);
+        const auto Binding = useVoidRecordCallee(F, Record);
+        if (Path == 2) {
+          LowOp Intrinsic;
+          Intrinsic.Opcode = NdOp::INTRINSIC;
+          Intrinsic.Addr = 0x1004;
+          F.Low.Blocks[0].Ops.insert(F.Low.Blocks[0].Ops.begin(), Intrinsic);
+        }
+        std::string Error;
+        const auto Hint = F.inferVoid(Error);
+        ASSERT_TRUE(Hint) << Error;
+        EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+        EXPECT_EQ(Hint->ReturnLocation.Kind, SourceABICarrierKind::None);
+        EXPECT_TRUE(Hint->Parameters.empty());
+
+        const auto Physicals = sourceABIParameters(Binding->Signature);
+        ASSERT_EQ(Physicals.size(), Shape == 3 ? 4U : 2U);
+        // Any byte in either member can carry a frame address, including a
+        // non-leading FP lane. Clear one interior byte to ensure other-byte
+        // taint cannot be erased by a partial overwrite.
+        for (const auto &Physical : Physicals)
+          for (bool PartialClear : {false, true}) {
+            auto Escaping = F;
+            auto &Ops = Escaping.Low.Blocks[0].Ops;
+            const auto Call =
+                std::find_if(Ops.begin(), Ops.end(),
+                             [](auto &Op) { return Op.Opcode == NdOp::CALL; });
+            ASSERT_NE(Call, Ops.end());
+            const auto Index = Call - Ops.begin();
+            const auto Register = Physical.Location.RegisterOffset;
+            LowOp Derive = NativeVoidFrameFixture::op(
+                NdOp::COPY, NdVar::reg(Register, 8),
+                {NdVar::reg(getTargetRegInfo(Architecture).StackPointer, 8)},
+                0x100c);
+            Ops.insert(Ops.begin() + Index, Derive);
+            if (PartialClear)
+              Ops.insert(Ops.begin() + Index + 1,
+                         NativeVoidFrameFixture::op(
+                             NdOp::COPY, NdVar::reg(Register + 1, 1),
+                             {NdVar::cst(0, 1)}, 0x100c));
+            EXPECT_FALSE(Escaping.inferVoid(Error)) << Error;
+          }
+      }
+}
+
+TEST(NativeSourceHints, VoidRecordsRejectStaleAndBorrowedMemberContracts) {
+  for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeVoidFrameFixture F(Arch::AArch64);
+    auto Binding = useVoidRecordCallee(
+        F, NdType::makeStruct({NdType::makeInt(8), NdType::makeInt(8)}));
+    auto &Parameter = Binding->Signature.Parameters[0];
+    switch (Mutation) {
+    case 0:
+      Parameter.Components.pop_back();
+      break;
+    case 1:
+      Parameter.Components[1] = Parameter.Components[0];
+      break;
+    case 2:
+      Parameter.Components[1].ValueBytes = 4;
+      break;
+    case 3:
+      ++F.Low.Blocks[0].Ops[F.CallIndex].Seq;
+      break;
+    case 4:
+      F.Med.Blocks[0].Ops[0].addInput(MedVar::makeConst(31, 8));
+      break;
+    case 5:
+      --F.Med.Blocks[0].Ops[0].NumInputs;
+      break;
+    case 6:
+    case 7:
+      // The super2 certificate for source parameter zero only borrows a
+      // scalar pointer. Its index must not authorize either record member.
+      Binding->CallKind = SourceCallTypeHint::Kind::ObjCSuper2;
+      Binding->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+      F.Low.Blocks[0].Ops.insert(
+          F.Low.Blocks[0].Ops.begin() + F.CallIndex,
+          NativeVoidFrameFixture::op(
+              NdOp::COPY,
+              NdVar::reg(Parameter.Components[Mutation - 6].RegisterOffset, 8),
+              {NdVar::reg(a64reg::SP, 8)}, 0x100c));
+      break;
+    }
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error)) << Error;
+    EXPECT_FALSE(Error.empty());
+  }
+}
+
 struct NativeOutgoingStackFixture : NativeVoidFrameFixture {
   size_t ArgumentStore;
   std::shared_ptr<SourceCallTypeHint> Binding;
@@ -1053,6 +1192,57 @@ struct NativeOutgoingStackFixture : NativeVoidFrameFixture {
     Call.addInput(MedVar::makeConst(0x7777, 8));
   }
 };
+
+TEST(NativeSourceHints, RecordBorrowingKeepsOriginalScalarParameterIndexes) {
+  for (bool Floating : {false, true})
+    for (bool Writable : {false, true})
+      for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+        SCOPED_TRACE(Floating);
+        SCOPED_TRACE(Writable);
+        SCOPED_TRACE(Mutation);
+        NativeOutgoingStackFixture F;
+        auto &Signature = F.Binding->Signature;
+        const auto Member =
+            Floating ? NdType::makeFloat(8) : NdType::makeInt(8);
+        Signature.Parameters = {
+            {"record", NdType::makeStruct({Member, Member})},
+            {"scratch", NdType::makePtr(NdType::makeVoid())}};
+        std::string Error;
+        ASSERT_TRUE(assignDarwinFixedSourceABI(Signature, Arch::AArch64, Error))
+            << Error;
+        const auto Key = nativeSourceCallKey(F.Low.Blocks[0].Ops[F.CallIndex]);
+        ASSERT_TRUE(Key);
+        NativeSourceCallContract Contract;
+        Contract.Signature = &Signature;
+        auto &Borrowed = Writable ? Contract.WritableFrameParameters
+                                  : Contract.ReadOnlyFrameParameters;
+        // Logical parameter 1 is physical member 2 after a two-member record.
+        Borrowed.emplace(Mutation == 1 ? 2 : 1, 8);
+        auto &Ops = F.Low.Blocks[0].Ops;
+        Ops.insert(
+            Ops.begin() + F.CallIndex,
+            NativeVoidFrameFixture::op(
+                NdOp::COPY,
+                NdVar::reg(Signature.Parameters[1].Location.RegisterOffset, 8),
+                {NdVar::reg(a64reg::SP, 8)}, 0x100c));
+        if (Mutation == 2 || Mutation == 3) {
+          Borrowed.emplace(0, 8);
+          Ops.insert(Ops.begin() + F.CallIndex,
+                     NativeVoidFrameFixture::op(
+                         NdOp::COPY,
+                         NdVar::reg(Signature.Parameters[0]
+                                        .Components[Mutation - 2]
+                                        .RegisterOffset,
+                                    8),
+                         {NdVar::reg(a64reg::SP, 8)}, 0x100c));
+        }
+        if (Mutation == 4)
+          Signature.Parameters[0].Components.pop_back();
+        NativeSourceCalls Calls{{*Key, Contract}};
+        EXPECT_EQ(restoresNativeSourceState(F.Low, Arch::AArch64, Calls),
+                  Mutation == 0);
+      }
+}
 
 TEST(NativeSourceHints, ReturningCallsConsumeCompletelyWrittenStackWords) {
   for (unsigned Mutation = 0; Mutation < 13; ++Mutation) {

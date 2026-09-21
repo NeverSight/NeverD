@@ -238,10 +238,13 @@ public:
           return false;
         }
         std::vector<std::pair<int64_t, size_t>> WritableFrameRanges;
-        for (size_t ParameterIndex = 0;
-             ParameterIndex < Signature.Parameters.size(); ++ParameterIndex) {
+        // Inspect the same validated physical members used by call lowering.
+        // A record has no single carrier; checking only its primary location
+        // would reject valid records or miss a frame address in a later member.
+        for (const auto &Physical : sourceABIParameters(Signature)) {
+          const size_t ParameterIndex = Physical.ParameterIndex;
           const auto &Parameter = Signature.Parameters[ParameterIndex];
-          const auto &Location = Parameter.Location;
+          const auto &Location = Physical.Location;
           if (Location.Kind == SourceABICarrierKind::Stack) {
             const bool TerminalArgument =
                 TerminalOnly && Found->second.Terminates;
@@ -284,6 +287,10 @@ public:
                 lookup(Current.Registers, Location.RegisterOffset + I)
                     .MayBeFrame;
           if (HasFrameByte) {
+            // Borrowing certificates describe a complete scalar pointer, not
+            // one member of a source record with the same parameter index.
+            if (!Parameter.Components.empty())
+              return false;
             const auto ReadOnly =
                 Found->second.ReadOnlyFrameParameters.find(ParameterIndex);
             const auto Writable =
@@ -837,7 +844,8 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
             return false;
         if (!Found->second.Signature)
           return false;
-        for (const auto &Parameter : Found->second.Signature->Parameters) {
+        for (const auto &Parameter :
+             sourceABIParameters(*Found->second.Signature)) {
           const auto &Location = Parameter.Location;
           if ((Location.Kind != SourceABICarrierKind::IntegerRegister &&
                Location.Kind != SourceABICarrierKind::FloatingRegister) ||
