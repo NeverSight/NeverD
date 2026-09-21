@@ -99,7 +99,8 @@ inline size_t inferObjCNativeDependencies(
     PipelineOptions &Options, std::map<va_t, std::string> &Diagnostics,
     const std::set<va_t> &CallbackRoots = {},
     const std::set<va_t> &CallOnlyTargets = {},
-    const std::map<va_t, HighFunc> *SourceRefinements = nullptr) {
+    const std::map<va_t, HighFunc> *SourceRefinements = nullptr,
+    const NativeSourceCalleeContracts *CalleeContracts = nullptr) {
   const auto Targets =
       walkObjCNativeDependencies(Image, Result, nullptr, CallbackRoots);
   std::map<va_t, const LowFunc *> Low;
@@ -166,7 +167,7 @@ inline size_t inferObjCNativeDependencies(
       continue;
     auto Hint = inferNativeSourceTypeHint(
         Image, *M->second, *H->second, *A->second, Diagnostics[Target],
-        L->second, IntegerPairReturns.count(Target));
+        L->second, IntegerPairReturns.count(Target), CalleeContracts);
     if (Hint) {
       Options.SourceTypeHints.emplace(Target, std::move(*Hint));
       ++Added;

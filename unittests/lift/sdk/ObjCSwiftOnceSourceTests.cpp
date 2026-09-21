@@ -704,6 +704,111 @@ TEST(SwiftOnceSources, BindsCanonicalZeroArgumentAddressor) {
   }
 }
 
+TEST(SwiftOnceSources, NativeCalleeContractsRevalidateCurrentBodiesAndABI) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(Mutation);
+      AddressorFixture F(Architecture);
+      auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      ASSERT_EQ(Plan.Addressors.size(), 1U);
+      PipelineOptions Persisted;
+      applySwiftOnceSourceHints(Plan, Persisted);
+      auto &Initializer = F.Pipeline.HighFuncs[1];
+      BinaryImage OtherImage;
+      if (Mutation == 1)
+        F.Pipeline.SourceImage = &OtherImage;
+      if (Mutation == 2)
+        Plan.Addressors.begin()->second.Storage += 8;
+      if (Mutation == 3)
+        F.Once->Operands[2] = HighExpr::makeConst(0, 8);
+      if (Mutation == 4) {
+        HighStmt Use;
+        Use.Kind = StmtKind::ExprStmt;
+        MedVar Context;
+        Context.Kind = MedVar::Param;
+        Context.Id = 0;
+        Context.Size = 8;
+        Use.Val = HighExpr::makeVar(Context, NdType::makeInt(8));
+        Initializer.Body.insert(Initializer.Body.begin(), Use);
+      }
+      if (Mutation == 5)
+        Initializer.SourceTypeHint.reset();
+      if (Mutation == 6) {
+        // Mutating both the plan and the current declaration cannot forge the
+        // canonical callback ABI that authorizes dropping the x2 context.
+        Initializer.SourceTypeHint->Parameters.clear();
+        Plan.CallbackHints[AddressorFixture::InitializerAddress] =
+            *Initializer.SourceTypeHint;
+      }
+      if (Mutation == 7)
+        Plan.Addressors.begin()->second.Initializer += 4;
+      if (Mutation == 8)
+        F.Pipeline.HighFuncs[0].Name += "forged";
+      if (Mutation == 9) {
+        HighStmt UnknownEdge;
+        UnknownEdge.Kind = StmtKind::Goto;
+        UnknownEdge.GotoTarget = 0x1234;
+        Initializer.Body = {UnknownEdge};
+      }
+      if (Mutation == 10)
+        F.Pipeline.HighFuncs.erase(F.Pipeline.HighFuncs.begin() + 1);
+      if (Mutation == 11)
+        F.Pipeline.HighFuncs.push_back(F.Pipeline.HighFuncs.front());
+      const auto Contracts =
+          swiftOnceNativeCalleeContracts(F.Image, F.Pipeline, Plan);
+      if (Mutation)
+        EXPECT_TRUE(Contracts.ZeroArgumentPointerCallees.empty());
+      else {
+        EXPECT_EQ(Contracts.SourceImage, &F.Image);
+        ASSERT_EQ(Contracts.ZeroArgumentPointerCallees.size(), 1U);
+        EXPECT_TRUE(equalSourceABIs(
+            Contracts.ZeroArgumentPointerCallees.at(
+                AddressorFixture::AccessorAddress),
+            swift_once_source_detail::addressorHint(Architecture)));
+      }
+      if (Mutation == 6) {
+        std::set<std::string> Shared;
+        EXPECT_THROW(renderSwiftOnceAddressorHelpers(
+                         F.Image, {AddressorFixture::AccessorAddress}, Plan,
+                         F.functions(), Shared),
+                     std::runtime_error);
+        EXPECT_TRUE(Shared.empty());
+      }
+      // Persisted hints never become evidence for this round's contracts.
+      EXPECT_EQ(Persisted.SourceCalleeTypeHints.size(), 1U);
+      EXPECT_FALSE(
+          Persisted.SourceTypeHints.count(AddressorFixture::AccessorAddress));
+    }
+}
+
+TEST(SwiftOnceSources, NativeCalleeContractDoesNotCloseInitializerBody) {
+  AddressorFixture F(Arch::AArch64);
+  auto &Initializer = F.Pipeline.HighFuncs[1];
+  HighStmt Unknown;
+  Unknown.Kind = StmtKind::Call;
+  Unknown.CallExpr = HighExpr::makeCall("unknown", 0x10f0, {});
+  Unknown.CallExpr->Type = NdType::makeVoid();
+  Initializer.Body.insert(Initializer.Body.begin(), Unknown);
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  const auto Contracts =
+      swiftOnceNativeCalleeContracts(F.Image, F.Pipeline, Plan);
+  ASSERT_EQ(Contracts.ZeroArgumentPointerCallees.size(), 1U);
+  const auto Bound = bindSwiftOnceSourceReferences(
+      F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+  EXPECT_EQ(Bound.Dependencies,
+            std::set<va_t>{AddressorFixture::InitializerAddress});
+  PipelineFunctionAudit Audit;
+  Audit.Entry = Initializer.Entry;
+  Audit.Disposition = PipelineFunctionDisposition::Accepted;
+  Audit.HasLowIR = Audit.HasMedIR = Audit.MedIRVerified = true;
+  Audit.DecodedInstructions = Audit.LiftedInstructions = 2;
+  const auto Diagnostics =
+      sourceBodyDiagnostics(Initializer, *Initializer.SourceTypeHint, &Audit);
+  EXPECT_NE(Diagnostics.firstUnboundCall(), nullptr);
+  EXPECT_FALSE(Diagnostics.limitation().empty());
+}
+
 TEST(SwiftOnceSources, ProjectsCanonicalObjCLazyStaticGetterThunk) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     ObjCThunkFixture F(Architecture);

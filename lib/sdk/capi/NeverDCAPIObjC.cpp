@@ -125,9 +125,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         elimUnreadPrivateFrameStores(Binding.Function, S->Img.Arch);
         SourceRefinements.emplace(Function.Entry, std::move(Binding.Function));
       }
+      const auto CalleeContracts =
+          swiftOnceNativeCalleeContracts(S->Img, Result, OncePlan);
       const bool NativeChanged = inferObjCNativeDependencies(
           S->Img, Result, Options, NativeDependencies, OnceRoots,
-          OnceCallOnlyTargets, &SourceRefinements);
+          OnceCallOnlyTargets, &SourceRefinements, &CalleeContracts);
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;

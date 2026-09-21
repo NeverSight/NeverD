@@ -3,6 +3,7 @@
 
 #include "ObjCSourceBindings.h"
 
+#include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
 namespace neverd::sdk {
@@ -1274,6 +1275,58 @@ swiftOnceAddressorCallHint(const HighFunc &Function, const BinaryImage &Image) {
   return Hint;
 }
 
+// Shared authentication for projection and the current native-inference round.
+// Discovery publishes call-only hints before the initializer has been
+// re-lifted; neither those hints nor their presence in MedIR establish context
+// independence.
+inline std::optional<SourceCallTypeHint> validatedSwiftOnceAddressorCallee(
+    va_t Target, const BinaryImage &Image, const SwiftOnceSourcePlan &Plan,
+    const std::map<va_t, const HighFunc *> &Functions) {
+  const auto Planned = Plan.Addressors.find(Target);
+  const auto Function = Functions.find(Target);
+  if (Planned == Plan.Addressors.end() || Function == Functions.end() ||
+      !Function->second || Function->second->Entry != Target)
+    return std::nullopt;
+  const auto Current =
+      swift_once_source_detail::addressorContract(*Function->second, Image);
+  if (!Current || !(*Current == Planned->second))
+    return std::nullopt;
+  const auto Callback = Functions.find(Current->Initializer);
+  const auto CallbackHint = Plan.CallbackHints.find(Current->Initializer);
+  const auto ExpectedCallback =
+      swift_once_source_detail::callbackHint(Image.Arch);
+  if (Callback == Functions.end() || !Callback->second ||
+      Callback->second->Entry != Current->Initializer ||
+      CallbackHint == Plan.CallbackHints.end() ||
+      !Callback->second->SourceTypeHint ||
+      !objc_projection_detail::sameHint(CallbackHint->second,
+                                        ExpectedCallback) ||
+      !objc_projection_detail::sameHint(*Callback->second->SourceTypeHint,
+                                        ExpectedCallback) ||
+      !swift_once_source_detail::ignoresContext(*Callback->second))
+    return std::nullopt;
+  return swiftOnceAddressorCallHint(*Function->second, Image);
+}
+
+inline NativeSourceCalleeContracts
+swiftOnceNativeCalleeContracts(const BinaryImage &Image,
+                               const PipelineResult &Result,
+                               const SwiftOnceSourcePlan &Plan) {
+  NativeSourceCalleeContracts Contracts;
+  if (Result.SourceImage != &Image)
+    return Contracts;
+  Contracts.SourceImage = &Image;
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &Function : Result.HighFuncs)
+    if (!Functions.emplace(Function.Entry, &Function).second)
+      return {&Image, {}};
+  for (const auto &[Target, Contract] : Plan.Addressors)
+    if (const auto Hint =
+            validatedSwiftOnceAddressorCallee(Target, Image, Plan, Functions))
+      Contracts.ZeroArgumentPointerCallees.emplace(Target, Hint->Signature);
+  return Contracts;
+}
+
 inline bool
 swiftOnceAddressorBound(const HighExpr &E, const BinaryImage &Image,
                         const SwiftOnceSourcePlan &Plan,
@@ -1288,15 +1341,9 @@ swiftOnceAddressorBound(const HighExpr &E, const BinaryImage &Image,
           SourceCallTypeHint::Kind::RuntimeSwiftOnceAccessor)
     return false;
   const auto &Binding = *E.SourceCallHint;
-  const auto Planned = Plan.Addressors.find(Binding.TargetAddress);
-  const auto Function = Functions.find(Binding.TargetAddress);
-  if (Planned == Plan.Addressors.end() || Function == Functions.end() ||
-      !Function->second || E.CallAddr != Binding.TargetAddress)
-    return false;
-  const auto Current =
-      swift_once_source_detail::addressorContract(*Function->second, Image);
-  const auto Expected = swiftOnceAddressorCallHint(*Function->second, Image);
-  if (!Current || !(*Current == Planned->second) || !Expected ||
+  const auto Expected = validatedSwiftOnceAddressorCallee(
+      Binding.TargetAddress, Image, Plan, Functions);
+  if (!Expected || E.CallAddr != Binding.TargetAddress ||
       Binding.TargetName != Expected->TargetName || Binding.DoesNotReturn ||
       Binding.WeakImport || Binding.ReturnedArgument ||
       Binding.RuntimeObjCResultType || Binding.ValueWitness ||
@@ -1309,14 +1356,7 @@ swiftOnceAddressorBound(const HighExpr &E, const BinaryImage &Image,
       !Binding.SwiftStringInputs.empty() ||
       !objc_projection_detail::sameHint(Binding.Signature, Expected->Signature))
     return false;
-  const auto Callback = Functions.find(Current->Initializer);
-  const auto CallbackHint = Plan.CallbackHints.find(Current->Initializer);
-  return Callback != Functions.end() && Callback->second &&
-         CallbackHint != Plan.CallbackHints.end() &&
-         Callback->second->SourceTypeHint &&
-         objc_projection_detail::sameHint(*Callback->second->SourceTypeHint,
-                                          CallbackHint->second) &&
-         swift_once_source_detail::ignoresContext(*Callback->second);
+  return true;
 }
 
 inline bool
@@ -1555,25 +1595,9 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
         E->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         NativeAddressorCarrier()) {
       const auto Planned = Plan.Addressors.find(E->CallAddr);
-      const auto Function = Functions.find(E->CallAddr);
-      const auto Expected =
-          Function == Functions.end() || !Function->second
-              ? std::nullopt
-              : swiftOnceAddressorCallHint(*Function->second, Image);
-      const auto Callback = Planned == Plan.Addressors.end()
-                                ? Functions.end()
-                                : Functions.find(Planned->second.Initializer);
-      const auto CallbackHint =
-          Planned == Plan.Addressors.end()
-              ? Plan.CallbackHints.end()
-              : Plan.CallbackHints.find(Planned->second.Initializer);
+      const auto Expected = validatedSwiftOnceAddressorCallee(
+          E->CallAddr, Image, Plan, Functions);
       if (Planned != Plan.Addressors.end() && Expected &&
-          Callback != Functions.end() && Callback->second &&
-          CallbackHint != Plan.CallbackHints.end() &&
-          Callback->second->SourceTypeHint &&
-          objc_projection_detail::sameHint(*Callback->second->SourceTypeHint,
-                                           CallbackHint->second) &&
-          swift_once_source_detail::ignoresContext(*Callback->second) &&
           (!E->Type ||
            (E->Type->Size == 8 && (E->Type->Kind == NdTypeKind::Int ||
                                    E->Type->Kind == NdTypeKind::Ptr)))) {
@@ -1767,32 +1791,19 @@ inline std::string renderSwiftOnceAddressorHelpers(
         "__asm__(\"_swift_once\");\n";
   for (const va_t Address : Accessors) {
     const auto Planned = Plan.Addressors.find(Address);
-    const auto Function = Functions.find(Address);
-    if (Planned == Plan.Addressors.end() || Function == Functions.end() ||
-        !Function->second)
+    if (Planned == Plan.Addressors.end() ||
+        !validatedSwiftOnceAddressorCallee(Address, Image, Plan, Functions))
       throw std::runtime_error("Swift once addressor is no longer valid");
-    const auto Current =
-        swift_once_source_detail::addressorContract(*Function->second, Image);
-    const auto Callback = Functions.find(Planned->second.Initializer);
-    const auto CallbackHint =
-        Plan.CallbackHints.find(Planned->second.Initializer);
-    if (!Current || !(*Current == Planned->second) ||
-        Callback == Functions.end() || !Callback->second ||
-        CallbackHint == Plan.CallbackHints.end() ||
-        !Callback->second->SourceTypeHint ||
-        !objc_projection_detail::sameHint(*Callback->second->SourceTypeHint,
-                                          CallbackHint->second) ||
-        !swift_once_source_detail::ignoresContext(*Callback->second))
-      throw std::runtime_error("Swift once addressor is no longer valid");
+    const auto &Current = Planned->second;
 
     const std::string Predicate =
         "neverd_local_storage_" +
-        llvm::utohexstr(Current->Predicate, /*LowerCase=*/true) + "_address";
+        llvm::utohexstr(Current.Predicate, /*LowerCase=*/true) + "_address";
     const std::string Storage =
         "neverd_local_storage_" +
-        llvm::utohexstr(Current->Storage, /*LowerCase=*/true) + "_address";
+        llvm::utohexstr(Current.Storage, /*LowerCase=*/true) + "_address";
     const std::string Initializer =
-        swiftOnceInitializerName(Current->Initializer);
+        swiftOnceInitializerName(Current.Initializer);
     const std::string Accessor = swiftOnceAccessorName(Address);
     SharedFunctions.insert(Accessor);
     Source += "\nextern uintptr_t " + Predicate +

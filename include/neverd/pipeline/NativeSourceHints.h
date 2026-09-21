@@ -3,6 +3,7 @@
 
 #include "neverd/ir/SourceTypeHint.h"
 
+#include <map>
 #include <optional>
 #include <set>
 
@@ -12,6 +13,17 @@ struct LowFunc;
 struct MedFunc;
 struct HighFunc;
 struct PipelineFunctionAudit;
+
+/// Independently authenticated, call-only native declarations for one current
+/// image/pipeline round. The producer must revalidate the callee body and ABI;
+/// existing MedIR hints and persisted PipelineOptions are not authentication.
+/// These zero-argument pointer callees retain ordinary call clobbers and
+/// effects. They do not certify body/dependency closure or become entry
+/// declarations.
+struct NativeSourceCalleeContracts {
+  const BinaryImage *SourceImage = nullptr;
+  std::map<va_t, SourceFunctionTypeHint> ZeroArgumentPointerCallees;
+};
 
 /// Exact direct call targets followed by an observed full-word read of the
 /// second integer return register in the same block. This is a demand, not a
@@ -57,7 +69,8 @@ std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
 std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     const BinaryImage &Image, const MedFunc &Med, const HighFunc &High,
     const PipelineFunctionAudit &Audit, std::string &Diagnostic,
-    const LowFunc *Low = nullptr, bool ObserveIntegerPair = false);
+    const LowFunc *Low = nullptr, bool ObserveIntegerPair = false,
+    const NativeSourceCalleeContracts *CalleeContracts = nullptr);
 
 /// Extend an inferred native scalar result to two complete integer words only
 /// after both registers pass the same return-path proof. The caller must have

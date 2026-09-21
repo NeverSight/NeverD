@@ -47,11 +47,11 @@ bool completeNativeAudit(va_t Entry, const PipelineFunctionAudit &Audit) {
          Audit.UnsupportedInstructions.empty() && Audit.TruncatedPaths.empty();
 }
 
-bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
-                                  const MedFunc &Med, bool RequireCalls,
-                                  std::set<uint64_t> *UsedEntryRegisters =
-                                      nullptr,
-                                  bool TerminalContext = false);
+bool hasNativeSourceStateContract(
+    const BinaryImage &Image, const LowFunc *Low, const MedFunc &Med,
+    bool RequireCalls, std::set<uint64_t> *UsedEntryRegisters = nullptr,
+    bool TerminalContext = false,
+    const NativeSourceCalleeContracts *Callees = nullptr);
 
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
@@ -65,10 +65,10 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
 // without inventing a return-state restoration. Saving and restoring scratch
 // registers does not create hidden outputs.
 // The complete source body and its callers still require validation.
-std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
-                                           const LowFunc *Low,
-                                           const MedFunc &Med,
-                                           const SourceFunctionTypeHint &Hint) {
+std::vector<uint64_t>
+nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
+                     const MedFunc &Med, const SourceFunctionTypeHint &Hint,
+                     const NativeSourceCalleeContracts *Callees) {
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return {};
@@ -124,15 +124,17 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
     if (Med.DoesNotReturn) {
       // Terminal effects-only demand must always pass the complete terminal
       // proof, including when only SP/frame/link registers were written.
-      const bool Terminal =
-          Hint.ReturnType && Hint.ReturnType->Kind == NdTypeKind::Void &&
-          hasNativeSourceStateContract(Image, Low, Med, true, &Used, true);
+      const bool Terminal = Hint.ReturnType &&
+                            Hint.ReturnType->Kind == NdTypeKind::Void &&
+                            hasNativeSourceStateContract(Image, Low, Med, true,
+                                                         &Used, true, Callees);
       std::erase_if(Reads, [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8) &&
                (!Terminal || WrittenPreserved.count(Register) ||
                 !Used.count(Register));
       });
-    } else if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used))
+    } else if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used,
+                                             false, Callees))
       std::erase_if(Reads, [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8);
       });
@@ -176,6 +178,34 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
   return true;
 }
 
+// Call-only declarations have a separate producer-owned authority. Matching a
+// Swift origin on a Med hint is insufficient: require the independently rebuilt
+// image contract and its canonical ABI as well as this exact direct call
+// target.
+bool certifiedNativeCallee(const BinaryImage &Image, const MedOp &Op,
+                           const NativeSourceCalleeContracts *Callees) {
+  if (!Callees || Callees->SourceImage != &Image || Op.Opcode != NdOp::CALL ||
+      Op.NumInputs != 1 || !Op.Inputs[0].isConst() || !Op.SourceCallHint ||
+      Op.DoesNotReturn)
+    return false;
+  const auto &Binding = *Op.SourceCallHint;
+  if (Binding.CallKind != SourceCallTypeHint::Kind::Native ||
+      Binding.TargetAddress != Op.Inputs[0].ConstVal || Binding.DoesNotReturn ||
+      !Image.isCodeAddress(Binding.TargetAddress))
+    return false;
+  const auto Found =
+      Callees->ZeroArgumentPointerCallees.find(Binding.TargetAddress);
+  if (Found == Callees->ZeroArgumentPointerCallees.end())
+    return false;
+  SourceFunctionTypeHint Expected;
+  Expected.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Expected.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Error;
+  return assignDarwinScalarSourceABI(Expected, Image.Arch, Error) &&
+         equalSourceABIs(Found->second, Expected) &&
+         equalSourceABIs(Binding.Signature, Expected);
+}
+
 // A source-bound helper can have no usable scalar result. An internal void
 // summary preserves its effects and deliberately supplies no result to
 // callers. Callees may return values used inside the helper; those values do
@@ -186,7 +216,8 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
 bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
                                   const MedFunc &Med, bool RequireCalls,
                                   std::set<uint64_t> *UsedEntryRegisters,
-                                  bool TerminalContext) {
+                                  bool TerminalContext,
+                                  const NativeSourceCalleeContracts *Callees) {
   if (TerminalContext &&
       (!Med.DoesNotReturn || !hasProvenNoReturnExit(Med, Image.Arch)))
     return false;
@@ -230,6 +261,9 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
           Binding.Signature.Origin ==
               SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
           Binding.Signature.HasExplicitABI;
+      const bool CertifiedNative = Binding.TargetAddress != Med.Entry &&
+                                   !TerminalContext &&
+                                   certifiedNativeCallee(Image, Op, Callees);
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
@@ -279,11 +313,10 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
           return false;
         Contract.Terminates = Binding.DoesNotReturn;
       }
-      if ((!StaticRuntime && !StaticNative && !StaticMessage &&
-           !DynamicWitness) ||
+      if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
+           !StaticMessage && !DynamicWitness) ||
           (Binding.DoesNotReturn && !Contract.Terminates) ||
-          !Binding.Signature.ReturnType ||
-          !Image.isCodeAddress(Op.Addr) ||
+          !Binding.Signature.ReturnType || !Image.isCodeAddress(Op.Addr) ||
           !Calls
                .emplace(NativeSourceCallKey{Op.Addr, Op.OriginSeq, Op.Opcode,
                                             Op.Inputs[0].isConst()
@@ -754,7 +787,8 @@ std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
 std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     const BinaryImage &Image, const MedFunc &Med, const HighFunc &High,
     const PipelineFunctionAudit &Audit, std::string &Diagnostic,
-    const LowFunc *Low, bool ObserveIntegerPair) {
+    const LowFunc *Low, bool ObserveIntegerPair,
+    const NativeSourceCalleeContracts *CalleeContracts) {
   Diagnostic.clear();
   auto Reject =
       [&](const char *Reason) -> std::optional<SourceFunctionTypeHint> {
@@ -950,7 +984,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   if (!NoReturn && !definedReturnPaths(Med, Image.Arch, Hint.ReturnLocation,
                                        IncomingReturnParameter)) {
-    if (!hasNativeSourceStateContract(Image, Low, Med, true) ||
+    if (!hasNativeSourceStateContract(Image, Low, Med, true, nullptr, false,
+                                      CalleeContracts) ||
         !definedReturnPaths(Med, Image.Arch, {}, std::nullopt))
       return Reject("native result has no complete defined carrier on every "
                     "return path");
@@ -968,7 +1003,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   if (!validateSourceABI(Hint, Diagnostic))
     return std::nullopt;
-  const auto EntryRegisters = nativeEntryRegisters(Image, Low, Med, Hint);
+  const auto EntryRegisters =
+      nativeEntryRegisters(Image, Low, Med, Hint, CalleeContracts);
   for (uint64_t Register : AuxiliaryRegisters)
     if (std::find(EntryRegisters.begin(), EntryRegisters.end(), Register) ==
         EntryRegisters.end())

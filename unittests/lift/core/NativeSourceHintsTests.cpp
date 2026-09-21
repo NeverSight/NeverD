@@ -1020,6 +1020,90 @@ struct NativeVoidFrameFixture : NativeVoidFixture {
   }
 };
 
+TEST(NativeSourceHints, IndependentCallOnlyContractsRetainObservedContext) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(Mutation);
+      NativeVoidFrameFixture F(Architecture);
+      const auto Context =
+          Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R12;
+      SourceFunctionTypeHint Signature;
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+      Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Architecture, Error));
+      auto Binding = std::make_shared<SourceCallTypeHint>();
+      Binding->CallKind = SourceCallTypeHint::Kind::Native;
+      Binding->TargetAddress = 0x1080;
+      Binding->Signature = Signature;
+      auto &Call = F.Med.Blocks[0].Ops[0];
+      Call.SourceCallHint = Binding;
+      Call.NumInputs = 1;
+      // Consume an unmodified preserved context after the call, while the
+      // surrounding frame saves/restores other preserved registers.
+      MedVar Entry;
+      Entry.Kind = MedVar::Reg;
+      Entry.Id = 200;
+      Entry.RegOff = Context;
+      Entry.Size = 8;
+      Entry.TheArch = Architecture;
+      MedOp Store;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(MedVar::makeConst(0x3000, 8));
+      Store.addInput(Entry);
+      F.Med.Blocks[0].Ops.insert(F.Med.Blocks[0].Ops.begin() + 1, Store);
+      F.Low.Blocks[0].Ops.insert(
+          F.Low.Blocks[0].Ops.begin() + F.RestoreIndex,
+          NativeVoidFrameFixture::op(
+              NdOp::STORE, {},
+              {NdVar::cst(0x3000, 8), NdVar::reg(Context, 8)}));
+      NativeSourceCalleeContracts Contracts{&F.Image, {{0x1080, Signature}}};
+      BinaryImage OtherImage;
+      if (Mutation == 1)
+        Contracts.ZeroArgumentPointerCallees.clear();
+      if (Mutation == 2)
+        Contracts.SourceImage = &OtherImage;
+      if (Mutation == 3) {
+        Contracts.ZeroArgumentPointerCallees.clear();
+        Contracts.ZeroArgumentPointerCallees.emplace(0x1090, Signature);
+      }
+      if (Mutation == 4)
+        Contracts.ZeroArgumentPointerCallees[0x1080].ReturnType =
+            NdType::makeInt(8);
+      if (Mutation == 5)
+        Binding->TargetAddress = 0x1090;
+      if (Mutation == 6)
+        Binding->Signature.ReturnLocation.RegisterOffset += 8;
+      if (Mutation == 7)
+        ++F.Low.Blocks[0].Ops[F.CallIndex].Seq;
+      if (Mutation == 8)
+        F.Low.Blocks[0].Ops[F.RestoreIndex + 2].Opcode = NdOp::NOP;
+      if (Mutation == 9)
+        Binding->DoesNotReturn = true;
+      if (Mutation == 10) {
+        Binding->Signature.Parameters.push_back(
+            {"hidden", NdType::makePtr(NdType::makeVoid())});
+        ASSERT_TRUE(assignDarwinScalarSourceABI(Binding->Signature,
+                                                Architecture, Error));
+        Contracts.ZeroArgumentPointerCallees[0x1080] = Binding->Signature;
+      }
+      const auto Hint = inferNativeSourceTypeHint(
+          F.Image, F.Med, F.High, F.Audit, Error, &F.Low, false,
+          Mutation == 11 ? nullptr : &Contracts);
+      if (Mutation) {
+        EXPECT_FALSE(Hint);
+        EXPECT_FALSE(Error.empty());
+      } else {
+        ASSERT_TRUE(Hint) << Error;
+        EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+        ASSERT_EQ(Hint->Parameters.size(), 2U);
+        EXPECT_EQ(Hint->Parameters.back().Location.RegisterOffset, Context);
+        EXPECT_EQ(Hint->Parameters.back().Location.ValueBytes, 8U);
+      }
+    }
+}
+
 TEST(NativeSourceHints,
      CanonicalDynamicValueWitnessDestroyRestoresFramedState) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
