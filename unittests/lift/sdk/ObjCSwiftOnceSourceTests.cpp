@@ -1515,4 +1515,357 @@ TEST(SwiftOnceSources, RejectsUnprovedDispatchOnceReferences) {
   }
 }
 
+struct CopyOnceFixture : OnceFixture {
+  ExprPtr PredicateValue, SourceValue, RetainedValue, SourceLoad, Retain;
+  CopyOnceFixture() : OnceFixture(Arch::AArch64) {
+    const auto Ptr = NdType::makePtr(NdType::makeVoid());
+    const auto Int = NdType::makeInt(8);
+    const auto Param = [&](unsigned Id) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      V.RegOff = Id * 8;
+      V.TheArch = Arch::AArch64;
+      return HighExpr::makeVar(V, Ptr);
+    };
+    const auto Temp = [&](unsigned Id, TypeRef Type) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = Id;
+      V.Size = 8;
+      return HighExpr::makeVar(V, Type);
+    };
+    auto &Helper = Pipeline.HighFuncs[0];
+    Helper.Params.clear();
+    Helper.SourceTypeHint->Parameters.clear();
+    for (unsigned I = 0; I < 5; ++I) {
+      Helper.Params.push_back({"arg" + std::to_string(I), Ptr});
+      Helper.SourceTypeHint->Parameters.push_back(
+          {"arg" + std::to_string(I), Ptr});
+    }
+    std::string Error;
+    EXPECT_TRUE(
+        assignDarwinScalarSourceABI(*Helper.SourceTypeHint, Image.Arch, Error));
+    Once->Operands = {Param(1), Param(4), Param(2)};
+    Image.ImportPtrSlots[0x2088] = "_objc_retain";
+    Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+    Image.DyldBindSlots[0x2088] = {"_objc_retain", 0,
+                                   "/usr/lib/libobjc.A.dylib", false};
+    const auto RetainHint = objcRuntimeSourceCallHint(Image, 0x2088);
+    EXPECT_TRUE(RetainHint);
+    PredicateValue = Temp(10, Int);
+    SourceValue = Temp(11, Int);
+    RetainedValue = Temp(12, Ptr);
+    SourceLoad = HighExpr::makeLoad(Param(2), Int);
+    Retain = HighExpr::makeCall("objc_retain", 0x2088, {SourceValue});
+    Retain->Type = Ptr;
+    Retain->SourceCallHint = std::make_shared<SourceCallTypeHint>(*RetainHint);
+    HighStmt Predicate, Conditional, Invoke, Load, Store, Keep, Return;
+    Predicate.Kind = StmtKind::Assign;
+    Predicate.Dst = PredicateValue;
+    Predicate.Val = HighExpr::makeLoad(Param(1), Int);
+    Conditional.Kind = StmtKind::If;
+    Conditional.Cond =
+        HighExpr::makeBinop(NdOp::INT_NOTEQUAL, PredicateValue,
+                            HighExpr::makeConst(~uint64_t(0), 8));
+    Invoke.Kind = StmtKind::Call;
+    Invoke.CallExpr = Once;
+    Conditional.Body = {Invoke};
+    Load.Kind = StmtKind::Assign;
+    Load.Dst = SourceValue;
+    Load.Val = SourceLoad;
+    Store.Kind = StmtKind::Store;
+    Store.StoreAddr = Param(3);
+    Store.StoreVal = SourceValue;
+    Keep.Kind = StmtKind::Assign;
+    Keep.Dst = RetainedValue;
+    Keep.Val = Retain;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = RetainedValue;
+    Helper.Body = {Predicate, Conditional, Load, Store, Keep, Return};
+    auto &Callback = Pipeline.HighFuncs[1];
+    Callback.Name = "_$s4Test6source_WZ";
+    auto &Caller = Pipeline.HighFuncs[2];
+    Caller.Name = "_$s4Test4copy_WZ";
+    Caller.SourceTypeHint = swift_once_source_detail::callbackHint(Image.Arch);
+    Caller.Params = {{"context", Ptr}};
+    Caller.ReturnType = NdType::makeVoid();
+    auto Call = HighExpr::makeCall(Helper.Name, Helper.Entry,
+                                   {Param(0), HighExpr::makeConst(0x2000, 8),
+                                    HighExpr::makeConst(0x2010, 8),
+                                    HighExpr::makeConst(0x2020, 8),
+                                    HighExpr::makeConst(Callback.Entry, 8)});
+    Call->Type = Ptr;
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->CallKind = SourceCallTypeHint::Kind::Native;
+    Hint->TargetAddress = Helper.Entry;
+    Hint->Signature = *Helper.SourceTypeHint;
+    Call->SourceCallHint = Hint;
+    Invoke.CallExpr = Call;
+    Return.RetVal.reset();
+    Caller.Body = {Invoke, Return};
+    Image.Symbols = {{"_$s4Test6source_Wz", 0x2000, 8, false},
+                     {"_$s4Test6sourceSo8NSObjectCvpZ", 0x2010, 8, false},
+                     {"_$s4Test4copySo8NSObjectCvpZ", 0x2020, 8, false},
+                     {Callback.Name, Callback.Entry, 0, true},
+                     {Caller.Name, Caller.Entry, 0, true}};
+  }
+};
+
+TEST(SwiftOnceSources, CopyContractKeepsLoadStoreAndRetainEffects) {
+  CopyOnceFixture F;
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  ASSERT_EQ(Plan.Copies.size(), 1U);
+  const auto &Contract = Plan.Copies.at(0x1000);
+  EXPECT_EQ(Contract.Predicate, 1U);
+  EXPECT_EQ(Contract.Source, 2U);
+  EXPECT_EQ(Contract.Destination, 3U);
+  EXPECT_EQ(Contract.Initializer, 4U);
+  ASSERT_EQ(Plan.CallbackHints.count(0x1080), 1U);
+  const auto &Caller = F.Pipeline.HighFuncs[2];
+  const auto Bound =
+      bindSwiftOnceSourceReferences(Caller, F.Image, Plan, F.functions());
+  EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+  EXPECT_EQ(Bound.LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{0x2000, 8}, {0x2010, 8}, {0x2020, 8}}));
+  ASSERT_EQ(Bound.Function.Body.size(), Caller.Body.size());
+  const auto Call = Bound.Function.Body[0].CallExpr;
+  ASSERT_TRUE(Call);
+  ASSERT_EQ(Call->Operands.size(), 5U);
+  EXPECT_EQ(Call->Operands[0]->Var, Caller.Body[0].CallExpr->Operands[0]->Var);
+  for (unsigned I = 1; I < 4; ++I) {
+    ASSERT_TRUE(Call->Operands[I]->SourceCallHint);
+    EXPECT_EQ(Call->Operands[I]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+    EXPECT_EQ(Call->Operands[I]->SourceCallHint->TargetAddress,
+              0x1ff0U + I * 16);
+  }
+  EXPECT_TRUE(
+      swiftOnceCallbackBound(*Call->Operands[4], F.Image, Plan, F.functions()));
+  const auto Functions = F.functions();
+  EXPECT_TRUE(
+      bindObjCSourceReferences(Bound.Function, F.Image, nullptr, &Functions)
+          .Limitation.empty());
+  EXPECT_EQ(F.Pipeline.HighFuncs[0].Body[2].Val.get(), F.SourceLoad.get());
+  EXPECT_EQ(F.Pipeline.HighFuncs[0].Body[3].StoreVal.get(),
+            F.SourceValue.get());
+  EXPECT_EQ(F.Pipeline.HighFuncs[0].Body[4].Val.get(), F.Retain.get());
+  EXPECT_TRUE(F.Pipeline.HighFuncs[2].Body[0].CallExpr->Operands[1]->Kind ==
+              ExprKind::Const);
+}
+
+TEST(SwiftOnceSources, CopyContractUsesCurrentRefinedABIAndJoinLocals) {
+  CopyOnceFixture F;
+  auto &Helper = F.Pipeline.HighFuncs[0];
+  Helper.Params.erase(Helper.Params.begin());
+  Helper.SourceTypeHint->Parameters.erase(
+      Helper.SourceTypeHint->Parameters.begin());
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(*Helper.SourceTypeHint, F.Image.Arch, Error));
+  std::set<HighExpr *> Seen;
+  std::function<void(const ExprPtr &)> Remap = [&](const ExprPtr &E) {
+    if (!E || !Seen.insert(E.get()).second)
+      return;
+    if (E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Param)
+      --E->Var.Id;
+    for (const auto &Operand : E->Operands)
+      Remap(Operand);
+  };
+  walkStmts(Helper.Body, [&](const HighStmt &Statement) {
+    forEachRhsExpr(Statement, Remap);
+    Remap(Statement.StoreAddr);
+  });
+  F.Once->Type.reset();
+  const auto Local = [](unsigned Id) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.Id = Id;
+    V.Size = 8;
+    return HighExpr::makeVar(V, NdType::makePtr(NdType::makeVoid()));
+  };
+  auto Source = Local(50000), Destination = Local(50001);
+  HighStmt AliasSource, AliasDestination, Jump;
+  AliasSource.Kind = AliasDestination.Kind = StmtKind::Assign;
+  AliasSource.Dst = Source;
+  AliasSource.Val = F.SourceLoad->Operands[0];
+  AliasDestination.Dst = Destination;
+  AliasDestination.Val = Helper.Body[3].StoreAddr;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = 0x1060;
+  Helper.Body[1].Body.insert(Helper.Body[1].Body.end(),
+                             {AliasSource, AliasDestination, Jump});
+  F.SourceLoad->Operands[0] = Source;
+  Helper.Body[2].Addr = 0x1060;
+  Helper.Body[3].StoreAddr = Destination;
+  Helper.Body.insert(Helper.Body.begin() + 2, {AliasSource, AliasDestination});
+  auto &Caller = F.Pipeline.HighFuncs[2];
+  auto Call = Caller.Body[0].CallExpr;
+  Call->Operands.erase(Call->Operands.begin());
+  auto Hint = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+  Hint->Signature = *Helper.SourceTypeHint;
+  Call->SourceCallHint = Hint;
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  ASSERT_EQ(Plan.Copies.size(), 1U);
+  EXPECT_EQ(Plan.Copies.at(Helper.Entry).ParameterCount, 4U);
+  const auto Bound =
+      bindSwiftOnceSourceReferences(Caller, F.Image, Plan, F.functions());
+  EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+  EXPECT_EQ(Bound.LocalStorageExtents.size(), 3U);
+  EXPECT_EQ(Bound.Function.Body[0].CallExpr->Operands.size(), 4U);
+  EXPECT_EQ(Helper.Params.size(), 4U);
+}
+
+TEST(SwiftOnceSources, CopyContractRejectsExtraUsesAndChangedEffectOrder) {
+  for (unsigned Case = 0; Case < 19; ++Case) {
+    SCOPED_TRACE(Case);
+    CopyOnceFixture F;
+    auto &Helper = F.Pipeline.HighFuncs[0];
+    ASSERT_TRUE(swift_once_source_detail::copyContract(Helper, F.Image));
+    if (Case == 0) {
+      auto Narrow = std::make_shared<HighExpr>();
+      Narrow->Kind = ExprKind::Cast;
+      Narrow->Type = NdType::makeInt(4);
+      Narrow->Operands = {F.SourceValue};
+      Helper.Body[3].StoreVal = Narrow;
+    }
+    if (Case == 1)
+      Helper.Body[3].StoreAddr = F.Once->Operands[2];
+    if (Case == 2)
+      std::swap(Helper.Body[3], Helper.Body[4]);
+    if (Case == 3)
+      std::swap(Helper.Body[2], Helper.Body[3]);
+    if (Case == 4) {
+      HighStmt Extra;
+      Extra.Kind = StmtKind::ExprStmt;
+      Extra.Val = F.SourceLoad;
+      Helper.Body.insert(Helper.Body.begin() + 3, Extra);
+    }
+    if (Case == 5)
+      F.Retain->Operands[0] = F.PredicateValue;
+    if (Case == 6) {
+      HighStmt Extra;
+      Extra.Kind = StmtKind::ExprStmt;
+      Extra.Val = F.Pipeline.HighFuncs[2].Body[0].CallExpr->Operands[0];
+      Helper.Body.insert(Helper.Body.begin(), Extra);
+    }
+    if (Case == 7) {
+      auto Hint =
+          std::make_shared<SourceCallTypeHint>(*F.Retain->SourceCallHint);
+      Hint->TargetName = "objc_release";
+      F.Retain->SourceCallHint = Hint;
+    }
+    if (Case == 8)
+      F.SourceLoad->MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Case == 9)
+      Helper.Body[3].MemoryOrdering = NdMemoryOrdering::Release;
+    if (Case == 10)
+      F.Once->Operands[2] = F.Once->Operands[0];
+    if (Case == 11)
+      Helper.Body.erase(Helper.Body.begin());
+    if (Case == 12)
+      Helper.Body.back().RetVal = F.SourceValue;
+    if (Case >= 13 && Case <= 16) {
+      auto Cast = std::make_shared<HighExpr>();
+      Cast->Kind = Case == 16 ? ExprKind::BitCast : ExprKind::Cast;
+      Cast->Type = NdType::makeInt(8);
+      Cast->CastTo = NdType::makeInt(4);
+      Cast->Operands = {Case == 13   ? F.SourceLoad->Operands[0]
+                        : Case == 14 ? Helper.Body[3].StoreAddr
+                                     : F.SourceValue};
+      if (Case == 13)
+        F.SourceLoad->Operands[0] = Cast;
+      else if (Case == 14)
+        Helper.Body[3].StoreAddr = Cast;
+      else
+        Helper.Body[3].StoreVal = Cast;
+    }
+    if (Case == 17)
+      Helper.SourceTypeHint->Architecture = Arch::X64;
+    if (Case == 18)
+      Helper.ReturnType = NdType::makeInt(8);
+    EXPECT_FALSE(swift_once_source_detail::copyContract(Helper, F.Image));
+  }
+}
+
+TEST(SwiftOnceSources, CopyReferencesRejectAliasedOrStaleIdentities) {
+  for (unsigned Case = 0; Case < 22; ++Case) {
+    SCOPED_TRACE(Case);
+    CopyOnceFixture F;
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Copies.size(), 1U);
+    auto &Caller = F.Pipeline.HighFuncs[2];
+    auto Call = Caller.Body[0].CallExpr;
+    if (Case == 0)
+      Call->Operands[3] = Call->Operands[2];
+    if (Case == 1)
+      Call->Operands[3] = HighExpr::makeConst(0x2014, 8);
+    if (Case == 2)
+      Call->Operands[2] = Call->Operands[1];
+    if (Case == 3)
+      Call->Operands[4] = HighExpr::makeConst(0x1084, 8);
+    if (Case == 4)
+      F.Image.Symbols[0].Name = "_$s4Test5other_Wz";
+    if (Case == 5)
+      F.Image.Symbols[1].Size = 16;
+    if (Case == 6)
+      F.Image.Symbols[1].Name = "_$s4Test5otherSo8NSObjectCvpZ";
+    if (Case == 7)
+      F.Image.Symbols.push_back(F.Image.Symbols[2]);
+    if (Case == 8) {
+      auto Duplicate = F.Image.Symbols[1];
+      Duplicate.Addr += 0x30;
+      F.Image.Symbols.push_back(Duplicate);
+    }
+    if (Case == 9)
+      F.Image.Symbols[3].Name = "_$s4Test5other_WZ";
+    if (Case == 10) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      Use.Val = Call->Operands[0];
+      F.Pipeline.HighFuncs[1].Body.insert(F.Pipeline.HighFuncs[1].Body.begin(),
+                                          Use);
+    }
+    if (Case == 11)
+      F.Pipeline.HighFuncs[1].SourceTypeHint.reset();
+    if (Case == 12)
+      std::swap(F.Pipeline.HighFuncs[0].Body[3],
+                F.Pipeline.HighFuncs[0].Body[4]);
+    if (Case == 13)
+      F.Pipeline.HighFuncs[1].SourceTypeHint->ReturnType = NdType::makeInt(8);
+    if (Case == 14)
+      Call->CallAddr = 0x1100;
+    if (Case == 15 || Case == 16) {
+      auto Hint = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+      if (Case == 15)
+        Hint->TargetAddress = 0x1100;
+      else
+        Hint->ReturnedArgument = 0;
+      Call->SourceCallHint = Hint;
+    }
+    if (Case == 17 || Case == 18) {
+      auto Cast = std::make_shared<HighExpr>();
+      Cast->Kind = ExprKind::Cast;
+      Cast->Type = NdType::makeInt(8);
+      Cast->CastTo = NdType::makeInt(Case == 17 ? 4 : 8);
+      Cast->Operands = {Call->Operands[2]};
+      Call->Operands[2] = Cast;
+    }
+    if (Case == 19)
+      Call->Operands[2] = HighExpr::makeConst(0x2010, 4);
+    if (Case == 20)
+      Call->Operands[2]->SourceCallHint =
+          std::make_shared<SourceCallTypeHint>();
+    if (Case == 21)
+      Call->IntrinsicOutputs.push_back(F.SourceValue->Var);
+    const auto Bound =
+        bindSwiftOnceSourceReferences(Caller, F.Image, Plan, F.functions());
+    EXPECT_TRUE(Bound.Dependencies.empty());
+    EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+    EXPECT_EQ(Bound.Function.Body[0].CallExpr->Operands[1]->Kind,
+              ExprKind::Const);
+  }
+}
+
 } // namespace

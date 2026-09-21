@@ -6,6 +6,9 @@
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include <array>
+#include <tuple>
+
 namespace neverd::sdk {
 
 struct SwiftOnceGetterContract {
@@ -16,6 +19,20 @@ struct SwiftOnceGetterContract {
 
   size_t parameterCount() const { return SecondStorage ? 4 : 3; }
   uint64_t storageWidth() const { return SecondStorage ? 16 : 8; }
+};
+
+struct SwiftOnceCopyContract {
+  size_t ParameterCount = 0;
+  size_t Predicate = 0;
+  size_t Source = 0;
+  size_t Destination = 0;
+  size_t Initializer = 0;
+
+  bool operator==(const SwiftOnceCopyContract &Other) const {
+    return ParameterCount == Other.ParameterCount &&
+           Predicate == Other.Predicate && Source == Other.Source &&
+           Destination == Other.Destination && Initializer == Other.Initializer;
+  }
 };
 
 struct SwiftOnceAddressorContract {
@@ -57,6 +74,7 @@ struct SwiftObjCClassMetadataAccessorContract {
 
 struct SwiftOnceSourcePlan {
   std::map<va_t, SwiftOnceGetterContract> Getters;
+  std::map<va_t, SwiftOnceCopyContract> Copies;
   std::map<va_t, SwiftOnceAddressorContract> Addressors;
   std::map<va_t, SwiftOnceObjCThunkContract> ObjCThunks;
   std::map<va_t, SwiftOnceObjCThunkContract> NestedCallbacks;
@@ -1126,6 +1144,436 @@ inline bool ignoresContext(const HighFunc &F) {
   }
   return true;
 }
+// This separate use contract never changes a helper's inferred native ABI.
+// Four parameters supply the roles below; an optional fifth parameter must
+// have no use. Native inference alone owns removing that unused entry input.
+// This proof accounts for every remaining parameter and memory/call effect.
+inline std::optional<SwiftOnceCopyContract>
+copyContract(const HighFunc &F, const BinaryImage &Image) {
+  const auto Plain8 = [](const ExprPtr &E) {
+    return E && E->Type && E->Type->Size == 8 &&
+           (E->Type->Kind == NdTypeKind::Int ||
+            E->Type->Kind == NdTypeKind::Ptr) &&
+           E->IntrinsicId == Intrinsic::None && E->IntrinsicOutputs.empty() &&
+           E->MemoryOrdering == NdMemoryOrdering::None &&
+           E->MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+  const auto IdentityCast = [&](const ExprPtr &E) {
+    return Plain8(E) && E->Operands.size() == 1 && Plain8(E->Operands[0]) &&
+           (!E->CastTo || equalSourceTypes(E->CastTo, E->Type));
+  };
+  if (Image.Arch != Arch::AArch64 || !F.SourceTypeHint ||
+      F.SourceTypeHint->Architecture != Image.Arch ||
+      F.SourceTypeHint->Origin !=
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      F.SourceTypeHint->Convention !=
+          SourceFunctionTypeHint::ConventionKind::C ||
+      (F.Params.size() != 4 && F.Params.size() != 5) ||
+      F.SourceTypeHint->Parameters.size() != F.Params.size() || !F.ReturnType ||
+      F.ReturnType->Size != 8 ||
+      !equalSourceTypes(F.ReturnType, F.SourceTypeHint->ReturnType) ||
+      (F.ReturnType->Kind != NdTypeKind::Int &&
+       F.ReturnType->Kind != NdTypeKind::Ptr))
+    return std::nullopt;
+  std::string Error;
+  if (!validateSourceABI(*F.SourceTypeHint, Error))
+    return std::nullopt;
+  for (size_t I = 0; I < F.Params.size(); ++I)
+    if (!F.Params[I].Type || F.Params[I].Type->Size != 8 ||
+        (F.Params[I].Type->Kind != NdTypeKind::Int &&
+         F.Params[I].Type->Kind != NdTypeKind::Ptr) ||
+        !equalSourceTypes(F.Params[I].Type,
+                          F.SourceTypeHint->Parameters[I].Type))
+      return std::nullopt;
+  const auto Flow = buildHighSourceFlowGraph(F);
+  if (!Flow.Diagnostics.Complete || !Flow.Diagnostics.Items.empty() ||
+      Flow.Nodes.empty() || Flow.Nodes.size() > 512)
+    return std::nullopt;
+  using Local = HighSourceLocalIdentity;
+  std::map<Local, std::vector<ExprPtr>> Definitions;
+  bool Valid = true;
+  const HighStmt *Store = nullptr;
+  const HighExpr *Once = nullptr, *Retain = nullptr;
+  size_t Budget = 10000;
+  std::function<void(const ExprPtr &, unsigned)> FindCalls =
+      [&](const ExprPtr &E, unsigned Depth) {
+        if (!E || !Budget-- || Depth > 64) {
+          Valid = false;
+          return;
+        }
+        if (E->Kind == ExprKind::Call) {
+          if (onceCall(*E, Image)) {
+            if (Once)
+              Valid = false;
+            Once = E.get();
+          } else {
+            const auto Expected =
+                E->SourceCallHint ? objcRuntimeSourceCallHint(
+                                        Image, E->SourceCallHint->TargetAddress)
+                                  : std::nullopt;
+            if (Retain || !Expected || Expected->TargetName != "objc_retain" ||
+                !E->SourceCallHint || E->IsIndirectCall ||
+                E->Operands.size() != 1 ||
+                !objc_binding_detail::runtimeBindingMatches(*E->SourceCallHint,
+                                                            *Expected))
+              Valid = false;
+            Retain = E.get();
+          }
+        }
+        for (const auto &Operand : E->Operands)
+          FindCalls(Operand, Depth + 1);
+      };
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Store) {
+      if (Store || S.MemoryOrdering != NdMemoryOrdering::None ||
+          S.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        Valid = false;
+      Store = &S;
+    }
+    if (S.Kind == StmtKind::Assign) {
+      if (!Plain8(S.Dst) || !S.Val || S.Dst->Kind != ExprKind::Var ||
+          !S.Dst->Operands.empty() ||
+          (S.Dst->Var.Kind != MedVar::Reg && S.Dst->Var.Kind != MedVar::Temp))
+        Valid = false;
+      else
+        Definitions[highSourceLocalIdentity(S.Dst->Var)].push_back(S.Val);
+    }
+    forEachRhsExpr(S, [&](const ExprPtr &E) { FindCalls(E, 0); });
+  });
+  if (!Valid || !Store || !Once || !Retain)
+    return std::nullopt;
+
+  // A scalar local must have the same parameter or exact evaluated effect on
+  // every definition. Distinct loads are never merged by their address.
+  using Origin = std::pair<int64_t, const HighExpr *>;
+  std::function<std::optional<Origin>(const ExprPtr &, unsigned,
+                                      std::set<Local> &)>
+      Resolve;
+  Resolve = [&](const ExprPtr &E, unsigned Depth,
+                std::set<Local> &Visiting) -> std::optional<Origin> {
+    if (!Plain8(E) || Depth > 64)
+      return std::nullopt;
+    if (E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast)
+      return IdentityCast(E) ? Resolve(E->Operands[0], Depth + 1, Visiting)
+                             : std::nullopt;
+    if (E->Kind == ExprKind::Var)
+      if (const auto P = parameter(E))
+        return Origin{int64_t(*P), nullptr};
+    if (E->Kind == ExprKind::Load || E->Kind == ExprKind::Call)
+      return Origin{-1, E.get()};
+    if (E->Kind != ExprKind::Var && E->Kind != ExprKind::Phi)
+      return std::nullopt;
+    const std::vector<ExprPtr> *Values = &E->Operands;
+    const auto Identity = highSourceLocalIdentity(E->Var);
+    bool LocalDefinition = false;
+    if (Values->empty()) {
+      if (E->Var.Kind != MedVar::Reg && E->Var.Kind != MedVar::Temp)
+        return std::nullopt;
+      const auto Found = Definitions.find(Identity);
+      if (Found == Definitions.end() || !Visiting.insert(Identity).second)
+        return std::nullopt;
+      Values = &Found->second;
+      LocalDefinition = true;
+    }
+    std::optional<Origin> Result;
+    for (const auto &Value : *Values) {
+      const auto O = Resolve(Value, Depth + 1, Visiting);
+      if (!O || (Result && *Result != *O)) {
+        if (LocalDefinition)
+          Visiting.erase(Identity);
+        return std::nullopt;
+      }
+      Result = O;
+    }
+    if (LocalDefinition)
+      Visiting.erase(Identity);
+    return Result;
+  };
+  const auto From = [&](const ExprPtr &E) {
+    std::set<Local> Seen;
+    return Resolve(E, 0, Seen);
+  };
+  const auto Param = [&](const ExprPtr &E) -> std::optional<size_t> {
+    const auto O = From(E);
+    return O && O->first >= 0 && size_t(O->first) < F.Params.size()
+               ? std::optional<size_t>{size_t(O->first)}
+               : std::nullopt;
+  };
+  const auto P = Param(Once->Operands[0]), I = Param(Once->Operands[1]);
+  const auto S = Param(Once->Operands[2]), D = Param(Store->StoreAddr);
+  const auto Stored = From(Store->StoreVal);
+  if (!P || !I || !S || !D || std::set<size_t>{*P, *I, *S, *D}.size() != 4 ||
+      !Stored || Stored->first != -1 || !Stored->second ||
+      Stored->second->Kind != ExprKind::Load ||
+      Stored->second->Operands.size() != 1 ||
+      Param(Stored->second->Operands[0]) != S ||
+      From(Retain->Operands[0]) != Stored)
+    return std::nullopt;
+  const auto *SourceLoad = Stored->second;
+  const std::set<size_t> Parameters{*P, *I, *S, *D};
+  std::vector<std::vector<unsigned>> Effects(Flow.Nodes.size());
+  size_t PredicateReads = 0, SourceReads = 0;
+  Budget = 10000;
+  for (size_t N = 0; N < Flow.Nodes.size(); ++N) {
+    const auto &Node = Flow.Nodes[N];
+    auto &Events = Effects[N];
+    std::function<void(const ExprPtr &, unsigned)> Scan = [&](const ExprPtr &E,
+                                                              unsigned Depth) {
+      // Statement-form void calls need not carry an expression result type.
+      // onceCall already authenticated the complete runtime declaration.
+      if (E && E.get() == Once) {
+        Events.push_back(1);
+        return;
+      }
+      if (!E || !Budget-- || Depth > 64 || !E->Type || E->Type->Size > 8 ||
+          (E->Type->Kind != NdTypeKind::Int &&
+           E->Type->Kind != NdTypeKind::Ptr &&
+           E->Type->Kind != NdTypeKind::Void) ||
+          E->IntrinsicId != Intrinsic::None || !E->IntrinsicOutputs.empty() ||
+          E->MemoryOrdering != NdMemoryOrdering::None ||
+          E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+        Valid = false;
+        return;
+      }
+      if (E.get() == Retain) {
+        Scan(E->Operands[0], Depth + 1);
+        Events.push_back(4);
+        return;
+      }
+      if (E->Kind == ExprKind::Load) {
+        const auto FromParameter =
+            E->Operands.size() == 1 ? Param(E->Operands[0]) : std::nullopt;
+        if (!Plain8(E) || !FromParameter) {
+          Valid = false;
+          return;
+        }
+        if (*FromParameter == *P) {
+          ++PredicateReads;
+          Events.push_back(0);
+        } else if (E.get() == SourceLoad) {
+          ++SourceReads;
+          Events.push_back(2);
+        } else
+          Valid = false;
+        return;
+      }
+      if (Param(E)) {
+        Valid = false;
+        return;
+      }
+      if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast) &&
+          !IdentityCast(E)) {
+        Valid = false;
+        return;
+      }
+      if (E->Kind == ExprKind::Var && E->Var.Kind != MedVar::Reg &&
+          E->Var.Kind != MedVar::Temp)
+        Valid = false;
+      if (E->Kind != ExprKind::Var && E->Kind != ExprKind::Const &&
+          E->Kind != ExprKind::Phi && E->Kind != ExprKind::Cast &&
+          E->Kind != ExprKind::BitCast && E->Kind != ExprKind::BinOp &&
+          E->Kind != ExprKind::UnaryOp)
+        Valid = false;
+      for (const auto &Operand : E->Operands)
+        Scan(Operand, Depth + 1);
+    };
+    if (Node.Test) {
+      Scan(Node.Test, 0);
+      continue;
+    }
+    if (!Node.Statement)
+      continue;
+    const auto &Statement = *Node.Statement;
+    switch (Statement.Kind) {
+    case StmtKind::Assign:
+      if (const auto A = Param(Statement.Val)) {
+        if (!Parameters.count(*A))
+          Valid = false;
+      } else
+        Scan(Statement.Val, 0);
+      break;
+    case StmtKind::Store:
+      Scan(Statement.StoreVal, 0);
+      Events.push_back(3);
+      break;
+    case StmtKind::Call:
+      Scan(Statement.CallExpr, 0);
+      break;
+    case StmtKind::ExprStmt:
+      Scan(Statement.Val, 0);
+      break;
+    case StmtKind::Return:
+      if (From(Statement.RetVal) != std::optional<Origin>{{-1, Retain}})
+        Valid = false;
+      Scan(Statement.RetVal, 0);
+      Events.push_back(5);
+      break;
+    case StmtKind::Goto:
+    case StmtKind::Block:
+    case StmtKind::Nop:
+      break;
+    default:
+      Valid = false;
+      break;
+    }
+  }
+  if (!Valid || PredicateReads != 1 || SourceReads != 1)
+    return std::nullopt;
+  // Every path keeps predicate/optional once -> load -> store -> retain ->
+  // return. No cycle or fallthrough exit can silently certify a partial copy.
+  std::set<std::tuple<size_t, unsigned, bool>> Active, Done;
+  std::function<bool(size_t, unsigned, bool)> Path =
+      [&](size_t N, unsigned Phase, bool Called) {
+        if (N >= Flow.Nodes.size())
+          return false;
+        const auto Key = std::tuple{N, Phase, Called};
+        if (Done.count(Key))
+          return true;
+        if (!Active.insert(Key).second)
+          return false;
+        for (const auto Event : Effects[N]) {
+          if (Event == 1) {
+            if (Phase != 1 || Called)
+              return false;
+            Called = true;
+          } else {
+            const unsigned Expected = Event == 0 ? 0 : Event - 1;
+            if (Phase != Expected)
+              return false;
+            ++Phase;
+          }
+        }
+        const auto &Successors = Flow.Nodes[N].Successors;
+        if (Successors.empty()) {
+          if (Phase != 5)
+            return false;
+        } else {
+          if (Phase == 5)
+            return false;
+          for (const auto Next : Successors)
+            if (!Path(Next, Phase, Called))
+              return false;
+        }
+        Active.erase(Key);
+        Done.insert(Key);
+        return true;
+      };
+  if (!Path(Flow.Entry, 0, false))
+    return std::nullopt;
+  return SwiftOnceCopyContract{F.Params.size(), *P, *S, *D, *I};
+}
+
+struct CopyReferences {
+  SourceCallTypeHint Predicate;
+  SourceCallTypeHint Source;
+  SourceCallTypeHint Destination;
+  va_t Initializer = 0;
+};
+
+// Recompute the callee use proof and the caller's exact symbol/storage
+// identities whenever discovery or binding consumes a copy contract.
+inline std::optional<CopyReferences>
+copyReferences(const HighExpr &E, const HighFunc &Caller,
+               const BinaryImage &Image, const SwiftOnceCopyContract &Planned,
+               const std::map<va_t, const HighFunc *> &Functions) {
+  if (!Caller.SourceTypeHint ||
+      !objc_projection_detail::sameHint(*Caller.SourceTypeHint,
+                                        callbackHint(Image.Arch)) ||
+      !llvm::StringRef(Caller.Name).starts_with("_$s") ||
+      !llvm::StringRef(Caller.Name).ends_with("_WZ") ||
+      E.Kind != ExprKind::Call || !E.SourceCallHint || E.IsIndirectCall ||
+      E.CallAddr != E.SourceCallHint->TargetAddress ||
+      !objc_binding_detail::plainNativeBinding(*E.SourceCallHint) ||
+      E.IntrinsicId != Intrinsic::None || !E.IntrinsicOutputs.empty() ||
+      E.MemoryOrdering != NdMemoryOrdering::None ||
+      E.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      E.Operands.size() != Planned.ParameterCount ||
+      !objcSourceCallBound(E, Image, Functions))
+    return std::nullopt;
+  const auto Callee = Functions.find(E.SourceCallHint->TargetAddress);
+  if (Callee == Functions.end() || !Callee->second ||
+      Callee->second->Entry != E.CallAddr)
+    return std::nullopt;
+  const auto Current = copyContract(*Callee->second, Image);
+  if (!Current || !(*Current == Planned))
+    return std::nullopt;
+  const auto Constant = [&](size_t Index) -> std::optional<va_t> {
+    const auto &Value = E.Operands[Index];
+    if (!Value || Value->Kind != ExprKind::Const || !Value->Type ||
+        Value->Type->Size != 8 ||
+        (Value->Type->Kind != NdTypeKind::Int &&
+         Value->Type->Kind != NdTypeKind::Ptr) ||
+        !Value->Operands.empty() || Value->SourceCallHint ||
+        Value->IntrinsicId != Intrinsic::None ||
+        !Value->IntrinsicOutputs.empty() ||
+        Value->MemoryOrdering != NdMemoryOrdering::None ||
+        Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+    return Value->ConstVal;
+  };
+  const auto P = Constant(Current->Predicate), S = Constant(Current->Source);
+  const auto D = Constant(Current->Destination),
+             I = Constant(Current->Initializer);
+  if (!P || !S || !D || !I || !Image.isCodeAddress(*I))
+    return std::nullopt;
+  const std::array<va_t, 3> Storage{*P, *S, *D};
+  for (size_t A = 0; A < Storage.size(); ++A) {
+    if (Storage[A] % 8 || Storage[A] > InvalidVA - 8)
+      return std::nullopt;
+    for (size_t B = 0; B < A; ++B)
+      if (Storage[A] < Storage[B] + 8 && Storage[B] < Storage[A] + 8)
+        return std::nullopt;
+  }
+  const auto Predicate =
+      objc_binding_detail::oncePredicateStorageHint(Image, *P);
+  const auto Source = objc_binding_detail::localStorageHint(Image, *S, 8);
+  const auto Destination = objc_binding_detail::localStorageHint(Image, *D, 8);
+  if (!Predicate || !Source || !Destination ||
+      !llvm::StringRef(Predicate->TargetName).starts_with("_$s") ||
+      !llvm::StringRef(Predicate->TargetName).ends_with("_Wz"))
+    return std::nullopt;
+  const std::string Prefix =
+      llvm::StringRef(Predicate->TargetName).drop_back(3).str();
+  const std::string DestinationPrefix =
+      llvm::StringRef(Caller.Name).drop_back(3).str();
+  const auto StorageName = [&](const std::string &Name,
+                               const std::string &Base) {
+    return Name.size() > Base.size() + 3 &&
+           llvm::StringRef(Name).starts_with(Base) &&
+           llvm::StringRef(Name).ends_with("vpZ");
+  };
+  if (!StorageName(Source->TargetName, Prefix) ||
+      !StorageName(Destination->TargetName, DestinationPrefix))
+    return std::nullopt;
+  const auto UniqueSymbol = [&](va_t Address, const std::string &Name,
+                                bool Function) {
+    size_t Matches = 0;
+    for (const auto &Symbol : Image.Symbols) {
+      if (Symbol.Name == Name && Symbol.Addr != Address)
+        return false;
+      if (Symbol.Addr != Address)
+        continue;
+      if (Symbol.Name != Name || Symbol.IsFunc != Function ||
+          (!Function && Symbol.Size && Symbol.Size != 8))
+        return false;
+      ++Matches;
+    }
+    return Matches == 1;
+  };
+  const auto Callback = Functions.find(*I);
+  if (!UniqueSymbol(*P, Predicate->TargetName, false) ||
+      !UniqueSymbol(*S, Source->TargetName, false) ||
+      !UniqueSymbol(*D, Destination->TargetName, false) ||
+      !UniqueSymbol(*I, Prefix + "_WZ", true) ||
+      !UniqueSymbol(Caller.Entry, Caller.Name, true) ||
+      Callback == Functions.end() || !Callback->second ||
+      Callback->second->Entry != *I ||
+      Callback->second->Name != Prefix + "_WZ" ||
+      !ignoresContext(*Callback->second))
+    return std::nullopt;
+  return CopyReferences{*Predicate, *Source, *Destination, *I};
+}
+
 } // namespace swift_once_source_detail
 
 inline SwiftOnceSourcePlan
@@ -1151,6 +1599,8 @@ discoverSwiftOnceSources(const BinaryImage &Image,
       Plan.ObjCClassMetadataAccessors.emplace(F.Entry, *Contract);
     else if (auto Contract = getterContract(F, Image))
       Plan.Getters.emplace(F.Entry, *Contract);
+    else if (auto Contract = copyContract(F, Image))
+      Plan.Copies.emplace(F.Entry, *Contract);
     else if (auto Contract = addressorContract(F, Image)) {
       Plan.Addressors.emplace(F.Entry, *Contract);
       Plan.AddressorHints.emplace(F.Entry, addressorHint(Image.Arch));
@@ -1203,6 +1653,15 @@ discoverSwiftOnceSources(const BinaryImage &Image,
           if (E->Kind == ExprKind::Call && E->SourceCallHint &&
               E->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
               objcSourceCallBound(*E, Image, Functions)) {
+            if (const auto Copy =
+                    Plan.Copies.find(E->SourceCallHint->TargetAddress);
+                Copy != Plan.Copies.end()) {
+              const auto References =
+                  copyReferences(*E, F, Image, Copy->second, Functions);
+              if (References && !DirectTargets.count(References->Initializer))
+                Plan.CallbackHints.emplace(References->Initializer,
+                                           callbackHint(Image.Arch));
+            }
             auto Getter = Plan.Getters.find(E->SourceCallHint->TargetAddress);
             if (Getter != Plan.Getters.end() &&
                 E->Operands.size() == Getter->second.parameterCount() &&
@@ -1620,6 +2079,40 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
         E->MemoryOrdering != NdMemoryOrdering::None ||
         E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return E;
+    if (const auto CopyContract =
+            Plan.Copies.find(E->SourceCallHint->TargetAddress);
+        CopyContract != Plan.Copies.end()) {
+      const auto References = swift_once_source_detail::copyReferences(
+          *E, Function, Image, CopyContract->second, Functions);
+      if (!References)
+        return E;
+      auto Address = HighExpr::makeCall({}, 0, {});
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
+      Hint->TargetAddress = References->Initializer;
+      Hint->Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+      std::string Error;
+      if (!assignDarwinScalarSourceABI(Hint->Signature, Image.Arch, Error))
+        return E;
+      Address->Type = Hint->Signature.ReturnType;
+      Address->SourceCallHint = Hint;
+      if (!swiftOnceCallbackBound(*Address, Image, Plan, Functions))
+        return E;
+      const auto &C = CopyContract->second;
+      E->Operands[C.Initializer] = std::move(Address);
+      for (const auto &[Index, Binding] :
+           {std::pair{C.Predicate, References->Predicate},
+            std::pair{C.Source, References->Source},
+            std::pair{C.Destination, References->Destination}}) {
+        auto Value = HighExpr::makeCall({}, 0, {});
+        Value->Type = E->Operands[Index]->Type;
+        Value->SourceCallHint = std::make_shared<SourceCallTypeHint>(Binding);
+        E->Operands[Index] = std::move(Value);
+        Result.LocalStorageExtents[Binding.TargetAddress] = 8;
+      }
+      Result.Dependencies.insert(References->Initializer);
+      return E;
+    }
     auto Getter = Plan.Getters.find(E->SourceCallHint->TargetAddress);
     if (Getter == Plan.Getters.end() ||
         E->Operands.size() != Getter->second.parameterCount() ||

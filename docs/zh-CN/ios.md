@@ -320,3 +320,5 @@ arm64 UIKit 目录也记录 `UIButton` 的 `setTitleColor:forState:`（对象参
 Arm64 的 `+[NSSet setWithObjects:]` 保留 SDK 中以 nil 终止的可变参数声明。首批仅支持精确的平台类导入和 selector 桩，以及所有入边均证明完整八字节机器值的不可变 Objective-C 字符串参数。恢复在首个确定的 nil 处停止；首个对象为 nil 时无需证明栈上尾参，也不读取终止值之后的槽。共享 Darwin 可变参数 ABI 保留三个固定参数，其余对象与 nil 位于栈上。发布阶段针对当前映像重新验证声明、提供库、接收者、selector 及每个参数。动态对象、缺失或部分尾参写入、逃逸栈帧、本地覆盖和其他架构仍不受支持。 栈参数还须在线性私有栈帧中证明每次具体读取的值；后续覆盖不能改变已读出的值，重叠写入、未知调用、逃逸或控制流会阻止认证。
 
 源码导出可逐个投影编译器生成的 BOOL super getter，但必须由当前完整 ARM64 指令、CFG 与保存/恢复证明共同认证 Objective-C 入口、共享函数体及 metadata accessor（`CMa`）。发现、绑定与渲染共用同一契约。helper 保留实际 CMa 调用和已闭合依赖，随后读取经运行时注册的 SEL 槽，再按认证类型调用 `objc_msgSendSuper2`；不同 selector 保留独立槽。loader 通过 LLVM Mach-O 符号及 export trie，并严格核对当前 segment/section 映射，重新认证本地链接属性。投影不改变其他调用者或共享函数的全局 native ABI；缺失或过时证据继续拒绝。
+
+arm64 Swift once 初始化器可通过已具有类型的 native helper，在独立静态槽之间复制对象。统一的用途合同核对所有当前参数和每条路径，依次保留 predicate 读取、可选的 `swift_once`、源读取、目标写入、`objc_retain` 与返回。合同接受四个用途参数，或另加一个未使用的输入；参数移除仍只由 native 推断负责。发现和绑定都针对当前 image 重验同一合同、精确回调及存储符号、互不重叠的八字节范围和回调未使用的 context。ABI、控制流、内存效果及依赖检查保持完整；别名、部分或有序访问、额外用途和过期证据继续拒绝。
