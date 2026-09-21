@@ -52,4 +52,8 @@ ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "prot
 ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIResponderStandardEditActions", "", "P:NSObject", nullptr)
 ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UITraitEnvironment", "", "P:NSObject", nullptr)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIProgressView", "", false, "setProgress:", "v20@0:8f16", "", false, nullptr, "", false)
+// The same complete ASTs declare UIImageView with superclass UIView and no
+// directly adopted protocols. This closes the inherited receiver scope for
+// local subclasses without assigning a global type to their own selectors.
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIImageView", "", "C:UIView", nullptr)
 // clang-format on

@@ -7087,6 +7087,131 @@ TEST(ObjCCallHints, IOSProgressSetterRequiresPropertyReceiverAcrossARC) {
   }
 }
 
+TEST(ObjCCallHints, IOSViewDeclarationsKeepVoidAndUnsignedControlState) {
+  constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (const char *Selector :
+       {"invalidateIntrinsicContentSize", "setTitleColor:forState:"}) {
+    SCOPED_TRACE(Selector);
+    const bool Setter = llvm::StringRef(Selector) == "setTitleColor:forState:";
+    auto Image = image(Arch::AArch64);
+    Image.ObjCMethods.clear();
+    Image.DynInfo.NeededLibs = {Module};
+    Image.ObjCSourceReferences.at(0x2100).Name = Selector;
+    auto Low = caller();
+    Low.Blocks.front().Ops.back().NumInputs = 0;
+    const auto Med = convert(Image, Low);
+    ASSERT_EQ(Med.CallInfos.size(), 1U);
+    const auto &Call = Med.CallInfos.front();
+    ASSERT_TRUE(Call.SourceCallHint);
+    const auto &Hint = *Call.SourceCallHint;
+    EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Void);
+    EXPECT_EQ(Med.Blocks[Call.BlockId].Ops[Call.OpIdx].Output.Size, 0U);
+    ASSERT_EQ(Call.Args.size(), Setter ? 4U : 2U);
+    if (Setter) {
+      EXPECT_EQ(Hint.Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Call.Args[2].RegOff, TRI.IntParamRegs[2]);
+      const auto &State = Hint.Signature.Parameters[3];
+      EXPECT_EQ(State.Type->Kind, NdTypeKind::Int);
+      EXPECT_FALSE(State.Type->IsSigned);
+      EXPECT_EQ(State.Type->Size, 8U);
+      EXPECT_EQ(Call.Args[3].RegOff, TRI.IntParamRegs[3]);
+      EXPECT_EQ(Call.Args[3].Size, 8U);
+    }
+    auto Expression = receiverCallExpression(Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+    if (Setter) {
+      auto Forged = std::make_shared<SourceCallTypeHint>(Hint);
+      Forged->Signature.Parameters[3].Type = NdType::makeInt(8, true);
+      Expression->SourceCallHint = Forged;
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Image, {}));
+      Expression->SourceCallHint = std::make_shared<SourceCallTypeHint>(Hint);
+    }
+    for (const char *Other :
+         {"/tmp/UIKit.framework/UIKit",
+          "/System/Library/Frameworks/UIKit.framework/Versions/A/UIKit"}) {
+      auto Changed = Image;
+      Changed.DynInfo.NeededLibs = {Other};
+      EXPECT_FALSE(objcSelectorSourceTypeHint(Changed, Selector));
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}));
+    }
+    auto Unsupported = image(Arch::X64);
+    Unsupported.ObjCMethods.clear();
+    Unsupported.DynInfo.NeededLibs = {Module};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
+    auto Conflicting = Image;
+    ObjCMethod OtherMethod;
+    OtherMethod.ClassName = "Unrelated";
+    OtherMethod.Selector = Selector;
+    OtherMethod.TypeEncoding = Setter ? "v32@0:8@16q24" : "@16@0:8";
+    OtherMethod.TypeHint =
+        parseObjCMethodEncoding(Selector, OtherMethod.TypeEncoding);
+    Conflicting.ObjCMethods.push_back(OtherMethod);
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Conflicting, Selector));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Conflicting, {}));
+  }
+}
+
+TEST(ObjCCallHints, IOSImageViewSuperclassDisambiguatesLocalObjectSetter) {
+  auto Image = receiverImage(Arch::AArch64);
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/System/Library/Frameworks/UIKit.framework/UIKit",
+      "/System/Library/Frameworks/QuartzCore.framework/QuartzCore"};
+  auto &Class = Image.ObjCClasses.front();
+  Class.RootClass = false;
+  Class.SuperclassName = "UIImageView";
+  Class.InheritanceStatus = "resolved";
+  Image.ObjCSourceReferences.at(0x2100).Name = "setCurrentFrame:";
+  for (auto &Method : Image.ObjCMethods) {
+    Method.Selector = "setCurrentFrame:";
+    Method.TypeEncoding =
+        Method.ClassName == "First" ? "v24@0:8@16" : "v24@0:8d16";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  }
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "setCurrentFrame:"));
+  auto Low = receiverCaller(Arch::AArch64);
+  Low.Blocks.front().Ops.back().NumInputs = 0;
+  const auto Hints = buildObjCSourceCallHints(Image, Low);
+  ASSERT_EQ(Hints.count(0x1204), 1U);
+  const auto &Hint = Hints.at(0x1204);
+  ASSERT_TRUE(Hint.Receiver);
+  EXPECT_EQ(Hint.Receiver->ClassName, "First");
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 3U);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Location.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).IntParamRegs[2]);
+  auto Expression = receiverCallExpression(Hint);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.ObjCClasses.front().SuperclassName = "UnknownImageView";
+    else if (Mutation == 1)
+      Changed.DynInfo.NeededLibs.pop_back(); // Unproved CALayerDelegate parent.
+    else if (Mutation == 2)
+      Changed.DynInfo.NeededLibs[1] = "/tmp/UIKit.framework/UIKit";
+    else if (Mutation == 3) {
+      ObjCClass Child;
+      Child.Name = "Other";
+      Child.SuperclassName = "First";
+      Child.InheritanceStatus = "resolved";
+      Changed.ObjCClasses.push_back(Child);
+    } else
+      Changed.ObjCMethods.front().Implementation = 0x1300;
+    EXPECT_EQ(buildObjCSourceCallHints(Changed, Low).count(0x1204), 0U);
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}));
+  }
+  auto Unsupported = Image;
+  Unsupported.Arch = Arch::X64;
+  auto X64Low = receiverCaller(Arch::X64);
+  X64Low.Blocks.front().Ops.back().NumInputs = 0;
+  EXPECT_EQ(buildObjCSourceCallHints(Unsupported, X64Low).count(0x1204), 0U);
+  EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Unsupported, {}));
+}
+
 TEST(ObjCCallHints, IOSCoreImageCropKeepsExactProviderAndRecordABI) {
   constexpr auto Module =
       "/System/Library/Frameworks/CoreImage.framework/CoreImage";

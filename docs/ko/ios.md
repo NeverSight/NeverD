@@ -290,3 +290,5 @@ arm64 UIKit 카탈로그는 `UIProgressView`의 `observedProgress` 객체 반환
 태그가 붙은 리터럴 워드는 정확한 최상위 비트 태그와 불변 C 문자열 풀의 전체 이미지 주소를 유지할 수 있습니다. 소스 바인딩은 증명된 주소만 기존의 영구 공유 풀로 재배치하고 정수 OR, 태그, 내부 오프셋을 보존합니다. 비슷한 스칼라 값이나 부분 주소, 충돌하는 출처, 수정 가능하거나 재배치 정보가 있는 풀, 직접 메모리 주소로 쓰는 경우는 거부합니다. Swift String 객체 레이아웃을 추측하지 않습니다.
 
 `UIProgressView`의 `setProgress:`에는 정확한 ARC 동일성 호출을 거쳐 보존된 타입 지정 속성 결과처럼 입증된 수신자가 필요합니다. 검증된 상위 클래스와 프로토콜 관계 전체가 `float` 인수를 선택합니다. UIKit과 로컬 클래스에 같은 selector의 객체 인수 setter도 있으므로 수신자가 한정되지 않은 호출은 모호한 상태로 남습니다.
+
+arm64 UIKit 카탈로그는 객체 인수와 부호 없는 64비트 `UIControlState`를 받는 `UIButton`의 `setTitleColor:forState:` 및 `UIView`의 void 메서드 `invalidateIntrinsicContentSize`도 기록합니다. 기기와 시뮬레이터의 전체 AST 증거가 일치합니다. 확인된 `UIImageView → UIView` 상속 관계를 통해 기존 receiver 증명은 로컬 객체 setter와 관련 없는 클래스의 같은 이름 부동소수점 setter를 구별할 수 있습니다. 알 수 없는 receiver, 하위 클래스 선언 충돌, 부모 제공자 누락 및 x86_64는 계속 지원하지 않습니다.

@@ -43,6 +43,13 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "insertSubview:belowSubview:", "v32@0:8@16@24", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "instantiateWithOwner:options:", "@32@0:8@16@24", nullptr},
+// The complete device/simulator ASTs cited for UIProgressView below also agree
+// on UIView(UIConstraintBasedLayoutLayering)'s void invalidation method and
+// UIButton's UIColor* plus UIControlState (underlying unsigned long) setter.
+// These are the only owners of either selector in both complete artifacts.
+// Apple Clang independently reproduces both encodings from those canonical
+// declaration types for arm64 iOS and arm64 iOS Simulator.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "invalidateIntrinsicContentSize", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "mainScreen", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "nibWithNibName:bundle:", "@32@0:8@16@24", nullptr},
 // UIProgressView additions: both complete Xcode 26.5 Messages ASTs from
@@ -69,6 +76,7 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:animated:", "v24@0:8f16B20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgressViewStyle:", "v24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setText:", "v24@0:8@16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTitleColor:forState:", "v32@0:8@16Q24", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTranslatesAutoresizingMaskIntoConstraints:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "sizeToFit", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "superview", "@16@0:8", nullptr},
