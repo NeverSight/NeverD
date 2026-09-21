@@ -147,6 +147,8 @@ C 目录包含 `sys/mount.h` 声明，并保留架构专属的链接符号：ARM
 
 外部数据绑定要求各平台共有的非 TLS SDK 声明及精确的库导出证据。生成的 C 引用真实符号存储并保留后续内存访问，包括全局指针与其所指对象的区别。弱导入、身份冲突及不支持的存储保持未绑定。数据声明不能证明 block 的构造或所有权。 目录涵盖 CoreData、CoreImage、CoreGraphics、ImageIO 和 CoreSpotlight 数据。内建字面量存储通过在每个目标上编译空集合和布尔对象取得；只接受外部非 TLS 数据的直接地址，并执行相同的导出检查。生成目录时，除 libclang 外，还须通过 `--clang` 指定 Clang 编译器。
 
+在 ARM64 上，外部 `kCIContextPriorityRequestLow` 和 `kCIContextUseSoftwareRenderer` 的存储身份由完整 iPhoneOS 与 arm64 iPhoneSimulator SDK 中一致的声明及精确的 CoreImage 导入验证。上下文选项保留真实指针加载和运行时值；绑定不会替换字符串键或渲染行为。
+
 这只是对运行时信息的有限重建，不承诺完整恢复属性、协议、原始所有权标注、任意聚合类型、可变参数尾部、依赖异常的方法体和模型未覆盖的 Block/捕获布局。运行时编码只描述固定参数，不能证明原声明不存在省略号。只有原生加载器已解析相关槽时才使用链式指针；未解析格式会保留诊断。
 
 ## Swift 源码与存储布局

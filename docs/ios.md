@@ -164,6 +164,8 @@ The C catalog includes `sys/mount.h` declarations with architecture-specific lin
 
 External data bindings use common non-TLS SDK declarations and exact library export evidence. Generated C refers to the real symbol storage and preserves subsequent memory accesses, including the distinction between a global pointer and its pointee. Weak imports, conflicting identities and unsupported storage remain unbound. Data declarations do not establish block construction or ownership. The catalog includes CoreData, CoreImage, CoreGraphics, ImageIO and CoreSpotlight data. Built-in literal storage is derived by compiling empty collections and Boolean objects on every target; only direct addresses of external non-TLS data qualify, with the same export checks. Catalog generation requires the Clang compiler through `--clang` in addition to libclang.
 
+On ARM64, the external `kCIContextPriorityRequestLow` and `kCIContextUseSoftwareRenderer` storage identities use matching declarations from complete iPhoneOS and arm64 iPhoneSimulator SDKs, with an exact CoreImage import. Context options retain their real pointer loads and runtime values; the binding does not substitute string keys or rendering behavior.
+
 This is a limited reconstruction of runtime information. Complete properties, protocols, original ownership annotations, arbitrary aggregates, variadic tails, exception-dependent bodies, and unmodelled Block/capture layouts are not promised. Runtime encoding describes fixed arguments and cannot prove that the original declaration had no variadic tail. Chained pointers are used only where the native loader resolved the relevant slots; unresolved formats retain diagnostics.
 
 ## Swift source and storage

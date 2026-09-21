@@ -5058,21 +5058,38 @@ TEST(ObjCCallHints, FrameworkAndCompilerDataKeepExactExportIdentities) {
   }
 }
 
-TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
-  constexpr llvm::StringLiteral Module =
-      "/System/Library/Frameworks/UIKit.framework/UIKit";
+TEST(ObjCCallHints, MobileSDKDataKeepsExactFrameworkStorageIdentities) {
+  const std::pair<llvm::StringRef, llvm::StringRef> Declarations[] = {
+      {"UIApplicationDidReceiveMemoryWarningNotification", "UIKit"},
+      {"UIApplicationWillTerminateNotification", "UIKit"},
+      {"UIBackgroundTaskInvalid", "UIKit"},
+      {"UIAccessibilityTraitButton", "UIKit"},
+      {"UIEdgeInsetsZero", "UIKit"},
+      {"UIViewNoIntrinsicMetric", "UIKit"},
+      {"kCIContextPriorityRequestLow", "CoreImage"},
+      {"kCIContextUseSoftwareRenderer", "CoreImage"}};
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
-    for (llvm::StringRef Name :
-         {"UIApplicationDidReceiveMemoryWarningNotification",
-          "UIApplicationWillTerminateNotification", "UIBackgroundTaskInvalid",
-          "UIAccessibilityTraitButton", "UIEdgeInsetsZero",
-          "UIViewNoIntrinsicMetric"}) {
+    for (auto [Name, Framework] : Declarations) {
       SCOPED_TRACE(Name.str());
       auto Image = runtimeImage(("_" + Name).str(), Architecture);
-      Image.DyldBindSlots[0x2180] = {
-          ("_" + Name).str(), 0, Module.str(), false};
+      const auto Module = ("/System/Library/Frameworks/" + Framework +
+                           ".framework/" + Framework)
+                              .str();
+      Image.DyldBindSlots[0x2180] = {("_" + Name).str(), 0, Module, false};
       const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
+      // CIContext evidence covers the ARM64 device and simulator only.
+      if (Framework == "CoreImage" && Architecture == Arch::X64) {
+        EXPECT_FALSE(Binding);
+        continue;
+      }
       ASSERT_TRUE(Binding);
+      auto Versioned = Image;
+      Versioned.DyldBindSlots[0x2180].Module =
+          ("/System/Library/Frameworks/" + Framework +
+           ".framework/Versions/A/" + Framework)
+              .str();
+      EXPECT_EQ(darwinRuntimeGlobalAddressHint(Versioned, 0x2180).has_value(),
+                Framework == "CoreImage");
       EXPECT_EQ(Binding->TargetName, Name);
       EXPECT_EQ(Binding->CallKind,
                 SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress);
@@ -5080,7 +5097,7 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
                 SourceFunctionTypeHint::OriginKind::DarwinSDK);
 
       HighFunc Function;
-      Function.Name = "uikit_external_storage";
+      Function.Name = "framework_external_storage";
       Function.ReturnType = NdType::makeInt(8);
       HighStmt Return;
       Return.Kind = StmtKind::Return;
@@ -5105,7 +5122,7 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
       EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
       EXPECT_EQ(Source.find("0x2180"), std::string::npos) << Source;
 
-      for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
         auto Changed = Image;
         if (Mutation == 0)
           Changed.DyldBindSlots[0x2180].Module += ".impostor";
@@ -5119,7 +5136,12 @@ TEST(ObjCCallHints, MobileSDKDataKeepsExactUIKitStorageIdentities) {
           Changed.ImportPtrSlots[0x2180] += "Suffix";
           Changed.DyldBindSlots[0x2180].Name = Changed.ImportPtrSlots[0x2180];
         }
+        if (Mutation == 5)
+          Changed.DyldBindSlots[0x2180].Module =
+              "/System/Library/Frameworks/Foundation.framework/Foundation";
         EXPECT_FALSE(darwinRuntimeGlobalAddressHint(Changed, 0x2180))
+            << Mutation;
+        EXPECT_FALSE(sdk::objcSourceCallBound(*Address, Changed, {}))
             << Mutation;
       }
     }

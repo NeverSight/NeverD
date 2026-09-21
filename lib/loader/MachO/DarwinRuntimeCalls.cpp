@@ -229,20 +229,34 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
   // generate DarwinSourceDataDeclarations.inc has no UIKit headers or binary,
   // so retain the same exact symbol/provider proof here.
   // https://developer.apple.com/documentation/uikit/uiapplicationdidreceivememorywarningnotification
-  llvm::StringRef UIKitData;
+  llvm::StringRef FrameworkData;
+  const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+  auto MatchFrameworkData = [&](llvm::StringRef Name, llvm::StringRef Module) {
+    if (Import->starts_with("_") && Import->drop_front() == Name &&
+        Bind != Image.DyldBindSlots.end() &&
+        darwinExportModuleMatches(Module, Bind->second.Module))
+      FrameworkData = Name;
+  };
   for (llvm::StringRef Name :
        {"UIApplicationDidReceiveMemoryWarningNotification",
         "UIApplicationWillTerminateNotification", "UIBackgroundTaskInvalid",
         "UIAccessibilityTraitButton", "UIEdgeInsetsZero",
         "UIViewNoIntrinsicMetric"})
-    if (Import->starts_with("_") && Import->drop_front() == Name)
-      UIKitData = Name;
-  const auto Bind = Image.DyldBindSlots.find(ImportSlot);
-  const bool UIKitStorage =
-      !UIKitData.empty() && Bind != Image.DyldBindSlots.end() &&
-      darwinExportModuleMatches(
-          "/System/Library/Frameworks/UIKit.framework/UIKit",
-          Bind->second.Module);
+    MatchFrameworkData(Name,
+                       "/System/Library/Frameworks/UIKit.framework/UIKit");
+  // CIContext.h imports OpenGLES on iOS, unavailable in the CLT SDK used by
+  // the generated catalog. Complete Xcode 26.5 iPhoneOS and arm64 simulator
+  // ASTs agree that these are external, non-TLS NSString pointer objects.
+  // The CoreImage export authenticates their storage, not their contents.
+  // https://developer.apple.com/documentation/coreimage/kcicontextpriorityrequestlow
+  // https://developer.apple.com/documentation/coreimage/kcicontextusesoftwarerenderer
+  if (Image.Arch == Arch::AArch64)
+    for (llvm::StringRef Name :
+         {"kCIContextPriorityRequestLow", "kCIContextUseSoftwareRenderer"})
+      MatchFrameworkData(
+          Name, "/System/Library/Frameworks/CoreImage.framework/CoreImage|"
+                "/System/Library/Frameworks/CoreImage.framework/Versions/A/"
+                "CoreImage");
   // Swift's inlinable collection implementations take these singletons'
   // addresses, making their external storage identities part of the
   // stdlib/runtime ABI. Apple Swift 6.1.2 emits all three as external globals.
@@ -278,15 +292,15 @@ darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
               Image.Arch == Arch::AArch64 ? D.AArch64Modules : D.X64Modules,
               Bind->second.Module))
         SwiftMetadata = D.Name;
-  if (!UIKitStorage && !SwiftEmptyStorage && SwiftMetadata.empty() &&
+  if (FrameworkData.empty() && !SwiftEmptyStorage && SwiftMetadata.empty() &&
       *Import != "___stack_chk_guard")
     return darwinDeclaredSourceGlobalAddressHint(Image, ImportSlot);
 
   SourceCallTypeHint Result;
   Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress;
   Result.TargetAddress = ImportSlot;
-  if (UIKitStorage) {
-    Result.TargetName = UIKitData.str();
+  if (!FrameworkData.empty()) {
+    Result.TargetName = FrameworkData.str();
     Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
     Result.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   } else if (SwiftEmptyStorage || !SwiftMetadata.empty()) {
