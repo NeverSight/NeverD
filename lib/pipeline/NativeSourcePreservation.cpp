@@ -96,9 +96,10 @@ std::optional<int64_t> signedConstant(const NdVar &Value) {
 
 class PreservationProof {
 public:
-  PreservationProof(Arch Architecture, const NativeSourceCalls &Calls)
+  PreservationProof(Arch Architecture, const NativeSourceCalls &Calls,
+                    bool TerminalOnly = false)
       : Architecture(Architecture), Calls(Calls),
-        TRI(getTargetRegInfo(Architecture)) {
+        TRI(getTargetRegInfo(Architecture)), TerminalOnly(TerminalOnly) {
     for (const auto &Range : TRI.callPreservedRanges(BinaryFormat::MachO))
       for (unsigned I = 0; I < Range.Bytes; ++I)
         Preserved.insert(Range.Offset + I);
@@ -115,10 +116,14 @@ public:
 
   State Initial;
   size_t Remaining = 262144;
+  bool DidTerminate = false;
 
   bool transfer(const LowBlock &Block, State &Current, bool CheckExits,
                 std::set<uint64_t> *UsedEntryRegisters = nullptr) {
     RegisterFacts Temps;
+    // Only the single-block terminal proof accepts outgoing stack arguments.
+    // Its declaration may read a byte only after a complete private write.
+    std::set<int64_t> WrittenStack;
     va_t Instruction = InvalidVA;
     auto Read = [&](const NdVar &Value, unsigned Byte) {
       if (Value.isReg())
@@ -210,6 +215,8 @@ public:
             return false;
         if (!Found->second.Signature)
           return false;
+        if (Found->second.Terminates && !TerminalOnly)
+          return false;
         const auto &Signature = *Found->second.Signature;
         const bool Tail = Index + 1 < Block.Ops.size() &&
                           Block.Ops[Index + 1].Opcode == NdOp::RETURN &&
@@ -228,6 +235,21 @@ public:
              ParameterIndex < Signature.Parameters.size(); ++ParameterIndex) {
           const auto &Parameter = Signature.Parameters[ParameterIndex];
           const auto &Location = Parameter.Location;
+          if (Location.Kind == SourceABICarrierKind::Stack) {
+            if (!TerminalOnly || !Found->second.Terminates ||
+                !Location.ValueBytes || Location.ValueBytes > 64 ||
+                Location.EntryStackOffset < 0 ||
+                Location.EntryStackOffset > MaxFrame)
+              return false;
+            const int64_t Start = *SP + Location.EntryStackOffset;
+            if (Start < *SP || Start > -int64_t(Location.ValueBytes))
+              return false;
+            for (unsigned I = 0; I < Location.ValueBytes; ++I)
+              if (!WrittenStack.count(Start + I) ||
+                  lookup(Current.Stack, Start + I).MayBeFrame)
+                return false;
+            continue;
+          }
           if ((Location.Kind != SourceABICarrierKind::IntegerRegister &&
                Location.Kind != SourceABICarrierKind::FloatingRegister) ||
               Location.ValueBytes > 64)
@@ -280,11 +302,20 @@ public:
             }
           }
         }
-        for (const auto &[Address, Bytes] : WritableFrameRanges)
+        for (const auto &[Address, Bytes] : WritableFrameRanges) {
           std::erase_if(Current.Stack, [&](const auto &Item) {
             return Item.first >= Address &&
                    Item.first - Address < static_cast<int64_t>(Bytes);
           });
+          std::erase_if(WrittenStack, [&](int64_t Byte) {
+            return Byte >= Address &&
+                   Byte - Address < static_cast<int64_t>(Bytes);
+          });
+        }
+        if (Found->second.Terminates) {
+          DidTerminate = true;
+          return true;
+        }
         if (!Tail) {
           std::erase_if(Current.Registers, [&](const auto &Item) {
             return !Preserved.count(Item.first) ||
@@ -295,6 +326,8 @@ public:
           // through an ordinary call. The callee owns storage below call SP.
           std::erase_if(Current.Stack,
                         [&](const auto &Item) { return Item.first < *SP; });
+          std::erase_if(WrittenStack,
+                        [&](int64_t Byte) { return Byte < *SP; });
           Temps.clear();
         }
         continue;
@@ -420,6 +453,9 @@ public:
               return false;
             for (unsigned I = 0; I < Memory.AccessSize; ++I)
               put(Current.Stack, *Address + I, Read(*Memory.StoredValue, I));
+            if (TerminalOnly)
+              for (unsigned I = 0; I < Memory.AccessSize; ++I)
+                WrittenStack.insert(*Address + I);
           } else
             // A value with any frame-derived byte may be a partial or
             // inexact alias of private storage. A completely non-frame
@@ -449,7 +485,8 @@ public:
         return false;
       }
       if (Current.Registers.size() > MaxFacts ||
-          Current.Stack.size() > MaxFacts || Temps.size() > MaxFacts)
+          Current.Stack.size() > MaxFacts || Temps.size() > MaxFacts ||
+          WrittenStack.size() > MaxFacts)
         return false;
     }
     return true;
@@ -460,6 +497,7 @@ private:
   const NativeSourceCalls &Calls;
   const TargetRegInfo &TRI;
   std::set<uint64_t> Preserved;
+  bool TerminalOnly;
 };
 } // namespace
 
@@ -475,7 +513,8 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     std::string Error;
     // Hidden result storage needs its own bounded frame-write proof before
     // this analysis can treat it as preserving saved machine state.
-    if (!Signature || Signature->Architecture != Architecture ||
+    if (Contract.Terminates || !Signature ||
+        Signature->Architecture != Architecture ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Signature, Error))
@@ -567,6 +606,57 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
   return true;
 }
 
+bool observesTerminalNativeSourceState(
+    const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
+    std::set<uint64_t> &UsedEntryRegisters) {
+  // This narrow mode proves only incoming context uses in a straight-line
+  // helper with one independently declared terminating runtime call. It does
+  // not invent a general no-return exemption from machine-state validation.
+  if (Architecture != Arch::AArch64 || Function.Blocks.size() != 1 ||
+      Calls.size() != 1)
+    return false;
+  const auto &Block = Function.Blocks.front();
+  if (Block.Id < 0 ||
+      (Block.StartAddr != Function.Entry &&
+       (Block.StartAddr || Block.Id != 0)) ||
+      !Block.Preds.empty() || !Block.Succs.empty() ||
+      !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty() ||
+      Block.Ops.empty() || Block.Ops.size() > 262144)
+    return false;
+  const auto &Contract = Calls.begin()->second;
+  const auto *Signature = Contract.Signature;
+  std::string Error;
+  if (!Contract.Terminates || !Signature ||
+      Signature->Architecture != Architecture || !Signature->ReturnType ||
+      Signature->ReturnType->Kind != NdTypeKind::Void ||
+      !validateSourceABI(*Signature, Error))
+    return false;
+  for (const auto &Parameter : Signature->Parameters)
+    if (!Parameter.Components.empty() || !Parameter.Type ||
+        (Parameter.Type->Kind != NdTypeKind::Int &&
+         Parameter.Type->Kind != NdTypeKind::Ptr))
+      return false;
+  unsigned NativeCalls = 0;
+  for (const auto &Op : Block.Ops) {
+    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+        Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN)
+      return false;
+    if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+      continue;
+    const auto Key = nativeSourceCallKey(Op);
+    if (!Key || !Calls.count(*Key) || ++NativeCalls != 1)
+      return false;
+  }
+  PreservationProof Proof(Architecture, Calls, true);
+  auto State = Proof.Initial;
+  std::set<uint64_t> Used;
+  if (NativeCalls != 1 || !Proof.transfer(Block, State, false, &Used) ||
+      !Proof.DidTerminate)
+    return false;
+  UsedEntryRegisters = std::move(Used);
+  return true;
+}
+
 bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
                                     const NativeSourceCalls &Calls) {
   const size_t Count = Function.Blocks.size();
@@ -577,7 +667,8 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
   for (const auto &[Site, Contract] : Calls) {
     const auto *Signature = Contract.Signature;
     std::string Error;
-    if (!Signature || Signature->Architecture != Architecture ||
+    if (Contract.Terminates || !Signature ||
+        Signature->Architecture != Architecture ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Signature, Error))

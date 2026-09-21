@@ -50,7 +50,8 @@ bool completeNativeAudit(va_t Entry, const PipelineFunctionAudit &Audit) {
 bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
                                   const MedFunc &Med, bool RequireCalls,
                                   std::set<uint64_t> *UsedEntryRegisters =
-                                      nullptr);
+                                      nullptr,
+                                  bool TerminalContext = false);
 
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
@@ -58,8 +59,11 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
 // Preserved context inputs require an independent proof that every exit
 // restores state after any preserved-register write. An input register that is
 // itself overwritten must first reach a complete non-preservation use; a
-// prologue spill alone cannot invent a source parameter. Saving and restoring
-// scratch registers does not create hidden outputs.
+// prologue spill alone cannot invent a source parameter. A straight-line
+// helper with an authenticated terminating runtime call may retain an
+// unmodified, completely observed context after the same byte/frame proof,
+// without inventing a return-state restoration. Saving and restoring scratch
+// registers does not create hidden outputs.
 // The complete source body and its callers still require validation.
 std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
                                            const LowFunc *Low,
@@ -115,9 +119,20 @@ std::vector<uint64_t> nativeEntryRegisters(const BinaryImage &Image,
       std::any_of(Reads.begin(), Reads.end(), [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8);
       });
-  if (!WrittenPreserved.empty() && ReadsPreserved) {
+  if ((!WrittenPreserved.empty() || Med.DoesNotReturn) && ReadsPreserved) {
     std::set<uint64_t> Used;
-    if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used))
+    if (Med.DoesNotReturn) {
+      // Terminal effects-only demand must always pass the complete terminal
+      // proof, including when only SP/frame/link registers were written.
+      const bool Terminal =
+          Hint.ReturnType && Hint.ReturnType->Kind == NdTypeKind::Void &&
+          hasNativeSourceStateContract(Image, Low, Med, true, &Used, true);
+      std::erase_if(Reads, [&](uint64_t Register) {
+        return TRI.isCallPreserved(Register, 8) &&
+               (!Terminal || WrittenPreserved.count(Register) ||
+                !Used.count(Register));
+      });
+    } else if (!hasNativeSourceStateContract(Image, Low, Med, false, &Used))
       std::erase_if(Reads, [&](uint64_t Register) {
         return TRI.isCallPreserved(Register, 8);
       });
@@ -170,7 +185,11 @@ bool completeCallResultPrefix(llvm::ArrayRef<MedOp> Ops, size_t Index,
 // byte-taint rejection of stack-derived arguments and stores.
 bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
                                   const MedFunc &Med, bool RequireCalls,
-                                  std::set<uint64_t> *UsedEntryRegisters) {
+                                  std::set<uint64_t> *UsedEntryRegisters,
+                                  bool TerminalContext) {
+  if (TerminalContext &&
+      (!Med.DoesNotReturn || !hasProvenNoReturnExit(Med, Image.Arch)))
+    return false;
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return false;
@@ -238,9 +257,27 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
             equalSourceABIs(Expected->Signature, Binding.Signature))
           Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
       }
+      if (TerminalContext && StaticRuntime &&
+          Binding.CallKind == Kind::SwiftRuntimeCall &&
+          Binding.DoesNotReturn && Op.DoesNotReturn) {
+        // The binding's import slot and the call's code veneer are distinct
+        // addresses. Authenticate the loader declaration, then match the
+        // complete Low/Med occurrence below; never infer termination from a
+        // candidate native signature or a name alone.
+        const auto Expected =
+            swiftRuntimeSourceCallHint(Image, Binding.TargetAddress);
+        Contract.Terminates =
+            Expected && Expected->DoesNotReturn &&
+            Expected->CallKind == Binding.CallKind &&
+            Expected->TargetAddress == Binding.TargetAddress &&
+            Expected->TargetName == Binding.TargetName &&
+            equalSourceABIs(Expected->Signature, Binding.Signature) &&
+            Op.NumInputs == sourceABIParameters(Binding.Signature).size() + 1;
+      }
       if ((!StaticRuntime && !StaticNative && !StaticMessage &&
            !DynamicWitness) ||
-          Binding.DoesNotReturn || !Binding.Signature.ReturnType ||
+          (Binding.DoesNotReturn && !Contract.Terminates) ||
+          !Binding.Signature.ReturnType ||
           !Image.isCodeAddress(Op.Addr) ||
           !Calls
                .emplace(NativeSourceCallKey{Op.Addr, Op.OriginSeq, Op.Opcode,
@@ -270,6 +307,13 @@ bool hasNativeSourceStateContract(const BinaryImage &Image, const LowFunc *Low,
   if (NativeCalls.size() != Calls.size())
     return false;
   std::set<uint64_t> Used;
+  if (TerminalContext) {
+    if (!observesTerminalNativeSourceState(*Low, Image.Arch, Calls, Used))
+      return false;
+    if (UsedEntryRegisters)
+      *UsedEntryRegisters = std::move(Used);
+    return true;
+  }
   if (restoresNativeSourceState(*Low, Image.Arch, Calls, &Used)) {
     if (UsedEntryRegisters)
       *UsedEntryRegisters = std::move(Used);

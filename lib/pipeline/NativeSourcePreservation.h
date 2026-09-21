@@ -27,6 +27,9 @@ struct NativeSourceCallKey {
 
 struct NativeSourceCallContract {
   const SourceFunctionTypeHint *Signature = nullptr;
+  // Established from an exact external runtime declaration, independently of
+  // native signature inference. Only the terminal-entry proof consumes it.
+  bool Terminates = false;
   // Parameter indexes whose exact private-frame address is borrowed
   // synchronously and read-only by an independently known call contract.
   std::map<size_t, size_t> ReadOnlyFrameParameters;
@@ -54,6 +57,15 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
                                const NativeSourceCalls &Calls,
                                std::set<uint64_t> *UsedEntryRegisters =
                                    nullptr);
+
+/// Prove entry-register uses in a single straight-line ARM64 helper ending in
+/// an exact declared runtime termination. Reuse the preservation proof's byte
+/// identities and private-frame escape checks, including completely written
+/// outgoing scalar stack arguments, but do not require a nonexistent return
+/// to restore state. Branches, returns and exceptional edges remain rejected.
+bool observesTerminalNativeSourceState(
+    const LowFunc &Function, Arch Architecture, const NativeSourceCalls &Calls,
+    std::set<uint64_t> &UsedEntryRegisters);
 
 /// Prove the narrower frameless tail-call shape without requiring a synthetic
 /// frame reconstruction. The function may not write any preserved, frame,

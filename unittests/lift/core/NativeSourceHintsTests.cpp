@@ -2152,6 +2152,238 @@ TEST(NativeSourceHints, RecordResultDefinitionsRequireTheCompleteCallPrefix) {
     }
 }
 
+struct NativeTerminalContextFixture : NativeFixture {
+  LowFunc Low;
+  static constexpr va_t ImportSlot = 0x2000;
+  static constexpr uint64_t Context = a64reg::X20;
+
+  NativeTerminalContextFixture() : NativeFixture(Arch::AArch64) {
+    const std::string Import =
+        "_$ss17_assertionFailure__4file4line5flagss5NeverOs12StaticStringV_"
+        "SSAHSus6UInt32VtF";
+    Segment Data;
+    Data.VA = ImportSlot;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    Image.ImportPtrSlots[ImportSlot] = Import;
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        ImportSlot, Import, 0, "/usr/lib/swift/libswiftCore.dylib", false));
+    const auto Runtime = swiftRuntimeSourceCallHint(Image, ImportSlot);
+    EXPECT_TRUE(Runtime);
+    if (!Runtime)
+      return;
+    Med.Params.clear();
+    Med.TypedParams.clear();
+    High.Params.clear();
+    Med.DoesNotReturn = High.DoesNotReturn = true;
+    MedVar ContextValue;
+    ContextValue.Kind = MedVar::Reg;
+    ContextValue.Id = 200;
+    ContextValue.RegOff = Context;
+    ContextValue.Size = 8;
+    ContextValue.TheArch = Arch::AArch64;
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.Addr = 0x1004;
+    Store.addInput(ContextValue);
+    Store.addInput(MedVar::makeConst(0, 8));
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = 0x1010;
+    Call.OriginSeq = 0;
+    Call.DoesNotReturn = true;
+    Call.SourceCallHint = std::make_shared<const SourceCallTypeHint>(*Runtime);
+    // Import metadata names the data slot; machine calls name the veneer.
+    Call.addInput(MedVar::makeConst(0x1080, 8));
+    std::vector<ExprPtr> Arguments;
+    for (const auto &Parameter : Runtime->Signature.Parameters) {
+      Call.addInput(MedVar::makeConst(0, Parameter.Type->Size));
+      Arguments.push_back(HighExpr::makeConst(0, Parameter.Type->Size));
+    }
+    Med.Blocks[0].Ops = {Store, Call};
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Call;
+    Statement.CallExpr = HighExpr::makeCall(Runtime->TargetName, 0x1080,
+                                           std::move(Arguments));
+    Statement.CallExpr->Type = NdType::makeVoid();
+    Statement.CallExpr->SourceCallHint = Call.SourceCallHint;
+    High.Body = {Statement};
+    Low.Entry = Med.Entry;
+    Low.Blocks.emplace_back();
+    Low.Blocks[0].Id = 0;
+    using F = NativeVoidFrameFixture;
+    const auto SP = NdVar::reg(a64reg::SP, 8);
+    const auto Address = NdVar::tmp(TmpBase, 8);
+    Low.Blocks[0].Ops = {
+        F::op(NdOp::INT_SUB, SP, {SP, NdVar::cst(32, 8)}, 0x1000),
+        F::op(NdOp::STORE, {},
+              {NdVar::reg(Context, 8), NdVar::cst(0, 8)}, 0x1004),
+        F::op(NdOp::STORE, {}, {SP, NdVar::cst(115, 8)}, 0x1008),
+        F::op(NdOp::INT_ADD, Address, {SP, NdVar::cst(8, 8)}, 0x100c),
+        F::op(NdOp::STORE, {}, {Address, NdVar::cst(0, 4)}, 0x100c),
+        F::op(NdOp::CALL, {}, {NdVar::cst(0x1080, 8)}, 0x1010)};
+  }
+
+  std::optional<SourceFunctionTypeHint> inferContext(std::string &Error) const {
+    return inferNativeSourceTypeHint(Image, Med, High, Audit, Error, &Low);
+  }
+};
+
+TEST(NativeSourceHints, TerminalEntryBytesRequireEffectsOnlyAndProvenExit) {
+  NativeTerminalContextFixture Fixture;
+  SourceFunctionTypeHint Signature;
+  Signature.ReturnType = NdType::makeVoid();
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Signature, Arch::AArch64, Error));
+  EXPECT_FALSE(observedMedSourceEntryBytes(Fixture.Med, Signature));
+  const auto Bytes = observedMedSourceEntryBytes(
+      Fixture.Med, Signature, SourceEntryDemand::EffectsOnly);
+  ASSERT_TRUE(Bytes);
+  ASSERT_EQ(Bytes->size(), 1U);
+  EXPECT_EQ(Bytes->at(Fixture.Context), 0xffU);
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    auto Changed = Fixture.Med;
+    if (Mutation == 0)
+      Changed.DoesNotReturn = false;
+    else if (Mutation == 1)
+      Changed.Blocks[0].Ops.back().DoesNotReturn = false;
+    else {
+      Changed.Blocks[0].Ops.pop_back();
+      if (Mutation == 3)
+        Changed.Blocks[0].Succs = {99};
+    }
+    EXPECT_FALSE(observedMedSourceEntryBytes(
+        Changed, Signature, SourceEntryDemand::EffectsOnly)) << Mutation;
+  }
+}
+
+TEST(NativeSourceHints, TerminalRuntimeRetainsAnObservedUnwrittenContext) {
+  NativeTerminalContextFixture Fixture;
+  std::string Error;
+  const auto Hint = Fixture.inferContext(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, Fixture.Context);
+  EXPECT_EQ(Hint->Parameters[0].Location.ValueBytes, 8U);
+
+  const auto WithoutLow = Fixture.infer(Error);
+  ASSERT_TRUE(WithoutLow) << Error;
+  EXPECT_TRUE(WithoutLow->Parameters.empty());
+}
+
+TEST(NativeSourceHints, TerminalContextRequiresExactCallAndCompleteFrameProof) {
+  for (unsigned Mutation = 0; Mutation < 27; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeTerminalContextFixture F;
+    auto &Ops = F.Low.Blocks[0].Ops;
+    auto &Call = F.Med.Blocks[0].Ops.back();
+    auto Binding = std::make_shared<SourceCallTypeHint>(*Call.SourceCallHint);
+    Call.SourceCallHint = Binding;
+    const auto SP = NdVar::reg(a64reg::SP, 8);
+    using Op = NativeVoidFrameFixture;
+    switch (Mutation) {
+    case 0:
+      F.Image.DyldBindSlots[F.ImportSlot].Module = "/tmp/foreign.dylib";
+      break;
+    case 1:
+      F.Image.DyldBindSlots.clear();
+      break;
+    case 2:
+      Binding->TargetName += "_forged";
+      break;
+    case 3:
+      Binding->CallKind = SourceCallTypeHint::Kind::Native;
+      Binding->TargetAddress = 0x1080;
+      Binding->Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      break;
+    case 4:
+      Call.DoesNotReturn = false;
+      break;
+    case 5:
+      Binding->DoesNotReturn = false;
+      break;
+    case 6:
+      ++Ops.back().Seq;
+      break;
+    case 7:
+      Ops.back().Inputs[0].Offset += 4;
+      break;
+    case 8:
+      Ops.back().Addr += 4;
+      break;
+    case 9:
+      Ops.back().Opcode = NdOp::INDIR_CALL;
+      break;
+    case 10:
+      Ops[1].Inputs[0].Size = 4;
+      break;
+    case 11:
+    case 12:
+      Ops.insert(Ops.begin() + 1,
+                 Op::op(NdOp::COPY,
+                        NdVar::reg(F.Context + (Mutation == 12),
+                                   Mutation == 11 ? 8 : 1),
+                        {NdVar::cst(0, Mutation == 11 ? 8 : 1)}, 0x1004));
+      break;
+    case 13:
+      // A complete prologue spill is not a source-level context use.
+      Ops[1] = Op::op(NdOp::STORE, {}, {SP, NdVar::reg(F.Context, 8)}, 0x1004);
+      break;
+    case 14:
+      Ops[2].Inputs[1].Size = 4;
+      break;
+    case 15:
+      Ops.erase(Ops.begin() + 4);
+      break;
+    case 16:
+      Ops.insert(Ops.end() - 1,
+                 Op::op(NdOp::COPY, NdVar::reg(a64reg::X0, 8), {SP}, 0x100c));
+      break;
+    case 17:
+      Ops[1].Inputs[1] = SP;
+      break;
+    case 18:
+      Ops.front().Inputs[1] = NdVar::cst(8, 8);
+      break;
+    case 19:
+      F.Low.Blocks[0].Succs = {0};
+      break;
+    case 20:
+      F.Low.Blocks[0].ExceptionalSuccs.emplace_back();
+      break;
+    case 21:
+      Ops.insert(Ops.begin() + 1,
+                 Op::op(NdOp::BRANCH, {}, {NdVar::cst(0x1010, 8)}, 0x1004));
+      break;
+    case 22:
+      Ops.push_back(Op::op(NdOp::RETURN, {},
+                           {NdVar::reg(a64reg::X30, 8)}, 0x1014));
+      break;
+    case 23:
+      F.Low.Blocks.emplace_back();
+      F.Low.Blocks.back().Id = 1;
+      break;
+    case 24:
+      --Call.NumInputs;
+      break;
+    case 25:
+      Binding->Signature.Parameters.back().Location.EntryStackOffset += 4;
+      break;
+    case 26:
+      F.Med.DoesNotReturn = F.High.DoesNotReturn = false;
+      break;
+    }
+    std::string Error;
+    const auto Hint = F.inferContext(Error);
+    if (Hint)
+      EXPECT_TRUE(Hint->Parameters.empty()) << Error;
+  }
+}
+
 struct NativeContextFixture : NativeFixture {
   LowFunc Low;
   MedVar Context;

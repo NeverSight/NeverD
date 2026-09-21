@@ -13,8 +13,9 @@ struct SourceFunctionTypeHint;
 
 enum class SourceEntryDemand {
   EffectsAndReturns,
-  // Positive evidence for inputs reaching effects. This cannot prove that a
-  // return-only input is dead, or that any result carrier is fully defined.
+  // Positive evidence for inputs reaching effects, including independently
+  // proven terminal graphs. This cannot prove that a return-only input is
+  // dead, or that any result carrier is fully defined.
   EffectsOnly
 };
 

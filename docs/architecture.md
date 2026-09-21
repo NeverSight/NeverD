@@ -1087,3 +1087,5 @@ or partially defined return carrier may block a source result without hiding an
 independent context register consumed by a load, store or bound call. Narrow
 unsigned AArch64 extracts retain their actual input-byte boundary so unrelated
 upper register bytes do not enter either proof.
+
+A single straight-line ARM64 helper may retain an unmodified, fully observed entry context when its only call is a revalidated terminating Swift runtime import. The same byte-identity and frame-escape proof checks every preceding operation and requires each outgoing scalar stack argument to occupy completely written private bytes. Branches, returns, exceptional edges and unknown calls remain unsupported. Effects-only entry-byte demand accepts independently proven terminal graphs; the default dead-input proof still requires an observed return. This produces a candidate signature whose source body and dependency closure must still validate.
