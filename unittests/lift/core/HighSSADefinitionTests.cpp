@@ -465,6 +465,38 @@ TEST(HighSourceScalarLocals, NarrowsPureExtendedAlternativeDefinition) {
   EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
 }
 
+TEST(HighSourceScalarLocals, NarrowsFullWidthCopyAlternativeDefinition) {
+  auto F = sourceConcatLocal(Arch::AArch64, 8);
+  F.Body[0].ElseBody[0].Val = variable(7, 16);
+
+  narrowSourceConcatLocals(F);
+
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Kind, ExprKind::BinOp);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Op, NdOp::SUBBYTES);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Type->Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Operands[0]->Var.SSAVer, 7);
+  EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
+}
+
+TEST(HighSourceScalarLocals,
+     NarrowsExtendedAndCopiedDefinitionsWithoutConcat) {
+  auto F = sourceConcatLocal(Arch::AArch64, 8);
+  auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, variable(6, 8));
+  Extended->Type = NdType::makeInt(16, false);
+  F.Body[0].Body[0].Val = Extended;
+  F.Body[0].ElseBody[0].Val = variable(7, 16);
+
+  narrowSourceConcatLocals(F);
+
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[0].Body[0].Val->Op, NdOp::SUBBYTES);
+  EXPECT_EQ(F.Body[0].ElseBody[0].Val->Op, NdOp::SUBBYTES);
+  EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
+}
+
 TEST(HighSourceScalarLocals,
      RetainsUpperReadsEscapesEffectsAndIncompleteProofs) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})

@@ -140,7 +140,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     uint16_t Bytes = 0;
     bool Valid = true;
     std::vector<HighStmt *> Definitions;
-    std::set<HighStmt *> ExtendedDefinitions;
+    std::set<HighStmt *> PrefixDefinitions;
     std::vector<ExprPtr *> Uses;
   };
   VarKeyMap<Candidate> Candidates;
@@ -195,7 +195,13 @@ void narrowSourceConcatLocals(HighFunc &Func) {
           V->CastTo->Kind == NdTypeKind::Int && V->CastTo->Size == 16) ||
          (V->Kind == ExprKind::UnaryOp &&
           (V->Op == NdOp::INT_ZEXT || V->Op == NdOp::INT_SEXT)));
-    if ((!ConcatShape && !ExtensionShape) ||
+    const bool CopyShape =
+        DestinationShape && V->Kind == ExprKind::Var && V->Operands.empty() &&
+        V->Type && V->Type->Kind == NdTypeKind::Int &&
+        V->Type->Size == 16 && V->Var.Size == 16 &&
+        V->Var.RenameTag < 0 &&
+        (V->Var.Kind == MedVar::Reg || V->Var.Kind == MedVar::Temp);
+    if ((!ConcatShape && !ExtensionShape && !CopyShape) ||
         !discardableIntegerValue(
             ConcatShape ? V->Operands[0] : V, Budget)) {
       C.Valid = false;
@@ -206,7 +212,12 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       C.Valid &= !C.Bytes || C.Bytes == Width;
       C.Bytes = Width;
     } else {
-      C.ExtendedDefinitions.insert(S);
+      if (ExtensionShape) {
+        const auto Width = V->Operands[0]->Type->Size;
+        C.Valid &= !C.Bytes || C.Bytes == Width;
+        C.Bytes = Width;
+      }
+      C.PrefixDefinitions.insert(S);
     }
     C.Definitions.push_back(S);
   }
@@ -274,7 +285,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       Narrow(*Slot);
     for (auto *S : C.Definitions) {
       Narrow(S->Dst);
-      S->Val = C.ExtendedDefinitions.count(S)
+      S->Val = C.PrefixDefinitions.count(S)
                    ? frameValuePrefix(S->Val, C.Bytes)
                    : S->Val->Operands[1];
     }

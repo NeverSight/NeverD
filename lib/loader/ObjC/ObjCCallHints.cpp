@@ -226,7 +226,8 @@ struct LocalResultUse {
   std::optional<NdTypeKind> TypeKind;
 };
 
-std::optional<LocalResultUse> localResultUse(const LowBlock &Block,
+std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
+                                             size_t InitialBlock,
                                              size_t CallIndex,
                                              const TargetRegInfo &TRI,
                                              const BinaryImage &Image) {
@@ -257,91 +258,159 @@ std::optional<LocalResultUse> localResultUse(const LowBlock &Block,
         return Hint->Signature;
     return std::nullopt;
   };
+  std::map<int, size_t> Blocks;
+  for (size_t I = 0; I < Function.Blocks.size(); ++I)
+    if (!Blocks.emplace(Function.Blocks[I].Id, I).second)
+      return std::nullopt;
+  if (InitialBlock >= Function.Blocks.size())
+    return std::nullopt;
   auto Scan = [&](SourceABICarrierKind Kind, uint64_t Begin,
                   uint16_t FullWidth) -> std::optional<LocalResultUse> {
     if (!FullWidth)
       return std::nullopt;
-    std::vector<Alias> Aliases{{NdVar::reg(Begin, FullWidth), 0}};
-    auto ExactAlias = [&](const NdVar &V) -> std::optional<Alias> {
-      for (const auto &Alias : Aliases)
-        if (V.Space == VnodeSpace::REG && V.Offset == Alias.Value.Offset &&
-            V.Size == Alias.Value.Size)
-          return Alias;
-      return std::nullopt;
+    struct State {
+      size_t Block = 0;
+      size_t FirstOp = 0;
+      std::vector<Alias> Aliases;
     };
-    for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
-      const auto &Op = Block.Ops[I];
-      const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                        Op.Output.Space == VnodeSpace::REG;
-      const auto Copied = Copy ? ExactAlias(Op.Inputs[0]) : std::nullopt;
-      for (uint8_t J = 0; J < Op.NumInputs; ++J) {
-        const auto &Input = Op.Inputs[J];
-        for (const auto &Alias : Aliases) {
-          if (!Overlap(Input, Alias.Value) || (Copied && J == 0))
-            continue;
-          const uint64_t AliasBegin =
-              std::max<uint64_t>(Input.Offset, Alias.Value.Offset);
-          const uint64_t AliasEnd = std::min<uint64_t>(
-              Input.Offset + Input.Size, Alias.Value.Offset + Alias.Value.Size);
-          LocalResultUse Result;
-          Result.Location.Kind = Kind;
-          Result.Location.RegisterOffset =
-              Begin + Alias.SourceOffset + (AliasBegin - Alias.Value.Offset);
-          Result.Location.ValueBytes =
-              static_cast<uint16_t>(AliasEnd - AliasBegin);
-          return Result;
-        }
-      }
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          Op.Opcode == NdOp::INTRINSIC) {
-        const auto Signature = KnownCallSignature(Op);
-        if (!Signature)
-          return std::nullopt;
-        std::optional<LocalResultUse> ArgumentUse;
-        for (const auto &Parameter : sourceABIParameters(*Signature)) {
-          const auto &Location = Parameter.Location;
-          if (Location.Kind != SourceABICarrierKind::IntegerRegister &&
-              Location.Kind != SourceABICarrierKind::FloatingRegister)
-            continue;
-          for (const auto &Alias : Aliases) {
-            if (Alias.Value.Offset != Location.RegisterOffset ||
-                Alias.Value.Size < Location.ValueBytes ||
-                Alias.SourceOffset > FullWidth - Location.ValueBytes)
-              continue;
-            if (!Parameter.Type ||
-                (Parameter.Type->Kind != NdTypeKind::Int &&
-                 Parameter.Type->Kind != NdTypeKind::Ptr &&
-                 Parameter.Type->Kind != NdTypeKind::Float) ||
-                ArgumentUse)
-              return std::nullopt;
-            ArgumentUse = LocalResultUse{
-                {Kind, Begin + Alias.SourceOffset, 0, Location.ValueBytes},
-                Parameter.Type->Kind};
-          }
-        }
-        if (ArgumentUse)
-          return ArgumentUse;
-        for (auto It = Aliases.begin(); It != Aliases.end();) {
-          const auto Preserved =
-              TRI.callPreservedPrefixSize(It->Value.Offset, It->Value.Size);
-          if (!Preserved)
-            It = Aliases.erase(It);
-          else {
-            It->Value.Size = Preserved;
-            ++It;
-          }
-        }
-      }
-      if (Op.Output.Space == VnodeSpace::REG && Op.Output.Size)
-        std::erase_if(Aliases, [&](const Alias &Alias) {
-          return Overlap(Op.Output, Alias.Value);
-        });
-      if (Copied && Op.Output.Size == Copied->Value.Size)
-        Aliases.push_back({Op.Output, Copied->SourceOffset});
-      if (Aliases.empty())
+    std::vector<State> Work{{InitialBlock, CallIndex + 1,
+                             {{NdVar::reg(Begin, FullWidth), 0}}}};
+    using AliasKey = std::tuple<uint64_t, uint16_t, uint16_t>;
+    std::set<std::tuple<size_t, size_t, std::vector<AliasKey>>> Seen;
+    std::optional<LocalResultUse> Result;
+    bool Ambiguous = false;
+    size_t Budget = 4096;
+    auto Observe = [&](LocalResultUse Use) {
+      const auto Same = [](const LocalResultUse &A,
+                           const LocalResultUse &B) {
+        return A.Location.Kind == B.Location.Kind &&
+               A.Location.RegisterOffset == B.Location.RegisterOffset &&
+               A.Location.ValueBytes == B.Location.ValueBytes &&
+               A.TypeKind == B.TypeKind;
+      };
+      if (Result && !Same(*Result, Use))
+        Ambiguous = true;
+      else if (!Result)
+        Result = std::move(Use);
+    };
+    while (!Work.empty() && !Ambiguous) {
+      auto Current = std::move(Work.back());
+      Work.pop_back();
+      if (!Budget-- || Current.Block >= Function.Blocks.size())
         return std::nullopt;
+      std::vector<AliasKey> Keys;
+      for (const auto &Alias : Current.Aliases)
+        Keys.emplace_back(Alias.Value.Offset, Alias.Value.Size,
+                          Alias.SourceOffset);
+      llvm::sort(Keys);
+      Keys.erase(std::unique(Keys.begin(), Keys.end()), Keys.end());
+      if (!Seen.emplace(Current.Block, Current.FirstOp, std::move(Keys)).second)
+        continue;
+      const auto &Block = Function.Blocks[Current.Block];
+      bool Used = false;
+      for (size_t I = Current.FirstOp; I < Block.Ops.size() && !Used; ++I) {
+        const auto &Op = Block.Ops[I];
+        const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                          Op.Output.Space == VnodeSpace::REG;
+        std::optional<Alias> Copied;
+        if (Copy)
+          for (const auto &Alias : Current.Aliases)
+            if (Op.Inputs[0].Space == VnodeSpace::REG &&
+                Op.Inputs[0].Offset == Alias.Value.Offset &&
+                Op.Inputs[0].Size == Alias.Value.Size) {
+              Copied = Alias;
+              break;
+            }
+        for (uint8_t J = 0; J < Op.NumInputs && !Used; ++J) {
+          const auto &Input = Op.Inputs[J];
+          for (const auto &Alias : Current.Aliases) {
+            if (!Overlap(Input, Alias.Value) || (Copied && J == 0))
+              continue;
+            const uint64_t AliasBegin =
+                std::max<uint64_t>(Input.Offset, Alias.Value.Offset);
+            const uint64_t AliasEnd =
+                std::min<uint64_t>(Input.Offset + Input.Size,
+                                   Alias.Value.Offset + Alias.Value.Size);
+            LocalResultUse Use;
+            Use.Location.Kind = Kind;
+            Use.Location.RegisterOffset =
+                Begin + Alias.SourceOffset +
+                (AliasBegin - Alias.Value.Offset);
+            Use.Location.ValueBytes =
+                static_cast<uint16_t>(AliasEnd - AliasBegin);
+            Observe(std::move(Use));
+            Used = true;
+            break;
+          }
+        }
+        if (Used)
+          break;
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+            Op.Opcode == NdOp::INTRINSIC) {
+          const auto Signature = KnownCallSignature(Op);
+          if (!Signature)
+            return std::nullopt;
+          std::optional<LocalResultUse> ArgumentUse;
+          for (const auto &Parameter : sourceABIParameters(*Signature)) {
+            const auto &Location = Parameter.Location;
+            if (Location.Kind != SourceABICarrierKind::IntegerRegister &&
+                Location.Kind != SourceABICarrierKind::FloatingRegister)
+              continue;
+            for (const auto &Alias : Current.Aliases) {
+              if (Alias.Value.Offset != Location.RegisterOffset ||
+                  Alias.Value.Size < Location.ValueBytes ||
+                  Alias.SourceOffset > FullWidth - Location.ValueBytes)
+                continue;
+              if (!Parameter.Type ||
+                  (Parameter.Type->Kind != NdTypeKind::Int &&
+                   Parameter.Type->Kind != NdTypeKind::Ptr &&
+                   Parameter.Type->Kind != NdTypeKind::Float) ||
+                  ArgumentUse)
+                return std::nullopt;
+              ArgumentUse = LocalResultUse{
+                  {Kind, Begin + Alias.SourceOffset, 0, Location.ValueBytes},
+                  Parameter.Type->Kind};
+            }
+          }
+          if (ArgumentUse) {
+            Observe(std::move(*ArgumentUse));
+            Used = true;
+            break;
+          }
+          for (auto It = Current.Aliases.begin();
+               It != Current.Aliases.end();) {
+            const auto Preserved = TRI.callPreservedPrefixSize(
+                It->Value.Offset, It->Value.Size);
+            if (!Preserved)
+              It = Current.Aliases.erase(It);
+            else {
+              It->Value.Size = Preserved;
+              ++It;
+            }
+          }
+        }
+        if (Op.Output.Space == VnodeSpace::REG && Op.Output.Size)
+          std::erase_if(Current.Aliases, [&](const Alias &Alias) {
+            return Overlap(Op.Output, Alias.Value);
+          });
+        if (Copied && Op.Output.Size == Copied->Value.Size)
+          Current.Aliases.push_back({Op.Output, Copied->SourceOffset});
+        if (Current.Aliases.empty())
+          break;
+      }
+      if (Used || Current.Aliases.empty())
+        continue;
+      for (int Successor : Block.Succs) {
+        const auto Found = Blocks.find(Successor);
+        if (Found == Blocks.end())
+          return std::nullopt;
+        const auto &Child = Function.Blocks[Found->second];
+        if (!llvm::is_contained(Child.Preds, Block.Id))
+          return std::nullopt;
+        Work.push_back({Found->second, 0, Current.Aliases});
+      }
     }
-    return std::nullopt;
+    return Ambiguous ? std::nullopt : Result;
   };
   const auto Integer = Scan(SourceABICarrierKind::IntegerRegister,
                             TRI.IntReturnReg, TRI.FullRegWidth);
@@ -1240,7 +1309,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               SelectorArgumentStorageUse;
           if (!Signature && !Qualified)
             if (const auto Required =
-                    localResultUse(Block, OpIndex, TRI, Image)) {
+                    localResultUse(Function, Index, OpIndex, TRI, Image)) {
               Signature = objcSelectorSourceTypeHintForResultUse(
                   Image, Target->Selector, Required->Location,
                   Required->TypeKind);

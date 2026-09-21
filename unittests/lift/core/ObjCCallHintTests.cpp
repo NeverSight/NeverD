@@ -764,6 +764,30 @@ TEST(ObjCCallHints,
   EXPECT_EQ(Hint.SelectorResultUse->RegisterOffset, TRI.FPReturnReg);
   EXPECT_EQ(Hint.SelectorResultUse->ValueBytes, 8U);
 
+  const auto Med = convert(Image, Function);
+  const MedOp *BoundCall = nullptr;
+  const MedOp *WideResult = nullptr;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Op.Addr == 0x1200 && Op.SourceCallHint)
+        BoundCall = &Op;
+      if (Op.Addr == 0x1200 && Op.Opcode == NdOp::CONCAT &&
+          Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == TRI.FPReturnReg && Op.Output.Size == 16)
+        WideResult = &Op;
+    }
+  ASSERT_NE(BoundCall, nullptr);
+  ASSERT_EQ(BoundCall->Output.Kind, MedVar::Reg);
+  EXPECT_EQ(BoundCall->Output.RegOff, TRI.FPReturnReg);
+  EXPECT_EQ(BoundCall->Output.Size, 8U);
+  ASSERT_NE(WideResult, nullptr);
+  ASSERT_EQ(WideResult->NumInputs, 2U);
+  EXPECT_EQ(WideResult->Inputs[1].Kind, BoundCall->Output.Kind);
+  EXPECT_EQ(WideResult->Inputs[1].Id, BoundCall->Output.Id);
+  EXPECT_EQ(WideResult->Inputs[1].RegOff, BoundCall->Output.RegOff);
+  EXPECT_EQ(WideResult->Inputs[1].Size, BoundCall->Output.Size);
+  EXPECT_GT(WideResult->Inputs[1].SSAVer, 0);
+
   // A fixed Objective-C declaration authenticates the intervening call's
   // ordinary ABI just like a catalogued runtime call. The low half of v8 is
   // call-preserved, so the later d0 use still selects the floating result.
@@ -790,6 +814,74 @@ TEST(ObjCCallHints,
   Function.Blocks[0].Ops[4].Inputs[0] = NdVar::reg(a64reg::V(8), 4);
   Function.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(TRI.FPReturnReg, 4);
   EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+}
+
+TEST(ObjCCallHints, FloatingResultUseFollowsSavedVectorAcrossCFGEdge) {
+  auto Image = image();
+  Image.ObjCSourceReferences.at(0x2100).Name = "duration";
+  Image.ObjCMethods[0].Selector = "duration";
+  Image.ObjCMethods[0].TypeHint =
+      parseObjCMethodEncoding("duration", "d16@0:8");
+  ASSERT_TRUE(Image.ObjCMethods[0].TypeHint);
+  ObjCMethod IntegerDuration = Image.ObjCMethods[0];
+  IntegerDuration.ClassName = "Other";
+  IntegerDuration.TypeHint =
+      parseObjCMethodEncoding("duration", "q16@0:8");
+  ASSERT_TRUE(IntegerDuration.TypeHint);
+  Image.ObjCMethods.push_back(std::move(IntegerDuration));
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "duration"));
+
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "cross_block_floating_result";
+  LowBlock Call;
+  Call.Id = 0;
+  Call.StartAddr = 0x1200;
+  Call.EndAddr = 0x1208;
+  Call.Succs = {1};
+  Call.Ops = {
+      operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::COPY, NdVar::reg(a64reg::V(8), 16),
+                {NdVar::reg(TRI.FPReturnReg, 16)}, 0x1204)};
+  LowBlock Return;
+  Return.Id = 1;
+  Return.StartAddr = 0x1208;
+  Return.EndAddr = 0x1210;
+  Return.Preds = {0};
+  Return.Ops = {
+      operation(NdOp::COPY, NdVar::reg(TRI.FPReturnReg, 16),
+                {NdVar::reg(a64reg::V(8), 16)}, 0x1208),
+      operation(NdOp::RETURN, {}, {NdVar::reg(TRI.FPReturnReg, 8)}, 0x120c)};
+  Function.Blocks = {std::move(Call), std::move(Return)};
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1200);
+  ASSERT_TRUE(Hint.Signature.ReturnType);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint.Signature.ReturnType->Size, 8U);
+  ASSERT_TRUE(Hint.SelectorResultUse);
+  EXPECT_EQ(Hint.SelectorResultUse->Kind,
+            SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hint.SelectorResultUse->ValueBytes, 8U);
+
+  // Conflicting reachable uses in the integer and floating return banks do
+  // not select either of the ambiguous declarations.
+  Function.Blocks[0].Succs.push_back(2);
+  Function.Blocks[0].Ops.push_back(
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(TRI.IntReturnReg, 8)}, 0x1206));
+  LowBlock IntegerReturn;
+  IntegerReturn.Id = 2;
+  IntegerReturn.StartAddr = 0x1210;
+  IntegerReturn.EndAddr = 0x1214;
+  IntegerReturn.Preds = {0};
+  IntegerReturn.Ops = {operation(
+      NdOp::RETURN, {}, {NdVar::reg(a64reg::X19, 8)}, 0x1210)};
+  Function.Blocks.push_back(std::move(IntegerReturn));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
 }
 
 TEST(ObjCCallHints, FrameworkVariadicAndUnsupportedRecordsRemainUnbound) {
