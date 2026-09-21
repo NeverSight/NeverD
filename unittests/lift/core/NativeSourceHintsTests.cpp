@@ -210,6 +210,77 @@ TEST(NativeSourceHints,
     }
 }
 
+TEST(NativeSourceHints, RefinementNarrowsIntegerParametersWithOnlyLowWordUses) {
+  const auto Local = [](int Id, uint16_t Size) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = Id;
+    Value.Size = Size;
+    return HighExpr::makeVar(Value, NdType::makeInt(Size, false));
+  };
+  const auto Assign = [](ExprPtr Destination, ExprPtr Value) {
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Assign;
+    Statement.Dst = std::move(Destination);
+    Statement.Val = std::move(Value);
+    return Statement;
+  };
+  const auto Returning = [](ExprPtr Value) {
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Return;
+    Statement.RetVal = std::move(Value);
+    return Statement;
+  };
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+      NativeFixture Fixture(Architecture);
+      for (size_t I = 0; I < Fixture.High.Params.size(); ++I) {
+        Fixture.Med.Params[I].Size = 8;
+        Fixture.Med.TypedParams[I].Type = NdType::makeInt(8, false);
+        Fixture.High.Params[I].Type = NdType::makeInt(8, false);
+      }
+      SourceFunctionTypeHint Original;
+      Original.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Original.ReturnType = Fixture.High.ReturnType;
+      const auto Pointer = NdType::makePtr(NdType::makeVoid());
+      Fixture.High.Params[0].Type = Pointer;
+      Original.Parameters = {{"native_arg0", Pointer},
+                             {"native_arg1", NdType::makeInt(8, false)}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Original, Architecture, Error))
+          << Error;
+      Fixture.High.SourceTypeHint = Original;
+
+      auto Parameter =
+          HighExpr::makeVar(Fixture.Med.Params[1], NdType::makeInt(8, false));
+      auto Prefix =
+          HighExpr::makeBinop(NdOp::SUBBYTES, Parameter,
+                              HighExpr::makeConst(Mutation == 2 ? 1 : 0, 4));
+      Prefix->Type = NdType::makeInt(4, false);
+      auto PointerParameter = HighExpr::makeVar(Fixture.Med.Params[0], Pointer);
+      auto PointerLocal = Local(40, 8);
+      PointerLocal->Type = Pointer;
+      Fixture.High.Body = {Assign(PointerLocal, PointerParameter),
+                           Assign(Local(41, 4), Prefix),
+                           Returning(HighExpr::makeConst(0, 4))};
+      if (Mutation == 1)
+        Fixture.High.Body.insert(Fixture.High.Body.begin() + 2,
+                                 Assign(Local(42, 8), Parameter));
+
+      const auto Refined =
+          refineNativeSourceTypeHint(Fixture.High, Fixture.Audit);
+      EXPECT_EQ(bool(Refined), Mutation == 0) << Mutation;
+      if (Refined) {
+        ASSERT_EQ(Refined->Parameters.size(), 2U);
+        EXPECT_EQ(Refined->Parameters[0].Type->Size, 8U);
+        EXPECT_EQ(Refined->Parameters[1].Type->Size, 4U);
+        EXPECT_EQ(Refined->Parameters[1].Location.ValueBytes, 4U);
+        EXPECT_EQ(Refined->Parameters[1].Location.RegisterOffset,
+                  getTargetRegInfo(Architecture).IntParamRegs[1]);
+      }
+    }
+}
+
 TEST(NativeSourceHints, IntegerPairPathsMeetBothWordsAcrossJoinsAndBackedges) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (bool Loop : {false, true})

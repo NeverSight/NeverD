@@ -1121,6 +1121,68 @@ TEST(ObjCSourceProjection, NativeInferenceSkipsCallOnlyThunkTargets) {
   EXPECT_FALSE(Diagnostics.count(0x3000));
 }
 
+TEST(ObjCSourceProjection, NativeInferenceUsesSourceBoundRefinementBodies) {
+  NativeDependencyFixture F;
+  F.Image.Arch = Arch::AArch64;
+  F.call(0, 0x3000);
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.ReturnType = NdType::makeInt(4, false);
+  Hint.Parameters = {{"native_arg0", NdType::makeInt(8, false)},
+                     {"native_arg1", NdType::makeInt(8, false)}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Arch::AArch64, Error)) << Error;
+  HighFunc Function;
+  Function.Entry = 0x3000;
+  Function.ReturnType = Hint.ReturnType;
+  Function.SourceTypeHint = Hint;
+  for (const auto &Parameter : Hint.Parameters)
+    Function.Params.push_back({Parameter.Name, Parameter.Type});
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeConst(0, 4);
+  Function.Body.push_back(Return);
+  F.Result.HighFuncs.push_back(Function);
+  PipelineFunctionAudit Audit;
+  Audit.Entry = Function.Entry;
+  Audit.Disposition = PipelineFunctionDisposition::Accepted;
+  Audit.HasLowIR = Audit.HasMedIR = Audit.MedIRVerified = true;
+  Audit.DecodedInstructions = Audit.LiftedInstructions = 1;
+  F.Result.FunctionAudits.push_back(Audit);
+
+  auto Bound = Function;
+  MedVar ParameterValue;
+  ParameterValue.Kind = MedVar::Param;
+  ParameterValue.TheArch = Arch::AArch64;
+  ParameterValue.Id = 1;
+  ParameterValue.Size = 8;
+  auto Parameter = HighExpr::makeVar(ParameterValue, NdType::makeInt(8, false));
+  auto Prefix =
+      HighExpr::makeBinop(NdOp::SUBBYTES, Parameter, HighExpr::makeConst(0, 4));
+  Prefix->Type = NdType::makeInt(4, false);
+  HighStmt Use;
+  Use.Kind = StmtKind::Assign;
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 9;
+  Local.Size = 4;
+  Local.TheArch = Arch::AArch64;
+  Use.Dst = HighExpr::makeVar(Local, NdType::makeInt(4, false));
+  Use.Val = Prefix;
+  Bound.Body.insert(Bound.Body.begin(), std::move(Use));
+
+  PipelineOptions Options;
+  Options.SourceTypeHints.emplace(Function.Entry, Hint);
+  std::map<va_t, HighFunc> Refinements{{Function.Entry, std::move(Bound)}};
+  std::map<va_t, std::string> Diagnostics;
+  EXPECT_EQ(inferObjCNativeDependencies(F.Image, F.Result, Options, Diagnostics,
+                                        {}, {}, &Refinements),
+            1U);
+  ASSERT_EQ(Options.SourceTypeHints.at(Function.Entry).Parameters.size(), 2U);
+  EXPECT_EQ(Options.SourceTypeHints.at(Function.Entry).Parameters[1].Type->Size,
+            4U);
+}
+
 TEST(ObjCSourceProjection, NativeDependencyGraphTracksMissingAndFinalEvidence) {
   NativeDependencyFixture F;
   F.call(0, 0x3000);

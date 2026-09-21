@@ -243,6 +243,8 @@ Swift 런타임 ABI 목록은 고정된 상위 선언에서 생성하며 C 또�
 
 Mach-O를 이미 로드한 세션에서 `neverd_objc_methods_json(session, max_functions)`, `neverd_swift_methods_json(session, signatures_json, max_functions)`가 보고서를 반환합니다. 0은 발견한 모든 함수입니다. 성공 문자열은 `neverd_free_string`으로 해제합니다. `NULL`은 실패이며 세션 오류에 이유가 있습니다. 이 API는 IPA/`.app` 컨테이너를 로드하지 않습니다.
 
+Objective-C 네이티브 의존성 추론은 소스 호출을 결합한 뒤 `NativeAnalysis`의 64비트 정수 레지스터 인수를 32비트로 좁힐 수 있습니다. 모든 HighIR 사용을 빠짐없이 검사하여 각 출현이 오프셋 0 바이트 추출 또는 정확히 결합된 호출의 정수 인수로서 하위 4바이트만 정확히 관찰함을 증명해야 합니다. 증명은 인수별로 독립적이며, 전체 너비·0이 아닌 오프셋·잘못된 사용 또는 분석 예산 소진이 있으면 원래 너비를 유지합니다. 정제된 보조 함수는 다시 리프팅되어 일반 함수 본문 및 의존성 폐쇄 검사를 통과해야 하며, 재작성 ABI는 변경되지 않습니다.
+
 ## 검증과 문제 해결
 
 macOS에서 `BUILD_TESTING`을 활성화한 빌드는 `check-neverd-mobile-ios`를 제공하며, CTest로 세 네이티브 복원 테스트 모음을 실행합니다.

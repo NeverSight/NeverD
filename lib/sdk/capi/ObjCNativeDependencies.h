@@ -98,7 +98,8 @@ inline size_t inferObjCNativeDependencies(
     const BinaryImage &Image, const PipelineResult &Result,
     PipelineOptions &Options, std::map<va_t, std::string> &Diagnostics,
     const std::set<va_t> &CallbackRoots = {},
-    const std::set<va_t> &CallOnlyTargets = {}) {
+    const std::set<va_t> &CallOnlyTargets = {},
+    const std::map<va_t, HighFunc> *SourceRefinements = nullptr) {
   const auto Targets =
       walkObjCNativeDependencies(Image, Result, nullptr, CallbackRoots);
   std::map<va_t, const LowFunc *> Low;
@@ -128,6 +129,12 @@ inline size_t inferObjCNativeDependencies(
     if (const auto Existing = Options.SourceTypeHints.find(Target);
         Existing != Options.SourceTypeHints.end()) {
       const auto Found = High.find(Target);
+      const HighFunc *RefinementFunction =
+          Found == High.end() ? nullptr : Found->second;
+      if (SourceRefinements)
+        if (const auto Bound = SourceRefinements->find(Target);
+            Bound != SourceRefinements->end())
+          RefinementFunction = &Bound->second;
       const auto M = Med.find(Target);
       const auto A = Audits.find(Target);
       if (IntegerPairReturns.count(Target) && Found != High.end() &&
@@ -138,9 +145,9 @@ inline size_t inferObjCNativeDependencies(
           ++Added;
           continue;
         }
-      if (Found != High.end() && A != Audits.end())
+      if (RefinementFunction && A != Audits.end())
         if (auto Refined =
-                refineNativeSourceTypeHint(*Found->second, *A->second)) {
+                refineNativeSourceTypeHint(*RefinementFunction, *A->second)) {
           Existing->second = std::move(*Refined);
           ++Added;
         }

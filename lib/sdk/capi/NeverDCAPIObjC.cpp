@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../ir/high/pass/HighDCEDetail.h"
 #include "JSONText.h"
 #include "NativePhaseTrace.h"
 #include "ObjCBlockSources.h"
@@ -106,9 +107,27 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       OnceCallOnlyTargets.clear();
       for (const auto &[Address, Contract] : OncePlan.Addressors)
         OnceCallOnlyTargets.insert(Address);
+      std::map<va_t, const HighFunc *> RefinementInputs;
+      for (const auto &Function : Result.HighFuncs)
+        RefinementInputs.emplace(Function.Entry, &Function);
+      std::map<va_t, HighFunc> SourceRefinements;
+      const ObjCProfileStorage RefinementStorage(S->Img);
+      const auto RefinementTargets =
+          walkObjCNativeDependencies(S->Img, Result, nullptr, OnceRoots);
+      for (const auto &Function : Result.HighFuncs) {
+        if (!RefinementTargets.count(Function.Entry) ||
+            !Function.SourceTypeHint ||
+            Function.SourceTypeHint->Origin !=
+                SourceFunctionTypeHint::OriginKind::NativeAnalysis)
+          continue;
+        auto Binding = bindObjCSourceReferences(
+            Function, S->Img, &RefinementStorage, &RefinementInputs);
+        elimUnreadPrivateFrameStores(Binding.Function, S->Img.Arch);
+        SourceRefinements.emplace(Function.Entry, std::move(Binding.Function));
+      }
       const bool NativeChanged = inferObjCNativeDependencies(
           S->Img, Result, Options, NativeDependencies, OnceRoots,
-          OnceCallOnlyTargets);
+          OnceCallOnlyTargets, &SourceRefinements);
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;

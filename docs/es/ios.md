@@ -243,6 +243,8 @@ Los búferes inmutables se reconstruyen solo si el contrato validado de la llama
 
 En una sesión con Mach-O ya cargado, `neverd_objc_methods_json(session, max_functions)` y `neverd_swift_methods_json(session, signatures_json, max_functions)` devuelven los informes. Cero selecciona todas las funciones descubiertas. Libere las cadenas con `neverd_free_string`; `NULL` indica fallo, explicado por el error de sesión. Estas API no cargan contenedores IPA/`.app`.
 
+La inferencia de dependencias nativas de Objective-C puede reducir un parámetro entero de registro de 64 bits de `NativeAnalysis` a 32 bits después de enlazar las llamadas fuente. Una prueba exhaustiva de usos HighIR debe demostrar que cada aparición observa exactamente los cuatro bytes bajos, mediante una extracción de bytes con desplazamiento cero o un argumento entero exacto de una llamada enlazada. La prueba es independiente para cada parámetro; los usos de ancho completo, con desplazamiento distinto de cero, mal formados o que agotan el presupuesto conservan el ancho original. La función auxiliar refinada vuelve a someterse al lifting y debe superar las comprobaciones ordinarias del cuerpo y del cierre de dependencias; la ABI de reescritura no cambia.
+
 ## Verificación y resolución de problemas
 
 En macOS, las compilaciones con `BUILD_TESTING` activado ofrecen `check-neverd-mobile-ios`, que ejecuta las tres suites de recuperación nativa mediante CTest.

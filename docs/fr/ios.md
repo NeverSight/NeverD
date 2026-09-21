@@ -243,6 +243,8 @@ Les tampons immuables sont reconstruits uniquement si le contrat vérifié de l�
 
 Pour une session Mach-O déjà chargée, `neverd_objc_methods_json(session, max_functions)` et `neverd_swift_methods_json(session, signatures_json, max_functions)` renvoient ces rapports. Zéro sélectionne toutes les fonctions découvertes. Libérez les chaînes avec `neverd_free_string` ; `NULL` indique un échec expliqué par l’erreur de session. Ces API ne chargent pas les conteneurs IPA ou `.app`.
 
+L’inférence des dépendances natives Objective-C peut réduire un paramètre entier de registre 64 bits issu de `NativeAnalysis` à 32 bits après la liaison des appels source. Une preuve exhaustive des usages HighIR doit établir que chaque occurrence n’observe exactement que les quatre octets de poids faible, soit par une extraction d’octets à décalage nul, soit comme argument entier exact d’un appel lié. La preuve est indépendante pour chaque paramètre ; les usages pleine largeur, à décalage non nul, mal formés ou interrompus par le budget conservent la largeur d’origine. La fonction auxiliaire affinée est de nouveau levée et doit réussir les contrôles ordinaires du corps et de fermeture des dépendances ; l’ABI de réécriture reste inchangée.
+
 ## Vérification et dépannage
 
 Sur macOS, les builds avec `BUILD_TESTING` activé proposent `check-neverd-mobile-ios`, qui exécute les trois suites de récupération native via CTest.

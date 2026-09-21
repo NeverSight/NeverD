@@ -243,6 +243,8 @@ Unveränderliche Bytepuffer werden nur rekonstruiert, wenn der geprüfte Vertrag
 
 Für eine Sitzung mit geladener Mach-O-Datei liefern `neverd_objc_methods_json(session, max_functions)` und `neverd_swift_methods_json(session, signatures_json, max_functions)` die Berichte. Null wählt alle gefundenen Funktionen. Erfolgreiche Strings mit `neverd_free_string` freigeben; `NULL` bedeutet Fehler, erklärt durch den Sitzungsfehler. Diese APIs laden keine IPA- oder `.app`-Container.
 
+Die Inferenz nativer Objective-C-Abhängigkeiten darf einen 64-Bit-Ganzzahlregisterparameter aus `NativeAnalysis` nach dem Binden der Quellaufrufe weiter auf 32 Bit verengen. Ein vollständiger HighIR-Verwendungsnachweis muss zeigen, dass jedes Vorkommen exakt die unteren vier Bytes beobachtet, entweder durch einen Byte-Auszug mit Offset null oder als exakt gebundenes ganzzahliges Aufrufargument. Der Nachweis erfolgt unabhängig je Parameter; vollbreite, von null verschiedene, fehlerhafte oder durch Budgetende unvollständige Verwendungen behalten die ursprüngliche Breite. Die verfeinerte Hilfsfunktion wird erneut geliftet und muss die üblichen Rumpf- und Abhängigkeitsabschlussprüfungen bestehen; die Rewrite-ABI bleibt unverändert.
+
 ## Verifikation und Fehlerdiagnose
 
 Unter macOS bieten Builds mit aktiviertem `BUILD_TESTING` das Ziel `check-neverd-mobile-ios`, das alle drei nativen Wiederherstellungstestsuiten über CTest ausführt.

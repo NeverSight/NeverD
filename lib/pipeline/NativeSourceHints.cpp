@@ -975,6 +975,123 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       Original.Parameters.size() > 64 || !validateSourceABI(Original, Error))
     return std::nullopt;
   const auto &TRI = getTargetRegInfo(Original.Architecture);
+  // A previous source-bound iteration can prove that a generic 64-bit integer
+  // carrier reaches effects only through an explicit low-word projection. In
+  // particular, private-frame cleanup turns a store/reload used by a `%d`
+  // format argument into SUBBYTES(param, 0). Refine that source parameter to
+  // the observed word while retaining its physical register. Evidence is
+  // per-parameter: unrelated pointer, floating, or malformed parameter uses
+  // cannot erase a complete proof, while any non-prefix use of the candidate
+  // itself keeps its full carrier. Analysis-limit exhaustion keeps every
+  // parameter unchanged.
+  std::vector<uint16_t> ParameterBytes(Original.Parameters.size());
+  std::vector<bool> ParameterObserved(Original.Parameters.size(), false);
+  bool ByteProof = true;
+  size_t ByteBudget = 100000;
+  struct ByteUse {
+    const HighExpr *Expression = nullptr;
+    const HighExpr *Parent = nullptr;
+    unsigned Operand = 0;
+    unsigned Depth = 0;
+  };
+  std::vector<const HighStmt *> ByteStatements;
+  std::vector<const HighStmt *> ByteStatementWork;
+  for (const auto &Statement : Function.Body)
+    ByteStatementWork.push_back(&Statement);
+  for (size_t I = 0; I < ByteStatementWork.size(); ++I) {
+    const auto *Statement = ByteStatementWork[I];
+    ByteStatements.push_back(Statement);
+    const auto Add = [&](const std::vector<HighStmt> &Body) {
+      for (const auto &Child : Body)
+        ByteStatementWork.push_back(&Child);
+    };
+    Add(Statement->Body);
+    Add(Statement->ElseBody);
+    Add(Statement->DefaultBody);
+    for (const auto &Case : Statement->Cases)
+      Add(Case.Body);
+    for (const auto &Body : Statement->EHClauseBodies)
+      Add(Body);
+  }
+  std::vector<ByteUse> ByteUses;
+  for (const auto *Statement : ByteStatements)
+    forEachExpr(*Statement, [&](const ExprPtr &Expression) {
+      if (!(Statement->Kind == StmtKind::Assign &&
+            &Expression == &Statement->Dst))
+        ByteUses.push_back({Expression.get(), nullptr, 0, 0});
+    });
+  for (size_t I = 0; ByteProof && I < ByteUses.size(); ++I) {
+    const auto [Expression, Parent, Operand, Depth] = ByteUses[I];
+    if (!Expression || !ByteBudget-- || Depth > 128) {
+      ByteProof = false;
+      break;
+    }
+    if (Expression->Kind == ExprKind::Var &&
+        Expression->Var.Kind == MedVar::Param) {
+      const auto Id = Expression->Var.Id;
+      if (Id < 0 || size_t(Id) >= Original.Parameters.size()) {
+        ByteProof = false;
+        break;
+      }
+      const auto &Declared = Original.Parameters[Id];
+      if (Declared.Type && Declared.Type->Kind == NdTypeKind::Int &&
+          Declared.Type->Size == 8 && Declared.Components.empty() &&
+          Declared.Location.Kind == SourceABICarrierKind::IntegerRegister) {
+        uint16_t Bytes = 8;
+        if (Expression->Type && Expression->Type->Kind == NdTypeKind::Int &&
+            Expression->Type->Size == Expression->Var.Size) {
+          if (Parent && Parent->Kind == ExprKind::BinOp &&
+              Parent->Op == NdOp::SUBBYTES && Operand == 0 && Parent->Type &&
+              Parent->Type->Kind == NdTypeKind::Int &&
+              Parent->Operands.size() == 2 && Parent->Operands[1] &&
+              Parent->Operands[1]->Kind == ExprKind::Const &&
+              Parent->Operands[1]->ConstVal == 0 &&
+              Parent->Type->Size <= Expression->Var.Size) {
+            Bytes = Parent->Type->Size;
+          } else if (Parent && Parent->Kind == ExprKind::Call &&
+                     Parent->SourceCallHint) {
+            std::string CallError;
+            const auto &Signature = Parent->SourceCallHint->Signature;
+            const auto Parameters = sourceABIParameters(Signature);
+            if (validateSourceABI(Signature, CallError) &&
+                Parent->Operands.size() == Parameters.size() &&
+                Operand < Parameters.size() && Parameters[Operand].Type &&
+                Parameters[Operand].Type->Kind == NdTypeKind::Int &&
+                Parameters[Operand].Location.ValueBytes ==
+                    Parameters[Operand].Type->Size &&
+                Parameters[Operand].Location.ValueBytes <= Expression->Var.Size)
+              Bytes = Parameters[Operand].Location.ValueBytes;
+          }
+        }
+        ParameterObserved[Id] = true;
+        ParameterBytes[Id] = std::max(ParameterBytes[Id], Bytes);
+      }
+    }
+    for (unsigned J = 0; J < Expression->Operands.size(); ++J)
+      ByteUses.push_back(
+          {Expression->Operands[J].get(), Expression, J, Depth + 1});
+  }
+  std::optional<SourceFunctionTypeHint> Narrowed;
+  if (ByteProof) {
+    auto Candidate = Original;
+    for (size_t I = 0; I < Candidate.Parameters.size(); ++I) {
+      auto &Parameter = Candidate.Parameters[I];
+      if (!ParameterObserved[I] || ParameterBytes[I] != 4 || !Parameter.Type ||
+          Parameter.Type->Kind != NdTypeKind::Int ||
+          Parameter.Type->Size != 8 || !Parameter.Components.empty() ||
+          Parameter.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+          std::find(TRI.IntParamRegs.begin(), TRI.IntParamRegs.end(),
+                    Parameter.Location.RegisterOffset) ==
+              TRI.IntParamRegs.end())
+        continue;
+      Parameter.Type = NdType::makeInt(4, Parameter.Type->IsSigned);
+      Parameter.Location.ValueBytes = 4;
+      Parameter.Location.ExtendTo32Bits = false;
+      Narrowed = Candidate;
+    }
+    if (Narrowed && !validateSourceABI(*Narrowed, Error))
+      Narrowed.reset();
+  }
   std::set<size_t> Unused;
   for (size_t I = 0; I < Original.Parameters.size(); ++I) {
     const auto &Parameter = Original.Parameters[I];
@@ -987,7 +1104,7 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       Unused.insert(I);
   }
   if (Unused.empty())
-    return std::nullopt;
+    return Narrowed;
   bool Valid = true, HasReturn = false;
   size_t Remaining = 65536;
   std::vector<MedVar> RegisterUses;
@@ -1084,7 +1201,7 @@ refineNativeSourceTypeHint(const HighFunc &Function,
       Add(Body);
   }
   if (!Valid || !HasReturn || Unused.empty())
-    return std::nullopt;
+    return Narrowed;
   std::optional<bool> DefinedLocals;
   for (const auto &Value : RegisterUses) {
     const auto Definition = RegisterDefs.find(highSourceLocalIdentity(Value));
@@ -1109,8 +1226,8 @@ refineNativeSourceTypeHint(const HighFunc &Function,
     });
   }
   if (Unused.empty())
-    return std::nullopt;
-  auto Refined = Original;
+    return Narrowed;
+  auto Refined = Narrowed ? std::move(*Narrowed) : Original;
   for (auto I = Unused.rbegin(); I != Unused.rend(); ++I)
     Refined.Parameters.erase(Refined.Parameters.begin() + *I);
   return validateSourceABI(Refined, Error) ? std::optional(std::move(Refined))

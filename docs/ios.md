@@ -276,6 +276,8 @@ Immutable byte buffers are rebuilt only for imported calls whose validated contr
 
 For an already loaded Mach-O session, `neverd_objc_methods_json(session, max_functions)` and `neverd_swift_methods_json(session, signatures_json, max_functions)` return the corresponding reports. Zero selects all discovered functions. Free successful strings with `neverd_free_string`; `NULL` indicates failure and the session error explains it. These APIs do not load IPA or `.app` containers.
 
+Objective-C native dependency inference may further narrow a `NativeAnalysis` 64-bit integer register parameter to 32 bits after source calls are bound. An exhaustive HighIR use proof must show that every occurrence observes exactly the low four bytes, either through a zero-offset byte extraction or an exact bound integer call argument. The proof is independent for each parameter; full-width, nonzero-offset, malformed, or budget-exhausted uses keep the original width. The refined helper is re-lifted and must pass the ordinary body and dependency-closure checks; the rewrite ABI is unchanged.
+
 ## Verification and troubleshooting
 
 On macOS, builds with `BUILD_TESTING` enabled provide `check-neverd-mobile-ios`, which runs all three native recovery suites through CTest.

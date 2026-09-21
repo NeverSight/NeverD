@@ -257,6 +257,8 @@ Native 标量返回值推断可识别已验证调用结果 ABI 后紧接的完�
 
 对已加载 Mach-O 的会话，`neverd_objc_methods_json(session, max_functions)` 和 `neverd_swift_methods_json(session, signatures_json, max_functions)` 返回相应报告。零表示所有发现的函数。成功返回的字符串用 `neverd_free_string` 释放；`NULL` 表示失败，原因见会话错误。这些 API 不加载 IPA 或 `.app` 容器。
 
+绑定源码调用后，Objective-C 原生依赖推断可以把 `NativeAnalysis` 得到的 64 位整数寄存器参数进一步缩窄为 32 位。穷尽式 HighIR 使用证明必须确认该参数的每次出现都只准确观察低 4 字节：要么通过零偏移字节提取，要么作为已精确绑定调用的整数实参。证明按参数独立进行；任何全宽、非零偏移、格式错误或耗尽预算的使用都会保留原始宽度。缩窄后的辅助函数会重新提升，并且仍须通过常规函数体与依赖闭包检查；重写 ABI 保持不变。
+
 ## 验证与故障排查
 
 macOS 上启用 `BUILD_TESTING` 的构建提供 `check-neverd-mobile-ios`，通过 CTest 运行三组原生恢复验证。
