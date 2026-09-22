@@ -575,3 +575,22 @@ TEST(NativeBooleanResultProof, RejectsMalformedGraphsOperationsAndContracts) {
     EXPECT_FALSE(F.prove());
   }
 }
+
+TEST(NativeBooleanResultProof, EveryCallObservesItsImplicitStackPointer) {
+  for (unsigned ArgumentCount : {0U, 1U, 9U}) {
+    SCOPED_TRACE(ArgumentCount);
+    Fixture F;
+    F.Release.Parameters.clear();
+    for (unsigned I = 0; I != ArgumentCount; ++I)
+      F.Release.Parameters.push_back(
+          {"argument", NdType::makePtr(NdType::makeVoid())});
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(F.Release, Arch::AArch64, Error));
+    F.linear({call(), copy(a64reg::SP, a64reg::X0), constant(a64reg::X0, 0),
+              call(0x3000), constant(a64reg::SP, 0), constant(a64reg::X0, 0),
+              ret()});
+    // Restoring SP after the call cannot undo accesses through the callee's
+    // incoming stack, even when its declared arguments all use registers.
+    EXPECT_FALSE(F.prove());
+  }
+}

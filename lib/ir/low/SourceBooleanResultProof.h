@@ -184,16 +184,20 @@ struct Transfer {
         const auto It = Calls.find(*Key);
         if (!IsSelected && It == Calls.end())
           return false;
+        // SP is an implicit input to every callee, even with no stack-passed
+        // arguments. Its frame saves and loads can observe a different stack
+        // before the caller restores SP, so later restoration is insufficient.
+        if (Any(NdVar::reg(TRI.StackPointer, 8)))
+          return false;
         const auto Parameters =
             IsSelected ? SelectedInputs
                        : sourceABIParameters(*It->second.Signature);
         for (const auto &Parameter : Parameters) {
           const auto &Location = Parameter.Location;
-          if (Location.Kind == SourceABICarrierKind::Stack) {
-            // No differing store is permitted, so memory remains identical.
-            if (Any(NdVar::reg(TRI.StackPointer, 8)))
-              return false;
-          } else if (!ObserveLocation(Location))
+          // Differing stores are forbidden and SP is identical above, so
+          // stack arguments observe the same memory.
+          if (Location.Kind != SourceABICarrierKind::Stack &&
+              !ObserveLocation(Location))
             return false;
         }
         // Even with identical logical arguments, incidental caller-saved
