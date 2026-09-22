@@ -56,6 +56,8 @@ observable behavior; source labels survive removal. Adjacent byte slices of
 the same local are simplified in HighIR before this analysis, preserving their
 result type. This identity does not merge independent loads or calls.
 
+HighIR supports narrowing a 64-bit source local to 32 bits under the same proof used for 128-bit carriers: every definition must agree on the carrier and prefix widths, and every read must explicitly select the low prefix. Full-width stores, escapes, upper-byte reads, or effectful upper expressions prevent narrowing. Source-parameter padding remains unknown.
+
 The shared MedIR source-entry analysis owns observable byte masks for physical
 register inputs. Native helper inference uses these masks to represent proven
 low float/double lanes without claiming original source types or a rewriting

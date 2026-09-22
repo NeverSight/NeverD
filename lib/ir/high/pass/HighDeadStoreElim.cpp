@@ -121,7 +121,7 @@ ExprPtr frameValuePrefix(ExprPtr Value, uint16_t Bytes) {
 }
 } // namespace
 
-// A source-local merge can retain dead upper vector lanes on every incoming
+// A source-local merge can retain dead upper register bytes on every incoming
 // edge. Narrow only when every definition constructs the same scalar prefix
 // and every read explicitly selects that prefix. No CFG path or evaluation
 // moves: each definition keeps its low expression and its original location.
@@ -138,6 +138,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
   };
   struct Candidate {
     uint16_t Bytes = 0;
+    uint16_t CarrierBytes = 0;
     bool Valid = true;
     std::vector<HighStmt *> Definitions;
     std::set<HighStmt *> PrefixDefinitions;
@@ -172,33 +173,39 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     const bool DestinationShape =
         Plain(*D) && D->Operands.empty() && D->Var.Id >= 0 &&
         (D->Var.Kind == MedVar::Reg || D->Var.Kind == MedVar::Temp) &&
-        D->Type && D->Type->Kind == NdTypeKind::Int && D->Type->Size == 16 &&
-        D->Var.Size == 16 && D->Var.RenameTag < 0 && V && Plain(*V) &&
-        S->MemoryOrdering == NdMemoryOrdering::None &&
+        D->Type && D->Type->Kind == NdTypeKind::Int &&
+        (D->Type->Size == 8 || D->Type->Size == 16) &&
+        D->Var.Size == D->Type->Size && D->Var.RenameTag < 0 && V &&
+        Plain(*V) && S->MemoryOrdering == NdMemoryOrdering::None &&
         S->MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    const auto CarrierBytes = DestinationShape ? D->Type->Size : 0;
+    C.Valid &= !C.CarrierBytes || C.CarrierBytes == CarrierBytes;
+    C.CarrierBytes = CarrierBytes;
     const bool ConcatShape =
-        DestinationShape &&
-        V->Kind == ExprKind::BinOp && V->Op == NdOp::CONCAT && V->Type &&
-        V->Type->Kind == NdTypeKind::Int && V->Type->Size == 16 &&
-        V->Operands.size() == 2 && V->Operands[0] && V->Operands[1] &&
-        V->Operands[0]->Type && V->Operands[1]->Type &&
-        V->Operands[1]->Type->Kind == NdTypeKind::Int &&
-        (V->Operands[1]->Type->Size == 4 || V->Operands[1]->Type->Size == 8) &&
-        V->Operands[0]->Type->Size + V->Operands[1]->Type->Size == 16;
+        DestinationShape && V->Kind == ExprKind::BinOp &&
+        V->Op == NdOp::CONCAT && V->Type && V->Type->Kind == NdTypeKind::Int &&
+        V->Type->Size == CarrierBytes && V->Operands.size() == 2 &&
+        V->Operands[0] && V->Operands[1] && V->Operands[0]->Type &&
+        V->Operands[1]->Type && V->Operands[1]->Type->Kind == NdTypeKind::Int &&
+        (V->Operands[1]->Type->Size == 4 ||
+         (CarrierBytes == 16 && V->Operands[1]->Type->Size == 8)) &&
+        V->Operands[0]->Type->Size + V->Operands[1]->Type->Size == CarrierBytes;
     const bool ExtensionShape =
         DestinationShape && V->Type && V->Type->Kind == NdTypeKind::Int &&
-        V->Type->Size == 16 && V->Operands.size() == 1 && V->Operands[0] &&
-        V->Operands[0]->Kind != ExprKind::Undef && V->Operands[0]->Type &&
-        V->Operands[0]->Type->Kind == NdTypeKind::Int &&
+        V->Type->Size == CarrierBytes && V->Operands.size() == 1 &&
+        V->Operands[0] && V->Operands[0]->Kind != ExprKind::Undef &&
+        V->Operands[0]->Type && V->Operands[0]->Type->Kind == NdTypeKind::Int &&
         V->Operands[0]->Type->Size && V->Operands[0]->Type->Size <= 8 &&
+        (CarrierBytes == 16 || V->Operands[0]->Type->Size == 4) &&
         ((V->Kind == ExprKind::Cast && V->CastTo &&
-          V->CastTo->Kind == NdTypeKind::Int && V->CastTo->Size == 16) ||
+          V->CastTo->Kind == NdTypeKind::Int &&
+          V->CastTo->Size == CarrierBytes) ||
          (V->Kind == ExprKind::UnaryOp &&
           (V->Op == NdOp::INT_ZEXT || V->Op == NdOp::INT_SEXT)));
     const bool CopyShape =
         DestinationShape && V->Kind == ExprKind::Var && V->Operands.empty() &&
         V->Type && V->Type->Kind == NdTypeKind::Int &&
-        V->Type->Size == 16 && V->Var.Size == 16 &&
+        V->Type->Size == CarrierBytes && V->Var.Size == CarrierBytes &&
         V->Var.RenameTag < 0 &&
         (V->Var.Kind == MedVar::Reg || V->Var.Kind == MedVar::Temp);
     if ((!ConcatShape && !ExtensionShape && !CopyShape) ||
@@ -262,8 +269,9 @@ void narrowSourceConcatLocals(HighFunc &Func) {
               Parent->Operands[1]->Operands.empty() &&
               Parent->Operands[1]->ConstVal == 0));
         C.Valid &= Prefix && Plain(*E) && E->Operands.empty() && E->Type &&
-                   E->Type->Kind == NdTypeKind::Int && E->Type->Size == 16 &&
-                   E->Var.Size == 16 && E->Var.RenameTag < 0 &&
+                   E->Type->Kind == NdTypeKind::Int &&
+                   E->Type->Size == C.CarrierBytes &&
+                   E->Var.Size == C.CarrierBytes && E->Var.RenameTag < 0 &&
                    (E->Var.Kind == MedVar::Reg || E->Var.Kind == MedVar::Temp);
         C.Uses.push_back(Slot);
       }

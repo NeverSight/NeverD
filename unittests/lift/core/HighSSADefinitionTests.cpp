@@ -486,7 +486,8 @@ TEST(HighPrivateFrameStores, ExhaustedByteReadProofLeavesEveryStoreUnchanged) {
   EXPECT_EQ(Function.Body[0].StoreVal->Type->Size, 8U);
 }
 
-HighFunc sourceConcatLocal(Arch Architecture, unsigned Width) {
+HighFunc sourceConcatLocal(Arch Architecture, unsigned Width,
+                           unsigned Carrier = 16) {
   HighFunc F;
   SourceFunctionTypeHint Hint;
   Hint.ReturnType = NdType::makeInt(Width);
@@ -499,16 +500,16 @@ HighFunc sourceConcatLocal(Arch Architecture, unsigned Width) {
   for (auto *Body : {&Branch.Body, &Branch.ElseBody}) {
     auto Upper = std::make_shared<HighExpr>();
     Upper->Kind = ExprKind::Undef;
-    Upper->Type = NdType::makeInt(16 - Width, false);
+    Upper->Type = NdType::makeInt(Carrier - Width, false);
     auto Low = HighExpr::makeCall("effect", 0x2000, {});
     Low->Type = NdType::makeInt(Width, false);
     auto Join = HighExpr::makeBinop(NdOp::CONCAT, Upper, Low);
-    Join->Type = NdType::makeInt(16, false);
-    auto Definition = assign(variable(4, 16), Join);
+    Join->Type = NdType::makeInt(Carrier, false);
+    auto Definition = assign(variable(4, Carrier), Join);
     Definition.Addr = Body == &Branch.Body ? 0x1010 : 0x1020;
     Body->push_back(Definition);
   }
-  auto Prefix = HighExpr::makeBinop(NdOp::SUBBYTES, variable(4, 16),
+  auto Prefix = HighExpr::makeBinop(NdOp::SUBBYTES, variable(4, Carrier),
                                     HighExpr::makeConst(0, 8));
   Prefix->Type = NdType::makeInt(Width, false);
   F.Body = {Branch, returning(Prefix)};
@@ -637,6 +638,115 @@ TEST(HighSourceScalarLocals,
       narrowSourceConcatLocals(F);
       EXPECT_EQ(Left.Dst->Var.Size, 16U) << Mutation;
       EXPECT_EQ(Right.Dst->Type->Size, 16U) << Mutation;
+    }
+}
+TEST(HighSourceScalarLocals, NarrowsRegisterMergesWithExplicitLowWordReads) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Alternative = 0; Alternative < 5; ++Alternative) {
+      auto F = sourceConcatLocal(Architecture, 4, 8);
+      auto Left = F.Body[0].Body[0].Val->Operands[1];
+      auto &Right = F.Body[0].ElseBody[0];
+      auto RightLow = Right.Val->Operands[1];
+      if (Alternative == 1)
+        Right.Val = variable(7, 8);
+      else if (Alternative >= 2) {
+        Right.Val = HighExpr::makeUnary(
+            Alternative == 2 ? NdOp::INT_ZEXT : NdOp::INT_SEXT, variable(7, 4));
+        Right.Val->Type = NdType::makeInt(8, Alternative != 2);
+        if (Alternative == 4) {
+          Right.Val->Kind = ExprKind::Cast;
+          Right.Val->CastTo = Right.Val->Type;
+        }
+      }
+      auto OriginalRight = Right.Val;
+      F.Body[1].RetVal->Kind = ExprKind::Cast;
+      F.Body[1].RetVal->Operands.resize(1);
+      F.Body[1].RetVal->CastTo = NdType::makeInt(4, false);
+      narrowSourceConcatLocals(F);
+      EXPECT_EQ(F.Body[0].Body[0].Val, Left);
+      EXPECT_EQ(F.Body[0].Body[0].Addr, 0x1010U);
+      EXPECT_EQ(Right.Addr, 0x1020U);
+      EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 4U);
+      EXPECT_EQ(Right.Dst->Var.Size, 4U);
+      EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 4U);
+      EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.SSAVer, 4);
+      if (!Alternative)
+        EXPECT_EQ(Right.Val, RightLow);
+      else {
+        EXPECT_EQ(Right.Val->Op, NdOp::SUBBYTES);
+        EXPECT_EQ(Right.Val->Operands[0], OriginalRight);
+      }
+    }
+}
+
+TEST(HighSourceScalarLocals, RetainsObservedOrUnprovenRegisterCarrierBytes) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 15; ++Mutation) {
+      auto F = sourceConcatLocal(Architecture, 4, 8);
+      auto &Left = F.Body[0].Body[0];
+      auto &Right = F.Body[0].ElseBody[0];
+      switch (Mutation) {
+      case 0:
+        F.Body[1].RetVal->Operands[1]->ConstVal = 4;
+        break;
+      case 1:
+        F.Body[1].RetVal =
+            HighExpr::makeCall("escape", 0x3000, {variable(4, 8)});
+        break;
+      case 2:
+        F.Body[1].RetVal = variable(4, 8);
+        break;
+      case 3:
+        F.Body[1].Kind = StmtKind::Store;
+        F.Body[1].StoreAddr = HighExpr::makeConst(0x8000, 8);
+        F.Body[1].StoreVal = variable(4, 8);
+        F.Body[1].RetVal.reset();
+        break;
+      case 4:
+        Left.Val->Operands[0] = HighExpr::makeLoad(
+            HighExpr::makeConst(0x8000, 8), NdType::makeInt(4));
+        break;
+      case 5:
+        Left.Val->Operands[0] = HighExpr::makeCall("upper_effect", 0x4000, {});
+        Left.Val->Operands[0]->Type = NdType::makeInt(4);
+        break;
+      case 6:
+        Right.Dst = variable(4, 16);
+        Right.Val->Type = NdType::makeInt(16);
+        Right.Val->Operands[0]->Type = NdType::makeInt(12);
+        break;
+      case 7:
+        F.Body[1].RetVal->Operands[0] = variable(4, 16);
+        break;
+      case 8:
+        Right.Val = HighExpr::makeUnary(NdOp::INT_ZEXT, variable(7, 2));
+        Right.Val->Type = NdType::makeInt(8);
+        break;
+      case 9:
+        Right.Val = variable(7, 16);
+        break;
+      case 10:
+        Left.Val->Operands[0]->MemoryOrdering =
+            NdMemoryOrdering::SequentiallyConsistent;
+        break;
+      case 11:
+        Right.Val->Operands[0]->Type = NdType::makeInt(6);
+        Right.Val->Operands[1]->Type = NdType::makeInt(2);
+        break;
+      case 12:
+        Left.Val->Operands[0]->IntrinsicOutputs = {variable(4, 8)->Var};
+        break;
+      case 13:
+        Right.Dst->Var.Size = 16;
+        break;
+      case 14:
+        F.Body[1].RetVal->Operands[0]->Var.Size = 16;
+        break;
+      }
+      narrowSourceConcatLocals(F);
+      EXPECT_EQ(Left.Dst->Var.Size, 8U) << Mutation;
+      EXPECT_EQ(Right.Dst->Var.Size, Mutation == 6 || Mutation == 13 ? 16U : 8U)
+          << Mutation;
     }
 }
 } // namespace

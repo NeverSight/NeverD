@@ -25,6 +25,10 @@
 
 #include <algorithm>
 
+namespace neverd {
+void narrowSourceConcatLocals(HighFunc &Function);
+}
+
 namespace {
 using namespace neverd;
 
@@ -2024,6 +2028,112 @@ TEST(SourceABI, PhysicalParameterReadsKeepUnknownBytesAcrossPhiEdges) {
       EXPECT_EQ(PhiCopies, 2U);
       EXPECT_EQ(Stores, 1U);
       EXPECT_GT(UnknownEdges, 0U);
+    }
+}
+
+TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const bool FullWidthRead : {false, true}) {
+      constexpr bool Floating = false;
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(FullWidthRead);
+      SourceFunctionTypeHint Hint;
+      Hint.ReturnType = NdType::makeVoid();
+      Hint.Parameters = {{"value", Floating ? NdType::makeFloat(4)
+                                            : NdType::makeInt(4, false)},
+                         {"condition", NdType::makeInt(8, false)},
+                         {"destination", NdType::makePtr(NdType::makeInt(8))}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error));
+      auto Parameter = [&](unsigned Index) {
+        MedVar V;
+        V.Kind = MedVar::Param;
+        V.Id = Index;
+        V.Size = 8;
+        V.RegOff = Hint.Parameters[Index].Location.RegisterOffset;
+        V.TheArch = Architecture;
+        return V;
+      };
+      auto Operation = [](NdOp Opcode, MedVar Output,
+                          std::initializer_list<MedVar> Inputs) {
+        MedOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        return Op;
+      };
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.SourceTypeHint = Hint;
+      Function.SourceParametersBound = true;
+      for (unsigned I = 0; I != 3; ++I) {
+        Function.Params.push_back(Parameter(I));
+        Function.TypedParams.push_back(
+            {Hint.Parameters[I].Name, Hint.Parameters[I].Type});
+      }
+      Function.Blocks.resize(4);
+      for (unsigned I = 0; I != 4; ++I) {
+        Function.Blocks[I].Id = I;
+        Function.Blocks[I].StartAddr = 0x1000 + I * 16;
+      }
+      Function.Blocks[0].Succs = {1, 2};
+      Function.Blocks[0].Ops = {Operation(
+          NdOp::COND_BR, {}, {MedVar::makeConst(0x1020, 8), Parameter(1)})};
+      for (unsigned I : {1, 2}) {
+        Function.Blocks[I].Preds = {0};
+        Function.Blocks[I].Succs = {3};
+        Function.Blocks[I].Ops = {
+            Operation(NdOp::BRANCH, {}, {MedVar::makeConst(0x1030, 8)})};
+      }
+      PhiNode Phi;
+      Phi.Output.Kind = MedVar::Temp;
+      Phi.Output.Id = 10;
+      Phi.Output.Size = 8;
+      Phi.Args = {{1, Parameter(0)}, {2, Parameter(0)}};
+      auto &Join = Function.Blocks[3];
+      Join.Preds = {1, 2};
+      Join.Phis = {Phi};
+      MedVar Low = Phi.Output;
+      Low.Id = 11;
+      Low.Size = 4;
+      Join.Ops = {
+          Operation(NdOp::SUBBYTES, Low, {Phi.Output, MedVar::makeConst(0, 4)}),
+          Operation(NdOp::STORE, {}, {Parameter(2), Low})};
+      if (FullWidthRead)
+        Join.Ops.push_back(
+            Operation(NdOp::STORE, {}, {Parameter(2), Phi.Output}));
+      Join.Ops.push_back(Operation(NdOp::RETURN, {}, {}));
+      auto High = MedToHighConverter().convert(Function, Architecture);
+      narrowSourceConcatLocals(High);
+      unsigned PhiCopies = 0, UnknownEdges = 0, Stores = 0, FullStores = 0;
+      walkStmts(High.Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind == StmtKind::Store) {
+          ++Stores;
+          ASSERT_TRUE(Statement.StoreVal && Statement.StoreVal->Type);
+          FullStores += Statement.StoreVal->Type->Size == 8U;
+          EXPECT_TRUE(Statement.StoreVal->Type->Size == 4U ||
+                      (FullWidthRead && Statement.StoreVal->Type->Size == 8U));
+        }
+        if (!Statement.IsPhiCopy)
+          return;
+        ++PhiCopies;
+        EXPECT_TRUE(Statement.Val && Statement.Val->Type &&
+                    Statement.Val->Type->Size == (FullWidthRead ? 8U : 4U));
+        auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+          if (!E)
+            return;
+          if (E->Kind == ExprKind::Undef)
+            ++UnknownEdges;
+          for (const auto &Input : E->Operands)
+            Self(Self, Input);
+        };
+        Visit(Visit, Statement.Val);
+      });
+      EXPECT_EQ(PhiCopies, 2U);
+      EXPECT_EQ(Stores, FullWidthRead ? 2U : 1U);
+      EXPECT_EQ(FullStores, FullWidthRead ? 1U : 0U);
+      EXPECT_EQ(UnknownEdges, FullWidthRead ? 2U : 0U);
     }
 }
 
