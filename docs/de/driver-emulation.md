@@ -45,14 +45,17 @@ sie belegt nicht, dass der Treiber unter Windows funktioniert.
 
 Die Kompatibilität hängt vom ausgeführten Codepfad und seinen Abhängigkeiten ab,
 nicht von der Dateiendung `.sys`. Die bisherigen Abnahmen decken selbst entwickelte,
-freistehende Fixtures und den gepufferten Pfad von Microsofts WDM-Beispiel SIOCTL
-ab. Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
+freistehende Fixtures sowie die gepufferten, In-Direct- und Out-Direct-Pfade von
+Microsofts WDM-Beispiel SIOCTL einschließlich seines Builds mit Debugausgaben ab.
+Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 
 | Treiberklasse oder Anforderung | Aktueller Umfang | Fehlende Umgebung |
 |-------------------------------|------------------|-------------------|
-| x64-Software-WDM-Treiber mit den aufgeführten APIs | Begrenzte Initialisierung und ein synchroner Dateilebenszyklus | Jede weitere ausgeführte API benötigt ein definiertes Modell |
-| `METHOD_BUFFERED`-IOCTL | Im ausdrücklich angegebenen Anforderungsszenario unterstützt | Mehrere offene Dateien und asynchroner Abschluss sind nicht verfügbar |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT`, `METHOD_NEITHER` | Abgewiesen | MDLs, gesperrte Seiten, Zugriffsprüfung und Lebensdauer von Benutzerpuffern |
+| x64-Software-WDM-Treiber mit den aufgeführten APIs | Initialisierung und synchrone Dateilebenszyklen | Jede weitere ausgeführte API benötigt ein definiertes Modell |
+| `METHOD_BUFFERED`-IOCTL | Unterstützt, mit unabhängigen Dateiidentitäten und verschachtelten Anforderungsfolgen | Asynchroner Abschluss ist nicht verfügbar |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs und Systemabbildungen | Vom Treiber allokierte MDLs, physische Seitenidentitäten, DMA und Benutzerabbildungen |
+| Synchrone READ/WRITE | Gepuffert oder direkt entsprechend den Geräteflags | Neither-I/O, implizite Wahl der Dateiposition und asynchroner Abschluss |
+| `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
 | KMDF-/UMDF-Treiber | Nicht unterstützt | Framework-Anbindung, Objekte, Warteschlangen, Callbacks und passende Host-Laufzeit |
 | PnP-Bus-, Funktions- oder Filtertreiber | Initialisierung kann innerhalb der API-Teilmenge laufen; Gerätestapel-Lebenszyklus nicht unterstützt | Geräteanbindung, Dispatch an untergeordnete Treiber sowie PnP- und Power-IRPs |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
@@ -84,6 +87,8 @@ einschließlich kanonischer hoher Kernel-Adressen ohne künstliche Windows-
 Seitentabellen zu erhalten. Der anfängliche RFLAGS-Wert ist `0x202`; das
 Softwaregeräteprofil verwendet eine feste Cachezeilengröße von 64 Byte.
 Dies sind ausdrückliche Eigenschaften dieses Ausführungsszenarios.
+Inline-Lesezugriffe auf CR8 unter x64 sehen ebenfalls `PASSIVE_LEVEL`;
+CR8-Schreibzugriffe und andere Kontrollregisteroperationen bleiben nicht unterstützt.
 
 Unbekannte Importe werden an erst bei Nutzung auslösende Traps gebunden. Ein
 ungenutzter Import verhindert den Lauf nicht; die Ausführung seines Thunks oder
@@ -95,7 +100,7 @@ scheitern vor Beginn der Ausführung.
 
 Dieses Profil implementiert keinen vollständigen Windows-Kernel, keine
 KMDF-Laufzeit, keinen PnP-/Power-Lebenszyklus, keine asynchronen oder ausstehenden
-IRPs, keine Direct-/Neither-IOCTLs, keine Interrupts und kein Multithread-Scheduling.
+IRPs, keine Neither-IOCTLs, keine Interrupts und kein Multithread-Scheduling.
 Callbacks laufen nur auf ausdrückliche Anforderung des Szenarios; reine
 Initialisierung endet weiterhin nach DriverEntry.
 
@@ -114,14 +119,26 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | APIs | Modelliertes Verhalten und Einschränkungen |
 |------|-------------------------------------------|
 | `RtlInitUnicodeString` | Erstellt eine Gast-`UNICODE_STRING` für eine begrenzte NUL-terminierte Quelle |
+| `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Längengezähltes UTF-16-Kopieren und Vergleich unter Beachtung der Groß-/Kleinschreibung; Vergleich ohne Beachtung der Groß-/Kleinschreibung benötigt eine Windows-Tabelle zur Groß-/Kleinschreibung und stoppt |
+| `ExAllocatePool2` | Auslagerbare/nicht auslagerbare NX-Allokationen, standardmäßig genullt; Flags für nicht initialisierte und cacheausgerichtete Allokationen modelliert; ungültige erforderliche Flags liefern NULL, Quota-/ausführbare Pools und ausgelöste Allokationsausnahmen stoppen |
+| `MmGetSystemRoutineAddress` | Löst einen längengezählten Gastnamen über den gemeinsamen Exportkatalog auf |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Anforderungseigene MDLs, gecachte KernelMode-Systemabbildungen, explizite Rechte und Lebensdauer; vorhandene sichere Abbildungen werden wiederverwendet |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Datenallokationen für Pooltypen `0`, `1` und `512`; positive Größe/Tag, passende Tags beim Freigeben, keine Wiederverwendung von Adressen |
 | `IoCreateDevice`, `IoDeleteDevice` | Gerätetyp `0x22`, Characteristics `0` oder `0x100`, begrenzte Erweiterungen, ASCII-Namen der Form `\Device\Name` |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` oder `\??\Name` in einem Sitzungsnamensraum, Ziel `\Device\Name` |
-| `DbgPrint`, `DbgPrintEx` | ASCII-Literaltext und `%%`, höchstens 512 Ausgabebytes; variadische Formatierung stoppt; alle Debuggerfilter aktiviert |
+| `DbgPrint`, `DbgPrintEx` | Geprüfte variadische Win64-Formatierung, höchstens 512 Ausgabebytes; alle Debuggerfilter aktiviert |
 | `IoGetCurrentIrpStackLocation` | Gibt die Stackposition des aktiven modellierten IRP zurück; normale kompilierte WDM-Makros lesen dasselbe Gastfeld |
 | `KeGetCurrentIrql` | Gibt `PASSIVE_LEVEL` zurück |
 | `IofCompleteRequest`, `IoCompleteRequest` | Schließt das aktive synchrone modellierte IRP mit `IO_NO_INCREMENT` ab; auf ein abgeschlossenes IRP oder seinen Puffer darf nicht erneut zugegriffen werden |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Begrenzte Gastpufferoperationen, höchstens 1 MiB pro Aufruf; Kopier-APIs ohne Überlappungsunterstützung weisen Überlappungen ab |
+
+Die Formatierung von `DbgPrint` unterstützt Ganzzahlen `d/i/u/o/x/X`, Zeiger
+`p`, Text `s/c`, `%%`, längengezähltes Unicode `wZ/lZ`, breite Zeichenfolgen
+`ls/ws`, Flags, Breite/Präzision einschließlich `*` sowie Windows-Längenmodifikatoren
+für Ganzzahlen. Es werden höchstens 32 variable Argumente und 1024 Formatbytes
+gelesen. Breite und Präzision sind auf 512 begrenzt. Gleitkomma, `%n`, unbekannte
+Kombinationen und Nicht-ASCII-Textkonvertierungen stoppen ausdrücklich; das Modell
+errät keine Windows-Codepage und ruft kein Host-printf mit Gastdaten auf.
 
 Der ursprüngliche RegistryPath-Datensatz und sein Puffer verlieren ihre Gültigkeit,
 sobald DriverEntry zurückkehrt. Treiber, die die Zeichenfolge später benötigen,
@@ -167,36 +184,76 @@ Für einen Treiber, der `\Device\NeverDIO` erstellt und den gepufferten IOCTL
 }
 ```
 
-Gerätename und IOCTL-Code müssen zum Treiber passen. Ohne `device` wird das
-einzige aktive Gerät ausgewählt; mehrdeutige Auswahl scheitert. Dieses Modell
-verfolgt eine offene Datei und verlangt create, IOCTLs, cleanup und close in
-dieser Reihenfolge. Nur `METHOD_BUFFERED`-IOCTLs werden unterstützt. Dispatch
-muss jedes IRP synchron abschließen; `STATUS_PENDING`, fehlender Abschluss,
-ungültige Ausgabelängen und Zugriffe auf bereits abgeschlossene IRPs führen
-ausdrücklich zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte,
-symbolischen Links, Poolallokationen oder Dateiobjekte zurücklassen.
+Gerätename und IOCTL-Code müssen zum Treiber passen. Bei create wird ohne
+`device` das einzige aktive Gerät ausgewählt; mehrdeutige Auswahl scheitert.
+Spätere Anforderungen verwenden das Gerät ihrer Datei, sofern kein expliziter,
+passender Name angegeben ist. Das optionale `file` ist eine vorzeichenlose
+32-Bit-Szenarioidentität, standardmäßig null. Jede Identität besitzt ein eigenes
+FILE_OBJECT und FsContext und verlangt create, Transfers, cleanup und close in
+dieser Reihenfolge. Anforderungen unabhängiger Dateien dürfen ineinander
+verschachtelt werden. Exklusive Geräte weisen ein zweites Öffnen ab. Diese
+Identitäten stehen für Dateiobjekte, nicht für duplizierte Handles. Gepufferte
+und beide direkten IOCTL-Methoden werden unterstützt. Dispatch muss jedes IRP
+synchron abschließen; `STATUS_PENDING`, fehlender Abschluss, ungültige
+Ausgabelängen und Zugriffe auf bereits abgeschlossene IRPs führen ausdrücklich
+zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte, symbolischen Links,
+Poolallokationen oder Dateiobjekte zurücklassen.
 
 Das optionale Wurzelfeld `"load_address": "0x190000000"` fordert eine
 Basisverschiebung an; ohne dieses Feld oder mit `"0x0"` gilt die bevorzugte
 Adresse. Das Image muss die Relokationsanforderungen erfüllen. Der ursprüngliche
 Initialisierungsbefehl und die C-API implizieren kein Szenario.
 
-An der Wurzel sind nur `load_address`, `requests` und `unload` erlaubt.
-Anforderungsfelder sind `kind`, optional `device` und ausschließlich für `ioctl`
-das erforderliche `code` sowie optional `input` und `output_size`. Unbekannte
-oder doppelte Felder werden abgewiesen. `code` akzeptiert eine vorzeichenlose
-32-Bit-JSON-Ganzzahl oder eine Hexadezimalzeichenfolge mit `0x`. `input` ist eine
-Hexadezimal-Bytezeichenfolge gerader Länge ohne Präfix oder Leerzeichen;
-Weglassen bedeutet leere Eingabe. `output_size` ist eine vorzeichenlose
-JSON-Ganzzahl; Weglassen bedeutet null. Brüche und Gleitkommaschreibweisen
-werden abgewiesen.
+An der Wurzel sind nur `load_address`, `requests`, `unload` und `kernel_exports`
+erlaubt. Alle Anforderungen akzeptieren `kind`, optional `device` und optional
+`file`. IOCTLs benötigen `code` und akzeptieren `input`, `output_size` und
+`direct_input`. Ein `read` akzeptiert `output_size` und `byte_offset`; ein
+`write` akzeptiert `input` und `byte_offset`. Offsets sind standardmäßig null,
+akzeptieren Ganzzahlen oder Hexadezimalzeichenfolgen und müssen in einen
+nichtnegativen vorzeichenbehafteten 64-Bit-Wert passen. Lebenszyklusanforderungen
+weisen Transferfelder ab. Unbekannte oder doppelte Felder werden abgewiesen.
+`code` akzeptiert eine vorzeichenlose 32-Bit-JSON-Ganzzahl oder eine
+Hexadezimalzeichenfolge mit `0x`. `input` ist eine Hexadezimal-Bytezeichenfolge
+gerader Länge ohne Präfix oder Leerzeichen; Weglassen bedeutet leere Eingabe.
+`output_size` ist eine vorzeichenlose JSON-Ganzzahl; Weglassen bedeutet null.
+Brüche und Gleitkommaschreibweisen werden abgewiesen.
+
+Bei direkten IOCTLs initialisiert `input` den ersten Systempuffer, während
+`direct_input` den separaten, durch die MDL beschriebenen zweiten Puffer
+initialisiert und bis `output_size` mit Nullen ergänzt wird. `METHOD_IN_DIRECT`
+erfordert Lesezugriff; daraus folgt keine schreibgeschützte Systemabbildung.
+Beide Methoden verwenden lesbare/schreibbare Szenariopuffer. `MdlMappingNoWrite`
+entfernt Schreibrechte, `MdlMappingNoExecute` Ausführungsrechte der Abbildung.
+Das Aufheben der Abbildung entzieht die System-VA; erneutes Abbilden erhält
+dieselben gesperrten Daten. Abschluss beendet die Gültigkeit von MDL und Abbildung.
+Die von WDM-Makros verwendeten öffentlichen MDL-Felder sind modelliert;
+Prozess-/PFN-Felder, selbst erstellte MDLs, Benutzerabbildungen und direkter
+Zugriff über den rohen UserBuffer werden abgewiesen. Ein direkter Puffer der
+Länge null hat eine Null-MDL.
+
+Für READ/WRITE wählt `DO_BUFFERED_IO` oder `DO_DIRECT_IO` die Transfermethode.
+Neither-I/O oder widersprüchliche Flags stoppen. Information wird gegen die
+Transferlänge geprüft; Schreiboperationen liefern eine Anzahl, Leseoperationen Bytes.
+
+`kernel_exports` ordnet Routinenamen explizite Verfügbarkeits-Boolesche Werte
+zu, etwa `"kernel_exports": {"OptionalRoutine": false}`. Modellierte Exporte und
+statische Importe erhalten stabile Adressen, die auch `MmGetSystemRoutineAddress`
+verwendet. Ein ausdrücklich fehlender Export wird zu NULL aufgelöst und kann
+keinen statischen Import erfüllen. Ein als vorhanden deklarierter Export ohne
+API-Modell wird an einen erst bei Nutzung auslösenden Trap gebunden. Ein
+unbekannter dynamischer Name stoppt mit einer Diagnose zur nicht festgelegten
+Verfügbarkeit; aus fehlender Implementierung wird nie Abwesenheit abgeleitet.
+Namen bestehen aus begrenztem druckbarem ASCII; die Auflösung beachtet
+Groß-/Kleinschreibung. Der Katalog ist eine konkrete Szenarioeigenschaft und
+behauptet keine Übereinstimmung mit jeder Windows-Version.
+`IoGetCurrentIrpStackLocation` und `MmGetSystemAddressForMdlSafe` sind modellierte Hilfsfunktionen aus WDM-Headern; dadurch werden sie nicht standardmäßig als Exporte deklariert, weshalb ihre Exportverfügbarkeit einen statischen Import oder eine explizite `kernel_exports`-Deklaration erfordert.
 
 Der Szenariotext ist auf 2 MiB begrenzt: höchstens 64 Anforderungen, höchstens
-65536 Byte pro Eingabe- oder Ausgabepuffer und höchstens 512 KiB Eingabe- und
-Ausgabebytes insgesamt. Instruktions-, Beobachtungs-, Gastspeicher- und Zeitbudgets
-gelten für das gesamte Szenario. Die 1-MiB-Arena enthält auch Objekte und
-Metadaten; daher kann ein Image den Modellspeicher erschöpfen, bevor die
-maximalen Szenariopuffer verbraucht sind.
+65536 Byte pro Eingabe- oder Ausgabepuffer und höchstens 512 KiB angeforderte
+Bytes insgesamt, einschließlich des Inhalts von `direct_input`. Instruktions-,
+Beobachtungs-, Gastspeicher- und Zeitbudgets gelten für das gesamte Szenario.
+Die 1-MiB-Arena enthält auch Objekte und Metadaten; daher kann ein Image den
+Modellspeicher erschöpfen, bevor die maximalen Szenariopuffer verbraucht sind.
 
 ## Abnahme mit dem Microsoft-Beispiel
 
@@ -217,8 +274,10 @@ python3 scripts/validate_windows_driver_sample.py \
 
 Mit `--headers` lässt sich ein anderes MinGW-w64-Include-Verzeichnis angeben.
 Das Skript erzeugt aus den Abhängigkeiten der kompilierten Objektdatei eine
-MS-COFF-Importbibliothek. Die Prüfung führt DriverEntry, create, den gepufferten
-IOCTL des Beispiels, cleanup, close und unload aus. Das Originalbeispiel
+MS-COFF-Importbibliothek. Die Prüfung führt separate gepufferte, In-Direct- und
+Out-Direct-Szenarien über DriverEntry, create, IOCTL, cleanup, close und unload
+aus. Ergänzen Sie `--debug` und wählen Sie ein separates Ausgabeverzeichnis,
+um mit `DBG=1` zu kompilieren und Gast-Logmeldungen zu prüfen. Das Originalbeispiel
 registriert keinen Cleanup-Handler; deshalb schließt der modellierte
 Standardhandler cleanup mit `STATUS_INVALID_DEVICE_REQUEST` (`0xC0000010`) ab.
 Der Treiber wird trotzdem geschlossen und entladen, und der erfolgreiche IOCTL
@@ -235,8 +294,8 @@ und `nt_success`, den PC beim Anhalten und die Instruktionszahl. Er erhält
 die vor dem Stopp gesammelten API-Aufrufe und beobachtbaren Zustände,
 einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
-verlieren. Das Objekt `configuration` protokolliert Limits und Dienstnamen des
-Laufs. Das Profil lautet `wdm-x64-synchronous-v1`. `nt_status` bleibt das
+verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
+`kernel_exports`-Überschreibungen des Laufs. Das Profil lautet `wdm-x64-synchronous-v2`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -245,8 +304,16 @@ Phase (`driver_entry`, `request:N` oder `unload`). Jede Anforderung meldet
 Dispatch- und I/O-Status, Abschluss, Informationslänge und zurückgegebene Bytes
 in `output_hex`. `preferred_image_base` beschreibt die ursprüngliche PE-Basis.
 `security_cookie` ist die Gastadresse des initialisierten Cookies oder `"0x0"`,
-wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `code`,
+wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `file`, `byte_offset`, `code`,
 `irp`, `completed`, `dispatch_status`, `io_status`, `information` und `output_hex`.
+
+Das nullable Objekt `fault` erhält den ersten Backend-Fehler. Seine Felder
+`kind`, `pc`, das nullable `address`, `size`, `access` und `interrupt` unterscheiden
+nicht abgebildeten oder geschützten Speicher, ungültige Bereiche, ungültige
+Instruktionen und CPU-Ausnahmen. Adressen verwenden Hexadezimalzeichenfolgen,
+Größen und Interruptvektoren Ganzzahlen. Beobachtungslesezugriffe können den
+ursprünglichen Fehler nicht ersetzen. Ein fehlerhaft angehaltenes Backend kann
+nicht fortgesetzt werden; dieser Datensatz impliziert keine Gast-SEH-Behandlung.
 
 `instructions` zählt zugelassene Gastinstruktionsversuche. Eine von der
 Ausführungsrichtlinie abgewiesene Instruktion wird nicht gezählt; eine

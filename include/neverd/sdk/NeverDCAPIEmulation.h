@@ -61,10 +61,18 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// ownership rules match neverd_emulate_driver_json. ScenarioJSON is required,
 /// NUL-terminated UTF-8 JSON, limited to NEVERD_DRIVER_SCENARIO_JSON_LIMIT
 /// bytes. Supported root keys: load_address (0x string), unload (boolean),
-/// requests. Each request supplies kind (create/ioctl/cleanup/close), optional
-/// device; ioctl also requires code (u32 or 0x string), and optionally input
-/// (hex bytes) and output_size. Unknown keys and malformed/excessive requests
-/// are errors. The original v1 entry point remains initialization-only.
+/// requests, and kernel_exports (routine names mapped to availability
+/// booleans). Each request supplies kind
+/// (create/ioctl/read/write/cleanup/close), optional device and optional file
+/// (u32 identity, default zero). CREATE without a device selects the sole live
+/// device; later requests use their file's device. IOCTL requires code (u32 or
+/// 0x string) and accepts input (hex bytes), output_size, and direct_input (the
+/// separate direct IOCTL buffer's initial hex bytes). READ accepts output_size
+/// and byte_offset; WRITE accepts input and byte_offset. Offsets default to
+/// zero, accept integers or 0x strings, and the entire transfer must fit
+/// nonnegative signed 64-bit file offsets. Unknown keys and malformed/excessive
+/// requests are errors. The original v1 entry point remains
+/// initialization-only.
 NEVERD_API const char *
 neverd_emulate_driver_scenario_json(neverd_session_t Sess, const char *Path,
                                     const char *ScenarioJSON,

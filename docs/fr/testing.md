@@ -48,8 +48,10 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 Les fixtures couvrent l’initialisation invitée, les retours de réussite et
 d’échec, les comportements non pris en charge, les fautes mémoire, l’analyse
-stricte des scénarios, l’exécution bornée et les E/S synchrones bufferisées
-via create, IOCTL, cleanup, close et unload. Utilisez la
+stricte des scénarios, l’exécution bornée, les E/S synchrones bufferisées et
+directes, READ/WRITE, les durées de vie indépendantes des fichiers, les permissions
+MDL, les exports dynamiques, les arguments variables invités et les défauts CPU
+structurés via create, transferts, cleanup, close et unload. Utilisez la
 [CLI `emulate-driver`](driver-emulation.md) pour vérifier le JSON et les codes
 de sortie des processus. Les builds de production peuvent activer cette
 fonctionnalité avec `BUILD_TESTING=OFF` ; `libneverd` ne doit pas exiger une

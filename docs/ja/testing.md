@@ -41,7 +41,7 @@ cmake --build build-release --target \
 ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 ```
 
-fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動作、メモリフォールト、厳格なシナリオ解析、予算内の実行、および create、IOCTL、cleanup、close、unload を通る同期バッファード I/O を検証します。[`emulate-driver` CLI](driver-emulation.md) で JSON とプロセスの終了コードを確認してください。製品ビルドは `BUILD_TESTING=OFF` でもこの機能を有効にできます。`libneverd` がテスト専用の Unicorn 構成を必要としてはなりません。
+fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動作、メモリフォールト、厳格なシナリオ解析、予算内の実行、および create、転送、cleanup、close、unload を通る同期バッファード／ダイレクト I/O、READ/WRITE、独立したファイルの寿命、MDL の権限、動的エクスポート、ゲスト可変引数、構造化 CPU フォールトを検証します。[`emulate-driver` CLI](driver-emulation.md) で JSON とプロセスの終了コードを確認してください。製品ビルドは `BUILD_TESTING=OFF` でもこの機能を有効にできます。`libneverd` がテスト専用の Unicorn 構成を必要としてはなりません。
 
 ## テスト構成
 

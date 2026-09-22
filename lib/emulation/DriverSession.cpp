@@ -11,9 +11,11 @@
 
 #include "neverd/emulation/DriverSession.h"
 
+#include "DriverScenario.h"
 #include "X64ExecutionPolicy.h"
 #include "unicorn/UnicornBackend.h"
 #include "windows/DriverImage.h"
+#include "windows/KernelExportRegistry.h"
 #include "windows/KernelModel.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -52,30 +54,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                    }))
     return failure("service name must contain 1..128 ASCII letters, digits, "
                    "underscores or hyphens");
-  if (Options.Requests.size() > DriverScenarioRequestLimit)
-    return failure("driver scenario exceeds 64 requests");
-  uint64_t ScenarioBytes = 0;
-  for (const auto &Request : Options.Requests) {
-    if (Request.Input.size() > DriverScenarioBufferLimit ||
-        Request.OutputSize > DriverScenarioBufferLimit ||
-        Request.Device.size() > MaxDeviceNameSize)
-      return failure("driver request exceeds the bounded buffer or name limit");
-    ScenarioBytes += Request.Input.size() + Request.OutputSize;
-    if (ScenarioBytes > DriverScenarioTotalBufferLimit)
-      return failure("driver scenario exceeds 512 KiB of requested buffers");
-    switch (Request.Kind) {
-    case DriverRequestKind::Create:
-    case DriverRequestKind::Cleanup:
-    case DriverRequestKind::Close:
-      if (Request.ControlCode || !Request.Input.empty() || Request.OutputSize)
-        return failure("only device-control requests accept code and buffers");
-      break;
-    case DriverRequestKind::DeviceControl:
-      break;
-    default:
-      return failure("invalid driver request kind");
-    }
-  }
+  if (auto E = validateDriverScenario(Options))
+    return std::move(E);
+  KernelExportRegistry Exports;
+  if (auto E = Exports.initialize(Options))
+    return std::move(E);
   auto Image = loadDriverImage(Path, Options.MemoryLimit, Options.LoadAddress);
   if (!Image)
     return Image.takeError();
@@ -100,13 +83,12 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (auto E = CPU.write(Region.Address, Region.Bytes))
       return std::move(E);
   }
-  std::map<uint64_t, const DriverImport *> Thunks;
-  for (size_t I = 0; I < Image->Imports.size(); ++I) {
-    const auto &Import = Image->Imports[I];
-    uint64_t Address = ThunkBase + ThunkStride * I;
-    if (auto E = CPU.writeInteger(Import.Slot, Address, PointerSize))
+  for (const auto &Import : Image->Imports) {
+    auto Address = Exports.bindImport(Import);
+    if (!Address)
+      return Address.takeError();
+    if (auto E = CPU.writeInteger(Import.Slot, *Address, PointerSize))
       return std::move(E);
-    Thunks.emplace(Address, &Import);
   }
   for (const auto &Region : Image->Regions)
     if (auto E = CPU.protect(Region.Address, Region.Bytes.size(),
@@ -121,7 +103,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     return std::move(E);
   if (auto E = CPU.map(StackBase, StackSize, Read | Write))
     return std::move(E);
-  KernelModel Kernel(CPU, Result);
+  KernelModel Kernel(CPU, Result, &Exports);
   if (auto E = Kernel.initialize(*Image, Options))
     return std::move(E);
   const uint64_t InitialSP = StackBase + StackSize - EntryStackReservation;
@@ -130,7 +112,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     return std::move(E);
   bool Stopped = false;
   std::optional<uint32_t> InvocationReturn;
-  const DriverImport *Pending = nullptr;
+  const KernelExportRegistry::Export *Pending = nullptr;
   auto Stop = [&](DriverStopReason Reason, const std::string &Diagnostic) {
     if (Stopped)
       return;
@@ -170,14 +152,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       return;
     }
-    if (auto I = Thunks.find(Address); I != Thunks.end()) {
-      if (!KernelModel::argumentCount(I->second->Name)) {
+    if (const auto *Export = Exports.lookup(Address)) {
+      if (!KernelModel::argumentCount(Export->Name)) {
         Stop(DriverStopReason::UnsupportedAPI,
-             "unsupported import: " + I->second->Module + "!" +
-                 I->second->Name);
+             "unsupported import: " + Export->Module + "!" + Export->Name);
         return;
       }
-      Pending = I->second;
+      Pending = Export;
       CPU.stop();
       return;
     }
@@ -189,6 +170,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (!Size || Size > MaxInstructionSize) {
       Stop(DriverStopReason::UnsupportedInstruction,
            "invalid x64 instruction extent");
+      return;
+    }
+    if (auto E = Kernel.validateGuestAccess(Address, Size, false)) {
+      Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
       return;
     }
     std::array<uint8_t, MaxInstructionSize> Bytes{};
@@ -264,6 +249,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
 
   auto Deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(Options.TimeoutMilliseconds);
+  auto DeadlineExceeded = [&]() {
+    if (std::chrono::steady_clock::now() < Deadline)
+      return false;
+    Stopped = false;
+    Stop(DriverStopReason::Timeout, "execution time limit reached");
+    return true;
+  };
   auto Invoke = [&](const KernelModel::Invocation &Invocation,
                     const std::string &Phase) -> llvm::Error {
     Result.Phase = Phase;
@@ -325,8 +317,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (!SP)
         return SP.takeError();
       if ((*SP & (StackAlignment - 1)) != PointerSize ||
-          *SP > UINT64_MAX -
-                    (StackArgumentOffset + MaxAPIArguments * PointerSize)) {
+          *SP > UINT64_MAX - (StackArgumentOffset +
+                              MaxVariableAPIArguments * PointerSize)) {
         Stop(DriverStopReason::ModelError,
              "kernel call violates x64 stack alignment");
         break;
@@ -343,24 +335,29 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
         break;
       }
-      for (unsigned I = 0; I < Count; ++I) {
+      auto ReadArgument = [&](unsigned I) -> llvm::Expected<uint64_t> {
+        if (I >= MaxVariableAPIArguments)
+          return failure("kernel call exceeds the variable argument limit");
         if (I >= RegisterArgumentCount) {
           if (auto E = Kernel.validateGuestAccess(
                   *SP + StackArgumentOffset +
                       (I - RegisterArgumentCount) * PointerSize,
                   8, false)) {
-            Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
-            break;
+            return std::move(E);
           }
         }
-        auto Argument =
-            I < RegisterArgumentCount
-                ? CPU.reg(ArgumentRegisters[I])
-                : CPU.readInteger(*SP + StackArgumentOffset +
-                                      (I - RegisterArgumentCount) * PointerSize,
-                                  PointerSize);
+        return I < RegisterArgumentCount
+                   ? CPU.reg(ArgumentRegisters[I])
+                   : CPU.readInteger(*SP + StackArgumentOffset +
+                                         (I - RegisterArgumentCount) *
+                                             PointerSize,
+                                     PointerSize);
+      };
+      for (unsigned I = 0; I < Count; ++I) {
+        auto Argument = ReadArgument(I);
         if (!Argument) {
-          Stop(DriverStopReason::MemoryFault,
+          Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
+                                    : DriverStopReason::ModelError,
                llvm::toString(Argument.takeError()));
           break;
         }
@@ -380,7 +377,24 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
              "kernel call has a non-executable return address");
         break;
       }
-      auto Value = Kernel.call(Pending->Name, Result.Calls.back().Arguments);
+      // Keep fixed arguments independent of the growing trace: a variadic read
+      // can reallocate Event.Arguments while the model still holds ArrayRef.
+      const std::vector<uint64_t> FixedArguments =
+          Result.Calls.back().Arguments;
+      auto ReadVariableArgument = [&](unsigned I) -> llvm::Expected<uint64_t> {
+        auto &Arguments = Result.Calls.back().Arguments;
+        if (I < Arguments.size())
+          return Arguments[I];
+        if (I != Arguments.size())
+          return failure("variadic kernel arguments must be read in order");
+        auto Value = ReadArgument(I);
+        if (!Value)
+          return Value.takeError();
+        Arguments.push_back(*Value);
+        return *Value;
+      };
+      auto Value =
+          Kernel.call(Pending->Name, FixedArguments, ReadVariableArgument);
       if (!Value) {
         std::string Error = llvm::toString(Value.takeError());
         Result.Calls.back().Detail = Error;
@@ -423,6 +437,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   if (Result.Stop == DriverStopReason::Returned && Result.NTStatus == 0) {
     for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
       Result.Phase = std::string(RequestPhase) + std::to_string(Index);
+      if (DeadlineExceeded())
+        break;
       auto Invocation = Kernel.beginRequest(Options.Requests[Index]);
       if (!Invocation) {
         ModelFailure(Invocation.takeError());
@@ -439,7 +455,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         }
       }
     }
-    if (Result.Stop == DriverStopReason::Returned && Options.Unload) {
+    if (Result.Stop == DriverStopReason::Returned && Options.Unload &&
+        !DeadlineExceeded()) {
       Result.Phase = UnloadPhase;
       auto Invocation = Kernel.beginUnload();
       if (!Invocation) {
@@ -463,6 +480,19 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (Result.Stop == DriverStopReason::Returned) {
       Result.Stop = DriverStopReason::ModelError;
     }
+  }
+  if (Result.Stop == DriverStopReason::Returned)
+    DeadlineExceeded();
+  if (auto Fault = CPU.fault()) {
+    DriverFault Observation;
+    Observation.Kind = backendFaultKindName(Fault->Kind);
+    Observation.PC = Fault->PC;
+    Observation.Address = Fault->Address;
+    Observation.Size = Fault->Size;
+    Observation.Interrupt = Fault->Interrupt;
+    if (Fault->Access)
+      Observation.Access = backendAccessKindName(*Fault->Access);
+    Result.Fault = std::move(Observation);
   }
   return Result;
 }

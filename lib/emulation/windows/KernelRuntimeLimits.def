@@ -1,0 +1,14 @@
+//===- KernelRuntimeLimits.def - Bounded runtime API limits ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Explicit limits for guest runtime formatting and counted strings.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_RUNTIME_LIMIT(MaxDebugArguments, 32)
+NEVERD_KERNEL_RUNTIME_LIMIT(MaxDebugFieldWidth, 512)
+NEVERD_KERNEL_RUNTIME_LIMIT(MaxCountedUnicodeBytes, 65534)

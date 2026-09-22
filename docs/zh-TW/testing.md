@@ -38,7 +38,7 @@ cmake --build build-release --target \
 ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 ```
 
-fixture 涵蓋客體初始化、成功與失敗傳回、不支援的行為、記憶體錯誤、嚴格情境解析、有界執行，以及經過 create、IOCTL、cleanup、close 和 unload 的同步緩衝 I/O。使用 [`emulate-driver` CLI](driver-emulation.md) 驗證 JSON 與處理程序結束碼。生產建置可在 `BUILD_TESTING=OFF` 時啟用此功能；`libneverd` 不得依賴僅供測試使用的 Unicorn 設定。
+fixture 涵蓋客體初始化、成功與失敗傳回、不支援的行為、記憶體錯誤、嚴格情境解析、有界執行，以及經過 create、傳輸、cleanup、close 和 unload 的同步緩衝／直接 I/O、READ/WRITE、獨立檔案生命週期、MDL 權限、動態匯出、客體可變參數及結構化 CPU 錯誤。使用 [`emulate-driver` CLI](driver-emulation.md) 驗證 JSON 與處理程序結束碼。生產建置可在 `BUILD_TESTING=OFF` 時啟用此功能；`libneverd` 不得依賴僅供測試使用的 Unicorn 設定。
 
 ## 測試配置
 

@@ -17,7 +17,7 @@ add_custom_command(OUTPUT "${_driver_import_lib}"
 
 set(_driver_outputs)
 set(_driver_case 0)
-foreach(_driver_name success failure unknown fault loop devices readonly privileged opaque gs apifault pendingentry)
+foreach(_driver_name success failure unknown fault loop devices readonly privileged opaque gs apifault pendingentry opaqueargument)
   set(_driver_object "${_driver_fixture_dir}/${_driver_name}.obj")
   set(_driver_image "${_driver_fixture_dir}/${_driver_name}.sys")
   add_custom_command(OUTPUT "${_driver_image}" "${_driver_object}"
@@ -35,7 +35,7 @@ foreach(_driver_name success failure unknown fault loop devices readonly privile
 endforeach()
 # The loader fixture deliberately retains relocations and a compiler-inserted
 # stack protector. The WDM fixture covers the complete synchronous lifecycle.
-foreach(_driver_name loader driver_io)
+foreach(_driver_name loader driver_io driver_direct driver_runtime)
   set(_driver_object "${_driver_fixture_dir}/${_driver_name}.obj")
   set(_driver_image "${_driver_fixture_dir}/${_driver_name}.sys")
   if(_driver_name STREQUAL "loader")
@@ -43,7 +43,7 @@ foreach(_driver_name loader driver_io)
     set(_driver_stack_flag -fstack-protector-all)
     set(_driver_entry GsDriverEntry)
   else()
-    set(_driver_source fixtures/driver_io.c)
+    set(_driver_source "fixtures/${_driver_name}.c")
     set(_driver_stack_flag -fno-stack-protector)
     set(_driver_entry DriverEntry)
   endif()
@@ -68,6 +68,10 @@ add_neverd_unittest(NeverDDriverEmulationTests
   ExecutionPolicyTests.cpp
   DriverScenarioTests.cpp
   KernelModelTests.cpp
+  BackendFaultTests.cpp
+  KernelRuntimeTests.cpp
+  DriverDirectIOTests.cpp
+  KernelExportTests.cpp
   LINK_COMPONENTS Emulation
 )
 target_include_directories(NeverDDriverEmulationTests PRIVATE

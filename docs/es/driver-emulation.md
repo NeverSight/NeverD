@@ -43,16 +43,19 @@ no demuestra que el controlador funcione en Windows.
 
 ## Compatibilidad de controladores
 
-La compatibilidad depende de la ruta de código ejecutada y de sus dependencias,
+La compatibilidad depende de la ruta de código ejecutada y sus dependencias,
 no de la extensión `.sys`. La evidencia actual de aceptación cubre fixtures
-originales independientes y la ruta con búfer del ejemplo WDM SIOCTL de Microsoft.
-No demuestra compatibilidad con controladores arbitrarios de terceros.
+originales independientes y las rutas con búfer, in-direct y out-direct del
+ejemplo WDM SIOCTL de Microsoft, incluida su compilación con registros de
+depuración. No demuestra compatibilidad con controladores arbitrarios de terceros.
 
 | Clase de controlador o requisito | Alcance actual | Entorno que falta |
 |---------------------------------|----------------|-------------------|
-| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización acotada y un ciclo de vida síncrono de archivo | Cada API adicional ejecutada debe tener un modelo definido |
-| IOCTL `METHOD_BUFFERED` | Compatible con el escenario explícito de solicitudes | No hay varios archivos abiertos ni finalización asíncrona |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT`, `METHOD_NEITHER` | Rechazados | MDL, páginas bloqueadas, comprobación de accesos y duración de los búferes de usuario |
+| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización y ciclos de vida síncronos de archivos | Cada API adicional ejecutada requiere un modelo definido |
+| IOCTL `METHOD_BUFFERED` | Compatible, con identidades de archivo independientes y solicitudes intercaladas | La finalización asíncrona no está disponible |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propios de cada solicitud y asignaciones de memoria del sistema | MDL asignados por el controlador, identidades de páginas físicas, DMA y asignaciones de memoria de usuario |
+| READ/WRITE síncronos | Con búfer o directos según los indicadores del dispositivo | E/S neither, selección implícita de la posición de archivo y finalización asíncrona |
+| `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, comprobación de accesos y gestión de excepciones del invitado |
 | Controlador KMDF / UMDF | No compatible | Vinculación al framework, objetos, colas, callbacks y entorno de ejecución anfitrión adecuado |
 | Controlador PnP de bus, función o filtro | La inicialización puede ejecutarse dentro del subconjunto de API; no se admite el ciclo de vida de la pila de dispositivos | Conexión de dispositivos, despacho al controlador inferior, IRP PnP y de energía |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
@@ -85,6 +88,8 @@ virtuales del invitado, incluidas las direcciones canónicas altas del kernel,
 sin sintetizar tablas de páginas de Windows. El valor inicial de RFLAGS es
 `0x202`; el perfil de dispositivo de software utiliza una línea de caché fija
 de 64 bytes. Son propiedades explícitas de este escenario de ejecución.
+Las lecturas x64 de CR8 en línea observan el mismo `PASSIVE_LEVEL`; las escrituras
+de CR8 y otras operaciones de registros de control siguen sin estar admitidas.
 
 Las importaciones desconocidas se vinculan a trampas que se activan al usarlas.
 Una importación no utilizada no impide ejecutar; ejecutar su thunk o leer un
@@ -94,11 +99,11 @@ explícita. NeverD no sustituye llamadas sin implementar por valores de éxito.
 Las imágenes malformadas o los requisitos de carga no compatibles fallan antes
 de la ejecución.
 
-Este perfil no implementa un kernel de Windows completo, un runtime KMDF, el
-ciclo de vida PnP/energía, IRP asíncronas o pendientes, IOCTL direct/neither,
-interrupciones ni planificación multihilo. Los callbacks solo se ejecutan
-cuando el escenario los solicita explícitamente; la inicialización por sí
-sola sigue deteniéndose después de DriverEntry.
+Este perfil no implementa un kernel completo de Windows, un runtime KMDF,
+un ciclo de vida PnP/energía, IRP asíncronos o pendientes, IOCTL neither,
+interrupciones ni planificación multihilo. Los callbacks se ejecutan solo
+cuando el escenario los solicita explícitamente; la inicialización por sí sola
+sigue deteniéndose después de DriverEntry.
 
 Las imágenes utilizan su base preferida salvo que el escenario seleccione una
 dirección de reubicación válida, y deben ser ejecutables PE32+ x64 con el
@@ -116,14 +121,27 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | API | Comportamiento modelado y restricciones |
 |-----|----------------------------------------|
 | `RtlInitUnicodeString` | Construye una `UNICODE_STRING` del invitado para una fuente acotada terminada en NUL |
+| `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copia UTF-16 de longitud explícita y comparación sensible a mayúsculas; la comparación sin distinguir mayúsculas necesita una tabla de conversión de Windows y detiene la ejecución |
+| `ExAllocatePool2` | Asignaciones NX paginadas/no paginadas, inicializadas a cero por defecto; se modelan los indicadores de memoria sin inicializar y de alineación a la caché; los indicadores requeridos inválidos devuelven NULL; los pools con cuotas/ejecutables y las excepciones de asignación detienen la ejecución |
+| `MmGetSystemRoutineAddress` | Resuelve un nombre del invitado de longitud explícita mediante el inventario compartido de exportaciones |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | MDL propios de cada solicitud, asignaciones de memoria del sistema KernelMode con caché, permisos y duración explícitos; se reutilizan las asignaciones seguras existentes |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Asignaciones de datos para los tipos de pool `0`, `1` y `512`; tamaño/tag positivos, tags coincidentes al liberar con tag y sin reutilización de direcciones |
 | `IoCreateDevice`, `IoDeleteDevice` | Tipo de dispositivo `0x22`, características `0` o `0x100`, extensiones acotadas y nombres ASCII `\Device\Name` |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` o `\??\Name` dentro de un espacio de nombres de sesión, con destino `\Device\Name` |
-| `DbgPrint`, `DbgPrintEx` | Texto literal ASCII y `%%`, como máximo 512 bytes de salida; el formato variádico detiene la ejecución; todos los filtros del depurador activados |
+| `DbgPrint`, `DbgPrintEx` | Formato variádico Win64 verificado, con un máximo de 512 bytes de salida; todos los filtros del depurador habilitados |
 | `IoGetCurrentIrpStackLocation` | Devuelve la ubicación de pila de la IRP modelada activa; las macros WDM compiladas normales leen el mismo campo del invitado |
 | `KeGetCurrentIrql` | Devuelve `PASSIVE_LEVEL` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Completa la IRP síncrona modelada activa con `IO_NO_INCREMENT`; no se puede volver a acceder a una IRP completada ni a su búfer |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operaciones acotadas sobre búferes del invitado, como máximo 1 MiB por llamada; las API de copia sin solapamiento rechazan los solapamientos |
+
+El formato de `DbgPrint` admite enteros `d/i/u/o/x/X`, punteros `p`, texto
+`s/c`, `%%`, Unicode de longitud explícita `wZ/lZ`, cadenas anchas `ls/ws`,
+indicadores, anchura/precisión incluido `*` y modificadores de longitud de enteros
+de Windows. Se leen como máximo 32 argumentos variables y 1024 bytes de formato.
+La anchura y la precisión se limitan a 512. Los flotantes, `%n`, las combinaciones
+desconocidas y las conversiones de texto no ASCII detienen explícitamente la
+ejecución; el modelo no adivina una página de códigos de Windows ni llama al
+printf del anfitrión con datos del invitado.
 
 La estructura RegistryPath original y su búfer caducan cuando DriverEntry
 retorna. Los controladores que necesiten la cadena más adelante deben copiarla
@@ -171,34 +189,78 @@ Para un controlador que crea `\Device\NeverDIO` y acepta el IOCTL con búfer
 ```
 
 El nombre del dispositivo y el código IOCTL deben coincidir con el controlador.
-Omitir `device` selecciona el único dispositivo activo; una selección ambigua
-falla. Este modelo sigue un solo archivo abierto y exige create, IOCTL, cleanup
-y close en ese orden. Solo se admiten IOCTL `METHOD_BUFFERED`. El despacho debe
-completar cada IRP de forma síncrona; devolver `STATUS_PENDING`, no completarla,
-proporcionar longitudes de salida no válidas o acceder a una IRP completada
-produce un fallo explícito. La descarga solicitada no debe dejar dispositivos,
-enlaces simbólicos, asignaciones de pool ni objetos de archivo activos.
+En create, omitir `device` selecciona el único dispositivo activo; una selección
+ambigua falla. Las solicitudes posteriores usan el dispositivo de su archivo,
+a menos que se indique un nombre explícito coincidente. El campo opcional `file`
+es una identidad de escenario sin signo de 32 bits, con valor cero por defecto.
+Cada identidad tiene sus propios FILE_OBJECT y FsContext y exige create,
+transferencias, cleanup y close en ese orden. Las solicitudes de archivos
+independientes pueden intercalarse. Los dispositivos exclusivos rechazan una
+segunda apertura. Estas identidades representan objetos de archivo, no handles
+duplicados. Se admiten el método IOCTL con búfer y ambos métodos directos.
+El despacho debe completar cada IRP de forma síncrona; devolver `STATUS_PENDING`,
+no completarlo, indicar longitudes de salida inválidas o acceder a un IRP ya
+completado provoca un fallo explícito. La descarga solicitada no debe dejar
+ningún dispositivo, enlace simbólico, asignación de pool u objeto de archivo activo.
 
 El campo raíz opcional `"load_address": "0x190000000"` solicita cambiar la base;
 su omisión o `"0x0"` utiliza la dirección preferida. La imagen debe cumplir los
 requisitos de reubicación. El comando de inicialización y la API C originales
 no implican ningún escenario.
 
-Solo se aceptan `load_address`, `requests` y `unload` en la raíz. Los campos de
-solicitud son `kind`, el opcional `device` y, solo para `ioctl`, el obligatorio
-`code` junto con los opcionales `input` y `output_size`. Se rechazan campos
-desconocidos o duplicados. `code` acepta un entero JSON de 32 bits sin signo o
-una cadena hexadecimal con `0x`. `input` es una cadena de bytes hexadecimales de
-longitud par, sin prefijo ni espacios; omitirla significa entrada vacía.
-`output_size` es un entero JSON sin signo; omitirlo significa cero. Se rechazan
-fracciones numéricas y notaciones de coma flotante.
+En la raíz solo se aceptan `load_address`, `requests`, `unload` y
+`kernel_exports`. Todas las solicitudes aceptan `kind`, un `device` opcional y
+un `file` opcional. Los IOCTL requieren `code` y aceptan `input`, `output_size`
+y `direct_input`. Un `read` acepta `output_size` y `byte_offset`; un `write`
+acepta `input` y `byte_offset`. Los desplazamientos valen cero por defecto,
+aceptan enteros o cadenas hexadecimales y deben caber en un valor con signo de
+64 bits no negativo. Las solicitudes de ciclo de vida rechazan los campos de
+transferencia. Se rechazan los campos desconocidos o duplicados.
+`code` acepta un entero JSON sin signo de 32 bits o una cadena hexadecimal `0x`.
+`input` es una cadena hexadecimal de bytes de longitud par sin prefijo ni
+espacios; omitirlo significa una entrada vacía. `output_size` es un entero JSON
+sin signo; omitirlo significa cero. Se rechazan fracciones numéricas y
+notaciones de coma flotante.
 
-El texto del escenario está limitado a 2 MiB, con un máximo de 64 solicitudes,
-65536 bytes por búfer de entrada o salida y 512 KiB de bytes de entrada y salida
-en total. Los presupuestos de instrucciones, observaciones, memoria del invitado
-y tiempo se aplican a todo el escenario. La arena de 1 MiB también contiene
-objetos y metadatos, por lo que una imagen puede agotar la memoria del modelo
-antes de consumir el máximo de búferes del escenario.
+Para IOCTL directos, `input` inicializa el primer búfer del sistema y
+`direct_input` inicializa el segundo búfer independiente descrito por el MDL,
+rellenado con ceros hasta `output_size`. `METHOD_IN_DIRECT` requiere acceso de
+lectura; no implica una asignación de memoria del sistema de solo lectura.
+Ambos métodos usan búferes de escenario con lectura/escritura.
+`MdlMappingNoWrite` elimina el permiso de escritura de la asignación y
+`MdlMappingNoExecute` elimina el de ejecución. Desasignar revoca la dirección
+virtual del sistema; volver a asignar conserva los mismos datos bloqueados.
+La finalización caduca el MDL y la asignación. Se modelan los campos públicos
+del MDL usados por macros WDM; se rechazan los campos de proceso/PFN, los MDL
+construidos a mano, las asignaciones de usuario y el acceso directo mediante
+el UserBuffer sin procesar. Un búfer directo de longitud cero tiene un MDL nulo.
+
+Para READ/WRITE, `DO_BUFFERED_IO` o `DO_DIRECT_IO` selecciona el método de
+transferencia. La ausencia de ambos indicadores o su conflicto detiene la
+ejecución. Information se comprueba frente a la longitud de transferencia;
+las escrituras devuelven un recuento y las lecturas devuelven bytes.
+
+`kernel_exports` asocia nombres de rutinas con booleanos de disponibilidad
+explícitos, por ejemplo `"kernel_exports": {"OptionalRoutine": false}`. Las
+exportaciones modeladas y las importaciones estáticas reciben direcciones
+estables compartidas con `MmGetSystemRoutineAddress`. Una exportación
+explícitamente ausente se resuelve a NULL y no puede satisfacer una importación
+estática. Una exportación declarada presente sin modelo de API se resuelve a
+una trampa que se activa al llamarla. Un nombre dinámico desconocido detiene
+la ejecución con un diagnóstico de disponibilidad no especificada; nunca se
+infiere la ausencia a partir de una implementación inexistente. Los nombres
+son ASCII imprimible de longitud acotada y la resolución distingue mayúsculas.
+El inventario es una propiedad concreta del escenario y no pretende coincidir
+con todas las versiones de Windows.
+`IoGetCurrentIrpStackLocation` y `MmGetSystemAddressForMdlSafe` son funciones auxiliares modeladas de las cabeceras WDM; esto no las declara exportadas de forma predeterminada, por lo que su disponibilidad como exportaciones requiere una importación estática o una declaración explícita en `kernel_exports`.
+
+El texto del escenario se limita a 2 MiB, con un máximo de 64 solicitudes,
+65536 bytes por búfer de entrada o salida y 512 KiB de bytes solicitados en
+total, incluido el contenido de `direct_input`. Los presupuestos de instrucciones,
+observaciones, memoria del invitado y tiempo se aplican a todo el escenario.
+La arena de 1 MiB también contiene objetos y metadatos, por lo que una imagen
+puede agotar la memoria del modelo antes de consumir el máximo de los búferes
+del escenario.
 
 ## Comprobación de aceptación con el ejemplo de Microsoft
 
@@ -217,17 +279,20 @@ python3 scripts/validate_windows_driver_sample.py \
   --output build-release/driver-validation/sioctl
 ```
 
-Utilice `--headers` para especificar un directorio de inclusión de MinGW-w64
-distinto del predeterminado. El script genera una biblioteca de importación MS
-COFF a partir de las dependencias del objeto compilado. La comprobación ejecuta
-DriverEntry, create, el IOCTL con búfer del ejemplo, cleanup, close y unload.
-El ejemplo original no registra un manejador cleanup; por ello, el predeterminado
-modelado completa cleanup con `STATUS_INVALID_DEVICE_REQUEST` (`0xC0000010`).
-El controlador aun así se cierra y se descarga, y el IOCTL satisfactorio devuelve
-los bytes esperados. Para este escenario completo, el código de salida esperado
-de la CLI es **2** y `scenario_success` es false. El script solo tiene éxito
-si todos esos resultados coinciden, incluido el fallo visible de cleanup;
-no modifica el ejemplo para ocultar ese resultado.
+Use `--headers` para un directorio de inclusión MinGW-w64 distinto del
+predeterminado. El script genera una biblioteca de importación MS COFF a partir
+de las dependencias del objeto compilado. La comprobación ejecuta escenarios
+con búfer, in-direct y out-direct independientes mediante DriverEntry, create,
+IOCTL, cleanup, close y unload. Añada `--debug` y seleccione otro directorio de
+salida para compilar con `DBG=1` y verificar los mensajes del registro del
+invitado. El ejemplo original no registra un manejador de cleanup; por ello,
+el manejador predeterminado modelado completa cleanup con
+`STATUS_INVALID_DEVICE_REQUEST` (`0xC0000010`). El controlador aun así cierra
+y se descarga, y el IOCTL satisfactorio devuelve los bytes esperados. Para este
+escenario completo, el código de salida esperado de la CLI es **2** y
+`scenario_success` es false. El propio script solo tiene éxito cuando todos
+esos resultados coinciden, incluido el fallo visible de cleanup; no reescribe
+el ejemplo para ocultar ese resultado.
 
 ## Informes y SDK
 
@@ -237,8 +302,8 @@ llamadas de API y el estado observable recopilados antes de detenerse, incluidos
 los objetos de dispositivo y las direcciones de callbacks del controlador.
 Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
-límites y el nombre de servicio de la ejecución. El perfil es
-`wdm-x64-synchronous-v1`. `nt_status` sigue siendo el resultado de DriverEntry,
+límites, el nombre de servicio y las sustituciones de `kernel_exports` de la ejecución. El perfil es
+`wdm-x64-synchronous-v2`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -247,8 +312,16 @@ escritura de CPU también registra su fase (`driver_entry`, `request:N` o
 longitud de información y bytes devueltos en `output_hex`. `preferred_image_base`
 describe la base PE original. `security_cookie` es la dirección del invitado
 de la cookie inicializada, o `"0x0"` si no se requería. Los campos de solicitud
-son `kind`, `device`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`,
+son `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`,
 `information` y `output_hex`.
+
+El objeto anulable `fault` conserva el primer fallo del backend. Sus campos
+`kind`, `pc`, `address` anulable, `size`, `access` e `interrupt` distinguen memoria
+sin asignar o protegida, rangos inválidos, instrucciones inválidas y excepciones
+de CPU. Las direcciones usan cadenas hexadecimales; los tamaños y los vectores
+de interrupción usan enteros. Las lecturas de observación no pueden reemplazar
+el fallo original. Un backend con un fallo no puede reanudar la ejecución, y
+este registro no implica gestión SEH del invitado.
 
 `instructions` cuenta los intentos admitidos de instrucciones del invitado.
 Una instrucción rechazada por la política de ejecución no se cuenta; una

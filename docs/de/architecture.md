@@ -356,7 +356,7 @@ ausführbares Übersetzungs-Backend bereit.
 `lib/emulation` ist eine optionale Ausführungskomponente, aktiviert durch
 `NEVERD_ENABLE_DRIVER_EMULATION`. Die CLI `emulate-driver` erreicht sie über
 die öffentliche C-API. `DriverSession` verwaltet die begrenzte x64-WDM-
-Initialisierung und optionale synchrone create-/IOCTL-/cleanup-/close-/unload-
+Initialisierung und optionale synchrone create-/IOCTL-/read-/write-/cleanup-/close-/unload-
 Aufrufe. Die Windows-Image-Abbildung verwendet das vollständige `BinaryImage`
 des vorhandenen Loaders; das Windows-Modell besitzt Gastobjekte und API-Semantik.
 Der Unicorn-Adapter verwaltet CPU-Ausführung und den maßgeblichen Gastspeicher.
@@ -379,6 +379,17 @@ den synchronen Abschluss; die Sitzung ordnet Callbacks unter gemeinsamen
 Ausführungsbudgets an. Ungenutzte unbekannte Importe werden erst bei Nutzung
 aufgelöst; ihre Ausführung oder das Lesen nicht modellierter Exportdaten
 stoppt ausdrücklich.
+
+Der Exportkatalog weist sowohl statischen Importen als auch dynamisch
+aufgelösten Routinen stabile Gastadressen zu. Exportverfügbarkeit und
+Implementierung sind getrennt: ausdrückliche Abwesenheit wird zu NULL aufgelöst,
+eine vorhandene, nicht modellierte Routine an einen Trap gebunden, und nicht
+festgelegte dynamische Verfügbarkeit stoppt. Das Anforderungsmodell verwaltet
+unabhängige Dateiidentitäten und anforderungseigene MDLs einschließlich
+Abbildungsrechten und Gültigkeitsende. Die Laufzeit liest Gast-Varargs über den
+geprüften Win64-Argumentleser der Sitzung. Backend-Fehler erhalten ihre erste
+strukturierte Ursache; Beobachtung und Berichterstattung setzen eine fehlerhaft
+angehaltene CPU nicht fort und implizieren keine Windows-Ausnahmebehandlung.
 
 ## Grenzen der Ausnahmeumschreibung
 

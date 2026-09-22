@@ -43,14 +43,17 @@ the driver works under Windows.
 
 Compatibility is determined by the executed code path and its dependencies,
 not by the `.sys` extension. The current acceptance evidence covers original
-freestanding fixtures and the buffered path of Microsoft's SIOCTL WDM sample.
+freestanding fixtures and the buffered, in-direct and out-direct paths of
+Microsoft's SIOCTL WDM sample, including its debug logging build.
 It does not establish compatibility with arbitrary third-party drivers.
 
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
-| x64 software WDM driver using the listed APIs | Bounded initialization and one synchronous file lifecycle | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Supported for the explicit request scenario | Multiple open files and asynchronous completion are unavailable |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT`, `METHOD_NEITHER` | Rejected | MDLs, locked pages, access probing, and user-buffer lifetime |
+| x64 software WDM driver using the listed APIs | Initialization and synchronous file lifecycles | Each additional executed API must have a defined model |
+| `METHOD_BUFFERED` IOCTL | Supported, with independent file identities and interleaved requests | Asynchronous completion is unavailable |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | Driver-allocated MDLs, physical page identities, DMA and user mappings |
+| Synchronous READ/WRITE | Buffered or direct according to device flags | Neither I/O, implicit file-position selection and asynchronous completion |
+| `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF / UMDF driver | Unsupported | Framework binding, objects, queues, callbacks, and the appropriate host runtime |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
@@ -78,6 +81,8 @@ The adapter uses Unicorn’s virtual TLB mode to preserve guest virtual addresse
 including canonical high kernel addresses, without synthesizing Windows page
 tables. The initial RFLAGS value is `0x202`; the software-device profile uses a
 fixed 64-byte cache line. These are explicit properties of this execution scenario.
+Inline x64 CR8 reads observe the same `PASSIVE_LEVEL`; CR8 writes and other
+control-register operations remain unsupported.
 
 Unknown imports bind to lazy traps. An unused import does not prevent execution;
 executing its thunk or reading an unmodeled exported data value stops with
@@ -86,7 +91,7 @@ NeverD does not replace unimplemented calls with success values. Malformed
 images or unsupported loading requirements fail before execution.
 
 This profile does not implement a complete Windows kernel, KMDF runtime,
-PnP/power lifecycle, asynchronous or pending IRPs, direct/neither-method IOCTLs,
+PnP/power lifecycle, asynchronous or pending IRPs, neither-method IOCTLs,
 interrupts, or multi-thread scheduling. Callbacks execute only when explicitly
 requested by the scenario; initialization alone still stops after DriverEntry.
 
@@ -104,14 +109,25 @@ The initial API model deliberately has a finite contract:
 | APIs | Modeled behavior and restrictions |
 |------|-----------------------------------|
 | `RtlInitUnicodeString` | Builds a guest `UNICODE_STRING` for a bounded NUL-terminated source |
+| `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Counted UTF-16 copy and case-sensitive comparison; case-insensitive comparison requires a Windows case table and stops |
+| `ExAllocatePool2` | Paged/nonpaged NX allocations, zeroed by default; uninitialized and cache-aligned flags modeled; invalid required flags return NULL, quota/executable pools and raised allocation exceptions stop |
+| `MmGetSystemRoutineAddress` | Resolves a counted guest name through the shared export inventory |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs, cached KernelMode system mappings, explicit permissions and lifetime; existing safe mappings are reused |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` or `\??\Name` within one session namespace, targeting `\Device\Name` |
-| `DbgPrint`, `DbgPrintEx` | ASCII literal text and `%%`, at most 512 output bytes; variadic formatting stops; all debugger filters enabled |
+| `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
 | `KeGetCurrentIrql` | Returns `PASSIVE_LEVEL` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Completes the active synchronous modeled IRP with `IO_NO_INCREMENT`; a completed IRP or buffer cannot be accessed again |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
+
+`DbgPrint` formatting supports integer `d/i/u/o/x/X`, pointer `p`, text `s/c`,
+`%%`, counted Unicode `wZ/lZ`, wide `ls/ws`, flags, width/precision including
+`*`, and Windows integer length modifiers. At most 32 variable arguments and
+1024 format bytes are read. Width and precision are limited to 512. Floating
+point, `%n`, unknown combinations and non-ASCII text conversions stop explicitly;
+the model does not guess a Windows code page or call host printf on guest data.
 
 The original RegistryPath record and buffer expire when DriverEntry returns.
 Drivers that need the string later must copy it during initialization.
@@ -153,10 +169,14 @@ For a driver that creates `\Device\NeverDIO` and accepts buffered IOCTL
 }
 ```
 
-The device name and IOCTL code must match the driver. Omitting `device` selects
-the sole live device; ambiguous selection fails. This model tracks one open
-file and requires create, IOCTLs, cleanup, and close in that order. Only
-`METHOD_BUFFERED` IOCTLs are supported. Dispatch must synchronously complete
+The device name and IOCTL code must match the driver. On create, omitting
+`device` selects the sole live device; ambiguous selection fails. Later requests
+use their file's device unless an explicit matching name is given. Optional
+`file` is an unsigned 32-bit scenario identity, defaulting to zero. Each identity
+has its own FILE_OBJECT and FsContext and requires create, transfers, cleanup,
+and close in that order. Requests for independent files may be interleaved.
+Exclusive devices reject a second open. These identities represent file objects,
+not duplicated handles. Buffered and both direct IOCTL methods are supported. Dispatch must synchronously complete
 each IRP; returning `STATUS_PENDING`, failing to complete, invalid output
 lengths, and accessing a completed IRP fail explicitly. Requested unload must
 leave no live device, symbolic link, pool allocation, or file object.
@@ -166,16 +186,47 @@ omission or `"0x0"` uses the preferred address. Relocation requirements must be
 satisfied by the image. No scenario is implied by the original initialization
 command or C API.
 
-Only `load_address`, `requests`, and `unload` are accepted at the root. Request
-fields are `kind`, optional `device`, and, for `ioctl` only, required `code` plus
-optional `input` and `output_size`. Unknown or duplicate fields are rejected.
+Only `load_address`, `requests`, `unload`, and `kernel_exports` are accepted at
+the root. All requests accept `kind`, optional `device` and optional `file`.
+IOCTLs require `code` and accept `input`, `output_size`, and `direct_input`.
+A `read` accepts `output_size` and `byte_offset`; a `write` accepts `input` and
+`byte_offset`. Offsets default to zero, accept integers or hex strings, and must
+fit a nonnegative signed 64-bit value. Lifecycle requests reject transfer fields.
+Unknown or duplicate fields are rejected.
 `code` accepts an unsigned 32-bit JSON integer or a `0x` hexadecimal string.
 `input` is an even-length hexadecimal byte string without a prefix or spaces;
 omission means empty input. `output_size` is an unsigned JSON integer; omission
 means zero. Numeric fractions and floating-point spellings are rejected.
 
+For direct IOCTLs, `input` initializes the first system buffer, while
+`direct_input` initializes the separate MDL-described second buffer, padded
+with zeros to `output_size`. `METHOD_IN_DIRECT` requires read access; it does
+not imply a read-only system mapping. Both methods use readable/writable
+scenario buffers. `MdlMappingNoWrite` removes mapping write access and
+`MdlMappingNoExecute` removes execute access. Unmapping revokes the system VA;
+remapping retains the same locked data. Completion expires the MDL and mapping.
+The public MDL fields used by WDM macros are modeled; process/PFN fields,
+hand-built MDLs, user mappings and direct access through raw UserBuffer are
+rejected. A zero-length direct buffer has a null MDL.
+
+For READ/WRITE, `DO_BUFFERED_IO` or `DO_DIRECT_IO` selects the transfer method.
+Neither or conflicting flags stop. Information is checked against the transfer
+length; writes return a count and reads return bytes.
+
+`kernel_exports` maps routine names to explicit availability booleans, for
+example `"kernel_exports": {"OptionalRoutine": false}`. Modeled exports and
+static imports receive stable addresses shared with `MmGetSystemRoutineAddress`.
+An explicitly absent export resolves to NULL and cannot satisfy a static import.
+A declared present export without an API model resolves to a lazy trap. An
+unknown dynamic name stops with an unspecified-availability diagnostic; absence
+is never inferred from missing implementation. Names are bounded printable
+ASCII and resolution is case-sensitive. The inventory is a concrete scenario
+property, not a claim to match every Windows release.
+`IoGetCurrentIrpStackLocation` and `MmGetSystemAddressForMdlSafe` are modeled WDM header helpers; this does not declare them exported by default, so their export availability requires a static import or an explicit `kernel_exports` declaration.
+
 Scenario text is limited to 2 MiB, with at most 64 requests, at most 65536 bytes
-per input or output buffer, and at most 512 KiB total input plus output bytes.
+per input or output buffer, and at most 512 KiB total requested bytes, including
+`direct_input` contents.
 Instruction, observation, guest-memory, and time budgets apply across the
 entire scenario. The 1 MiB arena also holds objects and metadata, so an image
 can exhaust model memory before consuming the maximum scenario buffers.
@@ -198,8 +249,9 @@ python3 scripts/validate_windows_driver_sample.py \
 
 Use `--headers` for a non-default MinGW-w64 include directory. The script
 generates an MS COFF import library from the compiled object’s dependencies.
-The check runs DriverEntry, create, the sample's buffered IOCTL, cleanup,
-close, and unload. The upstream sample does not register a cleanup handler;
+The check runs separate buffered, in-direct and out-direct scenarios through
+DriverEntry, create, IOCTL, cleanup, close, and unload. Add `--debug` and select
+a separate output directory to compile with `DBG=1` and verify guest log messages. The upstream sample does not register a cleanup handler;
 the modeled default therefore completes cleanup with
 `STATUS_INVALID_DEVICE_REQUEST` (`0xC0000010`). The driver still closes and
 unloads, and the successful IOCTL returns the expected bytes. For this complete
@@ -214,8 +266,9 @@ The JSON report distinguishes `stop_reason`, nullable `nt_status` and
 calls and observable state collected before a stop, including device objects
 and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
-The `configuration` object records the run's limits and service name.
-The profile is `wdm-x64-synchronous-v1`. `nt_status` remains the DriverEntry
+The `configuration` object records the run's limits, service name and
+`kernel_exports` overrides.
+The profile is `wdm-x64-synchronous-v2`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -223,8 +276,15 @@ its phase (`driver_entry`, `request:N`, or `unload`). Each request reports
 dispatch and I/O statuses, completion, information length, and returned `output_hex` bytes.
 `preferred_image_base` describes the original PE base. `security_cookie` is the
 guest address of the initialized cookie, or `"0x0"` if none was required.
-Request fields are `kind`, `device`, `code`, `irp`, `completed`,
+Request fields are `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`,
 `dispatch_status`, `io_status`, `information`, and `output_hex`.
+
+The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,
+nullable `address`, `size`, `access` and `interrupt` distinguish unmapped or
+protected memory, invalid ranges, invalid instructions and CPU exceptions.
+Addresses use hex strings; sizes and interrupt vectors use integers. Observation
+reads cannot replace the original fault. A faulted backend cannot resume, and
+this record does not imply guest SEH handling.
 
 `instructions` counts admitted guest instruction attempts. An instruction
 rejected by the execution policy is not counted; an admitted instruction that

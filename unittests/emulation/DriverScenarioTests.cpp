@@ -49,7 +49,7 @@ TEST(DriverScenario, RejectsUnknownFieldsTypesAndRequestKinds) {
   for (const char *Text :
        {"[]", "null", R"({"unknown":true})", R"({"unload":1})",
         R"({"requests":null})", R"({"requests":[null]})",
-        R"({"requests":[{"kind":"read"}]})",
+        R"({"requests":[{"kind":"unknown"}]})",
         R"({"requests":[{"kind":"create","typo":0}]})",
         R"({"requests":[{"kind":"close","input":""}]})",
         R"({"requests":[{"kind":"create","device":""}]})",
@@ -59,6 +59,132 @@ TEST(DriverScenario, RejectsUnknownFieldsTypesAndRequestKinds) {
     ASSERT_FALSE(static_cast<bool>(Result));
     EXPECT_FALSE(llvm::toString(Result.takeError()).empty());
   }
+}
+
+TEST(DriverScenario, ParsesIndependentFilesDirectBuffersAndReadWriteOffsets) {
+  auto Result = driverOptionsFromScenarioJSON(R"({
+    "kernel_exports":{"ExAllocatePool2":true,"OptionalKernelRoutine":false},
+    "requests":[
+      {"kind":"create","file":7},
+      {"kind":"write","file":7,"input":"1234","byte_offset":"0x100000000"},
+      {"kind":"read","file":9,"output_size":2,"byte_offset":17},
+      {"kind":"ioctl","code":"0x222001","input":"ab",
+       "direct_input":"cdef","output_size":8,"file":7}
+    ]})");
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Requests.size(), 4u);
+  EXPECT_EQ(Result->Requests[1].Kind, DriverRequestKind::Write);
+  EXPECT_EQ(Result->Requests[1].File, 7u);
+  EXPECT_EQ(Result->Requests[1].ByteOffset, 0x100000000ULL);
+  EXPECT_EQ(Result->Requests[2].Kind, DriverRequestKind::Read);
+  EXPECT_EQ(Result->Requests[2].File, 9u);
+  EXPECT_EQ(Result->Requests[2].ByteOffset, 17u);
+  EXPECT_EQ(Result->Requests[3].DirectInput,
+            (std::vector<uint8_t>{0xcd, 0xef}));
+  EXPECT_TRUE(Result->KernelExports.at("ExAllocatePool2"));
+  EXPECT_FALSE(Result->KernelExports.at("OptionalKernelRoutine"));
+}
+
+TEST(DriverScenario, RejectsConflictingTransferParametersAndExportInventories) {
+  for (
+      const char *Text :
+      {R"({"requests":[{"kind":"read","input":""}]})",
+       R"({"requests":[{"kind":"write","output_size":0}]})",
+       R"({"requests":[{"kind":"write","direct_input":""}]})",
+       R"({"requests":[{"kind":"close","byte_offset":0}]})",
+       R"({"requests":[{"kind":"read","byte_offset":-1}]})",
+       R"({"requests":[{"kind":"read","byte_offset":"0x8000000000000000"}]})",
+       R"({"requests":[{"kind":"read","byte_offset":"0x7fffffffffffffff","output_size":1}]})",
+       R"({"requests":[{"kind":"write","byte_offset":9223372036854775807,"input":"ab"}]})",
+       R"({"requests":[{"kind":"read","file":4294967296}]})",
+       R"({"requests":[{"kind":"ioctl","code":1,"direct_input":"aabb","output_size":1}]})",
+       R"({"requests":[{"kind":"ioctl","code":0,"direct_input":"aa","output_size":1}]})",
+       R"({"requests":[{"kind":"ioctl","code":3,"direct_input":"aa","output_size":1}]})",
+       R"({"kernel_exports":[]})", R"({"kernel_exports":{"Foo":1}})",
+       R"({"kernel_exports":{"":true}})",
+       R"({"kernel_exports":{"Foo":true,"Foo":false}})"}) {
+    SCOPED_TRACE(Text);
+    auto Result = driverOptionsFromScenarioJSON(Text);
+    ASSERT_FALSE(static_cast<bool>(Result));
+    EXPECT_FALSE(llvm::toString(Result.takeError()).empty());
+  }
+}
+
+TEST(DriverScenario, NativeOptionsShareTransferAndAggregateBudgetValidation) {
+  DriverOptions Base;
+  DriverRequest Request;
+  Request.Kind = DriverRequestKind::Read;
+  Request.Input = {1};
+  Base.Requests.push_back(Request);
+  auto Result = driverOptionsFromScenarioJSON("{}", Base);
+  ASSERT_FALSE(static_cast<bool>(Result));
+  llvm::consumeError(Result.takeError());
+  Base.Requests.clear();
+  Request.Kind = DriverRequestKind::DeviceControl;
+  Request.ControlCode = 1;
+  Request.Input.clear();
+  Request.OutputSize = DriverScenarioBufferLimit;
+  Request.DirectInput.assign(DriverScenarioBufferLimit, 1);
+  Base.Requests.assign(5, Request);
+  Result = driverOptionsFromScenarioJSON("{}", Base);
+  ASSERT_FALSE(static_cast<bool>(Result));
+  EXPECT_NE(llvm::toString(Result.takeError()).find("512 KiB"),
+            std::string::npos);
+}
+
+TEST(DriverScenario, NativeInvalidTransfersFailBeforeImageLoading) {
+  DriverRequest Read;
+  Read.Kind = DriverRequestKind::Read;
+  Read.ByteOffset = INT64_MAX;
+  Read.OutputSize = 1;
+  DriverRequest Write;
+  Write.Kind = DriverRequestKind::Write;
+  Write.ByteOffset = INT64_MAX;
+  Write.Input = {0xab};
+  DriverRequest Buffered;
+  Buffered.ControlCode = 0;
+  Buffered.OutputSize = 1;
+  Buffered.DirectInput = {0xab};
+  for (const auto &Request : {Read, Write, Buffered}) {
+    DriverOptions Options;
+    Options.Requests.push_back(Request);
+    auto Result =
+        emulateDriver("missing-scenario-preflight-image.sys", Options);
+    ASSERT_FALSE(static_cast<bool>(Result));
+    EXPECT_EQ(llvm::toString(Result.takeError()).find("driver scenario:"), 0u);
+  }
+}
+
+TEST(DriverScenario, NativeDeviceNamesSharePrintableASCIIValidation) {
+  for (unsigned char Byte : {0, 0x1f, 0x7f, 0x80}) {
+    SCOPED_TRACE(static_cast<unsigned>(Byte));
+    DriverRequest Request;
+    Request.Kind = DriverRequestKind::Create;
+    Request.Device = "\\Device\\Name";
+    Request.Device += static_cast<char>(Byte);
+    DriverOptions Options;
+    Options.Requests.push_back(Request);
+    auto Result =
+        emulateDriver("missing-scenario-preflight-image.sys", Options);
+    ASSERT_FALSE(static_cast<bool>(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("printable ASCII"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverScenario, AcceptsOffsetBoundariesAndDefersNeitherExecutionSupport) {
+  auto Result = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"read","byte_offset":"0x7fffffffffffffff","output_size":0},
+    {"kind":"read","byte_offset":"0x7ffffffffffffffe","output_size":1},
+    {"kind":"write","byte_offset":"0x7fffffffffffffff","input":""},
+    {"kind":"write","byte_offset":"0x7ffffffffffffffe","input":"ab"},
+    {"kind":"ioctl","code":3,"output_size":1}
+  ]})");
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Requests.size(), 5u);
+  EXPECT_EQ(Result->Requests.back().ControlCode, 3u);
+  auto Native = driverOptionsFromScenarioJSON("{}", *Result);
+  ASSERT_TRUE(static_cast<bool>(Native)) << llvm::toString(Native.takeError());
 }
 
 TEST(DriverScenario, RejectsInexactOrOutOfRangeCodesAndBufferSizes) {

@@ -48,6 +48,16 @@ llvm::Error X64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
     return failure(std::string("unmodeled CPU environment instruction: ") +
                    Insn->mnemonic);
   };
+  const cs_x86 &X86 = Insn->detail->x86;
+  // WDM headers inline KeGetCurrentIrql as a CR8 read on x64. This profile
+  // executes only at PASSIVE_LEVEL, forbids all CR8 writes and cannot enable
+  // virtual interrupts. Unicorn's concrete CR8 read is therefore the same
+  // zero IRQL exposed by the kernel API. Do not extend this exception to CR8
+  // mutation or a profile that models IRQL transitions without owning TPR.
+  if (Insn->id == X86_INS_MOV && X86.op_count == 2 &&
+      X86.operands[0].type == X86_OP_REG && X86.operands[0].size == 8 &&
+      X86.operands[1].type == X86_OP_REG && X86.operands[1].reg == X86_REG_CR8)
+    return llvm::Error::success();
   if (cs_insn_group(Handle, Insn.get(), CS_GRP_PRIVILEGE) ||
       cs_insn_group(Handle, Insn.get(), CS_GRP_INT) ||
       cs_insn_group(Handle, Insn.get(), CS_GRP_IRET) ||
@@ -66,7 +76,6 @@ llvm::Error X64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
   default:
     break;
   }
-  const cs_x86 &X86 = Insn->detail->x86;
   // XLAT reads [RBX + zero_extend(AL)] but has no explicit memory operand in
   // Capstone's detail. Its effective segment override still changes the
   // address, so the ordinary operand walk cannot establish this boundary.

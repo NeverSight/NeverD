@@ -89,6 +89,12 @@ TEST(DriverEmulation, InvalidGuestMemoryStopsWithObservations) {
   EXPECT_EQ(Result->Stop, DriverStopReason::MemoryFault) << Result->Diagnostic;
   EXPECT_GT(Result->Instructions, 0u);
   EXPECT_FALSE(Result->NTStatus);
+  ASSERT_TRUE(Result->Fault);
+  EXPECT_EQ(Result->Fault->Kind, "unmapped_memory");
+  EXPECT_EQ(Result->Fault->Address, 0x12345000ULL);
+  EXPECT_EQ(Result->Fault->Size, 8u);
+  EXPECT_EQ(Result->Fault->Access, "write");
+  EXPECT_EQ(Result->Fault->PC, Result->PC);
 }
 
 TEST(DriverEmulation, SectionWriteProtectionIsEnforced) {
@@ -111,6 +117,19 @@ TEST(DriverEmulation, ReadingOpaqueDriverSectionStopsInsteadOfInventingState) {
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
   EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
   EXPECT_FALSE(Result->NTStatus);
+}
+
+TEST(DriverEmulation, OpaqueFixedArgumentIsAModelErrorWithoutABackendFault) {
+  auto Result = emulateDriver(fixture("opaqueargument"));
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+  EXPECT_NE(Result->Diagnostic.find("unmodeled Windows object field"),
+            std::string::npos);
+  EXPECT_FALSE(Result->Fault);
+  ASSERT_EQ(Result->Calls.size(), 1u);
+  EXPECT_EQ(Result->Calls[0].Name, "IoCreateDevice");
+  EXPECT_EQ(Result->Calls[0].Arguments.size(), 6u);
+  EXPECT_FALSE(Result->Calls[0].Result);
 }
 
 TEST(DriverEmulation, UnsupportedGSAccessStopsBeforeReadingUnknownThreadState) {

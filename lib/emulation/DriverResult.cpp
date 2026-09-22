@@ -77,7 +77,11 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::AddDevice, Address(Result.AddDevice)},
       {field::Diagnostic, Result.Diagnostic},
       {field::NTStatus, nullptr},
-      {field::NTSuccess, nullptr}};
+      {field::NTSuccess, nullptr},
+      {field::Fault, nullptr}};
+  llvm::json::Object Exports;
+  for (const auto &[Name, Present] : Result.Configuration.KernelExports)
+    Exports[Name] = Present;
   Root[field::Configuration] = llvm::json::Object{
       {field::ServiceName, Result.Configuration.ServiceName},
       {field::InstructionLimit, Result.Configuration.InstructionLimit},
@@ -85,7 +89,24 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::EventLimit, Result.Configuration.EventLimit},
       {field::TimeoutMilliseconds, Result.Configuration.TimeoutMilliseconds},
       {field::LoadAddress, Address(Result.Configuration.LoadAddress)},
-      {field::Unload, Result.Configuration.Unload}};
+      {field::Unload, Result.Configuration.Unload},
+      {field::KernelExports, std::move(Exports)}};
+  if (Result.Fault) {
+    const auto &Fault = *Result.Fault;
+    llvm::json::Object Item{
+        {field::Kind, Fault.Kind}, {field::PC, Address(Fault.PC)},
+        {field::Address, nullptr}, {field::Size, nullptr},
+        {field::Access, nullptr},  {field::Interrupt, nullptr}};
+    if (Fault.Address)
+      Item[field::Address] = Address(*Fault.Address);
+    if (Fault.Size)
+      Item[field::Size] = *Fault.Size;
+    if (Fault.Access)
+      Item[field::Access] = *Fault.Access;
+    if (Fault.Interrupt)
+      Item[field::Interrupt] = *Fault.Interrupt;
+    Root[field::Fault] = std::move(Item);
+  }
   if (Result.NTStatus) {
     Root[field::NTStatus] = *Result.NTStatus;
     Root[field::NTSuccess] =
@@ -139,6 +160,8 @@ std::string driverResultJSON(const DriverResult &Result) {
     llvm::json::Object Item{
         {field::Kind, requestKindName(Request.Kind)},
         {field::Device, Request.Device},
+        {field::File, Request.File},
+        {field::ByteOffset, Address(Request.ByteOffset)},
         {field::ControlCode, Request.ControlCode},
         {field::IRP, Address(Request.IRP)},
         {field::Completed, Request.Completed},
