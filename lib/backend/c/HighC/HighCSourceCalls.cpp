@@ -1,3 +1,4 @@
+#include "../../../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "HighCWriter.h"
 
 #include "neverd/Limits.h"
@@ -123,6 +124,42 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       E.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       E.MemoryOrdering != NdMemoryOrdering::None)
     return bad("incompatible operation effects");
+  if (Hint.BooleanResult && Hint.CallKind != Kind::SwiftBooleanProjection)
+    return bad("Boolean projection belongs to another binding kind");
+  if (Hint.CallKind == Kind::SwiftBooleanProjection) {
+    if (!isSwiftBooleanSourceBinding(Hint) || Opts.TheArch != Arch::AArch64 ||
+        !CurrentFunc ||
+        CurrentFunc->Entry != Hint.BooleanResult->FunctionEntry ||
+        E.IsIndirectCall ||
+        E.CallAddr != Hint.BooleanResult->Site.StaticTarget ||
+        E.Operands.size() != 5 ||
+        !equalSourceTypes(E.Type, Hint.Signature.ReturnType))
+      return bad("invalid Swift Boolean projection");
+    const auto Link = SwiftBooleanComparisonImport.drop_front().str();
+    if (SourceNativeSignatures.count(Link) ||
+        SourceRuntimeLinkNames.count(Link) ||
+        std::any_of(SourceRuntimeLinkNames.begin(),
+                    SourceRuntimeLinkNames.end(),
+                    [&](const auto &Entry) { return Entry.second == Link; }) ||
+        DefinedFuncs.count(Link) ||
+        DefinedFuncs.count(SwiftBooleanComparisonImport.str()) ||
+        SourceNativeSignatures.count(SwiftBooleanSourceName.str()))
+      return bad("conflicting Swift Boolean runtime declaration");
+    std::string Call = "((uint8_t)" + SwiftBooleanSourceName.str() + "(";
+    for (unsigned I = 0; I != 5; ++I) {
+      if (!E.Operands[I])
+        return bad("missing Swift Boolean argument");
+      const auto Value =
+          sourceValue(exprStr(*E.Operands[I]), E.Operands[I]->Type,
+                      Hint.Signature.Parameters[I].Type);
+      if (!Value)
+        return bad("incompatible Swift Boolean argument carrier");
+      if (I)
+        Call += ", ";
+      Call += *Value;
+    }
+    return Call + "))";
+  }
   const auto &Signature = Hint.Signature;
   if (Hint.NilTerminated &&
       (Hint.CallKind != Kind::ObjCMessage || Hint.Format || !Hint.Receiver ||

@@ -150,16 +150,16 @@ inline bool samePhysicalSourceCall(const SourceFunctionTypeHint &Observed,
 
 inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
   return Binding.CallKind == SourceCallTypeHint::Kind::Native &&
-         !Binding.ValueWitness && !Binding.DoesNotReturn &&
-         !Binding.WeakImport && !Binding.ReturnedArgument &&
-         !Binding.RuntimeObjCResultType && Binding.Selector.empty() &&
-         Binding.OwnerClass.empty() && !Binding.SelectorReferenceAddress &&
+         !Binding.BooleanResult && !Binding.ValueWitness &&
+         !Binding.DoesNotReturn && !Binding.WeakImport &&
+         !Binding.ReturnedArgument && !Binding.RuntimeObjCResultType &&
+         Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+         !Binding.SelectorReferenceAddress &&
          Binding.BorrowedByteInputs.empty() &&
          Binding.SwiftStringInputs.empty() && !Binding.Format &&
-         !Binding.NilTerminated &&
-         !Binding.SwiftTypeMetadata && !Binding.Receiver &&
-         !Binding.SelectorResultUse && !Binding.SelectorResultTypeUse &&
-         !Binding.SelectorArgumentTypeUse &&
+         !Binding.NilTerminated && !Binding.SwiftTypeMetadata &&
+         !Binding.Receiver && !Binding.SelectorResultUse &&
+         !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
          !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot;
 }
@@ -3378,6 +3378,9 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return false;
   const auto &Binding = *Expression.SourceCallHint;
+  if (Binding.BooleanResult ||
+      Binding.CallKind == SourceCallTypeHint::Kind::SwiftBooleanProjection)
+    return false; // Requires the current pipeline and caller proof.
   const auto &Hint = Binding.Signature;
   if (Binding.NilTerminated &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||

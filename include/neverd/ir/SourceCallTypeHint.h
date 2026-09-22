@@ -3,6 +3,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/SourceTypeHint.h"
+#include "neverd/ir/low/SourceCallOccurrence.h"
 
 #include <tuple>
 
@@ -162,9 +163,18 @@ struct SourceCallTypeHint {
     RuntimeSelectorReferenceAddress,
     /// A complete counter/metadata factory projected only in one verified
     /// Objective-C caller. Its counter retains the shared profiling storage.
-    RuntimeObjCMetadataFactory
+    RuntimeObjCMetadataFactory,
+    /// Caller-proven normalization of a raw Swift i1 result. The logical
+    /// byte signature describes the source expression, never the runtime ABI.
+    SwiftBooleanProjection
   };
   Kind CallKind = Kind::Native;
+  struct BooleanResultProjection {
+    va_t FunctionEntry = 0;
+    SourceCallOccurrenceKey Site;
+  };
+  /// Identity only; publication must repeat the current caller proof.
+  std::optional<BooleanResultProjection> BooleanResult;
   enum class SwiftValueWitnessKind {
     Destroy,
     InitializeWithCopy,

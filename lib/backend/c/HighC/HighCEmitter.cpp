@@ -14,6 +14,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 
+#include "../../../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "HighCWriter.h"
 
 #define DEBUG_TYPE "neverd-highc-emitter"
@@ -198,6 +199,8 @@ void HighCWriter::prepareFunctionIdentifiers(
         else
           Name = Hint.TargetName;
       }
+      if (Hint.CallKind == Kind::SwiftBooleanProjection)
+        Name = SwiftBooleanSourceName.str();
       if (!Name.empty())
         LinkedRuntimeNames.insert(std::move(Name));
     }
@@ -657,6 +660,9 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                    SourceCallTypeHint::Kind::SwiftStringBridge) {
           NeedsSwiftStringBridge = true;
         } else if (Hint.CallKind ==
+                   SourceCallTypeHint::Kind::SwiftBooleanProjection) {
+          NeedsSwiftBooleanProjection |= isSwiftBooleanSourceBinding(Hint);
+        } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::SwiftStringFromNSString) {
           NeedsSwiftStringFromNSString = true;
         } else if (Hint.CallKind ==
@@ -1003,6 +1009,14 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
   if (NeedsObjCSuper2)
     OS << "extern void objc_msgSendSuper2(void);\n";
+  if (NeedsSwiftBooleanProjection)
+    OS << "extern _Bool " << SwiftBooleanSourceName
+       << "(uint64_t, void *, uint64_t, void *, uint8_t) __asm__(\""
+       << SwiftBooleanComparisonImport << "\") "
+       << sourceConventionAttribute(
+              SourceFunctionTypeHint::ConventionKind::Swift)
+              .rtrim()
+       << ";\n";
   if (NeedsSwiftStringBridge)
     OS << "extern void *neverd_swift_string_to_nsstring(uint64_t, void *) "
           "__asm__(\"_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF\") "

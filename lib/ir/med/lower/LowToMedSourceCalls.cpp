@@ -1,3 +1,6 @@
+#include "../../../loader/Swift/SwiftBooleanProjection.h"
+#include "../../../loader/Swift/SwiftBooleanSourceBinding.h"
+
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -71,6 +74,21 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (Image) {
     auto BlockHints = buildObjCBlockCallHints(*Image, Low, EntrySignature);
     Hints.insert(BlockHints.begin(), BlockHints.end());
+  }
+  if (Image && EntrySignature) {
+    const auto Boolean =
+        qualifySwiftBooleanProjection(*Image, Low, *EntrySignature);
+    const auto Signature = swiftBooleanNormalizedSignature();
+    if (Boolean && Signature) {
+      SourceCallTypeHint Hint;
+      Hint.CallKind = SourceCallTypeHint::Kind::SwiftBooleanProjection;
+      Hint.BooleanResult = SourceCallTypeHint::BooleanResultProjection{
+          Low.Entry, Boolean->Normalization.Site};
+      Hint.Signature = *Signature;
+      Hint.TargetAddress = Boolean->Runtime.ImportSlot;
+      Hint.TargetName = SwiftBooleanComparisonImport.drop_front().str();
+      Hints.emplace(Boolean->Normalization.Site.Instruction, std::move(Hint));
+    }
   }
   const auto &TRI = getTargetRegInfo(TargetArch);
   auto Temporary = [&](uint16_t Size) {
@@ -148,6 +166,17 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       std::string Diagnostic;
       if (!Hint || Hint->Signature.Architecture != TargetArch ||
           !validateSourceABI(Hint->Signature, Diagnostic)) {
+        Ops.push_back(std::move(Op));
+        continue;
+      }
+      if (Hint->BooleanResult &&
+          (!isSwiftBooleanSourceBinding(*Hint) ||
+           Hint->BooleanResult->FunctionEntry != Low.Entry ||
+           Hint->BooleanResult->Site.Instruction != Op.Addr ||
+           Hint->BooleanResult->Site.Sequence != Op.OriginSeq ||
+           Hint->BooleanResult->Site.Opcode != Op.Opcode ||
+           !Op.Inputs[0].isConst() ||
+           Hint->BooleanResult->Site.StaticTarget != Op.Inputs[0].ConstVal)) {
         Ops.push_back(std::move(Op));
         continue;
       }
@@ -279,6 +308,18 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
               4));
           ReturnOps.push_back(std::move(Extract));
         }
+      } else if (Hint->CallKind ==
+                 SourceCallTypeHint::Kind::SwiftBooleanProjection) {
+        // Only this exact occurrence has a complete caller proof that zeroing
+        // undefined bits is unobservable. Ordinary narrow returns retain their
+        // unknown upper-byte dependency below.
+        Op.Output = Temporary(1);
+        MedOp Extend;
+        Extend.Opcode = NdOp::INT_ZEXT;
+        Extend.Addr = Op.Addr;
+        Extend.Output = ndVarToMedVar(NdVar::reg(Return.RegisterOffset, 8));
+        Extend.addInput(Op.Output);
+        ReturnOps.push_back(std::move(Extend));
       } else if (Return.Kind == SourceABICarrierKind::IntegerRegister &&
                  Return.ValueBytes < 8) {
         // A scalar ABI result does not define the rest of its register. Keep
@@ -310,8 +351,7 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Merge.addInput(Value);
         ReturnOps.push_back(std::move(Upper));
         ReturnOps.push_back(std::move(Merge));
-      } else if (Return.Kind ==
-                     SourceABICarrierKind::FloatingRegister &&
+      } else if (Return.Kind == SourceABICarrierKind::FloatingRegister &&
                  TRI.isVectorReg(Return.RegisterOffset)) {
         auto [WideOffset, WideBytes] =
             TRI.findWideReg(Return.RegisterOffset, Return.ValueBytes);

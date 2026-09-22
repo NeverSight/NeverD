@@ -24,6 +24,23 @@ inline constexpr llvm::StringLiteral SwiftBooleanComparisonImport =
 inline constexpr llvm::StringLiteral SwiftBooleanComparisonProvider =
     "/usr/lib/swift/libswiftCore.dylib";
 
+/// Canonical physical inputs shared by raw runtime and logical source facts.
+inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
+  SourceFunctionTypeHint Inputs;
+  Inputs.ReturnType = NdType::makeVoid();
+  const auto Word = NdType::makeInt(8, false);
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Inputs.Parameters = {{"lhs0", Word},
+                       {"lhs1", Pointer},
+                       {"rhs0", Word},
+                       {"rhs1", Pointer},
+                       {"expecting", NdType::makeInt(1, false)}};
+  std::string Error;
+  if (!assignDarwinSwiftSourceABI(Inputs, Arch::AArch64, Error))
+    return std::nullopt;
+  return Inputs;
+}
+
 /// Compiler evidence: Actions 35653573282, consumer db8d4079f67bd90beb8bbf50ff7
 /// 26ac0c488f6d5, Xcode 26.5/17F42. Both ARM64 device and simulator Swift/C
 /// probes produce swiftcc i1(i64, ptr, i64, ptr, i8). The C probe has a genuine
@@ -51,21 +68,12 @@ swiftBooleanRuntimeCandidate(const BinaryImage &Image, va_t ImportSlot) {
       Slot->second.Name != *Import || Slot->second.Addend)
     return std::nullopt;
 
-  SourceFunctionTypeHint Inputs;
-  Inputs.ReturnType = NdType::makeVoid();
-  const auto Word = NdType::makeInt(8, false);
-  const auto Pointer = NdType::makePtr(NdType::makeVoid());
-  Inputs.Parameters = {{"lhs0", Word},
-                       {"lhs1", Pointer},
-                       {"rhs0", Word},
-                       {"rhs1", Pointer},
-                       {"expecting", NdType::makeInt(1, false)}};
-  std::string Error;
-  if (!assignDarwinSwiftSourceABI(Inputs, Arch::AArch64, Error))
+  auto Inputs = swiftBooleanComparisonInputs();
+  if (!Inputs)
     return std::nullopt;
   SourceBooleanResultContract Raw;
   Raw.Architecture = Arch::AArch64;
-  Raw.Parameters = std::move(Inputs.Parameters);
+  Raw.Parameters = std::move(Inputs->Parameters);
   Raw.ResultRegister = getTargetRegInfo(Arch::AArch64).IntReturnReg;
   Raw.ResultCarrierBytes = 8;
   Raw.DefinedResultBits = 1;

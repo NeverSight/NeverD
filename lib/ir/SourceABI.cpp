@@ -723,7 +723,7 @@ swiftValueWitnessSlot(SourceCallTypeHint::SwiftValueWitnessKind Operation) {
 
 bool isSwiftValueWitnessSourceCallHint(const SourceCallTypeHint &Hint,
                                        Arch Architecture) {
-  if (!Hint.ValueWitness)
+  if (!Hint.ValueWitness || Hint.BooleanResult)
     return false;
   const auto Expected =
       swiftValueWitnessSourceCallHint(Architecture, *Hint.ValueWitness);

@@ -1,3 +1,4 @@
+#include "../../../lib/loader/Swift/SwiftBooleanSourceBinding.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -70,11 +71,12 @@ SourceCallTypeHint native(llvm::StringRef Name, TypeRef Return,
   return Hint;
 }
 
-std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true) {
+std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
+                 Arch Architecture = Arch::X64) {
   std::string Result;
   llvm::raw_string_ostream OS(Result);
   CEmitterOptions Options;
-  Options.TheArch = Arch::X64;
+  Options.TheArch = Architecture;
   Options.EmitIncludes = Includes;
   Options.EmitComments = false;
   EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options));
@@ -2230,4 +2232,104 @@ int main(void) {
     }
     EXPECT_NE(Render(Bad).find("bad source call"), std::string::npos);
   }
+}
+
+namespace {
+HighFunc booleanSourceFunction() {
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::SwiftBooleanProjection;
+  Hint.Signature = *swiftBooleanNormalizedSignature();
+  Hint.TargetName = SwiftBooleanComparisonImport.drop_front().str();
+  Hint.TargetAddress = 0x2080;
+  Hint.BooleanResult = SourceCallTypeHint::BooleanResultProjection{
+      0x1000, {0x101c, 0, NdOp::CALL, 0x1100}};
+  std::vector<ExprPtr> Args;
+  std::vector<TypeRef> Types;
+  for (const auto &P : Hint.Signature.Parameters) {
+    Args.push_back(parameter(Args.size(), P.Type));
+    Types.push_back(P.Type);
+  }
+  auto E = call(Hint, Hint.Signature.ReturnType, Args);
+  E->CallAddr = 0x1100;
+  auto Function = returning("projected_bool", E, Types);
+  Function.Entry = 0x1000;
+  return Function;
+}
+} // namespace
+
+TEST(HighCSourceCalls, SwiftBooleanUsesTrueI1DeclarationAndPreservesArguments) {
+  const auto Source = emit({booleanSourceFunction()}, true, Arch::AArch64);
+  EXPECT_NE(Source.find("extern _Bool neverd_swift_string_compare_bool"),
+            std::string::npos);
+  EXPECT_NE(Source.find("swiftcall"), std::string::npos);
+  EXPECT_NE(Source.find("((uint8_t)neverd_swift_string_compare_bool("),
+            std::string::npos);
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos);
+  const auto Program = Source + R"(
+static unsigned calls;
+_Bool __attribute__((swiftcall)) neverd_swift_string_compare_bool(
+    uint64_t a, void *b, uint64_t c, void *d, uint8_t e) {
+  ++calls;
+  return a == 5 && b == (void *)0x1234 && c == 7 && d == (void *)0x5678 && e == 255;
+}
+int main(void) {
+  if (projected_bool(5, (void *)0x1234, 7, (void *)0x5678, 255) != 1 || calls != 1) return 1;
+  if (projected_bool(6, (void *)0x1234, 7, (void *)0x5678, 255) != 0 || calls != 2) return 2;
+  return 0;
+}
+)";
+  compileAndRun(Program, {"-O0", "-Werror"});
+  compileAndRun(Program, {"-O2", "-Werror"});
+}
+
+TEST(HighCSourceCalls, SwiftBooleanRejectsForeignBindingsAndBytePrototypes) {
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = booleanSourceFunction();
+    auto E = Function.Body[0].RetVal;
+    auto Hint = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+    E->SourceCallHint = Hint;
+    switch (Mutation) {
+    case 0:
+      Hint->BooleanResult.reset();
+      break;
+    case 1:
+      Hint->BooleanResult->FunctionEntry += 4;
+      break;
+    case 2:
+      Hint->CallKind = SourceCallTypeHint::Kind::SwiftRuntimeCall;
+      break;
+    case 3:
+      Hint->Signature.ReturnType = NdType::makeInt(8, false);
+      break;
+    case 4:
+      E->IsIndirectCall = true;
+      break;
+    case 5:
+      E->CallAddr += 4;
+      break;
+    case 6:
+      Hint->ValueWitness = SourceCallTypeHint::SwiftValueWitnessKind::Destroy;
+      break;
+    case 7:
+      Hint->SwiftStringInputs = {{0, 1}};
+      break;
+    }
+    EXPECT_NE(emit({Function}, false, Arch::AArch64).find("bad source call"),
+              std::string::npos);
+  }
+  auto Function = booleanSourceFunction();
+  auto E = Function.Body[0].RetVal;
+  auto Byte = std::make_shared<HighExpr>(*E);
+  auto Hint = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+  Hint->BooleanResult.reset();
+  Hint->CallKind = SourceCallTypeHint::Kind::SwiftRuntimeCall;
+  Byte->SourceCallHint = Hint;
+  HighStmt Statement;
+  Statement.Kind = StmtKind::Call;
+  Statement.CallExpr = Byte;
+  Function.Body.insert(Function.Body.begin(), Statement);
+  EXPECT_NE(emit({Function}, false, Arch::AArch64)
+                .find("conflicting Swift Boolean runtime declaration"),
+            std::string::npos);
 }

@@ -177,6 +177,7 @@ public:
   bool NeedsDarwinStackGuard = false;
   bool NeedsDarwinStackFailure = false;
   bool NeedsSwiftStringBridge = false;
+  bool NeedsSwiftBooleanProjection = false;
   bool NeedsSwiftStringFromNSString = false;
   std::set<std::string> SourceObjectAddressHelpers;
   std::set<std::string> SourceBlockIsaNames;
