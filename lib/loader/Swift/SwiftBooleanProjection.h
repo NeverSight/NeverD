@@ -80,26 +80,28 @@ inline bool superInit(const BinaryImage &Image,
 }
 } // namespace swift_boolean_projection_detail
 
-/// Deliberately bounded to an Objective-C entry, one comparison occurrence,
-/// and other direct calls with freshly catalogued runtime ABIs, exact super
-/// init dispatch or complete eight-instruction class-accessor machine proofs.
-/// Other native candidates and dynamic dispatch, weak imports, indirect calls
-/// and unknown effects do not borrow authority from candidate signatures.
-inline std::optional<SwiftBooleanProjection>
-qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
-                              const SourceFunctionTypeHint &EntrySignature) {
+/// Deliberately bounded to an Objective-C entry, at most eight comparison
+/// occurrences, and other direct calls with freshly catalogued runtime ABIs,
+/// exact super init dispatch or complete eight-instruction class-accessor
+/// machine proofs. Other native candidates and dynamic dispatch, weak imports,
+/// indirect calls and unknown effects do not borrow authority from candidate
+/// signatures.
+inline std::vector<SwiftBooleanProjection>
+qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
+                               const SourceFunctionTypeHint &EntrySignature) {
   if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
       Image.Bits != Bitness::Bits64 || Image.IsRelocatable ||
       Low.Blocks.empty() || Low.Blocks.size() > 256)
-    return std::nullopt;
+    return {};
   const auto Entry = objcMethodSourceTypeHint(Image, Low.Entry);
   if (!Entry || !equalSourceABIs(*Entry, EntrySignature))
-    return std::nullopt;
+    return {};
   for (const auto &Method : Image.ObjCMethods)
     if (Method.Implementation == Low.Entry && Method.Status != "supported")
-      return std::nullopt;
+      return {};
   const auto Hints = buildObjCSourceCallHints(Image, Low);
-  std::optional<SwiftBooleanProjection> Selected;
+  std::vector<SwiftBooleanProjection> Selected;
+  std::map<SourceCallOccurrenceKey, SourceFunctionTypeHint> RawInputs;
   std::map<SourceCallOccurrenceKey, SourceBooleanOtherCallContract> Calls;
   std::map<va_t, SourceFunctionTypeHint> ClassAccessors;
   std::set<va_t> CallInstructions;
@@ -108,20 +110,31 @@ qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
         Block.EndAddr - Block.StartAddr > 32768 ||
         !readImmutableCodeBytes(Image, Block.StartAddr,
                                 Block.EndAddr - Block.StartAddr))
-      return std::nullopt;
+      return {};
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
       const auto Site = sourceCallOccurrenceKey(Op);
       if (!Site || !CallInstructions.insert(Op.Addr).second ||
           !swift_boolean_projection_detail::directCall(Image, *Site))
-        return std::nullopt;
+        return {};
       const auto Candidate =
           swiftBooleanRuntimeVeneerCandidate(Image, *Site->StaticTarget);
       if (Candidate) {
-        if (Selected)
-          return std::nullopt;
-        Selected = SwiftBooleanProjection{{&Low, *Site}, *Candidate};
+        if (Selected.size() == 8)
+          return {};
+        auto Inputs = swiftBooleanComparisonInputs();
+        if (!Inputs)
+          return {};
+        // Other raw Boolean calls establish only their inputs. No result byte
+        // is declared defined: in particular, i1 must not become a byte ABI.
+        const auto [It, Inserted] =
+            RawInputs.emplace(*Site, std::move(*Inputs));
+        if (!Inserted ||
+            !Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
+                 .second)
+          return {};
+        Selected.push_back(SwiftBooleanProjection{{&Low, *Site}, *Candidate});
         continue;
       }
       const auto Hint = Hints.find(Op.Addr);
@@ -130,12 +143,12 @@ qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
         const auto Machine =
             objcClassAccessorMachine(Image, *Site->StaticTarget);
         if (!Machine)
-          return std::nullopt;
+          return {};
         const auto [It, Inserted] =
             ClassAccessors.emplace(*Site->StaticTarget, Machine->Signature);
         if (!Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
                  .second)
-          return std::nullopt;
+          return {};
         continue;
       }
       if (!Slot ||
@@ -148,14 +161,27 @@ qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
                .emplace(*Site,
                         SourceBooleanOtherCallContract{&Hint->second.Signature})
                .second)
-        return std::nullopt;
+        return {};
     }
   }
-  if (!Selected || !proveSourceBooleanResultNormalization(
-                       Low, Image.Arch, Selected->Normalization.Site,
-                       Selected->Runtime.RawContract, Calls, EntrySignature))
-    return std::nullopt;
+  for (const auto &Projection : Selected) {
+    auto OtherCalls = Calls;
+    OtherCalls.erase(Projection.Normalization.Site);
+    if (!proveSourceBooleanResultNormalization(
+            Low, Image.Arch, Projection.Normalization.Site,
+            Projection.Runtime.RawContract, OtherCalls, EntrySignature))
+      return {};
+  }
   return Selected;
+}
+
+inline std::optional<SwiftBooleanProjection>
+qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
+                              const SourceFunctionTypeHint &EntrySignature) {
+  auto Projections = qualifySwiftBooleanProjections(Image, Low, EntrySignature);
+  return Projections.size() == 1
+             ? std::optional<SwiftBooleanProjection>(Projections.front())
+             : std::nullopt;
 }
 } // namespace neverd
 #endif

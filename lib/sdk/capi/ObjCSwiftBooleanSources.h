@@ -63,15 +63,18 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
       Instructions.size() != Audit->LiftedInstructions)
     return false;
   const auto Current =
-      qualifySwiftBooleanProjection(Image, *Low, *Function.SourceTypeHint);
-  if (!Current || Current->Runtime.ImportSlot != Binding.TargetAddress ||
-      Current->Normalization.Site < Binding.BooleanResult->Site ||
-      Binding.BooleanResult->Site < Current->Normalization.Site)
+      qualifySwiftBooleanProjections(Image, *Low, *Function.SourceTypeHint);
+  std::map<SourceCallOccurrenceKey, va_t> Sites;
+  for (const auto &Projection : Current)
+    Sites.emplace(Projection.Normalization.Site, Projection.Runtime.ImportSlot);
+  const auto Selected = Sites.find(Binding.BooleanResult->Site);
+  if (Selected == Sites.end() || Selected->second != Binding.TargetAddress)
     return false;
   // Count evaluations, not unique expression pointers: sharing one node in
   // two statements cannot reuse this one machine occurrence's evidence.
   size_t Budget = 100000, Matches = 0;
   bool Foreign = false;
+  std::set<SourceCallOccurrenceKey> Evaluated;
   std::vector<const HighStmt *> Statements;
   auto Append = [&](const std::vector<HighStmt> &Body) {
     if (Body.size() > Budget - std::min(Budget, Statements.size())) {
@@ -96,7 +99,30 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
           continue;
         if (E->SourceCallHint && E->SourceCallHint->BooleanResult) {
           Matches += E.get() == &Expression;
-          Foreign |= E.get() != &Expression;
+          const auto &Other = *E->SourceCallHint;
+          const auto Site = Sites.find(Other.BooleanResult->Site);
+          Foreign |=
+              !isSwiftBooleanSourceBinding(Other) ||
+              E->Kind != ExprKind::Call || E->IsIndirectCall ||
+              E->CallAddr != Other.BooleanResult->Site.StaticTarget ||
+              E->IntrinsicId != Intrinsic::None ||
+              E->MemoryOrdering != NdMemoryOrdering::None ||
+              E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+              E->Operands.size() != Other.Signature.Parameters.size() ||
+              !equalSourceTypes(E->Type, Other.Signature.ReturnType) ||
+              Other.BooleanResult->FunctionEntry != Function.Entry ||
+              Site == Sites.end() ||
+              (Site != Sites.end() && Site->second != Other.TargetAddress) ||
+              !Evaluated.insert(Other.BooleanResult->Site).second;
+          if (!Foreign)
+            for (size_t I = 0; I < E->Operands.size(); ++I) {
+              const auto &A = E->Operands[I];
+              Foreign |=
+                  !A || !A->Type ||
+                  A->Type->Size != Other.Signature.Parameters[I].Type->Size ||
+                  (A->Type->Kind != NdTypeKind::Int &&
+                   A->Type->Kind != NdTypeKind::Ptr);
+            }
         }
         if (E->Operands.size() > Budget - std::min(Budget, Pending.size())) {
           Budget = 0;

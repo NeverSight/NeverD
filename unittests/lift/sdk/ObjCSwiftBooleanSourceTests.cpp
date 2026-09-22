@@ -13,7 +13,7 @@ struct BooleanFixture {
   BinaryImage Image;
   llvm::LLVMContext Context;
   PipelineResult Result;
-  BooleanFixture(bool Source = true, bool Patch = false) {
+  BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -37,12 +37,14 @@ struct BooleanFixture {
       Section.Type = I ? 0 : llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
       Image.Sections.push_back(Section);
     }
-    const uint32_t Body[] = {0xa9bf7bfd, 0x910003fd, // save FP/LR
-                             0xd28000a0, 0xd2800001, 0xd28000e2,
-                             0xd2800003, 0x52800024,
-                             0x94000039, // BL 0x1100 from 0x101c
-                             0x12000000, // AND W0,W0,#1
-                             0xa8c17bfd, 0xd65f03c0};
+    std::vector<uint32_t> Body = {0xa9bf7bfd, 0x910003fd, // save FP/LR
+                                  0xd28000a0, 0xd2800001, 0xd28000e2,
+                                  0xd2800003, 0x52800024,
+                                  0x94000039, // BL 0x1100 from 0x101c
+                                  0x12000000, // AND W0,W0,#1
+                                  0xa8c17bfd, 0xd65f03c0};
+    if (Twice)
+      Body.insert(Body.end() - 2, {0x94000037, 0x12000000});
     for (unsigned I = 0; I != std::size(Body); ++I)
       word(0x1000 + 4 * I, Body[I]);
     word(0x1100, 0xb0000010);
@@ -61,7 +63,7 @@ struct BooleanFixture {
         parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
     Method.Status = "supported";
     Image.ObjCMethods.push_back(Method);
-    Image.Symbols.push_back({"bool_method", 0x1000, sizeof(Body), true});
+    Image.Symbols.push_back({"bool_method", 0x1000, Body.size() * 4, true});
     PipelineOptions Options;
     Options.EmitDumpOutput = false;
     Options.OnlyFunctionEntries = {0x1000};
@@ -122,6 +124,34 @@ TEST(ObjCSwiftBooleanSources, RealLoweringAndPublicationRepeatCallerProof) {
       for (const auto &Op : B.Ops)
         Normalizations += Op.Opcode == NdOp::INT_AND;
   EXPECT_EQ(Normalizations, 1U);
+}
+
+TEST(ObjCSwiftBooleanSources,
+     DistinctOccurrencesRequireDistinctCurrentEvidence) {
+  BooleanFixture F(true, false, true);
+  std::vector<ExprPtr> Calls;
+  walkStmts(F.high().Body, [&](HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &Root) {
+      if (Root && Root->SourceCallHint && Root->SourceCallHint->BooleanResult)
+        Calls.push_back(Root);
+    });
+  });
+  ASSERT_EQ(Calls.size(), 2U);
+  for (const auto &E : Calls)
+    EXPECT_TRUE(
+        objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  Calls[1]->CallAddr += 4;
+  for (const auto &E : Calls)
+    EXPECT_FALSE(
+        objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  Calls[1]->CallAddr -= 4;
+  auto Duplicate =
+      std::make_shared<SourceCallTypeHint>(*Calls[1]->SourceCallHint);
+  Duplicate->BooleanResult = Calls[0]->SourceCallHint->BooleanResult;
+  Calls[1]->SourceCallHint = Duplicate;
+  for (const auto &E : Calls)
+    EXPECT_FALSE(
+        objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }
 
 TEST(ObjCSwiftBooleanSources, RejectsStaleCurrentProofAndDuplicateEvaluations) {

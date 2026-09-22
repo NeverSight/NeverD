@@ -76,18 +76,20 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     Hints.insert(BlockHints.begin(), BlockHints.end());
   }
   if (Image && EntrySignature) {
-    const auto Boolean =
-        qualifySwiftBooleanProjection(*Image, Low, *EntrySignature);
+    const auto Booleans =
+        qualifySwiftBooleanProjections(*Image, Low, *EntrySignature);
     const auto Signature = swiftBooleanNormalizedSignature();
-    if (Boolean && Signature) {
+    for (const auto &Boolean : Booleans) {
+      if (!Signature)
+        continue;
       SourceCallTypeHint Hint;
       Hint.CallKind = SourceCallTypeHint::Kind::SwiftBooleanProjection;
       Hint.BooleanResult = SourceCallTypeHint::BooleanResultProjection{
-          Low.Entry, Boolean->Normalization.Site};
+          Low.Entry, Boolean.Normalization.Site};
       Hint.Signature = *Signature;
-      Hint.TargetAddress = Boolean->Runtime.ImportSlot;
+      Hint.TargetAddress = Boolean.Runtime.ImportSlot;
       Hint.TargetName = SwiftBooleanComparisonImport.drop_front().str();
-      Hints.emplace(Boolean->Normalization.Site.Instruction, std::move(Hint));
+      Hints.emplace(Boolean.Normalization.Site.Instruction, std::move(Hint));
     }
   }
   const auto &TRI = getTargetRegInfo(TargetArch);

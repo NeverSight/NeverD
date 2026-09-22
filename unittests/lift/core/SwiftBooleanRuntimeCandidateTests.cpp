@@ -397,6 +397,36 @@ TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
 }
 
+TEST(SwiftBooleanProjection,
+     ProvesEveryOccurrenceWithoutInventingOtherResults) {
+  ProjectionFixture F;
+  auto &B = F.Low.Blocks.front();
+  auto Call = B.Ops.front();
+  auto Mask = B.Ops[1];
+  Call.Addr = 0x3008;
+  Mask.Addr = 0x300c;
+  B.Ops.back().Addr = 0x3010;
+  B.Ops.insert(B.Ops.end() - 1, Call);
+  B.Ops.insert(B.Ops.end() - 1, Mask);
+  B.EndAddr = 0x3014;
+  F.word(0x3008, 0x97fff7fe);
+  F.word(0x300c, 0x92400000);
+  F.word(0x3010, 0xd65f03c0);
+  const auto Prove = [&] {
+    return qualifySwiftBooleanProjections(F.Image, F.Low, F.Entry);
+  };
+  ASSERT_EQ(Prove().size(), 2U);
+  B.Ops[1].Inputs[1].Offset = 3;
+  EXPECT_TRUE(Prove().empty()); // Raw padding reaches the next call's input.
+  B.Ops[1].Inputs[1].Offset = 1;
+  B.Ops[3].Inputs[1].Offset = 3;
+  EXPECT_TRUE(Prove().empty()); // The second normalization also needs proof.
+  B.Ops[3].Inputs[1].Offset = 1;
+  ASSERT_EQ(Prove().size(), 2U);
+  F.word(0x3008, 0x97fff7ff);
+  EXPECT_TRUE(Prove().empty()); // The second machine target must still agree.
+}
+
 TEST(SwiftBooleanProjection, RejectsStaleIdentityABIAndObservableUpperBits) {
   for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
     SCOPED_TRACE(Mutation);
