@@ -304,7 +304,9 @@ Export 레지스트리는 정적 import와 동적 루틴 조회에 안정적인 
 
 Windows 모델은 독립적인 비페이지 풀 MDL도 관리하며, 설명자를 해제해도 원래 버퍼는 해제하지 않습니다. 별도 레지스트리 모델이 명시적 시나리오 트리, 핸들 권한, 키·값 수명을 관리하며 정적 내보내기 목록과 분리됩니다. 사전 검증과 실행은 같은 검증 규칙을 사용하고 보고서에는 최종 키·값이 보존됩니다. 언로드 시 남은 핸들을 검사합니다.
 
-`KernelScheduler`는 준비 큐 순서, 콜백 식별자와 타이머 기한을, `KernelDispatcher`는 불투명 DPC·타이머·이벤트 객체와 신호를 관리합니다. `KernelModel`은 대기 등록, 작업 항목/장치 수명과 IRP 완료를 관리합니다. `DriverSession`은 Win64 스택 인수를 포함한 별도 콜백 스택과 전체 CPU 컨텍스트를 중단·복원하며 게스트 메모리는 공유합니다. 가상 시간은 타이머/대기 경계에서 진행하고 CPU0의 결정적 협력 스케줄링으로 DPC는 `DISPATCH_LEVEL`, 작업 항목은 `PASSIVE_LEVEL`에서 실행합니다. 일반 스레드/APC/취소/스핀락, 동시 IRP, KMDF, 전체 PnP/전원 또는 하드웨어 지원은 포함하지 않습니다. API IRQL 상한은 `KernelAPIIRQL.def`에 정의되며 인수별 제한은 담당 모델이 검사합니다.
+`KernelScheduler`는 준비 큐 순서, 콜백 식별자와 타이머 기한을, `KernelDispatcher`는 불투명 DPC·타이머·이벤트 객체와 신호를 관리합니다. `KernelModel`은 대기 등록, 작업 항목/장치 수명과 IRP 완료를 관리합니다. `DriverSession`은 Win64 스택 인수를 포함한 별도 콜백 스택과 전체 CPU 컨텍스트를 중단·복원하며 게스트 메모리는 공유합니다. 가상 시간은 타이머/대기 경계에서 진행하고 CPU0의 결정적 협력 스케줄링으로 DPC는 `DISPATCH_LEVEL`, 작업 항목은 `PASSIVE_LEVEL`에서 실행합니다. 일반 스레드/APC/취소/스핀락, 동시 IRP, 전체 PnP/전원 또는 하드웨어 지원은 포함하지 않습니다. API IRQL 상한은 `KernelAPIIRQL.def`에 정의되며 인수별 제한은 담당 모델이 검사합니다.
+
+`KernelFramework`는 KMDF 1.33 바인딩, 함수 테이블 식별자, 드라이버/일반 객체와 형식화된 컨텍스트 수명을 관리합니다. `DriverSession`은 공유 실행 예산 안에서 중첩 게스트 콜백을 실행하고 중단된 프레임워크 작업을 재개합니다. `DriverImage`는 CFG 메타데이터를 검증하며 `GuardControlFlow`는 선언된 이미지/API 대상을 관리하고 CPU 어댑터는 check/dispatch 호출 상태를 보존합니다. KMDF 장치, 큐, 요청, 클래스 확장이나 UMDF 지원은 포함하지 않습니다.
 
 
 ## 예외 재작성 경계

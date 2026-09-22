@@ -3484,7 +3484,11 @@
       "limitations": [
         "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF/UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
+        "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 11 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
+        "KMDF scope is non-PnP WdfDriverCreate with EvtDriverUnload, generic parented objects, typed contexts, references and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested callbacks can suspend and resume with their caller CPU state and stack retained; devices, queues, requests, cancellation and general framework synchronization are not modeled Failed DriverEntry unregister cleans and destroys objects without calling EvtDriverUnload; adding new references after completed cleanup is outside this profile.",
+        "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
+        "genuine KMDF integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE and NEVERD_KMDF_CFG_FIXTURE paths; absent optional fixtures skip visibly, SDK files are not distributed, and fixture execution evidence remains Linux-only",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF devices/queues/requests, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
         "wdm-x64-scheduled-v3 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
@@ -4193,6 +4197,159 @@
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverDispatcherTests.cpp",
           "filter": "DriverDispatcher.DpcBeforeResumedWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkTests.cpp",
+          "filter": "DriverKernelFramework.VersionOnePublishesDistinctGlobalsAndExactTable",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkTests.cpp",
+          "filter": "DriverKernelFramework.BindingReservesTableAndUnloadThunkBeforeAllocating",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkTests.cpp",
+          "filter": "DriverKernelFramework.AttributeFailuresReturnStatusesWithoutAllocating",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkTests.cpp",
+          "filter": "DriverKernelFramework.ParentCleanupReleasingChildReferenceWaitsUntilCleanupReturns",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverGuardTests.cpp",
+          "filter": "DriverGuardExecution.GuardedCheckAndDispatchPreserveWin64Arguments",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverGuardTests.cpp",
+          "filter": "DriverGuardExecution.UndeclaredTargetsFailAtCheckAndDispatch",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverGuardTests.cpp",
+          "filter": "GuardControlFlow.OnlyExplicitImageAndExportEntriesAreValid",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.RealEntryBindingContextsAndUnloadCallbacks",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.NestedWorkerCleanupWaitPreservesBothContinuations",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.UnmodeledTableEntryStopsAtItsExactIdentity",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.ActiveCFGEntryAndIndirectCallbacks",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.InvalidDriverConfigSizeReturnsDocumentedStatus",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLICompleteGenuineKMDFLifecycle",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLICompleteGenuineKMDFWithActiveCFG",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIPreservesDocumentedKMDFCreateFailures",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverKMDFLifecycleTests.cpp",
+          "filter": "DriverKMDFLifecycle.FailedEntryCleansObjectsWithoutDriverUnloadCallback",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkTests.cpp",
+          "filter": "DriverKernelFramework.ZeroSizeTypedContextHasOpaqueOwnedIdentity",
           "platforms": [
             "linux"
           ]

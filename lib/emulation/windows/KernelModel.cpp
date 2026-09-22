@@ -204,6 +204,17 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
   if (auto E =
           Dispatcher.configure(DriverObject, profile::WorkerThreadIdentity))
     return E;
+  if (Exports) {
+    Framework = std::make_unique<KernelFramework>(
+        Memory, *Exports, [this](uint64_t Size) { return allocate(Size); },
+        [this](uint64_t Address, uint32_t Size, bool IsWrite) {
+          return validateGuestAccess(Address, Size, IsWrite);
+        },
+        [this](uint64_t Address, uint64_t Size) {
+          return prepareReleaseRange(Address, Size);
+        });
+    Framework->configure(DriverObject, RegistryPath, Options.ServiceName);
+  }
   return llvm::Error::success();
 }
 
@@ -769,6 +780,12 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   if (Size > UINT64_MAX - Address)
     return modelError("overflowing guest access in Windows model");
   const uint64_t End = Address + Size;
+  if (Address < profile::GuardThunkBase + profile::PageSize &&
+      profile::GuardThunkBase < End)
+    return modelError("guest access to an opaque CFG helper");
+  if (Framework)
+    if (auto E = Framework->validateGuestAccess(Address, Size, IsWrite))
+      return E;
   if (CurrentIRQL > APCLevel)
     for (const auto &[Base, Allocation] : Allocations)
       if (!Allocation.NonPaged && Address < Base + Allocation.Size &&

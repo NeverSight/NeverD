@@ -268,7 +268,9 @@ Unicorn 透過 `cmake/NeverDUnicorn.cmake` 統一設定一次，與語義測試�
 
 Windows 模型亦管理獨立的非分頁池 MDL；釋放描述符不會釋放底層緩衝區。獨立登錄模型管理明確場景樹、控制代碼權限與機碼值生命週期，與靜態匯出目錄分開。場景預檢與執行使用相同登錄驗證規則，報告保留最終機碼值；卸載檢查遺留控制代碼。
 
-`KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。虛擬時間在計時器／等待邊界推進；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／取消／自旋鎖排程、並行 IRP、KMDF、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
+`KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。虛擬時間在計時器／等待邊界推進；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／取消／自旋鎖排程、並行 IRP、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
+
+`KernelFramework` 管理 KMDF 1.33 繫結、函式表識別、驅動程式／一般物件與具型別內容生命週期。`DriverSession` 在共用執行預算下執行巢狀客體回呼並還原暫停的框架操作。`DriverImage` 驗證 CFG 中繼資料，`GuardControlFlow` 管理已宣告的映像／API 目標，CPU 介面卡保留檢查／分派呼叫狀態。這不包含 KMDF 裝置、佇列、請求、類別擴充或 UMDF。
 
 
 ## 例外重寫邊界

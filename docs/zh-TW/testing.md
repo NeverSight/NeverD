@@ -46,6 +46,8 @@ fixture 涵蓋客體初始化、成功與失敗傳回、不支援的行為、記
 
 `driver_context_limits.c`: API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。DPC 不能呼叫登錄 API，也不能配置、釋放或存取分頁集區；Unicode `DbgPrint` 轉換要求 `PASSIVE_LEVEL`，支援的 ANSI 輸出與非分頁操作仍可在 `DISPATCH_LEVEL` 使用。回呼堆疊有明確邊界，越界堆疊指標不能進入另一阻塞工作項目的堆疊。裝置擴充中的已啟動計時器會阻止裝置提早回收。這些檢查並未開放一般 IRQL 切換。
 
+`DriverGuardTests.cpp` 與四個原創 `driver_guard.c` 變體涵蓋啟用／未啟用的 CFG、重新定位、檢查／分派 ABI，以及格式錯誤或未宣告目標。`KernelFrameworkTests.cpp` 涵蓋繫結與物件契約。原創 `driver_kmdf_lifecycle.c` 可使用真實 WDK 1.33 標頭編譯，並透過真正的 `FxDriverEntry` 程式庫連結；將 `NEVERD_KMDF_FIXTURE` 和 `NEVERD_KMDF_CFG_FIXTURE` 指向分別建置的一般及啟用 CFG 的映像。缺少外部產物時會明確略過。`DriverKMDFLifecycleTests.cpp` 和 `DriverScenarioPublicTests.cpp` 中的 C API／CLI 案例檢查繫結、具型別內容、參考延遲銷毀、實際客體回呼、卸載及文件規定的建立失敗。這些證據來自 Linux 主機，不代表更廣泛的 KMDF 支援。
+
 
 ## 測試配置
 

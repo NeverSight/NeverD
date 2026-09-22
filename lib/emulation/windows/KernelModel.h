@@ -13,6 +13,7 @@
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
 #include "KernelDispatcher.h"
+#include "KernelFramework.h"
 #include "KernelRegistry.h"
 #include "KernelScheduler.h"
 
@@ -29,7 +30,7 @@ class KernelExportRegistry;
 class KernelModel {
 public:
   KernelModel(GuestMemory &Memory, DriverResult &Result,
-              const KernelExportRegistry *Exports = nullptr)
+              KernelExportRegistry *Exports = nullptr)
       : Memory(Memory), Result(Result), Exports(Exports), Registry(Memory),
         Dispatcher(Memory, Scheduler,
                    [this](uint64_t Address, uint32_t Size, bool IsWrite) {
@@ -46,8 +47,17 @@ public:
   llvm::Error finishEntry();
   uint64_t driverObject() const { return DriverObject; }
   uint64_t registryPath() const { return RegistryPath; }
-  /// Exact supported function imports. Unknown imports are never bound as code.
+  /// Fixed kernel argument counts; unknown names have no execution contract.
   static std::optional<unsigned> argumentCount(const std::string &Name);
+  static std::optional<unsigned>
+  argumentCount(const KernelExportRegistry::Export &Export);
+  llvm::Expected<uint64_t>
+  call(const KernelExportRegistry::Export &Export,
+       llvm::ArrayRef<uint64_t> Arguments,
+       llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument);
+  std::optional<KernelFramework::GuestCall> takeGuestCall();
+  llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
+                                                          uint64_t Result);
   llvm::Expected<uint64_t>
   call(const std::string &Name, llvm::ArrayRef<uint64_t> Arguments,
        llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument =
@@ -94,7 +104,8 @@ public:
 private:
   GuestMemory &Memory;
   DriverResult &Result;
-  const KernelExportRegistry *Exports;
+  KernelExportRegistry *Exports;
+  std::unique_ptr<KernelFramework> Framework;
   KernelRegistry Registry;
   KernelScheduler Scheduler;
   KernelDispatcher Dispatcher;

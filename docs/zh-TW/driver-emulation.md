@@ -44,14 +44,14 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驅動程式自行配置的 MDL | 描述模型非分頁集區的獨立描述元，重複使用原始緩衝區位址 | IRP 關聯、MDL 鏈、探查／鎖定頁面、實體頁面及使用者對映 |
 | READ/WRITE | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行 IRP 或請求取消；`METHOD_NEITHER` 與隱含檔案位置 |
 | `METHOD_NEITHER` | 拒絕 | 使用者位址空間環境、存取探測及客體例外處理 |
-| KMDF / UMDF 驅動程式 | 不支援 | 框架繫結、物件、佇列、回呼及對應的主機執行階段 |
+| KMDF 1.33 非 PnP 驅動程式 | 版本繫結、驅動程式和一般物件、具型別內容、參考及實際執行的清理／卸載回呼 | KMDF 裝置、佇列、請求、類別擴充與 UMDF 仍不支援 |
 | PnP 匯流排／功能／篩選驅動程式 | 初始化可在 API 子集內執行；不支援裝置堆疊生命週期 | 裝置附加、向下層驅動程式派送、PnP 與電源 IRP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
 | 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行 IRP 或請求取消 |
 | 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 支援配置的登錄；其他行為限於下列 API | 物件管理員、系統狀態及回呼／事件產生機制 |
 | 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 不支援所需環境 | 裝置模型、實體記憶體、匯流排、中斷及特權 CPU 狀態 |
 | x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
-| 需要 CFG、不支援的載入組態、TLS 或其他遭拒絕 PE 功能的 x64 映像 | 載入時拒絕 | 針對這些需求的明確載入器／執行階段語義 |
+| x64 CFG | 驗證目標表及檢查／分派呼叫；未啟用的插樁保留客體後援函式 | XFG、匯出抑制、不支援的載入組態與 TLS 仍遭拒絕 |
 
 未使用的不支援匯入項目可以維持繫結。一旦執行到不支援的操作，便停止並提供診斷及先前收集的觀察結果。僅 DriverEntry 成功，不能證明後續派送、硬體或框架路徑也受支援。下方 API 表是受支援子集的權威定義。
 
@@ -65,14 +65,22 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排入佇列的 `DelayedWorkQueue` 工作項目在 `PASSIVE_LEVEL` 執行，客體 DPC 回呼在 `DISPATCH_LEVEL` 接收規定的四個參數。CPU0 在呼叫傳回及阻塞等待邊界進行確定性的合作排程。相對、絕對與週期計時器使用虛擬時間；沒有可執行的框架時，時間推進至下一計時器或等待期限。通知型與同步型事件／計時器保留各自的訊號消耗語意。每個回呼擁有獨立的客體堆疊；多個阻塞框架保留區域變數及完整 CPU 內容，客體記憶體仍共用。Win64 回呼入口將前四個參數放入暫存器，其餘放入堆疊。請求仍循序處理：標記 IRP 為待處理的派送函式必須傳回 `STATUS_PENDING`，且完成後才能開始下一個請求。待處理請求或無限等待沒有可用來源時，以停滯的 `model_error` 停止。指令、記憶體、觀察記錄與實際時間預算仍共用。
 
-這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、請求取消、自旋鎖、並行 IRP、一般 IRQL 切換、`METHOD_NEITHER`、KMDF／UMDF、完整 PnP／電源、硬體、DMA 與中斷仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
+這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、請求取消、自旋鎖、並行 IRP、一般 IRQL 切換、`METHOD_NEITHER`、UMDF 及 KMDF 裝置／佇列／請求契約、完整 PnP／電源、硬體、DMA 與中斷仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
 
 工作項目在回呼開始前出佇列，因此回呼可釋放自身的工作項目。釋放仍在佇列中的項目、重複排入、使用失效物件或非客體可執行記憶體中的回呼位址都會明確失敗。裝置參考保留到回呼傳回。請求卸載要求釋放所有工作項目並完成佇列工作。CPU 內容保存與還原包含通用、SIMD、FPU 與控制狀態；客體記憶體始終共用，故障 CPU 不能藉還原內容繼續執行。
 刪除會延後到檔案物件及排隊／執行中的工作項目參考全部釋放。物件區耗盡時，工作項目配置傳回 NULL。
 
-映像預設使用慣用基底位址，除非情境選擇了有效的重新定位位址。映像必須為使用 native 子系統的 PE32+ x64 可執行檔。匯入可來自 `ntoskrnl.exe` 或 `ntkrnlmp.exe`。
+映像預設使用慣用基底位址，除非情境選擇了有效的重新定位位址。映像必須為使用 native 子系統的 PE32+ x64 可執行檔。匯入可來自 `ntoskrnl.exe`、`ntkrnlmp.exe` 或 `WDFLDR.SYS`。
 
-執行載入器支援經驗證的 x64 `DIR64` 基底重新定位，以及有限的安全性 cookie 載入組態；它會在進入點包裝函式執行前設定具確定性的客體 cookie。CFG、其他未建模的載入組態欄位、TLS、延遲／繫結匯入、依序號匯入及受控映像皆會遭拒絕。映像還必須通過嚴格的範圍與對齊檢查。
+執行載入器支援經驗證的 x64 `DIR64` 基底重新定位，以及有限的安全性 cookie 載入組態；它會在進入點包裝函式執行前設定具確定性的客體 cookie。其他未建模的載入組態欄位、TLS、延遲／繫結匯入、依序號匯入及受控映像皆會遭拒絕。映像還必須通過嚴格的範圍與對齊檢查。
+
+啟用的控制流程防護（CFG）會驗證 PE 旗標、指標槽與已排序的可執行目標表。檢查與分派輔助函式僅允許已宣告的映像進入點或已登記的 API 跳板，保留 Win64 呼叫狀態，並拒絕未宣告的目標。只有插樁而未啟用 CFG 時，保留原始客體後援指標。啟用的 XFG、匯出抑制和其他未建模的防護策略仍遭拒絕；位址位於可執行記憶體不代表它是合法目標。
+
+KMDF 支援限於精確的 1.33.0 ABI：458 個函式槽具有穩定的客體識別，只有下列 11 個 API 實作了執行語義。`WdfVersionBind` 與 `WdfVersionUnbind` 驗證並管理客體繫結。真正的 WDK `FxDriverEntry` 包裝函式仍是映像進入點；`WdfGetDriver` 從公用全域結構讀取模型中的驅動程式控制代碼。非 PnP 驅動程式與一般物件支援清零的具型別內容、參考計數、父物件擁有權，以及在共用預算下實際執行的巢狀清理／銷毀／卸載回呼。這些操作目前要求 `PASSIVE_LEVEL`。裝置、佇列、請求、類別擴充、UMDF 和完整 PnP／電源不在此子集內。未建模的函式槽、`WdfLdrQueryInterface` 與類別繫結呼叫會明確停止；列入函式表不代表已經實作。 物件回呼僅在 `PASSIVE_LEVEL` 執行；清理完成後新增參考仍不在此框架執行設定的支援範圍內。
+
+已建模的 KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+
+可選的真實 WDK 驗證使用 `driver_kmdf_lifecycle.c`，需以真正的 KMDF 進入點程式庫單獨編譯連結。將 `NEVERD_KMDF_FIXTURE` 與 `NEVERD_KMDF_CFG_FIXTURE` 指向一般和啟用 CFG 的映像；缺少外部產物時明確略過。原生及 C API／CLI 涵蓋範圍見[測試指南](testing.md)。目前執行證據僅來自 Linux 主機。
 
 初始 API 模型刻意採用有限契約：
 

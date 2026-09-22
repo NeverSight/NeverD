@@ -58,7 +58,7 @@ tiers arbitraires.
 | MDL alloués par le pilote | Descripteurs autonomes du pool non paginé modélisé, partageant les adresses originales | Association à un IRP, chaînes de MDL, sondage/verrouillage, pages physiques et mappages utilisateur |
 | READ/WRITE | E/S buffered/direct sérielles, achèvement par travail ou DPC | Sous-ensemble d’API ci-dessous seulement ; ni IRP concurrents ni annulation de requête ; `METHOD_NEITHER` et position implicite du fichier |
 | `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès et gestion des exceptions invitées |
-| Pilote KMDF / UMDF | Non pris en charge | Liaison au framework, objets, files, callbacks et environnement d’exécution hôte approprié |
+| Pilote KMDF 1.33 non-PnP | Liaison de version, pilote et objets génériques, contextes typés, références et callbacks de nettoyage/déchargement exécutés | Périphériques, files, requêtes, extensions de classe KMDF et UMDF restent exclus |
 | Pilote PnP de bus, de fonction ou de filtre | L’initialisation peut s’exécuter dans le sous-ensemble d’API ; le cycle de vie de la pile de périphériques n’est pas pris en charge | Attachement de périphériques, dispatch vers les pilotes inférieurs, IRP PnP et d’alimentation |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
 | Travail, timers, DPC, événements et attentes | L’IRQL courant est `PASSIVE_LEVEL` pour le dispatch et le travail, et `DISPATCH_LEVEL` pour les DPC | Sous-ensemble d’API ci-dessous seulement ; ni IRP concurrents ni annulation de requête |
@@ -66,7 +66,7 @@ tiers arbitraires.
 | Pilote utilisant des callbacks de processus/thread, d’autres handles, des opérations de fichier ou la découverte de modules noyau | Non pris en charge hors des API listées | Gestionnaire d’objets, état système et producteurs de callbacks/événements |
 | Pilote matériel, DMA, PCI, d’interruption ou de virtualisation | Environnement non pris en charge | Modèles de périphériques, mémoire physique, bus, interruptions et état CPU privilégié |
 | Pilote Windows x86 ou ARM64 | Rejeté | Chargement, ABI et modèle d’exécution propres à l’architecture |
-| Image x64 exigeant CFG, une configuration de chargement non prise en charge, TLS ou d’autres fonctions PE rejetées | Rejetée au chargement | Sémantique explicite du chargeur et de l’exécution pour ces exigences |
+| CFG x64 | Tables de cibles validées et appels check/dispatch ; les pointeurs de repli invités restent inchangés si CFG est inactif | XFG, suppression des exports, configuration de chargement non modélisée et TLS restent rejetés |
 
 Un import non pris en charge mais inutilisé peut rester lié. Atteindre une
 opération non prise en charge arrête l’exécution avec un diagnostic et les
@@ -102,21 +102,29 @@ Les images malformées et les exigences de chargement non prises en charge
 
 Les éléments `DelayedWorkQueue` s’exécutent à `PASSIVE_LEVEL`, les callbacks DPC invités à `DISPATCH_LEVEL` avec les quatre arguments prévus. L’ordonnancement coopératif déterministe sur CPU0 intervient aux retours d’appels et aux attentes bloquantes. Les timers relatifs, absolus et périodiques utilisent un temps virtuel qui avance jusqu’à la prochaine échéance de timer ou d’attente lorsqu’aucun cadre ne peut s’exécuter. Les événements/timers de notification et de synchronisation conservent leurs règles distinctes de consommation du signal. Chaque callback dispose de sa pile invitée ; plusieurs cadres bloqués gardent leurs variables locales et contextes CPU complets, avec une mémoire partagée. Win64 passe les quatre premiers arguments en registres, les suivants sur la pile. Les requêtes restent sérielles : un dispatch marquant l’IRP en attente doit retourner `STATUS_PENDING` et terminer avant la requête suivante. Sans producteur disponible, une requête en attente ou une attente infinie s’arrête avec un `model_error` de blocage. Les budgets d’instructions, mémoire, observations et temps réel restent communs.
 
-Ce modèle borné n’offre pas tout l’asynchronisme Windows. Attentes alertables ou utilisateur, threads système, APC, annulation des requêtes, spinlocks, IRP concurrents, changements généraux d’IRQL, `METHOD_NEITHER`, KMDF/UMDF, PnP/alimentation complet, matériel, DMA et interruptions restent non pris en charge. L’initialisation seule exécute les callbacks explicitement mis en file sans créer de requêtes ni déchargement implicites.
+Ce modèle borné n’offre pas tout l’asynchronisme Windows. Attentes alertables ou utilisateur, threads système, APC, annulation des requêtes, spinlocks, IRP concurrents, changements généraux d’IRQL, `METHOD_NEITHER`, UMDF et contrats KMDF de périphériques/files/requêtes, PnP/alimentation complet, matériel, DMA et interruptions restent non pris en charge. L’initialisation seule exécute les callbacks explicitement mis en file sans créer de requêtes ni déchargement implicites.
 
 L’élément est retiré de la file avant le début de son callback, qui peut donc le libérer. La libération d’un élément encore en file, la double mise en file, les objets expirés et les cibles hors mémoire invitée exécutable échouent explicitement. La référence au périphérique reste détenue jusqu’au retour. Le déchargement exige la libération de tous les éléments et l’achèvement du travail en file. Les contextes CPU préservent les registres généraux, SIMD, FPU et l’état de contrôle ; la mémoire invitée reste partagée et restaurer un contexte ne permet pas de reprendre un CPU en faute.
 La suppression est différée tant que subsistent des objets fichiers ou des références de travail en file/en cours. L’allocation d’un élément retourne NULL si l’arène d’objets est épuisée.
 
 Les images utilisent leur base préférée sauf si un scénario sélectionne une
 adresse de relocalisation valide. Elles doivent être des exécutables PE32+ x64
-avec le sous-système natif. Les imports peuvent provenir de `ntoskrnl.exe` ou
-de `ntkrnlmp.exe`. Le chargeur d’exécution prend en charge les relocalisations
+avec le sous-système natif. Les imports peuvent provenir de `ntoskrnl.exe`,
+`ntkrnlmp.exe` ou `WDFLDR.SYS`. Le chargeur d’exécution prend en charge les relocalisations
 de base x64 `DIR64` validées et une configuration de chargement limitée pour le
 cookie de sécurité, initialisé avant l’enveloppe d’entrée avec un cookie invité
-déterministe. CFG et les autres champs de configuration de chargement non
+déterministe. Les autres champs de configuration de chargement non
 modélisés, TLS, les imports différés/liés, les imports par ordinal et les images
 managées sont rejetés. Les images doivent aussi satisfaire des contrôles stricts
 de plages et d’alignement.
+
+Control Flow Guard (CFG) actif valide les indicateurs PE, les emplacements de pointeurs et les cibles exécutables triées. Les helpers check/dispatch acceptent seulement les entrées déclarées de l’image ou les thunks API enregistrés, préservent l’état d’appel Win64 et rejettent les autres cibles. Une instrumentation sans CFG actif conserve les pointeurs de repli invités d’origine. XFG actif, suppression des exports et autres politiques non modélisées restent rejetés ; une adresse exécutable n’est pas automatiquement une cible valide.
+
+KMDF est limité à l’ABI exacte 1.33.0 : 458 entrées possèdent une identité invitée stable, mais seules les 11 API ci-dessous ont une sémantique exécutée. `WdfVersionBind` et `WdfVersionUnbind` valident et gèrent la liaison invitée. Le véritable wrapper WDK `FxDriverEntry` reste le point d’entrée ; `WdfGetDriver` lit le handle modélisé dans les globals publics. Pilotes non-PnP et objets génériques gèrent contextes typés initialisés à zéro, références, propriété parentale et callbacks invités imbriqués de nettoyage, destruction et déchargement, sous les budgets partagés. Ces opérations exigent actuellement `PASSIVE_LEVEL`. Périphériques, files, requêtes, extensions de classe, UMDF et PnP/alimentation complet restent exclus. Les entrées non modélisées, `WdfLdrQueryInterface` et la liaison de classes arrêtent explicitement l’exécution ; une entrée de table n’implique pas une implémentation. Les callbacks d’objet s’exécutent uniquement à `PASSIVE_LEVEL` ; acquérir de nouvelles références après la fin du nettoyage reste hors de ce profil.
+
+API KMDF modélisées: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+
+La validation WDK facultative compile séparément `driver_kmdf_lifecycle.c` avec la véritable bibliothèque d’entrée KMDF. `NEVERD_KMDF_FIXTURE` et `NEVERD_KMDF_CFG_FIXTURE` désignent les images normale et CFG actif ; les artefacts externes absents entraînent un saut explicite. Voir les [tests](testing.md) pour les cas natifs et C API/CLI. Les preuves actuelles se limitent aux hôtes Linux.
 
 Le modèle initial d’API possède volontairement un contrat limité :
 

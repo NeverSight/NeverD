@@ -48,6 +48,8 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 `driver_context_limits.c`: تأتي حدود IRQL من `KernelAPIIRQL.def` وتتحقق النماذج المسؤولة من الشروط المعتمدة على الوسائط. لا يمكن لـDPC استدعاء واجهات السجل أو تخصيص المخزن المقسّم إلى صفحات أو تحريره أو الوصول إليه. تتطلب تحويلات Unicode في `DbgPrint` مستوى `PASSIVE_LEVEL`، بينما يبقى إخراج ANSI والعمليات غير القابلة للترحيل المدعومة متاحة عند `DISPATCH_LEVEL`. للمكدسات حدود؛ فلا يدخل مؤشر مكدس خارج النطاق مكدس عامل آخر محجوب. تمنع المؤقتات الفعالة في امتداد الجهاز تحريره المبكر. لا تتيح هذه الفحوص تغييرات IRQL العامة.
 
+يغطي `DriverGuardTests.cpp` وأربعة متغيرات أصلية من `driver_guard.c` حالات CFG النشط وغير النشط ونقل العنوان وABI استدعاء check/dispatch والأهداف المشوهة أو غير المعلنة. يغطي `KernelFrameworkTests.cpp` عقود الربط والكائنات. يُترجم الملف الأصلي `driver_kmdf_lifecycle.c` اختياريًا باستخدام ترويسات WDK 1.33 الحقيقية ويرتبط بمكتبة `FxDriverEntry` الحقيقية؛ يشير `NEVERD_KMDF_FIXTURE` و`NEVERD_KMDF_CFG_FIXTURE` إلى الصورتين المبنيتين منفصلتين، العادية وذات CFG النشط. يُعلن التخطي عند غياب المنتجات الخارجية. يتحقق `DriverKMDFLifecycleTests.cpp` وحالات C API/CLI في `DriverScenarioPublicTests.cpp` من الربط والسياقات وتأخير التدمير بالمراجع واستدعاءات الضيف الفعلية وإلغاء التحميل وإخفاقات الإنشاء الموثقة. هذه الأدلة من Linux ولا تثبت دعم KMDF أوسع.
+
 
 ## توزيع الاختبارات
 

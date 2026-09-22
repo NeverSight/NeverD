@@ -15,6 +15,7 @@
 #include "X64ExecutionPolicy.h"
 #include "unicorn/UnicornBackend.h"
 #include "windows/DriverImage.h"
+#include "windows/GuardControlFlow.h"
 #include "windows/KernelExportRegistry.h"
 #include "windows/KernelModel.h"
 
@@ -76,6 +77,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   if (!Backend)
     return Backend.takeError();
   auto &CPU = **Backend;
+  GuardControlFlow Guard(*Image);
   // Temporary writable image pages are private setup state. Final permissions
   // are applied before any guest instruction can run.
   for (const auto &Region : Image->Regions) {
@@ -89,6 +91,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (!Address)
       return Address.takeError();
     if (auto E = CPU.writeInteger(Import.Slot, *Address, PointerSize))
+      return std::move(E);
+  }
+  if (Image->Guard.Enabled) {
+    if (auto E = CPU.writeInteger(Image->Guard.CheckPointerAddress,
+                                  GuardCheckThunk, PointerSize))
+      return std::move(E);
+    if (Image->Guard.DispatchPointerAddress)
+      if (auto E = CPU.writeInteger(Image->Guard.DispatchPointerAddress,
+                                    GuardDispatchThunk, PointerSize))
+        return std::move(E);
+    if (auto E = CPU.map(GuardThunkBase, PageSize, Read | Execute))
       return std::move(E);
   }
   for (const auto &Region : Image->Regions)
@@ -114,8 +127,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   if (auto E = Policy.initialize())
     return std::move(E);
   bool Stopped = false;
-  std::optional<uint32_t> InvocationReturn;
+  std::optional<uint64_t> InvocationReturn;
   const KernelExportRegistry::Export *Pending = nullptr;
+  uint64_t PendingGuard = 0;
   auto Stop = [&](DriverStopReason Reason, const std::string &Diagnostic) {
     if (Stopped)
       return;
@@ -162,13 +176,19 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         Stop(DriverStopReason::ModelError,
              "driver callback returned with an unbalanced stack");
       } else {
-        InvocationReturn = static_cast<uint32_t>(*AX);
+        InvocationReturn = *AX;
         Stop(DriverStopReason::Returned, "");
       }
       return;
     }
+    if (Image->Guard.Enabled &&
+        (Address == GuardCheckThunk || Address == GuardDispatchThunk)) {
+      PendingGuard = Address;
+      CPU.stop();
+      return;
+    }
     if (const auto *Export = Exports.lookup(Address)) {
-      if (!KernelModel::argumentCount(Export->Name)) {
+      if (!KernelModel::argumentCount(*Export)) {
         Stop(DriverStopReason::UnsupportedAPI,
              "unsupported import: " + Export->Module + "!" + Export->Name);
         return;
@@ -289,15 +309,19 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     std::string Phase;
     std::unique_ptr<BackendContext> Context;
     std::optional<KernelModel::Wait> Wait;
-    std::optional<uint32_t> ResumeValue;
+    std::optional<uint64_t> ResumeValue;
     size_t WaitEvent = 0;
+    bool PrivateStack = false;
+    uint64_t ReturnToken = 0;
+    std::optional<KernelFramework::GuestCall> ChildCall;
+    std::unique_ptr<Execution> Parent;
   };
   std::vector<std::unique_ptr<Execution>> Waiting;
   std::array<bool, MaxConcurrentCallbacks> StackMapped{}, StackInUse{};
   auto NewExecution =
       [&](uint64_t PC, llvm::ArrayRef<uint64_t> Arguments,
-          const std::string &Phase,
-          uint64_t ID) -> llvm::Expected<std::unique_ptr<Execution>> {
+          const std::string &Phase, uint64_t ID,
+          bool Nested = false) -> llvm::Expected<std::unique_ptr<Execution>> {
     if (!CPU.executable(PC) || (PC >= ThunkBase && PC < ThunkBase + ThunkSize))
       return failure("driver callback does not name guest executable code");
     if (Arguments.size() > MaxCallbackArguments)
@@ -308,7 +332,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     Frame->Phase = Phase;
     Frame->Base = StackBase;
     Frame->Size = StackSize;
-    if (ID) {
+    Frame->PrivateStack = ID || Nested;
+    if (Frame->PrivateStack) {
       auto Slot = std::find(StackInUse.begin(), StackInUse.end(), false);
       if (Slot == StackInUse.end())
         return failure("concurrent callback stack limit exhausted");
@@ -400,6 +425,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         break;
       }
       Pending = nullptr;
+      PendingGuard = 0;
       if (auto E = CPU.run(NextPC, Remaining)) {
         std::string Message = llvm::toString(std::move(E));
         if (!Stopped)
@@ -412,6 +438,36 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (CPU.timedOut()) {
         Stop(DriverStopReason::Timeout, "execution time limit reached");
         break;
+      }
+      if (PendingGuard) {
+        auto Target =
+            CPU.reg(PendingGuard == GuardCheckThunk ? X64Register::CX
+                                                    : X64Register::AX);
+        if (!Target)
+          return Target.takeError();
+        if (Exports.lookup(*Target))
+          if (auto E = Guard.registerExportTarget(*Target))
+            return E;
+        if (auto E = Guard.validateTarget(*Target))
+          return E;
+        if (PendingGuard == GuardCheckThunk) {
+          auto SP = CPU.reg(X64Register::SP);
+          if (!SP)
+            return SP.takeError();
+          if (auto E = Kernel.validateGuestAccess(*SP, PointerSize, false))
+            return E;
+          auto Return = CPU.readInteger(*SP, PointerSize);
+          if (!Return)
+            return Return.takeError();
+          if (!CPU.executable(*Return))
+            return failure("CFG check has a non-executable return address");
+          if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
+            return E;
+          NextPC = *Return;
+        } else {
+          NextPC = *Target;
+        }
+        continue;
       }
       if (!Pending) {
         Stop(DriverStopReason::EngineError,
@@ -436,7 +492,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       constexpr X64Register ArgumentRegisters[] = {
           X64Register::CX, X64Register::DX, X64Register::R8, X64Register::R9};
-      unsigned Count = *KernelModel::argumentCount(Event.Name);
+      unsigned Count = *KernelModel::argumentCount(*Pending);
       if (Count > MaxAPIArguments) {
         Stop(DriverStopReason::EngineError,
              "kernel API argument contract exceeds the x64 dispatcher limit");
@@ -504,8 +560,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         Arguments.push_back(*Value);
         return *Value;
       };
-      auto Value =
-          Kernel.call(Pending->Name, FixedArguments, ReadVariableArgument);
+      auto Value = Kernel.call(*Pending, FixedArguments, ReadVariableArgument);
       if (!Value) {
         std::string Error = llvm::toString(Value.takeError());
         Result.Calls.back().Detail = Error;
@@ -516,6 +571,18 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (auto E = RefreshWaiters())
         return E;
+      if (auto Call = Kernel.takeGuestCall()) {
+        Frame.ChildCall = std::move(*Call);
+        Frame.WaitEvent = Result.Calls.size() - 1;
+        Frame.PC = *ReturnPC;
+        if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
+          return E;
+        auto Context = CPU.saveContext();
+        if (!Context)
+          return Context.takeError();
+        Frame.Context = std::move(*Context);
+        return llvm::Error::success();
+      }
       if (auto Wait = Kernel.takeWait()) {
         Frame.Wait = *Wait;
         Frame.WaitEvent = Result.Calls.size() - 1;
@@ -549,6 +616,22 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           ModelFailure(std::move(E));
           return llvm::Error::success();
         }
+        if (Current->ChildCall) {
+          auto Call = std::move(*Current->ChildCall);
+          Current->ChildCall.reset();
+          auto Child =
+              NewExecution(Call.PC, Call.Arguments,
+                           "callback:framework" + std::to_string(Call.Token),
+                           Current->ID, true);
+          if (!Child) {
+            ModelFailure(Child.takeError());
+            return llvm::Error::success();
+          }
+          (*Child)->ReturnToken = Call.Token;
+          (*Child)->Parent = std::move(Current);
+          Current = std::move(*Child);
+          continue;
+        }
         if (Current->Wait) {
           Waiting.push_back(std::move(Current));
         } else {
@@ -558,14 +641,51 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             ModelFailure(std::move(E));
             return llvm::Error::success();
           }
+          if (Current->PrivateStack)
+            StackInUse[(Current->Base - CallbackStackBase) /
+                       CallbackStackStride] = false;
+          if (Current->Parent) {
+            auto Completion =
+                Kernel.finishGuestCall(Current->ReturnToken, *InvocationReturn);
+            if (!Completion) {
+              ModelFailure(Completion.takeError());
+              return llvm::Error::success();
+            }
+            auto Parent = std::move(Current->Parent);
+            if (*Completion) {
+              Parent->ResumeValue = **Completion;
+              Result.Calls[Parent->WaitEvent].Result = **Completion;
+            } else {
+              Parent->ChildCall = Kernel.takeGuestCall();
+              if (!Parent->ChildCall) {
+                ModelFailure(
+                    failure("framework continuation lost its guest callback"));
+                return llvm::Error::success();
+              }
+              auto Call = std::move(*Parent->ChildCall);
+              Parent->ChildCall.reset();
+              auto Child = NewExecution(Call.PC, Call.Arguments,
+                                        "callback:framework" +
+                                            std::to_string(Call.Token),
+                                        Parent->ID, true);
+              if (!Child) {
+                ModelFailure(Child.takeError());
+                return llvm::Error::success();
+              }
+              (*Child)->ReturnToken = Call.Token;
+              (*Child)->Parent = std::move(Parent);
+              Current = std::move(*Child);
+              continue;
+            }
+            Current = std::move(Parent);
+            continue;
+          }
           if (!Current->ID)
             return llvm::Error::success();
           if (auto E = Kernel.finishScheduled(Current->ID)) {
             ModelFailure(std::move(E));
             return llvm::Error::success();
           }
-          StackInUse[(Current->Base - CallbackStackBase) /
-                     CallbackStackStride] = false;
           Current.reset();
         }
       }

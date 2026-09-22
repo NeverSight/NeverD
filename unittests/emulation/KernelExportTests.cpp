@@ -147,6 +147,246 @@ TEST(KernelExports, RejectsMalformedInventoryBeforeItCanBecomeAnExport) {
   }
 }
 
+TEST(KernelExports, CanonicalImportProvidersShareOneExplicitPolicy) {
+  for (const char *Module : {"ntoskrnl.exe", "NTOSKRNL.EXE", "NtKrNlMp.ExE"}) {
+    auto Canonical = KernelExportRegistry::canonicalImportModule(Module);
+    ASSERT_TRUE(Canonical);
+    EXPECT_EQ(*Canonical, "ntoskrnl.exe");
+  }
+  for (const char *Module : {"wdfldr.sys", "WDFLDR.SYS", "WdFLdr.Sys"}) {
+    auto Canonical = KernelExportRegistry::canonicalImportModule(Module);
+    ASSERT_TRUE(Canonical);
+    EXPECT_EQ(*Canonical, "wdfldr.sys");
+  }
+  for (const char *Module : {"", "wdf01000.sys", "ntoskrnl", "hal.dll",
+                             "path/ntoskrnl.exe", "ntoskrnl.exe "})
+    EXPECT_FALSE(KernelExportRegistry::canonicalImportModule(Module));
+}
+
+TEST(KernelExports, KernelAndLoaderSameSpellingHaveDistinctIdentities) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t Kernel = requireValue(Registry.resolve("DbgPrint"));
+  const uint64_t Loader =
+      requireValue(Registry.bindImport({0x1000, "WDFLDR.SYS", "DbgPrint"}));
+  ASSERT_NE(Loader, Kernel);
+  EXPECT_EQ(
+      requireValue(Registry.bindImport({0x2000, "NtKrNlMp.ExE", "DbgPrint"})),
+      Kernel);
+  EXPECT_EQ(
+      requireValue(Registry.bindImport({0x3000, "WdFlDr.SyS", "DbgPrint"})),
+      Loader);
+  EXPECT_EQ(requireValue(Registry.resolve("DbgPrint")), Kernel);
+  ASSERT_NE(Registry.lookup(Loader), nullptr);
+  EXPECT_EQ(Registry.lookup(Loader)->Module, "wdfldr.sys");
+  EXPECT_EQ(Registry.lookup(Kernel)->Module, "ntoskrnl.exe");
+  EXPECT_EQ(Registry.lookup(Loader)->Kind,
+            KernelExportRegistry::ExportKind::ModuleExport);
+  EXPECT_EQ(Registry.lookup(Loader)->Binding, 0u);
+}
+
+TEST(KernelExports, KernelPresenceAndAbsenceOverridesCannotOverrideLoader) {
+  for (bool Present : {false, true}) {
+    DriverOptions Options;
+    Options.KernelExports.emplace("WdfVersionBind", Present);
+    KernelExportRegistry Registry;
+    ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+    const uint64_t Kernel = requireValue(Registry.resolve("WdfVersionBind"));
+    const uint64_t Loader = requireValue(
+        Registry.bindImport({0x1000, "WDFLDR.SYS", "WdfVersionBind"}));
+    ASSERT_NE(Loader, 0u);
+    EXPECT_NE(Loader, Kernel);
+    EXPECT_EQ(Kernel != 0, Present);
+    EXPECT_EQ(requireValue(Registry.resolve("WdfVersionBind")), Kernel);
+    if (Present) {
+      EXPECT_EQ(requireValue(Registry.bindImport(
+                    {0x2000, "ntoskrnl.exe", "WdfVersionBind"})),
+                Kernel);
+    } else {
+      EXPECT_NE(requireError(Registry.bindImport(
+                                 {0x2000, "ntoskrnl.exe", "WdfVersionBind"}))
+                    .find("explicitly absent"),
+                std::string::npos);
+    }
+    EXPECT_EQ(Registry.lookup(Loader)->Module, "wdfldr.sys");
+  }
+}
+
+TEST(KernelExports, UnknownLoaderImportsRemainLazyAndCaseSensitive) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t First = requireValue(
+      Registry.bindImport({0x1000, "wdfldr.sys", "UnknownFrameworkRoutine"}));
+  EXPECT_NE(requireError(Registry.resolve("UnknownFrameworkRoutine"))
+                .find("unspecified"),
+            std::string::npos);
+  const uint64_t DifferentSpelling = requireValue(
+      Registry.bindImport({0x2000, "wdfldr.sys", "unknownFrameworkRoutine"}));
+  EXPECT_NE(First, DifferentSpelling);
+  EXPECT_EQ(Registry.lookup(First)->Name, "UnknownFrameworkRoutine");
+  EXPECT_EQ(Registry.lookup(First)->Module, "wdfldr.sys");
+  const uint64_t Kernel = requireValue(
+      Registry.bindImport({0x3000, "ntoskrnl.exe", "UnknownFrameworkRoutine"}));
+  EXPECT_NE(First, Kernel);
+  EXPECT_EQ(requireValue(Registry.resolve("UnknownFrameworkRoutine")), Kernel);
+}
+
+TEST(KernelExports, FrameworkFunctionsRetainBindingAndDoNotAliasImports) {
+  constexpr uint64_t FirstBinding = 0x70004000;
+  constexpr uint64_t SecondBinding = 0x70005000;
+  KernelExportRegistry Registry;
+  DriverOptions Options;
+  Options.KernelExports.emplace("WdfDriverCreate", true);
+  ASSERT_EQ(llvm::toString(Registry.initialize(Options)), "");
+  const uint64_t Kernel = requireValue(Registry.resolve("WdfDriverCreate"));
+  const uint64_t Loader = requireValue(
+      Registry.bindImport({0x1000, "wdfldr.sys", "WdfDriverCreate"}));
+  const uint64_t First = requireValue(
+      Registry.insertFrameworkFunction(FirstBinding, "WdfDriverCreate"));
+  const uint64_t Second = requireValue(
+      Registry.insertFrameworkFunction(SecondBinding, "WdfDriverCreate"));
+  EXPECT_NE(First, Second);
+  EXPECT_NE(First, Kernel);
+  EXPECT_NE(First, Loader);
+  EXPECT_NE(Second, Kernel);
+  EXPECT_NE(Second, Loader);
+  EXPECT_EQ(requireValue(Registry.insertFrameworkFunction(FirstBinding,
+                                                          "WdfDriverCreate")),
+            First);
+  EXPECT_EQ(requireValue(Registry.insertFrameworkFunction(SecondBinding,
+                                                          "WdfDriverCreate")),
+            Second);
+  const auto *Export = Registry.lookup(First);
+  ASSERT_NE(Export, nullptr);
+  EXPECT_EQ(Export->Name, "WdfDriverCreate");
+  EXPECT_EQ(Export->Module, "wdf01000.sys");
+  EXPECT_EQ(Export->Binding, FirstBinding);
+  EXPECT_EQ(Export->Kind, KernelExportRegistry::ExportKind::FrameworkFunction);
+  EXPECT_EQ(requireValue(Registry.resolve("WdfDriverCreate")), Kernel);
+  EXPECT_EQ(Registry.lookup(Second)->Binding, SecondBinding);
+}
+
+TEST(KernelExports, FullFrameworkTablePreservesAllThunkIdentities) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const auto *Kernel =
+      Registry.lookup(requireValue(Registry.resolve("DbgPrint")));
+  ASSERT_NE(Kernel, nullptr);
+  std::vector<uint64_t> Table;
+  for (unsigned I = 0; I < 458; ++I) {
+    const std::string Name = "WdfTableSlot" + std::to_string(I);
+    Table.push_back(
+        requireValue(Registry.insertFrameworkFunction(0x70001000, Name)));
+    if (I)
+      EXPECT_EQ(Table[I], Table[I - 1] + profile::ThunkStride);
+  }
+  EXPECT_EQ(Kernel->Name, "DbgPrint");
+  EXPECT_EQ(Registry.lookup(Kernel->Address), Kernel);
+  for (unsigned I = 0; I < Table.size(); ++I) {
+    const std::string Name = "WdfTableSlot" + std::to_string(I);
+    EXPECT_EQ(requireValue(Registry.insertFrameworkFunction(0x70001000, Name)),
+              Table[I]);
+    ASSERT_NE(Registry.lookup(Table[I]), nullptr);
+    EXPECT_EQ(Registry.lookup(Table[I])->Name, Name);
+    EXPECT_EQ(Registry.lookup(Table[I])->Binding, 0x70001000u);
+  }
+  EXPECT_NE(requireError(Registry.resolve("WdfTableSlot0")).find("unspecified"),
+            std::string::npos);
+}
+
+TEST(KernelExports, NamespaceCapacityNeverAllocatesTheReturnSentinel) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t Kernel = requireValue(Registry.resolve("DbgPrint"));
+  const uint64_t Sentinel =
+      profile::ThunkBase + profile::ThunkSize - profile::ThunkStride;
+  uint64_t Next = profile::ThunkBase;
+  while (Registry.lookup(Next))
+    Next += profile::ThunkStride;
+  unsigned Index = 0;
+  while (Next < Sentinel) {
+    EXPECT_EQ(requireValue(Registry.insertFrameworkFunction(
+                  0x70001000, "WdfCapacity" + std::to_string(Index++))),
+              Next);
+    Next += profile::ThunkStride;
+  }
+  EXPECT_EQ(Registry.lookup(Sentinel), nullptr);
+  EXPECT_NE(
+      requireError(Registry.insertFrameworkFunction(0x70001000, "TooMany"))
+          .find("capacity"),
+      std::string::npos);
+  EXPECT_NE(requireError(
+                Registry.bindImport({0x1000, "wdfldr.sys", "UnknownTooMany"}))
+                .find("capacity"),
+            std::string::npos);
+  EXPECT_EQ(requireValue(Registry.resolve("DbgPrint")), Kernel);
+  EXPECT_NE(requireValue(
+                Registry.insertFrameworkFunction(0x70001000, "WdfCapacity0")),
+            0u);
+  EXPECT_EQ(Registry.lookup(Sentinel), nullptr);
+}
+
+TEST(KernelExports, InvalidIdentitiesDoNotConsumeAThunkOrEstablishPresence) {
+  KernelExportRegistry Registry;
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t Before = requireValue(
+      Registry.bindImport({0x1000, "wdfldr.sys", "BeforeInvalidInputs"}));
+  for (const std::string &Name :
+       {std::string(), std::string("Bad Name"), std::string("Bad\0Name", 8),
+        std::string(profile::MaxKernelExportNameSize + 1, 'A')}) {
+    EXPECT_NE(requireError(Registry.bindImport({0x1000, "wdfldr.sys", Name}))
+                  .find("ASCII"),
+              std::string::npos);
+    EXPECT_NE(requireError(Registry.insertFrameworkFunction(0x70001000, Name))
+                  .find("ASCII"),
+              std::string::npos);
+  }
+  EXPECT_NE(requireError(Registry.insertFrameworkFunction(0, "WdfValid"))
+                .find("binding identity"),
+            std::string::npos);
+  EXPECT_NE(
+      requireError(Registry.bindImport({0x1000, "wdf01000.sys", "WdfValid"}))
+          .find("provider"),
+      std::string::npos);
+  const uint64_t After = requireValue(
+      Registry.bindImport({0x2000, "wdfldr.sys", "AfterInvalidInputs"}));
+  EXPECT_EQ(After, Before + profile::ThunkStride);
+}
+
+TEST(KernelExports, InitializationFailurePublishesNoPartialNamespace) {
+  KernelExportRegistry Registry;
+  EXPECT_NE(requireError(Registry.bindImport({0x1000, "wdfldr.sys", "Any"}))
+                .find("not initialized"),
+            std::string::npos);
+  EXPECT_NE(requireError(Registry.insertFrameworkFunction(1, "Any"))
+                .find("not initialized"),
+            std::string::npos);
+  DriverOptions Options;
+  Options.KernelExports = {{"AlreadySeenAbsent", false}, {"Bad Name", true}};
+  auto Error = Registry.initialize(Options);
+  ASSERT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Registry.lookup(profile::ThunkBase), nullptr);
+  EXPECT_NE(requireError(Registry.resolve("AlreadySeenAbsent"))
+                .find("not initialized"),
+            std::string::npos);
+  Options.KernelExports.clear();
+  for (unsigned I = 0; I < profile::MaxImports; ++I)
+    Options.KernelExports.emplace("Explicit" + std::to_string(I), true);
+  Error = Registry.initialize(Options);
+  ASSERT_TRUE(bool(Error));
+  EXPECT_NE(llvm::toString(std::move(Error)).find("capacity"),
+            std::string::npos);
+  EXPECT_EQ(Registry.lookup(profile::ThunkBase), nullptr);
+  ASSERT_EQ(llvm::toString(Registry.initialize({})), "");
+  const uint64_t Valid = requireValue(Registry.resolve("DbgPrint"));
+  Error = Registry.initialize({});
+  ASSERT_TRUE(bool(Error));
+  EXPECT_NE(llvm::toString(std::move(Error)).find("already initialized"),
+            std::string::npos);
+  EXPECT_EQ(requireValue(Registry.resolve("DbgPrint")), Valid);
+}
+
 class KernelExportLookup : public ::testing::Test {
 protected:
   static constexpr uint64_t Scratch = 0x60000000;
@@ -228,6 +468,29 @@ TEST_F(KernelExportLookup, ReturnsNullOnlyForDeclaredAbsenceOrAnEmptyName) {
   EXPECT_NE(lookupError().find("unspecified"), std::string::npos);
   record(Scratch, 0, 0, 0);
   EXPECT_EQ(lookup(), 0u);
+}
+
+TEST_F(KernelExportLookup, DynamicLookupRemainsKernelOnlyAfterWDFBinding) {
+  const uint64_t Loader = requireValue(
+      Exports.bindImport({0x1000, "WDFLDR.SYS", "WdfVersionBind"}));
+  const uint64_t Function = requireValue(
+      Exports.insertFrameworkFunction(0x70005000, "WdfDriverCreate"));
+  EXPECT_NE(Loader, Function);
+  for (const char *Name : {"WdfVersionBind", "WdfDriverCreate"}) {
+    name(Scratch, Scratch + 32, Name);
+    EXPECT_NE(lookupError().find("unspecified"), std::string::npos);
+  }
+  requireValue(
+      Exports.bindImport({0x2000, "wdfldr.sys", "NeverDOptionalAbsent"}));
+  name(Scratch, Scratch + 32, "NeverDOptionalAbsent");
+  EXPECT_EQ(lookup(), 0u);
+  const uint64_t Kernel =
+      requireValue(Exports.resolve("ExAllocatePoolWithTag"));
+  EXPECT_NE(requireValue(Exports.bindImport(
+                {0x3000, "wdfldr.sys", "ExAllocatePoolWithTag"})),
+            Kernel);
+  name(Scratch, Scratch + 32, "ExAllocatePoolWithTag");
+  EXPECT_EQ(lookup(), Kernel);
 }
 
 TEST_F(KernelExportLookup, RejectsMalformedCountedStringsAndEmbeddedNulls) {

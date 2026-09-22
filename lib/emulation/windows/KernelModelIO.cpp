@@ -519,6 +519,8 @@ llvm::Error KernelModel::finishUnload() {
     return E;
   if (Registry.hasOpenHandles())
     return ioError("unload returned with live registry handles");
+  if (Framework && Framework->hasLiveBinding())
+    return ioError("unload returned with a live framework binding");
   if (!Devices.empty() || !SymbolicLinks.empty() || !Allocations.empty() ||
       !Files.empty() || Request || !MDLs.empty() || !WorkItems.empty() ||
       Scheduler.hasPending())

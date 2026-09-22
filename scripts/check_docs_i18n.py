@@ -2130,6 +2130,16 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         r"NEVERD_KERNEL_DISPATCHER_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelDispatcherAPIs.def")),
     )
+    # The 458-entry identity inventory also names unmodeled traps. Only the
+    # implemented table and loader ABI inventories establish documented APIs.
+    for inventory, macro in (
+        ("KernelFrameworkAPIs.def", "NEVERD_FRAMEWORK_API"),
+        ("KernelFrameworkLoaderAPIs.def", "NEVERD_FRAMEWORK_LOADER_API"),
+    ):
+        exports += re.findall(
+            rf"{macro}\((\w+),",
+            view.read_text(Path("lib/emulation/windows") / inventory),
+        )
     required = (
         "NEVERD_ENABLE_DRIVER_EMULATION=ON",
         "BUILD_TESTING",
@@ -2140,6 +2150,11 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "METHOD_NEITHER",
         "KMDF",
         "UMDF",
+        "KMDF 1.33",
+        "CFG",
+        "XFG",
+        "NEVERD_KMDF_FIXTURE",
+        "NEVERD_KMDF_CFG_FIXTURE",
         "PASSIVE_LEVEL",
         "DISPATCH_LEVEL",
         "KernelMode",

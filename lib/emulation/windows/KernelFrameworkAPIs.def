@@ -1,0 +1,23 @@
+//===- KernelFrameworkAPIs.def - Implemented framework ABI --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Modeled KMDF function-table entries and x64 argument counts, including the
+/// implicit driver-globals argument. Unlisted functions trap when reached.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_API(WdfDriverCreate, 6)
+NEVERD_FRAMEWORK_API(WdfDriverGetRegistryPath, 2)
+NEVERD_FRAMEWORK_API(WdfDriverWdmGetDriverObject, 2)
+NEVERD_FRAMEWORK_API(WdfWdmDriverGetWdfDriverHandle, 2)
+NEVERD_FRAMEWORK_API(WdfObjectGetTypedContextWorker, 3)
+NEVERD_FRAMEWORK_API(WdfObjectAllocateContext, 4)
+NEVERD_FRAMEWORK_API(WdfObjectContextGetObject, 2)
+NEVERD_FRAMEWORK_API(WdfObjectReferenceActual, 5)
+NEVERD_FRAMEWORK_API(WdfObjectDereferenceActual, 5)
+NEVERD_FRAMEWORK_API(WdfObjectCreate, 3)
+NEVERD_FRAMEWORK_API(WdfObjectDelete, 2)

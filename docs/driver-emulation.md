@@ -57,14 +57,14 @@ establish compatibility with arbitrary third-party drivers.
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
 | READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or request cancellation; `METHOD_NEITHER` and implicit file position |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
-| KMDF / UMDF driver | Unsupported | Framework binding, objects, queues, callbacks, and the appropriate host runtime |
+| KMDF 1.33 non-PnP driver | Version binding, driver and generic objects, typed contexts, references and executed cleanup/unload callbacks | KMDF devices, queues, requests, class extensions and UMDF remain unsupported |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
 | Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent IRPs or request cancellation |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Unsupported environment | Device models, physical memory, buses, interrupts and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
-| x64 image requiring CFG, unsupported load configuration, TLS or other rejected PE features | Rejected at load time | Explicit loader/runtime semantics for those requirements |
+| x64 CFG | Validated target tables and check/dispatch calls; inactive instrumentation retains guest fallbacks | XFG, export suppression, unsupported load configuration and TLS remain rejected |
 
 An unused unsupported import can remain bound. Reaching an unsupported operation
 stops with a diagnostic and the observations collected so far. A successful
@@ -110,18 +110,26 @@ instruction, memory, observation and wall-clock budgets still apply.
 This is a bounded scheduling model, not full Windows asynchronous support.
 Alertable or user-mode waits, system threads, APCs, request cancellation,
 spinlocks, concurrent IRPs, general IRQL transitions, `METHOD_NEITHER`,
-KMDF/UMDF, full PnP/power, hardware, DMA and interrupts remain unsupported.
+UMDF and KMDF device/queue/request contracts, full PnP/power, hardware, DMA and interrupts remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
 inventing requests or unload.
 
 Images use their preferred base unless a scenario selects a valid relocated
 address, and must be PE32+ x64 executables with the native subsystem. Imports
-may come from `ntoskrnl.exe` or `ntkrnlmp.exe`.
+may come from `ntoskrnl.exe`, `ntkrnlmp.exe` or `WDFLDR.SYS`.
 The execution loader supports validated x64 `DIR64` base relocations and a
 limited security-cookie load configuration, initialized before the entry wrapper
-with a deterministic guest cookie. CFG and other unmodeled load-configuration
+with a deterministic guest cookie. Other unmodeled load-configuration
 fields, TLS, delayed/bound imports, ordinal imports, and managed images are
 rejected. Images must also pass strict range and alignment checks.
+
+Active Control Flow Guard (CFG) validates PE flags, pointer slots and sorted executable target entries. Check and dispatch helpers admit only declared image entries or registered API thunks, preserve the Win64 call state and reject undeclared targets. Instrumentation without active CFG preserves the original guest fallback pointers. Active XFG, export suppression and other unmodeled guard policies remain rejected; executable memory alone does not make an address a valid target.
+
+KMDF support is limited to the exact 1.33.0 ABI: 458 function slots have stable guest identities, while only the 11 APIs below have execution semantics. `WdfVersionBind` and `WdfVersionUnbind` validate and manage guest bindings. The genuine WDK `FxDriverEntry` wrapper remains the image entry point; `WdfGetDriver` reads the modeled driver handle from public globals. Non-PnP drivers and generic objects support zeroed typed contexts, reference counts, parent ownership and nested guest cleanup/destroy/unload callbacks under shared budgets. These operations currently require `PASSIVE_LEVEL`. Devices, queues, requests, class extensions, UMDF and full PnP/power are outside this subset. Unmodeled function slots, `WdfLdrQueryInterface` and class-binding calls stop explicitly; table membership never implies implementation. Object callbacks execute only at `PASSIVE_LEVEL`; acquiring new references after cleanup completes is outside this framework profile.
+
+Modeled KMDF APIs: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+
+Optional genuine-WDK validation uses `driver_kmdf_lifecycle.c`, compiled separately with the real KMDF entry library. Set `NEVERD_KMDF_FIXTURE` and `NEVERD_KMDF_CFG_FIXTURE` to its normal and active-CFG images; missing external artifacts produce explicit skips. See [testing](testing.md) for the native and C API/CLI coverage. Current execution evidence is limited to Linux hosts.
 
 The initial API model deliberately has a finite contract:
 

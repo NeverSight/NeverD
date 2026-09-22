@@ -49,6 +49,8 @@ fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動
 
 `driver_context_limits.c`: API の IRQL 上限は `KernelAPIIRQL.def` にあり、引数依存の制約は担当モデルが検査します。DPC からレジストリ API やページプールの割り当て・解放・アクセスはできません。Unicode `DbgPrint` 変換は `PASSIVE_LEVEL` を要求し、対応する ANSI 出力と非ページ操作は `DISPATCH_LEVEL` で使用できます。コールバックスタックには範囲があり、逸脱したスタックポインターは別の待機ワーカーのスタックへ侵入できません。デバイス拡張内の有効なタイマーは早期解放を防ぎます。一般の IRQL 変更を公開する機能ではありません。
 
+`DriverGuardTests.cpp` と独自の `driver_guard.c` 4 変種は、有効／非アクティブ CFG、再配置、check/dispatch ABI、不正または未宣言ターゲットを検証します。`KernelFrameworkTests.cpp` はバインドとオブジェクトの契約を検証します。独自の `driver_kmdf_lifecycle.c` は実際の WDK 1.33 ヘッダーでコンパイルし、本物の `FxDriverEntry` ライブラリにリンクする任意の入力です。別途作成した通常版と CFG 有効版を `NEVERD_KMDF_FIXTURE` と `NEVERD_KMDF_CFG_FIXTURE` に指定します。外部成果物がなければ明示的にスキップします。`DriverKMDFLifecycleTests.cpp` と `DriverScenarioPublicTests.cpp` の C API／CLI ケースは、バインド、型付きコンテキスト、参照による破棄延期、実際のゲストコールバック、アンロード、文書化された作成失敗を検証します。実行証拠は Linux ホストに限定され、より広い KMDF 対応を示しません。
+
 
 ## テスト構成
 
