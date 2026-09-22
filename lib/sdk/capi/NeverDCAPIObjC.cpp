@@ -8,6 +8,7 @@
 #include "JSONText.h"
 #include "NativePhaseTrace.h"
 #include "ObjCBlockSources.h"
+#include "ObjCImmutableStringCallbackSources.h"
 #include "ObjCMetadataFactorySources.h"
 #include "ObjCNativeDependencies.h"
 #include "ObjCSourceBindings.h"
@@ -203,6 +204,18 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     }
     for (const auto &[Entry, Projection] : NestedOnceInputs)
       Functions[Entry] = &Projection.Function;
+    std::map<va_t, ObjCSourceBindingResult> ImmutableStringInputs;
+    for (const auto &[Entry, Hint] : OncePlan.CallbackHints) {
+      const auto Found = Functions.find(Entry);
+      if (Found == Functions.end() || !Found->second)
+        continue;
+      auto Projection = projectObjCImmutableStringCallback(
+          *Found->second, S->Img, Result, OncePlan);
+      if (Projection)
+        ImmutableStringInputs.emplace(Entry, std::move(*Projection));
+    }
+    for (const auto &[Entry, Projection] : ImmutableStringInputs)
+      Functions[Entry] = &Projection.Function;
     std::map<va_t, const PipelineFunctionAudit *> Audits;
     for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
       Audits.emplace(Audit.Entry, &Audit);
@@ -248,8 +261,23 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                      MetadataFactoryPlan, ProfileStorage);
       if (MetadataFactoryBinding.Projected)
         MetadataFactoryProjections.insert(Entry);
-      auto Binding = bindObjCSourceReferences(
-          MetadataFactoryBinding.Function, S->Img, &ProfileStorage, &Functions);
+      // The immutable callback already carries all current source bindings.
+      // Its proved scalar pool offsets may numerically overlap image code;
+      // reinterpreting those generated offsets as raw machine addresses would
+      // discard their caller-specific proof. Revalidate the entire body below.
+      auto Binding = ImmutableStringInputs.count(Entry)
+                         ? ImmutableStringInputs.at(Entry)
+                         : bindObjCSourceReferences(
+                               MetadataFactoryBinding.Function, S->Img,
+                               &ProfileStorage, &Functions);
+      if (const auto Immutable = ImmutableStringInputs.find(Entry);
+          Immutable != ImmutableStringInputs.end()) {
+        Binding.Function = MetadataFactoryBinding.Function;
+        if (!objCImmutableStringCallbackValid(Binding.Function, S->Img, Result,
+                                             OncePlan))
+          Binding.Limitation =
+              "immutable string callback proof is no longer valid";
+      }
       Binding.Dependencies.insert(MetadataFactoryBinding.Dependencies.begin(),
                                   MetadataFactoryBinding.Dependencies.end());
       Binding.ProfileCounterSections.insert(
@@ -382,6 +410,13 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                      objcBlockSourceCallBound(Expression, BlockSource,
                                               BlockPlan, Functions);
             });
+        if (ImmutableStringInputs.count(Entry) &&
+            !objCImmutableStringCallbackValid(Binding.Function, S->Img, Result,
+                                             OncePlan)) {
+          Evidence.Complete = false;
+          Evidence.add(SourceProjectionIssue::Body,
+                       "immutable string callback proof is no longer valid");
+        }
         Evidence.append(Binding.Diagnostics);
         if (!Block.Limitation.empty()) {
           Evidence.Complete = false;
@@ -466,6 +501,13 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                           Audit, CallAllowed, &UnboundCall);
         Evidence = objcSourceBodyDiagnostics(
             Projection.Function, *Method.TypeHint, Audit, CallAllowed);
+        if (ImmutableStringInputs.count(Method.Implementation) &&
+            !objCImmutableStringCallbackValid(Projection.Function, S->Img,
+                                             Result, OncePlan)) {
+          Reason = "immutable string callback proof is no longer valid";
+          Evidence.Complete = false;
+          Evidence.add(SourceProjectionIssue::Body, Reason);
+        }
         Evidence.append(Projection.Diagnostics);
         const auto &Block = BlockProjections.at(Method.Implementation);
         if (!Block.Limitation.empty()) {

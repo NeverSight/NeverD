@@ -148,6 +148,7 @@ add_neverd_unittest(NeverDLiftTests
   sdk/ObjCSwiftOnceSourceTests.cpp
   sdk/ObjCSuperGetterSourceTests.cpp
   sdk/ObjCMetadataFactorySourceTests.cpp
+  sdk/ObjCImmutableStringCallbackSourceTests.cpp
   sdk/ObjCBlockSourceTests.cpp
   sdk/SwiftSourceNamespaceTests.cpp
   sdk/SwiftSourceSignatureTests.cpp
@@ -963,6 +964,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   sdk/ObjCSwiftOnceSourceTests.cpp
   sdk/ObjCSuperGetterSourceTests.cpp
   sdk/ObjCMetadataFactorySourceTests.cpp
+  sdk/ObjCImmutableStringCallbackSourceTests.cpp
   sdk/ObjCSourceProjectionTests.cpp
   sdk/SwiftABIProjectionPlanTests.cpp
   LINK_COMPONENTS
