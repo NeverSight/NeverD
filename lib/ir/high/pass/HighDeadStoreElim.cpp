@@ -145,6 +145,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     std::vector<ExprPtr *> Uses;
   };
   VarKeyMap<Candidate> Candidates;
+  std::vector<HighStmt *> CopyDefinitions;
   std::vector<std::pair<HighStmt *, unsigned>> Pending;
   for (auto &S : Func.Body)
     Pending.emplace_back(&S, 0);
@@ -227,6 +228,59 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       C.PrefixDefinitions.insert(S);
     }
     C.Definitions.push_back(S);
+    if (CopyShape)
+      CopyDefinitions.push_back(S);
+  }
+  // A whole-copy RHS may inherit a prefix proof only from its exact
+  // destination. Shared expression nodes in other consumers get no permission.
+  std::unordered_map<ExprPtr *, VarKey> CopyTargets;
+  VarKeyMap<std::vector<VarKey>> Neighbors, CopySources;
+  for (auto *S : CopyDefinitions) {
+    if (!Budget--)
+      return;
+    const auto From = varKey(S->Val->Var), To = varKey(S->Dst->Var);
+    auto Source = Candidates.find(From);
+    auto &Destination = Candidates.at(To);
+    if (Source == Candidates.end() || !Source->second.CarrierBytes ||
+        Source->second.CarrierBytes != Destination.CarrierBytes)
+      continue;
+    CopyTargets.emplace(&S->Val, To);
+    Neighbors[From].push_back(To);
+    Neighbors[To].push_back(From);
+    CopySources[To].push_back(From);
+  }
+  // Prefix widths originate in a constructing definition, never a guessed
+  // use. Copy-only components without such a seed remain unchanged.
+  VarKeyMap<bool> Visited;
+  for (const auto &[Key, _] : Candidates) {
+    if (Visited[Key])
+      continue;
+    Visited[Key] = true;
+    std::vector<VarKey> Component{Key};
+    uint16_t Bytes = 0;
+    bool Consistent = true;
+    for (size_t I = 0; I < Component.size(); ++I) {
+      if (!Budget--)
+        return;
+      const auto &C = Candidates.at(Component[I]);
+      if (C.Bytes) {
+        Consistent &= !Bytes || Bytes == C.Bytes;
+        Bytes = C.Bytes;
+      }
+      for (const auto &Next : Neighbors[Component[I]]) {
+        if (!Budget--)
+          return;
+        if (!Visited[Next]) {
+          Visited[Next] = true;
+          Component.push_back(Next);
+        }
+      }
+    }
+    for (const auto &Member : Component) {
+      auto &C = Candidates.at(Member);
+      C.Bytes = Bytes;
+      C.Valid &= Consistent;
+    }
   }
   struct Use {
     ExprPtr *Slot;
@@ -268,8 +322,12 @@ void narrowSourceConcatLocals(HighFunc &Func) {
               Plain(*Parent->Operands[1]) &&
               Parent->Operands[1]->Operands.empty() &&
               Parent->Operands[1]->ConstVal == 0));
-        C.Valid &= Prefix && Plain(*E) && E->Operands.empty() && E->Type &&
-                   E->Type->Kind == NdTypeKind::Int &&
+        const auto Copy = CopyTargets.find(Slot);
+        const bool ProvenCopy = !Parent && Copy != CopyTargets.end() &&
+                                C.Bytes &&
+                                Candidates.at(Copy->second).Bytes == C.Bytes;
+        C.Valid &= (Prefix || ProvenCopy) && Plain(*E) && E->Operands.empty() &&
+                   E->Type && E->Type->Kind == NdTypeKind::Int &&
                    E->Type->Size == C.CarrierBytes &&
                    E->Var.Size == C.CarrierBytes && E->Var.RenameTag < 0 &&
                    (E->Var.Kind == MedVar::Reg || E->Var.Kind == MedVar::Temp);
@@ -279,20 +337,46 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     for (unsigned J = 0; J < E->Operands.size(); ++J)
       Uses.push_back({&E->Operands[J], E.get(), J, Depth + 1});
   }
+  // A source cannot be narrowed if an exempted whole-copy consumer will
+  // remain wide. Propagate final rewrite eligibility backwards to a fixed
+  // point before changing any expression or statement.
+  std::vector<VarKey> Invalid;
+  for (auto &[Key, C] : Candidates) {
+    C.Valid &= C.Bytes && !C.Definitions.empty() && !C.Uses.empty();
+    if (!C.Valid)
+      Invalid.push_back(Key);
+  }
+  for (size_t I = 0; I < Invalid.size(); ++I) {
+    if (!Budget--)
+      return;
+    for (const auto &From : CopySources[Invalid[I]]) {
+      if (!Budget--)
+        return;
+      auto &C = Candidates.at(From);
+      if (C.Valid) {
+        C.Valid = false;
+        Invalid.push_back(From);
+      }
+    }
+  }
   if (!Budget)
     return;
+  const auto Narrow = [](ExprPtr &E, uint16_t Bytes) {
+    E = std::make_shared<HighExpr>(*E);
+    E->Type = NdType::makeInt(Bytes, false);
+    E->Var.Size = Bytes;
+  };
+  // A recorded use may be another candidate's definition RHS. Rewrite all
+  // uses first, before prefix extraction can replace that slot with a tree.
+  for (auto &[Key, C] : Candidates)
+    if (C.Valid)
+      for (auto *Slot : C.Uses)
+        Narrow(*Slot, C.Bytes);
   for (auto &[Key, C] : Candidates) {
-    if (!C.Valid || !C.Bytes || C.Definitions.empty() || C.Uses.empty())
+    if (!C.Valid)
       continue;
-    const auto Narrow = [&](ExprPtr &E) {
-      E = std::make_shared<HighExpr>(*E);
-      E->Type = NdType::makeInt(C.Bytes, false);
-      E->Var.Size = C.Bytes;
-    };
-    for (auto *Slot : C.Uses)
-      Narrow(*Slot);
     for (auto *S : C.Definitions) {
-      Narrow(S->Dst);
+      Narrow(S->Dst, C.Bytes);
       S->Val = C.PrefixDefinitions.count(S)
                    ? frameValuePrefix(S->Val, C.Bytes)
                    : S->Val->Operands[1];

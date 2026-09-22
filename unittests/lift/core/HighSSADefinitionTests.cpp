@@ -749,4 +749,113 @@ TEST(HighSourceScalarLocals, RetainsObservedOrUnprovenRegisterCarrierBytes) {
           << Mutation;
     }
 }
+HighFunc sourceCopyChain(Arch Architecture, unsigned Width, unsigned Carrier) {
+  auto F = sourceConcatLocal(Architecture, Width, Carrier);
+  auto Return = F.Body.back();
+  Return.RetVal->Operands[0] = variable(7, Carrier);
+  F.Body.resize(1);
+  F.Body.push_back(assign(variable(5, Carrier), variable(4, Carrier)));
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = HighExpr::makeConst(1, 1);
+  Branch.Body = {assign(variable(6, Carrier), variable(5, Carrier))};
+  Branch.ElseBody = {assign(variable(6, Carrier), variable(4, Carrier))};
+  F.Body.push_back(Branch);
+  F.Body.push_back(assign(variable(7, Carrier), variable(6, Carrier)));
+  F.Body.push_back(Return);
+  return F;
+}
+
+TEST(HighSourceScalarLocals, NarrowsSeededCopyChainsWithoutMovingEffects) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Carrier : {8U, 16U})
+      for (unsigned Width : {4U, 8U}) {
+        if (Width >= Carrier)
+          continue;
+        for (const bool Cycle : {false, true}) {
+          auto F = sourceCopyChain(Architecture, Width, Carrier);
+          auto Left = F.Body[0].Body[0].Val->Operands[1];
+          auto Right = F.Body[0].ElseBody[0].Val->Operands[1];
+          if (Cycle)
+            F.Body[0].ElseBody.push_back(
+                assign(variable(4, Carrier), variable(7, Carrier)));
+          narrowSourceConcatLocals(F);
+          EXPECT_EQ(F.Body[0].Body[0].Val, Left);
+          EXPECT_EQ(F.Body[0].ElseBody[0].Val, Right);
+          EXPECT_EQ(F.Body[0].Body[0].Addr, 0x1010U);
+          EXPECT_EQ(F.Body[0].ElseBody[0].Addr, 0x1020U);
+          walkStmts(F.Body, [&](const HighStmt &S) {
+            if (S.Kind == StmtKind::Assign) {
+              EXPECT_EQ(S.Dst->Var.Size, Width);
+              EXPECT_EQ(S.Val->Type->Size, Width);
+              if (S.Val->Kind == ExprKind::Var)
+                EXPECT_EQ(S.Val->Var.Size, Width);
+            }
+          });
+          EXPECT_EQ(F.Body.back().RetVal->Operands[0]->Var.Size, Width);
+        }
+      }
+}
+
+TEST(HighSourceScalarLocals, CopyChainsRequireEveryWholeCopyConsumerToNarrow) {
+  for (unsigned Carrier : {8U, 16U})
+    for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+      auto F = sourceCopyChain(Arch::AArch64, 4, Carrier);
+      if (Mutation == 0)
+        F.Body.back().RetVal = variable(7, Carrier);
+      if (Mutation == 1)
+        F.Body.back().RetVal =
+            HighExpr::makeCall("escape", 0x3000, {variable(7, Carrier)});
+      if (Mutation == 2) {
+        HighStmt Store;
+        Store.Kind = StmtKind::Store;
+        Store.StoreAddr = HighExpr::makeConst(0x8000, 8);
+        Store.StoreVal = variable(5, Carrier);
+        F.Body.push_back(Store);
+      }
+      if (Mutation == 3)
+        F.Body[2].ElseBody[0].Val = HighExpr::makeConst(42, Carrier);
+      if (Mutation == 4) {
+        auto Shared = F.Body[1].Val;
+        F.Body.back().RetVal =
+            HighExpr::makeCall("escape_shared", 0x3000, {Shared});
+      }
+      if (Mutation == 5)
+        F.Body.push_back(assign(variable(9, Carrier), variable(7, Carrier)));
+      if (Mutation == 6) {
+        F.Body[3].Dst->Var.Size = Carrier == 8 ? 16 : 8;
+        F.Body[3].Dst->Type = NdType::makeInt(F.Body[3].Dst->Var.Size);
+      }
+      if (Mutation == 7) {
+        auto Other =
+            sourceConcatLocal(Arch::AArch64, Carrier == 8 ? 2 : 8, Carrier);
+        Other.Body[0].Body[0].Dst = variable(6, Carrier);
+        F.Body[2].ElseBody[0] = Other.Body[0].Body[0];
+      }
+      narrowSourceConcatLocals(F);
+      EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, Carrier) << Mutation;
+      EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, Carrier) << Mutation;
+      EXPECT_EQ(F.Body[0].Body[0].Val->Op, NdOp::CONCAT) << Mutation;
+      if (Mutation == 4) {
+        EXPECT_EQ(F.Body[1].Dst->Var.Size, 4U);
+        EXPECT_EQ(F.Body[1].Val->Op, NdOp::SUBBYTES);
+        EXPECT_EQ(F.Body[1].Val->Type->Size, 4U);
+        EXPECT_EQ(F.Body[1].Val->Operands[0]->Var.Size, Carrier);
+      }
+    }
+}
+
+TEST(HighSourceScalarLocals, UnseededCopiesAndExhaustedProofStayUnchanged) {
+  auto F = sourceCopyChain(Arch::AArch64, 4, 8);
+  F.Body[0].Body[0].Val = variable(7, 8);
+  F.Body[0].ElseBody[0].Val = variable(7, 8);
+  narrowSourceConcatLocals(F);
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[3].Dst->Var.Size, 8U);
+  auto Large = sourceCopyChain(Arch::AArch64, 4, 8);
+  Large.Body.resize(100001);
+  narrowSourceConcatLocals(Large);
+  EXPECT_EQ(Large.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(Large.Body[0].Body[0].Val->Op, NdOp::CONCAT);
+}
 } // namespace
