@@ -5202,6 +5202,8 @@ TEST(ObjCCallHints, FrameworkAndCompilerDataKeepExactExportIdentities) {
       {"kCGImagePropertyGIFDictionary", "ImageIO"},
       {"CSSearchableItemActivityIdentifier", "CoreSpotlight"},
       {"kCGColorSpaceSRGB", "CoreGraphics"},
+      {"kUTTagClassFilenameExtension", "CoreServices"},
+      {"kUTTypeImage", "CoreServices"},
       {"CIDetectorAccuracy", "CoreImage"},
       {"CIDetectorAccuracyLow", "CoreImage"},
       {"CIDetectorTypeFace", "CoreImage"},

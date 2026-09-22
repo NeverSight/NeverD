@@ -167,7 +167,9 @@ def main():
         source.write_text(
             "#import <Foundation/Foundation.h>\n#include <objc/runtime.h>\n"
             "#include <objc/objc-sync.h>\n#include <pthread.h>\n"
-            "#include <dispatch/dispatch.h>\n#include <os/log.h>\n" +
+            "#include <dispatch/dispatch.h>\n#include <os/log.h>\n"
+            "#import <LaunchServices/UTType.h>\n"
+            "#import <LaunchServices/UTCoreTypes.h>\n" +
             # CALayer supplies the public layer constants without pulling in
             # OpenGLES headers absent from the command-line-tools SDK.
             "".join(f"#import <{name}/{'CALayer' if name == 'QuartzCore' else name}.h>\n"
@@ -177,7 +179,11 @@ def main():
             # are absent from the command-line-tools SDK.
             "#import <CoreImage/CIDetector.h>\n#import <CoreImage/CIFilter.h>\n"
             "#import <CoreImage/CIImage.h>\n")
-        profiles = [clang.extract(source, sdk, target) for target in TARGETS]
+        nested_frameworks = (sdk / "System/Library/Frameworks/"
+                             "CoreServices.framework/Frameworks")
+        profiles = [clang.extract(source, sdk, target,
+                                  ("-F", str(nested_frameworks)))
+                    for target in TARGETS]
         for profile, target in zip(profiles, TARGETS):
             for name, declarations in compile_literal_storage(args.clang, sdk, target).items():
                 profile.setdefault(name, set()).update(declarations)
@@ -193,7 +199,12 @@ def main():
     if not version_match:
         raise ValueError("unrecognized literal compiler version")
     version = json.loads((sdk / "SDKSettings.json").read_text())["Version"]
-    output, count = render(profiles, load_exports(sdk, frameworks), version,
+    exports = load_exports(sdk, frameworks)
+    core_services = load_exports(sdk, ("CoreServices",))
+    for common, extra in zip(exports, core_services):
+        for name in ("kUTTagClassFilenameExtension", "kUTTypeImage"):
+            common[name] = extra[name]
+    output, count = render(profiles, exports, version,
                            clang.string(clang.clang_getClangVersion()), version_match[0])
     if args.check:
         if args.output.read_text() != output:
