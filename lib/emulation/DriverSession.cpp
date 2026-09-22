@@ -820,7 +820,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           return std::move(E);
         if (Result.Stop != DriverStopReason::Returned)
           break;
-        const uint32_t DispatchStatus = *InvocationReturn;
+        const uint32_t DispatchStatus =
+            Invocation->FrameworkDispatchStatus.value_or(
+                uint32_t(*InvocationReturn));
         if (auto E = Kernel.finishRequest(DispatchStatus)) {
           ModelFailure(std::move(E));
           break;

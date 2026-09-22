@@ -44,7 +44,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
 | READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发 IRP 或请求取消；`METHOD_NEITHER` 与隐式文件位置 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
-| KMDF 1.33 非 PnP 驱动 | 版本绑定、驱动和通用对象、类型化上下文、引用及实际执行的清理／卸载回调 | KMDF 设备、队列、请求、类扩展和 UMDF 仍不支持 |
+| KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、顺序默认队列，以及实际执行回调的缓冲／直接请求 | 不支持 PnP 设备、取消、通用队列调度、类扩展或 UMDF |
 | PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发 IRP 或请求取消 |
@@ -65,7 +65,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排队的 `DelayedWorkQueue` 工作项在 `PASSIVE_LEVEL` 执行，来宾 DPC 回调在 `DISPATCH_LEVEL` 接收规定的四个参数。CPU0 在调用返回和阻塞等待的边界进行确定性的协作调度。相对、绝对和周期定时器使用虚拟时间；没有可运行的执行帧时，时间推进到下一定时器或等待期限。通知型与同步型事件／定时器保留各自的信号消耗语义。每个回调拥有独立的来宾栈；多个阻塞帧保留局部变量和完整 CPU 上下文，来宾内存仍然共享。Win64 回调入口将前四个参数放入寄存器，其余参数放入栈。请求仍串行处理：标记 IRP 为待处理的派发函数必须返回 `STATUS_PENDING`，且该请求完成后才能开始下一个。待处理请求或无限等待没有可用生产者时，以停滞的 `model_error` 停止。指令、内存、观察记录与墙钟时间预算仍共用。
 
-这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、请求取消、自旋锁、并发 IRP、通用 IRQL 切换、`METHOD_NEITHER`、UMDF 及 KMDF 设备／队列／请求契约、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
+这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、请求取消、自旋锁、并发 IRP、通用 IRQL 切换、`METHOD_NEITHER`、UMDF、KMDF PnP 设备及通用队列调度、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
 
 工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
 删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
@@ -76,11 +76,17 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 启用的控制流保护（CFG）会验证 PE 标志、指针槽和已排序的可执行目标表。检查与分派辅助函数仅允许已声明的映像入口或已登记的 API 跳板，保留 Win64 调用状态，并拒绝未声明的目标。只有插桩而未启用 CFG 时，保留原始来宾回退指针。启用的 XFG、导出抑制和其他未建模的保护策略仍被拒绝；地址位于可执行内存并不使它成为合法目标。
 
-KMDF 支持限于精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，只有下列 11 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 验证并管理来宾绑定。真正的 WDK `FxDriverEntry` 包装函数仍是映像入口；`WdfGetDriver` 从公共全局结构读取模型中的驱动句柄。非 PnP 驱动与通用对象支持清零的类型化上下文、引用计数、父对象所有权，以及在共享预算下实际执行的嵌套清理／销毁／卸载回调。这些操作目前要求 `PASSIVE_LEVEL`。设备、队列、请求、类扩展、UMDF 和完整 PnP／电源不在此子集内。未建模的函数槽、`WdfLdrQueryInterface` 和类绑定调用会明确停止；列入函数表不代表已经实现。 对象回调仅在 `PASSIVE_LEVEL` 执行；清理完成后新增引用仍不在此框架执行配置的支持范围内。
+KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，下列 27 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 在真实 WDK `FxDriverEntry` 包装函数前后管理来宾绑定。`WdfGetDriver` 读取公共驱动全局结构。非 PnP 驱动、通用对象、控制设备、队列和传入请求共享类型化上下文、引用计数，以及实际执行的清理／销毁／卸载回调。所有已建模的框架调用和回调目前都要求 `PASSIVE_LEVEL`；清理完成后新增引用仍不在此配置的支持范围内。未建模的函数槽、`WdfLdrQueryInterface`、类扩展和 UMDF 会明确停止。
 
-已建模的 KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+控制设备要求复制可打印 ASCII 名称，并且 SDDL 必须精确为 `D:P(A;;GA;;;WD)`。这授予所有调用方访问权限，无需虚构调用方令牌；不支持其他安全描述符、未命名设备和自动名称。设备初始化拥有一个 WDM 设备。请求可通过现有会话命名空间中的符号链接别名 `\DosDevices\Name` 或 `\??\Name` 选择设备，报告仍保留规范设备名。创建成功会消耗初始化对象并清空其指针；失败则回滚部分设备所有权。`WdfControlFinishInitializing` 决定何时可以递送 I/O。仅在已建模的文件、工作项和请求允许时，删除操作才移除设备及其链接；不支持删除过程中取消或排空请求。
 
-可选的真实 WDK 验证使用 `driver_kmdf_lifecycle.c`，需以真正的 KMDF 入口库单独编译链接。将 `NEVERD_KMDF_FIXTURE` 与 `NEVERD_KMDF_CFG_FIXTURE` 指向普通和启用 CFG 的映像；缺少外部产物时明确跳过。原生及 C API／CLI 覆盖见[测试指南](testing.md)。当前执行证据仅来自 Linux 主机。
+96 字节的 `WDF_IO_QUEUE_CONFIG` 支持顺序默认队列，要求显式被动执行且不使用框架同步。控制设备队列不参与电源管理。专用 READ／WRITE／IOCTL 回调优先于默认回调。已接受的队列请求即使同步完成也返回 `STATUS_PENDING`；void 回调的返回寄存器不会使请求完成。延迟完成使用现有调度器。没有处理函数时，请求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未启用零长度递送时，零长度 READ／WRITE 直接完成。默认文件包以成功状态和 Information=0 完成 CREATE／CLEANUP／CLOSE。不支持并行／手动队列、取消、文件回调、PnP 设备和完整 PnP／电源。
+
+请求参数使用 40 字节的 `WDF_REQUEST_PARAMETERS` 布局。输入／输出访问函数返回逻辑长度，保留缓冲区别名及现有直接 I/O 的 MDL 映射；直接 IOCTL 的输入仍使用缓冲区。方向错误或缓冲区不足返回文档规定的状态。完成操作先执行请求清理和子对象销毁，再使 IRP／缓冲区失效，最后在引用允许时销毁请求。一旦开始完成操作，就拒绝新的请求访问函数调用；已取得的缓冲区指针在清理期间仍可使用。外部对象引用保留上下文，但不保留对已完成 IRP 的访问权。用户模式 `METHOD_NEITHER` 仍需要尚未实现的调用方上下文／探测／锁定支持。
+
+已建模的 KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceCreate`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`.
+
+可选的真实 WDK 验证以真正的 KMDF 入口库分别编译 `driver_kmdf_lifecycle.c` 和 `driver_kmdf_control.c`。`NEVERD_KMDF_FIXTURE`／`NEVERD_KMDF_CFG_FIXTURE` 选择生命周期映像；`NEVERD_KMDF_CONTROL_FIXTURE`／`NEVERD_KMDF_CONTROL_CFG_FIXTURE` 选择普通／启用 CFG 的控制设备映像。缺少外部产物时会明确跳过。原生及 C API／CLI 覆盖见[测试指南](testing.md)。当前执行证据仅来自 Linux 主机。
 
 初始 API 模型刻意采用有限契约：
 
@@ -193,7 +199,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v3`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v4`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

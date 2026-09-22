@@ -4,6 +4,10 @@ set(NEVERD_KMDF_FIXTURE "" CACHE FILEPATH
   "Optional original KMDF lifecycle fixture linked with genuine WDK libraries")
 set(NEVERD_KMDF_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK KMDF lifecycle fixture linked with active CFG")
+set(NEVERD_KMDF_CONTROL_FIXTURE "" CACHE FILEPATH
+  "Optional original KMDF control-device fixture linked with genuine WDK libraries")
+set(NEVERD_KMDF_CONTROL_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK KMDF control-device fixture linked with active CFG")
 if(NOT NEVERD_TEST_CLANG_EXECUTABLE OR NOT NEVERD_DRIVER_LLD_LINK)
   message(STATUS "Driver emulation fixtures unavailable: Clang and lld-link are required")
   return()
@@ -123,10 +127,17 @@ add_custom_target(NeverDDriverFixtures DEPENDS ${_driver_outputs})
 # local ignored SDK directory exists, and keep missing coverage visible.
 set(_driver_kmdf_definitions)
 set(_driver_has_kmdf_fixture FALSE)
-foreach(_driver_kmdf_variable NEVERD_KMDF_FIXTURE NEVERD_KMDF_CFG_FIXTURE)
+set(_driver_has_kmdf_control_fixture FALSE)
+foreach(_driver_kmdf_variable NEVERD_KMDF_FIXTURE NEVERD_KMDF_CFG_FIXTURE
+    NEVERD_KMDF_CONTROL_FIXTURE NEVERD_KMDF_CONTROL_CFG_FIXTURE)
   if(_driver_kmdf_variable STREQUAL "NEVERD_KMDF_CFG_FIXTURE"
       AND NOT _driver_has_kmdf_fixture)
     message(STATUS "Driver KMDF CFG tests skipped: NEVERD_KMDF_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(_driver_kmdf_variable STREQUAL "NEVERD_KMDF_CONTROL_CFG_FIXTURE"
+      AND NOT _driver_has_kmdf_control_fixture)
+    message(STATUS "Driver KMDF control CFG tests skipped: NEVERD_KMDF_CONTROL_FIXTURE is unavailable")
     continue()
   endif()
   if(NOT "${${_driver_kmdf_variable}}" STREQUAL ""
@@ -138,6 +149,8 @@ foreach(_driver_kmdf_variable NEVERD_KMDF_FIXTURE NEVERD_KMDF_CFG_FIXTURE)
       "${_driver_kmdf_variable}=\"${_driver_kmdf_path}\"")
     if(_driver_kmdf_variable STREQUAL "NEVERD_KMDF_FIXTURE")
       set(_driver_has_kmdf_fixture TRUE)
+    elseif(_driver_kmdf_variable STREQUAL "NEVERD_KMDF_CONTROL_FIXTURE")
+      set(_driver_has_kmdf_control_fixture TRUE)
     endif()
     message(STATUS "Driver KMDF fixture ${_driver_kmdf_variable}: ${_driver_kmdf_path}")
   else()
@@ -150,11 +163,15 @@ add_neverd_unittest(NeverDDriverEmulationTests
   DriverLoaderAdvancedTests.cpp
   DriverGuardTests.cpp
   DriverKMDFLifecycleTests.cpp
+  DriverKMDFControlTests.cpp
   DriverIOTests.cpp
   ExecutionPolicyTests.cpp
   DriverScenarioTests.cpp
   KernelModelTests.cpp
   KernelFrameworkTests.cpp
+  KernelFrameworkControlTests.cpp
+  KernelFrameworkQueueTests.cpp
+  KernelFrameworkRequestTests.cpp
   BackendFaultTests.cpp
   BackendContextTests.cpp
   KernelSchedulerTests.cpp

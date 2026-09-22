@@ -57,7 +57,7 @@ establish compatibility with arbitrary third-party drivers.
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
 | READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or request cancellation; `METHOD_NEITHER` and implicit file position |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
-| KMDF 1.33 non-PnP driver | Version binding, driver and generic objects, typed contexts, references and executed cleanup/unload callbacks | KMDF devices, queues, requests, class extensions and UMDF remain unsupported |
+| KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, cancellation, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
 | Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent IRPs or request cancellation |
@@ -110,7 +110,7 @@ instruction, memory, observation and wall-clock budgets still apply.
 This is a bounded scheduling model, not full Windows asynchronous support.
 Alertable or user-mode waits, system threads, APCs, request cancellation,
 spinlocks, concurrent IRPs, general IRQL transitions, `METHOD_NEITHER`,
-UMDF and KMDF device/queue/request contracts, full PnP/power, hardware, DMA and interrupts remain unsupported.
+UMDF, KMDF PnP devices and general queue scheduling, full PnP/power, hardware, DMA and interrupts remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
 inventing requests or unload.
 
@@ -125,11 +125,17 @@ rejected. Images must also pass strict range and alignment checks.
 
 Active Control Flow Guard (CFG) validates PE flags, pointer slots and sorted executable target entries. Check and dispatch helpers admit only declared image entries or registered API thunks, preserve the Win64 call state and reject undeclared targets. Instrumentation without active CFG preserves the original guest fallback pointers. Active XFG, export suppression and other unmodeled guard policies remain rejected; executable memory alone does not make an address a valid target.
 
-KMDF support is limited to the exact 1.33.0 ABI: 458 function slots have stable guest identities, while only the 11 APIs below have execution semantics. `WdfVersionBind` and `WdfVersionUnbind` validate and manage guest bindings. The genuine WDK `FxDriverEntry` wrapper remains the image entry point; `WdfGetDriver` reads the modeled driver handle from public globals. Non-PnP drivers and generic objects support zeroed typed contexts, reference counts, parent ownership and nested guest cleanup/destroy/unload callbacks under shared budgets. These operations currently require `PASSIVE_LEVEL`. Devices, queues, requests, class extensions, UMDF and full PnP/power are outside this subset. Unmodeled function slots, `WdfLdrQueryInterface` and class-binding calls stop explicitly; table membership never implies implementation. Object callbacks execute only at `PASSIVE_LEVEL`; acquiring new references after cleanup completes is outside this framework profile.
+KMDF 1.33 support uses the exact 1.33.0 ABI: 458 function slots have stable guest identities, while the 27 APIs below have execution semantics. `WdfVersionBind` and `WdfVersionUnbind` manage guest bindings around the genuine WDK `FxDriverEntry` wrapper. `WdfGetDriver` reads the public driver globals. Non-PnP drivers, generic objects, control devices, queues and incoming requests share typed contexts, reference counts and executed cleanup/destroy/unload callbacks. All modeled framework calls and callbacks currently require `PASSIVE_LEVEL`; adding references after completed cleanup remains outside this profile. Unmodeled function slots, `WdfLdrQueryInterface`, class extensions and UMDF stop explicitly.
 
-Modeled KMDF APIs: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+Control devices require a copied printable-ASCII name and the exact SDDL `D:P(A;;GA;;;WD)`. This grants universal access and avoids inventing a caller token; other security descriptors, unnamed devices and automatic names are unsupported. Device initialization owns one WDM device. Requests can select it through the existing session namespace using `\DosDevices\Name` or `\??\Name` symbolic-link aliases; reports retain the canonical device name. Successful creation consumes and clears the initializer; failed creation rolls back partial device ownership. `WdfControlFinishInitializing` gates I/O delivery. Deletion removes the device and its links only when modeled files, work items and requests permit it; cancellation or draining during deletion is unsupported.
 
-Optional genuine-WDK validation uses `driver_kmdf_lifecycle.c`, compiled separately with the real KMDF entry library. Set `NEVERD_KMDF_FIXTURE` and `NEVERD_KMDF_CFG_FIXTURE` to its normal and active-CFG images; missing external artifacts produce explicit skips. See [testing](testing.md) for the native and C API/CLI coverage. Current execution evidence is limited to Linux hosts.
+The 96-byte `WDF_IO_QUEUE_CONFIG` supports a sequential default queue with explicit passive execution and no framework synchronization. Control-device queues are not power managed. Specific READ/WRITE/IOCTL callbacks take precedence over the default callback. Accepted queued requests return `STATUS_PENDING` even when completed synchronously; a void callback's return register does not complete its request. Deferred completion uses the existing scheduler. Without a handler the request completes with `STATUS_INVALID_DEVICE_REQUEST`; zero-length READ/WRITE completes without delivery unless enabled. The default file package completes CREATE/CLEANUP/CLOSE successfully with Information=0. Parallel/manual queues, cancellation, file callbacks, PnP devices and full PnP/power remain unsupported.
+
+Request parameters use the 40-byte `WDF_REQUEST_PARAMETERS` layout. Input/output accessors return the logical lengths, preserving buffered aliases and existing direct-I/O MDL mappings; direct IOCTL input remains buffered. Wrong directions and insufficient buffers return documented statuses. Completion runs request cleanup and child destruction before retiring the IRP/buffers, then destroys the request when references permit. New request accessors are rejected once completion begins; already obtained buffer pointers remain usable during cleanup. An external object reference preserves context, not completed IRP access. User-mode `METHOD_NEITHER` still requires unimplemented caller-context/probe/lock support.
+
+Modeled KMDF APIs: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceCreate`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`.
+
+Optional genuine-WDK validation compiles `driver_kmdf_lifecycle.c` and `driver_kmdf_control.c` separately with the real KMDF entry library. `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` select lifecycle images; `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` select normal/active-CFG control-device images. Missing external artifacts produce explicit skips. See [testing](testing.md) for native and C API/CLI coverage. Current execution evidence is limited to Linux hosts.
 
 The initial API model deliberately has a finite contract:
 
@@ -406,7 +412,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v3`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v4`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

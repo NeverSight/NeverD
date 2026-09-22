@@ -487,7 +487,7 @@ thread/APC/cancellation/spinlock scheduling, concurrent IRPs, full
 PnP/power or hardware. API IRQL ceilings come from `KernelAPIIRQL.def`, with
 argument-dependent checks in the owning model.
 
-`KernelFramework` owns KMDF 1.33 binding, function-table identity, driver/generic objects and typed-context lifetime. `DriverSession` executes nested guest callbacks and resumes the suspended framework operation with shared execution budgets. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. This does not add KMDF devices, queues, requests, class extensions or UMDF.
+`KernelFramework` owns KMDF 1.33 bindings, table identity, WDF objects/contexts, control-device initializers, sequential default queues and request handles. Its typed device and request hosts delegate WDM namespace, storage, packet state, MDL mapping and completion validation to `KernelModel`; neither side invents duplicate devices or IRPs. Queue routing carries a framework-owned dispatch status separately from the void guest callback return. Completion continuations execute cleanup and child destruction before retiring the IRP, while external references retain only the WDF context. Pending-request deletion is rejected before ancestor mutation until cancellation/draining is modeled. `DriverSession` executes nested callbacks with shared budgets. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. PnP devices, general queues/cancellation, class extensions and UMDF remain unsupported.
 
 ## Exception-rewrite boundaries
 

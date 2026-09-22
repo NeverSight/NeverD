@@ -241,12 +241,10 @@ KernelModel::beginRequest(const DriverRequest &Input) {
     else
       return ioError("an unnamed request requires exactly one live device");
   } else {
-    if (!std::all_of(Input.Device.begin(), Input.Device.end(),
-                     [](unsigned char C) { return C >= 0x20 && C <= 0x7e; }))
-      return ioError("device selection requires an exact printable ASCII name");
-    for (const auto &[Address, Object] : Devices)
-      if (Object.Name == Input.Device)
-        Device = Address;
+    auto Resolved = resolveDeviceName(Input.Device);
+    if (!Resolved)
+      return Resolved.takeError();
+    Device = *Resolved;
     if (!Device)
       return ioError("request device name does not identify a live device");
   }
@@ -306,6 +304,30 @@ KernelModel::beginRequest(const DriverRequest &Input) {
   if (auto E = initializeRequestPacket(Input, Device, FileIt->second.Address))
     return E;
   const uint64_t Callback = Result.MajorFunctions[Major];
+  if (Framework) {
+    auto Route = Framework->routeRequest(Device, Request->IRP);
+    if (!Route)
+      return Route.takeError();
+    if (*Route) {
+      const auto &Dispatch = **Route;
+      if (!Dispatch.PC) {
+        if (auto E = finishRequest(Dispatch.Status))
+          return E;
+        return Invocation{};
+      }
+      Invocation Call;
+      Call.PC = Dispatch.PC;
+      Call.FrameworkDispatchStatus = Dispatch.Status;
+      uint64_t *Registers[] = {&Call.Argument0, &Call.Argument1,
+                               &Call.Argument2, &Call.Argument3};
+      for (size_t I = 0; I < Dispatch.Arguments.size(); ++I)
+        if (I < 4)
+          *Registers[I] = Dispatch.Arguments[I];
+        else
+          Call.StackArguments.push_back(Dispatch.Arguments[I]);
+      return Call;
+    }
+  }
   if (!Callback) {
     const auto First =
         DispatchBytesWritten.begin() + Major * profile::PointerSize;
@@ -340,41 +362,18 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   auto Information = Memory.readInteger(IRP + IRPInformationOffset, 8);
   if (!Information)
     return Information.takeError();
+  if (auto E = validateRequestCompletion(IRP, static_cast<uint32_t>(*Status),
+                                         *Information))
+    return E;
   auto &Observation = Result.Requests[Request->ResultIndex];
   Observation.IOStatus = static_cast<uint32_t>(*Status);
   Observation.Information = *Information;
-  auto Pending = Memory.readInteger(IRP + IRPPendingOffset, 1);
-  if (!Pending)
-    return Pending.takeError();
+  const bool HasIOCTLOutput =
+      Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
   auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
   if (!Control)
     return Control.takeError();
-  if (*Status == StatusPending)
-    return ioError("IoCompleteRequest cannot complete with STATUS_PENDING");
-  if (*Pending || (*Control & ~StackPendingReturned))
-    return ioError("unmodeled completion-stack control or pending propagation");
   Request->PendingMarked = (*Control & StackPendingReturned) != 0;
-  // An IOCTL without an output buffer may use Information for a driver-defined
-  // result instead of a byte count. Direct IOCTLs do not set
-  // IRP_INPUT_OPERATION, even when an output buffer exists, so use the
-  // request's buffer contract.
-  // https://learn.microsoft.com/windows-hardware/drivers/kernel/failure-to-initialize-output-buffers
-  const bool HasIOCTLOutput =
-      Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
-  const bool HasTransferCount = HasIOCTLOutput ||
-                                Request->Kind == DriverRequestKind::Read ||
-                                Request->Kind == DriverRequestKind::Write;
-  if (HasTransferCount && *Information > Request->TransferSize)
-    return ioError(
-        "IoStatus.Information exceeds the requested transfer buffer");
-  if ((Request->Kind == DriverRequestKind::Cleanup ||
-       Request->Kind == DriverRequestKind::Close) &&
-      *Information)
-    return ioError("CLEANUP and CLOSE require zero IoStatus.Information");
-  if (Request->Kind == DriverRequestKind::Create &&
-      *Information > MaxCreateInformation)
-    return ioError(
-        "CREATE IoStatus.Information is not a defined create result");
   // Completion retires several allocations together. Preflight every range
   // before unregistering any dispatcher state or delivering output bytes.
   std::vector<std::pair<uint64_t, uint64_t>> Retiring{

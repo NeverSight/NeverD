@@ -115,6 +115,32 @@ protected:
     success(Memory->writeInteger(Record + 2, (Text.size() + 1) * 2, 2));
     success(Memory->writeInteger(Record + 8, Record + 32, 8));
   }
+
+  void checkDeviceOutputFailure(uint64_t Output, BackendFaultKind Kind) {
+    const uint64_t Name = Scratch + 0x100;
+    unicode(Name, u"\\Device\\Unpublished");
+    ASSERT_EQ(invoke("IoCreateDevice",
+                     {Model->driverObject(), 0, 0, 0x22, 0, 0, Scratch}),
+              0u);
+    const uint64_t First = integer(Scratch);
+    EXPECT_NE(failure("IoCreateDevice",
+                      {Model->driverObject(), 32, Name, 0x22, 0, 0, Output})
+                  .find("guest write fault"),
+              std::string::npos);
+    EXPECT_EQ(integer(Model->driverObject() + windows::DriverDeviceHead),
+              First);
+    EXPECT_EQ(integer(First + windows::DeviceNext), 0u);
+    success(Model->snapshot());
+    ASSERT_EQ(Result.Devices.size(), 1u);
+    EXPECT_EQ(Result.Devices[0].Address, First);
+    EXPECT_TRUE(Result.Devices[0].Name.empty());
+    const auto Fault = Memory->fault();
+    ASSERT_TRUE(Fault);
+    EXPECT_EQ(Fault->Kind, Kind);
+    EXPECT_EQ(Fault->Address, Output);
+    EXPECT_EQ(Fault->Size, 8u);
+    EXPECT_EQ(Fault->Access, BackendAccessKind::Write);
+  }
 };
 
 TEST_F(DriverKernelModel, PoolOwnershipSurvivesBadTagAndRejectsUseAfterFree) {
@@ -224,6 +250,18 @@ TEST_F(DriverKernelModel, DevicesLinkCollideAndDeleteWithoutLosingLiveState) {
   EXPECT_EQ(integer(Model->driverObject() + 8), 0u);
   success(Model->snapshot());
   EXPECT_TRUE(Result.Devices.empty());
+}
+
+TEST_F(DriverKernelModel, UnmappedDeviceOutputPreservesExistingListAndFault) {
+  checkDeviceOutputFailure(0x50000000, BackendFaultKind::UnmappedMemory);
+}
+
+TEST_F(DriverKernelModel, ReadOnlyDeviceOutputPreservesExistingListAndFault) {
+  const uint64_t Output = Scratch + 0x8000;
+  success(Memory->writeInteger(Output, 0x12345678, 8));
+  success(Memory->protect(Output, 0x1000, Read));
+  checkDeviceOutputFailure(Output, BackendFaultKind::Protection);
+  EXPECT_EQ(integer(Output), 0x12345678u);
 }
 
 TEST_F(DriverKernelModel,
