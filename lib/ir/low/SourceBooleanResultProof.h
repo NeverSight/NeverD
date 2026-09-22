@@ -279,16 +279,40 @@ struct Transfer {
           Value[I] = I < Op.Inputs[1].Size
                          ? Read(Op.Inputs[1], I)
                          : Read(Op.Inputs[0], I - Op.Inputs[1].Size);
+      } else if (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
+                 Op.Opcode == NdOp::INT_ASHR) {
+        if (Op.NumInputs != 2 || !Op.Output.Size ||
+            Op.Inputs[0].Size != Op.Output.Size || !Op.Inputs[1].isConst() ||
+            Op.Inputs[1].Size > 8 ||
+            Op.Inputs[1].Offset >= uint64_t(Op.Output.Size) * 8)
+          return false;
+        const unsigned Bits = Op.Output.Size * 8;
+        const unsigned Shift = Op.Inputs[1].Offset;
+        std::fill(Value.begin(), Value.end(), 0);
+        for (unsigned Bit = 0; Bit < Bits; ++Bit) {
+          if (Op.Opcode == NdOp::INT_LEFT && Bit < Shift)
+            continue;
+          unsigned Source =
+              Op.Opcode == NdOp::INT_LEFT ? Bit - Shift : Bit + Shift;
+          if (Source >= Bits) {
+            if (Op.Opcode != NdOp::INT_ASHR)
+              continue;
+            Source = Bits - 1;
+          }
+          if (Read(Op.Inputs[0], Source / 8) & (1U << (Source % 8)))
+            Value[Bit / 8] |= 1U << (Bit % 8);
+        }
       } else if (Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR ||
                  Op.Opcode == NdOp::INT_XOR) {
         if (Op.NumInputs != 2 || !Op.Output.Size)
           return false;
         for (unsigned I = 0; I < 2; ++I)
-          if (Op.Inputs[I].isConst() ? Op.Inputs[I].Size > Op.Output.Size
-                                     : Op.Inputs[I].Size != Op.Output.Size)
+          if (!Op.Inputs[I].isConst() && Op.Inputs[I].Size < Op.Output.Size)
             return false;
-        if (Op.Inputs[0].Size == Value.size() &&
-            Op.Inputs[1].Size == Value.size()) {
+        // Bitwise operations may truncate to the destination width, including
+        // TBZ's one-byte predicate extracted from a full W register.
+        if (Op.Inputs[0].Size >= Value.size() &&
+            Op.Inputs[1].Size >= Value.size()) {
           const bool Constant =
               (Op.Inputs[0].isConst() || Op.Inputs[1].isConst()) &&
               Value.size() <= 8;

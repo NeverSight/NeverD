@@ -576,6 +576,43 @@ TEST(NativeBooleanResultProof, RejectsMalformedGraphsOperationsAndContracts) {
   }
 }
 
+TEST(NativeBooleanResultProof, ConstantShiftsAndTruncatedMasksTrackExactBits) {
+  for (const auto Opcode : {NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    Fixture F;
+    F.linear({call(),
+              operation(Opcode, NdVar::reg(a64reg::X8, 4),
+                        {NdVar::reg(a64reg::X0, 4), NdVar::cst(0, 4)}),
+              operation(NdOp::INT_AND, NdVar::reg(a64reg::X9, 1),
+                        {NdVar::reg(a64reg::X8, 4), NdVar::cst(1, 4)}),
+              operation(NdOp::INT_ZEXT, NdVar::reg(a64reg::X0, 8),
+                        {NdVar::reg(a64reg::X9, 1)}),
+              ret()});
+    ASSERT_TRUE(F.prove());
+    F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 1;
+    EXPECT_FALSE(F.prove()); // Bit one reaches the observable result.
+    F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 32;
+    EXPECT_FALSE(F.prove()); // Out-of-range shifts need separate semantics.
+    F.Low.Blocks[0].Ops[1].Inputs[1] = NdVar::reg(a64reg::X2, 4);
+    EXPECT_FALSE(F.prove());
+    F.Low.Blocks[0].Ops[1].Inputs[1] = NdVar::cst(0, 4);
+    F.Low.Blocks[0].Ops[2].Inputs[1].Offset = 3;
+    EXPECT_FALSE(F.prove());
+  }
+}
+
+TEST(NativeBooleanResultProof, ConstantLeftShiftMovesTheDifferenceMask) {
+  Fixture F;
+  F.linear({call(),
+            operation(NdOp::INT_LEFT, NdVar::reg(a64reg::X8, 8),
+                      {NdVar::reg(a64reg::X0, 8), NdVar::cst(9, 8)}),
+            mask(a64reg::X0, a64reg::X8, 512), ret()});
+  ASSERT_TRUE(F.prove());
+  F.Low.Blocks[0].Ops[2].Inputs[1].Offset = 1024;
+  EXPECT_FALSE(F.prove());
+  F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 64;
+  EXPECT_FALSE(F.prove());
+}
+
 TEST(NativeBooleanResultProof, EveryCallObservesItsImplicitStackPointer) {
   for (unsigned ArgumentCount : {0U, 1U, 9U}) {
     SCOPED_TRACE(ArgumentCount);
