@@ -1170,10 +1170,19 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             };
             std::vector<Snapshot> Snapshots;
             for (const auto &[Destination, Source] : Found->second.Registers) {
-              Snapshot Copy{Destination, Read(NdVar::reg(Source, 8)), {}};
-              for (unsigned I = 0; I < 8; ++I)
-                Copy.Frame[I] =
-                    State.FrameBytes.count({VnodeSpace::REG, Source + I});
+              Snapshot Copy{Destination, std::nullopt, {}};
+              if (const auto *Entry =
+                      std::get_if<SourceEntryRegister>(&Source)) {
+                Copy.Fact = Read(NdVar::reg(Entry->Offset, 8));
+                for (unsigned I = 0; I < 8; ++I)
+                  Copy.Frame[I] = State.FrameBytes.count(
+                      {VnodeSpace::REG, Entry->Offset + I});
+              } else {
+                Copy.Fact =
+                    Value{Value::Kind::Number,
+                          std::get<SourceConstantStringAddress>(Source).Address,
+                          {}};
+              }
               Snapshots.push_back(std::move(Copy));
             }
             for (auto &Copy : Snapshots) {

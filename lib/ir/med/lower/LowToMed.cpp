@@ -312,6 +312,15 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
           // sequence temporarily uses another destination as scratch.
           std::vector<std::pair<uint64_t, MedVar>> Snapshots;
           for (const auto &[Destination, Source] : Found->second.Registers) {
+            if (const auto *Address =
+                    std::get_if<SourceConstantStringAddress>(&Source)) {
+              Snapshots.emplace_back(
+                  Destination,
+                  MedVar::makeConst(Address->Address, 8,
+                                    ConstantAddressProvenance::DataAddress,
+                                    Address->Address));
+              continue;
+            }
             MedOp Read;
             Read.Opcode = NdOp::COPY;
             Read.Addr = LOp.Addr;
@@ -319,7 +328,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
             Read.Output.Id = allocVarId();
             Read.Output.Size = 8;
             Read.Output.TheArch = TheArch;
-            Read.addInput(ndVarToMedVar(NdVar::reg(Source, 8)));
+            Read.addInput(ndVarToMedVar(
+                NdVar::reg(std::get<SourceEntryRegister>(Source).Offset, 8)));
             Snapshots.emplace_back(Destination, Read.Output);
             MB.Ops.push_back(std::move(Read));
           }

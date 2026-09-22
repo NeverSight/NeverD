@@ -6,6 +6,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/Support/Endian.h"
@@ -14,13 +15,18 @@
 
 namespace neverd {
 namespace {
+struct RegisterValue {
+  enum Kind { EntryRegister, PageAddress, CompleteAddress } TheKind;
+  uint64_t Value;
+};
+
 std::optional<SourceRegisterCopy> leaf(const BinaryImage &Image, va_t Entry) {
   if (Entry % 4 || Entry > UINT64_MAX - 68)
     return std::nullopt;
   SourceRegisterCopy Result;
-  std::array<unsigned, 29> Sources;
+  std::array<RegisterValue, 29> Sources;
   for (unsigned I = 0; I < Sources.size(); ++I)
-    Sources[I] = I;
+    Sources[I] = {RegisterValue::EntryRegister, I * 8};
   for (unsigned I = 0; I <= 16; ++I) {
     const auto Bytes = readImmutableCodeBytes(Image, Entry + 4 * I, 4);
     if (!Bytes)
@@ -44,25 +50,65 @@ std::optional<SourceRegisterCopy> leaf(const BinaryImage &Image, va_t Entry) {
             (Metadata.CodeRange.End <= Metadata.CodeRange.Begin ||
              !isPlainSourceUnwind(Metadata)))
           return std::nullopt;
-      for (unsigned R = 0; R < Sources.size(); ++R)
-        if (Sources[R] != R)
-          Result.Registers.emplace(R * 8, Sources[R] * 8);
+      for (unsigned R = 0; R < Sources.size(); ++R) {
+        const auto &Source = Sources[R];
+        if (Source.TheKind == RegisterValue::PageAddress)
+          return std::nullopt;
+        if (Source.TheKind == RegisterValue::EntryRegister) {
+          if (Source.Value != R * 8)
+            Result.Registers.emplace(R * 8, SourceEntryRegister{Source.Value});
+          continue;
+        }
+        const auto String = readObjCConstantString(Image, Source.Value);
+        if (!String)
+          return std::nullopt;
+        Result.Registers.emplace(
+            R * 8, SourceConstantStringAddress{Source.Value, String->UTF16,
+                                               String->Units,
+                                               String->ContentsAddress});
+      }
       // Identity-only helpers provide no useful first-stage projection.
       return Result.Registers.empty() ? std::nullopt : std::optional(Result);
     }
     // ORR Xd, XZR, Xm, LSL #0, the full-width MOV alias. Exclude the
     // platform, frame, link and zero registers in both operand positions.
-    const unsigned Dst = Word & 31, Src = (Word >> 16) & 31;
-    if (I == 16 || (Word & 0xffe0ffe0) != 0xaa0003e0 || Dst > 28 || Src > 28 ||
-        Dst == 18 || Src == 18)
+    const unsigned Dst = Word & 31;
+    auto Allowed = [](unsigned R) { return R <= 28 && R != 18; };
+    if (I == 16 || !Allowed(Dst))
       return std::nullopt;
-    Sources[Dst] = Sources[Src];
+    if ((Word & 0xffe0ffe0) == 0xaa0003e0) {
+      const unsigned Src = (Word >> 16) & 31;
+      if (!Allowed(Src))
+        return std::nullopt;
+      Sources[Dst] = Sources[Src];
+    } else if ((Word & 0x9f000000) == 0x90000000) {
+      const uint64_t Page = (Entry + 4 * I) & ~uint64_t(0xfff);
+      const uint32_t Imm = ((Word >> 29) & 3) | ((Word >> 3) & 0x1ffffc);
+      const int64_t Delta =
+          (int64_t(Imm) - ((Imm & 0x100000) ? 0x200000 : 0)) * 4096;
+      if ((Delta < 0 && Page < uint64_t(-Delta)) ||
+          (Delta >= 0 && Page > UINT64_MAX - uint64_t(Delta)))
+        return std::nullopt;
+      Sources[Dst] = {RegisterValue::PageAddress, Page + Delta};
+    } else if ((Word & 0xffc00000) == 0x91000000) {
+      // ADD Xd, Xn, #imm12, LSL #0. Entry-register arithmetic and ADD of
+      // already completed addresses do not acquire object provenance.
+      const unsigned Src = (Word >> 5) & 31;
+      const uint64_t Offset = (Word >> 10) & 0xfff;
+      if (!Allowed(Src) || Sources[Src].TheKind != RegisterValue::PageAddress ||
+          Sources[Src].Value > UINT64_MAX - Offset)
+        return std::nullopt;
+      Sources[Dst] = {RegisterValue::CompleteAddress,
+                      Sources[Src].Value + Offset};
+    } else {
+      return std::nullopt;
+    }
   }
   return std::nullopt;
 }
 } // namespace
 
-std::optional<std::map<uint64_t, uint64_t>>
+std::optional<SourceRegisterValues>
 sourceRegisterCopyLeafRegisters(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
       Image.Bits != Bitness::Bits64 || Image.IsRelocatable)

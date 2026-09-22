@@ -155,8 +155,9 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
         const auto Copy = Med.RegisterCopyProjections.find(*Site);
         if (Copy != Med.RegisterCopyProjections.end())
           for (const auto &[Destination, Source] : Copy->second.Registers) {
-            if (Observed->count(Source))
-              Reads.insert(Source);
+            if (const auto *Entry = std::get_if<SourceEntryRegister>(&Source);
+                Entry && Observed->count(Entry->Offset))
+              Reads.insert(Entry->Offset);
             if (TRI.isCallPreserved(Destination, 8))
               WrittenPreserved.insert(Destination);
           }

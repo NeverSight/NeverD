@@ -9,11 +9,13 @@ struct LowFunc;
 
 /// Exact final-register effects of the same bounded local machine leaf.
 /// This does not qualify a caller occurrence or declare a C calling convention.
-std::optional<std::map<uint64_t, uint64_t>>
+std::optional<SourceRegisterValues>
 sourceRegisterCopyLeafRegisters(const BinaryImage &Image, va_t Entry);
 
 /// Authenticate bounded, direct AArch64 BL occurrences and their complete
-/// local MOV64/RET bodies in a linked immutable Mach-O image. Original LowIR
+/// local MOV64/ADRP/ADD/RET bodies in a linked immutable Mach-O image. Complete
+/// address outputs are restricted to authenticated constant-string objects.
+/// Original LowIR
 /// stays unchanged, including BL's real LR write and instruction boundaries.
 /// Missing, conflicting or incomplete evidence supplies no projection.
 SourceRegisterCopies sourceRegisterCopies(const BinaryImage &Image,

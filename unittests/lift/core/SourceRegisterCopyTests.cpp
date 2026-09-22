@@ -1,5 +1,6 @@
 #include "../../../lib/loader/MachO/MachOLocalFunction.h"
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
+#include "../../../lib/sdk/capi/ObjCSourceBindings.h"
 #include "../../../lib/sdk/capi/ObjCSourceProjection.h"
 #include "../../../lib/sdk/capi/SourceRegisterCopyProjection.h"
 #include "gtest/gtest.h"
@@ -9,6 +10,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -142,13 +144,375 @@ struct CopyFixture {
   }
 };
 
+uint32_t pageAddress(va_t PC, va_t Address, unsigned Register) {
+  const auto Delta =
+      (int64_t(Address & ~va_t(0xfff)) - int64_t(PC & ~va_t(0xfff))) / 4096;
+  const uint32_t Imm = uint32_t(Delta) & 0x1fffff;
+  return 0x90000000 | ((Imm & 3) << 29) | ((Imm >> 2) << 5) | Register;
+}
+uint32_t completeAddress(unsigned Destination, unsigned Source, va_t Address) {
+  return 0x91000000 | ((Address & 0xfff) << 10) | (Source << 5) | Destination;
+}
+void constantStrings(CopyFixture &F) {
+  using namespace llvm::MachO;
+  for (unsigned I = 0; I < 2; ++I) {
+    Segment Data;
+    Data.VA = Data.FileOff = 0x2000 + I * 0x1000;
+    Data.Size = Data.FileSz = 0x1000;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(Data.Size);
+    F.Image.Segments.push_back(Data);
+    Section Sec;
+    Sec.VA = Sec.FileOff = Data.VA;
+    Sec.Size = Sec.FileSz = Data.Size;
+    Sec.Flags = Data.Flags;
+    Sec.Name = I ? "__cstring" : "__cfstring";
+    Sec.SegmentName = I ? "__TEXT" : "__DATA_CONST";
+    Sec.Type = I ? S_CSTRING_LITERALS : S_REGULAR;
+    F.Image.Sections.push_back(Sec);
+    auto *Header =
+        reinterpret_cast<mach_header_64 *>(F.Image.Segments[0].Data.data());
+    auto *Command = reinterpret_cast<segment_command_64 *>(
+        reinterpret_cast<uint8_t *>(Header + 1) + Header->sizeofcmds);
+    ++Header->ncmds;
+    Header->sizeofcmds += sizeof(*Command) + sizeof(section_64);
+    Command->cmd = LC_SEGMENT_64;
+    Command->cmdsize = sizeof(*Command) + sizeof(section_64);
+    std::strcpy(Command->segname, Sec.SegmentName.c_str());
+    Command->vmaddr = Command->fileoff = Data.VA;
+    Command->vmsize = Command->filesize = Data.Size;
+    Command->maxprot = Command->initprot = VM_PROT_READ;
+    Command->nsects = 1;
+    auto *Raw = reinterpret_cast<section_64 *>(Command + 1);
+    std::strcpy(Raw->segname, Sec.SegmentName.c_str());
+    std::strcpy(Raw->sectname, Sec.Name.c_str());
+    Raw->addr = Raw->offset = Data.VA;
+    Raw->size = Data.Size;
+    Raw->flags = Sec.Type;
+  }
+  for (unsigned I = 0; I < 2; ++I) {
+    const va_t Address = 0x2040 + I * 32;
+    ASSERT_TRUE(F.Image.recordDyldBindSlot(
+        Address, "___CFConstantStringClassReference", 0,
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        false));
+    auto *Record = F.Image.Segments[1].Data.data() + Address - 0x2000;
+    llvm::support::endian::write64le(Record + 8, 0x7c8);
+    llvm::support::endian::write64le(Record + 16, 0x3000 + I * 16);
+    llvm::support::endian::write64le(Record + 24, 4);
+    std::memcpy(F.Image.Segments[2].Data.data() + I * 16, I ? "file" : "test",
+                5);
+    ASSERT_TRUE(readObjCConstantString(F.Image, Address));
+  }
+}
+void addressLeaf(CopyFixture &F) {
+  const uint32_t Body[] = {0xaa0103f3,
+                           0xaa0003f4,
+                           pageAddress(F.Leaf + 8, 0x2040, 4),
+                           completeAddress(4, 4, 0x2040),
+                           pageAddress(F.Leaf + 16, 0x2060, 6),
+                           completeAddress(6, 6, 0x2060),
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Body); ++I)
+    F.word(F.Leaf + I * 4, Body[I]);
+}
+
+TEST(SourceRegisterCopy, ExactConstantStringAddressesShareFreshMachineProof) {
+  CopyFixture F(false, true);
+  constantStrings(F);
+  addressLeaf(F);
+  F.run();
+  ASSERT_EQ(F.med().RegisterCopyProjections.size(), 2U);
+  for (const auto &[Site, Proof] : F.med().RegisterCopyProjections) {
+    ASSERT_EQ(Proof.Registers.size(), 4U);
+    const auto &Address =
+        std::get<SourceConstantStringAddress>(Proof.Registers.at(4 * 8));
+    EXPECT_EQ(Address.Address, 0x2040U);
+    EXPECT_EQ(Address.ContentsAddress, 0x3000U);
+    EXPECT_EQ(Address.Units, (std::vector<uint16_t>{'t', 'e', 's', 't'}));
+  }
+  EXPECT_TRUE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+  EXPECT_TRUE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&F.Image);
+  Converter.setSourceCallHintsEnabled(true);
+  const auto Med =
+      Converter.convert(F.low(), Arch::AArch64, BinaryFormat::MachO);
+  unsigned Addresses = 0;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const auto &Input = Op.Inputs[I];
+        if (Input.Kind != MedVar::Const ||
+            (Input.ConstVal != 0x2040 && Input.ConstVal != 0x2060))
+          continue;
+        ++Addresses;
+        EXPECT_EQ(Input.Provenance, ConstantAddressProvenance::DataAddress);
+        EXPECT_EQ(Input.AddressOwnerVA, Input.ConstVal);
+        EXPECT_EQ(Op.OriginSeq, -1);
+        EXPECT_EQ(Op.CallSiteId, 0U);
+      }
+  EXPECT_EQ(Addresses, 4U);
+}
+
+TEST(SourceRegisterCopy, RejectsInvalidAddressChainsAndMutatedObjects) {
+  CopyFixture F;
+  constantStrings(F);
+  addressLeaf(F);
+  F.run();
+  const auto Original = F.Image;
+  for (unsigned Mutation = 0; Mutation < 18; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    F.Image = Original;
+    switch (Mutation) {
+    case 0:
+      F.word(F.Leaf + 12, completeAddress(4, 4, 0x2040) | (1U << 22));
+      break;
+    case 1:
+      F.word(F.Leaf + 12, completeAddress(4, 4, 0x2040) & ~0x80000000U);
+      break;
+    case 2:
+      F.word(F.Leaf + 12, completeAddress(4, 4, 0x2040) | (1U << 29));
+      break;
+    case 3:
+      F.word(F.Leaf + 12, completeAddress(4, 0, 0x2040));
+      break;
+    case 4:
+      F.word(F.Leaf + 12, completeAddress(5, 4, 0x2040));
+      break; // Surviving page.
+    case 5:
+      F.word(F.Leaf + 8, pageAddress(F.Leaf + 8, F.Root, 4));
+      break;
+    case 6:
+      F.word(F.Leaf + 12, completeAddress(4, 4, 0x2041));
+      break;
+    case 7:
+      F.word(F.Leaf + 8, pageAddress(F.Leaf + 8, 0x9000, 4));
+      break;
+    case 8:
+      F.word(F.Leaf + 8, pageAddress(F.Leaf + 8, 0x2040, 18));
+      break;
+    case 9:
+      F.word(F.Leaf + 12, completeAddress(31, 4, 0x2040));
+      break;
+    case 10:
+      F.word(F.Leaf + 12, completeAddress(4, 31, 0x2040));
+      break;
+    case 11:
+      F.word(F.Leaf + 8, 0xd0ffffe4);
+      break; // ADRP underflow.
+    case 12:
+      F.Image.DyldBindSlots.erase(0x2040);
+      break;
+    case 13:
+      F.Image.Segments[1].Data[0x48] = 0;
+      break;
+    case 14:
+      F.Image.CodePtrRelocSlots.insert(0x3000);
+      break;
+    case 15:
+      F.Image.Segments[2].Data[0] = 'b';
+      break;
+    case 16:
+      F.Image.Segments[2].Data[4] = 'b';
+      break;
+    case 17:
+      F.Image.ConflictingImportStorageSlots.insert(0x2040);
+      break;
+    }
+    EXPECT_FALSE(validateSourceRegisterCopies(F.Image, F.low(),
+                                              F.med().RegisterCopyProjections));
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+    if (Mutation != 15)
+      EXPECT_TRUE(sourceRegisterCopies(F.Image, F.low()).empty());
+  }
+}
+
+TEST(SourceRegisterCopy, PageCalculationUsesTheCalleePCAndRejectsOverflow) {
+  using namespace llvm::MachO;
+  for (va_t Base : {va_t(0), va_t(0x4000), va_t(0xffffffffffffc000)}) {
+    SCOPED_TRACE(Base);
+    CopyFixture F;
+    constantStrings(F);
+    // Move the text mapping independently from the object and file offsets.
+    // The negative case is outside the caller page; the high case overflows.
+    F.Image.Segments[0].VA = Base;
+    F.Image.Sections[0].VA += Base;
+    for (auto &Symbol : F.Image.Symbols)
+      Symbol.Addr += Base;
+    auto *Header =
+        reinterpret_cast<mach_header_64 *>(F.Image.Segments[0].Data.data());
+    auto *Segment = reinterpret_cast<segment_command_64 *>(Header + 1);
+    Segment->vmaddr = Base;
+    auto *Section = reinterpret_cast<section_64 *>(Segment + 1);
+    Section->addr += Base;
+    auto *Symbol =
+        reinterpret_cast<nlist_64 *>(F.Image.Segments[0].Data.data() + 0x1800);
+    Symbol->n_value += Base;
+    const auto Entry = F.Leaf + Base;
+    const uint32_t Page =
+        Base > INT64_MAX ? 0xf0000024 : pageAddress(Entry, 0x2040, 4);
+    F.word(F.Leaf, Page);
+    F.word(F.Leaf + 4, completeAddress(4, 4, 0x2040));
+    F.word(F.Leaf + 8, 0xd65f03c0);
+    const auto Proof = sourceRegisterCopyLeafRegisters(F.Image, Entry);
+    if (Base > INT64_MAX) {
+      EXPECT_FALSE(Proof);
+    } else {
+      ASSERT_TRUE(Proof);
+      EXPECT_EQ(std::get<SourceConstantStringAddress>(Proof->at(4 * 8)).Address,
+                0x2040U);
+    }
+  }
+}
+
+TEST(SourceRegisterCopy, PageAndCompleteAddressCopiesRetainTheirKind) {
+  CopyFixture F;
+  constantStrings(F);
+  const uint32_t Body[] = {pageAddress(F.Leaf, 0x2040, 4),
+                           0xaa0403e5,
+                           completeAddress(4, 4, 0x2040),
+                           completeAddress(5, 5, 0x2060),
+                           0xaa0403e6,
+                           0xaa0003f5,
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Body); ++I)
+    F.word(F.Leaf + I * 4, Body[I]);
+  const auto Proof = sourceRegisterCopyLeafRegisters(F.Image, F.Leaf);
+  ASSERT_TRUE(Proof);
+  EXPECT_EQ(Proof->at(4 * 8), Proof->at(6 * 8));
+  EXPECT_EQ(std::get<SourceConstantStringAddress>(Proof->at(5 * 8)).Address,
+            0x2060U);
+  EXPECT_EQ(std::get<SourceEntryRegister>(Proof->at(21 * 8)).Offset, 0U);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {F.Leaf};
+  auto Result = Pipeline().run(F.Image, F.Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  std::string Error;
+  EXPECT_FALSE(inferNativeSourceTypeHint(
+      F.Image, Result.MedFuncs.front(), Result.HighFuncs.front(),
+      Result.FunctionAudits.front(), Error, &Result.LowFuncs.front()));
+  EXPECT_NE(Error.find("private register outputs"), std::string::npos);
+  F.word(F.Leaf + 12,
+         completeAddress(5, 4, 0x2060)); // Completed base, not page.
+  EXPECT_FALSE(sourceRegisterCopyLeafRegisters(F.Image, F.Leaf));
+}
+
+TEST(SourceRegisterCopy, ConstantWritesCannotRestoreAnEntryRegisterOrFrame) {
+  CopyFixture F;
+  constantStrings(F);
+  F.word(F.Leaf, pageAddress(F.Leaf, 0x2040, 19));
+  F.word(F.Leaf + 4, completeAddress(19, 19, 0x2040));
+  F.word(F.Leaf + 8, 0xd65f03c0);
+  F.run();
+  ASSERT_EQ(F.med().RegisterCopyProjections.size(), 1U);
+  EXPECT_TRUE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+  F.word(F.Root + 20, 0xd503201f);
+  F.run();
+  EXPECT_FALSE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+  auto Med = F.med();
+  auto &Value =
+      Med.RegisterCopyProjections.begin()->second.Registers.at(19 * 8);
+  std::get<SourceConstantStringAddress>(Value).Address = 19 * 8;
+  EXPECT_FALSE(validateSourceRegisterCopies(F.Image, F.low(),
+                                            Med.RegisterCopyProjections));
+}
+
+TEST(SourceRegisterCopy, GeneratedAddressProjectionsExecuteAgainstFoundation) {
+#if defined(__APPLE__) && defined(__aarch64__) && defined(NEVERD_TEST_CLANG)
+  CopyFixture F(false, true);
+  constantStrings(F);
+  addressLeaf(F);
+  std::vector<HighFunc> Functions;
+  std::set<va_t> Strings;
+  F.Signature.Parameters.resize(2);
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(F.Signature, Arch::AArch64, Error));
+  for (unsigned Register : {4U, 6U}) {
+    F.word(F.Root + 16, 0xaa0003e0 | (Register << 16)); // MOV x0, string.
+    F.word(F.Root + 20, 0xd503201f);
+    F.run();
+    ASSERT_EQ(F.med().RegisterCopyProjections.size(), 2U);
+    ASSERT_TRUE(
+        sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+    auto Bound = sdk::bindObjCSourceReferences(F.high(), F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.ConstantStrings.size(), 1U);
+    Bound.Function.Name = "string_" + std::to_string(Register);
+    Strings.insert(Bound.ConstantStrings.begin(), Bound.ConstantStrings.end());
+    Functions.push_back(std::move(Bound.Function));
+  }
+  std::string Source = "#include <CoreFoundation/CoreFoundation.h>\n";
+  llvm::raw_string_ostream Stream(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.EmitComments = false;
+  ASSERT_TRUE(HighCEmitter().emit(Functions, Stream, Options));
+  std::set<std::string> Shared;
+  Source += sdk::renderObjCConstantStringHelpers(F.Image, Strings, Shared);
+  Source += R"C(
+int main(void) {
+  CFStringRef first = (CFStringRef)string_4(11, 22);
+  CFStringRef second = (CFStringRef)string_6(33, 44);
+  if (first != (CFStringRef)string_4(55, 66) || second != (CFStringRef)string_6(77, 88)) return 1;
+  if (first == second) return 2;
+  if (CFStringCompare(first, CFSTR("test"), 0) != kCFCompareEqualTo) return 3;
+  if (CFStringCompare(second, CFSTR("file"), 0) != kCFCompareEqualTo) return 4;
+  return 0;
+}
+)C";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-address-leaf", Directory));
+  const std::filesystem::path Work(Directory.c_str());
+  struct Cleanup {
+    std::filesystem::path Work;
+    ~Cleanup() {
+      std::error_code Error;
+      std::filesystem::remove_all(Work, Error);
+    }
+  } Cleanup{Work};
+  const auto Path = (Work / "source.c").string();
+  const auto Executable = (Work / "source").string();
+  const auto ErrorPath = (Work / "stderr").string();
+  std::ofstream(Path) << Source;
+  for (const auto *Level : {"-O0", "-O2"}) {
+    const std::string Compiler = NEVERD_TEST_CLANG;
+    const std::vector<std::string> Arguments{
+        Compiler,     "-std=gnu11", Level,        "-Werror",
+        "-framework", "Foundation", "-framework", "CoreFoundation",
+        Path,         "-o",         Executable};
+    const std::vector<llvm::StringRef> Refs(Arguments.begin(), Arguments.end());
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath};
+    const auto Status = llvm::sys::ExecuteAndWait(Compiler, Refs, std::nullopt,
+                                                  Redirects, 60, 0, &Error);
+    auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (Errors ? (*Errors)->getBuffer().str() : "")
+                         << Source;
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable, {Executable}, std::nullopt,
+                                        Redirects, 30, 0, &Error),
+              0)
+        << Error << Source;
+  }
+#else
+  GTEST_SKIP()
+      << "Foundation runtime verification requires macOS arm64 and clang";
+#endif
+}
+
 TEST(SourceRegisterCopy, ExactLocalLeafKeepsPhysicalEffectsAndOriginalCalls) {
   CopyFixture F;
   ASSERT_EQ(F.Result.LowFuncs.size(), 1U);
   const auto Copies = sourceRegisterCopies(F.Image, F.low());
   ASSERT_EQ(Copies.size(), 1U);
   EXPECT_EQ(Copies.begin()->second.Registers,
-            (std::map<uint64_t, uint64_t>{{19 * 8, 8}, {20 * 8, 0}}));
+            (SourceRegisterValues{{19 * 8, SourceEntryRegister{8}},
+                                  {20 * 8, SourceEntryRegister{0}}}));
   EXPECT_EQ(F.med().RegisterCopyProjections, Copies);
   EXPECT_EQ(F.high().RegisterCopyProjections, Copies);
   EXPECT_TRUE(
@@ -184,8 +548,11 @@ TEST(SourceRegisterCopy, SequentialAliasesNormalizeToEntryAndBindEveryCall) {
   ASSERT_EQ(Copies.size(), 2U);
   for (const auto &[Site, Proof] : Copies) {
     EXPECT_EQ(Proof.Registers,
-              (std::map<uint64_t, uint64_t>{
-                  {0, 8}, {8, 0}, {9 * 8, 0}, {19 * 8, 0}, {20 * 8, 8}}));
+              (SourceRegisterValues{{0, SourceEntryRegister{8}},
+                                    {8, SourceEntryRegister{0}},
+                                    {9 * 8, SourceEntryRegister{0}},
+                                    {19 * 8, SourceEntryRegister{0}},
+                                    {20 * 8, SourceEntryRegister{8}}}));
     EXPECT_EQ(Proof.Site, Site);
     EXPECT_EQ(Proof.Caller, F.Root);
   }
@@ -292,7 +659,7 @@ TEST(SourceRegisterCopy, RejectsStaleCallerBoundariesAndProjectionReceipts) {
     if (Mutation == 3)
       ++Low.Entry;
     if (Mutation == 4)
-      Copies.begin()->second.Registers[19 * 8] = 0;
+      Copies.begin()->second.Registers[19 * 8] = SourceEntryRegister{0};
     if (Mutation == 5)
       ++Copies.begin()->second.Site.Sequence;
     if (Mutation == 6)
@@ -403,7 +770,8 @@ TEST(SourceRegisterCopy, NativeInferenceObservesInputsThroughProjectedCalls) {
   for (unsigned I = 0; I < 3; ++I)
     EXPECT_EQ(Hint->Parameters[I].Location.RegisterOffset, 8 * I);
   auto Med = F.med();
-  Med.RegisterCopyProjections.begin()->second.Registers[19 * 8] = 0;
+  Med.RegisterCopyProjections.begin()->second.Registers[19 * 8] =
+      SourceEntryRegister{0};
   EXPECT_FALSE(inferNativeSourceTypeHint(F.Image, Med, F.high(),
                                          F.Result.FunctionAudits.front(), Error,
                                          &F.low()));

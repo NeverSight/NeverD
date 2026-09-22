@@ -234,9 +234,10 @@ public:
         if (const auto *Copy = Found->second.RegisterCopy) {
           std::vector<std::pair<uint64_t, std::array<ByteFact, 8>>> Snapshots;
           for (const auto &[Destination, Source] : Copy->Registers) {
-            std::array<ByteFact, 8> Value;
-            for (unsigned I = 0; I < 8; ++I)
-              Value[I] = Read(NdVar::reg(Source, 8), I);
+            std::array<ByteFact, 8> Value{};
+            if (const auto *Entry = std::get_if<SourceEntryRegister>(&Source))
+              for (unsigned I = 0; I < 8; ++I)
+                Value[I] = Read(NdVar::reg(Entry->Offset, 8), I);
             Snapshots.emplace_back(Destination, Value);
           }
           for (const auto &[Destination, Value] : Snapshots)
@@ -589,10 +590,17 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
           Copy->Caller != Function.Entry || Copy->Site != Site ||
           Copy->Registers.empty() || Copy->Registers.size() > 16)
         return false;
-      for (const auto &[Destination, Source] : Copy->Registers)
-        if (Destination > 28 * 8 || Source > 28 * 8 || Destination % 8 ||
-            Source % 8 || Destination == 18 * 8 || Source == 18 * 8)
+      for (const auto &[Destination, Source] : Copy->Registers) {
+        if (Destination > 28 * 8 || Destination % 8 || Destination == 18 * 8)
           return false;
+        if (const auto *Entry = std::get_if<SourceEntryRegister>(&Source)) {
+          if (Entry->Offset > 28 * 8 || Entry->Offset % 8 ||
+              Entry->Offset == 18 * 8)
+            return false;
+        } else if (!std::get<SourceConstantStringAddress>(Source).Address) {
+          return false;
+        }
+      }
       continue;
     }
     const auto *Signature = Contract.Signature;
