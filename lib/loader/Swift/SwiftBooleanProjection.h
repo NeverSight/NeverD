@@ -2,6 +2,7 @@
 #define NEVERD_LOADER_SWIFT_SWIFTBOOLEANPROJECTION_H
 
 #include "../../ir/low/SourceBooleanResultProof.h"
+#include "../ObjC/ObjCClassAccessorMachine.h"
 #include "SwiftBooleanRuntimeCandidate.h"
 
 #include "neverd/loader/ObjC/ObjCCallHints.h"
@@ -49,12 +50,41 @@ inline bool ordinaryRuntime(const SourceCallTypeHint &Hint) {
          Hint.CallKind == Kind::SwiftStringFromNSString ||
          Hint.CallKind == Kind::DarwinRuntimeCall;
 }
+
+// This supplies only the complete physical ABI to the difference proof. The
+// existing super-dispatch publication gate still owns receiver/frame binding.
+inline bool superInit(const BinaryImage &Image,
+                      const SourceCallOccurrenceKey &Site, va_t Slot,
+                      const SourceCallTypeHint &Hint) {
+  const auto Import = darwinRuntimeImport(Image, Slot);
+  const auto Bind = Image.DyldBindSlots.find(Slot);
+  const auto &Signature = Hint.Signature;
+  return Hint.CallKind == SourceCallTypeHint::Kind::ObjCSuper2 &&
+         Hint.TargetAddress == Site.StaticTarget && Hint.Selector == "init" &&
+         Hint.TargetName == "objc_msgSendSuper2" && Import &&
+         *Import == "_objc_msgSendSuper2" &&
+         Bind != Image.DyldBindSlots.end() &&
+         Bind->second.Module == "/usr/lib/libobjc.A.dylib" && !Hint.Format &&
+         !Hint.NilTerminated && !Hint.WeakImport && !Hint.DoesNotReturn &&
+         Signature.Convention == SourceFunctionTypeHint::ConventionKind::C &&
+         Signature.ReturnType &&
+         Signature.ReturnType->Kind == NdTypeKind::Ptr &&
+         Signature.ReturnType->Size == 8 && Signature.Parameters.size() == 2 &&
+         std::all_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                     [](const auto &P) {
+                       return P.Type && P.Type->Kind == NdTypeKind::Ptr &&
+                              P.Type->Size == 8 &&
+                              P.TheRole ==
+                                  SourceParameterTypeHint::Role::Ordinary;
+                     });
+}
 } // namespace swift_boolean_projection_detail
 
 /// Deliberately bounded to an Objective-C entry, one comparison occurrence,
-/// and other direct calls with freshly catalogued runtime ABIs. Native callees,
-/// dynamic dispatch, weak imports, indirect calls and unknown effects require
-/// separate evidence and do not borrow authority from candidate signatures.
+/// and other direct calls with freshly catalogued runtime ABIs, exact super
+/// init dispatch or complete eight-instruction class-accessor machine proofs.
+/// Other native candidates and dynamic dispatch, weak imports, indirect calls
+/// and unknown effects do not borrow authority from candidate signatures.
 inline std::optional<SwiftBooleanProjection>
 qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
                               const SourceFunctionTypeHint &EntrySignature) {
@@ -71,6 +101,7 @@ qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
   const auto Hints = buildObjCSourceCallHints(Image, Low);
   std::optional<SwiftBooleanProjection> Selected;
   std::map<SourceCallOccurrenceKey, SourceBooleanOtherCallContract> Calls;
+  std::map<va_t, SourceFunctionTypeHint> ClassAccessors;
   std::set<va_t> CallInstructions;
   for (const auto &Block : Low.Blocks) {
     if (Block.EndAddr <= Block.StartAddr ||
@@ -95,8 +126,23 @@ qualifySwiftBooleanProjection(const BinaryImage &Image, const LowFunc &Low,
       }
       const auto Hint = Hints.find(Op.Addr);
       const auto Slot = darwinImportVeneerSlot(Image, *Site->StaticTarget);
-      if (!Slot || Hint == Hints.end() || Hint->second.TargetAddress != *Slot ||
-          !swift_boolean_projection_detail::ordinaryRuntime(Hint->second) ||
+      if (Hint == Hints.end()) {
+        const auto Machine =
+            objcClassAccessorMachine(Image, *Site->StaticTarget);
+        if (!Machine)
+          return std::nullopt;
+        const auto [It, Inserted] =
+            ClassAccessors.emplace(*Site->StaticTarget, Machine->Signature);
+        if (!Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
+                 .second)
+          return std::nullopt;
+        continue;
+      }
+      if (!Slot ||
+          !((Hint->second.TargetAddress == *Slot &&
+             swift_boolean_projection_detail::ordinaryRuntime(Hint->second)) ||
+            swift_boolean_projection_detail::superInit(Image, *Site, *Slot,
+                                                       Hint->second)) ||
           Hint->second.WeakImport || Hint->second.DoesNotReturn ||
           !Calls
                .emplace(*Site,

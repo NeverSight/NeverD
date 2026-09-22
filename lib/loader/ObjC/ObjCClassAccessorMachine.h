@@ -32,14 +32,6 @@ objcClassAccessorMachine(const BinaryImage &Image, va_t Entry) {
   const auto Bytes = readImmutableCodeBytes(Image, Entry, 32);
   if (!Bytes)
     return std::nullopt;
-  for (const auto &Metadata : Image.ExceptionMetadata.Functions)
-    if (((Metadata.CodeRange.Begin < Entry + 32 &&
-          Metadata.CodeRange.End > Entry) ||
-         (Metadata.CodeRange.Begin >= Entry &&
-          Metadata.CodeRange.Begin < Entry + 32)) &&
-        (Metadata.CodeRange.End <= Metadata.CodeRange.Begin ||
-         !isPlainSourceUnwind(Metadata)))
-      return std::nullopt;
   auto Word = [&](unsigned I) {
     return llvm::support::endian::read32le(Bytes->data() + 4 * I);
   };
@@ -49,6 +41,14 @@ objcClassAccessorMachine(const BinaryImage &Image, va_t Entry) {
       (Word(3) & 0xffc003ff) != 0x91000000 ||
       (Word(4) & 0xfc000000) != 0x94000000)
     return std::nullopt;
+  for (const auto &Metadata : Image.ExceptionMetadata.Functions)
+    if (((Metadata.CodeRange.Begin < Entry + 32 &&
+          Metadata.CodeRange.End > Entry) ||
+         (Metadata.CodeRange.Begin >= Entry &&
+          Metadata.CodeRange.Begin < Entry + 32)) &&
+        (Metadata.CodeRange.End <= Metadata.CodeRange.Begin ||
+         !isPlainSourceUnwind(Metadata)))
+      return std::nullopt;
   auto Add = [](va_t Base, int64_t Offset) -> std::optional<va_t> {
     if ((Offset < 0 && Base < uint64_t(-Offset)) ||
         (Offset >= 0 && Base > UINT64_MAX - uint64_t(Offset)))

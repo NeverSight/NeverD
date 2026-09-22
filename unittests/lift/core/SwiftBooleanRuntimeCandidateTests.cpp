@@ -627,3 +627,77 @@ TEST(ObjCClassAccessorMachine, UsesSharedStructuralUnwindBoundary) {
     EXPECT_FALSE(objcClassAccessorMachine(Bad, 0x3040));
   }
 }
+
+TEST(SwiftBooleanProjection, OtherNativeCallNeedsCompleteCurrentMachineFacts) {
+  ProjectionFixture F;
+  addClassAccessor(F);
+  auto &B = F.Low.Blocks.front();
+  auto Call = B.Ops.front();
+  Call.Addr = 0x3008;
+  Call.Inputs[0].Offset = 0x3040;
+  B.Ops.back().Addr = 0x300c;
+  B.Ops.insert(B.Ops.end() - 1, Call);
+  B.EndAddr = 0x3010;
+  F.word(0x3008, 0x9400000e);
+  F.word(0x300c, 0xd65f03c0);
+  ASSERT_TRUE(F.qualify());
+  // This native call still has no ordinary loader source binding. Its current
+  // complete body, rather than a native candidate signature, supplies the ABI.
+  EXPECT_EQ(buildObjCSourceCallHints(F.Image, F.Low).count(0x3008), 0U);
+  F.word(0x3048, 0xf0ffffe1); // x0 is now an incoming argument.
+  EXPECT_FALSE(F.qualify());
+  F.word(0x3048, 0xf0ffffe0);
+  ASSERT_TRUE(F.qualify());
+  F.Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
+  EXPECT_FALSE(F.qualify());
+}
+
+TEST(SwiftBooleanProjection,
+     SuperInitRequiresCurrentSelectorProviderAndInputs) {
+  ProjectionFixture F;
+  const va_t SuperSlot = Slot + 16, SelectorSlot = 0x20c0;
+  F.Image.ImportPtrSlots[SuperSlot] = "_objc_msgSendSuper2";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(SuperSlot, "_objc_msgSendSuper2", 0,
+                                         "/usr/lib/libobjc.A.dylib", false));
+  F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+  F.Image.ObjCSourceReferences[SelectorSlot] = {
+      ObjCSourceReference::Kind::Selector, SelectorSlot, 8, "init"};
+  ObjCMethod Init;
+  Init.ClassName = "Base";
+  Init.Selector = "init";
+  Init.TypeEncoding = "@16@0:8";
+  Init.TypeHint = parseObjCMethodEncoding(Init.Selector, Init.TypeEncoding);
+  Init.Status = "supported";
+  F.Image.ObjCMethods.push_back(Init);
+  F.word(0x1020, 0xb0000010);
+  F.word(0x1024, 0xf9404a10);
+  F.word(0x1028, 0xd61f0200);
+  auto &B = F.Low.Blocks.front();
+  auto Call = B.Ops.front();
+  Call.Addr = 0x300c;
+  Call.Inputs[0].Offset = 0x1020;
+  auto Load = B.Ops.front();
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = 0x3008;
+  Load.Output = NdVar::reg(8, 8);
+  Load.Inputs[0] = NdVar::cst(SelectorSlot, 8);
+  B.Ops.back().Addr = 0x3010;
+  B.Ops.insert(B.Ops.end() - 1, Load);
+  B.Ops.insert(B.Ops.end() - 1, Call);
+  B.EndAddr = 0x3014;
+  F.word(0x3008, 0x58ff85c1);
+  F.word(0x300c, 0x97fff805);
+  F.word(0x3010, 0xd65f03c0);
+  const auto Hints = buildObjCSourceCallHints(F.Image, F.Low);
+  ASSERT_EQ(Hints.count(0x300c), 1U);
+  ASSERT_EQ(Hints.at(0x300c).CallKind, SourceCallTypeHint::Kind::ObjCSuper2);
+  ASSERT_TRUE(F.qualify());
+  F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 3;
+  EXPECT_FALSE(F.qualify()); // The changed result reaches the super pointer.
+  F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 1;
+  F.Image.ObjCSourceReferences[SelectorSlot].Name = "description";
+  EXPECT_FALSE(F.qualify());
+  F.Image.ObjCSourceReferences[SelectorSlot].Name = "init";
+  F.Image.DyldBindSlots[SuperSlot].Module = "/tmp/libobjc.A.dylib";
+  EXPECT_FALSE(F.qualify());
+}
