@@ -14,6 +14,7 @@
 #define NEVERD_EMULATION_KERNELMMIO_H
 
 #include "../GuestMemory.h"
+#include "KernelResources.h"
 
 #include "neverd/emulation/DriverPnp.h"
 
@@ -30,23 +31,12 @@ namespace mmio {
 
 class KernelMMIO {
 public:
-  explicit KernelMMIO(GuestMemory &Memory) : Memory(Memory) {}
+  KernelMMIO(GuestMemory &Memory, const KernelResources &Resources)
+      : Memory(Memory), Resources(Resources) {}
   KernelMMIO(const KernelMMIO &) = delete;
   KernelMMIO &operator=(const KernelMMIO &) = delete;
-  /// Configuration is validated collectively by validateDriverResources.
-  llvm::Error configure(uint64_t PDO, const DriverPnpDevice &Configuration);
-  bool hasResources(uint64_t PDO) const;
-  llvm::Expected<std::vector<uint8_t>> resourceList(uint64_t PDO,
-                                                    bool Translated) const;
-  /// Pure preparation precedes a new START ticket; activation is lower success.
-  llvm::Error canStart(uint64_t PDO) const;
-  llvm::Error beginStart(uint64_t PDO);
-  llvm::Error completeLowerStart(uint64_t PDO, uint32_t Status);
-  llvm::Error validateCompletion(uint64_t PDO, DevicePnpRequest Minor,
-                                 uint32_t Status) const;
-  llvm::Error finishPnp(uint64_t PDO, DevicePnpRequest Minor, uint32_t Status);
-  void surpriseRemoval(uint64_t PDO);
-  void setPhysicalPower(uint64_t PDO, DevicePowerState Power);
+  /// Seed mutable register values from the immutable assignment inventory.
+  llvm::Error configure(uint64_t PDO);
   llvm::Error canRemove(uint64_t PDO) const;
   llvm::Expected<uint64_t> map(uint64_t Physical, uint64_t Length,
                                uint32_t Attributes, bool Extended);
@@ -55,11 +45,6 @@ public:
 private:
   struct Device {
     std::vector<DriverMemoryResource> Resources;
-    uint64_t Epoch = 0;
-    bool Starting = false;
-    bool Assigned = false;
-    bool Present = true;
-    DevicePowerState Power = DevicePowerState::D0;
   };
   struct Mapping {
     uint64_t PDO;
@@ -73,11 +58,11 @@ private:
     bool ReadOnly;
   };
   GuestMemory &Memory;
+  const KernelResources &Resources;
   std::shared_ptr<unsigned char> Lifetime = std::make_shared<unsigned char>(0);
   std::map<uint64_t, Device> Devices;
   std::map<uint64_t, Mapping> Mappings;
   uint64_t NextMapping = 0;
-  llvm::Error noMappings(uint64_t PDO) const;
   llvm::Error validate(uint64_t Address, uint64_t Offset, uint64_t Size,
                        bool Write) const;
   llvm::Expected<uint64_t> read(uint64_t Address, uint64_t Offset,

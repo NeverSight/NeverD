@@ -46,6 +46,7 @@ protected:
   uint64_t NextIRP = Driver + 0x3000;
   uint64_t Queue = 0, WdmDevice = 0;
   bool FailValidation = false;
+  unsigned CancelQueries = 0;
 
   llvm::Expected<HostRequest *> livePacket(uint64_t IRP) {
     auto I = Packets.find(IRP);
@@ -84,6 +85,7 @@ protected:
       return llvm::Error::success();
     };
     Host.IsCanceled = [this](uint64_t IRP) -> llvm::Expected<bool> {
+      ++CancelQueries;
       auto P = livePacket(IRP);
       if (!P)
         return P.takeError();
@@ -1019,9 +1021,9 @@ TEST_F(DriverKernelFrameworkRequest,
               "invalid, foreign");
   expectError(invoke("WdfRequestMarkCancelable", {Globals, Queue, CancelPC}),
               "invalid, foreign");
-  expectError(invoke("WdfRequestMarkCancelable",
-                     {Globals + 8, Request, CancelPC}),
-              "another binding's globals");
+  expectError(
+      invoke("WdfRequestMarkCancelable", {Globals + 8, Request, CancelPC}),
+      "another binding's globals");
   EXPECT_FALSE(Model.takeGuestCall());
   EXPECT_TRUE(Validations.empty());
   EXPECT_EQ(take(invoke("WdfRequestIsCanceled", {Globals, Request})), 0u);
@@ -1065,6 +1067,124 @@ TEST_F(DriverKernelFrameworkRequest,
             std::optional<uint64_t>{0});
   EXPECT_TRUE(Released.count(Request));
   EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationPreviewCountsOnlyMarkedRequestsWithoutReadingHostFacts) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  const KernelFramework &Preview = Model;
+  EXPECT_FALSE(take(Preview.preflightRequestCancellation(Sentinel)));
+  EXPECT_FALSE(take(Preview.preflightRequestCancellation(IRP)));
+  markCancelable(Request);
+  const auto Queries = CancelQueries;
+  const auto Events = HostEvents;
+  const auto Bytes = Memory.Bytes;
+  for (unsigned I = 0; I < 3; ++I) {
+    EXPECT_TRUE(take(Preview.preflightRequestCancellation(IRP)));
+    EXPECT_FALSE(Model.hasPendingGuestCall());
+  }
+  EXPECT_EQ(CancelQueries, Queries);
+  EXPECT_EQ(HostEvents, Events);
+  EXPECT_EQ(Memory.Bytes, Bytes);
+  EXPECT_FALSE(Packets.at(IRP).Canceled);
+  expectError(Model.requestCancellation(IRP), "IRP cancel flag");
+  EXPECT_TRUE(take(Preview.preflightRequestCancellation(IRP)));
+  // Repeated previews did not publish a call or consume the cancellation hold.
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})), 0u);
+  EXPECT_FALSE(take(Preview.preflightRequestCancellation(IRP)));
+  complete(Request);
+  EXPECT_TRUE(Released.count(Request));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationPreviewMatchesQueuedDeliveredAndCompletedCallbackCounts) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP)));
+  const auto Cancel = cancel(IRP);
+  EXPECT_EQ(Cancel.PC, CancelPC);
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP)));
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  success(Model.beginCancelCallback(Cancel.Token));
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP)));
+  complete(Request, 0, 0xc0000120);
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP)));
+  EXPECT_FALSE(Released.count(Request));
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP)));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationPreviewRejectsPendingCallWithoutConsumingEitherOwner) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  type();
+  attributes(0, Type, ChildCleanup, ChildDestroy);
+  const auto Other = object(Attrs);
+  take(invoke("WdfObjectDelete", {Globals, Other}));
+  const auto Queries = CancelQueries;
+  expectError(Model.preflightRequestCancellation(IRP),
+              "pending guest callback");
+  expectError(Model.preflightRequestCancellation(IRP),
+              "pending guest callback");
+  EXPECT_EQ(CancelQueries, Queries);
+  EXPECT_TRUE(Model.hasPendingGuestCall());
+  EXPECT_EQ(drain(), (std::vector<uint64_t>{ChildCleanup, ChildDestroy}));
+  EXPECT_TRUE(Released.count(Other));
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP)));
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  complete(Request, 0, 0xc0000120);
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_TRUE(Released.count(Request));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationPreviewRejectsMissingHostOnlyForAnActualCallback) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  Model.setRequestHost({});
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(Sentinel)));
+  expectError(Model.preflightRequestCancellation(IRP), "host is unavailable");
+  expectError(Model.requestCancellation(IRP), "host is unavailable");
+  EXPECT_FALSE(Model.hasPendingGuestCall());
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})), 0u);
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP)));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationPreviewChecksBatchTokenCapacityWithoutReservingTokens) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_FALSE(take(Model.preflightRequestCancellation(IRP, UINT64_MAX)));
+  markCancelable(Request);
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP, 0)));
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP, 7)));
+  expectError(Model.preflightRequestCancellation(IRP, UINT64_MAX),
+              "token capacity exhausted");
+  expectError(Model.preflightRequestCancellation(IRP, UINT64_MAX - 1),
+              "token capacity exhausted");
+  EXPECT_FALSE(Model.hasPendingGuestCall());
+  EXPECT_FALSE(Packets.at(IRP).Canceled);
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP)));
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  complete(Request, 0, 0xc0000120);
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_TRUE(Released.count(Request));
 }
 
 } // namespace

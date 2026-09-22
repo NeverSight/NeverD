@@ -16,11 +16,15 @@
 
 namespace neverd::emulation {
 
+llvm::Error KernelModel::canReleaseResources(uint64_t PDO) const {
+  return llvm::joinErrors(MMIO.canRemove(PDO), Interrupts.canRelease(PDO));
+}
+
 llvm::Error KernelModel::initializePnpResources(ActiveRequest &Request) {
   if (Request.PnpOperation->Minor == DevicePnpRequest::Start &&
-      MMIO.hasResources(Request.PnpDevice)) {
-    auto Raw = MMIO.resourceList(Request.PnpDevice, false);
-    auto Translated = MMIO.resourceList(Request.PnpDevice, true);
+      Resources.hasResources(Request.PnpDevice)) {
+    auto Raw = Resources.resourceList(Request.PnpDevice, false);
+    auto Translated = Resources.resourceList(Request.PnpDevice, true);
     if (!Raw || !Translated)
       return llvm::joinErrors(Raw.takeError(), Translated.takeError());
     auto RawAddress = allocate(Raw->size());
@@ -54,7 +58,7 @@ llvm::Error KernelModel::validatePnpRequestCompletion(
   // completion repeats this validation after actual provider completion.
   if (ProviderProbe && Request.PnpOperation->Minor == DevicePnpRequest::Start)
     return llvm::Error::success();
-  return MMIO.validateCompletion(Request.PnpDevice, Request.PnpOperation->Minor,
+  return Resources.validateCompletion(Request.PnpDevice, Request.PnpOperation->Minor,
                                  Status);
 }
 
@@ -62,12 +66,12 @@ llvm::Error KernelModel::publishProviderHardware(ActiveRequest &Request,
                                                  uint32_t Status) {
   if (Request.PnpOperation &&
       Request.PnpOperation->Minor == DevicePnpRequest::Start)
-    return MMIO.completeLowerStart(Request.PnpDevice, Status);
+    return Resources.completeLowerStart(Request.PnpDevice, Status);
   if (Request.PowerOperation &&
       Request.PowerOperation->Type == DriverPowerType::Device &&
       Request.PowerOperation->Minor == DevicePowerRequest::Set &&
       !(Status & profile::NTStatusFailureMask))
-    MMIO.setPhysicalPower(
+    Resources.setPhysicalPower(
         Request.PnpDevice,
         static_cast<DevicePowerState>(Request.PowerOperation->State));
   return llvm::Error::success();

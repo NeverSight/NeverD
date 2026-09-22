@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
 #include <filesystem>
@@ -979,7 +980,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1344,7 +1345,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1470,7 +1471,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1591,7 +1592,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
             << llvm::toString(Parsed.takeError()) << error();
         const auto *Report = Parsed->getAsObject();
         ASSERT_NE(Report, nullptr);
-        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
         EXPECT_EQ(Report->getString("stop_reason"), "returned")
             << Report->getString("diagnostic").value_or("").str();
         EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1759,7 +1760,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1839,6 +1840,170 @@ TEST_F(DriverScenarioPublic,
     }
 #else
   GTEST_SKIP() << "NEVERD_WDM_RESOURCE_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, RejectsInvalidInterruptFactsBeforeImageLoading) {
+  for (const auto &[Field, Fact] :
+       std::vector<std::pair<const char *, const char *>>{
+           {"translated_level", "2"},
+           {"translated_affinity", "2"},
+           {"mode", "\"level_sensitive\""},
+           {"share", "\"shared\""}}) {
+    auto Value = llvm::json::parse(R"({"pnp_devices":[{
+      "id":"interrupt0","bus":"register_bank","initial_device_power":"D0",
+      "initial_system_power":"working","interrupts":[{
+      "id":"line0","raw_vector":17,"raw_level":7,"raw_affinity":1,
+      "translated_vector":145,"translated_level":5,"translated_affinity":1,
+      "mode":"latched","share":"device_exclusive"}]}]})");
+    auto Replacement = llvm::json::parse(Fact);
+    ASSERT_TRUE(bool(Value));
+    ASSERT_TRUE(bool(Replacement));
+    auto *IRQ = (*(*Value->getAsObject()->getArray("pnp_devices"))[0]
+                      .getAsObject()
+                      ->getArray("interrupts"))[0]
+                    .getAsObject();
+    (*IRQ)[Field] = std::move(*Replacement);
+    const std::string Scenario = llvm::formatv("{0}", *Value).str();
+    EXPECT_EQ(
+        neverd_emulate_driver_scenario_json(
+            Session, "missing-interrupt-driver.sys", Scenario.c_str(), nullptr),
+        nullptr);
+    EXPECT_NE(error().find("driver scenario:"), std::string::npos);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+  }
+  for (const char *Request : {R"({"kind":"create","interrupt_events":[]})",
+                              R"({"kind":"ioctl","code":0,"interrupt_events":[{
+             "after_100ns":0,"device_id":"missing","interrupt_id":"line0"}]})"}) {
+    const std::string Scenario =
+        std::string("{\"requests\":[") + Request + "]}";
+    EXPECT_EQ(
+        neverd_emulate_driver_scenario_json(
+            Session, "missing-interrupt-driver.sys", Scenario.c_str(), nullptr),
+        nullptr);
+    EXPECT_NE(error().find("driver scenario:"), std::string::npos);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+  }
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIExecuteExplicitInterruptAndDpcCompletion) {
+#ifdef NEVERD_WDM_INTERRUPT_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_INTERRUPT_FIXTURE};
+#ifdef NEVERD_WDM_INTERRUPT_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_INTERRUPT_CFG_FIXTURE);
+#endif
+  const std::string Scenario = R"({
+    "load_address":"0x190000000","unload":true,
+    "pnp_devices":[{"id":"interrupt0","bus":"register_bank",
+      "initial_device_power":"D0","initial_system_power":"working",
+      "resources":[{"id":"counter","raw_start":"0x200000000",
+        "translated_start":"0x300000000","length":"0x1000",
+        "registers":[{"offset":0,"width":4,"access":"read_write","value":0}]}],
+      "interrupts":[{"id":"line0","raw_vector":17,"raw_level":7,
+        "raw_affinity":1,"translated_vector":145,"translated_level":5,
+        "translated_affinity":1,"mode":"latched","share":"device_exclusive"}]}],
+    "requests":[
+      {"kind":"pnp","device_id":"interrupt0","minor":"start",
+       "bus_completion":{"status":0,"delay_100ns":11}},
+      {"kind":"create","device_id":"interrupt0","file":1},
+      {"kind":"ioctl","file":1,"code":"0x222000","output_size":32,
+       "interrupt_events":[{"after_100ns":7,"device_id":"interrupt0","interrupt_id":"line0"}]},
+      {"kind":"cleanup","file":1},{"kind":"close","file":1},
+      {"kind":"pnp","device_id":"interrupt0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"interrupt0","minor":"remove",
+       "bus_completion":{"status":0,"delay_100ns":3}}]})";
+  for (const char *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.c_str(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 7u);
+      for (const auto &Value : *Requests) {
+        const auto *Request = Value.getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getBoolean("completed"), true);
+        EXPECT_EQ(Request->getInteger("io_status"), 0);
+      }
+      const auto *Ioctl = (*Requests)[2].getAsObject();
+      EXPECT_EQ(Ioctl->getInteger("dispatch_status"), 0x103);
+      EXPECT_EQ(Ioctl->getInteger("information"), 32);
+      EXPECT_EQ(
+          Ioctl->getString("output_hex"),
+          "0100000001000000010000000100000002000000010000000100000005000000");
+      const auto *Interrupts = Report->getArray("interrupts");
+      ASSERT_NE(Interrupts, nullptr);
+      ASSERT_EQ(Interrupts->size(), 1u);
+      const auto *IRQ = Interrupts->front().getAsObject();
+      ASSERT_NE(IRQ, nullptr);
+      EXPECT_EQ(IRQ->getInteger("source_request_index"), 2);
+      EXPECT_EQ(IRQ->getInteger("event_index"), 0);
+      EXPECT_EQ(IRQ->getString("device_id"), "interrupt0");
+      EXPECT_EQ(IRQ->getString("interrupt_id"), "line0");
+      EXPECT_EQ(IRQ->getInteger("epoch"), 1);
+      EXPECT_EQ(IRQ->getInteger("due_at_100ns"), 18);
+      EXPECT_EQ(IRQ->getInteger("occurred_at_100ns"), 18);
+      EXPECT_EQ(IRQ->getInteger("delivered_at_100ns"), 18);
+      EXPECT_EQ(IRQ->getInteger("returned_at_100ns"), 18);
+      EXPECT_EQ(IRQ->getInteger("return_value"), 1);
+      EXPECT_EQ(IRQ->getBoolean("claimed"), true);
+      ASSERT_TRUE(IRQ->getString("interrupt_object"));
+      EXPECT_NE(IRQ->getString("interrupt_object"), "0x0");
+      EXPECT_TRUE(IRQ->get("undelivered_reason")->getAsNull());
+      EXPECT_FALSE(IRQ->get("io_status"));
+      const auto *Config = Report->getObject("configuration");
+      ASSERT_NE(Config, nullptr);
+      const auto *Events = Config->getArray("interrupt_events");
+      ASSERT_NE(Events, nullptr);
+      ASSERT_EQ(Events->size(), 1u);
+      EXPECT_EQ(
+          Events->front().getAsObject()->getInteger("source_request_index"), 2);
+      EXPECT_EQ(Events->front().getAsObject()->getInteger("after_100ns"), 7);
+      const auto *Provider =
+          Report->getArray("pnp_devices")->front().getAsObject();
+      EXPECT_EQ(Provider->getString("pnp_state"), "removed");
+      EXPECT_EQ(Provider->getBoolean("provider_present"), false);
+      EXPECT_TRUE(Report->getArray("devices")->empty());
+      unsigned Connect = 0, Disconnect = 0, Sync = 0, Acquire = 0, Release = 0;
+      for (const auto &Value : *Report->getArray("calls")) {
+        const auto *Call = Value.getAsObject();
+        const auto Name = Call->getString("name");
+        Connect += Name == "IoConnectInterrupt";
+        Disconnect += Name == "IoDisconnectInterrupt";
+        Sync += Name == "KeSynchronizeExecution";
+        Acquire += Name == "KeAcquireInterruptSpinLock";
+        Release += Name == "KeReleaseInterruptSpinLock";
+        if (Name == "IoConnectInterrupt")
+          EXPECT_EQ(Call->getArray("arguments")->size(), 11u);
+      }
+      EXPECT_EQ(Connect, 1u);
+      EXPECT_EQ(Disconnect, 1u);
+      EXPECT_EQ(Sync, 3u);
+      EXPECT_EQ(Acquire, 1u);
+      EXPECT_EQ(Release, 1u);
+      for (const auto &Message : *Report->getArray("messages")) {
+        const auto Text = Message.getAsString();
+        ASSERT_TRUE(Text);
+        EXPECT_EQ(Text->find("failure"), llvm::StringRef::npos);
+      }
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_INTERRUPT_FIXTURE requires a genuine WDK fixture";
 #endif
 }
 

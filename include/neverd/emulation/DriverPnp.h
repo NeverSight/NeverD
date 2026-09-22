@@ -13,6 +13,7 @@
 #ifndef NEVERD_EMULATION_DRIVERPNP_H
 #define NEVERD_EMULATION_DRIVERPNP_H
 
+#include "neverd/emulation/DriverInterrupts.h"
 #include "neverd/emulation/DriverResources.h"
 
 #include <cstdint>
@@ -119,6 +120,8 @@ struct DriverPnpDevice {
   /// Fixed ordered raw/translated assignments for the register_bank provider.
   /// The resource_free provider requires an empty inventory.
   std::vector<DriverMemoryResource> Resources{};
+  /// Fixed interrupt assignments, following memory entries in each CM list.
+  std::vector<DriverInterruptResource> Interrupts{};
 };
 
 struct DriverPnpOperation {

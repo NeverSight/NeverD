@@ -3508,8 +3508,8 @@
         "Input/output WdmMdl retrieval lazily describes existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each direction is validated as nonempty before reuse; one cache per request preserves the first successful direction's ByteCount. The safe mapping helper returns the original VA; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output preserve IRP.MdlAddress without mapping on retrieval; direct IOCTL input uses the SystemBuffer cache. Completion retires descriptors with packet/buffers; METHOD_NEITHER and physical PFNs remain unsupported.",
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, general hardware and DMA remain unsupported",
-        "wdm-x64-scheduled-v12 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, general spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, other interrupt modes, general hardware and DMA remain unsupported",
+        "wdm-x64-scheduled-v13 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
@@ -3539,12 +3539,18 @@
         "REMOVE still requires closed files and finalized earlier requests in this serial profile, but no longer rejects all outstanding callbacks before dispatch. Workers may release a lock and then wait for the resumed remover. The request route survives AndWait, detach/delete and lower pending completion, and remaining execution frames must return before final route retirement. Teardown is preflighted before erasing request identity or releasing any device owner.",
         "Unknown, unaligned, out-of-extension or overlapping lock storage, mismatched sizes, unmatched releases, duplicate drain and reinitialization fail explicitly without mutating valid state. Delete/Detach reject held acquisitions or unconsumed drain waits before changing DeletePending/topology. Unused initialized locks can retire in clean AddDevice failure; actual extension retirement unregisters storage. Drain never consumes genuine work-item/device references. Debug metadata does not enable Verifier timeout/high-water behavior.",
         "Original genuine-WDK driver_wdm_remove_lock.c uses optional NEVERD_WDM_REMOVE_LOCK_FIXTURE, NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE, NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE and NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE. Native tests cover retail/DBG ABI, normal/active-CFG rebasing, opaque retired Tags, NULL/repeated Tags, DPC release, waiting workers, delayed lower removal, no-producer stalls, independent PDOs and clean AddDevice failure. C API/CLI use the unchanged PnP schema for synchronous/delayed lower completion and verify actual release/wait/drain/delete/resume order. Missing artifacts skip explicitly; evidence is Linux-only.",
-        "The synthetic register_bank bus requires explicit resources with stable per-PDO id, raw_start, translated_start, length and registers. Each register requires offset, width, read_only/read_write access and initial value. DriverResources.h/.def own native types, spellings and limits; JSON and native options share validateDriverResources. Bounds are 8 resources per PDO/32 total, 256 registers per resource/4096 total, and 1..1048576 bytes per resource. Physical intervals cannot overflow; translated intervals never overlap globally, raw intervals cannot overlap within one PDO, and register intervals must fit without overlap. Widths1/2/4 and offsets/translated addresses are naturally aligned; values fit their declared width. Empty register arrays explicitly leave no accessible offsets.",
+        "The synthetic register_bank bus accepts explicit memory resources with stable per-PDO id, raw_start, translated_start, length and registers. Each register requires offset, width, read_only/read_write access and initial value. DriverResources.h/.def own native types, spellings and limits; JSON and native options share validateDriverResources. Bounds are 8 resources per PDO/32 total, 256 registers per resource/4096 total, and 1..1048576 bytes per resource. Physical intervals cannot overflow; translated intervals never overlap globally, raw intervals cannot overlap within one PDO, and register intervals must fit without overlap. Widths1/2/4 and offsets/translated addresses are naturally aligned; values fit their declared width. Empty register arrays explicitly leave no accessible offsets.",
         "Register-bank START receives separate read-only packed raw and translated CM_RESOURCE_LISTs with corresponding ordered Memory descriptors, one full header, Internal/bus0/version1/revision1, DeviceExclusive and READ_WRITE range flags. ResourceFree retains null lists. Each START from NotStarted/Stopped creates a new fixed-assignment epoch, published only at actual successful provider START completion before upper callbacks. Bank values initialize once per PDO and persist across unmap, STOP and restart. Failed START or successful STOP/REMOVE requires driver unmap before terminal IRP completion, allowing upper completion callbacks to unmap first; no implicit mapping cleanup hides a leak. Surprise arrival disables hardware/new maps immediately while allowing unmap.",
-        "KernelMMIO is the sole bank-value, physical-assignment, epoch and alias authority. Actual successful provider device-SET completion updates hardware accessibility before final upper lifecycle completion: D3 forbids register transactions but permits mapping, D0 additionally requires a live assignment. Power transitions neither reset register values nor discard mappings. PoSetPowerState notification remains a separate fact.",
-        "MmMapIoSpace uses NonCached; MmMapIoSpaceEx uses PAGE_NOCACHE with PAGE_READONLY/PAGE_READWRITE. Both accept exact translated subranges within one assignment and preserve page offset. Aliases share register state with independent permissions; MmUnmapIoSpace requires the original base/length. Monotonic address reservations prevent stale mapping reuse. Mapping/window or configured memory-budget exhaustion returns NULL; backend failures remain explicit errors. No arbitrary physical RAM, execute/cache variants, PCI configuration, ports, interrupts, resource rebalance or DMA is implied.",
+        "KernelResources is the sole physical-assignment, epoch, presence and power authority. KernelMMIO owns bank values and aliases; KernelInterrupts owns connections, locks and pulses. Actual successful provider device-SET completion updates hardware accessibility before final upper lifecycle completion: D3 forbids register transactions but permits mapping, D0 additionally requires a live assignment. Power transitions neither reset register values nor discard mappings. PoSetPowerState notification remains a separate fact.",
+        "MmMapIoSpace uses NonCached; MmMapIoSpaceEx uses PAGE_NOCACHE with PAGE_READONLY/PAGE_READWRITE. Both accept exact translated subranges within one assignment and preserve page offset. Aliases share register state with independent permissions; MmUnmapIoSpace requires the original base/length. Monotonic address reservations prevent stale mapping reuse. Mapping/window or configured memory-budget exhaustion returns NULL; backend failures remain explicit errors. No arbitrary physical RAM, execute/cache variants, PCI configuration, ports, other interrupt modes, resource rebalance or DMA is implied.",
         "GuestMemory and UnicornBackend preflight whole original accesses and share a first-fault/stop latch with MMIO callbacks, preventing Unicorn width splitting or post-stop callbacks from producing effects. Exact scalar1/2/4 and real REP element transactions execute; holes, wrong widths, unaligned/partial/cross-mapping accesses, RO writes and instruction fetches fail before register effects. Modeled API memory accesses must also fit one aligned 1/2/4-byte transaction; larger bulk spans fail instead of being split into register accesses. Initial facts are reported under configuration.pnp_devices[].resources with lossless physical-address strings; runtime bank values are observed through actual guest I/O instead of a duplicate public state model.",
-        "The original genuine-WDK driver_wdm_resources.c uses optional NEVERD_WDM_RESOURCE_FIXTURE/NEVERD_WDM_RESOURCE_CFG_FIXTURE and true scalar/REP accessors. Native normal/active-CFG rebasing covers packed lists, lower completion timing, aliases, page-tail mappings, STOP/restart persistence, independent PDOs, surprise cleanup and invalid accesses. Public C API/CLI reject invalid register facts before image loading and execute the 14-request driver-register-bank-scenario.json through two START epochs, preserving returned IOCTL bytes and exact map/unmap counts. C V1 struct and Python ctypes are unchanged because scenario_json is shared. Missing genuine artifacts skip explicitly; evidence remains Linux-only."
+        "The original genuine-WDK driver_wdm_resources.c uses optional NEVERD_WDM_RESOURCE_FIXTURE/NEVERD_WDM_RESOURCE_CFG_FIXTURE and true scalar/REP accessors. Native normal/active-CFG rebasing covers packed lists, lower completion timing, aliases, page-tail mappings, STOP/restart persistence, independent PDOs, surprise cleanup and invalid accesses. Public C API/CLI reject invalid register facts before image loading and execute the 14-request driver-register-bank-scenario.json through two START epochs, preserving returned IOCTL bytes and exact map/unmap counts. C V1 struct and Python ctypes are unchanged because scenario_json is shared. Missing genuine artifacts skip explicitly; evidence remains Linux-only.",
+        "DriverResources.h / DriverResources.def and DriverInterrupts.h / DriverInterrupts.def define fixed register_bank memory and interrupt assignments. DriverScenario owns JSON/native preflight; DriverResult records initial configuration without duplicating observed bank state. KernelResources alone owns packed raw/translated assignments, resource epochs, physical presence and power. KernelMMIO owns persistent register values and independent mapping aliases; KernelInterrupts owns opaque connections, locks and explicit pulses. KernelModelResources builds read-only START packets and integrates actual provider completion: successful lower START publishes its epoch before upper callbacks, and actual provider device-SET updates D0/D3 accessibility. Failed START or STOP/REMOVE teardown is checked before terminal IRP completion, after upper callbacks can unmap and disconnect, without implicit cleanup. Surprise removal immediately denies hardware access. GuestMemory and UnicornBackend validate whole CPU/API transactions before MMIO effects and preserve the first fault latch. Fixed-assignment restart preserves bank values. Arbitrary RAM, resource rebalance, ports, shared/level/message interrupts and DMA remain unsupported.",
+        "KernelInterrupts binds each explicit pulse to the connection token and resource epoch present at successful source request submission. KernelModelInterruptEvents preflights all same-time producer capacities before clock advancement or observation mutation, including exact framework cancellation callback counts; timers, provider completion and cancellation cannot silently consume the space reserved for an ISR. Actual provider hardware publication precedes pulse eligibility, and admitted interrupts precede DPCs and passive callbacks. The schedule remains cooperative: virtual time advances only while idle, and zero delay does not mean instruction preemption. KernelModelInterrupts decodes the legacy eleven-argument ABI and selected Ex fields, while KernelGuestCall gives interrupt callbacks a separate owner/token. ISR and synchronization callbacks hold the same nonrecursive lock at assigned DIRQL; nested CPU frames preserve caller IRQL/CR8, and BOOLEAN uses only AL. Manual locks require the same execution identity and saved IRQL, and a callback cannot return with a leaked lock. Armed pulses outlive their source IRP; disconnected, unavailable-epoch or D3 delivery records an explicit undelivered reason and stops, with no rebind or invented enable/ack register behavior. DriverResult.Interrupts contains independent observations, never synthetic IRPs or NTSTATUS completions.",
+        "The same register_bank provider can declare interrupts alone or alongside resources; at least one list must be nonempty. resource_free rejects an explicit interrupts field, including []. Each interrupt requires id, raw_vector, raw_level, raw_affinity, translated_vector, translated_level, translated_affinity, mode: \"latched\" and share: \"device_exclusive\". DriverInterrupts.h / DriverInterrupts.def own the types, spellings and limits: 8 interrupts per PDO / 32 total, per-PDO unique bounded ASCII IDs, globally exclusive translated vectors, raw level 0–65535 and translated DIRQL 3–12. Vectors retain all 32 bits without a guessed vector/IRQL relation. Both affinity masks must be 1: CPU0 and group0 are explicit provider facts. Raw and translated values are independent. Memory descriptors keep their order, followed by ordered interrupt descriptors in the same CM_RESOURCE_LIST; interrupt descriptors use type 2, DeviceExclusive sharing and LATCHED flags. This synthetic edge-triggered profile does not represent PCI shared level lines.",
+        "READ/WRITE/IOCTL requests may declare interrupt_events, each with explicit after_100ns, device_id and interrupt_id; other request kinds reject the field even when empty. At most 64 events per request / 1024 total are accepted, with nonnegative delay through INT64_MAX. Successful request submission anchors the delay and captures an already connected interrupt plus its PDO resource epoch. Events are independent external line pulses: source IRP completion does not cancel them, and register writes do not infer enable, status or acknowledgement. Time advances only while idle; due events run at the next supported callback boundary, so after_100ns: 0 promises no instruction-level preemption or delivery before the first guest instruction. Same-time producers are capacity-preflighted together; provider hardware publication precedes eligibility and ISR callbacks precede DPCs/workers. A lost connection, stale/unavailable epoch or physical D3 records undelivered_reason and stops as model_error; the event is never rebound or silently delayed.",
+        "IoConnectInterrupt uses its actual eleven arguments and the exact translated assignment. IoConnectInterruptEx supports FullySpecified (1), LineBased (2, one assigned line on the explicit PDO) and FullySpecifiedGroup (4, group 0); IoDisconnectInterruptEx requires the matching version/context. Registration and disconnection require PASSIVE_LEVEL. Only a private interrupt lock, exclusive latched mode, CPU0/group0 and no floating-state save are supported. Synchronization IRQL must equal the assigned DIRQL; LineBased zero selects that level. KINTERRUPT is opaque and its address is never reused. The real ISR receives (Interrupt, ServiceContext) and returns BOOLEAN from AL; FALSE is unclaimed, not NTSTATUS failure. KeSynchronizeExecution runs the real one-argument callback under the same lock at DIRQL and returns its BOOLEAN while restoring caller IRQL/CR8. KeAcquireInterruptSpinLock / KeReleaseInterruptSpinLock enforce nonrecursive ownership, the original execution and saved IRQL; leaked locks cannot cross callback return. Interrupt waits, caller-provided shared locks, shared/level/MSI/passive interrupts and instruction-level interrupt preemption remain unsupported. Failed START and successful STOP/REMOVE require disconnection before terminal completion; upper completion callbacks may tear down first, and disconnect never silently discards a queued DPC.",
+        "Reports separate declarations from observations. configuration.pnp_devices[].interrupts retains resources, and configuration.interrupt_events flattens input events with zero-based source_request_index (the configured request index) and event_index. Root interrupts rows add device_id, interrupt_id, epoch, absolute due_at_100ns, nullable occurred_at_100ns, delivered_at_100ns, returned_at_100ns, interrupt_object, return_value, claimed and undelivered_reason. claimed derives only from the actual low-byte return; timestamps are observations, not fabricated callback results. Every configured event must return without an undelivered failure for scenario_success; an unclaimed ISR remains valid. DPC effects appear through actual request completion, API calls and messages. The runnable interrupt scenario uses original genuine-WDK driver_wdm_interrupts.c with optional NEVERD_WDM_INTERRUPT_FIXTURE / NEVERD_WDM_INTERRUPT_CFG_FIXTURE: seven requests include delayed START, a pending IOCTL completed by ISR→DPC, file cleanup/close and removal. The existing C/Python scenario_json boundary and neverd_driver_options_v1 layout are unchanged. Missing genuine artifacts skip explicitly; execution evidence is Linux-only."
       ],
       "tests": [
         {
@@ -5568,6 +5574,204 @@
           "target": "NeverDDriverEmulationPublicTests",
           "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
           "filter": "DriverScenarioPublic.CAPIAndCLIExecuteRegisterBanksAcrossStopAndRestart",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverInterruptScenarioTests.cpp",
+          "filter": "DriverInterruptScenario.ParsesIndependentRawTranslatedAndPulseFacts",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverInterruptScenarioTests.cpp",
+          "filter": "DriverInterruptScenario.EventsNameExplicitTargetsAndPreserveRepeatedPulseOrder",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverInterruptScenarioTests.cpp",
+          "filter": "DriverInterruptScenario.UnclaimedBooleanIsNotAnNtStatusFailure",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverInterruptScenarioTests.cpp",
+          "filter": "DriverInterruptScenario.MissingOrUndeliveredPulseCannotReportSuccess",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.DisconnectNeverRetargetsAnAlreadyArmedPulse",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.BooleanUsesOnlyLowAlIncludingNoncanonicalTrue",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.ContextStorageCannotRetireUntilItsConnectionEnds",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.NestedDifferentInterruptSyncRestoresEachCallerIrql",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptsTests.cpp",
+          "filter": "KernelInterruptTest.DueD3PulseRecordsPreciseUndeliveredFailure",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptBridgeTests.cpp",
+          "filter": "KernelInterruptBridge.SameDeadlineInterruptPrecedesTimerDPC",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptBridgeTests.cpp",
+          "filter": "KernelInterruptBridge.SharedCapacityFailurePreservesTimeTimerAndInterruptBeforeRetry",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptBridgeTests.cpp",
+          "filter": "KernelInterruptBridge.CompletedSourceRetainsIndependentDueEventAndExplicitSourceIndex",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelInterruptBridgeTests.cpp",
+          "filter": "KernelInterruptBridge.SynchronizationRestoresPassiveAndDPCParentsIncludingSavedCR8",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/SchedulerInterruptTests.cpp",
+          "filter": "DriverKernelScheduler.SharedBoundaryAdmitsISRBeforeSelectingTimerDPC",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/SchedulerInterruptTests.cpp",
+          "filter": "DriverKernelScheduler.WholeBoundaryCapacityFailurePreservesTimerAndTime",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkRequestTests.cpp",
+          "filter": "DriverKernelFrameworkRequest.CancellationPreviewChecksBatchTokenCapacityWithoutReservingTokens",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMInterruptTests.cpp",
+          "filter": "DriverWDMInterrupt.LegacyElevenArgumentsIsrDpcExecuteNormalCfgAndRebased",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMInterruptTests.cpp",
+          "filter": "DriverWDMInterrupt.ExFullySpecifiedGroupZeroAndLineBasedUseSameCallbacks",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMInterruptTests.cpp",
+          "filter": "DriverWDMInterrupt.FalseLowAlIgnoresUpperGarbageAndSurvivesCompletedSource",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMInterruptTests.cpp",
+          "filter": "DriverWDMInterrupt.StopRestartReplacesConnectionAndKeepsIndependentEpochs",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.RejectsInvalidInterruptFactsBeforeImageLoading",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIExecuteExplicitInterruptAndDpcCompletion",
           "platforms": [
             "linux"
           ]

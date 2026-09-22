@@ -77,6 +77,19 @@ llvm::Error KernelScheduler::validateDPC(const DpcCallback &DPC) const {
   return schedulerError("invalid DPC importance");
 }
 
+llvm::Error KernelScheduler::validateInterrupt(
+    const InterruptCallback &Interrupt) const {
+  if (auto E = validateCallback(Interrupt))
+    return E;
+  if (Interrupt.Priority < scheduler::MinDeviceIRQL ||
+      Interrupt.Priority > scheduler::MaxDeviceIRQL ||
+      Interrupt.IRQL < Interrupt.Priority ||
+      Interrupt.IRQL > scheduler::MaxDeviceIRQL)
+    return schedulerError("interrupt requires a device priority and an equal "
+                          "or higher synchronization IRQL");
+  return llvm::Error::success();
+}
+
 llvm::Error KernelScheduler::checkCapacity(uint64_t Additional) const {
   const uint64_t Outstanding =
       queuedCallbackCount() + Suspended.size() + bool(Active);
@@ -172,6 +185,39 @@ KernelScheduler::enqueueWDMCompletion(Callback Completion) {
   Completions.push_back(makeInvocation(std::move(Completion),
                                        CallbackKind::WDMCompletion, Now));
   return Completions.back().ID;
+}
+
+llvm::Error KernelScheduler::canEnqueueInterrupts(
+    llvm::ArrayRef<InterruptCallback> Batch) const {
+  if (auto E = validateTime())
+    return E;
+  std::set<uint64_t> Objects;
+  for (const auto &Interrupt : Batch) {
+    if (auto E = validateInterrupt(Interrupt))
+      return E;
+    if (containsObject(Interrupts, Interrupt.Object) ||
+        !Objects.insert(Interrupt.Object).second)
+      return schedulerError("interrupt event is already queued");
+  }
+  return checkCapacity(Batch.size());
+}
+
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueInterrupt(InterruptCallback Interrupt) {
+  if (auto E = canEnqueueInterrupts({Interrupt}))
+    return E;
+  const uint8_t IRQL = Interrupt.IRQL;
+  const uint8_t Priority = Interrupt.Priority;
+  auto Call =
+      makeInvocation(std::move(Interrupt), CallbackKind::Interrupt, Now);
+  Call.IRQL = IRQL;
+  Call.InterruptPriority = Priority;
+  const uint64_t ID = Call.ID;
+  auto Position = llvm::find_if(Interrupts, [Priority](const auto &Queued) {
+    return Queued.InterruptPriority < Priority;
+  });
+  Interrupts.insert(Position, std::move(Call));
+  return ID;
 }
 
 bool KernelScheduler::removeDPC(uint64_t Object) {
@@ -294,7 +340,40 @@ llvm::Error KernelScheduler::forgetTimer(uint64_t Timer) {
   return llvm::Error::success();
 }
 
+llvm::Error KernelScheduler::validateTimerExpirations(
+    uint64_t Time, uint64_t AdditionalCallbacks) const {
+  if (auto E = validateTime())
+    return E;
+  if (Time < Now || Time > Bounds.MaxTime100ns)
+    return schedulerError("timer boundary exceeds the virtual time range");
+  // Validate the entire expiration batch before advancing time, signaling a
+  // timer, or enqueuing callbacks. A resource failure must not drop callbacks
+  // or partially consume deadlines. Duplicate DPC insertion is the documented
+  // coalescing behavior, not an exhausted-budget fallback.
+  uint64_t Expirations = 0;
+  std::set<uint64_t> NewDPCs;
+  for (const auto &[Object, Timer] : Timers) {
+    if (!Timer.Armed || Timer.DueTime100ns > Time)
+      continue;
+    ++Expirations;
+    if (Timer.Period100ns && (Timer.Period100ns > UINT64_MAX - Time ||
+                               Timer.Period100ns > Bounds.MaxTime100ns - Time))
+      return schedulerError(
+          "periodic timer deadline overflows virtual time limit");
+    if (Timer.DPC && !isDPCQueued(Timer.DPC->Object))
+      NewDPCs.insert(Timer.DPC->Object);
+  }
+  if (TimerExpirations > Bounds.MaxTimerExpirations ||
+      Expirations > Bounds.MaxTimerExpirations - TimerExpirations)
+    return schedulerError("scheduler timer expiration limit exhausted");
+  if (AdditionalCallbacks > UINT64_MAX - NewDPCs.size())
+    return schedulerError("scheduler pending callback count overflow");
+  return checkCapacity(NewDPCs.size() + AdditionalCallbacks);
+}
+
 llvm::Error KernelScheduler::expireTimers(uint64_t Time) {
+  if (auto E = validateTimerExpirations(Time, 0))
+    return E;
   std::vector<std::pair<uint64_t, TimerState *>> Due;
   for (auto &[Object, Timer] : Timers)
     if (Timer.Armed && Timer.DueTime100ns <= Time)
@@ -303,25 +382,6 @@ llvm::Error KernelScheduler::expireTimers(uint64_t Time) {
     return std::tie(A.second->DueTime100ns, A.second->Sequence) <
            std::tie(B.second->DueTime100ns, B.second->Sequence);
   });
-
-  // Validate the entire expiration batch before advancing time, signaling a
-  // timer, or enqueuing callbacks. A resource failure must not drop callbacks
-  // or partially consume deadlines. Duplicate DPC insertion is the documented
-  // coalescing behavior, not an exhausted-budget fallback.
-  if (TimerExpirations > Bounds.MaxTimerExpirations ||
-      Due.size() > Bounds.MaxTimerExpirations - TimerExpirations)
-    return schedulerError("scheduler timer expiration limit exhausted");
-  std::set<uint64_t> NewDPCs;
-  for (const auto &[Object, Timer] : Due) {
-    if (Timer->Period100ns && (Timer->Period100ns > UINT64_MAX - Time ||
-                               Timer->Period100ns > Bounds.MaxTime100ns - Time))
-      return schedulerError(
-          "periodic timer deadline overflows virtual time limit");
-    if (Timer->DPC && !isDPCQueued(Timer->DPC->Object))
-      NewDPCs.insert(Timer->DPC->Object);
-  }
-  if (auto E = checkCapacity(NewDPCs.size()))
-    return E;
 
   Now = Time;
   TimerExpirations += Due.size();
@@ -362,7 +422,8 @@ KernelScheduler::next(bool AdvanceTime,
     if (queuedCallbackCount()) {
       if (Dispatches >= Bounds.MaxDispatches)
         return schedulerError("scheduler callback dispatch limit exhausted");
-      auto &Queue = !DPCs.empty()             ? DPCs
+      auto &Queue = !Interrupts.empty()       ? Interrupts
+                    : !DPCs.empty()           ? DPCs
                     : !Cancellations.empty() ? Cancellations
                     : !Completions.empty()   ? Completions
                                              : Workers;
@@ -400,6 +461,24 @@ llvm::Error KernelScheduler::processDueTimers() {
   if (auto E = validateTime())
     return E;
   return expireTimers(Now);
+}
+
+llvm::Error KernelScheduler::canAdvanceTo100ns(
+    uint64_t Time, uint64_t AdditionalCallbacks) const {
+  if (Time > Now) {
+    if (Active || queuedCallbackCount())
+      return schedulerError("cannot advance virtual time with runnable work");
+    auto Earliest = nextEventTime100ns();
+    if (Earliest && Time > *Earliest)
+      return schedulerError("cannot advance past an earlier timer boundary");
+  }
+  return validateTimerExpirations(Time, AdditionalCallbacks);
+}
+
+llvm::Error KernelScheduler::advanceTo100ns(uint64_t Time) {
+  if (auto E = canAdvanceTo100ns(Time))
+    return E;
+  return expireTimers(Time);
 }
 
 llvm::Error KernelScheduler::finish(uint64_t ID) {
@@ -441,7 +520,8 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
     return true;
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
   if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches) ||
-      llvm::any_of(Cancellations, Matches) || llvm::any_of(Completions, Matches))
+      llvm::any_of(Cancellations, Matches) ||
+      llvm::any_of(Completions, Matches) || llvm::any_of(Interrupts, Matches))
     return true;
   if (llvm::any_of(Suspended, [Owner](const auto &Item) {
         return Item.second.Owner == Owner;

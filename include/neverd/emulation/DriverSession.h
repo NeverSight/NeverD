@@ -60,6 +60,9 @@ struct DriverRequest {
   std::optional<DriverPnpOperation> Pnp;
   /// Present exactly when Kind is Power; those packets have no FILE_OBJECT.
   std::optional<DriverPowerOperation> Power;
+  /// Explicit external pulses for READ/WRITE/IOCTL. These events survive the
+  /// source IRP's completion and do not imply device enable/ack semantics.
+  std::vector<DriverInterruptEvent> InterruptEvents{};
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -181,6 +184,7 @@ struct DriverResult {
   /// Final registry state, including changes observed before execution stops.
   std::optional<std::vector<DriverRegistryKey>> Registry;
   std::vector<DriverPnpDeviceResult> PnpDevices;
+  std::vector<DriverInterruptResult> Interrupts;
 };
 
 /// Parse and validate a fresh complete PE image. Request/format/setup failures

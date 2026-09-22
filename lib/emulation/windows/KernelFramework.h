@@ -89,6 +89,14 @@ public:
   /// The WDM host first records cancellation, then asks for the one guest
   /// notification owned by this request. Ordinary WDM requests return nullopt.
   llvm::Expected<std::optional<GuestCall>> requestCancellation(uint64_t IRP);
+  /// Preview the callback count before the host records an imminent cancel
+  /// fact. This checks model state and token capacity without reading the host
+  /// cancel flag, publishing a call, or changing references or request state.
+  /// EarlierCallbacks counts other cancellation callbacks already previewed
+  /// for the same boundary, so their future continuation tokens are reserved.
+  llvm::Expected<bool>
+  preflightRequestCancellation(uint64_t IRP,
+                               uint64_t EarlierCallbacks = 0) const;
   /// Latch delivery when the scheduled or nested cancel callback is entered.
   llvm::Error beginCancelCallback(uint64_t Token);
   /// Framework-owned packets must complete through their WDF request lifetime.
@@ -217,6 +225,8 @@ private:
   std::map<uint64_t, Continuation> Continuations;
   std::map<uint64_t, uint64_t> CancelCallbacks;
   std::optional<GuestCall> PendingCall;
+
+  llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;
 
   llvm::Expected<uint64_t> read(uint64_t Address, unsigned Width = 8);
   llvm::Expected<std::vector<uint8_t>> readRegistryPath(uint64_t Address);
