@@ -18,6 +18,7 @@
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/loader/ObjC/ObjCSentinelCalls.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/Swift/SwiftMetadata.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/loader/Swift/SwiftStringCalls.h"
@@ -763,6 +764,23 @@ inline bool swiftSystemFrameworkNominalDescriptor(llvm::StringRef Symbol,
          Provider == Prefix + "Versions/A/" + *Module;
 }
 
+inline bool swiftImportedNominalDescriptor(const BinaryImage &Image, va_t Slot,
+                                           llvm::StringRef Symbol,
+                                           llvm::StringRef Provider) {
+  if (swiftSystemFrameworkNominalDescriptor(Symbol, Provider))
+    return true;
+  // Actions 35683213827, consumer bfe0f17b3d7140d468f53a6f7a07375d3b7d898a:
+  // retained Xcode 26.5 libswiftCore TBDs export this exact descriptor for
+  // arm64e-ios and arm64-ios-simulator. Manifest SHA-256:
+  // 95e268bb837009a8881ecb210aa6cc3a970602b6277799dc68f048fbd13c6e40.
+  // Bind only its identity in a proven type-reference recipe; no descriptor
+  // bytes, runtime class layout, or callable ABI are inferred from the name.
+  return Image.Arch == Arch::AArch64 &&
+         Symbol == "_$ss23_ContiguousArrayStorageCMn" &&
+         Provider == "/usr/lib/swift/libswiftCore.dylib" &&
+         isImmutableImageImportSlot(Image, Slot);
+}
+
 inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
                                                 va_t Field) {
   const auto *Bytes = Image.readVA(Field, 4);
@@ -846,8 +864,8 @@ swiftTypeMetadataDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
       !Import->second.Addend && Bind != Image.DyldBindSlots.end() &&
       Bind->second.Name == Import->second.Name && !Bind->second.Addend &&
       !Bind->second.WeakImport &&
-      swiftSystemFrameworkNominalDescriptor(Import->second.Name,
-                                            Bind->second.Module))
+      swiftImportedNominalDescriptor(Image, DescriptorSlot, Import->second.Name,
+                                     Bind->second.Module))
     DescriptorSymbol = Import->second.Name;
   else
     DescriptorSymbol = swiftLocalExportedDescriptor(Image, DescriptorSlot);
@@ -859,10 +877,11 @@ swiftTypeMetadataDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
   const bool Nominal = Descriptor.ends_with("Mn");
   const bool Protocol = Descriptor.ends_with("Mp");
   const bool ValidNominal =
-      Nominal && (Bind != Image.DyldBindSlots.end()
-                      ? swiftSystemFrameworkNominalDescriptor(
-                            *DescriptorSymbol, Bind->second.Module)
-                      : swiftExportedNominalDescriptor(*DescriptorSymbol));
+      Nominal &&
+      (Bind != Image.DyldBindSlots.end()
+           ? swiftImportedNominalDescriptor(
+                 Image, DescriptorSlot, *DescriptorSymbol, Bind->second.Module)
+           : swiftExportedNominalDescriptor(*DescriptorSymbol));
   if ((!Nominal && !Protocol) || (Nominal && !ValidNominal) ||
       (Protocol != swiftProtocolDescriptor(*DescriptorSymbol)))
     return std::nullopt;

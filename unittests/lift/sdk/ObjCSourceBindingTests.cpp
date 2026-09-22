@@ -691,6 +691,26 @@ struct SwiftTypeMetadataFixture {
   }
 };
 
+SwiftTypeMetadataFixture swiftStdlibTypeMetadataFixture() {
+  SwiftTypeMetadataFixture F(Arch::AArch64);
+  F.Image.ImportPtrSlots.clear();
+  F.Image.ImportStorageSlots.clear();
+  F.Image.DyldBindSlots.clear();
+  EXPECT_TRUE(
+      F.Image.recordDyldBindSlot(SwiftTypeMetadataFixture::DescriptorSlot,
+                                 "_$ss23_ContiguousArrayStorageCMn", 0,
+                                 "/usr/lib/swift/libswiftCore.dylib", false));
+  F.Image.Symbols[0].Name = "_$ss23_ContiguousArrayStorageCyypGMR";
+  F.Image.Symbols[1].Name = "_$ss23_ContiguousArrayStorageCyypGMd";
+  auto &Data = F.Image.Segments[0].Data;
+  llvm::support::endian::write32le(
+      Data.data() + SwiftTypeMetadataFixture::Reference + 4 - 0x1000, 9);
+  std::memcpy(Data.data() + SwiftTypeMetadataFixture::TypeReference + 5 -
+                  0x1000,
+              "yypG", 5);
+  return F;
+}
+
 SwiftTypeMetadataFixture
 printableSwiftTypeMetadataFixture(Arch Architecture,
                                   llvm::StringRef TypeReference) {
@@ -1002,6 +1022,161 @@ TEST(ObjCSourceBindings,
     }
 }
 
+TEST(ObjCSourceBindings, SwiftStdlibDescriptorRebuildsExactMetadataRecipe) {
+  auto F = swiftStdlibTypeMetadataFixture();
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  const auto &Pair = Result.SwiftTypeMetadataPairs.at(F.Cache);
+  EXPECT_EQ(Pair.DescriptorSymbol, "_$ss23_ContiguousArrayStorageCMn");
+  EXPECT_EQ(Pair.Suffix, "yypG");
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftTypeMetadataHelpers(
+      F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+  EXPECT_NE(Source.find(".reference.length = 9"), std::string::npos);
+  EXPECT_NE(Source.find("_$ss23_ContiguousArrayStorageCMn"), std::string::npos);
+  F.Image.DyldBindSlots[F.DescriptorSlot].WeakImport = true;
+  EXPECT_FALSE(objcSourceCallBound(*Result.Function.Body[0].Val->Operands[0],
+                                   F.Image, {}));
+  EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
+                   F.Image, Result.SwiftTypeMetadataPairs, Helpers),
+               std::runtime_error);
+}
+
+TEST(ObjCSourceBindings, SwiftStdlibDescriptorRejectsUnprovenImports) {
+  for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = swiftStdlibTypeMetadataFixture();
+    auto &Bind = F.Image.DyldBindSlots[F.DescriptorSlot];
+    switch (Mutation) {
+    case 0:
+      Bind.WeakImport = true;
+      break;
+    case 1:
+      Bind.Addend = 8;
+      break;
+    case 2:
+      Bind.Module = "/tmp/libswiftCore.dylib";
+      break;
+    case 3:
+      Bind.Name = "_$ss22_ContiguousArrayBufferVMn";
+      F.Image.ImportStorageSlots[F.DescriptorSlot].Name = Bind.Name;
+      break;
+    case 4:
+      F.Image.DyldBindSlots.erase(F.DescriptorSlot);
+      break;
+    case 5:
+      F.Image.ImportPtrSlots[F.DescriptorSlot] = "_different";
+      break;
+    case 6:
+      F.Image.Arch = Arch::X64;
+      break;
+    case 7:
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+      break;
+    case 8:
+      F.Image.Sections[2].FileSz = 0x27;
+      break;
+    case 9:
+      F.Image.Sections.push_back(F.Image.Sections[2]);
+      break;
+    case 10:
+      F.Image.DataPtrRelocSlots.insert(F.DescriptorSlot);
+      break;
+    case 11:
+      F.Image.CodePtrRelocSlots.insert(F.DescriptorSlot - 1);
+      break;
+    case 12:
+      F.Image.MachOChainedFixupsAmbiguous = true;
+      break;
+    case 13:
+      F.Image.Segments[1].Data[F.Cache - 0x2000] = 1;
+      break;
+    case 14:
+      F.Image.Symbols[0].Name = "_$ss23_ContiguousArrayStorageCySiGMR";
+      break;
+    case 15:
+      F.Image.Segments[0].Data[F.TypeReference + 5 - 0x1000] = 'x';
+      break;
+    case 16:
+      F.Image.MachOTwoLevelNamespace = false;
+      break;
+    case 17:
+      F.Image.ImportStorageSlots[F.DescriptorSlot].Addend = 8;
+      break;
+    }
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
+    EXPECT_FALSE(Result.Limitation.empty());
+  }
+}
+
+TEST(ObjCSourceBindings, SwiftStdlibMetadataRecipeExecutesWithSharedCache) {
+  auto F = swiftStdlibTypeMetadataFixture();
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  std::set<std::string> Shared;
+  std::string Source = "#include <stdint.h>\n#include <string.h>\n" +
+                       renderObjCSwiftTypeMetadataHelpers(
+                           F.Image, Result.SwiftTypeMetadataPairs, Shared);
+  Source += R"(
+unsigned char descriptor[1] __asm__("_$ss23_ContiguousArrayStorageCMn") = { 0 };
+int main(void) {
+  void **cache = (void **)neverd_swift_type_metadata_2020_1020_cache_address();
+  const unsigned char *reference = (const void *)
+      neverd_swift_type_metadata_2020_1020_reference_address();
+  int32_t relative; uint32_t length;
+  memcpy(&relative, reference, 4);
+  memcpy(&length, reference + 4, 4);
+  if (length != 9 || *cache) return 1;
+  const unsigned char *type = reference + relative;
+  if (type[0] != 2 || memcmp(type + 5, "yypG", 5)) return 2;
+  memcpy(&relative, type + 1, 4);
+  const void *resolved;
+  memcpy(&resolved, type + 1 + relative, sizeof(resolved));
+  if (resolved != descriptor) return 3;
+  *cache = descriptor;
+  if ((void **)neverd_swift_type_metadata_2020_1020_cache_address() != cache ||
+      *cache != descriptor) return 4;
+  if ((const void *)neverd_swift_type_metadata_2020_1020_reference_address() !=
+      reference) return 5;
+  return 0;
+}
+)";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-stdlib-metadata",
+                                                    Directory));
+  const std::filesystem::path Work(Directory.str().str());
+  struct Cleanup {
+    std::filesystem::path Work;
+    ~Cleanup() {
+      std::error_code Error;
+      std::filesystem::remove_all(Work, Error);
+    }
+  } Cleanup{Work};
+  const auto Path = (Work / "objects.c").string();
+  const auto Executable = (Work / "objects").string();
+  const auto ErrorPath = (Work / "stderr").string();
+  std::ofstream(Path) << Source;
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    const std::vector<std::string> Arguments{
+        Compiler, "-std=c11", Optimization, "-Werror", Path, "-o", Executable};
+    std::vector<llvm::StringRef> Refs(Arguments.begin(), Arguments.end());
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath};
+    std::string Error;
+    const auto Status = llvm::sys::ExecuteAndWait(Compiler, Refs, std::nullopt,
+                                                  Redirects, 60, 0, &Error);
+    auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (Errors ? (*Errors)->getBuffer().str() : "");
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable, {Executable}, std::nullopt,
+                                        Redirects, 30, 0, &Error),
+              0)
+        << Error;
+  }
+}
 TEST(ObjCSourceBindings,
      SwiftSystemFrameworkDescriptorsRequireMatchingInstallNames) {
   constexpr llvm::StringLiteral Descriptor = "_$s7Combine9PublishedVMn";
