@@ -54,6 +54,11 @@ std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
 /// not a runtime object layout, provider export, or permission to copy bytes.
 bool isImmutableImageImportSlot(const BinaryImage &Image, va_t Address);
 
+/// Same storage/fixup proof, additionally requiring one exact Class reference
+/// matching the strong imported class symbol. Only that matching metadata
+/// record is permitted; provider ownership remains the caller's obligation.
+bool isImmutableImageClassImportSlot(const BinaryImage &Image, va_t Address);
+
 /// Read the initial value of an authenticated local data-pointer relocation.
 /// Storage may be writable: this is an initializer recipe, never permission
 /// to replace subsequent loads with the initial value. The caller must rebuild

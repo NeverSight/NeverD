@@ -2,6 +2,7 @@
 #define NEVERD_SDK_CAPI_SOURCEREGISTERCOPYPROJECTION_H
 
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
+#include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/pipeline/Pipeline.h"
 
 namespace neverd::sdk {
@@ -11,7 +12,8 @@ public:
                                         const PipelineResult &Result)
       : Image(Image), SameImage(Result.SourceImage == &Image) {
     for (const auto &Function : Result.MedFuncs)
-      if (!Function.RegisterCopyProjections.empty())
+      if (!Function.RegisterCopyProjections.empty() ||
+          !Function.ClassGetterCallFacts.empty())
         Projected.emplace(Function.Entry, Pair{});
     for (const auto &Function : Result.MedFuncs)
       if (auto Found = Projected.find(Function.Entry);
@@ -34,19 +36,38 @@ public:
       return false;
     const auto Found = Projected.find(Function.Entry);
     if (Found == Projected.end())
-      return Function.RegisterCopyProjections.empty();
+      return Function.RegisterCopyProjections.empty() &&
+             Function.ClassGetterCallFacts.empty();
     const auto &Pair = Found->second;
     if (Pair.Ambiguous || !Pair.Low || !Pair.Med ||
         Function.RegisterCopyProjections != Pair.Med->RegisterCopyProjections ||
+        Function.ClassGetterCallFacts != Pair.Med->ClassGetterCallFacts ||
+        (!Function.ClassGetterCallFacts.empty() &&
+         !validateSourceClassGetterCalls(Image, *Pair.Low,
+                                         Function.ClassGetterCallFacts)) ||
         !validateSourceRegisterCopies(Image, *Pair.Low,
                                       Function.RegisterCopyProjections))
       return false;
+    std::map<SourceCallOccurrenceKey, unsigned> GetterCalls;
+    for (const auto &[Site, Proof] : Function.ClassGetterCallFacts)
+      GetterCalls.emplace(Site, 0);
     for (const auto &Block : Pair.Med->Blocks)
       for (const auto &Op : Block.Ops)
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           for (const auto &[Site, Copy] : Function.RegisterCopyProjections)
             if (Site.Instruction == Op.Addr && Site.Sequence == Op.OriginSeq)
               return false;
+          const SourceCallOccurrenceKey Site{
+              Op.Addr, Op.OriginSeq, Op.Opcode,
+              Op.NumInputs && Op.Inputs[0].isConst()
+                  ? std::optional<va_t>(Op.Inputs[0].ConstVal)
+                  : std::nullopt};
+          if (auto Found = GetterCalls.find(Site); Found != GetterCalls.end())
+            ++Found->second;
+        }
+    for (const auto &[Site, Count] : GetterCalls)
+      if (Count != 1)
+        return false;
     return true;
   }
 

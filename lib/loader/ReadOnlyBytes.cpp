@@ -53,7 +53,8 @@ const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
 // Byte copies admit no fixup. Pointer reads admit only the exact normalized
 // absolute data slot, with independently checked resolution and target owner.
 bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
-                          uint64_t Extent, bool Pointer, bool Import = false) {
+                          uint64_t Extent, bool Pointer, bool Import = false,
+                          bool ClassReference = false) {
   auto Touches = [&](const auto &Slots, auto Key, bool AllowExact = false) {
     auto It = Slots.lower_bound(Address >= 7 ? Address - 7 : 0);
     for (; It != Slots.end() &&
@@ -76,7 +77,7 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       Touches(Image.ImportPtrSlots, Map, Import) ||
       Touches(Image.ImportStorageSlots, Map, Import) ||
       Touches(Image.DyldBindSlots, Map, Import) ||
-      Touches(Image.ObjCSourceReferences, Map) ||
+      Touches(Image.ObjCSourceReferences, Map, ClassReference) ||
       Touches(Image.DataAddressRelocOperands, Map) ||
       Touches(Image.CodeAddressRelocOperands, Map))
     return true;
@@ -169,9 +170,11 @@ std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
   return readResolvedPointer(Image, Address, true);
 }
 
-bool isImmutableImageImportSlot(const BinaryImage &Image, va_t Address) {
+namespace {
+bool immutableImportSlot(const BinaryImage &Image, va_t Address,
+                         bool ClassReference) {
   if (!supportedImage(Image) || !mappedBytes(Image, Address, 8, true) ||
-      hasConflictingFixups(Image, Address, 8, false, true))
+      hasConflictingFixups(Image, Address, 8, false, true, ClassReference))
     return false;
   const auto Bind = Image.DyldBindSlots.find(Address);
   if (Bind == Image.DyldBindSlots.end() || Bind->second.Name.empty() ||
@@ -183,6 +186,23 @@ bool isImmutableImageImportSlot(const BinaryImage &Image, va_t Address) {
   const auto Slot = Storage.Slots.find(Address);
   return !Storage.Conflicts.count(Address) && Slot != Storage.Slots.end() &&
          Slot->second.Name == Bind->second.Name && !Slot->second.Addend;
+}
+} // namespace
+
+bool isImmutableImageImportSlot(const BinaryImage &Image, va_t Address) {
+  return immutableImportSlot(Image, Address, false);
+}
+
+bool isImmutableImageClassImportSlot(const BinaryImage &Image, va_t Address) {
+  const auto Ref = Image.ObjCSourceReferences.find(Address);
+  const auto Bind = Image.DyldBindSlots.find(Address);
+  if (Address % 8 || Ref == Image.ObjCSourceReferences.end() ||
+      Bind == Image.DyldBindSlots.end() || Ref->second.Address != Address ||
+      Ref->second.Size != 8 || Ref->second.Name.empty() ||
+      Ref->second.TheKind != ObjCSourceReference::Kind::Class ||
+      Bind->second.Name != "_OBJC_CLASS_$_" + Ref->second.Name)
+    return false;
+  return immutableImportSlot(Image, Address, true);
 }
 
 std::optional<va_t> readInitialImagePointer(const BinaryImage &Image,

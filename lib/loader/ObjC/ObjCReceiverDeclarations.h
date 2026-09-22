@@ -28,6 +28,11 @@ struct ReceiverDeclarations {
   std::vector<ReceiverMemberDeclaration> Members;
 };
 
+/// Match a concrete class owner to the exact SDK framework install name.
+/// Categories and merely active frameworks do not establish export ownership.
+bool sdkClassImportProvider(Arch Architecture, llvm::StringRef Class,
+                            llvm::StringRef Module);
+
 ReceiverDeclarations sdkReceiverDeclarations(const BinaryImage &Image,
                                              llvm::StringRef Name,
                                              bool Protocol, bool ClassMethod,

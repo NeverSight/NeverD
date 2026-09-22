@@ -19,6 +19,7 @@
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SourceClassGetterCall.h"
 #include "neverd/ir/low/SourceRegisterCopy.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -305,6 +306,7 @@ struct MedFunc {
   std::vector<MedCallClobber> CallClobbers;
   std::vector<MedStructReturnCandidate> StructReturnCandidates;
   SourceRegisterCopies RegisterCopyProjections;
+  SourceClassGetterCalls ClassGetterCallFacts;
   CallingConv CC = CallingConv::Unknown;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;

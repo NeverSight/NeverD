@@ -11,6 +11,7 @@
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
+#include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/loader/ObjC/ObjCSentinelCalls.h"
@@ -857,6 +858,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
     return Result;
   const auto &TRI = getTargetRegInfo(Image.Arch);
   const auto RegisterCopies = sourceRegisterCopies(Image, Function);
+  const auto ClassGetters = sourceClassGetterCalls(Image, Function);
   const size_t Count = Function.Blocks.size();
   if (Count > 16384)
     return {};
@@ -1161,6 +1163,25 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           continue;
         }
         if (const auto Site = sourceCallOccurrenceKey(Op); Site) {
+          if (const auto Found = ClassGetters.find(*Site);
+              Found != ClassGetters.end()) {
+            // Only transfer machine input/frame facts. The ordinary CALL
+            // still requires independent native declaration and closure.
+            SourceFunctionTypeHint Signature;
+            Signature.ReturnType = NdType::makeInt(8, false);
+            std::string Error;
+            if (!assignDarwinScalarSourceABI(Signature, Image.Arch, Error))
+              return std::nullopt;
+            Clobber(&Signature);
+            Values[key(NdVar::reg(TRI.IntReturnRegs.front(), 8))] =
+                Value{Value::Kind::Receiver,
+                      0,
+                      {},
+                      ObjCReceiverTypeHint{
+                          ObjCReceiverTypeHint::OriginKind::ClassReference,
+                          Found->second.Slot, Found->second.ClassName, true}};
+            continue;
+          }
           const auto Found = RegisterCopies.find(*Site);
           if (Found != RegisterCopies.end()) {
             struct Snapshot {

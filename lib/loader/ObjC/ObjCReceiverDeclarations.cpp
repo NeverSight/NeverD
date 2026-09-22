@@ -1,5 +1,7 @@
 #include "ObjCReceiverDeclarations.h"
 
+#include "../MachO/DarwinRuntimeImport.h"
+
 #include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
@@ -116,6 +118,24 @@ bool active(const BinaryImage &Image, llvm::StringRef Modules) {
   return false;
 }
 } // namespace
+
+bool sdkClassImportProvider(Arch Architecture, llvm::StringRef Class,
+                            llvm::StringRef Module) {
+  const auto *Catalog = catalog(Architecture);
+  if (!Catalog || Class.empty() || Module.empty())
+    return false;
+  unsigned Matches = 0;
+  for (const auto &[Provider, Framework] : *Catalog) {
+    const auto Owner = Framework.Owners.find({"class", Class.str(), ""});
+    if (Owner == Framework.Owners.end())
+      continue;
+    if (!Owner->second.Parents || *Owner->second.Parents == "!" ||
+        !darwinExportModuleMatches(Framework.Modules, Module))
+      return false;
+    ++Matches;
+  }
+  return Matches == 1;
+}
 
 ReceiverDeclarations sdkReceiverDeclarations(const BinaryImage &Image,
                                              llvm::StringRef Name,

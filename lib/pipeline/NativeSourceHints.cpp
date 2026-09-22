@@ -13,6 +13,7 @@
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -886,6 +887,10 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     return std::nullopt;
   };
   if (High.RegisterCopyProjections != Med.RegisterCopyProjections ||
+      High.ClassGetterCallFacts != Med.ClassGetterCallFacts ||
+      (!Med.ClassGetterCallFacts.empty() &&
+       (!Low || !validateSourceClassGetterCalls(Image, *Low,
+                                                Med.ClassGetterCallFacts))) ||
       (!Med.RegisterCopyProjections.empty() &&
        (!Low || !validateSourceRegisterCopies(Image, *Low,
                                               Med.RegisterCopyProjections))))

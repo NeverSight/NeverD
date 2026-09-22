@@ -18,6 +18,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
+#include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -279,8 +280,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
-      TheArch == Arch::AArch64 && Image->Arch == TheArch)
+      TheArch == Arch::AArch64 && Image->Arch == TheArch) {
     Func.RegisterCopyProjections = sourceRegisterCopies(*Image, Low);
+    Func.ClassGetterCallFacts = sourceClassGetterCalls(*Image, Low);
+  }
 
   for (const auto &LB : Low.Blocks) {
     MedBlock MB;

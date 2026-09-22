@@ -10,6 +10,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 
@@ -503,6 +504,216 @@ int main(void) {
   GTEST_SKIP()
       << "Foundation runtime verification requires macOS arm64 and clang";
 #endif
+}
+
+void classGetter(CopyFixture &F) {
+  constantStrings(F);
+  constexpr auto Foundation =
+      "/System/Library/Frameworks/Foundation.framework/Foundation";
+  F.Image.DynInfo.NeededLibs = {Foundation, "/usr/lib/libobjc.A.dylib"};
+  F.Image.ObjCSourceReferences[0x2100] = {
+      ObjCSourceReference::Kind::Class, 0x2100, 8, "NSSet", {}};
+  F.Image.ImportPtrSlots[0x2100] = "_OBJC_CLASS_$_NSSet";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(0x2100, "_OBJC_CLASS_$_NSSet", 0,
+                                         Foundation, false));
+  F.word(F.Leaf, pageAddress(F.Leaf, 0x2100, 8));
+  F.word(F.Leaf + 4, 0xf9408100); // LDR x0,[x8,#0x100].
+  F.word(F.Leaf + 8, 0xd65f03c0);
+  F.run();
+}
+
+TEST(SourceClassGetter, KeepsOrdinaryCallAndIndependentNativeBinding) {
+  CopyFixture F(false, true);
+  classGetter(F);
+  const auto Facts = sourceClassGetterCalls(F.Image, F.low());
+  ASSERT_EQ(Facts.size(), 2U);
+  EXPECT_EQ(F.med().ClassGetterCallFacts, Facts);
+  EXPECT_EQ(F.high().ClassGetterCallFacts, Facts);
+  EXPECT_TRUE(F.med().RegisterCopyProjections.empty());
+  EXPECT_TRUE(isImmutableImageClassImportSlot(F.Image, 0x2100));
+  EXPECT_FALSE(isImmutableImageImportSlot(F.Image, 0x2100));
+  EXPECT_FALSE(readImmutableImageBytes(F.Image, 0x2100, 8));
+  unsigned Ordinary = 0;
+  for (const auto &Block : F.med().Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::CALL) {
+        ++Ordinary;
+        EXPECT_FALSE(Op.SourceCallHint);
+      }
+  EXPECT_EQ(Ordinary, 2U);
+  EXPECT_TRUE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&F.Image);
+  EXPECT_TRUE(Converter.convert(F.low(), Arch::AArch64, BinaryFormat::MachO)
+                  .ClassGetterCallFacts.empty());
+}
+
+TEST(SourceClassGetter, RejectsStaleMachineImportAndClassOwnership) {
+  CopyFixture F;
+  classGetter(F);
+  ASSERT_EQ(F.med().ClassGetterCallFacts.size(), 1U);
+  const auto Original = F.Image;
+  for (unsigned Mutation = 0; Mutation < 18; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    F.Image = Original;
+    switch (Mutation) {
+    case 0:
+      F.word(F.Root + 8, F.branch(F.Root + 12));
+      break;
+    case 1:
+      F.word(F.Leaf, pageAddress(F.Leaf, 0x2100, 9));
+      break;
+    case 2:
+      F.word(F.Leaf + 4, 0xb9408100);
+      break; // W0 load.
+    case 3:
+      F.word(F.Leaf + 4, 0xf9408101);
+      break; // Wrong output.
+    case 4:
+      F.word(F.Leaf + 4, 0xf9408500);
+      break; // Wrong slot.
+    case 5:
+      F.word(F.Leaf + 8, 0xd65f0100);
+      break; // RET x8.
+    case 6:
+      F.Image.ObjCSourceReferences.at(0x2100).Name = "NSAssertionHandler";
+      break;
+    case 7:
+      F.Image.DyldBindSlots.at(0x2100).Module = "/usr/lib/libobjc.A.dylib";
+      break;
+    case 8:
+      F.Image.DyldBindSlots.at(0x2100).WeakImport = true;
+      break;
+    case 9:
+      F.Image.DyldBindSlots.at(0x2100).Addend = 8;
+      break;
+    case 10:
+      F.Image.ObjCSourceReferences.at(0x2100).TheKind =
+          ObjCSourceReference::Kind::Metaclass;
+      break;
+    case 11:
+      F.Image.Segments[1].Flags =
+          F.Image.Segments[1].Flags | SegmentFlags::Writable;
+      break;
+    case 12:
+      F.Image.CodePtrRelocSlots.insert(0x2100);
+      break;
+    case 13:
+      F.Image.ConflictingImportStorageSlots.insert(0x2100);
+      break;
+    case 14:
+      F.Image.ObjCSourceReferences[0x2104] =
+          F.Image.ObjCSourceReferences.at(0x2100);
+      break;
+    case 15:
+      F.Image.DyldBindSlots.erase(0x2100);
+      break;
+    case 16:
+      F.Image.Segments[0].Data[0x1804] |= llvm::MachO::N_EXT;
+      break;
+    case 17:
+      F.Image.MachOChainedFixupsAmbiguous = true;
+      break;
+    }
+    EXPECT_TRUE(sourceClassGetterCalls(F.Image, F.low()).empty());
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  }
+}
+
+TEST(SourceClassGetter, PublicationRequiresFreshCallFactsAndOneOrdinaryCall) {
+  CopyFixture F;
+  classGetter(F);
+  ASSERT_EQ(F.med().ClassGetterCallFacts.size(), 1U);
+  for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    PipelineResult Changed;
+    Changed.SourceImage = &F.Image;
+    Changed.LowFuncs = F.Result.LowFuncs;
+    Changed.MedFuncs = F.Result.MedFuncs;
+    auto High = F.high();
+    if (Mutation == 0)
+      High.ClassGetterCallFacts.clear();
+    if (Mutation == 1)
+      Changed.MedFuncs.front().ClassGetterCallFacts.clear();
+    if (Mutation == 2)
+      ++High.ClassGetterCallFacts.begin()->second.LeafWords[1];
+    if (Mutation == 3)
+      Changed.LowFuncs.front().Blocks.front().InstructionBoundaries.clear();
+    if (Mutation == 4)
+      Changed.MedFuncs.push_back(Changed.MedFuncs.front());
+    if (Mutation >= 5) {
+      auto &Ops = Changed.MedFuncs.front().Blocks.front().Ops;
+      auto Call = std::find_if(Ops.begin(), Ops.end(), [](const auto &Op) {
+        return Op.Opcode == NdOp::CALL;
+      });
+      ASSERT_NE(Call, Ops.end());
+      if (Mutation == 5)
+        Ops.erase(Call);
+      else {
+        const auto Copy = *Call;
+        Ops.push_back(Copy);
+      }
+    }
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(High, F.Image, Changed));
+  }
+}
+
+TEST(SourceClassGetter, PreservesFreshFrameFactsButCannotUndoAnEarlierEscape) {
+  CopyFixture F;
+  classGetter(F);
+  F.Image.ObjCSourceReferences[0x2110] = {
+      ObjCSourceReference::Kind::Selector, 0x2110, 8, "setWithObjects:", {}};
+  F.Image.ImportPtrSlots[0x2180] = "_objc_msgSend";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(0x2180, "_objc_msgSend", 0,
+                                         "/usr/lib/libobjc.A.dylib", false));
+  const uint32_t Stub[] = {0xb0000001, 0xf9408821, 0xb0000010, 0xf940c210,
+                           0xd61f0200};
+  for (unsigned I = 0; I < std::size(Stub); ++I)
+    F.word(0x1280 + I * 4, Stub[I]);
+  F.word(0x1260, 0xd65f03c0);
+  std::vector<uint32_t> Body = {0xd100c3ff,
+                                0xa9027bfd,
+                                0xa90153f3,
+                                0xd503201f,
+                                0xd503201f,
+                                F.branch(F.Root + 20),
+                                0xaa0003f3,
+                                0xaa1303e0,
+                                pageAddress(F.Root + 32, 0x2040, 2),
+                                completeAddress(2, 2, 0x2040),
+                                pageAddress(F.Root + 40, 0x2060, 8),
+                                completeAddress(8, 8, 0x2060),
+                                0xf90003e8,
+                                0xf90007ff,
+                                0x94000000u | ((0x1280 - (F.Root + 56)) / 4),
+                                0xa94153f3,
+                                0xa9427bfd,
+                                0x9100c3ff,
+                                0xd65f03c0};
+  for (unsigned I = 0; I < Body.size(); ++I)
+    F.word(F.Root + I * 4, Body[I]);
+  F.run();
+  const auto Hints = buildObjCSourceCallHints(F.Image, F.low());
+  const auto Found = Hints.find(F.Root + 56);
+  ASSERT_NE(Found, Hints.end());
+  ASSERT_TRUE(Found->second.Receiver);
+  EXPECT_EQ(Found->second.Receiver->ClassName, "NSSet");
+  ASSERT_TRUE(Found->second.NilTerminated);
+  EXPECT_EQ(Found->second.NilTerminated->Objects,
+            (std::vector<va_t>{0x2040, 0x2060}));
+  EXPECT_TRUE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  // Exposing this frame to an earlier unknown call remains an escape even
+  // though the later getter itself cannot consume a frame pointer.
+  F.word(F.Root + 12, 0x910003e0); // MOV x0,sp.
+  F.word(F.Root + 16, 0x94000000u | ((0x1260 - (F.Root + 16)) / 4));
+  F.run();
+  const auto Escaped = buildObjCSourceCallHints(F.Image, F.low());
+  const auto Later = Escaped.find(F.Root + 56);
+  EXPECT_TRUE(Later == Escaped.end() || !Later->second.NilTerminated);
 }
 
 TEST(SourceRegisterCopy, ExactLocalLeafKeepsPhysicalEffectsAndOriginalCalls) {
