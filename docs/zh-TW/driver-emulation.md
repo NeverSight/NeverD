@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL、系統對映及唯讀共用模型 PFN | 使用者對映及其他 DMA 介面 |
 | 驅動程式自行配置的 MDL | 描述模型非分頁集區的獨立描述元，重複使用原始緩衝區位址 | IRP 關聯、MDL 鏈、探查／鎖定頁面及使用者對映 |
 | READ/WRITE | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交 或 WDM 請求取消；`METHOD_NEITHER` 與隱含檔案位置 |
-| `METHOD_NEITHER` | 拒絕 | 使用者位址空間環境、存取探測及客體例外處理 |
+| `METHOD_NEITHER` | 拒絕 | 使用者位址空間脈絡、存取探測、鎖定/解除鎖定及使用者記憶體故障復原 |
 | KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、循序預設佇列，以及實際執行回呼的緩衝／直接請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
 | PnP 匯流排／功能／篩選驅動程式 | 明確的無資源或暫存器組 PDO、客體 AddDevice 與八種常見 PnP 生命週期次要功能 | 其他 PnP 操作、一般電源管理、其他硬體／資源及 KMDF PnP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
@@ -189,6 +189,7 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 |-----|----------------|
 | `RtlInitUnicodeString` | 根據有界且以 NUL 結尾的來源字串建立客體 `UNICODE_STRING` |
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 計數式 UTF-16 複製及區分大小寫的比較；不區分大小寫的比較需要 Windows 大小寫對照表，因此會停止 |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 引發客體例外並交給支援的常數 C `__except` 處理常式；API 不會正常返回，篩選函式/finally 與 CPU 故障復原仍不支援 |
 | `ExAllocatePool2` | 分頁／非分頁 NX 配置，預設清零；建模未初始化與快取對齊旗標；無效的必要旗標傳回 NULL，配額／可執行集區及引發的配置例外會停止 |
 | `MmGetSystemRoutineAddress` | 透過共用匯出清單解析客體計數式名稱 |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 宣告之轉譯子範圍的非快取映射、共用 RO／RW 別名，以及原始基址／長度完全相符的解除映射 |
@@ -310,9 +311,15 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v15`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v16`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
+
+`ExRaiseStatus` 將 NTSTATUS 的低 32 位元傳給客體例外處理常式；`ExRaiseAccessViolation` 與 `ExRaiseDatatypeMisalignment` 分別引發 `STATUS_ACCESS_VIOLATION` 與 `STATUS_DATATYPE_MISALIGNMENT`。此設定依循 Microsoft 各函式的 DDI 文件：ExRaiseStatus 允許 `APC_LEVEL`，另兩個無參數常式則要求 `PASSIVE_LEVEL`。部分 WDK SAL 註記允許這兩個包裝常式使用 APC_LEVEL；此設定保留文件中較嚴格的限制。引發例外的呼叫維持 `result: null`，並在 `detail` 記錄例外碼；不會回報成功返回 API。
+
+例外傳遞使用映像已解碼的 x64 第一版展開表，以及 `__C_specific_handler` 的常數 `EXCEPTION_EXECUTE_HANDLER` 範圍。它執行真正的客體處理常式主體，支援一般輔助函式框架展開，還原已儲存的非揮發性通用暫存器，並保留目前執行的堆疊邊界。`GetExceptionCode()` 可取得引發的例外碼。處理常式可再次引發例外，交給支援的外層範圍。遇到篩選函式、`__finally`、GS/C++ 處理機制、鏈結或不完整中繼資料、前置程式碼展開與 XMM 還原時，會明確失敗。未捕捉的 API 例外以 `model_error` 停止；CPU 記憶體、插斷與無效指令故障仍會終止執行。
+
+原創測試驅動 `driver_wdm_seh.c` 使用真正的 WDK 標頭與 `/GS-`。設定 `NEVERD_WDM_SEH_FIXTURE` 及 `NEVERD_WDM_SEH_CFG_FIXTURE`，即可提供一般及啟用 CFG 的映像。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) 範例會重定位映像、在 DriverEntry 捕捉 API 例外，然後卸載。這項 API 例外支援不會啟用 `ProbeForRead`、`ProbeForWrite`、使用者 MDL 鎖定或 `METHOD_NEITHER`。
 
 可為空值的 `fault` 物件保留第一個後端錯誤。其 `kind`、`pc`、可為空值的 `address`、`size`、`access` 及 `interrupt` 可區分未對映或受保護的記憶體、無效範圍、無效指令及 CPU 例外。位址使用十六進位字串；大小及中斷向量使用整數。觀察讀取不能取代原始錯誤。發生錯誤的後端不能繼續執行，此記錄也不代表提供客體 SEH 處理。
 

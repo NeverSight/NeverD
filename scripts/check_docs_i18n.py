@@ -2181,6 +2181,21 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         matches_channel = False
     if not matches_channel:
         report(errors, "driver DMA channel example differs from public execution scenario")
+    seh_example = Path("docs/examples/driver-seh-scenario.json")
+    seh_scenario = re.search(
+        r'CAPIAndCLIResumeGenuineConstantExceptionHandler.*?'
+        r'const std::string Scenario\s*=\s*R"seh\((.*?)\)seh";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_seh = seh_scenario is not None and json.loads(
+            view.read_text(seh_example)
+        ) == json.loads(seh_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_seh = False
+    if not matches_seh:
+        report(errors, "driver SEH example differs from public execution scenario")
     exports = re.findall(
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
@@ -2285,7 +2300,12 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v15",
+        "wdm-x64-scheduled-v16",
+        "ExRaiseStatus", "ExRaiseAccessViolation", "ExRaiseDatatypeMisalignment",
+        "__C_specific_handler", "EXCEPTION_EXECUTE_HANDLER", "GetExceptionCode",
+        "STATUS_ACCESS_VIOLATION", "STATUS_DATATYPE_MISALIGNMENT", "APC_LEVEL",
+        "NEVERD_WDM_SEH_FIXTURE", "NEVERD_WDM_SEH_CFG_FIXTURE",
+        "driver-seh-scenario.json", "ProbeForRead", "ProbeForWrite",
         "DriverDMA.h", "DriverDMA.def", "dma_events", "dma_transfers",
         "address_bits", "maximum_length", "map_registers", "alignment",
         "logical_base", "logical_length", "scatter_gather", "logical_address",
@@ -2360,6 +2380,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
              "KernelDMAEvents", "KernelModelPhysicalMemory", "KernelModelDMA",
              "KernelModelDMATransfers", "DmaWritable",
              "KernelDMAChannels", "KernelModelDMAChannels", "DMAAdapterControl",
+             "KernelGuestException", "KernelSEH",
              "KernelModelInterruptEvents", "KernelModelInterrupts",
              "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
              "KernelModelPowerCompletion"),
@@ -2373,6 +2394,11 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
                 "NeverDDriverEmulationPublicTests",
                 "'^NeverDDriverEmulation'",
                 "(driver-emulation.md)",
+                "KernelSEHTests.cpp", "KernelExceptionTests.cpp",
+                "DriverWDMSEHTests.cpp", "NEVERD_WDM_SEH_FIXTURE",
+                "NEVERD_WDM_SEH_CFG_FIXTURE", "driver-seh-scenario.json",
+                "test_driver_seh_integration.py", "NEVERD_TEST_WDM_SEH_FIXTURE",
+                "NEVERD_TEST_WDM_SEH_CFG_FIXTURE",
                 "KernelDeviceStackTests.cpp",
                 "KernelIRPStackTests.cpp",
                 "DriverWDMStackTests.cpp",

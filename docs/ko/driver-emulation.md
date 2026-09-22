@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | 요청 소유 MDL, 시스템 매핑, 공유 물리 페이지 식별자와 SG DMA | 사용자 매핑과 기타 DMA 인터페이스 |
 | 드라이버가 할당한 MDL | 모델의 비페이지 풀을 설명하는 독립 MDL, 원래 버퍼 주소 공유 | IRP 연결, MDL 체인, 프로브/잠금, 물리 페이지와 사용자 매핑 |
 | READ/WRITE | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 공개 시나리오 제출와 WDM 요청 취소는 미지원; `METHOD_NEITHER`와 암묵적 파일 위치도 미지원 |
-| `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사와 게스트 예외 처리 |
+| `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사, 잠금／해제 및 사용자 메모리 오류 복구 |
 | KMDF 1.33 비 PnP 드라이버 | 바인딩, 객체/컨텍스트, 이름 있는 제어 장치, 순차 기본 큐 및 콜백을 실제 실행하는 버퍼/직접 요청 | PnP 장치, 일반 큐 스케줄링, 클래스 확장 및 UMDF는 지원하지 않음 |
 | PnP 버스/기능/필터 드라이버 | 명시적 리소스 없는 PDO 또는 고정 레지스터 뱅크 PDO, 게스트 AddDevice, 여덟 가지 일반 PnP 수명 주기 부 기능 | 기타 PnP 작업, 일반 전원 관리, 기타 하드웨어/리소스 및 KMDF PnP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
@@ -186,6 +186,7 @@ KMDF 1.33 지원은 정확한 1.33.0 ABI를 사용합니다. 458개 함수 슬�
 |-----|----------------------|
 | `RtlInitUnicodeString` | 길이가 제한된 NUL 종료 소스로 게스트 `UNICODE_STRING`을 구성함 |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | 길이가 지정된 UTF-16 복사와 대소문자를 구분하는 비교. 대소문자 무시 비교에는 Windows 대소문자 테이블이 필요하므로 중단함 |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 지원하는 상수 C `__except` 처리기로 게스트 예외 발생. 정상 API 반환은 없으며 필터／finally와 CPU 오류 복구는 미지원 |
 | `ExAllocatePool2` | Paged/nonpaged NX 할당이며 기본값은 0으로 초기화. uninitialized 및 cache-aligned 플래그를 모델링함. 잘못된 필수 플래그는 NULL을 반환하고, quota/executable 풀과 할당 예외 발생은 중단함 |
 | `MmGetSystemRoutineAddress` | 공유 export 목록을 통해 길이가 지정된 게스트 이름을 해석함 |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 선언된 변환 후 하위 구간, 비캐시 RO／RW, 공유 별칭과 정확한 unmap. 임의 물리 메모리는 미지원 |
@@ -305,11 +306,17 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v15`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v16`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 
-null이 가능한 `fault` 객체는 최초의 백엔드 오류를 보존합니다. `kind`, `pc`와 null이 가능한 `address`, `size`, `access`, `interrupt`는 매핑되지 않았거나 보호된 메모리, 잘못된 범위, 잘못된 명령어와 CPU 예외를 구분합니다. 주소는 16진 문자열, 크기와 인터럽트 벡터는 정수를 사용합니다. 관찰을 위한 읽기는 원래 오류를 대체할 수 없습니다. 오류가 발생한 백엔드는 재개할 수 없으며, 이 레코드가 게스트 SEH 처리를 뜻하지는 않습니다.
+`ExRaiseStatus`는 NTSTATUS의 하위 32비트를 게스트 예외 처리기에 전달합니다. `ExRaiseAccessViolation`과 `ExRaiseDatatypeMisalignment`는 각각 `STATUS_ACCESS_VIOLATION`과 `STATUS_DATATYPE_MISALIGNMENT`를 발생시킵니다. 프로필은 개별 Microsoft DDI 문서를 따릅니다. ExRaiseStatus는 `APC_LEVEL`을 허용하고 인수가 없는 두 루틴은 `PASSIVE_LEVEL`을 요구합니다. 일부 WDK SAL 주석은 래퍼에 APC_LEVEL을 허용하지만 이 프로필은 문서의 더 엄격한 상한을 유지합니다. 예외를 발생시킨 호출은 `result: null`을 유지하고 `detail`에 코드를 기록하며 성공적인 API 반환으로 보고하지 않습니다.
+
+예외 전달은 이미지에서 해석한 x64 버전 1 스택 해제 테이블과 `__C_specific_handler`의 상수 `EXCEPTION_EXECUTE_HANDLER` 범위를 사용합니다. 실제 게스트 처리기 본문을 실행하고 일반 헬퍼 프레임을 해제하며 저장된 비휘발성 범용 레지스터를 복원하고 현재 실행의 스택 경계를 보존합니다. `GetExceptionCode()`는 발생한 코드를 확인합니다. 처리기는 지원하는 바깥 범위로 다른 예외를 발생시킬 수 있습니다. 경로에서 필터 함수, `__finally`, GS／C++ 성격 처리기, 연결되거나 불완전한 메타데이터, 프롤로그 해제, XMM 복원 연산을 만나면 명시적으로 실패합니다. 잡히지 않은 API 예외는 `model_error`로 멈추며 CPU 메모리／인터럽트／잘못된 명령 오류는 계속 실행 종료를 뜻합니다.
+
+직접 작성한 `driver_wdm_seh.c` 픽스처는 실제 WDK 헤더와 `/GS-`를 사용합니다. 일반 및 활성 CFG 이미지는 `NEVERD_WDM_SEH_FIXTURE`와 `NEVERD_WDM_SEH_CFG_FIXTURE`로 설정합니다. [driver-seh-scenario.json](../examples/driver-seh-scenario.json) 예제는 이미지를 재배치하고 DriverEntry에서 API 예외를 잡은 뒤 언로드합니다. 이 API 예외 지원은 `ProbeForRead`, `ProbeForWrite`, 사용자 MDL 잠금 또는 `METHOD_NEITHER`를 활성화하지 않습니다.
+
+null이 가능한 `fault` 객체는 최초의 백엔드 오류를 보존합니다. `kind`, `pc`와 null이 가능한 `address`, `size`, `access`, `interrupt`는 매핑되지 않았거나 보호된 메모리, 잘못된 범위, 잘못된 명령어와 CPU 예외를 구분합니다. 주소는 16진 문자열, 크기와 인터럽트 벡터는 정수를 사용합니다. 관찰을 위한 읽기는 원래 오류를 대체할 수 없습니다. 오류가 발생한 백엔드는 재개할 수 없으며, 이 레코드로 이러한 백엔드 오류를 게스트 SEH에서 처리할 수는 없습니다.
 
 `instructions`는 허용된 게스트 명령어 실행 시도 수입니다. 실행 정책이 거부한 명령어는 세지 않지만, 허용된 후 CPU에서 오류가 난 명령어는 셉니다. 합성 API 디스패치와 반환 센티널은 이 카운터를 증가시키지 않습니다.
 

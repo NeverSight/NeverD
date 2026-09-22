@@ -466,8 +466,7 @@ requests per file, and public scenarios still submit and drain requests in order
 The same MDL authority also owns standalone driver descriptors: nonpaged pool
 provenance is recorded by pool allocation, building a descriptor retains the
 original pool VA, and descriptor release never frees or remaps its backing
-buffer. Physical page identities, MDL chains and IRP association remain
-unmodeled.
+buffer. MDL chains and IRP association remain unmodeled.
 
 `KernelRegistry` owns the explicitly configured session tree, per-handle access
 rights and lifetime, value serialization, and mutations. Scenario preflight and
@@ -517,6 +516,8 @@ argument-dependent checks in the owning model.
 Scenario cancellation is a per-transfer virtual deadline, owned by the IRP record in `KernelModel` and configured by `cancel_after_100ns`; public scenarios remain serial. The model records the actual absolute `cancel_requested_at_100ns` independently of whether a callback is registered. `KernelModel` applies zero-delay cancellation after framework routing and before guest I/O dispatch, preserves completion-first outcomes, and includes positive cancellation deadlines in idle time advancement. `KernelFramework` owns mark/unmark state, queued versus delivered cancellation and an internal reference through callback return. A queued callback cannot authorize completion; after delivery, a worker may coordinate completion while the cancellation callback waits. WDF lifetime retention never revalidates completed IRP storage. The scheduler carries cancellation callbacks separately from work items, preserving callback kind through suspend/resume and enforcing shared capacity and dispatch budgets. This bounded control-device contract does not add a WDM cancel routine or a general queue scheduler.
 
 Legacy `WdfRequestMarkCancelable` on an already canceled IRP uses a nested `GuestCall` in the current API continuation. Its cancel, cleanup and final destroy callbacks may wait; the caller resumes only after the continuation finishes. Cancellation after registration still uses the scheduler. `KernelFramework` owns WDF handle identity and the defined neutral getter results during/after completion. Its request-accessor host delegates the original IRP, 64-bit Information and MDL identity to `KernelModel`, which also rejects guest WDM completion of a framework-owned IRP. A single request-owned SystemBuffer MDL is allocated lazily; direct buffers retain their existing descriptor, and retrieval alone does not map it. Completion retires both descriptor kinds with the IRP/buffers, independently of retained WDF context references.
+
+`KernelGuestException` is a typed API outcome carrying a 32-bit status, separate from model errors and backend faults. `DriverImage` retains the loader's existing preferred-base exception metadata. `KernelSEH` prepares a pure, bounded x64 version-one C catch-all transfer over that metadata, with checked address translation and stack reads. It restores supported nonvolatile GPR saves across ordinary helper frames and selects the actual guest handler; it rejects encountered filters/finally, GS/C++ personalities, chains, incomplete records, prologues and XMM restoration. `DriverSession` commits the validated register plan only at a healthy API stop, keeps API trace results null, and resumes the handler within the same execution. It never clears the backend's retained fault or unwinds into another callback stack. This boundary supports ExRaiseStatus/ExRaiseAccessViolation/ExRaiseDatatypeMisalignment; user probing, locked user buffers and CPU-fault recovery remain separate work.
 
 ## Exception-rewrite boundaries
 

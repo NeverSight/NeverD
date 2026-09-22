@@ -56,7 +56,7 @@ establish compatibility with arbitrary third-party drivers.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses and physical page identities | IRP association, MDL chains, probing/locking and user mappings |
 | READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation; `METHOD_NEITHER` and implicit file position |
-| `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
+| `METHOD_NEITHER` | Rejected | User address-space context, access probing, lock/unlock and recovery from user-memory faults |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
@@ -239,6 +239,7 @@ The initial API model deliberately has a finite contract:
 |------|-----------------------------------|
 | `RtlInitUnicodeString` | Builds a guest `UNICODE_STRING` for a bounded NUL-terminated source |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Counted UTF-16 copy and case-sensitive comparison; case-insensitive comparison requires a Windows case table and stops |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Raise a guest exception for supported constant C `__except` handlers; no normal API return, filters/finally and CPU-fault recovery remain unsupported |
 | `ExAllocatePool2` | Paged/nonpaged NX allocations, zeroed by default; uninitialized and cache-aligned flags modeled; invalid required flags return NULL, quota/executable pools and raised allocation exceptions stop |
 | `MmGetSystemRoutineAddress` | Resolves a counted guest name through the shared export inventory |
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs with cached KernelMode mappings and permissions; nonpaged pool MDLs reuse the original pool mapping through the safe helper |
@@ -524,7 +525,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v15`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v16`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -540,6 +541,12 @@ Request fields are `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, 
 `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`, `information_hex`, and `output_hex`.
 `information_hex` preserves the raw64-bit `IoStatus.Information` as an exact
 hexadecimal string; the existing numeric `information` field remains available.
+
+`ExRaiseStatus` passes the low 32-bit NTSTATUS to the guest exception handler; `ExRaiseAccessViolation` and `ExRaiseDatatypeMisalignment` raise `STATUS_ACCESS_VIOLATION` and `STATUS_DATATYPE_MISALIGNMENT`. The profile follows the individual Microsoft DDI pages: ExRaiseStatus permits `APC_LEVEL`, while the two no-argument routines require `PASSIVE_LEVEL`. Some WDK SAL annotations permit APC_LEVEL for the wrappers; this profile retains the documented stricter limit. A raised call keeps `result: null` and records the code in `detail`; it never reports a successful API return.
+
+Exception delivery uses the image's decoded x64 version-one unwind tables and `__C_specific_handler` constant `EXCEPTION_EXECUTE_HANDLER` scopes. It executes the actual guest handler body, supports ordinary helper-frame unwinding, restores saved nonvolatile general registers and preserves the current execution's stack boundary. `GetExceptionCode()` observes the raised code. A handler may raise another exception into an enclosing supported scope. Encountered filter functions, `__finally`, GS/C++ personalities, chained or incomplete metadata, prologue unwinding and XMM restore operations fail explicitly. An uncaught API exception stops with `model_error`; CPU memory/interrupt/invalid-instruction faults remain terminal.
+
+The original `driver_wdm_seh.c` fixture uses genuine WDK headers and `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. This API exception support does not enable `ProbeForRead`, `ProbeForWrite`, user MDL locking or `METHOD_NEITHER`.
 
 The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,
 nullable `address`, `size`, `access` and `interrupt` distinguish unmapped or

@@ -941,6 +941,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   Image.Size = Size;
   Image.Guard = std::move(*Guard);
   Image.Imports = std::move(*Imports);
+  Image.Exceptions = std::move(Loaded->ExceptionMetadata);
   for (auto &Import : Image.Imports)
     Import.Slot = ActualBase + (Import.Slot - Base);
   DriverImageRegion Headers;

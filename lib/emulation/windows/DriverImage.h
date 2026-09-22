@@ -13,6 +13,7 @@
 #define NEVERD_EMULATION_DRIVERIMAGE_H
 
 #include "neverd/emulation/DriverProfile.h"
+#include "neverd/loader/ExceptionTable.h"
 
 #include "llvm/Support/Error.h"
 
@@ -50,6 +51,9 @@ struct DriverImage {
   DriverGuardControlFlow Guard;
   std::vector<DriverImageRegion> Regions;
   std::vector<DriverImport> Imports;
+  /// Validated loader metadata in preferred-image coordinates. Exception
+  /// dispatch performs the checked translation to this session's actual base.
+  ExceptionInfo Exceptions;
 };
 /// Concrete guest cookie used for reproducible analysis, never for protection
 /// of the host. The PE wrapper still executes its own cookie checks.
