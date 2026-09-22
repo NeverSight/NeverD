@@ -145,7 +145,12 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     std::vector<ExprPtr *> Uses;
   };
   VarKeyMap<Candidate> Candidates;
-  std::vector<HighStmt *> CopyDefinitions;
+  struct CopyDefinition {
+    HighStmt *Statement = nullptr;
+    ExprPtr *Leaf = nullptr;
+    uint16_t Capacity = 0;
+  };
+  std::vector<CopyDefinition> CopyDefinitions;
   std::vector<std::pair<HighStmt *, unsigned>> Pending;
   for (auto &S : Func.Body)
     Pending.emplace_back(&S, 0);
@@ -179,7 +184,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
         D->Var.Size == D->Type->Size && D->Var.RenameTag < 0 && V &&
         Plain(*V) && S->MemoryOrdering == NdMemoryOrdering::None &&
         S->MemoryAddressSpace == NdMemoryAddressSpace::Default;
-    const auto CarrierBytes = DestinationShape ? D->Type->Size : 0;
+    const uint16_t CarrierBytes = DestinationShape ? D->Type->Size : 0;
     C.Valid &= !C.CarrierBytes || C.CarrierBytes == CarrierBytes;
     C.CarrierBytes = CarrierBytes;
     const bool ConcatShape =
@@ -203,12 +208,48 @@ void narrowSourceConcatLocals(HighFunc &Func) {
           V->CastTo->Size == CarrierBytes) ||
          (V->Kind == ExprKind::UnaryOp &&
           (V->Op == NdOp::INT_ZEXT || V->Op == NdOp::INT_SEXT)));
-    const bool CopyShape =
-        DestinationShape && V->Kind == ExprKind::Var && V->Operands.empty() &&
-        V->Type && V->Type->Kind == NdTypeKind::Int &&
-        V->Type->Size == CarrierBytes && V->Var.Size == CarrierBytes &&
-        V->Var.RenameTag < 0 &&
-        (V->Var.Kind == MedVar::Reg || V->Var.Kind == MedVar::Temp);
+    CopyDefinition Copy{S, &S->Val, CarrierBytes};
+    const bool CopyShape = [&]() {
+      if (!DestinationShape || !V->Type || V->Type->Kind != NdTypeKind::Int ||
+          V->Type->Size != CarrierBytes)
+        return false;
+      // Each accepted view preserves its low Capacity bytes. Check every
+      // intermediate width: re-extension cannot restore a discarded byte.
+      for (unsigned Depth = 0; Depth <= 8; ++Depth) {
+        const auto &E = *Copy.Leaf;
+        if (!E || !Plain(*E) || !E->Type || E->Type->Kind != NdTypeKind::Int ||
+            !E->Type->Size || E->Type->Size > 16)
+          return false;
+        Copy.Capacity = std::min(Copy.Capacity, E->Type->Size);
+        if (E->Kind == ExprKind::Var)
+          return E->Operands.empty() && E->Var.Id >= 0 &&
+                 E->Var.Size == E->Type->Size && E->Var.RenameTag < 0 &&
+                 (E->Var.Size == 8 || E->Var.Size == 16) &&
+                 (E->Var.Kind == MedVar::Reg || E->Var.Kind == MedVar::Temp);
+        const bool Cast = E->Kind == ExprKind::Cast &&
+                          E->Operands.size() == 1 && E->CastTo &&
+                          E->CastTo->Kind == NdTypeKind::Int &&
+                          E->CastTo->Size == E->Type->Size &&
+                          E->CastTo->IsSigned == E->Type->IsSigned;
+        const bool Extension =
+            E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
+            (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT);
+        const bool Slice =
+            E->Kind == ExprKind::BinOp && E->Op == NdOp::SUBBYTES &&
+            E->Operands.size() == 2 && E->Operands[1] &&
+            Plain(*E->Operands[1]) && E->Operands[1]->Kind == ExprKind::Const &&
+            E->Operands[1]->Operands.empty() && E->Operands[1]->Type &&
+            E->Operands[1]->Type->Kind == NdTypeKind::Int &&
+            E->Operands[1]->Type->Size && E->Operands[1]->ConstVal == 0;
+        if ((!Cast && !Extension && !Slice) || !E->Operands[0] ||
+            !E->Operands[0]->Type ||
+            (Extension && E->Operands[0]->Type->Size > E->Type->Size) ||
+            (Slice && E->Operands[0]->Type->Size < E->Type->Size))
+          return false;
+        Copy.Leaf = &E->Operands[0];
+      }
+      return false;
+    }();
     if ((!ConcatShape && !ExtensionShape && !CopyShape) ||
         !discardableIntegerValue(
             ConcatShape ? V->Operands[0] : V, Budget)) {
@@ -228,26 +269,28 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       C.PrefixDefinitions.insert(S);
     }
     C.Definitions.push_back(S);
-    if (CopyShape)
-      CopyDefinitions.push_back(S);
+    // An extension already establishes its own prefix width. Keep that
+    // existing proof independent of the source local's narrower candidates.
+    if (CopyShape && !ExtensionShape)
+      CopyDefinitions.push_back(Copy);
   }
   // A whole-copy RHS may inherit a prefix proof only from its exact
   // destination. Shared expression nodes in other consumers get no permission.
-  std::unordered_map<ExprPtr *, VarKey> CopyTargets;
+  std::unordered_map<ExprPtr *, CopyDefinition> CopyTargets;
   VarKeyMap<std::vector<VarKey>> Neighbors, CopySources;
-  for (auto *S : CopyDefinitions) {
+  for (const auto &Copy : CopyDefinitions) {
+    auto *S = Copy.Statement;
     if (!Budget--)
       return;
-    const auto From = varKey(S->Val->Var), To = varKey(S->Dst->Var);
+    const auto From = varKey((*Copy.Leaf)->Var), To = varKey(S->Dst->Var);
     auto Source = Candidates.find(From);
     auto &Destination = Candidates.at(To);
-    if (Source == Candidates.end() || !Source->second.CarrierBytes ||
-        Source->second.CarrierBytes != Destination.CarrierBytes)
+    if (Source == Candidates.end() || !Destination.CarrierBytes ||
+        Source->second.CarrierBytes != (*Copy.Leaf)->Var.Size)
       continue;
-    CopyTargets.emplace(&S->Val, To);
+    CopyTargets.emplace(&S->Val, Copy);
     Neighbors[From].push_back(To);
     Neighbors[To].push_back(From);
-    CopySources[To].push_back(From);
   }
   // Prefix widths originate in a constructing definition, never a guessed
   // use. Copy-only components without such a seed remain unchanged.
@@ -282,8 +325,16 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       C.Valid &= Consistent;
     }
   }
+  // Cross-carrier copies must preserve the entire established prefix and
+  // still satisfy each destination's supported narrowing range.
+  for (const auto &[Root, Copy] : CopyTargets) {
+    auto &C = Candidates.at(varKey(Copy.Statement->Dst->Var));
+    C.Valid &= C.Bytes <= Copy.Capacity && C.Bytes < C.CarrierBytes &&
+               (C.CarrierBytes == 16 || C.Bytes == 4);
+  }
   struct Use {
     ExprPtr *Slot;
+    ExprPtr *Root;
     const HighExpr *Parent;
     unsigned Operand, Depth;
   };
@@ -295,11 +346,11 @@ void narrowSourceConcatLocals(HighFunc &Func) {
     forEachExpr(*S, [&](ExprPtr &E) {
       if (!(S->Kind == StmtKind::Assign && &E == &S->Dst)) {
         Roots.push_back(E);
-        Uses.push_back({&E, nullptr, 0, 0});
+        Uses.push_back({&E, &E, nullptr, 0, 0});
       }
     });
   for (size_t I = 0; I < Uses.size(); ++I) {
-    auto [Slot, Parent, Operand, Depth] = Uses[I];
+    auto [Slot, Root, Parent, Operand, Depth] = Uses[I];
     const auto &E = *Slot;
     if (!Budget-- || Depth > 128 || !E)
       return;
@@ -322,10 +373,17 @@ void narrowSourceConcatLocals(HighFunc &Func) {
               Plain(*Parent->Operands[1]) &&
               Parent->Operands[1]->Operands.empty() &&
               Parent->Operands[1]->ConstVal == 0));
-        const auto Copy = CopyTargets.find(Slot);
-        const bool ProvenCopy = !Parent && Copy != CopyTargets.end() &&
-                                C.Bytes &&
-                                Candidates.at(Copy->second).Bytes == C.Bytes;
+        const auto Copy = CopyTargets.find(Root);
+        const bool ProvenCopy =
+            Copy != CopyTargets.end() && Copy->second.Leaf == Slot && C.Bytes &&
+            C.Bytes <= Copy->second.Capacity &&
+            Candidates.at(varKey(Copy->second.Statement->Dst->Var)).Bytes ==
+                C.Bytes;
+        // Explicit low reads already prove their source independently of
+        // whether the destination can narrow. Only exemptions depend on it.
+        if (ProvenCopy && !Prefix)
+          CopySources[varKey(Copy->second.Statement->Dst->Var)].push_back(
+              It->first);
         C.Valid &= (Prefix || ProvenCopy) && Plain(*E) && E->Operands.empty() &&
                    E->Type && E->Type->Kind == NdTypeKind::Int &&
                    E->Type->Size == C.CarrierBytes &&
@@ -335,7 +393,7 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       }
     }
     for (unsigned J = 0; J < E->Operands.size(); ++J)
-      Uses.push_back({&E->Operands[J], E.get(), J, Depth + 1});
+      Uses.push_back({&E->Operands[J], Root, E.get(), J, Depth + 1});
   }
   // A source cannot be narrowed if an exempted whole-copy consumer will
   // remain wide. Propagate final rewrite eligibility backwards to a fixed

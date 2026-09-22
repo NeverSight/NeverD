@@ -861,4 +861,133 @@ TEST(HighSourceScalarLocals, UnseededCopiesAndExhaustedProofStayUnchanged) {
   EXPECT_EQ(Large.Body[0].Body[0].Dst->Var.Size, 8U);
   EXPECT_EQ(Large.Body[0].Body[0].Val->Op, NdOp::CONCAT);
 }
+ExprPtr integerPrefixView(ExprPtr Value, unsigned Bytes) {
+  auto E =
+      HighExpr::makeBinop(NdOp::SUBBYTES, Value, HighExpr::makeConst(0, 4));
+  E->Type = NdType::makeInt(Bytes, false);
+  return E;
+}
+
+HighFunc sourceCopyViewChain() {
+  auto F = sourceCopyChain(Arch::AArch64, 4, 16);
+  auto View = integerPrefixView(variable(4, 16), 8);
+  View = HighExpr::makeUnary(NdOp::INT_ZEXT, View);
+  View->Type = NdType::makeInt(16, false);
+  F.Body[1] = assign(variable(5, 8), integerPrefixView(View, 8));
+  F.Body[2].Body[0] = assign(variable(6, 8), variable(5, 8));
+  F.Body[2].ElseBody[0] = assign(variable(6, 8), variable(5, 8));
+  F.Body[3] = assign(variable(7, 8), variable(6, 8));
+  F.Body.back().RetVal->Operands[0] = variable(7, 8);
+  return F;
+}
+
+TEST(HighSourceScalarLocals, CopyViewsPreserveEveryIntermediatePrefix) {
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    auto F = sourceCopyViewChain();
+    auto &View = F.Body[1].Val;
+    if (Mutation == 1)
+      View->Operands[0]->Op = NdOp::INT_SEXT;
+    if (Mutation == 2) {
+      View->Kind = ExprKind::Cast;
+      View->CastTo = NdType::makeInt(8, true);
+      View->Type = View->CastTo;
+      View->Operands.resize(1);
+    }
+    if (Mutation == 3) {
+      // Eight wrappers are within the witness bound.
+      for (unsigned I = 0; I < 5; ++I)
+        View = integerPrefixView(View, 8);
+    }
+    auto Low = F.Body[0].Body[0].Val->Operands[1];
+    narrowSourceConcatLocals(F);
+    EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 4U) << Mutation;
+    EXPECT_EQ(F.Body[0].Body[0].Val, Low);
+    EXPECT_EQ(F.Body[1].Dst->Var.Size, 4U) << Mutation;
+    EXPECT_EQ(F.Body[1].Val->Type->Size, 4U);
+    EXPECT_EQ(F.Body[3].Dst->Var.Size, 4U);
+    EXPECT_EQ(F.Body.back().RetVal->Operands[0]->Var.Size, 4U);
+  }
+}
+
+TEST(HighSourceScalarLocals, CopyViewProofIsBoundedAndScopedToItsRoot) {
+  for (unsigned Mutation = 0; Mutation < 12; ++Mutation) {
+    auto F = sourceCopyViewChain();
+    auto &View = F.Body[1].Val;
+    if (Mutation == 0)
+      View->Operands[0]->Operands[0]->Type = NdType::makeInt(2, false);
+    if (Mutation == 1)
+      View->Operands[1]->ConstVal = 1;
+    if (Mutation == 2) {
+      View->Kind = ExprKind::Cast;
+      View->Operands.resize(1);
+      View->CastTo = NdType::makeInt(4, false);
+    }
+    if (Mutation == 3)
+      View->Operands[0]->Type = NdType::makeFloat(16);
+    if (Mutation == 4)
+      View->MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Mutation == 5)
+      View->IntrinsicOutputs = {variable(9)->Var};
+    if (Mutation == 6)
+      for (unsigned I = 0; I < 6; ++I)
+        View = integerPrefixView(View, 8); // Nine wrappers exceed the bound.
+    if (Mutation == 7)
+      F.Body.back().RetVal = variable(7, 8);
+    if (Mutation == 8) {
+      HighStmt Call;
+      Call.Kind = StmtKind::ExprStmt;
+      Call.CallExpr = HighExpr::makeCall("escape_view", 0x3000, {View});
+      F.Body.insert(F.Body.end() - 1, Call);
+    }
+    if (Mutation == 9) {
+      auto Shared = View;
+      F.Body.push_back(assign(variable(9, 8), Shared));
+      F.Body.push_back(returning(variable(9, 8)));
+    }
+    if (Mutation == 10) {
+      View->Kind = ExprKind::Cast;
+      View->Operands.resize(1);
+      View->CastTo = NdType::makeInt(8, true); // Type still unsigned.
+    }
+    if (Mutation == 11)
+      View->Operands[0]->Operands[0]->Operands[0]->Type = NdType::makePtr();
+    narrowSourceConcatLocals(F);
+    if (!Mutation) {
+      // The direct two-byte source read is safe, but re-extension cannot
+      // establish the four-byte destination prefix.
+      EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 4U);
+      EXPECT_EQ(F.Body[1].Dst->Var.Size, 8U);
+    } else {
+      EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 16U) << Mutation;
+      EXPECT_EQ(F.Body[0].Body[0].Val->Op, NdOp::CONCAT) << Mutation;
+    }
+  }
+}
+TEST(HighSourceScalarLocals, VectorExtensionExposesASecondProvenPrefix) {
+  auto F = sourceCopyChain(Arch::AArch64, 4, 16);
+  auto View = integerPrefixView(variable(4, 16), 8);
+  View = HighExpr::makeUnary(NdOp::INT_ZEXT, View);
+  View->Type = NdType::makeInt(16, false);
+  F.Body[1].Val = View;
+  F.Body[2].ElseBody[0].Val = variable(5, 16);
+  narrowSourceConcatLocals(F);
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 16U);
+  EXPECT_EQ(F.Body[1].Dst->Var.Size, 8U);
+  narrowSourceConcatLocals(F);
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 4U);
+  EXPECT_EQ(F.Body[1].Dst->Var.Size, 4U);
+  EXPECT_EQ(F.Body[3].Dst->Var.Size, 4U);
+  EXPECT_EQ(F.Body.back().RetVal->Operands[0]->Var.Size, 4U);
+}
+
+TEST(HighSourceScalarLocals, AnExplicitPrefixDoesNotDependOnItsConsumerWidth) {
+  auto F = sourceConcatLocal(Arch::AArch64, 8, 16);
+  auto Prefix = integerPrefixView(variable(4, 16), 8);
+  F.Body.insert(F.Body.begin() + 1, assign(variable(5, 8), Prefix));
+  F.Body.back().RetVal = variable(5, 8);
+  narrowSourceConcatLocals(F);
+  EXPECT_EQ(F.Body[0].Body[0].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[1].Dst->Var.Size, 8U);
+  EXPECT_EQ(F.Body[1].Val->Operands[0]->Var.Size, 8U);
+}
 } // namespace
