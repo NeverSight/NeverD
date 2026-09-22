@@ -259,6 +259,18 @@ source ABI carrier, object-consumer fact and message parameter index;
 publication rebuilds the method and selector declarations from the current
 image before accepting the call.
 
+An exact Objective-C wrapper may supply a selector declaration that is absent
+from both the image and active SDK catalogs. The call must use one unchanged,
+declared method-entry parameter as its receiver, forward every selector
+argument from an unchanged full-width integer-register parameter, and
+immediately return the call output with the wrapper's declared result ABI. The
+selector arity, caller parameter locations and return carrier must all agree
+with a freshly assigned Darwin ABI. Any incomplete declaration is a veto, and
+every complete declaration that does exist must match the reconstructed
+signature. The hint records the caller entry and parameter mapping;
+publication rebuilds the method signature and requires the exact HighIR
+parameter operands before accepting the message.
+
 Full-width receiver and declared pointer identities may survive an
 exact private-frame spill and reload. A returning call preserves the entry-SP
 identity even when its source signature is unknown. When a frame address is

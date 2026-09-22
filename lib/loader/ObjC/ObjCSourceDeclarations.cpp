@@ -327,6 +327,96 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
   return Result;
 }
 
+std::optional<SourceFunctionTypeHint>
+objcMethodForwardingSourceTypeHint(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorForwardingEvidence &Evidence) {
+  if (!Evidence.MethodEntry || Evidence.ReceiverSourceParameter < 2 ||
+      Selector.count(':') != Evidence.ArgumentSourceParameters.size())
+    return std::nullopt;
+  const auto Caller = objcMethodSourceTypeHint(Image, Evidence.MethodEntry);
+  if (!Caller || !Caller->ReturnType || Caller->Parameters.size() < 3 ||
+      Evidence.ReceiverSourceParameter >= Caller->Parameters.size())
+    return std::nullopt;
+  const auto CompleteIntegerCarrier = [](const SourceParameterTypeHint &P) {
+    return P.Type &&
+           (P.Type->Kind == NdTypeKind::Int ||
+            P.Type->Kind == NdTypeKind::Ptr) &&
+           P.Type->Size == 8 &&
+           P.Location.Kind == SourceABICarrierKind::IntegerRegister &&
+           P.Location.ValueBytes == 8 && P.Components.empty();
+  };
+  const auto &Receiver = Caller->Parameters[Evidence.ReceiverSourceParameter];
+  if (!CompleteIntegerCarrier(Receiver) ||
+      Receiver.Type->Kind != NdTypeKind::Ptr || !Receiver.Type->Pointee ||
+      Receiver.Type->Pointee->Kind != NdTypeKind::Void)
+    return std::nullopt;
+
+  SourceFunctionTypeHint Result;
+  Result.Origin = SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+  Result.ReturnType = Caller->ReturnType;
+  Result.Parameters.assign(Caller->Parameters.begin(),
+                           Caller->Parameters.begin() + 2);
+  for (const auto Parameter : Evidence.ArgumentSourceParameters) {
+    if (Parameter < 2 || Parameter >= Caller->Parameters.size() ||
+        !CompleteIntegerCarrier(Caller->Parameters[Parameter]))
+      return std::nullopt;
+    auto Forwarded = Caller->Parameters[Parameter];
+    Forwarded.Name = "arg" + std::to_string(Result.Parameters.size() - 2);
+    Forwarded.Location = {};
+    Forwarded.Components.clear();
+    Result.Parameters.push_back(std::move(Forwarded));
+  }
+  for (auto &Parameter : Result.Parameters) {
+    Parameter.Location = {};
+    Parameter.Components.clear();
+  }
+  std::string Diagnostic;
+  if (!assignDarwinObjCSourceABI(Result, Image.Arch, Diagnostic) ||
+      !sameLocation(Result.ReturnLocation, Caller->ReturnLocation))
+    return std::nullopt;
+  const bool SameReturnComponents =
+      Result.ReturnComponents.size() == Caller->ReturnComponents.size() &&
+      std::equal(Result.ReturnComponents.begin(), Result.ReturnComponents.end(),
+                 Caller->ReturnComponents.begin(), sameLocation);
+  if (!SameReturnComponents)
+    return std::nullopt;
+
+  return Result;
+}
+
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForForwardingUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorForwardingEvidence &Evidence) {
+  auto Result =
+      objcMethodForwardingSourceTypeHint(Image, Selector, Evidence);
+  if (!Result)
+    return std::nullopt;
+
+  // Complete declarations remain authoritative. A forwarding wrapper may
+  // fill an absent selector declaration, but it cannot override an incomplete
+  // or differently typed declaration elsewhere in the active image/SDK.
+  const auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
+  if (!Candidates)
+    return std::nullopt;
+  for (auto Candidate : *Candidates) {
+    if (!equalSourceTypes(Candidate.ReturnType, Result->ReturnType) ||
+        Candidate.Parameters.size() != Result->Parameters.size())
+      return std::nullopt;
+    for (size_t I = 0; I < Candidate.Parameters.size(); ++I) {
+      if (!equalSourceTypes(Candidate.Parameters[I].Type,
+                            Result->Parameters[I].Type))
+        return std::nullopt;
+      Candidate.Parameters[I].Name = Result->Parameters[I].Name;
+    }
+    Candidate.Origin = Result->Origin;
+    if (!equalSourceABIs(Candidate, *Result))
+      return std::nullopt;
+  }
+  return Result;
+}
+
 bool isObjCSelectorArgumentEvidenceType(const TypeRef &Type,
                                         bool ConsumedAsObject) {
   // The declaration, not the machine width alone, supplies this evidence.

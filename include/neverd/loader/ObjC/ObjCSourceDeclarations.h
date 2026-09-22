@@ -44,6 +44,21 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorArgumentTypeEvidence &Evidence);
 
+/// Reconstruct the source signature carried by an exact Objective-C method
+/// forwarder without consulting declarations for the forwarded selector.
+std::optional<SourceFunctionTypeHint>
+objcMethodForwardingSourceTypeHint(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorForwardingEvidence &Evidence);
+
+/// Revalidate a reconstructed forwarding signature against every declaration
+/// for the dynamic selector. Missing declarations are allowed; incomplete or
+/// conflicting declarations veto the forwarding contract.
+std::optional<SourceFunctionTypeHint>
+objcSelectorSourceTypeHintForForwardingUse(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const SourceCallTypeHint::SelectorForwardingEvidence &Evidence);
+
 /// Resolve a selector conflict when one argument is the exact address of
 /// private frame storage. This proves pointer-to-pointer shape only; a unique
 /// complete declaration must supply the pointee type and every other ABI fact.

@@ -218,6 +218,87 @@ TEST(ObjCCallHints, FrameworkDeclarationsKeepMissingAndConflictingEvidence) {
   EXPECT_EQ(buildObjCSourceCallHints(Image, caller()).size(), 1U);
 }
 
+TEST(ObjCCallHints, ExactMethodForwardingSuppliesMissingSelectorDeclaration) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "ddLogLevel";
+  ObjCMethod Wrapper;
+  Wrapper.ClassName = "DDLog";
+  Wrapper.IsClassMethod = true;
+  Wrapper.Selector = "levelForClass:";
+  Wrapper.Implementation = 0x1200;
+  Wrapper.TypeHint = parseObjCMethodEncoding(Wrapper.Selector, "q24@0:8#16");
+  ASSERT_TRUE(Wrapper.TypeHint);
+  Image.ObjCMethods.push_back(Wrapper);
+
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  auto Function = caller();
+  Function.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(TRI.IntReturnReg, 8);
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin(),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[2], 8)}, 0x11fc));
+  auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  const auto &Getter = Hints.at(0x1200);
+  ASSERT_TRUE(Getter.SelectorForwardingUse);
+  EXPECT_EQ(Getter.SelectorForwardingUse->MethodEntry, 0x1200U);
+  EXPECT_EQ(Getter.SelectorForwardingUse->ReceiverSourceParameter, 2U);
+  EXPECT_TRUE(Getter.SelectorForwardingUse->ArgumentSourceParameters.empty());
+  ASSERT_TRUE(Getter.Signature.ReturnType);
+  EXPECT_EQ(Getter.Signature.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Getter.Signature.ReturnType->Size, 8U);
+
+  // The setter forwards its declared level and Class parameters into the
+  // receiver and sole selector argument before returning void.
+  Image.ObjCSourceReferences.at(0x2100).Name = "ddSetLogLevel:";
+  Image.ObjCMethods[0].Selector = "setLevel:forClass:";
+  Image.ObjCMethods[0].TypeHint =
+      parseObjCMethodEncoding(Image.ObjCMethods[0].Selector, "v32@0:8q16#24");
+  ASSERT_TRUE(Image.ObjCMethods[0].TypeHint);
+  Function.Blocks[0].Ops = {
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[3], 8)}, 0x11f8),
+      operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1200),
+      operation(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 8)}, 0x1204)};
+  Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  const auto &Setter = Hints.at(0x1200);
+  ASSERT_TRUE(Setter.SelectorForwardingUse);
+  EXPECT_EQ(Setter.SelectorForwardingUse->ReceiverSourceParameter, 3U);
+  EXPECT_EQ(Setter.SelectorForwardingUse->ArgumentSourceParameters,
+            std::vector<unsigned>{2});
+  ASSERT_EQ(Setter.Signature.Parameters.size(), 3U);
+  EXPECT_EQ(Setter.Signature.Parameters[2].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Setter.Signature.Parameters[2].Type->Size, 8U);
+  EXPECT_EQ(Setter.Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  // A rewritten forwarded value, a non-tail call, or an incomplete selector
+  // declaration removes the proof instead of guessing the ABI.
+  auto Invalid = Function;
+  Invalid.Blocks[0].Ops.insert(
+      Invalid.Blocks[0].Ops.begin() + 1,
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[2], 8),
+                {NdVar::cst(7, 8)}, 0x11fc));
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Invalid).count(0x1200));
+  Invalid = Function;
+  Invalid.Blocks[0].Ops.insert(
+      Invalid.Blocks[0].Ops.end() - 1,
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::cst(0, 8)}, 0x1202));
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Invalid).count(0x1200));
+  ObjCMethod Unknown;
+  Unknown.ClassName = "UnknownLogger";
+  Unknown.Selector = "ddSetLogLevel:";
+  Image.ObjCMethods.push_back(std::move(Unknown));
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+  Image.ObjCMethods.back().TypeHint =
+      parseObjCMethodEncoding("ddSetLogLevel:", "v24@0:8@16");
+  ASSERT_TRUE(Image.ObjCMethods.back().TypeHint);
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1200));
+}
+
 TEST(ObjCCallHints, FrameworkProvidersRequireExactActivationAndAgreement) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto Image = image(Architecture);

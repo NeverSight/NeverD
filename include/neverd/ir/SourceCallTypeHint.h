@@ -312,6 +312,18 @@ struct SourceCallTypeHint {
     bool ConsumedAsObject = false;
   };
   std::optional<SelectorArgumentTypeEvidence> SelectorArgumentTypeUse;
+  /// An exact Objective-C method forwards an entry parameter as the receiver,
+  /// forwards every selector argument from named entry parameters, and returns
+  /// the message result without changing its declared source type. This can
+  /// supply a missing selector declaration; publication revalidates the
+  /// current method declaration and exact HighIR parameter operands.
+  struct SelectorForwardingEvidence {
+    va_t MethodEntry = 0;
+    unsigned ReceiverSourceParameter = 0;
+    std::vector<unsigned> ArgumentSourceParameters;
+    bool operator==(const SelectorForwardingEvidence &) const = default;
+  };
+  std::optional<SelectorForwardingEvidence> SelectorForwardingUse;
   /// An exact address inside the current function's private frame flowed to
   /// one message argument. This may distinguish a pointer-to-pointer
   /// declaration from an object-valued declaration; publication revalidates

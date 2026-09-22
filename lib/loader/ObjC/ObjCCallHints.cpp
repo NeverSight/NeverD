@@ -938,7 +938,12 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       for (const auto &Parameter : Signature->Parameters) {
         const auto &Type = Parameter.Type;
         const auto &Location = Parameter.Location;
-        if (!isObjCSelectorArgumentEvidenceType(Type, true) ||
+        const bool CompleteForwardedScalar =
+            Type && Type->Size == 8 &&
+            (Type->Kind == NdTypeKind::Int ||
+             Type->Kind == NdTypeKind::Ptr);
+        if ((!isObjCSelectorArgumentEvidenceType(Type, true) &&
+             !CompleteForwardedScalar) ||
             Location.Kind != SourceABICarrierKind::IntegerRegister ||
             Location.ValueBytes != 8)
           continue;
@@ -1517,6 +1522,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           std::optional<NdTypeKind> SelectorResultTypeUse;
           std::optional<SourceCallTypeHint::SelectorArgumentTypeEvidence>
               SelectorArgumentTypeUse;
+          std::optional<SourceCallTypeHint::SelectorForwardingEvidence>
+              SelectorForwardingUse;
+          bool SelectorForwardingContract = false;
           std::optional<SourceCallTypeHint::SelectorArgumentStorageEvidence>
               SelectorArgumentStorageUse;
           std::optional<SourceCallTypeHint::ObjCIndirectResultStorageEvidence>
@@ -1556,7 +1564,87 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               }
             }
           }
-          if (!Signature && !Qualified)
+          if (!Qualified && Target->Name == "objc_msgSend") {
+            const auto Caller = objcMethodSourceTypeHint(Image, Function.Entry);
+            const auto SourceParameter = [&](const Value &V)
+                -> std::optional<unsigned> {
+              if (!Caller || V.TheKind != Value::Kind::SourceParameter ||
+                  V.SourceMethodEntry != Function.Entry)
+                return std::nullopt;
+              std::optional<unsigned> Result;
+              for (unsigned I = 0; I < Caller->Parameters.size(); ++I)
+                if (std::tie(Caller->Parameters[I].Location.Kind,
+                             Caller->Parameters[I].Location.RegisterOffset,
+                             Caller->Parameters[I].Location.EntryStackOffset,
+                             Caller->Parameters[I].Location.ValueBytes,
+                             Caller->Parameters[I].Location.ExtendTo32Bits) ==
+                    std::tie(V.SourceLocation.Kind,
+                             V.SourceLocation.RegisterOffset,
+                             V.SourceLocation.EntryStackOffset,
+                             V.SourceLocation.ValueBytes,
+                             V.SourceLocation.ExtendTo32Bits)) {
+                  if (Result)
+                    return std::nullopt;
+                  Result = I;
+                }
+              return Result;
+            };
+            const auto &Ops = Block.Ops;
+            const auto &Return = Ops.back();
+            const bool DirectReturn =
+                OpIndex + 2 == Ops.size() && Return.Opcode == NdOp::RETURN;
+            bool ExactReturn = false;
+            if (Caller && Caller->ReturnType && DirectReturn) {
+              if (Caller->ReturnType->Kind == NdTypeKind::Void)
+                ExactReturn = Return.NumInputs == 1 && Op.Output.Size == 8 &&
+                              Return.Inputs[0] == Op.Output;
+              else if (Caller->ReturnComponents.empty() &&
+                       Caller->ReturnLocation.Kind ==
+                           SourceABICarrierKind::IntegerRegister &&
+                       Caller->ReturnLocation.ValueBytes == 8 &&
+                       Return.NumInputs == 1)
+                ExactReturn =
+                    Return.Inputs[0] ==
+                    NdVar::reg(Caller->ReturnLocation.RegisterOffset, 8);
+            }
+            const auto Self = Read(NdVar::reg(TRI.IntParamRegs[0], 8));
+            const auto ReceiverParameter =
+                Self ? SourceParameter(*Self) : std::nullopt;
+            const size_t ArgumentCount =
+                std::count(Target->Selector.begin(), Target->Selector.end(),
+                           ':');
+            if (ExactReturn && ReceiverParameter &&
+                ArgumentCount <= TRI.IntParamRegs.size() - 2) {
+              SourceCallTypeHint::SelectorForwardingEvidence Evidence;
+              Evidence.MethodEntry = Function.Entry;
+              Evidence.ReceiverSourceParameter = *ReceiverParameter;
+              bool ExactArguments = true;
+              for (size_t I = 0; I < ArgumentCount; ++I) {
+                const auto Argument =
+                    Read(NdVar::reg(TRI.IntParamRegs[I + 2], 8));
+                const auto Parameter =
+                    Argument ? SourceParameter(*Argument) : std::nullopt;
+                if (!Parameter) {
+                  ExactArguments = false;
+                  break;
+                }
+                Evidence.ArgumentSourceParameters.push_back(*Parameter);
+              }
+              if (ExactArguments) {
+                const auto Reconstructed =
+                    objcMethodForwardingSourceTypeHint(
+                        Image, Target->Selector, Evidence);
+                if (Reconstructed) {
+                  SelectorForwardingContract = true;
+                  Signature = objcSelectorSourceTypeHintForForwardingUse(
+                      Image, Target->Selector, Evidence);
+                  if (Signature)
+                    SelectorForwardingUse = std::move(Evidence);
+                }
+              }
+            }
+          }
+          if (!Signature && !Qualified && !SelectorForwardingContract)
             if (const auto Required =
                     localResultUse(Function, Index, OpIndex, TRI, Image)) {
               Signature = objcSelectorSourceTypeHintForResultUse(
@@ -1567,7 +1655,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                 SelectorResultTypeUse = Required->TypeKind;
               }
             }
-          if (!Signature && !Qualified) {
+          if (!Signature && !Qualified && !SelectorForwardingContract) {
             for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
                  ++Parameter) {
               const auto Argument =
@@ -1593,7 +1681,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               SelectorArgumentTypeUse = Evidence;
             }
           }
-          if (!Signature && !Qualified) {
+          if (!Signature && !Qualified && !SelectorForwardingContract) {
             for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
                  ++Parameter) {
               const auto Argument =
@@ -1631,12 +1719,14 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Hint.SelectorResultUse = SelectorResultUse;
             Hint.SelectorResultTypeUse = SelectorResultTypeUse;
             Hint.SelectorArgumentTypeUse = SelectorArgumentTypeUse;
+            Hint.SelectorForwardingUse = SelectorForwardingUse;
             Hint.SelectorArgumentStorageUse = SelectorArgumentStorageUse;
             Hint.ObjCIndirectResultStorage = ObjCIndirectResultStorage;
             if (Qualified)
               Hint.Receiver = std::move(Receiver);
             BlockHints.emplace(Op.Addr, std::move(Hint));
-          } else if (Target->Name == "objc_msgSend") {
+          } else if (Target->Name == "objc_msgSend" &&
+                     !SelectorForwardingContract) {
             const auto Declaration =
                 objcSelectorFormatDeclaration(Image, Target->Selector);
             if (Declaration) {

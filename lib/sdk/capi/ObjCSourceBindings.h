@@ -161,6 +161,7 @@ inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
          !Binding.NilTerminated && !Binding.SwiftTypeMetadata &&
          !Binding.Receiver && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
+         !Binding.SelectorForwardingUse &&
          !Binding.SelectorArgumentStorageUse &&
          !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot;
@@ -201,6 +202,7 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
+         !Binding.SelectorForwardingUse &&
          !Binding.SelectorArgumentStorageUse &&
          !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.SwiftTypeMetadata && !Binding.NilTerminated &&
@@ -1455,7 +1457,8 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.NilTerminated ||
       Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
-      Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
+      Hint.SelectorArgumentTypeUse || Hint.SelectorForwardingUse ||
+      Hint.SelectorArgumentStorageUse ||
       Hint.ObjCIndirectResultStorage || Hint.DoesNotReturn || Hint.WeakImport ||
       Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
       Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
@@ -3426,7 +3429,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
        !Binding.OwnerClass.empty() || !Binding.BorrowedByteInputs.empty() ||
        !Binding.SwiftStringInputs.empty() || Binding.SwiftTypeMetadata ||
        Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
-       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.SelectorArgumentTypeUse || Binding.SelectorForwardingUse ||
+       Binding.SelectorArgumentStorageUse ||
        Binding.ObjCIndirectResultStorage || Binding.ByteCount ||
        Binding.ImmutablePointerSlot))
     return false;
@@ -3456,6 +3460,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.SelectorForwardingUse ||
        Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
@@ -3463,14 +3468,23 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
+       Binding.SelectorForwardingUse ||
        Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+    return false;
+  if (Binding.SelectorForwardingUse &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
+       Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
+       Binding.SelectorArgumentStorageUse || Binding.ObjCIndirectResultStorage ||
+       Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCRuntime))
     return false;
   if (Binding.ObjCIndirectResultStorage &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        !Binding.Receiver || Binding.Format || Binding.NilTerminated ||
        Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
-       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.SelectorArgumentTypeUse || Binding.SelectorForwardingUse ||
+       Binding.SelectorArgumentStorageUse ||
        Binding.DoesNotReturn || Binding.WeakImport ||
        Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
        Binding.ValueWitness || !Binding.OwnerClass.empty() ||
@@ -3520,6 +3534,36 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                                    *ContainingFunction, Image.Arch);
     if (!Offset || *Offset != Evidence.FrameOffset)
       return false;
+  }
+  if (Binding.SelectorForwardingUse) {
+    const auto &Evidence = *Binding.SelectorForwardingUse;
+    const auto Caller = objcMethodSourceTypeHint(Image, Evidence.MethodEntry);
+    const auto Expected = objcSelectorSourceTypeHintForForwardingUse(
+        Image, Binding.Selector, Evidence);
+    if (!ContainingFunction || !Evidence.MethodEntry ||
+        Evidence.MethodEntry != ContainingFunction->Entry ||
+        !ContainingFunction->SourceTypeHint || !Caller || !Expected ||
+        !objc_projection_detail::sameHint(*ContainingFunction->SourceTypeHint,
+                                          *Caller) ||
+        !objc_projection_detail::sameHint(Hint, *Expected) ||
+        ContainingFunction->Params.size() != Caller->Parameters.size() ||
+        Evidence.ArgumentSourceParameters.size() + 2 !=
+            Expression.Operands.size() ||
+        Evidence.ReceiverSourceParameter >= ContainingFunction->Params.size() ||
+        !exactParameterValue(Expression.Operands[0],
+                             Evidence.ReceiverSourceParameter))
+      return false;
+    for (size_t I = 0; I < ContainingFunction->Params.size(); ++I)
+      if (ContainingFunction->Params[I].Name != Caller->Parameters[I].Name ||
+          !equalSourceTypes(ContainingFunction->Params[I].Type,
+                            Caller->Parameters[I].Type))
+        return false;
+    for (size_t I = 0; I < Evidence.ArgumentSourceParameters.size(); ++I) {
+      const auto Parameter = Evidence.ArgumentSourceParameters[I];
+      if (Parameter >= ContainingFunction->Params.size() ||
+          !exactParameterValue(Expression.Operands[I + 2], Parameter))
+        return false;
+    }
   }
   if (Binding.ObjCIndirectResultStorage) {
     const auto &Evidence = *Binding.ObjCIndirectResultStorage;
@@ -3993,6 +4037,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
              !Binding.Receiver && !Binding.SelectorResultUse &&
              !Binding.SelectorResultTypeUse &&
              !Binding.SelectorArgumentTypeUse &&
+             !Binding.SelectorForwardingUse &&
              !Binding.SelectorArgumentStorageUse &&
              !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
              !Binding.ImmutablePointerSlot && !Format.FormatAddress &&
@@ -4172,7 +4217,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       return false;
   } else if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK ||
              (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCRuntime &&
-              Binding.SelectorResultUse && Binding.SelectorResultTypeUse)) {
+              ((Binding.SelectorResultUse && Binding.SelectorResultTypeUse) ||
+               Binding.SelectorForwardingUse))) {
     const auto Expected =
         Binding.SelectorResultUse
             ? objcSelectorSourceTypeHintForResultUse(
@@ -4181,6 +4227,9 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         : Binding.SelectorArgumentTypeUse
             ? objcSelectorSourceTypeHintForArgumentTypeUse(
                   Image, Binding.Selector, *Binding.SelectorArgumentTypeUse)
+        : Binding.SelectorForwardingUse
+            ? objcSelectorSourceTypeHintForForwardingUse(
+                  Image, Binding.Selector, *Binding.SelectorForwardingUse)
         : Binding.SelectorArgumentStorageUse
             ? objcSelectorSourceTypeHintForArgumentStorageUse(
                   Image, Binding.Selector, *Binding.SelectorArgumentStorageUse)

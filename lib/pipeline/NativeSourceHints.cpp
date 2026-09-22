@@ -80,7 +80,8 @@ bool stackCheckFailureBinding(const BinaryImage &Image, const MedOp &Op,
       !Binding.SwiftStringInputs.empty() || Binding.Format ||
       Binding.NilTerminated || Binding.SwiftTypeMetadata || Binding.Receiver ||
       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
-      Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+      Binding.SelectorArgumentTypeUse || Binding.SelectorForwardingUse ||
+      Binding.SelectorArgumentStorageUse ||
       Binding.ObjCIndirectResultStorage || Binding.ByteCount ||
       Binding.ImmutablePointerSlot)
     return false;

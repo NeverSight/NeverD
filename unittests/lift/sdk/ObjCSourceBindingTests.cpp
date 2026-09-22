@@ -5748,6 +5748,78 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     ExactSelectorForwardingIsRevalidatedAtPublication) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  ObjCMethod Caller;
+  Caller.ClassName = "DDLog";
+  Caller.IsClassMethod = true;
+  Caller.Selector = "setLevel:forClass:";
+  Caller.Implementation = 0x1200;
+  Caller.TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, "v32@0:8q16#24");
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+
+  SourceCallTypeHint::SelectorForwardingEvidence Use;
+  Use.MethodEntry = Caller.Implementation;
+  Use.ReceiverSourceParameter = 3;
+  Use.ArgumentSourceParameters = {2};
+  const auto Signature = objcSelectorSourceTypeHintForForwardingUse(
+      Image, "ddSetLogLevel:", Use);
+  ASSERT_TRUE(Signature);
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding->TargetName = "objc_msgSend";
+  Binding->Selector = "ddSetLogLevel:";
+  Binding->Signature = *Signature;
+  Binding->SelectorForwardingUse = Use;
+  const auto CallerSignature =
+      objcMethodSourceTypeHint(Image, Caller.Implementation);
+  ASSERT_TRUE(CallerSignature);
+  const auto Parameter = [&](unsigned Index) {
+    MedVar Value;
+    Value.Kind = MedVar::Param;
+    Value.Id = Index;
+    Value.Size = 8;
+    Value.TheArch = Image.Arch;
+    return HighExpr::makeVar(Value, CallerSignature->Parameters[Index].Type);
+  };
+  auto Call = HighExpr::makeCall(
+      "objc_msgSend", 0,
+      {Parameter(3), HighExpr::makeConst(0, 8), Parameter(2)});
+  Call->Type = Signature->ReturnType;
+  Call->SourceCallHint = Binding;
+  HighFunc Owner;
+  Owner.Entry = Caller.Implementation;
+  Owner.ReturnType = CallerSignature->ReturnType;
+  Owner.SourceTypeHint = *CallerSignature;
+  for (const auto &Source : CallerSignature->Parameters)
+    Owner.Params.push_back({Source.Name, Source.Type});
+
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+  const auto Rebuilt = objcSelectorSourceTypeHintForForwardingUse(
+      Image, Binding->Selector, *Binding->SelectorForwardingUse);
+  ASSERT_TRUE(Rebuilt);
+  EXPECT_TRUE(objc_projection_detail::sameHint(Binding->Signature, *Rebuilt));
+  EXPECT_EQ(Owner.Params.size(), CallerSignature->Parameters.size());
+  EXPECT_TRUE(objc_binding_detail::exactParameterValue(Call->Operands[0], 3));
+  EXPECT_TRUE(objc_binding_detail::exactParameterValue(Call->Operands[2], 2));
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Call->Operands[0] = Parameter(2);
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Call->Operands[0] = Parameter(3);
+  Call->Operands[2] = Parameter(3);
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+  Call->Operands[2] = Parameter(2);
+  Image.ObjCMethods.front().TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, "v32@0:8Q16#24");
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}, nullptr, nullptr, &Owner));
+}
+
+TEST(ObjCSourceBindings,
      ConflictingSelectorFrameStorageIsRevalidatedAtPublication) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
