@@ -169,9 +169,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
        !Hint.SwiftStringInputs.empty() || Hint.SwiftTypeMetadata ||
        Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
        Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
-       Hint.ByteCount || Hint.ImmutablePointerSlot ||
-       Hint.TargetName != "objc_msgSend" || Hint.Selector.empty() ||
-       !Hint.TargetAddress || !Hint.SelectorReferenceAddress ||
+       Hint.ObjCIndirectResultStorage || Hint.ByteCount ||
+       Hint.ImmutablePointerSlot || Hint.TargetName != "objc_msgSend" ||
+       Hint.Selector.empty() || !Hint.TargetAddress ||
+       !Hint.SelectorReferenceAddress ||
        Hint.Receiver->Origin !=
            ObjCReceiverTypeHint::OriginKind::ClassReference ||
        !Hint.Receiver->IsClassMethod || !Hint.Receiver->Steps.empty() ||
@@ -281,7 +282,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         Hint.Format || Hint.NilTerminated || Hint.SwiftTypeMetadata ||
         Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
         Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
-        Hint.ByteCount || Hint.ImmutablePointerSlot ||
+        Hint.ObjCIndirectResultStorage || Hint.ByteCount ||
+        Hint.ImmutablePointerSlot ||
         std::any_of(Signature.Parameters.begin(), Signature.Parameters.end(),
                     [](const auto &Parameter) {
                       return !Parameter.Type ||

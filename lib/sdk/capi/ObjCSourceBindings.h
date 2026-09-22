@@ -161,7 +161,8 @@ inline bool plainNativeBinding(const SourceCallTypeHint &Binding) {
          !Binding.NilTerminated && !Binding.SwiftTypeMetadata &&
          !Binding.Receiver && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
-         !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+         !Binding.SelectorArgumentStorageUse &&
+         !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot;
 }
 
@@ -200,7 +201,8 @@ inline bool runtimeBindingMatches(const SourceCallTypeHint &Binding,
          Binding.Selector.empty() && Binding.OwnerClass.empty() &&
          !Binding.SelectorReferenceAddress && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
-         !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+         !Binding.SelectorArgumentStorageUse &&
+         !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.SwiftTypeMetadata && !Binding.NilTerminated &&
          !Expected.NilTerminated &&
          bool(Binding.Format) == bool(Expected.Format) &&
@@ -1452,10 +1454,10 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
   const auto &Hint = *Expression.SourceCallHint;
   if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.Selector != Selector || Hint.Format || Hint.NilTerminated ||
-      Hint.SelectorResultUse ||
-      Hint.SelectorResultTypeUse || Hint.SelectorArgumentTypeUse ||
-      Hint.SelectorArgumentStorageUse || Hint.DoesNotReturn ||
-      Hint.WeakImport || Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
+      Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
+      Hint.SelectorArgumentTypeUse || Hint.SelectorArgumentStorageUse ||
+      Hint.ObjCIndirectResultStorage || Hint.DoesNotReturn || Hint.WeakImport ||
+      Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
       Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
       !Hint.SwiftStringInputs.empty() ||
       Expression.Operands.size() != Hint.Signature.Parameters.size() ||
@@ -3425,7 +3427,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
        !Binding.SwiftStringInputs.empty() || Binding.SwiftTypeMetadata ||
        Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
        Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
-       Binding.ByteCount || Binding.ImmutablePointerSlot))
+       Binding.ObjCIndirectResultStorage || Binding.ByteCount ||
+       Binding.ImmutablePointerSlot))
     return false;
   if ((Binding.ReturnedArgument || Binding.RuntimeObjCResultType) &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall)
@@ -3438,6 +3441,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   if (Binding.SelectorResultUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format ||
+       Binding.ObjCIndirectResultStorage ||
        (Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK &&
         !(Binding.SelectorResultTypeUse &&
           Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCRuntime))))
@@ -3452,13 +3456,27 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.SelectorArgumentStorageUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
+       Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
+    return false;
+  if (Binding.ObjCIndirectResultStorage &&
+      (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+       !Binding.Receiver || Binding.Format || Binding.NilTerminated ||
+       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
+       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
+       Binding.DoesNotReturn || Binding.WeakImport ||
+       Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
+       Binding.ValueWitness || !Binding.OwnerClass.empty() ||
+       !Binding.BorrowedByteInputs.empty() ||
+       !Binding.SwiftStringInputs.empty() || Binding.SwiftTypeMetadata ||
+       Binding.ByteCount || Binding.ImmutablePointerSlot))
     return false;
   if (Binding.Format &&
       Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage &&
@@ -3502,6 +3520,38 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                                    *ContainingFunction, Image.Arch);
     if (!Offset || *Offset != Evidence.FrameOffset)
       return false;
+  }
+  if (Binding.ObjCIndirectResultStorage) {
+    const auto &Evidence = *Binding.ObjCIndirectResultStorage;
+    const auto &Receiver = *Binding.Receiver;
+    const auto Caller = objcMethodSourceTypeHint(Image, Evidence.MethodEntry);
+    if (!ContainingFunction || !Evidence.MethodEntry || !Evidence.ByteCount ||
+        Evidence.MethodEntry != ContainingFunction->Entry ||
+        Receiver.Origin != ObjCReceiverTypeHint::OriginKind::MethodEntry ||
+        Receiver.Address != Evidence.MethodEntry || !Receiver.Steps.empty() ||
+        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK ||
+        Hint.ReturnLocation.Kind !=
+            SourceABICarrierKind::IndirectResultPointer ||
+        !Hint.ReturnType || Hint.ReturnType->Kind != NdTypeKind::Struct ||
+        Hint.ReturnType->Size != Evidence.ByteCount ||
+        !Hint.ReturnComponents.empty() ||
+        ContainingFunction->FrameSize <= 0 ||
+        Evidence.FrameOffset < -ContainingFunction->FrameSize ||
+        Evidence.FrameOffset > -static_cast<int64_t>(Evidence.ByteCount) ||
+        !ContainingFunction->SourceTypeHint || !Caller ||
+        !objc_projection_detail::sameHint(*ContainingFunction->SourceTypeHint,
+                                          *Caller) ||
+        ContainingFunction->Params.size() != Caller->Parameters.size() ||
+        !exactParameterValue(Expression.Operands[0], 0))
+      return false;
+    const auto Members = sourceAggregateMembers(Hint.ReturnType);
+    if (Members.empty())
+      return false;
+    for (size_t I = 0; I < ContainingFunction->Params.size(); ++I)
+      if (ContainingFunction->Params[I].Name != Caller->Parameters[I].Name ||
+          !equalSourceTypes(ContainingFunction->Params[I].Type,
+                            Caller->Parameters[I].Type))
+        return false;
   }
   if (Binding.ImmutablePointerSlot &&
       Binding.CallKind != SourceCallTypeHint::Kind::RuntimeConstantString &&
@@ -3943,7 +3993,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
              !Binding.Receiver && !Binding.SelectorResultUse &&
              !Binding.SelectorResultTypeUse &&
              !Binding.SelectorArgumentTypeUse &&
-             !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+             !Binding.SelectorArgumentStorageUse &&
+             !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
              !Binding.ImmutablePointerSlot && !Format.FormatAddress &&
              Format.AlternativeFormatAddresses.empty() &&
              (unsigned(Format.DynamicWithoutArguments) +
@@ -4108,7 +4159,10 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
   }
   if (Binding.Receiver) {
     const auto Expected =
-        Binding.CallKind == SourceCallTypeHint::Kind::ObjCSuper2
+        Binding.ObjCIndirectResultStorage
+            ? objcNonNilSelfSourceTypeHint(Image, Binding.Selector,
+                                           *Binding.Receiver)
+        : Binding.CallKind == SourceCallTypeHint::Kind::ObjCSuper2
             ? objcSuperSourceTypeHint(Image, Binding.Selector,
                                       *Binding.Receiver)
             : objcReceiverSourceTypeHint(Image, Binding.Selector,

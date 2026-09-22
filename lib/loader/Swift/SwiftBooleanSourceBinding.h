@@ -58,7 +58,8 @@ inline bool isSwiftBooleanSourceBinding(const SourceCallTypeHint &Binding) {
          !Binding.NilTerminated && !Binding.SwiftTypeMetadata &&
          !Binding.Receiver && !Binding.SelectorResultUse &&
          !Binding.SelectorResultTypeUse && !Binding.SelectorArgumentTypeUse &&
-         !Binding.SelectorArgumentStorageUse && !Binding.ByteCount &&
+         !Binding.SelectorArgumentStorageUse &&
+         !Binding.ObjCIndirectResultStorage && !Binding.ByteCount &&
          !Binding.ImmutablePointerSlot;
 }
 } // namespace neverd

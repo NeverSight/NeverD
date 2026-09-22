@@ -70,8 +70,8 @@ bool stackCheckFailureBinding(const BinaryImage &Image, const MedOp &Op,
       Binding.WeakImport || Import == Image.DyldBindSlots.end() ||
       Import->second.Module != "/usr/lib/libSystem.B.dylib" ||
       std::find(Image.DynInfo.NeededLibs.begin(),
-                Image.DynInfo.NeededLibs.end(), Import->second.Module) ==
-          Image.DynInfo.NeededLibs.end() ||
+                Image.DynInfo.NeededLibs.end(),
+                Import->second.Module) == Image.DynInfo.NeededLibs.end() ||
       Import->second.Name != "___stack_chk_fail" || Import->second.Addend ||
       Import->second.WeakImport || Binding.ValueWitness ||
       Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
@@ -81,7 +81,8 @@ bool stackCheckFailureBinding(const BinaryImage &Image, const MedOp &Op,
       Binding.NilTerminated || Binding.SwiftTypeMetadata || Binding.Receiver ||
       Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
       Binding.SelectorArgumentTypeUse || Binding.SelectorArgumentStorageUse ||
-      Binding.ByteCount || Binding.ImmutablePointerSlot)
+      Binding.ObjCIndirectResultStorage || Binding.ByteCount ||
+      Binding.ImmutablePointerSlot)
     return false;
   const auto Expected =
       darwinRuntimeSourceCallHint(Image, Binding.TargetAddress);

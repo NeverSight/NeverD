@@ -1485,6 +1485,43 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               SelectorArgumentTypeUse;
           std::optional<SourceCallTypeHint::SelectorArgumentStorageEvidence>
               SelectorArgumentStorageUse;
+          std::optional<SourceCallTypeHint::ObjCIndirectResultStorageEvidence>
+              ObjCIndirectResultStorage;
+          if (!Signature && Qualified && Receiver &&
+              Target->Name == "objc_msgSend" &&
+              Receiver->Origin ==
+                  ObjCReceiverTypeHint::OriginKind::MethodEntry &&
+              Receiver->Address == Function.Entry && Receiver->Steps.empty()) {
+            const auto NonNull = objcNonNilSelfSourceTypeHint(
+                Image, Target->Selector, *Receiver);
+            if (NonNull.HasDeclaration && !NonNull.RequiresGlobalAgreement &&
+                NonNull.Signature && NonNull.Signature->ReturnType &&
+                NonNull.Signature->ReturnLocation.Kind ==
+                    SourceABICarrierKind::IndirectResultPointer &&
+                NonNull.Signature->ReturnComponents.empty() &&
+                !sourceAggregateMembers(NonNull.Signature->ReturnType)
+                     .empty()) {
+              const auto Size = NonNull.Signature->ReturnType->Size;
+              const auto &Location = NonNull.Signature->ReturnLocation;
+              const auto Buffer = Read(
+                  NdVar::reg(Location.RegisterOffset, Location.ValueBytes));
+              const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
+              if (Size && Buffer && Stack &&
+                  Buffer->TheKind == Value::Kind::Frame &&
+                  Stack->TheKind == Value::Kind::Frame) {
+                const auto Offset = static_cast<int64_t>(Buffer->Number);
+                const auto StackOffset = static_cast<int64_t>(Stack->Number);
+                if (!State.FrameEscaped && Offset >= StackOffset &&
+                    Offset <= -static_cast<int64_t>(Size) &&
+                    State.typedFrameRangePrivate(Offset, Size)) {
+                  Signature = *NonNull.Signature;
+                  ObjCIndirectResultStorage =
+                      SourceCallTypeHint::ObjCIndirectResultStorageEvidence{
+                          Function.Entry, Offset, Size};
+                }
+              }
+            }
+          }
           if (!Signature && !Qualified)
             if (const auto Required =
                     localResultUse(Function, Index, OpIndex, TRI, Image)) {
@@ -1560,6 +1597,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Hint.SelectorResultTypeUse = SelectorResultTypeUse;
             Hint.SelectorArgumentTypeUse = SelectorArgumentTypeUse;
             Hint.SelectorArgumentStorageUse = SelectorArgumentStorageUse;
+            Hint.ObjCIndirectResultStorage = ObjCIndirectResultStorage;
             if (Qualified)
               Hint.Receiver = std::move(Receiver);
             BlockHints.emplace(Op.Addr, std::move(Hint));

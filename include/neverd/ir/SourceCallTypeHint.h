@@ -318,6 +318,18 @@ struct SourceCallTypeHint {
     int64_t FrameOffset = 0;
   };
   std::optional<SelectorArgumentStorageEvidence> SelectorArgumentStorageUse;
+  /// A non-null current-method self and the exact private frame range supplied
+  /// through Darwin's hidden indirect-result register. This admits an
+  /// Objective-C record result without changing selector-wide nil-dispatch
+  /// semantics. Publication revalidates the method entry, self operand, frame
+  /// bounds, and complete receiver-qualified declaration.
+  struct ObjCIndirectResultStorageEvidence {
+    va_t MethodEntry = 0;
+    int64_t FrameOffset = 0;
+    uint16_t ByteCount = 0;
+    bool operator==(const ObjCIndirectResultStorageEvidence &) const = default;
+  };
+  std::optional<ObjCIndirectResultStorageEvidence> ObjCIndirectResultStorage;
   /// RuntimeBorrowedBytes/RuntimeReadOnlyBytes extent at TargetAddress.
   uint32_t ByteCount = 0;
   /// Constant strings/objects: the immutable relocated slot whose loaded

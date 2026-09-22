@@ -470,9 +470,12 @@ struct ReceiverType {
   bool IncludeSubclasses = false;
 };
 
-ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
-                                            llvm::StringRef Selector,
-                                            const ReceiverType &Type);
+enum class ReceiverResultMode { ObjCNilDispatch, ProvenNonNullSelf };
+
+ObjCReceiverDeclaration receiverDeclaration(
+    const BinaryImage &Image, llvm::StringRef Selector,
+    const ReceiverType &Type,
+    ReceiverResultMode ResultMode = ReceiverResultMode::ObjCNilDispatch);
 
 std::optional<ReceiverType> receiverType(const BinaryImage &Image,
                                          const ObjCReceiverTypeHint &Receiver) {
@@ -561,7 +564,8 @@ std::optional<std::string> declaredReturnClass(llvm::StringRef Encoding) {
 
 ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
                                             llvm::StringRef Selector,
-                                            const ReceiverType &Type) {
+                                            const ReceiverType &Type,
+                                            ReceiverResultMode ResultMode) {
   ObjCReceiverDeclaration Result;
   bool Complete = true;
   bool KnownScope = true;
@@ -575,7 +579,11 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
     }
     auto Hint = *Signature;
     std::string Diagnostic;
-    if (!assignDarwinObjCSourceABI(Hint, Image.Arch, Diagnostic) ||
+    const bool Assigned =
+        ResultMode == ReceiverResultMode::ProvenNonNullSelf
+            ? assignDarwinFixedSourceABI(Hint, Image.Arch, Diagnostic)
+            : assignDarwinObjCSourceABI(Hint, Image.Arch, Diagnostic);
+    if (!Assigned ||
         (Result.Signature && !mergeSignature(*Result.Signature, Hint))) {
       Complete = false;
       return;
@@ -729,6 +737,18 @@ objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
                            const ObjCReceiverTypeHint &Receiver) {
   const auto Type = receiverType(Image, Receiver);
   return Type ? receiverDeclaration(Image, Selector, *Type)
+              : ObjCReceiverDeclaration{true, std::nullopt};
+}
+
+ObjCReceiverDeclaration
+objcNonNilSelfSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
+                             const ObjCReceiverTypeHint &Receiver) {
+  if (Receiver.Origin != ObjCReceiverTypeHint::OriginKind::MethodEntry ||
+      !Receiver.Steps.empty())
+    return {};
+  const auto Type = receiverType(Image, Receiver);
+  return Type ? receiverDeclaration(Image, Selector, *Type,
+                                    ReceiverResultMode::ProvenNonNullSelf)
               : ObjCReceiverDeclaration{true, std::nullopt};
 }
 

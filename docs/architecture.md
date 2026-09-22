@@ -341,8 +341,13 @@ caller-owned storage. Ordinary arguments keep their original registers; x0 is
 still clobbered and does not acquire a result. Call-hint discovery invalidates
 facts about escaped result storage. Entry projection and native preservation
 proofs reject these indirect results until their own storage proofs exist;
-Objective-C indirect results remain rejected: nil message dispatch leaves the
-original result buffer untouched and needs its own storage model.
+Objective-C indirect results remain rejected by selector-wide and ordinary
+receiver lookup because nil message dispatch leaves the original result buffer
+untouched. One receiver-qualified ARM64 call may use the fixed record ABI when
+the receiver is exactly the current method's non-null self and x8 names the
+complete, private, unescaped frame range. Source publication revalidates the
+method entry, self operand, receiver declaration, record size and frame bounds;
+missing or changed evidence leaves the message unresolved.
 Three-word records with unsigned or pointer fields, three-word parameters and
 x86_64 indirect results remain unsupported.
 Padding, packed fields, mixed floating/integer classes and incomplete components

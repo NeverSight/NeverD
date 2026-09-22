@@ -54,7 +54,10 @@ Catalog buildCatalog(Arch Architecture) {
     std::string Diagnostic;
     if (Signature) {
       Signature->Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
-      if (!assignDarwinObjCSourceABI(*Signature, Architecture, Diagnostic))
+      // Retain fixed-ABI indirect results in the owner-qualified catalog.
+      // Ordinary Objective-C lookup still rejects them; a call-site proof of
+      // non-null self and private result storage may request them separately.
+      if (!assignDarwinFixedSourceABI(*Signature, Architecture, Diagnostic))
         Signature.reset();
     }
     Framework.Owners[{Kind, Name, Category}]

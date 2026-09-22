@@ -62,6 +62,14 @@ ObjCReceiverDeclaration
 objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
                            const ObjCReceiverTypeHint &Receiver);
 
+/// Resolve a receiver-qualified declaration using the ordinary fixed Darwin
+/// ABI when the exact receiver is the current method's non-null self. This is
+/// only declaration evidence: callers must separately prove and publish the
+/// hidden indirect-result storage at the call site.
+ObjCReceiverDeclaration
+objcNonNilSelfSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
+                             const ObjCReceiverTypeHint &Receiver);
+
 /// Resolve an instance super dispatch from the exact current-class reference
 /// stored in struct objc_super. The referenced local class must have a complete
 /// superclass edge; declarations are searched from that superclass only, so

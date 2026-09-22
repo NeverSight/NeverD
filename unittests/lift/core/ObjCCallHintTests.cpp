@@ -8,6 +8,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedNoReturn.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -7844,6 +7845,149 @@ TEST(ObjCCallHints, IndirectMessageResultsRequireNilStorageModeling) {
   // record result does not supply that dispatch-specific storage behavior.
   EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "operatingSystemVersion"));
   EXPECT_TRUE(buildObjCSourceCallHints(Image, caller()).empty());
+}
+
+namespace {
+LowFunc nonNullSelfIndirectResultCaller() {
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "-[NSProcessInfo neverd_versionAtLeast:]";
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto Stack = NdVar::reg(TRI.StackPointer, 8);
+  const auto Buffer = NdVar::reg(TRI.indirectResultReg(), 8);
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1220;
+  Block.Ops = {
+      operation(NdOp::INT_SUB, Stack, {Stack, NdVar::cst(64, 8)}, 0x1200),
+      operation(NdOp::INT_ADD, Buffer, {Stack, NdVar::cst(8, 8)}, 0x1204),
+      operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1208),
+      operation(NdOp::INT_ADD, NdVar::tmp(0, 8), {Stack, NdVar::cst(8, 8)},
+                0x120c),
+      operation(NdOp::LOAD, NdVar::tmp(1, 8), {NdVar::tmp(0, 8)}, 0x1210),
+      operation(NdOp::INT_EQUAL, NdVar::reg(TRI.IntReturnReg, 4),
+                {NdVar::tmp(1, 8), NdVar::cst(1, 8)}, 0x1214),
+      operation(NdOp::INT_ADD, Stack, {Stack, NdVar::cst(64, 8)}, 0x1218),
+      operation(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 4)}, 0x121c)};
+  Function.Blocks.push_back(std::move(Block));
+  return Function;
+}
+
+BinaryImage nonNullSelfIndirectResultImage() {
+  auto Image = image(Arch::AArch64);
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  Image.ObjCSourceReferences.at(0x2100).Name = "operatingSystemVersion";
+  Image.ObjCMethods.clear();
+  ObjCMethod Method;
+  Method.Status = "supported";
+  Method.ClassName = "NSProcessInfo";
+  Method.Selector = "neverd_hasVersion";
+  Method.Implementation = 0x1200;
+  Method.TypeHint = parseObjCMethodEncoding(Method.Selector, "B16@0:8");
+  Image.ObjCMethods.push_back(std::move(Method));
+  return Image;
+}
+} // namespace
+
+TEST(ObjCCallHints,
+     NonNullMethodSelfAndPrivateFrameAdmitIndirectMessageResult) {
+  auto Image = nonNullSelfIndirectResultImage();
+  const auto Receiver = objcMethodReceiverTypeHint(Image, 0x1200);
+  ASSERT_TRUE(Receiver);
+  const auto Ordinary =
+      objcReceiverSourceTypeHint(Image, "operatingSystemVersion", *Receiver);
+  EXPECT_TRUE(Ordinary.HasDeclaration);
+  EXPECT_FALSE(Ordinary.Signature);
+  const auto NonNull =
+      objcNonNilSelfSourceTypeHint(Image, "operatingSystemVersion", *Receiver);
+  ASSERT_TRUE(NonNull.Signature);
+  EXPECT_EQ(NonNull.Signature->ReturnLocation.Kind,
+            SourceABICarrierKind::IndirectResultPointer);
+
+  const auto Low = nonNullSelfIndirectResultCaller();
+  const auto Hints = buildObjCSourceCallHints(Image, Low);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1208);
+  ASSERT_TRUE(Hint.Receiver);
+  ASSERT_TRUE(Hint.ObjCIndirectResultStorage);
+  EXPECT_EQ(Hint.ObjCIndirectResultStorage->MethodEntry, 0x1200U);
+  EXPECT_EQ(Hint.ObjCIndirectResultStorage->FrameOffset, -56);
+  EXPECT_EQ(Hint.ObjCIndirectResultStorage->ByteCount, 24U);
+  EXPECT_EQ(Hint.Signature.ReturnType->Size, 24U);
+
+  const auto EntryHint = objcMethodSourceTypeHint(Image, Low.Entry);
+  ASSERT_TRUE(EntryHint);
+  std::map<va_t, SourceFunctionTypeHint> EntryHints{{Low.Entry, *EntryHint}};
+  LowToMedConverter LowConverter;
+  LowConverter.setBinaryImage(&Image);
+  LowConverter.setSourceEntryTypeHints(&EntryHints);
+  LowConverter.setSourceCallHintsEnabled(true);
+  auto Med = LowConverter.convert(Low, Image.Arch, BinaryFormat::MachO);
+  Med.SourceTypeHint = *EntryHint;
+  inferMedTypes(Med, Image.Arch);
+  ASSERT_TRUE(Med.SourceTypeHint);
+  recoverCallAbi(Med, Image.Arch, {}, &Image);
+  ASSERT_TRUE(Med.SourceTypeHint);
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  ASSERT_TRUE(Med.CallInfos.front().SourceCallHint);
+  MedToHighConverter Converter;
+  Converter.setBinaryImage(&Image);
+  const auto High = Converter.convert(Med, Image.Arch);
+  const auto *Expression = sourceCall(High);
+  ASSERT_NE(Expression, nullptr);
+  ASSERT_TRUE(High.SourceTypeHint);
+  ASSERT_EQ(High.Params.size(), High.SourceTypeHint->Parameters.size());
+  ASSERT_EQ(Expression->Operands.size(), 2U);
+  EXPECT_TRUE(
+      sdk::objc_binding_detail::exactParameterValue(Expression->Operands[0], 0))
+      << Expression->Operands[0]->str();
+  EXPECT_GT(High.FrameSize, 0);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}, nullptr, nullptr,
+                                       &High));
+
+  auto BadFunction = High;
+  BadFunction.FrameSize = 16;
+  EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Image, {}, nullptr,
+                                        nullptr, &BadFunction));
+  auto BadExpression = *Expression;
+  BadExpression.Operands[0] = HighExpr::makeConst(1, 8);
+  EXPECT_FALSE(sdk::objcSourceCallBound(BadExpression, Image, {}, nullptr,
+                                        nullptr, &High));
+}
+
+TEST(ObjCCallHints, IndirectMessageResultRejectsMissingCallSiteProofs) {
+  const auto BaseImage = nonNullSelfIndirectResultImage();
+  const auto Base = nonNullSelfIndirectResultCaller();
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = BaseImage;
+    auto Low = Base;
+    auto &Ops = Low.Blocks.front().Ops;
+    if (Mutation == 0)
+      Ops.insert(Ops.begin() + 1,
+                 operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                           {NdVar::cst(0, 8)}, 0x1202));
+    if (Mutation == 1)
+      Ops[1] = operation(NdOp::COPY, NdVar::reg(TRI.indirectResultReg(), 8),
+                         {NdVar::cst(0x2000, 8)}, 0x1204);
+    if (Mutation == 2) {
+      Ops[0].Inputs[1] = NdVar::cst(16, 8);
+      Ops[6].Inputs[1] = NdVar::cst(16, 8);
+    }
+    if (Mutation == 3)
+      Ops.insert(Ops.begin() + 2,
+                 operation(NdOp::STORE, {},
+                           {NdVar::reg(TRI.IntParamRegs[3], 8),
+                            NdVar::reg(TRI.indirectResultReg(), 8)},
+                           0x1206));
+    if (Mutation == 4)
+      Image.ObjCMethods.front().ClassName = "NSString";
+    EXPECT_TRUE(buildObjCSourceCallHints(Image, Low).empty());
+  }
 }
 
 TEST(ObjCCallHints, FrameSelectorsRejectEscapesOverwritesAndUnknownCalls) {
