@@ -12,6 +12,7 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelIO.cpp
   windows/KernelModelMDL.cpp
   windows/KernelModelRuntime.cpp
+  windows/KernelRegistry.cpp
   LINK_COMPONENTS Loader
   LINK_LIBS unicorn)
 if(WIN32)

@@ -57,6 +57,12 @@ Use the
 codes. Production builds may enable this feature with `BUILD_TESTING=OFF`;
 test-only Unicorn configuration must not be required by `libneverd`.
 
+Additional fixtures cover driver-owned nonpaged pool MDLs, independent descriptor
+and buffer lifetimes, registry query layouts and short buffers, handle rights,
+deletion and leaks, and full-width `information_hex` for zero-output IOCTLs.
+External acceptance also covers Zero synchronous direct reads/writes and
+statistics queries.
+
 ## Test layout
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every

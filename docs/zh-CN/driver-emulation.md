@@ -34,18 +34,21 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 兼容性由实际执行的代码路径及其依赖决定，而非由 `.sys` 扩展名决定。目前的验收证据涵盖原创的独立测试样例，以及 Microsoft SIOCTL WDM 示例的 buffered、in-direct 和 out-direct 路径，包括其调试日志构建；这并不代表与任意第三方驱动兼容。
 
+验收还覆盖 Pavel Yosifovich 未修改的 Zero WDM 示例，包括 direct READ/WRITE、原子统计计数及统计 IOCTL。
+
 | 驱动类别或要求 | 当前范围 | 缺少的环境 |
 |----------------|----------|------------|
 | 使用下列 API 的 x64 软件 WDM 驱动 | 初始化与同步文件生命周期 | 每个额外执行到的 API 都必须具有明确的模型 |
 | `METHOD_BUFFERED` IOCTL | 支持独立文件身份与交错请求 | 尚不支持异步完成 |
-| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL 及系统映射 | 驱动自行分配的 MDL、物理页身份、DMA 及用户映射 |
+| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL 及系统映射 | 物理页身份、DMA 及用户映射 |
+| 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
 | 同步 READ/WRITE | 根据设备标志选择 buffered 或 direct | Neither I/O、隐式文件位置选择及异步完成 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
 | KMDF / UMDF 驱动 | 不支持 | 框架绑定、对象、队列、回调及相应宿主运行时 |
 | PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 使用工作线程、定时器、DPC、APC、等待或取消的驱动 | 不支持 | 调度、IRQL 转换、同步与异步所有权 |
-| 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 下列 API 以外的行为不支持 | 对象管理器、系统状态以及回调／事件产生机制 |
+| 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
 | 硬件、DMA、PCI、中断或虚拟化驱动 | 不支持所需环境 | 设备模型、物理内存、总线、中断及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
 | 需要 CFG、不支持的加载配置、TLS 或其他被拒绝的 PE 特性的 x64 映像 | 加载时拒绝 | 针对这些要求的明确加载器／运行时语义 |
@@ -74,7 +77,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 带长度的 UTF-16 复制及区分大小写比较；不区分大小写的比较需要 Windows 大小写表，因此会停止 |
 | `ExAllocatePool2` | 分页／非分页 NX 分配，默认清零；支持未初始化与缓存行对齐标志；无效的必需标志返回 NULL，配额／可执行池以及分配失败引发异常的路径会停止 |
 | `MmGetSystemRoutineAddress` | 通过共享导出清单解析带长度的来宾名称 |
-| `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 请求拥有的 MDL、KernelMode 缓存系统映射、明确权限与生命周期；复用已有的安全映射 |
+| `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 请求拥有的 MDL 支持 KernelMode 缓存映射及权限；非分页池 MDL 通过安全辅助函数复用原始池映射 |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 独立描述符，完整范围须位于同一个有效非分页池分配内；描述符与缓冲区具有独立生命周期，不支持 IRP 关联、MDL 链或配额 |
+| `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 显式配置的会话注册表、逐句柄权限与生命周期、查询缓冲区大小及修改；不访问宿主注册表 |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | 对池类型 `0`、`1`、`512` 提供数据分配；大小／标签必须为正，带标签释放必须匹配，地址不复用 |
 | `IoCreateDevice`、`IoDeleteDevice` | 设备类型为 `0x22`，characteristics 为 `0` 或 `0x100`，扩展大小有界，名称为 ASCII `\Device\Name` |
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一个会话命名空间内的 ASCII `\DosDevices\Name` 或 `\??\Name`，目标为 `\Device\Name` |
@@ -117,9 +122,13 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 可选根字段 `"load_address": "0x190000000"` 请求更改加载基址；省略该字段或指定 `"0x0"` 时使用首选地址。映像必须满足重定位要求。原有的初始化命令或 C API 不会隐式执行任何请求场景。
 
-根对象仅接受 `load_address`、`requests`、`unload` 和 `kernel_exports`。所有请求均接受 `kind`、可选的 `device` 和可选的 `file`。IOCTL 必须提供 `code`，并接受 `input`、`output_size` 和 `direct_input`。`read` 接受 `output_size` 和 `byte_offset`；`write` 接受 `input` 和 `byte_offset`。偏移默认为零，接受整数或十六进制字符串，且必须位于有符号 64 位整数的非负范围内。生命周期请求拒绝传输字段。未知或重复字段会被拒绝。`code` 接受无符号 32 位 JSON 整数或 `0x` 十六进制字符串。`input` 是长度为偶数且不带前缀或空格的十六进制字节字符串；省略表示空输入。`output_size` 为无符号 JSON 整数，省略表示零。不接受小数以及浮点数写法。
+根对象仅接受 `load_address`、`requests`、`unload`、`kernel_exports` 和 `registry`。所有请求均接受 `kind`、可选的 `device` 和可选的 `file`。IOCTL 必须提供 `code`，并接受 `input`、`output_size` 和 `direct_input`。`read` 接受 `output_size` 和 `byte_offset`；`write` 接受 `input` 和 `byte_offset`。偏移默认为零，接受整数或十六进制字符串，且必须位于有符号 64 位整数的非负范围内。生命周期请求拒绝传输字段。未知或重复字段会被拒绝。`code` 接受无符号 32 位 JSON 整数或 `0x` 十六进制字符串。`input` 是长度为偶数且不带前缀或空格的十六进制字节字符串；省略表示空输入。`output_size` 为无符号 JSON 整数，省略表示零。不接受小数以及浮点数写法。
 
 对于 direct IOCTL，`input` 初始化第一个系统缓冲区，`direct_input` 初始化由 MDL 描述的独立第二缓冲区，并补零至 `output_size`。`METHOD_IN_DIRECT` 要求可读访问，但不意味着系统映射为只读。两种方法都使用可读写的场景缓冲区。`MdlMappingNoWrite` 移除映射的写权限，`MdlMappingNoExecute` 移除执行权限。解除映射会撤销系统虚拟地址；重新映射保留同一份锁定数据。请求完成时 MDL 和映射均失效。模型支持 WDM 宏使用的公共 MDL 字段；进程／PFN 字段、手工构造的 MDL、用户映射以及通过原始 UserBuffer 直接访问都会被拒绝。零长度 direct 缓冲区的 MDL 为空。
+
+`IoAllocateMdl` 为非空、不溢出且不超过 1 MiB 的缓冲区分配独立元数据，不探测或锁定缓冲区。`Irp` 必须为 NULL，`SecondaryBuffer` 和 `ChargeQuota` 必须为 FALSE；对象区耗尽时返回 NULL。`MmBuildMdlForNonPagedPool` 要求完整描述范围位于同一个有效非分页池分配内。安全辅助函数及常规 WDM 宏复用原始地址，保留别名关系与既有权限，即使再次传入禁止写入／执行标志也不改变权限。额外系统映射和解除映射会被拒绝。`IoFreeMdl` 仅使描述符失效，池缓冲区有独立生命周期；只要不再使用已释放的存储，两种释放顺序均受支持。所有建模 MDL 字段均为只读；进程／PFN 访问、描述符链和手工修改字段仍不受支持。卸载前必须释放所有驱动拥有的描述符。
+
+当 IOCTL 的 `output_size` 非零时，`Information` 不得超过该大小，即使输入缓冲区更大。无输出缓冲区的 IOCTL 可在此字段返回驱动自定义结果，且不会复制输出字节；`information_hex` 精确保留原始 64 位值。
 
 对于 READ/WRITE，`DO_BUFFERED_IO` 或 `DO_DIRECT_IO` 决定传输方法。Neither 或冲突的标志会停止执行。Information 按传输长度检查；write 返回计数，read 返回字节。
 
@@ -127,6 +136,18 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 `IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 头文件辅助函数；模型默认不会据此声明它们是导出项，其导出可用性需要静态导入或显式 `kernel_exports` 声明。
 
 场景文本上限为 2 MiB，最多包含 64 个请求，每个输入或输出缓冲区最多 65536 字节，请求总字节数最多 512 KiB，包括 `direct_input` 内容。指令、观察事件、来宾内存和时间预算覆盖整个场景。1 MiB 区域还需存放对象与元数据，因此即使尚未用尽场景缓冲区总额度，也可能耗尽模型内存。
+
+## 注册表场景
+
+可选的 `registry` 数组定义具体的会话内注册表树。每个键必须提供 `path`，可选提供 `values` 数组；每个值包含 `name`、无符号整数 `type` 和十六进制 `data`。空名称表示默认值。例如 DWORD 值为 `{"name":"Mode","type":4,"data":"01000000"}`。值字节原样保留，不修复字符串终止符或展开环境变量。
+
+路径必须是 `\Registry\Machine` 或 `\Registry\User` 下的绝对 ASCII 路径；祖先键自动建立。键和值按 ASCII 规则忽略大小写比较；拒绝非 ASCII 名称和重复身份。省略配置表示可用性未指定，注册表调用会停止。`"registry": []` 显式表示空命名空间。不根据驱动推断任何键、值、宿主注册表数据或服务配置。
+
+`ZwOpenKey` 和 `ZwCreateKey` 返回独立的不透明句柄，逐句柄检查查询、设置、子键创建及删除权限。配置树授予受支持的 `KEY_ALL_ACCESS` 位，包括普通 `KEY_READ` 和 `KEY_WRITE` 掩码。这是显式可访问的测试树，不实现 Windows ACL 或权限提升判断。通用权限、`MAXIMUM_ALLOWED`、其他注册表视图、自定义安全描述符、类及符号链接均不受支持。相对创建要求具有 `KEY_CREATE_SUB_KEY` 的直接父键句柄。输入键为非易失键，新建键可以为易失键；拒绝在易失父键下创建非易失子键。不模拟重启或磁盘持久化。
+
+`ZwQueryValueKey` 实现 Basic、Full、Partial 及其有定义的 Align64 信息类，包括精确长度、对齐数据、部分输出，以及不同的 `STATUS_BUFFER_TOO_SMALL`／`STATUS_BUFFER_OVERFLOW` 结果。`ZwSetValueKey` 和 `ZwDeleteValueKey` 只修改当前会话的树。`ZwDeleteKey` 拒绝删除仍有子键的键；已删除键的句柄在关闭前返回 `STATUS_KEY_DELETED`。`ZwClose` 独立释放句柄而不删除键；请求卸载时若仍有打开的注册表句柄则失败。
+
+限制为含祖先在内的 256 个键、总计 1024 个值、每值 65536 字节、值数据总计 512 KiB、键路径 1024 个 ASCII 字节、值名 256 字节及同时打开 256 个句柄。创建和修改遵守与场景预检相同的限制。报告的 `configuration.registry` 保留原始输入；`registry` 列出最终存活的键路径和值，包括停止前已观察到的修改。未指定注册表时报告 null。此值快照不包含易失属性及句柄身份。
 
 ## Microsoft 示例验收检查
 
@@ -140,11 +161,15 @@ python3 scripts/validate_windows_driver_sample.py \
 
 非默认 MinGW-w64 包含目录可通过 `--headers` 指定。脚本根据已编译对象的依赖生成 MS COFF 导入库。检查分别运行 buffered、in-direct 和 out-direct 场景，经过 DriverEntry、create、IOCTL、cleanup、close 和 unload。添加 `--debug` 并选择独立输出目录，可以使用 `DBG=1` 编译并验证来宾日志消息。上游示例没有注册 cleanup 处理函数，因此模型默认处理函数以 `STATUS_INVALID_DEVICE_REQUEST`（`0xC0000010`）完成 cleanup。驱动仍会关闭并卸载，成功的 IOCTL 则返回预期字节。对于这个完整场景，CLI 的预期退出码为 **2**，`scenario_success` 为 false。脚本仅在所有结果均符合预期时成功，包括可见的 cleanup 失败；它不会改写示例来隐藏该结果。
 
+## Zero 示例验收检查
+
+额外的 [Zero 验证脚本](../../scripts/validate_zero_driver_sample.py)按[清单](../../unittests/emulation/fixtures/zero-validation.json)固定的版本及哈希构建 Pavel Yosifovich 未修改的公开 Zero WDM 示例。使用相同工具链运行 `python3 scripts/validate_zero_driver_sample.py`。默认在 `build-release/driver-validation/zero` 保留源码、MIT 许可证、命令、场景及报告。九个请求覆盖跨页 direct read、write 计数、来宾原子统计和 buffered 统计 IOCTL。示例的零长度 read 失败及缺失 CLEANUP 处理函数仍可见；预期 CLI 退出码为 2，随后成功 close 和 unload。仅当这些结果及全部输出字节精确匹配时，验证脚本才成功。
+
 ## 报告与 SDK
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-synchronous-v2`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information` 和 `output_hex`。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-synchronous-v2`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 可为空的 `fault` 对象保留后端首次故障。其 `kind`、`pc`、可为空的 `address`、`size`、`access` 和 `interrupt` 区分未映射或受保护内存、无效范围、无效指令及 CPU 异常。地址使用十六进制字符串；大小和中断向量使用整数。用于观察的读取不能替换原始故障。发生故障的后端不能恢复执行，此记录也不意味着支持来宾 SEH 处理。
 

@@ -43,6 +43,8 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動作、メモリフォールト、厳格なシナリオ解析、予算内の実行、および create、転送、cleanup、close、unload を通る同期バッファード／ダイレクト I/O、READ/WRITE、独立したファイルの寿命、MDL の権限、動的エクスポート、ゲスト可変引数、構造化 CPU フォールトを検証します。[`emulate-driver` CLI](driver-emulation.md) で JSON とプロセスの終了コードを確認してください。製品ビルドは `BUILD_TESTING=OFF` でもこの機能を有効にできます。`libneverd` がテスト専用の Unicorn 構成を必要としてはなりません。
 
+追加テストでは、ドライバー所有の非ページプール MDL、記述子とバッファーの独立した寿命、レジストリ問い合わせの配置と短いバッファー、ハンドル権限、削除とリーク、および出力のない IOCTL の完全な64ビット `information_hex` を検証します。実際のサンプル検証には Zero の同期直接読み書きと統計問い合わせも含まれます。
+
 ## テスト構成
 
 `add_neverd_unittest` は GoogleTest 実行ファイルを 1 つ作り、検出した各ケースに

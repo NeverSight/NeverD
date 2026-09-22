@@ -55,6 +55,8 @@ verificare il JSON e i codici di uscita dei processi. Le build di produzione
 possono abilitare questa funzionalità con `BUILD_TESTING=OFF`; `libneverd` non
 deve richiedere una configurazione Unicorn riservata ai test.
 
+I test aggiuntivi coprono MDL del pool non paginato appartenenti al driver, durate indipendenti di descrittore e buffer, strutture di interrogazione del registro e buffer corti, diritti degli handle, eliminazioni e perdite, oltre ai 64 bit completi di `information_hex` per gli IOCTL senza output. La convalida esterna include anche letture/scritture dirette sincrone e statistiche di Zero.
+
 ## Organizzazione dei test
 
 `add_neverd_unittest` crea un eseguibile GoogleTest e assegna a ogni caso

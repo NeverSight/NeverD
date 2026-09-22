@@ -395,6 +395,8 @@ conserve la première cause structurée d’un défaut ; l’observation et les 
 ne reprennent pas une CPU en défaut et n’impliquent aucune gestion des exceptions
 Windows.
 
+Le modèle Windows gère aussi les MDL autonomes de pool non paginé : libérer le descripteur ne libère pas le tampon sous-jacent. Un modèle de registre distinct gère l’arbre explicite du scénario, les droits des handles et la durée de vie des clés et valeurs, indépendamment de l’inventaire des exports. La préparation et l’exécution partagent les mêmes règles de validation. Le rapport conserve les valeurs finales et le déchargement vérifie les handles encore ouverts.
+
 ## Frontières de réécriture des exceptions
 
 Le compact unwind Mach-O dispose d’un parser strict du `__unwind_info` original,

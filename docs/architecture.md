@@ -457,6 +457,19 @@ dynamic routine lookups. Export availability is separate from implementation:
 explicit absence resolves to NULL, a present unmodeled routine binds to a trap,
 and unspecified dynamic availability stops. The request model owns independent
 file identities and request-owned MDLs, including mapping permissions and expiry.
+The same MDL authority also owns standalone driver descriptors: nonpaged pool
+provenance is recorded by pool allocation, building a descriptor retains the
+original pool VA, and descriptor release never frees or remaps its backing
+buffer. Physical page identities, MDL chains and IRP association remain
+unmodeled.
+
+`KernelRegistry` owns the explicitly configured session tree, per-handle access
+rights and lifetime, value serialization, and mutations. Scenario preflight and
+runtime operations share its validation limits. The model does not consult a
+host registry; reports distinguish original configuration from the final live
+key/value snapshot. Closing a registry handle does not delete its key, and
+requested unload rejects leaked handles.
+
 The runtime reads guest varargs through the session's checked Win64 argument
 reader. Backend faults retain their first structured cause; observation and
 reporting do not resume a faulted CPU or imply Windows exception handling.

@@ -1,5 +1,12 @@
 LIBRARY ntoskrnl.exe
 EXPORTS
+  ZwOpenKey
+  ZwCreateKey
+  ZwQueryValueKey
+  ZwSetValueKey
+  ZwDeleteValueKey
+  ZwDeleteKey
+  ZwClose
   RtlInitUnicodeString
   ExAllocatePoolWithTag
   ExFreePoolWithTag
@@ -11,6 +18,11 @@ EXPORTS
   ZwOpenFile
   MmMapLockedPagesSpecifyCache
   MmUnmapLockedPages
+  IoAllocateMdl
+  IoFreeMdl
+  MmBuildMdlForNonPagedPool
+  MmGetSystemAddressForMdlSafe
+  ExAllocatePool2
   DbgPrint
   DbgPrintEx
   MmGetSystemRoutineAddress

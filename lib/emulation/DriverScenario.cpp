@@ -13,6 +13,7 @@
 
 #include "windows/WindowsKernelLayout.h"
 
+#include "neverd/emulation/DriverReportFields.h"
 #include "neverd/emulation/DriverSession.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -221,9 +222,62 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
   return Result;
 }
 
+llvm::Expected<std::vector<DriverRegistryKey>>
+registry(const llvm::json::Value &Value) {
+  const auto *Keys = Value.getAsArray();
+  if (!Keys || Keys->size() > MaxRegistryKeys)
+    return invalid("registry must be a bounded array of keys");
+  std::vector<DriverRegistryKey> Result;
+  for (const auto &KeyValue : *Keys) {
+    const auto *Key = KeyValue.getAsObject();
+    if (!Key)
+      return invalid("each registry key must be an object");
+    if (auto E = fields(*Key, {field::Path, field::Values}))
+      return std::move(E);
+    auto Path = Key->getString(field::Path);
+    if (!Path)
+      return invalid("registry key path must be a string");
+    DriverRegistryKey Entry;
+    Entry.Path = Path->str();
+    if (const auto *ValuesValue = Key->get(field::Values)) {
+      const auto *Values = ValuesValue->getAsArray();
+      if (!Values || Values->size() > MaxRegistryValues)
+        return invalid("registry values must be a bounded array");
+      for (const auto &Item : *Values) {
+        const auto *Object = Item.getAsObject();
+        if (!Object)
+          return invalid("each registry value must be an object");
+        if (auto E = fields(*Object, {field::Name, field::Type, field::Data}))
+          return std::move(E);
+        auto Name = Object->getString(field::Name);
+        const auto *TypeValue = Object->get(field::Type);
+        auto Type = TypeValue ? TypeValue->getAsUINT64() : std::nullopt;
+        auto Data = Object->getString(field::Data);
+        if (!Name || !Type || *Type > UINT32_MAX || !Data ||
+            Data->size() > MaxRegistryValueBytes * 2 || Data->size() % 2 ||
+            !std::all_of(Data->begin(), Data->end(), llvm::isHexDigit))
+          return invalid("registry values require name, unsigned type and "
+                         "bounded hexadecimal data");
+        DriverRegistryValue Value;
+        Value.Name = Name->str();
+        Value.Type = static_cast<uint32_t>(*Type);
+        Value.Data.reserve(Data->size() / 2);
+        for (size_t I = 0; I < Data->size(); I += 2)
+          Value.Data.push_back((llvm::hexDigitValue((*Data)[I]) << 4) |
+                               llvm::hexDigitValue((*Data)[I + 1]));
+        Entry.Values.push_back(std::move(Value));
+      }
+    }
+    Result.push_back(std::move(Entry));
+  }
+  return Result;
+}
+
 } // namespace
 
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
+  if (auto E = validateDriverRegistry(Options.Registry))
+    return invalid(llvm::toString(std::move(E)));
   if (Options.Requests.size() > DriverScenarioRequestLimit)
     return invalid("at most 64 requests are permitted");
   uint64_t Total = 0;
@@ -292,6 +346,12 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     return invalid("root must be an object");
   if (auto E = fields(*Object, RootFields))
     return std::move(E);
+  if (const auto *Registry = Object->get(RegistryField)) {
+    auto ParsedRegistry = registry(*Registry);
+    if (!ParsedRegistry)
+      return ParsedRegistry.takeError();
+    Base.Registry = std::move(*ParsedRegistry);
+  }
   if (const auto *Exports = Object->get(KernelExportsField)) {
     const auto *Inventory = Exports->getAsObject();
     if (!Inventory || Inventory->size() > profile::MaxImports)

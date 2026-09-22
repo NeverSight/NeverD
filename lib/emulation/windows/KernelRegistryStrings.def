@@ -1,0 +1,15 @@
+//===- KernelRegistryStrings.def - Registry names -------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Canonical registry namespace spellings.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_REGISTRY_STRING(MachineRoot, "\\registry\\machine")
+NEVERD_REGISTRY_STRING(UserRoot, "\\registry\\user")
+NEVERD_REGISTRY_STRING(Separator, "\\")
+NEVERD_REGISTRY_STRING(EmptyComponent, "\\\\")

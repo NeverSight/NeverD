@@ -391,6 +391,8 @@ geprüften Win64-Argumentleser der Sitzung. Backend-Fehler erhalten ihre erste
 strukturierte Ursache; Beobachtung und Berichterstattung setzen eine fehlerhaft
 angehaltene CPU nicht fort und implizieren keine Windows-Ausnahmebehandlung.
 
+Das Windows-Modell verwaltet auch eigenständige MDLs für nicht auslagerbaren Pool; das Freigeben des Deskriptors gibt den zugehörigen Puffer nicht frei. Ein separates Registry-Modell verwaltet den expliziten Szenariobaum, Handle-Rechte und die Lebenszeit von Schlüsseln und Werten, unabhängig vom Exportverzeichnis. Vorprüfung und Ausführung teilen dieselben Validierungsregeln. Der Bericht erhält die endgültigen Werte; beim Entladen werden verbleibende Handles geprüft.
+
 ## Grenzen der Ausnahmeumschreibung
 
 Mach-O Compact Unwind verfügt über einen strikten Parser für das ursprüngliche

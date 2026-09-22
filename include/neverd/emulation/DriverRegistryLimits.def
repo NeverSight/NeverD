@@ -1,0 +1,18 @@
+//===- DriverRegistryLimits.def - Registry scenario bounds ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounds shared by parsing, native input, and guest mutations.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryKeys, 256)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryValues, 1024)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryValueBytes, 65536)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryTotalBytes, 512 * 1024)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryPathLength, 1024)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryValueNameLength, 256)
+NEVERD_DRIVER_REGISTRY_LIMIT(MaxRegistryHandles, 256)

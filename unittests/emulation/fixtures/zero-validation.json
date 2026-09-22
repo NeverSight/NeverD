@@ -1,0 +1,29 @@
+{
+  "repository": "https://github.com/zodiacon/windowskernelprogrammingbook",
+  "revision": "bd13779bf1f79f4056d206e1f4272baf032e5451",
+  "raw_root": "https://raw.githubusercontent.com/zodiacon/windowskernelprogrammingbook",
+  "files": {
+    "chapter07/Zero/Zero.cpp": "80d7d0714fbf99dc54efd0e6c7ce8a7a494c9a3d3364f0142420b20246181090",
+    "chapter07/Zero/pch.h": "56f6eaa1a9f59e9dc35237ddb1f04dc7a92637c4de5c6975c5d870c9a9507b63",
+    "chapter07/Zero/ZeroCommon.h": "f11d9541ece3af7d0504ca13ad175c470f4d6476ef941ef23bd984d3b0328414",
+    "LICENSE": "f1d388b8947ef864762d2cdba97e3a15dbf8304878006941a63eb7996cdf3f46"
+  },
+  "scenario": {
+    "requests": [
+      {"kind": "create", "device": "\\Device\\Zero"},
+      {"kind": "read", "output_size": 37, "byte_offset": 5},
+      {"kind": "write", "input": "00017f80ff", "byte_offset": 17},
+      {"kind": "read", "output_size": 8193, "byte_offset": 1},
+      {"kind": "write", "input": ""},
+      {"kind": "read", "output_size": 0},
+      {"kind": "ioctl", "code": "0x80002000", "output_size": 16},
+      {"kind": "cleanup"},
+      {"kind": "close"}
+    ],
+    "unload": true
+  },
+  "expected_statuses": [0, 0, 0, 0, 0, 3221225990, 0, 3221225488, 0],
+  "expected_information": [0, 37, 5, 8193, 0, 0, 16, 0, 0],
+  "expected_total_read": 8230,
+  "expected_total_written": 5
+}

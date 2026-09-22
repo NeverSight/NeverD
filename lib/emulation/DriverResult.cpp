@@ -44,6 +44,25 @@ bool scenarioSucceeded(const DriverResult &Result) {
            !(*Request.IOStatus & profile::NTStatusFailureMask);
   });
 }
+
+llvm::json::Value
+registryJSON(const std::optional<std::vector<DriverRegistryKey>> &Registry) {
+  if (!Registry)
+    return nullptr;
+  llvm::json::Array Keys;
+  for (const auto &Key : *Registry) {
+    llvm::json::Array Values;
+    for (const auto &Value : Key.Values)
+      Values.push_back(llvm::json::Object{
+          {field::Name, Value.Name},
+          {field::Type, Value.Type},
+          {field::Data,
+           llvm::toHex(llvm::ArrayRef<uint8_t>(Value.Data), true)}});
+    Keys.push_back(llvm::json::Object{{field::Path, Key.Path},
+                                      {field::Values, std::move(Values)}});
+  }
+  return Keys;
+}
 } // namespace
 
 const char *driverStopReasonName(DriverStopReason Reason) {
@@ -79,6 +98,7 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::NTStatus, nullptr},
       {field::NTSuccess, nullptr},
       {field::Fault, nullptr}};
+  Root[field::Registry] = registryJSON(Result.Registry);
   llvm::json::Object Exports;
   for (const auto &[Name, Present] : Result.Configuration.KernelExports)
     Exports[Name] = Present;
@@ -90,6 +110,7 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::TimeoutMilliseconds, Result.Configuration.TimeoutMilliseconds},
       {field::LoadAddress, Address(Result.Configuration.LoadAddress)},
       {field::Unload, Result.Configuration.Unload},
+      {field::Registry, registryJSON(Result.Configuration.Registry)},
       {field::KernelExports, std::move(Exports)}};
   if (Result.Fault) {
     const auto &Fault = *Result.Fault;
@@ -168,6 +189,7 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::DispatchStatus, nullptr},
         {field::IOStatus, nullptr},
         {field::Information, Request.Information},
+        {field::InformationHex, Address(Request.Information)},
         {field::Output,
          llvm::toHex(llvm::ArrayRef<uint8_t>(Request.Output), true)}};
     if (Request.DispatchStatus)

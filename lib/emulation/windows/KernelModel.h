@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_KERNELMODEL_H
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
+#include "KernelRegistry.h"
 
 #include "neverd/emulation/DriverSession.h"
 
@@ -26,7 +27,7 @@ class KernelModel {
 public:
   KernelModel(GuestMemory &Memory, DriverResult &Result,
               const KernelExportRegistry *Exports = nullptr)
-      : Memory(Memory), Result(Result), Exports(Exports) {}
+      : Memory(Memory), Result(Result), Exports(Exports), Registry(Memory) {}
   llvm::Error initialize(const DriverImage &Image,
                          const DriverOptions &Options);
   /// End a normally returned DriverEntry, regardless of its NTSTATUS. The
@@ -60,6 +61,7 @@ private:
   GuestMemory &Memory;
   DriverResult &Result;
   const KernelExportRegistry *Exports;
+  KernelRegistry Registry;
   llvm::Expected<uint64_t> resolveRoutine(uint64_t Address);
   uint64_t DriverObject = 0;
   uint64_t RegistryPath = 0;
@@ -70,6 +72,7 @@ private:
   struct PoolAllocation {
     uint64_t Size;
     uint32_t Tag;
+    bool NonPaged;
   };
   std::map<uint64_t, PoolAllocation> Allocations;
   std::map<uint64_t, uint64_t> ArenaAllocations;
@@ -112,17 +115,25 @@ private:
   llvm::Error initializeRequestPacket(const DriverRequest &Input,
                                       uint64_t Device, uint64_t File);
   struct LockedMdl {
+    enum class Ownership { Request, Driver, NonPagedPool };
+    Ownership Owner = Ownership::Request;
     uint64_t Address = 0;
     uint64_t Size = 0;
     uint64_t Buffer = 0;
     uint64_t AllocationSize = 0;
     uint64_t UserAddress = 0;
     uint32_t ByteCount = 0;
+    uint64_t Pool = 0;
     bool Writable = false;
     bool Mapped = false;
     bool MappingWritable = false;
   };
   std::map<uint64_t, LockedMdl> MDLs;
+  llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error buildNonPagedMDL(uint64_t MDL);
+  llvm::Error freeMDL(uint64_t MDL);
+  llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
+                                           uint16_t Flags);
   llvm::Expected<uint64_t> createRequestMDL(uint32_t Size,
                                             llvm::ArrayRef<uint8_t> Initial,
                                             bool Writable,

@@ -181,6 +181,49 @@ TEST_F(DriverScenarioPublic, CLIRunsOrderedLifecycleScenario) {
   EXPECT_EQ(Parsed->getAsObject()->getBoolean("unload_completed"), true);
 }
 
+TEST_F(DriverScenarioPublic, CAPIAndCLIPreserveFullWidthIOCTLInformation) {
+  constexpr char Scenario[] = R"({"requests":[
+    {"kind":"create","device":"\\Device\\NeverDIO"},
+    {"kind":"ioctl","code":"0x222014"},
+    {"kind":"ioctl","code":"0x22201c"},
+    {"kind":"ioctl","code":"0x22201d"},
+    {"kind":"ioctl","code":"0x22201e"},
+    {"kind":"cleanup"},{"kind":"close"}
+  ],"unload":true})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    const std::string Text =
+        CLI ? runCLI(Scenario, 0, "success", NEVERD_DRIVER_IO_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_DRIVER_IO_FIXTURE, Scenario, nullptr));
+    // The legacy numeric field remains an exact decimal JSON integer. Clients
+    // whose number type cannot retain 64 bits can use information_hex instead.
+    EXPECT_NE(Text.find("\"information\":18446744073709551615"),
+              std::string::npos);
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 7u);
+    for (size_t I = 1; I <= 4; ++I) {
+      const auto *IO = (*Requests)[I].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      ASSERT_NE(IO->get("information"), nullptr);
+      EXPECT_EQ(IO->get("information")->getAsUINT64(),
+                I == 1 ? 0x123456789abcdef0ULL : UINT64_MAX);
+      EXPECT_EQ(IO->getString("information_hex"),
+                I == 1 ? "0x123456789ABCDEF0" : "0xFFFFFFFFFFFFFFFF");
+      EXPECT_EQ(IO->getString("output_hex"), "");
+      EXPECT_EQ(IO->getBoolean("completed"), true);
+    }
+  }
+}
+
 TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
   const char *Scenario = R"({"requests":[
     {"kind":"create","device":"\\Device\\NeverDDirect","file":7},
@@ -229,6 +272,55 @@ TEST_F(DriverScenarioPublic, ExplicitExportAbsenceControlsTheGuestBranch) {
   EXPECT_EQ((*Calls)[1].getAsObject()->getString("name"),
             "MmGetSystemRoutineAddress");
   EXPECT_EQ((*Calls)[1].getAsObject()->getString("result"), "0x0");
+}
+
+TEST_F(DriverScenarioPublic, RegistryScenarioRunsThroughCAPIAndCLI) {
+  constexpr char Scenario[] = R"({"registry":[{
+    "path":"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\NeverDDriver",
+    "values":[{"name":"Mode","type":4,"data":"78563412"}]
+  }],"unload":true})";
+  for (bool CLI : {false, true}) {
+    auto Parsed =
+        llvm::json::parse(CLI ? runCLI(Scenario, 0, "driver_registry")
+                              : takeString(neverd_emulate_driver_scenario_json(
+                                    Session, fixture("driver_registry").c_str(),
+                                    Scenario, nullptr)));
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Registry = Report->getArray("registry");
+    ASSERT_NE(Registry, nullptr);
+    bool Observed = false;
+    for (const auto &Item : *Registry) {
+      const auto *Key = Item.getAsObject();
+      ASSERT_NE(Key, nullptr);
+      const auto *Values = Key->getArray("values");
+      ASSERT_NE(Values, nullptr);
+      for (const auto &Value : *Values) {
+        const auto *Record = Value.getAsObject();
+        ASSERT_NE(Record, nullptr);
+        if (Record->getString("name") == "Observed") {
+          Observed = true;
+          EXPECT_EQ(Record->getInteger("type"), 4);
+          EXPECT_EQ(Record->getString("data"), "78563412");
+        }
+      }
+    }
+    EXPECT_TRUE(Observed);
+  }
+}
+
+TEST_F(DriverScenarioPublic, InvalidRegistryFailsBeforeTheImageIsOpened) {
+  constexpr char Scenario[] = R"({"registry":[{"path":"relative"}]})";
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                Session, "missing-registry-public.sys", Scenario, nullptr),
+            nullptr);
+  EXPECT_NE(error().find("driver scenario:"), std::string::npos);
+  EXPECT_TRUE(
+      runCLI(Scenario, 1, "success", "missing-registry-public.sys").empty());
 }
 
 TEST_F(DriverScenarioPublic, CLIPreservesTheFirstStructuredMemoryFault) {

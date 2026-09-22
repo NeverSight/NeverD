@@ -1,0 +1,18 @@
+//===- KernelRegistryAPIs.def - Registry routine contracts ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Supported routine spellings and Win64 argument counts.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_REGISTRY_API(ZwOpenKey, 3)
+NEVERD_KERNEL_REGISTRY_API(ZwCreateKey, 7)
+NEVERD_KERNEL_REGISTRY_API(ZwQueryValueKey, 6)
+NEVERD_KERNEL_REGISTRY_API(ZwSetValueKey, 6)
+NEVERD_KERNEL_REGISTRY_API(ZwDeleteValueKey, 2)
+NEVERD_KERNEL_REGISTRY_API(ZwDeleteKey, 1)
+NEVERD_KERNEL_REGISTRY_API(ZwClose, 1)

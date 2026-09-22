@@ -55,6 +55,8 @@ para verificar el JSON y los códigos de salida del proceso. Las compilaciones
 de producción pueden activar esta función con `BUILD_TESTING=OFF`; `libneverd`
 no debe requerir una configuración de Unicorn exclusiva de las pruebas.
 
+Las pruebas adicionales cubren MDL de pool no paginado propiedad del controlador, vidas independientes del descriptor y del búfer, estructuras de consulta del registro y búferes cortos, permisos de identificadores, eliminación y fugas, y los 64 bits completos de `information_hex` para IOCTL sin salida. La validación externa también cubre lecturas/escrituras directas síncronas y consultas de estadísticas de Zero.
+
 ## Distribución de pruebas
 
 `add_neverd_unittest` crea un ejecutable GoogleTest y asigna a cada caso

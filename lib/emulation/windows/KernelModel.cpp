@@ -152,6 +152,8 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
                                     const DriverOptions &Options) {
   if (DriverObject)
     return modelError("kernel model cannot be initialized twice");
+  if (auto E = Registry.initialize(Options.Registry))
+    return E;
   if (auto E = Memory.map(profile::KernelArenaBase, profile::KernelArenaSize,
                           Read | Write))
     return E;
@@ -368,8 +370,28 @@ llvm::Expected<uint64_t> KernelModel::call(
   const auto Kind = API->Kind;
   if (!DriverObject)
     return modelError("kernel model has not been initialized");
+  switch (Kind) {
+#define NEVERD_KERNEL_REGISTRY_API(Name, Arity) case KernelAPIKind::Name:
+#include "KernelRegistryAPIs.def"
+#undef NEVERD_KERNEL_REGISTRY_API
+    return Registry.call(*this, Name, A);
+  default:
+    break;
+  }
   if (Kind == KernelAPIKind::MmGetSystemRoutineAddress)
     return resolveRoutine(A[0]);
+  if (Kind == KernelAPIKind::IoAllocateMdl)
+    return allocateMDL(A);
+  if (Kind == KernelAPIKind::IoFreeMdl) {
+    if (auto E = freeMDL(A[0]))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::MmBuildMdlForNonPagedPool) {
+    if (auto E = buildNonPagedMDL(A[0]))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
     if (static_cast<uint32_t>(A[1]) != KernelMode ||
         static_cast<uint32_t>(A[2]) != MmCached || A[3] ||
@@ -501,7 +523,9 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (!Modern || (Flags & pool::Uninitialized))
       if (auto E = writeBytes(Memory, *Pointer, A[1], UninitializedPoolByte))
         return E;
-    Allocations.emplace(*Pointer, PoolAllocation{A[1], Tag});
+    const bool NonPaged = Modern ? (Flags & pool::NonPaged) != 0
+                                 : static_cast<uint32_t>(A[0]) != PoolPaged;
+    Allocations.emplace(*Pointer, PoolAllocation{A[1], Tag, NonPaged});
     return *Pointer;
   }
   if (Kind == KernelAPIKind::ExFreePoolWithTag ||
@@ -610,6 +634,7 @@ llvm::Expected<uint64_t> KernelModel::call(
 }
 
 llvm::Error KernelModel::snapshot() {
+  Result.Registry = Registry.snapshot();
   if (!DriverObject)
     return modelError("cannot snapshot an uninitialized kernel model");
   auto Unload = Memory.readInteger(DriverObject + DriverUnloadOffset, 8);
