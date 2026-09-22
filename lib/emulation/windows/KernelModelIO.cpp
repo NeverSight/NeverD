@@ -325,12 +325,13 @@ KernelModel::beginRequest(const DriverRequest &Input) {
                            Input.Kind != DriverRequestKind::Close;
   if (PnpOwner) {
     const auto *Owner = pnpDeviceForPDO(PnpOwner);
+    if (!Owner || !Owner->AddDeviceStatus ||
+        (*Owner->AddDeviceStatus & profile::NTStatusFailureMask) ||
+        !Devices.count(PnpOwner))
+      return ioError("file request requires a successfully added live device");
     Result.Requests[Index].DeviceID = Result.PnpDevices[Owner->ResultIndex].ID;
-    auto State = Lifecycle.snapshot(PnpOwner);
-    if (!State)
-      return State.takeError();
-    if (LifecycleIo && !State->CanStartIo)
-      return ioError("PnP device is not ready to start I/O");
+    if (auto E = Lifecycle.validateIoSubmission(PnpOwner))
+      return E;
   }
   auto Top = topAttachedDevice(Device);
   if (!Top)
@@ -414,7 +415,7 @@ KernelModel::beginRequest(const DriverRequest &Input) {
   Record.PnpDevice = PnpOwner;
   Record.LifecycleIo = LifecycleIo;
   if (LifecycleIo)
-    if (auto E = Lifecycle.beginIo(PnpOwner, *Packet))
+    if (auto E = Lifecycle.trackIo(PnpOwner, *Packet))
       return E;
   Record.FileAddress = FileIt->second.Address;
   Record.FileId = Input.File;

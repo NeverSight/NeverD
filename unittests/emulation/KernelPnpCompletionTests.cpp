@@ -89,11 +89,13 @@ protected:
     EXPECT_EQ(call("IoAttachDeviceToDeviceStack", {FDO, PDO}), PDO);
     success(Model->finishAddDevice("device0", 0));
   }
-  uint64_t begin(uint64_t Delay, uint32_t Status = 0, bool Handler = true) {
+  uint64_t begin(uint64_t Delay, uint32_t Status = 0, bool Handler = true,
+                 DevicePnpRequest Minor = DevicePnpRequest::Start) {
     DriverRequest Request;
     Request.Kind = DriverRequestKind::Pnp;
     Request.DeviceID = "device0";
     Request.Pnp = DriverPnpOperation{};
+    Request.Pnp->Minor = Minor;
     Request.Pnp->BusCompletion.Status = Status;
     Request.Pnp->BusCompletion.Delay100ns = Delay;
     auto Invoke = take(Model->beginRequest(Request));
@@ -133,6 +135,37 @@ protected:
   void finish(uint64_t ID, uint32_t Return = 0) {
     EXPECT_FALSE(take(Model->continueScheduled(ID, Return)));
     success(Model->finishScheduled(ID));
+  }
+  void completePnp(DevicePnpRequest Minor) {
+    const uint64_t IRP = begin(0, StatusSuccess, false, Minor);
+    send(IRP, StatusSuccess);
+    success(Model->recordDispatchReturn(IRP, StatusSuccess));
+    success(Model->finalizeRequest(IRP));
+  }
+  void rejectedUpperStatus(DevicePnpRequest Minor, uint32_t Status,
+                            llvm::StringRef Message) {
+    completePnp(DevicePnpRequest::Start);
+    if (Minor == DevicePnpRequest::Stop ||
+        Minor == DevicePnpRequest::CancelStop)
+      completePnp(DevicePnpRequest::QueryStop);
+    const uint64_t IRP = begin(13, StatusSuccess, true, Minor);
+    send(IRP, Pending);
+    success(Model->recordDispatchReturn(IRP, Pending));
+    const auto Call = delivery();
+    const auto State = observation().Pnp->StateAfter;
+    const uint64_t Cursor = get(IRP + IRPStackPointerOffset);
+    call("IoMarkIrpPending", {IRP});
+    put(IRP + IRPStatusOffset, Status, 4);
+    rejected(Model->continueScheduled(Call.ID, 0), Message);
+    EXPECT_EQ(get(IRP + IRPStackPointerOffset), Cursor);
+    EXPECT_EQ(get(IRP + IRPStatusOffset, 4), Status);
+    EXPECT_FALSE(observation().Completed);
+    EXPECT_TRUE(Model->requestPending(IRP));
+    EXPECT_EQ(observation().Pnp->BusStatus, StatusSuccess);
+    EXPECT_EQ(observation().Pnp->BusCompletedAt100ns, 13u);
+    success(Model->validateGuestAccess(IRP + IRPStatusOffset, 4, false));
+    success(Model->snapshot());
+    EXPECT_EQ(Result.PnpDevices.front().PnpState, State);
   }
 };
 
@@ -291,6 +324,110 @@ TEST_F(KernelPnpCompletion, FullCallbackCapacityCannotPublishBusCompletionEffect
   EXPECT_EQ(Model->nextEventTime(), 10u);
   EXPECT_FALSE(Model->takeGuestCall());
   EXPECT_FALSE(observation().Completed);
+}
+
+TEST_F(KernelPnpCompletion, DelayedQueryStopFailureRollsBackAtUpperCompletion) {
+  completePnp(DevicePnpRequest::Start);
+  constexpr uint32_t Failure = 0xc0000001;
+  const uint64_t IRP = begin(17, Failure, true, DevicePnpRequest::QueryStop);
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::StopPending);
+  send(IRP, Pending);
+  success(Model->recordDispatchReturn(IRP, Pending));
+  const auto Call = delivery();
+  EXPECT_EQ(observation().Pnp->BusStatus, Failure);
+  EXPECT_EQ(observation().Pnp->BusCompletedAt100ns, 17u);
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::StopPending);
+  EXPECT_FALSE(observation().Completed);
+  call("IoMarkIrpPending", {IRP});
+  finish(Call.ID);
+  EXPECT_EQ(observation().IOStatus, Failure);
+  EXPECT_EQ(observation().DispatchStatus, Pending);
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::Started);
+  success(Model->finalizeRequest(IRP));
+  EXPECT_EQ(Result.PnpDevices.front().PnpState, DevicePnpState::Started);
+}
+
+TEST_F(KernelPnpCompletion, DelayedQueryStopUpperFailureOverridesBusSuccess) {
+  completePnp(DevicePnpRequest::Start);
+  constexpr uint32_t Failure = 0xc0000001;
+  const uint64_t IRP = begin(11, StatusSuccess, true, DevicePnpRequest::QueryStop);
+  send(IRP, Pending);
+  success(Model->recordDispatchReturn(IRP, Pending));
+  const auto Call = delivery();
+  put(IRP + IRPStatusOffset, Failure, 4);
+  call("IoMarkIrpPending", {IRP});
+  finish(Call.ID);
+  EXPECT_EQ(observation().Pnp->BusStatus, StatusSuccess);
+  EXPECT_EQ(observation().IOStatus, Failure);
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::Started);
+  success(Model->finalizeRequest(IRP));
+}
+
+TEST_F(KernelPnpCompletion, DelayedStopRejectsNonzeroUpperSuccessBeforePop) {
+  rejectedUpperStatus(DevicePnpRequest::Stop, 1, "STATUS_SUCCESS");
+}
+
+TEST_F(KernelPnpCompletion, DelayedCancelStopRejectsNonzeroUpperSuccessBeforePop) {
+  rejectedUpperStatus(DevicePnpRequest::CancelStop, 1, "STATUS_SUCCESS");
+}
+
+TEST_F(KernelPnpCompletion, DelayedSurpriseRejectsNonzeroUpperSuccessBeforePop) {
+  rejectedUpperStatus(DevicePnpRequest::SurpriseRemoval, 1, "STATUS_SUCCESS");
+}
+
+TEST_F(KernelPnpCompletion, UpperQueryStopResourceRequeryCannotCommitOrPop) {
+  rejectedUpperStatus(DevicePnpRequest::QueryStop,
+                      StatusResourceRequirementsChanged,
+                      "unsupported resource requery");
+}
+
+TEST_F(KernelPnpCompletion, DelayedCancelStopMPRRetainsStopPendingUntilRecomplete) {
+  completePnp(DevicePnpRequest::Start);
+  completePnp(DevicePnpRequest::QueryStop);
+  const uint64_t IRP = begin(19, StatusSuccess, true, DevicePnpRequest::CancelStop);
+  send(IRP, Pending);
+  success(Model->recordDispatchReturn(IRP, Pending));
+  const auto Call = delivery();
+  call("IoMarkIrpPending", {IRP});
+  finish(Call.ID, StatusMoreProcessingRequired);
+  EXPECT_EQ(observation().Pnp->BusStatus, StatusSuccess);
+  EXPECT_EQ(observation().Pnp->BusCompletedAt100ns, 19u);
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::StopPending);
+  EXPECT_TRUE(Model->requestPending(IRP));
+  EXPECT_FALSE(Model->nextEventTime());
+  success(Model->snapshot());
+  EXPECT_EQ(Result.PnpDevices.front().PnpState, DevicePnpState::StopPending);
+  call("IofCompleteRequest", {IRP, 0});
+  EXPECT_EQ(observation().Pnp->StateAfter, DevicePnpState::Started);
+  success(Model->finalizeRequest(IRP));
+}
+
+TEST_F(KernelPnpCompletion, DelayedSurprisePreservesDevicesUntilLaterRemove) {
+  completePnp(DevicePnpRequest::Start);
+  const uint64_t IRP =
+      begin(11, StatusSuccess, true, DevicePnpRequest::SurpriseRemoval);
+  send(IRP, Pending);
+  success(Model->recordDispatchReturn(IRP, Pending));
+  const auto Call = delivery();
+  call("IoMarkIrpPending", {IRP});
+  finish(Call.ID);
+  success(Model->finalizeRequest(IRP));
+  EXPECT_EQ(Result.PnpDevices.front().PnpState, DevicePnpState::SurpriseRemoved);
+  EXPECT_TRUE(Result.PnpDevices.front().Attached);
+  EXPECT_TRUE(Result.PnpDevices.front().ProviderPresent);
+  success(Model->validateGuestAccess(FDO + DeviceExtensionOffset, 8, false));
+  const uint64_t Remove = begin(7, StatusSuccess, false, DevicePnpRequest::Remove);
+  send(Remove, Pending);
+  call("IoDetachDevice", {PDO});
+  call("IoDeleteDevice", {FDO});
+  success(Model->recordDispatchReturn(Remove, Pending));
+  EXPECT_FALSE(take(Model->nextScheduled(true)));
+  EXPECT_TRUE(observation().Completed);
+  EXPECT_EQ(observation().Pnp->BusCompletedAt100ns, 18u);
+  success(Model->finalizeRequest(Remove));
+  EXPECT_EQ(Result.PnpDevices.front().PnpState, DevicePnpState::Removed);
+  EXPECT_FALSE(Result.PnpDevices.front().ProviderPresent);
+  EXPECT_TRUE(Result.Devices.empty());
 }
 
 TEST_F(KernelPnpCompletion, MismatchedRawMinorCannotConsumeConfiguredResponse) {

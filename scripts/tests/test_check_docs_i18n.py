@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v8",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v9",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -198,9 +198,12 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                                       "initial_device_power", "initial_system_power",
                                       "device_id", "bus_completion", "delay_100ns",
                                       "query_remove", "cancel_remove", "add_device_status",
+                                      "query_stop", "cancel_stop", "surprise_removal",
+                                      "STATUS_RESOURCE_REQUIREMENTS_CHANGED", "0x119",
                                       "provider_present", "bus_received_at_100ns",
                                       "bus_completed_at_100ns", "add_device:<ID>")),
             ("architecture.md", ("DriverPnp.h", "DeviceLifecycle.def",
+                                 "devicePnpFinalStatusError",
                                  "KernelModelPnpDevices", "KernelModelPnpRequests",
                                  "KernelModelPnpCompletion")),
             ("testing.md", ("DriverPnpScenarioTests.cpp", "KernelPnpDeviceTests.cpp",

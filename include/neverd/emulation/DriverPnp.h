@@ -40,6 +40,12 @@ constexpr bool devicePnpRequiresSuccess(DevicePnpRequest Request) {
   }
 }
 
+/// Return nullptr for a modeled final status, or a stable diagnostic. Scenario
+/// preflight and final guest completion share this decision; neither may accept
+/// a completion that requires an unmodeled PnP manager operation.
+const char *devicePnpFinalStatusError(DevicePnpRequest Request,
+                                      uint32_t Status);
+
 enum class DevicePowerState : uint32_t {
 #define NEVERD_DEVICE_POWER_STATE(Name, Value) Name = Value,
 #include "neverd/emulation/DeviceLifecycle.def"

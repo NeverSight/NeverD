@@ -74,10 +74,13 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// nonnegative signed 64-bit file offsets. Configured pnp_devices require a
 /// unique case-sensitive ASCII id, bus="resource_free", initial_device_power=
 /// "D0" and initial_system_power="working". A kind="pnp" request requires
-/// device_id, minor (start/query_remove/cancel_remove/remove), and
+/// device_id, minor (start/query_remove/cancel_remove/remove/query_stop/stop/
+/// cancel_stop/surprise_removal), and
 /// bus_completion with explicit final status (u32 or 0x string) and optional
-/// nonnegative delay_100ns measured from provider receipt. Cancel-remove/remove
-/// require status zero. PnP requests forbid device, file, transfer and
+/// nonnegative delay_100ns measured from provider receipt. Stop, cancel-stop,
+/// surprise-removal, cancel-remove and remove require status zero. Query-stop
+/// status 0x119 requires unmodeled resource requery and is rejected. PnP
+/// requests forbid device, file, transfer and
 /// cancellation fields. Unknown keys and malformed/excessive requests are
 /// errors. The original v1 entry point remains initialization-only.
 NEVERD_API const char *

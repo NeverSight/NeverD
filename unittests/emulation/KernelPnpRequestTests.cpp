@@ -21,6 +21,7 @@
 namespace neverd::emulation {
 namespace {
 using namespace windows;
+constexpr uint32_t StatusDeletePending = 0xc0000056;
 
 class KernelPnpRequest : public ::testing::Test {
 protected:
@@ -150,10 +151,17 @@ protected:
       Input.DeviceID = "sensor0";
     return take(Model->beginRequest(Input));
   }
-  void completeFile(DriverRequestKind Kind) {
+  void completeFile(DriverRequestKind Kind, uint32_t Status = StatusSuccess) {
     const auto Invocation = file(Kind);
-    status(Invocation.IRP, StatusSuccess);
+    EXPECT_EQ(Invocation.PC, Entry);
+    EXPECT_EQ(Invocation.Argument0, FDO);
+    status(Invocation.IRP, Status);
     call("IofCompleteRequest", {Invocation.IRP, 0});
+    finish(Invocation.IRP, Status);
+  }
+  void completePnp(DevicePnpRequest Minor) {
+    const auto Invocation = begin(Minor);
+    EXPECT_EQ(forward(Invocation.IRP), StatusSuccess);
     finish(Invocation.IRP);
   }
 };
@@ -286,29 +294,99 @@ TEST_F(KernelPnpRequest, UpperFinalStatusOwnsQueryRollback) {
   completeFile(DriverRequestKind::Close);
 }
 
-TEST_F(KernelPnpRequest, FileAdmissionRequiresStartAndCancelRemoveReopensIo) {
+TEST_F(KernelPnpRequest, GuestDispatchOwnsCreateFailuresAndCancelReopensFile) {
   attach();
-  DriverRequest Create;
-  Create.Kind = DriverRequestKind::Create;
-  Create.DeviceID = "sensor0";
-  auto Rejected = Model->beginRequest(Create);
-  ASSERT_FALSE(bool(Rejected));
-  reject(Rejected.takeError(), "not ready");
+  // NotStarted does not synthesize a dispatch decision. A real guest failure
+  // must retire the opening file identity so the same ID can be used again.
+  completeFile(DriverRequestKind::Create, StatusNotSupported);
+  EXPECT_EQ(Result.Requests.back().IOStatus, StatusNotSupported);
   start();
-  auto Query = begin(DevicePnpRequest::QueryRemove);
-  forward(Query.IRP);
-  finish(Query.IRP);
-  Rejected = Model->beginRequest(Create);
-  ASSERT_FALSE(bool(Rejected));
-  reject(Rejected.takeError(), "not ready");
-  auto Cancel = begin(DevicePnpRequest::CancelRemove);
-  forward(Cancel.IRP);
-  finish(Cancel.IRP);
+  completePnp(DevicePnpRequest::QueryRemove);
+  completeFile(DriverRequestKind::Create, StatusDeletePending);
+  EXPECT_EQ(Result.Requests.back().IOStatus, StatusDeletePending);
+  completePnp(DevicePnpRequest::CancelRemove);
   EXPECT_EQ(Result.PnpDevices[0].PnpState, DevicePnpState::Started);
   completeFile(DriverRequestKind::Create);
   EXPECT_EQ(Result.Requests.back().DeviceID, "sensor0");
   completeFile(DriverRequestKind::Cleanup);
   completeFile(DriverRequestKind::Close);
+}
+
+TEST_F(KernelPnpRequest, LiveFilesDispatchAcrossPauseQueryAndSurpriseStates) {
+  attach();
+  start();
+  completeFile(DriverRequestKind::Create);
+  for (auto Minor : {DevicePnpRequest::QueryStop, DevicePnpRequest::CancelStop,
+                     DevicePnpRequest::QueryStop, DevicePnpRequest::Stop,
+                     DevicePnpRequest::Start, DevicePnpRequest::QueryRemove,
+                     DevicePnpRequest::CancelRemove}) {
+    completePnp(Minor);
+    // A software-only IOCTL can succeed even while the device is paused.
+    completeFile(DriverRequestKind::DeviceControl);
+    EXPECT_EQ(Result.Requests.back().IOStatus, StatusSuccess);
+  }
+  completePnp(DevicePnpRequest::SurpriseRemoval);
+  ASSERT_EQ(Result.PnpDevices[0].PnpState, DevicePnpState::SurpriseRemoved);
+  EXPECT_TRUE(Result.PnpDevices[0].Attached);
+  // The guest, rather than an admission gate, reports hardware disappearance.
+  completeFile(DriverRequestKind::Read, StatusDeletePending);
+  EXPECT_EQ(Result.Requests.back().IOStatus, StatusDeletePending);
+  completeFile(DriverRequestKind::Cleanup);
+  completeFile(DriverRequestKind::Close);
+  auto Remove = begin(DevicePnpRequest::Remove);
+  forward(Remove.IRP);
+  call("IoDetachDevice", {PDO});
+  call("IoDeleteDevice", {FDO});
+  finish(Remove.IRP);
+  EXPECT_FALSE(Result.PnpDevices[0].ProviderPresent);
+}
+
+TEST_F(KernelPnpRequest, HeldIoRetainsItsFileAndRouteAcrossStopAndSurprise) {
+  attach();
+  start();
+  completeFile(DriverRequestKind::Create);
+  DriverRequest ReadInput;
+  ReadInput.Kind = DriverRequestKind::Read;
+  ReadInput.OutputSize = 4;
+  const auto Read = take(Model->beginRequest(ReadInput));
+  const auto File = get(Read.IRP + IRPOriginalFileOffset);
+  const auto Stack = get(Read.IRP + IRPStackPointerOffset);
+  const auto Buffer = get(Read.IRP + IRPSystemBufferOffset);
+  ASSERT_NE(Buffer, 0u);
+  put(Buffer, 0x12345678, 4);
+  put(Stack + StackControlOffset, StackPendingReturned, 1);
+  ok(Model->recordDispatchReturn(Read.IRP, StatusPending));
+  const auto ReadIndex = Result.Requests.size() - 1;
+  // KernelModel can represent interleaved submissions. The public runner is
+  // deliberately serial and cannot use later scenario input as this producer.
+  for (auto Minor : {DevicePnpRequest::QueryStop, DevicePnpRequest::Stop,
+                     DevicePnpRequest::Start,
+                     DevicePnpRequest::SurpriseRemoval}) {
+    completePnp(Minor);
+    EXPECT_TRUE(Model->requestPending(Read.IRP));
+    EXPECT_EQ(get(Read.IRP + IRPOriginalFileOffset), File);
+    EXPECT_EQ(get(Read.IRP + IRPStackPointerOffset), Stack);
+    EXPECT_EQ(get(Read.IRP + IRPSystemBufferOffset), Buffer);
+    ok(Model->validateGuestAccess(Buffer, 4, false));
+    EXPECT_EQ(get(Buffer, 4), 0x12345678u);
+    EXPECT_EQ(get(File + FileDeviceOffset), PDO);
+    EXPECT_EQ(get(PDO + DeviceAttachedOffset), FDO);
+    EXPECT_FALSE(Result.Requests[ReadIndex].Completed);
+  }
+  status(Read.IRP, StatusDeletePending);
+  call("IofCompleteRequest", {Read.IRP, 0});
+  ok(Model->finalizeRequest(Read.IRP));
+  reject(Model->validateGuestAccess(Buffer, 4, false), "freed");
+  EXPECT_EQ(Result.Requests[ReadIndex].IOStatus, StatusDeletePending);
+  EXPECT_TRUE(Result.Requests[ReadIndex].Completed);
+  completeFile(DriverRequestKind::Cleanup);
+  completeFile(DriverRequestKind::Close);
+  auto Remove = begin(DevicePnpRequest::Remove);
+  forward(Remove.IRP);
+  call("IoDetachDevice", {PDO});
+  call("IoDeleteDevice", {FDO});
+  finish(Remove.IRP);
+  EXPECT_TRUE(Result.Devices.empty());
 }
 
 TEST_F(KernelPnpRequest, CleanupAndCloseRemainAvailableAfterQueryRemove) {
@@ -342,10 +420,13 @@ TEST_F(KernelPnpRequest, NamedOpenKeepsItsLifecycleOwnerAfterDetach) {
   DriverRequest Read;
   Read.Kind = DriverRequestKind::Read;
   Read.OutputSize = 4;
-  auto Rejected = Model->beginRequest(Read);
-  ASSERT_FALSE(bool(Rejected));
-  reject(Rejected.takeError(), "not ready");
-  Rejected = Model->beginRequest(pnp(DevicePnpRequest::Remove));
+  auto ReadCall = take(Model->beginRequest(Read));
+  EXPECT_EQ(ReadCall.Argument0, FDO);
+  EXPECT_EQ(Result.Requests.back().DeviceID, "sensor0");
+  status(ReadCall.IRP, StatusNotSupported);
+  call("IofCompleteRequest", {ReadCall.IRP, 0});
+  finish(ReadCall.IRP, StatusNotSupported);
+  auto Rejected = Model->beginRequest(pnp(DevicePnpRequest::Remove));
   ASSERT_FALSE(bool(Rejected));
   reject(Rejected.takeError(), "files to close");
   completeFile(DriverRequestKind::Cleanup);

@@ -95,9 +95,9 @@ TEST_F(DriverDeviceLifecycle, PowerRequestCodesMatchWindowsMinorFunctions) {
   EXPECT_EQ(static_cast<uint8_t>(DevicePowerRequest::Query), 0x03);
 }
 
-TEST_F(DriverDeviceLifecycle, StartFailureAndQueriesRollbackWithoutStartingIo) {
-  EXPECT_FALSE(state().CanStartIo);
-  failure(Model.beginIo(FirstDevice, 1), "not ready");
+TEST_F(DriverDeviceLifecycle, StartFailureAndQueriesRollbackWithoutChoosingIoPolicy) {
+  success(Model.trackIo(FirstDevice, 1));
+  success(Model.finishIo(FirstDevice, 1));
   const auto FailedStart = begin(DevicePnpRequest::Start);
   failure(Model.finishPnp(FailedStart, Pending), "not a final");
   EXPECT_EQ(state().PnpOperation, FailedStart);
@@ -105,16 +105,14 @@ TEST_F(DriverDeviceLifecycle, StartFailureAndQueriesRollbackWithoutStartingIo) {
   EXPECT_EQ(state().Pnp, DevicePnpState::NotStarted);
   EXPECT_FALSE(state().PnpOperation);
   start();
-  EXPECT_TRUE(state().CanStartIo);
   const auto QueryStop = begin(DevicePnpRequest::QueryStop);
   EXPECT_EQ(state().Pnp, DevicePnpState::StopPending);
-  failure(Model.beginIo(FirstDevice, 1), "not ready");
+  success(Model.trackIo(FirstDevice, 1));
+  success(Model.finishIo(FirstDevice, 1));
   success(Model.finishPnp(QueryStop, Failure));
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
-  EXPECT_TRUE(state().CanStartIo);
   pnp(DevicePnpRequest::QueryRemove, Failure);
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
-  EXPECT_TRUE(state().CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, RebalanceCancelsStopsAndRestarts) {
@@ -128,12 +126,10 @@ TEST_F(DriverDeviceLifecycle, RebalanceCancelsStopsAndRestarts) {
   pnp(DevicePnpRequest::QueryStop);
   pnp(DevicePnpRequest::Stop);
   EXPECT_EQ(state().Pnp, DevicePnpState::Stopped);
-  EXPECT_FALSE(state().CanStartIo);
   pnp(DevicePnpRequest::Start, Failure);
   EXPECT_EQ(state().Pnp, DevicePnpState::Stopped);
   start();
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
-  EXPECT_TRUE(state().CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, RemoveCancellationRestoresStoppedAndUnstarted) {
@@ -149,7 +145,6 @@ TEST_F(DriverDeviceLifecycle, RemoveCancellationRestoresStoppedAndUnstarted) {
   EXPECT_EQ(state().Pnp, DevicePnpState::RemovePending);
   pnp(DevicePnpRequest::CancelRemove);
   EXPECT_EQ(state().Pnp, DevicePnpState::Stopped);
-  EXPECT_FALSE(state().CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, BootConfiguredDevicesCanRebalanceBeforeStart) {
@@ -165,7 +160,6 @@ TEST_F(DriverDeviceLifecycle, BootConfiguredDevicesCanRebalanceBeforeStart) {
   pnp(DevicePnpRequest::Stop, Success, BootDevice);
   EXPECT_EQ(state(BootDevice).Pnp, DevicePnpState::Stopped);
   start(BootDevice);
-  EXPECT_TRUE(state(BootDevice).CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle,
@@ -200,6 +194,65 @@ TEST_F(DriverDeviceLifecycle, RemoveAndCancelRequireExactSuccess) {
     success(Model.finishPnp(Ticket, Success));
   }
   EXPECT_EQ(state().Pnp, DevicePnpState::Removed);
+}
+
+TEST_F(DriverDeviceLifecycle, StopCancelAndSurpriseRequireExactSuccess) {
+  start();
+  pnp(DevicePnpRequest::QueryStop);
+  for (auto Minor : {DevicePnpRequest::CancelStop, DevicePnpRequest::Stop,
+                     DevicePnpRequest::SurpriseRemoval}) {
+    const auto Ticket = begin(Minor);
+    const auto Before = state().Pnp;
+    failure(Model.validatePnpCompletion(Ticket, 1), "STATUS_SUCCESS");
+    failure(Model.finishPnp(Ticket, Failure), "must not fail");
+    EXPECT_EQ(state().Pnp, Before);
+    EXPECT_EQ(state().PnpOperation, Ticket);
+    success(Model.finishPnp(Ticket, Success));
+    if (Minor == DevicePnpRequest::CancelStop)
+      pnp(DevicePnpRequest::QueryStop);
+  }
+  EXPECT_EQ(state().Pnp, DevicePnpState::SurpriseRemoved);
+}
+
+TEST_F(DriverDeviceLifecycle, ResourceRequeryStatusKeepsQueryStopUncommitted) {
+  start();
+  const auto Query = begin(DevicePnpRequest::QueryStop);
+  failure(Model.validatePnpCompletion(Query, 0x119), "resource requery");
+  failure(Model.finishPnp(Query, 0x119), "resource requery");
+  EXPECT_EQ(state().Pnp, DevicePnpState::StopPending);
+  EXPECT_EQ(state().PnpOperation, Query);
+  success(Model.finishPnp(Query, Failure));
+  EXPECT_EQ(state().Pnp, DevicePnpState::Started);
+}
+
+TEST_F(DriverDeviceLifecycle, IoLifetimeSurvivesStopRestartAndPowerTransactions) {
+  // Dispatch acceptance does not infer whether an IRP touches hardware.
+  success(Model.trackIo(FirstDevice, 1));
+  start();
+  pnp(DevicePnpRequest::QueryStop);
+  success(Model.trackIo(FirstDevice, 2));
+  pnp(DevicePnpRequest::Stop);
+  EXPECT_EQ(state().OutstandingIo, 2u);
+  success(Model.trackIo(FirstDevice, 3));
+  success(Model.finishIo(FirstDevice, 1));
+  start();
+  success(Model.finishIo(FirstDevice, 2));
+  success(Model.finishIo(FirstDevice, 3));
+  auto Query = devicePower(DevicePowerRequest::Query, DevicePowerState::D3);
+  success(Model.trackIo(FirstDevice, 4));
+  success(Model.finishDevicePower(Query, Success));
+  success(Model.trackIo(FirstDevice, 5));
+  auto Set = devicePower(DevicePowerRequest::Set, DevicePowerState::D3);
+  success(Model.finishDevicePower(Set, Success));
+  success(Model.trackIo(FirstDevice, 6));
+  auto Sleep = systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3);
+  success(Model.finishSystemPower(Sleep, Success));
+  success(Model.trackIo(FirstDevice, 7));
+  for (uint64_t IRP : {4, 5, 6, 7})
+    success(Model.finishIo(FirstDevice, IRP));
+  EXPECT_EQ(state().OutstandingIo, 0u);
+  EXPECT_EQ(state().DevicePower, DevicePowerState::D3);
+  EXPECT_EQ(state().SystemPower, SystemPowerState::Sleeping3);
 }
 
 TEST_F(DriverDeviceLifecycle, PnpTransitionGridRejectsOnlyInvalidSequences) {
@@ -287,15 +340,17 @@ TEST_F(DriverDeviceLifecycle, SurpriseRemovalDoesNotDiscardIoOrLockOwnership) {
   constexpr uint64_t Irp = 0x8000;
   success(Model.initializeRemoveLock(FirstDevice, Lock));
   success(Model.acquireRemoveLock(FirstDevice, Lock, Irp));
-  success(Model.beginIo(FirstDevice, Irp));
+  success(Model.trackIo(FirstDevice, Irp));
   const auto Surprise = begin(DevicePnpRequest::SurpriseRemoval);
   EXPECT_EQ(state().Pnp, DevicePnpState::SurpriseRemoved);
   EXPECT_EQ(state().OutstandingIo, 1u);
   EXPECT_EQ(state().RemoveLockReferences, 1u);
-  failure(Model.beginIo(FirstDevice, Irp + 1), "not ready");
+  success(Model.trackIo(FirstDevice, Irp + 1));
+  success(Model.finishIo(FirstDevice, Irp + 1));
   failure(Model.finishPnp(Surprise, Failure), "must not fail");
   success(Model.finishPnp(Surprise, Success));
   const auto Remove = begin(DevicePnpRequest::Remove);
+  failure(Model.trackIo(FirstDevice, Irp + 1), "after REMOVE begins");
   failure(Model.finishPnp(Remove, Success), "outstanding operations");
   success(Model.acquireRemoveLock(FirstDevice, Lock, 0x9000));
   EXPECT_FALSE(
@@ -310,6 +365,7 @@ TEST_F(DriverDeviceLifecycle, SurpriseRemovalDoesNotDiscardIoOrLockOwnership) {
   EXPECT_TRUE(value(Model.removeLockDrained(FirstDevice, Lock)));
   success(Model.finishPnp(Remove, Success));
   EXPECT_EQ(state().Pnp, DevicePnpState::Removed);
+  failure(Model.trackIo(FirstDevice, Irp + 1), "after REMOVE begins");
   failure(Model.initializeRemoveLock(FirstDevice, Lock), "during removal");
   failure(Model.addDevice(FirstDevice, DevicePowerState::D0,
                           SystemPowerState::Working),
@@ -354,14 +410,14 @@ TEST_F(DriverDeviceLifecycle, DeviceAndIrpIdentityFailuresAreAtomic) {
           "invalid initial");
   start();
   start(SecondDevice);
-  success(Model.beginIo(FirstDevice, 0x5000));
-  failure(Model.beginIo(SecondDevice, 0x5000), "already has");
+  success(Model.trackIo(FirstDevice, 0x5000));
+  failure(Model.trackIo(SecondDevice, 0x5000), "already has");
   failure(Model.finishIo(SecondDevice, 0x5000), "not outstanding");
-  failure(Model.beginIo(FirstDevice, 0), "nonzero");
+  failure(Model.trackIo(FirstDevice, 0), "nonzero");
   EXPECT_EQ(state().OutstandingIo, 1u);
   EXPECT_EQ(state(SecondDevice).OutstandingIo, 0u);
   success(Model.finishIo(FirstDevice, 0x5000));
-  success(Model.beginIo(SecondDevice, 0x5000));
+  success(Model.trackIo(SecondDevice, 0x5000));
   success(Model.initializeRemoveLock(FirstDevice, 0x6000));
   failure(Model.initializeRemoveLock(SecondDevice, 0x6000),
           "already initialized");
@@ -376,35 +432,28 @@ TEST_F(DriverDeviceLifecycle, StartingDoesNotInventHardwarePowerTransitions) {
                           SystemPowerState::Working));
   start(SleepingDevice);
   EXPECT_EQ(state(SleepingDevice).DevicePower, DevicePowerState::D3);
-  EXPECT_FALSE(state(SleepingDevice).CanStartIo);
   const auto Power = value(Model.beginDevicePower(
       SleepingDevice, DevicePowerRequest::Set, DevicePowerState::D0));
   EXPECT_EQ(state(SleepingDevice).DevicePower, DevicePowerState::D3);
   success(Model.finishDevicePower(Power, Success));
-  EXPECT_TRUE(state(SleepingDevice).CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, DevicePowerQueriesAndIdleTransitions) {
   start();
   auto Query = devicePower(DevicePowerRequest::Query, DevicePowerState::D3);
-  EXPECT_FALSE(state().CanStartIo);
   EXPECT_EQ(state().DevicePower, DevicePowerState::D0);
   success(Model.finishDevicePower(Query, Failure));
-  EXPECT_TRUE(state().CanStartIo);
   Query = devicePower(DevicePowerRequest::Query, DevicePowerState::D3);
   success(Model.finishDevicePower(Query, Success));
   EXPECT_TRUE(state().DevicePowerQueryAccepted);
-  EXPECT_FALSE(state().CanStartIo);
   // A same-state set releases a query; a prior query is never required to set.
   auto Set = devicePower(DevicePowerRequest::Set, DevicePowerState::D0);
   success(Model.finishDevicePower(Set, Success));
-  EXPECT_TRUE(state().CanStartIo);
   for (DevicePowerState Target : {DevicePowerState::D1, DevicePowerState::D2,
                                   DevicePowerState::D3, DevicePowerState::D0}) {
     Set = devicePower(DevicePowerRequest::Set, Target);
     success(Model.finishDevicePower(Set, Success));
     EXPECT_EQ(state().DevicePower, Target);
-    EXPECT_EQ(state().CanStartIo, Target == DevicePowerState::D0);
   }
 }
 
@@ -435,7 +484,6 @@ TEST_F(DriverDeviceLifecycle,
   Device = devicePower(DevicePowerRequest::Set, DevicePowerState::D0);
   success(Model.finishDevicePower(Device, Success));
   success(Model.finishSystemPower(System, Success));
-  EXPECT_TRUE(state().CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, FailedSystemQueryAllowsAnySubsequentSet) {
@@ -517,20 +565,16 @@ TEST_F(DriverDeviceLifecycle,
   pnp(DevicePnpRequest::CancelRemove);
   Power = devicePower(DevicePowerRequest::Set, DevicePowerState::D0);
   success(Model.finishDevicePower(Power, Success));
-  EXPECT_TRUE(state().CanStartIo);
 }
 
 TEST_F(DriverDeviceLifecycle, StartedDeviceCanRestartWithChangedResources) {
   start();
   // PNP_RESOURCE_REQUIREMENTS_CHANGED can trigger START without a STOP.
   const auto Restart = begin(DevicePnpRequest::Start);
-  EXPECT_FALSE(state().CanStartIo);
   success(Model.finishPnp(Restart, Success));
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
-  EXPECT_TRUE(state().CanStartIo);
   pnp(DevicePnpRequest::Start, Failure);
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
-  EXPECT_TRUE(state().CanStartIo);
   // Informational success is distinct from pending and failure.
   pnp(DevicePnpRequest::QueryStop, 0x104);
   EXPECT_EQ(state().Pnp, DevicePnpState::StopPending);
