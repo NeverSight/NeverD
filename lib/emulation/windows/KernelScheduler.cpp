@@ -47,6 +47,11 @@ bool removeObject(std::deque<KernelScheduler::Invocation> &Queue,
 
 } // namespace
 
+bool KernelScheduler::isDMACallbackKind(CallbackKind Kind) {
+  return Kind == CallbackKind::DMAListControl ||
+         Kind == CallbackKind::DMAAdapterControl;
+}
+
 llvm::Error KernelScheduler::validateTime() const {
   if (Now > Bounds.MaxTime100ns)
     return schedulerError("scheduler initial time exceeds virtual time limit");
@@ -109,7 +114,7 @@ KernelScheduler::Invocation KernelScheduler::makeInvocation(Callback Work,
   static_cast<Callback &>(Call) = std::move(Work);
   Call.ID = NextID++;
   Call.Kind = Kind;
-  Call.IRQL = Kind == CallbackKind::DPC || Kind == CallbackKind::DMAListControl
+  Call.IRQL = Kind == CallbackKind::DPC || isDMACallbackKind(Kind)
                   ? scheduler::DispatchLevel
                   : scheduler::PassiveLevel;
   Call.DueTime100ns = DueTime;
@@ -226,31 +231,37 @@ bool KernelScheduler::removeDPC(uint64_t Object) {
   return removeObject(DPCs, Object);
 }
 
-llvm::Error
-KernelScheduler::canReserveDMAListControl(const Callback &Call) const {
+llvm::Error KernelScheduler::canReserveDMACallback(const Callback &Call,
+                                                   CallbackKind Kind) const {
+  if (!isDMACallbackKind(Kind))
+    return schedulerError("callback kind is not a DMA callback");
   if (auto E = validateCallback(Call))
     return E;
   return checkCapacity(1);
 }
 
-llvm::Expected<uint64_t> KernelScheduler::reserveDMAListControl(Callback Call) {
-  if (auto E = canReserveDMAListControl(Call))
+llvm::Expected<uint64_t>
+KernelScheduler::reserveDMACallback(Callback Call, CallbackKind Kind) {
+  if (auto E = canReserveDMACallback(Call, Kind))
     return E;
-  auto Reserved =
-      makeInvocation(std::move(Call), CallbackKind::DMAListControl, Now);
+  auto Reserved = makeInvocation(std::move(Call), Kind, Now);
   const uint64_t ID = Reserved.ID;
   WaitingDMA.emplace(ID, std::move(Reserved));
   return ID;
 }
 
 llvm::Error
-KernelScheduler::canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const {
+KernelScheduler::validateDMAAdmission(llvm::ArrayRef<uint64_t> IDs,
+                                      std::optional<CallbackKind> Kind) const {
   if (auto E = validateTime())
     return E;
   std::set<uint64_t> Seen;
   for (uint64_t ID : IDs) {
-    if (!WaitingDMA.count(ID))
+    const auto Found = WaitingDMA.find(ID);
+    if (Found == WaitingDMA.end())
       return schedulerError("DMA callback is not waiting for resources");
+    if (Kind && Found->second.Kind != *Kind)
+      return schedulerError("DMA callback kind mismatch");
     if (!Seen.insert(ID).second)
       return schedulerError("duplicate DMA callback in admission batch");
   }
@@ -258,8 +269,12 @@ KernelScheduler::canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const {
 }
 
 llvm::Error
-KernelScheduler::readyDMAListControls(llvm::ArrayRef<uint64_t> IDs) {
-  if (auto E = canReadyDMAListControls(IDs))
+KernelScheduler::canReadyDMACallbacks(llvm::ArrayRef<uint64_t> IDs) const {
+  return validateDMAAdmission(IDs, std::nullopt);
+}
+
+llvm::Error KernelScheduler::readyDMACallbacks(llvm::ArrayRef<uint64_t> IDs) {
+  if (auto E = canReadyDMACallbacks(IDs))
     return E;
   for (uint64_t ID : IDs) {
     auto Reserved = WaitingDMA.extract(ID);
@@ -269,7 +284,7 @@ KernelScheduler::readyDMAListControls(llvm::ArrayRef<uint64_t> IDs) {
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::canDispatchInlineDMAListControl() const {
+llvm::Error KernelScheduler::canDispatchInlineDMACallback() const {
   if (auto E = validateTime())
     return E;
   if (Dispatches >= Bounds.MaxDispatches)
@@ -277,16 +292,24 @@ llvm::Error KernelScheduler::canDispatchInlineDMAListControl() const {
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::canBeginInlineDMAListControl(uint64_t ID) const {
-  if (auto E = canDispatchInlineDMAListControl())
+llvm::Error
+KernelScheduler::canBeginInlineDMACallback(uint64_t ID,
+                                           CallbackKind Kind) const {
+  if (!isDMACallbackKind(Kind))
+    return schedulerError("callback kind is not a DMA callback");
+  if (auto E = canDispatchInlineDMACallback())
     return E;
-  if (!WaitingDMA.count(ID))
+  const auto Found = WaitingDMA.find(ID);
+  if (Found == WaitingDMA.end())
     return schedulerError("DMA callback is not waiting for inline delivery");
+  if (Found->second.Kind != Kind)
+    return schedulerError("DMA callback kind mismatch");
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::beginInlineDMAListControl(uint64_t ID) {
-  if (auto E = canBeginInlineDMAListControl(ID))
+llvm::Error KernelScheduler::beginInlineDMACallback(uint64_t ID,
+                                                    CallbackKind Kind) {
+  if (auto E = canBeginInlineDMACallback(ID, Kind))
     return E;
   auto Reserved = WaitingDMA.extract(ID);
   Reserved.mapped().DueTime100ns = Now;
@@ -295,17 +318,71 @@ llvm::Error KernelScheduler::beginInlineDMAListControl(uint64_t ID) {
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::canFinishInlineDMAListControl(uint64_t ID) const {
+llvm::Error
+KernelScheduler::canFinishInlineDMACallback(uint64_t ID,
+                                            CallbackKind Kind) const {
+  if (!isDMACallbackKind(Kind))
+    return schedulerError("callback kind is not a DMA callback");
   if (InlineDMA.empty() || InlineDMA.back().ID != ID)
     return schedulerError("inline DMA callback return identity mismatch");
+  if (InlineDMA.back().Kind != Kind)
+    return schedulerError("DMA callback kind mismatch");
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::finishInlineDMAListControl(uint64_t ID) {
-  if (auto E = canFinishInlineDMAListControl(ID))
+llvm::Error KernelScheduler::finishInlineDMACallback(uint64_t ID,
+                                                     CallbackKind Kind) {
+  if (auto E = canFinishInlineDMACallback(ID, Kind))
     return E;
   InlineDMA.pop_back();
   return llvm::Error::success();
+}
+
+llvm::Error
+KernelScheduler::canReserveDMAListControl(const Callback &Call) const {
+  return canReserveDMACallback(Call, CallbackKind::DMAListControl);
+}
+
+llvm::Expected<uint64_t> KernelScheduler::reserveDMAListControl(Callback Call) {
+  return reserveDMACallback(std::move(Call), CallbackKind::DMAListControl);
+}
+
+llvm::Error
+KernelScheduler::canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const {
+  return validateDMAAdmission(IDs, CallbackKind::DMAListControl);
+}
+
+llvm::Error
+KernelScheduler::readyDMAListControls(llvm::ArrayRef<uint64_t> IDs) {
+  if (auto E = canReadyDMAListControls(IDs))
+    return E;
+  return readyDMACallbacks(IDs);
+}
+
+bool KernelScheduler::hasQueuedDMAListControl() const {
+  return llvm::any_of(ReadyDMA, [](const auto &Call) {
+    return Call.Kind == CallbackKind::DMAListControl;
+  });
+}
+
+llvm::Error KernelScheduler::canDispatchInlineDMAListControl() const {
+  return canDispatchInlineDMACallback();
+}
+
+llvm::Error KernelScheduler::canBeginInlineDMAListControl(uint64_t ID) const {
+  return canBeginInlineDMACallback(ID, CallbackKind::DMAListControl);
+}
+
+llvm::Error KernelScheduler::beginInlineDMAListControl(uint64_t ID) {
+  return beginInlineDMACallback(ID, CallbackKind::DMAListControl);
+}
+
+llvm::Error KernelScheduler::canFinishInlineDMAListControl(uint64_t ID) const {
+  return canFinishInlineDMACallback(ID, CallbackKind::DMAListControl);
+}
+
+llvm::Error KernelScheduler::finishInlineDMAListControl(uint64_t ID) {
+  return finishInlineDMACallback(ID, CallbackKind::DMAListControl);
 }
 
 bool KernelScheduler::isDPCQueued(uint64_t Object) const {
@@ -566,11 +643,17 @@ llvm::Error KernelScheduler::advanceTo100ns(uint64_t Time) {
   return expireTimers(Time);
 }
 
-llvm::Error KernelScheduler::finish(uint64_t ID) {
+llvm::Error KernelScheduler::canFinish(uint64_t ID) const {
   if (!Active || Active->ID != ID)
     return schedulerError("scheduler callback completion identity mismatch");
   if (!InlineDMA.empty())
     return schedulerError("callback still owns an inline DMA invocation");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::finish(uint64_t ID) {
+  if (auto E = canFinish(ID))
+    return E;
   Active.reset();
   return llvm::Error::success();
 }

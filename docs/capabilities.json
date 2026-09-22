@@ -3509,7 +3509,7 @@
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, general spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, other interrupt modes, general hardware and other DMA interfaces remain unsupported",
-        "wdm-x64-scheduled-v14 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "wdm-x64-scheduled-v15 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
@@ -3552,12 +3552,17 @@
         "IoConnectInterrupt uses its actual eleven arguments and the exact translated assignment. IoConnectInterruptEx supports FullySpecified (1), LineBased (2, one assigned line on the explicit PDO) and FullySpecifiedGroup (4, group 0); IoDisconnectInterruptEx requires the matching version/context. Registration and disconnection require PASSIVE_LEVEL. Only a private interrupt lock, exclusive latched mode, CPU0/group0 and no floating-state save are supported. Synchronization IRQL must equal the assigned DIRQL; LineBased zero selects that level. KINTERRUPT is opaque and its address is never reused. The real ISR receives (Interrupt, ServiceContext) and returns BOOLEAN from AL; FALSE is unclaimed, not NTSTATUS failure. KeSynchronizeExecution runs the real one-argument callback under the same lock at DIRQL and returns its BOOLEAN while restoring caller IRQL/CR8. KeAcquireInterruptSpinLock / KeReleaseInterruptSpinLock enforce nonrecursive ownership, the original execution and saved IRQL; leaked locks cannot cross callback return. Interrupt waits, caller-provided shared locks, shared/level/MSI/passive interrupts and instruction-level interrupt preemption remain unsupported. Failed START and successful STOP/REMOVE require disconnection before terminal completion; upper completion callbacks may tear down first, and disconnect never silently discards a queued DPC.",
         "Reports separate declarations from observations. configuration.pnp_devices[].interrupts retains resources, and configuration.interrupt_events flattens input events with zero-based source_request_index (the configured request index) and event_index. Root interrupts rows add device_id, interrupt_id, epoch, absolute due_at_100ns, nullable occurred_at_100ns, delivered_at_100ns, returned_at_100ns, interrupt_object, return_value, claimed and undelivered_reason. claimed derives only from the actual low-byte return; timestamps are observations, not fabricated callback results. Every configured event must return without an undelivered failure for scenario_success; an unclaimed ISR remains valid. DPC effects appear through actual request completion, API calls and messages. The runnable interrupt scenario uses original genuine-WDK driver_wdm_interrupts.c with optional NEVERD_WDM_INTERRUPT_FIXTURE / NEVERD_WDM_INTERRUPT_CFG_FIXTURE: seven requests include delayed START, a pending IOCTL completed by ISR→DPC, file cleanup/close and removal. The existing C/Python scenario_json boundary and neverd_driver_options_v1 layout are unchanged. Missing genuine artifacts skip explicitly; execution evidence is Linux-only.",
         "DriverDMA.h / DriverDMA.def add an optional dma object to a register_bank PDO, alongside its memory/interrupt assignments; DMA alone does not replace either resource list. All seven fields are explicit: address_bits (32 or 64), maximum_length (1–1048576 bytes), map_registers (1–256), alignment (power of two from 1–4096), logical_base (nonzero and page aligned), logical_length (page aligned, 4096–1073741824 bytes), and Boolean scatter_gather. The overflow-free aperture must fit the address width. Each PDO has an independent logical domain, so equal addresses on different devices do not alias. Translated MMIO resources must avoid the reserved model RAM range [0x1000000000, 0x1000100000). These declarations describe a coherent synthetic bus master, never host physical memory or a PCI device.",
-        "IoGetDmaAdapter accepts the historical DEVICE_DESCRIPTION version 0/1 fields for an Internal bus master and publishes a version-one DMA_ADAPTER with its actual 104-byte DMA_OPERATIONS table. Version 2/3 probes return NULL without reading a modern description tail. Each indirect method is bound to that exact live adapter, independently of kernel imports. Implemented methods are AllocateCommonBuffer, FreeCommonBuffer, GetDmaAlignment, GetScatterGatherList, PutScatterGatherList and PutDmaAdapter; AllocateAdapterChannel, FlushAdapterBuffers, FreeAdapterChannel, FreeMapRegisters, MapTransfer and ReadDmaCounter remain named traps. Common-buffer allocation/free and alignment queries require PASSIVE_LEVEL; Get/PutScatterGatherList require DISPATCH_LEVEL, and adapter release permits IRQL through DISPATCH_LEVEL. x64 ignores CacheEnabled. Unsupported version probes, incompatible declared capabilities and documented allocation shortages return NULL; malformed or unmodeled interface selections and backend failures remain explicit errors.",
+        "IoGetDmaAdapter accepts the historical DEVICE_DESCRIPTION version 0/1 fields for an Internal bus master and publishes a version-one DMA_ADAPTER with its actual 104-byte DMA_OPERATIONS table. Version 2/3 probes return NULL without reading a modern description tail. Each indirect method is bound to that exact live adapter, independently of kernel imports. Implemented methods are AllocateCommonBuffer, FreeCommonBuffer, GetDmaAlignment, GetScatterGatherList, PutScatterGatherList, PutDmaAdapter, AllocateAdapterChannel, MapTransfer, FlushAdapterBuffers and FreeMapRegisters. FreeAdapterChannel and ReadDmaCounter remain named traps because this profile has no subordinate/system DMA controller. Common-buffer allocation/free and alignment queries require PASSIVE_LEVEL; Get/PutScatterGatherList require DISPATCH_LEVEL, and adapter release permits IRQL through DISPATCH_LEVEL. x64 ignores CacheEnabled. Unsupported version probes, incompatible declared capabilities and documented allocation shortages return NULL; malformed or unmodeled interface selections and backend failures remain explicit errors.",
         "KernelPhysicalMemory assigns at most 256 model physical pages of 4096 bytes to existing RAM. CPU virtual addresses, physical page identities and device logical addresses are distinct. Built MDL PFN arrays expose these shared identities read-only; unbuilt descriptors have no usable PFNs. Small neighboring allocations may share a PFN but retain separate byte ranges and lifetimes. Common buffers, pool storage and request buffers use the same bytes already owned by GuestMemory, without a second DMA copy. A live SG mapping pins its exact data range and descriptor. Completion, pool/MDL free and teardown reject live dependencies before retirement. Unmapping a direct MDL only revokes its CPU system mapping; DMA remains able to reach its locked backing. DmaWritable records the write-lock contract separately from CPU mapping permissions: device writes require direct READ/OUT_DIRECT or writable nonpaged storage; WRITE/IN_DIRECT do not gain that permission merely because their CPU mapping is writable.",
         "GetScatterGatherList validates CurrentVa/Length against the MDL's original range and creates logical page fragments over its existing backing. Available map registers allow the real four-argument void AdapterListControl to run inline before the API returns; otherwise admission retains the data/descriptor and reserves a callback in the PDO's FIFO until resources are released. This profile has no StartIo ownership, so the callback's second IRP argument is NULL. Callback return does not release a mapping. CPU access to a live SG data range requires Put first; a callback waiting for map registers has not yet granted the device ownership of those bytes. PutScatterGatherList may run inside the callback; after Put, the driver may complete the request and release the last adapter while its callback continuation and device hold survive until return. Common buffers require their original adapter, length, logical address and CPU address when freed. Logical addresses are never reused during the session, including restart. A resource wait without a real producer stalls explicitly; it does not fabricate a completion or deadline.",
         "Only READ/WRITE/IOCTL requests accept dma_events. Each event requires after_100ns, device_id, logical_address, direction and length; write_memory additionally requires exact-length data_hex, while read_memory rejects that field. Directions are from the device's perspective. Limits are 64 events per request, 1024 total, 16 MiB of total transaction bytes and 1 MiB per transaction; delay is nonnegative through INT64_MAX. Submission captures the PDO's current assigned epoch and anchors virtual time, but does not require a mapping that the forthcoming dispatch has yet to create. Delivery resolves the complete live logical range and direction, requires physical D0, and validates all backing bytes before any transaction effect. Source IRP completion does not cancel an event. Missing/released mappings, stale epochs, surprise removal or D3 record a failure and stop; events neither rebind nor invent an interrupt, register protocol or IRP completion. At one scheduled boundary, provider hardware publication precedes DMA bytes, which precede independently declared interrupt pulses. Timing remains cooperative, not instruction-level preemption.",
-        "Reports retain configuration.pnp_devices[].dma and flattened configuration.dma_events. Root dma_transfers rows identify source_request_index, event_index, device_id, epoch, logical_address, direction, length and due_at_100ns, with nullable occurred_at_100ns, completed_at_100ns, mapping, adapter and failure_reason; data_hex contains actual transferred bytes. Every declared transaction must finish without failure for scenario_success. The DMA scenario uses original genuine-WDK driver_wdm_dma.c with optional NEVERD_WDM_DMA_FIXTURE / NEVERD_WDM_DMA_CFG_FIXTURE, exercising a common buffer through actual adapter pointers and a separately declared ISR→DPC completion. C/Python still use scenario_json without changing neverd_driver_options_v1. Missing artifacts skip explicitly; evidence is Linux-only. Adapter-channel allocation, MapTransfer/FlushAdapterBuffers, subordinate controllers, V2/V3 methods, hardware descriptor engines, general KMDF DMA and other device models remain unsupported.",
-        "DriverDMA.h / DriverDMA.def own explicit per-PDO capabilities and independent external transactions. KernelPhysicalMemory registers exact live RAM allocations, assigns shared page identities and pins byte ranges; MDLs are views of that authority, not copied buffers. GuestMemory / UnicornBackend provide whole-span backing access that bypasses CPU permissions without changing them, rejects MMIO/running/reentrant or faulted access, and latches unexpected backend failures. KernelDMA owns independent logical domains, adapter-bound method identities, common/SG mappings, map-register admission and callback references; KernelDMAEvents resolves captured PDO epochs at actual delivery. KernelModelPhysicalMemory, KernelModelDMA and KernelModelDMATransfers bridge original allocation/MDL ownership and real indirect guest callbacks. Available SG resources permit inline delivery, while queued callbacks reserve identity and capacity until FIFO promotion. Mapping and callback lifetimes are separate: Put can release data/descriptor pins before callback return, and callback retention does not keep completed IRPs alive. DmaWritable records lock intent independently of CPU mapping permissions. Same-time provider publication precedes DMA RAM effects and then interrupt eligibility. Resource epochs/presence/power remain solely in KernelResources; DMA does not infer vendor registers, assert an IRQ, complete an IRP or own a second lifecycle. Logical addresses are never recycled, and transaction validation failures retain observations without changing RAM. The first interface is coherent common-buffer and version-one SG DMA over bounded model RAM; general hardware, subordinate controllers and other DMA interfaces remain unsupported."
+        "Reports retain configuration.pnp_devices[].dma and flattened configuration.dma_events. Root dma_transfers rows identify source_request_index, event_index, device_id, epoch, logical_address, direction, length and due_at_100ns, with nullable occurred_at_100ns, completed_at_100ns, mapping, adapter and failure_reason; data_hex contains actual transferred bytes. Every declared transaction must finish without failure for scenario_success. The DMA scenario uses original genuine-WDK driver_wdm_dma.c with optional NEVERD_WDM_DMA_FIXTURE / NEVERD_WDM_DMA_CFG_FIXTURE, exercising a common buffer through actual adapter pointers and a separately declared ISR→DPC completion. C/Python still use scenario_json without changing neverd_driver_options_v1. Missing artifacts skip explicitly; evidence is Linux-only. Subordinate controllers, V2/V3 methods, hardware descriptor engines, general KMDF DMA and other device models remain unsupported.",
+        "DriverDMA.h / DriverDMA.def own explicit per-PDO capabilities and independent external transactions. KernelPhysicalMemory registers exact live RAM allocations, assigns shared page identities and pins byte ranges; MDLs are views of that authority, not copied buffers. GuestMemory / UnicornBackend provide whole-span backing access that bypasses CPU permissions without changing them, rejects MMIO/running/reentrant or faulted access, and latches unexpected backend failures. KernelDMA owns independent logical domains, adapter-bound method identities, common/SG mappings, map-register admission and callback references; KernelDMAEvents resolves captured PDO epochs at actual delivery. KernelModelPhysicalMemory, KernelModelDMA and KernelModelDMATransfers bridge original allocation/MDL ownership and real indirect guest callbacks. Available SG resources permit inline delivery, while queued callbacks reserve identity and capacity until FIFO promotion. Mapping and callback lifetimes are separate: Put can release data/descriptor pins before callback return, and callback retention does not keep completed IRPs alive. DmaWritable records lock intent independently of CPU mapping permissions. Same-time provider publication precedes DMA RAM effects and then interrupt eligibility. Resource epochs/presence/power remain solely in KernelResources; DMA does not infer vendor registers, assert an IRQ, complete an IRP or own a second lifecycle. Logical addresses are never recycled, and transaction validation failures retain observations without changing RAM. The first interface is coherent common-buffer and version-one SG DMA over bounded model RAM; general hardware, subordinate controllers and other DMA interfaces remain unsupported.",
+        "AllocateAdapterChannel requires DISPATCH_LEVEL and reserves an opaque non-NULL map-register token. Common buffers, SG lists and channel reservations share the same per-PDO quota and FIFO. Success accepts a real immediate or queued AdapterControl; an excessive requested count returns STATUS_INSUFFICIENT_RESOURCES without a callback. One unfinished allocation callback is allowed per guest device, and calling AllocateAdapterChannel from AdapterControl is rejected, including through a nested callback. The callback's four arguments contain the actual DEVICE_OBJECT.CurrentIrp snapshot taken at registration. That exact eight-byte field is writable on guest devices; zero or a live IRP routed to the device is accepted. A queued callback retains that packet until entry, after which the callback may complete it. The profile still has no StartIo; the separate SG callback's unused IRP argument remains NULL.",
+        "AdapterControl returns a 32-bit IO_ALLOCATION_ACTION; high RAX bits are ignored, and the action never replaces AllocateAdapterChannel's STATUS_SUCCESS. DeallocateObject releases unused or fully flushed registers on callback return. DeallocateObjectKeepRegisters retains them until FreeMapRegisters uses the exact adapter, token and original count. Returning KeepObject requires an unmodeled system controller and fails explicitly. The newly delivered allocation cannot be freed as retained before its callback returns; a different previously retained allocation may be freed when its own contract permits. Callback identity, retained registers and active mapped bytes have separate lifetimes, all checked before adapter or device teardown.",
+        "MapTransfer and FlushAdapterBuffers permit IRQL through DISPATCH_LEVEL; channel allocation and register free require DISPATCH_LEVEL. MapTransfer takes an MDL-relative index, reads and updates an actual ULONG length and returns the logical address by value. The bounded SG profile returns one backing-page fragment per call; contiguous subsequent indices in the same MDL and direction extend one operation. Non-SG maps the entire requested extent in one call if it fits the reserved count, without shortening it. The first map reserves a nonreused logical aperture sized to the register reservation; other allocations can interleave without overlapping it. All fragments share one growing physical pin. Device transactions can span the full currently mapped operation, while CPU access, MDL free and completion that retires pinned storage remain blocked until aggregate flush. Flush must match the initial index, MDL, direction and total actual mapped length. It releases mapped bytes without releasing registers, so the retained token can support another operation. Partial flushes, mixed-MDL operations and other MapTransfer patterns are outside this profile, rather than assumed invalid on every Windows system.",
+        "KeFlushIoBuffers validates a live locked/nonpaged MDL. The modeled platform is coherent, so either ReadOperation or DmaOperation value needs no separate cache copy; this call does not release DMA ownership or replace FlushAdapterBuffers. The channel scenario runs original driver_wdm_dma_channel.c through two MapTransfer calls, one cross-page device transaction, a separately declared IRQ/DPC, aggregate flush and exact register release. Genuine normal/CFG images use NEVERD_WDM_DMA_CHANNEL_FIXTURE and NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE.",
+        "The original genuine-WDK driver_wdm_dma_channel.c and optional NEVERD_WDM_DMA_CHANNEL_FIXTURE/NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE exercise real translated bus-master channel calls, aggregate fragments, retained-register reuse and shared common/SG/channel admission. Native normal/CFG/rebased runs and the seven-request C API/CLI example validate the bounded profile; Python uses the same scenario_json interface. Missing fixtures skip explicitly and evidence remains Linux-only."
       ],
       "tests": [
         {
@@ -5950,6 +5955,276 @@
           "target": "NeverDPythonSDKUnitTests",
           "source": "pluginsdk/python/tests/test_driver_dma_integration.py",
           "filter": "DriverDMAIntegrationTests.test_late_dma_failure_remains_visible_after_source_irp_completion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.SharedQuotaPromotesChannelBeforeLaterSG",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.CurrentIrpIsHeldUntilEntryAndDeviceUntilFree",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.SGFragmentsGrowOnePinAndFlushOneAggregate",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.AggregateBusTransactionCrossesMapFragments",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.AggregatePreflightRejectsHoleBeforeAnyPrefixWrite",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.InterleavedSGCannotOverlapReservedOperationAperture",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.LiveOperationsRejectReturnAndFreeWithoutMutation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelTests.cpp",
+          "filter": "DriverKernelDMAChannel.OldLogicalAddressCannotRedirectToReusedToken",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPhysicalMemoryTests.cpp",
+          "filter": "KernelPhysicalRAM.GrowingPinPreservesIdentityAndSameBytesAcrossPages",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPhysicalMemoryTests.cpp",
+          "filter": "KernelPhysicalRAM.ExistingPinCanGrowWithAllPinSlotsOccupied",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.CurrentIrpWriteIsExactlyOneGuestPointer",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.QueuedSnapshotProtectsIrpOnlyUntilDelivery",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.BegunCallbackCanCompleteItsCapturedIrp",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.ReturnUsesLowDwordAndFailedActionKeepsOwner",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.PartialMapsRequireOneAggregateFlush",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.InvalidMapLeavesLengthAndAdmissionUnchanged",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.CacheFlushDoesNotEndTransferOwnership",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDMAChannelBridgeTests.cpp",
+          "filter": "KernelDMAChannelBridge.RegisterReleasePromotesMixedCallbacksInFifoOrder",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/SchedulerDMATests.cpp",
+          "filter": "DriverSchedulerDMA.MixedFIFOHasOnePriorityTierWithoutObjectCoalescing",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/SchedulerDMATests.cpp",
+          "filter": "DriverSchedulerDMA.MixedBatchRejectsWrongKindWithoutPartialPromotion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/SchedulerDMATests.cpp",
+          "filter": "DriverSchedulerDMA.ChannelWaitingAndSuspensionRetainOriginalArguments",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.ScatterFragmentsExecuteWithNormalCfgAndRebasing",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.NonScatterMappingPreservesRequestedWholeLength",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.AggregateFlushAllowsRetainedRegisterReuse",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.CallbackMayCompleteBeforeDeallocateActionReturns",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.PartialFlushWrongDirectionAndPartialFreeAreRejected",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMDMAChannelTests.cpp",
+          "filter": "DriverWDMDMAChannel.LiveMappingProtectsMdlPoolIrpAndCpuOwnership",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIFlushChannelFragmentsBeforeCompletion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_driver_dma_channel_integration.py",
+          "filter": "DriverDMAChannelIntegrationTests.test_one_bus_transaction_crosses_two_fragments_before_aggregate_flush",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_driver_dma_channel_integration.py",
+          "filter": "DriverDMAChannelIntegrationTests.test_shared_quota_preserves_the_registration_time_irp_snapshot",
           "platforms": [
             "linux"
           ]

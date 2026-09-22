@@ -32,6 +32,19 @@ namespace dma {
 
 class KernelDMA {
 public:
+  enum class CallbackKind { ScatterGather, AdapterControl };
+  struct Promotion {
+    CallbackKind Kind = CallbackKind::ScatterGather;
+    uint64_t Object = 0;
+    uint64_t SchedulerID = 0;
+    bool operator==(const Promotion &) const = default;
+  };
+  struct CallbackInfo {
+    CallbackKind Kind = CallbackKind::ScatterGather;
+    uint64_t Object = 0, Adapter = 0, PDO = 0;
+    uint64_t Device = 0, DeviceSize = 0, Routine = 0, Context = 0;
+    uint64_t CurrentIRP = 0, IRPSize = 0, SchedulerID = 0;
+  };
   KernelDMA(KernelPhysicalMemory &Physical, const KernelResources &Resources,
             DriverResult &Result)
       : Physical(Physical), Resources(Resources), Result(Result) {}
@@ -55,7 +68,7 @@ public:
   llvm::Error putAdapter(uint64_t Object);
 
   struct Mapping {
-    uint64_t Object = 0; // Common VA or unique guest SG-list allocation.
+    uint64_t Object = 0; // Common VA, SG list, or channel register token.
     uint64_t Adapter = 0;
     uint64_t PDO = 0;
     uint64_t Owner = 0;
@@ -68,6 +81,7 @@ public:
     uint32_t Length = 0;
     uint32_t Registers = 0;
     bool Common = false;
+    bool Channel = false;
     bool Live = false;
     DriverDmaDirection Direction = DriverDmaDirection::ReadMemory;
     uint64_t MDL = 0;
@@ -92,18 +106,87 @@ public:
 
   struct ReleasePlan {
     uint64_t Object = 0;
-    /// Map IDs in per-domain FIFO order; callback capacity was reserved at Get.
-    std::vector<uint64_t> Ready;
+    /// Typed FIFO promotions; callback capacity was reserved at admission.
+    std::vector<Promotion> Ready;
   };
   llvm::Expected<ReleasePlan> planRelease(uint64_t Object) const;
   llvm::Error releaseMapping(const ReleasePlan &Plan);
   /// Callback records survive Put and even logical adapter retirement.
   const Mapping *callback(uint64_t Object) const;
+  std::optional<CallbackInfo> callbackInfo(uint64_t Object) const;
   bool hasPendingCallbacks() const;
   llvm::Error canBeginCallback(uint64_t Object) const;
   llvm::Error beginCallback(uint64_t Object);
   llvm::Error canFinishCallback(uint64_t Object) const;
   llvm::Error finishCallback(uint64_t Object);
+
+  struct ChannelRequest {
+    uint64_t Object = 0, Adapter = 0, Device = 0, DeviceSize = 0;
+    uint64_t Routine = 0, Context = 0, CurrentIRP = 0, IRPSize = 0;
+    uint64_t SchedulerID = 0;
+    uint32_t Registers = 0;
+    bool operator==(const ChannelRequest &) const = default;
+  };
+  struct Channel {
+    ChannelRequest Request;
+    uint64_t PDO = 0;
+    bool Live = false, Begun = false, Returned = false;
+    bool Retained = false, Released = false;
+    uint64_t OperationSerial = 0, InitialVA = 0, Revision = 0;
+  };
+  /// Preview accepts SchedulerID zero; publication requires its reservation.
+  llvm::Expected<std::optional<Channel>>
+  planChannel(const ChannelRequest &Request) const;
+  llvm::Error canPublishChannel(const Channel &Plan) const;
+  llvm::Error publishChannel(const Channel &Plan);
+  const Channel *channel(uint64_t Object) const;
+
+  struct ChannelReturnPlan {
+    uint64_t Object = 0, Revision = 0;
+    uint32_t Action = 0;
+    std::vector<Promotion> Ready;
+  };
+  llvm::Expected<ChannelReturnPlan> planChannelReturn(uint64_t Object,
+                                                      uint32_t Action) const;
+  llvm::Error finishChannelReturn(const ChannelReturnPlan &Plan);
+  struct RegisterReleasePlan {
+    uint64_t Adapter = 0, Object = 0, Revision = 0;
+    uint32_t Registers = 0;
+    std::vector<Promotion> Ready;
+  };
+  llvm::Expected<RegisterReleasePlan>
+  planFreeRegisters(uint64_t Adapter, uint64_t Object,
+                    uint32_t Registers) const;
+  llvm::Error freeRegisters(const RegisterReleasePlan &Plan);
+
+  struct TransferRequest {
+    uint64_t Adapter = 0, Object = 0, Owner = 0, Offset = 0;
+    uint64_t MDL = 0, MDLSize = 0, CurrentVA = 0;
+    uint32_t Length = 0;
+    DriverDmaDirection Direction = DriverDmaDirection::ReadMemory;
+    bool operator==(const TransferRequest &) const = default;
+  };
+  struct TransferPlan {
+    TransferRequest Request;
+    uint64_t Logical = 0, NextLogical = 0, Serial = 0;
+    uint32_t Length = 0, TotalLength = 0, Registers = 0;
+    bool First = false;
+    bool operator==(const TransferPlan &) const = default;
+  };
+  llvm::Expected<TransferPlan>
+  planTransfer(const TransferRequest &Request) const;
+  llvm::Error commitTransfer(const TransferPlan &Plan);
+  struct FlushPlan {
+    uint64_t Adapter = 0, Object = 0, MDL = 0, CurrentVA = 0, Serial = 0;
+    uint32_t Length = 0;
+    DriverDmaDirection Direction = DriverDmaDirection::ReadMemory;
+    bool operator==(const FlushPlan &) const = default;
+  };
+  llvm::Expected<FlushPlan> planFlush(uint64_t Adapter, uint64_t Object,
+                                      uint64_t MDL, uint64_t CurrentVA,
+                                      uint32_t Length,
+                                      DriverDmaDirection Direction) const;
+  llvm::Error flush(const FlushPlan &Plan);
   llvm::Error canReleasePDO(uint64_t PDO) const;
   llvm::Error canReleaseRange(uint64_t Base, uint64_t Size) const;
   llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size,
@@ -121,7 +204,7 @@ private:
   struct Domain {
     uint64_t NextLogical = 0;
     uint32_t UsedRegisters = 0;
-    std::deque<uint64_t> Waiting;
+    std::deque<Promotion> Waiting;
   };
   struct Callback {
     Mapping Arguments;
@@ -142,9 +225,13 @@ private:
   std::map<uint64_t, Domain> Domains;
   std::map<uint64_t, Mapping> Mappings;
   std::map<uint64_t, Callback> Callbacks;
+  std::map<uint64_t, Channel> Channels;
   std::set<uint64_t> RetiredMappings;
   std::map<size_t, Event> Events;
   uint64_t ObservedBytes = 0;
+  llvm::Expected<std::vector<Promotion>>
+  planPromotions(uint64_t PDO, uint32_t Releasing) const;
+  void promote(uint64_t PDO, llvm::ArrayRef<Promotion> Ready);
   llvm::Expected<Event> resolveEvent(const DriverDmaEvent &Event,
                                      uint64_t Now) const;
   llvm::Error executeEvent(Event &Event, uint64_t Now);

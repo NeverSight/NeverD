@@ -75,6 +75,9 @@ public:
   llvm::Error canPin(uint64_t Owner, uint64_t Offset, uint64_t Length) const;
   llvm::Expected<uint64_t> pin(uint64_t Owner, uint64_t Offset,
                                uint64_t Length);
+  /// Grow forward in place without releasing ownership or taking a second pin.
+  llvm::Error canExtendPin(uint64_t Pin, uint64_t NewLength) const;
+  llvm::Error extendPin(uint64_t Pin, uint64_t NewLength);
   llvm::Error unpin(uint64_t Pin);
   llvm::Error read(uint64_t Pin, uint64_t Offset,
                    llvm::MutableArrayRef<uint8_t> Bytes);

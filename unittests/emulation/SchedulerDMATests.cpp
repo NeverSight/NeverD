@@ -427,5 +427,277 @@ TEST(DriverSchedulerDMA, InlineReturnPreflightPreservesNestedOwners) {
   EXPECT_FALSE(S.hasPending());
 }
 
+TEST(DriverSchedulerDMA, OtherKindsCannotConsumeDMAIdentityOrCapacity) {
+  Scheduler S;
+  using Kind = Scheduler::CallbackKind;
+  for (Kind Other :
+       {Kind::WorkItem, Kind::DPC, Kind::FrameworkCancel, Kind::WDMCompletion,
+        Kind::Interrupt, static_cast<Kind>(255)}) {
+    EXPECT_FALSE(Scheduler::isDMACallbackKind(Other));
+    fails(S.canReserveDMACallback(callback(1), Other), "not a DMA callback");
+    fails(S.reserveDMACallback(callback(1), Other), "not a DMA callback");
+    fails(S.canBeginInlineDMACallback(1, Other), "not a DMA callback");
+    fails(S.beginInlineDMACallback(1, Other), "not a DMA callback");
+    fails(S.canFinishInlineDMACallback(1, Other), "not a DMA callback");
+    fails(S.finishInlineDMACallback(1, Other), "not a DMA callback");
+  }
+  EXPECT_FALSE(S.hasPending());
+  EXPECT_EQ(S.dispatchCount(), 0u);
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_TRUE(Scheduler::isDMACallbackKind(Kind::DMAAdapterControl));
+  EXPECT_TRUE(Scheduler::isDMACallbackKind(Kind::DMAListControl));
+  EXPECT_EQ(take(S.reserveDMACallback(callback(1), Kind::DMAAdapterControl)),
+            1u);
+}
+
+TEST(DriverSchedulerDMA, MixedFIFOHasOnePriorityTierWithoutObjectCoalescing) {
+  Scheduler S;
+  using Kind = Scheduler::CallbackKind;
+  const auto Channel =
+      take(S.reserveDMACallback(callback(7), Kind::DMAAdapterControl));
+  const auto List = take(S.reserveDMAListControl(callback(7)));
+  const auto OtherChannel =
+      take(S.reserveDMACallback(callback(7), Kind::DMAAdapterControl));
+  // Admission order, rather than reservation age or callback kind, owns FIFO.
+  success(S.readyDMACallbacks({List, Channel}));
+  success(S.readyDMACallbacks({OtherChannel}));
+  const auto Worker = take(S.enqueueWorkItem(callback(7)));
+  const auto Completion = take(S.enqueueWDMCompletion(callback(7)));
+  const auto Cancel = take(S.enqueueFrameworkCancel(callback(7)));
+  EXPECT_TRUE(take(S.queueDPC(dpc(7))));
+  Scheduler::InterruptCallback IRQ;
+  static_cast<Scheduler::Callback &>(IRQ) = callback(7);
+  IRQ.IRQL = IRQ.Priority = 5;
+  const auto Interrupt = take(S.enqueueInterrupt(IRQ));
+  EXPECT_EQ(S.queuedCallbackCount(), 8u);
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, Interrupt);
+  success(S.finish(Call->ID));
+  Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Kind, Kind::DPC);
+  success(S.finish(Call->ID));
+  for (uint64_t ID : {List, Channel, OtherChannel}) {
+    EXPECT_TRUE(S.hasQueuedDMACallback());
+    EXPECT_EQ(S.hasQueuedDMAListControl(), ID == List);
+    Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    EXPECT_EQ(Call->Kind,
+              ID == List ? Kind::DMAListControl : Kind::DMAAdapterControl);
+    EXPECT_EQ(Call->IRQL, 2);
+    EXPECT_EQ(Call->Arguments, callback(7).Arguments);
+    success(S.finish(ID));
+  }
+  EXPECT_FALSE(S.hasQueuedDMACallback());
+  for (uint64_t ID : {Cancel, Completion, Worker}) {
+    Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    EXPECT_EQ(Call->IRQL, 0);
+    success(S.finish(ID));
+  }
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverSchedulerDMA, MixedBatchRejectsWrongKindWithoutPartialPromotion) {
+  Scheduler S;
+  using Kind = Scheduler::CallbackKind;
+  const auto List = take(S.reserveDMAListControl(callback(1, 101)));
+  const auto Channel =
+      take(S.reserveDMACallback(callback(2, 102), Kind::DMAAdapterControl));
+  fails(S.canReadyDMAListControls({List, Channel}), "kind mismatch");
+  fails(S.readyDMAListControls({List, Channel}), "kind mismatch");
+  fails(S.canReadyDMACallbacks({List, Channel, Channel}), "duplicate");
+  fails(S.readyDMACallbacks({List, Channel, UINT64_MAX}), "not waiting");
+  EXPECT_FALSE(S.hasQueuedDMACallback());
+  EXPECT_FALSE(take(S.next(true)));
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_TRUE(S.hasOutstanding(101));
+  EXPECT_TRUE(S.hasOutstanding(102));
+  success(S.canReadyDMACallbacks({Channel, List}));
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+  success(S.readyDMACallbacks({Channel, List}));
+  for (uint64_t ID : {Channel, List}) {
+    const auto Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    success(S.finish(ID));
+  }
+  EXPECT_EQ(take(S.reserveDMAListControl(callback(3))), 3u);
+}
+
+TEST(DriverSchedulerDMA, MixedPromotionUsesCapacityReservedBeforeRelease) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 3;
+  Scheduler S(Limits);
+  using Kind = Scheduler::CallbackKind;
+  const auto Parent = take(S.enqueueWorkItem(callback(1, 101)));
+  const auto Channel =
+      take(S.reserveDMACallback(callback(2, 102), Kind::DMAAdapterControl));
+  const auto List = take(S.reserveDMAListControl(callback(3, 103)));
+  ASSERT_TRUE(take(S.next(false)));
+  fails(S.reserveDMACallback(callback(4), Kind::DMAAdapterControl),
+        "pending callback limit");
+  success(S.readyDMACallbacks({Channel, List}));
+  // Promotion during a release only queues; the scheduled releaser survives.
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, Parent);
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  fails(S.next(false), "unfinished callback");
+  success(S.finish(Parent));
+  for (uint64_t ID : {Channel, List}) {
+    const auto Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    EXPECT_TRUE(S.hasOutstanding(Call->Owner));
+    success(S.finish(ID));
+    EXPECT_FALSE(S.hasOutstanding(Call->Owner));
+  }
+  EXPECT_EQ(take(S.reserveDMACallback(callback(4), Kind::DMAAdapterControl)),
+            4u);
+}
+
+TEST(DriverSchedulerDMA, MixedInlineKindAndLifoFailuresPreserveParent) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 3;
+  Scheduler S(Limits);
+  using Kind = Scheduler::CallbackKind;
+  EXPECT_TRUE(take(S.queueDPC(dpc(1))));
+  const auto Parent = take(S.next(false));
+  ASSERT_TRUE(Parent);
+  const auto Channel =
+      take(S.reserveDMACallback(callback(2, 102), Kind::DMAAdapterControl));
+  const auto List = take(S.reserveDMAListControl(callback(3, 103)));
+  fails(S.canBeginInlineDMAListControl(Channel), "kind mismatch");
+  fails(S.beginInlineDMAListControl(Channel), "kind mismatch");
+  fails(S.beginInlineDMACallback(List, Kind::DMAAdapterControl),
+        "kind mismatch");
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  success(S.canBeginInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  success(S.beginInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  success(S.beginInlineDMAListControl(List));
+  EXPECT_EQ(S.dispatchCount(), 3u);
+  fails(S.canFinishInlineDMACallback(Channel, Kind::DMAAdapterControl),
+        "identity mismatch");
+  fails(S.finishInlineDMACallback(Channel, Kind::DMAAdapterControl),
+        "identity mismatch");
+  fails(S.finishInlineDMACallback(List, Kind::DMAAdapterControl),
+        "kind mismatch");
+  fails(S.suspend(Parent->ID), "inline DMA");
+  fails(S.canFinish(Parent->ID), "inline DMA");
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, Parent->ID);
+  EXPECT_EQ(S.active()->Kind, Kind::DPC);
+  EXPECT_TRUE(S.hasOutstanding(102));
+  EXPECT_TRUE(S.hasOutstanding(103));
+  success(S.finishInlineDMAListControl(List));
+  fails(S.canFinishInlineDMAListControl(Channel), "kind mismatch");
+  fails(S.finishInlineDMAListControl(Channel), "kind mismatch");
+  EXPECT_TRUE(S.hasOutstanding(102));
+  EXPECT_FALSE(S.hasOutstanding(103));
+  success(S.canFinishInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  EXPECT_TRUE(S.hasOutstanding(102));
+  success(S.finishInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  EXPECT_FALSE(S.hasOutstanding(102));
+  success(S.canFinish(Parent->ID));
+  success(S.canFinish(Parent->ID));
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, Parent->ID);
+  success(S.finish(Parent->ID));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverSchedulerDMA, ChannelWaitingAndSuspensionRetainOriginalArguments) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 1;
+  Scheduler S(Limits);
+  using Kind = Scheduler::CallbackKind;
+  auto Metadata = callback(1, 101);
+  Metadata.Arguments = {101, 0x70001000, 0x80002000, 0xDEADBEEF};
+  const auto ID = take(S.reserveDMACallback(Metadata, Kind::DMAAdapterControl));
+  Metadata.Arguments[1] = 0; // The registering caller can change its storage.
+  EXPECT_FALSE(S.hasQueuedDMACallback());
+  EXPECT_FALSE(S.nextEventTime100ns());
+  EXPECT_FALSE(take(S.next(true)));
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_TRUE(S.hasPending());
+  EXPECT_TRUE(S.hasOutstanding(101));
+  success(S.readyDMACallbacks({ID}));
+  const auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Arguments[1], 0x70001000u);
+  EXPECT_EQ(Call->IRQL, 2);
+  // Suspension is a scheduler primitive; API-level waits still enforce IRQL.
+  success(S.suspend(ID));
+  ASSERT_NE(S.suspended(ID), nullptr);
+  EXPECT_EQ(S.suspended(ID)->Kind, Kind::DMAAdapterControl);
+  EXPECT_EQ(S.suspended(ID)->Arguments, Call->Arguments);
+  fails(S.reserveDMAListControl(callback(2)), "pending callback limit");
+  success(S.resume(ID));
+  EXPECT_EQ(S.active()->Arguments, Call->Arguments);
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  success(S.finish(ID));
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_EQ(take(S.reserveDMAListControl(callback(2))), 2u);
+}
+
+TEST(DriverSchedulerDMA, ChannelAndListShareInlineAndScheduledDispatchBudget) {
+  Scheduler::Limits Limits;
+  Limits.MaxDispatches = 1;
+  Scheduler S(Limits);
+  using Kind = Scheduler::CallbackKind;
+  success(S.canDispatchInlineDMACallback());
+  const auto Channel =
+      take(S.reserveDMACallback(callback(1, 101), Kind::DMAAdapterControl));
+  const auto List = take(S.reserveDMAListControl(callback(2, 102)));
+  success(S.beginInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  success(S.finishInlineDMACallback(Channel, Kind::DMAAdapterControl));
+  fails(S.canDispatchInlineDMACallback(), "dispatch limit");
+  fails(S.beginInlineDMAListControl(List), "dispatch limit");
+  success(S.canReadyDMACallbacks({List}));
+  success(S.readyDMACallbacks({List}));
+  fails(S.next(false), "dispatch limit");
+  EXPECT_FALSE(S.active());
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+  EXPECT_TRUE(S.hasOutstanding(102));
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  EXPECT_EQ(take(S.reserveDMACallback(callback(3), Kind::DMAAdapterControl)),
+            3u);
+}
+
+TEST(DriverSchedulerDMA, MixedReservationsPreflightWholeTimerBoundary) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 3;
+  Scheduler S(Limits);
+  using Kind = Scheduler::CallbackKind;
+  const auto Channel =
+      take(S.reserveDMACallback(callback(1), Kind::DMAAdapterControl));
+  const auto List = take(S.reserveDMAListControl(callback(2)));
+  EXPECT_FALSE(take(S.setTimer(20, 100, -10, 0, dpc(30))));
+  fails(S.canAdvanceTo100ns(10, 1), "pending callback limit");
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_FALSE(take(S.timerSignaled(20)));
+  EXPECT_EQ(S.timerExpirationCount(), 0u);
+  success(S.canAdvanceTo100ns(10));
+  success(S.advanceTo100ns(10));
+  success(S.readyDMACallbacks({Channel, List}));
+  EXPECT_EQ(S.queuedCallbackCount(), 3u);
+  const auto First = take(S.next(false));
+  ASSERT_TRUE(First);
+  EXPECT_EQ(First->Kind, Kind::DPC);
+  success(S.finish(First->ID));
+  for (uint64_t ID : {Channel, List}) {
+    const auto Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    EXPECT_EQ(Call->DueTime100ns, 10u);
+    success(S.finish(ID));
+  }
+  EXPECT_EQ(S.dispatchCount(), 3u);
+}
+
 } // namespace
 } // namespace neverd::emulation

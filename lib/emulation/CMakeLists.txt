@@ -34,8 +34,10 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelResources.cpp
   windows/KernelPhysicalMemory.cpp
   windows/KernelDMA.cpp
+  windows/KernelDMAChannels.cpp
   windows/KernelDMAEvents.cpp
   windows/KernelModelDMA.cpp
+  windows/KernelModelDMAChannels.cpp
   windows/KernelModelDMATransfers.cpp
   windows/KernelMMIO.cpp
   windows/KernelModelRemoveLocks.cpp

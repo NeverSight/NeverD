@@ -217,7 +217,11 @@ TEST_F(DriverKernelDMA, SharedDomainBudgetAndFIFOApplyAcrossAdapters) {
   bad(Model.beginCallback(B.Object), "waiting");
   good(Model.beginCallback(A.Object));
   const auto Release = take(Model.planRelease(A.Object));
-  EXPECT_EQ(Release.Ready, (std::vector<uint64_t>{B.Object, C.Object}));
+  EXPECT_EQ(
+      Release.Ready,
+      (std::vector<KernelDMA::Promotion>{
+          {KernelDMA::CallbackKind::ScatterGather, B.Object, B.SchedulerID},
+          {KernelDMA::CallbackKind::ScatterGather, C.Object, C.SchedulerID}}));
   auto Incorrect = Release;
   std::reverse(Incorrect.Ready.begin(), Incorrect.Ready.end());
   bad(Model.releaseMapping(Incorrect), "changed");

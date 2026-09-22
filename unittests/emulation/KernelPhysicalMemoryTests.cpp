@@ -261,5 +261,51 @@ TEST_F(KernelPhysicalRAM, ReleaseRangeIncludesPaddingAndEveryIntersectedOwner) {
   EXPECT_NE(Model->find(2), nullptr);
   EXPECT_NE(llvm::toString(Model->canReleaseRange(UINT64_MAX, 2)), "");
 }
+TEST_F(KernelPhysicalRAM, GrowingPinPreservesIdentityAndSameBytesAcrossPages) {
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 2 * Page)), "");
+  const auto Pin = take(Model->pin(1, Page - 2, 2));
+  ASSERT_EQ(llvm::toString(Model->canExtendPin(Pin, 6)), "");
+  std::array<uint8_t, 4> Bytes{};
+  EXPECT_NE(llvm::toString(Model->read(Pin, 2, Bytes)), "");
+  ASSERT_EQ(llvm::toString(Model->extendPin(Pin, 6)), "");
+  const std::array<uint8_t, 4> Written{5, 6, 7, 8};
+  ASSERT_EQ(llvm::toString(Model->write(Pin, 2, Written)), "");
+  ASSERT_EQ(llvm::toString(CPU->read(Base + Page, Bytes)), "");
+  EXPECT_EQ(Bytes, Written);
+  EXPECT_NE(llvm::toString(Model->retire(1)), "");
+  ASSERT_EQ(llvm::toString(Model->unpin(Pin)), "");
+  ASSERT_EQ(llvm::toString(Model->retire(1)), "");
+}
+
+TEST_F(KernelPhysicalRAM, PinGrowthCannotShrinkOrBorrowAdjacentOwnerBytes) {
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 16)), "");
+  ASSERT_EQ(llvm::toString(Model->registerRegion(2, Base + 16, 16)), "");
+  const auto Pin = take(Model->pin(1, 8, 4));
+  EXPECT_NE(llvm::toString(Model->extendPin(Pin, 3)), "");
+  EXPECT_NE(llvm::toString(Model->extendPin(Pin, 9)), "");
+  EXPECT_NE(llvm::toString(Model->extendPin(Pin + 1, 4)), "");
+  std::array<uint8_t, 1> Byte{};
+  ASSERT_EQ(llvm::toString(Model->read(Pin, 3, Byte)), "");
+  EXPECT_NE(llvm::toString(Model->read(Pin, 4, Byte)), "");
+  ASSERT_EQ(llvm::toString(Model->extendPin(Pin, 8)), "");
+  ASSERT_EQ(llvm::toString(Model->read(Pin, 7, Byte)), "");
+  EXPECT_NE(llvm::toString(Model->read(Pin, 8, Byte)), "");
+}
+
+TEST_F(KernelPhysicalRAM, ExistingPinCanGrowWithAllPinSlotsOccupied) {
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 16)), "");
+  std::vector<uint64_t> Pins;
+  for (uint64_t I = 0; I < physical::PinLimit; ++I)
+    Pins.push_back(take(Model->pin(1, 0, 1)));
+  rejects(Model->pin(1, 0, 1));
+  ASSERT_EQ(llvm::toString(Model->extendPin(Pins.front(), 16)), "");
+  std::array<uint8_t, 1> Byte{};
+  ASSERT_EQ(llvm::toString(Model->read(Pins.front(), 15, Byte)), "");
+  EXPECT_NE(llvm::toString(Model->read(Pins.back(), 1, Byte)), "");
+  for (const auto Pin : Pins)
+    ASSERT_EQ(llvm::toString(Model->unpin(Pin)), "");
+  ASSERT_EQ(llvm::toString(Model->retire(1)), "");
+}
+
 } // namespace
 } // namespace neverd::emulation

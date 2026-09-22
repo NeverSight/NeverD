@@ -20,6 +20,11 @@ llvm::Error transferError(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "DMA transfer: " + Text);
 }
+KernelScheduler::CallbackKind schedulerKind(KernelDMA::CallbackKind Kind) {
+  return Kind == KernelDMA::CallbackKind::AdapterControl
+             ? KernelScheduler::CallbackKind::DMAAdapterControl
+             : KernelScheduler::CallbackKind::DMAListControl;
+}
 } // namespace
 
 llvm::Expected<uint64_t>
@@ -34,31 +39,16 @@ KernelModel::getScatterGatherList(llvm::ArrayRef<uint64_t> A) {
       Device->second.PnpDevice != Adapter->PDO)
     return transferError(
         "GetScatterGatherList requires its adapter's live guest device");
-  auto MDL = MDLs.find(A[2]);
-  if (MDL == MDLs.end() || MDL->second.Owner == LockedMdl::Ownership::Driver)
-    return transferError(
-        "GetScatterGatherList requires a locked or nonpaged MDL");
-  const auto &View = MDL->second;
-  const uint64_t Virtual = View.Owner == LockedMdl::Ownership::Request
-                               ? View.UserAddress
-                               : View.Buffer;
+  if (!A[5])
+    return transferError("GetScatterGatherList requires a callback");
   const uint32_t Length = uint32_t(A[4]);
-  if (!Length || A[3] < Virtual || A[3] - Virtual >= View.ByteCount ||
-      Length > View.ByteCount - (A[3] - Virtual) || !A[5])
-    return transferError(
-        "CurrentVa and Length exceed the MDL, or callback is absent");
   const bool ToDevice = bool(uint8_t(A[7]));
-  if (!ToDevice && !View.DmaWritable)
-    return transferError("device writes require a write-locked MDL");
-  const uint64_t Backing = View.Buffer + (A[3] - Virtual);
-  auto Owner = Physical.ownerForRange(Backing, Length);
-  if (!Owner)
-    return Owner.takeError();
-  const auto *Region = Physical.find(*Owner);
-  auto Planned =
-      DMA.planMapping(A[0], *Owner, Backing - Region->Backing, Length, false,
-                      ToDevice ? DriverDmaDirection::ReadMemory
-                               : DriverDmaDirection::WriteMemory);
+  auto View = dmaMdlView(A[2], A[3], Length, ToDevice);
+  if (!View)
+    return View.takeError();
+  auto Planned = DMA.planMapping(A[0], View->Owner, View->Offset, Length, false,
+                                 ToDevice ? DriverDmaDirection::ReadMemory
+                                          : DriverDmaDirection::WriteMemory);
   if (!Planned)
     return Planned.takeError();
   if (!*Planned)
@@ -70,8 +60,8 @@ KernelModel::getScatterGatherList(llvm::ArrayRef<uint64_t> A) {
   if (Plan.Object > AllocationEnd ||
       Plan.StorageSize > AllocationEnd - Plan.Object)
     return windows::StatusInsufficientResources;
-  Plan.MDL = MDL->first;
-  Plan.MDLSize = View.Size;
+  Plan.MDL = A[2];
+  Plan.MDLSize = View->DescriptorSize;
   Plan.Device = Device->first;
   Plan.DeviceSize = Device->second.Size;
   Plan.Routine = A[5];
@@ -117,26 +107,35 @@ KernelModel::getScatterGatherList(llvm::ArrayRef<uint64_t> A) {
   return windows::StatusSuccess;
 }
 
-llvm::Error KernelModel::releaseDMAMapping(const KernelDMA::ReleasePlan &Plan) {
-  std::vector<uint64_t> Ready;
-  for (uint64_t Object : Plan.Ready) {
-    const auto *Map = DMA.mapping(Object);
-    if (!Map || !Map->SchedulerID)
+llvm::Expected<std::vector<uint64_t>> KernelModel::dmaPromotionIDs(
+    llvm::ArrayRef<KernelDMA::Promotion> Promotions) const {
+  std::vector<uint64_t> IDs;
+  for (const auto &Promotion : Promotions) {
+    const auto Call = DMA.callbackInfo(Promotion.Object);
+    if (!Call || Call->SchedulerID != Promotion.SchedulerID ||
+        Call->Kind != Promotion.Kind)
       return transferError("promoted mapping lost its callback reservation");
-    Ready.push_back(Map->SchedulerID);
+    IDs.push_back(Promotion.SchedulerID);
   }
-  if (auto E = Scheduler.canReadyDMAListControls(Ready))
+  if (auto E = Scheduler.canReadyDMACallbacks(IDs))
     return E;
+  return IDs;
+}
+
+llvm::Error KernelModel::releaseDMAMapping(const KernelDMA::ReleasePlan &Plan) {
+  auto Ready = dmaPromotionIDs(Plan.Ready);
+  if (!Ready)
+    return Ready.takeError();
   if (auto E = DMA.releaseMapping(Plan))
     return E;
-  return Scheduler.readyDMAListControls(Ready);
+  return Scheduler.readyDMACallbacks(*Ready);
 }
 
 llvm::Error KernelModel::putScatterGatherList(llvm::ArrayRef<uint64_t> A) {
   const auto *Found = DMA.mapping(A[1]);
   const auto Direction = uint8_t(A[2]) ? DriverDmaDirection::ReadMemory
                                        : DriverDmaDirection::WriteMemory;
-  if (!Found || Found->Common || Found->Adapter != A[0] ||
+  if (!Found || Found->Common || Found->Channel || Found->Adapter != A[0] ||
       Found->Direction != Direction)
     return transferError(
         "PutScatterGatherList requires its exact adapter/list/direction");
@@ -144,11 +143,9 @@ llvm::Error KernelModel::putScatterGatherList(llvm::ArrayRef<uint64_t> A) {
   auto Release = DMA.planRelease(Map.Object);
   if (!Release)
     return Release.takeError();
-  std::vector<uint64_t> Ready;
-  for (uint64_t Object : Release->Ready)
-    Ready.push_back(DMA.mapping(Object)->SchedulerID);
-  if (auto E = Scheduler.canReadyDMAListControls(Ready))
-    return E;
+  auto Ready = dmaPromotionIDs(Release->Ready);
+  if (!Ready)
+    return Ready.takeError();
   if (auto E = prepareReleaseRange(Map.Object, Map.StorageSize))
     return E;
   if (auto E = releaseDMAMapping(*Release))
@@ -158,47 +155,77 @@ llvm::Error KernelModel::putScatterGatherList(llvm::ArrayRef<uint64_t> A) {
 }
 
 llvm::Error KernelModel::beginDMACall(uint64_t Object) {
-  const auto *Call = DMA.callback(Object);
+  const auto Call = DMA.callbackInfo(Object);
   if (!Call || CurrentIRQL != scheduler::DispatchLevel)
     return transferError(
-        "list callback requires its live context at DISPATCH_LEVEL");
+        "DMA callback requires its live context at DISPATCH_LEVEL");
   if (auto E = DMA.canBeginCallback(Object))
     return E;
   if (InlineDMACalls.count(Object)) {
-    if (auto E = Scheduler.beginInlineDMAListControl(Call->SchedulerID))
+    if (auto E = Scheduler.beginInlineDMACallback(Call->SchedulerID,
+                                                  schedulerKind(Call->Kind)))
       return E;
   } else if (!Scheduler.active() ||
              Scheduler.active()->ID != Call->SchedulerID ||
-             Scheduler.active()->Kind !=
-                 KernelScheduler::CallbackKind::DMAListControl) {
-    return transferError("list callback lost its active scheduler identity");
+             Scheduler.active()->Kind != schedulerKind(Call->Kind)) {
+    return transferError("DMA callback lost its active scheduler identity");
   }
   return DMA.beginCallback(Object);
 }
 
 llvm::Expected<std::optional<uint64_t>>
-KernelModel::finishDMACall(uint64_t Object) {
-  const auto *Found = DMA.callback(Object);
+KernelModel::finishDMACall(uint64_t Object, uint64_t Result) {
+  const auto Found = DMA.callbackInfo(Object);
   if (!Found || CurrentIRQL != scheduler::DispatchLevel)
     return transferError(
-        "list callback return lost its identity or DISPATCH_LEVEL");
+        "DMA callback return lost its identity or DISPATCH_LEVEL");
   const auto Call = *Found;
   const bool Inline = InlineDMACalls.count(Object);
-  if (auto E = DMA.canFinishCallback(Object))
+  std::optional<KernelDMA::ChannelReturnPlan> ChannelReturn;
+  std::vector<uint64_t> Ready;
+  if (Call.Kind == KernelDMA::CallbackKind::AdapterControl) {
+    auto Plan = DMA.planChannelReturn(Object, uint32_t(Result));
+    if (!Plan)
+      return Plan.takeError();
+    auto IDs = dmaPromotionIDs(Plan->Ready);
+    if (!IDs)
+      return IDs.takeError();
+    Ready = std::move(*IDs);
+    ChannelReturn = std::move(*Plan);
+  } else if (auto E = DMA.canFinishCallback(Object)) {
     return E;
-  if (Inline)
-    if (auto E = Scheduler.canFinishInlineDMAListControl(Call.SchedulerID))
-      return E;
-  if (auto E = DMA.finishCallback(Object))
-    return E;
+  }
   if (Inline) {
-    if (auto E = Scheduler.finishInlineDMAListControl(Call.SchedulerID))
+    if (auto E = Scheduler.canFinishInlineDMACallback(Call.SchedulerID,
+                                                      schedulerKind(Call.Kind)))
+      return E;
+  } else {
+    if (!Scheduler.active() ||
+        Scheduler.active()->Kind != schedulerKind(Call.Kind))
+      return transferError("DMA return lost its active scheduler kind");
+    if (auto E = Scheduler.canFinish(Call.SchedulerID))
+      return E;
+  }
+  if (ChannelReturn) {
+    if (auto E = DMA.finishChannelReturn(*ChannelReturn))
+      return E;
+    if (auto E = Scheduler.readyDMACallbacks(Ready))
+      return E;
+    if (ChannelReturn->Action == dma::DeallocateObject)
+      FreedRanges.emplace(Object, dma::ChannelTokenSize);
+  } else if (auto E = DMA.finishCallback(Object)) {
+    return E;
+  }
+  if (Inline) {
+    if (auto E = Scheduler.finishInlineDMACallback(Call.SchedulerID,
+                                                   schedulerKind(Call.Kind)))
       return E;
     InlineDMACalls.erase(Object);
     if (auto E = retireDeviceIfUnreferenced(Call.Device))
       return E;
   }
-  // AdapterListControl is void: its return register cannot become Get's status.
+  // Both allocation APIs resume with acceptance status. The void list callback
+  // ignores RAX; AdapterControl's low 32 bits only select resource disposition.
   return std::optional<uint64_t>{windows::StatusSuccess};
 }
 } // namespace neverd::emulation

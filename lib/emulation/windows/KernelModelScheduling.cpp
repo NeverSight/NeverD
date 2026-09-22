@@ -154,7 +154,7 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
         return schedulingError("interrupt entry disagrees with its IRQL");
     } else {
       CurrentIRQL = (**Next).IRQL;
-      if ((**Next).Kind == KernelScheduler::CallbackKind::DMAListControl) {
+      if (KernelScheduler::isDMACallbackKind((**Next).Kind)) {
         auto Token = ScheduledModelContinuations.find((**Next).ID);
         if (Token == ScheduledModelContinuations.end() ||
             Token->second.Owner != GuestCallOwner::DMA)
@@ -189,7 +189,7 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
       Invocation.Kind == KernelScheduler::CallbackKind::Interrupt ||
-      Invocation.Kind == KernelScheduler::CallbackKind::DMAListControl)
+      KernelScheduler::isDMACallbackKind(Invocation.Kind))
     return retireDeviceIfUnreferenced(Invocation.Owner);
   return llvm::Error::success();
 }

@@ -73,6 +73,11 @@ llvm::Error KernelDMA::canPutAdapter(uint64_t Object) const {
     if (Map.Adapter == Object)
       return dmaError("adapter still owns a common buffer or accepted DMA map");
   }
+  for (const auto &[ID, Channel] : Channels) {
+    (void)ID;
+    if (Channel.Request.Adapter == Object && !Channel.Released)
+      return dmaError("adapter still owns an accepted channel allocation");
+  }
   return llvm::Error::success();
 }
 
@@ -159,7 +164,8 @@ llvm::Error KernelDMA::canPublishMapping(const Mapping &Plan) const {
     return dmaError("mapping resources changed after preparation");
   const auto &Expected = **Current;
   if (!Plan.Object || !Plan.Owner || Plan.Pin || Mappings.count(Plan.Object) ||
-      RetiredMappings.count(Plan.Object) || Expected.PDO != Plan.PDO ||
+      RetiredMappings.count(Plan.Object) || Channels.count(Plan.Object) ||
+      Plan.Channel || Expected.PDO != Plan.PDO ||
       Expected.Backing != Plan.Backing || Expected.Logical != Plan.Logical ||
       Expected.NextLogical != Plan.NextLogical ||
       Expected.Registers != Plan.Registers || Expected.Live != Plan.Live)
@@ -195,7 +201,8 @@ llvm::Error KernelDMA::publishMapping(Mapping Plan) {
   if (Plan.Live)
     Domain.UsedRegisters += Plan.Registers;
   else
-    Domain.Waiting.push_back(Plan.Object);
+    Domain.Waiting.push_back(
+        {CallbackKind::ScatterGather, Plan.Object, Plan.SchedulerID});
   if (!Plan.Common)
     Callbacks.emplace(Plan.Object, Callback{Plan, false, false});
   Mappings.emplace(Plan.Object, Plan);
@@ -209,7 +216,7 @@ const KernelDMA::Mapping *KernelDMA::mapping(uint64_t Object) const {
 
 llvm::Expected<std::vector<uint8_t>>
 KernelDMA::scatterGatherBytes(const Mapping &Map) const {
-  if (Map.Common || !Map.Owner)
+  if (Map.Common || Map.Channel || !Map.Owner)
     return dmaError("scatter/gather metadata requires a packet view");
   auto Segments = Physical.describe(Map.Owner, Map.Offset, Map.Length);
   if (!Segments)
@@ -240,6 +247,8 @@ KernelDMA::planRelease(uint64_t Object) const {
   const auto *Map = mapping(Object);
   if (!Map || !Map->Live)
     return dmaError("release requires its live admitted mapping");
+  if (Map->Channel)
+    return dmaError("channel mappings require aggregate FlushAdapterBuffers");
   if (!Map->Common) {
     const auto Call = Callbacks.find(Object);
     if (Call == Callbacks.end() || !Call->second.Begun)
@@ -251,22 +260,10 @@ KernelDMA::planRelease(uint64_t Object) const {
   if (Map->Common)
     if (auto E = Physical.canRetire(Map->Owner, Map->Pin))
       return E;
-  const auto &Config = *Resources.find(Map->PDO)->Dma;
-  uint64_t Free = Config.MapRegisters - Domain.UsedRegisters + Map->Registers;
-  ReleasePlan Plan{Object, {}};
-  for (uint64_t ID : Domain.Waiting) {
-    const auto *Waiting = mapping(ID);
-    if (!Waiting || Waiting->Live || Waiting->Common ||
-        Waiting->PDO != Map->PDO || !callback(ID))
-      return dmaError("resource waiter lost its reserved mapping or callback");
-    if (Waiting->Registers > Free)
-      break;
-    if (!Physical.find(Waiting->Owner))
-      return dmaError("resource waiter lost its pinned physical allocation");
-    Plan.Ready.push_back(ID);
-    Free -= Waiting->Registers;
-  }
-  return Plan;
+  auto Ready = planPromotions(Map->PDO, Map->Registers);
+  if (!Ready)
+    return Ready.takeError();
+  return ReleasePlan{Object, std::move(*Ready)};
 }
 
 llvm::Error KernelDMA::releaseMapping(const ReleasePlan &Plan) {
@@ -285,13 +282,7 @@ llvm::Error KernelDMA::releaseMapping(const ReleasePlan &Plan) {
   if (auto I = Callbacks.find(Plan.Object);
       I != Callbacks.end() && I->second.Returned)
     Callbacks.erase(I);
-  for (uint64_t ID : Plan.Ready) {
-    auto &Map = Mappings.at(ID);
-    Map.Live = true;
-    Domain.UsedRegisters += Map.Registers;
-    Callbacks.at(ID).Arguments.Live = true;
-    Domain.Waiting.pop_front();
-  }
+  promote(Old.PDO, Plan.Ready);
   return llvm::Error::success();
 }
 
@@ -302,11 +293,21 @@ const KernelDMA::Mapping *KernelDMA::callback(uint64_t Object) const {
 }
 
 bool KernelDMA::hasPendingCallbacks() const {
-  return std::any_of(Callbacks.begin(), Callbacks.end(),
+  return std::any_of(
+             Channels.begin(), Channels.end(),
+             [](const auto &Entry) { return !Entry.second.Returned; }) ||
+         std::any_of(Callbacks.begin(), Callbacks.end(),
                      [](const auto &Entry) { return !Entry.second.Returned; });
 }
 
 llvm::Error KernelDMA::canBeginCallback(uint64_t Object) const {
+  if (auto C = Channels.find(Object); C != Channels.end()) {
+    if (!C->second.Live || C->second.Begun || C->second.Returned ||
+        C->second.Released || !adapter(C->second.Request.Adapter))
+      return dmaError(
+          "channel callback is waiting, retired or already entered");
+    return llvm::Error::success();
+  }
   const auto I = Callbacks.find(Object);
   if (I == Callbacks.end() || I->second.Begun || I->second.Returned ||
       !I->second.Arguments.Live || !mapping(Object))
@@ -317,11 +318,16 @@ llvm::Error KernelDMA::canBeginCallback(uint64_t Object) const {
 llvm::Error KernelDMA::beginCallback(uint64_t Object) {
   if (auto E = canBeginCallback(Object))
     return E;
-  Callbacks.at(Object).Begun = true;
+  if (auto C = Channels.find(Object); C != Channels.end())
+    C->second.Begun = true;
+  else
+    Callbacks.at(Object).Begun = true;
   return llvm::Error::success();
 }
 
 llvm::Error KernelDMA::canFinishCallback(uint64_t Object) const {
+  if (Channels.count(Object))
+    return dmaError("channel callback requires its allocation return action");
   const auto I = Callbacks.find(Object);
   if (I == Callbacks.end() || !I->second.Begun || I->second.Returned)
     return dmaError("callback return lost its independent owner");
@@ -371,6 +377,17 @@ llvm::Error KernelDMA::canReleaseRange(uint64_t Base, uint64_t Size) const {
     if (!Callback.Returned && overlaps(Base, Size, Map.Device, Map.DeviceSize))
       return dmaError("device storage still owns a DMA callback");
   }
+  for (const auto &[ID, Channel] : Channels) {
+    (void)ID;
+    const auto &Request = Channel.Request;
+    if ((!Channel.Released || !Channel.Returned) &&
+        overlaps(Base, Size, Request.Device, Request.DeviceSize))
+      return dmaError(
+          "device storage still owns a channel allocation or callback");
+    if (!Channel.Begun && Request.CurrentIRP &&
+        overlaps(Base, Size, Request.CurrentIRP, Request.IRPSize))
+      return dmaError("IRP storage still owns a queued channel callback");
+  }
   return llvm::Error::success();
 }
 
@@ -378,6 +395,11 @@ llvm::Error KernelDMA::validateGuestAccess(uint64_t Address, uint32_t Size,
                                            bool IsWrite) const {
   if (Size > UINT64_MAX - Address)
     return dmaError("guest access range overflows");
+  for (const auto &[Object, Channel] : Channels)
+    if (overlaps(Address, Size, Object, dma::ChannelTokenSize))
+      return dmaError(Channel.Released
+                          ? "access to a retired register token"
+                          : "map-register allocation tokens are opaque");
   for (const auto &[ID, Adapter] : Adapters) {
     (void)ID;
     if (overlaps(Address, Size, Adapter.Object, dma::AdapterSize) ||
@@ -399,8 +421,11 @@ llvm::Error KernelDMA::validateGuestAccess(uint64_t Address, uint32_t Size,
             "common-buffer access exceeds its requested byte count");
     } else {
       if (Map.Live && overlaps(Address, Size, Map.Backing, Map.Length))
-        return dmaError("CPU access requires PutScatterGatherList to release "
-                        "packet DMA ownership");
+        return dmaError(Map.Channel
+                            ? "CPU access requires FlushAdapterBuffers to "
+                              "release channel DMA ownership"
+                            : "CPU access requires PutScatterGatherList to "
+                              "release packet DMA ownership");
       if (IsWrite && overlaps(Address, Size, Map.Object, Map.StorageSize))
         return dmaError("scatter/gather metadata is model-owned and read-only");
     }

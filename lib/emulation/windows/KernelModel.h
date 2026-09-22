@@ -127,7 +127,7 @@ public:
     return (Interrupt && *Interrupt <= Scheduler.now100ns()) ||
            (Transfer && *Transfer <= Scheduler.now100ns()) ||
            Scheduler.hasQueuedInterrupt() || hasQueuedDPC() ||
-           Scheduler.hasQueuedDMAListControl() ||
+           Scheduler.hasQueuedDMACallback() ||
            Scheduler.hasQueuedFrameworkCancel() ||
            Scheduler.hasQueuedWDMCompletion();
   }
@@ -185,9 +185,23 @@ private:
   llvm::Expected<uint64_t>
   getScatterGatherList(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error putScatterGatherList(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t>
+  allocateAdapterChannel(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> mapTransfer(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error flushAdapterBuffers(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error freeMapRegisters(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error flushIoBuffers(uint64_t MDL);
+  struct DmaMdlView {
+    uint64_t Owner, Offset, DescriptorSize;
+  };
+  llvm::Expected<DmaMdlView> dmaMdlView(uint64_t MDL, uint64_t CurrentVA,
+                                        uint32_t Length, bool ToDevice) const;
+  llvm::Expected<std::vector<uint64_t>>
+  dmaPromotionIDs(llvm::ArrayRef<KernelDMA::Promotion> Ready) const;
   llvm::Error releaseDMAMapping(const KernelDMA::ReleasePlan &Plan);
   llvm::Error beginDMACall(uint64_t Object);
-  llvm::Expected<std::optional<uint64_t>> finishDMACall(uint64_t Object);
+  llvm::Expected<std::optional<uint64_t>> finishDMACall(uint64_t Object,
+                                                        uint64_t Result);
 
   uint64_t CurrentExecution = 0;
   std::optional<KernelGuestCall> PendingInterruptCall;
