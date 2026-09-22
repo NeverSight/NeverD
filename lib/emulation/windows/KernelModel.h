@@ -14,6 +14,7 @@
 #include "../GuestMemory.h"
 #include "KernelDispatcher.h"
 #include "KernelFramework.h"
+#include "KernelGuestCall.h"
 #include "KernelRegistry.h"
 #include "KernelScheduler.h"
 
@@ -55,8 +56,8 @@ public:
   call(const KernelExportRegistry::Export &Export,
        llvm::ArrayRef<uint64_t> Arguments,
        llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument);
-  std::optional<KernelFramework::GuestCall> takeGuestCall();
-  llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
+  std::optional<KernelGuestCall> takeGuestCall();
+  llvm::Expected<std::optional<uint64_t>> finishGuestCall(GuestCallToken Token,
                                                           uint64_t Result);
   llvm::Expected<uint64_t>
   call(const std::string &Name, llvm::ArrayRef<uint64_t> Arguments,
@@ -86,7 +87,7 @@ public:
   llvm::Error finishScheduled(uint64_t ID);
   /// Finish a scheduled framework callback, including any destruction callbacks
   /// required before releasing its scheduler ownership.
-  llvm::Expected<std::optional<KernelFramework::GuestCall>>
+  llvm::Expected<std::optional<KernelGuestCall>>
   continueScheduled(uint64_t ID, uint64_t ReturnValue);
   llvm::Error suspendScheduled(uint64_t ID);
   llvm::Error resumeScheduled(uint64_t ID);
@@ -116,6 +117,9 @@ private:
   DriverResult &Result;
   KernelExportRegistry *Exports;
   std::unique_ptr<KernelFramework> Framework;
+  std::optional<KernelGuestCall> takeWdmGuestCall();
+  llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
+                                                            uint64_t Result);
   void configureFrameworkDeviceHost();
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
@@ -157,9 +161,21 @@ private:
   };
   std::map<uint64_t, PoolAllocation> Allocations;
   std::map<uint64_t, uint64_t> ArenaAllocations;
-  std::map<uint64_t, DriverDevice> Devices;
-  std::set<uint64_t> DeletePendingDevices;
-  std::map<uint64_t, uint64_t> DeviceSizes;
+  struct DeviceRecord {
+    uint64_t Address = 0;
+    uint64_t Extension = 0;
+    uint32_t Type = 0;
+    std::string Name;
+    uint64_t OwnerDriver = 0;
+    uint64_t Lower = 0;
+    uint64_t Upper = 0;
+    uint64_t Size = 0;
+    // Request and callback holds are distinct from open handles and from the
+    // DEVICE_OBJECT.ReferenceCount field. Attachment links also prevent retire.
+    uint64_t InternalReferences = 0;
+    bool DeletePending = false;
+  };
+  std::map<uint64_t, DeviceRecord> Devices;
   std::map<uint64_t, uint64_t> FreedRanges;
   mutable std::array<bool, 28 * 8> DispatchBytesWritten{};
   std::map<std::string, std::string> SymbolicLinks;
@@ -178,6 +194,12 @@ private:
     uint64_t IRP = 0;
     uint64_t Device = 0, FileAddress = 0;
     uint64_t Stack = 0;
+    uint8_t StackCount = 1;
+    /// Immutable route holds outlive packet completion until dispatch returns.
+    std::vector<uint64_t> DeviceRoute;
+    /// Historical pending bits captured when each slot was unwound.
+    std::vector<std::optional<bool>> UnwoundPending;
+    bool Forwarded = false;
     uint64_t SystemBuffer = 0;
     uint64_t UserBuffer = 0;
     uint64_t BufferSize = 0;
@@ -199,6 +221,24 @@ private:
   };
   std::map<uint64_t, ActiveRequest> Requests;
   std::set<uint64_t> FinalizedRequests;
+  enum class IRPCallKind { Dispatch, Completion };
+  struct IRPCall {
+    IRPCallKind Kind;
+    uint64_t IRP = 0;
+    uint32_t Slot = 0;
+    bool AwaitingCallback = false;
+    uint64_t ReturnValue = 0;
+  };
+  uint64_t NextIRPCall = 1;
+  std::map<uint64_t, IRPCall> IRPCalls;
+  std::optional<KernelGuestCall> PendingWdmCall;
+  llvm::Expected<uint32_t> requestStackCursor(uint64_t IRP) const;
+  llvm::Expected<uint64_t> currentRequestStack(uint64_t IRP) const;
+  llvm::Expected<uint64_t> callDriver(uint64_t Device, uint64_t IRP);
+  llvm::Expected<std::optional<uint64_t>> advanceIRPCompletion(uint64_t Token);
+  llvm::Expected<bool> dispatchPending(const ActiveRequest &Request,
+                                       uint32_t Slot) const;
+  llvm::Error retireCompletedRequest(uint64_t IRP, uint8_t PriorityBoost);
   ActiveRequest *requestForIRP(uint64_t IRP);
   const ActiveRequest *requestForIRP(uint64_t IRP) const;
   void configureFrameworkRequestHost();
@@ -265,6 +305,15 @@ private:
   llvm::Expected<uint64_t> resolveDeviceName(llvm::StringRef Name) const;
   llvm::Error deleteDevice(uint64_t Address);
   llvm::Error retireDeviceIfUnreferenced(uint64_t Address);
+  llvm::Expected<uint64_t> topAttachedDevice(uint64_t Base) const;
+  llvm::Expected<std::vector<uint64_t>> deviceStack(uint64_t Top) const;
+  llvm::Error validateDeviceTopology() const;
+  llvm::Expected<uint64_t> attachDevice(uint64_t Source, uint64_t Target);
+  llvm::Error detachDevice(uint64_t Lower);
+  llvm::Error retainDevice(uint64_t Device);
+  llvm::Error releaseDevice(uint64_t Device);
+  llvm::Error validateDeviceStackMutation(
+      llvm::ArrayRef<uint64_t> Stack) const;
 };
 } // namespace neverd::emulation
 #endif

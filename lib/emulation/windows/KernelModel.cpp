@@ -350,7 +350,6 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
     if (auto Restore =
             Memory.writeInteger(DriverObject + DriverDeviceHead, *Previous, 8))
       return llvm::joinErrors(std::move(E), std::move(Restore));
-    DeviceSizes.erase(Created->Address);
     Devices.erase(Created->Address);
     return E;
   }
@@ -361,6 +360,8 @@ llvm::Expected<KernelModel::DeviceCreation>
 KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
                                 uint32_t Type, uint32_t Characteristics,
                                 bool Exclusive) {
+  if (auto E = validateDeviceTopology())
+    return E;
   if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
     return modelError(
         "IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
@@ -411,8 +412,14 @@ KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
       return E;
   if (auto E = Memory.writeInteger(DriverObject + DriverDeviceHead, *Object, 8))
     return E;
-  Devices.emplace(*Object, DriverDevice{*Object, Extension, Type, Name.str()});
-  DeviceSizes.emplace(*Object, Size);
+  DeviceRecord Device;
+  Device.Address = *Object;
+  Device.Extension = Extension;
+  Device.Type = Type;
+  Device.Name = Name.str();
+  Device.OwnerDriver = DriverObject;
+  Device.Size = Size;
+  Devices.emplace(*Object, std::move(Device));
   return DeviceCreation{StatusSuccess, *Object};
 }
 
@@ -439,13 +446,22 @@ llvm::Expected<uint32_t> KernelModel::deleteSymbolicLink(llvm::StringRef Name) {
 }
 
 llvm::Error KernelModel::deleteDevice(uint64_t Address) {
-  if (!Devices.count(Address) || !DeletePendingDevices.insert(Address).second)
+  auto Device = Devices.find(Address);
+  if (Device == Devices.end() || Device->second.DeletePending)
     return modelError("IoDeleteDevice received an unknown or deleted device");
+  if (auto E = validateDeviceTopology())
+    return E;
+  Device->second.DeletePending = true;
   return retireDeviceIfUnreferenced(Address);
 }
 
 llvm::Error KernelModel::retireDeviceIfUnreferenced(uint64_t Address) {
-  if (!DeletePendingDevices.count(Address) || Scheduler.hasOutstanding(Address))
+  auto It = Devices.find(Address);
+  if (It == Devices.end())
+    return modelError("IoDeleteDevice received an unknown or deleted device");
+  const auto &Device = It->second;
+  if (!Device.DeletePending || Device.InternalReferences || Device.Lower ||
+      Device.Upper || Scheduler.hasOutstanding(Address))
     return llvm::Error::success();
   for (const auto &[Id, File] : Files)
     if (File.Address && File.Device == Address)
@@ -453,29 +469,26 @@ llvm::Error KernelModel::retireDeviceIfUnreferenced(uint64_t Address) {
   for (const auto &[IRP, Request] : Requests)
     if (Request.Device == Address)
       return llvm::Error::success();
-  auto It = Devices.find(Address);
-  if (It == Devices.end())
-    return modelError("IoDeleteDevice received an unknown or deleted device");
-  uint64_t Link = DriverObject + DriverDeviceHead;
+  uint64_t Link = Device.OwnerDriver + DriverDeviceHead;
   std::set<uint64_t> Seen;
   while (true) {
     auto Current = Memory.readInteger(Link, 8);
     if (!Current)
       return Current.takeError();
-    if (!*Current || !Devices.count(*Current) || !Seen.insert(*Current).second)
+    if (!*Current || !Devices.count(*Current) ||
+        Devices.at(*Current).OwnerDriver != Device.OwnerDriver ||
+        !Seen.insert(*Current).second)
       return modelError("device missing from, or cycle in, DRIVER_OBJECT list");
     auto Next = Memory.readInteger(*Current + DeviceNext, 8);
     if (!Next)
       return Next.takeError();
     if (*Current == Address) {
-      if (auto E = prepareReleaseRange(Address, DeviceSizes.at(Address)))
+      if (auto E = prepareReleaseRange(Address, Device.Size))
         return E;
       if (auto E = Memory.writeInteger(Link, *Next, 8))
         return E;
-      FreedRanges.emplace(Address, DeviceSizes.at(Address));
-      DeviceSizes.erase(Address);
+      FreedRanges.emplace(Address, Device.Size);
       Devices.erase(It);
-      DeletePendingDevices.erase(Address);
       WorkReferences.erase(Address);
       return llvm::Error::success();
     }
@@ -570,6 +583,16 @@ llvm::Expected<uint64_t> KernelModel::call(
       return E;
     return 0;
   }
+  if (Kind == KernelAPIKind::IoAttachDeviceToDeviceStack)
+    return attachDevice(A[0], A[1]);
+  if (Kind == KernelAPIKind::IoDetachDevice) {
+    if (auto E = detachDevice(A[0]))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::IofCallDriver ||
+      Kind == KernelAPIKind::IoCallDriver)
+    return callDriver(A[0], A[1]);
   if (Kind == KernelAPIKind::IofCompleteRequest ||
       Kind == KernelAPIKind::IoCompleteRequest) {
     if (Framework && Framework->ownsRequestIRP(A[0]))
@@ -584,7 +607,7 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (!Request || Request->Completed)
       return modelError(
           "IoGetCurrentIrpStackLocation requires the live request IRP");
-    return Request->Stack;
+    return currentRequestStack(A[0]);
   }
 
   if (Kind == KernelAPIKind::RtlInitUnicodeString) {
@@ -806,6 +829,8 @@ llvm::Error KernelModel::snapshot() {
   Result.Registry = Registry.snapshot();
   if (!DriverObject)
     return modelError("cannot snapshot an uninitialized kernel model");
+  if (auto E = validateDeviceTopology())
+    return E;
   auto Unload = Memory.readInteger(DriverObject + DriverUnloadOffset, 8);
   if (!Unload)
     return Unload.takeError();
@@ -843,9 +868,12 @@ llvm::Error KernelModel::snapshot() {
   uint64_t Current = *Head;
   while (Current) {
     auto It = Devices.find(Current);
-    if (It == Devices.end() || !Seen.insert(Current).second)
+    if (It == Devices.end() || It->second.OwnerDriver != DriverObject ||
+        !Seen.insert(Current).second)
       return modelError("unknown device or cycle in DRIVER_OBJECT device list");
-    Result.Devices.push_back(It->second);
+    const auto &Device = It->second;
+    Result.Devices.push_back(
+        {Device.Address, Device.Extension, Device.Type, Device.Name});
     auto Next = Memory.readInteger(Current + DeviceNext, 8);
     if (!Next)
       return Next.takeError();

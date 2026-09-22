@@ -3484,6 +3484,10 @@
       "limitations": [
         "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
+        "WDM stacks contain several DEVICE_OBJECTs owned by the same guest driver. IoAttachDeviceToDeviceStack returns the previous top and derives StackSize/AlignmentRequirement without changing the NextDevice inventory or buffer flags. IoDetachDevice receives the saved lower at PASSIVE_LEVEL; attach permits DISPATCH_LEVEL. Named lower FILE_OBJECT/report identity stays distinct from top dispatch and top READ/WRITE flags; retained routes survive detach/delete through dispatch return. Internal holds do not inflate the open-handle ReferenceCount.",
+        "IofCallDriver and the IoCallDriver helper dispatch to the exact retained target; genuine inline Copy/Skip/SetCompletion operate on the original bounded guest IRP stack. Completion clears consumed lower slots before upper callbacks and separates lower NTSTATUS, callback control results and final IoStatus. Success/error/cancel masks and pending propagation are modeled, including propagation after STATUS_PENDING dispatch returns; invoked callbacks own propagation. STATUS_MORE_PROCESSING_REQUIRED and nested completion preserve packet/MDL/buffer lifetime until terminal unwind, with exactly-once retirement.",
+        "KernelGuestCall uses subsystem-owner tags and local tokens for nested WDM/WDF continuations, preserving parent CPU frames and inherited IRQL. WDF attachment/forwarding, attachment to live stacks, intermediate detach, changed forwarded major functions, targets outside retained routes, driver-allocated IRPs, PDO providers, AddDevice execution and PnP/power IRPs remain unsupported.",
+        "Optional genuine-WDK driver_wdm_stack.c images use NEVERD_WDM_STACK_FIXTURE and NEVERD_WDM_STACK_CFG_FIXTURE. Model/native/public tests cover Copy and Skip, buffered READ/WRITE and file lifecycle, IOCTL completion ordering, worker/DPC completion, MPR waits with direct MDLs, nested completion, malformed cursors and normal/active-CFG rebasing. Missing artifacts skip explicitly; evidence remains Linux-only.",
         "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 38 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
         "KMDF non-PnP drivers, generic objects, control devices, sequential default queues and incoming requests share typed contexts and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested continuations preserve caller CPU state and stack. Failed DriverEntry unregister cleans objects without EvtDriverUnload; adding references after cleanup is unsupported. PnP devices, general queue scheduling/cancellation and automatic synchronization remain unmodeled.",
         "Control devices require a copied printable-ASCII name and exact universal-access SDDL D:P(A;;GA;;;WD); other DACLs need an unmodeled caller token. Initializers are consumed only on success, partial creation is rolled back, and device/link ownership uses the WDM namespace; FinishInitializing gates delivery. Pending I/O or other live references prevent unsupported deletion/draining.",
@@ -3498,8 +3502,8 @@
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
-        "wdm-x64-scheduled-v6 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
-        "IoDeleteDevice defers physical retirement while live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
+        "wdm-x64-scheduled-v7 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
         "KeSetEvent supports Increment=0 and Wait=FALSE only; event signal consumption and waiter wakeups remain distinct from callback return; DPC targets are restricted to CPU0, nonzero/infinite waits require IRQL <= APC_LEVEL, and pending dispatcher-object or wait references prohibit premature storage release",
@@ -3517,6 +3521,177 @@
         "current execution evidence is limited to Linux hosts with Clang and lld-link fixture tools; no macOS or Windows host validation is claimed and the Python SDK provides only raw ABI bindings"
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDeviceStackTests.cpp",
+          "filter": "KernelDeviceStack.AttachmentFindsActualTopWithoutChangingDriverInventory",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDeviceStackTests.cpp",
+          "filter": "KernelDeviceStack.UnwritableLowerDoesNotPartiallyInitializeSource",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDeviceStackTests.cpp",
+          "filter": "KernelDeviceStack.DetachedCompletedRequestRetainsEveryDeviceUntilReturn",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDeviceStackTests.cpp",
+          "filter": "KernelDeviceStack.NamedLowerKeepsFileIdentityAndUsesTopBufferingFlags",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDeviceStackTests.cpp",
+          "filter": "KernelDeviceStack.DetachRequiresPassiveIRQLAndPreservesTopologyOnFailure",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.CompletionPopsBeforeCallbackAndKeepsThreeResultsIndependent",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.CompletionMasksUseNTSuccessAndCancellationIsAnOrCondition",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.ThreeLayerPendingReturnsPrecedeCompletionPropagation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.NestedCompletionRequiresOuterMoreProcessingRequired",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.CopyIncludesTheFullReadWriteCleanupAndClosePrefix",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.RetainedRouteSurvivesDetachAndDeleteUntilDispatchFinalizes",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelIRPStackTests.cpp",
+          "filter": "KernelIRPStack.EachCompletionMaskUsesTheStatusLeftByThePreviousCallback",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMStackTests.cpp",
+          "filter": "DriverWDMStack.CopyForwardsBufferedReadWriteAndFileLifecycle",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMStackTests.cpp",
+          "filter": "DriverWDMStack.DirectMdlSurvivesStoppedCompletionAndUpperWait",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMStackTests.cpp",
+          "filter": "DriverWDMStack.NestedCompletionThenMoreProcessingRequiredRetiresExactlyOnce",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMStackTests.cpp",
+          "filter": "DriverWDMStack.TimerDpcCompletionInheritsDispatchLevel",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMStackTests.cpp",
+          "filter": "DriverWDMStack.MalformedCursorAndNullCompletionFlagsFailExplicitly",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIExecuteGenuineWdmStackForwarding",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIExecutesWdmRetainedAndNestedCompletion",
+          "platforms": [
+            "linux"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",

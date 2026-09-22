@@ -107,6 +107,7 @@ public:
                                 llvm::ArrayRef<uint64_t> Arguments,
                                 uint8_t IRQL);
   std::optional<GuestCall> takeGuestCall();
+  bool hasPendingGuestCall() const { return PendingCall.has_value(); }
   /// Resume one suspended framework operation after its actual guest callback.
   llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
                                                           uint64_t Result);

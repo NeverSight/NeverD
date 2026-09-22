@@ -38,10 +38,13 @@ llvm::Error KernelModel::markRequestPending(uint64_t IRP) {
   if (!Request || Request->Completed)
     return frameworkRequestError(
         "IoMarkIrpPending requires the live active IRP");
-  auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
+  auto Stack = currentRequestStack(IRP);
+  if (!Stack)
+    return Stack.takeError();
+  auto Control = Memory.readInteger(*Stack + StackControlOffset, 1);
   if (!Control)
     return Control.takeError();
-  return Memory.writeInteger(Request->Stack + StackControlOffset,
+  return Memory.writeInteger(*Stack + StackControlOffset,
                              *Control | StackPendingReturned, 1);
 }
 
@@ -52,18 +55,9 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
   if (!Request || Request->Completed)
     return frameworkRequestError(
         "completion requires the active IRP and cannot occur twice");
-  auto Pending = Memory.readInteger(IRP + IRPPendingOffset, 1);
-  if (!Pending)
-    return Pending.takeError();
-  auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
-  if (!Control)
-    return Control.takeError();
   if (Status == StatusPending)
     return frameworkRequestError(
         "IoCompleteRequest cannot complete with STATUS_PENDING");
-  if (*Pending || (*Control & ~StackPendingReturned))
-    return frameworkRequestError(
-        "unmodeled completion-stack control or pending propagation");
   // An IOCTL with no output allocation can use Information as a driver-defined
   // value. Otherwise READ/WRITE and IOCTL output retain the WDM byte limit.
   // https://learn.microsoft.com/windows-hardware/drivers/kernel/failure-to-initialize-output-buffers

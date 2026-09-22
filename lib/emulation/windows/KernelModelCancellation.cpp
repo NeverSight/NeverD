@@ -54,14 +54,14 @@ llvm::Error KernelModel::processRequestCancellations() {
   return llvm::Error::success();
 }
 
-llvm::Expected<std::optional<KernelFramework::GuestCall>>
+llvm::Expected<std::optional<KernelGuestCall>>
 KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
   if (!Scheduler.active() || Scheduler.active()->ID != ID)
     return cancellationError(
         "callback continuation does not match active task");
   if (Scheduler.active()->Kind !=
       KernelScheduler::CallbackKind::FrameworkCancel)
-    return std::optional<KernelFramework::GuestCall>{};
+    return std::optional<KernelGuestCall>{};
   auto Token = ScheduledCancelContinuations.find(ID);
   if (!Framework || Token == ScheduledCancelContinuations.end())
     return cancellationError("scheduled cancellation lost its continuation");
@@ -70,11 +70,13 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
     return Result.takeError();
   if (*Result) {
     ScheduledCancelContinuations.erase(Token);
-    return std::optional<KernelFramework::GuestCall>{};
+    return std::optional<KernelGuestCall>{};
   }
   auto Call = Framework->takeGuestCall();
   if (!Call || Call->Token != Token->second)
     return cancellationError("cancellation epilogue lost its guest callback");
-  return Call;
+  return std::optional<KernelGuestCall>{
+      KernelGuestCall{{GuestCallOwner::Framework, Call->Token}, Call->PC,
+                     std::move(Call->Arguments)}};
 }
 } // namespace neverd::emulation

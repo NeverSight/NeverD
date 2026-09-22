@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v6");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v7");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1076,6 +1076,121 @@ TEST_F(DriverScenarioPublic, CLIPreservesTheFirstStructuredMemoryFault) {
   EXPECT_EQ(Fault->getInteger("size"), 8);
   ASSERT_NE(Fault->get("interrupt"), nullptr);
   EXPECT_EQ(Fault->get("interrupt")->kind(), llvm::json::Value::Null);
+}
+
+#ifdef NEVERD_WDM_STACK_FIXTURE
+std::string wdmStackScenario(bool Direct = false) {
+  return std::string(R"({"requests":[
+    {"kind":"create","device":"\\DosDevices\\NeverDWdmStack"},
+    {"kind":"ioctl","code":")") +
+         (Direct ? "0x222002" : "0x222000") +
+         R"(","input":"00010203","output_size":4},
+    {"kind":"cleanup"},{"kind":"close"}],"unload":true,
+    "load_address":"0x190000000"})";
+}
+
+void checkWdmStackReport(const llvm::json::Object &Report, char Mode) {
+  EXPECT_EQ(Report.getString("stop_reason"), "returned")
+      << Report.getString("diagnostic").value_or("").str();
+  EXPECT_EQ(Report.getBoolean("scenario_success"), true);
+  EXPECT_EQ(Report.getBoolean("unload_completed"), true);
+  const auto *Requests = Report.getArray("requests");
+  ASSERT_NE(Requests, nullptr);
+  ASSERT_EQ(Requests->size(), 4u);
+  for (size_t I = 0; I != Requests->size(); ++I) {
+    const auto *Request = (*Requests)[I].getAsObject();
+    ASSERT_NE(Request, nullptr);
+    EXPECT_EQ(Request->getBoolean("completed"), true);
+    EXPECT_EQ(Request->getString("device"), "\\Device\\NeverDWdmStack");
+    EXPECT_EQ(Request->getInteger("io_status"), 0);
+    const bool Pending = I == 1 && Mode == 'I';
+    EXPECT_EQ(Request->getInteger("dispatch_status"), Pending ? 0x103 : 0);
+    EXPECT_EQ(Request->getInteger("information"), I == 1 ? 4 : 0);
+  }
+  constexpr char Hex[] = "0123456789abcdef";
+  std::string Output = "53";
+  Output += Hex[static_cast<unsigned char>(Mode) >> 4];
+  Output += Hex[Mode & 15];
+  Output += "444d";
+  EXPECT_EQ((*Requests)[1].getAsObject()->getString("output_hex"), Output);
+  const auto *Messages = Report.getArray("messages");
+  ASSERT_NE(Messages, nullptr);
+  for (const auto &Value : *Messages) {
+    const auto Text = Value.getAsString();
+    ASSERT_TRUE(Text);
+    EXPECT_EQ(Text->find("failure"), llvm::StringRef::npos);
+  }
+  const auto *Devices = Report.getArray("devices");
+  ASSERT_NE(Devices, nullptr);
+  EXPECT_TRUE(Devices->empty());
+}
+#endif
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteGenuineWdmStackForwarding) {
+#ifdef NEVERD_WDM_STACK_FIXTURE
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(wdmStackScenario(), 0, "success", NEVERD_WDM_STACK_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_WDM_STACK_FIXTURE, wdmStackScenario().c_str(),
+                  nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    ASSERT_NE(Parsed->getAsObject(), nullptr);
+    checkWdmStackReport(*Parsed->getAsObject(), 'S');
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_STACK_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIExecutesWdmRetainedAndNestedCompletion) {
+#ifdef NEVERD_WDM_STACK_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_STACK_FIXTURE};
+#ifdef NEVERD_WDM_STACK_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_STACK_CFG_FIXTURE);
+#endif
+  for (const auto *Image : Images)
+    for (char Mode : {'W', 'D', 'N', 'I'}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Mode);
+      const std::string Service = std::string("NeverDWdmStack") + Mode;
+      neverd_driver_options_v1 Options{};
+      Options.struct_size = sizeof(Options);
+      Options.instruction_limit = 100000;
+      Options.memory_limit = 64 * 1024 * 1024;
+      Options.event_limit = 10000;
+      Options.timeout_milliseconds = 5000;
+      Options.service_name = Service.c_str();
+      const auto Scenario = wdmStackScenario(Mode == 'D');
+      auto Parsed = llvm::json::parse(takeString(
+          neverd_emulate_driver_scenario_json(Session, Image, Scenario.c_str(),
+                                              &Options)));
+      ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+      ASSERT_NE(Parsed->getAsObject(), nullptr);
+      const auto &Report = *Parsed->getAsObject();
+      checkWdmStackReport(Report, Mode);
+      const auto *Calls = Report.getArray("calls");
+      ASSERT_NE(Calls, nullptr);
+      unsigned Forwards = 0, Completes = 0;
+      bool SawPendingReturn = false;
+      for (const auto &Value : *Calls) {
+        const auto *Call = Value.getAsObject();
+        ASSERT_NE(Call, nullptr);
+        if (Call->getString("name") == "IofCallDriver") {
+          ++Forwards;
+          SawPendingReturn |= Call->getString("result") == "0x103";
+        }
+        if (Call->getString("name") == "IofCompleteRequest")
+          ++Completes;
+      }
+      EXPECT_EQ(Forwards, 4u);
+      EXPECT_EQ(Completes, Mode == 'I' ? 4u : 5u);
+      EXPECT_EQ(SawPendingReturn, Mode != 'N');
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_STACK_FIXTURE requires a genuine WDK fixture";
+#endif
 }
 
 } // namespace

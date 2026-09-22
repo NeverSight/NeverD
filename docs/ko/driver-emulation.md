@@ -45,7 +45,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | READ/WRITE | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 IRP와 WDM 요청 취소는 미지원; `METHOD_NEITHER`와 암묵적 파일 위치도 미지원 |
 | `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사와 게스트 예외 처리 |
 | KMDF 1.33 비 PnP 드라이버 | 바인딩, 객체/컨텍스트, 이름 있는 제어 장치, 순차 기본 큐 및 콜백을 실제 실행하는 버퍼/직접 요청 | PnP 장치, 일반 큐 스케줄링, 클래스 확장 및 UMDF는 지원하지 않음 |
-| PnP 버스/기능/필터 드라이버 | API 하위 집합 내에서 초기화가 실행될 수 있으나 장치 스택 수명 주기는 지원하지 않음 | 장치 연결, 하위 드라이버 디스패치, PnP 및 전원 IRP |
+| PnP 버스/기능/필터 드라이버 | 동일 게스트 드라이버 연결과 하위 디스패치는 모델링됨. PnP 수명 주기는 미지원 | PDO/공급자 소유권, AddDevice 실행, PnP 및 전원 IRP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
 | 작업 항목, 타이머, DPC, 이벤트와 대기 | 현재 실행 IRQL은 디스패치와 작업 항목에서는 `PASSIVE_LEVEL`, DPC에서는 `DISPATCH_LEVEL`입니다 | 아래 API 부분집합만 지원하며 동시 IRP와 WDM 요청 취소는 미지원 |
 | 프로세스/스레드 콜백, 핸들, 레지스트리/파일 작업 또는 커널 모듈 탐색을 사용하는 드라이버 | 구성한 레지스트리는 지원하며 그 외 동작은 아래 API 범위로 제한 | 객체 관리자, 시스템 상태와 콜백/이벤트 생성 주체 |
@@ -72,6 +72,12 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe`, `ntkrnlmp.exe` 또는 `WDFLDR.SYS`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
 
 활성 Control Flow Guard(CFG)는 PE 플래그, 포인터 슬롯과 정렬된 실행 가능 대상 테이블을 검증합니다. check/dispatch 도우미는 선언된 이미지 진입점 또는 등록된 API 썽크만 허용하며 Win64 호출 상태를 보존하고 미선언 대상을 거부합니다. CFG가 활성화되지 않은 계측은 원래 게스트 대체 포인터를 유지합니다. 활성 XFG, 내보내기 억제 및 다른 미지원 보호 정책은 거부되며 실행 가능 메모리에 있다는 이유만으로 유효한 대상이 되지는 않습니다.
+
+WDM 스택에는 같은 게스트 드라이버가 소유한 여러 장치를 둘 수 있습니다. `IoAttachDeviceToDeviceStack`은 독립 소스 장치를 대상의 현재 최상단에 연결하고 이전 최상단을 반환합니다. `StackSize`와 `AlignmentRequirement`를 설정하지만 `NextDevice` 목록이나 버퍼 플래그는 변경하지 않습니다. `IoDetachDevice`는 저장한 하위 장치를 받으며 `PASSIVE_LEVEL`이 필요합니다. 연결은 `DISPATCH_LEVEL` 이하에서 가능합니다. 이름 있는 하위 장치를 열면 현재 최상단으로 디스패치하지만 `FILE_OBJECT.DeviceObject`와 보고서는 이름 있는 장치 신원을 유지합니다. READ/WRITE 버퍼링은 선택한 최상단의 플래그를 사용합니다. 요청이 보존한 경로는 분리·삭제 후에도 디스패치 반환까지 각 장치를 유지하며, 내부 참조는 열린 핸들 수인 `ReferenceCount`에 더해지지 않습니다.
+
+`IofCallDriver`와 `IoCallDriver` 도우미는 보존 경로에서 지정된 정확한 대상을 호출합니다. 실제 인라인 `IoCopyCurrentIrpStackLocationToNext`, `IoSkipCurrentIrpStackLocation`, `IoSetCompletionRoutine`은 원래 게스트 IRP를 조작하며 커서, 개수, 제어 플래그를 검증합니다. 하위 디스패치의 실제 반환 상태는 `IoStatus` 및 완료 루틴 반환값과 분리됩니다. 완료 처리는 커서를 전진시키고 성공/오류/취소 조건에 따라 콜백을 호출하며 pending을 위로 전달합니다. 완료 루틴이 실행되면 해당 루틴이 전달을 책임지며, 디스패치가 이미 `STATUS_PENDING`을 반환한 뒤에도 전달할 수 있습니다. `STATUS_MORE_PROCESSING_REQUIRED`는 IRP, MDL, 버퍼를 유지한 채 완료 해제를 멈추고 이후 완료 호출로 재개합니다. 중첩 완료에는 외부 루틴의 중단 결과가 필요하며 최종 해제 시 저장소를 한 번만 폐기합니다. 소유 하위 시스템이 표시된 continuation은 WDM/WDF 호출 프레임과 상속 IRQL을 보존합니다. 상위 완료 콜백 전에 소비된 하위 스택 위치를 0으로 지웁니다.
+
+이 범위에는 PDO, `AddDevice` 실행, PnP/전원 IRP, 드라이버 할당 IRP가 포함되지 않습니다. WDF 연결/전달, 파일이나 콜백이 남은 스택에 연결, 중간 계층 분리, 전달 중 주 기능 변경, 보존 경로 외부 대상으로 전달하면 명시적으로 실패합니다. 실제 WDK의 선택적 `driver_wdm_stack.c`는 `NEVERD_WDM_STACK_FIXTURE`와 `NEVERD_WDM_STACK_CFG_FIXTURE`로 구성합니다. 네이티브와 C API/CLI 검증에는 재배치가 포함되며 산출물 누락 시 명시적으로 건너뜁니다. 실행 근거는 Linux에 한정됩니다.
 
 KMDF 1.33 지원은 정확한 1.33.0 ABI를 사용합니다. 458개 함수 슬롯에 안정적인 게스트 식별자가 있으며 아래 38개 API에 실행 의미가 구현되어 있습니다. `WdfVersionBind`와 `WdfVersionUnbind`는 실제 WDK `FxDriverEntry` 래퍼 전후에 게스트 바인딩을 관리합니다. `WdfGetDriver`는 공용 드라이버 전역 구조를 읽습니다. 비 PnP 드라이버, 일반 객체, 제어 장치, 큐 및 들어오는 요청은 형식화된 컨텍스트, 참조 수와 실제 실행되는 정리/파괴/언로드 콜백을 공유합니다. 모델링된 모든 프레임워크 호출과 콜백은 현재 `PASSIVE_LEVEL`을 요구하며 정리 완료 후 새 참조를 얻는 동작은 이 프로필의 범위 밖입니다. 모델링되지 않은 함수 슬롯, `WdfLdrQueryInterface`, 클래스 확장 및 UMDF는 명시적으로 중단합니다.
 
@@ -106,6 +112,8 @@ KMDF 1.33 지원은 정확한 1.33.0 ABI를 사용합니다. 458개 함수 슬�
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 명시적인 세션 레지스트리, 핸들별 권한과 수명, 쿼리 버퍼 크기와 변경. 호스트 레지스트리에 접근하지 않음 |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | 풀 유형 `0`, `1`, `512`의 데이터 할당. 크기/태그는 양수이며, 태그가 있는 해제는 일치해야 하고 주소를 재사용하지 않음 |
 | `IoCreateDevice`, `IoDeleteDevice` | 장치 유형 `0x22`, 특성 `0` 또는 `0x100`, 제한된 확장, ASCII `\Device\Name` 이름 |
+| `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 동일 드라이버 연결. 이전 최상단을 반환하며 분리는 저장한 하위 장치를 받음. 위 토폴로지/수명 제한 적용 |
+| `IofCallDriver`, `IoCallDriver` | 보존 경로의 정확한 대상으로 디스패치. 게스트 커서 검증 및 하위 NTSTATUS 보존 |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | 하나의 세션 네임스페이스에서 ASCII `\DosDevices\Name` 또는 `\??\Name`을 사용하며 `\Device\Name`을 가리킴 |
 | `DbgPrint`, `DbgPrintEx` | 검증된 Win64 가변 인수 포맷팅, 최대 출력 512바이트. 모든 디버거 필터가 활성화됨 |
 | `IoGetCurrentIrpStackLocation` | 활성 모델 IRP의 스택 위치를 반환함. 일반적인 컴파일된 WDM 매크로도 동일한 게스트 필드를 읽음 |
@@ -117,7 +125,7 @@ KMDF 1.33 지원은 정확한 1.33.0 ABI를 사용합니다. 458개 함수 슬�
 | `KeWaitForSingleObject` | 초기화된 이벤트 또는 타이머 하나, 비경고 `KernelMode`, 사유 `Executive`; 0 폴링, 유한 상대/절대 또는 무한 대기; 0이 아닌/무한 대기는 IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | IRQL <= APC_LEVEL에서 비경고 `KernelMode` 상대/절대 지연; 가상 시간 진행 후 저장된 게스트 프레임 재개 |
 | `IoMarkIrpPending` | 현재 유효한 IRP를 보류로 표시. WDM 매크로의 스택 제어 필드 쓰기도 지원. 디스패치는 `STATUS_PENDING`을 반환해야 함 |
-| `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 활성 동기 또는 보류 모델 IRP를 완료함. 완료된 IRP나 버퍼에는 다시 접근할 수 없음 |
+| `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 완료 해제를 수행. 중단/재개를 지원하고 최종 경계에서만 IRP/MDL/버퍼를 폐기 |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | 호출당 최대 1 MiB의 제한된 게스트 버퍼 작업. 비중첩 복사 API는 겹치는 범위를 거부함 |
 
 API IRQL 상한은 `KernelAPIIRQL.def`에 정의되며 인수별 제한은 담당 모델이 검사합니다. DPC는 레지스트리 API나 페이징 풀 할당·해제·접근을 사용할 수 없습니다. Unicode `DbgPrint` 변환은 `PASSIVE_LEVEL`이 필요하며 지원되는 ANSI 출력과 비페이징 작업은 `DISPATCH_LEVEL`에서 사용할 수 있습니다. 콜백 스택에는 경계가 있어 이탈한 스택 포인터가 다른 차단 작업자의 스택을 침범할 수 없습니다. 장치 확장의 활성 타이머는 조기 장치 회수를 막습니다. 일반 IRQL 전환을 제공하는 기능은 아닙니다.
@@ -204,7 +212,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v6`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v7`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 

@@ -80,13 +80,17 @@ llvm::Error KernelModel::freeWorkItem(uint64_t Address) {
 }
 
 llvm::Error KernelModel::updateDeviceReferences(uint64_t Device) {
+  if (!Devices.count(Device))
+    return schedulingError("cannot update references of an unknown device");
   const uint64_t OpenCount =
       std::count_if(Files.begin(), Files.end(), [&](const auto &Entry) {
         return Entry.second.Device == Device &&
                Entry.second.State == FileState::Open;
       });
-  return Memory.writeInteger(Device + windows::DeviceReferenceCount,
-                             OpenCount + WorkReferences[Device], 4);
+  // The public DEVICE_OBJECT field counts open handles. Scheduler ownership
+  // and retained IRP routes protect lifetime without becoming open handles.
+  return Memory.writeInteger(Device + windows::DeviceReferenceCount, OpenCount,
+                             4);
 }
 
 llvm::Expected<std::optional<KernelScheduler::Invocation>>

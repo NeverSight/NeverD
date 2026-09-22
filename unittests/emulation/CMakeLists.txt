@@ -8,6 +8,10 @@ set(NEVERD_KMDF_CONTROL_FIXTURE "" CACHE FILEPATH
   "Optional original KMDF control-device fixture linked with genuine WDK libraries")
 set(NEVERD_KMDF_CONTROL_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK KMDF control-device fixture linked with active CFG")
+set(NEVERD_WDM_STACK_FIXTURE "" CACHE FILEPATH
+  "Optional original WDM device-stack fixture linked with genuine WDK libraries")
+set(NEVERD_WDM_STACK_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK device-stack fixture linked with active CFG")
 if(NOT NEVERD_TEST_CLANG_EXECUTABLE OR NOT NEVERD_DRIVER_LLD_LINK)
   message(STATUS "Driver emulation fixtures unavailable: Clang and lld-link are required")
   return()
@@ -158,12 +162,38 @@ foreach(_driver_kmdf_variable NEVERD_KMDF_FIXTURE NEVERD_KMDF_CFG_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_stack_definitions)
+set(_driver_has_wdm_stack_fixture FALSE)
+foreach(_driver_stack_variable NEVERD_WDM_STACK_FIXTURE
+    NEVERD_WDM_STACK_CFG_FIXTURE)
+  if(_driver_stack_variable STREQUAL "NEVERD_WDM_STACK_CFG_FIXTURE"
+      AND NOT _driver_has_wdm_stack_fixture)
+    message(STATUS "Driver WDM stack CFG tests skipped: NEVERD_WDM_STACK_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(NOT "${${_driver_stack_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_stack_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_stack_variable}}")
+    get_filename_component(_driver_stack_path
+      "${${_driver_stack_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_stack_definitions
+      "${_driver_stack_variable}=\"${_driver_stack_path}\"")
+    if(_driver_stack_variable STREQUAL "NEVERD_WDM_STACK_FIXTURE")
+      set(_driver_has_wdm_stack_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM stack fixture ${_driver_stack_variable}: ${_driver_stack_path}")
+  else()
+    message(STATUS "Driver WDM stack tests requiring ${_driver_stack_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
   DriverSessionTests.cpp
   DriverLoaderAdvancedTests.cpp
   DriverGuardTests.cpp
   DriverKMDFLifecycleTests.cpp
   DriverKMDFControlTests.cpp
+  DriverWDMStackTests.cpp
   DriverIOTests.cpp
   ExecutionPolicyTests.cpp
   DriverScenarioTests.cpp
@@ -176,6 +206,8 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelFrameworkRequestTests.cpp
   KernelFrameworkRequestAccessorTests.cpp
   KernelRequestMDLTests.cpp
+  KernelDeviceStackTests.cpp
+  KernelIRPStackTests.cpp
   BackendFaultTests.cpp
   BackendContextTests.cpp
   KernelSchedulerTests.cpp
@@ -200,7 +232,8 @@ target_include_directories(NeverDDriverEmulationTests PRIVATE
 target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   NEVERD_DRIVER_FIXTURES="${_driver_fixture_dir}"
   NEVERD_DRIVER_IO_FIXTURE="${_driver_fixture_dir}/driver_io.sys"
-  ${_driver_kmdf_definitions})
+  ${_driver_kmdf_definitions}
+  ${_driver_wdm_stack_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -216,7 +249,8 @@ if(TARGET neverd_shared AND TARGET neverd)
     NEVERD_DRIVER_FIXTURES="${_driver_fixture_dir}"
     NEVERD_DRIVER_IO_FIXTURE="${_driver_fixture_dir}/driver_io.sys"
     NEVERD_DRIVER_CLI="$<TARGET_FILE:neverd>"
-    ${_driver_kmdf_definitions})
+    ${_driver_kmdf_definitions}
+    ${_driver_wdm_stack_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

@@ -275,7 +275,7 @@ TEST_F(DriverKernelModel,
   invoke("IoDeleteDevice", {Device});
   success(Model->snapshot());
   ASSERT_EQ(Result.Devices.size(), 1u);
-  EXPECT_EQ(integer(Device + windows::DeviceReferenceCount, 4), 1u);
+  EXPECT_EQ(integer(Device + windows::DeviceReferenceCount, 4), 0u);
   auto Next = Model->nextScheduled(false);
   ASSERT_TRUE(bool(Next)) << llvm::toString(Next.takeError());
   ASSERT_TRUE(Next->has_value());
