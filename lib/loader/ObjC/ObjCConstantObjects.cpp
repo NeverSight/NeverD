@@ -1,6 +1,7 @@
 #include "neverd/loader/ObjC/ObjCConstantObjects.h"
 
 #include "../MachO/DarwinRuntimeImport.h"
+#include "../MachO/DarwinSourceDeclarations.h"
 #include "ObjCRuntimeData.h"
 
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -121,6 +122,28 @@ class Reader {
     return true;
   }
 
+  bool importedBoolean(va_t Slot, unsigned Depth) {
+    if (Depth > 64 || Objects.size() + Active.size() >= 4096 ||
+        !isImmutableImageImportSlot(Image, Slot))
+      return false;
+    const auto &Bind = Image.DyldBindSlots.at(Slot);
+    const llvm::StringRef Import(Bind.Name);
+    if ((Import != "___kCFBooleanTrue" && Import != "___kCFBooleanFalse") ||
+        !darwinDeclaredSourceDataExport(Image.Arch, Import, Bind.Module) ||
+        !charge(8))
+      return false;
+    ObjCConstantObject Object;
+    Object.TheKind = ObjCConstantObject::Kind::ImportedBoolean;
+    Object.ImportName = Import.str();
+    const auto [Found, Added] = Objects.emplace(Slot, std::move(Object));
+    if (!Added &&
+        (Found->second.TheKind != ObjCConstantObject::Kind::ImportedBoolean ||
+         Found->second.ImportName != Import))
+      return false;
+    Heights[Slot] = 0;
+    return true;
+  }
+
   bool edges(va_t Slot, uint64_t Count, std::vector<va_t> &Values,
              unsigned Depth) {
     if (Count > EdgesLeft || Count > BytesLeft / 8)
@@ -135,9 +158,16 @@ class Reader {
       return false;
     for (uint64_t I = 0; I < Count; ++I) {
       const auto Value = readImmutableImagePointer(Image, *Table + I * 8);
-      if (!Value || !object(*Value, Depth + 1))
-        return false;
-      Values.push_back(*Value);
+      if (Value) {
+        if (!object(*Value, Depth + 1))
+          return false;
+        Values.push_back(*Value);
+      } else {
+        const va_t ImportSlot = *Table + I * 8;
+        if (!importedBoolean(ImportSlot, Depth + 1))
+          return false;
+        Values.push_back(ImportSlot);
+      }
     }
     return true;
   }
@@ -158,7 +188,9 @@ class Reader {
 
   bool object(va_t Address, unsigned Depth) {
     if (auto It = Heights.find(Address); It != Heights.end())
-      return Depth <= 64 && It->second <= 64 - Depth;
+      return Objects.at(Address).TheKind !=
+                 ObjCConstantObject::Kind::ImportedBoolean &&
+             Depth <= 64 && It->second <= 64 - Depth;
     if (!Address || Depth > 64 || Objects.size() + Active.size() >= 4096 ||
         !Active.insert(Address).second)
       return false;

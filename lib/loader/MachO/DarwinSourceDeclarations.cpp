@@ -86,24 +86,31 @@ darwinDeclaredSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   return Result;
 }
 
+bool darwinDeclaredSourceDataExport(Arch Architecture, llvm::StringRef Symbol,
+                                    llvm::StringRef Module) {
+  if ((Architecture != Arch::AArch64 && Architecture != Arch::X64) ||
+      !Symbol.consume_front("_"))
+    return false;
+  const auto D = std::lower_bound(
+      std::begin(DataDeclarations), std::end(DataDeclarations), Symbol,
+      [](const DataDeclaration &D, llvm::StringRef Name) {
+        return D.Name < Name;
+      });
+  return D != std::end(DataDeclarations) && D->Name == Symbol &&
+         darwinExportModuleMatches(
+             Architecture == Arch::AArch64 ? D->AArch64Modules : D->X64Modules,
+             Module);
+}
+
 std::optional<SourceCallTypeHint>
 darwinDeclaredSourceGlobalAddressHint(const BinaryImage &Image,
                                       va_t ImportSlot) {
   auto Import = darwinRuntimeImport(Image, ImportSlot);
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
-  if (!Import || !Import->consume_front("_") ||
-      Bind == Image.DyldBindSlots.end())
+  if (!Import || Bind == Image.DyldBindSlots.end() ||
+      !darwinDeclaredSourceDataExport(Image.Arch, *Import, Bind->second.Module))
     return std::nullopt;
-  const auto D = std::lower_bound(
-      std::begin(DataDeclarations), std::end(DataDeclarations), *Import,
-      [](const DataDeclaration &D, llvm::StringRef Name) {
-        return D.Name < Name;
-      });
-  if (D == std::end(DataDeclarations) || D->Name != *Import ||
-      !darwinExportModuleMatches(Image.Arch == Arch::AArch64 ? D->AArch64Modules
-                                                             : D->X64Modules,
-                                 Bind->second.Module))
-    return std::nullopt;
+  Import->consume_front("_");
   // Only non-TLS external storage with a declaration common to both platform
   // profiles is eligible. Bind the address; subsequent loads and stores still
   // access the real runtime object, without assuming its value or layout.

@@ -69,6 +69,15 @@ inline std::string renderObjCConstantObjectHelpers(
   for (const auto &[Address, Object] : Objects) {
     if (Object.TheKind == Kind::String)
       continue;
+    if (Object.TheKind == Kind::ImportedBoolean) {
+      const auto Symbol =
+          "neverd_imported_boolean_" + llvm::utohexstr(Address, true);
+      Source += "\nuintptr_t " + Name(Address) +
+                "(void) {\n  extern const unsigned char " + Symbol +
+                "[] __asm__(\"" + Object.ImportName +
+                "\");\n  return (uintptr_t)" + Symbol + ";\n}\n";
+      continue;
+    }
     const bool Integer = Object.TheKind == Kind::Integer;
     const bool Dictionary = Object.TheKind == Kind::Dictionary;
     const std::string Class = Integer      ? "NSConstantIntegerNumber"

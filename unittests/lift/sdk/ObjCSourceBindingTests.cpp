@@ -3044,6 +3044,149 @@ TEST(ObjCSourceBindings,
   }
 }
 
+namespace {
+ConstantObjectFixture booleanConstantObjectFixture(Arch Architecture,
+                                                   bool Chained) {
+  ConstantObjectFixture F(Architecture, Chained);
+  for (va_t Slot : {0x6000U, 0x6008U, 0x6010U}) {
+    F.Image.DataPtrRelocSlots.erase(Slot);
+    F.Image.DataPtrRelocTargetOwners.erase(Slot);
+    const char *Name =
+        Slot == 0x6008 ? "___kCFBooleanFalse" : "___kCFBooleanTrue";
+    EXPECT_TRUE(F.Image.recordDyldBindSlot(
+        Slot, Name, 0,
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        false));
+    // Chained binds carry symbolic loader authority, not a resolved local
+    // pointer and not necessarily a legacy GOT pointer-table entry.
+    F.Image.ImportPtrSlots.erase(Slot);
+    F.Image.MachOResolvedChainedPointerSlots.erase(Slot);
+  }
+  return F;
+}
+} // namespace
+
+TEST(ObjCSourceBindings, ConstantObjectsPreserveImportedBooleanIdentities) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Chained : {false, true}) {
+      auto F = booleanConstantObjectFixture(Architecture, Chained);
+      const auto Graph = readObjCConstantObjectGraph(F.Image, 0x3000);
+      ASSERT_TRUE(Graph);
+      EXPECT_EQ(Graph->size(), 4U);
+      EXPECT_EQ(Graph->at(0x3000).Elements,
+                (std::vector<va_t>{0x6000, 0x6008, 0x6010}));
+      EXPECT_EQ(Graph->at(0x6000).TheKind,
+                ObjCConstantObject::Kind::ImportedBoolean);
+      EXPECT_EQ(Graph->at(0x6000).ImportName, "___kCFBooleanTrue");
+      EXPECT_EQ(Graph->at(0x6010).ImportName, "___kCFBooleanTrue");
+      EXPECT_EQ(Graph->at(0x6008).ImportName, "___kCFBooleanFalse");
+      EXPECT_TRUE(isImmutableImageImportSlot(F.Image, 0x6000));
+      EXPECT_FALSE(readImmutableImageBytes(F.Image, 0x6000, 8));
+      EXPECT_FALSE(readImmutableImagePointer(F.Image, 0x6000));
+      EXPECT_FALSE(readObjCConstantObjectGraph(F.Image, 0x6000));
+      F.Function.Body[0].RetVal = HighExpr::makeConst(0x3000, 8);
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      EXPECT_TRUE(
+          objcSourceCallBound(*Bound.Function.Body[0].RetVal, F.Image, {}));
+      F.Image.DyldBindSlots.at(0x6000).WeakImport = true;
+      EXPECT_FALSE(
+          objcSourceCallBound(*Bound.Function.Body[0].RetVal, F.Image, {}));
+    }
+}
+
+TEST(ObjCSourceBindings, ImportedBooleanEdgesRejectAliasesAndStaleImports) {
+  using Mutation = std::function<void(ConstantObjectFixture &)>;
+  const std::vector<Mutation> Mutations{
+      [](auto &F) { F.Image.DyldBindSlots.at(0x6000).WeakImport = true; },
+      [](auto &F) { F.Image.DyldBindSlots.at(0x6000).Addend = 8; },
+      [](auto &F) { F.Image.DyldBindSlots.at(0x6000).Module = "/tmp/fake"; },
+      [](auto &F) { F.Image.ImportPtrSlots[0x6000] = "_kCFBooleanTrue"; },
+      [](auto &F) { F.Image.ImportStorageSlots.at(0x6000).Addend = 8; },
+      [](auto &F) { F.Image.DyldBindSlots.erase(0x6000); },
+      [](auto &F) { F.Image.DataPtrRelocSlots.insert(0x6000); },
+      [](auto &F) { F.Image.DataPtrRelocTargetOwners[0x6000] = 0x6000; },
+      [](auto &F) { F.Image.CodePtrRelocSlots.insert(0x5ffc); },
+      [](auto &F) { F.Image.ImportStorageSlots[0x6004] = {"_other", 0}; },
+      [](auto &F) { F.Image.MachOResolvedChainedPointerSlots.insert(0x6004); },
+      [](auto &F) { F.Image.ConflictingImportStorageSlots.insert(0x6000); },
+      [](auto &F) { F.Image.Segments.back().ReadOnlyAfterRelocations = false; },
+      [](auto &F) { F.Image.Sections.back().FileSz = 7; },
+      [](auto &F) { F.Image.Sections.push_back(F.Image.Sections.back()); },
+      [](auto &F) { F.Image.Relocations.push_back({0x6000}); },
+      [](auto &F) { F.Image.BaseRelocations.push_back({0x5ffc}); },
+      [](auto &F) { F.Image.RuntimeCallablePointerSlots.push_back({0x6000}); },
+      [](auto &F) {
+        F.pointer(0x6020, 0x6000);
+      }, // Address of the slot is not its value.
+      [](auto &F) {
+        F.pointer(0x6030, 0x3000);
+      }, // Boolean arrays are not string keys.
+  };
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (size_t I = 0; I < Mutations.size(); ++I) {
+      SCOPED_TRACE(I);
+      auto F = booleanConstantObjectFixture(Architecture, true);
+      Mutations[I](F);
+      EXPECT_FALSE(readObjCConstantObjectGraph(F.Image, 0x3018));
+    }
+}
+
+TEST(ObjCSourceBindings, ImportedBooleanElementsExecuteWithSharedIdentity) {
+  auto F = booleanConstantObjectFixture(Arch::AArch64, true);
+  std::set<std::string> Shared;
+  std::string Source =
+      "#include <stdint.h>\n" +
+      renderObjCConstantObjectHelpers(F.Image, {0x3000}, {}, Shared);
+  Source += R"(
+const unsigned char true_object[1] __asm__("___kCFBooleanTrue") = { 1 };
+const unsigned char false_object[1] __asm__("___kCFBooleanFalse") = { 0 };
+unsigned char array_class[1] __asm__("_OBJC_CLASS_$_NSConstantArray") = { 0 };
+struct array_record { const void *isa; uintptr_t count; const void *const *elements; };
+int main(void) {
+  const struct array_record *a = (const void *)neverd_objc_constant_object_3000_address();
+  if (a->isa != array_class || a->count != 3) return 1;
+  if (a->elements[0] != true_object || a->elements[1] != false_object ||
+      a->elements[2] != true_object) return 2;
+  if (a != (const void *)neverd_objc_constant_object_3000_address()) return 3;
+  return 0;
+}
+)";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-boolean-objects",
+                                                    Directory));
+  const std::filesystem::path Work(Directory.str().str());
+  struct Cleanup {
+    std::filesystem::path Work;
+    ~Cleanup() {
+      std::error_code Error;
+      std::filesystem::remove_all(Work, Error);
+    }
+  } Cleanup{Work};
+  const auto Path = (Work / "objects.c").string();
+  const auto Executable = (Work / "objects").string();
+  const auto ErrorPath = (Work / "stderr").string();
+  std::ofstream(Path) << Source;
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    const std::vector<std::string> Arguments{
+        Compiler, "-std=c11", Optimization, "-Werror", Path, "-o", Executable};
+    std::vector<llvm::StringRef> Refs(Arguments.begin(), Arguments.end());
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath};
+    std::string Error;
+    const auto Status = llvm::sys::ExecuteAndWait(Compiler, Refs, std::nullopt,
+                                                  Redirects, 60, 0, &Error);
+    auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (Errors ? (*Errors)->getBuffer().str() : "");
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable, {Executable}, std::nullopt,
+                                        Redirects, 30, 0, &Error),
+              0)
+        << Error;
+  }
+}
+
 TEST(ObjCSourceBindings, ConstantIntegerObjectsRetainSignednessAndExactBits) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (char Encoding : std::string("cCsSiIlLqQ")) {

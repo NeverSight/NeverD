@@ -49,6 +49,11 @@ bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
                                               va_t Address);
 
+/// Prove one exact strong, zero-addend import slot has unique immutable
+/// file-backed storage and no competing fixups. This authenticates the slot,
+/// not a runtime object layout, provider export, or permission to copy bytes.
+bool isImmutableImageImportSlot(const BinaryImage &Image, va_t Address);
+
 /// Read the initial value of an authenticated local data-pointer relocation.
 /// Storage may be writable: this is an initializer recipe, never permission
 /// to replace subsequent loads with the initial value. The caller must rebuild
