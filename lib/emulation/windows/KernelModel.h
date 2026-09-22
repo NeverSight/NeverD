@@ -17,6 +17,7 @@
 #include "KernelFramework.h"
 #include "KernelGuestCall.h"
 #include "KernelRegistry.h"
+#include "KernelRemoveLocks.h"
 #include "KernelScheduler.h"
 
 #include "neverd/emulation/DriverSession.h"
@@ -97,6 +98,8 @@ public:
   llvm::Error suspendScheduled(uint64_t ID);
   llvm::Error resumeScheduled(uint64_t ID);
   struct Wait {
+    enum class Kind { Dispatcher, Delay, RemoveLock };
+    Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
     std::optional<uint64_t> Deadline;
   };
@@ -132,8 +135,19 @@ private:
   KernelRegistry Registry;
   KernelScheduler Scheduler;
   KernelDispatcher Dispatcher;
+  KernelRemoveLocks RemoveLocks;
   std::optional<Wait> PendingWait;
   std::map<uint64_t, size_t> WaitReferences;
+  std::map<uint64_t, size_t> RemoveLockWaitReferences;
+  llvm::Expected<uint64_t>
+  initializeRemoveLock(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t>
+  acquireRemoveLock(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> releaseRemoveLock(llvm::ArrayRef<uint64_t> Arguments,
+                                             bool Wait);
+  llvm::Error validateRemoveLockOwner(uint64_t Lock) const;
+  llvm::Error canReleaseRemoveLockStorage(uint64_t Base, uint64_t Size) const;
+  llvm::Error canReleaseRange(uint64_t Base, uint64_t Size) const;
   llvm::Expected<uint64_t> beginWait(llvm::ArrayRef<uint64_t> Arguments,
                                      bool Delay);
   llvm::Error prepareReleaseRange(uint64_t Base, uint64_t Size);
@@ -275,6 +289,8 @@ private:
     mutable std::array<bool, 16> IOStatusWritten{};
   };
   std::map<uint64_t, ActiveRequest> Requests;
+  llvm::Error
+  validatePnpRemovalFinalization(const ActiveRequest &Request) const;
   std::set<uint64_t> FinalizedRequests;
   enum class IRPCallKind {
     Dispatch,
@@ -412,6 +428,7 @@ private:
   llvm::Expected<uint64_t> topAttachedDevice(uint64_t Base) const;
   llvm::Expected<std::vector<uint64_t>> deviceStack(uint64_t Top) const;
   llvm::Error validateDeviceTopology() const;
+  llvm::Expected<std::vector<uint64_t>> driverDeviceInventory() const;
   llvm::Expected<uint64_t> attachDevice(uint64_t Source, uint64_t Target);
   llvm::Error detachDevice(uint64_t Lower);
   llvm::Error retainDevice(uint64_t Device);

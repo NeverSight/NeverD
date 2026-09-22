@@ -102,6 +102,15 @@ NEVERD_KERNEL_IRQL_API(PoCallDriver, Dispatch)
 NEVERD_KERNEL_IRQL_API(PoRequestPowerIrp, Dispatch)
 NEVERD_KERNEL_IRQL_API(PoSetPowerState, Dispatch)
 NEVERD_KERNEL_IRQL_API(PoStartNextPowerIrp, Dispatch)
+// The public WDK macros call these exports with the concrete lock size.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinitializeremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioacquireremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleaseremovelock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleaseremovelockandwait
+NEVERD_KERNEL_IRQL_API(IoInitializeRemoveLockEx, Passive)
+NEVERD_KERNEL_IRQL_API(IoAcquireRemoveLockEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseRemoveLockEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseRemoveLockAndWaitEx, Passive)
 NEVERD_KERNEL_IRQL_API(IoAttachDeviceToDeviceStack, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoDetachDevice, Passive)
 NEVERD_KERNEL_IRQL_API(IoCompleteRequest, Dispatch)

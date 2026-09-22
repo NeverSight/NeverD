@@ -699,10 +699,8 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
     const bool Removed =
         Request->PnpOperation->Minor == DevicePnpRequest::Remove;
     if (Removed)
-      for (uint64_t Owner : Request->DeviceRoute)
-        if (Owner != PDO && !Devices.at(Owner).DeletePending)
-          return ioError(
-              "remove returned without deleting a guest device in its route");
+      if (auto E = validatePnpRemovalFinalization(*Request))
+        return E;
     auto Route = std::move(Request->DeviceRoute);
     Requests.erase(IRP);
     FinalizedRequests.insert(IRP);

@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v10",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v11",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -191,6 +191,27 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
         i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
         self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
+
+    def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("IoInitializeRemoveLockEx", "IoAcquireRemoveLockEx",
+                                      "IoReleaseRemoveLockEx", "IoReleaseRemoveLockAndWaitEx",
+                                      "STATUS_DELETE_PENDING", "Driver Verifier")),
+            ("architecture.md", ("KernelRemoveLocks",)),
+            ("testing.md", ("KernelRemoveLocksTests.cpp", "KernelRemoveLockBridgeTests.cpp",
+                            "DriverWDMRemoveLockTests.cpp", "NEVERD_WDM_REMOVE_LOCK_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE",
+                            "NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedLockContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
 
     def test_driver_power_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (

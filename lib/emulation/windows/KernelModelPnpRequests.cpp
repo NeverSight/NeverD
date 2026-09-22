@@ -68,9 +68,6 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
           return Entry.second.PnpDevice == PDO;
         }))
       return pnpError("remove requires earlier device requests to finalize");
-    for (uint64_t Device : *Route)
-      if (Scheduler.hasOutstanding(Device))
-        return pnpError("remove requires earlier device callbacks to drain");
   }
   auto Count = Memory.readInteger(*Top + DeviceStackCountOffset, 1);
   if (!Count)

@@ -878,7 +878,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           break;
         }
       }
-      const bool Deferred = Kernel.requestPending(Invocation->IRP);
+      // A completed REMOVE may still have callbacks that released their final
+      // remove-lock acquisition and then waited. Keep its captured route until
+      // those real execution frames return, even if the packet is already dead.
+      const auto &Input = Options.Requests[Index];
+      const bool Removing =
+          Input.Pnp && Input.Pnp->Minor == DevicePnpRequest::Remove;
+      const bool Deferred = Removing || Kernel.requestPending(Invocation->IRP);
       if (!Deferred) {
         if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
           ModelFailure(std::move(E));

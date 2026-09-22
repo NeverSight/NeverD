@@ -105,13 +105,19 @@ WDM 裝置堆疊可以包含同一客體驅動程式擁有的多個裝置物件�
 }
 ```
 
-DriverEntry 成功後，每個設定的 PDO 執行一次 `AddDevice`，提供者擁有獨立的 `DRIVER_OBJECT`；客體不能刪除或冒充提供者物件。PnP IRP 為 `KernelMode`、不關聯檔案、無資源，初始狀態為 `STATUS_NOT_SUPPORTED`。僅轉送至對應 PDO 後才使用匯流排回應；延遲完成沿用虛擬時鐘與既有完成續接。最終上層完成決定生命週期提交或回復，與匯流排狀態分開。正常自 Started 移除必須先成功 query、關閉檔案、排空先前要求／回呼，並由客體拆鏈／刪除。乾淨的 AddDevice 失敗僅退役提供者；新客體裝置洩漏會觸發 `model_error`，已拆鏈者亦同。卸載前所有提供者必須已退出。本範圍不實作其他 PnP 次要功能、一般電源管理、硬體／資源或 KMDF PnP。 成功 PnP 必須實際完成提供者；START/QUERY_STOP/QUERY_REMOVE 的上層早期失敗可保留空匯流排觀測。裝置／檔案生命週期身分在拆鏈後仍保留。
+DriverEntry 成功後，每個設定的 PDO 執行一次 `AddDevice`，提供者擁有獨立的 `DRIVER_OBJECT`；客體不能刪除或冒充提供者物件。PnP IRP 為 `KernelMode`、不關聯檔案、無資源，初始狀態為 `STATUS_NOT_SUPPORTED`。僅轉送至對應 PDO 後才使用匯流排回應；延遲完成沿用虛擬時鐘與既有完成續接。最終上層完成決定生命週期提交或回復，與匯流排狀態分開。正常自 Started 移除必須先成功 query、關閉檔案、排空先前要求，並由客體拆鏈／刪除。乾淨的 AddDevice 失敗僅退役提供者；新客體裝置洩漏會觸發 `model_error`，已拆鏈者亦同。卸載前所有提供者必須已退出。本範圍不實作其他 PnP 次要功能、一般電源管理、硬體／資源或 KMDF PnP。 成功 PnP 必須實際完成提供者；START/QUERY_STOP/QUERY_REMOVE 的上層早期失敗可保留空匯流排觀測。裝置／檔案生命週期身分在拆鏈後仍保留。
 
 報告於 `configuration.pnp_devices` 保留初始設定。觀測的 `pnp_devices` 包含 `id`、`pdo`、可空 `add_device_status`、目前 `attached`、`pnp_state` 與 `provider_present`；移除後 `attached` 為 false。AddDevice 階段為 `add_device:<ID>`，失敗影響 `scenario_success`，但不覆寫 DriverEntry 的 `nt_status`。每個要求新增可空 `device_id` 與 `pnp`；PnP 的 `file` 為 null。`pnp` 記錄 `minor`、`state_before`、`state_after`、可空 `bus_status`、`bus_received_at_100ns` 與 `bus_completed_at_100ns`。設定狀態僅在匯流排實際完成後成為觀測；接收時間獨立記錄。既有要求欄位型別不變。
 
-除了 Removing/Removed，裝置仍存在時，一般 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE 會進入真正客體派送。模型不根據 Stopped、StopPending、RemovePending 或電源狀態虛構失敗；驅動程式可依自身程式碼完成軟體 I/O、拒絕或保留要求。公開執行器仍為循序；目前保留 IRP 若無可用生產者，不能靠後續情境中的 start 或 cleanup 喚醒，會以停滯 `model_error` 結束。Remove 前關閉檔案、排空先前要求／回呼是目前設定的限制。`query_stop` 的最終 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) 要求尚未實作的資源重新查詢，因此情境預檢與客體最終完成都明確拒絕；參見 [Microsoft QUERY_STOP 合約](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)。停止／重啟及突然移除不代表資源、一般電源管理 或 KMDF PnP 支援。
+除了 Removing/Removed，裝置仍存在時，一般 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE 會進入真正客體派送。模型不根據 Stopped、StopPending、RemovePending 或電源狀態虛構失敗；驅動程式可依自身程式碼完成軟體 I/O、拒絕或保留要求。公開執行器仍為循序；目前保留 IRP 若無可用生產者，不能靠後續情境中的 start 或 cleanup 喚醒，會以停滯 `model_error` 結束。Remove 前關閉檔案、排空先前要求是目前設定的限制。`query_stop` 的最終 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) 要求尚未實作的資源重新查詢，因此情境預檢與客體最終完成都明確拒絕；參見 [Microsoft QUERY_STOP 合約](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)。停止／重啟及突然移除不代表資源、一般電源管理 或 KMDF PnP 支援。
 
 無資源 PnP 使用原創真正 WDK `driver_wdm_pnp.c`、選用的 `NEVERD_WDM_PNP_FIXTURE`／`NEVERD_WDM_PNP_CFG_FIXTURE`，並提供原生及 C API／CLI 測試；缺少產物時明確略過，執行證據仍僅來自 Linux。
+
+WDM remove-lock 使用真正匯出 `IoInitializeRemoveLockEx`、`IoAcquireRemoveLockEx`、`IoReleaseRemoveLockEx` 和 `IoReleaseRemoveLockAndWaitEx`；不帶 Ex 的 WDK 名稱是巨集。鎖屬於完整對齊儲存所在延伸區的確切 DEVICE_OBJECT，與 PDO 生命週期或 Tag 形狀無關；附加前即可初始化。支援 retail 32 位元組及 DBG 120 位元組，須傳入符合的獨立大小參數，登記後整個區域不透明。NULL 和重複 Tag 依每把鎖計數，Tag 從不解參考，因此 IRP 完成後仍可釋放。初始化與 AndWait 要求 `PASSIVE_LEVEL`，acquire/release 允許 `DISPATCH_LEVEL`。
+
+AndWait 關閉取得入口、釋放一次符合的取得，並暫停真正客體框架直到其餘取得全部釋放；之後 acquire 傳回 `STATUS_DELETE_PENDING` 且不產生釋放義務。最後一次 release 在釋放回呼傳回前鎖存就緒，允許工作項目 release 後等待 REMOVE 續接送出的事件。模型不製造回呼、逾時或無生產者的成功。目前 AndWait 要求擁有者位於關聯的活動 REMOVE 路徑且提供者已實際接收（`bus_received_at_100ns` 可為零），不需等待下層完成。下層在到達提供者前將 REMOVE 排入佇列仍不支援；這不是完整 OutsideRemoveDevice／Driver Verifier。REMOVE 前仍須關閉檔案並排空先前要求，但允許尚未結束的回呼釋放鎖。保留路徑涵蓋等待、客體拆鏈／刪除及下層 pending；相關回呼框架全數傳回後才最終釋放路徑。
+
+未知或大小不符的儲存、不符 release、重複 drain、重新初始化，以及仍有取得或未消耗 drain 等待時刪除延伸區，均在修改前失敗。乾淨的 AddDevice 失敗可刪除已初始化但未使用的鎖。鎖不取代真正裝置／工作項目參考，只在延伸區實體退役時取消登記；有效除錯中繼資料不啟用 Verifier 逾時／高水位行為。真正 WDK `driver_wdm_remove_lock.c` 以 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE` 提供四種變體。缺少產物明確略過；原生及 C API／CLI 證據僅來自 Linux，不代表完整移除管理或一般並行 I/O 排空。
 
 無資源 WDM 電源要求使用 `kind: "power"` 和已設定的 `device_id`。每個封包必須明確提供 `minor`（`query`／`set`）、`power_type`（`device`／`system`）、`power_state`（`D0`／`D3` 或 `working`／`sleeping3`）、`power_action`（`none`／`sleep`）、32 位元整數或十六進位字串 `system_context` 及 `bus_completion`。不支援 System Query 到 Working；拒絕檔案、傳輸及取消欄位。完整 `system_context` 保留為不透明事實，不推斷父要求、休眠或快速啟動。路徑必須具有 `DO_POWER_PAGABLE` 且沒有 `DO_POWER_INRUSH`；目前電源派送及 `PoRequestPowerIrp` 在 `PASSIVE_LEVEL` 執行。`PoCallDriver` 轉送同一受管理的電源 IRP；`PoStartNextPowerIrp` 遵循 Vista+ 無額外序列化交握的契約。一般電源原則、WAIT_WAKE、其他狀態／動作、關機／休眠、浪湧、不可分頁路徑、硬體及 KMDF PnP 仍不支援。
 
@@ -156,6 +162,8 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 | `IoCreateDevice`、`IoDeleteDevice` | 裝置類型為 `0x22`，characteristics 為 `0` 或 `0x100`，擴充區大小有界，名稱為 ASCII `\Device\Name` |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 同驅動程式附加；傳回原頂端，解除附加接收儲存的下層裝置；遵守上述拓撲與生命週期限制 |
 | `IofCallDriver`, `IoCallDriver` | 在保留路徑中向確切目標派送；驗證客體堆疊游標，保留下層 NTSTATUS |
+| `IoInitializeRemoveLockEx`, `IoAcquireRemoveLockEx` | 延伸區內確切擁有者及不透明32／120位元組；NULL／重複 Tag |
+| `IoReleaseRemoveLockEx`, `IoReleaseRemoveLockAndWaitEx` | 符合 Tag 釋放及提供者接收後可恢復的 REMOVE 等待 |
 | `PoCallDriver`, `PoStartNextPowerIrp` | 轉送同一受管理的電源 IRP；Vista+ start-next 驗證不增加序列化交握 |
 | `PoSetPowerState`, `PoRequestPowerIrp` | 獨立裝置通知狀態及明確 PDO FIFO 驅動的真正子要求；範圍見上 |
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一個工作階段命名空間內的 ASCII `\DosDevices\Name` 或 `\??\Name`，目標為 `\Device\Name` |
@@ -258,7 +266,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v10`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v11`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

@@ -26,6 +26,35 @@ llvm::Error deviceError(const llvm::Twine &Message) {
 
 } // namespace
 
+llvm::Expected<std::vector<uint64_t>>
+KernelModel::driverDeviceInventory() const {
+  std::vector<uint64_t> Inventory;
+  std::set<uint64_t> Seen;
+  for (uint64_t Owner : {DriverObject, PnpProviderDriver}) {
+    if (!Owner)
+      continue;
+    auto Head = Memory.readInteger(Owner + DriverDeviceHead, 8);
+    if (!Head)
+      return Head.takeError();
+    uint64_t Current = *Head;
+    while (Current) {
+      const auto Found = Devices.find(Current);
+      if (Found == Devices.end() || Found->second.OwnerDriver != Owner ||
+          !Seen.insert(Current).second)
+        return deviceError(
+            "unknown device or cycle in DRIVER_OBJECT device list");
+      Inventory.push_back(Current);
+      auto Next = Memory.readInteger(Current + DeviceNext, 8);
+      if (!Next)
+        return Next.takeError();
+      Current = *Next;
+    }
+  }
+  if (Seen.size() != Devices.size())
+    return deviceError("live device detached from DRIVER_OBJECT device list");
+  return Inventory;
+}
+
 llvm::Error KernelModel::validateDeviceTopology() const {
   for (const auto &[Address, Device] : Devices) {
     const uint64_t ExpectedOwner = Device.OwnerKind == DeviceOwnerKind::Guest
@@ -239,6 +268,8 @@ llvm::Error KernelModel::detachDevice(uint64_t Lower) {
                        "this profile");
   if (FrameworkDevices.count(Lower) || FrameworkDevices.count(Source))
     return deviceError("framework device attachment is outside this profile");
+  if (auto E = canReleaseRemoveLockStorage(Source, Upper.Size))
+    return E;
   if (auto E = Memory.writeInteger(Lower + DeviceAttachedOffset, 0, 8))
     return E;
   LowerIt->second.Upper = 0;

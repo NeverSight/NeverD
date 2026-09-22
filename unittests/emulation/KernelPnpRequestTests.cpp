@@ -1,5 +1,4 @@
-//===- KernelPnpRequestTests.cpp - PnP packet and lifecycle contracts
-//------===//
+//===- KernelPnpRequestTests.cpp - PnP packet lifetime -------------------===//
 //
 // NeverD Decompiler
 //
@@ -359,9 +358,9 @@ TEST_F(KernelPnpRequest, HeldIoRetainsItsFileAndRouteAcrossStopAndSurprise) {
   const auto ReadIndex = Result.Requests.size() - 1;
   // KernelModel can represent interleaved submissions. The public runner is
   // deliberately serial and cannot use later scenario input as this producer.
-  for (auto Minor : {DevicePnpRequest::QueryStop, DevicePnpRequest::Stop,
-                     DevicePnpRequest::Start,
-                     DevicePnpRequest::SurpriseRemoval}) {
+  for (auto Minor :
+       {DevicePnpRequest::QueryStop, DevicePnpRequest::Stop,
+        DevicePnpRequest::Start, DevicePnpRequest::SurpriseRemoval}) {
     completePnp(Minor);
     EXPECT_TRUE(Model->requestPending(Read.IRP));
     EXPECT_EQ(get(Read.IRP + IRPOriginalFileOffset), File);
@@ -454,6 +453,72 @@ TEST_F(KernelPnpRequest, NormalRemovalRequiresQueryAndGuestTeardown) {
   EXPECT_TRUE(Result.Devices.empty());
   reject(Model->validateGuestAccess(FDO + DeviceExtensionOffset, 8, false),
          "freed");
+}
+
+TEST_F(KernelPnpRequest, CorruptRemoveDeviceInventoryPreservesRouteForRetry) {
+  attach();
+  EXPECT_EQ(call("IoCreateDevice", {Model->driverObject(), 16, 0,
+                                    UnknownDeviceType, 0, 0, Scratch}),
+            StatusSuccess);
+  const uint64_t Upper = get(Scratch);
+  EXPECT_EQ(call("IoAttachDeviceToDeviceStack", {Upper, FDO}), FDO);
+  const auto Remove = begin(DevicePnpRequest::Remove);
+  EXPECT_EQ(Remove.Argument0, Upper);
+
+  const auto Stack = get(Remove.IRP + IRPStackPointerOffset);
+  std::array<uint8_t, StackCompletionOffset> Prefix;
+  ok(Memory->read(Stack, Prefix));
+  ok(Memory->write(Stack - StackSize, Prefix));
+  call("IofCallDriver", {FDO, Remove.IRP});
+  const auto LowerCall = Model->takeGuestCall();
+  ASSERT_TRUE(LowerCall);
+  ASSERT_EQ(LowerCall->Arguments.size(), 2u);
+  EXPECT_EQ(LowerCall->Arguments[0], FDO);
+  EXPECT_EQ(forward(Remove.IRP), StatusSuccess);
+  const auto Returned =
+      take(Model->finishGuestCall(LowerCall->Token, StatusSuccess));
+  ASSERT_TRUE(Returned);
+  EXPECT_EQ(*Returned, StatusSuccess);
+  ASSERT_TRUE(Result.Requests.back().Completed);
+  reject(Model->validateGuestAccess(Remove.IRP, 2, false), "freed");
+
+  call("IoDetachDevice", {FDO});
+  call("IoDetachDevice", {PDO});
+  call("IoDeleteDevice", {Upper});
+  call("IoDeleteDevice", {FDO});
+  ok(Model->recordDispatchReturn(Remove.IRP, StatusSuccess));
+  const uint64_t Head = Model->driverObject() + DriverDeviceHead;
+  EXPECT_EQ(get(Head), Upper);
+  EXPECT_EQ(get(Upper + DeviceNext), FDO);
+  const uint64_t SavedNext = get(FDO + DeviceNext);
+
+  for (uint64_t InvalidNext : {Upper, Scratch + 0x800}) {
+    // Both a cycle and an unknown node occur after the first route owner in
+    // list order. No owner may retire before the entire inventory is checked.
+    ok(Model->validateGuestAccess(FDO + DeviceNext, 8, true));
+    put(FDO + DeviceNext, InvalidNext);
+    reject(Model->finalizeRequest(Remove.IRP), "device list");
+    EXPECT_EQ(get(Head), Upper);
+    EXPECT_EQ(get(Upper + DeviceNext), FDO);
+    EXPECT_EQ(get(FDO + DeviceNext), InvalidNext);
+    for (uint64_t Device : {Upper, FDO, PDO})
+      ok(Model->validateGuestAccess(Device, 2, false));
+    // The completed packet stays retired, but its owning request record and
+    // all captured route holds must survive a rejected finalization.
+    reject(Model->validateGuestAccess(Remove.IRP, 2, false), "freed");
+    reject(Model->recordDispatchReturn(Remove.IRP, StatusSuccess),
+           "already recorded");
+    put(FDO + DeviceNext, SavedNext);
+    ok(Model->snapshot());
+    EXPECT_EQ(Result.Devices.size(), 2u);
+    EXPECT_TRUE(Result.PnpDevices[0].ProviderPresent);
+  }
+
+  ok(Model->finalizeRequest(Remove.IRP));
+  EXPECT_TRUE(Result.Devices.empty());
+  EXPECT_FALSE(Result.PnpDevices[0].ProviderPresent);
+  for (uint64_t Device : {Upper, FDO, PDO})
+    reject(Model->validateGuestAccess(Device, 2, false), "freed");
 }
 
 TEST_F(KernelPnpRequest,

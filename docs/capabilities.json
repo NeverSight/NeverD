@@ -3492,7 +3492,7 @@
         "The eight public common PnP minors are Start, QueryRemove, CancelRemove, Remove, QueryStop, Stop, CancelStop and SurpriseRemoval. Every configured bus completion requires an explicit final 32-bit status, rejects STATUS_PENDING, and accepts optional nonnegative delay_100ns through INT64_MAX from actual provider receipt. Stop/CancelStop/SurpriseRemoval/CancelRemove/Remove require exactly STATUS_SUCCESS (0). Shared devicePnpFinalStatusError validates both configured bus policy and final guest completion. QueryStop STATUS_RESOURCE_REQUIREMENTS_CHANGED (0x119) is explicitly unsupported because it requests resource requery. Other PnP operations, general power policy, physical resources, relations/capabilities, hardware and KMDF PnP remain unsupported.",
         "After successful DriverEntry, each configured PDO invokes the actual guest AddDevice callback once in add_device:<ID>. Provider-owned PDO/DRIVER_OBJECT inventory remains separate from the guest driver and cannot be deleted, mutated or impersonated by guest code. Successful filters may decline attachment. Failed AddDevice records its status and retires only a clean provider; new guest devices left behind, including detached leaks, cause ModelError without fabricated cleanup.",
         "PnP IRPs share the existing captured route, guest stack and completion authority; they are KernelMode, file-free/resource-free and initially STATUS_NOT_SUPPORTED. Only actual provider receipt consumes the configured response; timed completion participates in the virtual scheduler without inventing a guest callback. Final upper completion owns lifecycle commit/rollback and may differ from the recorded bus status; successful PnP requires actual completed bus forwarding. Early Start/QueryStop/QueryRemove guest failure can leave bus observations null.",
-        "Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE reach real guest dispatch outside Removing/Removed; model stop, remove-pending and power state do not synthesize an I/O refusal. Guest code may complete software operations, reject them or hold them. Immutable FDO/PDO and FILE_OBJECT lifecycle identity survives detach. The public runner is serial; a held IRP without a currently available producer cannot wait for a later scenario start or cleanup request and is an explicit stalled ModelError. Normal Remove from Started still requires successful query; closed files and drained earlier requests/callbacks before Remove are bounded-profile restrictions. Providers must be absent before unload; guest and provider retirement remain independent.",
+        "Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE reach real guest dispatch outside Removing/Removed; model stop, remove-pending and power state do not synthesize an I/O refusal. Guest code may complete software operations, reject them or hold them. Immutable FDO/PDO and FILE_OBJECT lifecycle identity survives detach. The public runner is serial; a held IRP without a currently available producer cannot wait for a later scenario start or cleanup request and is an explicit stalled ModelError. Normal Remove from Started still requires successful query; closed files and drained earlier requests before Remove are bounded-profile restrictions. Providers must be absent before unload; guest and provider retirement remain independent.",
         "Reports preserve configuration.pnp_devices and observed pnp_devices id/pdo/add_device_status/attached/pnp_state/provider_present. Attached is current and false after removal. AddDevice failures affect scenario_success without replacing DriverEntry nt_status. Requests add nullable device_id/pnp; PnP file is null, with minor/state_before/state_after and nullable bus_status/bus_received_at_100ns/bus_completed_at_100ns. Configured status appears only at actual bus completion; receipt time is independent and legacy field types are preserved.",
         "Original genuine-WDK driver_wdm_pnp.c uses optional NEVERD_WDM_PNP_FIXTURE/NEVERD_WDM_PNP_CFG_FIXTURE; native normal/active-CFG rebasing covers AddDevice, file I/O, orderly/delayed removal, start/query failure and clean/leaking AddDevice failure. C API/CLI test seven-request delayed PnP reports. Missing artifacts skip explicitly; evidence remains Linux-only and does not establish general PnP/power support. Additional native cases exercise query-stop/cancel-stop/stop/restart, surprise removal, software I/O in pause/remove-pending states, guest failure after surprise, independent PDO/file identities, mixed AddDevice outcomes and an independent control device. C API/CLI normal/CFG execution also covers a 16-request stop/restart/surprise sequence and preflight rejection of resource requery.",
         "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 38 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
@@ -3509,7 +3509,7 @@
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
-        "wdm-x64-scheduled-v10 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "wdm-x64-scheduled-v11 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
@@ -3532,7 +3532,13 @@
         "Each PDO owns an independent requested_device_power FIFO, at most 64 templates across all PDOs. Only an actual PoRequestPowerIrp matching the PDO queue-head minor and target consumes a device-type template; absent/mismatched policy fails and unused templates create no observation. Callback context never determines a parent. Actual children have separate IRPs and report rows with origin PoRequestPowerIrp and zero-based response_index; scenario rows use origin scenario and null response_index.",
         "Real PoRequestPowerIrp Query/Set uses six API arguments with a null output-IRP pointer. Its terminal five-argument void callback receives the original API device, minor, state, context and a distinct completed IO_STATUS_BLOCK snapshot. Inline child completion can precede the API STATUS_PENDING return; callbacks may wait and retain their snapshot until return. A system S0 parent may complete before its independent D0 child; parent result and packet storage are not reused.",
         "Reports add nullable power, per-row origin/response_index, explicit packet facts, device/system before/after, original requested_device_object and actual nullable bus status/receipt/completion times. Final PnP snapshots add device_power/system_power; live devices add nullable reported_device_power. scenario_success matches only scenario-origin count while requiring all actual scenario and child rows to complete successfully; unused FIFO entries do not fail the scenario.",
-        "Original genuine-WDK driver_wdm_power.c uses optional NEVERD_WDM_POWER_FIXTURE/NEVERD_WDM_POWER_CFG_FIXTURE. Native normal/active-CFG rebasing covers Query/Set, independent delayed children, inline and S0-before-D0 completion, callback waits, workers, null callbacks, query failures and independent PDO notification/FIFO state. C API/CLI execute six scenario requests and three real children; missing artifacts skip explicitly and execution evidence remains Linux-only."
+        "Original genuine-WDK driver_wdm_power.c uses optional NEVERD_WDM_POWER_FIXTURE/NEVERD_WDM_POWER_CFG_FIXTURE. Native normal/active-CFG rebasing covers Query/Set, independent delayed children, inline and S0-before-D0 completion, callback waits, workers, null callbacks, query failures and independent PDO notification/FIFO state. C API/CLI execute six scenario requests and three real children; missing artifacts skip explicitly and execution evidence remains Linux-only.",
+        "The actual IoInitializeRemoveLockEx/IoAcquireRemoveLockEx/IoReleaseRemoveLockEx/IoReleaseRemoveLockAndWaitEx exports model the WDK macro ABI, including separate size arguments for retail 32-byte and DBG 120-byte opaque locks. Initialization and AndWait require PASSIVE_LEVEL; acquire/release permit DISPATCH_LEVEL. Every lock belongs to the exact guest DEVICE_OBJECT extension containing its complete aligned storage, including before attachment; neither PDO lifecycle nor Tag shape supplies ownership.",
+        "KernelRemoveLocks is the sole registration/acquisition/drain authority, separate from DeviceLifecycle. NULL and repeated Tags count independently per lock and are never dereferenced; completed IRP addresses remain valid opaque Tags. AndWait closes admission and releases exactly one matching acquisition. Later acquire returns STATUS_DELETE_PENDING without a release obligation; the final release latches readiness before the releasing callback returns.",
+        "A typed RemoveLock wait suspends the real CPU frame and resumes through existing continuations. The bounded context check requires a related retained REMOVE route containing the owner and actual provider receipt, including virtual time zero, but not lower completion or live Tag memory. Lower queueing before provider receipt is explicitly unsupported; this is not full OutsideRemoveDevice/Driver Verifier enforcement. No producer is a stalled model error, not a synthetic callback, timeout or success.",
+        "REMOVE still requires closed files and finalized earlier requests in this serial profile, but no longer rejects all outstanding callbacks before dispatch. Workers may release a lock and then wait for the resumed remover. The request route survives AndWait, detach/delete and lower pending completion, and remaining execution frames must return before final route retirement. Teardown is preflighted before erasing request identity or releasing any device owner.",
+        "Unknown, unaligned, out-of-extension or overlapping lock storage, mismatched sizes, unmatched releases, duplicate drain and reinitialization fail explicitly without mutating valid state. Delete/Detach reject held acquisitions or unconsumed drain waits before changing DeletePending/topology. Unused initialized locks can retire in clean AddDevice failure; actual extension retirement unregisters storage. Drain never consumes genuine work-item/device references. Debug metadata does not enable Verifier timeout/high-water behavior.",
+        "Original genuine-WDK driver_wdm_remove_lock.c uses optional NEVERD_WDM_REMOVE_LOCK_FIXTURE, NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE, NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE and NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE. Native tests cover retail/DBG ABI, normal/active-CFG rebasing, opaque retired Tags, NULL/repeated Tags, DPC release, waiting workers, delayed lower removal, no-producer stalls, independent PDOs and clean AddDevice failure. C API/CLI use the unchanged PnP schema for synchronous/delayed lower completion and verify actual release/wait/drain/delete/resume order. Missing artifacts skip explicitly; evidence is Linux-only."
       ],
       "tests": [
         {
@@ -5295,6 +5301,105 @@
           "target": "NeverDDriverEmulationPublicTests",
           "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
           "filter": "DriverScenarioPublic.CAPIAndCLIRejectIncompletePowerFactsBeforeLoading",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLocksTests.cpp",
+          "filter": "DriverKernelRemoveLocks.RepeatedNullTagsDrainOneAcquisitionAtATime",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLocksTests.cpp",
+          "filter": "DriverKernelRemoveLocks.RetirementBatchIsAtomicAcrossHeldLocks",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLocksTests.cpp",
+          "filter": "DriverKernelRemoveLocks.OpaqueRetiredAddressTagsDoNotCrossRelease",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLockBridgeTests.cpp",
+          "filter": "KernelRemoveLockBridge.RetailAndDebugLocksInitializeBeforeAttachmentWithIndependentOwners",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLockBridgeTests.cpp",
+          "filter": "KernelRemoveLockBridge.RegisteredBytesAndInternalEventAreOpaqueButSurroundingsRemainWritable",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLockBridgeTests.cpp",
+          "filter": "KernelRemoveLockBridge.HeldLockRejectsDeleteAndDetachBeforeDeviceOrTopologyMutation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRemoveLockBridgeTests.cpp",
+          "filter": "KernelRemoveLockBridge.DpcAcquisitionIgnoresFilePointerAndPassiveOnlyFailuresAreAtomic",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMRemoveLockTests.cpp",
+          "filter": "DriverWDMRemoveLock.LastReleaseWakesRemovalBeforeWorkerCallbackReturns",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMRemoveLockTests.cpp",
+          "filter": "DriverWDMRemoveLock.WorkerDrainDoesNotWaitForDelayedLowerRemoveCompletion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMRemoveLockTests.cpp",
+          "filter": "DriverWDMRemoveLock.UnusedInitializedLockAllowsFailedAddDeviceCleanup",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIExecuteResumableRemoveLockDrain",
           "platforms": [
             "linux"
           ]

@@ -20,6 +20,14 @@ set(NEVERD_WDM_POWER_FIXTURE "" CACHE FILEPATH
   "Optional original WDM power fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_POWER_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK power fixture linked with active CFG")
+set(NEVERD_WDM_REMOVE_LOCK_FIXTURE "" CACHE FILEPATH
+  "Optional original WDM remove-lock fixture linked with genuine WDK libraries")
+set(NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK remove-lock fixture linked with active CFG")
+set(NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK DBG remove-lock fixture")
+set(NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK DBG remove-lock fixture linked with active CFG")
 if(NOT NEVERD_TEST_CLANG_EXECUTABLE OR NOT NEVERD_DRIVER_LLD_LINK)
   message(STATUS "Driver emulation fixtures unavailable: Clang and lld-link are required")
   return()
@@ -245,6 +253,32 @@ foreach(_driver_power_variable NEVERD_WDM_POWER_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_remove_lock_definitions)
+set(_driver_has_wdm_remove_lock_fixture FALSE)
+foreach(_driver_remove_lock_variable NEVERD_WDM_REMOVE_LOCK_FIXTURE
+    NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE
+    NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE)
+  if(NOT _driver_remove_lock_variable STREQUAL "NEVERD_WDM_REMOVE_LOCK_FIXTURE"
+      AND NOT _driver_has_wdm_remove_lock_fixture)
+    message(STATUS "Driver WDM remove-lock variant skipped: NEVERD_WDM_REMOVE_LOCK_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(NOT "${${_driver_remove_lock_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_remove_lock_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_remove_lock_variable}}")
+    get_filename_component(_driver_remove_lock_path
+      "${${_driver_remove_lock_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_remove_lock_definitions
+      "${_driver_remove_lock_variable}=\"${_driver_remove_lock_path}\"")
+    if(_driver_remove_lock_variable STREQUAL "NEVERD_WDM_REMOVE_LOCK_FIXTURE")
+      set(_driver_has_wdm_remove_lock_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM remove-lock fixture ${_driver_remove_lock_variable}: ${_driver_remove_lock_path}")
+  else()
+    message(STATUS "Driver WDM remove-lock tests requiring ${_driver_remove_lock_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
   DriverSessionTests.cpp
   DriverLoaderAdvancedTests.cpp
@@ -254,6 +288,7 @@ add_neverd_unittest(NeverDDriverEmulationTests
   DriverWDMStackTests.cpp
   DriverWDMPnpTests.cpp
   DriverWDMPowerTests.cpp
+  DriverWDMRemoveLockTests.cpp
   DriverIOTests.cpp
   ExecutionPolicyTests.cpp
   DriverScenarioTests.cpp
@@ -275,6 +310,8 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelPnpCompletionTests.cpp
   KernelPowerRequestTests.cpp
   KernelPowerCompletionTests.cpp
+  KernelRemoveLocksTests.cpp
+  KernelRemoveLockBridgeTests.cpp
   BackendFaultTests.cpp
   BackendContextTests.cpp
   KernelSchedulerTests.cpp
@@ -302,7 +339,8 @@ target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   ${_driver_kmdf_definitions}
   ${_driver_wdm_stack_definitions}
   ${_driver_wdm_pnp_definitions}
-  ${_driver_wdm_power_definitions})
+  ${_driver_wdm_power_definitions}
+  ${_driver_wdm_remove_lock_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -321,7 +359,8 @@ if(TARGET neverd_shared AND TARGET neverd)
     ${_driver_kmdf_definitions}
     ${_driver_wdm_stack_definitions}
   ${_driver_wdm_pnp_definitions}
-  ${_driver_wdm_power_definitions})
+  ${_driver_wdm_power_definitions}
+  ${_driver_wdm_remove_lock_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

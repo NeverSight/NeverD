@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1344,7 +1344,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1470,7 +1470,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1546,6 +1546,140 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
     }
 #else
   GTEST_SKIP() << "NEVERD_WDM_POWER_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
+#ifdef NEVERD_WDM_REMOVE_LOCK_FIXTURE
+  struct ImageCase {
+    const char *Path;
+    const char *LockSize;
+  };
+  std::vector<ImageCase> Images{{NEVERD_WDM_REMOVE_LOCK_FIXTURE, "0x20"}};
+#ifdef NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE
+  Images.push_back({NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE, "0x20"});
+#endif
+#ifdef NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE
+  Images.push_back({NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE, "0x78"});
+#endif
+#ifdef NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE
+  Images.push_back({NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE, "0x78"});
+#endif
+  for (const auto &Image : Images)
+    for (unsigned Delay : {0u, 20u})
+      for (bool CLI : {false, true}) {
+        SCOPED_TRACE(Image.Path);
+        SCOPED_TRACE(Delay);
+        SCOPED_TRACE(CLI);
+        const std::string Scenario =
+            std::string(R"({"load_address":"0x190000000","unload":true,
+              "pnp_devices":[{"id":"remove0","bus":"resource_free",
+                "initial_device_power":"D0","initial_system_power":"working"}],
+              "requests":[
+                {"kind":"pnp","device_id":"remove0","minor":"start",
+                 "bus_completion":{"status":0}},
+                {"kind":"pnp","device_id":"remove0","minor":"query_remove",
+                 "bus_completion":{"status":0}},
+                {"kind":"pnp","device_id":"remove0","minor":"remove",
+                 "bus_completion":{"status":0,"delay_100ns":)") +
+            std::to_string(Delay) + "}}]}";
+        auto Parsed = llvm::json::parse(
+            CLI ? runCLI(Scenario, 0, "success", Image.Path)
+                : takeString(neverd_emulate_driver_scenario_json(
+                      Session, Image.Path, Scenario.c_str(), nullptr)));
+        ASSERT_TRUE(bool(Parsed))
+            << llvm::toString(Parsed.takeError()) << error();
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
+        EXPECT_EQ(Report->getString("stop_reason"), "returned")
+            << Report->getString("diagnostic").value_or("").str();
+        EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+        EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+        const auto *Requests = Report->getArray("requests");
+        ASSERT_NE(Requests, nullptr);
+        ASSERT_EQ(Requests->size(), 3u);
+        for (const auto &Value : *Requests) {
+          const auto *Request = Value.getAsObject();
+          ASSERT_NE(Request, nullptr);
+          EXPECT_EQ(Request->getString("device_id"), "remove0");
+          EXPECT_EQ(Request->getString("origin"), "scenario");
+          EXPECT_EQ(Request->getBoolean("completed"), true);
+          EXPECT_EQ(Request->getInteger("io_status"), 0);
+          EXPECT_EQ(Request->getInteger("information"), 0);
+          EXPECT_EQ(Request->getString("output_hex"), "");
+        }
+        const auto *Remove = Requests->back().getAsObject();
+        ASSERT_NE(Remove, nullptr);
+        const auto *Pnp = Remove->getObject("pnp");
+        ASSERT_NE(Pnp, nullptr);
+        EXPECT_EQ(Pnp->getString("minor"), "remove");
+        EXPECT_EQ(Pnp->getString("state_before"), "remove_pending");
+        EXPECT_EQ(Pnp->getString("state_after"), "removed");
+        EXPECT_EQ(Pnp->getInteger("bus_status"), 0);
+        EXPECT_EQ(Pnp->getInteger("bus_received_at_100ns"), 0);
+        EXPECT_EQ(Pnp->getInteger("bus_completed_at_100ns"), Delay);
+        const auto *Devices = Report->getArray("devices");
+        ASSERT_NE(Devices, nullptr);
+        EXPECT_TRUE(Devices->empty());
+        const auto *Providers = Report->getArray("pnp_devices");
+        ASSERT_NE(Providers, nullptr);
+        ASSERT_EQ(Providers->size(), 1u);
+        const auto *Provider = Providers->front().getAsObject();
+        ASSERT_NE(Provider, nullptr);
+        EXPECT_EQ(Provider->getString("pnp_state"), "removed");
+        EXPECT_EQ(Provider->getBoolean("attached"), false);
+        EXPECT_EQ(Provider->getBoolean("provider_present"), false);
+        const auto *Calls = Report->getArray("calls");
+        ASSERT_NE(Calls, nullptr);
+        unsigned Initialized = 0, Acquired = 0, Released = 0, Drained = 0;
+        for (const auto &Value : *Calls) {
+          const auto *Call = Value.getAsObject();
+          ASSERT_NE(Call, nullptr);
+          const auto Name = Call->getString("name");
+          const bool Init = Name == "IoInitializeRemoveLockEx";
+          const bool Acquire = Name == "IoAcquireRemoveLockEx";
+          const bool Release = Name == "IoReleaseRemoveLockEx";
+          const bool Drain = Name == "IoReleaseRemoveLockAndWaitEx";
+          if (!Init && !Acquire && !Release && !Drain)
+            continue;
+          const auto *Arguments = Call->getArray("arguments");
+          ASSERT_NE(Arguments, nullptr);
+          ASSERT_EQ(Arguments->size(), Init || Acquire ? 5u : 3u);
+          EXPECT_EQ(Arguments->back().getAsString(), Image.LockSize);
+          Initialized += Init;
+          Acquired += Acquire;
+          Released += Release;
+          Drained += Drain;
+        }
+        EXPECT_EQ(Initialized, 1u);
+        EXPECT_GE(Acquired, 2u);
+        EXPECT_GE(Released, 1u);
+        EXPECT_EQ(Drained, 1u);
+        const auto *Messages = Report->getArray("messages");
+        ASSERT_NE(Messages, nullptr);
+        std::string Trace;
+        for (const auto &Value : *Messages) {
+          const auto Text = Value.getAsString();
+          ASSERT_TRUE(Text);
+          EXPECT_EQ(Text->find("failure"), llvm::StringRef::npos);
+          Trace += Text->str();
+        }
+        size_t Position = 0;
+        for (const char *Marker :
+             {"Remove lock: worker last release",
+              "Remove lock: worker waits after release",
+              "Remove lock: drain returned",
+              "Remove lock: device deletion requested",
+              "Remove lock: worker resumed after deletion"}) {
+          Position = Trace.find(Marker, Position);
+          ASSERT_NE(Position, std::string::npos) << Marker << "\n" << Trace;
+          Position += std::char_traits<char>::length(Marker);
+        }
+      }
+#else
+  GTEST_SKIP()
+      << "NEVERD_WDM_REMOVE_LOCK_FIXTURE requires a genuine WDK fixture";
 #endif
 }
 

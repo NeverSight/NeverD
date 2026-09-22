@@ -473,6 +473,8 @@ llvm::Error KernelModel::deleteDevice(uint64_t Address) {
     return modelError("IoDeleteDevice cannot delete a provider-owned PDO");
   if (auto E = validateDeviceTopology())
     return E;
+  if (auto E = canReleaseRemoveLockStorage(Address, Device->second.Size))
+    return E;
   Device->second.DeletePending = true;
   return retireDeviceIfUnreferenced(Address);
 }
@@ -543,6 +545,14 @@ llvm::Expected<uint64_t> KernelModel::call(
       WaitReferences.count(A[0]))
     return modelError("cannot reinitialize an object with outstanding waits");
   switch (Kind) {
+  case KernelAPIKind::IoInitializeRemoveLockEx:
+    return initializeRemoveLock(A);
+  case KernelAPIKind::IoAcquireRemoveLockEx:
+    return acquireRemoveLock(A);
+  case KernelAPIKind::IoReleaseRemoveLockEx:
+    return releaseRemoveLock(A, false);
+  case KernelAPIKind::IoReleaseRemoveLockAndWaitEx:
+    return releaseRemoveLock(A, true);
 #define NEVERD_KERNEL_DISPATCHER_API(Name, Arity) case KernelAPIKind::Name:
 #include "KernelDispatcherAPIs.def"
 #undef NEVERD_KERNEL_DISPATCHER_API
@@ -897,33 +907,16 @@ llvm::Error KernelModel::snapshot() {
       return Function.takeError();
     Result.MajorFunctions[I] = *Function;
   }
+  auto Inventory = driverDeviceInventory();
+  if (!Inventory)
+    return Inventory.takeError();
   Result.Devices.clear();
-  std::set<uint64_t> Seen;
-  for (uint64_t Owner : {DriverObject, PnpProviderDriver}) {
-    if (!Owner)
-      continue;
-    auto Head = Memory.readInteger(Owner + DriverDeviceHead, 8);
-    if (!Head)
-      return Head.takeError();
-    uint64_t Current = *Head;
-    while (Current) {
-      auto It = Devices.find(Current);
-      if (It == Devices.end() || It->second.OwnerDriver != Owner ||
-          !Seen.insert(Current).second)
-        return modelError(
-            "unknown device or cycle in DRIVER_OBJECT device list");
-      const auto &Device = It->second;
-      if (Device.OwnerKind == DeviceOwnerKind::Guest)
-        Result.Devices.push_back({Device.Address, Device.Extension, Device.Type,
-                                  Device.Name, Device.ReportedDevicePower});
-      auto Next = Memory.readInteger(Current + DeviceNext, 8);
-      if (!Next)
-        return Next.takeError();
-      Current = *Next;
-    }
+  for (uint64_t Address : *Inventory) {
+    const auto &Device = Devices.at(Address);
+    if (Device.OwnerKind == DeviceOwnerKind::Guest)
+      Result.Devices.push_back({Device.Address, Device.Extension, Device.Type,
+                                Device.Name, Device.ReportedDevicePower});
   }
-  if (Seen.size() != Devices.size())
-    return modelError("live device detached from DRIVER_OBJECT device list");
   return snapshotPnpDevices();
 }
 
@@ -979,6 +972,8 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   if (IncludeDispatcher)
     if (auto E = Dispatcher.validateGuestAccess(Address, Size, IsWrite))
       return E;
+  if (auto E = RemoveLocks.validateGuestAccess(Address, Size, IsWrite))
+    return E;
   for (const auto &[Item, Device] : WorkItems)
     if (Address < Item + profile::WorkItemTokenSize && Item < End)
       return modelError("guest access to an opaque IO_WORKITEM");

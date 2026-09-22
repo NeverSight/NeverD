@@ -135,7 +135,8 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   if (!Scheduler.active() || Scheduler.active()->ID != ID)
     return schedulingError("callback completion does not match active task");
   if (ScheduledModelContinuations.count(ID))
-    return schedulingError("scheduled callback still owns a model continuation");
+    return schedulingError(
+        "scheduled callback still owns a model continuation");
   const auto Invocation = *Scheduler.active();
   if (auto E = Scheduler.finish(ID))
     return E;
@@ -198,6 +199,7 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
   if (Delay && !TimeoutAddress)
     return schedulingError("KeDelayExecutionThread requires an interval");
   Wait Pending;
+  Pending.Type = Delay ? Wait::Kind::Delay : Wait::Kind::Dispatcher;
   Pending.Object = Delay ? 0 : A[0];
   bool PollOnly = false;
   if (TimeoutAddress) {
@@ -236,6 +238,19 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<std::optional<uint32_t>>
 KernelModel::pollWait(const Wait &Pending) {
+  if (Pending.Type == Wait::Kind::RemoveLock) {
+    auto Drained = RemoveLocks.drained(Pending.Object);
+    if (!Drained)
+      return Drained.takeError();
+    if (!*Drained)
+      return std::optional<uint32_t>{};
+    auto Reference = RemoveLockWaitReferences.find(Pending.Object);
+    if (Reference == RemoveLockWaitReferences.end() || !Reference->second)
+      return schedulingError("remove-lock wait lost its storage reference");
+    if (!--Reference->second)
+      RemoveLockWaitReferences.erase(Reference);
+    return std::optional<uint32_t>{windows::StatusSuccess};
+  }
   bool Signaled = false;
   if (Pending.Object) {
     auto Acquired = Dispatcher.tryAcquire(Pending.Object);
@@ -263,20 +278,28 @@ llvm::Error KernelModel::prepareReleaseRange(uint64_t Base, uint64_t Size) {
   return prepareReleaseRanges({{Base, Size}});
 }
 
+llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size) const {
+  if (Size > UINT64_MAX - Base)
+    return schedulingError("overflowing object storage range");
+  for (const auto &[Object, References] : WaitReferences)
+    if (References && Object >= Base && Object < Base + Size)
+      return schedulingError("cannot release storage with outstanding waits");
+  if (auto E = canReleaseRemoveLockStorage(Base, Size))
+    return E;
+  return Dispatcher.canReleaseRange(Base, Size);
+}
+
 llvm::Error KernelModel::prepareReleaseRanges(
     llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges) {
-  for (const auto &[Base, Size] : Ranges) {
-    if (Size > UINT64_MAX - Base)
-      return schedulingError("overflowing dispatcher storage range");
-    for (const auto &[Object, References] : WaitReferences)
-      if (References && Object >= Base && Object < Base + Size)
-        return schedulingError("cannot release storage with outstanding waits");
-    if (auto E = Dispatcher.canReleaseRange(Base, Size))
-      return E;
-  }
   for (const auto &[Base, Size] : Ranges)
+    if (auto E = canReleaseRange(Base, Size))
+      return E;
+  for (const auto &[Base, Size] : Ranges) {
     if (auto E = Dispatcher.prepareReleaseRange(Base, Size))
       return E;
+    if (auto E = RemoveLocks.forgetRange(Base, Size))
+      return E;
+  }
   return llvm::Error::success();
 }
 
