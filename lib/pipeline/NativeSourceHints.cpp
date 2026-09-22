@@ -1,6 +1,7 @@
 #include "neverd/pipeline/NativeSourceHints.h"
 
 #include "NativeSourceFloatingReturn.h"
+#include "NativeSourceIntegerPrefixReturn.h"
 #include "NativeSourcePreservation.h"
 
 #include "neverd/ir/SourceABI.h"
@@ -1241,8 +1242,15 @@ refineNativeSourceTypeHint(const HighFunc &Function,
           {Expression->Operands[J].get(), Expression, J, Depth + 1});
   }
   std::optional<SourceFunctionTypeHint> Narrowed;
+  if (detail::hasNativeSourceIntegerPrefixReturn(Function)) {
+    auto Prefix = Original;
+    Prefix.ReturnType = NdType::makeInt(4, Original.ReturnType->IsSigned);
+    Prefix.ReturnLocation.ValueBytes = 4;
+    if (validateSourceABI(Prefix, Error))
+      Narrowed = std::move(Prefix);
+  }
   if (ByteProof) {
-    auto Candidate = Original;
+    auto Candidate = Narrowed.value_or(Original);
     for (size_t I = 0; I < Candidate.Parameters.size(); ++I) {
       auto &Parameter = Candidate.Parameters[I];
       if (!ParameterObserved[I] || ParameterBytes[I] != 4 || !Parameter.Type ||

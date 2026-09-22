@@ -87,7 +87,10 @@ refineNativeIntegerPairReturnHint(const MedFunc &Med, const HighFunc &High,
 /// HighIR's existing private-frame cleanup; it does not independently discard
 /// stores. The audit must prove that this HighIR came from complete verified
 /// lifting. The returned candidate requires another pipeline run and source
-/// validation.
+/// validation. An inferred eight-byte integer result may also shrink to its
+/// defined low word when every return supports that projection and at least
+/// one explicitly carries unknown upper padding. This never defines discarded
+/// bytes for callers; their complete source validation remains mandatory.
 std::optional<SourceFunctionTypeHint>
 refineNativeSourceTypeHint(const HighFunc &Function,
                            const PipelineFunctionAudit &Audit);

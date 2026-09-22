@@ -1,12 +1,13 @@
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
+#include "../../../lib/sdk/capi/ObjCSourceProjection.h"
 #include "gtest/gtest.h"
-
-#include "llvm/BinaryFormat/MachO.h"
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/AArch64Regs.h"
@@ -16,6 +17,8 @@
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/BinaryFormat/MachO.h"
 
 #include <algorithm>
 #include <array>
@@ -284,6 +287,138 @@ TEST(NativeSourceHints, RefinementNarrowsIntegerParametersWithOnlyLowWordUses) {
         EXPECT_EQ(Refined->Parameters[1].Location.RegisterOffset,
                   getTargetRegInfo(Architecture).IntParamRegs[1]);
       }
+    }
+}
+
+TEST(NativeSourceHints, RefinesOnlyExplicitlyPartialIntegerReturnCandidates) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      NativeFixture F(Architecture);
+      SourceFunctionTypeHint Original;
+      Original.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Original.ReturnType = NdType::makeInt(8, false);
+      Original.Parameters = {{"arg0", NdType::makeInt(4)},
+                             {"arg1", NdType::makeInt(4)}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Original, Architecture, Error));
+      F.High.ReturnType = Original.ReturnType;
+      F.High.SourceTypeHint = Original;
+      MedVar Local;
+      Local.Kind = MedVar::Temp;
+      Local.Id = 40;
+      Local.Size = 8;
+      const auto LocalExpr = [&] {
+        return HighExpr::makeVar(Local, NdType::makeInt(8, false));
+      };
+      auto Low = HighExpr::makeVar(F.Med.Params[0], NdType::makeInt(4));
+      if (Mutation == 1)
+        Low = HighExpr::makeUndef(4);
+      auto Upper = HighExpr::makeUndef(4);
+      if (Mutation == 2)
+        Upper = HighExpr::makeConst(0, 4);
+      auto Partial = HighExpr::makeBinop(NdOp::CONCAT, Upper, Low);
+      Partial->Type = NdType::makeInt(8, false);
+      HighStmt Define;
+      Define.Kind = StmtKind::Assign;
+      Define.Dst = LocalExpr();
+      Define.Val = Partial;
+      HighStmt Otherwise = Define;
+      Otherwise.Dst = LocalExpr();
+      Otherwise.Val = HighExpr::makeConst(0, 8);
+      HighStmt Branch;
+      Branch.Kind = StmtKind::IfElse;
+      Branch.Cond = HighExpr::makeVar(F.Med.Params[1], NdType::makeInt(4));
+      Branch.Body = {Define};
+      Branch.ElseBody = {Otherwise};
+      if (Mutation == 3)
+        Branch.ElseBody.clear();
+      if (Mutation == 4)
+        Branch.ElseBody[0].Val = LocalExpr(); // Cyclic/missing definition.
+      HighStmt Return;
+      Return.Kind = StmtKind::Return;
+      Return.RetVal = LocalExpr();
+      F.High.Body = {Branch, Return};
+      if (Mutation == 5)
+        F.High.SourceTypeHint->Origin =
+            SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+      if (Mutation == 6)
+        ++F.Audit.Entry;
+      if (Mutation == 7)
+        F.High.Body.back().RetVal = HighExpr::makeUndef(8);
+      if (Mutation == 8)
+        F.High.StructuredExceptionRegions = 1;
+      if (Mutation == 9)
+        Partial->Operands[1]->Type = NdType::makeInt(2);
+      if (Mutation == 0) {
+        const auto Flow = analyzeHighSourceFlow(F.High, true);
+        for (const auto &Item : Flow.Items)
+          ADD_FAILURE() << Item.Reason;
+      }
+      const auto Refined = refineNativeSourceTypeHint(F.High, F.Audit);
+      EXPECT_EQ(bool(Refined), Mutation == 0);
+      if (Refined) {
+        EXPECT_EQ(Refined->ReturnType->Size, 4U);
+        EXPECT_EQ(Refined->ReturnLocation.ValueBytes, 4U);
+        EXPECT_EQ(Refined->Parameters.size(), Original.Parameters.size());
+        EXPECT_EQ(Refined->ReturnLocation.RegisterOffset,
+                  Original.ReturnLocation.RegisterOffset);
+        // The candidate is not a mutation of the analyzed body or its ABI.
+        EXPECT_EQ(F.High.SourceTypeHint->ReturnType->Size, 8U);
+        EXPECT_EQ(F.High.Body.back().RetVal->Type->Size, 8U);
+      }
+    }
+}
+
+TEST(NativeSourceHints, IntegerPrefixCallersCannotObserveUnknownUpperWord) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (uint16_t Width : {4, 8}) {
+      NativeFixture F(Architecture);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      SourceFunctionTypeHint Callee, Entry;
+      Callee.Origin = Entry.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Callee.ReturnType = NdType::makeInt(4, false);
+      Entry.ReturnType = NdType::makeInt(Width, false);
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Callee, Architecture, Error));
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Entry, Architecture, Error));
+      std::map<va_t, SourceFunctionTypeHint> Hints{{0x1000, Entry},
+                                                   {0x1080, Callee}};
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      LowBlock B;
+      B.Id = 0;
+      B.StartAddr = 0x1000;
+      B.EndAddr = 0x1008;
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = 0x1000;
+      Call.Output = NdVar::reg(TRI.IntReturnReg, 8);
+      Call.addInput(NdVar::cst(0x1080, 8));
+      LowOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = 0x1004;
+      Return.addInput(NdVar::reg(TRI.IntReturnReg, Width));
+      B.Ops = {Call, Return};
+      Low.Blocks = {B};
+      LowToMedConverter Converter;
+      Converter.setSourceCallHintsEnabled(true);
+      Converter.setSourceCalleeTypeHints(&Hints);
+      Converter.setSourceEntryTypeHints(&Hints);
+      F.Med = Converter.convert(Low, Architecture, BinaryFormat::MachO);
+      recoverCallAbi(F.Med, Architecture, {{0x1080, "native_prefix"}});
+      F.Med.SourceTypeHint = Entry;
+      inferMedTypes(F.Med, Architecture);
+      F.High = MedToHighConverter().convert(F.Med, Architecture);
+      // Isolate return publication from the separately authenticated callee
+      // closure. Even an allowed call cannot define its unreturned high word.
+      const auto Limitation = sdk::sourceBodyLimitation(
+          F.High, Entry, &F.Audit, [](const HighExpr &) { return true; });
+      EXPECT_EQ(Limitation.empty(), Width == 4) << Limitation;
+      if (Width == 8)
+        EXPECT_NE(Limitation.find("unresolved"), std::string::npos)
+            << Limitation;
     }
 }
 
