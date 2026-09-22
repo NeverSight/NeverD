@@ -64,7 +64,7 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
   if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
       Kind != KernelScheduler::CallbackKind::WDMCompletion &&
       Kind != KernelScheduler::CallbackKind::Interrupt &&
-      Kind != KernelScheduler::CallbackKind::DMAListControl)
+      !KernelScheduler::isDMACallbackKind(Kind))
     return std::optional<KernelGuestCall>{};
   auto Token = ScheduledModelContinuations.find(ID);
   if (Token == ScheduledModelContinuations.end())
@@ -74,9 +74,8 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
           ? GuestCallOwner::Framework
       : Kind == KernelScheduler::CallbackKind::Interrupt
           ? GuestCallOwner::Interrupt
-      : Kind == KernelScheduler::CallbackKind::DMAListControl
-          ? GuestCallOwner::DMA
-          : GuestCallOwner::WDM;
+      : KernelScheduler::isDMACallbackKind(Kind) ? GuestCallOwner::DMA
+                                                 : GuestCallOwner::WDM;
   if (Token->second.Owner != ExpectedOwner)
     return cancellationError("scheduled callback has a foreign continuation owner");
   auto Result = finishGuestCall(Token->second, ReturnValue);

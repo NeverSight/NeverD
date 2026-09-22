@@ -203,6 +203,26 @@ llvm::Error KernelPhysicalMemory::unpin(uint64_t Pin) {
   return llvm::Error::success();
 }
 
+llvm::Error KernelPhysicalMemory::canExtendPin(uint64_t Pin,
+                                               uint64_t NewLength) const {
+  const auto I = Pins.find(Pin);
+  if (I == Pins.end())
+    return physicalError("physical RAM extension requires a live pin");
+  if (NewLength < I->second.Length)
+    return physicalError("physical RAM pin extension cannot shrink its view");
+  auto Backing = viewBacking(I->second.Owner, I->second.Offset, NewLength);
+  if (!Backing)
+    return Backing.takeError();
+  return llvm::Error::success();
+}
+
+llvm::Error KernelPhysicalMemory::extendPin(uint64_t Pin, uint64_t NewLength) {
+  if (auto E = canExtendPin(Pin, NewLength))
+    return E;
+  Pins.at(Pin).Length = NewLength;
+  return llvm::Error::success();
+}
+
 llvm::Expected<uint64_t>
 KernelPhysicalMemory::pinBacking(uint64_t Pin, uint64_t Offset,
                                  uint64_t Length) const {

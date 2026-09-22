@@ -198,7 +198,7 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
   case GuestCallOwner::Interrupt:
     return finishInterruptCall(Token.ID, Result);
   case GuestCallOwner::DMA:
-    return finishDMACall(Token.ID);
+    return finishDMACall(Token.ID, Result);
   }
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "guest callback has an invalid owner");

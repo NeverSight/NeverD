@@ -49,7 +49,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发场景提交 或 WDM 请求取消 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
-| 硬件、DMA、PCI、中断或虚拟化驱动 | 支持显式内存寄存器银行、MMIO、独占 latched 中断回调及一致性公共缓冲区／SG DMA | 其他设备模型、任意物理 RAM、PCI、端口、其他中断模式、其他 DMA 接口及特权 CPU 状态 |
+| 硬件、DMA、PCI、中断或虚拟化驱动 | 支持显式内存寄存器银行、MMIO、独占 latched 中断回调及有界一致性公共缓冲区／SG／通道 DMA | 其他设备模型、任意物理 RAM、PCI、端口、其他中断模式、其他 DMA 接口及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
 | x64 CFG | 验证目标表及检查／分派调用；未启用的插桩保留来宾回退函数 | XFG、导出抑制、不支持的加载配置和 TLS 仍被拒绝 |
 
@@ -131,7 +131,15 @@ READ／WRITE／IOCTL 请求可声明 `interrupt_events`，每项显式指定 `af
 
 `DriverDMA.h`／`DriverDMA.def` 为 `register_bank` PDO 增加可选的 `dma` 对象，与内存／中断分配并存；仅声明 DMA 不能取代这两类资源列表。七个字段都必须显式提供：`address_bits`（32 或 64）、`maximum_length`（1–1048576 字节）、`map_registers`（1–256）、`alignment`（1–4096 之间的二次幂）、`logical_base`（非零、页对齐）、`logical_length`（页对齐、4096–1073741824 字节）及布尔值 `scatter_gather`。逻辑地址窗口必须无溢出且落在地址位宽内。每个 PDO 都有独立逻辑地址域，不同设备的相同地址不会互为别名。转换后的 MMIO 资源不能与保留的模型 RAM 区间 `[0x1000000000, 0x1000100000)` 重叠。这些声明描述具备一致性的合成总线主设备，不代表宿主物理内存或 PCI 设备。
 
-`IoGetDmaAdapter` 接受 Internal 总线主设备的历史 `DEVICE_DESCRIPTION` 版本 0／1 字段，发布版本为 1 的 `DMA_ADAPTER` 及真实的 104 字节 `DMA_OPERATIONS` 表。版本 2／3 探测返回 NULL，不读取现代结构尾部。每个间接方法绑定到确切的有效适配器，身份独立于内核导入。已实现 `AllocateCommonBuffer`、`FreeCommonBuffer`、`GetDmaAlignment`、`GetScatterGatherList`、`PutScatterGatherList` 和 `PutDmaAdapter`；另外六个 V1 项 `AllocateAdapterChannel`、`FlushAdapterBuffers`、`FreeAdapterChannel`、`FreeMapRegisters`、`MapTransfer`、`ReadDmaCounter` 保留具名的不支持错误。公共缓冲区分配／释放及对齐查询要求 PASSIVE_LEVEL；Get／PutScatterGatherList 要求 DISPATCH_LEVEL，适配器释放允许 IRQL 不高于 DISPATCH_LEVEL。x64 忽略 `CacheEnabled`。不支持的版本探测、声明能力不兼容以及文档规定的分配资源不足返回 NULL；非法或未建模的接口选择及后端故障仍明确报错。
+`IoGetDmaAdapter` 接受 Internal 总线主设备的历史 `DEVICE_DESCRIPTION` 版本 0／1 字段，发布版本为 1 的 `DMA_ADAPTER` 及真实的 104 字节 `DMA_OPERATIONS` 表。版本 2／3 探测返回 NULL，不读取现代结构尾部。每个间接方法绑定到确切的有效适配器，身份独立于内核导入。已实现 `AllocateCommonBuffer`、`FreeCommonBuffer`、`GetDmaAlignment`、`GetScatterGatherList`、`PutScatterGatherList`、`PutDmaAdapter`、`AllocateAdapterChannel`、`MapTransfer`、`FlushAdapterBuffers` 和 `FreeMapRegisters`。本配置不建模从属／系统 DMA 控制器，因此 `FreeAdapterChannel` 和 `ReadDmaCounter` 仍保留具名的不支持错误。公共缓冲区分配／释放及对齐查询要求 PASSIVE_LEVEL；Get／PutScatterGatherList 要求 DISPATCH_LEVEL，适配器释放允许 IRQL 不高于 DISPATCH_LEVEL。x64 忽略 `CacheEnabled`。不支持的版本探测、声明能力不兼容以及文档规定的分配资源不足返回 NULL；非法或未建模的接口选择及后端故障仍明确报错。
+
+`AllocateAdapterChannel` 要求 DISPATCH_LEVEL，预约非 NULL 的不透明映射寄存器令牌。公共缓冲区、SG 列表和通道预约共享每 PDO 的同一额度及 FIFO。成功即接纳真实的立即或排队 `AdapterControl` 回调；请求个数过大时返回 `STATUS_INSUFFICIENT_RESOURCES`，不执行回调。每个来宾设备最多允许一个尚未结束的分配回调，禁止在 AdapterControl 内调用 AllocateAdapterChannel，包括经过嵌套回调的调用。回调四个参数包含注册时实际 `DEVICE_OBJECT.CurrentIrp` 的快照。来宾设备的该确切八字节字段可写，只接受零或经过此设备路由的有效 IRP。排队回调保持该包有效直到进入回调，此后回调可以完成它。当前仍无 StartIo，因此另一种 SG 回调的未使用 IRP 参数仍为 NULL。
+
+`AdapterControl` 返回 32 位 `IO_ALLOCATION_ACTION`，忽略 RAX 高位，且该动作不会替换 AllocateAdapterChannel 的 `STATUS_SUCCESS`。`DeallocateObject` 在回调返回时释放未使用或已整体刷新完毕的寄存器；`DeallocateObjectKeepRegisters` 保留寄存器，直到 FreeMapRegisters 使用确切适配器、令牌及原始个数释放。返回 `KeepObject` 需要未建模的系统控制器，因此明确失败。新递送的分配在回调返回之前还不能作为已保留分配释放；其他先前保留的分配可按其自身契约释放。回调身份、保留的寄存器及正在映射的数据字节具有独立生命周期，适配器或设备销毁前会分别检查。
+
+`MapTransfer` 和 `FlushAdapterBuffers` 允许 IRQL 不高于 DISPATCH_LEVEL；通道分配和寄存器释放要求 DISPATCH_LEVEL。MapTransfer 接受相对 MDL 的位置，读取并更新真实 ULONG 长度，按值返回逻辑地址。有界 SG 配置每次返回一个底层页片段，同一 MDL 和方向上紧接的后续位置扩展同一次操作。非 SG 在预约个数足够时一次映射整个请求范围，不缩短长度。第一次映射按寄存器预约大小预留永不复用的逻辑窗口，其他分配可穿插但不会与其重叠。所有片段共用一个原地增长的物理固定范围。设备事务可以跨越当前已映射的整个操作，但 CPU 访问、MDL 释放以及会退休固定存储的完成操作，在整体刷新前均被禁止。Flush 必须匹配最初位置、MDL、方向及实际映射总长度。它只释放映射字节而不释放寄存器，因此保留令牌可用于下一次操作。部分刷新、混合 MDL 操作及其他 MapTransfer 模式处于此配置范围之外，不意味着所有 Windows 系统都会认定这些模式非法。
+
+`KeFlushIoBuffers` 验证有效的已锁定／非分页 MDL。模型平台具有缓存一致性，因此 ReadOperation 和 DmaOperation 的任意取值均无需额外缓存副本；此调用不释放 DMA 所有权，也不替代 FlushAdapterBuffers。[通道场景](../examples/driver-dma-channel-scenario.json)运行原创 `driver_wdm_dma_channel.c`，执行两次 MapTransfer、一个跨页设备事务、独立声明的 IRQ/DPC、整体刷新及确切寄存器释放。真实普通／CFG 镜像使用 `NEVERD_WDM_DMA_CHANNEL_FIXTURE` 和 `NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE`。
 
 `KernelPhysicalMemory` 为现有 RAM 分配最多 256 个、每页 4096 字节的模型物理页身份。CPU 虚拟地址、物理页身份和设备逻辑地址彼此区分。已构建 MDL 的 PFN 数组以只读方式暴露这些共享身份，未构建描述符没有可用 PFN。相邻小分配可以共享 PFN，但字节范围和生命周期仍独立。公共缓冲区、池和请求缓冲区使用 `GuestMemory` 已有的同一份字节，不增加 DMA 数据副本。有效 SG 映射固定确切数据范围及描述符；完成、池／MDL 释放和拆除在退休存储前拒绝尚存依赖。解除直接 MDL 映射只撤销 CPU 系统映射，DMA 仍可访问锁定的底层 RAM。`DmaWritable` 将写锁定契约与 CPU 映射权限分开记录：设备写入要求直接 READ／OUT_DIRECT 或可写非分页存储；WRITE／IN_DIRECT 不会因为 CPU 映射可写就取得该许可。
 
@@ -139,7 +147,7 @@ READ／WRITE／IOCTL 请求可声明 `interrupt_events`，每项显式指定 `af
 
 只有 READ／WRITE／IOCTL 请求接受 `dma_events`。每个事件必须提供 `after_100ns`、`device_id`、`logical_address`、`direction` 和 `length`；`write_memory` 还必须提供长度准确的 `data_hex`，`read_memory` 则拒绝该字段。方向以设备为视角。上限为每请求 64 个事件、合计 1024 个、事务字节总计 16 MiB、每事务 1 MiB；延迟范围为非负至 INT64_MAX。提交捕捉 PDO 当前已分配资源代次并确定虚拟时间起点，但不要求后续派发尚未创建的映射已经存在。递送时解析完整有效逻辑范围及方向，要求物理 D0，并在任何事务效果前验证全部底层字节。源 IRP 完成不会取消事件。映射缺失或已释放、陈旧资源代次、突然移除或 D3 都会记录失败并停止；不会重新绑定，也不虚构中断、寄存器协议或 IRP 完成。在同一调度边界，提供者先发布硬件状态，然后执行 DMA 字节访问，最后处理独立声明的中断脉冲。时间仍为协作式，不提供指令级抢占。
 
-报告保留 `configuration.pnp_devices[].dma` 和平铺的 `configuration.dma_events`。根级 `dma_transfers` 行标明 `source_request_index`、`event_index`、`device_id`、`epoch`、`logical_address`、`direction`、`length` 和 `due_at_100ns`，并提供可空的 `occurred_at_100ns`、`completed_at_100ns`、`mapping`、`adapter`、`failure_reason`；`data_hex` 仅包含实际传输字节。所有声明的事务都必须无失败完成，`scenario_success` 才能成立。[DMA 场景](../examples/driver-dma-scenario.json)使用原创真实 WDK `driver_wdm_dma.c` 和可选 `NEVERD_WDM_DMA_FIXTURE`／`NEVERD_WDM_DMA_CFG_FIXTURE`，通过真实适配器指针操作公共缓冲区，并以独立声明的 ISR→DPC 完成请求。C／Python 仍使用 `scenario_json`，不修改 `neverd_driver_options_v1`。缺少产物明确跳过，证据仅限 Linux。适配器通道分配、MapTransfer／FlushAdapterBuffers、从属控制器、V2／V3 方法、硬件描述符引擎、通用 KMDF DMA 及其他设备模型仍不支持。
+报告保留 `configuration.pnp_devices[].dma` 和平铺的 `configuration.dma_events`。根级 `dma_transfers` 行标明 `source_request_index`、`event_index`、`device_id`、`epoch`、`logical_address`、`direction`、`length` 和 `due_at_100ns`，并提供可空的 `occurred_at_100ns`、`completed_at_100ns`、`mapping`、`adapter`、`failure_reason`；`data_hex` 仅包含实际传输字节。所有声明的事务都必须无失败完成，`scenario_success` 才能成立。[DMA 场景](../examples/driver-dma-scenario.json)使用原创真实 WDK `driver_wdm_dma.c` 和可选 `NEVERD_WDM_DMA_FIXTURE`／`NEVERD_WDM_DMA_CFG_FIXTURE`，通过真实适配器指针操作公共缓冲区，并以独立声明的 ISR→DPC 完成请求。C／Python 仍使用 `scenario_json`，不修改 `neverd_driver_options_v1`。缺少产物明确跳过，证据仅限 Linux。从属控制器、V2／V3 方法、硬件描述符引擎、通用 KMDF DMA 及其他设备模型仍不支持。
 
 WDM remove-lock 使用真实导出 `IoInitializeRemoveLockEx`、`IoAcquireRemoveLockEx`、`IoReleaseRemoveLockEx` 和 `IoReleaseRemoveLockAndWaitEx`；不带 Ex 的 WDK 名称是宏。锁属于完整对齐存储所在扩展的确切 DEVICE_OBJECT，与 PDO 生命周期和 Tag 形状无关；附加前即可初始化。支持 retail 32 字节和 DBG 120 字节，必须传入匹配的独立大小参数，注册后整个区域不透明。NULL 和重复 Tag 按每把锁计数，Tag 从不解引用，因此 IRP 完成后仍可释放。初始化与 AndWait 要求 `PASSIVE_LEVEL`，acquire/release 允许 `DISPATCH_LEVEL`。
 
@@ -189,6 +197,8 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 | `IoGetDmaAdapter` | PASSIVE_LEVEL 下显式 Internal 总线主设备的版本 0／1 描述和绑定的 V1 操作表；新版探测返回 NULL |
 | `AllocateCommonBuffer`, `FreeCommonBuffer`, `GetDmaAlignment`, `PutDmaAdapter` | 操作共享一致性 RAM 的适配器表方法，精确分配身份及独立适配器生命周期 |
 | `GetScatterGatherList`, `PutScatterGatherList` | DISPATCH_LEVEL 下的适配器表方法；真实内嵌或资源排队回调、固定 MDL 视图和显式映射释放 |
+| `AllocateAdapterChannel`, `MapTransfer`, `FlushAdapterBuffers`, `FreeMapRegisters` | 经过地址转换的总线主设备通道回调、共享寄存器额度、连续 MDL 片段、整体刷新及确切保留寄存器释放 |
+| `KeFlushIoBuffers` | 针对有效已锁定／非分页 MDL 的一致性 CPU 缓存刷新，不释放 DMA 映射 |
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 请求拥有的 MDL 支持 KernelMode 缓存映射及权限；非分页池 MDL 通过安全辅助函数复用原始池映射 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 独立描述符，完整范围须位于同一个有效非分页池分配内；描述符与缓冲区具有独立生命周期，不支持 IRP 关联、MDL 链或配额 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 显式配置的会话注册表、逐句柄权限与生命周期、查询缓冲区大小及修改；不访问宿主注册表 |
@@ -300,7 +310,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v14`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v15`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

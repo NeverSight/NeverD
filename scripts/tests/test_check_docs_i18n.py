@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v14",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v15",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -295,6 +295,42 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         errors: list[str] = []
         i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
         self.assertTrue(any("DMA example differs" in error for error in errors), errors)
+
+    def test_driver_dma_channel_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("AllocateAdapterChannel", "MapTransfer",
+                                     "FlushAdapterBuffers", "FreeMapRegisters",
+                                     "KeFlushIoBuffers", "CurrentIrp",
+                                     "driver-dma-channel-scenario.json")),
+            ("architecture.md", ("KernelDMAChannels", "KernelModelDMAChannels",
+                                  "DMAAdapterControl")),
+            ("testing.md", ("KernelDMAChannelTests.cpp", "KernelDMAChannelBridgeTests.cpp",
+                             "DriverWDMDMAChannelTests.cpp", "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE",
+                             "test_driver_dma_channel_integration.py")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedChannelContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_dma_channel_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-dma-channel-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"length": 32', '"length": 31')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("DMA channel example differs" in error for error in errors), errors)
+
+    def test_driver_dma_channel_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-dma-channel-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("DMA channel example differs" in error for error in errors), errors)
 
     def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (

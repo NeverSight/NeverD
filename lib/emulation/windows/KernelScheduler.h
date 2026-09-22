@@ -34,7 +34,7 @@ namespace scheduler {
 } // namespace scheduler
 
 /// A concrete single-processor schedule, not an assertion of Windows timing or
-/// interleaving equivalence. Interrupts precede DPCs, DMA list callbacks,
+/// interleaving equivalence. Interrupts precede DPCs, DMA callbacks,
 /// framework cancellation, provider completions and workers at dispatch
 /// boundaries. Interrupts use descending assigned priority and FIFO ties;
 /// high-importance DPCs insert at the head. No callback executes here: next()
@@ -49,8 +49,10 @@ public:
     FrameworkCancel,
     WDMCompletion,
     Interrupt,
-    DMAListControl
+    DMAListControl,
+    DMAAdapterControl
   };
+  static bool isDMACallbackKind(CallbackKind Kind);
   enum class DpcImportance { Low = 0, Medium = 1, High = 2, MediumHigh = 3 };
 
   struct Limits {
@@ -124,19 +126,33 @@ public:
   /// while waiting for map registers. Each reservation is independent; Object
   /// never coalesces requests. Waiting reservations do not create deadlines or
   /// become runnable until explicitly promoted by the owning DMA model.
-  llvm::Error canReserveDMAListControl(const Callback &Call) const;
-  llvm::Expected<uint64_t> reserveDMAListControl(Callback Call);
+  llvm::Error canReserveDMACallback(const Callback &Call,
+                                    CallbackKind Kind) const;
+  llvm::Expected<uint64_t> reserveDMACallback(Callback Call, CallbackKind Kind);
   /// Validate the complete ordered batch before moving any reservation to the
   /// DISPATCH_LEVEL FIFO. Promotion consumes no new identity or capacity.
-  llvm::Error canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const;
-  llvm::Error readyDMAListControls(llvm::ArrayRef<uint64_t> IDs);
-  bool hasQueuedDMAListControl() const { return !ReadyDMA.empty(); }
+  llvm::Error canReadyDMACallbacks(llvm::ArrayRef<uint64_t> IDs) const;
+  llvm::Error readyDMACallbacks(llvm::ArrayRef<uint64_t> IDs);
+  bool hasQueuedDMACallback() const { return !ReadyDMA.empty(); }
 
   /// Immediate guest delivery retains the scheduled parent (if any) as Active.
   /// Nested inline callbacks count toward the same capacity/dispatch limits
   /// and must return in order; their guest return registers are not
   /// interpreted. Validate dispatch budget before reserving an immediate
   /// callback identity.
+  llvm::Error canDispatchInlineDMACallback() const;
+  llvm::Error canBeginInlineDMACallback(uint64_t ID, CallbackKind Kind) const;
+  llvm::Error beginInlineDMACallback(uint64_t ID, CallbackKind Kind);
+  llvm::Error canFinishInlineDMACallback(uint64_t ID, CallbackKind Kind) const;
+  llvm::Error finishInlineDMACallback(uint64_t ID, CallbackKind Kind);
+
+  /// Typed compatibility entry points use the same reservation, FIFO and
+  /// inline stack, and cannot admit or finish an AdapterControl callback.
+  llvm::Error canReserveDMAListControl(const Callback &Call) const;
+  llvm::Expected<uint64_t> reserveDMAListControl(Callback Call);
+  llvm::Error canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const;
+  llvm::Error readyDMAListControls(llvm::ArrayRef<uint64_t> IDs);
+  bool hasQueuedDMAListControl() const;
   llvm::Error canDispatchInlineDMAListControl() const;
   llvm::Error canBeginInlineDMAListControl(uint64_t ID) const;
   llvm::Error beginInlineDMAListControl(uint64_t ID);
@@ -161,6 +177,7 @@ public:
   llvm::Expected<std::optional<Invocation>>
   next(bool AdvanceTime = true,
        std::optional<uint64_t> MaxAdvanceTime = std::nullopt);
+  llvm::Error canFinish(uint64_t ID) const;
   llvm::Error finish(uint64_t ID);
   /// A blocked callback retains its identity, device ownership and capacity.
   /// While it is suspended, other callbacks may run. Only the caller knows
@@ -253,6 +270,8 @@ private:
   llvm::Error validateCallback(const Callback &Work) const;
   llvm::Error validateDPC(const DpcCallback &DPC) const;
   llvm::Error validateInterrupt(const InterruptCallback &Interrupt) const;
+  llvm::Error validateDMAAdmission(llvm::ArrayRef<uint64_t> IDs,
+                                   std::optional<CallbackKind> Kind) const;
   llvm::Error checkCapacity(uint64_t Additional) const;
   Invocation makeInvocation(Callback Work, CallbackKind Kind, uint64_t DueTime);
   llvm::Error expireTimers(uint64_t Time);

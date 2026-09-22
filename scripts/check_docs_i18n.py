@@ -2166,6 +2166,21 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         matches_dma = False
     if not matches_dma:
         report(errors, "driver DMA example differs from public execution scenario")
+    channel_example = Path("docs/examples/driver-dma-channel-scenario.json")
+    channel_scenario = re.search(
+        r'CAPIAndCLIFlushChannelFragmentsBeforeCompletion.*?'
+        r'const std::string Scenario\s*=\s*R"channel\((.*?)\)channel";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_channel = channel_scenario is not None and json.loads(
+            view.read_text(channel_example)
+        ) == json.loads(channel_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_channel = False
+    if not matches_channel:
+        report(errors, "driver DMA channel example differs from public execution scenario")
     exports = re.findall(
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
@@ -2270,7 +2285,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v14",
+        "wdm-x64-scheduled-v15",
         "DriverDMA.h", "DriverDMA.def", "dma_events", "dma_transfers",
         "address_bits", "maximum_length", "map_registers", "alignment",
         "logical_base", "logical_length", "scatter_gather", "logical_address",
@@ -2278,6 +2293,10 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "mapping", "adapter", "failure_reason", "DmaWritable",
         "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
         "driver-dma-scenario.json",
+        "AllocateAdapterChannel", "MapTransfer", "FlushAdapterBuffers",
+        "FreeMapRegisters", "KeFlushIoBuffers", "CurrentIrp",
+        "NEVERD_WDM_DMA_CHANNEL_FIXTURE", "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE",
+        "driver-dma-channel-scenario.json",
         "DriverInterrupts.h", "DriverInterrupts.def", "interrupt_events",
         "after_100ns", "interrupt_id", "raw_vector", "raw_level", "raw_affinity",
         "translated_vector", "translated_level", "translated_affinity",
@@ -2340,6 +2359,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
              "DriverDMA.h", "DriverDMA.def", "KernelPhysicalMemory", "KernelDMA",
              "KernelDMAEvents", "KernelModelPhysicalMemory", "KernelModelDMA",
              "KernelModelDMATransfers", "DmaWritable",
+             "KernelDMAChannels", "KernelModelDMAChannels", "DMAAdapterControl",
              "KernelModelInterruptEvents", "KernelModelInterrupts",
              "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
              "KernelModelPowerCompletion"),
@@ -2362,6 +2382,12 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
                 "DriverDMAScenarioTests.cpp", "KernelPhysicalMemoryTests.cpp",
                 "BackendBackingTests.cpp", "KernelDMATests.cpp", "KernelDMABridgeTests.cpp",
                 "SchedulerDMATests.cpp", "DriverWDMDMATests.cpp",
+                "KernelDMAChannelTests.cpp", "KernelDMAChannelBridgeTests.cpp",
+                "DriverWDMDMAChannelTests.cpp", "NEVERD_WDM_DMA_CHANNEL_FIXTURE",
+                "NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE", "driver-dma-channel-scenario.json",
+                "test_driver_dma_channel_integration.py",
+                "NEVERD_TEST_WDM_DMA_CHANNEL_FIXTURE",
+                "NEVERD_TEST_WDM_DMA_CHANNEL_CFG_FIXTURE",
                 "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
                 "driver-dma-scenario.json", "test_driver_dma_integration.py",
                 "NEVERD_TEST_LIBNEVERD", "NEVERD_TEST_WDM_DMA_FIXTURE",

@@ -75,6 +75,20 @@ KernelModel::callDMAExport(const KernelExportRegistry::Export &Export,
     return DMA.adapter(A[0])->Alignment;
   if (Export.Name == "GetScatterGatherList")
     return getScatterGatherList(A);
+  if (Export.Name == "AllocateAdapterChannel")
+    return allocateAdapterChannel(A);
+  if (Export.Name == "MapTransfer")
+    return mapTransfer(A);
+  if (Export.Name == "FlushAdapterBuffers") {
+    if (auto E = flushAdapterBuffers(A))
+      return E;
+    return 1;
+  }
+  if (Export.Name == "FreeMapRegisters") {
+    if (auto E = freeMapRegisters(A))
+      return E;
+    return 0;
+  }
   if (Export.Name == "PutScatterGatherList") {
     if (auto E = putScatterGatherList(A))
       return E;
@@ -248,11 +262,9 @@ llvm::Error KernelModel::freeCommonBuffer(llvm::ArrayRef<uint64_t> A) {
   auto Release = DMA.planRelease(Map.Object);
   if (!Release)
     return Release.takeError();
-  std::vector<uint64_t> Ready;
-  for (uint64_t Object : Release->Ready)
-    Ready.push_back(DMA.mapping(Object)->SchedulerID);
-  if (auto E = Scheduler.canReadyDMAListControls(Ready))
-    return E;
+  auto Ready = dmaPromotionIDs(Release->Ready);
+  if (!Ready)
+    return Ready.takeError();
   if (auto E = prepareReleaseRange(Map.Object, Map.StorageSize, Map.Pin))
     return E;
   if (auto E = releaseDMAMapping(*Release))

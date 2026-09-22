@@ -614,6 +614,11 @@ llvm::Expected<uint64_t> KernelModel::call(
       return E;
     return 0;
   }
+  if (Kind == KernelAPIKind::KeFlushIoBuffers) {
+    if (auto E = flushIoBuffers(A[0]))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
     if (static_cast<uint32_t>(A[1]) != KernelMode ||
         static_cast<uint32_t>(A[2]) != MmCached || A[3] ||
@@ -1063,6 +1068,8 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
             if (Device.OwnerKind == DeviceOwnerKind::Provider)
               return false;
             return (Offset >= DeviceNext && Offset < DeviceAttachedOffset) ||
+                   (Offset >= DeviceCurrentIRP &&
+                    Offset < DeviceCurrentIRP + profile::PointerSize) ||
                    (Offset >= DeviceFlagsOffset &&
                     Offset < DeviceCharacteristicsOffset) ||
                    Offset == DeviceStackCountOffset ||

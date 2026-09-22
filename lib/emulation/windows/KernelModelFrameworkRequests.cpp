@@ -55,6 +55,12 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
   if (!Request || Request->Completed)
     return frameworkRequestError(
         "completion requires the active IRP and cannot occur twice");
+  // An accepted AdapterControl may still need this exact captured packet as
+  // input. Check before a terminal unwind consumes stack slots; beginning the
+  // callback releases that input hold and permits completion from its body.
+  if (auto E =
+          DMA.canReleaseRange(IRP, IRPSize + Request->StackCount * StackSize))
+    return E;
   if (Status == StatusPending)
     return frameworkRequestError(
         "IoCompleteRequest cannot complete with STATUS_PENDING");
