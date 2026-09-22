@@ -58,7 +58,7 @@ arbitrarios de terceros.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL de cada solicitud, mappings de sistema e identidades PFN compartidas de solo lectura | Mappings de usuario y otras interfaces DMA |
 | MDL asignados por el controlador | Descriptores independientes del pool no paginado modelado, con las direcciones originales de los búferes | Asociación con IRP, cadenas MDL, sondeo/bloqueo y asignaciones de usuario |
 | READ/WRITE | E/S buffered/direct serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos ni cancelación de solicitudes WDM; `METHOD_NEITHER` y posición implícita del archivo |
-| `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, comprobación de accesos y gestión de excepciones del invitado |
+| `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, sondeo de acceso, bloqueo/desbloqueo y recuperación de fallos de memoria de usuario |
 | Controlador KMDF 1.33 no PnP | Vinculación, objetos/contextos, dispositivos de control con nombre, colas secuenciales predeterminadas y solicitudes con búfer/directas con callbacks ejecutados | Sin dispositivos PnP, planificación general de colas, extensiones de clase ni UMDF |
 | Controlador PnP de bus, función o filtro | PDO explícitos sin recursos o con bancos de registros, AddDevice invitado y ocho menores comunes del ciclo PnP | Otras operaciones PnP, política general de energía, hardware/recursos generales y KMDF PnP |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
@@ -235,6 +235,7 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 |-----|----------------------------------------|
 | `RtlInitUnicodeString` | Construye una `UNICODE_STRING` del invitado para una fuente acotada terminada en NUL |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copia UTF-16 de longitud explícita y comparación sensible a mayúsculas; la comparación sin distinguir mayúsculas necesita una tabla de conversión de Windows y detiene la ejecución |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Generan una excepción del invitado para manejadores C `__except` constantes admitidos; no hay retorno normal de API, y filtros/finally y recuperación de fallos CPU siguen sin admitirse |
 | `ExAllocatePool2` | Asignaciones NX paginadas/no paginadas, inicializadas a cero por defecto; se modelan los indicadores de memoria sin inicializar y de alineación a la caché; los indicadores requeridos inválidos devuelven NULL; los pools con cuotas/ejecutables y las excepciones de asignación detienen la ejecución |
 | `MmGetSystemRoutineAddress` | Resuelve un nombre del invitado de longitud explícita mediante el inventario compartido de exportaciones |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Árbol explícito del registro limitado a la sesión, derechos por handle, consultas con tamaños de salida exactos y duración tras la eliminación; véanse los escenarios del registro |
@@ -517,7 +518,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v15`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v16`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -534,6 +535,12 @@ conserva exactamente todos los bits del resultado sin signo de 64 bits. Use
 de 64 bits, especialmente para IOCTL sin búfer de salida.
 
 Las observaciones del trabajo usan la fase `callback:N`. Una solicitud pendiente conserva `STATUS_PENDING` en `dispatch_status`; el estado final se registra por separado en `io_status` y determina su contribución a `scenario_success`.
+
+`ExRaiseStatus` pasa los 32 bits bajos del NTSTATUS al manejador de excepciones del invitado; `ExRaiseAccessViolation` y `ExRaiseDatatypeMisalignment` generan `STATUS_ACCESS_VIOLATION` y `STATUS_DATATYPE_MISALIGNMENT`. El perfil sigue las páginas DDI individuales de Microsoft: ExRaiseStatus permite `APC_LEVEL`, mientras que las dos rutinas sin argumentos requieren `PASSIVE_LEVEL`. Algunas anotaciones SAL del WDK permiten APC_LEVEL para esas dos rutinas; este perfil mantiene el límite documentado más estricto. Una llamada que genera una excepción conserva `result: null` y registra el código en `detail`; nunca informa de un retorno satisfactorio de la API.
+
+La entrega de excepciones usa las tablas unwind x64 de versión uno decodificadas de la imagen y ámbitos constantes `EXCEPTION_EXECUTE_HANDLER` de `__C_specific_handler`. Ejecuta el cuerpo real del manejador del invitado, admite desenrollar marcos auxiliares ordinarios, restaura registros generales no volátiles guardados y preserva el límite de pila de la ejecución actual. `GetExceptionCode()` observa el código generado. Un manejador puede generar otra excepción hacia un ámbito envolvente admitido. Las funciones de filtro, `__finally`, personalidades GS/C++, metadatos encadenados o incompletos, desenrollado de prólogos y restauración XMM encontrados fallan explícitamente. Una excepción API no capturada se detiene con `model_error`; los fallos CPU de memoria, interrupción o instrucción inválida siguen siendo terminales.
+
+El fixture original `driver_wdm_seh.c` usa cabeceras WDK auténticas y `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` y `NEVERD_WDM_SEH_CFG_FIXTURE` para imágenes normal y con CFG activo. El ejemplo [driver-seh-scenario.json](../examples/driver-seh-scenario.json) reubica la imagen, captura una excepción API en DriverEntry y descarga el controlador. Este soporte de excepciones API no habilita `ProbeForRead`, `ProbeForWrite`, bloqueo de MDL de usuario ni `METHOD_NEITHER`.
 
 El objeto anulable `fault` conserva el primer fallo del backend. Sus campos
 `kind`, `pc`, `address` anulable, `size`, `access` e `interrupt` distinguen memoria

@@ -56,7 +56,7 @@ tiers arbitraires.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes, mappages système, identités physiques partagées et SG DMA | mappages utilisateur et autres interfaces DMA |
 | MDL alloués par le pilote | Descripteurs autonomes du pool non paginé modélisé, partageant les adresses originales | Association à un IRP, chaînes de MDL, sondage/verrouillage, pages physiques et mappages utilisateur |
 | READ/WRITE | E/S buffered/direct sérielles, achèvement par travail ou DPC | Sous-ensemble d’API ci-dessous seulement ; ni soumissions concurrentes de scénarios publics ni annulation de requête WDM ; `METHOD_NEITHER` et position implicite du fichier |
-| `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès et gestion des exceptions invitées |
+| `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès, verrouillage/déverrouillage et reprise après défaut de mémoire utilisateur |
 | Pilote KMDF 1.33 non-PnP | Liaison, objets/contextes, périphériques de contrôle nommés, files séquentielles par défaut et requêtes tamponnées/directes avec callbacks exécutés | Pas de périphériques PnP, ordonnancement général des files, extensions de classe ou UMDF |
 | Pilote PnP de bus, de fonction ou de filtre | PDO explicites sans ressources ou à banque de registres fixe, AddDevice invité et huit fonctions mineures courantes du cycle PnP | Autres opérations PnP, politique générale d’alimentation, autres modèles matériels/de ressources et KMDF PnP |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
@@ -232,6 +232,7 @@ Le modèle initial d’API possède volontairement un contrat limité :
 |-----|--------------------------------------|
 | `RtlInitUnicodeString` | Construit une `UNICODE_STRING` invitée pour une source bornée terminée par NUL |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copie UTF-16 avec longueur explicite et comparaison sensible à la casse ; une comparaison insensible à la casse exige une table de casse Windows et provoque un arrêt |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Lèvent une exception invitée pour les handlers C `__except` constants pris en charge ; aucun retour API normal, filtres/finally et reprise après défaut CPU restent exclus |
 | `ExAllocatePool2` | Allocations NX paginées/non paginées, initialisées à zéro par défaut ; indicateurs de non-initialisation et d’alignement sur le cache modélisés ; des indicateurs requis invalides renvoient NULL ; les pools à quotas/exécutables et les exceptions d’allocation provoquent un arrêt |
 | `MmGetSystemRoutineAddress` | Résout un nom invité de longueur explicite via l’inventaire partagé des exports |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | Sous-plages traduites déclarées ; RO/RW non caché, alias partagés et unmap exact ; aucune mémoire physique arbitraire |
@@ -514,7 +515,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v15`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v16`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -531,14 +532,20 @@ des entiers sur 64 bits, notamment pour les IOCTL sans tampon de sortie.
 
 Les observations du travail portent la phase `callback:N`. Une requête en attente conserve `STATUS_PENDING` dans `dispatch_status` ; son état final figure séparément dans `io_status` et détermine sa contribution à `scenario_success`.
 
+`ExRaiseStatus` transmet les 32 bits bas du NTSTATUS au handler d’exception invité ; `ExRaiseAccessViolation` et `ExRaiseDatatypeMisalignment` lèvent respectivement `STATUS_ACCESS_VIOLATION` et `STATUS_DATATYPE_MISALIGNMENT`. Le profil suit les pages DDI Microsoft individuelles : ExRaiseStatus autorise `APC_LEVEL`, tandis que les deux routines sans argument exigent `PASSIVE_LEVEL`. Certaines annotations SAL du WDK autorisent APC_LEVEL pour ces wrappers ; ce profil conserve la limite documentée plus stricte. Un appel qui lève conserve `result: null` et inscrit le code dans `detail` ; il ne rapporte jamais de retour API réussi.
+
+La livraison d’exception utilise les tables de déroulement x64 version 1 décodées de l’image et les portées constantes `EXCEPTION_EXECUTE_HANDLER` de `__C_specific_handler`. Elle exécute le véritable corps du handler invité, déroule les frames de fonctions auxiliaires ordinaires, restaure les registres généraux non volatils sauvegardés et préserve la limite de pile de l’exécution courante. `GetExceptionCode()` observe le code levé. Un handler peut lever une autre exception vers une portée englobante prise en charge. Les fonctions filtre, `__finally`, personnalités GS/C++, métadonnées chaînées ou incomplètes, déroulement de prologue et restaurations XMM rencontrés échouent explicitement. Une exception API non capturée arrête en `model_error` ; les défauts CPU de mémoire, d’interruption ou d’instruction invalide restent terminaux.
+
+Le code original `driver_wdm_seh.c` utilise les véritables en-têtes WDK et `/GS-`. Configurez `NEVERD_WDM_SEH_FIXTURE` et `NEVERD_WDM_SEH_CFG_FIXTURE` pour les images normales et CFG actif. L’exemple [driver-seh-scenario.json](../examples/driver-seh-scenario.json) rebase l’image, capture une exception API dans DriverEntry et décharge le pilote. Cette gestion des exceptions API n’active ni `ProbeForRead`, ni `ProbeForWrite`, ni le verrouillage des MDL utilisateur, ni `METHOD_NEITHER`.
+
 L’objet nullable `fault` conserve le premier défaut du backend. Ses champs
 `kind`, `pc`, `address` nullable, `size`, `access` et `interrupt` distinguent la
 mémoire non mappée ou protégée, les plages invalides, les instructions invalides
 et les exceptions CPU. Les adresses utilisent des chaînes hexadécimales ; les
 tailles et vecteurs d’interruption utilisent des entiers. Les lectures
 d’observation ne peuvent pas remplacer le défaut d’origine. Un backend en
-défaut ne peut pas reprendre, et cet enregistrement n’implique pas de gestion
-SEH invitée.
+défaut ne peut pas reprendre, et cet enregistrement ne permet pas de traiter ces défauts backend par
+la SEH invitée.
 
 `instructions` compte les tentatives d’instructions invitées admises. Une
 instruction rejetée par la politique d’exécution n’est pas comptée ; une

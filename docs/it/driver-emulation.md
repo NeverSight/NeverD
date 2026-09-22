@@ -57,7 +57,7 @@ compatibilità con driver arbitrari di terze parti.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL delle richieste, mapping di sistema e identità PFN condivise in sola lettura | Mapping utente e altre interfacce DMA |
 | MDL allocati dal driver | Descrittori autonomi del pool non paginato modellato, con indirizzi originali condivisi | Associazione IRP, catene MDL, verifica/blocco e mapping utente |
 | READ/WRITE | I/O buffered/direct seriale con completamento da lavoro o DPC | Solo le API seguenti; nessun IRP concorrente o annullamento di richiesta WDM; `METHOD_NEITHER` e posizione implicita del file |
-| `METHOD_NEITHER` | Rifiutato | Contesto degli indirizzi utente, verifica degli accessi e gestione delle eccezioni guest |
+| `METHOD_NEITHER` | Rifiutato | Contesto di indirizzi utente, probing degli accessi, blocco/sblocco e recupero da fault della memoria utente |
 | Driver KMDF 1.33 non PnP | Binding, oggetti/contesti, dispositivi di controllo con nome, code sequenziali predefinite e richieste con buffer/dirette con callback eseguiti | Nessun dispositivo PnP, pianificazione generale delle code, estensione di classe o UMDF |
 | Driver PnP di bus, funzione o filtro | PDO espliciti senza risorse o con banchi di registri, AddDevice guest e otto funzioni minori comuni del ciclo PnP | Altre operazioni PnP, politica generale di alimentazione, hardware/risorse generali e KMDF PnP |
 | Driver di archiviazione, rete, visualizzazione, file system e minifilter | Contratti dei sottosistemi non supportati | Framework port/class/miniport, NDIS/WFP, servizi grafici o del file system |
@@ -233,6 +233,7 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 |-----|--------------------------------------|
 | `RtlInitUnicodeString` | Costruisce una `UNICODE_STRING` guest per una sorgente limitata terminata da NUL |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copia UTF-16 a lunghezza esplicita e confronto sensibile alle maiuscole; il confronto che ignora le maiuscole richiede una tabella Windows e arresta l’esecuzione |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Sollevano un’eccezione guest per i gestori C `__except` costanti supportati; nessun ritorno API normale, filtri/finally e recupero da fault CPU restano non supportati |
 | `ExAllocatePool2` | Allocazioni NX paginabili/non paginabili, azzerate per impostazione predefinita; sono modellati i flag di memoria non inizializzata e allineamento alla cache; flag obbligatori non validi restituiscono NULL; pool con quote/eseguibili ed eccezioni di allocazione arrestano l’esecuzione |
 | `MmGetSystemRoutineAddress` | Risolve un nome guest a lunghezza esplicita tramite l’inventario condiviso degli export |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Albero di registro esplicito e locale alla sessione, handle indipendenti, diritti per handle, interrogazioni con lunghezze esatte e modifiche osservabili; nessun accesso al registro host né valutazione delle ACL Windows |
@@ -507,7 +508,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v15`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v16`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -521,6 +522,12 @@ resta un intero JSON decimale esatto; `information_hex` conserva gli stessi bit
 anche per i client che leggono i numeri JSON con precisione limitata a 53 bit.
 
 Le osservazioni del lavoro usano la fase `callback:N`. Le richieste pendenti mantengono `STATUS_PENDING` in `dispatch_status`; lo stato finale è riportato separatamente in `io_status` e determina il contributo a `scenario_success`.
+
+`ExRaiseStatus` passa i 32 bit bassi del NTSTATUS al gestore di eccezioni guest; `ExRaiseAccessViolation` e `ExRaiseDatatypeMisalignment` generano `STATUS_ACCESS_VIOLATION` e `STATUS_DATATYPE_MISALIGNMENT`. Il profilo segue le singole pagine DDI Microsoft: ExRaiseStatus permette `APC_LEVEL`, mentre le due routine senza argomenti richiedono `PASSIVE_LEVEL`. Alcune annotazioni SAL del WDK consentono APC_LEVEL per queste due routine; il profilo conserva il limite documentato più rigoroso. Una chiamata che solleva un’eccezione mantiene `result: null` e registra il codice in `detail`; non dichiara mai un ritorno API riuscito.
+
+La consegna delle eccezioni usa le tabelle unwind x64 versione uno decodificate dall’immagine e gli ambiti costanti `EXCEPTION_EXECUTE_HANDLER` di `__C_specific_handler`. Esegue il corpo effettivo del gestore guest, supporta l’unwind dei normali frame ausiliari, ripristina i registri generali non volatili salvati e conserva il confine dello stack dell’esecuzione corrente. `GetExceptionCode()` osserva il codice sollevato. Un gestore può sollevare un’altra eccezione verso un ambito esterno supportato. Funzioni filtro, `__finally`, personalità GS/C++, metadati concatenati o incompleti, unwind dei prologhi e ripristino XMM incontrati falliscono esplicitamente. Un’eccezione API non catturata arresta l’esecuzione con `model_error`; i fault CPU di memoria, interrupt o istruzione non valida restano terminali.
+
+Il fixture originale `driver_wdm_seh.c` usa header WDK autentici e `/GS-`. Configurare `NEVERD_WDM_SEH_FIXTURE` e `NEVERD_WDM_SEH_CFG_FIXTURE` per immagini normali e con CFG attivo. L’esempio [driver-seh-scenario.json](../examples/driver-seh-scenario.json) riloca l’immagine, cattura un’eccezione API in DriverEntry e scarica il driver. Questo supporto alle eccezioni API non abilita `ProbeForRead`, `ProbeForWrite`, il blocco di MDL utente o `METHOD_NEITHER`.
 
 L’oggetto nullable `fault` conserva il primo fault del backend. I suoi campi
 `kind`, `pc`, `address` nullable, `size`, `access` e `interrupt` distinguono

@@ -13,6 +13,7 @@
 
 #include "DriverImage.h"
 #include "KernelAPIIRQL.h"
+#include "KernelException.h"
 #include "KernelModelRuntime.h"
 #include "WindowsKernelLayout.h"
 
@@ -547,6 +548,14 @@ llvm::Expected<uint64_t> KernelModel::call(
       WaitReferences.count(A[0]))
     return modelError("cannot reinitialize an object with outstanding waits");
   switch (Kind) {
+  case KernelAPIKind::ExRaiseStatus:
+    return llvm::make_error<KernelGuestException>(uint32_t(A[0]));
+  case KernelAPIKind::ExRaiseAccessViolation:
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
+  case KernelAPIKind::ExRaiseDatatypeMisalignment:
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusDatatypeMisalignment);
 #define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL) case KernelAPIKind::Symbol:
 #include "KernelInterruptAPIs.def"
 #undef NEVERD_KERNEL_INTERRUPT_API

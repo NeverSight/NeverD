@@ -1,0 +1,14 @@
+//===- KernelExceptionValues.def - Guest exception status codes -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Windows status codes raised by the modeled no-argument exception APIs.
+/// Define NEVERD_KERNEL_EXCEPTION_VALUE(Name, Value) before inclusion.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_EXCEPTION_VALUE(StatusAccessViolation, 0xc0000005U)
+NEVERD_KERNEL_EXCEPTION_VALUE(StatusDatatypeMisalignment, 0x80000002U)

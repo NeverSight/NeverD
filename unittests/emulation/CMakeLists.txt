@@ -28,6 +28,10 @@ set(NEVERD_WDM_DMA_FIXTURE "" CACHE FILEPATH
   "Optional original WDM DMA fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_DMA_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK DMA fixture linked with active CFG")
+set(NEVERD_WDM_SEH_FIXTURE "" CACHE FILEPATH
+  "Optional original WDM API exception fixture linked with genuine WDK libraries")
+set(NEVERD_WDM_SEH_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK API exception fixture linked with active CFG")
 set(NEVERD_WDM_DMA_CHANNEL_FIXTURE "" CACHE FILEPATH
   "Optional original WDM DMA channel fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE "" CACHE FILEPATH
@@ -395,7 +399,35 @@ foreach(_driver_dma_channel_variable NEVERD_WDM_DMA_CHANNEL_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_seh_definitions)
+set(_driver_has_wdm_seh_fixture FALSE)
+foreach(_driver_seh_variable NEVERD_WDM_SEH_FIXTURE
+    NEVERD_WDM_SEH_CFG_FIXTURE)
+  if(NOT _driver_seh_variable STREQUAL "NEVERD_WDM_SEH_FIXTURE"
+      AND NOT _driver_has_wdm_seh_fixture)
+    message(STATUS "Driver WDM API exception variant skipped: NEVERD_WDM_SEH_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(NOT "${${_driver_seh_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_seh_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_seh_variable}}")
+    get_filename_component(_driver_seh_path
+      "${${_driver_seh_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_seh_definitions
+      "${_driver_seh_variable}=\"${_driver_seh_path}\"")
+    if(_driver_seh_variable STREQUAL "NEVERD_WDM_SEH_FIXTURE")
+      set(_driver_has_wdm_seh_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM API exception fixture ${_driver_seh_variable}: ${_driver_seh_path}")
+  else()
+    message(STATUS "Driver WDM API exception tests requiring ${_driver_seh_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
+  DriverWDMSEHTests.cpp
+  KernelSEHTests.cpp
+  KernelExceptionTests.cpp
   DriverWDMDMAChannelTests.cpp
   KernelDMAChannelTests.cpp
   KernelDMAChannelBridgeTests.cpp
@@ -482,7 +514,8 @@ target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   ${_driver_wdm_resource_definitions}
   ${_driver_wdm_interrupt_definitions}
   ${_driver_wdm_dma_definitions}
-  ${_driver_wdm_dma_channel_definitions})
+  ${_driver_wdm_dma_channel_definitions}
+  ${_driver_wdm_seh_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -506,7 +539,8 @@ if(TARGET neverd_shared AND TARGET neverd)
   ${_driver_wdm_resource_definitions}
   ${_driver_wdm_interrupt_definitions}
   ${_driver_wdm_dma_definitions}
-  ${_driver_wdm_dma_channel_definitions})
+  ${_driver_wdm_dma_channel_definitions}
+  ${_driver_wdm_seh_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

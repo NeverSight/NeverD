@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 要求所有 MDL、システムマッピング、共有物理ページ識別子、SG DMA | ユーザーマッピング、その他の DMA インターフェース |
 | ドライバーが割り当てる MDL | モデルの非ページプールを記述する独立した MDL。元のバッファーアドレスを共有 | IRP との関連付け、MDL チェーン、プローブ／ロック、物理ページ、ユーザーマッピング |
 | READ/WRITE | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。公開シナリオの並行送信 と WDM 要求キャンセルは未対応。`METHOD_NEITHER` と暗黙のファイル位置も未対応 |
-| `METHOD_NEITHER` | 拒否 | ユーザーアドレス空間のコンテキスト、アクセスのプローブ、ゲストの例外処理 |
+| `METHOD_NEITHER` | 拒否 | ユーザーアドレス空間のコンテキスト、アクセスのプローブ、ロック／解除、ユーザーメモリ障害からの復帰 |
 | KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
 | PnP バス／ファンクション／フィルタードライバー | 明示的なリソースなし／固定レジスターバンク PDO、ゲスト AddDevice、8 種の一般的な PnP ライフサイクル機能 | その他の PnP、一般的な電源管理、その他のハードウェア／リソース、KMDF PnP |
 | ストレージ、ネットワーク、ディスプレイ、ファイルシステム、ミニフィルタードライバー | 各サブシステムの契約に未対応 | ポート／クラス／ミニポートのフレームワーク、NDIS/WFP、グラフィックスまたはファイルシステムのサービス |
@@ -189,6 +189,7 @@ KMDF 1.33 対応は正確な 1.33.0 ABI を使用します。458 個の関数ス
 |-----|------------------------|
 | `RtlInitUnicodeString` | 範囲を限定した NUL 終端ソースからゲスト `UNICODE_STRING` を作る |
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 長さを持つ UTF-16 文字列のコピーと、大文字小文字を区別する比較。区別しない比較には Windows の大小文字テーブルが必要なため停止する |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 対応する定数 C `__except` ハンドラーへゲスト例外を送る。通常の API return はなく、フィルター／finally と CPU 障害からの復帰は未対応 |
 | `ExAllocatePool2` | ページプール／非ページ NX プールの割り当て。デフォルトでゼロ初期化し、未初期化とキャッシュ整列のフラグをモデル化する。無効な必須フラグは NULL を返し、クォータ／実行可能プールおよび割り当て例外の送出では停止する |
 | `MmGetSystemRoutineAddress` | 長さを持つゲストの名前を、共通のエクスポート一覧で解決する |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 宣言済み変換後部分区間、非キャッシュ RO／RW、共有別名、正確な unmap。任意物理メモリは未対応 |
@@ -310,11 +311,17 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v15` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v16` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
-null を取り得る `fault` オブジェクトは、最初のバックエンドフォールトを保持します。`kind`、`pc`、null を取り得る `address`、`size`、`access`、`interrupt` により、未マップまたは保護されたメモリ、無効な範囲、無効な命令、CPU 例外を区別します。アドレスは 16 進文字列、サイズと割り込みベクターは整数で表します。観測用の読み取りが元のフォールトを置き換えることはありません。フォールトが発生したバックエンドは再開できず、この記録はゲストの SEH 処理を意味しません。
+`ExRaiseStatus` は NTSTATUS の下位 32 ビットをゲスト例外ハンドラーへ渡します。`ExRaiseAccessViolation` と `ExRaiseDatatypeMisalignment` はそれぞれ `STATUS_ACCESS_VIOLATION` と `STATUS_DATATYPE_MISALIGNMENT` を発生させます。プロファイルは各 Microsoft DDI ページに従い、ExRaiseStatus は `APC_LEVEL` を許可し、引数のない二つのルーチンは `PASSIVE_LEVEL` を要求します。一部の WDK SAL 注釈はラッパーに APC_LEVEL を許可しますが、このプロファイルは文書の厳しい方の上限を採用します。例外を送出する呼び出しは `result: null` を保ち、コードを `detail` に記録します。API が成功して return したとは報告しません。
+
+例外配信はイメージからデコードした x64 バージョン 1 展開テーブルと、`__C_specific_handler` の定数 `EXCEPTION_EXECUTE_HANDLER` スコープを使います。実際のゲストハンドラー本体を実行し、通常のヘルパーフレームを展開して、保存された不揮発汎用レジスターを復元し、現在の実行のスタック境界を保持します。`GetExceptionCode()` は送出されたコードを取得します。ハンドラーは対応する外側スコープへ別の例外を送出できます。途中でフィルター関数、`__finally`、GS／C++ パーソナリティー、連鎖または不完全なメタデータ、プロローグの展開、XMM 復元操作に遭遇した場合は明示的に失敗します。捕捉されない API 例外は `model_error` で停止し、CPU のメモリ／割り込み／無効命令フォールトは引き続き実行を終了します。
+
+独自の `driver_wdm_seh.c` フィクスチャーは真正 WDK ヘッダーと `/GS-` を使います。通常イメージと有効 CFG イメージには `NEVERD_WDM_SEH_FIXTURE` と `NEVERD_WDM_SEH_CFG_FIXTURE` を設定します。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) の例はイメージを再配置し、DriverEntry 内で API 例外を捕捉してアンロードします。この API 例外対応によって `ProbeForRead`、`ProbeForWrite`、ユーザー MDL のロック、`METHOD_NEITHER` が有効になるわけではありません。
+
+null を取り得る `fault` オブジェクトは、最初のバックエンドフォールトを保持します。`kind`、`pc`、null を取り得る `address`、`size`、`access`、`interrupt` により、未マップまたは保護されたメモリ、無効な範囲、無効な命令、CPU 例外を区別します。アドレスは 16 進文字列、サイズと割り込みベクターは整数で表します。観測用の読み取りが元のフォールトを置き換えることはありません。フォールトが発生したバックエンドは再開できず、この記録によってバックエンドフォールトをゲスト SEH で処理できるわけではありません。
 
 `instructions` は、実行ポリシーが許可したゲスト命令の試行回数を数えます。ポリシーが拒否した命令は数えません。許可後に CPU フォールトが発生した命令は数えます。合成した API ディスパッチと戻り先の番兵は、このカウンターを増やしません。
 

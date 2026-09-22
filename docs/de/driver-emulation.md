@@ -57,7 +57,7 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs, Systemabbildungen, gemeinsame physische Seitenidentitäten und SG-DMA | Benutzerabbildungen und weitere DMA-Schnittstellen |
 | Vom Treiber allokierte MDLs | Eigenständige Deskriptoren für modellierten nicht auslagerbaren Pool mit ursprünglichen Pufferadressen | IRP-Zuordnung, MDL-Ketten, Prüfen/Sperren, physische Seiten und Benutzerabbildungen |
 | READ/WRITE | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen öffentlichen Szenarioeinreichungen oder WDM-Anforderungsabbrüche; `METHOD_NEITHER` und implizite Dateiposition |
-| `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
+| `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung, Sperren/Entsperren und Wiederherstellung nach Benutzerspeicherfehlern |
 | KMDF-1.33-Nicht-PnP-Treiber | Bindung, Objekte/Kontexte, benannte Steuergeräte, sequenzielle Standardwarteschlangen sowie gepufferte/direkte Anforderungen mit ausgeführten Callbacks | Keine PnP-Geräte, allgemeine Warteschlangenplanung, Klassenerweiterungen oder UMDF |
 | PnP-Bus-, Funktions- oder Filtertreiber | Explizite PDOs ohne Ressourcen oder mit fester Registerbank, Gast-AddDevice und acht übliche PnP-Lebenszyklusfunktionen | Weitere PnP-Vorgänge, allgemeine Power-Policy, weitere Hardware-/Ressourcenmodelle und KMDF-PnP |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
@@ -232,6 +232,7 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 |------|-------------------------------------------|
 | `RtlInitUnicodeString` | Erstellt eine Gast-`UNICODE_STRING` für eine begrenzte NUL-terminierte Quelle |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Längengezähltes UTF-16-Kopieren und Vergleich unter Beachtung der Groß-/Kleinschreibung; Vergleich ohne Beachtung der Groß-/Kleinschreibung benötigt eine Windows-Tabelle zur Groß-/Kleinschreibung und stoppt |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Lösen eine Gastausnahme für unterstützte konstante C-`__except`-Handler aus; keine normale API-Rückkehr, Filter/finally und Wiederherstellung nach CPU-Fehlern bleiben unmodelliert |
 | `ExAllocatePool2` | Auslagerbare/nicht auslagerbare NX-Allokationen, standardmäßig genullt; Flags für nicht initialisierte und cacheausgerichtete Allokationen modelliert; ungültige erforderliche Flags liefern NULL, Quota-/ausführbare Pools und ausgelöste Allokationsausnahmen stoppen |
 | `MmGetSystemRoutineAddress` | Löst einen längengezählten Gastnamen über den gemeinsamen Exportkatalog auf |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | Deklarierte übersetzte Teilbereiche; NonCached RO/RW, gemeinsame Aliase und exaktes Unmap; kein beliebiger physischer Speicher |
@@ -510,7 +511,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v15`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v16`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -529,13 +530,19 @@ erhält, insbesondere bei IOCTLs ohne Ausgabepuffer.
 
 Work-Item-Beobachtungen tragen die Phase `callback:N`. Bei ausstehenden Anforderungen bleibt `dispatch_status` auf `STATUS_PENDING`; der endgültige Abschlussstatus steht getrennt in `io_status` und bestimmt den Beitrag zu `scenario_success`.
 
+`ExRaiseStatus` übergibt die unteren 32 Bit des NTSTATUS an den Gast-Ausnahmehandler; `ExRaiseAccessViolation` und `ExRaiseDatatypeMisalignment` lösen `STATUS_ACCESS_VIOLATION` beziehungsweise `STATUS_DATATYPE_MISALIGNMENT` aus. Das Profil folgt den einzelnen Microsoft-DDI-Seiten: ExRaiseStatus erlaubt `APC_LEVEL`, die beiden parameterlosen Routinen verlangen `PASSIVE_LEVEL`. Einige WDK-SAL-Annotationen erlauben APC_LEVEL für diese Wrapper; dieses Profil behält die strengere dokumentierte Grenze bei. Ein auslösender Aufruf behält `result: null` und vermerkt den Code in `detail`; er meldet niemals eine erfolgreiche API-Rückkehr.
+
+Die Ausnahmezustellung verwendet die dekodierten x64-Unwindtabellen der Version 1 und konstante `EXCEPTION_EXECUTE_HANDLER`-Bereiche von `__C_specific_handler`. Sie führt den tatsächlichen Gast-Handlercode aus, unterstützt das Abwickeln gewöhnlicher Hilfsfunktionsframes, stellt gesicherte nichtflüchtige Allzweckregister wieder her und wahrt die Stackgrenze der laufenden Ausführung. `GetExceptionCode()` liefert den ausgelösten Code. Ein Handler darf eine weitere Ausnahme in einen umgebenden unterstützten Bereich auslösen. Angetroffene Filterfunktionen, `__finally`, GS-/C++-Persönlichkeiten, verkettete oder unvollständige Metadaten, Prologabwicklung und XMM-Wiederherstellung scheitern ausdrücklich. Eine nicht behandelte API-Ausnahme stoppt mit `model_error`; CPU-Speicher-, Interrupt- und ungültige Instruktionsfehler bleiben terminal.
+
+Der eigenständig geschriebene Testtreiber `driver_wdm_seh.c` verwendet echte WDK-Header und `/GS-`. `NEVERD_WDM_SEH_FIXTURE` und `NEVERD_WDM_SEH_CFG_FIXTURE` konfigurieren normale beziehungsweise aktive CFG-Abbilder. Das Beispiel [driver-seh-scenario.json](../examples/driver-seh-scenario.json) lädt das Abbild an einer anderen Basisadresse, behandelt eine API-Ausnahme in DriverEntry und entlädt es. Diese API-Ausnahmeunterstützung schaltet weder `ProbeForRead`, `ProbeForWrite`, Benutzermemory-MDL-Sperren noch `METHOD_NEITHER` frei.
+
 Das nullable Objekt `fault` erhält den ersten Backend-Fehler. Seine Felder
 `kind`, `pc`, das nullable `address`, `size`, `access` und `interrupt` unterscheiden
 nicht abgebildeten oder geschützten Speicher, ungültige Bereiche, ungültige
 Instruktionen und CPU-Ausnahmen. Adressen verwenden Hexadezimalzeichenfolgen,
 Größen und Interruptvektoren Ganzzahlen. Beobachtungslesezugriffe können den
 ursprünglichen Fehler nicht ersetzen. Ein fehlerhaft angehaltenes Backend kann
-nicht fortgesetzt werden; dieser Datensatz impliziert keine Gast-SEH-Behandlung.
+nicht fortgesetzt werden; dieser Datensatz ermöglicht keine Gast-SEH-Behandlung dieser Backendfehler.
 
 `instructions` zählt zugelassene Gastinstruktionsversuche. Eine von der
 Ausführungsrichtlinie abgewiesene Instruktion wird nicht gezählt; eine

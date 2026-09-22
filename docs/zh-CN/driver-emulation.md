@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL、系统映射、共享物理页身份及 SG DMA | 用户映射及其他 DMA 接口 |
 | 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
 | READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发场景提交 或 WDM 请求取消；`METHOD_NEITHER` 与隐式文件位置 |
-| `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
+| `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测、锁定／解锁及用户内存故障恢复 |
 | KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、顺序默认队列，以及实际执行回调的缓冲／直接请求 | 不支持 PnP 设备、通用队列调度、类扩展或 UMDF |
 | PnP 总线／功能／过滤驱动 | 显式无资源或固定寄存器银行 PDO、来宾 AddDevice 和八种常见 PnP 生命周期次功能 | 其他 PnP 操作、通用电源管理、其他硬件／资源及 KMDF PnP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
@@ -189,6 +189,7 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 |-----|----------------|
 | `RtlInitUnicodeString` | 根据有界、以 NUL 结尾的源字符串构造来宾 `UNICODE_STRING` |
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 带长度的 UTF-16 复制及区分大小写比较；不区分大小写的比较需要 Windows 大小写表，因此会停止 |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | 为支持的常量 C `__except` 处理器抛出来宾异常；没有正常 API 返回，过滤器／finally 和 CPU 故障恢复仍不支持 |
 | `ExAllocatePool2` | 分页／非分页 NX 分配，默认清零；支持未初始化与缓存行对齐标志；无效的必需标志返回 NULL，配额／可执行池以及分配失败引发异常的路径会停止 |
 | `MmGetSystemRoutineAddress` | 通过共享导出清单解析带长度的来宾名称 |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 声明的转换后子区间；非缓存 RO／RW、共享别名、精确取消映射；不提供任意物理内存 |
@@ -310,11 +311,17 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v15`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v16`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
-可为空的 `fault` 对象保留后端首次故障。其 `kind`、`pc`、可为空的 `address`、`size`、`access` 和 `interrupt` 区分未映射或受保护内存、无效范围、无效指令及 CPU 异常。地址使用十六进制字符串；大小和中断向量使用整数。用于观察的读取不能替换原始故障。发生故障的后端不能恢复执行，此记录也不意味着支持来宾 SEH 处理。
+`ExRaiseStatus` 将 NTSTATUS 低 32 位传给来宾异常处理器；`ExRaiseAccessViolation` 和 `ExRaiseDatatypeMisalignment` 分别抛出 `STATUS_ACCESS_VIOLATION` 和 `STATUS_DATATYPE_MISALIGNMENT`。此配置遵循各自的 Microsoft DDI 文档：ExRaiseStatus 允许 `APC_LEVEL`，两个无参例程要求 `PASSIVE_LEVEL`。部分 WDK SAL 注解允许这两个包装函数在 APC_LEVEL 运行；此配置保留文档规定的较严格上限。抛出异常的调用保持 `result: null`，在 `detail` 记录异常码，不会报告 API 成功返回。
+
+异常递送使用镜像已解码的 x64 版本 1 展开表及 `__C_specific_handler` 的常量 `EXCEPTION_EXECUTE_HANDLER` 作用域。它执行真实来宾处理器代码，支持跨普通辅助函数栈帧展开、恢复保存的非易失通用寄存器，并保留当前执行的栈边界。`GetExceptionCode()` 取得抛出的异常码。处理器可向受支持的外层作用域再次抛出异常。路径中遇到过滤器函数、`__finally`、GS／C++ 异常处理例程、链式或不完整元数据、序言展开或 XMM 恢复操作时，均明确失败。未捕获的 API 异常以 `model_error` 停止；CPU 访存／中断／无效指令故障仍会终止执行。
+
+原创 `driver_wdm_seh.c` 测试驱动使用真实 WDK 头文件及 `/GS-`。通过 `NEVERD_WDM_SEH_FIXTURE` 和 `NEVERD_WDM_SEH_CFG_FIXTURE` 配置普通及活动 CFG 镜像。[driver-seh-scenario.json](../examples/driver-seh-scenario.json) 示例重定位镜像，在 DriverEntry 中捕获 API 异常后卸载。这项 API 异常支持不会启用 `ProbeForRead`、`ProbeForWrite`、用户 MDL 锁定或 `METHOD_NEITHER`。
+
+可为空的 `fault` 对象保留后端首次故障。其 `kind`、`pc`、可为空的 `address`、`size`、`access` 和 `interrupt` 区分未映射或受保护内存、无效范围、无效指令及 CPU 异常。地址使用十六进制字符串；大小和中断向量使用整数。用于观察的读取不能替换原始故障。发生故障的后端不能恢复执行，此记录也不会使这些后端故障能够由来宾 SEH 处理。
 
 `instructions` 统计执行策略已准许的来宾指令尝试次数。被执行策略拒绝的指令不计数；已准许但在 CPU 中发生故障的指令计数。合成的 API 派发与返回哨兵不增加该计数。
 

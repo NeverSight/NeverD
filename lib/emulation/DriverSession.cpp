@@ -16,8 +16,10 @@
 #include "unicorn/UnicornBackend.h"
 #include "windows/DriverImage.h"
 #include "windows/GuardControlFlow.h"
+#include "windows/KernelException.h"
 #include "windows/KernelExportRegistry.h"
 #include "windows/KernelModel.h"
+#include "windows/KernelSEH.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -139,6 +141,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   KernelModel Kernel(CPU, Result, &Exports);
   if (auto E = Kernel.initialize(*Image, Options))
     return std::move(E);
+  KernelSEH Exceptions(
+      Image->Exceptions, Image->PreferredBase, Image->Base, Image->Size,
+      [&](uint64_t Address) -> llvm::Expected<uint64_t> {
+        if (auto E = Kernel.validateGuestAccess(Address, PointerSize, false))
+          return std::move(E);
+        return CPU.readInteger(Address, PointerSize);
+      },
+      [&](uint64_t Address) { return CPU.executable(Address); });
   uint64_t ExpectedReturnSP = 0;
   uint64_t ActiveStackBase = 0;
   uint64_t ActiveStackSize = 0;
@@ -619,7 +629,50 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       };
       auto Value = Kernel.call(*Pending, FixedArguments, ReadVariableArgument);
       if (!Value) {
-        std::string Error = llvm::toString(Value.takeError());
+        std::optional<uint32_t> RaisedCode;
+        auto OtherError = llvm::handleErrors(
+            Value.takeError(), [&](const KernelGuestException &Exception) {
+              RaisedCode = Exception.code();
+            });
+        if (!OtherError && RaisedCode) {
+          const std::string Detail =
+              "raised guest exception 0x" + llvm::utohexstr(*RaisedCode);
+          Result.Calls.back().Detail = Detail;
+          // A model-raised exception starts at a normal API stop. Never use
+          // this path to reset the backend's retained execution fault.
+          if (CPU.fault() || CPU.hasDeviceError())
+            return failure("guest exception delivery requires a healthy CPU");
+          KernelSEH::Context Caller;
+          static_assert(unsigned(X64Register::AX) == 0 &&
+                        unsigned(X64Register::SP) == 4 &&
+                        unsigned(X64Register::R15) + 1 == seh::RegisterCount);
+          for (size_t I = 0; I < Caller.GPR.size(); ++I) {
+            auto Register = CPU.reg(static_cast<X64Register>(I));
+            if (!Register)
+              return Register.takeError();
+            Caller.GPR[I] = *Register;
+          }
+          Caller.GPR[unsigned(X64Register::SP)] = *SP + PointerSize;
+          Caller.PC = *ReturnPC - 1;
+          auto Transfer =
+              Exceptions.plan(*RaisedCode, Caller, {Frame.Base, Frame.Size});
+          if (!Transfer)
+            return Transfer.takeError();
+          if (!*Transfer) {
+            Stop(DriverStopReason::ModelError,
+                 "unhandled guest exception 0x" + llvm::utohexstr(*RaisedCode));
+            break;
+          }
+          // Search and all stack reads have succeeded. Commit the planned
+          // GPR state without changing SIMD/FPU state or guest memory.
+          for (size_t I = 0; I < Caller.GPR.size(); ++I)
+            if (auto E = CPU.setReg(static_cast<X64Register>(I),
+                                    (**Transfer).Registers.GPR[I]))
+              return E;
+          NextPC = (**Transfer).HandlerPC;
+          continue;
+        }
+        std::string Error = llvm::toString(std::move(OtherError));
         Result.Calls.back().Detail = Error;
         Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
                                   : DriverStopReason::ModelError,
