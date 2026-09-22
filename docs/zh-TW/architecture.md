@@ -270,6 +270,10 @@ Windows 模型亦管理獨立的非分頁池 MDL；釋放描述符不會釋放�
 
 `KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。僅在沒有就緒執行框架時，虛擬時間才推進至計時器／等待／取消邊界；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／自旋鎖排程、WDM／PnP 取消、並行 IRP、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
 
+`KernelModelDeviceStack` 以單一記錄管理各裝置的驅動程式擁有者、配置、上下層鄰居、待刪除狀態與內部參考。客體 `NextDevice` 列舉串列與宿主擁有的附加圖意義不同。名稱解析保留具名下層裝置作為 `FILE_OBJECT` 和報告身分，選擇目前堆疊頂端進行初始派送及 READ/WRITE 緩衝設定，並保留整條請求路徑。解除附加或刪除不會讓請求／回呼仍持有的裝置失效；公開 `ReferenceCount` 仍只計算開啟的控制代碼。
+
+`KernelModelIRPStack` 管理原始客體封包的有界堆疊游標、確切目標派送及完成展開；內嵌 Copy/Skip/SetCompletion 寫入仍為權威資料。派送狀態、完成回呼控制值與最終 `IoStatus` 分離，pending 可在派送傳回後傳播。`STATUS_MORE_PROCESSING_REQUIRED` 保留封包、MDL 與緩衝區，直到繼續執行並到達最終展開邊界，包括巢狀完成。`KernelGuestCall` 攜帶子系統擁有者及區域 token，防止 WDM／WDF 續接身分碰撞；`DriverSession` 保留 CPU 框架與繼承的 IRQL。目前僅有一個客體驅動程式，不提供 PDO、AddDevice／PnP／電源執行或驅動程式自行配置的 IRP；WDF 附加／轉送、活動堆疊附加、中間層移除、變更主要功能及路徑外目標仍不支援。 呼叫上層完成回呼之前，已消耗的下層堆疊位置會清零。
+
 `KernelFramework` 管理 KMDF 1.33 繫結、函式表識別、WDF 物件與內容、控制裝置初始化記錄、循序預設佇列及要求控制代碼。其具型別的裝置與要求主控介面將 WDM 命名空間、儲存空間、封包狀態、MDL 對應及完成驗證交由 `KernelModel` 負責；雙方均不建立重複的裝置或 IRP。佇列路由將框架擁有的分派狀態與傳回型別為 `void` 的客體回呼返回分開記錄。完成接續流程先執行清理及子物件銷毀，再釋放 IRP；外部參考僅保留 WDF 內容。刪除待處理要求會在修改上層祖先物件之前遭到拒絕；刪除時自動取消或排空要求仍不受支援。`DriverSession` 在共用預算下執行巢狀回呼。`DriverImage` 驗證 CFG 中繼資料；`GuardControlFlow` 管理已宣告的映像／API 目標，CPU 介面卡保留檢查／分派呼叫狀態。PnP 裝置、一般佇列排程及其取消、類別擴充及 UMDF 仍不受支援。
 
 情境透過 `cancel_after_100ns` 為傳輸要求設定虛擬取消期限，`KernelModel` 的獨立 IRP 記錄管理此期限及實際發生的絕對 `cancel_requested_at_100ns`；公開情境仍循序提交要求。`KernelModel` 在框架路由後、客體 I/O 回呼前套用零延遲取消，保留完成先發生的結果，並在閒置時間推進時考慮正數取消期限。`KernelFramework` 管理標記／解除標記、排入佇列／已遞送狀態，以及保留至取消回呼傳回的內部參考。僅排入佇列的取消回呼不允許完成要求；遞送後，工作項目可在回呼等待期間協調完成。保留 WDF 物件不會恢復已失效的 IRP 儲存空間。`KernelScheduler` 將取消回呼與工作項目分開管理，在暫停／還原時保留回呼類別並共用容量與派送預算；DPC 優先，其後是 FIFO 取消回呼，再執行一般工作項目或還原就緒的被動等待框架。取消回呼在 `PASSIVE_LEVEL` 執行。此控制裝置契約不提供 WDM 取消常式或一般佇列排程器。

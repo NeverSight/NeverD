@@ -134,7 +134,6 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
                                                  const DriverRequest &Input) {
   auto *Request = &Record;
   const uint64_t Packet = Request->IRP;
-  const uint64_t Device = Request->Device;
   const uint64_t File = Request->FileAddress;
   uint32_t Flags = IRPSynchronous;
   if (Input.Kind == DriverRequestKind::Create)
@@ -155,22 +154,23 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
   };
   for (const Field &F :
        std::array<Field, 13>{{{0, IRPType, 2},
-                              {2, IRPSize + StackSize, 2},
+                              {2, IRPSize + Request->StackCount * StackSize, 2},
                               {IRPMdlOffset, Request->Mdl, 8},
                               {IRPFlagsOffset, Flags, 4},
                               {IRPSystemBufferOffset, Request->SystemBuffer, 8},
                               {IRPStatusOffset, 0, 4},
                               {IRPRequestorModeOffset, UserMode, 1},
-                              {IRPStackCountOffset, 1, 1},
-                              {IRPLocationOffset, 1, 1},
+                              {IRPStackCountOffset, Request->StackCount, 1},
+                              {IRPLocationOffset, Request->StackCount, 1},
                               {IRPUserBufferOffset, Request->UserBuffer, 8},
                               {IRPStackPointerOffset, Request->Stack, 8},
                               {IRPOriginalFileOffset, File, 8},
-                              {IRPSize, majorFunction(Input.Kind), 1}}})
+                              {Request->Stack - Packet, majorFunction(Input.Kind), 1}}})
     if (auto E = Memory.writeInteger(Packet + F.Offset, F.Value, F.Size))
       return E;
   if (auto E =
-          Memory.writeInteger(Request->Stack + StackDeviceOffset, Device, 8))
+          Memory.writeInteger(Request->Stack + StackDeviceOffset,
+                               Request->DeviceRoute.front(), 8))
     return E;
   if (auto E = Memory.writeInteger(Request->Stack + StackFileOffset, File, 8))
     return E;
@@ -275,11 +275,23 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       return ioError("request device name does not identify a live device");
   }
   Result.Requests[Index].Device = Devices.at(Device).Name;
+  auto Top = topAttachedDevice(Device);
+  if (!Top)
+    return Top.takeError();
+  auto Route = deviceStack(*Top);
+  if (!Route)
+    return Route.takeError();
+  auto StackCount = Memory.readInteger(*Top + DeviceStackCountOffset, 1);
+  if (!StackCount)
+    return StackCount.takeError();
+  if (!*StackCount || *StackCount > MaxIRPStackCount ||
+      *StackCount < Route->size())
+    return ioError("device stack requires a positive bounded IRP stack count");
   if (Input.CancelAfter100ns && !FrameworkDevices.count(Device))
     return ioError("scheduled cancellation requires a KMDF control request");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
-    if (DeletePendingDevices.count(Device))
+    if (Devices.at(Device).DeletePending || Devices.at(*Top).DeletePending)
       return ioError("CREATE cannot target a delete-pending device");
     if (FileIt != Files.end())
       return ioError("CREATE requires an unused file identity");
@@ -330,12 +342,15 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       }))
     return ioError(
         "a synchronous file requires its prior request to finalize");
-  auto Packet = allocate(IRPSize + StackSize);
+  auto Packet = allocate(IRPSize + *StackCount * StackSize);
   if (!Packet)
     return Packet.takeError();
   ActiveRequest Record{Input.Kind, Index};
   Record.IRP = *Packet;
-  Record.Stack = *Packet + IRPSize;
+  Record.StackCount = *StackCount;
+  Record.Stack = *Packet + IRPSize + (*StackCount - 1) * StackSize;
+  Record.DeviceRoute = std::move(*Route);
+  Record.UnwoundPending.resize(*StackCount);
   Record.Device = Device;
   Record.FileAddress = FileIt->second.Address;
   Record.FileId = Input.File;
@@ -348,14 +363,17 @@ KernelModel::beginRequest(const DriverRequest &Input) {
     Record.CancelDeadline = *Deadline;
   }
   auto *Request = &Requests.emplace(*Packet, std::move(Record)).first->second;
-  if (auto E = prepareRequestBuffers(*Request, Input, Device))
+  for (uint64_t Owner : Request->DeviceRoute)
+    if (auto E = retainDevice(Owner))
+      return E;
+  if (auto E = prepareRequestBuffers(*Request, Input, *Top))
     return E;
   if (auto E = initializeRequestPacket(*Request, Input))
     return E;
   Result.Requests[Index].IRP = *Packet;
   const uint64_t Callback = Result.MajorFunctions[Major];
   if (Framework) {
-    auto Route = Framework->routeRequest(Device, Request->IRP);
+    auto Route = Framework->routeRequest(*Top, Request->IRP);
     if (!Route)
       return Route.takeError();
     if (*Route) {
@@ -405,12 +423,12 @@ KernelModel::beginRequest(const DriverRequest &Input) {
     Call.IRP = *Packet;
     return Call;
   }
-  Invocation Call{Callback, Device, Request->IRP};
+  Invocation Call{Callback, *Top, Request->IRP};
   Call.IRP = *Packet;
   return Call;
 }
 
-llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
+llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP, uint8_t PriorityBoost) {
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return ioError("completion requires the active IRP and cannot occur twice");
@@ -434,14 +452,17 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   Observation.Information = *Information;
   const bool HasIOCTLOutput =
       Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
-  auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
-  if (!Control)
-    return Control.takeError();
-  Request->PendingMarked = (*Control & StackPendingReturned) != 0;
+  auto Pending = dispatchPending(*Request, Request->StackCount - 1);
+  if (!Pending)
+    return Pending.takeError();
+  Request->PendingMarked = *Pending;
+  if (Request->DispatchReturned &&
+      Observation.DispatchStatus == StatusPending && !Request->PendingMarked)
+    return ioError("pending dispatch completion requires propagation to the top stack");
   // Completion retires several allocations together. Preflight every range
   // before unregistering any dispatcher state or delivering output bytes.
   std::vector<std::pair<uint64_t, uint64_t>> Retiring{
-      {IRP, IRPSize + StackSize}};
+      {IRP, IRPSize + Request->StackCount * StackSize}};
   if (Request->SystemBuffer)
     Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
   if (Request->UserBuffer)
@@ -490,7 +511,7 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   Observation.Completed = true;
   Request->Completed = true;
   Request->CancelDeadline.reset();
-  FreedRanges.emplace(IRP, IRPSize + StackSize);
+  FreedRanges.emplace(IRP, IRPSize + Request->StackCount * StackSize);
   if (Request->SystemBuffer)
     FreedRanges.emplace(Request->SystemBuffer, Request->BufferSize);
   if (Request->UserBuffer)
@@ -517,12 +538,17 @@ llvm::Error KernelModel::recordDispatchReturn(uint64_t IRP,
       return Control.takeError();
     Request->PendingMarked = (*Control & StackPendingReturned) != 0;
   }
-  if ((DispatchStatus == StatusPending) != Request->PendingMarked)
+  // In a forwarded asynchronous request, the completion routine propagates
+  // pending later. Validate that final propagation when unwinding reaches the
+  // top, rather than requiring a callback that has not run yet to have marked it.
+  if (!(Request->Forwarded && DispatchStatus == StatusPending &&
+        !Request->Completed) &&
+      (DispatchStatus == StatusPending) != Request->PendingMarked)
     return ioError("STATUS_PENDING and IoMarkIrpPending must agree");
   if (DispatchStatus != StatusPending) {
     if (!Request->Completed)
       return ioError("dispatch returned without completing its IRP");
-    if (Observation.IOStatus != DispatchStatus)
+    if (!Request->Forwarded && Observation.IOStatus != DispatchStatus)
       return ioError("synchronous dispatch status does not match completed "
                      "IoStatus.Status");
   }
@@ -539,6 +565,10 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
   if (!Request->DispatchReturned || !Request->Completed)
     return ioError(
         "request finalization requires completion and dispatch return");
+  if (std::any_of(IRPCalls.begin(), IRPCalls.end(), [&](const auto &Entry) {
+        return Entry.second.IRP == IRP;
+      }))
+    return ioError("request finalization requires its guest continuations to return");
   auto &Observation = Result.Requests[Request->ResultIndex];
   auto FileIt = Files.find(Request->FileId);
   if (FileIt == Files.end() || FileIt->second.Address != Request->FileAddress ||
@@ -576,10 +606,12 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
   }
   if (auto E = updateDeviceReferences(Device))
     return E;
+  auto Route = std::move(Request->DeviceRoute);
   Requests.erase(IRP);
   FinalizedRequests.insert(IRP);
-  if (auto E = retireDeviceIfUnreferenced(Device))
-    return E;
+  for (uint64_t Owner : Route)
+    if (auto E = releaseDevice(Owner))
+      return E;
   return snapshot();
 }
 
@@ -611,7 +643,8 @@ llvm::Error KernelModel::finishUnload() {
     return ioError("unload returned with a live framework binding");
   if (!Devices.empty() || !SymbolicLinks.empty() || !Allocations.empty() ||
       !Files.empty() || !Requests.empty() || !MDLs.empty() ||
-      !WorkItems.empty() || Scheduler.hasPending())
+      !WorkItems.empty() || !IRPCalls.empty() || PendingWdmCall ||
+      Scheduler.hasPending())
     return ioError("unload returned with live devices, symbolic links, pool "
                    "allocations or file/request state");
   Unloading = false;
@@ -654,6 +687,9 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
             return (Offset >= IRPStatusOffset &&
                     Offset < IRPRequestorModeOffset) ||
                    Offset == IRPPendingOffset ||
+                   Offset == IRPLocationOffset ||
+                   (Offset >= IRPStackPointerOffset &&
+                    Offset < IRPStackPointerOffset + profile::PointerSize) ||
                    (Offset >= IRPDriverContextOffset &&
                     Offset < IRPThreadOffset);
           if (Offset >= IRPStatusOffset && Offset < IRPRequestorModeOffset)
@@ -667,17 +703,12 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
                   Offset < IRPOriginalFileOffset + profile::PointerSize);
         }))
       return E;
-    if (auto E = Check(Request->Stack, StackSize, [&](uint64_t Offset) {
-          if (IsWrite)
-            return Offset == StackControlOffset;
-          if (Offset < StackParametersOffset || Offset >= StackDeviceOffset)
-            return true;
-          return Request->Kind == DriverRequestKind::Create ||
-                 Request->Kind == DriverRequestKind::DeviceControl ||
-                 ((Request->Kind == DriverRequestKind::Read ||
-                   Request->Kind == DriverRequestKind::Write) &&
-                  Offset < StackReadWriteByteOffset + profile::PointerSize);
-        }))
+    // WDK CopyCurrent copies the entire prefix through FileObject, including
+    // unused union bytes and padding for READ/WRITE/CLEANUP/CLOSE. These bytes
+    // belong to the allocated stack record; checking only active union members
+    // would reject the public inline operation before forwarding can validate it.
+    if (auto E = Check(Request->IRP + IRPSize, Request->StackCount * StackSize,
+                        [](uint64_t) { return true; }))
       return E;
     if (auto E = Check(Request->SecurityContext, SecurityContextSize,
                        [&](uint64_t Offset) {

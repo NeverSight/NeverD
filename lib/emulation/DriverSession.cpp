@@ -36,6 +36,13 @@ llvm::Error failure(const std::string &Text) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Text);
 }
 
+std::string guestCallPhase(const GuestCallToken &Token) {
+  return std::string(Token.Owner == GuestCallOwner::Framework
+                         ? "callback:framework"
+                         : "callback:wdm") +
+         std::to_string(Token.ID);
+}
+
 } // namespace
 
 llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
@@ -312,8 +319,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     std::optional<uint64_t> ResumeValue;
     size_t WaitEvent = 0;
     bool PrivateStack = false;
-    uint64_t ReturnToken = 0;
-    std::optional<KernelFramework::GuestCall> ChildCall;
+    GuestCallToken ReturnToken;
+    std::optional<KernelGuestCall> ChildCall;
     std::unique_ptr<Execution> Parent;
   };
   std::vector<std::unique_ptr<Execution>> Waiting;
@@ -619,10 +626,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (Current->ChildCall) {
           auto Call = std::move(*Current->ChildCall);
           Current->ChildCall.reset();
-          auto Child =
-              NewExecution(Call.PC, Call.Arguments,
-                           "callback:framework" + std::to_string(Call.Token),
-                           Current->ID, true);
+          auto Child = NewExecution(Call.PC, Call.Arguments,
+                                    guestCallPhase(Call.Token), Current->ID,
+                                    true);
           if (!Child) {
             ModelFailure(Child.takeError());
             return llvm::Error::success();
@@ -659,15 +665,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
               Parent->ChildCall = Kernel.takeGuestCall();
               if (!Parent->ChildCall) {
                 ModelFailure(
-                    failure("framework continuation lost its guest callback"));
+                    failure("model continuation lost its guest callback"));
                 return llvm::Error::success();
               }
               auto Call = std::move(*Parent->ChildCall);
               Parent->ChildCall.reset();
               auto Child = NewExecution(Call.PC, Call.Arguments,
-                                        "callback:framework" +
-                                            std::to_string(Call.Token),
-                                        Parent->ID, true);
+                                        guestCallPhase(Call.Token), Parent->ID,
+                                        true);
               if (!Child) {
                 ModelFailure(Child.takeError());
                 return llvm::Error::success();

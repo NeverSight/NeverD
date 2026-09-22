@@ -54,7 +54,7 @@ void KernelModel::configureFrameworkDeviceHost() {
   };
   Host.FinishInitializing = [this](uint64_t Device) -> llvm::Error {
     if (!FrameworkDevices.count(Device) || !Devices.count(Device) ||
-        DeletePendingDevices.count(Device))
+        Devices.at(Device).DeletePending)
       return frameworkDeviceError(
           "framework initialization requires its own live WDM device");
     auto Flags = Memory.readInteger(Device + windows::DeviceFlagsOffset, 4);
@@ -68,7 +68,7 @@ void KernelModel::configureFrameworkDeviceHost() {
     auto Owner = FrameworkDevices.find(Device);
     auto Object = Devices.find(Device);
     if (Owner == FrameworkDevices.end() || Object == Devices.end() ||
-        DeletePendingDevices.count(Device))
+        Object->second.DeletePending)
       return frameworkDeviceError(
           "framework symbolic link requires its own live WDM device");
     auto Key = linkKey(Name);
@@ -84,9 +84,8 @@ void KernelModel::configureFrameworkDeviceHost() {
   Host.Delete = [this](uint64_t Device) -> llvm::Error {
     auto Owner = FrameworkDevices.find(Device);
     auto Object = Devices.find(Device);
-    auto Size = DeviceSizes.find(Device);
     if (Owner == FrameworkDevices.end() || Object == Devices.end() ||
-        Size == DeviceSizes.end() || DeletePendingDevices.count(Device))
+        Object->second.DeletePending)
       return frameworkDeviceError(
           "framework deletion requires its own live WDM device");
     if (std::any_of(Files.begin(), Files.end(), [&](const auto &File) {
@@ -123,7 +122,7 @@ void KernelModel::configureFrameworkDeviceHost() {
     // marking deletion. No guest callback can interleave these host operations.
     if (auto E = snapshot())
       return E;
-    if (auto E = prepareReleaseRange(Device, Size->second))
+    if (auto E = prepareReleaseRange(Device, Object->second.Size))
       return E;
     if (auto E = deleteDevice(Device))
       return E;
@@ -159,18 +158,37 @@ llvm::Expected<uint64_t> KernelModel::call(
   if (!Framework)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "framework model is not initialized");
+  if (PendingWdmCall)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "cannot replace a pending WDM guest callback");
   return Framework->call(Export, Arguments, CurrentIRQL);
 }
 
-std::optional<KernelFramework::GuestCall> KernelModel::takeGuestCall() {
-  return Framework ? Framework->takeGuestCall() : std::nullopt;
+std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
+  if (auto Call = takeWdmGuestCall())
+    return Call;
+  if (Framework)
+    if (auto Call = Framework->takeGuestCall())
+      return KernelGuestCall{{GuestCallOwner::Framework, Call->Token}, Call->PC,
+                             std::move(Call->Arguments)};
+  return std::nullopt;
 }
 
 llvm::Expected<std::optional<uint64_t>>
-KernelModel::finishGuestCall(uint64_t Token, uint64_t Result) {
-  if (!Framework)
+KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
+  if (!Token.ID)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "framework callback has no owning model");
-  return Framework->finishGuestCall(Token, Result);
+                                   "guest callback has no continuation token");
+  switch (Token.Owner) {
+  case GuestCallOwner::Framework:
+    if (!Framework)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "framework callback has no owning model");
+    return Framework->finishGuestCall(Token.ID, Result);
+  case GuestCallOwner::WDM:
+    return finishWdmGuestCall(Token.ID, Result);
+  }
+  return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                 "guest callback has an invalid owner");
 }
 } // namespace neverd::emulation

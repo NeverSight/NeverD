@@ -378,7 +378,7 @@ TEST_F(KernelCancellation,
   ASSERT_NE(Item, 0u);
   kernel("IoQueueWorkItem",
          {Item, WorkerPC, profile::DelayedWorkQueue, Scratch});
-  EXPECT_EQ(get(WdmDevice + windows::DeviceReferenceCount, 4), 2u);
+  EXPECT_EQ(get(WdmDevice + windows::DeviceReferenceCount, 4), 1u);
   complete(Request);
   EXPECT_TRUE(observation(Request.IRP).Completed);
   success(Model->validateGuestAccess(Context, 24, false));
@@ -387,7 +387,7 @@ TEST_F(KernelCancellation,
   ASSERT_TRUE(Destroy);
   EXPECT_EQ(Destroy->PC, DestroyPC);
   EXPECT_EQ(Destroy->Arguments, (std::vector<uint64_t>{Request.Request}));
-  EXPECT_EQ(get(WdmDevice + windows::DeviceReferenceCount, 4), 2u);
+  EXPECT_EQ(get(WdmDevice + windows::DeviceReferenceCount, 4), 1u);
   // A suspended destroy continuation retains the same cancellation task. The
   // independently scheduled work item releases only its own device reference.
   success(Model->suspendScheduled(Cancel.ID));

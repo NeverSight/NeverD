@@ -89,6 +89,10 @@ NEVERD_KERNEL_IRQL_API(RtlInitUnicodeString, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitem
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iofreeworkitem
 NEVERD_KERNEL_IRQL_API(IofCompleteRequest, Dispatch)
+NEVERD_KERNEL_IRQL_API(IofCallDriver, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoCallDriver, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoAttachDeviceToDeviceStack, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoDetachDevice, Passive)
 NEVERD_KERNEL_IRQL_API(IoCompleteRequest, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoAllocateWorkItem, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoQueueWorkItem, Dispatch)

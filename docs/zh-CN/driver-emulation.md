@@ -45,7 +45,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发 IRP 或 WDM 请求取消；`METHOD_NEITHER` 与隐式文件位置 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
 | KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、顺序默认队列，以及实际执行回调的缓冲／直接请求 | 不支持 PnP 设备、通用队列调度、类扩展或 UMDF |
-| PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
+| PnP 总线／功能／过滤驱动 | 同一来宾驱动的附加和向下派发已建模；PnP 生命周期仍不支持 | PDO／提供者所有权、AddDevice 执行、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发 IRP 或 WDM 请求取消 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
@@ -75,6 +75,12 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 执行加载器支持经验证的 x64 `DIR64` 基址重定位，以及有限的安全 cookie 加载配置；它会在入口包装函数执行前设置确定性的来宾 cookie。其他未建模的加载配置字段、TLS、延迟／绑定导入、按序号导入以及托管映像都会被拒绝。映像还必须通过严格的范围与对齐检查。
 
 启用的控制流保护（CFG）会验证 PE 标志、指针槽和已排序的可执行目标表。检查与分派辅助函数仅允许已声明的映像入口或已登记的 API 跳板，保留 Win64 调用状态，并拒绝未声明的目标。只有插桩而未启用 CFG 时，保留原始来宾回退指针。启用的 XFG、导出抑制和其他未建模的保护策略仍被拒绝；地址位于可执行内存并不使它成为合法目标。
+
+WDM 设备栈可以包含同一来宾驱动拥有的多个设备对象。`IoAttachDeviceToDeviceStack` 将独立源设备附加到目标的当前栈顶，返回原栈顶，并设置 `StackSize` 和 `AlignmentRequirement`；它不修改驱动的 `NextDevice` 链，也不复制缓冲标志。`IoDetachDevice` 接收保存的下层设备，要求 `PASSIVE_LEVEL`；附加允许 IRQL 不高于 `DISPATCH_LEVEL`。打开具名下层设备时，请求派发到当前栈顶，而 `FILE_OBJECT.DeviceObject` 和报告保留具名设备身份。READ/WRITE 使用所选栈顶的缓冲标志。请求保存的路径在拆链、删除后仍保留各层设备，直到派发返回；内部引用不增加表示打开句柄数的 `ReferenceCount`。
+
+`IofCallDriver` 和 `IoCallDriver` 辅助入口调用保存路径中的确切目标。真实内联 `IoCopyCurrentIrpStackLocationToNext`、`IoSkipCurrentIrpStackLocation` 和 `IoSetCompletionRoutine` 操作原始来宾 IRP；模型验证游标、数量和控制标志。下层派发返回真实状态，与 `IoStatus` 及完成回调返回值分开。完成展开先推进游标，按成功／错误／取消标志选择回调并向上传递 pending 状态；执行完成回调时，回调负责传播 pending，包括派发已返回 `STATUS_PENDING` 后的传播。`STATUS_MORE_PROCESSING_REQUIRED` 暂停展开并保留 IRP、MDL 和缓冲区，后续完成调用可以继续。嵌套完成要求外层返回停止结果，最终展开只释放一次存储。带所属子系统标记的续接保留嵌套 WDM／WDF 调用帧和继承的 IRQL。 在调用上层完成回调之前，已消耗的下层栈位置会被清零。
+
+此设备栈子集不包含 PDO、`AddDevice` 执行、PnP／电源 IRP 或驱动自行分配的 IRP。WDF 附加／转发、向仍有文件或回调的栈附加设备、拆除中间层、改变转发的主功能及指向保存路径之外的设备均明确报错。可选真实 WDK 样例 `driver_wdm_stack.c` 使用 `NEVERD_WDM_STACK_FIXTURE` 和 `NEVERD_WDM_STACK_CFG_FIXTURE`；原生与 C API／CLI 测试包括重定位，缺少产物会明确跳过。执行证据仍仅来自 Linux。
 
 KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，下列 38 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 在真实 WDK `FxDriverEntry` 包装函数前后管理来宾绑定。`WdfGetDriver` 读取公共驱动全局结构。非 PnP 驱动、通用对象、控制设备、队列和传入请求共享类型化上下文、引用计数，以及实际执行的清理／销毁／卸载回调。所有已建模的框架调用和回调目前都要求 `PASSIVE_LEVEL`；清理完成后新增引用仍不在此配置的支持范围内。未建模的函数槽、`WdfLdrQueryInterface`、类扩展和 UMDF 会明确停止。
 
@@ -109,6 +115,8 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 显式配置的会话注册表、逐句柄权限与生命周期、查询缓冲区大小及修改；不访问宿主注册表 |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | 对池类型 `0`、`1`、`512` 提供数据分配；大小／标签必须为正，带标签释放必须匹配，地址不复用 |
 | `IoCreateDevice`、`IoDeleteDevice` | 设备类型为 `0x22`，characteristics 为 `0` 或 `0x100`，扩展大小有界，名称为 ASCII `\Device\Name` |
+| `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | 同驱动附加；返回原栈顶，拆链接收保存的下层设备；遵守上述拓扑和生命周期限制 |
+| `IofCallDriver`, `IoCallDriver` | 在保留路径中向确切目标派发；验证来宾栈游标，保留下层 NTSTATUS |
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一个会话命名空间内的 ASCII `\DosDevices\Name` 或 `\??\Name`，目标为 `\Device\Name` |
 | `DbgPrint`、`DbgPrintEx` | 经检查的 Win64 可变参数格式化，最多输出 512 字节；启用所有调试器过滤器 |
 | `IoGetCurrentIrpStackLocation` | 返回当前建模 IRP 的栈位置；正常编译的 WDM 宏读取相同来宾字段 |
@@ -120,7 +128,7 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 | `KeWaitForSingleObject` | 单个已初始化事件或定时器；非警报 `KernelMode`、原因 `Executive`；零超时轮询、有限相对／绝对或无限等待；非零／无限等待要求 IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | IRQL <= APC_LEVEL 的非警报 `KernelMode` 相对／绝对延迟；虚拟时间推进后恢复保存的来宾执行帧 |
 | `IoMarkIrpPending` | 标记当前存活的 IRP；也支持 WDM 宏对栈控制字段的等效写入；派发必须返回 `STATUS_PENDING` |
-| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成当前同步或待处理的建模 IRP；已完成的 IRP 或缓冲区不能再次访问 |
+| `IofCompleteRequest`、`IoCompleteRequest` | 使用 `IO_NO_INCREMENT` 执行完成展开，支持暂停／继续；仅在最终展开边界释放 IRP、MDL 和缓冲区 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的来宾缓冲区操作，每次调用最多 1 MiB；要求不重叠的复制 API 会拒绝重叠 |
 
 API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。DPC 不能调用注册表 API，也不能分配、释放或访问分页池；Unicode `DbgPrint` 转换要求 `PASSIVE_LEVEL`，支持的 ANSI 输出和非分页操作仍可在 `DISPATCH_LEVEL` 使用。回调栈有明确边界，越界栈指针不能进入另一阻塞工作项的栈。设备扩展中的已启动定时器会阻止设备提前回收。这些检查并未开放通用 IRQL 切换。
@@ -209,7 +217,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v6`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v7`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

@@ -127,7 +127,7 @@ TEST(DriverKernelAPIIRQL, DispatcherKeepsItsOwnNarrowerChecks) {
 TEST(DriverKernelAPIIRQL, UnknownAndInexactSpellingsHaveNoGuessedPolicy) {
   const llvm::StringLiteral Names[] = {
       "",           "ZwNotModeled",           "ZwOpenKeyEx",  "zwopenkey",
-      "ZwOpenKey ", "ntoskrnl.exe!ZwOpenKey", "IoCallDriver", "DbgPrintEx2",
+      "ZwOpenKey ", "ntoskrnl.exe!ZwOpenKey", "IoCallDriverEx", "DbgPrintEx2",
       "memcpy_s"};
   for (auto Name : Names) {
     auto Maximum = maximumKernelIRQL(Name);

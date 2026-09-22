@@ -58,7 +58,7 @@ establish compatibility with arbitrary third-party drivers.
 | READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or WDM request cancellation; `METHOD_NEITHER` and implicit file position |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
-| PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
+| PnP bus/function/filter driver | Same-guest-driver attachment and lower dispatch are modeled; PnP lifecycle remains unsupported | PDO/provider ownership, AddDevice execution, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
 | Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent IRPs or WDM request cancellation |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
@@ -126,6 +126,12 @@ rejected. Images must also pass strict range and alignment checks.
 
 Active Control Flow Guard (CFG) validates PE flags, pointer slots and sorted executable target entries. Check and dispatch helpers admit only declared image entries or registered API thunks, preserve the Win64 call state and reject undeclared targets. Instrumentation without active CFG preserves the original guest fallback pointers. Active XFG, export suppression and other unmodeled guard policies remain rejected; executable memory alone does not make an address a valid target.
 
+WDM stacks can contain several device objects owned by the same guest driver. `IoAttachDeviceToDeviceStack` attaches an isolated source above the target's current top and returns that previous top; it sets `StackSize` and `AlignmentRequirement` without changing the driver's `NextDevice` list or copying buffer flags. `IoDetachDevice` takes the saved lower device and requires `PASSIVE_LEVEL`; attachment permits IRQL up to `DISPATCH_LEVEL`. Opening a named lower device dispatches to the current top, while `FILE_OBJECT.DeviceObject` and the report retain the named device identity. READ/WRITE buffering uses the selected top's flags. Captured request routes retain every device through dispatch return, including after detach/delete; internal holds do not increase the open-handle `ReferenceCount`.
+
+`IofCallDriver` and the `IoCallDriver` helper invoke the exact target on that retained route. Real inline `IoCopyCurrentIrpStackLocationToNext`, `IoSkipCurrentIrpStackLocation` and `IoSetCompletionRoutine` operate on the original guest IRP; cursor, count and control flags are validated. Lower dispatch returns its actual status independently of `IoStatus` and completion-routine return values. Completion advances the cursor, selects callbacks using success/error/cancel flags and carries pending state upward; a completion routine owns its pending propagation, including after an earlier `STATUS_PENDING` dispatch return. `STATUS_MORE_PROCESSING_REQUIRED` stops unwinding without retiring the IRP, MDLs or buffers; later completion resumes it. Nested completion is supported with the required outer stop result, and terminal unwinding retires storage once. Owner-tagged continuations preserve nested WDM/WDF caller frames and inherited IRQL. Each consumed lower stack location is cleared before the upper completion callback runs.
+
+This stack subset does not add PDOs, `AddDevice` execution, PnP/power IRPs or driver-allocated IRPs. WDF attachment/forwarding, attaching to stacks with live files or callbacks, detaching an intermediate layer, changing the forwarded major function and targeting devices outside the captured route fail explicitly. Optional genuine-WDK `driver_wdm_stack.c` images use `NEVERD_WDM_STACK_FIXTURE` and `NEVERD_WDM_STACK_CFG_FIXTURE`; native and C API/CLI coverage includes relocation, with missing artifacts explicitly skipped. Execution evidence remains Linux-only.
+
 KMDF 1.33 support uses the exact 1.33.0 ABI: 458 function slots have stable guest identities, while the 38 APIs below have execution semantics. `WdfVersionBind` and `WdfVersionUnbind` manage guest bindings around the genuine WDK `FxDriverEntry` wrapper. `WdfGetDriver` reads the public driver globals. Non-PnP drivers, generic objects, control devices, queues and incoming requests share typed contexts, reference counts and executed cleanup/destroy/unload callbacks. All modeled framework calls and callbacks currently require `PASSIVE_LEVEL`; adding references after completed cleanup remains outside this profile. Unmodeled function slots, `WdfLdrQueryInterface`, class extensions and UMDF stop explicitly.
 
 Control devices require a copied printable-ASCII name and the exact SDDL `D:P(A;;GA;;;WD)`. This grants universal access and avoids inventing a caller token; other security descriptors, unnamed devices and automatic names are unsupported. Device initialization owns one WDM device. Requests can select it through the existing session namespace using `\DosDevices\Name` or `\??\Name` symbolic-link aliases; reports retain the canonical device name. Successful creation consumes and clears the initializer; failed creation rolls back partial device ownership. `WdfControlFinishInitializing` gates I/O delivery. Deletion removes the device and its links only when modeled files, work items and requests permit it; cancellation or draining during deletion is unsupported.
@@ -159,6 +165,8 @@ The initial API model deliberately has a finite contract:
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Explicit session registry, per-handle rights and lifetime, query buffer sizing and mutations; no host registry access |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
+| `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | Same-driver attachment; attach returns the previous top, detach consumes the saved lower device; explicit topology/lifetime limits above |
+| `IofCallDriver`, `IoCallDriver` | Exact-target dispatch on the retained route; validated guest stack cursor and distinct lower NTSTATUS |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` or `\??\Name` within one session namespace, targeting `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
@@ -170,7 +178,7 @@ The initial API model deliberately has a finite contract:
 | `KeWaitForSingleObject` | One initialized event or timer; nonalertable `KernelMode`, reason `Executive`; zero polling, finite relative/absolute or infinite waits; nonzero/infinite waits require IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Nonalertable `KernelMode` relative/absolute delay at IRQL <= APC_LEVEL; resumes the saved guest frame after virtual time advances |
 | `IoMarkIrpPending` | Marks the live active IRP; the equivalent WDM macro's stack-control write is also modeled; dispatch must return `STATUS_PENDING` |
-| `IofCompleteRequest`, `IoCompleteRequest` | Completes the active synchronous or pending modeled IRP with `IO_NO_INCREMENT`; a completed IRP or buffer cannot be accessed again |
+| `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; executes completion unwinding, supports stopped/resumed completion and retires IRP/MDL/buffer storage only at its terminal boundary |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
 
 API IRQL ceilings come from `KernelAPIIRQL.def`, with argument-dependent
@@ -423,7 +431,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v6`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v7`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
