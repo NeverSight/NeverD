@@ -218,6 +218,296 @@ void addressLeaf(CopyFixture &F) {
     F.word(F.Leaf + I * 4, Body[I]);
 }
 
+void stackStoreLeaf(CopyFixture &F) {
+  constantStrings(F);
+  const uint32_t Leaf[] = {pageAddress(F.Leaf, 0x2040, 8),
+                           completeAddress(8, 8, 0x2040),
+                           0xf90003e8,
+                           pageAddress(F.Leaf + 12, 0x2060, 8),
+                           completeAddress(8, 8, 0x2060),
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Leaf); ++I)
+    F.word(F.Leaf + I * 4, Leaf[I]);
+  const uint32_t Body[] = {0xd10083ff, 0xa9017bfd, F.branch(F.Root + 8),
+                           0xf94003e0, 0xa9417bfd, 0x910083ff,
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Body); ++I)
+    F.word(F.Root + I * 4, Body[I]);
+  F.Signature.Parameters.clear();
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(F.Signature, Arch::AArch64, Error));
+  F.run();
+}
+
+TEST(SourceRegisterCopy, StackStoreRetainsItsOwnValueAndRequiresAFrame) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  ASSERT_EQ(F.med().RegisterCopyProjections.size(), 1U);
+  const auto &Proof = F.med().RegisterCopyProjections.begin()->second;
+  ASSERT_TRUE(Proof.StackStore);
+  EXPECT_EQ(Proof.StackStore->Value.Address, 0x2040U);
+  EXPECT_EQ(Proof.StackStore->InstructionIndex, 2U);
+  EXPECT_EQ(Proof.StackStore->Word, 0xf90003e8U);
+  EXPECT_EQ(
+      std::get<SourceConstantStringAddress>(Proof.Registers.at(64)).Address,
+      0x2060U);
+  EXPECT_FALSE(sourceRegisterCopyLeafRegisters(F.Image, F.Leaf));
+  EXPECT_TRUE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+  EXPECT_TRUE(
+      sourceStackStoreStateContract(F.Image, F.low(), F.med(), F.high()));
+  EXPECT_TRUE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&F.Image);
+  Converter.setSourceCallHintsEnabled(true);
+  const auto Med =
+      Converter.convert(F.low(), Arch::AArch64, BinaryFormat::MachO);
+  unsigned Stores = 0;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::STORE && Op.Addr == F.Root + 8) {
+        ++Stores;
+        ASSERT_EQ(Op.NumInputs, 2U);
+        EXPECT_LT(Op.OriginSeq, 0);
+        EXPECT_EQ(Op.Inputs[1].ConstVal, 0x2040U);
+      }
+  EXPECT_EQ(Stores, 1U);
+}
+
+TEST(SourceRegisterCopy, StackStoreRejectsUnsupportedOrStaleMemoryEffects) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  const auto Original = F.Image;
+  const uint32_t BadStores[] = {
+      0xb90003e8, // STR w8,[sp].
+      0xf90007e8, // STR x8,[sp,#8].
+      0xf9000008, // STR x8,[x0].
+      0xf8000fe8, // pre-index form.
+      0xf90003e0, // entry x0 is not a constant address.
+      0xf90003f2, // platform register.
+      0xf90003fd, // FP.
+      0xf90003ff, // zero register.
+      0xc89fffe8  // release store.
+  };
+  for (uint32_t Word : BadStores) {
+    SCOPED_TRACE(Word);
+    F.Image = Original;
+    F.word(F.Leaf + 8, Word);
+    EXPECT_TRUE(sourceRegisterCopies(F.Image, F.low()).empty());
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  }
+  F.Image = Original;
+  F.word(F.Leaf + 12, 0xf90003e8); // second store.
+  EXPECT_TRUE(sourceRegisterCopies(F.Image, F.low()).empty());
+  F.Image = Original;
+  F.Image.Segments[2].Data[0] ^= 1; // Stored object payload, not final x8.
+  EXPECT_FALSE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  F.Image = Original;
+  F.Result.MedFuncs.front()
+      .RegisterCopyProjections.begin()
+      ->second.StackStore->Value.Address = 0x2060;
+  F.Result.HighFuncs.front().RegisterCopyProjections =
+      F.med().RegisterCopyProjections;
+  EXPECT_FALSE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+}
+
+TEST(SourceRegisterCopy, StackStoreRejectsInvalidFramesAndOverwrittenSpills) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  const auto Original = F.Image;
+  for (const auto [Allocate, Release] :
+       {std::pair{0xd503201fU, 0xd503201fU},    // no frame.
+        std::pair{0xd10013ffU, 0x910013ffU},    // four bytes.
+        std::pair{0xd10023ffU, 0x910023ffU},    // eight bytes, misaligned.
+        std::pair{0x910083ffU, 0xd10083ffU},    // positive SP.
+        std::pair{0x9100001fU, 0x910083ffU}}) { // unknown SP from x0.
+    SCOPED_TRACE(Allocate);
+    F.Image = Original;
+    F.word(F.Root, Allocate);
+    F.word(F.Root + 20, Release);
+    F.run();
+    ASSERT_EQ(F.med().RegisterCopyProjections.size(), 1U);
+    EXPECT_FALSE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  }
+  F.Image = Original;
+  F.word(F.Root + 4, 0xa9007bfd); // Saved FP/LR overlap the store.
+  F.word(F.Root + 16, 0xa9407bfd);
+  F.run();
+  EXPECT_FALSE(restoresNativeSourceState(F.low(), Arch::AArch64, F.calls()));
+  EXPECT_FALSE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+}
+
+TEST(SourceRegisterCopy, StackStorePublicationRequiresCurrentExplicitEntryABI) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  const auto OriginalMed = F.med();
+  const auto OriginalHigh = F.high();
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    F.Result.MedFuncs.front() = OriginalMed;
+    F.Result.HighFuncs.front() = OriginalHigh;
+    auto &Med = F.Result.MedFuncs.front();
+    auto &High = F.Result.HighFuncs.front();
+    switch (Mutation) {
+    case 0:
+      Med.SourceTypeHint.reset();
+      break;
+    case 1:
+      High.SourceTypeHint.reset();
+      break;
+    case 2:
+      Med.SourceParametersBound = false;
+      break;
+    case 3:
+      Med.SourceTypeHint->HasExplicitABI = false;
+      break;
+    case 4:
+      High.SourceTypeHint->ReturnType = NdType::makeInt(4, false);
+      break;
+    }
+    EXPECT_FALSE(
+        sdk::sourceRegisterCopyProjectionValid(High, F.Image, F.Result));
+  }
+  F.Result.MedFuncs.front() = OriginalMed;
+  F.Result.HighFuncs.front() = OriginalHigh;
+  F.Signature.Origin = SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+  F.Signature.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())},
+                            {"_cmd", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(F.Signature, Arch::AArch64, Error));
+  F.run();
+  EXPECT_TRUE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+  F.word(F.Root + 4, 0xa9007bfd);
+  F.word(F.Root + 16, 0xa9407bfd);
+  F.run();
+  EXPECT_FALSE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+}
+
+TEST(SourceRegisterCopy, CallerStackStoreCannotDeclareAnOrdinaryLeafABI) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {F.Leaf};
+  auto Result = Pipeline().run(F.Image, F.Context, Options);
+  ASSERT_TRUE(Result.Success);
+  ASSERT_EQ(Result.HighFuncs.size(), 1U);
+  std::string Error;
+  EXPECT_FALSE(inferNativeSourceTypeHint(
+      F.Image, Result.MedFuncs.front(), Result.HighFuncs.front(),
+      Result.FunctionAudits.front(), Error, &Result.LowFuncs.front()));
+  EXPECT_NE(Error.find("caller's private stack frame"), std::string::npos);
+}
+
+TEST(SourceRegisterCopy,
+     StackStoreOutgoingAreaMustBeRewrittenAfterAConsumingCall) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  const uint32_t Body[] = {0xd10083ff,
+                           0xa9017bfd,
+                           F.branch(F.Root + 8),
+                           0x94000000u | ((0x1200 - (F.Root + 12)) / 4),
+                           0x94000000u | ((0x1200 - (F.Root + 16)) / 4),
+                           0xa9417bfd,
+                           0x910083ff,
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Body); ++I)
+    F.word(F.Root + I * 4, Body[I]);
+  F.word(0x1200, 0xd65f03c0);
+  SourceFunctionTypeHint Consume;
+  Consume.ReturnType = NdType::makeVoid();
+  Consume.Parameters = {{"tag", NdType::makeInt(8, false)},
+                        {"object", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinVariadicSourceABI(Consume, 1, Arch::AArch64, Error));
+  auto Calls = [&] {
+    auto Result = F.calls();
+    for (const auto &Block : F.low().Blocks)
+      for (const auto &Op : Block.Ops)
+        if (const auto Site = nativeSourceCallKey(Op);
+            Site && !Result.count(*Site)) {
+          NativeSourceCallContract Contract;
+          Contract.Signature = &Consume;
+          Result.emplace(*Site, Contract);
+        }
+    return Result;
+  };
+  F.run();
+  EXPECT_FALSE(restoresNativeSourceState(F.low(), Arch::AArch64, Calls()));
+  F.word(F.Root + 16, 0xd503201f); // one consumer uses the fresh write.
+  F.run();
+  EXPECT_TRUE(restoresNativeSourceState(F.low(), Arch::AArch64, Calls()));
+  F.word(F.Root + 16, F.branch(F.Root + 16)); // rewrite after consumption.
+  F.run();
+  EXPECT_TRUE(restoresNativeSourceState(F.low(), Arch::AArch64, Calls()));
+}
+
+TEST(SourceRegisterCopy,
+     StackStoreBindsFreshVariadicObjectsButCannotUndoEscape) {
+  CopyFixture F;
+  stackStoreLeaf(F);
+  constexpr auto Foundation =
+      "/System/Library/Frameworks/Foundation.framework/Foundation";
+  F.Image.DynInfo.NeededLibs = {Foundation, "/usr/lib/libobjc.A.dylib"};
+  F.Image.ObjCSourceReferences[0x2100] = {
+      ObjCSourceReference::Kind::Class, 0x2100, 8, "NSSet", {}};
+  F.Image.ImportPtrSlots[0x2100] = "_OBJC_CLASS_$_NSSet";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(0x2100, "_OBJC_CLASS_$_NSSet", 0,
+                                         Foundation, false));
+  F.Image.ObjCSourceReferences[0x2110] = {
+      ObjCSourceReference::Kind::Selector, 0x2110, 8, "setWithObjects:", {}};
+  F.Image.ImportPtrSlots[0x2180] = "_objc_msgSend";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(0x2180, "_objc_msgSend", 0,
+                                         "/usr/lib/libobjc.A.dylib", false));
+  const uint32_t Stub[] = {0xb0000001, 0xf9408821, 0xb0000010, 0xf940c210,
+                           0xd61f0200};
+  for (unsigned I = 0; I < std::size(Stub); ++I)
+    F.word(0x1280 + I * 4, Stub[I]);
+  F.word(0x1260, 0xd65f03c0);
+  const uint32_t Body[] = {0xd100c3ff,
+                           0xa9027bfd,
+                           0xa90153f3,
+                           pageAddress(F.Root + 12, 0x2100, 8),
+                           0xf9408113,
+                           0xd503201f,
+                           0xd503201f,
+                           0xaa1303e0,
+                           pageAddress(F.Root + 32, 0x2060, 2),
+                           completeAddress(2, 2, 0x2060),
+                           F.branch(F.Root + 40),
+                           0xf90007ff,
+                           0x94000000u | ((0x1280 - (F.Root + 48)) / 4),
+                           0xa94153f3,
+                           0xa9427bfd,
+                           0x9100c3ff,
+                           0xd65f03c0};
+  for (unsigned I = 0; I < std::size(Body); ++I)
+    F.word(F.Root + I * 4, Body[I]);
+  F.run();
+  const auto Hints = buildObjCSourceCallHints(F.Image, F.low());
+  const auto Found = Hints.find(F.Root + 48);
+  ASSERT_NE(Found, Hints.end());
+  ASSERT_TRUE(Found->second.NilTerminated);
+  EXPECT_EQ(Found->second.NilTerminated->Objects,
+            (std::vector<va_t>{0x2060, 0x2040}));
+  F.word(F.Root + 20, 0x910003e0); // Pass current SP to an unknown call.
+  F.word(F.Root + 24, 0x94000000u | ((0x1260 - (F.Root + 24)) / 4));
+  F.run();
+  const auto Escaped = buildObjCSourceCallHints(F.Image, F.low());
+  const auto Later = Escaped.find(F.Root + 48);
+  EXPECT_TRUE(Later == Escaped.end() || !Later->second.NilTerminated);
+  EXPECT_FALSE(
+      sdk::sourceRegisterCopyProjectionValid(F.high(), F.Image, F.Result));
+}
+
 TEST(SourceRegisterCopy, ExactConstantStringAddressesShareFreshMachineProof) {
   CopyFixture F(false, true);
   constantStrings(F);
@@ -446,6 +736,16 @@ TEST(SourceRegisterCopy, GeneratedAddressProjectionsExecuteAgainstFoundation) {
     Strings.insert(Bound.ConstantStrings.begin(), Bound.ConstantStrings.end());
     Functions.push_back(std::move(Bound.Function));
   }
+  CopyFixture Stored;
+  stackStoreLeaf(Stored);
+  ASSERT_TRUE(sdk::sourceRegisterCopyProjectionValid(
+      Stored.high(), Stored.Image, Stored.Result));
+  auto BoundStore = sdk::bindObjCSourceReferences(Stored.high(), Stored.Image);
+  ASSERT_TRUE(BoundStore.Limitation.empty()) << BoundStore.Limitation;
+  BoundStore.Function.Name = "stored_string";
+  Strings.insert(BoundStore.ConstantStrings.begin(),
+                 BoundStore.ConstantStrings.end());
+  Functions.push_back(std::move(BoundStore.Function));
   std::string Source = "#include <CoreFoundation/CoreFoundation.h>\n";
   llvm::raw_string_ostream Stream(Source);
   CEmitterOptions Options;
@@ -462,6 +762,11 @@ int main(void) {
   if (first == second) return 2;
   if (CFStringCompare(first, CFSTR("test"), 0) != kCFCompareEqualTo) return 3;
   if (CFStringCompare(second, CFSTR("file"), 0) != kCFCompareEqualTo) return 4;
+  CFStringRef stored = (CFStringRef)stored_string();
+  if (stored != first) return 5;
+  CFStringRef formatted = CFStringCreateWithFormat(0, 0, CFSTR("%@/%@"), stored, second);
+  if (!formatted || CFStringCompare(formatted, CFSTR("test/file"), 0) != kCFCompareEqualTo) return 6;
+  CFRelease(formatted);
   return 0;
 }
 )C";

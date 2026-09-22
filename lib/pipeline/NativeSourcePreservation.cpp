@@ -240,6 +240,18 @@ public:
                 Value[I] = Read(NdVar::reg(Entry->Offset, 8), I);
             Snapshots.emplace_back(Destination, Value);
           }
+          if (Copy->StackStore) {
+            const auto SP = FrameOffset(NdVar::reg(TRI.StackPointer, 8));
+            if (!SP || !sourceStackConstantStoreFitsFrame(*SP))
+              return false;
+            // A constant has no entry-register or frame-byte identity. Erase
+            // overwritten spill facts before recording the outgoing write.
+            for (unsigned I = 0; I < 8; ++I) {
+              Current.Stack.erase(*SP + I);
+              if (TrackStackArguments)
+                WrittenStack.insert(*SP + I);
+            }
+          }
           for (const auto &[Destination, Value] : Snapshots)
             for (unsigned I = 0; I < 8; ++I)
               put(Current.Registers, Destination + I, Value[I]);
@@ -582,6 +594,7 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
   if (!Count || Count > 16384 ||
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
     return false;
+  bool HasStackStore = false;
   for (const auto &[Site, Contract] : Calls) {
     if (const auto *Copy = Contract.RegisterCopy) {
       if (Architecture != Arch::AArch64 || Contract.Signature ||
@@ -590,6 +603,16 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
           Copy->Caller != Function.Entry || Copy->Site != Site ||
           Copy->Registers.empty() || Copy->Registers.size() > 16)
         return false;
+      if (Copy->StackStore) {
+        const auto &Store = *Copy->StackStore;
+        if (!Store.Value.Address || Store.InstructionIndex >= 16 ||
+            Store.InstructionIndex >= Copy->LeafWords.size() ||
+            Copy->LeafWords[Store.InstructionIndex] != Store.Word ||
+            (Store.Word & 0xffffffe0) != 0xf90003e0 || (Store.Word & 31) > 28 ||
+            (Store.Word & 31) == 18)
+          return false;
+        HasStackStore = true;
+      }
       for (const auto &[Destination, Source] : Copy->Registers) {
         if (Destination > 28 * 8 || Destination % 8 || Destination == 18 * 8)
           return false;
@@ -638,8 +661,9 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
   if (EntrySignature) {
     std::string Error;
     if (EntrySignature->Architecture != Architecture ||
-        EntrySignature->Origin !=
-            SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+        (EntrySignature->Origin !=
+             SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+         !HasStackStore) ||
         !validateSourceABI(*EntrySignature, Error))
       return false;
     for (const auto &Parameter : EntrySignature->Parameters) {

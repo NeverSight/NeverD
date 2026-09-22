@@ -60,7 +60,21 @@ std::optional<SourceRegisterCopy> leaf(const BinaryImage &Image, va_t Entry) {
     auto Allowed = [](unsigned R) { return R <= 28 && R != 18; };
     if (I == 16 || !Allowed(Dst))
       return std::nullopt;
-    if ((Word & 0xffe0ffe0) == 0xaa0003e0) {
+    if ((Word & 0xffffffe0) == 0xf90003e0) {
+      // STR Xn,[SP,#0], with one fresh complete object value at this point.
+      // The loader does not know whether the caller owns this stack slot.
+      if (Result.StackStore ||
+          Sources[Dst].TheKind != RegisterValue::CompleteAddress)
+        return std::nullopt;
+      const auto String = readObjCConstantString(Image, Sources[Dst].Value);
+      if (!String)
+        return std::nullopt;
+      Result.StackStore =
+          SourceStackConstantStore{I,
+                                   Word,
+                                   {Sources[Dst].Value, String->UTF16,
+                                    String->Units, String->ContentsAddress}};
+    } else if ((Word & 0xffe0ffe0) == 0xaa0003e0) {
       const unsigned Src = (Word >> 16) & 31;
       if (!Allowed(Src))
         return std::nullopt;
@@ -92,13 +106,20 @@ std::optional<SourceRegisterCopy> leaf(const BinaryImage &Image, va_t Entry) {
 }
 } // namespace
 
-std::optional<SourceRegisterValues>
-sourceRegisterCopyLeafRegisters(const BinaryImage &Image, va_t Entry) {
+std::optional<SourceRegisterCopy>
+sourceRegisterCopyLeafEffects(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
       Image.Bits != Bitness::Bits64 || Image.IsRelocatable)
     return std::nullopt;
-  const auto Proof = leaf(Image, Entry);
-  return Proof ? std::optional(Proof->Registers) : std::nullopt;
+  return leaf(Image, Entry);
+}
+
+std::optional<SourceRegisterValues>
+sourceRegisterCopyLeafRegisters(const BinaryImage &Image, va_t Entry) {
+  const auto Proof = sourceRegisterCopyLeafEffects(Image, Entry);
+  // A register-only query must not hide a caller-frame memory effect.
+  return Proof && !Proof->StackStore ? std::optional(Proof->Registers)
+                                     : std::nullopt;
 }
 
 SourceRegisterCopies sourceRegisterCopies(const BinaryImage &Image,

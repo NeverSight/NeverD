@@ -3,7 +3,10 @@
 
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
+#include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
+
+#include <algorithm>
 
 namespace neverd::sdk {
 class SourceRegisterCopyProjectionValidator {
@@ -47,6 +50,13 @@ public:
                                          Function.ClassGetterCallFacts)) ||
         !validateSourceRegisterCopies(Image, *Pair.Low,
                                       Function.RegisterCopyProjections))
+      return false;
+    const bool HasStore = std::any_of(
+        Function.RegisterCopyProjections.begin(),
+        Function.RegisterCopyProjections.end(),
+        [](const auto &Item) { return Item.second.StackStore.has_value(); });
+    if (HasStore &&
+        !sourceStackStoreStateContract(Image, *Pair.Low, *Pair.Med, Function))
       return false;
     std::map<SourceCallOccurrenceKey, unsigned> GetterCalls;
     for (const auto &[Site, Proof] : Function.ClassGetterCallFacts)

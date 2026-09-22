@@ -336,6 +336,17 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
             Snapshots.emplace_back(Destination, Read.Output);
             MB.Ops.push_back(std::move(Read));
           }
+          if (const auto &Store = Found->second.StackStore) {
+            MedOp Write;
+            Write.Opcode = NdOp::STORE;
+            Write.Addr = LOp.Addr;
+            Write.addInput(ndVarToMedVar(
+                NdVar::reg(getTargetRegInfo(TheArch).StackPointer, 8)));
+            Write.addInput(MedVar::makeConst(
+                Store->Value.Address, 8, ConstantAddressProvenance::DataAddress,
+                Store->Value.Address));
+            MB.Ops.push_back(std::move(Write));
+          }
           for (const auto &[Destination, Value] : Snapshots) {
             MedOp Write;
             Write.Opcode = NdOp::COPY;

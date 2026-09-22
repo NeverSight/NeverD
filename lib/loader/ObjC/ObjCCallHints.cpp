@@ -1206,6 +1206,23 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               }
               Snapshots.push_back(std::move(Copy));
             }
+            if (const auto &Store = Found->second.StackStore) {
+              const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
+              if (!Stack || Stack->TheKind != Value::Kind::Frame)
+                return std::nullopt;
+              const auto Offset = static_cast<int64_t>(Stack->Number);
+              if (!sourceStackConstantStoreFitsFrame(Offset) ||
+                  State.FrameEscaped ||
+                  !State.typedFrameRangePrivate(Offset, 8))
+                return std::nullopt;
+              State.invalidateFrameRange(Offset, 8);
+              State.invalidateTypedFrameRange(Offset, 8);
+              State.FrameSlots[{Offset, 8}] =
+                  Value{Value::Kind::Number, Store->Value.Address, {}};
+              if (State.FrameSlots.size() > 4096 ||
+                  State.TypedFrameSlots.size() > 4096)
+                return std::nullopt;
+            }
             for (auto &Copy : Snapshots) {
               for (auto It = Values.begin(); It != Values.end();)
                 if (std::get<0>(It->first) == VnodeSpace::REG &&

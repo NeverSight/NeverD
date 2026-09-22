@@ -72,6 +72,12 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     const LowFunc *Low = nullptr, bool ObserveIntegerPair = false,
     const NativeSourceCalleeContracts *CalleeContracts = nullptr);
 
+/// Recheck the complete framed machine contract of a published memory-bearing
+/// leaf projection. Requires matching current, explicit Med/High entry ABIs;
+/// this does not authenticate final source calls or dependency closure.
+bool sourceStackStoreStateContract(const BinaryImage &Image, const LowFunc &Low,
+                                   const MedFunc &Med, const HighFunc &High);
+
 /// Extend an inferred native scalar result to two complete integer words only
 /// after both registers pass the same return-path proof. The caller must have
 /// observed a use of the second word. Existing external/source declarations

@@ -7,6 +7,11 @@ namespace neverd {
 struct BinaryImage;
 struct LowFunc;
 
+/// Complete machine effects, including any caller-SP store. This authenticates
+/// the leaf only; callers must separately prove their current private frame.
+std::optional<SourceRegisterCopy>
+sourceRegisterCopyLeafEffects(const BinaryImage &Image, va_t Entry);
+
 /// Exact final-register effects of the same bounded local machine leaf.
 /// This does not qualify a caller occurrence or declare a C calling convention.
 std::optional<SourceRegisterValues>

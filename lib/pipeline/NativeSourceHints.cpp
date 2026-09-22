@@ -448,6 +448,9 @@ bool hasNativeSourceStateContract(
       *UsedEntryRegisters = std::move(Used);
     return true;
   }
+  for (const auto &[Site, Copy] : Med.RegisterCopyProjections)
+    if (Copy.StackStore)
+      return false;
   return preservesNativeSourceLeafState(*Low, Image.Arch, Calls);
 }
 
@@ -875,6 +878,27 @@ std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
   return Targets;
 }
 
+bool sourceStackStoreStateContract(const BinaryImage &Image, const LowFunc &Low,
+                                   const MedFunc &Med, const HighFunc &High) {
+  std::string Error;
+  if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
+      Image.Bits != Bitness::Bits64 || Image.IsRelocatable ||
+      Low.Entry != Med.Entry || Med.Entry != High.Entry ||
+      !Med.SourceTypeHint || !High.SourceTypeHint ||
+      !Med.SourceParametersBound || !Med.SourceTypeHint->HasExplicitABI ||
+      Med.SourceTypeHint->Architecture != Image.Arch ||
+      !equalSourceABIs(*Med.SourceTypeHint, *High.SourceTypeHint) ||
+      !validateSourceABI(*Med.SourceTypeHint, Error) ||
+      Med.RegisterCopyProjections != High.RegisterCopyProjections)
+    return false;
+  const bool HasStore = std::any_of(
+      Med.RegisterCopyProjections.begin(), Med.RegisterCopyProjections.end(),
+      [](const auto &Item) { return Item.second.StackStore.has_value(); });
+  return HasStore &&
+         hasNativeSourceStateContract(Image, &Low, Med, true, nullptr, false,
+                                      nullptr, &*Med.SourceTypeHint);
+}
+
 std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     const BinaryImage &Image, const MedFunc &Med, const HighFunc &High,
     const PipelineFunctionAudit &Audit, std::string &Diagnostic,
@@ -905,10 +929,13 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     return Reject("native source inference requires complete verified lifting");
   if (Med.SourceTypeHint || High.SourceTypeHint || Med.SourceParametersBound)
     return Reject("native function already has a source declaration");
-  if (const auto Copies = sourceRegisterCopyLeafRegisters(Image, Med.Entry))
-    for (const auto &[Destination, Source] : *Copies)
+  if (const auto Effects = sourceRegisterCopyLeafEffects(Image, Med.Entry)) {
+    if (Effects->StackStore)
+      return Reject("native leaf writes its caller's private stack frame");
+    for (const auto &[Destination, Source] : Effects->Registers)
       if (getTargetRegInfo(Image.Arch).isCallPreserved(Destination, 8))
         return Reject("native register-copy leaf has private register outputs");
+  }
   const bool NoReturn = Med.DoesNotReturn && High.DoesNotReturn &&
                         hasProvenNoReturnExit(Med, Image.Arch);
   if (Med.IsVariadic || !Med.MultiReturn.empty() || Med.FPReturnViaX87 ||
