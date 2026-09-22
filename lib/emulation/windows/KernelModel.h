@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_KERNELMODEL_H
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
+#include "DeviceLifecycle.h"
 #include "KernelDispatcher.h"
 #include "KernelFramework.h"
 #include "KernelGuestCall.h"
@@ -74,6 +75,10 @@ public:
     std::optional<uint32_t> FrameworkDispatchStatus;
     uint64_t IRP = 0;
   };
+  // PnP device enrollment: configuration identities never expose addresses.
+  llvm::Error preparePnpDevices();
+  llvm::Expected<Invocation> beginAddDevice(llvm::StringRef ID);
+  llvm::Error finishAddDevice(llvm::StringRef ID, uint32_t Status);
   /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
   llvm::Error recordDispatchReturn(uint64_t IRP, uint32_t DispatchStatus);
@@ -100,7 +105,8 @@ public:
   std::optional<uint64_t> nextEventTime() const;
   bool hasQueuedDPC() const { return Scheduler.hasQueuedDPC(); }
   bool hasQueuedPriorityCallback() const {
-    return hasQueuedDPC() || Scheduler.hasQueuedFrameworkCancel();
+    return hasQueuedDPC() || Scheduler.hasQueuedFrameworkCancel() ||
+           Scheduler.hasQueuedWDMCompletion();
   }
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
@@ -141,7 +147,7 @@ private:
   uint8_t CurrentIRQL = 0;
   std::map<uint64_t, uint64_t> WorkItems;
   std::map<uint64_t, uint64_t> WorkReferences;
-  std::map<uint64_t, uint64_t> ScheduledCancelContinuations;
+  std::map<uint64_t, GuestCallToken> ScheduledModelContinuations;
   llvm::Error processRequestCancellations();
   llvm::Expected<uint64_t> allocateWorkItem(uint64_t Device);
   llvm::Error queueWorkItem(llvm::ArrayRef<uint64_t> Arguments);
@@ -161,12 +167,16 @@ private:
   };
   std::map<uint64_t, PoolAllocation> Allocations;
   std::map<uint64_t, uint64_t> ArenaAllocations;
+  enum class DeviceOwnerKind { Guest, Provider };
   struct DeviceRecord {
     uint64_t Address = 0;
     uint64_t Extension = 0;
     uint32_t Type = 0;
     std::string Name;
     uint64_t OwnerDriver = 0;
+    DeviceOwnerKind OwnerKind = DeviceOwnerKind::Guest;
+    // Association survives detach; it is not the current attachment edge.
+    uint64_t PnpDevice = 0;
     uint64_t Lower = 0;
     uint64_t Upper = 0;
     uint64_t Size = 0;
@@ -176,6 +186,28 @@ private:
     bool DeletePending = false;
   };
   std::map<uint64_t, DeviceRecord> Devices;
+  // PnP provider identities persist after the concrete PDO is retired.
+  struct PnpDeviceRecord {
+    uint64_t PDO = 0;
+    size_t ResultIndex = 0;
+    bool BusResourceFree = false;
+    std::optional<uint32_t> AddDeviceStatus;
+    bool AddDeviceActive = false;
+    std::set<uint64_t> ExistingGuestDevices;
+    std::set<uint64_t> GuestDevices;
+  };
+  uint64_t PnpProviderDriver = 0;
+  bool PnpDevicesPrepared = false;
+  std::vector<DriverPnpDevice> ConfiguredPnpDevices;
+  std::map<std::string, PnpDeviceRecord> PnpDevices;
+  DeviceLifecycle Lifecycle;
+  bool isProviderDevice(uint64_t Address) const;
+  PnpDeviceRecord *pnpDeviceForPDO(uint64_t PDO);
+  const PnpDeviceRecord *pnpDeviceForPDO(uint64_t PDO) const;
+  llvm::Expected<uint64_t> pnpDeviceForRoute(uint64_t Device) const;
+  llvm::Error finishPnpRemoval(uint64_t PDO);
+  llvm::Error retirePnpProvider(uint64_t PDO);
+  llvm::Error snapshotPnpDevices();
   std::map<uint64_t, uint64_t> FreedRanges;
   mutable std::array<bool, 28 * 8> DispatchBytesWritten{};
   std::map<std::string, std::string> SymbolicLinks;
@@ -183,6 +215,8 @@ private:
   struct OpenFile {
     uint64_t Address = 0;
     uint64_t Device = 0;
+    /// Stable lifecycle owner even after the opened FDO is detached.
+    uint64_t PnpDevice = 0;
     FileState State = FileState::Opening;
   };
   std::map<uint32_t, OpenFile> Files;
@@ -193,6 +227,10 @@ private:
     size_t ResultIndex;
     uint64_t IRP = 0;
     uint64_t Device = 0, FileAddress = 0;
+    uint64_t PnpDevice = 0;
+    std::optional<DeviceLifecycleTicket> PnpTicket;
+    std::optional<DriverPnpOperation> PnpOperation;
+    bool LifecycleIo = false;
     uint64_t Stack = 0;
     uint8_t StackCount = 1;
     /// Immutable route holds outlive packet completion until dispatch returns.
@@ -235,6 +273,26 @@ private:
   llvm::Expected<uint32_t> requestStackCursor(uint64_t IRP) const;
   llvm::Expected<uint64_t> currentRequestStack(uint64_t IRP) const;
   llvm::Expected<uint64_t> callDriver(uint64_t Device, uint64_t IRP);
+  struct IRPCompletionStep {
+    uint32_t Slot;
+    bool Pending;
+  };
+  struct IRPCompletionPlan {
+    uint32_t StartSlot = 0;
+    std::vector<IRPCompletionStep> Steps;
+    uint64_t PC = 0, Device = 0, Context = 0;
+  };
+  llvm::Expected<IRPCompletionPlan>
+  planIRPCompletion(uint64_t IRP,
+                    std::optional<uint32_t> StatusOverride = std::nullopt) const;
+  struct ProviderCompletion {
+    uint64_t Device = 0, Deadline = 0, Sequence = 0;
+    uint32_t Status = 0;
+  };
+  uint64_t NextProviderSequence = 1;
+  std::map<uint64_t, ProviderCompletion> ProviderCompletions;
+  llvm::Expected<uint64_t> callProviderDriver(uint64_t Device, uint64_t IRP);
+  llvm::Error processProviderCompletions();
   llvm::Expected<std::optional<uint64_t>> advanceIRPCompletion(uint64_t Token);
   llvm::Expected<bool> dispatchPending(const ActiveRequest &Request,
                                        uint32_t Slot) const;
@@ -246,6 +304,9 @@ private:
   llvm::Error prepareRequestBuffers(ActiveRequest &Record,
                                     const DriverRequest &Input,
                                     uint64_t Device);
+  llvm::Expected<Invocation> beginPnpRequest(const DriverRequest &Input,
+                                             size_t ResultIndex);
+  llvm::Error finishRequestLifecycle(ActiveRequest &Request, uint32_t Status);
   llvm::Error initializeRequestPacket(ActiveRequest &Record,
                                       const DriverRequest &Input);
   struct LockedMdl {
@@ -298,6 +359,11 @@ private:
   llvm::Expected<DeviceCreation>
   createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
                      uint32_t Type, uint32_t Characteristics, bool Exclusive);
+  llvm::Expected<DeviceCreation>
+  createDeviceObjectForOwner(llvm::StringRef Name, uint32_t ExtensionSize,
+                             uint32_t Type, uint32_t Characteristics,
+                             bool Exclusive, uint64_t Owner,
+                             DeviceOwnerKind OwnerKind);
   llvm::Expected<uint32_t> createSymbolicLink(llvm::StringRef Name,
                                               llvm::StringRef Target);
   llvm::Expected<uint32_t> deleteSymbolicLink(llvm::StringRef Name);

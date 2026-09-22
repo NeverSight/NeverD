@@ -58,6 +58,9 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
   if (Status == StatusPending)
     return frameworkRequestError(
         "IoCompleteRequest cannot complete with STATUS_PENDING");
+  if (Request->Kind == DriverRequestKind::Pnp && Information)
+    return frameworkRequestError(
+        "modeled PnP operations require zero IoStatus.Information");
   // An IOCTL with no output allocation can use Information as a driver-defined
   // value. Otherwise READ/WRITE and IOCTL output retain the WDM byte limit.
   // https://learn.microsoft.com/windows-hardware/drivers/kernel/failure-to-initialize-output-buffers

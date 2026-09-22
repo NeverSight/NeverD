@@ -626,9 +626,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (Current->ChildCall) {
           auto Call = std::move(*Current->ChildCall);
           Current->ChildCall.reset();
-          auto Child = NewExecution(Call.PC, Call.Arguments,
-                                    guestCallPhase(Call.Token), Current->ID,
-                                    true);
+          auto Child =
+              NewExecution(Call.PC, Call.Arguments, guestCallPhase(Call.Token),
+                           Current->ID, true);
           if (!Child) {
             ModelFailure(Child.takeError());
             return llvm::Error::success();
@@ -670,9 +670,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
               }
               auto Call = std::move(*Parent->ChildCall);
               Parent->ChildCall.reset();
-              auto Child = NewExecution(Call.PC, Call.Arguments,
-                                        guestCallPhase(Call.Token), Parent->ID,
-                                        true);
+              auto Child =
+                  NewExecution(Call.PC, Call.Arguments,
+                               guestCallPhase(Call.Token), Parent->ID, true);
               if (!Child) {
                 ModelFailure(Child.takeError());
                 return llvm::Error::success();
@@ -694,9 +694,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             return llvm::Error::success();
           }
           if (*Continuation) {
-            auto Frame = NewExecution((**Continuation).PC,
-                                      (**Continuation).Arguments,
-                                      Current->Phase, Current->ID);
+            auto Frame =
+                NewExecution((**Continuation).PC, (**Continuation).Arguments,
+                             Current->Phase, Current->ID);
             if (!Frame) {
               ModelFailure(Frame.takeError());
               return llvm::Error::success();
@@ -712,7 +712,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         }
       }
       // Waiters retain independent stacks and CPU state. Ready passive frames
-      // yield to queued DPCs and request cancellation callbacks.
+      // yield to queued DPCs, cancellation and provider completion callbacks.
       if (auto E = RefreshWaiters()) {
         ModelFailure(std::move(E));
         return llvm::Error::success();
@@ -827,6 +827,32 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   if (Result.Stop == DriverStopReason::Returned && Result.NTStatus == 0) {
     if (auto E = DrainCallbacks())
       return std::move(E);
+    if (Result.Stop == DriverStopReason::Returned)
+      if (auto E = Kernel.preparePnpDevices())
+        ModelFailure(std::move(E));
+    for (const auto &Device : Options.PnpDevices) {
+      if (Result.Stop != DriverStopReason::Returned)
+        break;
+      Result.Phase = std::string(AddDevicePhase) + Device.ID;
+      if (DeadlineExceeded())
+        break;
+      auto Invocation = Kernel.beginAddDevice(Device.ID);
+      if (!Invocation) {
+        ModelFailure(Invocation.takeError());
+        break;
+      }
+      if (auto E = Invoke(*Invocation, Result.Phase))
+        return std::move(E);
+      if (Result.Stop != DriverStopReason::Returned)
+        break;
+      if (auto E =
+              Kernel.finishAddDevice(Device.ID, uint32_t(*InvocationReturn))) {
+        ModelFailure(std::move(E));
+        break;
+      }
+      if (auto E = DrainCallbacks())
+        return std::move(E);
+    }
     for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
       if (Result.Stop != DriverStopReason::Returned)
         break;
@@ -851,22 +877,22 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           ModelFailure(std::move(E));
           break;
         }
-        const bool Deferred = Kernel.requestPending(Invocation->IRP);
-        if (!Deferred) {
-          if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
-            ModelFailure(std::move(E));
-            break;
-          }
-        }
-        if (auto E = DrainCallbacks())
-          return std::move(E);
-        if (Result.Stop != DriverStopReason::Returned)
+      }
+      const bool Deferred = Kernel.requestPending(Invocation->IRP);
+      if (!Deferred) {
+        if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
+          ModelFailure(std::move(E));
           break;
-        if (Deferred) {
-          if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
-            ModelFailure(std::move(E));
-            break;
-          }
+        }
+      }
+      if (auto E = DrainCallbacks())
+        return std::move(E);
+      if (Result.Stop != DriverStopReason::Returned)
+        break;
+      if (Deferred) {
+        if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
+          ModelFailure(std::move(E));
+          break;
         }
       }
     }

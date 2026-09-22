@@ -59,6 +59,37 @@ bool validDeviceName(llvm::StringRef Name) {
                      [](unsigned char C) { return C >= 0x20 && C <= 0x7e; });
 }
 
+bool validDeviceID(llvm::StringRef ID) {
+  return !ID.empty() && ID.size() <= DriverScenarioDeviceIDLimit &&
+         llvm::isAlnum(ID.front()) &&
+         std::all_of(ID.begin(), ID.end(), [](unsigned char C) {
+           return llvm::isAlnum(C) || C == '_' || C == '-' || C == '.';
+         });
+}
+
+bool supportedPnpRequest(DevicePnpRequest Minor) {
+  switch (Minor) {
+#define NEVERD_DRIVER_PNP_REQUEST(Name, Spelling)                              \
+  case DevicePnpRequest::Name:                                                 \
+    return true;
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_PNP_REQUEST
+  default:
+    return false;
+  }
+}
+
+bool pnpRequestMayFail(DevicePnpRequest Minor) {
+  switch (Minor) {
+#define NEVERD_DEVICE_PNP_REQUEST(Name, Value, MayFail)                        \
+  case DevicePnpRequest::Name:                                                 \
+    return MayFail;
+#include "neverd/emulation/DeviceLifecycle.def"
+#undef NEVERD_DEVICE_PNP_REQUEST
+  }
+  return false;
+}
+
 // LLVM's object parser retains the final value of a duplicate key. Scenarios
 // reject ambiguity instead. Run this scanner only after JSON syntax validation;
 // decode each key using that same parser so escaped key aliases also collide.
@@ -112,22 +143,113 @@ llvm::Expected<uint64_t> hexNumber(llvm::StringRef Text,
   return Value;
 }
 
-llvm::Expected<uint32_t> controlCode(const llvm::json::Value &Value) {
+llvm::Expected<uint32_t> unsigned32(const llvm::json::Value &Value,
+                                    llvm::StringRef Field) {
   uint64_t Number;
   if (auto Text = Value.getAsString()) {
-    auto Parsed = hexNumber(*Text, "code");
+    auto Parsed = hexNumber(*Text, Field);
     if (!Parsed)
       return Parsed.takeError();
     Number = *Parsed;
   } else if (auto Integer = Value.getAsUINT64()) {
     Number = *Integer;
   } else {
-    return invalid(
-        "code must be an unsigned integer or a 0x hexadecimal string");
+    return invalid(Field +
+                   " must be an unsigned integer or a 0x hexadecimal string");
   }
   if (Number > UINT32_MAX)
-    return invalid("code exceeds 32 bits");
+    return invalid(Field + " exceeds 32 bits");
   return static_cast<uint32_t>(Number);
+}
+
+llvm::Expected<DriverPnpOperation>
+pnpOperation(const llvm::json::Object &Object) {
+  if (auto E = fields(
+          Object, {KindField, DeviceIDField, MinorField, BusCompletionField}))
+    return std::move(E);
+  auto Minor = Object.getString(MinorField);
+  if (!Minor)
+    return invalid("pnp minor must be a string");
+  DriverPnpOperation Result;
+  bool Found = false;
+#define NEVERD_DRIVER_PNP_REQUEST(Name, Spelling)                              \
+  if (*Minor == Spelling) {                                                    \
+    Result.Minor = DevicePnpRequest::Name;                                     \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_PNP_REQUEST
+  if (!Found)
+    return invalid("unsupported pnp minor '" + *Minor + "'");
+  const auto *Completion = Object.getObject(BusCompletionField);
+  if (!Completion)
+    return invalid("pnp bus_completion must be an explicit object");
+  if (auto E = fields(*Completion, {field::Status, field::Delay100ns}))
+    return std::move(E);
+  const auto *Status = Completion->get(field::Status);
+  if (!Status)
+    return invalid("bus_completion requires an explicit status");
+  auto ParsedStatus = unsigned32(*Status, field::Status);
+  if (!ParsedStatus)
+    return ParsedStatus.takeError();
+  Result.BusCompletion.Status = *ParsedStatus;
+  if (const auto *Delay = Completion->get(field::Delay100ns)) {
+    auto Number = Delay->getAsUINT64();
+    if (!Number)
+      return invalid("delay_100ns must be a nonnegative integer");
+    Result.BusCompletion.Delay100ns = *Number;
+  }
+  return Result;
+}
+
+llvm::Expected<std::vector<DriverPnpDevice>>
+pnpDevices(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->size() > DriverScenarioPnpDeviceLimit)
+    return invalid("pnp_devices must be a bounded array of devices");
+  std::vector<DriverPnpDevice> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each pnp_devices entry must be an object");
+    if (auto E =
+            fields(*Object, {field::ID, field::Bus, field::InitialDevicePower,
+                             field::InitialSystemPower}))
+      return std::move(E);
+    auto ID = Object->getString(field::ID);
+    auto Bus = Object->getString(field::Bus);
+    auto DevicePower = Object->getString(field::InitialDevicePower);
+    auto SystemPower = Object->getString(field::InitialSystemPower);
+    if (!ID || !Bus || !DevicePower || !SystemPower)
+      return invalid(
+          "pnp_devices entries require id, bus, initial_device_power "
+          "and initial_system_power strings");
+    DriverPnpDevice Device;
+    Device.ID = ID->str();
+    bool Found = false;
+#define NEVERD_DRIVER_BUS_KIND(Name, Spelling)                                 \
+  if (*Bus == Spelling) {                                                      \
+    Device.Bus = DriverBusKind::Name;                                          \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_BUS_KIND
+    if (!Found)
+      return invalid("unsupported pnp bus '" + *Bus + "'");
+#define NEVERD_DRIVER_DEVICE_POWER(Name, Spelling)                             \
+  if (*DevicePower == Spelling)                                                \
+    Device.InitialDevicePower = DevicePowerState::Name;
+#define NEVERD_DRIVER_SYSTEM_POWER(Name, Spelling)                             \
+  if (*SystemPower == Spelling)                                                \
+    Device.InitialSystemPower = SystemPowerState::Name;
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_DEVICE_POWER
+#undef NEVERD_DRIVER_SYSTEM_POWER
+    if (!Device.InitialDevicePower || !Device.InitialSystemPower)
+      return invalid("unknown initial PnP power state");
+    Result.push_back(std::move(Device));
+  }
+  return Result;
 }
 
 llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
@@ -156,6 +278,21 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
       return invalid("device must contain 1..512 printable ASCII bytes");
     Result.Device = Name->str();
   }
+  if (const auto *DeviceID = Object->get(DeviceIDField)) {
+    auto ID = DeviceID->getAsString();
+    if (!ID || !validDeviceID(*ID))
+      return invalid("device_id must be a bounded ASCII identifier");
+    Result.DeviceID = ID->str();
+  }
+  if (Result.Kind == DriverRequestKind::Pnp) {
+    auto Pnp = pnpOperation(*Object);
+    if (!Pnp)
+      return Pnp.takeError();
+    Result.Pnp = *Pnp;
+    return Result;
+  }
+  if (Object->get(MinorField) || Object->get(BusCompletionField))
+    return invalid("minor and bus_completion require request kind pnp");
   const bool IOCTL = Result.Kind == DriverRequestKind::DeviceControl;
   const bool Read = Result.Kind == DriverRequestKind::Read;
   const bool Write = Result.Kind == DriverRequestKind::Write;
@@ -192,7 +329,7 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     const auto *Code = Object->get(CodeField);
     if (!Code)
       return invalid("ioctl requests require code");
-    auto ParsedCode = controlCode(*Code);
+    auto ParsedCode = unsigned32(*Code, CodeField);
     if (!ParsedCode)
       return ParsedCode.takeError();
     Result.ControlCode = *ParsedCode;
@@ -281,13 +418,68 @@ registry(const llvm::json::Value &Value) {
 
 } // namespace
 
+llvm::Error validateDriverPnpOperation(const DriverPnpOperation &Operation) {
+  if (!supportedPnpRequest(Operation.Minor))
+    return invalid("unsupported pnp minor");
+  const auto &Bus = Operation.BusCompletion;
+  if (!Bus.Status)
+    return invalid("bus_completion requires an explicit status");
+  if (*Bus.Status == windows::StatusPending)
+    return invalid("bus_completion status cannot be STATUS_PENDING");
+  if (Bus.Delay100ns > INT64_MAX)
+    return invalid("delay_100ns exceeds the signed 64-bit time limit");
+  if (!pnpRequestMayFail(Operation.Minor) &&
+      (*Bus.Status & profile::NTStatusFailureMask))
+    return invalid("this pnp minor requires a successful bus completion");
+  if (devicePnpRequiresSuccess(Operation.Minor) &&
+      *Bus.Status != windows::StatusSuccess)
+    return invalid("this pnp minor requires STATUS_SUCCESS bus completion");
+  return llvm::Error::success();
+}
+
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
   if (auto E = validateDriverRegistry(Options.Registry))
     return invalid(llvm::toString(std::move(E)));
+  if (Options.PnpDevices.size() > DriverScenarioPnpDeviceLimit)
+    return invalid("pnp_devices exceeds the device count limit");
+  std::set<std::string> DeviceIDs;
+  for (const auto &Device : Options.PnpDevices) {
+    if (!validDeviceID(Device.ID))
+      return invalid("pnp device id must be a bounded ASCII identifier");
+    if (!DeviceIDs.insert(Device.ID).second)
+      return invalid("duplicate pnp device id '" + Device.ID + "'");
+    if (Device.Bus != DriverBusKind::ResourceFree)
+      return invalid("only the resource_free PnP bus is supported");
+    if (!Device.InitialDevicePower || !Device.InitialSystemPower)
+      return invalid("pnp devices require explicit initial power states");
+    if (*Device.InitialDevicePower != DevicePowerState::D0 ||
+        *Device.InitialSystemPower != SystemPowerState::Working)
+      return invalid("resource_free devices require D0 and working initial "
+                     "power states");
+  }
   if (Options.Requests.size() > DriverScenarioRequestLimit)
     return invalid("at most 64 requests are permitted");
   uint64_t Total = 0;
   for (const auto &Request : Options.Requests) {
+    if (!Request.Device.empty() && !Request.DeviceID.empty())
+      return invalid("device and device_id are mutually exclusive");
+    if (!Request.DeviceID.empty() && (!validDeviceID(Request.DeviceID) ||
+                                      !DeviceIDs.contains(Request.DeviceID)))
+      return invalid("device_id must name a configured pnp device");
+    if (Request.Kind == DriverRequestKind::Pnp) {
+      if (Request.DeviceID.empty() || !Request.Pnp)
+        return invalid("pnp requests require device_id and a PnP operation");
+      if (!Request.Device.empty() || Request.File || Request.ControlCode ||
+          !Request.Input.empty() || Request.OutputSize ||
+          !Request.DirectInput.empty() || Request.ByteOffset ||
+          Request.CancelAfter100ns)
+        return invalid("pnp requests cannot contain file or transfer fields");
+      if (auto E = validateDriverPnpOperation(*Request.Pnp))
+        return E;
+      continue;
+    }
+    if (Request.Pnp)
+      return invalid("PnP operation requires request kind pnp");
     if (Request.CancelAfter100ns) {
       if (*Request.CancelAfter100ns > INT64_MAX)
         return invalid(
@@ -362,6 +554,12 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     return invalid("root must be an object");
   if (auto E = fields(*Object, RootFields))
     return std::move(E);
+  if (const auto *Devices = Object->get(PnpDevicesField)) {
+    auto ParsedDevices = pnpDevices(*Devices);
+    if (!ParsedDevices)
+      return ParsedDevices.takeError();
+    Base.PnpDevices = std::move(*ParsedDevices);
+  }
   if (const auto *Registry = Object->get(RegistryField)) {
     auto ParsedRegistry = registry(*Registry);
     if (!ParsedRegistry)

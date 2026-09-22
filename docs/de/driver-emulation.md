@@ -60,7 +60,7 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 | READ/WRITE | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen IRPs oder WDM-Anforderungsabbrüche; `METHOD_NEITHER` und implizite Dateiposition |
 | `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
 | KMDF-1.33-Nicht-PnP-Treiber | Bindung, Objekte/Kontexte, benannte Steuergeräte, sequenzielle Standardwarteschlangen sowie gepufferte/direkte Anforderungen mit ausgeführten Callbacks | Keine PnP-Geräte, allgemeine Warteschlangenplanung, Klassenerweiterungen oder UMDF |
-| PnP-Bus-, Funktions- oder Filtertreiber | Anbindung und unterer Dispatch desselben Gasttreibers sind modelliert; PnP-Lebenszyklus fehlt | PDO-/Provider-Eigentum, AddDevice-Ausführung, PnP- und Power-IRPs |
+| PnP-Bus-, Funktions- oder Filtertreiber | Explizite ressourcenfreie PDOs, Gast-AddDevice und vier PnP-Lebenszyklusfunktionen | Weitere PnP-Vorgänge, Power-IRPs, Hardware/Ressourcen und KMDF-PnP |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
 | Work Items, Timer, DPCs, Ereignisse und Warten | Der aktuelle IRQL ist bei Dispatch und Work Items `PASSIVE_LEVEL`, bei DPCs `DISPATCH_LEVEL` | Nur die unten genannten APIs; keine gleichzeitigen IRPs oder WDM-Anforderungsabbrüche |
 | Registry-Operationen über die aufgeführten Zw-APIs | Expliziter Sitzungsbaum und Rechte pro Handle | ACLs, Privilegien, alternative Ansichten und Persistenz |
@@ -124,7 +124,29 @@ WDM-Stapel können mehrere Geräteobjekte desselben Gasttreibers enthalten. `IoA
 
 `IofCallDriver` und der Helfer `IoCallDriver` rufen das genaue Ziel auf dieser Route auf. Echte Inline-Helfer `IoCopyCurrentIrpStackLocationToNext`, `IoSkipCurrentIrpStackLocation` und `IoSetCompletionRoutine` bearbeiten das ursprüngliche Gast-IRP; Cursor, Anzahl und Steuerflags werden geprüft. Der untere Dispatch liefert seinen tatsächlichen Status unabhängig von `IoStatus` und Completion-Rückgaben. Die Abwicklung verschiebt den Cursor, wählt Callbacks nach Erfolg/Fehler/Abbruch und propagiert pending nach oben. Ein aufgerufener Completion-Callback ist selbst für diese Weitergabe verantwortlich, auch nach einer früheren Dispatch-Rückgabe `STATUS_PENDING`. `STATUS_MORE_PROCESSING_REQUIRED` hält die Abwicklung mit gültigem IRP, MDLs und Puffern an; ein späterer Abschluss setzt sie fort. Verschachtelter Abschluss erfordert das äußere Stop-Ergebnis; endgültige Abwicklung gibt Speicher genau einmal frei. Fortsetzungen mit Subsystem-Eigentümer erhalten verschachtelte WDM/WDF-Aufrufrahmen und geerbten IRQL. Jede verbrauchte untere Stackposition wird vor dem oberen Completion-Callback geleert.
 
-PDOs, Ausführung von `AddDevice`, PnP-/Power-IRPs und treiberseitig erzeugte IRPs fehlen weiterhin. WDF-Anbindung/Weiterleitung, Anbinden an Stapel mit aktiven Dateien oder Callbacks, Trennen einer mittleren Schicht, Änderung der weitergeleiteten Major-Funktion und Ziele außerhalb der gespeicherten Route scheitern ausdrücklich. Das optionale echte WDK-Fixture `driver_wdm_stack.c` verwendet `NEVERD_WDM_STACK_FIXTURE` und `NEVERD_WDM_STACK_CFG_FIXTURE`. Native und C-API/CLI-Tests umfassen Relokation; fehlende Artefakte werden sichtbar übersprungen. Ausführungsnachweise gelten nur für Linux.
+Power-IRPs, treiberseitig erzeugte IRPs, weitere PnP-Minorfunktionen und Hardware-/Ressourcenmodelle bleiben ununterstützt. WDF-Anbindung/Weiterleitung, Anbinden an Stapel mit aktiven Dateien oder Callbacks, Trennen einer mittleren Schicht, Änderung der weitergeleiteten Major-Funktion und Ziele außerhalb der gespeicherten Route scheitern ausdrücklich. Das optionale echte WDK-Fixture `driver_wdm_stack.c` verwendet `NEVERD_WDM_STACK_FIXTURE` und `NEVERD_WDM_STACK_CFG_FIXTURE`. Native und C-API/CLI-Tests umfassen Relokation; fehlende Artefakte werden sichtbar übersprungen. Ausführungsnachweise gelten nur für Linux.
+
+Ein Szenario kann bis zu 64 `pnp_devices` explizit konfigurieren. Jeder Eintrag benötigt `id`, `bus: "resource_free"`, `initial_device_power: "D0"` und `initial_system_power: "working"`; fehlende Angaben werden nicht geraten. IDs sind 1–64 ASCII-Bytes lang und unterscheiden Groß-/Kleinschreibung: zuerst ein alphanumerisches Zeichen, danach nur solche Zeichen oder `_`, `-`, `.`. Normale Anfragen können ein konfiguriertes `device_id` statt `device` auswählen, jedoch nicht beides. `kind: "pnp"` benötigt `device_id`, `minor` und `bus_completion`; unterstützt sind `start`, `query_remove`, `cancel_remove`, `remove`. `bus_completion.status` ist eine erforderliche 32-Bit-Zahl oder Hex-Zeichenfolge. Optionales `delay_100ns` ist eine nichtnegative Ganzzahl bis INT64_MAX, gemessen ab tatsächlichem Empfang beim Provider. `STATUS_PENDING` ist kein Endstatus; cancel-remove/remove erfordern exakt `STATUS_SUCCESS` (0). Datei-, Transfer- und Abbruchfelder werden bei PnP auch mit Wert null/0 abgelehnt. Dieselbe Vorprüfung gilt im C++-API.
+
+```json
+{
+  "pnp_devices": [
+    {"id": "sensor0", "bus": "resource_free", "initial_device_power": "D0", "initial_system_power": "working"}
+  ],
+  "requests": [
+    {"kind": "pnp", "device_id": "sensor0", "minor": "start", "bus_completion": {"status": "0x0", "delay_100ns": 10}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "query_remove", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "remove", "bus_completion": {"status": "0x0"}}
+  ],
+  "unload": true
+}
+```
+
+Nach erfolgreichem DriverEntry läuft `AddDevice` einmal je konfiguriertem PDO; der Provider besitzt ein separates `DRIVER_OBJECT`, das der Gast weder löschen noch imitieren darf. PnP-IRPs sind `KernelMode`, datei- und ressourcenfrei, anfänglich `STATUS_NOT_SUPPORTED`. Busantworten werden erst bei tatsächlicher Weiterleitung zum PDO verwendet; verzögerter Abschluss nutzt die gemeinsame virtuelle Uhr und Completion-Fortsetzungen. Der endgültige obere Abschluss entscheidet unabhängig vom Busstatus über Zustandsübernahme oder Rollback. PnP-Erfolg setzt tatsächlichen Providerabschluss voraus; frühe START/QUERY_REMOVE-Fehler können ohne Busbeobachtung bleiben. CREATE/Transfers erfordern Started/D0/Working; cleanup/close bleiben nach query-remove möglich. Normales Remove aus Started benötigt erfolgreiche Query, geschlossene Dateien, abgearbeitete frühere Anfragen/Callbacks und Gast-Detach/Delete. Geräte-/Dateiidentität bleibt nach Detach erhalten. Sauberer AddDevice-Fehler entfernt nur den Provider; neue Gastgeräte-Leaks, auch abgetrennte, verursachen `model_error`. Vor Unload müssen alle Provider entfernt sein. Weitere PnP-Funktionen, Power-IRPs, Hardware/Ressourcen und KMDF-PnP fehlen.
+
+`configuration.pnp_devices` erhält die Anfangskonfiguration. Beobachtete `pnp_devices` enthalten `id`, `pdo`, nullable `add_device_status`, aktuelles `attached`, `pnp_state`, `provider_present`; nach Remove ist `attached` false. AddDevice-Phasen heißen `add_device:<ID>`; Fehler beeinflussen `scenario_success`, nicht DriverEntrys `nt_status`. Anfragen ergänzen nullable `device_id` und `pnp`; PnP verwendet `file: null`. Das `pnp`-Objekt enthält `minor`, `state_before`, `state_after`, nullable `bus_status`, `bus_received_at_100ns`, `bus_completed_at_100ns`. Konfigurierter Status wird erst beim echten Busabschluss beobachtbar; Empfangszeit bleibt unabhängig. Bestehende Feldtypen ändern sich nicht.
+
+Ressourcenfreies PnP verwendet das originale echte WDK-Fixture `driver_wdm_pnp.c`, optionale `NEVERD_WDM_PNP_FIXTURE`/`NEVERD_WDM_PNP_CFG_FIXTURE` und native sowie C-API/CLI-Tests. Fehlende Artefakte werden explizit übersprungen; Ausführungsnachweise bleiben Linux-spezifisch.
 
 KMDF 1.33 verwendet die genaue ABI 1.33.0: 458 Funktionsplätze besitzen stabile Gastidentitäten; die folgenden 38 APIs haben Ausführungssemantik. `WdfVersionBind` und `WdfVersionUnbind` verwalten Gastbindungen rund um den echten WDK-Wrapper `FxDriverEntry`. `WdfGetDriver` liest die öffentlichen Treiberglobals. Nicht-PnP-Treiber, generische Objekte, Steuergeräte, Warteschlangen und eingehende Anforderungen verwenden typisierte Kontexte, Referenzzähler und ausgeführte Cleanup-/Destroy-/Unload-Callbacks. Alle modellierten Framework-Aufrufe und Callbacks erfordern derzeit `PASSIVE_LEVEL`; neue Referenzen nach abgeschlossenem Cleanup liegen weiterhin außerhalb dieses Profils. Unmodellierte Funktionsplätze, `WdfLdrQueryInterface`, Klassenerweiterungen und UMDF stoppen explizit.
 
@@ -248,9 +270,8 @@ Basisverschiebung an; ohne dieses Feld oder mit `"0x0"` gilt die bevorzugte
 Adresse. Das Image muss die Relokationsanforderungen erfüllen. Der ursprüngliche
 Initialisierungsbefehl und die C-API implizieren kein Szenario.
 
-An der Wurzel sind nur `load_address`, `requests`, `unload`, `kernel_exports` und `registry`
-erlaubt. Alle Anforderungen akzeptieren `kind`, optional `device` und optional
-`file`. IOCTLs benötigen `code` und akzeptieren `input`, `output_size` und
+An der Wurzel sind nur `load_address`, `requests`, `unload`, `kernel_exports`, `registry` und `pnp_devices`
+erlaubt. Nicht-PnP-Anforderungen akzeptieren `kind`, optional `device` oder `device_id` (gegenseitig exklusiv) und optional `file`. IOCTLs benötigen `code` und akzeptieren `input`, `output_size` und
 `direct_input`. Ein `read` akzeptiert `output_size` und `byte_offset`; ein
 `write` akzeptiert `input` und `byte_offset`. Offsets sind standardmäßig null,
 akzeptieren Ganzzahlen oder Hexadezimalzeichenfolgen und müssen in einen
@@ -419,16 +440,16 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v7`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v8`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
 Lebenszyklus. Jeder API-Aufruf und CPU-Schreibzugriff protokolliert auch seine
-Phase (`driver_entry`, `request:N`, `callback:N` oder `unload`). Jede Anforderung meldet
+Phase (`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N` oder `unload`). Jede Anforderung meldet
 Dispatch- und I/O-Status, Abschluss, den Information-Wert und zurückgegebene Bytes
 in `output_hex`. `preferred_image_base` beschreibt die ursprüngliche PE-Basis.
 `security_cookie` ist die Gastadresse des initialisierten Cookies oder `"0x0"`,
-wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `file`, `byte_offset`, `code`,
+wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`,
 `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`,
 `information_hex` und `output_hex`. `information` behält seine Zahlenform;
 `information_hex` ist eine Hexadezimalzeichenfolge mit dem Präfix `0x`, die jedes

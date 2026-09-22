@@ -28,7 +28,7 @@ namespace neverd::emulation {
 namespace {
 #define NEVERD_DEVICE_LIFECYCLE_LIMIT(Name, Value)                             \
   constexpr size_t Name = Value;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_DEVICE_LIFECYCLE_LIMIT
 
 llvm::Error lifecycleError(const llvm::Twine &Message) {
@@ -41,7 +41,7 @@ bool valid(DevicePnpRequest Request) {
 #define NEVERD_DEVICE_PNP_REQUEST(Name, Value, MayFail)                        \
   case DevicePnpRequest::Name:                                                 \
     return true;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_DEVICE_PNP_REQUEST
   }
   return false;
@@ -52,7 +52,7 @@ bool mayFail(DevicePnpRequest Request) {
 #define NEVERD_DEVICE_PNP_REQUEST(Name, Value, MayFail)                        \
   case DevicePnpRequest::Name:                                                 \
     return MayFail;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_DEVICE_PNP_REQUEST
   }
   return false;
@@ -63,7 +63,7 @@ bool valid(DevicePowerState State) {
 #define NEVERD_DEVICE_POWER_STATE(Name, Value)                                 \
   case DevicePowerState::Name:                                                 \
     return true;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_DEVICE_POWER_STATE
   }
   return false;
@@ -74,7 +74,7 @@ bool valid(SystemPowerState State) {
 #define NEVERD_SYSTEM_POWER_STATE(Name, Value)                                 \
   case SystemPowerState::Name:                                                 \
     return true;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_SYSTEM_POWER_STATE
   }
   return false;
@@ -85,7 +85,7 @@ bool valid(DevicePowerRequest Request) {
 #define NEVERD_DEVICE_POWER_REQUEST(Name, Value)                               \
   case DevicePowerRequest::Name:                                               \
     return true;
-#include "DeviceLifecycle.def"
+#include "neverd/emulation/DeviceLifecycle.def"
 #undef NEVERD_DEVICE_POWER_REQUEST
   }
   return false;
@@ -261,31 +261,44 @@ DeviceLifecycle::beginPnp(uint64_t Identity, DevicePnpRequest Request) {
   return *Ticket;
 }
 
-llvm::Error DeviceLifecycle::finishPnp(DeviceLifecycleTicket Ticket,
-                                       uint32_t Status) {
+llvm::Error DeviceLifecycle::validatePnpCompletion(DeviceLifecycleTicket Ticket,
+                                                   uint32_t Status) const {
   auto Found = lookup(Ticket.Device);
   if (!Found)
     return Found.takeError();
-  Device &D = **Found;
+  const Device &D = **Found;
   if (!D.PnpPending || D.PnpPending->Ticket != Ticket)
     return lifecycleError("stale or mismatched PnP ticket");
   if (auto E = finalStatus(Status))
     return E;
-  const PnpOperation Operation = *D.PnpPending;
   if (!succeeded(Status)) {
-    if (!mayFail(Operation.Request))
+    if (!mayFail(D.PnpPending->Request))
       return lifecycleError("this PnP request must not fail");
-    D.Pnp = Operation.Previous;
-    D.PnpPending.reset();
     return llvm::Error::success();
   }
-  if (Operation.Request == DevicePnpRequest::Remove) {
+  if (devicePnpRequiresSuccess(D.PnpPending->Request) && Status != 0)
+    return lifecycleError("this PnP request requires STATUS_SUCCESS");
+  if (D.PnpPending->Request == DevicePnpRequest::Remove) {
     if (!D.Io.empty() || D.LockReferences || D.DevicePowerPending ||
         D.SystemPowerPending)
       return lifecycleError("remove completion has outstanding operations");
     for (const auto &[Identity, Lock] : D.Locks)
       if (!Lock.Draining)
         return lifecycleError("remove completion has an undrained remove lock");
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error DeviceLifecycle::finishPnp(DeviceLifecycleTicket Ticket,
+                                       uint32_t Status) {
+  if (auto E = validatePnpCompletion(Ticket, Status))
+    return E;
+  Device &D = Devices.at(Ticket.Device);
+  const PnpOperation Operation = *D.PnpPending;
+  if (!succeeded(Status)) {
+    D.Pnp = Operation.Previous;
+    D.PnpPending.reset();
+    return llvm::Error::success();
   }
   switch (Operation.Request) {
   case DevicePnpRequest::Start:
@@ -443,13 +456,20 @@ llvm::Error DeviceLifecycle::beginIo(uint64_t Identity, uint64_t Irp) {
   return llvm::Error::success();
 }
 
-llvm::Error DeviceLifecycle::finishIo(uint64_t Identity, uint64_t Irp) {
+llvm::Error DeviceLifecycle::validateIoCompletion(uint64_t Identity,
+                                                  uint64_t Irp) const {
   auto Found = lookup(Identity);
   if (!Found)
     return Found.takeError();
-  Device &D = **Found;
-  if (!D.Io.erase(Irp))
+  if (!(**Found).Io.contains(Irp))
     return lifecycleError("IRP is not outstanding for this device");
+  return llvm::Error::success();
+}
+
+llvm::Error DeviceLifecycle::finishIo(uint64_t Identity, uint64_t Irp) {
+  if (auto E = validateIoCompletion(Identity, Irp))
+    return E;
+  Devices.at(Identity).Io.erase(Irp);
   IoOwners.erase(Irp);
   return llvm::Error::success();
 }

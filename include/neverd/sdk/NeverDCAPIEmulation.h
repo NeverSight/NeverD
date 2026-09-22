@@ -61,18 +61,25 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// ownership rules match neverd_emulate_driver_json. ScenarioJSON is required,
 /// NUL-terminated UTF-8 JSON, limited to NEVERD_DRIVER_SCENARIO_JSON_LIMIT
 /// bytes. Supported root keys: load_address (0x string), unload (boolean),
-/// requests, and kernel_exports (routine names mapped to availability
-/// booleans). Each request supplies kind
-/// (create/ioctl/read/write/cleanup/close), optional device and optional file
-/// (u32 identity, default zero). CREATE without a device selects the sole live
+/// requests, registry, pnp_devices, and kernel_exports (routine names mapped
+/// to availability booleans). Each ordinary request supplies kind
+/// (create/ioctl/read/write/cleanup/close), optional device or configured
+/// device_id, and optional file (u32 identity, default zero). CREATE without
+/// a device selector selects the sole live
 /// device; later requests use their file's device. IOCTL requires code (u32 or
 /// 0x string) and accepts input (hex bytes), output_size, and direct_input (the
 /// separate direct IOCTL buffer's initial hex bytes). READ accepts output_size
 /// and byte_offset; WRITE accepts input and byte_offset. Offsets default to
 /// zero, accept integers or 0x strings, and the entire transfer must fit
-/// nonnegative signed 64-bit file offsets. Unknown keys and malformed/excessive
-/// requests are errors. The original v1 entry point remains
-/// initialization-only.
+/// nonnegative signed 64-bit file offsets. Configured pnp_devices require a
+/// unique case-sensitive ASCII id, bus="resource_free", initial_device_power=
+/// "D0" and initial_system_power="working". A kind="pnp" request requires
+/// device_id, minor (start/query_remove/cancel_remove/remove), and
+/// bus_completion with explicit final status (u32 or 0x string) and optional
+/// nonnegative delay_100ns measured from provider receipt. Cancel-remove/remove
+/// require status zero. PnP requests forbid device, file, transfer and
+/// cancellation fields. Unknown keys and malformed/excessive requests are
+/// errors. The original v1 entry point remains initialization-only.
 NEVERD_API const char *
 neverd_emulate_driver_scenario_json(neverd_session_t Sess, const char *Path,
                                     const char *ScenarioJSON,

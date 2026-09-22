@@ -91,6 +91,9 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return stackError("IoCallDriver requires a live owned IRP");
+  if (Request->Kind == DriverRequestKind::Pnp &&
+      CurrentIRQL >= scheduler::DispatchLevel)
+    return stackError("PnP forwarding requires IRQL below DISPATCH_LEVEL");
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return stackError("cannot replace a pending guest callback");
   if (Framework && Framework->ownsRequestIRP(IRP))
@@ -124,11 +127,15 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
   if (*Major != requestMajor(Request->Kind))
     return stackError(
         "changing the request major while forwarding is unsupported");
-  auto PC = Memory.readInteger(
-      Devices.at(Device).OwnerDriver + DriverDispatchOffset + *Major * 8, 8);
+  const bool Provider = isProviderDevice(Device);
+  llvm::Expected<uint64_t> PC = Provider
+      ? llvm::Expected<uint64_t>(0)
+      : Memory.readInteger(Devices.at(Device).OwnerDriver + DriverDispatchOffset +
+                               *Major * 8,
+                           8);
   if (!PC)
     return PC.takeError();
-  if (!*PC) {
+  if (!Provider && !*PC) {
     const auto First = DispatchBytesWritten.begin() + *Major * 8;
     if (std::any_of(First, First + 8, [](bool Written) { return Written; }))
       return stackError(
@@ -144,6 +151,8 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
     return std::move(E);
   Request->Forwarded = true;
   Request->UnwoundPending[Slot].reset();
+  if (Provider)
+    return callProviderDriver(Device, IRP);
   if (!*PC) {
     if (auto E =
             Memory.writeInteger(IRP + IRPStatusOffset, InvalidDeviceRequest, 4))
@@ -179,6 +188,8 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   if (!Request || Request->Completed)
     return stackError(
         "completion requires the active IRP and cannot occur twice");
+  if (ProviderCompletions.count(IRP))
+    return stackError("provider still owns the pending IRP");
   if (PriorityBoost)
     return stackError("modeled completion supports IO_NO_INCREMENT only");
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
@@ -206,6 +217,82 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   return llvm::Error::success();
 }
 
+llvm::Expected<KernelModel::IRPCompletionPlan>
+KernelModel::planIRPCompletion(uint64_t IRP,
+                               std::optional<uint32_t> StatusOverride) const {
+  auto Cursor = requestStackCursor(IRP);
+  if (!Cursor)
+    return Cursor.takeError();
+  const auto &Request = *requestForIRP(IRP);
+  llvm::Expected<uint64_t> Status = StatusOverride
+      ? llvm::Expected<uint64_t>(*StatusOverride)
+      : Memory.readInteger(IRP + IRPStatusOffset, 4);
+  auto Cancel = Memory.readInteger(IRP + IRPCancelOffset, 1);
+  if (!Status || !Cancel)
+    return llvm::joinErrors(Status.takeError(), Cancel.takeError());
+  IRPCompletionPlan Plan;
+  Plan.StartSlot = *Cursor;
+  bool PropagatePending = false;
+  for (uint32_t Slot = *Cursor; Slot < Request.StackCount; ++Slot) {
+    const uint64_t Stack = IRP + IRPSize + Slot * StackSize;
+    auto Control = Memory.readInteger(Stack + StackControlOffset, 1);
+    auto PC = Memory.readInteger(Stack + StackCompletionOffset, 8);
+    auto Context = Memory.readInteger(Stack + StackCompletionContextOffset, 8);
+    if (!Control || !PC || !Context)
+      return llvm::joinErrors(Control.takeError(),
+          llvm::joinErrors(PC.takeError(), Context.takeError()));
+    if (*Control & ~CompletionControlMask)
+      return stackError("unsupported completion-stack control flags");
+    if ((*Control & ~StackPendingReturned) && !*PC)
+      return stackError("completion invocation flags require a callback");
+    const bool Pending = PropagatePending || (*Control & StackPendingReturned);
+    Plan.Steps.push_back({Slot, Pending});
+    const bool Success = (uint32_t(*Status) & 0x80000000U) == 0;
+    const bool Invoke = (Success && (*Control & StackInvokeOnSuccess)) ||
+                        (!Success && (*Control & StackInvokeOnError)) ||
+                        (*Cancel && (*Control & StackInvokeOnCancel));
+    if (Invoke) {
+      Plan.PC = *PC;
+      Plan.Context = *Context;
+      if (Slot + 1 < Request.StackCount) {
+        auto Upper = Memory.readInteger(Stack + StackSize + StackDeviceOffset, 8);
+        if (!Upper)
+          return Upper.takeError();
+        if (!Devices.count(*Upper) ||
+            std::find(Request.DeviceRoute.begin(), Request.DeviceRoute.end(),
+                      *Upper) == Request.DeviceRoute.end())
+          return stackError("completion lost the upper device identity");
+        Plan.Device = *Upper;
+      }
+      return Plan;
+    }
+    PropagatePending = Pending;
+  }
+  llvm::Expected<uint64_t> Information = StatusOverride
+      ? llvm::Expected<uint64_t>(0)
+      : Memory.readInteger(IRP + IRPInformationOffset, 8);
+  if (!Information)
+    return Information.takeError();
+  if (auto E = validateRequestCompletion(IRP, uint32_t(*Status), *Information))
+    return E;
+  if (Request.PnpTicket)
+    if (auto E = Lifecycle.validatePnpCompletion(*Request.PnpTicket,
+                                                 uint32_t(*Status)))
+      return E;
+  if (Request.PnpTicket && !StatusOverride &&
+      !(uint32_t(*Status) & profile::NTStatusFailureMask)) {
+    const auto &Observation = Result.Requests[Request.ResultIndex].Pnp;
+    if (!Observation || !Observation->BusReceivedAt100ns ||
+        !Observation->BusCompletedAt100ns)
+      return stackError(
+          "successful PnP completion requires actual provider completion");
+  }
+  if (Request.LifecycleIo)
+    if (auto E = Lifecycle.validateIoCompletion(Request.PnpDevice, IRP))
+      return E;
+  return Plan;
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelModel::advanceIRPCompletion(uint64_t Token) {
   auto Call = IRPCalls.find(Token);
@@ -215,84 +302,49 @@ KernelModel::advanceIRPCompletion(uint64_t Token) {
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return stackError("completion continued after packet retirement");
-  while (true) {
-    auto Cursor = requestStackCursor(IRP);
-    if (!Cursor)
-      return Cursor.takeError();
-    if (*Cursor != Call->second.Slot)
-      return stackError("completion callback changed its continuation cursor");
-    if (*Cursor == Request->StackCount) {
-      const uint64_t ReturnValue = Call->second.ReturnValue;
-      if (auto E = retireCompletedRequest(IRP, 0))
-        return std::move(E);
-      IRPCalls.erase(Call);
-      return std::optional<uint64_t>{ReturnValue};
-    }
-    const uint64_t Stack = IRP + IRPSize + *Cursor * StackSize;
-    auto Control = Memory.readInteger(Stack + StackControlOffset, 1);
-    auto PC = Memory.readInteger(Stack + StackCompletionOffset, 8);
-    auto Context = Memory.readInteger(Stack + StackCompletionContextOffset, 8);
-    auto Status = Memory.readInteger(IRP + IRPStatusOffset, 4);
-    auto Cancel = Memory.readInteger(IRP + IRPCancelOffset, 1);
-    if (!Control || !PC || !Context || !Status || !Cancel)
-      return llvm::joinErrors(
-          llvm::joinErrors(Control.takeError(), PC.takeError()),
-          llvm::joinErrors(
-              Context.takeError(),
-              llvm::joinErrors(Status.takeError(), Cancel.takeError())));
-    if (*Control & ~CompletionControlMask)
-      return stackError("unsupported completion-stack control flags");
-    const bool Pending = (*Control & StackPendingReturned) != 0;
-    const bool Success = (uint32_t(*Status) & 0x80000000U) == 0;
-    const bool Invoke = (Success && (*Control & StackInvokeOnSuccess)) ||
-                        (!Success && (*Control & StackInvokeOnError)) ||
-                        (*Cancel && (*Control & StackInvokeOnCancel));
-    if ((*Control & ~StackPendingReturned) && !*PC)
-      return stackError("completion invocation flags require a callback");
-    Request->UnwoundPending[*Cursor] = Pending;
-    // Windows clears each consumed lower location before invoking the upper
-    // completion. Preserve only callback inputs and the historical pending bit.
-    // https://learn.microsoft.com/windows-hardware/drivers/kernel/implementing-an-iocompletion-routine
+  auto Plan = planIRPCompletion(IRP);
+  if (!Plan)
+    return Plan.takeError();
+  if (Plan->StartSlot != Call->second.Slot)
+    return stackError("completion callback changed its continuation cursor");
+  for (const auto &Step : Plan->Steps) {
+    const uint64_t Stack = IRP + IRPSize + Step.Slot * StackSize;
+    Request->UnwoundPending[Step.Slot] = Step.Pending;
+    // Consume the lower slot before entering its upper completion callback.
     const std::array<uint8_t, StackSize> Cleared{};
     if (auto E = Memory.write(Stack, Cleared))
-      return std::move(E);
-    const uint32_t Next = *Cursor + 1;
-    const uint64_t NextStack = IRP + IRPSize + Next * StackSize;
-    if (auto E = Memory.writeInteger(IRP + IRPPendingOffset, Pending, 1))
-      return std::move(E);
+      return E;
+    const uint32_t Next = Step.Slot + 1;
+    const uint64_t NextStack = Stack + StackSize;
+    if (auto E = Memory.writeInteger(IRP + IRPPendingOffset, Step.Pending, 1))
+      return E;
     if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, Next + 1, 1))
-      return std::move(E);
+      return E;
     if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset, NextStack, 8))
-      return std::move(E);
+      return E;
     Call->second.Slot = Next;
-    if (Invoke) {
-      uint64_t Device = 0;
-      if (Next < Request->StackCount) {
-        auto Upper = Memory.readInteger(NextStack + StackDeviceOffset, 8);
-        if (!Upper)
-          return Upper.takeError();
-        if (!Devices.count(*Upper) ||
-            std::find(Request->DeviceRoute.begin(), Request->DeviceRoute.end(),
-                      *Upper) == Request->DeviceRoute.end())
-          return stackError("completion lost the upper device identity");
-        Device = *Upper;
-      }
-      Call->second.AwaitingCallback = true;
-      PendingWdmCall = KernelGuestCall{
-          {GuestCallOwner::WDM, Token}, *PC, {Device, IRP, *Context}};
-      return std::optional<uint64_t>{};
-    }
-    // Without a completion routine, the I/O manager propagates pending to
-    // the next slot. An invoked routine instead owns this decision itself.
-    if (Pending && Next < Request->StackCount) {
-      auto UpperControl = Memory.readInteger(NextStack + StackControlOffset, 1);
-      if (!UpperControl)
-        return UpperControl.takeError();
+    const bool Invokes = Plan->PC && Next == Plan->Steps.back().Slot + 1;
+    if (!Invokes && Step.Pending && Next < Request->StackCount) {
+      auto Control = Memory.readInteger(NextStack + StackControlOffset, 1);
+      if (!Control)
+        return Control.takeError();
       if (auto E = Memory.writeInteger(NextStack + StackControlOffset,
-                                       *UpperControl | StackPendingReturned, 1))
-        return std::move(E);
+                                       *Control | StackPendingReturned, 1))
+        return E;
     }
   }
+  if (Plan->PC) {
+    Call->second.AwaitingCallback = true;
+    PendingWdmCall = KernelGuestCall{
+        {GuestCallOwner::WDM, Token}, Plan->PC,
+        {Plan->Device, IRP, Plan->Context}};
+    return std::optional<uint64_t>{};
+  }
+  const uint64_t ReturnValue = Call->second.ReturnValue;
+  if (auto E = retireCompletedRequest(IRP, 0))
+    return E;
+  IRPCalls.erase(Call);
+  return std::optional<uint64_t>{ReturnValue};
 }
 
 llvm::Expected<std::optional<uint64_t>>

@@ -49,7 +49,8 @@ llvm::Error KernelModel::processRequestCancellations() {
     auto ID = Scheduler.enqueueFrameworkCancel(std::move(Callback));
     if (!ID)
       return ID.takeError();
-    ScheduledCancelContinuations.emplace(*ID, (**Call).Token);
+    ScheduledModelContinuations.emplace(
+        *ID, GuestCallToken{GuestCallOwner::Framework, (**Call).Token});
   }
   return llvm::Error::success();
 }
@@ -59,24 +60,28 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
   if (!Scheduler.active() || Scheduler.active()->ID != ID)
     return cancellationError(
         "callback continuation does not match active task");
-  if (Scheduler.active()->Kind !=
-      KernelScheduler::CallbackKind::FrameworkCancel)
+  const auto Kind = Scheduler.active()->Kind;
+  if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
+      Kind != KernelScheduler::CallbackKind::WDMCompletion)
     return std::optional<KernelGuestCall>{};
-  auto Token = ScheduledCancelContinuations.find(ID);
-  if (!Framework || Token == ScheduledCancelContinuations.end())
-    return cancellationError("scheduled cancellation lost its continuation");
-  auto Result = Framework->finishGuestCall(Token->second, ReturnValue);
+  auto Token = ScheduledModelContinuations.find(ID);
+  if (Token == ScheduledModelContinuations.end())
+    return cancellationError("scheduled callback lost its model continuation");
+  const auto ExpectedOwner = Kind == KernelScheduler::CallbackKind::FrameworkCancel
+                                 ? GuestCallOwner::Framework : GuestCallOwner::WDM;
+  if (Token->second.Owner != ExpectedOwner)
+    return cancellationError("scheduled callback has a foreign continuation owner");
+  auto Result = finishGuestCall(Token->second, ReturnValue);
   if (!Result)
     return Result.takeError();
   if (*Result) {
-    ScheduledCancelContinuations.erase(Token);
+    ScheduledModelContinuations.erase(Token);
     return std::optional<KernelGuestCall>{};
   }
-  auto Call = Framework->takeGuestCall();
-  if (!Call || Call->Token != Token->second)
-    return cancellationError("cancellation epilogue lost its guest callback");
-  return std::optional<KernelGuestCall>{
-      KernelGuestCall{{GuestCallOwner::Framework, Call->Token}, Call->PC,
-                     std::move(Call->Arguments)}};
+  auto Call = takeGuestCall();
+  if (!Call || Call->Token.Owner != Token->second.Owner ||
+      Call->Token.ID != Token->second.ID)
+    return cancellationError("scheduled epilogue lost its guest callback");
+  return Call;
 }
 } // namespace neverd::emulation

@@ -12,6 +12,8 @@
 #ifndef NEVERD_EMULATION_DEVICELIFECYCLE_H
 #define NEVERD_EMULATION_DEVICELIFECYCLE_H
 
+#include "neverd/emulation/DriverPnp.h"
+
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
@@ -21,32 +23,6 @@
 #include <set>
 
 namespace neverd::emulation {
-
-enum class DevicePnpState : uint8_t {
-#define NEVERD_DEVICE_PNP_STATE(Name, Value) Name = Value,
-#include "DeviceLifecycle.def"
-#undef NEVERD_DEVICE_PNP_STATE
-};
-enum class DevicePnpRequest : uint8_t {
-#define NEVERD_DEVICE_PNP_REQUEST(Name, Value, MayFail) Name = Value,
-#include "DeviceLifecycle.def"
-#undef NEVERD_DEVICE_PNP_REQUEST
-};
-enum class DevicePowerState : uint32_t {
-#define NEVERD_DEVICE_POWER_STATE(Name, Value) Name = Value,
-#include "DeviceLifecycle.def"
-#undef NEVERD_DEVICE_POWER_STATE
-};
-enum class SystemPowerState : uint32_t {
-#define NEVERD_SYSTEM_POWER_STATE(Name, Value) Name = Value,
-#include "DeviceLifecycle.def"
-#undef NEVERD_SYSTEM_POWER_STATE
-};
-enum class DevicePowerRequest : uint8_t {
-#define NEVERD_DEVICE_POWER_REQUEST(Name, Value) Name = Value,
-#include "DeviceLifecycle.def"
-#undef NEVERD_DEVICE_POWER_REQUEST
-};
 
 struct DeviceLifecycleTicket {
   uint64_t Device = 0;
@@ -92,6 +68,9 @@ public:
 
   llvm::Expected<DeviceLifecycleTicket> beginPnp(uint64_t Device,
                                                  DevicePnpRequest Request);
+  /// Validate a final completion without publishing a lifecycle transition.
+  llvm::Error validatePnpCompletion(DeviceLifecycleTicket Ticket,
+                                     uint32_t Status) const;
   llvm::Error finishPnp(DeviceLifecycleTicket Ticket, uint32_t Status);
   llvm::Expected<DeviceLifecycleTicket>
   beginDevicePower(uint64_t Device, DevicePowerRequest Request,
@@ -106,6 +85,7 @@ public:
   /// PnP/power transaction or successful power query. Existing requests may
   /// complete while stopped, sleeping, surprise-removed, or removing.
   llvm::Error beginIo(uint64_t Device, uint64_t Irp);
+  llvm::Error validateIoCompletion(uint64_t Device, uint64_t Irp) const;
   llvm::Error finishIo(uint64_t Device, uint64_t Irp);
 
   /// Remove locks have identities separate from IRPs and independently

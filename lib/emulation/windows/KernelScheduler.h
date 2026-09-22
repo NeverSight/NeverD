@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 #define NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -32,14 +33,14 @@ namespace scheduler {
 
 /// A concrete single-processor schedule, not an assertion of Windows timing or
 /// interleaving equivalence. DPCs run before framework cancellation callbacks,
-/// followed by workers at dispatch boundaries. Each queue is FIFO, except
+/// then provider completions and workers at dispatch boundaries. Each queue is FIFO, except
 /// high-importance DPCs insert at the head. No callback executes here: next()
 /// returns guest execution metadata.
 /// Virtual time advances only when no callback is ready or running. Guest API
 /// wrappers own object initialization, thread identities, and memory semantics.
 class KernelScheduler {
 public:
-  enum class CallbackKind { WorkItem, DPC, FrameworkCancel };
+  enum class CallbackKind { WorkItem, DPC, FrameworkCancel, WDMCompletion };
   enum class DpcImportance { Low = 0, Medium = 1, High = 2, MediumHigh = 3 };
 
   struct Limits {
@@ -88,6 +89,13 @@ public:
   /// An already-queued cancellation object is an explicit error.
   llvm::Expected<uint64_t> enqueueFrameworkCancel(Callback Cancellation);
   bool hasQueuedFrameworkCancel() const { return !Cancellations.empty(); }
+
+  /// Preflight a whole provider-completion batch without reserving identities
+  /// or mutating queues. The model commits without intervening guest execution.
+  llvm::Error
+  canEnqueueWDMCompletions(llvm::ArrayRef<Callback> Completions) const;
+  llvm::Expected<uint64_t> enqueueWDMCompletion(Callback Completion);
+  bool hasQueuedWDMCompletion() const { return !Completions.empty(); }
 
   /// An already-queued DPC is unchanged and returns false, as KeInsertQueueDpc.
   /// Removing a DPC does not cancel any timer that may queue it again.
@@ -150,7 +158,7 @@ public:
   uint64_t dispatchCount() const { return Dispatches; }
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const {
-    return Workers.size() + DPCs.size() + Cancellations.size();
+    return Workers.size() + DPCs.size() + Cancellations.size() + Completions.size();
   }
   size_t suspendedCallbackCount() const { return Suspended.size(); }
   const std::optional<Invocation> &active() const { return Active; }
@@ -175,6 +183,7 @@ private:
   std::deque<Invocation> Workers;
   std::deque<Invocation> DPCs;
   std::deque<Invocation> Cancellations;
+  std::deque<Invocation> Completions;
   std::optional<Invocation> Active;
   std::map<uint64_t, Invocation> Suspended;
   std::map<uint64_t, TimerState> Timers;

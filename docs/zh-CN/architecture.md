@@ -290,7 +290,9 @@ Windows 模型还管理独立的非分页池 MDL；描述符释放不会释放�
 
 `KernelModelDeviceStack` 用单一记录管理每个设备的驱动所有者、分配、上下层邻居、待删除状态和内部引用。来宾 `NextDevice` 枚举链与宿主拥有的附着图含义不同。名称解析保留具名下层设备作为 `FILE_OBJECT` 和报告身份，选择当前栈顶进行初始派发及 READ/WRITE 缓冲配置，并保存保活整条路径的引用。拆链或删除不能使请求／回调仍持有的设备失效；公开 `ReferenceCount` 仍只计算打开句柄。
 
-`KernelModelIRPStack` 管理原始来宾数据包的有界栈游标、确切目标派发和完成展开；内联 Copy/Skip/SetCompletion 写入仍是权威数据。派发状态、完成回调控制值和最终 `IoStatus` 分离，pending 可以在派发返回后传播。`STATUS_MORE_PROCESSING_REQUIRED` 保留数据包、MDL 和缓冲区，直到继续执行并到达最终展开边界；这也适用于嵌套完成。`KernelGuestCall` 携带子系统所有者和局部 token，防止 WDM／WDF 续接身份碰撞；`DriverSession` 保存 CPU 帧和继承的 IRQL。当前仅有一个来宾驱动，不提供 PDO、AddDevice／PnP／电源执行或驱动自行分配的 IRP；WDF 附着／转发、活动栈附加、中间层拆除、改变主功能及路径外目标仍不支持。 在调用上层完成回调之前，已消耗的下层栈位置会被清零。
+`KernelModelIRPStack` 管理原始来宾数据包的有界栈游标、确切目标派发和完成展开；内联 Copy/Skip/SetCompletion 写入仍是权威数据。派发状态、完成回调控制值和最终 `IoStatus` 分离，pending 可以在派发返回后传播。`STATUS_MORE_PROCESSING_REQUIRED` 保留数据包、MDL 和缓冲区，直到继续执行并到达最终展开边界；这也适用于嵌套完成。`KernelGuestCall` 携带子系统所有者和局部 token，防止 WDM／WDF 续接身份碰撞；`DriverSession` 保存 CPU 帧和继承的 IRQL。一个来宾驱动可附着于单独拥有的场景 PDO；驱动自行分配的 IRP 和电源 IRP 仍不支持。WDF 附着／转发、活动栈附加、中间层拆除、改变主功能及路径外目标仍不支持。 在调用上层完成回调之前，已消耗的下层栈位置会被清零。
+
+`DriverPnp.h` 与公开 `DeviceLifecycle.def` 统一定义生命周期枚举及场景／报告类型。`KernelModelPnpDevices` 拥有稳定 PDO 身份、独立提供者驱动清单及实际 AddDevice 观测。`KernelModelPnpRequests` 将生命周期事务和不可变设备身份关联到现有 IRP 记录，文件准入使用该身份。`KernelModelPnpCompletion` 管理实际总线接收／完成及有界虚拟期限，复用 `KernelModelIRPStack` 和带所有者标记的续接，不创建第二份数据包或虚构来宾回调。只有最终上层完成才提交生命周期。提供者退休和来宾拆链／删除是不同的所有权变化；不会静默清理泄漏的来宾设备。公开范围仅为无资源 Start/QueryRemove/CancelRemove/Remove，不代表通用 PnP、电源或 KMDF PnP。 成功 PnP 必须实际完成提供者；START/QUERY_REMOVE 的上层早期失败可保留空总线观测。设备／文件生命周期身份在拆链后仍保留。
 
 `KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、WDF 对象与上下文、控制设备初始化记录、顺序默认队列和请求句柄。其类型化设备与请求宿主接口将 WDM 命名空间、存储、数据包状态、MDL 映射及完成验证交给 `KernelModel`；双方均不创建重复的设备或 IRP。队列路由将框架拥有的分派状态与返回类型为 `void` 的来宾回调返回分开记录。完成续接流程先执行清理和子对象销毁，再释放 IRP；外部引用仅保留 WDF 上下文。删除待处理请求会在修改祖先对象之前被拒绝；删除时自动取消或排空请求仍不受支持。`DriverSession` 在共享预算下执行嵌套回调。`DriverImage` 验证 CFG 元数据；`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。PnP 设备、通用队列调度及其取消、类扩展及 UMDF 仍不受支持。
 
