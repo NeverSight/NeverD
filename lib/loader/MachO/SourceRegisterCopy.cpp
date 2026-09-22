@@ -61,19 +61,23 @@ std::optional<SourceRegisterCopy> leaf(const BinaryImage &Image, va_t Entry) {
     if (I == 16 || !Allowed(Dst))
       return std::nullopt;
     if ((Word & 0xffffffe0) == 0xf90003e0) {
-      // STR Xn,[SP,#0], with one fresh complete object value at this point.
+      // Store the value at this instruction, normalized to leaf entry.
       // The loader does not know whether the caller owns this stack slot.
       if (Result.StackStore ||
-          Sources[Dst].TheKind != RegisterValue::CompleteAddress)
+          Sources[Dst].TheKind == RegisterValue::PageAddress)
         return std::nullopt;
-      const auto String = readObjCConstantString(Image, Sources[Dst].Value);
-      if (!String)
-        return std::nullopt;
-      Result.StackStore =
-          SourceStackConstantStore{I,
-                                   Word,
-                                   {Sources[Dst].Value, String->UTF16,
-                                    String->Units, String->ContentsAddress}};
+      SourceRegisterValue Value;
+      if (Sources[Dst].TheKind == RegisterValue::EntryRegister) {
+        Value = SourceEntryRegister{Sources[Dst].Value};
+      } else {
+        const auto String = readObjCConstantString(Image, Sources[Dst].Value);
+        if (!String)
+          return std::nullopt;
+        Value =
+            SourceConstantStringAddress{Sources[Dst].Value, String->UTF16,
+                                        String->Units, String->ContentsAddress};
+      }
+      Result.StackStore = SourceStackStore{I, Word, std::move(Value)};
     } else if ((Word & 0xffe0ffe0) == 0xaa0003e0) {
       const unsigned Src = (Word >> 16) & 31;
       if (!Allowed(Src))

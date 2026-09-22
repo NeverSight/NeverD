@@ -349,8 +349,8 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
       Value = HighExpr::makeRecordField(Value, Binding.ByteOffset,
                                         Binding.Type->Size);
     if (Binding.Type->Kind == NdTypeKind::Float)
-      return HighExpr::makeBitCast(Value,
-                                   NdType::makeInt(Binding.Type->Size, false));
+      Value = HighExpr::makeBitCast(Value,
+                                    NdType::makeInt(Binding.Type->Size, false));
     if (Binding.Location.ExtendTo32Bits && V.Size > Binding.Type->Size) {
       // Keep the logical parameter type while exposing only the carrier bytes
       // established by its source ABI. Wider machine reads still have an
@@ -359,7 +359,10 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
           Binding.Type->IsSigned ? NdOp::INT_SEXT : NdOp::INT_ZEXT, Value);
       Value->Type = NdType::makeInt(std::min<uint16_t>(4, V.Size), false);
     }
-    return Value;
+    // A physical read keeps its requested width, including unknown bytes
+    // outside the declared ABI carrier. Preserve those bytes before COPY,
+    // PHI, or STORE lowering can turn a narrow expression into a C conversion.
+    return sourceBitSlice(Value, 0, V.Size);
   };
   // Typed MedIR parameter IDs index physical source-ABI bindings, including
   // context registers and record leaves. Ordinary argument-register numbering

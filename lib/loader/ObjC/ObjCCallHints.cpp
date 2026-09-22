@@ -1211,14 +1211,36 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               if (!Stack || Stack->TheKind != Value::Kind::Frame)
                 return std::nullopt;
               const auto Offset = static_cast<int64_t>(Stack->Number);
-              if (!sourceStackConstantStoreFitsFrame(Offset) ||
-                  State.FrameEscaped ||
+              if (!sourceStackStoreFitsFrame(Offset) || State.FrameEscaped ||
                   !State.typedFrameRangePrivate(Offset, 8))
                 return std::nullopt;
+              std::optional<Value> Stored;
+              if (const auto *Entry =
+                      std::get_if<SourceEntryRegister>(&Store->Value)) {
+                const auto Input = NdVar::reg(Entry->Offset, 8);
+                if (State.mayBeFrame(Input) || CopiedBlockInput(Input))
+                  return std::nullopt;
+                Stored = Read(Input);
+                if (Stored && Stored->Block)
+                  return std::nullopt;
+                if (Stored && Stored->TheKind != Value::Kind::Number &&
+                    Stored->TheKind != Value::Kind::Receiver &&
+                    Stored->TheKind != Value::Kind::SourceParameter)
+                  Stored.reset();
+              } else {
+                Stored = Value{
+                    Value::Kind::Number,
+                    std::get<SourceConstantStringAddress>(Store->Value).Address,
+                    {}};
+              }
               State.invalidateFrameRange(Offset, 8);
               State.invalidateTypedFrameRange(Offset, 8);
-              State.FrameSlots[{Offset, 8}] =
-                  Value{Value::Kind::Number, Store->Value.Address, {}};
+              if (Stored) {
+                State.FrameSlots[{Offset, 8}] = *Stored;
+                if (Stored->TheKind == Value::Kind::Receiver ||
+                    Stored->TheKind == Value::Kind::SourceParameter)
+                  State.TypedFrameSlots[{Offset, 8}] = *Stored;
+              }
               if (State.FrameSlots.size() > 4096 ||
                   State.TypedFrameSlots.size() > 4096)
                 return std::nullopt;

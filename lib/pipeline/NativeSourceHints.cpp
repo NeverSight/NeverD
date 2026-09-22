@@ -154,7 +154,12 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
         return {};
       if (const auto Site = sourceCallOccurrenceKey(Op); Site) {
         const auto Copy = Med.RegisterCopyProjections.find(*Site);
-        if (Copy != Med.RegisterCopyProjections.end())
+        if (Copy != Med.RegisterCopyProjections.end()) {
+          if (Copy->second.StackStore)
+            if (const auto *Entry = std::get_if<SourceEntryRegister>(
+                    &Copy->second.StackStore->Value);
+                Entry && Observed->count(Entry->Offset))
+              Reads.insert(Entry->Offset);
           for (const auto &[Destination, Source] : Copy->second.Registers) {
             if (const auto *Entry = std::get_if<SourceEntryRegister>(&Source);
                 Entry && Observed->count(Entry->Offset))
@@ -162,6 +167,7 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
             if (TRI.isCallPreserved(Destination, 8))
               WrittenPreserved.insert(Destination);
           }
+        }
       }
       const auto &Output = Op.Output;
       if (Output.isReg() && Output.Size &&

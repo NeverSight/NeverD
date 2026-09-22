@@ -232,22 +232,27 @@ public:
           if (Read(Op.Inputs[0], I).MayBeFrame)
             return false;
         if (const auto *Copy = Found->second.RegisterCopy) {
-          std::vector<std::pair<uint64_t, std::array<ByteFact, 8>>> Snapshots;
-          for (const auto &[Destination, Source] : Copy->Registers) {
+          auto SnapshotValue = [&](const SourceRegisterValue &Source) {
             std::array<ByteFact, 8> Value{};
             if (const auto *Entry = std::get_if<SourceEntryRegister>(&Source))
               for (unsigned I = 0; I < 8; ++I)
                 Value[I] = Read(NdVar::reg(Entry->Offset, 8), I);
-            Snapshots.emplace_back(Destination, Value);
-          }
+            return Value;
+          };
+          std::vector<std::pair<uint64_t, std::array<ByteFact, 8>>> Snapshots;
+          for (const auto &[Destination, Source] : Copy->Registers)
+            Snapshots.emplace_back(Destination, SnapshotValue(Source));
           if (Copy->StackStore) {
             const auto SP = FrameOffset(NdVar::reg(TRI.StackPointer, 8));
-            if (!SP || !sourceStackConstantStoreFitsFrame(*SP))
+            const auto Value = SnapshotValue(Copy->StackStore->Value);
+            if (!SP || !sourceStackStoreFitsFrame(*SP) ||
+                std::any_of(Value.begin(), Value.end(),
+                            [](const auto &Byte) { return Byte.MayBeFrame; }))
               return false;
-            // A constant has no entry-register or frame-byte identity. Erase
-            // overwritten spill facts before recording the outgoing write.
+            // A physical write replaces every old spill byte. Unknown source
+            // bytes remain unknown; WrittenStack does not define their value.
             for (unsigned I = 0; I < 8; ++I) {
-              Current.Stack.erase(*SP + I);
+              put(Current.Stack, *SP + I, Value[I]);
               if (TrackStackArguments)
                 WrittenStack.insert(*SP + I);
             }
@@ -311,6 +316,21 @@ public:
               if (!WrittenStack.count(Start + I) ||
                   lookup(Current.Stack, Start + I).MayBeFrame)
                 return false;
+            if (UsedEntryRegisters && ReturningArgument &&
+                Location.ValueBytes == 8) {
+              const auto First = lookup(Current.Stack, Start);
+              if (First.TheKind == ByteFact::Entry && First.Value >= 0 &&
+                  First.Value <= 28 * 8 && First.Value % 8 == 0 &&
+                  First.Value != 18 * 8) {
+                bool Complete = true;
+                for (unsigned I = 0; I < 8; ++I)
+                  Complete &= lookup(Current.Stack, Start + I) ==
+                              ByteFact{ByteFact::Entry, First.Value + I};
+                if (Complete)
+                  UsedEntryRegisters->insert(
+                      static_cast<uint64_t>(First.Value));
+              }
+            }
             // AAPCS64 permits the callee to overwrite its incoming argument
             // area. A by-value argument does not lend a frame pointer, but its
             // complete area, including padding before/between parameters,
@@ -605,12 +625,21 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
         return false;
       if (Copy->StackStore) {
         const auto &Store = *Copy->StackStore;
-        if (!Store.Value.Address || Store.InstructionIndex >= 16 ||
+        if (Store.InstructionIndex >= 16 ||
             Store.InstructionIndex >= Copy->LeafWords.size() ||
             Copy->LeafWords[Store.InstructionIndex] != Store.Word ||
             (Store.Word & 0xffffffe0) != 0xf90003e0 || (Store.Word & 31) > 28 ||
             (Store.Word & 31) == 18)
           return false;
+        if (const auto *Entry =
+                std::get_if<SourceEntryRegister>(&Store.Value)) {
+          if (Entry->Offset > 28 * 8 || Entry->Offset % 8 ||
+              Entry->Offset == 18 * 8)
+            return false;
+        } else if (!std::get<SourceConstantStringAddress>(Store.Value)
+                        .Address) {
+          return false;
+        }
         HasStackStore = true;
       }
       for (const auto &[Destination, Source] : Copy->Registers) {

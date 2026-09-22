@@ -313,17 +313,12 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         if (Found != Func.RegisterCopyProjections.end()) {
           // All normalized sources refer to leaf entry, including when a
           // sequence temporarily uses another destination as scratch.
-          std::vector<std::pair<uint64_t, MedVar>> Snapshots;
-          for (const auto &[Destination, Source] : Found->second.Registers) {
+          auto SnapshotValue = [&](const SourceRegisterValue &Source) {
             if (const auto *Address =
-                    std::get_if<SourceConstantStringAddress>(&Source)) {
-              Snapshots.emplace_back(
-                  Destination,
-                  MedVar::makeConst(Address->Address, 8,
-                                    ConstantAddressProvenance::DataAddress,
-                                    Address->Address));
-              continue;
-            }
+                    std::get_if<SourceConstantStringAddress>(&Source))
+              return MedVar::makeConst(Address->Address, 8,
+                                       ConstantAddressProvenance::DataAddress,
+                                       Address->Address);
             MedOp Read;
             Read.Opcode = NdOp::COPY;
             Read.Addr = LOp.Addr;
@@ -333,18 +328,21 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
             Read.Output.TheArch = TheArch;
             Read.addInput(ndVarToMedVar(
                 NdVar::reg(std::get<SourceEntryRegister>(Source).Offset, 8)));
-            Snapshots.emplace_back(Destination, Read.Output);
+            const auto Value = Read.Output;
             MB.Ops.push_back(std::move(Read));
-          }
+            return Value;
+          };
+          std::vector<std::pair<uint64_t, MedVar>> Snapshots;
+          for (const auto &[Destination, Source] : Found->second.Registers)
+            Snapshots.emplace_back(Destination, SnapshotValue(Source));
           if (const auto &Store = Found->second.StackStore) {
+            const auto Value = SnapshotValue(Store->Value);
             MedOp Write;
             Write.Opcode = NdOp::STORE;
             Write.Addr = LOp.Addr;
             Write.addInput(ndVarToMedVar(
                 NdVar::reg(getTargetRegInfo(TheArch).StackPointer, 8)));
-            Write.addInput(MedVar::makeConst(
-                Store->Value.Address, 8, ConstantAddressProvenance::DataAddress,
-                Store->Value.Address));
+            Write.addInput(Value);
             MB.Ops.push_back(std::move(Write));
           }
           for (const auto &[Destination, Value] : Snapshots) {

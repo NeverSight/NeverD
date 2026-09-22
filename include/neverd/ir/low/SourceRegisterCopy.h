@@ -27,16 +27,16 @@ using SourceRegisterValues = std::map<uint64_t, SourceRegisterValue>;
 
 /// One eight-byte STR to the leaf-entry SP. Keep the store-time value even
 /// when a later instruction changes the source register.
-struct SourceStackConstantStore {
+struct SourceStackStore {
   unsigned InstructionIndex = 0;
   uint32_t Word = 0;
-  SourceConstantStringAddress Value;
-  bool operator==(const SourceStackConstantStore &) const = default;
+  SourceRegisterValue Value;
+  bool operator==(const SourceStackStore &) const = default;
 };
 
 /// Shared bound for a known current SP relative to this invocation's entry.
 /// This never authorizes borrowing a future allocation or an escaped frame.
-inline bool sourceStackConstantStoreFitsFrame(int64_t SP) {
+inline bool sourceStackStoreFitsFrame(int64_t SP) {
   return SP >= -(1 << 20) && SP <= -8 && SP % 16 == 0;
 }
 
@@ -51,7 +51,7 @@ struct SourceRegisterCopy {
   uint32_t CallWord = 0;
   std::vector<uint32_t> LeafWords;
   SourceRegisterValues Registers;
-  std::optional<SourceStackConstantStore> StackStore;
+  std::optional<SourceStackStore> StackStore;
 
   bool operator==(const SourceRegisterCopy &) const = default;
 };

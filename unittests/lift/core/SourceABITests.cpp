@@ -1853,6 +1853,180 @@ TEST(SourceABI, NarrowParametersPreserveKnownBytesThroughWideCopies) {
   }
 }
 
+TEST(SourceABI, PhysicalStoresPreserveUnknownParameterCarrierBytes) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const uint16_t ParameterBytes : {1, 2, 4, 8})
+      for (const bool Signed : {false, true})
+        for (const bool Saved : {false, true})
+          for (const uint16_t StoreBytes : {1, 4, 8}) {
+            SCOPED_TRACE(static_cast<unsigned>(Architecture));
+            SCOPED_TRACE(ParameterBytes);
+            SCOPED_TRACE(Signed);
+            SCOPED_TRACE(Saved);
+            SCOPED_TRACE(StoreBytes);
+            const auto &TRI = getTargetRegInfo(Architecture);
+            LowFunc Low;
+            Low.Entry = 0x1200;
+            Low.Name = "store_parameter";
+            LowBlock Block;
+            Block.Id = 0;
+            Block.StartAddr = Low.Entry;
+            Block.EndAddr = Low.Entry + 12;
+            uint64_t ValueRegister = TRI.IntParamRegs[0];
+            if (Saved) {
+              LowOp Copy;
+              Copy.Opcode = NdOp::COPY;
+              Copy.Addr = Low.Entry;
+              Copy.Output = NdVar::reg(TRI.CalleeSaveRegs.front(), 8);
+              Copy.addInput(NdVar::reg(ValueRegister, 8));
+              Block.Ops.push_back(Copy);
+              ValueRegister = Copy.Output.Offset;
+            }
+            LowOp Store;
+            Store.Opcode = NdOp::STORE;
+            Store.Addr = Low.Entry + 4;
+            Store.addInput(NdVar::reg(TRI.IntParamRegs[1], 8));
+            Store.addInput(NdVar::reg(ValueRegister, StoreBytes));
+            Block.Ops.push_back(Store);
+            LowOp Return;
+            Return.Opcode = NdOp::RETURN;
+            Return.Addr = Low.Entry + 8;
+            Block.Ops.push_back(Return);
+            Low.Blocks.push_back(Block);
+            SourceFunctionTypeHint Hint;
+            Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+            Hint.ReturnType = NdType::makeVoid();
+            Hint.Parameters = {
+                {"value", NdType::makeInt(ParameterBytes, Signed)},
+                {"destination", NdType::makePtr(NdType::makeInt(StoreBytes))}};
+            std::string Error;
+            ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error));
+            LowToMedConverter Converter;
+            auto Med =
+                Converter.convert(Low, Architecture, BinaryFormat::MachO);
+            recoverCallAbi(Med, Architecture, {});
+            Med.SourceTypeHint = Hint;
+            inferMedTypes(Med, Architecture);
+            ASSERT_TRUE(Med.SourceTypeHint);
+            const auto High = MedToHighConverter().convert(Med, Architecture);
+            unsigned Stores = 0;
+            bool Unknown = false;
+            auto ContainsUnknown = [&](auto &&Self, const ExprPtr &E) -> bool {
+              if (!E)
+                return false;
+              if (E->Kind == ExprKind::Undef)
+                return true;
+              return std::any_of(
+                  E->Operands.begin(), E->Operands.end(),
+                  [&](const auto &Input) { return Self(Self, Input); });
+            };
+            walkStmts(High.Body, [&](const HighStmt &Statement) {
+              if (Statement.Kind != StmtKind::Store)
+                return;
+              ++Stores;
+              ASSERT_TRUE(Statement.StoreVal && Statement.StoreVal->Type);
+              EXPECT_EQ(Statement.StoreVal->Type->Size, StoreBytes);
+              Unknown |= ContainsUnknown(ContainsUnknown, Statement.StoreVal);
+            });
+            EXPECT_EQ(Stores, 1U);
+            EXPECT_EQ(Unknown,
+                      StoreBytes > std::max<uint16_t>(4, ParameterBytes));
+          }
+}
+
+TEST(SourceABI, PhysicalParameterReadsKeepUnknownBytesAcrossPhiEdges) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const bool Floating : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Floating);
+      SourceFunctionTypeHint Hint;
+      Hint.ReturnType = NdType::makeVoid();
+      Hint.Parameters = {{"value", Floating ? NdType::makeFloat(4)
+                                            : NdType::makeInt(4, false)},
+                         {"condition", NdType::makeInt(8, false)},
+                         {"destination", NdType::makePtr(NdType::makeInt(8))}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Error));
+      auto Parameter = [&](unsigned Index) {
+        MedVar V;
+        V.Kind = MedVar::Param;
+        V.Id = Index;
+        V.Size = 8;
+        V.RegOff = Hint.Parameters[Index].Location.RegisterOffset;
+        V.TheArch = Architecture;
+        return V;
+      };
+      auto Operation = [](NdOp Opcode, MedVar Output,
+                          std::initializer_list<MedVar> Inputs) {
+        MedOp Op;
+        Op.Opcode = Opcode;
+        Op.Output = Output;
+        for (const auto &Input : Inputs)
+          Op.addInput(Input);
+        return Op;
+      };
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.SourceTypeHint = Hint;
+      Function.SourceParametersBound = true;
+      for (unsigned I = 0; I != 3; ++I) {
+        Function.Params.push_back(Parameter(I));
+        Function.TypedParams.push_back(
+            {Hint.Parameters[I].Name, Hint.Parameters[I].Type});
+      }
+      Function.Blocks.resize(4);
+      for (unsigned I = 0; I != 4; ++I) {
+        Function.Blocks[I].Id = I;
+        Function.Blocks[I].StartAddr = 0x1000 + I * 16;
+      }
+      Function.Blocks[0].Succs = {1, 2};
+      Function.Blocks[0].Ops = {Operation(
+          NdOp::COND_BR, {}, {MedVar::makeConst(0x1020, 8), Parameter(1)})};
+      for (unsigned I : {1, 2}) {
+        Function.Blocks[I].Preds = {0};
+        Function.Blocks[I].Succs = {3};
+        Function.Blocks[I].Ops = {
+            Operation(NdOp::BRANCH, {}, {MedVar::makeConst(0x1030, 8)})};
+      }
+      PhiNode Phi;
+      Phi.Output.Kind = MedVar::Temp;
+      Phi.Output.Id = 10;
+      Phi.Output.Size = 8;
+      Phi.Args = {{1, Parameter(0)}, {2, MedVar::makeConst(42, 8)}};
+      auto &Join = Function.Blocks[3];
+      Join.Preds = {1, 2};
+      Join.Phis = {Phi};
+      Join.Ops = {Operation(NdOp::STORE, {}, {Parameter(2), Phi.Output}),
+                  Operation(NdOp::RETURN, {}, {})};
+      const auto High = MedToHighConverter().convert(Function, Architecture);
+      unsigned PhiCopies = 0, UnknownEdges = 0, Stores = 0;
+      walkStmts(High.Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind == StmtKind::Store) {
+          ++Stores;
+          ASSERT_TRUE(Statement.StoreVal && Statement.StoreVal->Type);
+          EXPECT_EQ(Statement.StoreVal->Type->Size, 8U);
+        }
+        if (!Statement.IsPhiCopy)
+          return;
+        ++PhiCopies;
+        EXPECT_TRUE(Statement.Val && Statement.Val->Type &&
+                    Statement.Val->Type->Size == 8);
+        auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+          if (!E)
+            return;
+          if (E->Kind == ExprKind::Undef)
+            ++UnknownEdges;
+          for (const auto &Input : E->Operands)
+            Self(Self, Input);
+        };
+        Visit(Visit, Statement.Val);
+      });
+      EXPECT_EQ(PhiCopies, 2U);
+      EXPECT_EQ(Stores, 1U);
+      EXPECT_GT(UnknownEdges, 0U);
+    }
+}
+
 TEST(SourceABI, UnsupportedArithmeticNeverManufacturesAZeroResult) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
