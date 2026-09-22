@@ -3,6 +3,7 @@
 
 #include "../../loader/MachO/DarwinRuntimeImport.h"
 #include "../../loader/MachO/MachOLocalFunction.h"
+#include "../../loader/ObjC/ObjCClassAccessorMachine.h"
 #include "../../pipeline/NativeSourcePreservation.h"
 #include "ObjCSourceBindings.h"
 
@@ -198,36 +199,17 @@ validatedClassAccessor(const BinaryImage &Image, const PipelineResult &Result,
       Image.IsRelocatable ||
       !objc::RuntimeData(Image).supportsPlainObjectPointers())
     return std::nullopt;
-  const auto ImmutableBytes = readImmutableCodeBytes(Image, Entry, 32);
-  const auto *AccessorBytes = ImmutableBytes ? ImmutableBytes->data() : nullptr;
+  const auto Machine = objcClassAccessorMachine(Image, Entry);
   const auto *AccessorLow = completeLow(Result, Entry, 8);
   const auto *AccessorHigh = uniqueEntry(Result.HighFuncs, Entry);
-  if (!AccessorBytes || !AccessorLow || !AccessorHigh ||
+  if (!Machine || !AccessorLow || !AccessorHigh ||
       !AccessorHigh->SourceTypeHint || AccessorHigh->DoesNotReturn ||
       AccessorHigh->StructuredExceptionRegions ||
       AccessorHigh->UnstructuredExceptionRegions ||
       !AccessorHigh->Params.empty())
     return std::nullopt;
-  const auto AccessorWord = [&](unsigned I) {
-    return llvm::support::endian::read32le(AccessorBytes + I * 4);
-  };
-  if (AccessorWord(0) != 0xa9bf7bfd || AccessorWord(1) != 0x910003fd ||
-      AccessorWord(5) != 0xd2800001 || AccessorWord(6) != 0xa8c17bfd ||
-      AccessorWord(7) != 0xd65f03c0)
-    return std::nullopt;
-  const auto ClassAddress =
-      pageAddress(AccessorWord(2), AccessorWord(3), Entry + 8, 0);
-  const auto SelfTarget = branch(AccessorWord(4), Entry + 16, true);
-  const auto SelfSlot = SelfTarget
-                            ? runtimeSlot(Image, *SelfTarget, "_objc_opt_self")
-                            : std::nullopt;
-  const auto SelfHint =
-      SelfSlot ? objcRuntimeSourceCallHint(Image, *SelfSlot) : std::nullopt;
-  if (!ClassAddress || !SelfTarget || !SelfHint ||
-      !readImmutableCodeBytes(Image, *SelfTarget, 12))
-    return std::nullopt;
   const auto Classes = objc_binding_detail::classObjectIdentities(Image);
-  const auto ClassIdentity = Classes.find(*ClassAddress);
+  const auto ClassIdentity = Classes.find(Machine->ClassAddress);
   if (ClassIdentity == Classes.end() ||
       ClassIdentity->second.Kind != SourceCallTypeHint::Kind::RuntimeClass)
     return std::nullopt;
@@ -244,9 +226,10 @@ validatedClassAccessor(const BinaryImage &Image, const PipelineResult &Result,
   std::string Error;
   if (!assignDarwinScalarSourceABI(Expected, Arch::AArch64, Error) ||
       !equalSourceABIs(Signature, Expected) ||
-      !callsRestore(*AccessorLow, Entry + 16, *SelfTarget, SelfHint->Signature))
+      !callsRestore(*AccessorLow, Entry + 16, Machine->SelfTarget,
+                    Machine->SelfCall.Signature))
     return std::nullopt;
-  return ObjCClassAccessorContract{Entry, *ClassAddress, Signature};
+  return ObjCClassAccessorContract{Entry, Machine->ClassAddress, Signature};
 }
 
 inline std::optional<ObjCSuperGetterContract>

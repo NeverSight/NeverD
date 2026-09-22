@@ -1,3 +1,4 @@
+#include "../../../lib/loader/ObjC/ObjCClassAccessorMachine.h"
 #include "../../../lib/loader/Swift/SwiftBooleanProjection.h"
 #include "gtest/gtest.h"
 
@@ -495,4 +496,134 @@ TEST(SwiftBooleanProjection,
   F.Image.ImportPtrSlots.erase(ReleaseSlot);
   F.Image.DyldBindSlots.erase(ReleaseSlot);
   EXPECT_FALSE(F.qualify());
+}
+
+namespace {
+void addClassAccessor(ProjectionFixture &F) {
+  F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+  F.Image.ImportPtrSlots[Slot + 8] = "_objc_opt_self";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(Slot + 8, "_objc_opt_self", 0,
+                                         "/usr/lib/libobjc.A.dylib", false));
+  F.word(0x1020, 0xb0000010);
+  F.word(0x1024, 0xf9404610);
+  F.word(0x1028, 0xd61f0200);
+  const uint32_t Body[] = {0xa9bf7bfd, 0x910003fd, 0xf0ffffe0, 0x91140000,
+                           0x97fff7f4, 0xd2800001, 0xa8c17bfd, 0xd65f03c0};
+  for (unsigned I = 0; I != std::size(Body); ++I)
+    F.word(0x3040 + 4 * I, Body[I]);
+}
+} // namespace
+
+TEST(ObjCClassAccessorMachine, ProvesUnusedInputsAndFullPointerResultOnly) {
+  ProjectionFixture F;
+  addClassAccessor(F);
+  auto M = objcClassAccessorMachine(F.Image, 0x3040);
+  ASSERT_TRUE(M);
+  EXPECT_EQ(M->ClassAddress, 0x2500U);
+  EXPECT_EQ(M->SelfTarget, 0x1020U);
+  EXPECT_EQ(M->SelfCall.TargetAddress, Slot + 8);
+  EXPECT_TRUE(M->Signature.Parameters.empty());
+  EXPECT_EQ(M->Signature.ReturnType->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(M->Signature.ReturnLocation.ValueBytes, 8U);
+  EXPECT_EQ(M->Signature.ReturnLocation.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).IntReturnReg);
+  // This fixture has no class identity at 0x2500. Machine ABI facts cannot
+  // authenticate that address as a source-rebuildable runtime object.
+  EXPECT_EQ(F.Image.ObjCClasses.size(), 0U);
+}
+
+TEST(ObjCClassAccessorMachine, RejectsChangedInstructionsProviderAndStorage) {
+  for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ProjectionFixture F;
+    addClassAccessor(F);
+    va_t Entry = 0x3040;
+    switch (Mutation) {
+    case 0:
+      F.word(Entry, 0xa9bf7bfc);
+      break;
+    case 1:
+      F.word(Entry + 4, 0x910003fc);
+      break;
+    case 2:
+      F.word(Entry + 8, 0xf0ffffe1);
+      break;
+    case 3:
+      F.word(Entry + 12, 0x91540000);
+      break;
+    case 4:
+      F.word(Entry + 16, 0x17fff7f4);
+      break;
+    case 5:
+      F.word(Entry + 20, 0xd2800000);
+      break;
+    case 6:
+      F.word(Entry + 24, 0xa8c17bfc);
+      break;
+    case 7:
+      F.word(Entry + 28, 0xd65f0000);
+      break;
+    case 8:
+      F.Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
+      break;
+    case 9:
+      F.Image.ImportPtrSlots[Slot + 8] = "_objc_release";
+      break;
+    case 10:
+      F.word(0x1028, 0xd61f0220);
+      break;
+    case 11:
+      F.Image.CodePtrRelocSlots.insert(Entry + 8);
+      break;
+    case 12:
+      F.Image.Sections.push_back(F.Image.Sections.back());
+      break;
+    case 13:
+      F.Image.Segments.back().Flags = SegmentFlags::Readable |
+                                      SegmentFlags::Writable |
+                                      SegmentFlags::Executable;
+      break;
+    case 14:
+      Entry += 1;
+      break;
+    case 15:
+      F.Image.IsRelocatable = true;
+      break;
+    case 16:
+      F.Image.MachOChainedFixupsAmbiguous = true;
+      break;
+    }
+    EXPECT_FALSE(objcClassAccessorMachine(F.Image, Entry));
+  }
+}
+
+TEST(ObjCClassAccessorMachine, UsesSharedStructuralUnwindBoundary) {
+  ProjectionFixture F;
+  addClassAccessor(F);
+  ExceptionFunction Metadata;
+  Metadata.CodeRange = {0x3040, 0x3060};
+  Metadata.Encoding = ExceptionEncoding::CompactUnwind;
+  Metadata.Compact.emplace();
+  Metadata.Compact->SemanticStatus = CompactUnwindSemanticStatus::Complete;
+  F.Image.ExceptionMetadata.Functions = {Metadata};
+  ASSERT_TRUE(objcClassAccessorMachine(F.Image, 0x3040));
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Bad = F.Image;
+    auto &M = Bad.ExceptionMetadata.Functions.front();
+    switch (Mutation) {
+    case 0:
+      M.ParseStatus = ExceptionParseStatus::Partial;
+      break;
+    case 1:
+      M.PersonalityVA = 0x4000;
+      break;
+    case 2:
+      M.Compact->HasLSDA = true;
+      break;
+    case 3:
+      M.Compact->SemanticStatus = CompactUnwindSemanticStatus::Partial;
+      break;
+    }
+    EXPECT_FALSE(objcClassAccessorMachine(Bad, 0x3040));
+  }
 }
