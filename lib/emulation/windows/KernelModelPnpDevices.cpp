@@ -256,6 +256,62 @@ llvm::Error KernelModel::finishPnpRemoval(uint64_t PDO) {
   return retirePnpProvider(PDO);
 }
 
+llvm::Error KernelModel::validatePnpRemovalFinalization(
+    const ActiveRequest &Request) const {
+  const uint64_t PDO = Request.PnpDevice;
+  const auto *Configured = pnpDeviceForPDO(PDO);
+  if (!Configured || !isProviderDevice(PDO))
+    return pnpDeviceError("remove finalization lost its provider identity");
+  auto Inventory = driverDeviceInventory();
+  if (!Inventory)
+    return Inventory.takeError();
+  if (auto E = validateDeviceTopology())
+    return E;
+  auto State = Lifecycle.snapshot(PDO);
+  if (!State)
+    return State.takeError();
+  if (State->Pnp != DevicePnpState::Removed)
+    return pnpDeviceError("remove finalization requires completed removal");
+  for (uint64_t Guest : Configured->GuestDevices)
+    if (Devices.count(Guest) &&
+        std::find(Request.DeviceRoute.begin(), Request.DeviceRoute.end(),
+                  Guest) == Request.DeviceRoute.end())
+      return pnpDeviceError("remove left a live associated guest device");
+  for (uint64_t Owner : Request.DeviceRoute) {
+    const auto Found = Devices.find(Owner);
+    if (Found == Devices.end())
+      return pnpDeviceError("remove route lost a retained device");
+    const auto &Device = Found->second;
+    if (Owner != PDO && !Device.DeletePending)
+      return pnpDeviceError("remove returned without deleting a guest device "
+                            "in its route");
+    if (Device.InternalReferences != 1 || Device.Lower || Device.Upper ||
+        Scheduler.hasOutstanding(Owner))
+      return pnpDeviceError("remove finalization has a retained guest device "
+                            "or attachment");
+    for (const auto &[ID, File] : Files) {
+      (void)ID;
+      if (File.Device == Owner)
+        return pnpDeviceError("remove finalization has a retained file");
+    }
+    for (const auto &[IRP, Other] : Requests)
+      if (IRP != Request.IRP &&
+          (Other.Device == Owner ||
+           std::find(Other.DeviceRoute.begin(), Other.DeviceRoute.end(),
+                     Owner) != Other.DeviceRoute.end()))
+        return pnpDeviceError("remove finalization has another retained IRP");
+    if (Owner == PDO)
+      for (const auto &[Item, Device] : WorkItems) {
+        (void)Item;
+        if (Device == PDO)
+          return pnpDeviceError("provider teardown has a live work item");
+      }
+    if (auto E = canReleaseRange(Owner, Device.Size))
+      return E;
+  }
+  return llvm::Error::success();
+}
+
 llvm::Error KernelModel::snapshotPnpDevices() {
   for (const auto &[ID, Device] : PnpDevices) {
     if (Device.ResultIndex >= Result.PnpDevices.size())

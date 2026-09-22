@@ -15,7 +15,6 @@
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/handling-irp-mn-query-power-for-system-power-states
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/calling-iocalldriver-versus-calling-pocalldriver
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/dispatchpower-routines
-/// https://learn.microsoft.com/windows-hardware/drivers/kernel/using-remove-locks
 ///
 //===----------------------------------------------------------------------===//
 
@@ -154,8 +153,6 @@ DeviceLifecycle::snapshot(uint64_t Identity) const {
   if (D.SystemPowerPending)
     Result.SystemPowerOperation = D.SystemPowerPending->Ticket;
   Result.OutstandingIo = D.Io.size();
-  Result.RemoveLocks = D.Locks.size();
-  Result.RemoveLockReferences = D.LockReferences;
   Result.DevicePowerQueryAccepted = D.DevicePowerQueryAccepted;
   Result.SystemPowerQueryAccepted = D.SystemPowerQueryAccepted;
   return Result;
@@ -254,12 +251,8 @@ llvm::Error DeviceLifecycle::validatePnpCompletion(DeviceLifecycleTicket Ticket,
   if (!succeeded(Status))
     return llvm::Error::success();
   if (D.PnpPending->Request == DevicePnpRequest::Remove) {
-    if (!D.Io.empty() || D.LockReferences || D.DevicePowerPending ||
-        D.SystemPowerPending)
+    if (!D.Io.empty() || D.DevicePowerPending || D.SystemPowerPending)
       return lifecycleError("remove completion has outstanding operations");
-    for (const auto &[Identity, Lock] : D.Locks)
-      if (!Lock.Draining)
-        return lifecycleError("remove completion has an undrained remove lock");
   }
   return llvm::Error::success();
 }
@@ -488,95 +481,6 @@ llvm::Error DeviceLifecycle::finishIo(uint64_t Identity, uint64_t Irp) {
   Devices.at(Identity).Io.erase(Irp);
   IoOwners.erase(Irp);
   return llvm::Error::success();
-}
-
-llvm::Error DeviceLifecycle::initializeRemoveLock(uint64_t Identity,
-                                                  uint64_t Lock) {
-  auto Found = lookup(Identity);
-  if (!Found)
-    return Found.takeError();
-  Device &D = **Found;
-  if (!Lock)
-    return lifecycleError("remove-lock identity must be nonzero");
-  if (absent(D.Pnp))
-    return lifecycleError("cannot initialize a remove lock during removal");
-  if (LockOwners.contains(Lock))
-    return lifecycleError("remove lock is already initialized");
-  if (LockOwners.size() >= MaxRemoveLocks)
-    return lifecycleError("remove-lock count exceeds the limit");
-  LockOwners.emplace(Lock, Identity);
-  D.Locks.emplace(Lock, RemoveLock{});
-  return llvm::Error::success();
-}
-
-llvm::Error DeviceLifecycle::acquireRemoveLock(uint64_t Identity, uint64_t Lock,
-                                               uint64_t Tag) {
-  auto Found = lookup(Identity);
-  if (!Found)
-    return Found.takeError();
-  Device &D = **Found;
-  auto It = D.Locks.find(Lock);
-  if (It == D.Locks.end())
-    return lifecycleError("remove lock is not owned by this device");
-  if (It->second.Draining || D.Pnp == DevicePnpState::Removed)
-    return lifecycleError("remove lock no longer accepts acquisitions");
-  if (TotalLockReferences >= MaxRemoveLockReferences)
-    return lifecycleError("remove-lock reference count exceeds the limit");
-  ++It->second.Tags[Tag];
-  ++D.LockReferences;
-  ++TotalLockReferences;
-  return llvm::Error::success();
-}
-
-llvm::Error DeviceLifecycle::releaseRemoveLock(uint64_t Identity, uint64_t Lock,
-                                               uint64_t Tag) {
-  auto Found = lookup(Identity);
-  if (!Found)
-    return Found.takeError();
-  Device &D = **Found;
-  auto It = D.Locks.find(Lock);
-  if (It == D.Locks.end())
-    return lifecycleError("remove lock is not owned by this device");
-  auto Acquisition = It->second.Tags.find(Tag);
-  if (Acquisition == It->second.Tags.end())
-    return lifecycleError("remove lock does not hold this tag");
-  if (--Acquisition->second == 0)
-    It->second.Tags.erase(Acquisition);
-  --D.LockReferences;
-  --TotalLockReferences;
-  return llvm::Error::success();
-}
-
-llvm::Expected<bool>
-DeviceLifecycle::releaseRemoveLockAndWait(uint64_t Identity, uint64_t Lock,
-                                          uint64_t Tag) {
-  auto Found = lookup(Identity);
-  if (!Found)
-    return Found.takeError();
-  Device &D = **Found;
-  auto It = D.Locks.find(Lock);
-  if (It == D.Locks.end())
-    return lifecycleError("remove lock is not owned by this device");
-  if (D.Pnp != DevicePnpState::Removing)
-    return lifecycleError("remove-lock drain requires a remove operation");
-  if (It->second.Draining)
-    return lifecycleError("remove lock is already draining");
-  if (auto E = releaseRemoveLock(Identity, Lock, Tag))
-    return E;
-  It->second.Draining = true;
-  return It->second.Tags.empty();
-}
-
-llvm::Expected<bool> DeviceLifecycle::removeLockDrained(uint64_t Identity,
-                                                        uint64_t Lock) const {
-  auto Found = lookup(Identity);
-  if (!Found)
-    return Found.takeError();
-  const Device &D = **Found;
-  auto It = D.Locks.find(Lock);
-  if (It == D.Locks.end())
-    return lifecycleError("remove lock is not owned by this device");
-  return It->second.Draining && It->second.Tags.empty();
 }
 
 } // namespace neverd::emulation

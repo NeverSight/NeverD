@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Device identity, transactional PnP/power state and removal references.
+/// Device identity and transactional PnP/power state.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -39,8 +39,6 @@ struct DeviceLifecycleSnapshot {
   std::optional<DeviceLifecycleTicket> DevicePowerOperation;
   std::optional<DeviceLifecycleTicket> SystemPowerOperation;
   size_t OutstandingIo = 0;
-  size_t RemoveLocks = 0;
-  size_t RemoveLockReferences = 0;
   bool DevicePowerQueryAccepted = false;
   bool SystemPowerQueryAccepted = false;
 };
@@ -93,17 +91,6 @@ public:
   llvm::Error validateIoCompletion(uint64_t Device, uint64_t Irp) const;
   llvm::Error finishIo(uint64_t Device, uint64_t Irp);
 
-  /// Remove locks have identities separate from IRPs and independently
-  /// counted acquisition tags, including repeat acquisitions of one tag.
-  llvm::Error initializeRemoveLock(uint64_t Device, uint64_t Lock);
-  llvm::Error acquireRemoveLock(uint64_t Device, uint64_t Lock, uint64_t Tag);
-  llvm::Error releaseRemoveLock(uint64_t Device, uint64_t Lock, uint64_t Tag);
-  /// Releases this acquisition and closes the lock to new acquisitions.
-  /// False means the caller must wait for other acquisitions to drain.
-  llvm::Expected<bool> releaseRemoveLockAndWait(uint64_t Device, uint64_t Lock,
-                                                uint64_t Tag);
-  llvm::Expected<bool> removeLockDrained(uint64_t Device, uint64_t Lock) const;
-
 private:
   struct PnpOperation {
     DeviceLifecycleTicket Ticket;
@@ -114,10 +101,6 @@ private:
     DeviceLifecycleTicket Ticket;
     DevicePowerRequest Request;
     State Target;
-  };
-  struct RemoveLock {
-    bool Draining = false;
-    std::map<uint64_t, size_t> Tags;
   };
   struct Device {
     DevicePnpState Pnp = DevicePnpState::NotStarted;
@@ -132,13 +115,9 @@ private:
     std::optional<PowerOperation<DevicePowerState>> DevicePowerPending;
     std::optional<PowerOperation<SystemPowerState>> SystemPowerPending;
     std::set<uint64_t> Io;
-    std::map<uint64_t, RemoveLock> Locks;
-    size_t LockReferences = 0;
   };
   std::map<uint64_t, Device> Devices;
   std::map<uint64_t, uint64_t> IoOwners;
-  std::map<uint64_t, uint64_t> LockOwners;
-  size_t TotalLockReferences = 0;
   uint64_t NextSequence = 1;
 
   llvm::Expected<Device *> lookup(uint64_t Identity);

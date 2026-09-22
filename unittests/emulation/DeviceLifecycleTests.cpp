@@ -337,17 +337,13 @@ TEST_F(DriverDeviceLifecycle, TicketsCannotCrossDevicesDomainsOrCompletions) {
   success(Model.finishDevicePower(Query, Failure));
 }
 
-TEST_F(DriverDeviceLifecycle, SurpriseRemovalDoesNotDiscardIoOrLockOwnership) {
+TEST_F(DriverDeviceLifecycle, SurpriseRemovalPreservesOutstandingIo) {
   start();
-  constexpr uint64_t Lock = 0x7000;
   constexpr uint64_t Irp = 0x8000;
-  success(Model.initializeRemoveLock(FirstDevice, Lock));
-  success(Model.acquireRemoveLock(FirstDevice, Lock, Irp));
   success(Model.trackIo(FirstDevice, Irp));
   const auto Surprise = begin(DevicePnpRequest::SurpriseRemoval);
   EXPECT_EQ(state().Pnp, DevicePnpState::SurpriseRemoved);
   EXPECT_EQ(state().OutstandingIo, 1u);
-  EXPECT_EQ(state().RemoveLockReferences, 1u);
   success(Model.trackIo(FirstDevice, Irp + 1));
   success(Model.finishIo(FirstDevice, Irp + 1));
   failure(Model.finishPnp(Surprise, Failure), "must not fail");
@@ -355,48 +351,14 @@ TEST_F(DriverDeviceLifecycle, SurpriseRemovalDoesNotDiscardIoOrLockOwnership) {
   const auto Remove = begin(DevicePnpRequest::Remove);
   failure(Model.trackIo(FirstDevice, Irp + 1), "after REMOVE begins");
   failure(Model.finishPnp(Remove, Success), "outstanding operations");
-  success(Model.acquireRemoveLock(FirstDevice, Lock, 0x9000));
-  EXPECT_FALSE(
-      value(Model.releaseRemoveLockAndWait(FirstDevice, Lock, 0x9000)));
-  failure(Model.acquireRemoveLock(FirstDevice, Lock, 0xa000),
-          "no longer accepts");
   success(Model.finishIo(FirstDevice, Irp));
   EXPECT_EQ(state().OutstandingIo, 0u);
-  EXPECT_EQ(state().RemoveLockReferences, 1u);
-  failure(Model.finishPnp(Remove, Success), "outstanding operations");
-  success(Model.releaseRemoveLock(FirstDevice, Lock, Irp));
-  EXPECT_TRUE(value(Model.removeLockDrained(FirstDevice, Lock)));
   success(Model.finishPnp(Remove, Success));
   EXPECT_EQ(state().Pnp, DevicePnpState::Removed);
   failure(Model.trackIo(FirstDevice, Irp + 1), "after REMOVE begins");
-  failure(Model.initializeRemoveLock(FirstDevice, Lock), "during removal");
   failure(Model.addDevice(FirstDevice, DevicePowerState::D0,
                           SystemPowerState::Working),
           "already exists");
-}
-
-TEST_F(DriverDeviceLifecycle, RemoveLocksCountRepeatedTagsAndRequireDrain) {
-  constexpr uint64_t Lock = 0x7000;
-  success(Model.initializeRemoveLock(FirstDevice, Lock));
-  success(Model.acquireRemoveLock(FirstDevice, Lock, 42));
-  success(Model.acquireRemoveLock(FirstDevice, Lock, 42));
-  EXPECT_EQ(state().RemoveLockReferences, 2u);
-  EXPECT_EQ(state().OutstandingIo, 0u);
-  failure(Model.releaseRemoveLock(FirstDevice, Lock, 43), "does not hold");
-  failure(Model.releaseRemoveLockAndWait(FirstDevice, Lock, 42),
-          "requires a remove");
-  EXPECT_EQ(state().RemoveLockReferences, 2u);
-  success(Model.releaseRemoveLock(FirstDevice, Lock, 42));
-  success(Model.releaseRemoveLock(FirstDevice, Lock, 42));
-  EXPECT_FALSE(value(Model.removeLockDrained(FirstDevice, Lock)));
-  const auto Remove = begin(DevicePnpRequest::Remove);
-  failure(Model.finishPnp(Remove, Success), "undrained");
-  success(Model.acquireRemoveLock(FirstDevice, Lock, 0));
-  EXPECT_TRUE(value(Model.releaseRemoveLockAndWait(FirstDevice, Lock, 0)));
-  failure(Model.releaseRemoveLockAndWait(FirstDevice, Lock, 0),
-          "already draining");
-  failure(Model.releaseRemoveLock(FirstDevice, Lock, 0), "does not hold");
-  success(Model.finishPnp(Remove, Success));
 }
 
 TEST_F(DriverDeviceLifecycle, DeviceAndIrpIdentityFailuresAreAtomic) {
@@ -421,12 +383,6 @@ TEST_F(DriverDeviceLifecycle, DeviceAndIrpIdentityFailuresAreAtomic) {
   EXPECT_EQ(state(SecondDevice).OutstandingIo, 0u);
   success(Model.finishIo(FirstDevice, 0x5000));
   success(Model.trackIo(SecondDevice, 0x5000));
-  success(Model.initializeRemoveLock(FirstDevice, 0x6000));
-  failure(Model.initializeRemoveLock(SecondDevice, 0x6000),
-          "already initialized");
-  failure(Model.acquireRemoveLock(SecondDevice, 0x6000, 1), "not owned");
-  EXPECT_EQ(state().RemoveLocks, 1u);
-  EXPECT_EQ(state(SecondDevice).RemoveLocks, 0u);
 }
 
 TEST_F(DriverDeviceLifecycle, StartingDoesNotInventHardwarePowerTransitions) {

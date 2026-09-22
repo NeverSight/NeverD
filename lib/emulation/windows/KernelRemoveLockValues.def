@@ -1,0 +1,19 @@
+//===- KernelRemoveLockValues.def - Remove-lock values -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// IO_REMOVE_LOCK extents verified against public WDK 10.0.26100.0 wdm.h for
+/// DBG=0 and DBG=1. These are storage bounds; the structure remains opaque.
+/// Limits are deterministic model budgets, not Windows allocation limits.
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinitializeremovelock
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_REMOVE_LOCK_VALUE(RetailSize, 32)
+NEVERD_KERNEL_REMOVE_LOCK_VALUE(DebugSize, 120)
+NEVERD_KERNEL_REMOVE_LOCK_VALUE(ObjectAlignment, 8)
+NEVERD_KERNEL_REMOVE_LOCK_VALUE(MaxLocks, 4096)
+NEVERD_KERNEL_REMOVE_LOCK_VALUE(MaxReferences, 65536)
