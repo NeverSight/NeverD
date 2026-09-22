@@ -70,6 +70,9 @@ public:
     std::function<llvm::Error(uint64_t)> MarkPending;
     std::function<llvm::Expected<bool>(uint64_t)> IsCanceled;
     std::function<llvm::Expected<uint64_t>(uint64_t)> Information;
+    std::function<llvm::Error(uint64_t, uint64_t)> SetInformation;
+    /// Return the request-owned descriptor, or zero on allocation failure.
+    std::function<llvm::Expected<uint64_t>(uint64_t, bool)> Mdl;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> ValidateCompletion;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
   };
@@ -86,8 +89,10 @@ public:
   /// The WDM host first records cancellation, then asks for the one guest
   /// notification owned by this request. Ordinary WDM requests return nullopt.
   llvm::Expected<std::optional<GuestCall>> requestCancellation(uint64_t IRP);
-  /// Latch delivery only when the scheduler actually enters this callback.
+  /// Latch delivery when the scheduled or nested cancel callback is entered.
   llvm::Error beginCancelCallback(uint64_t Token);
+  /// Framework-owned packets must complete through their WDF request lifetime.
+  bool ownsRequestIRP(uint64_t IRP) const;
   KernelFramework(GuestMemory &Memory, KernelExportRegistry &Exports,
                   Allocate AllocateStorage, Validate ValidateAccess,
                   Release ReleaseStorage)
@@ -160,7 +165,6 @@ private:
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;
-    uint64_t CompletionInformation = 0;
     CancelState Cancellation = CancelState::Unmarked;
     uint64_t CancelRoutine = 0;
   };
@@ -237,6 +241,9 @@ private:
   llvm::Expected<std::optional<uint64_t>>
   callRequest(llvm::StringRef Name, Binding &B,
               llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<std::optional<uint64_t>>
+  callRequestAccessors(llvm::StringRef Name, Binding &B,
+                       llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<std::string> readControlString(uint64_t Address);
   llvm::Error planDelete(uint64_t Handle, std::vector<Step> &Steps);
   llvm::Expected<std::optional<uint64_t>> advance(uint64_t Token);

@@ -48,6 +48,8 @@ fixture 涵蓋客體初始化、成功與失敗傳回、不支援的行為、記
 
 `DriverGuardTests.cpp` 與四個原創 `driver_guard.c` 變體涵蓋啟用／未啟用的 CFG、重新定位、檢查／分派 ABI 及格式錯誤的目標。`KernelFrameworkTests.cpp`、`KernelFrameworkControlTests.cpp`、`KernelFrameworkQueueTests.cpp` 和 `KernelFrameworkRequestTests.cpp` 涵蓋繫結、失敗時可復原的裝置建立、佇列路由、緩衝區邏輯長度，以及清理順序與 IRP／內容生命週期。原創 `driver_kmdf_lifecycle.c` 與 `driver_kmdf_control.c` 可選用真實 WDK 1.33 標頭編譯，並透過真正的 `FxDriverEntry` 程式庫連結。將 CMake 快取路徑 `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` 指向生命週期映像，將 `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` 指向一般／啟用 CFG 的控制裝置映像。缺少外部產物時會明確略過。`DriverKMDFLifecycleTests.cpp`、`DriverKMDFControlTests.cpp` 及 `DriverScenarioPublicTests.cpp` 中的 C API／CLI 案例涵蓋實際回呼、緩衝／直接 I/O、工作項目完成待處理要求、失敗狀態、卸載及重新定位後的 CFG 執行。驗證證據仍僅限於 Linux，不代表完整 KMDF 或 PnP／電源管理支援。
 
+舊版取消測試將 API 接續保留至取消、巢狀清理與最終銷毀結束；對於已取消的請求，Ex 仍傳回取消狀態而不遞送回呼。`KernelFrameworkRequestAccessorTests.cpp` 與 `KernelRequestMDLTests.cpp` 涵蓋共用的 64 位元 Information、完成時長度驗證、來源佇列／IRP 識別、NULL WDF 檔案控制代碼、保留控制代碼的 getter 結果、緩衝 MDL 快取與首個方向的 ByteCount、直接描述元識別與延後對映、完成時回收，以及拒絕繞過 WDF 完成流程。真實控制裝置 fixture 的 L、M、D、C 模式在一般／啟用 CFG 映像中分別執行舊版取消、緩衝 MDL／資訊、直接 READ／WRITE MDL 和完成後的存取。
+
 取消測試涵蓋僅允許傳輸要求設定的虛擬期限及報告欄位、完成優先與已取消路徑、標記／解除標記結果、排入佇列與已遞送回呼的完成權限、回呼等待及內部參考生命週期。排程器測試獨立驗證 DPC／取消／工作項目順序、容量、識別隔離和暫停／還原。WDM 取消仍明確回報模型錯誤。
 
 

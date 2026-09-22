@@ -132,6 +132,8 @@ llvm::Error KernelModel::freeMDL(uint64_t MDL) {
     return mdlError("IoFreeMdl received an unknown or already freed MDL");
   if (It->second.Owner == LockedMdl::Ownership::Request)
     return mdlError("IoFreeMdl cannot release a request-owned locked MDL");
+  if (It->second.Owner == LockedMdl::Ownership::RequestSystemBuffer)
+    return mdlError("IoFreeMdl cannot release a request-owned system-buffer MDL");
   // A nonpaged pool MDL owns only its descriptor. Its original buffer and
   // mapping survive IoFreeMdl and remain governed by pool allocation lifetime.
   FreedRanges.emplace(It->second.Address, It->second.Size);
@@ -178,6 +180,70 @@ KernelModel::createRequestMDL(uint64_t IRP, uint32_t Size,
   return *Record;
 }
 
+llvm::Expected<uint64_t> KernelModel::frameworkRequestMDL(uint64_t IRP,
+                                                         bool Output) {
+  auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
+    return mdlError("framework MDL retrieval requires a live owning IRP");
+  const bool IsIOCTL = Request->Kind == DriverRequestKind::DeviceControl;
+  const bool IsRead = Request->Kind == DriverRequestKind::Read;
+  const bool IsWrite = Request->Kind == DriverRequestKind::Write;
+  if ((!IsIOCTL && !IsRead && !IsWrite) || (IsRead && !Output) ||
+      (IsWrite && Output))
+    return mdlError("framework MDL direction does not match the WDM request");
+  const uint32_t Length = Output ? Request->OutputSize : Request->InputSize;
+  if (!Length)
+    return mdlError("framework MDL requires a nonempty request buffer");
+  if (Request->Direct && (!IsIOCTL || Output)) {
+    auto It = MDLs.find(Request->Mdl);
+    if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
+        It->second.Owner != LockedMdl::Ownership::Request)
+      return mdlError("framework request lost its direct MDL");
+    // Retrieving a descriptor does not create or change its system mapping.
+    return Request->Mdl;
+  }
+  if (!Request->SystemBuffer || Length > Request->BufferSize)
+    return mdlError("framework request lost its system buffer");
+  if (Request->SystemMdl) {
+    auto It = MDLs.find(Request->SystemMdl);
+    if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
+        It->second.Owner != LockedMdl::Ownership::RequestSystemBuffer)
+      return mdlError("framework request lost its system-buffer MDL");
+    return Request->SystemMdl;
+  }
+  // Both public WDF helpers share m_AllocatedMdl. Buffered IOCTL directions
+  // therefore reuse the first successful descriptor and its original length.
+  // The existing SystemBuffer is the only data allocation and remains the
+  // authority for aliasing and lifetime; this owner adds just a descriptor.
+  // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/core/km/fxrequestkm.cpp#L301-L338
+  // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/core/km/fxrequestkm.cpp#L542-L580
+  auto Record = createMDLRecord(Request->SystemBuffer, Length,
+                                MDLSourceIsNonPagedPool);
+  if (!Record)
+    return Record.takeError();
+  if (!*Record)
+    return 0;
+  if (auto E = Memory.writeInteger(*Record + MDLMappedSystemVAOffset,
+                                   Request->SystemBuffer, profile::PointerSize))
+    return std::move(E);
+  LockedMdl State;
+  State.Owner = LockedMdl::Ownership::RequestSystemBuffer;
+  State.OwnerIRP = IRP;
+  State.Address = *Record;
+  const uint64_t Offset = Request->SystemBuffer & (profile::PageSize - 1);
+  State.Size = MDLSize +
+               ((Offset + Length + profile::PageSize - 1) / profile::PageSize) *
+                   profile::PointerSize;
+  State.Buffer = Request->SystemBuffer;
+  State.ByteCount = Length;
+  State.Writable = true;
+  State.Mapped = true;
+  State.MappingWritable = true;
+  MDLs.emplace(*Record, State);
+  Request->SystemMdl = *Record;
+  return *Record;
+}
+
 llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
                                                      uint32_t Priority,
                                                      bool ReuseExisting) {
@@ -193,6 +259,16 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
   if (State.Owner == LockedMdl::Ownership::Driver)
     return mdlError("mapping requires a built MDL; allocated metadata does "
                     "not lock or map the described buffer");
+  if (State.Owner == LockedMdl::Ownership::RequestSystemBuffer) {
+    const auto *Owner = requestForIRP(State.OwnerIRP);
+    if (!Owner || Owner->Completed || Owner->SystemMdl != MDL ||
+        Owner->SystemBuffer != State.Buffer)
+      return mdlError("mapping requires the active request's system-buffer MDL");
+    if (!ReuseExisting)
+      return mdlError("a request system-buffer MDL cannot create an additional "
+                      "system-space mapping");
+    return State.Buffer;
+  }
   if (State.Owner == LockedMdl::Ownership::NonPagedPool) {
     if (!ReuseExisting)
       return mdlError("a nonpaged pool MDL cannot create an additional "
@@ -230,6 +306,10 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
 
 llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
   auto It = MDLs.find(MDL);
+  if (It != MDLs.end() &&
+      It->second.Owner == LockedMdl::Ownership::RequestSystemBuffer)
+    return mdlError("a request system-buffer MDL cannot release its existing "
+                    "system-space mapping");
   if (It != MDLs.end() &&
       It->second.Owner == LockedMdl::Ownership::NonPagedPool)
     return mdlError("a nonpaged pool MDL cannot release its existing "
@@ -287,18 +367,30 @@ llvm::Error KernelModel::expireRequestMDL(uint64_t IRP) {
   const auto *Owner = requestForIRP(IRP);
   if (!Owner || Owner->Completed)
     return mdlError("active request lost ownership of its MDL");
-  if (!Owner->Mdl)
-    return llvm::Error::success();
-  auto It = MDLs.find(Owner->Mdl);
-  if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
-      It->second.Owner != LockedMdl::Ownership::Request)
+  const auto Direct = MDLs.find(Owner->Mdl);
+  const auto System = MDLs.find(Owner->SystemMdl);
+  if (Owner->Mdl &&
+      (Direct == MDLs.end() || Direct->second.OwnerIRP != IRP ||
+       Direct->second.Owner != LockedMdl::Ownership::Request))
     return mdlError("active request lost ownership of its MDL");
-  const auto &State = It->second;
-  if (auto E = Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
-    return E;
-  FreedRanges.emplace(State.Address, State.Size);
-  FreedRanges.emplace(pageBase(State.Buffer), State.AllocationSize);
-  MDLs.erase(It);
+  if (Owner->SystemMdl &&
+      (System == MDLs.end() || System->second.OwnerIRP != IRP ||
+       System->second.Owner != LockedMdl::Ownership::RequestSystemBuffer))
+    return mdlError("active request lost ownership of its system-buffer MDL");
+  if (Direct != MDLs.end()) {
+    const auto &State = Direct->second;
+    if (auto E = Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
+      return E;
+    FreedRanges.emplace(State.Address, State.Size);
+    FreedRanges.emplace(pageBase(State.Buffer), State.AllocationSize);
+    MDLs.erase(Direct);
+  }
+  if (System != MDLs.end()) {
+    // Completion already owns the SystemBuffer's release. Never revoke its
+    // arena page (which may also contain unrelated live allocations).
+    FreedRanges.emplace(System->second.Address, System->second.Size);
+    MDLs.erase(System);
+  }
   return llvm::Error::success();
 }
 

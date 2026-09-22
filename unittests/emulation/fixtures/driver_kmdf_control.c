@@ -16,6 +16,8 @@
 /// worker while the cancel callback waits; U unmarks before a delayed worker;
 /// N deliberately completes a still-cancelable request. Buffered mode B polls
 /// cancellation before processing, including the CLI's default service name.
+/// L uses legacy MarkCancelable, including synchronous cancellation before the
+/// API returns. M checks request metadata and buffered WDM MDL aliases.
 /// Q deliberately supplies an invalid queue configuration size. CREATE,
 /// CLEANUP and CLOSE use the default framework file package without callbacks.
 ///
@@ -89,6 +91,7 @@ ABI_SLOT(WdfObjectReferenceActual, 205);
 ABI_SLOT(WdfObjectDereferenceActual, 206);
 ABI_SLOT(WdfObjectCreate, 207);
 ABI_SLOT(WdfObjectDelete, 208);
+ABI_SLOT(WdfRequestMarkCancelable, 255);
 ABI_SLOT(WdfRequestUnmarkCancelable, 256);
 ABI_SLOT(WdfRequestIsCanceled, 257);
 ABI_SLOT(WdfRequestComplete, 263);
@@ -96,6 +99,13 @@ ABI_SLOT(WdfRequestCompleteWithInformation, 265);
 ABI_SLOT(WdfRequestGetParameters, 266);
 ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
+ABI_SLOT(WdfRequestRetrieveInputWdmMdl, 271);
+ABI_SLOT(WdfRequestRetrieveOutputWdmMdl, 272);
+ABI_SLOT(WdfRequestSetInformation, 275);
+ABI_SLOT(WdfRequestGetInformation, 276);
+ABI_SLOT(WdfRequestGetFileObject, 277);
+ABI_SLOT(WdfRequestGetIoQueue, 282);
+ABI_SLOT(WdfRequestWdmGetIrp, 285);
 ABI_SLOT(WdfRequestMarkCancelableEx, 393);
 
 typedef struct {
@@ -107,6 +117,7 @@ typedef struct {
 
 typedef struct {
   PUCHAR Buffer;
+  PIRP Irp;
   size_t Length;
   ULONG Checksum;
   ULONG Phase;
@@ -146,6 +157,94 @@ static BOOLEAN CheckQueue(WDFQUEUE Queue, ULONG Code) {
                Code);
 }
 
+static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
+  PMDL InputMdl = (PMDL)(ULONG_PTR)1;
+  PMDL OutputMdl = (PMDL)(ULONG_PTR)1;
+  NTSTATUS InputStatus = WdfRequestRetrieveInputWdmMdl(Request, &InputMdl);
+  NTSTATUS OutputStatus = WdfRequestRetrieveOutputWdmMdl(Request, &OutputMdl);
+  return Check(WdfRequestGetIoQueue(Request) == NULL &&
+                   WdfRequestGetInformation(Request) == 0 &&
+                   InputStatus == STATUS_INTERNAL_ERROR && InputMdl == NULL &&
+                   OutputStatus == STATUS_INTERNAL_ERROR && OutputMdl == NULL,
+               Code);
+}
+
+static PIRP CheckedRequestIrp(WDFREQUEST Request, UCHAR Major) {
+  PIRP Irp = WdfRequestWdmGetIrp(Request);
+  if (!Check(Irp != NULL && WdfRequestGetIoQueue(Request) == DefaultQueue &&
+                 WdfRequestGetFileObject(Request) == NULL &&
+                 IoGetCurrentIrpStackLocation(Irp)->MajorFunction == Major &&
+                 IoGetCurrentIrpStackLocation(Irp)->FileObject != NULL,
+             100))
+    return NULL;
+  return Irp;
+}
+
+static BOOLEAN CheckBufferedIoctlMdl(WDFREQUEST Request, PUCHAR Buffer,
+                                     size_t InputLength) {
+  PIRP Irp = CheckedRequestIrp(Request, IRP_MJ_DEVICE_CONTROL);
+  PMDL InputMdl = NULL;
+  PMDL OutputMdl = NULL;
+  NTSTATUS InputStatus = WdfRequestRetrieveInputWdmMdl(Request, &InputMdl);
+  NTSTATUS OutputStatus = WdfRequestRetrieveOutputWdmMdl(Request, &OutputMdl);
+  // A buffered request caches one descriptor on first retrieval. The larger
+  // output capacity must not silently replace that input-sized descriptor.
+  return Check(
+      Irp != NULL && Irp->MdlAddress == NULL && InputStatus == STATUS_SUCCESS &&
+          OutputStatus == STATUS_SUCCESS && InputMdl != NULL &&
+          OutputMdl == InputMdl && MmGetMdlByteCount(InputMdl) == InputLength &&
+          MmGetSystemAddressForMdlSafe(InputMdl, NormalPagePriority) ==
+              Buffer &&
+          Irp->AssociatedIrp.SystemBuffer == Buffer,
+      101);
+}
+
+static BOOLEAN CheckTransferMdl(WDFREQUEST Request, PUCHAR Buffer,
+                                size_t Length, BOOLEAN WriteRequest) {
+  PIRP Irp =
+      CheckedRequestIrp(Request, WriteRequest ? IRP_MJ_WRITE : IRP_MJ_READ);
+  PMDL Mdl = NULL;
+  NTSTATUS Status = WriteRequest
+                        ? WdfRequestRetrieveInputWdmMdl(Request, &Mdl)
+                        : WdfRequestRetrieveOutputWdmMdl(Request, &Mdl);
+  return Check(Irp != NULL && Status == STATUS_SUCCESS && Mdl != NULL &&
+                   MmGetMdlByteCount(Mdl) == Length &&
+                   MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority) ==
+                       Buffer &&
+                   (TransferMode == 'D' ? Irp->MdlAddress == Mdl
+                                        : Irp->MdlAddress == NULL),
+               102);
+}
+
+static void CompleteWithMetadata(WDFREQUEST Request, size_t Length) {
+  PIRP Irp = WdfRequestWdmGetIrp(Request);
+  const ULONG_PTR First = 0x123456789abcdef0ULL;
+  const ULONG_PTR Second = 0xfedcba9876543210ULL;
+  WdfRequestSetInformation(Request, First);
+  if (!Check(Irp != NULL && WdfRequestGetInformation(Request) == First &&
+                 Irp->IoStatus.Information == First,
+             103)) {
+    WdfRequestCompleteWithInformation(Request, STATUS_UNSUCCESSFUL, 0);
+    return;
+  }
+  Irp->IoStatus.Information = Second;
+  if (!Check(WdfRequestGetInformation(Request) == Second, 104)) {
+    WdfRequestCompleteWithInformation(Request, STATUS_UNSUCCESSFUL, 0);
+    return;
+  }
+  WdfRequestSetInformation(Request, Length);
+  if (!Check(WdfRequestGetInformation(Request) == Length &&
+                 Irp->IoStatus.Information == Length,
+             105)) {
+    WdfRequestCompleteWithInformation(Request, STATUS_UNSUCCESSFUL, 0);
+    return;
+  }
+  DbgPrint("KMDF control: %c metadata checked\n", TransferMode);
+  // No explicit Information argument: completion must use the shared IRP's
+  // current value, including mutations made through either public interface.
+  WdfRequestComplete(Request, STATUS_SUCCESS);
+}
+
 static ULONG BufferChecksum(volatile UCHAR *Buffer, size_t Length) {
   ULONG Value = 5381;
   for (size_t Index = 0; Index != Length; ++Index)
@@ -168,7 +267,15 @@ static void RequestCleanup(WDFOBJECT Object) {
   if (!Context->Armed)
     return;
   if (Check(Context->Cookie == 0xc0de3233 && Context->Phase == 0, 70) &&
-      CheckSavedOutput(Context, 71)) {
+      CheckSavedOutput(Context, 71) &&
+      CheckRetiredRequestAccessors((WDFREQUEST)Object, 106) &&
+      Check(Context->Irp != NULL &&
+                Context->Irp->IoStatus.Information == Context->Length - 1,
+            108)) {
+    // CompleteWithInformation publishes its value before EarlyDispose. The
+    // saved WDM escape remains live here and is the final information source.
+    Context->Irp->IoStatus.Information = Context->Length;
+    DbgPrint("KMDF control: C cleanup information checked\n");
     Context->Phase = 1;
     DbgPrint("KMDF control: C request cleanup\n");
   }
@@ -214,6 +321,7 @@ static void CompleteObservedTransform(WDFREQUEST Request, PUCHAR Buffer,
     return;
   }
   Context->Buffer = Buffer;
+  Context->Irp = WdfRequestWdmGetIrp(Request);
   Context->Length = Length;
   Context->Checksum = BufferChecksum(Buffer, Length);
   Context->Cookie = 0xc0de3233;
@@ -229,12 +337,14 @@ static void CompleteObservedTransform(WDFREQUEST Request, PUCHAR Buffer,
   CleanupChildContext(Child)->RequestContext = Context;
   Context->Armed = TRUE;
   WdfObjectReference(Request);
-  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, Length);
+  WdfRequestSetInformation(Request, 1);
+  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, Length - 1);
   // Only the context is inspected after completion; no request accessor or
   // saved buffer dereference may extend the underlying IRP's lifetime.
   if (Check(CleanupContext(Request) == Context &&
                 Context->Cookie == 0xc0de3233 && Context->Phase == 2,
-            75)) {
+            75) &&
+      CheckRetiredRequestAccessors(Request, 107)) {
     Context->Phase = 3;
     DbgPrint("KMDF control: C retained context\n");
   }
@@ -289,6 +399,11 @@ static void TransformRequest(WDFREQUEST Request, size_t OutputLength,
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
+  if (TransferMode == 'M' &&
+      !CheckBufferedIoctlMdl(Request, Input, InputLength)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
 
   // METHOD_BUFFERED aliases the input and output allocation; move backwards.
   for (size_t Index = InputLength; Index != 0; --Index)
@@ -303,6 +418,10 @@ static void TransformRequest(WDFREQUEST Request, size_t OutputLength,
   if (TransferMode == 'C') {
     CompleteObservedTransform(Request, Output,
                               InputLength + TransformPrefixLength);
+    return;
+  }
+  if (TransferMode == 'M') {
+    CompleteWithMetadata(Request, InputLength + TransformPrefixLength);
     return;
   }
   WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
@@ -466,7 +585,7 @@ static void CancelableIoctl(WDFREQUEST Request, size_t OutputLength,
   CANCEL_REQUEST_CONTEXT *Context = NULL;
   WDF_OBJECT_ATTRIBUTES Attributes;
   NTSTATUS Status;
-  if (TransferMode == 'X' || TransferMode == 'H') {
+  if (TransferMode == 'X' || TransferMode == 'H' || TransferMode == 'L') {
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes,
                                             CANCEL_REQUEST_CONTEXT);
     Attributes.EvtCleanupCallback = CancelCleanup;
@@ -480,6 +599,14 @@ static void CancelableIoctl(WDFREQUEST Request, size_t OutputLength,
     Context->Mode = TransferMode;
     if (TransferMode == 'H')
       KeInitializeEvent(&Context->Completed, NotificationEvent, FALSE);
+  }
+  if (TransferMode == 'L') {
+    DbgPrint("KMDF control: L before mark\n");
+    WdfRequestMarkCancelable(Request, CancelRequest);
+    // With pre-dispatch cancellation, even the context can already have been
+    // destroyed here. Do not inspect the request or its saved context pointer.
+    DbgPrint("KMDF control: L after mark\n");
+    return;
   }
   Status = WdfRequestMarkCancelableEx(Request, CancelRequest);
   if (Status == STATUS_CANCELLED) {
@@ -522,7 +649,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     return;
   }
   if (TransferMode == 'X' || TransferMode == 'H' || TransferMode == 'U' ||
-      TransferMode == 'N') {
+      TransferMode == 'N' || TransferMode == 'L') {
     CancelableIoctl(Request, OutputLength, InputLength);
     return;
   }
@@ -577,9 +704,18 @@ static void IoRead(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
+  if ((TransferMode == 'M' || TransferMode == 'D') &&
+      !CheckTransferMdl(Request, Buffer, Length, FALSE)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
   for (size_t Index = 0; Index != Length; ++Index)
     Buffer[Index] = (UCHAR)(ReadPatternBase + (Index & PatternIndexMask));
   DbgPrint("KMDF control: read %llu bytes\n", (unsigned long long)Length);
+  if (TransferMode == 'M' || TransferMode == 'D') {
+    CompleteWithMetadata(Request, Length);
+    return;
+  }
   WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, Length);
 }
 
@@ -608,6 +744,11 @@ static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
+  if ((TransferMode == 'M' || TransferMode == 'D') &&
+      !CheckTransferMdl(Request, Buffer, Length, TRUE)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
   for (size_t Index = 0; Index != Length; ++Index) {
     if (Buffer[Index] !=
         (UCHAR)(WritePatternBase + (Index & PatternIndexMask))) {
@@ -616,6 +757,10 @@ static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
     }
   }
   DbgPrint("KMDF control: write %llu bytes\n", (unsigned long long)Length);
+  if (TransferMode == 'M' || TransferMode == 'D') {
+    CompleteWithMetadata(Request, Length);
+    return;
+  }
   WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, Length);
 }
 
@@ -654,6 +799,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'H' ? 'H'
                  : Marker == L'U' ? 'U'
                  : Marker == L'N' ? 'N'
+                 : Marker == L'L' ? 'L'
+                 : Marker == L'M' ? 'M'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);

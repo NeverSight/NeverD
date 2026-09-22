@@ -51,6 +51,8 @@ fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動
 
 `DriverGuardTests.cpp` と独自の `driver_guard.c` の 4 変種は、有効／無効の CFG、ベースアドレスの再配置、check/dispatch ABI、不正なターゲットを検証します。`KernelFrameworkTests.cpp`、`KernelFrameworkControlTests.cpp`、`KernelFrameworkQueueTests.cpp`、`KernelFrameworkRequestTests.cpp` は、バインド、失敗時にロールバックするデバイス作成、キューのルーティング、バッファーの論理長、クリーンアップの順序と IRP／コンテキストの寿命を検証します。独自の `driver_kmdf_lifecycle.c` と `driver_kmdf_control.c` は、実際の WDK 1.33 ヘッダーで任意にコンパイルし、本物の `FxDriverEntry` ライブラリを通じてリンクします。CMake キャッシュのパスとして、ライフサイクルのイメージには `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE`、制御デバイスの通常版／CFG 有効版には `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` を設定します。外部成果物がなければ明示的にスキップします。`DriverKMDFLifecycleTests.cpp`、`DriverKMDFControlTests.cpp`、`DriverScenarioPublicTests.cpp` の C API／CLI ケースは、実際のコールバック、バッファード／ダイレクト I/O、ワークアイテムによる保留要求の完了、失敗ステータス、アンロード、再配置後の CFG 実行を検証します。実行証拠は Linux に限定され、完全な KMDF や PnP／電源管理の対応を示すものではありません。
 
+旧版キャンセルのテストは、キャンセル、入れ子のクリーンアップ、最終破棄まで API 継続処理を保持します。既にキャンセル済みの Ex は引き続きコールバックなしでキャンセル状態を返します。`KernelFrameworkRequestAccessorTests.cpp` と `KernelRequestMDLTests.cpp` の検証対象は、共有 64 ビット Information、完了時の長さ検査、元キュー／IRP 識別、NULL WDF ファイルハンドル、保持ハンドルの getter 結果、バッファー MDL キャッシュと最初の方向の ByteCount、直接記述子の識別と遅延マッピング、完了時の無効化、WDM 完了による迂回の拒否です。実際の制御デバイス fixture の L、M、D、C モードは通常／CFG 有効イメージで、旧版キャンセル、バッファー MDL／情報、直接 READ／WRITE MDL、完了後アクセスを実行します。
+
 キャンセルのテストは、転送要求だけに許す仮想期限とレポートフィールド、完了優先と既にキャンセル済みの経路、マーク／解除の結果、キュー登録と配信済みの完了権限、コールバック待機、内部参照の寿命を検証します。スケジューラーのテストは DPC／キャンセル／ワーク項目の順序、容量、識別子の分離、中断／再開を独立に検証します。WDM キャンセルは明示的なモデルエラーのままです。
 
 

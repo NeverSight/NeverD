@@ -637,9 +637,11 @@ KernelFramework::advance(uint64_t Token) {
       auto R = Requests.find(S.Object);
       if (R == Requests.end() || !R->second.Completing || R->second.Completed)
         return invalid("completion continuation lost its live request");
-      if (auto E =
-              RequestsHost.Complete(R->second.IRP, R->second.CompletionStatus,
-                                    R->second.CompletionInformation))
+      auto Information = RequestsHost.Information(R->second.IRP);
+      if (!Information)
+        return Information.takeError();
+      if (auto E = RequestsHost.Complete(
+              R->second.IRP, R->second.CompletionStatus, *Information))
         return E;
       R->second.Completed = true;
       R->second.Completing = false;
@@ -776,6 +778,11 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     return Queue.takeError();
   if (*Queue)
     return **Queue;
+  auto Accessor = callRequestAccessors(Export.Name, B, A);
+  if (!Accessor)
+    return Accessor.takeError();
+  if (*Accessor)
+    return **Accessor;
   auto Request = callRequest(Export.Name, B, A);
   if (!Request)
     return Request.takeError();

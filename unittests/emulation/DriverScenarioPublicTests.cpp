@@ -548,7 +548,9 @@ void checkKMDFControlReport(const llvm::json::Object &Report, char Mode) {
   }
   const auto *IOCTL = (*Requests)[1].getAsObject();
   EXPECT_EQ(IOCTL->getString("output_hex"), Mode == 'D'   ? "4b4d44445a4b78"
+                                            : Mode == 'C' ? "4b4d44435a4b78"
                                             : Mode == 'W' ? "4b4d44575a4b78"
+                                            : Mode == 'M' ? "4b4d444d5a4b78"
                                                           : "4b4d44425a4b78");
   EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"), "60616263");
   const auto *Devices = Report.getArray("devices");
@@ -725,6 +727,145 @@ TEST_F(DriverScenarioPublic, CAPIRunsGenuineCancelCallbacksAndUnmarkRaces) {
 #endif
 }
 
+TEST_F(DriverScenarioPublic, CAPIReportsGenuineRequestMetadataAndBufferedMDLs) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = "NeverDKmdfM";
+  auto Parsed = llvm::json::parse(takeString(
+      neverd_emulate_driver_scenario_json(Session, NEVERD_KMDF_CONTROL_FIXTURE,
+                                          KMDFControlScenario, &Options)));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  checkKMDFControlReport(*Report, 'M');
+  const auto *Calls = Report->getArray("calls");
+  ASSERT_NE(Calls, nullptr);
+  size_t InputMdls = 0, OutputMdls = 0, SetInfo = 0, GetInfo = 0;
+  for (const auto &Value : *Calls) {
+    const auto *Call = Value.getAsObject();
+    ASSERT_NE(Call, nullptr);
+    const auto Name = Call->getString("name");
+    if (Name == "WdfRequestRetrieveInputWdmMdl") {
+      ++InputMdls;
+      EXPECT_EQ(Call->getString("result"), "0x0");
+    } else if (Name == "WdfRequestRetrieveOutputWdmMdl") {
+      ++OutputMdls;
+      EXPECT_EQ(Call->getString("result"), "0x0");
+    } else if (Name == "WdfRequestSetInformation") {
+      ++SetInfo;
+    } else if (Name == "WdfRequestGetInformation") {
+      ++GetInfo;
+    }
+  }
+  EXPECT_EQ(InputMdls, 2u);
+  EXPECT_EQ(OutputMdls, 2u);
+  EXPECT_EQ(SetInfo, 6u);
+  EXPECT_EQ(GetInfo, 9u);
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIPreservesCleanupWritesToSharedIRPInformation) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = "NeverDKmdfC";
+  auto Parsed = llvm::json::parse(takeString(
+      neverd_emulate_driver_scenario_json(Session, NEVERD_KMDF_CONTROL_FIXTURE,
+                                          KMDFControlScenario, &Options)));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  checkKMDFControlReport(*Report, 'C');
+  const auto *Messages = Report->getArray("messages");
+  ASSERT_NE(Messages, nullptr);
+  bool SawInformationCheck = false;
+  for (const auto &Value : *Messages) {
+    const auto Message = Value.getAsString();
+    ASSERT_TRUE(Message);
+    EXPECT_EQ(Message->find("failure"), llvm::StringRef::npos);
+    SawInformationCheck |=
+        *Message == "KMDF control: C cleanup information checked\n";
+  }
+  EXPECT_TRUE(SawInformationCheck);
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIPreservesLegacyMarkCancellationReturnOrder) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  for (uint64_t Delay : {0u, 10u}) {
+    SCOPED_TRACE(Delay);
+    neverd_driver_options_v1 Options{};
+    Options.struct_size = sizeof(Options);
+    Options.instruction_limit = 100000;
+    Options.memory_limit = 64 * 1024 * 1024;
+    Options.event_limit = 10000;
+    Options.timeout_milliseconds = 5000;
+    Options.service_name = "NeverDKmdfL";
+    const std::string Scenario =
+        std::string(R"({"requests":[
+          {"kind":"create","device":"\\DosDevices\\NeverDKmdfControl"},
+          {"kind":"ioctl","code":"0x222000","input":"001122",
+           "output_size":12,"cancel_after_100ns":)") +
+        std::to_string(Delay) +
+        R"(},{"kind":"cleanup"},{"kind":"close"}],"unload":true})";
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, NEVERD_KMDF_CONTROL_FIXTURE, Scenario.c_str(), &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned")
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    const auto *IO = (*Requests)[1].getAsObject();
+    ASSERT_NE(IO, nullptr);
+    EXPECT_EQ(IO->getBoolean("completed"), true);
+    EXPECT_EQ(IO->getInteger("io_status"), 0xc0000120);
+    EXPECT_EQ(IO->getInteger("cancel_requested_at_100ns"), int64_t(Delay));
+    const auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    std::vector<std::string> Observed;
+    for (const auto &Message : *Messages) {
+      auto Text = Message.getAsString();
+      ASSERT_TRUE(Text);
+      if (Text->starts_with("KMDF control:"))
+        Observed.push_back(Text->str());
+    }
+    std::vector<std::string> Expected{
+        "KMDF control: ready in mode L\n",
+        "KMDF control: L before mark\n",
+        "KMDF control: L cancel callback\n",
+        "KMDF control: L request cleanup\n",
+        "KMDF control: L cancel callback retained context\n",
+        "KMDF control: L request destroy\n",
+        "KMDF control: L destroy resumed\n",
+        "KMDF control: driver unload\n"};
+    Expected.insert(Expected.begin() + (Delay == 0 ? 7 : 2),
+                    "KMDF control: L after mark\n");
+    EXPECT_EQ(Observed, Expected);
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
 TEST_F(DriverScenarioPublic, CAPIReportsDirectAndDeferredKMDFControlIO) {
 #ifdef NEVERD_KMDF_CONTROL_FIXTURE
   for (const char *Service : {"NeverDKmdfD", "NeverDKmdfW"}) {
@@ -838,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v5");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v6");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
