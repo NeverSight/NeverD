@@ -13,6 +13,7 @@
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
 #include "KernelRegistry.h"
+#include "KernelScheduler.h"
 
 #include "neverd/emulation/DriverSession.h"
 
@@ -20,6 +21,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 namespace neverd::emulation {
 struct DriverImage;
 class KernelExportRegistry;
@@ -46,11 +48,19 @@ public:
     uint64_t PC = 0;
     uint64_t Argument0 = 0;
     uint64_t Argument1 = 0;
+    uint64_t Argument2 = 0;
+    uint64_t Argument3 = 0;
   };
-  /// Construct one synchronous guest IRP and retain its object state until
-  /// finishRequest. Request errors do not launch a callback.
+  /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
   llvm::Error finishRequest(uint32_t DispatchStatus);
+  bool requestPending() const {
+    return Request && Request->DispatchReturned && !Request->Completed;
+  }
+  llvm::Expected<std::optional<KernelScheduler::Invocation>>
+  nextScheduled(bool AdvanceTime);
+  llvm::Error finishScheduled(uint64_t ID);
+  uint8_t currentIRQL() const { return CurrentIRQL; }
   llvm::Expected<Invocation> beginUnload();
   llvm::Error finishUnload();
   /// Reject CPU accesses whose environment semantics this profile does not own.
@@ -62,6 +72,14 @@ private:
   DriverResult &Result;
   const KernelExportRegistry *Exports;
   KernelRegistry Registry;
+  KernelScheduler Scheduler;
+  uint8_t CurrentIRQL = 0;
+  std::map<uint64_t, uint64_t> WorkItems;
+  std::map<uint64_t, uint64_t> WorkReferences;
+  llvm::Expected<uint64_t> allocateWorkItem(uint64_t Device);
+  llvm::Error queueWorkItem(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error freeWorkItem(uint64_t Address);
+  llvm::Error updateDeviceReferences(uint64_t Device);
   llvm::Expected<uint64_t> resolveRoutine(uint64_t Address);
   uint64_t DriverObject = 0;
   uint64_t RegistryPath = 0;
@@ -77,6 +95,7 @@ private:
   std::map<uint64_t, PoolAllocation> Allocations;
   std::map<uint64_t, uint64_t> ArenaAllocations;
   std::map<uint64_t, DriverDevice> Devices;
+  std::set<uint64_t> DeletePendingDevices;
   std::map<uint64_t, uint64_t> DeviceSizes;
   std::map<uint64_t, uint64_t> FreedRanges;
   mutable std::array<bool, 28 * 8> DispatchBytesWritten{};
@@ -101,6 +120,8 @@ private:
     uint64_t SecurityContext = 0;
     uint32_t OutputSize = 0;
     bool Completed = false;
+    bool DispatchReturned = false;
+    bool PendingMarked = false;
     uint32_t FileId = 0;
     uint32_t InputSize = 0;
     uint32_t TransferSize = 0;
@@ -154,6 +175,7 @@ private:
   llvm::Expected<std::string> readObjectName(uint64_t Address);
   llvm::Expected<uint64_t> createDevice(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error deleteDevice(uint64_t Address);
+  llvm::Error retireDeviceIfUnreferenced(uint64_t Address);
 };
 } // namespace neverd::emulation
 #endif

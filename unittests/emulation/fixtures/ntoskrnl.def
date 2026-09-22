@@ -13,6 +13,11 @@ EXPORTS
   IoCreateDevice
   IoCreateSymbolicLink
   IoDeleteDevice
+  IoAllocateWorkItem
+  IoQueueWorkItem
+  IoFreeWorkItem
+  IoMarkIrpPending
+  KeGetCurrentIrql
   IoDeleteSymbolicLink
   IofCompleteRequest
   ZwOpenFile

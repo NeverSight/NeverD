@@ -68,6 +68,8 @@ const char *backendAccessKindName(BackendAccessKind Kind) {
 
 struct UnicornBackend::Impl {
   uc_engine *Engine = nullptr;
+  // A separate identity survives address reuse without extending engine life.
+  std::shared_ptr<const void> Identity = std::make_shared<unsigned char>(0);
   uint64_t Limit = 0;
   uint64_t Mapped = 0;
   // The adapter owns permissions for API accesses as uc_mem_read/write bypass
@@ -79,6 +81,7 @@ struct UnicornBackend::Impl {
   uint64_t InstructionPC = 0;
   bool Timeout = false;
   bool CallbackFailed = false;
+  bool Running = false;
 
   ~Impl() {
     if (Engine)
@@ -213,6 +216,22 @@ struct UnicornBackend::Impl {
   }
 };
 
+struct BackendContext::Impl {
+  uc_context *Context = nullptr;
+  std::weak_ptr<const void> Owner;
+
+  ~Impl() {
+    if (Context)
+      uc_context_free(Context);
+  }
+};
+
+BackendContext::BackendContext(std::unique_ptr<Impl> State)
+    : State(std::move(State)) {}
+BackendContext::~BackendContext() = default;
+BackendContext::BackendContext(BackendContext &&) noexcept = default;
+BackendContext &BackendContext::operator=(BackendContext &&) noexcept = default;
+
 UnicornBackend::UnicornBackend(std::unique_ptr<Impl> State)
     : State(std::move(State)) {}
 UnicornBackend::~UnicornBackend() = default;
@@ -230,6 +249,11 @@ UnicornBackend::create(uint64_t MemoryLimit) {
   // these addresses intact while retaining the mapped page permissions.
   if (auto E = check(uc_ctl_tlb_mode(S->Engine, UC_TLB_VIRTUAL),
                      "configure guest virtual address space"))
+    return std::move(E);
+  // Scheduling exchanges CPU state while every thread observes the same live
+  // address space. Never enable Unicorn's optional memory snapshot mode.
+  if (auto E = check(uc_ctl_context_mode(S->Engine, UC_CTL_CONTEXT_CPU),
+                     "configure CPU context contents"))
     return std::move(E);
   // No Windows privilege environment is implied by this CPU configuration.
   // DriverSession explicitly rejects environment-dependent instructions.
@@ -323,6 +347,49 @@ llvm::Error UnicornBackend::setReg(X64Register Register, uint64_t Value) {
                "write guest register");
 }
 
+llvm::Expected<std::unique_ptr<BackendContext>> UnicornBackend::saveContext() {
+  if (State->FirstFault || State->CallbackFailed)
+    return failure("cannot save a faulted CPU instance");
+  auto Saved = std::make_unique<BackendContext::Impl>();
+  Saved->Owner = State->Identity;
+  if (auto E = check(uc_context_alloc(State->Engine, &Saved->Context),
+                     "allocate CPU context"))
+    return std::move(E);
+  auto Context =
+      std::unique_ptr<BackendContext>(new BackendContext(std::move(Saved)));
+  if (auto E = saveContext(*Context))
+    return std::move(E);
+  return Context;
+}
+
+llvm::Error UnicornBackend::saveContext(BackendContext &Context) {
+  if (!Context.State || Context.State->Owner.expired())
+    return failure("cannot save to an expired CPU context");
+  if (Context.State->Owner.lock() != State->Identity)
+    return failure("CPU context belongs to another backend instance");
+  if (State->FirstFault || State->CallbackFailed)
+    return failure("cannot save a faulted CPU instance");
+  return check(uc_context_save(State->Engine, Context.State->Context),
+               "save CPU context");
+}
+
+llvm::Error UnicornBackend::restoreContext(const BackendContext &Context) {
+  if (!Context.State || Context.State->Owner.expired())
+    return failure("cannot restore an expired CPU context");
+  if (Context.State->Owner.lock() != State->Identity)
+    return failure("CPU context belongs to another backend instance");
+  if (State->FirstFault || State->CallbackFailed)
+    return failure("cannot restore a faulted CPU instance");
+  if (State->Running)
+    return failure("cannot restore CPU context during guest execution");
+  if (auto E = check(uc_context_restore(State->Engine, Context.State->Context),
+                     "restore CPU context"))
+    return E;
+  State->InstructionPC = State->currentPC();
+  State->Timeout = false;
+  return llvm::Error::success();
+}
+
 llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
   State->Hooks = std::move(Hooks);
   // Replacing observers must not duplicate the underlying hooks.
@@ -349,10 +416,14 @@ llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
 llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
   if (State->FirstFault || State->CallbackFailed)
     return failure("cannot resume a faulted CPU instance");
+  if (State->Running)
+    return failure("cannot recursively execute a CPU instance");
   State->InstructionPC = PC;
   State->Timeout = false;
+  State->Running = true;
   uc_err Status =
       uc_emu_start(State->Engine, PC, UINT64_MAX, TimeoutMicroseconds, 0);
+  State->Running = false;
   if (Status == UC_ERR_INSN_INVALID || Status == UC_ERR_EXCEPTION)
     State->retain({Status == UC_ERR_INSN_INVALID
                        ? BackendFaultKind::InvalidInstruction

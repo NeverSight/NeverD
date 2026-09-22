@@ -50,9 +50,9 @@ llvm::Error X64ExecutionPolicy::validate(llvm::ArrayRef<uint8_t> Bytes,
   };
   const cs_x86 &X86 = Insn->detail->x86;
   // WDM headers inline KeGetCurrentIrql as a CR8 read on x64. This profile
-  // executes only at PASSIVE_LEVEL, forbids all CR8 writes and cannot enable
-  // virtual interrupts. Unicorn's concrete CR8 read is therefore the same
-  // zero IRQL exposed by the kernel API. Do not extend this exception to CR8
+  // assigns CR8 from the current modeled callback IRQL and forbids guest CR8
+  // writes. The concrete read agrees with the kernel API; it cannot enable
+  // virtual interrupts. Do not extend this exception to CR8
   // mutation or a profile that models IRQL transitions without owning TPR.
   if (Insn->id == X86_INS_MOV && X86.op_count == 2 &&
       X86.operands[0].type == X86_OP_REG && X86.operands[0].size == 8 &&

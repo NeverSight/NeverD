@@ -90,7 +90,14 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_driver_guide_tracks_supported_export_inventory(self) -> None:
         path = Path("docs/de/driver-emulation.md")
         original = i18n.RepositoryView(use_index=False).read_text(path)
-        for symbol in ("IoGetCurrentIrpStackLocation", "ZwQueryValueKey"):
+        for symbol in (
+            "IoGetCurrentIrpStackLocation",
+            "ZwQueryValueKey",
+            "IoAllocateWorkItem",
+            "IoQueueWorkItem",
+            "IoFreeWorkItem",
+            "IoMarkIrpPending",
+        ):
             with self.subTest(symbol=symbol):
                 errors: list[str] = []
                 changed = original.replace(f"`{symbol}`", "`UnknownAPI`")

@@ -5,7 +5,7 @@
 # Windows driver emulation
 
 NeverD's optional driver emulator executes the PE entry point of a supported
-x64 WDM driver and optionally exercises an explicit synchronous request
+x64 WDM driver and optionally exercises an explicit serial request
 scenario before unloading it. It uses Unicorn for CPU execution and NeverD's
 own bounded Windows environment model. It does not load
 the driver into the host kernel or forward guest API calls to host OS services.
@@ -51,16 +51,16 @@ establish compatibility with arbitrary third-party drivers.
 
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
-| x64 software WDM driver using the listed APIs | Initialization and synchronous file lifecycles | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Supported, with independent file identities and interleaved requests | Asynchronous completion is unavailable |
+| x64 software WDM driver using the listed APIs | Initialization, serial file lifecycles and bounded work-item callbacks | Each additional executed API must have a defined model |
+| `METHOD_BUFFERED` IOCTL | Independent file identities, interleaved serial requests and work-item completion | Other asynchronous producers remain unsupported |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | physical page identities, DMA and user mappings |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
-| Synchronous READ/WRITE | Buffered or direct according to device flags | Neither I/O, implicit file-position selection and asynchronous completion |
+| READ/WRITE | Buffered or direct according to device flags, including work-item completion | Neither I/O, implicit file-position selection and other asynchronous producers |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF / UMDF driver | Unsupported | Framework binding, objects, queues, callbacks, and the appropriate host runtime |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
-| Driver using worker threads, timers, DPCs, APCs, waits or cancellation | Unsupported | Scheduling, IRQL transitions, synchronization and asynchronous ownership |
+| Driver using work items | Deterministic `DelayedWorkQueue` callbacks at `PASSIVE_LEVEL` | Worker threads, timers, DPCs, APCs, waits and cancellation remain unsupported |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Unsupported environment | Device models, physical memory, buses, interrupts and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
@@ -93,10 +93,20 @@ executing its thunk or reading an unmodeled exported data value stops with
 NeverD does not replace unimplemented calls with success values. Malformed
 images or unsupported loading requirements fail before execution.
 
+Queued work-item callbacks run deterministically after a driver invocation
+returns, including DriverEntry, request dispatch and another worker callback.
+Requests remain serial: a pending request must complete before the next request
+starts. The dispatcher must mark the IRP pending and return `STATUS_PENDING`;
+a queued worker can then complete it at `PASSIVE_LEVEL`. If the request remains
+pending without an available completion producer, execution stops with a stalled
+`model_error`. Instruction, memory, event and time budgets also bound callbacks.
+
 This profile does not implement a complete Windows kernel, KMDF runtime,
-PnP/power lifecycle, asynchronous or pending IRPs, neither-method IOCTLs,
-interrupts, or multi-thread scheduling. Callbacks execute only when explicitly
-requested by the scenario; initialization alone still stops after DriverEntry.
+PnP/power lifecycle, neither-method IOCTLs, interrupts, general waits, threads,
+cancellation, or guest timer/DPC/APC APIs. Internal scheduler state-machine tests
+do not establish public support for those operations. Initialization-only calls
+also drain work explicitly queued by DriverEntry; they do not create scenario
+requests or invoke unload implicitly.
 
 Images use their preferred base unless a scenario selects a valid relocated
 address, and must be PE32+ x64 executables with the native subsystem. Imports
@@ -124,7 +134,9 @@ The initial API model deliberately has a finite contract:
 | `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
 | `KeGetCurrentIrql` | Returns `PASSIVE_LEVEL` |
-| `IofCompleteRequest`, `IoCompleteRequest` | Completes the active synchronous modeled IRP with `IO_NO_INCREMENT`; a completed IRP or buffer cannot be accessed again |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Device-owned opaque work items; `DelayedWorkQueue` only, callbacks receive the device and context at `PASSIVE_LEVEL`; queued items cannot be freed |
+| `IoMarkIrpPending` | Marks the live active IRP; the equivalent WDM macro's stack-control write is also modeled; dispatch must return `STATUS_PENDING` |
+| `IofCompleteRequest`, `IoCompleteRequest` | Completes the active synchronous or pending modeled IRP with `IO_NO_INCREMENT`; a completed IRP or buffer cannot be accessed again |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
 
 `DbgPrint` formatting supports integer `d/i/u/o/x/X`, pointer `p`, text `s/c`,
@@ -136,6 +148,17 @@ the model does not guess a Windows code page or call host printf on guest data.
 
 The original RegistryPath record and buffer expire when DriverEntry returns.
 Drivers that need the string later must copy it during initialization.
+
+A worker is removed from the queue before its callback begins, so that callback
+may free its own work item. Freeing an item that is still queued, duplicate
+queueing, stale handles and callback targets outside executable guest memory
+fail explicitly. The device reference survives until the callback returns.
+Requested unload requires all work items to be freed and queued work to finish.
+CPU context save/restore includes general, SIMD, FPU and control state; guest
+memory stays shared and faulted CPUs cannot be resumed through a saved context.
+Device deletion is deferred while file objects or queued/running work-item
+references remain. Work-item allocation returns NULL when the object arena
+is exhausted.
 
 The object/pool arena is 1 MiB. Uninitialized pool bytes use deterministic
 `0xCD` contents; freed pool bytes use `0xDD`. This is one concrete execution
@@ -181,9 +204,10 @@ use their file's device unless an explicit matching name is given. Optional
 has its own FILE_OBJECT and FsContext and requires create, transfers, cleanup,
 and close in that order. Requests for independent files may be interleaved.
 Exclusive devices reject a second open. These identities represent file objects,
-not duplicated handles. Buffered and both direct IOCTL methods are supported. Dispatch must synchronously complete
-each IRP; returning `STATUS_PENDING`, failing to complete, invalid output
-lengths, and accessing a completed IRP fail explicitly. Requested unload must
+not duplicated handles. Buffered and both direct IOCTL methods are supported.
+Dispatch must either complete synchronously or use the pending work-item
+contract above. Invalid output lengths and access to a completed IRP fail
+explicitly. Requested unload must
 leave no live device, symbolic link, pool allocation, or file object.
 
 The optional root field `"load_address": "0x190000000"` requests rebasing;
@@ -245,7 +269,7 @@ unknown dynamic name stops with an unspecified-availability diagnostic; absence
 is never inferred from missing implementation. Names are bounded printable
 ASCII and resolution is case-sensitive. The inventory is a concrete scenario
 property, not a claim to match every Windows release.
-`IoGetCurrentIrpStackLocation` and `MmGetSystemAddressForMdlSafe` are modeled WDM header helpers; this does not declare them exported by default, so their export availability requires a static import or an explicit `kernel_exports` declaration.
+`IoGetCurrentIrpStackLocation`, `IoMarkIrpPending` and `MmGetSystemAddressForMdlSafe` are modeled WDM header helpers; this does not declare them exported by default, so their export availability requires a static import or an explicit `kernel_exports` declaration.
 
 Scenario text is limited to 2 MiB, with at most 64 requests, at most 65536 bytes
 per input or output buffer, and at most 512 KiB total requested bytes, including
@@ -348,12 +372,16 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-synchronous-v2`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v3`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
-its phase (`driver_entry`, `request:N`, or `unload`). Each request reports
-dispatch and I/O statuses, completion, information length, and returned `output_hex` bytes.
+its phase (`driver_entry`, `request:N`, `callback:N`, or `unload`). Each request
+reports dispatch and I/O statuses, completion, information length, and returned
+`output_hex` bytes.
+Pending requests retain `STATUS_PENDING` in `dispatch_status`; the worker's
+final completion status is reported separately in `io_status` and determines
+the request's contribution to `scenario_success`.
 `preferred_image_base` describes the original PE base. `security_cookie` is the
 guest address of the initialized cookie, or `"0x0"` if none was required.
 Request fields are `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`,

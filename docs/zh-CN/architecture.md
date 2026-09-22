@@ -276,15 +276,18 @@ generated-code ABI 只为标量整数定义。浮点、SIMD、x87、原子操作
 
 ## Windows 驱动模拟
 
-`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 启用的可选执行组件。`emulate-driver` CLI 通过公共 C API 访问该组件。`DriverSession` 负责有界的 x64 WDM 初始化，以及可选的同步 create／IOCTL／read／write／cleanup／close／unload 调用；Windows 映像映射使用现有加载器提供的完整 `BinaryImage`，Windows 模型负责来宾对象和 API 语义。Unicorn 适配器负责 CPU 执行，并持有来宾内存的权威状态。此路径不使用实验性的原生翻译流水线，也不改变其支持范围。
+`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 启用的可选执行组件。`emulate-driver` CLI 通过公共 C API 访问该组件。`DriverSession` 负责有界的 x64 WDM 初始化，以及可选的串行 create／IOCTL／read／write／cleanup／close／unload 调用；Windows 映像映射使用现有加载器提供的完整 `BinaryImage`，Windows 模型负责来宾对象和 API 语义。Unicorn 适配器负责 CPU 执行，并持有来宾内存的权威状态。此路径不使用实验性的原生翻译流水线，也不改变其支持范围。
 
 Unicorn 通过 `cmake/NeverDUnicorn.cmake` 统一配置一次，与语义测试共享，并在 `BUILD_TESTING=OFF` 时仍可用。未知 API 和 CPU 环境行为会明确停止；驱动返回失败与模拟未完成始终保持区分。限制、报告及不支持的生命周期操作见[驱动模拟](driver-emulation.md)。
 
-原有 C API 仍仅执行初始化。场景 JSON 在相同执行选项上使用统一的严格解析器，字段与请求类型通过 `.def` 目录声明。请求的基址重定位和安全 cookie 初始化由执行加载器负责。Windows 模型负责 IRP／栈位置／文件对象，并验证同步完成；会话在共享执行预算下按顺序调用回调。未使用的未知导入采用延迟绑定；执行它们或读取未建模的导出数据时会明确停止。
+原有 C API 仍仅执行初始化。场景 JSON 在相同执行选项上使用统一的严格解析器，字段与请求类型通过 `.def` 目录声明。请求的基址重定位和安全 cookie 初始化由执行加载器负责。Windows 模型负责 IRP／栈位置／文件对象，并验证同步完成或工作项驱动的待处理完成；会话在共享执行预算下按顺序调用回调。未使用的未知导入采用延迟绑定；执行它们或读取未建模的导出数据时会明确停止。
 
 导出注册表为静态导入及动态例程查找分配稳定的来宾地址。导出可用性独立于实现：显式不存在的导出解析为 NULL，存在但未建模的例程绑定到陷阱，动态可用性未指定时停止。请求模型管理独立文件身份及请求拥有的 MDL，包括映射权限和失效时机。运行时通过会话中经过检查的 Win64 参数读取器读取来宾变参。后端故障保留首次结构化原因；观察和报告不会恢复已故障的 CPU，也不代表支持 Windows 异常处理。
 
 Windows 模型还管理独立的非分页池 MDL；描述符释放不会释放底层缓冲区。独立注册表模型管理显式场景树、句柄权限和键值生命周期，与静态导出目录分开。场景预检与执行使用同一注册表验证规则，报告保留最终键值；卸载检查遗留句柄。
+
+`KernelScheduler` 负责确定性的工作项队列顺序和回调身份；`KernelModel` 负责工作项／设备生命周期及 IRP 待处理／完成契约。`DriverSession` 在来宾调用返回的边界以 `PASSIVE_LEVEL` 执行队列，再推进串行请求。Unicorn 适配器保存完整 CPU 上下文，来宾内存始终共享。内部定时器／DPC 状态机并不代表已经公开支持对应来宾 API、线程／等待、取消、KMDF、PnP／电源或硬件。
+
 
 ## 异常重写边界
 

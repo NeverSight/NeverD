@@ -14,7 +14,7 @@ NeverD supporta Android e iOS tramite la CLI sperimentale `neverd mobile`: APK (
 | [Contribuire](CONTRIBUTING.md) | Ambiente, profili di build, workflow, stile e requisiti PR |
 | [Architettura](architecture.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
 | [Test](testing.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
-| [Emulazione dei driver Windows](driver-emulation.md) | Esecuzione WDM x64 limitata, compatibilità, scenari di richieste, report JSON e SDK |
+| [Emulazione dei driver Windows](driver-emulation.md) | Inizializzazione WDM x64 limitata, richieste seriali buffered/direct, completamento con elementi di lavoro, report e limiti |
 | [Ricostruzione delle eccezioni Windows](windows-exception-reconstruction.md) | Matrice di supporto SEH/C++, contratto IR, regole di patch nativo e validazione PE |
 | [Audit e hunt di sicurezza della memoria](memory-safety.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
 | [Plugin nativi](plugins.md) | ABI del descrittore C puro, callback ed eventi, flusso di build/link, rilevamento e regole di compatibilità |

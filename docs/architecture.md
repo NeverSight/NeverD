@@ -432,7 +432,7 @@ backend.
 `lib/emulation` is an optional execution component, enabled by
 `NEVERD_ENABLE_DRIVER_EMULATION`. The `emulate-driver` CLI reaches it through
 the public C API. `DriverSession` owns bounded x64 WDM initialization and
-optional synchronous create/IOCTL/read/write/cleanup/close/unload invocations;
+optional serial create/IOCTL/read/write/cleanup/close/unload invocations;
 Windows image mapping consumes the existing loader's complete `BinaryImage`,
 and the Windows model owns guest objects and API semantics. The Unicorn adapter
 owns CPU execution and the authoritative guest memory. This path does not use
@@ -448,9 +448,10 @@ The original C API remains initialization-only. Scenario JSON uses one strict
 parser over the same execution options, with fields and request kinds declared
 in `.def` inventories. Requested rebasing and security-cookie initialization
 belong to the execution loader. The Windows model owns IRP/stack-location/file
-objects and validates synchronous completion; the session sequences callbacks
-under shared execution budgets. Unused unknown imports are lazy bindings;
-executing them or reading unmodeled export data stops explicitly.
+objects and validates synchronous or work-item-driven pending completion; the
+session sequences callbacks under shared execution budgets. Unused unknown
+imports are lazy bindings; executing them or reading unmodeled export data
+stops explicitly.
 
 The export registry assigns stable guest addresses to both static imports and
 dynamic routine lookups. Export availability is separate from implementation:
@@ -473,6 +474,14 @@ requested unload rejects leaked handles.
 The runtime reads guest varargs through the session's checked Win64 argument
 reader. Backend faults retain their first structured cause; observation and
 reporting do not resume a faulted CPU or imply Windows exception handling.
+
+`KernelScheduler` owns deterministic work-item queue order and callback identity;
+`KernelModel` owns work-item/device lifetime and the IRP pending/completion
+contract. `DriverSession` drains callbacks at returned guest-call boundaries,
+at `PASSIVE_LEVEL`, before advancing serial requests. The Unicorn adapter saves
+complete CPU contexts while guest memory remains shared. Internal timer/DPC
+state-machine models do not imply exposed guest APIs, general thread/wait
+scheduling, cancellation, KMDF, PnP/power or hardware support.
 
 ## Exception-rewrite boundaries
 

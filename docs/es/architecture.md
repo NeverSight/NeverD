@@ -353,7 +353,7 @@ la política no proporciona un backend de traducción ejecutable.
 `lib/emulation` es un componente opcional de ejecución, activado mediante
 `NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` accede a él a través
 de la API C pública. `DriverSession` controla la inicialización WDM x64 acotada
-y las invocaciones síncronas opcionales create/IOCTL/read/write/cleanup/close/unload;
+y las invocaciones seriales opcionales create/IOCTL/read/write/cleanup/close/unload;
 el mapeo de imágenes Windows utiliza el `BinaryImage` completo del cargador
 existente, y el modelo de Windows controla los objetos del invitado y la
 semántica de las API. El adaptador Unicorn controla la ejecución de CPU y la
@@ -372,7 +372,7 @@ utiliza un único parser estricto con las mismas opciones de ejecución, con
 campos y tipos de solicitud declarados en catálogos `.def`. El cambio de base
 solicitado y la inicialización de la cookie de seguridad pertenecen al cargador
 de ejecución. El modelo de Windows controla los objetos IRP, de ubicación de
-pila y de archivo, y valida la finalización síncrona; la sesión ordena los
+pila y de archivo, y valida la finalización síncrona o pendiente mediante elementos de trabajo; la sesión ordena los
 callbacks bajo presupuestos de ejecución compartidos. Las importaciones
 desconocidas no utilizadas tienen vinculación diferida; ejecutarlas o leer
 datos exportados no modelados provoca una detención explícita.
@@ -391,6 +391,9 @@ conserva la primera causa estructurada de un fallo; la observación y los inform
 no reanudan una CPU con un fallo ni implican gestión de excepciones de Windows.
 
 El modelo de Windows también administra MDL independientes de pool no paginado; liberar el descriptor no libera el búfer subyacente. Un modelo de registro separado administra el árbol explícito del escenario, los permisos de identificadores y la vida de claves y valores, independientemente del inventario de exportaciones. La comprobación previa y la ejecución comparten las mismas reglas de validación. El informe conserva los valores finales y la descarga comprueba los identificadores abiertos.
+
+`KernelScheduler` controla el orden determinista y la identidad de los callbacks; `KernelModel` controla la vida de elementos/dispositivos y el contrato IRP pendiente/completado. `DriverSession` vacía la cola a `PASSIVE_LEVEL` cuando retornan las llamadas invitadas, antes de avanzar las solicitudes seriales. Unicorn guarda contextos CPU completos y mantiene la memoria compartida. Los modelos internos de temporizadores/DPC no implican API invitadas públicas, hilos/esperas generales, cancelación, KMDF, PnP/energía ni hardware.
+
 
 ## Fronteras de reescritura de excepciones
 

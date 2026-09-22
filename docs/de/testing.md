@@ -57,6 +57,9 @@ für Tests bestimmte Unicorn-Konfiguration benötigen.
 
 Zusätzliche Tests prüfen treibereigene MDLs für nicht auslagerbaren Pool, unabhängige Lebenszeiten von Deskriptor und Puffer, Registry-Abfragelayouts und kurze Puffer, Handle-Rechte, Löschung und Lecks sowie die vollständigen 64 Bit von `information_hex` bei IOCTLs ohne Ausgabe. Die externe Validierung umfasst auch synchrone direkte Lese-/Schreibzugriffe und Statistikabfragen von Zero.
 
+Zusätzliche Tests prüfen vollständige CPU-Kontexte (Register, Flags, SIMD, FPU, CR8), gemeinsamen Speicher und die Ablehnung fehlerhafter oder fremder Kontexte. Worker-Fixtures prüfen markierte ausstehende IRPs, verzögerten Abschluss, Queue-/Lebenszeitfehler, Stillstand, gemeinsame Budgets und getrennte Dispatch-/Abschlussstatus in öffentlichen Berichten. Interne Timer-/DPC-Tests prüfen nur Zustandsübergänge, keine Gast-APIs oder vollständige asynchrone Windows-Umgebung.
+
+
 ## Testaufteilung
 
 `add_neverd_unittest` erzeugt ein GoogleTest-Programm und weist jedem

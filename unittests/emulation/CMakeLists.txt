@@ -35,7 +35,7 @@ foreach(_driver_name success failure unknown fault loop devices readonly privile
 endforeach()
 # The loader fixture deliberately retains relocations and a compiler-inserted
 # stack protector. The WDM fixture covers the complete synchronous lifecycle.
-foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl driver_registry)
+foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl driver_registry driver_async)
   set(_driver_object "${_driver_fixture_dir}/${_driver_name}.obj")
   set(_driver_image "${_driver_fixture_dir}/${_driver_name}.sys")
   if(_driver_name STREQUAL "loader")
@@ -47,6 +47,13 @@ foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl dr
     set(_driver_stack_flag -fno-stack-protector)
     set(_driver_entry DriverEntry)
   endif()
+  set(_driver_additional_dependencies)
+  if(_driver_name STREQUAL "driver_async")
+    list(APPEND _driver_additional_dependencies
+      fixtures/driver_io.c fixtures/DriverAsyncCases.def
+      "${CMAKE_SOURCE_DIR}/lib/emulation/windows/KernelValues.def"
+      "${CMAKE_SOURCE_DIR}/lib/emulation/windows/WindowsKernelLayout.def")
+  endif()
   add_custom_command(OUTPUT "${_driver_image}" "${_driver_object}"
     COMMAND "${NEVERD_TEST_CLANG_EXECUTABLE}"
       --target=x86_64-pc-windows-msvc -std=c11 -ffreestanding
@@ -56,6 +63,7 @@ foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl dr
       /subsystem:native /driver /nodefaultlib /dynamicbase /base:0x180000000
       "/out:${_driver_image}" "${_driver_object}" "${_driver_import_lib}"
     DEPENDS "${_driver_source}" "${_driver_import_lib}"
+      ${_driver_additional_dependencies}
     VERBATIM)
   list(APPEND _driver_outputs "${_driver_image}")
 endforeach()
@@ -69,6 +77,10 @@ add_neverd_unittest(NeverDDriverEmulationTests
   DriverScenarioTests.cpp
   KernelModelTests.cpp
   BackendFaultTests.cpp
+  BackendContextTests.cpp
+  KernelSchedulerTests.cpp
+  DeviceLifecycleTests.cpp
+  DriverAsyncTests.cpp
   KernelRuntimeTests.cpp
   DriverDirectIOTests.cpp
   DriverMDLTests.cpp

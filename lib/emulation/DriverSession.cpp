@@ -279,6 +279,12 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       return E;
     if (auto E = CPU.setReg(X64Register::DX, Invocation.Argument1))
       return E;
+    if (auto E = CPU.setReg(X64Register::R8, Invocation.Argument2))
+      return E;
+    if (auto E = CPU.setReg(X64Register::R9, Invocation.Argument3))
+      return E;
+    if (auto E = CPU.setReg(X64Register::CR8, Kernel.currentIRQL()))
+      return E;
     uint64_t NextPC = Invocation.PC;
     while (!Stopped) {
       auto Remaining = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -424,6 +430,49 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                               : DriverStopReason::ModelError,
          llvm::toString(std::move(E)));
   };
+  auto DrainCallbacks = [&]() -> llvm::Error {
+    const std::string ParentPhase = Result.Phase;
+    while (!DeadlineExceeded()) {
+      auto Next = Kernel.nextScheduled(Kernel.requestPending());
+      if (!Next) {
+        ModelFailure(Next.takeError());
+        return llvm::Error::success();
+      }
+      if (!*Next) {
+        if (Kernel.requestPending())
+          ModelFailure(
+              failure("STATUS_PENDING request is stalled: no scheduled "
+                      "completion source remains"));
+        else
+          Result.Phase = ParentPhase;
+        return llvm::Error::success();
+      }
+      const auto &Task = **Next;
+      if (Task.Arguments.size() > RegisterArgumentCount) {
+        ModelFailure(failure("scheduled callback exceeds register arguments"));
+        return llvm::Error::success();
+      }
+      auto Context = CPU.saveContext();
+      if (!Context)
+        return Context.takeError();
+      auto Argument = [&](size_t Index) {
+        return Index < Task.Arguments.size() ? Task.Arguments[Index] : 0;
+      };
+      if (auto E = Invoke(
+              {Task.PC, Argument(0), Argument(1), Argument(2), Argument(3)},
+              std::string(CallbackPhase) + std::to_string(Task.ID)))
+        return E;
+      if (Result.Stop != DriverStopReason::Returned)
+        return llvm::Error::success();
+      if (auto E = Kernel.finishScheduled(Task.ID)) {
+        ModelFailure(std::move(E));
+        return llvm::Error::success();
+      }
+      if (auto E = CPU.restoreContext(**Context))
+        return E;
+    }
+    return llvm::Error::success();
+  };
   if (Result.Stop == DriverStopReason::Returned) {
     if (auto E = Kernel.finishEntry())
       ModelFailure(std::move(E));
@@ -435,7 +484,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   // Entry failure is a valid completed observation. No requests or unload are
   // delivered to a driver whose initialization did not succeed.
   if (Result.Stop == DriverStopReason::Returned && Result.NTStatus == 0) {
+    if (auto E = DrainCallbacks())
+      return std::move(E);
     for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
+      if (Result.Stop != DriverStopReason::Returned)
+        break;
       Result.Phase = std::string(RequestPhase) + std::to_string(Index);
       if (DeadlineExceeded())
         break;
@@ -449,9 +502,21 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           return std::move(E);
         if (Result.Stop != DriverStopReason::Returned)
           break;
-        if (auto E = Kernel.finishRequest(*InvocationReturn)) {
+        const uint32_t DispatchStatus = *InvocationReturn;
+        if (auto E = Kernel.finishRequest(DispatchStatus)) {
           ModelFailure(std::move(E));
           break;
+        }
+        const bool Deferred = Kernel.requestPending();
+        if (auto E = DrainCallbacks())
+          return std::move(E);
+        if (Result.Stop != DriverStopReason::Returned)
+          break;
+        if (Deferred) {
+          if (auto E = Kernel.finishRequest(DispatchStatus)) {
+            ModelFailure(std::move(E));
+            break;
+          }
         }
       }
     }
