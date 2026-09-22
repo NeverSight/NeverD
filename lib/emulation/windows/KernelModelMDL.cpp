@@ -140,8 +140,12 @@ llvm::Error KernelModel::freeMDL(uint64_t MDL) {
 }
 
 llvm::Expected<uint64_t>
-KernelModel::createRequestMDL(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
-                              bool Writable, uint64_t UserAddress) {
+KernelModel::createRequestMDL(uint64_t IRP, uint32_t Size,
+                              llvm::ArrayRef<uint8_t> Initial, bool Writable,
+                              uint64_t UserAddress) {
+  const auto *Owner = requestForIRP(IRP);
+  if (!Owner || Owner->Completed)
+    return mdlError("a request MDL requires a live owning IRP");
   if (!Size || Initial.size() > Size)
     return mdlError("a request MDL requires a nonempty bounded buffer");
   const uint64_t Offset = UserAddress & (profile::PageSize - 1);
@@ -160,6 +164,7 @@ KernelModel::createRequestMDL(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
   if (!*Record)
     return mdlError("request MDL exhausted the Windows model arena");
   LockedMdl State;
+  State.OwnerIRP = IRP;
   State.Address = *Record;
   State.Size = MDLSize + Pages * profile::PointerSize;
   State.Buffer = Buffer;
@@ -198,7 +203,8 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
     // request no-write/no-execute. No page protections are changed here.
     return State.Buffer;
   }
-  if (!Request || Request->Completed || Request->Mdl != MDL)
+  const auto *Owner = requestForIRP(State.OwnerIRP);
+  if (!Owner || Owner->Completed || Owner->Mdl != MDL)
     return mdlError("mapping requires the active request's locked MDL");
   if (State.Mapped) {
     if (!ReuseExisting)
@@ -228,9 +234,12 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
       It->second.Owner == LockedMdl::Ownership::NonPagedPool)
     return mdlError("a nonpaged pool MDL cannot release its existing "
                     "system-space mapping");
-  if (!Request || Request->Completed || Request->Mdl != MDL || !MDLs.count(MDL))
+  if (It == MDLs.end() || It->second.Owner != LockedMdl::Ownership::Request)
     return mdlError("unmapping requires the active request's locked MDL");
-  auto &State = MDLs.at(MDL);
+  auto &State = It->second;
+  const auto *Owner = requestForIRP(State.OwnerIRP);
+  if (!Owner || Owner->Completed || Owner->Mdl != MDL)
+    return mdlError("unmapping requires the active request's locked MDL");
   if (!State.Mapped || State.Buffer != Address)
     return mdlError("MDL unmapping requires its live system mapping address");
   if (auto E =
@@ -274,11 +283,15 @@ llvm::Expected<std::vector<uint8_t>> KernelModel::readMDLBytes(uint64_t MDL,
   return Bytes;
 }
 
-llvm::Error KernelModel::expireRequestMDL() {
-  if (!Request || !Request->Mdl)
+llvm::Error KernelModel::expireRequestMDL(uint64_t IRP) {
+  const auto *Owner = requestForIRP(IRP);
+  if (!Owner || Owner->Completed)
+    return mdlError("active request lost ownership of its MDL");
+  if (!Owner->Mdl)
     return llvm::Error::success();
-  auto It = MDLs.find(Request->Mdl);
-  if (It == MDLs.end())
+  auto It = MDLs.find(Owner->Mdl);
+  if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
+      It->second.Owner != LockedMdl::Ownership::Request)
     return mdlError("active request lost ownership of its MDL");
   const auto &State = It->second;
   if (auto E = Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))

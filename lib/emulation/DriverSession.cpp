@@ -823,17 +823,24 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         const uint32_t DispatchStatus =
             Invocation->FrameworkDispatchStatus.value_or(
                 uint32_t(*InvocationReturn));
-        if (auto E = Kernel.finishRequest(DispatchStatus)) {
+        if (auto E =
+                Kernel.recordDispatchReturn(Invocation->IRP, DispatchStatus)) {
           ModelFailure(std::move(E));
           break;
         }
-        const bool Deferred = Kernel.requestPending();
+        const bool Deferred = Kernel.requestPending(Invocation->IRP);
+        if (!Deferred) {
+          if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
+            ModelFailure(std::move(E));
+            break;
+          }
+        }
         if (auto E = DrainCallbacks())
           return std::move(E);
         if (Result.Stop != DriverStopReason::Returned)
           break;
         if (Deferred) {
-          if (auto E = Kernel.finishRequest(DispatchStatus)) {
+          if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
             ModelFailure(std::move(E));
             break;
           }

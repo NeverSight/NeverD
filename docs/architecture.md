@@ -458,6 +458,11 @@ dynamic routine lookups. Export availability is separate from implementation:
 explicit absence resolves to NULL, a present unmodeled routine binds to a trap,
 and unspecified dynamic availability stops. The request model owns independent
 file identities and request-owned MDLs, including mapping permissions and expiry.
+Each in-flight IRP has an explicit record retaining its file, device and MDL
+identity independently of guest packet storage. Dispatch return, completion and
+finalization are separate boundaries; completed packets may already be retired
+before their dispatch returns. The current synchronous file profile serializes
+requests per file, and public scenarios still submit and drain requests in order.
 The same MDL authority also owns standalone driver descriptors: nonpaged pool
 provenance is recorded by pool allocation, building a descriptor retains the
 original pool VA, and descriptor release never frees or remaps its backing

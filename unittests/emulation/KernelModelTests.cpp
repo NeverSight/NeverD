@@ -178,7 +178,8 @@ TEST_F(DriverKernelModel, MDLMappingIgnoresUnspecifiedNarrowArgumentHighBits) {
   success(Memory->writeInteger(IRP + IRPStatusOffset, 0, 4));
   success(Memory->writeInteger(IRP + IRPInformationOffset, 0, 8));
   invoke("IofCompleteRequest", {IRP, 0});
-  success(Model->finishRequest(0));
+  success(Model->recordDispatchReturn(IRP, 0));
+  success(Model->finalizeRequest(IRP));
   DriverRequest IO;
   IO.ControlCode = 0x222002;
   IO.OutputSize = 2;

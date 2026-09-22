@@ -34,7 +34,8 @@ llvm::Expected<uint32_t> requestMajor(DriverRequestKind Kind) {
 } // namespace
 
 llvm::Error KernelModel::markRequestPending(uint64_t IRP) {
-  if (!Request || Request->IRP != IRP || Request->Completed)
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
     return frameworkRequestError(
         "IoMarkIrpPending requires the live active IRP");
   auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
@@ -47,7 +48,8 @@ llvm::Error KernelModel::markRequestPending(uint64_t IRP) {
 llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
                                                    uint32_t Status,
                                                    uint64_t Information) const {
-  if (!Request || Request->IRP != IRP || Request->Completed)
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
     return frameworkRequestError(
         "completion requires the active IRP and cannot occur twice");
   auto Pending = Memory.readInteger(IRP + IRPPendingOffset, 1);
@@ -89,7 +91,8 @@ void KernelModel::configureFrameworkRequestHost() {
   KernelFramework::RequestHost Host;
   Host.View =
       [this](uint64_t IRP) -> llvm::Expected<KernelFramework::RequestView> {
-    if (!Request || Request->IRP != IRP || Request->Completed)
+    const auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
       return frameworkRequestError(
           "framework request inspection requires the live active IRP");
     auto Major = requestMajor(Request->Kind);
@@ -104,7 +107,8 @@ void KernelModel::configureFrameworkRequestHost() {
                                         Request->OutputSize};
   };
   Host.Buffer = [this](uint64_t IRP, bool Output) -> llvm::Expected<uint64_t> {
-    if (!Request || Request->IRP != IRP || Request->Completed)
+    const auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
       return frameworkRequestError(
           "framework buffer retrieval requires the live active IRP");
     const bool IsIOCTL = Request->Kind == DriverRequestKind::DeviceControl;
@@ -135,7 +139,8 @@ void KernelModel::configureFrameworkRequestHost() {
   };
   Host.MarkPending = [this](uint64_t IRP) { return markRequestPending(IRP); };
   Host.Information = [this](uint64_t IRP) -> llvm::Expected<uint64_t> {
-    if (!Request || Request->IRP != IRP || Request->Completed)
+    const auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
       return frameworkRequestError(
           "framework information retrieval requires the live active IRP");
     return Memory.readInteger(IRP + IRPInformationOffset, 8);
@@ -148,6 +153,7 @@ void KernelModel::configureFrameworkRequestHost() {
                          uint64_t Information) -> llvm::Error {
     if (auto E = validateRequestCompletion(IRP, Status, Information))
       return E;
+    auto *Request = requestForIRP(IRP);
     if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, Status, 4))
       return E;
     if (auto E =

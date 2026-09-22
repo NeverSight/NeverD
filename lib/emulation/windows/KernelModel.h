@@ -71,13 +71,15 @@ public:
     uint64_t Argument3 = 0;
     std::vector<uint64_t> StackArguments;
     std::optional<uint32_t> FrameworkDispatchStatus;
+    uint64_t IRP = 0;
   };
   /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
-  llvm::Error finishRequest(uint32_t DispatchStatus);
-  bool requestPending() const {
-    return Request && Request->DispatchReturned && !Request->Completed;
-  }
+  llvm::Error recordDispatchReturn(uint64_t IRP, uint32_t DispatchStatus);
+  /// Finalization is idempotent only for an already finalized owned IRP.
+  llvm::Error finalizeRequest(uint64_t IRP);
+  /// IRP=0 inspects all requests for the scheduler's drain boundary.
+  bool requestPending(uint64_t IRP = 0) const;
   llvm::Expected<std::optional<KernelScheduler::Invocation>>
   nextScheduled(bool AdvanceTime,
                 std::optional<uint64_t> Deadline = std::nullopt);
@@ -165,6 +167,7 @@ private:
     DriverRequestKind Kind;
     size_t ResultIndex;
     uint64_t IRP = 0;
+    uint64_t Device = 0, FileAddress = 0;
     uint64_t Stack = 0;
     uint64_t SystemBuffer = 0;
     uint64_t UserBuffer = 0;
@@ -182,16 +185,21 @@ private:
     uint64_t Mdl = 0;
     mutable std::array<bool, 16> IOStatusWritten{};
   };
-  std::optional<ActiveRequest> Request;
+  std::map<uint64_t, ActiveRequest> Requests;
+  std::set<uint64_t> FinalizedRequests;
+  ActiveRequest *requestForIRP(uint64_t IRP);
+  const ActiveRequest *requestForIRP(uint64_t IRP) const;
   void configureFrameworkRequestHost();
   llvm::Error markRequestPending(uint64_t IRP);
-  llvm::Error prepareRequestBuffers(const DriverRequest &Input,
+  llvm::Error prepareRequestBuffers(ActiveRequest &Record,
+                                    const DriverRequest &Input,
                                     uint64_t Device);
-  llvm::Error initializeRequestPacket(const DriverRequest &Input,
-                                      uint64_t Device, uint64_t File);
+  llvm::Error initializeRequestPacket(ActiveRequest &Record,
+                                      const DriverRequest &Input);
   struct LockedMdl {
     enum class Ownership { Request, Driver, NonPagedPool };
     Ownership Owner = Ownership::Request;
+    uint64_t OwnerIRP = 0;
     uint64_t Address = 0;
     uint64_t Size = 0;
     uint64_t Buffer = 0;
@@ -209,7 +217,7 @@ private:
   llvm::Error freeMDL(uint64_t MDL);
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
                                            uint16_t Flags);
-  llvm::Expected<uint64_t> createRequestMDL(uint32_t Size,
+  llvm::Expected<uint64_t> createRequestMDL(uint64_t IRP, uint32_t Size,
                                             llvm::ArrayRef<uint8_t> Initial,
                                             bool Writable,
                                             uint64_t UserAddress);
@@ -218,7 +226,7 @@ private:
   llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL);
   llvm::Error validateMDLAccess(uint64_t Address, uint32_t Size,
                                 bool IsWrite) const;
-  llvm::Error expireRequestMDL();
+  llvm::Error expireRequestMDL(uint64_t IRP);
   llvm::Expected<std::vector<uint8_t>> readMDLBytes(uint64_t MDL,
                                                     uint32_t Count);
   llvm::Error completeRequest(uint64_t IRP, uint8_t PriorityBoost);

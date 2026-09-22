@@ -104,16 +104,15 @@ void KernelModel::configureFrameworkDeviceHost() {
         (References != WorkReferences.end() && References->second))
       return frameworkDeviceError(
           "asynchronous framework device deletion is outside this profile");
-    if (Request && Request->Stack) {
-      auto RequestDevice =
-          Memory.readInteger(Request->Stack + windows::StackDeviceOffset, 8);
-      if (!RequestDevice)
-        return RequestDevice.takeError();
-      if (*RequestDevice == Device)
-        return frameworkDeviceError(
-            "framework device deletion with an active IRP is outside this "
-            "profile");
-    }
+    // Completed packets may already be inaccessible while their dispatch
+    // invocation has not returned. Model-owned identity survives until the
+    // request record is finalized; never recover it from retired guest fields.
+    if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          return Entry.second.Device == Device;
+        }))
+      return frameworkDeviceError(
+          "framework device deletion with an active IRP is outside this "
+          "profile");
     for (const auto &Key : Owner->second) {
       auto Link = SymbolicLinks.find(Key);
       if (Link == SymbolicLinks.end() || Link->second != Object->second.Name)
