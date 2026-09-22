@@ -4,7 +4,7 @@
 
 # Windows 驅動程式模擬
 
-NeverD 的選用驅動程式模擬器執行受支援 x64 WDM 驅動程式的 PE 進入點，並可在卸載前執行明確指定的同步請求情境。它使用 Unicorn 執行 CPU 指令，使用 NeverD 自有的有界 Windows 環境模型。它不會將驅動程式載入主機核心，也不會把客體 API 呼叫轉送給主機作業系統服務。
+NeverD 的選用驅動程式模擬器執行受支援 x64 WDM 驅動程式的 PE 進入點，並可在卸載前執行明確指定的循序請求情境。它使用 Unicorn 執行 CPU 指令，使用 NeverD 自有的有界 Windows 環境模型。它不會將驅動程式載入主機核心，也不會把客體 API 呼叫轉送給主機作業系統服務。
 
 ## 建置與執行
 
@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 驅動程式類別或需求 | 目前範圍 | 缺少的環境 |
 |--------------------|----------|------------|
-| 使用下列 API 的 x64 軟體 WDM 驅動程式 | 初始化與同步檔案生命週期 | 每個額外執行到的 API 都必須有明確的模型 |
-| `METHOD_BUFFERED` IOCTL | 支援獨立檔案識別碼與交錯請求 | 尚不支援非同步完成 |
+| 使用下列 API 的 x64 軟體 WDM 驅動程式 | 初始化、循序檔案生命週期與有界工作項目回呼 | 每個額外執行到的 API 都必須有明確的模型 |
+| `METHOD_BUFFERED` IOCTL | 獨立檔案識別碼、交錯循序請求及工作項目完成 | 其他非同步完成來源仍不支援 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL 及系統對映 | 實體頁面識別、DMA 及使用者對映 |
 | 驅動程式自行配置的 MDL | 描述模型非分頁集區的獨立描述元，重複使用原始緩衝區位址 | IRP 關聯、MDL 鏈、探查／鎖定頁面、實體頁面及使用者對映 |
-| 同步 READ/WRITE | 依裝置旗標使用緩衝或直接傳輸 | Neither I/O、隱含檔案位置選擇及非同步完成 |
+| READ/WRITE | 依裝置旗標使用緩衝或直接傳輸，支援工作項目完成 | Neither I/O、隱含檔案位置及其他非同步完成來源 |
 | `METHOD_NEITHER` | 拒絕 | 使用者位址空間環境、存取探測及客體例外處理 |
 | KMDF / UMDF 驅動程式 | 不支援 | 框架繫結、物件、佇列、回呼及對應的主機執行階段 |
 | PnP 匯流排／功能／篩選驅動程式 | 初始化可在 API 子集內執行；不支援裝置堆疊生命週期 | 裝置附加、向下層驅動程式派送、PnP 與電源 IRP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
-| 使用背景工作執行緒、計時器、DPC、APC、等待或取消的驅動程式 | 不支援 | 排程、IRQL 轉換、同步與非同步所有權 |
+| 使用工作項目的驅動程式 | 在 `PASSIVE_LEVEL` 確定性執行 `DelayedWorkQueue` 回呼 | 背景工作執行緒、計時器、DPC、APC、等待與取消仍不支援 |
 | 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 支援配置的登錄；其他行為限於下列 API | 物件管理員、系統狀態及回呼／事件產生機制 |
 | 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 不支援所需環境 | 裝置模型、實體記憶體、匯流排、中斷及特權 CPU 狀態 |
 | x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
@@ -63,7 +63,12 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 未知匯入項目繫結至延遲陷阱。未使用的匯入項目不會阻止執行；執行其 thunk 或讀取未建模的匯出資料值時，會以 `unsupported_api` 停止。不支援的 CPU 環境效果也會明確停止。NeverD 不會用成功傳回值替代未實作的呼叫。格式錯誤的映像或不支援的載入需求會在執行前失敗。
 
-此設定並未實作完整的 Windows 核心、KMDF 執行階段、PnP／電源生命週期、非同步或待處理 IRP、neither 方法 IOCTL、中斷或多執行緒排程。只有情境明確請求時才執行回呼；僅初始化模式仍在 DriverEntry 之後停止。
+佇列中的工作項目在驅動程式呼叫傳回後確定性執行，包括 DriverEntry、請求派送與其他工作項目回呼傳回時。請求仍循序處理：待處理請求必須完成後才能開始下一個請求。派送函式必須將 IRP 標記為待處理並傳回 `STATUS_PENDING`，再由排入佇列的工作項目於 `PASSIVE_LEVEL` 完成。若請求仍待處理卻沒有可執行的完成來源，執行會因停滯而以 `model_error` 停止。回呼共用指令、記憶體、事件與時間預算。
+
+此設定仍未實作完整 Windows 核心、KMDF、PnP／電源生命週期、neither IOCTL、中斷、通用等待、執行緒、取消或客體計時器／DPC／APC API。內部排程狀態機的單元測試不代表這些公開能力已可用。僅初始化呼叫也會執行 DriverEntry 明確排入佇列的工作項目，但不會隱含產生情境請求或執行卸載。
+
+工作項目在回呼開始前出佇列，因此回呼可釋放自身的工作項目。釋放仍在佇列中的項目、重複排入、使用失效物件或非客體可執行記憶體中的回呼位址都會明確失敗。裝置參考保留到回呼傳回。請求卸載要求釋放所有工作項目並完成佇列工作。CPU 內容保存與還原包含通用、SIMD、FPU 與控制狀態；客體記憶體始終共用，故障 CPU 不能藉還原內容繼續執行。
+刪除會延後到檔案物件及排隊／執行中的工作項目參考全部釋放。物件區耗盡時，工作項目配置傳回 NULL。
 
 映像預設使用慣用基底位址，除非情境選擇了有效的重新定位位址。映像必須為使用 native 子系統的 PE32+ x64 可執行檔。匯入可來自 `ntoskrnl.exe` 或 `ntkrnlmp.exe`。
 
@@ -86,7 +91,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `DbgPrint`、`DbgPrintEx` | 經檢查的 Win64 可變參數格式化，最多輸出 512 位元組；啟用所有偵錯器篩選器 |
 | `IoGetCurrentIrpStackLocation` | 傳回目前建模 IRP 的堆疊位置；正常編譯的 WDM 巨集讀取相同客體欄位 |
 | `KeGetCurrentIrql` | 傳回 `PASSIVE_LEVEL` |
-| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成目前同步建模 IRP；已完成的 IRP 或緩衝區不能再次存取 |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 裝置擁有的不透明工作項目；僅支援 `DelayedWorkQueue`，在 `PASSIVE_LEVEL` 將裝置與內容傳給回呼；禁止釋放仍在佇列中的項目 |
+| `IoMarkIrpPending` | 標記目前存活的 IRP；也支援 WDM 巨集對堆疊控制欄位的等效寫入；派送必須傳回 `STATUS_PENDING` |
+| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成目前同步或待處理的建模 IRP；已完成的 IRP 或緩衝區不能再次存取 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的客體緩衝區操作，每次呼叫最多 1 MiB；要求不重疊的複製 API 會拒絕重疊 |
 
 `DbgPrint` 格式化支援整數 `d/i/u/o/x/X`、指標 `p`、文字 `s/c`、`%%`、計數式 Unicode `wZ/lZ`、寬字元 `ls/ws`、旗標、包含 `*` 的寬度／精度，以及 Windows 整數長度修飾符。最多讀取 32 個可變參數及 1024 個格式位元組。寬度與精度上限為 512。浮點數、`%n`、未知組合及非 ASCII 文字轉換會明確停止；模型不會猜測 Windows 字碼頁，也不會對客體資料呼叫主機 printf。
@@ -118,7 +125,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-裝置名稱與 IOCTL 代碼必須符合驅動程式。create 省略 `device` 時選擇唯一的存活裝置；無法唯一選擇則失敗。後續請求使用其檔案的裝置，除非明確提供相符的名稱。選用的 `file` 是無號 32 位元情境識別碼，預設為零。每個識別碼各有自己的 FILE_OBJECT 與 FsContext，且必須依 create、傳輸、cleanup、close 的順序執行。獨立檔案的請求可以交錯執行。獨占裝置會拒絕第二次開啟。這些識別碼代表檔案物件，而非複製的控制代碼。支援緩衝及兩種直接 IOCTL 方法。派送必須同步完成每個 IRP；傳回 `STATUS_PENDING`、未完成請求、輸出長度無效及存取已完成的 IRP 都會明確失敗。請求卸載後，不得留下存活的裝置、符號連結、集區配置或檔案物件。
+裝置名稱與 IOCTL 代碼必須符合驅動程式。create 省略 `device` 時選擇唯一的存活裝置；無法唯一選擇則失敗。後續請求使用其檔案的裝置，除非明確提供相符的名稱。選用的 `file` 是無號 32 位元情境識別碼，預設為零。每個識別碼各有自己的 FILE_OBJECT 與 FsContext，且必須依 create、傳輸、cleanup、close 的順序執行。獨立檔案的請求可以交錯執行。獨占裝置會拒絕第二次開啟。這些識別碼代表檔案物件，而非複製的控制代碼。支援緩衝及兩種直接 IOCTL 方法。派送必須同步完成，或遵循上述工作項目待處理契約。輸出長度無效及存取已完成的 IRP 都會明確失敗。請求卸載後，不得留下存活的裝置、符號連結、集區配置或檔案物件。
 
 選用根欄位 `"load_address": "0x190000000"` 請求變更載入基底位址；省略此欄位或指定 `"0x0"` 時使用慣用位址。映像必須滿足重新定位需求。原有的初始化命令或 C API 不會隱含執行任何請求情境。
 
@@ -133,7 +140,7 @@ IOCTL 的 `output_size` 非零時，`Information` 不得超過該大小，即使
 對於 READ/WRITE，`DO_BUFFERED_IO` 或 `DO_DIRECT_IO` 選擇傳輸方法。Neither 或互相衝突的旗標會停止。Information 會依傳輸長度檢查；寫入傳回計數，讀取傳回位元組。
 
 `kernel_exports` 將常式名稱對應至明確的可用性布林值，例如 `"kernel_exports": {"OptionalRoutine": false}`。已建模的匯出與靜態匯入會取得與 `MmGetSystemRoutineAddress` 共用的穩定位址。明確不存在的匯出解析為 NULL，且不能滿足靜態匯入需求。宣告存在但沒有 API 模型的匯出解析為延遲陷阱。未知的動態名稱會停止，並診斷其可用性未指定；絕不因缺少實作而推斷匯出不存在。名稱為有界的可列印 ASCII，解析時區分大小寫。此清單是具體情境的屬性，不代表符合每個 Windows 版本。
-`IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 標頭檔輔助函式；模型預設不會據此宣告它們是匯出項目，其匯出可用性需要靜態匯入或明確的 `kernel_exports` 宣告。
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 標頭檔輔助函式；模型預設不會據此宣告它們是匯出項目，其匯出可用性需要靜態匯入或明確的 `kernel_exports` 宣告。
 
 情境文字上限為 2 MiB，最多包含 64 個請求，每個輸入或輸出緩衝區最多 65536 位元組，包含 `direct_input` 內容在內的總請求位元組數最多 512 KiB。指令、觀察事件、客體記憶體及時間預算涵蓋整個情境。1 MiB 區域還需存放物件與中繼資料，因此即使尚未用盡情境緩衝區總額度，也可能耗盡模型記憶體。
 
@@ -169,7 +176,9 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-synchronous-v2`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`request:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v3`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+
+工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
 可為空值的 `fault` 物件保留第一個後端錯誤。其 `kind`、`pc`、可為空值的 `address`、`size`、`access` 及 `interrupt` 可區分未對映或受保護的記憶體、無效範圍、無效指令及 CPU 例外。位址使用十六進位字串；大小及中斷向量使用整數。觀察讀取不能取代原始錯誤。發生錯誤的後端不能繼續執行，此記錄也不代表提供客體 SEH 處理。
 

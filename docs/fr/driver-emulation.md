@@ -6,7 +6,7 @@
 
 L’émulateur de pilotes optionnel de NeverD exécute le point d’entrée PE d’un
 pilote WDM x64 pris en charge et peut parcourir un scénario explicite de requêtes
-synchrones avant de le décharger. Il utilise Unicorn pour l’exécution CPU et le
+sérielles avant de le décharger. Il utilise Unicorn pour l’exécution CPU et le
 modèle Windows borné propre à NeverD. Il ne charge pas le pilote dans le noyau
 hôte et ne transmet pas les appels d’API invités aux services du système hôte.
 
@@ -52,16 +52,16 @@ tiers arbitraires.
 
 | Classe de pilote ou exigence | Périmètre actuel | Environnement manquant |
 |-----------------------------|------------------|------------------------|
-| Pilote WDM logiciel x64 utilisant les API listées | Initialisation et cycles de vie synchrones des fichiers | Toute API supplémentaire exécutée nécessite un modèle défini |
-| IOCTL `METHOD_BUFFERED` | Pris en charge, avec des identités de fichiers indépendantes et des requêtes entrelacées | L’achèvement asynchrone n’est pas disponible |
+| Pilote WDM logiciel x64 utilisant les API listées | Initialisation, cycles de fichiers sériels et callbacks bornés de travail | Toute API supplémentaire exécutée nécessite un modèle défini |
+| IOCTL `METHOD_BUFFERED` | Identités indépendantes, requêtes sérielles entrelacées et achèvement par élément de travail | Les autres producteurs asynchrones restent non pris en charge |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes et mappages système | identités de pages physiques, DMA et mappages utilisateur |
 | MDL alloués par le pilote | Descripteurs autonomes du pool non paginé modélisé, partageant les adresses originales | Association à un IRP, chaînes de MDL, sondage/verrouillage, pages physiques et mappages utilisateur |
-| READ/WRITE synchrones | Bufferisés ou directs selon les indicateurs du périphérique | E/S neither, sélection implicite de la position de fichier et achèvement asynchrone |
+| READ/WRITE | Bufferisés ou directs selon le périphérique, avec achèvement par élément de travail | E/S neither, position implicite et autres producteurs asynchrones |
 | `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès et gestion des exceptions invitées |
 | Pilote KMDF / UMDF | Non pris en charge | Liaison au framework, objets, files, callbacks et environnement d’exécution hôte approprié |
 | Pilote PnP de bus, de fonction ou de filtre | L’initialisation peut s’exécuter dans le sous-ensemble d’API ; le cycle de vie de la pile de périphériques n’est pas pris en charge | Attachement de périphériques, dispatch vers les pilotes inférieurs, IRP PnP et d’alimentation |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
-| Pilote utilisant des threads de travail, timers, DPC, APC, attentes ou annulations | Non pris en charge | Ordonnancement, transitions IRQL, synchronisation et responsabilité asynchrone des ressources |
+| Pilote utilisant des éléments de travail | Callbacks déterministes `DelayedWorkQueue` à `PASSIVE_LEVEL` | Threads de travail, timers, DPC, APC, attentes et annulation restent non pris en charge |
 | Opérations de registre via les API Zw listées | Arborescence explicite de session et droits par handle | ACL, privilèges, vues alternatives et persistance |
 | Pilote utilisant des callbacks de processus/thread, d’autres handles, des opérations de fichier ou la découverte de modules noyau | Non pris en charge hors des API listées | Gestionnaire d’objets, état système et producteurs de callbacks/événements |
 | Pilote matériel, DMA, PCI, d’interruption ou de virtualisation | Environnement non pris en charge | Modèles de périphériques, mémoire physique, bus, interruptions et état CPU privilégié |
@@ -101,11 +101,12 @@ NeverD ne remplace pas les appels non implémentés par des valeurs de réussite
 Les images malformées et les exigences de chargement non prises en charge
 échouent avant l’exécution.
 
-Ce profil n’implémente ni noyau Windows complet, ni runtime KMDF, ni cycle de
-vie PnP/alimentation, ni IRP asynchrones ou en attente, ni IOCTL neither,
-ni interruptions, ni ordonnancement multithread. Les callbacks s’exécutent
-uniquement lorsque le scénario les demande explicitement ; une initialisation
-seule s’arrête toujours après DriverEntry.
+Les callbacks de travail en file s’exécutent de manière déterministe après le retour d’un appel du pilote, dont DriverEntry, le dispatch d’une requête et un autre callback de travail. Les requêtes restent sérielles : une requête en attente doit se terminer avant la suivante. Le dispatch doit marquer l’IRP en attente et retourner `STATUS_PENDING` ; un élément en file peut ensuite le terminer à `PASSIVE_LEVEL`. Sans producteur d’achèvement exécutable, la requête bloquée s’arrête avec `model_error`. Les budgets communs d’instructions, de mémoire, d’événements et de temps bornent aussi les callbacks.
+
+Un noyau Windows complet, KMDF, PnP/alimentation, les IOCTL neither, interruptions, attentes générales, threads, annulations et API invitées de timers/DPC/APC restent non implémentés. Les tests internes de la machine d’états du planificateur ne prouvent pas leur prise en charge publique. Un appel limité à l’initialisation exécute aussi le travail explicitement mis en file par DriverEntry ; il ne crée ni requêtes du scénario ni déchargement implicite.
+
+L’élément est retiré de la file avant le début de son callback, qui peut donc le libérer. La libération d’un élément encore en file, la double mise en file, les objets expirés et les cibles hors mémoire invitée exécutable échouent explicitement. La référence au périphérique reste détenue jusqu’au retour. Le déchargement exige la libération de tous les éléments et l’achèvement du travail en file. Les contextes CPU préservent les registres généraux, SIMD, FPU et l’état de contrôle ; la mémoire invitée reste partagée et restaurer un contexte ne permet pas de reprendre un CPU en faute.
+La suppression est différée tant que subsistent des objets fichiers ou des références de travail en file/en cours. L’allocation d’un élément retourne NULL si l’arène d’objets est épuisée.
 
 Les images utilisent leur base préférée sauf si un scénario sélectionne une
 adresse de relocalisation valide. Elles doivent être des exécutables PE32+ x64
@@ -135,7 +136,9 @@ Le modèle initial d’API possède volontairement un contrat limité :
 | `DbgPrint`, `DbgPrintEx` | Formatage variadique Win64 vérifié, au plus 512 octets en sortie ; tous les filtres du débogueur sont activés |
 | `IoGetCurrentIrpStackLocation` | Renvoie l’emplacement de pile de l’IRP modélisé actif ; les macros WDM compilées habituelles lisent le même champ invité |
 | `KeGetCurrentIrql` | Renvoie `PASSIVE_LEVEL` |
-| `IofCompleteRequest`, `IoCompleteRequest` | Termine l’IRP modélisé synchrone actif avec `IO_NO_INCREMENT` ; aucun nouvel accès à un IRP terminé ou à son tampon n’est autorisé |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Éléments opaques appartenant au périphérique ; `DelayedWorkQueue` uniquement, périphérique et contexte passés à `PASSIVE_LEVEL` ; un élément encore en file ne peut être libéré |
+| `IoMarkIrpPending` | Marque l’IRP actif ; l’écriture équivalente de la macro WDM dans le contrôle de pile est aussi modélisée ; le dispatch doit retourner `STATUS_PENDING` |
+| `IofCompleteRequest`, `IoCompleteRequest` | Termine l’IRP modélisé actif, synchrone ou en attente avec `IO_NO_INCREMENT` ; aucun nouvel accès à un IRP terminé ou à son tampon n’est autorisé |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Opérations bornées sur les tampons invités, au plus 1 MiB par appel ; les API de copie sans chevauchement rejettent les chevauchements |
 
 Le formatage de `DbgPrint` prend en charge les entiers `d/i/u/o/x/X`, les
@@ -201,9 +204,7 @@ create, transferts, cleanup puis close dans cet ordre. Les requêtes de fichiers
 indépendants peuvent être entrelacées. Les périphériques exclusifs rejettent une
 seconde ouverture. Ces identités représentent des objets fichiers, et non des
 handles dupliqués. Les méthodes IOCTL bufferisée et les deux méthodes directes
-sont prises en charge. Le dispatch doit terminer chaque IRP de façon synchrone ;
-renvoyer `STATUS_PENDING`, ne pas terminer l’IRP, fournir des longueurs de sortie
-invalides ou accéder à un IRP terminé provoque un échec explicite. Le déchargement
+sont prises en charge. Le dispatch doit terminer de façon synchrone ou respecter le contrat de travail en attente décrit ci-dessus. Les longueurs de sortie invalides et l’accès à un IRP terminé provoquent un échec explicite. Le déchargement
 demandé ne doit laisser aucun périphérique, lien symbolique, allocation de pool
 ou objet fichier actif.
 
@@ -263,7 +264,7 @@ l’absence n’est jamais déduite du manque d’implémentation. Les noms sont
 imprimable de longueur bornée et la résolution est sensible à la casse.
 L’inventaire est une propriété concrète du scénario, sans prétendre correspondre
 à toutes les versions de Windows.
-`IoGetCurrentIrpStackLocation` et `MmGetSystemAddressForMdlSafe` sont des fonctions auxiliaires des en-têtes WDM modélisées ; cela ne les déclare pas exportées par défaut, leur disponibilité comme exports nécessitant un import statique ou une déclaration explicite dans `kernel_exports`.
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` et `MmGetSystemAddressForMdlSafe` sont des fonctions auxiliaires des en-têtes WDM modélisées ; cela ne les déclare pas exportées par défaut, leur disponibilité comme exports nécessitant un import statique ou une déclaration explicite dans `kernel_exports`.
 
 Le texte du scénario est limité à 2 MiB, avec au plus 64 requêtes, 65536 octets
 par tampon d’entrée ou de sortie et 512 KiB d’octets demandés au total, contenu
@@ -382,11 +383,11 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-synchronous-v2`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v3`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
-aussi sa phase (`driver_entry`, `request:N` ou `unload`). Chaque requête rapporte
+aussi sa phase (`driver_entry`, `request:N`, `callback:N` ou `unload`). Chaque requête rapporte
 les statuts de dispatch et d’E/S, l’achèvement, la valeur Information et
 les octets renvoyés dans `output_hex`. `preferred_image_base` décrit la base
 PE d’origine. `security_cookie` est l’adresse invitée du cookie initialisé,
@@ -396,6 +397,8 @@ forme numérique ; `information_hex` est une chaîne hexadécimale préfixée pa
 `0x` qui conserve exactement tous les bits du résultat non signé sur 64 bits.
 Utilisez `information_hex` si le consommateur JSON ne préserve pas la précision
 des entiers sur 64 bits, notamment pour les IOCTL sans tampon de sortie.
+
+Les observations du travail portent la phase `callback:N`. Une requête en attente conserve `STATUS_PENDING` dans `dispatch_status` ; son état final figure séparément dans `io_status` et détermine sa contribution à `scenario_success`.
 
 L’objet nullable `fault` conserve le premier défaut du backend. Ses champs
 `kind`, `pc`, `address` nullable, `size`, `access` et `interrupt` distinguent la

@@ -53,6 +53,23 @@ struct BackendHooks {
   std::function<void(uint32_t)> Interrupt;
   std::function<void()> InvalidInstruction;
 };
+/// An owning CPU snapshot associated with exactly one backend instance.
+/// Guest memory and hooks are shared by all contexts and are never rolled back.
+/// The snapshot may outlive its backend, but can no longer be used afterward.
+class BackendContext final {
+public:
+  ~BackendContext();
+  BackendContext(BackendContext &&) noexcept;
+  BackendContext &operator=(BackendContext &&) noexcept;
+  BackendContext(const BackendContext &) = delete;
+  BackendContext &operator=(const BackendContext &) = delete;
+
+private:
+  friend class UnicornBackend;
+  struct Impl;
+  explicit BackendContext(std::unique_ptr<Impl> State);
+  std::unique_ptr<Impl> State;
+};
 /// Executes against the GuestMemory virtual address space, without an MMU
 /// model.
 class UnicornBackend final : public GuestMemory {
@@ -70,6 +87,12 @@ public:
   llvm::Error fetch(uint64_t Address, llvm::MutableArrayRef<uint8_t> Bytes);
   llvm::Expected<uint64_t> reg(X64Register Register);
   llvm::Error setReg(X64Register Register, uint64_t Value);
+  /// Capture the complete Unicorn CPU state, including SIMD and FPU registers.
+  llvm::Expected<std::unique_ptr<BackendContext>> saveContext();
+  /// Replace an existing snapshot with this backend's current CPU state.
+  llvm::Error saveContext(BackendContext &Context);
+  /// Restore between run() calls. A snapshot cannot recover a faulted CPU.
+  llvm::Error restoreContext(const BackendContext &Context);
   llvm::Error installHooks(BackendHooks Hooks);
   /// A normally stopped CPU can continue. A faulted CPU cannot resume: Unicorn
   /// does not guarantee its internal state after an unhandled execution error.

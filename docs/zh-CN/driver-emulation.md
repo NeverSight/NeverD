@@ -4,7 +4,7 @@
 
 # Windows 驱动模拟
 
-NeverD 的可选驱动模拟器执行受支持的 x64 WDM 驱动的 PE 入口点，并可在卸载前执行显式指定的同步请求场景。它使用 Unicorn 执行 CPU 指令，使用 NeverD 自有的有界 Windows 环境模型。它不会将驱动加载到宿主内核，也不会把来宾 API 调用转发给宿主操作系统服务。
+NeverD 的可选驱动模拟器执行受支持的 x64 WDM 驱动的 PE 入口点，并可在卸载前执行显式指定的串行请求场景。它使用 Unicorn 执行 CPU 指令，使用 NeverD 自有的有界 Windows 环境模型。它不会将驱动加载到宿主内核，也不会把来宾 API 调用转发给宿主操作系统服务。
 
 ## 构建与运行
 
@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 驱动类别或要求 | 当前范围 | 缺少的环境 |
 |----------------|----------|------------|
-| 使用下列 API 的 x64 软件 WDM 驱动 | 初始化与同步文件生命周期 | 每个额外执行到的 API 都必须具有明确的模型 |
-| `METHOD_BUFFERED` IOCTL | 支持独立文件身份与交错请求 | 尚不支持异步完成 |
+| 使用下列 API 的 x64 软件 WDM 驱动 | 初始化、串行文件生命周期与有界工作项回调 | 每个额外执行到的 API 都必须具有明确的模型 |
+| `METHOD_BUFFERED` IOCTL | 独立文件身份、交错串行请求及工作项完成 | 其他异步完成来源仍不支持 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL 及系统映射 | 物理页身份、DMA 及用户映射 |
 | 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
-| 同步 READ/WRITE | 根据设备标志选择 buffered 或 direct | Neither I/O、隐式文件位置选择及异步完成 |
+| READ/WRITE | 根据设备标志选择 buffered 或 direct，支持工作项完成 | Neither I/O、隐式文件位置及其他异步完成来源 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
 | KMDF / UMDF 驱动 | 不支持 | 框架绑定、对象、队列、回调及相应宿主运行时 |
 | PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
-| 使用工作线程、定时器、DPC、APC、等待或取消的驱动 | 不支持 | 调度、IRQL 转换、同步与异步所有权 |
+| 使用工作项的驱动 | 在 `PASSIVE_LEVEL` 确定性执行 `DelayedWorkQueue` 回调 | 工作线程、定时器、DPC、APC、等待与取消仍不支持 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
 | 硬件、DMA、PCI、中断或虚拟化驱动 | 不支持所需环境 | 设备模型、物理内存、总线、中断及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
@@ -63,7 +63,12 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 未知导入项绑定到延迟陷阱。未使用的导入项不会阻止执行；执行其 thunk 或读取未建模的导出数据值时，会以 `unsupported_api` 停止。不支持的 CPU 环境效果也会明确停止。NeverD 不会用成功返回值替代未实现的调用。格式错误的映像或不支持的加载要求会在执行前失败。
 
-此配置没有实现完整的 Windows 内核、KMDF 运行时、PnP／电源生命周期、异步或待处理 IRP、neither 方法 IOCTL、中断或多线程调度。只有场景显式请求时才执行回调；仅初始化模式仍在 DriverEntry 之后停止。
+队列中的工作项在驱动调用返回后确定性执行，包括 DriverEntry、请求派发和其他工作项回调返回时。请求仍按串行处理：待处理请求必须完成后才能开始下一个请求。派发函数必须标记 IRP 为待处理并返回 `STATUS_PENDING`，随后由排队的工作项在 `PASSIVE_LEVEL` 完成。如果请求仍待处理却没有可执行的完成来源，执行会因停滞而以 `model_error` 停止。回调共用指令、内存、事件与时间预算。
+
+此配置仍未实现完整 Windows 内核、KMDF、PnP／电源生命周期、neither IOCTL、中断、通用等待、线程、取消或来宾定时器／DPC／APC API。内部调度状态机的单元测试不代表这些公开能力已经可用。仅初始化调用也会执行 DriverEntry 显式排队的工作项，但不会隐式生成场景请求或执行卸载。
+
+工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
+删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
 
 映像默认使用首选基址，除非场景选择了有效的重定位地址。映像必须为使用 native 子系统的 PE32+ x64 可执行文件。导入可来自 `ntoskrnl.exe` 或 `ntkrnlmp.exe`。
 
@@ -86,7 +91,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `DbgPrint`、`DbgPrintEx` | 经检查的 Win64 可变参数格式化，最多输出 512 字节；启用所有调试器过滤器 |
 | `IoGetCurrentIrpStackLocation` | 返回当前建模 IRP 的栈位置；正常编译的 WDM 宏读取相同来宾字段 |
 | `KeGetCurrentIrql` | 返回 `PASSIVE_LEVEL` |
-| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成当前同步建模 IRP；已完成的 IRP 或缓冲区不能再次访问 |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 设备拥有的不透明工作项；仅支持 `DelayedWorkQueue`，在 `PASSIVE_LEVEL` 将设备和上下文传给回调；禁止释放仍在队列中的项 |
+| `IoMarkIrpPending` | 标记当前存活的 IRP；也支持 WDM 宏对栈控制字段的等效写入；派发必须返回 `STATUS_PENDING` |
+| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成当前同步或待处理的建模 IRP；已完成的 IRP 或缓冲区不能再次访问 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的来宾缓冲区操作，每次调用最多 1 MiB；要求不重叠的复制 API 会拒绝重叠 |
 
 `DbgPrint` 格式化支持整数 `d/i/u/o/x/X`、指针 `p`、文本 `s/c`、`%%`、带长度的 Unicode `wZ/lZ`、宽字符串 `ls/ws`、标志、宽度／精度（包括 `*`），以及 Windows 整数长度修饰符。最多读取 32 个可变参数及 1024 字节格式串，宽度与精度上限均为 512。浮点数、`%n`、未知组合及非 ASCII 文本转换都会明确停止；模型不会猜测 Windows 代码页，也不会将来宾数据交给宿主 printf。
@@ -118,7 +125,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-设备名称与 IOCTL 代码必须匹配驱动。create 时省略 `device` 会选择唯一的存活设备；无法唯一选择则失败。后续请求默认使用所属文件的设备，也可显式指定匹配的设备名称。可选的 `file` 是无符号 32 位场景身份，默认为零。每个身份有独立的 FILE_OBJECT 和 FsContext，并要求按 create、传输、cleanup、close 的顺序执行。不同文件的请求可以交错执行。独占设备会拒绝第二次打开。这些身份表示文件对象，而非复制的句柄。支持 buffered 和两种 direct IOCTL 方法。派发必须同步完成每个 IRP；返回 `STATUS_PENDING`、未完成请求、输出长度无效以及访问已完成的 IRP 都会明确失败。请求卸载后，不得留下存活的设备、符号链接、池分配或文件对象。
+设备名称与 IOCTL 代码必须匹配驱动。create 时省略 `device` 会选择唯一的存活设备；无法唯一选择则失败。后续请求默认使用所属文件的设备，也可显式指定匹配的设备名称。可选的 `file` 是无符号 32 位场景身份，默认为零。每个身份有独立的 FILE_OBJECT 和 FsContext，并要求按 create、传输、cleanup、close 的顺序执行。不同文件的请求可以交错执行。独占设备会拒绝第二次打开。这些身份表示文件对象，而非复制的句柄。支持 buffered 和两种 direct IOCTL 方法。派发必须同步完成，或遵循上述工作项待处理契约。输出长度无效及访问已完成的 IRP 都会明确失败。请求卸载后，不得留下存活的设备、符号链接、池分配或文件对象。
 
 可选根字段 `"load_address": "0x190000000"` 请求更改加载基址；省略该字段或指定 `"0x0"` 时使用首选地址。映像必须满足重定位要求。原有的初始化命令或 C API 不会隐式执行任何请求场景。
 
@@ -133,7 +140,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 对于 READ/WRITE，`DO_BUFFERED_IO` 或 `DO_DIRECT_IO` 决定传输方法。Neither 或冲突的标志会停止执行。Information 按传输长度检查；write 返回计数，read 返回字节。
 
 `kernel_exports` 将例程名称映射到显式可用性布尔值，例如 `"kernel_exports": {"OptionalRoutine": false}`。已建模的导出和静态导入获得与 `MmGetSystemRoutineAddress` 共享的稳定地址。显式不存在的导出解析为 NULL，且不能满足静态导入。声明存在但没有 API 模型的导出解析为延迟陷阱。未知的动态名称会以可用性未指定的诊断停止；绝不会根据缺少实现推断不存在。名称为有界的可打印 ASCII，解析区分大小写。此清单是具体场景的属性，并不宣称匹配所有 Windows 版本。
-`IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 头文件辅助函数；模型默认不会据此声明它们是导出项，其导出可用性需要静态导入或显式 `kernel_exports` 声明。
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 头文件辅助函数；模型默认不会据此声明它们是导出项，其导出可用性需要静态导入或显式 `kernel_exports` 声明。
 
 场景文本上限为 2 MiB，最多包含 64 个请求，每个输入或输出缓冲区最多 65536 字节，请求总字节数最多 512 KiB，包括 `direct_input` 内容。指令、观察事件、来宾内存和时间预算覆盖整个场景。1 MiB 区域还需存放对象与元数据，因此即使尚未用尽场景缓冲区总额度，也可能耗尽模型内存。
 
@@ -169,7 +176,9 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-synchronous-v2`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v3`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+
+工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
 可为空的 `fault` 对象保留后端首次故障。其 `kind`、`pc`、可为空的 `address`、`size`、`access` 和 `interrupt` 区分未映射或受保护内存、无效范围、无效指令及 CPU 异常。地址使用十六进制字符串；大小和中断向量使用整数。用于观察的读取不能替换原始故障。发生故障的后端不能恢复执行，此记录也不意味着支持来宾 SEH 处理。
 

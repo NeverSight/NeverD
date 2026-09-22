@@ -6,7 +6,7 @@
 
 NeverDs optionaler Treiberemulator führt den PE-Einsprungpunkt eines unterstützten
 x64-WDM-Treibers aus und kann vor dem Entladen ein ausdrücklich angegebenes
-Szenario synchroner Anforderungen durchlaufen. Für die CPU-Ausführung verwendet
+Szenario serieller Anforderungen durchlaufen. Für die CPU-Ausführung verwendet
 er Unicorn, für die begrenzte Windows-Umgebung NeverDs eigenes Modell. Er lädt
 den Treiber nicht in den Host-Kernel und leitet Gast-API-Aufrufe nicht an
 Betriebssystemdienste des Hosts weiter.
@@ -53,16 +53,16 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 
 | Treiberklasse oder Anforderung | Aktueller Umfang | Fehlende Umgebung |
 |-------------------------------|------------------|-------------------|
-| x64-Software-WDM-Treiber mit den aufgeführten APIs | Initialisierung und synchrone Dateilebenszyklen | Jede weitere ausgeführte API benötigt ein definiertes Modell |
-| `METHOD_BUFFERED`-IOCTL | Unterstützt, mit unabhängigen Dateiidentitäten und verschachtelten Anforderungsfolgen | Asynchroner Abschluss ist nicht verfügbar |
+| x64-Software-WDM-Treiber mit den aufgeführten APIs | Initialisierung, serielle Dateilebenszyklen und begrenzte Work-Item-Callbacks | Jede weitere ausgeführte API benötigt ein definiertes Modell |
+| `METHOD_BUFFERED`-IOCTL | Unabhängige Dateiidentitäten, verschachtelte serielle Anforderungen und Abschluss durch Work Items | Andere asynchrone Abschlussquellen bleiben unmodelliert |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs und Systemabbildungen | physische Seitenidentitäten, DMA und Benutzerabbildungen |
 | Vom Treiber allokierte MDLs | Eigenständige Deskriptoren für modellierten nicht auslagerbaren Pool mit ursprünglichen Pufferadressen | IRP-Zuordnung, MDL-Ketten, Prüfen/Sperren, physische Seiten und Benutzerabbildungen |
-| Synchrone READ/WRITE | Gepuffert oder direkt entsprechend den Geräteflags | Neither-I/O, implizite Wahl der Dateiposition und asynchroner Abschluss |
+| READ/WRITE | Gepuffert oder direkt gemäß Geräteflags, auch mit Abschluss durch Work Items | Neither-I/O, implizite Dateiposition und andere asynchrone Abschlussquellen |
 | `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
 | KMDF-/UMDF-Treiber | Nicht unterstützt | Framework-Anbindung, Objekte, Warteschlangen, Callbacks und passende Host-Laufzeit |
 | PnP-Bus-, Funktions- oder Filtertreiber | Initialisierung kann innerhalb der API-Teilmenge laufen; Gerätestapel-Lebenszyklus nicht unterstützt | Geräteanbindung, Dispatch an untergeordnete Treiber sowie PnP- und Power-IRPs |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
-| Treiber mit Worker-Threads, Timern, DPCs, APCs, Warteoperationen oder Abbruch | Nicht unterstützt | Scheduling, IRQL-Wechsel, Synchronisation und asynchrone Zuständigkeit |
+| Treiber mit Work Items | Deterministische `DelayedWorkQueue`-Callbacks auf `PASSIVE_LEVEL` | Worker-Threads, Timer, DPCs, APCs, Warten und Abbruch bleiben nicht unterstützt |
 | Registry-Operationen über die aufgeführten Zw-APIs | Expliziter Sitzungsbaum und Rechte pro Handle | ACLs, Privilegien, alternative Ansichten und Persistenz |
 | Treiber mit Prozess-/Thread-Callbacks, anderen Handles, Dateioperationen oder Kernel-Modulsuche | Außerhalb der aufgeführten APIs nicht unterstützt | Objektmanager, Systemzustand und Erzeuger von Callbacks/Ereignissen |
 | Hardware-, DMA-, PCI-, Interrupt- oder Virtualisierungstreiber | Umgebung nicht unterstützt | Gerätemodelle, physischer Speicher, Busse, Interrupts und privilegierter CPU-Zustand |
@@ -102,11 +102,12 @@ ausdrücklich. NeverD ersetzt nicht implementierte Aufrufe nicht durch
 Erfolgswerte. Fehlerhafte Images oder nicht unterstützte Ladeanforderungen
 scheitern vor Beginn der Ausführung.
 
-Dieses Profil implementiert keinen vollständigen Windows-Kernel, keine
-KMDF-Laufzeit, keinen PnP-/Power-Lebenszyklus, keine asynchronen oder ausstehenden
-IRPs, keine Neither-IOCTLs, keine Interrupts und kein Multithread-Scheduling.
-Callbacks laufen nur auf ausdrückliche Anforderung des Szenarios; reine
-Initialisierung endet weiterhin nach DriverEntry.
+Eingereihte Work-Item-Callbacks laufen deterministisch nach der Rückkehr eines Treiberaufrufs, einschließlich DriverEntry, Anforderungs-Dispatch und weiterer Worker-Callbacks. Anforderungen bleiben seriell: Ein ausstehendes IRP muss vor der nächsten Anforderung abgeschlossen sein. Dispatch muss das IRP als ausstehend markieren und `STATUS_PENDING` zurückgeben; ein eingereihtes Work Item kann es anschließend auf `PASSIVE_LEVEL` abschließen. Fehlt eine ausführbare Abschlussquelle, stoppt die festgefahrene Anforderung mit `model_error`. Die gemeinsamen Befehls-, Speicher-, Ereignis- und Zeitbudgets gelten auch für Callbacks.
+
+Ein vollständiger Windows-Kernel, KMDF, PnP/Power, Neither-IOCTLs, Interrupts, allgemeine Warteoperationen, Threads, Abbruch und Gast-APIs für Timer/DPC/APC bleiben unimplementiert. Interne Tests der Scheduling-Zustandsmaschine belegen keine öffentliche Unterstützung dieser Funktionen. Reine Initialisierungsaufrufe führen auch explizit von DriverEntry eingereihte Arbeit aus; sie erzeugen weder Szenarioanforderungen noch implizites Entladen.
+
+Ein Work Item wird vor Beginn seines Callbacks aus der Warteschlange entfernt; der Callback darf sein eigenes Item freigeben. Freigabe eingereihter Items, doppelte Einreihung, veraltete Objekte und Callback-Ziele außerhalb ausführbaren Gastspeichers scheitern ausdrücklich. Die Gerätereferenz bleibt bis zur Rückkehr erhalten. Entladen verlangt die Freigabe aller Work Items und den Abschluss eingereihter Arbeit. CPU-Kontexte enthalten allgemeine Register, SIMD-, FPU- und Steuerzustand; Gastspeicher bleibt gemeinsam, und fehlerhafte CPUs lassen sich durch Kontextwiederherstellung nicht fortsetzen.
+Löschen wird aufgeschoben, solange Dateiobjekte oder eingereihte/laufende Work-Item-Referenzen bestehen. Work-Item-Allokation liefert NULL bei erschöpfter Objektarena.
 
 Images verwenden ihre bevorzugte Basisadresse, sofern das Szenario keine gültige
 Relokationsadresse auswählt, und müssen ausführbare PE32+-x64-Dateien mit nativem
@@ -135,7 +136,9 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | `DbgPrint`, `DbgPrintEx` | Geprüfte variadische Win64-Formatierung, höchstens 512 Ausgabebytes; alle Debuggerfilter aktiviert |
 | `IoGetCurrentIrpStackLocation` | Gibt die Stackposition des aktiven modellierten IRP zurück; normale kompilierte WDM-Makros lesen dasselbe Gastfeld |
 | `KeGetCurrentIrql` | Gibt `PASSIVE_LEVEL` zurück |
-| `IofCompleteRequest`, `IoCompleteRequest` | Schließt das aktive synchrone modellierte IRP mit `IO_NO_INCREMENT` ab; auf ein abgeschlossenes IRP oder seinen Puffer darf nicht erneut zugegriffen werden |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Geräteeigene undurchsichtige Work Items; nur `DelayedWorkQueue`, Gerät und Kontext werden auf `PASSIVE_LEVEL` übergeben; eingereihte Einträge dürfen nicht freigegeben werden |
+| `IoMarkIrpPending` | Markiert das aktive lebende IRP; der entsprechende Schreibzugriff des WDM-Makros auf das Stack-Control-Feld wird ebenfalls modelliert; Dispatch muss `STATUS_PENDING` zurückgeben |
+| `IofCompleteRequest`, `IoCompleteRequest` | Schließt das aktive synchrone oder ausstehende modellierte IRP mit `IO_NO_INCREMENT` ab; auf ein abgeschlossenes IRP oder seinen Puffer darf nicht erneut zugegriffen werden |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Begrenzte Gastpufferoperationen, höchstens 1 MiB pro Aufruf; Kopier-APIs ohne Überlappungsunterstützung weisen Überlappungen ab |
 
 Die Formatierung von `DbgPrint` unterstützt Ganzzahlen `d/i/u/o/x/X`, Zeiger
@@ -199,10 +202,7 @@ FILE_OBJECT und FsContext und verlangt create, Transfers, cleanup und close in
 dieser Reihenfolge. Anforderungen unabhängiger Dateien dürfen ineinander
 verschachtelt werden. Exklusive Geräte weisen ein zweites Öffnen ab. Diese
 Identitäten stehen für Dateiobjekte, nicht für duplizierte Handles. Gepufferte
-und beide direkten IOCTL-Methoden werden unterstützt. Dispatch muss jedes IRP
-synchron abschließen; `STATUS_PENDING`, fehlender Abschluss, ungültige
-Ausgabelängen und Zugriffe auf bereits abgeschlossene IRPs führen ausdrücklich
-zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte, symbolischen Links,
+und beide direkten IOCTL-Methoden werden unterstützt. Dispatch muss synchron abschließen oder den oben beschriebenen Vertrag für ausstehende IRPs mit Work Items erfüllen. Ungültige Ausgabelängen und Zugriffe auf abgeschlossene IRPs führen ausdrücklich zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte, symbolischen Links,
 Poolallokationen oder Dateiobjekte zurücklassen.
 
 Das optionale Wurzelfeld `"load_address": "0x190000000"` fordert eine
@@ -260,7 +260,7 @@ Verfügbarkeit; aus fehlender Implementierung wird nie Abwesenheit abgeleitet.
 Namen bestehen aus begrenztem druckbarem ASCII; die Auflösung beachtet
 Groß-/Kleinschreibung. Der Katalog ist eine konkrete Szenarioeigenschaft und
 behauptet keine Übereinstimmung mit jeder Windows-Version.
-`IoGetCurrentIrpStackLocation` und `MmGetSystemAddressForMdlSafe` sind modellierte Hilfsfunktionen aus WDM-Headern; dadurch werden sie nicht standardmäßig als Exporte deklariert, weshalb ihre Exportverfügbarkeit einen statischen Import oder eine explizite `kernel_exports`-Deklaration erfordert.
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` und `MmGetSystemAddressForMdlSafe` sind modellierte Hilfsfunktionen aus WDM-Headern; dadurch werden sie nicht standardmäßig als Exporte deklariert, weshalb ihre Exportverfügbarkeit einen statischen Import oder eine explizite `kernel_exports`-Deklaration erfordert.
 
 Der Szenariotext ist auf 2 MiB begrenzt: höchstens 64 Anforderungen, höchstens
 65536 Byte pro Eingabe- oder Ausgabepuffer und höchstens 512 KiB angeforderte
@@ -379,12 +379,12 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-synchronous-v2`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v3`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
 Lebenszyklus. Jeder API-Aufruf und CPU-Schreibzugriff protokolliert auch seine
-Phase (`driver_entry`, `request:N` oder `unload`). Jede Anforderung meldet
+Phase (`driver_entry`, `request:N`, `callback:N` oder `unload`). Jede Anforderung meldet
 Dispatch- und I/O-Status, Abschluss, den Information-Wert und zurückgegebene Bytes
 in `output_hex`. `preferred_image_base` beschreibt die ursprüngliche PE-Basis.
 `security_cookie` ist die Gastadresse des initialisierten Cookies oder `"0x0"`,
@@ -395,6 +395,8 @@ wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `file`, 
 Bit des vorzeichenlosen 64-Bit-Ergebnisses exakt erhält. Verwenden Sie
 `information_hex`, wenn der JSON-Verbraucher keine exakten 64-Bit-Ganzzahlen
 erhält, insbesondere bei IOCTLs ohne Ausgabepuffer.
+
+Work-Item-Beobachtungen tragen die Phase `callback:N`. Bei ausstehenden Anforderungen bleibt `dispatch_status` auf `STATUS_PENDING`; der endgültige Abschlussstatus steht getrennt in `io_status` und bestimmt den Beitrag zu `scenario_success`.
 
 Das nullable Objekt `fault` erhält den ersten Backend-Fehler. Seine Felder
 `kind`, `pc`, das nullable `address`, `size`, `access` und `interrupt` unterscheiden

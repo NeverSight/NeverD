@@ -3482,9 +3482,12 @@
         "docs/testing.md"
       ],
       "limitations": [
-        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested synchronous create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
+        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; the model supports independent file identities and synchronous buffered/direct requests, not pending/asynchronous I/O, neither-method IOCTLs, KMDF, PnP/power, interrupts or multithread scheduling",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through queued work items after marked STATUS_PENDING; general waits/threads/cancellation, guest timer/DPC/APC APIs, neither-method IOCTLs, KMDF, PnP/power, interrupts and hardware remain unsupported",
+        "wdm-x64-scheduled-v3 drains deterministic DelayedWorkQueue callbacks at returned driver-call boundaries at PASSIVE_LEVEL; no available producer for an incomplete pending request is a stalled model_error; work-item objects and device references retain separate lifetimes, and a dequeued running item may be freed by its callback",
+        "IoDeleteDevice defers physical retirement while live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
+        "full CPU contexts include SIMD/FPU/control state but never snapshot guest memory; foreign, expired and faulted contexts cannot resume execution; internal scheduler timer/DPC unit tests are not public API support evidence",
         "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total requested buffer bytes including direct_input over 512 KiB; requested load addresses require valid supported PE relocations",
         "dynamic export lookup shares stable thunk identity with static imports; explicit kernel_exports availability overrides distinguish absent exports from present unmodeled routines; unspecified dynamic availability stops instead of changing driver capability branches",
         "direct requests expose request-owned MDL system mappings with independent write/execute permissions; standalone driver MDLs can describe live nonpaged pool allocations and retain their original alias; IRP associations/chains, physical PFN data, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
@@ -3853,6 +3856,132 @@
           "target": "NeverDDriverEmulationPublicTests",
           "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
           "filter": "DriverScenarioPublic.RegistryScenarioRunsThroughCAPIAndCLI",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.RestoresGeneralRegistersFlagsStackAndInstruction",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.RestoresFullSIMDRegistersIncludingHighRegisterBank",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.RestoresFPUStackAndFloatingPointControlState",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.ModelControlledIRQLIsPartOfTheCPUContext",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.MemoryMappingsContentsAndPermissionsStayShared",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendContextTests.cpp",
+          "filter": "DriverBackendContext.ContextCannotResurrectFaultedEngine",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.WorkerCompletesPendingIrpAndUnloads",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.PendingDispatchKeepsFailureCompletionSeparate",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.MarkedAlreadyCompletedIrpStillReturnsPending",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.RejectsInvalidLifetimesAndPendingContracts",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.CallbackFaultPreservesFirstFaultAndPendingObservation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverAsyncTests.cpp",
+          "filter": "DriverAsync.CallbackSharesTheSessionInstructionBudget",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLICompletePendingWorkItemRequests",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CLIDoesNotHideFailedAsynchronousCompletion",
           "platforms": [
             "linux"
           ]

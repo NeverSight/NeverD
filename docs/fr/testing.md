@@ -59,6 +59,9 @@ configuration Unicorn réservée aux tests.
 
 Les tests supplémentaires couvrent les MDL de pool non paginé appartenant au pilote, les durées de vie indépendantes du descripteur et du tampon, les structures de requête du registre et les tampons courts, les droits des handles, les suppressions et les fuites, ainsi que les 64 bits de `information_hex` pour les IOCTL sans sortie. La validation externe couvre aussi les lectures/écritures directes synchrones et les statistiques de Zero.
 
+Les tests supplémentaires vérifient les contextes CPU complets (registres, flags, SIMD, FPU, CR8), la mémoire partagée et le rejet des contextes après faute ou étrangers. Les fixtures de travail couvrent les IRP marqués en attente, l’achèvement différé, les erreurs de file et de durée de vie, le blocage, les budgets partagés et les statuts dispatch/achèvement distincts des rapports publics. Les tests internes de timers/DPC vérifient seulement les transitions, pas les API invitées ni un environnement Windows asynchrone complet.
+
+
 ## Organisation des tests
 
 `add_neverd_unittest` crée un exécutable GoogleTest et attribue à chaque cas

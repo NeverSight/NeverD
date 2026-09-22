@@ -4,7 +4,7 @@
 
 # Windows 드라이버 에뮬레이션
 
-NeverD의 선택적 드라이버 에뮬레이터는 지원되는 x64 WDM 드라이버의 PE 진입점을 실행하며, 필요하면 명시적인 동기 요청 시나리오를 실행한 뒤 드라이버를 언로드합니다. CPU 실행에는 Unicorn을, Windows 환경에는 NeverD 자체의 제한된 모델을 사용합니다. 드라이버를 호스트 커널에 로드하거나 게스트 API 호출을 호스트 OS 서비스에 전달하지 않습니다.
+NeverD의 선택적 드라이버 에뮬레이터는 지원되는 x64 WDM 드라이버의 PE 진입점을 실행하며, 필요하면 명시적인 순차 요청 시나리오를 실행한 뒤 드라이버를 언로드합니다. CPU 실행에는 Unicorn을, Windows 환경에는 NeverD 자체의 제한된 모델을 사용합니다. 드라이버를 호스트 커널에 로드하거나 게스트 API 호출을 호스트 OS 서비스에 전달하지 않습니다.
 
 ## 빌드 및 실행
 
@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 드라이버 종류 또는 요구 사항 | 현재 범위 | 부족한 환경 |
 |-----------------------------|-----------|-------------|
-| 아래 API를 사용하는 x64 소프트웨어 WDM 드라이버 | 초기화와 동기 파일 수명 주기 | 추가로 실행되는 각 API에 명확한 모델이 필요함 |
-| `METHOD_BUFFERED` IOCTL | 독립적인 파일 식별자와 교차 요청을 지원함 | 비동기 완료는 지원하지 않음 |
+| 아래 API를 사용하는 x64 소프트웨어 WDM 드라이버 | 초기화, 순차 파일 수명 주기 및 제한된 작업 항목 콜백 | 추가로 실행되는 각 API에 명확한 모델이 필요함 |
+| `METHOD_BUFFERED` IOCTL | 독립 파일 식별자, 교차 순차 요청과 작업 항목 완료 | 다른 비동기 완료 생성 주체는 지원하지 않음 |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | 요청 소유 MDL과 시스템 매핑 | 물리 페이지 식별자, DMA와 사용자 매핑 |
 | 드라이버가 할당한 MDL | 모델의 비페이지 풀을 설명하는 독립 MDL, 원래 버퍼 주소 공유 | IRP 연결, MDL 체인, 프로브/잠금, 물리 페이지와 사용자 매핑 |
-| 동기 READ/WRITE | 장치 플래그에 따라 buffered 또는 direct 방식 사용 | Neither I/O, 암묵적 파일 위치 선택과 비동기 완료 |
+| READ/WRITE | 장치 플래그에 따른 buffered 또는 direct 전송과 작업 항목 완료 | Neither I/O, 암묵적 파일 위치 및 다른 비동기 완료 생성 주체 |
 | `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사와 게스트 예외 처리 |
 | KMDF / UMDF 드라이버 | 지원하지 않음 | 프레임워크 바인딩, 객체, 큐, 콜백과 해당 호스트 런타임 |
 | PnP 버스/기능/필터 드라이버 | API 하위 집합 내에서 초기화가 실행될 수 있으나 장치 스택 수명 주기는 지원하지 않음 | 장치 연결, 하위 드라이버 디스패치, PnP 및 전원 IRP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
-| 작업자 스레드, 타이머, DPC, APC, 대기 또는 취소를 사용하는 드라이버 | 지원하지 않음 | 스케줄링, IRQL 전환, 동기화와 비동기 소유권 |
+| 작업 항목을 사용하는 드라이버 | `PASSIVE_LEVEL`에서 결정적으로 실행하는 `DelayedWorkQueue` 콜백 | 작업자 스레드, 타이머, DPC, APC, 대기와 취소는 지원하지 않음 |
 | 프로세스/스레드 콜백, 핸들, 레지스트리/파일 작업 또는 커널 모듈 탐색을 사용하는 드라이버 | 구성한 레지스트리는 지원하며 그 외 동작은 아래 API 범위로 제한 | 객체 관리자, 시스템 상태와 콜백/이벤트 생성 주체 |
 | 하드웨어, DMA, PCI, 인터럽트 또는 가상화 드라이버 | 환경을 지원하지 않음 | 장치 모델, 물리 메모리, 버스, 인터럽트와 특권 CPU 상태 |
 | x86 또는 ARM64 Windows 드라이버 | 거부됨 | 아키텍처별 로딩, ABI와 실행 모델 |
@@ -62,7 +62,12 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 알 수 없는 import는 지연 트랩에 바인딩됩니다. 사용되지 않는 import는 실행을 막지 않지만, 해당 thunk를 실행하거나 모델링되지 않은 export 데이터 값을 읽으면 `unsupported_api`로 중단됩니다. 지원하지 않는 CPU 환경 효과도 명시적으로 중단됩니다. NeverD는 미구현 호출을 성공 값으로 대체하지 않습니다. 잘못된 이미지나 지원하지 않는 로딩 요구 사항은 실행 전에 실패합니다.
 
-이 프로필은 완전한 Windows 커널, KMDF 런타임, PnP/전원 수명 주기, 비동기 또는 pending IRP, neither 방식 IOCTL, 인터럽트, 다중 스레드 스케줄링을 구현하지 않습니다. 콜백은 시나리오에서 명시적으로 요청한 경우에만 실행됩니다. 초기화만 요청하면 여전히 DriverEntry 이후에 멈춥니다.
+대기열의 작업 항목은 DriverEntry, 요청 디스패치, 다른 작업 항목 콜백 등 드라이버 호출이 반환한 뒤 결정적으로 실행됩니다. 요청은 순차적으로 처리되며 보류 요청이 완료되어야 다음 요청을 시작합니다. 디스패치는 IRP를 보류로 표시하고 `STATUS_PENDING`을 반환해야 합니다. 이후 대기열의 작업 항목이 `PASSIVE_LEVEL`에서 완료할 수 있습니다. 완료를 생성할 실행 가능한 작업이 없는데 요청이 계속 보류되면 정체된 `model_error`로 중단합니다. 콜백에도 공통 명령어, 메모리, 이벤트 및 시간 예산을 적용합니다.
+
+완전한 Windows 커널, KMDF, PnP/전원 수명 주기, neither IOCTL, 인터럽트, 일반 대기, 스레드, 취소 및 게스트 타이머/DPC/APC API는 여전히 구현하지 않습니다. 내부 스케줄러 상태 머신의 단위 테스트는 이러한 공개 기능 지원을 뜻하지 않습니다. 초기화만 요청해도 DriverEntry가 명시적으로 큐에 넣은 작업 항목을 실행하지만 시나리오 요청이나 언로드를 암묵적으로 만들지는 않습니다.
+
+콜백 시작 전에 작업 항목이 대기열에서 제거되므로 콜백은 자신의 작업 항목을 해제할 수 있습니다. 대기열 항목 해제, 중복 큐 삽입, 만료 객체 및 실행 가능한 게스트 메모리 밖의 콜백 주소는 명시적으로 실패합니다. 장치 참조는 콜백 반환까지 유지합니다. 언로드에는 모든 작업 항목 해제와 큐 작업 완료가 필요합니다. CPU 컨텍스트는 일반, SIMD, FPU 및 제어 상태를 저장하고 복원합니다. 게스트 메모리는 공유되며 장애가 난 CPU는 저장된 컨텍스트로 재개할 수 없습니다.
+파일 객체 또는 대기/실행 중인 작업 항목 참조가 남아 있으면 삭제를 연기합니다. 객체 영역이 소진되면 작업 항목 할당은 NULL을 반환합니다.
 
 시나리오에서 유효한 재배치 주소를 지정하지 않으면 이미지는 선호 베이스를 사용하며, native 서브시스템의 PE32+ x64 실행 파일이어야 합니다. import 제공자는 `ntoskrnl.exe` 또는 `ntkrnlmp.exe`일 수 있습니다. 실행 로더는 검증된 x64 `DIR64` 베이스 재배치와 제한적인 security-cookie 로드 구성을 지원합니다. security cookie는 진입 래퍼 실행 전에 결정적인 게스트 값으로 초기화됩니다. CFG와 기타 모델링되지 않은 로드 구성 필드, TLS, 지연/바인딩 import, ordinal import, managed 이미지는 거부됩니다. 이미지에는 엄격한 범위 및 정렬 검사도 적용됩니다.
 
@@ -83,7 +88,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `DbgPrint`, `DbgPrintEx` | 검증된 Win64 가변 인수 포맷팅, 최대 출력 512바이트. 모든 디버거 필터가 활성화됨 |
 | `IoGetCurrentIrpStackLocation` | 활성 모델 IRP의 스택 위치를 반환함. 일반적인 컴파일된 WDM 매크로도 동일한 게스트 필드를 읽음 |
 | `KeGetCurrentIrql` | `PASSIVE_LEVEL`을 반환함 |
-| `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 활성 동기 모델 IRP를 완료함. 완료된 IRP나 버퍼에는 다시 접근할 수 없음 |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 장치 소유의 불투명 작업 항목. `DelayedWorkQueue`만 지원하며 `PASSIVE_LEVEL`에서 장치와 컨텍스트를 콜백에 전달. 대기열에 있는 항목은 해제 불가 |
+| `IoMarkIrpPending` | 현재 유효한 IRP를 보류로 표시. WDM 매크로의 스택 제어 필드 쓰기도 지원. 디스패치는 `STATUS_PENDING`을 반환해야 함 |
+| `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 활성 동기 또는 보류 모델 IRP를 완료함. 완료된 IRP나 버퍼에는 다시 접근할 수 없음 |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | 호출당 최대 1 MiB의 제한된 게스트 버퍼 작업. 비중첩 복사 API는 겹치는 범위를 거부함 |
 
 `DbgPrint` 포맷팅은 정수 `d/i/u/o/x/X`, 포인터 `p`, 텍스트 `s/c`, `%%`, 길이가 지정된 Unicode `wZ/lZ`, wide 형식 `ls/ws`, 플래그, `*`를 포함한 너비/정밀도, Windows 정수 길이 수정자를 지원합니다. 가변 인수는 최대 32개, 형식 문자열은 최대 1024바이트를 읽습니다. 너비와 정밀도는 512로 제한됩니다. 부동소수점, `%n`, 알 수 없는 조합 및 비ASCII 텍스트 변환은 명시적으로 중단합니다. 모델은 Windows 코드 페이지를 추측하거나 게스트 데이터에 호스트 printf를 호출하지 않습니다.
@@ -115,7 +122,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-장치 이름과 IOCTL 코드는 드라이버와 일치해야 합니다. create에서 `device`를 생략하면 유일한 활성 장치를 선택하며, 선택이 모호하면 실패합니다. 이후 요청은 명시적으로 일치하는 이름을 지정하지 않는 한 해당 파일의 장치를 사용합니다. 선택적인 `file`은 부호 없는 32비트 시나리오 식별자이며 기본값은 0입니다. 각 식별자에는 자체 FILE_OBJECT와 FsContext가 있으며 create, 전송, cleanup, close 순서를 따라야 합니다. 독립된 파일의 요청은 서로 교차할 수 있습니다. 독점 장치는 두 번째 열기를 거부합니다. 이 식별자는 복제된 핸들이 아니라 파일 객체를 나타냅니다. Buffered 및 두 direct IOCTL 방식을 지원합니다. 디스패치는 각 IRP를 동기적으로 완료해야 합니다. `STATUS_PENDING` 반환, 미완료, 잘못된 출력 길이, 완료된 IRP 접근은 명시적으로 실패합니다. 언로드를 요청했다면 활성 장치, 심볼릭 링크, 풀 할당 또는 파일 객체가 남아서는 안 됩니다.
+장치 이름과 IOCTL 코드는 드라이버와 일치해야 합니다. create에서 `device`를 생략하면 유일한 활성 장치를 선택하며, 선택이 모호하면 실패합니다. 이후 요청은 명시적으로 일치하는 이름을 지정하지 않는 한 해당 파일의 장치를 사용합니다. 선택적인 `file`은 부호 없는 32비트 시나리오 식별자이며 기본값은 0입니다. 각 식별자에는 자체 FILE_OBJECT와 FsContext가 있으며 create, 전송, cleanup, close 순서를 따라야 합니다. 독립된 파일의 요청은 서로 교차할 수 있습니다. 독점 장치는 두 번째 열기를 거부합니다. 이 식별자는 복제된 핸들이 아니라 파일 객체를 나타냅니다. Buffered 및 두 direct IOCTL 방식을 지원합니다. 디스패치는 동기적으로 완료하거나 위의 작업 항목 보류 계약을 따라야 합니다. 잘못된 출력 길이와 완료된 IRP 접근은 명시적으로 실패합니다. 언로드를 요청했다면 활성 장치, 심볼릭 링크, 풀 할당 또는 파일 객체가 남아서는 안 됩니다.
 
 선택적인 루트 필드 `"load_address": "0x190000000"`는 베이스 재배치를 요청합니다. 생략하거나 `"0x0"`을 지정하면 선호 주소를 사용합니다. 이미지는 재배치 요구 사항을 충족해야 합니다. 기존 초기화 명령이나 C API에는 암묵적인 시나리오가 없습니다.
 
@@ -130,7 +137,7 @@ IOCTL의 `output_size`가 0이 아니면 입력 버퍼가 더 커도 `Informatio
 READ/WRITE에서는 `DO_BUFFERED_IO` 또는 `DO_DIRECT_IO`가 전송 방식을 선택합니다. Neither 방식이나 충돌하는 플래그는 중단됩니다. Information은 전송 길이에 대해 검사하며, 쓰기는 개수를 반환하고 읽기는 바이트를 반환합니다.
 
 `kernel_exports`는 루틴 이름을 명시적인 가용성 불리언에 매핑합니다. 예를 들면 `"kernel_exports": {"OptionalRoutine": false}`입니다. 모델링된 export와 정적 import는 `MmGetSystemRoutineAddress`와 공유하는 안정적인 주소를 받습니다. 명시적으로 없는 export는 NULL로 해석되며 정적 import를 충족할 수 없습니다. 존재한다고 선언되었으나 API 모델이 없는 export는 지연 트랩으로 해석됩니다. 알 수 없는 동적 이름은 가용성이 지정되지 않았다는 진단과 함께 중단됩니다. 구현이 없다는 이유로 부재를 추론하지 않습니다. 이름은 길이가 제한된 출력 가능한 ASCII이며 해석 시 대소문자를 구분합니다. 이 목록은 구체적인 시나리오 속성이며 모든 Windows 릴리스와 일치한다는 의미는 아닙니다.
-`IoGetCurrentIrpStackLocation`과 `MmGetSystemAddressForMdlSafe`는 모델링된 WDM 헤더 도우미 함수이며, 모델링되었다는 사실만으로 기본 export로 선언되지는 않으므로 export 가용성에는 정적 import 또는 명시적인 `kernel_exports` 선언이 필요합니다.
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation`과 `MmGetSystemAddressForMdlSafe`는 모델링된 WDM 헤더 도우미 함수이며, 모델링되었다는 사실만으로 기본 export로 선언되지는 않으므로 export 가용성에는 정적 import 또는 명시적인 `kernel_exports` 선언이 필요합니다.
 
 시나리오 텍스트는 2 MiB, 요청은 최대 64개, 각 입력 또는 출력 버퍼는 최대 65536바이트, `direct_input` 내용을 포함한 요청 바이트 총합은 최대 512 KiB입니다. 명령어, 관찰, 게스트 메모리 및 시간 예산은 전체 시나리오에 적용됩니다. 1 MiB arena에는 객체와 메타데이터도 저장되므로 최대 시나리오 버퍼 용량을 사용하기 전에 모델 메모리가 고갈될 수 있습니다.
 
@@ -164,7 +171,9 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-synchronous-v2`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `request:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v3`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+
+작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 
 null이 가능한 `fault` 객체는 최초의 백엔드 오류를 보존합니다. `kind`, `pc`와 null이 가능한 `address`, `size`, `access`, `interrupt`는 매핑되지 않았거나 보호된 메모리, 잘못된 범위, 잘못된 명령어와 CPU 예외를 구분합니다. 주소는 16진 문자열, 크기와 인터럽트 벡터는 정수를 사용합니다. 관찰을 위한 읽기는 원래 오류를 대체할 수 없습니다. 오류가 발생한 백엔드는 재개할 수 없으며, 이 레코드가 게스트 SEH 처리를 뜻하지는 않습니다.
 

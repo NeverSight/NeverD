@@ -49,7 +49,7 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 Fixtures exercise guest initialization, returned success and failure,
 unsupported behavior, memory faults, strict scenario parsing, bounded execution,
-and synchronous buffered/direct I/O, READ/WRITE, independent file lifetimes,
+and buffered/direct I/O, READ/WRITE, independent file lifetimes,
 MDL permissions, dynamic export resolution, guest varargs, and structured CPU
 faults through create, transfers, cleanup, close and unload.
 Use the
@@ -62,6 +62,14 @@ and buffer lifetimes, registry query layouts and short buffers, handle rights,
 deletion and leaks, and full-width `information_hex` for zero-output IOCTLs.
 External acceptance also covers Zero synchronous direct reads/writes and
 statistics queries.
+
+Focused backend tests execute CPU-context roundtrips for general registers,
+flags, SIMD, FPU and CR8 while preserving shared guest memory and rejecting
+fault recovery or foreign contexts. Worker fixtures exercise marked pending
+requests, deferred completion, queue/lifetime errors, stalled requests, shared
+budgets and separate dispatch/completion statuses through public reports.
+Internal scheduler timer/DPC tests validate state transitions only; they do not
+establish guest timer/DPC API or full asynchronous Windows support.
 
 ## Test layout
 

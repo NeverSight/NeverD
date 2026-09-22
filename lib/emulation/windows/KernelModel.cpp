@@ -332,9 +332,17 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
 }
 
 llvm::Error KernelModel::deleteDevice(uint64_t Address) {
+  if (!Devices.count(Address) || !DeletePendingDevices.insert(Address).second)
+    return modelError("IoDeleteDevice received an unknown or deleted device");
+  return retireDeviceIfUnreferenced(Address);
+}
+
+llvm::Error KernelModel::retireDeviceIfUnreferenced(uint64_t Address) {
+  if (!DeletePendingDevices.count(Address) || Scheduler.hasOutstanding(Address))
+    return llvm::Error::success();
   for (const auto &[Id, File] : Files)
     if (File.Address && File.Device == Address)
-      return modelError("cannot delete a device while its file object is live");
+      return llvm::Error::success();
   auto It = Devices.find(Address);
   if (It == Devices.end())
     return modelError("IoDeleteDevice received an unknown or deleted device");
@@ -355,6 +363,8 @@ llvm::Error KernelModel::deleteDevice(uint64_t Address) {
       FreedRanges.emplace(Address, DeviceSizes.at(Address));
       DeviceSizes.erase(Address);
       Devices.erase(It);
+      DeletePendingDevices.erase(Address);
+      WorkReferences.erase(Address);
       return llvm::Error::success();
     }
     Link = *Current + DeviceNext;
@@ -380,6 +390,29 @@ llvm::Expected<uint64_t> KernelModel::call(
   }
   if (Kind == KernelAPIKind::MmGetSystemRoutineAddress)
     return resolveRoutine(A[0]);
+  if (Kind == KernelAPIKind::IoAllocateWorkItem)
+    return allocateWorkItem(A[0]);
+  if (Kind == KernelAPIKind::IoQueueWorkItem) {
+    if (auto E = queueWorkItem(A))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::IoFreeWorkItem) {
+    if (auto E = freeWorkItem(A[0]))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::IoMarkIrpPending) {
+    if (!Request || Request->IRP != A[0] || Request->Completed)
+      return modelError("IoMarkIrpPending requires the live active IRP");
+    auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
+    if (!Control)
+      return Control.takeError();
+    if (auto E = Memory.writeInteger(Request->Stack + StackControlOffset,
+                                     *Control | StackPendingReturned, 1))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::IoAllocateMdl)
     return allocateMDL(A);
   if (Kind == KernelAPIKind::IoFreeMdl) {
@@ -582,7 +615,7 @@ llvm::Expected<uint64_t> KernelModel::call(
     return StatusSuccess;
   }
   if (Kind == KernelAPIKind::KeGetCurrentIrql)
-    return 0; // DriverEntry runs at PASSIVE_LEVEL; no IRQL transitions exist.
+    return CurrentIRQL;
 
   const bool Zero = Kind == KernelAPIKind::RtlZeroMemory;
   const bool Fill = Kind == KernelAPIKind::RtlFillMemory;
@@ -719,6 +752,9 @@ llvm::Error KernelModel::validateGuestAccess(uint64_t Address, uint32_t Size,
   for (const auto &[Start, Length] : FreedRanges)
     if (Address < Start + Length && Start < End)
       return modelError("guest access to a freed model object or allocation");
+  for (const auto &[Item, Device] : WorkItems)
+    if (Address < Item + profile::WorkItemTokenSize && Item < End)
+      return modelError("guest access to an opaque IO_WORKITEM");
   if (auto E = validateIOAccess(Address, Size, IsWrite))
     return E;
   if (auto E = validateMDLAccess(Address, Size, IsWrite))

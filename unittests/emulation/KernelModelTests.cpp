@@ -226,6 +226,48 @@ TEST_F(DriverKernelModel, DevicesLinkCollideAndDeleteWithoutLosingLiveState) {
   EXPECT_TRUE(Result.Devices.empty());
 }
 
+TEST_F(DriverKernelModel,
+       WorkItemKeepsDeletePendingDeviceUntilCallbackReturns) {
+  invoke("IoCreateDevice", {Model->driverObject(), 0, 0, 0x22, 0, 0, Scratch});
+  const auto Device = integer(Scratch);
+  const auto Item = invoke("IoAllocateWorkItem", {Device});
+  ASSERT_NE(Item, 0u);
+  invoke("IoQueueWorkItem", {Item, Entry, profile::DelayedWorkQueue, Scratch});
+  invoke("IoDeleteDevice", {Device});
+  success(Model->snapshot());
+  ASSERT_EQ(Result.Devices.size(), 1u);
+  EXPECT_EQ(integer(Device + windows::DeviceReferenceCount, 4), 1u);
+  auto Next = Model->nextScheduled(false);
+  ASSERT_TRUE(bool(Next)) << llvm::toString(Next.takeError());
+  ASSERT_TRUE(Next->has_value());
+  EXPECT_EQ((**Next).Arguments, (std::vector<uint64_t>{Device, Scratch}));
+  invoke("IoFreeWorkItem", {Item});
+  success(Model->validateGuestAccess(Device, 2, false));
+  success(Model->finishScheduled((**Next).ID));
+  success(Model->snapshot());
+  EXPECT_TRUE(Result.Devices.empty());
+  EXPECT_NE(denied(Device, 1).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverKernelModel, WorkItemAllocationExhaustionReturnsNull) {
+  invoke("IoCreateDevice", {Model->driverObject(), 0, 0, 0x22, 0, 0, Scratch});
+  const auto Device = integer(Scratch);
+  ASSERT_NE(invoke("ExAllocatePoolWithTag",
+                   {0, profile::KernelArenaSize - profile::PageSize, 0x1234}),
+            0u);
+  bool Exhausted = false;
+  for (size_t I = 0; I < profile::PageSize / profile::WorkItemTokenSize; ++I) {
+    auto Item = Model->call("IoAllocateWorkItem", {Device});
+    ASSERT_TRUE(bool(Item)) << llvm::toString(Item.takeError());
+    if (!*Item) {
+      Exhausted = true;
+      break;
+    }
+    invoke("IoFreeWorkItem", {*Item});
+  }
+  EXPECT_TRUE(Exhausted);
+}
+
 TEST_F(DriverKernelModel, SymbolicLinksShareTheSessionDosNamespace) {
   const uint64_t Name = Scratch + 0x100;
   const uint64_t Alias = Scratch + 0x200;

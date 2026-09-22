@@ -353,7 +353,7 @@ backend di traduzione eseguibile.
 `lib/emulation` è un componente di esecuzione opzionale, abilitato da
 `NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` vi accede tramite
 l’API C pubblica. `DriverSession` gestisce l’inizializzazione WDM x64 limitata
-e le invocazioni sincrone opzionali create/IOCTL/read/write/cleanup/close/unload;
+e le invocazioni seriali opzionali create/IOCTL/read/write/cleanup/close/unload;
 il mapping delle immagini Windows usa il `BinaryImage` completo del loader
 esistente, mentre il modello Windows gestisce gli oggetti guest e la semantica
 delle API. L’adattatore Unicorn gestisce l’esecuzione CPU e la memoria guest
@@ -372,7 +372,7 @@ usa un unico parser rigoroso con le stesse opzioni di esecuzione, con campi e
 tipi di richiesta dichiarati in cataloghi `.def`. Il cambio di base richiesto
 e l’inizializzazione del cookie di sicurezza appartengono al loader di esecuzione.
 Il modello Windows gestisce gli oggetti IRP, posizione nello stack e file e
-valida il completamento sincrono; la sessione ordina i callback entro budget
+valida il completamento sincrono o pendente tramite elementi di lavoro; la sessione ordina i callback entro budget
 di esecuzione condivisi. Le importazioni sconosciute inutilizzate sono binding
 lazy; eseguirle o leggere dati esportati non modellati causa un arresto esplicito.
 
@@ -389,6 +389,9 @@ la prima causa strutturata di un fault; l’osservazione e i report non riprendo
 una CPU in fault né implicano una gestione delle eccezioni Windows.
 
 Il modello Windows gestisce anche MDL autonomi del pool non paginato; liberare il descrittore non libera il buffer sottostante. Un modello del registro separato gestisce l’albero esplicito dello scenario, i diritti degli handle e la durata di chiavi e valori, indipendentemente dall’inventario delle esportazioni. Verifica preliminare ed esecuzione condividono le stesse regole. Il rapporto conserva i valori finali e lo scaricamento controlla gli handle ancora aperti.
+
+`KernelScheduler` gestisce ordine deterministico e identità dei callback; `KernelModel` gestisce la vita degli elementi/dispositivi e il contratto IRP pendente/completato. `DriverSession` svuota la coda a `PASSIVE_LEVEL` al ritorno delle chiamate guest prima di proseguire con richieste seriali. Unicorn salva contesti CPU completi mantenendo la memoria condivisa. I modelli interni timer/DPC non implicano API guest pubbliche, thread/attese generali, annullamento, KMDF, PnP/alimentazione o hardware.
+
 
 ## Confini della riscrittura delle eccezioni
 

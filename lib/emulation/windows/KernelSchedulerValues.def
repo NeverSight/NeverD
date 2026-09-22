@@ -1,0 +1,19 @@
+//===- KernelSchedulerValues.def - Deterministic scheduling constants -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Virtual clock units, callback IRQL and bounded scheduler resource defaults.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_SCHEDULER_VALUE(PassiveLevel, 0)
+NEVERD_KERNEL_SCHEDULER_VALUE(DispatchLevel, 2)
+NEVERD_KERNEL_SCHEDULER_VALUE(TicksPerMillisecond, 10000)
+NEVERD_KERNEL_SCHEDULER_VALUE(MaxArguments, 32)
+NEVERD_KERNEL_SCHEDULER_VALUE(DefaultMaxPendingCallbacks, 1024)
+NEVERD_KERNEL_SCHEDULER_VALUE(DefaultMaxDispatches, 10000)
+NEVERD_KERNEL_SCHEDULER_VALUE(DefaultMaxTimers, 1024)
+NEVERD_KERNEL_SCHEDULER_VALUE(DefaultMaxTimerExpirations, 10000)

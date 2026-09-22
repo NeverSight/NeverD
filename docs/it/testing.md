@@ -57,6 +57,9 @@ deve richiedere una configurazione Unicorn riservata ai test.
 
 I test aggiuntivi coprono MDL del pool non paginato appartenenti al driver, durate indipendenti di descrittore e buffer, strutture di interrogazione del registro e buffer corti, diritti degli handle, eliminazioni e perdite, oltre ai 64 bit completi di `information_hex` per gli IOCTL senza output. La convalida esterna include anche letture/scritture dirette sincrone e statistiche di Zero.
 
+I test aggiuntivi verificano contesti CPU completi (registri, flag, SIMD, FPU, CR8), memoria condivisa e rifiuto di contesti dopo fault o di altri backend. Le fixture di lavoro coprono IRP marcati pendenti, completamento differito, errori di coda e durata, stallo, budget condivisi e stati dispatch/completamento distinti nei report pubblici. I test interni timer/DPC verificano solo transizioni, non API guest o un ambiente Windows asincrono completo.
+
+
 ## Organizzazione dei test
 
 `add_neverd_unittest` crea un eseguibile GoogleTest e assegna a ogni caso

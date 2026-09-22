@@ -57,6 +57,9 @@ no debe requerir una configuración de Unicorn exclusiva de las pruebas.
 
 Las pruebas adicionales cubren MDL de pool no paginado propiedad del controlador, vidas independientes del descriptor y del búfer, estructuras de consulta del registro y búferes cortos, permisos de identificadores, eliminación y fugas, y los 64 bits completos de `information_hex` para IOCTL sin salida. La validación externa también cubre lecturas/escrituras directas síncronas y consultas de estadísticas de Zero.
 
+Las pruebas adicionales verifican contextos CPU completos (registros, indicadores, SIMD, FPU, CR8), memoria compartida y rechazo de contextos tras fallos o de otro backend. Los fixtures de trabajo cubren IRP marcados como pendientes, finalización diferida, errores de cola y vida, bloqueo, límites compartidos y estados separados de despacho/finalización en informes públicos. Las pruebas internas de temporizadores/DPC solo verifican transiciones, no API invitadas ni un entorno asíncrono Windows completo.
+
+
 ## Distribución de pruebas
 
 `add_neverd_unittest` crea un ejecutable GoogleTest y asigna a cada caso

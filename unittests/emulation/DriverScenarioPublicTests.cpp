@@ -172,6 +172,47 @@ TEST_F(DriverScenarioPublic, CAPICompletesBufferedIOAndUnloads) {
   EXPECT_EQ(IO->getString("output_hex"), "5a4b7869");
 }
 
+TEST_F(DriverScenarioPublic, CAPIAndCLICompletePendingWorkItemRequests) {
+  for (bool UseCLI : {false, true}) {
+    const auto Output = UseCLI ? runCLI(LifecycleScenario, 0, "driver_async")
+                               : takeString(neverd_emulate_driver_scenario_json(
+                                     Session, fixture("driver_async").c_str(),
+                                     LifecycleScenario, nullptr));
+    auto Parsed = llvm::json::parse(Output);
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    const auto *IO = (*Requests)[1].getAsObject();
+    ASSERT_NE(IO, nullptr);
+    EXPECT_EQ(IO->getInteger("dispatch_status"), 0x103);
+    EXPECT_EQ(IO->getInteger("io_status"), 0);
+    EXPECT_EQ(IO->getBoolean("completed"), true);
+    EXPECT_EQ(IO->getString("output_hex"), "5a4b7869");
+  }
+}
+
+TEST_F(DriverScenarioPublic, CLIDoesNotHideFailedAsynchronousCompletion) {
+  std::string Scenario = LifecycleScenario;
+  Scenario.replace(Scenario.find("0x222000"), 8, "0x222028");
+  auto Parsed = llvm::json::parse(runCLI(Scenario, 2, "driver_async"));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  EXPECT_EQ(Report->getString("stop_reason"), "returned");
+  EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+  EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+  const auto *Requests = Report->getArray("requests");
+  ASSERT_NE(Requests, nullptr);
+  ASSERT_EQ(Requests->size(), 4u);
+  EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("dispatch_status"), 0x103);
+  EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("io_status"), 0xc000000d);
+}
+
 TEST_F(DriverScenarioPublic, CLIRunsOrderedLifecycleScenario) {
   auto Parsed = llvm::json::parse(
       runCLI(LifecycleScenario, 0, "success", NEVERD_DRIVER_IO_FIXTURE));
@@ -241,7 +282,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-synchronous-v2");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v3");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);

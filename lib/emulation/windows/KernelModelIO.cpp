@@ -253,6 +253,8 @@ KernelModel::beginRequest(const DriverRequest &Input) {
   Result.Requests[Index].Device = Devices.at(Device).Name;
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
+    if (DeletePendingDevices.count(Device))
+      return ioError("CREATE cannot target a delete-pending device");
     if (FileIt != Files.end())
       return ioError("CREATE requires an unused file identity");
     auto Flags = Memory.readInteger(Device + DeviceFlagsOffset, 4);
@@ -347,8 +349,11 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
   if (!Control)
     return Control.takeError();
-  if (*Status == StatusPending || *Pending || *Control)
-    return ioError("pending or asynchronous IRP completion is unsupported");
+  if (*Status == StatusPending)
+    return ioError("IoCompleteRequest cannot complete with STATUS_PENDING");
+  if (*Pending || (*Control & ~StackPendingReturned))
+    return ioError("unmodeled completion-stack control or pending propagation");
+  Request->PendingMarked = (*Control & StackPendingReturned) != 0;
   // An IOCTL without an output buffer may use Information for a driver-defined
   // result instead of a byte count. Direct IOCTLs do not set
   // IRP_INPUT_OPERATION, even when an output buffer exists, so use the
@@ -409,11 +414,22 @@ llvm::Error KernelModel::finishRequest(uint32_t DispatchStatus) {
     return ioError("no active request to finish");
   auto &Observation = Result.Requests[Request->ResultIndex];
   Observation.DispatchStatus = DispatchStatus;
-  if (DispatchStatus == StatusPending)
-    return ioError("STATUS_PENDING requires unsupported asynchronous dispatch");
+  if (!Request->DispatchReturned) {
+    if (!Request->Completed) {
+      auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
+      if (!Control)
+        return Control.takeError();
+      Request->PendingMarked = (*Control & StackPendingReturned) != 0;
+    }
+    if ((DispatchStatus == StatusPending) != Request->PendingMarked)
+      return ioError("STATUS_PENDING and IoMarkIrpPending must agree");
+    Request->DispatchReturned = true;
+  }
+  if (DispatchStatus == StatusPending && !Request->Completed)
+    return llvm::Error::success();
   if (!Request->Completed)
     return ioError("dispatch returned without completing its IRP");
-  if (Observation.IOStatus != DispatchStatus)
+  if (DispatchStatus != StatusPending && Observation.IOStatus != DispatchStatus)
     return ioError(
         "synchronous dispatch status does not match completed IoStatus.Status");
   auto FileIt = Files.find(Request->FileId);
@@ -421,11 +437,12 @@ llvm::Error KernelModel::finishRequest(uint32_t DispatchStatus) {
     return ioError("active request lost its file identity");
   auto &File = FileIt->second;
   const uint64_t Device = File.Device;
+  const uint32_t CompletionStatus = *Observation.IOStatus;
   if (auto E = Memory.writeInteger(File.Address + FileFinalStatusOffset,
-                                   DispatchStatus, 4))
+                                   CompletionStatus, 4))
     return E;
   if (Request->Kind == DriverRequestKind::Create) {
-    if (ntSuccess(DispatchStatus)) {
+    if (ntSuccess(CompletionStatus)) {
       File.State = FileState::Open;
     } else {
       FreedRanges.emplace(File.Address, FileSize);
@@ -441,25 +458,24 @@ llvm::Error KernelModel::finishRequest(uint32_t DispatchStatus) {
     Files.erase(FileIt);
   } else if ((Request->Kind == DriverRequestKind::Read ||
               Request->Kind == DriverRequestKind::Write) &&
-             !ntError(DispatchStatus)) {
+             !ntError(CompletionStatus)) {
     if (auto E =
             Memory.writeInteger(File.Address + FileCurrentByteOffset,
                                 Request->ByteOffset + Observation.Information,
                                 profile::PointerSize))
       return E;
   }
-  const uint64_t OpenCount =
-      std::count_if(Files.begin(), Files.end(), [&](const auto &Entry) {
-        return Entry.second.Device == Device &&
-               Entry.second.State == FileState::Open;
-      });
-  if (auto E = Memory.writeInteger(Device + DeviceReferenceCount, OpenCount, 4))
+  if (auto E = updateDeviceReferences(Device))
     return E;
   Request.reset();
+  if (auto E = retireDeviceIfUnreferenced(Device))
+    return E;
   return snapshot();
 }
 
 llvm::Expected<KernelModel::Invocation> KernelModel::beginUnload() {
+  if (Scheduler.hasPending())
+    return ioError("unload requires scheduled callbacks and timers to drain");
   if (Request || !Files.empty())
     return ioError(
         "unload requires all requests completed and the file closed");
@@ -481,7 +497,8 @@ llvm::Error KernelModel::finishUnload() {
   if (Registry.hasOpenHandles())
     return ioError("unload returned with live registry handles");
   if (!Devices.empty() || !SymbolicLinks.empty() || !Allocations.empty() ||
-      !Files.empty() || Request || !MDLs.empty())
+      !Files.empty() || Request || !MDLs.empty() || !WorkItems.empty() ||
+      Scheduler.hasPending())
     return ioError("unload returned with live devices, symbolic links, pool "
                    "allocations or file/request state");
   Unloading = false;

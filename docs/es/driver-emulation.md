@@ -6,7 +6,7 @@
 
 El emulador opcional de controladores de NeverD ejecuta el punto de entrada PE
 de un controlador WDM x64 compatible y, opcionalmente, recorre un escenario
-explícito de solicitudes síncronas antes de descargarlo. Utiliza Unicorn para
+explícito de solicitudes en serie antes de descargarlo. Utiliza Unicorn para
 ejecutar la CPU y el modelo acotado de Windows propio de NeverD. No carga el
 controlador en el kernel del host ni reenvía las llamadas de API del invitado
 a los servicios del sistema operativo anfitrión.
@@ -53,16 +53,16 @@ arbitrarios de terceros.
 
 | Clase de controlador o requisito | Alcance actual | Entorno que falta |
 |---------------------------------|----------------|-------------------|
-| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización y ciclos de vida síncronos de archivos | Cada API adicional ejecutada requiere un modelo definido |
-| IOCTL `METHOD_BUFFERED` | Compatible, con identidades de archivo independientes y solicitudes intercaladas | La finalización asíncrona no está disponible |
+| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización, ciclos de archivos en serie y callbacks acotados de elementos de trabajo | Cada API adicional ejecutada requiere un modelo definido |
+| IOCTL `METHOD_BUFFERED` | Identidades independientes, solicitudes intercaladas en serie y finalización por elementos de trabajo | Otros productores asíncronos siguen sin admitirse |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propios de cada solicitud y asignaciones de memoria del sistema | identidades de páginas físicas, DMA y asignaciones de memoria de usuario |
 | MDL asignados por el controlador | Descriptores independientes del pool no paginado modelado, con las direcciones originales de los búferes | Asociación con IRP, cadenas MDL, sondeo/bloqueo, páginas físicas y asignaciones de usuario |
-| READ/WRITE síncronos | Con búfer o directos según los indicadores del dispositivo | E/S neither, selección implícita de la posición de archivo y finalización asíncrona |
+| READ/WRITE | Con búfer o directos según el dispositivo, incluida la finalización por elementos de trabajo | E/S neither, posición implícita y otros productores asíncronos |
 | `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, comprobación de accesos y gestión de excepciones del invitado |
 | Controlador KMDF / UMDF | No compatible | Vinculación al framework, objetos, colas, callbacks y entorno de ejecución anfitrión adecuado |
 | Controlador PnP de bus, función o filtro | La inicialización puede ejecutarse dentro del subconjunto de API; no se admite el ciclo de vida de la pila de dispositivos | Conexión de dispositivos, despacho al controlador inferior, IRP PnP y de energía |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
-| Controlador con hilos de trabajo, temporizadores, DPC, APC, esperas o cancelaciones | No compatible | Planificación, transiciones IRQL, sincronización y responsabilidad asíncrona sobre los recursos |
+| Controlador con elementos de trabajo | Callbacks deterministas de `DelayedWorkQueue` a `PASSIVE_LEVEL` | Hilos de trabajo, temporizadores, DPC, APC, esperas y cancelación siguen sin admitirse |
 | Operaciones del registro mediante las API Zw listadas | Árbol explícito de sesión y derechos por handle | ACL, privilegios, vistas alternativas y persistencia |
 | Controlador con callbacks de proceso/hilo, otros handles, operaciones de archivo o descubrimiento de módulos del kernel | No compatible fuera de las API enumeradas | Administrador de objetos, estado del sistema y productores de callbacks/eventos |
 | Controlador de hardware, DMA, PCI, interrupciones o virtualización | Entorno no compatible | Modelos de dispositivos, memoria física, buses, interrupciones y estado privilegiado de CPU |
@@ -103,11 +103,12 @@ explícita. NeverD no sustituye llamadas sin implementar por valores de éxito.
 Las imágenes malformadas o los requisitos de carga no compatibles fallan antes
 de la ejecución.
 
-Este perfil no implementa un kernel completo de Windows, un runtime KMDF,
-un ciclo de vida PnP/energía, IRP asíncronos o pendientes, IOCTL neither,
-interrupciones ni planificación multihilo. Los callbacks se ejecutan solo
-cuando el escenario los solicita explícitamente; la inicialización por sí sola
-sigue deteniéndose después de DriverEntry.
+Los callbacks de elementos de trabajo en cola se ejecutan de forma determinista cuando retorna una llamada del controlador, incluido DriverEntry, el despacho de solicitudes y otro callback de trabajo. Las solicitudes siguen siendo seriales: una pendiente debe terminar antes de iniciar la siguiente. El despacho debe marcar el IRP como pendiente y devolver `STATUS_PENDING`; un elemento en cola puede completarlo después a `PASSIVE_LEVEL`. Si no queda un productor de finalización ejecutable, la solicitud atascada se detiene con `model_error`. Los callbacks comparten los límites de instrucciones, memoria, eventos y tiempo.
+
+Siguen sin implementarse un kernel Windows completo, KMDF, PnP/energía, IOCTL neither, interrupciones, esperas generales, hilos, cancelación y API invitadas de temporizadores/DPC/APC. Las pruebas internas de la máquina de estados del planificador no demuestran compatibilidad pública con esas operaciones. Una llamada de solo inicialización también ejecuta el trabajo puesto explícitamente en cola por DriverEntry; no crea solicitudes del escenario ni una descarga implícita.
+
+El elemento sale de la cola antes de iniciar su callback, que puede liberar su propio elemento. Liberar uno aún en cola, encolarlo dos veces, usar objetos caducados o destinos fuera de memoria invitada ejecutable provoca un fallo explícito. La referencia al dispositivo se conserva hasta que retorna el callback. La descarga exige liberar todos los elementos y terminar el trabajo en cola. Los contextos CPU conservan registros generales, SIMD, FPU y estado de control; la memoria invitada sigue compartida y restaurar un contexto no permite reanudar una CPU con fallo.
+La eliminación se aplaza mientras queden objetos de archivo o referencias de trabajo en cola/en ejecución. La asignación de elementos devuelve NULL al agotarse el espacio de objetos.
 
 Las imágenes utilizan su base preferida salvo que el escenario seleccione una
 dirección de reubicación válida, y deben ser ejecutables PE32+ x64 con el
@@ -137,7 +138,9 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | `DbgPrint`, `DbgPrintEx` | Formato variádico Win64 verificado, con un máximo de 512 bytes de salida; todos los filtros del depurador habilitados |
 | `IoGetCurrentIrpStackLocation` | Devuelve la ubicación de pila de la IRP modelada activa; las macros WDM compiladas normales leen el mismo campo del invitado |
 | `KeGetCurrentIrql` | Devuelve `PASSIVE_LEVEL` |
-| `IofCompleteRequest`, `IoCompleteRequest` | Completa la IRP síncrona modelada activa con `IO_NO_INCREMENT`; no se puede volver a acceder a una IRP completada ni a su búfer |
+| `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Elementos opacos asociados al dispositivo; solo `DelayedWorkQueue`, con dispositivo y contexto a `PASSIVE_LEVEL`; no se puede liberar un elemento aún en cola |
+| `IoMarkIrpPending` | Marca el IRP activo; también se modela la escritura equivalente de la macro WDM en el control de pila; el despacho debe devolver `STATUS_PENDING` |
+| `IofCompleteRequest`, `IoCompleteRequest` | Completa la IRP modelada activa, síncrona o pendiente con `IO_NO_INCREMENT`; no se puede volver a acceder a una IRP completada ni a su búfer |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operaciones acotadas sobre búferes del invitado, como máximo 1 MiB por llamada; las API de copia sin solapamiento rechazan los solapamientos |
 
 El formato de `DbgPrint` admite enteros `d/i/u/o/x/X`, punteros `p`, texto
@@ -204,9 +207,7 @@ transferencias, cleanup y close en ese orden. Las solicitudes de archivos
 independientes pueden intercalarse. Los dispositivos exclusivos rechazan una
 segunda apertura. Estas identidades representan objetos de archivo, no handles
 duplicados. Se admiten el método IOCTL con búfer y ambos métodos directos.
-El despacho debe completar cada IRP de forma síncrona; devolver `STATUS_PENDING`,
-no completarlo, indicar longitudes de salida inválidas o acceder a un IRP ya
-completado provoca un fallo explícito. La descarga solicitada no debe dejar
+El despacho debe completar de forma síncrona o cumplir el contrato anterior de elementos de trabajo pendientes. Las longitudes de salida inválidas y el acceso a un IRP completado provocan un fallo explícito. La descarga solicitada no debe dejar
 ningún dispositivo, enlace simbólico, asignación de pool u objeto de archivo activo.
 
 El campo raíz opcional `"load_address": "0x190000000"` solicita cambiar la base;
@@ -266,7 +267,7 @@ infiere la ausencia a partir de una implementación inexistente. Los nombres
 son ASCII imprimible de longitud acotada y la resolución distingue mayúsculas.
 El inventario es una propiedad concreta del escenario y no pretende coincidir
 con todas las versiones de Windows.
-`IoGetCurrentIrpStackLocation` y `MmGetSystemAddressForMdlSafe` son funciones auxiliares modeladas de las cabeceras WDM; esto no las declara exportadas de forma predeterminada, por lo que su disponibilidad como exportaciones requiere una importación estática o una declaración explícita en `kernel_exports`.
+`IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` y `MmGetSystemAddressForMdlSafe` son funciones auxiliares modeladas de las cabeceras WDM; esto no las declara exportadas de forma predeterminada, por lo que su disponibilidad como exportaciones requiere una importación estática o una declaración explícita en `kernel_exports`.
 
 El texto del escenario se limita a 2 MiB, con un máximo de 64 solicitudes,
 65536 bytes por búfer de entrada o salida y 512 KiB de bytes solicitados en
@@ -384,11 +385,11 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-synchronous-v2`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v3`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
-escritura de CPU también registra su fase (`driver_entry`, `request:N` o
+escritura de CPU también registra su fase (`driver_entry`, `request:N`, `callback:N` o
 `unload`). Cada solicitud informa de los estados de despacho y E/S, finalización,
 el valor Information y los bytes devueltos en `output_hex`. `preferred_image_base`
 describe la base PE original. `security_cookie` es la dirección del invitado
@@ -399,6 +400,8 @@ numérica; `information_hex` es una cadena hexadecimal con prefijo `0x` que
 conserva exactamente todos los bits del resultado sin signo de 64 bits. Use
 `information_hex` si el consumidor JSON no conserva la precisión de los enteros
 de 64 bits, especialmente para IOCTL sin búfer de salida.
+
+Las observaciones del trabajo usan la fase `callback:N`. Una solicitud pendiente conserva `STATUS_PENDING` en `dispatch_status`; el estado final se registra por separado en `io_status` y determina su contribución a `scenario_success`.
 
 El objeto anulable `fault` conserva el primer fallo del backend. Sus campos
 `kind`, `pc`, `address` anulable, `size`, `access` e `interrupt` distinguen memoria
