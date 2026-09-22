@@ -257,7 +257,8 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
 }
 
 llvm::Error KernelModel::finishEntry() {
-  if (!DriverObject || !RegistryPath || EntryFinished || Request || Unloading)
+  if (!DriverObject || !RegistryPath || EntryFinished || !Requests.empty() ||
+      Unloading)
     return modelError(
         "DriverEntry lifetime can end only once after initialization");
   const auto Allocation = ArenaAllocations.find(RegistryPath);
@@ -449,6 +450,9 @@ llvm::Error KernelModel::retireDeviceIfUnreferenced(uint64_t Address) {
   for (const auto &[Id, File] : Files)
     if (File.Address && File.Device == Address)
       return llvm::Error::success();
+  for (const auto &[IRP, Request] : Requests)
+    if (Request.Device == Address)
+      return llvm::Error::success();
   auto It = Devices.find(Address);
   if (It == Devices.end())
     return modelError("IoDeleteDevice received an unknown or deleted device");
@@ -573,7 +577,8 @@ llvm::Expected<uint64_t> KernelModel::call(
     return 0;
   }
   if (Kind == KernelAPIKind::IoGetCurrentIrpStackLocation) {
-    if (!Request || Request->IRP != A[0] || Request->Completed)
+    const auto *Request = requestForIRP(A[0]);
+    if (!Request || Request->Completed)
       return modelError(
           "IoGetCurrentIrpStackLocation requires the live request IRP");
     return Request->Stack;
