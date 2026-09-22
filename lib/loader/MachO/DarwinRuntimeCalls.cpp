@@ -9,28 +9,6 @@
 #include "llvm/ADT/StringRef.h"
 
 namespace neverd {
-namespace {
-std::optional<llvm::StringRef> darwinWeakRuntimeImport(const BinaryImage &Image,
-                                                       va_t Slot) {
-  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
-      Image.Bits != Bitness::Bits64 ||
-      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
-      Image.ConflictingImportStorageSlots.count(Slot))
-    return std::nullopt;
-  const auto Import = Image.ImportPtrSlots.find(Slot);
-  const auto Bind = Image.DyldBindSlots.find(Slot);
-  if (Import == Image.ImportPtrSlots.end() ||
-      Bind == Image.DyldBindSlots.end() ||
-      Bind->second.Name != Import->second || Bind->second.Addend ||
-      !Bind->second.WeakImport)
-    return std::nullopt;
-  if (auto I = Image.ImportStorageSlots.find(Slot);
-      I != Image.ImportStorageSlots.end() &&
-      (I->second.Name != Import->second || I->second.Addend))
-    return std::nullopt;
-  return Import->second;
-}
-} // namespace
 
 std::optional<SourceCallTypeHint>
 darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
@@ -251,7 +229,7 @@ std::optional<SourceCallTypeHint>
 darwinRuntimeGlobalAddressHint(const BinaryImage &Image, va_t ImportSlot) {
   const auto Import = darwinRuntimeImport(Image, ImportSlot);
   if (!Import)
-    return std::nullopt;
+    return darwinDeclaredSourceGlobalAddressHint(Image, ImportSlot);
 
   // These UIKit constants are public external storage, rather than functions
   // or implementation-owned objects. The command-line-tools SDK used to

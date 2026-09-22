@@ -654,6 +654,10 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                   Hint.TargetName,
                   GlobalIdentifierAllocator.allocate(
                       "neverd_darwin_data_" + Hint.TargetName, "nd_data"));
+            const auto [Weak, Added] = SourceRuntimeDataWeakImports.emplace(
+                Hint.TargetName, Hint.WeakImport);
+            if (!Added && Weak->second != Hint.WeakImport)
+              ConflictingSourceRuntimeDataIdentities.insert(Hint.TargetName);
           } else
             NeedsDarwinStackGuard |= Hint.TargetName == "__stack_chk_guard";
         } else if (Hint.CallKind ==
@@ -1004,7 +1008,12 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   for (const auto &[Name, Identifier] : SourceRuntimeDataIdentifiers) {
-    OS << "extern unsigned char " << Identifier << "[] __asm__(\"";
+    if (ConflictingSourceRuntimeDataIdentities.count(Name))
+      continue;
+    OS << "extern ";
+    if (SourceRuntimeDataWeakImports.at(Name))
+      OS << "__attribute__((weak_import)) ";
+    OS << "unsigned char " << Identifier << "[] __asm__(\"";
     OS.write_escaped("_" + Name);
     OS << "\");\n";
   }

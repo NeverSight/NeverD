@@ -106,6 +106,9 @@ std::optional<SourceCallTypeHint>
 darwinDeclaredSourceGlobalAddressHint(const BinaryImage &Image,
                                       va_t ImportSlot) {
   auto Import = darwinRuntimeImport(Image, ImportSlot);
+  const bool WeakImport = !Import;
+  if (!Import)
+    Import = darwinWeakRuntimeImport(Image, ImportSlot);
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
   if (!Import || Bind == Image.DyldBindSlots.end() ||
       !darwinDeclaredSourceDataExport(Image.Arch, *Import, Bind->second.Module))
@@ -116,6 +119,7 @@ darwinDeclaredSourceGlobalAddressHint(const BinaryImage &Image,
   // access the real runtime object, without assuming its value or layout.
   SourceCallTypeHint Result;
   Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress;
+  Result.WeakImport = WeakImport;
   Result.TargetAddress = ImportSlot;
   Result.TargetName = Import->str();
   Result.Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;

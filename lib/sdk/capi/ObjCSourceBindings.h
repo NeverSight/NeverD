@@ -3520,7 +3520,9 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall)
     return false;
   if (Binding.WeakImport &&
-      Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall)
+      Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall &&
+      Binding.CallKind !=
+          SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress)
     return false;
   if (!validateSourceABI(Hint, Reason) || Hint.Architecture != Image.Arch ||
       Expression.Operands.size() != Hint.Parameters.size())

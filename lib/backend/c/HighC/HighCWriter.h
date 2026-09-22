@@ -190,6 +190,8 @@ public:
   std::map<std::string, SourceNativeDeclaration> SourceNativeSignatures;
   std::map<std::string, std::string> SourceRuntimeLinkNames;
   std::map<std::string, std::string> SourceRuntimeDataIdentifiers;
+  std::map<std::string, bool> SourceRuntimeDataWeakImports;
+  std::set<std::string> ConflictingSourceRuntimeDataIdentities;
   std::map<std::string, bool> SourceCallTermination;
   std::set<std::string> ConflictingSourceNativeSignatures;
   std::map<std::string, unsigned> MemoryTypes;

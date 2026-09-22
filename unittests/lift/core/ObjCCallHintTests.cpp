@@ -5239,6 +5239,80 @@ TEST(ObjCCallHints, FrameworkAndCompilerDataKeepExactExportIdentities) {
   }
 }
 
+TEST(ObjCCallHints, WeakSDKDataKeepsOptionalExternalStorageIdentity) {
+  constexpr llvm::StringLiteral Name = "kCGImageDestinationEncodeRequest";
+  constexpr llvm::StringLiteral Symbol = "_kCGImageDestinationEncodeRequest";
+  constexpr llvm::StringLiteral Module =
+      "/System/Library/Frameworks/ImageIO.framework/ImageIO";
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage(Symbol, Architecture);
+    Image.DyldBindSlots[0x2180] = {Symbol.str(), 0, Module.str(), true};
+    const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
+    ASSERT_TRUE(Binding);
+    EXPECT_EQ(Binding->TargetName, Name);
+    EXPECT_EQ(Binding->CallKind,
+              SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress);
+    EXPECT_EQ(Binding->Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::DarwinSDK);
+    EXPECT_TRUE(Binding->WeakImport);
+
+    HighFunc Function;
+    Function.Name = "weak_framework_external_storage";
+    Function.ReturnType = NdType::makeInt(8);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeLoad(HighExpr::makeConst(0x2180, 8),
+                                       NdType::makeInt(8));
+    Function.Body = {Return};
+    const auto Bound = sdk::bindObjCSourceReferences(Function, Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    const auto *Address = sourceCall(Bound.Function);
+    ASSERT_NE(Address, nullptr);
+    EXPECT_TRUE(Address->SourceCallHint->WeakImport);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Address, Image, {}));
+
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    ASSERT_TRUE(HighCEmitter().emit({Bound.Function}, OS, Options));
+    EXPECT_NE(Source.find(
+                  "extern __attribute__((weak_import)) unsigned char "
+                  "neverd_darwin_data_kCGImageDestinationEncodeRequest[] "
+                  "__asm__(\"_kCGImageDestinationEncodeRequest\");"),
+              std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("0x2180"), std::string::npos) << Source;
+
+    auto Forged = *Address;
+    auto ForgedHint =
+        std::make_shared<SourceCallTypeHint>(*Address->SourceCallHint);
+    ForgedHint->WeakImport = false;
+    Forged.SourceCallHint = std::move(ForgedHint);
+    EXPECT_FALSE(sdk::objcSourceCallBound(Forged, Image, {}));
+
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      auto Changed = Image;
+      if (Mutation == 0)
+        Changed.DyldBindSlots[0x2180].WeakImport = false;
+      if (Mutation == 1)
+        Changed.DyldBindSlots[0x2180].Module += ".impostor";
+      if (Mutation == 2)
+        Changed.DyldBindSlots[0x2180].Addend = 8;
+      if (Mutation == 3)
+        Changed.DyldBindSlots.clear();
+      if (Mutation == 4) {
+        Changed.ImportPtrSlots[0x2180] += "Suffix";
+        Changed.DyldBindSlots[0x2180].Name =
+            Changed.ImportPtrSlots[0x2180];
+      }
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Address, Changed, {}))
+          << Mutation;
+    }
+  }
+}
+
 TEST(ObjCCallHints, MobileSDKDataKeepsExactFrameworkStorageIdentities) {
   const std::pair<llvm::StringRef, llvm::StringRef> Declarations[] = {
       {"UIApplicationDidReceiveMemoryWarningNotification", "UIKit"},
@@ -5458,9 +5532,10 @@ TEST(ObjCCallHints, SDKDataBindingsRequireExactExportsAndDataDeclarations) {
         Image.Format = BinaryFormat::ELF;
       if (Mutation == 9)
         Image.ImportPtrSlots[0x2180] = "_different";
-      EXPECT_EQ(bool(darwinRuntimeGlobalAddressHint(Image, 0x2180)),
-                Mutation == 0)
-          << Mutation;
+      const auto Binding = darwinRuntimeGlobalAddressHint(Image, 0x2180);
+      EXPECT_EQ(bool(Binding), Mutation == 0 || Mutation == 4) << Mutation;
+      if (Mutation == 4 && Binding)
+        EXPECT_TRUE(Binding->WeakImport);
     }
     for (const char *Name :
          {"NSStringFromClass", "NSDefaultRunLoopMode_suffix"}) {

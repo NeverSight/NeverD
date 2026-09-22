@@ -205,7 +205,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
   }
 
   if (Hint.WeakImport &&
-      (Hint.CallKind != Kind::DarwinRuntimeCall ||
+      ((Hint.CallKind != Kind::DarwinRuntimeCall &&
+        Hint.CallKind != Kind::DarwinRuntimeGlobalAddress) ||
        Signature.Origin != SourceFunctionTypeHint::OriginKind::DarwinSDK))
     return bad("weak import belongs to another binding kind");
   if (Hint.ValueWitness && Hint.CallKind != Kind::SwiftValueWitness)
@@ -343,7 +344,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
           Signature.Origin ==
               SourceFunctionTypeHint::OriginKind::SwiftRuntime) {
         auto It = SourceRuntimeDataIdentifiers.find(Hint.TargetName);
-        if (It == SourceRuntimeDataIdentifiers.end())
+        const auto Weak = SourceRuntimeDataWeakImports.find(Hint.TargetName);
+        if (It == SourceRuntimeDataIdentifiers.end() ||
+            Weak == SourceRuntimeDataWeakImports.end() ||
+            Weak->second != Hint.WeakImport ||
+            ConflictingSourceRuntimeDataIdentities.count(Hint.TargetName))
           return bad("unknown runtime data identity");
         Value = It->second;
       } else if (Hint.TargetName == "__stack_chk_guard")
