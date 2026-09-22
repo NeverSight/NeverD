@@ -6974,6 +6974,8 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
       {"initWithCGImage:", NdTypeKind::Ptr, 3},
       {"initWithProgressViewStyle:", NdTypeKind::Ptr, 3},
+      {"initWithActivityIndicatorStyle:", NdTypeKind::Ptr, 3},
+      {"isHighDynamicRange", NdTypeKind::Int, 2},
       {"initWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"insertSubview:belowSubview:", NdTypeKind::Void, 4},
       {"instantiateWithOwner:options:", NdTypeKind::Ptr, 4},
@@ -7004,7 +7006,16 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
     ASSERT_TRUE(Hint);
     EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
     EXPECT_EQ(Hint->ReturnType->Kind, Case.ReturnKind);
-    EXPECT_EQ(Hint->Parameters.size(), Case.Parameters);
+    ASSERT_EQ(Hint->Parameters.size(), Case.Parameters);
+    if (llvm::StringRef(Case.Selector) == "isHighDynamicRange") {
+      EXPECT_EQ(Hint->ReturnType->Size, 1U);
+      EXPECT_FALSE(Hint->ReturnType->IsSigned);
+    }
+    if (llvm::StringRef(Case.Selector) == "initWithActivityIndicatorStyle:") {
+      EXPECT_EQ(Hint->Parameters[2].Type->Size, 8U);
+      EXPECT_TRUE(Hint->Parameters[2].Type->IsSigned);
+      EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
+    }
 
     auto Changed = Image;
     Changed.DynInfo.NeededLibs = {
@@ -7592,6 +7603,9 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
     const char *ReturnClass;
   } Cases[] = {
       {"UIImage", "imageOrientation", false, NdTypeKind::Int, 2, ""},
+      {"UIImage", "isHighDynamicRange", false, NdTypeKind::Int, 2, ""},
+      {"UIActivityIndicatorView", "initWithActivityIndicatorStyle:", false,
+       NdTypeKind::Ptr, 3, "First"},
       {"UIImage", "imageFlippedForRightToLeftLayoutDirection", false,
        NdTypeKind::Ptr, 2, "UIImage"},
       {"UIImage", "imageWithCGImage:", true, NdTypeKind::Ptr, 3, "UIImage"},
@@ -7616,6 +7630,9 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
     Image.DynInfo.NeededLibs = {
         "/System/Library/Frameworks/UIKit.framework/UIKit",
         "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    if (llvm::StringRef(Case.Owner) == "UIActivityIndicatorView")
+      Image.DynInfo.NeededLibs.push_back(
+          "/System/Library/Frameworks/QuartzCore.framework/QuartzCore");
     auto &Class = Image.ObjCClasses.front();
     Class.RootClass = false;
     Class.InheritanceStatus = "resolved";

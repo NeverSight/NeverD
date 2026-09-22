@@ -56,4 +56,10 @@ ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "cla
 // directly adopted protocols. This closes the inherited receiver scope for
 // local subclasses without assigning a global type to their own selectors.
 ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIImageView", "", "C:UIView", nullptr)
+// The same complete ASTs above declare UIImage's bool HDR property and the
+// UIActivityIndicatorView initializer, returning instancetype with a long enum.
+// Preserve the activity indicator's exact UIView/NSCoding receiver closure.
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIImage", "", false, "isHighDynamicRange", "B16@0:8", "", false, nullptr, "", false)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIActivityIndicatorView", "", "C:UIView|P:NSCoding", nullptr)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIActivityIndicatorView", "", false, "initWithActivityIndicatorStyle:", "@24@0:8q16", "", true, nullptr, "", false)
 // clang-format on

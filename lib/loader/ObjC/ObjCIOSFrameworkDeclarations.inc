@@ -86,4 +86,12 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "userInterfaceIdiom", "q16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "window", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "whiteColor", "@16@0:8", nullptr},
-    // clang-format on
+    // Additional fixed declarations from complete Xcode 26.5 device/simulator ASTs.
+// SHA-256: dc99c06a9e4aab8015f8675b08ac55e042201401c21d39a4df4535aa63e0303f
+//          c443f389aae208205f42b4a592859ffb45766cc6e2f663b6ef919528e2676b61
+// UIImage BOOL is bool; UIActivityIndicatorViewStyle is a signed long enum.
+// Both selectors have one agreeing declaration owner in each complete AST.
+// Apple Clang encodes these canonical declarations on both arm64 iOS targets.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "isHighDynamicRange", "B16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithActivityIndicatorStyle:", "@24@0:8q16", nullptr},
+// clang-format on
