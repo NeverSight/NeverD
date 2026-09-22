@@ -16,13 +16,16 @@ TARGETS = {"iphoneos": "arm64-apple-ios18.0",
            "iphonesimulator": "arm64-apple-ios18.0-simulator"}
 
 
-def ir(language, target="arm64-apple-ios18.0"):
-    name = SYMBOL if language == "swift" else r"\01_" + SYMBOL
+def ir(language, target="arm64-apple-ios18.0", probe="comparison"):
+    symbol = SYMBOL if probe == "comparison" else "$sSS9hasPrefixySbSSF"
+    name = symbol if language == "swift" else r"\01_" + symbol
     attrs = "" if language == "swift" else " noundef"
     types = ("i64", "ptr", "i64", "ptr", "i8")
+    if probe == "prefix":
+        types = types[:-1]
     result = f'target triple = "{target}"\n'
     result += f'declare swiftcc i1 @"{name}"(' + ", ".join(t + attrs for t in types) + ") #1\n"
-    for mode in (0, 1) if language == "swift" else (None,):
+    for mode in (0, 1) if language == "swift" and probe == "comparison" else (None,):
         args = [t + attrs + " %" + str(i) for i, t in enumerate(types)]
         if mode is not None:
             args[-1] = "i8 " + str(mode)
@@ -33,6 +36,32 @@ def ir(language, target="arm64-apple-ios18.0"):
 
 
 class SwiftStringIRTests(unittest.TestCase):
+    def test_prefix_requires_its_own_four_input_i1_contract(self):
+        for language in ("swift", "c"):
+            base = ir(language, probe="prefix")
+            result = collector.validate_ir(base, language, probe="prefix")
+            self.assertEqual(result["parameters"], ["i64", "ptr", "i64", "ptr"])
+            self.assertEqual(result["call_count"], 1)
+            self.assertEqual(result["modes"], [])
+            for bad in (ir(language), base.replace("swiftcc i1", "swiftcc i8"),
+                        base.replace("ptr)", "ptr, ptr swiftself)"),
+                        base.replace("ptr noundef)", "ptr noundef, ptr swiftself)"),
+                        base.replace("ptr %3", "ptr 0"),
+                        base.replace("ptr noundef %3", "ptr noundef 0")):
+                if bad == base:
+                    continue
+                with self.subTest(language=language, bad=bad), self.assertRaises(ValueError):
+                    collector.validate_ir(bad, language, probe="prefix")
+            with self.assertRaises(ValueError):
+                collector.validate_ir(base, language)
+
+    def test_unknown_probe_fails_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with self.assertRaises(ValueError):
+                collector.collect(output, "arbitrary-symbol")
+            self.assertFalse(output.exists())
+
     def test_actual_calls_preserve_i1_and_all_five_arguments(self):
         for language in ("swift", "c"):
             with self.subTest(language=language):
@@ -110,6 +139,7 @@ class SwiftStringCollectionTests(unittest.TestCase):
         self.fail_command = None
         self.timeout_command = None
         self.bad_ir = False
+        self.probe = "comparison"
 
     def run_command(self, argv, *, cwd, env, stdout, stderr, timeout, check):
         args = [str(value) for value in argv]
@@ -146,16 +176,20 @@ class SwiftStringCollectionTests(unittest.TestCase):
             self.assertEqual(args[-2], "-o")
             source = Path(args[-3]).read_text()
             if language == "swift":
-                self.assertIn("lhs == rhs", source)
-                self.assertIn("lhs < rhs", source)
+                if self.probe == "comparison":
+                    self.assertIn("lhs == rhs", source)
+                    self.assertIn("lhs < rhs", source)
+                else:
+                    self.assertIn("value.hasPrefix(prefix)", source)
                 self.assertIn("-O", args)
             else:
-                self.assertIn("extern _Bool neverd_compare", source)
+                self.assertIn("extern _Bool neverd_" +
+                              ("compare" if self.probe == "comparison" else "has_prefix"), source)
                 self.assertIn("__attribute__((swiftcall))", source)
                 self.assertIn("-Werror", args)
                 self.assertIn("-std=gnu11", args)
             text = ""
-            payload = ir(language, target) if args[-1].endswith(".ll") else "mock assembly\n"
+            payload = ir(language, target, self.probe) if args[-1].endswith(".ll") else "mock assembly\n"
             if self.bad_ir:
                 payload = payload.replace("swiftcc i1", "swiftcc i8")
             Path(args[-1]).write_text(payload)
@@ -176,7 +210,7 @@ class SwiftStringCollectionTests(unittest.TestCase):
                 mock.patch.object(collector.sys, "platform", "darwin"), \
                 mock.patch.object(collector.time, "monotonic", side_effect=lambda: self.now), \
                 mock.patch.object(collector.subprocess, "run", side_effect=self.run_command):
-            success = collector.collect(self.output)
+            success = collector.collect(self.output, self.probe)
         report = json.loads((self.output / "manifest.json").read_text())
         self.assertEqual(success, report["status"] == "complete")
         return report
@@ -199,6 +233,18 @@ class SwiftStringCollectionTests(unittest.TestCase):
             self.assertEqual(entry["size"], len(data))
             self.assertEqual(entry["sha256"], hashlib.sha256(data).hexdigest())
         self.assertTrue(all(command["exitcode"] == 0 for command in report["commands"]))
+
+    def test_prefix_profiles_retain_separate_symbol_and_compiler_inputs(self):
+        self.probe = "prefix"
+        report = self.collect()
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["probe"], "prefix")
+        self.assertEqual(report["symbol"], "$sSS9hasPrefixySbSSF")
+        for profile in report["profiles"]:
+            for language in ("swift", "c"):
+                self.assertEqual(profile[language + "_abi"]["parameters"],
+                                 ["i64", "ptr", "i64", "ptr"])
+                self.assertEqual(profile[language + "_abi"]["call_count"], 1)
 
     def test_wrong_sdk_version_preserves_completed_device_profile(self):
         self.versions["iphonesimulator"] = "26.4"

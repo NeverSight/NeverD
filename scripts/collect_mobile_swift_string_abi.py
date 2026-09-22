@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retain compiler evidence for one exact Swift String comparison import.
+"""Retain compiler evidence for an exact Swift String boolean import.
 
 Fixed device/simulator acquisition on macOS Actions. No application code or
 recovery engine is executed, and no declaration is installed by this script.
@@ -32,10 +32,30 @@ uint8_t compare_byte(uint64_t a, void *b, uint64_t c, void *d, uint8_t e) {
   return neverd_compare(a, b, c, d, e);
 }
 """
+PREFIX_SYMBOL = "$sSS9hasPrefixySbSSF"
+PREFIX_TYPES = ("i64", "ptr", "i64", "ptr")
+PREFIX_SWIFT_SOURCE = """@inline(never) public func prefixStrings(_ value: String, _ prefix: String) -> Bool { value.hasPrefix(prefix) }
+"""
+PREFIX_C_SOURCE = """#include <stdint.h>
+extern _Bool neverd_has_prefix(uint64_t, void *, uint64_t, void *)
+  __asm__(\"_""" + PREFIX_SYMBOL + """\") __attribute__((swiftcall));
+uint8_t prefix_byte(uint64_t a, void *b, uint64_t c, void *d) {
+  return neverd_has_prefix(a, b, c, d);
+}
+"""
 
 
-def validate_ir(text, language, target=None):
+def probe_inputs(probe):
+    if probe == "comparison":
+        return SYMBOL, TYPES, SWIFT_SOURCE, C_SOURCE
+    if probe == "prefix":
+        return PREFIX_SYMBOL, PREFIX_TYPES, PREFIX_SWIFT_SOURCE, PREFIX_C_SOURCE
+    raise ValueError("unknown fixed Swift String probe")
+
+
+def validate_ir(text, language, target=None, probe="comparison"):
     """Require the actual fixed call and declaration, including the i1 result."""
+    symbol, types, _, _ = probe_inputs(probe)
     if language not in {"swift", "c"} or len(text.encode()) > MAX_BYTES:
         raise ValueError("invalid IR profile or size")
     if target is not None:
@@ -44,7 +64,7 @@ def validate_ir(text, language, target=None):
         expected = {target, target.replace("ios18.0", "ios18.0.0")}
         if len(triples) != 1 or triples[0] not in expected:
             raise ValueError("compiler IR has a different target triple")
-    name = SYMBOL if language == "swift" else r"\01_" + SYMBOL
+    name = symbol if language == "swift" else r"\01_" + symbol
     quoted = re.escape('"' + name + '"')
     decls = re.findall(r'^declare swiftcc i1 @' + quoted +
                        r'\(([^\n]*)\)[^\n]*$', text, re.M)
@@ -53,23 +73,24 @@ def validate_ir(text, language, target=None):
     parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)?', value.strip())
                   for value in decls[0].split(',')]
     if any(value is None for value in parameters) or tuple(
-            value.group(1) for value in parameters) != TYPES:
+            value.group(1) for value in parameters) != types:
         raise ValueError("declaration has a different or hidden argument ABI")
     calls = re.findall(r'(%[A-Za-z0-9._-]+) = (?:tail )?call swiftcc i1 @' + quoted +
                        r'\(([^\n]*)\)', text)
-    if len(calls) != (2 if language == "swift" else 1):
+    if len(calls) != (2 if language == "swift" and probe == "comparison" else 1):
         raise ValueError("probe did not call the exact declaration")
     modes = set()
     for result, call in calls:
         parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)? (%[A-Za-z0-9._-]+|[0-9]+)',
                                    value.strip()) for value in call.split(',')]
         if any(value is None for value in parameters) or tuple(
-                value.group(1) for value in parameters) != TYPES:
+                value.group(1) for value in parameters) != types:
             raise ValueError("call arguments disagree with the declaration")
         if any(not value.group(2).startswith('%') for value in parameters[:4]):
             raise ValueError("probe does not pass its dynamic String arguments")
-        modes.add(parameters[-1].group(2))
-    if language == "swift" and modes != {"0", "1"}:
+        if probe == "comparison":
+            modes.add(parameters[-1].group(2))
+    if language == "swift" and probe == "comparison" and modes != {"0", "1"}:
         raise ValueError("equality and ordering modes were not independently observed")
     if language == "c":
         normalized = re.findall(r'(%[A-Za-z0-9._-]+) = zext i1 ' +
@@ -78,7 +99,7 @@ def validate_ir(text, language, target=None):
                 r'\bret i8 ' + re.escape(normalized[0]) + r'(?:\s|$)', text):
             raise ValueError("C probe does not return its normalized one-bit result")
     return {"calling_convention": "swiftcc", "return": "i1",
-            "parameters": list(TYPES), "call_count": len(calls),
+            "parameters": list(types), "call_count": len(calls),
             "modes": sorted(modes) if language == "swift" else []}
 
 
@@ -115,14 +136,15 @@ def tool_identity(path, developer):
             "sha256": digest.hexdigest()}
 
 
-def collect(output):
+def collect(output, probe="comparison"):
+    symbol, _, swift_source, c_source = probe_inputs(probe)
     if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
         raise RuntimeError("Swift SDK evidence must run on macOS GitHub Actions")
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     evidence = {"schema_version": 1, "scope": "swift-string-call-abi-only",
                 "status": "incomplete", "consumer_commit": os.environ.get("CONSUMER_COMMIT"),
-                "symbol": SYMBOL, "sdk_version": SDK_VERSION, "commands": [], "profiles": []}
+                "probe": probe, "symbol": symbol, "sdk_version": SDK_VERSION, "commands": [], "profiles": []}
     end = time.monotonic() + 480
 
     def command(name, argv):
@@ -194,8 +216,8 @@ def collect(output):
             profile["tools"] = [tool_identity(path, developer) for path in (swift, clang)]
             profile["swift_version"] = command(sdk + "-swift-version", [swift, "--version"])
             profile["clang_version"] = command(sdk + "-clang-version", [clang, "--version"])
-            for language, source, suffix, compiler in (("swift", SWIFT_SOURCE, ".swift", swift),
-                                                        ("c", C_SOURCE, ".c", clang)):
+            for language, source, suffix, compiler in (("swift", swift_source, ".swift", swift),
+                                                        ("c", c_source, ".c", clang)):
                 name = sdk + "-" + language
                 path = output / (name + suffix)
                 path.write_text(source)
@@ -208,7 +230,7 @@ def collect(output):
                 emit_ir = ["-emit-ir"] if language == "swift" else ["-S", "-emit-llvm"]
                 command(name + "-ir", [*args, *emit_ir, path, "-o", ir])
                 profile["files"].append({"path": ir.name, **retained_file(ir, output)})
-                profile[language + "_abi"] = validate_ir(ir.read_text(), language, target)
+                profile[language + "_abi"] = validate_ir(ir.read_text(), language, target, probe)
                 command(name + "-assembly", [*args, "-S", path, "-o", assembly])
                 profile["files"].append({"path": assembly.name, **retained_file(assembly, output)})
             profile["status"] = "complete"
@@ -233,8 +255,9 @@ def collect(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--probe", choices=("comparison", "prefix"), default="comparison")
     args = parser.parse_args()
-    return 0 if collect(args.output) else 1
+    return 0 if collect(args.output, args.probe) else 1
 
 
 if __name__ == "__main__":

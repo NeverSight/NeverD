@@ -2,6 +2,14 @@ name: Mobile Swift String ABI Evidence
 
 on:
   workflow_dispatch:
+    inputs:
+      probe:
+        description: Fixed Swift String import to inspect
+        type: choice
+        default: comparison
+        options:
+          - comparison
+          - prefix
 
 permissions:
   contents: read
@@ -13,6 +21,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       CONSUMER_COMMIT: ${{ github.sha }}
+      SWIFT_STRING_PROBE: ${{ inputs.probe || 'comparison' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,6 +35,7 @@ jobs:
         run: |
           test -d "$DEVELOPER_DIR"
           python scripts/collect_mobile_swift_string_abi.py \
+            --probe "$SWIFT_STRING_PROBE" \
             --output "$RUNNER_TEMP/mobile-swift-string-abi"
       - name: Preserve compiler and SDK evidence
         if: always()
