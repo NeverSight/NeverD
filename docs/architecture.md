@@ -485,14 +485,18 @@ deadlines; `KernelDispatcher` owns opaque DPC, timer and event objects and
 their signals. `KernelModel` owns wait registrations, work-item/device
 lifetimes and IRP completion. `DriverSession` suspends and resumes separate
 callback stacks and complete CPU contexts, including Win64 stack arguments,
-with shared guest memory. Virtual time advances at timer/wait boundaries; DPCs
-run at `DISPATCH_LEVEL`, workers at `PASSIVE_LEVEL`, on CPU0 with
-deterministic cooperative scheduling. This does not provide general
-thread/APC/cancellation/spinlock scheduling, concurrent IRPs, full
+with shared guest memory. Virtual time advances at timer/wait/cancellation boundaries only when no frame
+is ready. DPCs run at `DISPATCH_LEVEL`; framework cancellation callbacks and
+workers run at `PASSIVE_LEVEL`, on CPU0 with deterministic cooperative
+scheduling. DPCs precede FIFO cancellation callbacks, which precede workers
+and resuming ready passive waiters. This does not provide general
+thread/APC/spinlock scheduling, WDM or PnP cancellation, concurrent IRPs, full
 PnP/power or hardware. API IRQL ceilings come from `KernelAPIIRQL.def`, with
 argument-dependent checks in the owning model.
 
-`KernelFramework` owns KMDF 1.33 bindings, table identity, WDF objects/contexts, control-device initializers, sequential default queues and request handles. Its typed device and request hosts delegate WDM namespace, storage, packet state, MDL mapping and completion validation to `KernelModel`; neither side invents duplicate devices or IRPs. Queue routing carries a framework-owned dispatch status separately from the void guest callback return. Completion continuations execute cleanup and child destruction before retiring the IRP, while external references retain only the WDF context. Pending-request deletion is rejected before ancestor mutation until cancellation/draining is modeled. `DriverSession` executes nested callbacks with shared budgets. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. PnP devices, general queues/cancellation, class extensions and UMDF remain unsupported.
+`KernelFramework` owns KMDF 1.33 bindings, table identity, WDF objects/contexts, control-device initializers, sequential default queues and request handles. Its typed device and request hosts delegate WDM namespace, storage, packet state, MDL mapping and completion validation to `KernelModel`; neither side invents duplicate devices or IRPs. Queue routing carries a framework-owned dispatch status separately from the void guest callback return. Completion continuations execute cleanup and child destruction before retiring the IRP, while external references retain only the WDF context. Pending-request deletion is rejected before ancestor mutation; automatic cancellation/draining during deletion remains unsupported. `DriverSession` executes nested callbacks with shared budgets. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. PnP devices, general queue scheduling/cancellation, class extensions and UMDF remain unsupported.
+
+Scenario cancellation is a per-transfer virtual deadline, owned by the IRP record in `KernelModel` and configured by `cancel_after_100ns`; public scenarios remain serial. The model records the actual absolute `cancel_requested_at_100ns` independently of whether a callback is registered. `KernelModel` applies zero-delay cancellation after framework routing and before guest I/O dispatch, preserves completion-first outcomes, and includes positive cancellation deadlines in idle time advancement. `KernelFramework` owns mark/unmark state, queued versus delivered cancellation and an internal reference through callback return. A queued callback cannot authorize completion; after delivery, a worker may coordinate completion while the cancellation callback waits. WDF lifetime retention never revalidates completed IRP storage. The scheduler carries cancellation callbacks separately from work items, preserving callback kind through suspend/resume and enforcing shared capacity and dispatch budgets. This bounded control-device contract does not add a WDM cancel routine or a general queue scheduler.
 
 ## Exception-rewrite boundaries
 

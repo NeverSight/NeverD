@@ -50,6 +50,8 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 يغطي `DriverGuardTests.cpp` وأربعة متغيرات أصلية من `driver_guard.c` حالات CFG النشط وغير النشط ونقل عنوان التحميل وABI استدعاءات check/dispatch والأهداف المشوهة. تغطي `KernelFrameworkTests.cpp` و`KernelFrameworkControlTests.cpp` و`KernelFrameworkQueueTests.cpp` و`KernelFrameworkRequestTests.cpp` الربط وإنشاء الأجهزة مع التراجع الكامل عند الفشل وتوجيه الطوابير والأطوال المنطقية للمخازن المؤقتة وترتيب التنظيف وأعمار IRP والسياقات. يُترجم الملفان الأصليان `driver_kmdf_lifecycle.c` و`driver_kmdf_control.c` اختياريًا باستخدام ترويسات WDK 1.33 الحقيقية ويرتبطان عبر مكتبة `FxDriverEntry` الفعلية. اضبط مسارات CMake المخزنة `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` لصور دورة الحياة، و`NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` لصور أجهزة التحكم العادية وذات CFG النشط. يُعلن التخطي صراحة عند غياب المنتجات الخارجية. يغطي `DriverKMDFLifecycleTests.cpp` و`DriverKMDFControlTests.cpp` وحالات C API/CLI في `DriverScenarioPublicTests.cpp` الاستدعاءات الفعلية والإدخال والإخراج بالمخازن المؤقتة وبالوصول المباشر وإكمال الطلبات المعلقة عبر عناصر العمل وحالات الفشل وإلغاء التحميل وتنفيذ CFG بعد نقل عنوان التحميل. تظل الأدلة محصورة في Linux ولا تثبت دعم KMDF الكامل أو PnP وإدارة الطاقة.
 
+تغطي اختبارات الإلغاء المهل الافتراضية المسموحة للنقل فقط وحقول التقارير، والإكمال السابق والطلبات الملغاة مسبقًا، ووضع العلامة وإزالتها، وسلطة الإكمال بحسب الاصطفاف أو التسليم، وانتظار الاستدعاءات والمراجع الداخلية. تتحقق اختبارات المجدول بصورة مستقلة من ترتيب DPC/الإلغاء/العمل والسعة وفصل الهويات والإيقاف والاستئناف. يبقى إلغاء WDM خطأ صريحًا في النموذج.
+
 
 ## توزيع الاختبارات
 

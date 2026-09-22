@@ -170,6 +170,12 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
       return invalid("file must be an unsigned 32-bit scenario identity");
     Result.File = static_cast<uint32_t>(*Number);
   }
+  if (const auto *Cancel = Object->get(CancelAfter100nsField)) {
+    auto Number = Cancel->getAsUINT64();
+    if (!Number)
+      return invalid("cancel_after_100ns must be a nonnegative integer");
+    Result.CancelAfter100ns = *Number;
+  }
   if (const auto *Offset = Object->get(ByteOffsetField)) {
     if (auto Text = Offset->getAsString()) {
       auto Number = hexNumber(*Text, ByteOffsetField);
@@ -282,6 +288,16 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
     return invalid("at most 64 requests are permitted");
   uint64_t Total = 0;
   for (const auto &Request : Options.Requests) {
+    if (Request.CancelAfter100ns) {
+      if (*Request.CancelAfter100ns > INT64_MAX)
+        return invalid(
+            "cancel_after_100ns exceeds the signed 64-bit time limit");
+      if (Request.Kind != DriverRequestKind::Read &&
+          Request.Kind != DriverRequestKind::Write &&
+          Request.Kind != DriverRequestKind::DeviceControl)
+        return invalid("cancel_after_100ns is valid only for read, write and "
+                       "ioctl requests");
+    }
     if (Request.Input.size() > DriverScenarioBufferLimit ||
         Request.OutputSize > DriverScenarioBufferLimit ||
         Request.DirectInput.size() > Request.OutputSize ||

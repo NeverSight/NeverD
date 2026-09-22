@@ -188,6 +188,7 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::Completed, Request.Completed},
         {field::DispatchStatus, nullptr},
         {field::IOStatus, nullptr},
+        {field::CancelRequestedAt100ns, nullptr},
         {field::Information, Request.Information},
         {field::InformationHex, Address(Request.Information)},
         {field::Output,
@@ -196,6 +197,8 @@ std::string driverResultJSON(const DriverResult &Result) {
       Item[field::DispatchStatus] = *Request.DispatchStatus;
     if (Request.IOStatus)
       Item[field::IOStatus] = *Request.IOStatus;
+    if (Request.CancelRequestedAt100ns)
+      Item[field::CancelRequestedAt100ns] = *Request.CancelRequestedAt100ns;
     Requests.push_back(std::move(Item));
   }
   Root[field::Requests] = std::move(Requests);

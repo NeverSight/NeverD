@@ -23,6 +23,7 @@ protected:
   static constexpr uint64_t ReadPC = IoControlPC + 0x100;
   static constexpr uint64_t WritePC = IoControlPC + 0x200;
   static constexpr uint64_t DefaultPC = IoControlPC + 0x300;
+  static constexpr uint64_t CancelPC = IoControlPC + 0x400;
   static constexpr uint64_t BufferSlot = Driver + 0x2100;
   static constexpr uint64_t LengthSlot = Driver + 0x2108;
   static constexpr uint64_t Parameters = Driver + 0x2200;
@@ -36,6 +37,7 @@ protected:
     uint32_t Status = 0;
     unsigned PendingCalls = 0, CompletionCalls = 0;
     bool Completed = false;
+    bool Canceled = false;
   };
   std::map<uint64_t, HostRequest> Packets;
   std::vector<std::pair<uint64_t, bool>> BufferQueries;
@@ -80,6 +82,12 @@ protected:
       ++(*P)->PendingCalls;
       HostEvents.push_back("pending");
       return llvm::Error::success();
+    };
+    Host.IsCanceled = [this](uint64_t IRP) -> llvm::Expected<bool> {
+      auto P = livePacket(IRP);
+      if (!P)
+        return P.takeError();
+      return (*P)->Canceled;
     };
     Host.Information = [this](uint64_t IRP) -> llvm::Expected<uint64_t> {
       auto P = livePacket(IRP);
@@ -156,6 +164,28 @@ protected:
         Output ? "WdfRequestRetrieveOutputBuffer"
                : "WdfRequestRetrieveInputBuffer",
         {Globals, Request, Minimum, BufferSlot, WithLength ? LengthSlot : 0}));
+  }
+
+  void markCancelable(uint64_t Request) {
+    EXPECT_EQ(take(invoke("WdfRequestMarkCancelableEx",
+                          {Globals, Request, CancelPC})),
+              0u);
+  }
+
+  KernelFramework::GuestCall cancel(uint64_t IRP) {
+    Packets.at(IRP).Canceled = true;
+    auto Call = take(Model.requestCancellation(IRP));
+    EXPECT_TRUE(Call);
+    EXPECT_FALSE(Model.takeGuestCall());
+    return Call.value_or(KernelFramework::GuestCall{});
+  }
+
+  uint64_t requestContext(uint64_t Request) {
+    type();
+    attributes(0, Type, ChildCleanup, ChildDestroy);
+    take(invoke("WdfObjectAllocateContext",
+                {Globals, Request, Attrs, ContextOutput}));
+    return get(ContextOutput);
   }
 };
 
@@ -609,6 +639,244 @@ TEST_F(DriverKernelFrameworkRequest,
   EXPECT_TRUE(Released.count(Queue));
   EXPECT_TRUE(Released.count(Device));
   EXPECT_TRUE(HostDevices.empty());
+}
+
+TEST_F(DriverKernelFrameworkRequest, SuccessfulUnmarkWinsAndReleasesItsHold) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(take(invoke("WdfRequestIsCanceled", {Globals, Request})), 0u);
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})),
+            0xc0000010u);
+  expectError(invoke("WdfRequestMarkCancelableEx", {Globals, Request, 0}),
+              "cancel callback");
+  markCancelable(Request);
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC})),
+      0xc0000010u);
+  expectError(invoke("WdfRequestIsCanceled", {Globals, Request}), "unmarked");
+  expectError(invoke("WdfRequestComplete", {Globals, Request, 0}),
+              "UnmarkCancelable");
+  EXPECT_TRUE(Validations.empty());
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})), 0u);
+  // A second registration proves successful unmark restored the initial state.
+  markCancelable(Request);
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})), 0u);
+  Packets.at(IRP).Canceled = true;
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_EQ(take(invoke("WdfRequestIsCanceled", {Globals, Request})), 1u);
+  complete(Request, 0, 0xc0000120);
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       AlreadyCanceledMarkExNeverRegistersOrCallsTheCallback) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  Packets.at(IRP).Canceled = true;
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC})),
+      0xc0000120u);
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_EQ(take(invoke("WdfRequestIsCanceled", {Globals, Request})), 1u);
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})),
+            0xc0000010u);
+  complete(Request, 0, 0xc0000120);
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       QueuedCancellationMustEnterBeforeEitherParticipantCompletes) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  expectError(Model.requestCancellation(IRP), "IRP cancel flag");
+  const auto Cancel = cancel(IRP);
+  EXPECT_EQ(Cancel.PC, CancelPC);
+  EXPECT_EQ(Cancel.Arguments, (std::vector<uint64_t>{Request}));
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  expectError(Model.finishGuestCall(Cancel.Token, 0), "has not entered");
+  expectError(Model.beginCancelCallback(Cancel.Token + 1), "unknown");
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})),
+            0xc0000120u);
+  expectError(invoke("WdfRequestComplete", {Globals, Request, 0xc0000120}),
+              "delivered");
+  EXPECT_TRUE(Validations.empty());
+  success(Model.beginCancelCallback(Cancel.Token));
+  expectError(Model.beginCancelCallback(Cancel.Token), "already delivered");
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})),
+            0xc0000120u);
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC})),
+      0xc0000010u);
+  // A cooperating worker can make this call while the cancel frame waits.
+  complete(Request, 0, 0xc0000120);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_FALSE(Released.count(Request));
+  expectError(invoke("WdfRequestUnmarkCancelable", {Globals, Request}),
+              "completed framework request");
+  expectError(
+      invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC}),
+      "completed framework request");
+  expectError(invoke("WdfRequestIsCanceled", {Globals, Request}),
+              "completed framework request");
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+  expectError(Model.finishGuestCall(Cancel.Token, 0), "invalid");
+  expectError(Model.beginCancelCallback(Cancel.Token), "unknown");
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancelCompletionCleansImmediatelyButDestroysAfterCallbackReturn) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  const auto Context = requestContext(Request);
+  put(Context, Sentinel);
+  markCancelable(Request);
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  complete(Request, 0, 0xc0000120);
+  const auto Cleanup = callback();
+  EXPECT_NE(Cleanup.Token, Cancel.Token);
+  EXPECT_EQ(Cleanup.PC, ChildCleanup);
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  expectError(invoke("WdfRequestIsCanceled", {Globals, Request}),
+              "completion in progress");
+  expectError(invoke("WdfRequestUnmarkCancelable", {Globals, Request}),
+              "completion in progress");
+  expectError(
+      invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC}),
+      "completion in progress");
+  finish(Cleanup);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_FALSE(Released.count(Request));
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(get(Context), Sentinel);
+  // The parent may not be synchronously deleted under a suspended callback.
+  expectError(invoke("WdfObjectDelete", {Globals, Device}),
+              "outstanding cancellation callback");
+  EXPECT_FALSE(take(Model.finishGuestCall(Cancel.Token, 0)));
+  const auto Destroy = callback();
+  EXPECT_EQ(Destroy.Token, Cancel.Token);
+  EXPECT_EQ(Destroy.PC, ChildDestroy);
+  EXPECT_EQ(Destroy.Arguments, (std::vector<uint64_t>{Request}));
+  EXPECT_FALSE(Released.count(Request));
+  EXPECT_EQ(get(Context), Sentinel);
+  finish(Destroy);
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_TRUE(Released.count(Context));
+  EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ExplicitDereferenceCannotConsumeTheCancellationHold) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  requestContext(Request);
+  markCancelable(Request);
+  expectError(invoke("WdfObjectDereferenceActual", {Globals, Request, 0, 0, 0}),
+              "underflow");
+  take(invoke("WdfObjectReferenceActual", {Globals, Request, 0, 0, 0}));
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  complete(Request, 0, 0xc0000120);
+  const auto Cleanup = callback();
+  finish(Cleanup);
+  take(invoke("WdfObjectDereferenceActual", {Globals, Request, 0, 0, 0}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_FALSE(Released.count(Request));
+  expectError(invoke("WdfObjectDereferenceActual", {Globals, Request, 0, 0, 0}),
+              "underflow");
+  EXPECT_FALSE(take(Model.finishGuestCall(Cancel.Token, 0)));
+  const auto Destroy = callback();
+  EXPECT_EQ(Destroy.PC, ChildDestroy);
+  finish(Destroy);
+  EXPECT_TRUE(Released.count(Request));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ExplicitReferenceOutlivesTheCancelCallbackAndItsInternalHold) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  const auto Context = requestContext(Request);
+  markCancelable(Request);
+  take(invoke("WdfObjectReferenceActual", {Globals, Request, 0, 0, 0}));
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  complete(Request, 0, 0xc0000120);
+  finish(callback());
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_FALSE(Released.count(Context));
+  EXPECT_FALSE(Released.count(Request));
+  // A retained completed request does not hold sequential queue ownership.
+  const auto Next = request(route(packet()));
+  complete(Next);
+  take(invoke("WdfObjectDereferenceActual", {Globals, Request, 0, 0, 0}));
+  const auto Destroy = callback();
+  EXPECT_NE(Destroy.Token, Cancel.Token);
+  EXPECT_EQ(Destroy.PC, ChildDestroy);
+  finish(Destroy);
+  EXPECT_TRUE(Released.count(Request));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancelCallbackMayReturnBeforeCooperatingWorkerCompletes) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  requestContext(Request);
+  markCancelable(Request);
+  const auto Cancel = cancel(IRP);
+  success(Model.beginCancelCallback(Cancel.Token));
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel.Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  EXPECT_FALSE(Released.count(Request));
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})),
+            0xc0000120u);
+  complete(Request, 0, 0xc0000120);
+  EXPECT_EQ(drain(), (std::vector<uint64_t>{ChildCleanup, ChildDestroy}));
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_EQ(Packets.at(IRP).CompletionCalls, 1u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CancellationCannotReplaceAnotherPendingFrameworkCallback) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  type();
+  attributes(0, Type, ChildCleanup, ChildDestroy);
+  const auto Other = object(Attrs);
+  take(invoke("WdfObjectDelete", {Globals, Other}));
+  Packets.at(IRP).Canceled = true;
+  expectError(Model.requestCancellation(IRP), "pending guest callback");
+  EXPECT_EQ(drain(), (std::vector<uint64_t>{ChildCleanup, ChildDestroy}));
+  const auto Cancel = take(Model.requestCancellation(IRP));
+  ASSERT_TRUE(Cancel);
+  EXPECT_EQ(Cancel->PC, CancelPC);
+  EXPECT_FALSE(Model.takeGuestCall());
+  success(Model.beginCancelCallback(Cancel->Token));
+  complete(Request, 0, 0xc0000120);
+  EXPECT_EQ(take(Model.finishGuestCall(Cancel->Token, 0)),
+            std::optional<uint64_t>{0});
+  EXPECT_TRUE(Released.count(Request));
 }
 
 } // namespace

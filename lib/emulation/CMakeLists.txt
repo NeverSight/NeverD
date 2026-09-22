@@ -20,6 +20,7 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelMDL.cpp
   windows/KernelModelRuntime.cpp
   windows/KernelModelScheduling.cpp
+  windows/KernelModelCancellation.cpp
   windows/KernelScheduler.cpp
   windows/KernelDispatcher.cpp
   windows/KernelAPIIRQL.cpp

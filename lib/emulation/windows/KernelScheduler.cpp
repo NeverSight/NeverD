@@ -121,6 +121,19 @@ bool KernelScheduler::isWorkItemQueued(uint64_t Object) const {
   return containsObject(Workers, Object);
 }
 
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueFrameworkCancel(Callback Cancellation) {
+  if (auto E = validateCallback(Cancellation))
+    return E;
+  if (containsObject(Cancellations, Cancellation.Object))
+    return schedulerError("framework cancellation is already queued");
+  if (auto E = checkCapacity(1))
+    return E;
+  Cancellations.push_back(makeInvocation(std::move(Cancellation),
+                                         CallbackKind::FrameworkCancel, Now));
+  return Cancellations.back().ID;
+}
+
 llvm::Expected<bool> KernelScheduler::queueDPC(DpcCallback DPC) {
   if (auto E = validateDPC(DPC))
     return E;
@@ -322,10 +335,12 @@ KernelScheduler::next(bool AdvanceTime,
     const uint64_t PreviousExpirations = TimerExpirations;
     if (auto E = expireTimers(Now))
       return E;
-    if (!DPCs.empty() || !Workers.empty()) {
+    if (queuedCallbackCount()) {
       if (Dispatches >= Bounds.MaxDispatches)
         return schedulerError("scheduler callback dispatch limit exhausted");
-      auto &Queue = DPCs.empty() ? Workers : DPCs;
+      auto &Queue = !DPCs.empty()            ? DPCs
+                    : !Cancellations.empty() ? Cancellations
+                                             : Workers;
       Active = std::move(Queue.front());
       Queue.pop_front();
       ++Dispatches;
@@ -400,7 +415,8 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
   if (Active && Active->Owner == Owner)
     return true;
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
-  if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches))
+  if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches) ||
+      llvm::any_of(Cancellations, Matches))
     return true;
   if (llvm::any_of(Suspended, [Owner](const auto &Item) {
         return Item.second.Owner == Owner;
@@ -412,7 +428,7 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
 }
 
 bool KernelScheduler::hasPending() const {
-  if (Active || !Suspended.empty() || !Workers.empty() || !DPCs.empty())
+  if (Active || !Suspended.empty() || queuedCallbackCount())
     return true;
   return llvm::any_of(Timers,
                       [](const auto &Item) { return Item.second.Armed; });

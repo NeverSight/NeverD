@@ -3484,21 +3484,23 @@
       "limitations": [
         "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 27 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
-        "KMDF non-PnP drivers, generic objects, control devices, sequential default queues and incoming requests share typed contexts and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested continuations preserve caller CPU state and stack. Failed DriverEntry unregister cleans objects without EvtDriverUnload; adding references after cleanup is unsupported. PnP devices, general queue scheduling, cancellation and automatic synchronization remain unmodeled.",
+        "KMDF 1.33 exact-version binding preserves real FxDriverEntry execution, separate WDFLDR module identity and 458 distinct function-table entries; only 30 documented table APIs plus WdfVersionBind/WdfVersionUnbind are modeled, and other reached entries remain unsupported_api traps; downlevel negotiation, class extensions and WdfLdrQueryInterface are unsupported",
+        "KMDF non-PnP drivers, generic objects, control devices, sequential default queues and incoming requests share typed contexts and guest cleanup/destroy callbacks at PASSIVE_LEVEL; nested continuations preserve caller CPU state and stack. Failed DriverEntry unregister cleans objects without EvtDriverUnload; adding references after cleanup is unsupported. PnP devices, general queue scheduling/cancellation and automatic synchronization remain unmodeled.",
         "Control devices require a copied printable-ASCII name and exact universal-access SDDL D:P(A;;GA;;;WD); other DACLs need an unmodeled caller token. Initializers are consumed only on success, partial creation is rolled back, and device/link ownership uses the WDM namespace; FinishInitializing gates delivery. Pending I/O or other live references prevent unsupported deletion/draining.",
         "The 96-byte WDF_IO_QUEUE_CONFIG supports a sequential default queue with explicit passive/no-synchronization attributes and no power management. Accepted requests mark the same IRP pending and return STATUS_PENDING independently of void callback RAX. Default file handling completes CREATE/CLEANUP/CLOSE with Information=0; zero READ/WRITE and missing handlers follow explicit framework policy.",
         "The 40-byte WDF_REQUEST_PARAMETERS and input/output accessors preserve logical lengths, buffered aliases and existing direct MDL mappings; direct IOCTL input remains buffered. Completion validates first, then runs cleanup and child destruction before IRP retirement; new accessors stop once completion begins, while saved buffers remain valid through cleanup. External WDF references preserve context without retaining completed IRP/queue ownership.",
+        "KMDF control-device READ/WRITE/IOCTL cancellation uses optional cancel_after_100ns, a nonnegative JSON integer at most INT64_MAX relative to submission in virtual 100 ns units. Zero acts after routing and before the guest I/O callback unless routing completed first; completion before cancellation leaves cancel_requested_at_100ns null, otherwise reports record the actual absolute virtual time. WDM cancellation is an explicit model_error; general queues and PnP cancellation remain unsupported.",
+        "WdfRequestMarkCancelableEx returns STATUS_CANCELLED without callback delivery for already canceled requests; successful WdfRequestUnmarkCancelable prevents later callback delivery while preserving observable cancellation state. WdfRequestIsCanceled requires an unmarked live request. After successful marking, completion requires successful unmarking or delivered cancellation, not merely a queued callback; delivered callbacks and workers may cooperate. A separate internal reference lasts through cancellation-callback return, retaining context after IRP retirement; final destruction continuations may wait.",
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
-        "wdm-x64-scheduled-v4 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
+        "wdm-x64-scheduled-v5 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
-        "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer and wait boundaries; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
+        "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
         "KeSetEvent supports Increment=0 and Wait=FALSE only; event signal consumption and waiter wakeups remain distinct from callback return; DPC targets are restricted to CPU0, nonzero/infinite waits require IRQL <= APC_LEVEL, and pending dispatcher-object or wait references prohibit premature storage release",
         "KernelAPIIRQL.def owns routine ceilings with argument-dependent checks in the API or memory owner; DPC registry calls, paged-pool allocation/free/access and Unicode DbgPrint conversions fail before mutation; supported ANSI output and nonpaged operations remain usable at DISPATCH_LEVEL; bounded callback stacks reject escape into suspended workers and armed extension timers prevent premature device retirement",
-        "timer expiration satisfies registered waits before a DPC can reset or rearm the signal; queued DPCs execute before awakened PASSIVE_LEVEL frames resume; IRP completion rejects release of request storage containing pending dispatcher objects before marking completion or invalidating buffers",
+        "timer expiration satisfies registered waits before a DPC can reset or rearm the signal; queued DPCs precede FIFO framework cancellation callbacks, which precede ordinary workers and resuming ready PASSIVE_LEVEL frames; IRP completion rejects release of request storage containing pending dispatcher objects before marking completion or invalidating buffers",
         "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total requested buffer bytes including direct_input over 512 KiB; requested load addresses require valid supported PE relocations",
         "dynamic export lookup shares stable thunk identity with static imports; explicit kernel_exports availability overrides distinguish absent exports from present unmodeled routines; unspecified dynamic availability stops instead of changing driver capability branches",
         "direct requests expose request-owned MDL system mappings with independent write/execute permissions; standalone driver MDLs can describe live nonpaged pool allocations and retain their original alias; IRP associations/chains, physical PFN data, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
@@ -3511,6 +3513,33 @@
         "current execution evidence is limited to Linux hosts with Clang and lld-link fixture tools; no macOS or Windows host validation is claimed and the Python SDK provides only raw ABI bindings"
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSchedulerTests.cpp",
+          "filter": "DriverKernelScheduler.DPCsPrecedeCancellationFIFOWhichPrecedesWorkers",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkRequestTests.cpp",
+          "filter": "DriverKernelFrameworkRequest.QueuedCancellationMustEnterBeforeEitherParticipantCompletes",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelFrameworkRequestTests.cpp",
+          "filter": "DriverKernelFrameworkRequest.AlreadyCanceledMarkExNeverRegistersOrCallsTheCallback",
+          "platforms": [
+            "linux"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",

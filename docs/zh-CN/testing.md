@@ -48,6 +48,8 @@ fixture 覆盖来宾初始化、成功与失败返回、不支持的行为、内
 
 `DriverGuardTests.cpp` 与四个原创 `driver_guard.c` 变体覆盖启用／未启用的 CFG、重定位、检查／分派 ABI 和畸形目标。`KernelFrameworkTests.cpp`、`KernelFrameworkControlTests.cpp`、`KernelFrameworkQueueTests.cpp` 和 `KernelFrameworkRequestTests.cpp` 覆盖绑定、可回滚的设备创建、队列路由、缓冲区逻辑长度，以及清理顺序与 IRP／上下文生命周期。原创 `driver_kmdf_lifecycle.c` 与 `driver_kmdf_control.c` 可选用真实 WDK 1.33 头文件编译，并通过真正的 `FxDriverEntry` 库链接。将 CMake 缓存路径 `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` 指向生命周期映像，将 `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` 指向普通／启用 CFG 的控制设备映像。缺少外部产物时会明确跳过。`DriverKMDFLifecycleTests.cpp`、`DriverKMDFControlTests.cpp` 及 `DriverScenarioPublicTests.cpp` 中的 C API／CLI 用例覆盖实际回调、缓冲／直接 I/O、工作项完成待处理请求、失败状态、卸载和重定位后的 CFG 执行。验证证据仍限于 Linux，不代表完整 KMDF 或 PnP／电源管理支持。
 
+取消测试覆盖仅允许传输请求配置的虚拟期限及报告字段、完成优先与已取消路径、标记／解除标记结果、排队与已递送回调的完成权限、回调等待及内部引用生命周期。调度器测试独立验证 DPC／取消／工作项顺序、容量、身份隔离和暂停／恢复。WDM 取消仍明确报告模型错误。
+
 
 ## 测试布局
 

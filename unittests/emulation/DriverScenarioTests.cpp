@@ -13,6 +13,8 @@
 
 #include "neverd/emulation/DriverSession.h"
 
+#include "llvm/Support/JSON.h"
+
 namespace neverd::emulation {
 namespace {
 
@@ -253,6 +255,160 @@ TEST(DriverScenario, EnforcesIndividualInputAndTextBudgets) {
     ASSERT_FALSE(static_cast<bool>(Result));
     EXPECT_FALSE(llvm::toString(Result.takeError()).empty());
   }
+}
+
+TEST(DriverScenario, ParsesCancellationDelayBoundariesForDataRequests) {
+  auto Result = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"read","cancel_after_100ns":0},
+    {"kind":"write","cancel_after_100ns":1},
+    {"kind":"ioctl","code":0,"cancel_after_100ns":9223372036854775807},
+    {"kind":"ioctl","code":0}
+  ]})");
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Requests.size(), 4u);
+  EXPECT_EQ(Result->Requests[0].CancelAfter100ns, 0u);
+  EXPECT_EQ(Result->Requests[1].CancelAfter100ns, 1u);
+  EXPECT_EQ(Result->Requests[2].CancelAfter100ns, uint64_t(INT64_MAX));
+  EXPECT_FALSE(Result->Requests[3].CancelAfter100ns);
+  auto Native = driverOptionsFromScenarioJSON("{}", *Result);
+  ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+  EXPECT_EQ(Native->Requests[2].CancelAfter100ns, uint64_t(INT64_MAX));
+}
+
+TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
+  for (const char *Value :
+       {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",
+        R"("0x0")", "[]", "{}", "9223372036854775808", "18446744073709551615",
+        "18446744073709551616", "1e100"}) {
+    SCOPED_TRACE(Value);
+    auto Result = driverOptionsFromScenarioJSON(
+        std::string(R"({"requests":[{"kind":"read","cancel_after_100ns":)") +
+        Value + "}]}");
+    ASSERT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("cancel_after_100ns"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverScenario, RejectsCancellationOnLifecycleAndUnknownFieldLocations) {
+  for (const char *Kind : {"create", "cleanup", "close"}) {
+    SCOPED_TRACE(Kind);
+    auto Result =
+        driverOptionsFromScenarioJSON(std::string(R"({"requests":[{"kind":")") +
+                                      Kind + R"(","cancel_after_100ns":0}]})");
+    ASSERT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("cancel_after_100ns"),
+              std::string::npos);
+  }
+  for (const char *JSON :
+       {R"({"cancel_after_100ns":0})",
+        R"({"requests":[{"kind":"read","cancel_after_ns":0}]})",
+        R"({"requests":[{"kind":"read","cancel_requested_at_100ns":0}]})"}) {
+    SCOPED_TRACE(JSON);
+    auto Result = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("unknown field"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverScenario, RejectsDuplicateCancellationFieldsAndEscapedAliases) {
+  for (
+      const char *JSON :
+      {R"({"requests":[{"kind":"read","cancel_after_100ns":0,"cancel_after_100ns":1}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":0,"cancel_after_100n\u0073":1}]})"}) {
+    SCOPED_TRACE(JSON);
+    auto Result = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError()).find("duplicate field"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverScenario, CancellationRequestsInheritOrReplaceTheBaseAsAWhole) {
+  DriverOptions Base;
+  Base.InstructionLimit = 37;
+  DriverRequest Input;
+  Input.Kind = DriverRequestKind::Read;
+  Input.File = 7;
+  Input.CancelAfter100ns = 17;
+  Base.Requests.push_back(Input);
+  auto Unchanged = driverOptionsFromScenarioJSON("{}", Base);
+  ASSERT_TRUE(bool(Unchanged)) << llvm::toString(Unchanged.takeError());
+  ASSERT_EQ(Unchanged->Requests.size(), 1u);
+  EXPECT_EQ(Unchanged->Requests[0].CancelAfter100ns, 17u);
+  EXPECT_EQ(Unchanged->Requests[0].File, 7u);
+  EXPECT_EQ(Unchanged->InstructionLimit, 37u);
+
+  auto Replaced = driverOptionsFromScenarioJSON(
+      R"({"requests":[{"kind":"read"},{"kind":"read","cancel_after_100ns":0}]})",
+      Base);
+  ASSERT_TRUE(bool(Replaced)) << llvm::toString(Replaced.takeError());
+  ASSERT_EQ(Replaced->Requests.size(), 2u);
+  EXPECT_FALSE(Replaced->Requests[0].CancelAfter100ns);
+  EXPECT_EQ(Replaced->Requests[1].CancelAfter100ns, 0u);
+  EXPECT_EQ(Replaced->InstructionLimit, 37u);
+  EXPECT_EQ(Base.Requests[0].CancelAfter100ns, 17u);
+  auto Cleared = driverOptionsFromScenarioJSON(R"({"requests":[]})", Base);
+  ASSERT_TRUE(bool(Cleared)) << llvm::toString(Cleared.takeError());
+  EXPECT_TRUE(Cleared->Requests.empty());
+  EXPECT_EQ(Base.Requests.size(), 1u);
+}
+
+TEST(DriverScenario, NativeInvalidCancellationFailsBeforeImageLoading) {
+  for (auto Kind :
+       {DriverRequestKind::Create, DriverRequestKind::Cleanup,
+        DriverRequestKind::Close, DriverRequestKind::Read,
+        DriverRequestKind::Write, DriverRequestKind::DeviceControl}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    DriverRequest Input;
+    Input.Kind = Kind;
+    const bool Lifecycle = Kind == DriverRequestKind::Create ||
+                           Kind == DriverRequestKind::Cleanup ||
+                           Kind == DriverRequestKind::Close;
+    Input.CancelAfter100ns = Lifecycle ? 0 : uint64_t(INT64_MAX) + 1;
+    DriverOptions Options;
+    Options.Requests.push_back(Input);
+    auto Parsed = driverOptionsFromScenarioJSON("{}", Options);
+    ASSERT_FALSE(bool(Parsed));
+    EXPECT_NE(llvm::toString(Parsed.takeError()).find("cancel_after_100ns"),
+              std::string::npos);
+    auto Native = emulateDriver("missing-cancellation-preflight.sys", Options);
+    ASSERT_FALSE(bool(Native));
+    const auto Diagnostic = llvm::toString(Native.takeError());
+    EXPECT_EQ(Diagnostic.find("driver scenario:"), 0u);
+    EXPECT_NE(Diagnostic.find("cancel_after_100ns"), std::string::npos);
+  }
+}
+
+TEST(DriverScenario,
+     ReportDistinguishesAbsentZeroAndFullWidthCancellationTime) {
+  DriverResult Result;
+  Result.Requests.resize(4);
+  Result.Requests[1].CancelRequestedAt100ns = 0;
+  Result.Requests[2].CancelRequestedAt100ns = uint64_t(INT64_MAX);
+  Result.Requests[3].CancelRequestedAt100ns = UINT64_MAX;
+  const auto Text = driverResultJSON(Result);
+  auto Parsed = llvm::json::parse(Text);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  const auto *Requests = Root->getArray("requests");
+  ASSERT_NE(Requests, nullptr);
+  ASSERT_EQ(Requests->size(), 4u);
+  for (size_t Index = 0; Index < Requests->size(); ++Index) {
+    const auto *Request = (*Requests)[Index].getAsObject();
+    ASSERT_NE(Request, nullptr);
+    const auto *Time = Request->get("cancel_requested_at_100ns");
+    ASSERT_NE(Time, nullptr);
+    if (!Index)
+      EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
+    else
+      EXPECT_EQ(Time->getAsUINT64(),
+                Result.Requests[Index].CancelRequestedAt100ns);
+  }
+  EXPECT_NE(Text.find("\"cancel_requested_at_100ns\":18446744073709551615"),
+            std::string::npos);
 }
 
 } // namespace

@@ -91,17 +91,37 @@ llvm::Error KernelModel::updateDeviceReferences(uint64_t Device) {
 
 llvm::Expected<std::optional<KernelScheduler::Invocation>>
 KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
+  if (auto E = processRequestCancellations())
+    return E;
+  // Request deadlines share the scheduler clock, but are not synthetic guest
+  // timers. Stop at their boundary before advancing to a later timer or wait.
+  for (const auto &[IRP, Request] : Requests)
+    if (!Request.Completed && Request.CancelDeadline &&
+        (!Deadline || *Request.CancelDeadline < *Deadline))
+      Deadline = Request.CancelDeadline;
   auto Next = Scheduler.next(AdvanceTime, Deadline);
   if (!Next)
     return Next.takeError();
-  if (*Next)
+  if (auto E = processRequestCancellations())
+    return E;
+  if (*Next) {
+    if ((**Next).Kind == KernelScheduler::CallbackKind::FrameworkCancel) {
+      auto Token = ScheduledCancelContinuations.find((**Next).ID);
+      if (!Framework || Token == ScheduledCancelContinuations.end())
+        return schedulingError("cancel callback lost its framework identity");
+      if (auto E = Framework->beginCancelCallback(Token->second))
+        return E;
+    }
     CurrentIRQL = (**Next).IRQL;
+  }
   return std::move(*Next);
 }
 
 llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   if (!Scheduler.active() || Scheduler.active()->ID != ID)
     return schedulingError("callback completion does not match active task");
+  if (ScheduledCancelContinuations.count(ID))
+    return schedulingError("cancel callback still owns a framework continuation");
   const auto Invocation = *Scheduler.active();
   if (auto E = Scheduler.finish(ID))
     return E;
@@ -115,6 +135,8 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
       return E;
     return retireDeviceIfUnreferenced(Invocation.Owner);
   }
+  if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel)
+    return retireDeviceIfUnreferenced(Invocation.Owner);
   return llvm::Error::success();
 }
 
@@ -133,7 +155,12 @@ llvm::Error KernelModel::resumeScheduled(uint64_t ID) {
 }
 
 std::optional<uint64_t> KernelModel::nextEventTime() const {
-  return Scheduler.nextEventTime100ns();
+  auto Deadline = Scheduler.nextEventTime100ns();
+  for (const auto &[IRP, Request] : Requests)
+    if (!Request.Completed && Request.CancelDeadline &&
+        (!Deadline || *Request.CancelDeadline < *Deadline))
+      Deadline = std::max(*Request.CancelDeadline, Scheduler.now100ns());
+  return Deadline;
 }
 
 std::optional<KernelModel::Wait> KernelModel::takeWait() {

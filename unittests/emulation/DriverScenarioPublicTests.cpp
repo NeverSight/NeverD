@@ -142,6 +142,68 @@ TEST_F(DriverScenarioPublic, CLIRejectsUnknownFieldsNULAndOversizedFiles) {
                   .empty());
 }
 
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIRejectMalformedCancellationBeforeImageLoading) {
+  for (
+      const char *Scenario :
+      {R"({"requests":[{"kind":"read","cancel_after_100ns":-1}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":1.0}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":1e0}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":true}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":null}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":"0"}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":9223372036854775808}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":18446744073709551616}]})",
+       R"({"requests":[{"kind":"create","cancel_after_100ns":0}]})",
+       R"({"requests":[{"kind":"cleanup","cancel_after_100ns":0}]})",
+       R"({"requests":[{"kind":"close","cancel_after_100ns":0}]})",
+       R"({"cancel_after_100ns":0})",
+       R"({"requests":[{"kind":"read","cancel_requested_at_100ns":0}]})",
+       R"({"requests":[{"kind":"read","cancel_after_100ns":0,"cancel_after_100n\u0073":1}]})"}) {
+    SCOPED_TRACE(Scenario);
+    EXPECT_EQ(
+        neverd_emulate_driver_scenario_json(
+            Session, "missing-cancellation-public.sys", Scenario, nullptr),
+        nullptr);
+    const auto Diagnostic = error();
+    EXPECT_NE(Diagnostic.find("driver scenario:"), std::string::npos);
+    EXPECT_NE(Diagnostic.find("cancel_"), std::string::npos);
+    EXPECT_FALSE(neverd_session_is_loaded(Session));
+    EXPECT_TRUE(
+        runCLI(Scenario, 1, "success", "missing-cancellation-public.sys")
+            .empty());
+    std::ifstream Errors(Directory / "error.txt");
+    const std::string CLIDiagnostic(std::istreambuf_iterator<char>(Errors), {});
+    EXPECT_NE(CLIDiagnostic.find("driver scenario:"), std::string::npos);
+    EXPECT_NE(CLIDiagnostic.find("cancel_"), std::string::npos);
+  }
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIAcceptCancellationBoundariesBeforeFailedInitialization) {
+  constexpr char Scenario[] = R"({"requests":[
+    {"kind":"read","cancel_after_100ns":0},
+    {"kind":"write","cancel_after_100ns":1},
+    {"kind":"ioctl","code":0,"cancel_after_100ns":9223372036854775807}
+  ]})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(Scenario, 2, "failure")
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, fixture("failure").c_str(), Scenario, nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned");
+    EXPECT_EQ(Report->getBoolean("nt_success"), false);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    EXPECT_TRUE(Requests->empty());
+    EXPECT_TRUE(error().empty());
+  }
+}
+
 constexpr const char LifecycleScenario[] = R"({
   "requests":[
     {"kind":"create","device":"\\Device\\NeverDIO"},
@@ -171,6 +233,75 @@ TEST_F(DriverScenarioPublic, CAPICompletesBufferedIOAndUnloads) {
   EXPECT_EQ(IO->getBoolean("completed"), true);
   EXPECT_EQ(IO->getInteger("io_status"), 0);
   EXPECT_EQ(IO->getString("output_hex"), "5a4b7869");
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIReportNullCancellationForUnconfiguredRequests) {
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(LifecycleScenario, 0, "success", NEVERD_DRIVER_IO_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_DRIVER_IO_FIXTURE, LifecycleScenario,
+                  nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    for (const auto &Value : *Requests) {
+      const auto *Request = Value.getAsObject();
+      ASSERT_NE(Request, nullptr);
+      const auto *Time = Request->get("cancel_requested_at_100ns");
+      ASSERT_NE(Time, nullptr);
+      EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
+    }
+  }
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIRejectScheduledWDMCancellationBeforeDispatch) {
+  for (const char *Delay : {"0", "17"}) {
+    SCOPED_TRACE(Delay);
+    const std::string Scenario = std::string(R"({"requests":[
+          {"kind":"create","device":"\\Device\\NeverDIO"},
+          {"kind":"ioctl","code":"0x222000","input":"00112233",
+           "output_size":4,"cancel_after_100ns":)") +
+                                 Delay + "}]}";
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 3, "success", NEVERD_DRIVER_IO_FIXTURE)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, NEVERD_DRIVER_IO_FIXTURE, Scenario.c_str(),
+                    nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "model_error");
+      EXPECT_NE(
+          Report->getString("diagnostic")
+              .value_or("")
+              .find("scheduled cancellation requires a KMDF control request"),
+          llvm::StringRef::npos);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 2u);
+      const auto *IO = (*Requests)[1].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      EXPECT_EQ(IO->getBoolean("completed"), false);
+      EXPECT_EQ(IO->getString("irp"), "0x0");
+      const auto *Time = IO->get("cancel_requested_at_100ns");
+      ASSERT_NE(Time, nullptr);
+      EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
+      const auto *Dispatch = IO->get("dispatch_status");
+      ASSERT_NE(Dispatch, nullptr);
+      EXPECT_EQ(Dispatch->kind(), llvm::json::Value::Null);
+    }
+  }
 }
 
 TEST_F(DriverScenarioPublic, CAPIAndCLICompletePendingWorkItemRequests) {
@@ -446,6 +577,154 @@ TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFControlIO) {
 #endif
 }
 
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLILeaveCancellationTimeNullWhenKMDFCompletionWins) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  constexpr char Scenario[] = R"({"requests":[
+    {"kind":"create","device":"\\DosDevices\\NeverDKmdfControl"},
+    {"kind":"ioctl","code":"0x222000","input":"001122","output_size":12,
+     "cancel_after_100ns":1},
+    {"kind":"read","output_size":4,"cancel_after_100ns":1},
+    {"kind":"write","input":"40414243","cancel_after_100ns":1},
+    {"kind":"cleanup"},{"kind":"close"}
+  ],"unload":true})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(Scenario, 0, "success", NEVERD_KMDF_CONTROL_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_KMDF_CONTROL_FIXTURE, Scenario, nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    checkKMDFControlReport(*Report, 'B');
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    for (const auto &Value : *Requests) {
+      const auto *Request = Value.getAsObject();
+      ASSERT_NE(Request, nullptr);
+      const auto *Time = Request->get("cancel_requested_at_100ns");
+      ASSERT_NE(Time, nullptr);
+      EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIReportPreDispatchKMDFCancellationAsCompletedFailure) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  constexpr char Scenario[] = R"({"requests":[
+    {"kind":"create","device":"\\DosDevices\\NeverDKmdfControl"},
+    {"kind":"ioctl","code":"0x222000","input":"001122","output_size":12,
+     "cancel_after_100ns":0},
+    {"kind":"cleanup"},{"kind":"close"}
+  ],"unload":true})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    // The CLI's existing completed-failure exit code is 2. Cancellation is a
+    // completed NTSTATUS observation, not setup failure or a model error.
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(Scenario, 2, "success", NEVERD_KMDF_CONTROL_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_KMDF_CONTROL_FIXTURE, Scenario, nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned");
+    EXPECT_EQ(Report->getInteger("nt_status"), 0);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    EXPECT_EQ(Report->getString("diagnostic"), "");
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    const auto *IO = (*Requests)[1].getAsObject();
+    ASSERT_NE(IO, nullptr);
+    EXPECT_EQ(IO->getBoolean("completed"), true);
+    EXPECT_EQ(IO->getInteger("dispatch_status"), 0x103);
+    EXPECT_EQ(IO->getInteger("io_status"), 0xc0000120);
+    EXPECT_EQ(IO->getInteger("cancel_requested_at_100ns"), 0);
+    EXPECT_EQ(IO->getString("output_hex"), "");
+    const auto *Devices = Report->getArray("devices");
+    ASSERT_NE(Devices, nullptr);
+    EXPECT_TRUE(Devices->empty());
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIRunsGenuineCancelCallbacksAndUnmarkRaces) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  struct Case {
+    const char *Service;
+    uint64_t Delay;
+    bool CompletedNormally;
+  };
+  for (const auto &Test :
+       {Case{"NeverDKmdfX", 10, false}, Case{"NeverDKmdfX", 0, false},
+        Case{"NeverDKmdfH", 10, false}, Case{"NeverDKmdfU", 10, true},
+        Case{"NeverDKmdfU", 30, true}}) {
+    SCOPED_TRACE(Test.Service);
+    SCOPED_TRACE(Test.Delay);
+    neverd_driver_options_v1 Options{};
+    Options.struct_size = sizeof(Options);
+    Options.instruction_limit = 100000;
+    Options.memory_limit = 64 * 1024 * 1024;
+    Options.event_limit = 10000;
+    Options.timeout_milliseconds = 5000;
+    Options.service_name = Test.Service;
+    const std::string Scenario =
+        std::string(R"({"requests":[
+          {"kind":"create","device":"\\DosDevices\\NeverDKmdfControl"},
+          {"kind":"ioctl","code":"0x222000","input":"001122",
+           "output_size":12,"cancel_after_100ns":)") +
+        std::to_string(Test.Delay) +
+        R"(},{"kind":"cleanup"},{"kind":"close"}],"unload":true})";
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, NEVERD_KMDF_CONTROL_FIXTURE, Scenario.c_str(), &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned")
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), Test.CompletedNormally);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    const auto *IO = (*Requests)[1].getAsObject();
+    ASSERT_NE(IO, nullptr);
+    EXPECT_EQ(IO->getBoolean("completed"), true);
+    EXPECT_EQ(IO->getInteger("dispatch_status"), 0x103);
+    EXPECT_EQ(IO->getInteger("io_status"),
+              Test.CompletedNormally ? 0 : 0xc0000120);
+    EXPECT_EQ(IO->getString("output_hex"),
+              Test.CompletedNormally ? "4b4d44555a4b78" : "");
+    const auto *Time = IO->get("cancel_requested_at_100ns");
+    ASSERT_NE(Time, nullptr);
+    if (Test.Delay == 30)
+      EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
+    else
+      EXPECT_EQ(Time->getAsUINT64(), Test.Delay);
+    const auto *Messages = Report->getArray("messages");
+    ASSERT_NE(Messages, nullptr);
+    for (const auto &Message : *Messages) {
+      auto Text = Message.getAsString();
+      ASSERT_TRUE(Text);
+      EXPECT_EQ(Text->find("failure"), llvm::StringRef::npos);
+      EXPECT_EQ(Text->find("forbidden"), llvm::StringRef::npos);
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
 TEST_F(DriverScenarioPublic, CAPIReportsDirectAndDeferredKMDFControlIO) {
 #ifdef NEVERD_KMDF_CONTROL_FIXTURE
   for (const char *Service : {"NeverDKmdfD", "NeverDKmdfW"}) {
@@ -559,7 +838,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v4");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v5");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
