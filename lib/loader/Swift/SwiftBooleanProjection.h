@@ -83,9 +83,8 @@ inline bool superInit(const BinaryImage &Image,
 /// Deliberately bounded to an Objective-C entry, at most eight comparison
 /// occurrences, and other direct calls with freshly catalogued runtime ABIs,
 /// exact super init dispatch or complete eight-instruction class-accessor
-/// machine proofs. Other native candidates and dynamic dispatch, weak imports,
-/// indirect calls and unknown effects do not borrow authority from candidate
-/// signatures.
+/// machine proofs. Other direct calls require identical physical state and
+/// supply no ABI or binding facts. Indirect calls remain unsupported.
 inline std::vector<SwiftBooleanProjection>
 qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
                                const SourceFunctionTypeHint &EntrySignature) {
@@ -140,10 +139,17 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       const auto Hint = Hints.find(Op.Addr);
       const auto Slot = darwinImportVeneerSlot(Image, *Site->StaticTarget);
       if (Hint == Hints.end()) {
+        // A recognizable import veneer with no current ABI is failed import
+        // evidence, not an opaque native-body candidate.
+        if (Slot)
+          return {};
         const auto Machine =
             objcClassAccessorMachine(Image, *Site->StaticTarget);
-        if (!Machine)
-          return {};
+        if (!Machine) {
+          Calls.emplace(*Site,
+                        SourceBooleanOtherCallContract{nullptr, false, true});
+          continue;
+        }
         const auto [It, Inserted] =
             ClassAccessors.emplace(*Site->StaticTarget, Machine->Signature);
         if (!Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
@@ -156,8 +162,9 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
              swift_boolean_projection_detail::ordinaryRuntime(Hint->second)) ||
             swift_boolean_projection_detail::superInit(Image, *Site, *Slot,
                                                        Hint->second)) ||
-          Hint->second.WeakImport || Hint->second.DoesNotReturn ||
-          !Calls
+          Hint->second.WeakImport || Hint->second.DoesNotReturn)
+        return {};
+      if (!Calls
                .emplace(*Site,
                         SourceBooleanOtherCallContract{&Hint->second.Signature})
                .second)

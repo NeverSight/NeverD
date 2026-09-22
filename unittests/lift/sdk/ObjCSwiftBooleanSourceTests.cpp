@@ -14,7 +14,7 @@ struct BooleanFixture {
   llvm::LLVMContext Context;
   PipelineResult Result;
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
-                 bool Prefix = false) {
+                 bool Prefix = false, bool OpaquePrefix = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -46,6 +46,8 @@ struct BooleanFixture {
                                   0xa8c17bfd, 0xd65f03c0};
     if (Twice)
       Body.insert(Body.end() - 2, {0x94000037, 0x12000000});
+    if (OpaquePrefix)
+      Body[2] = 0x9400005e; // BL 0x1180 before any selected result exists.
     for (unsigned I = 0; I != std::size(Body); ++I)
       word(0x1000 + 4 * I, Body[I]);
     word(0x1100, 0xb0000010);
@@ -126,6 +128,33 @@ TEST(ObjCSwiftBooleanSources, RealLoweringAndPublicationRepeatCallerProof) {
       for (const auto &Op : B.Ops)
         Normalizations += Op.Opcode == NdOp::INT_AND;
   EXPECT_EQ(Normalizations, 1U);
+}
+
+TEST(ObjCSwiftBooleanSources, OpaquePrefixDoesNotAcquireSourceBinding) {
+  BooleanFixture F(true, false, false, false, true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  EXPECT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  unsigned Unbound = 0;
+  walkStmts(F.high().Body, [&](HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Pending{Root};
+      while (!Pending.empty()) {
+        const auto Current = Pending.back();
+        Pending.pop_back();
+        if (!Current)
+          continue;
+        if (Current->Kind == ExprKind::Call && Current->CallAddr == 0x1180) {
+          ++Unbound;
+          EXPECT_FALSE(Current->SourceCallHint);
+          EXPECT_FALSE(objcSourceCallBound(*Current, F.Image, {}));
+        }
+        Pending.insert(Pending.end(), Current->Operands.begin(),
+                       Current->Operands.end());
+      }
+    });
+  });
+  EXPECT_GT(Unbound, 0U);
 }
 
 TEST(ObjCSwiftBooleanSources,

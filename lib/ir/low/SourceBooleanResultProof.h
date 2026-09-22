@@ -184,6 +184,16 @@ struct Transfer {
         const auto It = Calls.find(*Key);
         if (!IsSelected && It == Calls.end())
           return false;
+        if (!IsSelected && It->second.RequiresIdenticalState) {
+          // Stores never admit differing memory. With every physical register
+          // and flag also equal, an opaque call has identical inputs and
+          // effects. Retain temporary differences; do not invent any ABI or
+          // clear result bytes. A later loop visit must prove equality again.
+          if (std::any_of(Registers.begin(), Registers.end(),
+                          [](const auto &Byte) { return Byte.second != 0; }))
+            return false;
+          continue;
+        }
         // SP is an implicit input to every callee, even with no stack-passed
         // arguments. Its frame saves and loads can observe a different stack
         // before the caller restores SP, so later restoration is insufficient.
@@ -379,9 +389,10 @@ struct Transfer {
 };
 } // namespace source_boolean_result_detail
 
-/// The selected call has a separate raw-i1 result contract; ordinary calls and
-/// entry retain complete, independently validated source ABIs. The shared
-/// LowIR call-occurrence owner supplies every exact identity.
+/// The selected call has a separate raw-i1 result contract; the entry and known
+/// calls retain complete, independently validated source ABIs. Opaque calls
+/// require identical physical state. The shared LowIR call-occurrence owner
+/// supplies every exact identity.
 /// This owner checks their physical shape and exact LowIR occurrence, then
 /// proves non-observation of the replaced bits on every physical CFG path.
 /// Indirect calls, tail exits, exceptions, differing memory writes and unknown
@@ -406,15 +417,22 @@ proveSourceBooleanResultNormalization(
       Selected.Opcode != NdOp::CALL || !Selected.StaticTarget ||
       *Selected.StaticTarget == Function.Entry || Calls.count(Selected))
     return std::nullopt;
-  for (const auto &[Key, Contract] : Calls)
+  for (const auto &[Key, Contract] : Calls) {
     if (Key.Opcode != NdOp::CALL || !Key.StaticTarget ||
-        *Key.StaticTarget == Function.Entry || Contract.DoesNotReturn ||
-        !Contract.Signature ||
+        *Key.StaticTarget == Function.Entry || Contract.DoesNotReturn)
+      return std::nullopt;
+    if (Contract.RequiresIdenticalState) {
+      if (Contract.Signature)
+        return std::nullopt;
+      continue;
+    }
+    if (!Contract.Signature ||
         Contract.Signature->Architecture != Architecture ||
         Contract.Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Contract.Signature, Error))
       return std::nullopt;
+  }
   std::map<int, size_t> Ids;
   std::map<va_t, size_t> Starts;
   std::optional<size_t> Entry;

@@ -276,6 +276,87 @@ TEST(NativeBooleanResultProof, RejectsObservableUpperBitsAndPartialWrites) {
   }
 }
 
+TEST(NativeBooleanResultProof, OpaqueCallsRequireEveryPhysicalByteToAgree) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const std::vector<uint64_t> Registers = {a64reg::X8,         a64reg::X19,
+                                           a64reg::X30,        a64reg::SP,
+                                           TRI.VecRegBase + 8, a64reg::NFLAG};
+  for (const auto Register : Registers) {
+    for (bool Clear : {false, true}) {
+      SCOPED_TRACE(Register);
+      SCOPED_TRACE(Clear);
+      Fixture F;
+      const unsigned Width = Register == a64reg::NFLAG ? 1 : 8;
+      F.linear(
+          {call(), copy(Register, a64reg::X0, Width),
+           mask(a64reg::X0, a64reg::X0),
+           Clear ? constant(Register, 0, Width) : operation(NdOp::NOP, {}, {}),
+           call(0x2100), constant(Register, 0, Width), constant(a64reg::X0, 0),
+           ret()});
+      F.Calls.begin()->second = {nullptr, false, true};
+      EXPECT_EQ(bool(F.prove()), Clear);
+    }
+  }
+  Fixture F;
+  F.linear({call(0x2100), call(), mask(a64reg::X0, a64reg::X0), ret()});
+  F.Calls.begin()->second = {nullptr, false, true};
+  ASSERT_TRUE(F.prove());
+  F.Calls.begin()->second.Signature = &F.Release;
+  EXPECT_FALSE(F.prove());
+  F.Calls.begin()->second.Signature = nullptr;
+  F.Calls.begin()->second.DoesNotReturn = true;
+  EXPECT_FALSE(F.prove());
+  F.Calls.begin()->second = {};
+  EXPECT_FALSE(F.prove());
+}
+
+TEST(NativeBooleanResultProof, OpaqueCallsRetainSameInstructionTemporaries) {
+  Fixture F;
+  F.linear(
+      {call(),
+       operation(NdOp::COPY, NdVar::tmp(0, 8), {NdVar::reg(a64reg::X0, 8)}),
+       mask(a64reg::X0, a64reg::X0), call(0x2100),
+       operation(NdOp::STORE, {}, {NdVar::cst(0x3000, 8), NdVar::tmp(0, 8)}),
+       constant(a64reg::X0, 0), ret()});
+  auto &B = F.Low.Blocks[0];
+  // One machine instruction may expand into several operations. Its temporary
+  // is private to LowIR, but remains observable after the opaque call.
+  for (unsigned I = 1; I <= 4; ++I) {
+    B.Ops[I].Addr = 0x1004;
+    B.Ops[I].Seq = I - 1;
+  }
+  for (unsigned I = 5; I < B.Ops.size(); ++I)
+    B.Ops[I].Addr -= 12;
+  B.EndAddr -= 12;
+  F.bindCalls();
+  F.Calls.begin()->second = {nullptr, false, true};
+  EXPECT_FALSE(F.prove());
+  B.Ops[4].Inputs[1] = NdVar::reg(a64reg::X0, 8);
+  EXPECT_TRUE(F.prove());
+}
+
+TEST(NativeBooleanResultProof, OpaquePrefixMustRemainIdenticalOnEveryBackedge) {
+  for (bool Clear : {false, true}) {
+    Fixture F;
+    F.Low.Blocks = {
+        block(0, 0x1000, {operation(NdOp::BRANCH, {}, {NdVar::cst(0x1004, 8)})},
+              {}, {1}),
+        block(1, 0x1004,
+              {call(0x2100), call(), copy(a64reg::X19, a64reg::X0),
+               mask(a64reg::X0, a64reg::X0),
+               Clear ? constant(a64reg::X19, 0) : operation(NdOp::NOP, {}, {}),
+               operation(NdOp::COND_BR, {},
+                         {NdVar::cst(0x1004, 8), NdVar::reg(a64reg::X20, 1)})},
+              {0, 1}, {1, 2}),
+        block(2, 0x101c,
+              {constant(a64reg::X19, 0), constant(a64reg::X30, 0), ret()},
+              {1})};
+    F.bindCalls();
+    F.Calls.begin()->second = {nullptr, false, true};
+    EXPECT_EQ(bool(F.prove()), Clear);
+  }
+}
+
 TEST(NativeBooleanResultProof, ExactCallsKeepThePreservedRegisterDifference) {
   for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
     SCOPED_TRACE(Mutation);

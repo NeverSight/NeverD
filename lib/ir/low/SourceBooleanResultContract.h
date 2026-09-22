@@ -43,12 +43,15 @@ sourceBooleanInputParameters(const SourceBooleanResultContract &Contract) {
   return sourceABIParameters(Inputs);
 }
 
-/// Ordinary calls in the difference proof require complete, independently
-/// established source ABIs. Frame-borrowing and native-state privileges are
-/// intentionally absent: they belong to their separate semantic owners.
+/// Other calls require either an independently established complete source ABI
+/// or identical physical state. Frame-borrowing and native-state privileges
+/// remain absent: they belong to their separate semantic owners.
 struct SourceBooleanOtherCallContract {
   const SourceFunctionTypeHint *Signature = nullptr;
   bool DoesNotReturn = false;
+  // No ABI fact: all physical state must be identical at this occurrence.
+  // This never defines result bytes or grants source-binding permission.
+  bool RequiresIdenticalState = false;
 };
 } // namespace neverd
 #endif

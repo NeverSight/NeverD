@@ -414,6 +414,31 @@ TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
 }
 
+TEST(SwiftBooleanProjection, UnknownPrefixRequiresIdenticalPhysicalState) {
+  for (bool Prefix : {false, true}) {
+    ProjectionFixture F;
+    auto &B = F.Low.Blocks.front();
+    auto Opaque = B.Ops.front();
+    Opaque.Inputs[0] = NdVar::cst(0x4000, 8);
+    B.Ops.insert(B.Ops.begin() + (Prefix ? 0 : 1), Opaque);
+    B.EndAddr += 4;
+    for (unsigned I = 0; I < B.Ops.size(); ++I) {
+      auto &Op = B.Ops[I];
+      Op.Addr = B.StartAddr + I * 4;
+      if (Op.Opcode == NdOp::CALL) {
+        const int64_t Delta = int64_t(Op.Inputs[0].Offset) - int64_t(Op.Addr);
+        F.word(Op.Addr, 0x94000000 | (uint32_t(Delta / 4) & 0x03ffffff));
+      } else
+        F.word(Op.Addr, Op.Opcode == NdOp::RETURN ? 0xd65f03c0 : 0x92400000);
+    }
+    EXPECT_EQ(bool(F.qualify()), Prefix);
+    EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
+    F.word(Prefix ? 0x3000 : 0x3004,
+           0xd63f0200); // BLR is not this direct call.
+    EXPECT_FALSE(F.qualify());
+  }
+}
+
 TEST(SwiftBooleanProjection,
      ProvesEveryOccurrenceWithoutInventingOtherResults) {
   ProjectionFixture F;
@@ -675,7 +700,7 @@ TEST(ObjCClassAccessorMachine, UsesSharedStructuralUnwindBoundary) {
   }
 }
 
-TEST(SwiftBooleanProjection, OtherNativeCallNeedsCompleteCurrentMachineFacts) {
+TEST(SwiftBooleanProjection, OtherNativeCallsSeparateABIFromIdenticalState) {
   ProjectionFixture F;
   addClassAccessor(F);
   auto &B = F.Low.Blocks.front();
@@ -692,11 +717,16 @@ TEST(SwiftBooleanProjection, OtherNativeCallNeedsCompleteCurrentMachineFacts) {
   // complete body, rather than a native candidate signature, supplies the ABI.
   EXPECT_EQ(buildObjCSourceCallHints(F.Image, F.Low).count(0x3008), 0U);
   F.word(0x3048, 0xf0ffffe1); // x0 is now an incoming argument.
-  EXPECT_FALSE(F.qualify());
+  EXPECT_FALSE(objcClassAccessorMachine(F.Image, 0x3040));
+  EXPECT_TRUE(F.qualify()); // The mask already made every physical byte equal.
+  B.Ops[1].Inputs[1].Offset = 3;
+  EXPECT_FALSE(F.qualify()); // Opaque calls cannot accept even one changed bit.
+  B.Ops[1].Inputs[1].Offset = 1;
   F.word(0x3048, 0xf0ffffe0);
   ASSERT_TRUE(F.qualify());
   F.Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
-  EXPECT_FALSE(F.qualify());
+  EXPECT_FALSE(objcClassAccessorMachine(F.Image, 0x3040));
+  EXPECT_TRUE(F.qualify()); // No callee facts are obtained from the bad body.
 }
 
 TEST(SwiftBooleanProjection,
