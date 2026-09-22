@@ -26,19 +26,37 @@ inline constexpr llvm::StringLiteral SwiftBooleanComparisonProvider =
     "/usr/lib/swift/libswiftCore.dylib";
 inline constexpr llvm::StringLiteral SwiftBooleanPrefixImport =
     "_$sSS9hasPrefixySbSSF";
+inline constexpr llvm::StringLiteral SwiftBooleanObjectEqualityImport =
+    "_$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ";
+inline constexpr llvm::StringLiteral SwiftBooleanObjectEqualityProvider =
+    "/usr/lib/swift/libswiftObjectiveC.dylib";
+
+inline llvm::StringRef swiftBooleanRuntimeProvider(llvm::StringRef Import) {
+  if (Import == SwiftBooleanComparisonImport ||
+      Import == SwiftBooleanPrefixImport)
+    return SwiftBooleanComparisonProvider;
+  if (Import == SwiftBooleanObjectEqualityImport)
+    return SwiftBooleanObjectEqualityProvider;
+  return {};
+}
 
 /// Canonical physical inputs shared by raw runtime and logical source facts.
 inline std::optional<SourceFunctionTypeHint> swiftBooleanRuntimeInputs(
     llvm::StringRef Import = SwiftBooleanComparisonImport) {
-  if (Import != SwiftBooleanComparisonImport &&
-      Import != SwiftBooleanPrefixImport)
+  if (swiftBooleanRuntimeProvider(Import).empty())
     return std::nullopt;
   SourceFunctionTypeHint Inputs;
   Inputs.ReturnType = NdType::makeVoid();
   const auto Word = NdType::makeInt(8, false);
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
-  Inputs.Parameters = {
-      {"lhs0", Word}, {"lhs1", Pointer}, {"rhs0", Word}, {"rhs1", Pointer}};
+  if (Import == SwiftBooleanObjectEqualityImport) {
+    Inputs.Parameters = {
+        {"lhs", Pointer}, {"rhs", Pointer}, {"metadata", Pointer}};
+    Inputs.Parameters.back().TheRole =
+        SourceParameterTypeHint::Role::SwiftContext;
+  } else
+    Inputs.Parameters = {
+        {"lhs0", Word}, {"lhs1", Pointer}, {"rhs0", Word}, {"rhs1", Pointer}};
   if (Import == SwiftBooleanComparisonImport)
     Inputs.Parameters.push_back({"expecting", NdType::makeInt(1, false)});
   std::string Error;
@@ -63,21 +81,25 @@ inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
 /// swiftcc i1(i64, ptr, i64, ptr), prefix words before receiver words, with the
 /// same genuine _Bool normalization. Their libswiftCore TBDs export the exact
 /// hasPrefix symbol for arm64e-ios and arm64-ios-simulator respectively.
+/// NSObject equality: Actions 35710714248, consumer 4c088964d2aa7a0f1d19ca3
+/// f6929551154bc84c4, Xcode 26.5/17F42. Device and simulator Swift/C probes
+/// independently produce swiftcc i1(ptr, ptr, ptr swiftself); the metadata is
+/// an x20 input, not a third ordinary argument. Both libswiftObjectiveC TBDs
+/// export the exact symbol for their ARM64 target. The C result is normalized
+/// with zext i1 to i8, retaining the raw one-bit contract here.
 inline std::optional<SwiftBooleanRuntimeCandidate>
 swiftBooleanRuntimeCandidate(const BinaryImage &Image, va_t ImportSlot) {
   if (Image.Arch != Arch::AArch64 || Image.MachOChainedFixupsAmbiguous)
     return std::nullopt;
   const auto Import = darwinRuntimeImport(Image, ImportSlot);
+  const auto Provider =
+      Import ? swiftBooleanRuntimeProvider(*Import) : llvm::StringRef{};
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
-  if (!Import ||
-      (*Import != SwiftBooleanComparisonImport &&
-       *Import != SwiftBooleanPrefixImport) ||
-      Bind == Image.DyldBindSlots.end() ||
-      Bind->second.Module != SwiftBooleanComparisonProvider ||
+  if (!Import || Provider.empty() || Bind == Image.DyldBindSlots.end() ||
+      Bind->second.Module != Provider ||
       !Image.isValidImportStorageSlot(ImportSlot, *Import) ||
       std::count(Image.DynInfo.NeededLibs.begin(),
-                 Image.DynInfo.NeededLibs.end(),
-                 SwiftBooleanComparisonProvider.str()) != 1)
+                 Image.DynInfo.NeededLibs.end(), Provider.str()) != 1)
     return std::nullopt;
   const auto Storage = Image.collectImportStorageSlots();
   const auto Slot = Storage.Slots.find(ImportSlot);

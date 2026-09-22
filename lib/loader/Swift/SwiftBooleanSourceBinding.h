@@ -12,6 +12,8 @@ inline std::string swiftBooleanSourceName(llvm::StringRef TargetName) {
     return SwiftBooleanSourceName.str();
   if (TargetName == SwiftBooleanPrefixImport.drop_front())
     return "neverd_swift_string_has_prefix_bool";
+  if (TargetName == SwiftBooleanObjectEqualityImport.drop_front())
+    return "neverd_swift_nsobject_equal_bool";
   return {};
 }
 

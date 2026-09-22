@@ -14,12 +14,15 @@ struct BooleanFixture {
   llvm::LLVMContext Context;
   PipelineResult Result;
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
-                 bool Prefix = false, bool OpaquePrefix = false) {
+                 bool Prefix = false, bool OpaquePrefix = false,
+                 bool ObjectEquality = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
     Image.Entry = 0x1000;
-    Image.DynInfo.NeededLibs = {SwiftBooleanComparisonProvider.str()};
+    const auto Provider = ObjectEquality ? SwiftBooleanObjectEqualityProvider
+                                         : SwiftBooleanComparisonProvider;
+    Image.DynInfo.NeededLibs = {Provider.str()};
     for (unsigned I = 0; I != 2; ++I) {
       Segment Segment;
       Segment.VA = 0x1000 + I * 0x1000;
@@ -44,6 +47,15 @@ struct BooleanFixture {
                                   0x94000039, // BL 0x1100 from 0x101c
                                   0x12000000, // AND W0,W0,#1
                                   0xa8c17bfd, 0xd65f03c0};
+    if (ObjectEquality) {
+      // Preserve the incoming callee-saved x20 and provide a distinct metadata
+      // value in the ABI's swiftself register before the comparison.
+      Body[0] = 0xa9be7bfd;                    // STP FP,LR,[SP,#-32]!
+      Body[2] = 0xf9000bf4;                    // STR X20,[SP,#16]
+      Body[6] = 0xd2800134;                    // MOV X20,#9
+      Body.insert(Body.end() - 2, 0xf9400bf4); // LDR X20,[SP,#16]
+      Body[Body.size() - 2] = 0xa8c27bfd;      // LDP FP,LR,[SP],#32
+    }
     if (Twice)
       Body.insert(Body.end() - 2, {0x94000037, 0x12000000});
     if (OpaquePrefix)
@@ -53,11 +65,11 @@ struct BooleanFixture {
     word(0x1100, 0xb0000010);
     word(0x1104, 0xf9404210);
     word(0x1108, 0xd61f0200);
-    const auto Import =
-        Prefix ? SwiftBooleanPrefixImport : SwiftBooleanComparisonImport;
+    const auto Import = ObjectEquality ? SwiftBooleanObjectEqualityImport
+                        : Prefix       ? SwiftBooleanPrefixImport
+                                       : SwiftBooleanComparisonImport;
     Image.ImportPtrSlots[0x2080] = Import.str();
-    EXPECT_TRUE(Image.recordDyldBindSlot(
-        0x2080, Import, 0, SwiftBooleanComparisonProvider, false));
+    EXPECT_TRUE(Image.recordDyldBindSlot(0x2080, Import, 0, Provider, false));
     ObjCMethod Method;
     Method.Implementation = 0x1000;
     Method.ClassName = "BooleanFixture";
@@ -128,6 +140,33 @@ TEST(ObjCSwiftBooleanSources, RealLoweringAndPublicationRepeatCallerProof) {
       for (const auto &Op : B.Ops)
         Normalizations += Op.Opcode == NdOp::INT_AND;
   EXPECT_EQ(Normalizations, 1U);
+}
+
+TEST(ObjCSwiftBooleanSources,
+     ObjectEqualityRechecksContextProviderAndConsumer) {
+  BooleanFixture F(true, false, false, false, false, true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  ASSERT_EQ(E->SourceCallHint->Signature.Parameters.size(), 3U);
+  EXPECT_EQ(
+      E->SourceCallHint->Signature.Parameters.back().Location.RegisterOffset,
+      160U);
+  EXPECT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  const auto Provider = F.Image.DyldBindSlots[0x2080].Module;
+  F.Image.DyldBindSlots[0x2080].Module = SwiftBooleanComparisonProvider.str();
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  F.Image.DyldBindSlots[0x2080].Module = Provider;
+  // The publication proof consumes the current pipeline LowIR.
+  for (auto &Low : F.Result.LowFuncs)
+    for (auto &Block : Low.Blocks)
+      for (auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INT_AND)
+          for (auto &Input : Op.Inputs)
+            if (Input.isConst() && Input.Offset == 1)
+              Input.Offset = 3;
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }
 
 TEST(ObjCSwiftBooleanSources, OpaquePrefixDoesNotAcquireSourceBinding) {

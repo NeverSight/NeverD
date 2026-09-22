@@ -2288,7 +2288,7 @@ TEST(HighCSourceCalls, SwiftPrefixKeepsItsOwnFourArgumentI1Prototype) {
                            true, Arch::AArch64);
   EXPECT_NE(
       Source.find("extern _Bool neverd_swift_string_has_prefix_bool(uint64_t, "
-                  "void *, uint64_t, void *)"),
+                  "void*, uint64_t, void*)"),
       std::string::npos);
   EXPECT_NE(Source.find("__asm__(\"_$sSS9hasPrefixySbSSF\")"),
             std::string::npos);
@@ -2309,6 +2309,44 @@ int main(void) {
 )";
   compileAndRun(Program, {"-O0", "-Werror"});
   compileAndRun(Program, {"-O2", "-Werror"});
+}
+
+TEST(HighCSourceCalls, SwiftObjectEqualityPreservesHiddenContextAndI1Result) {
+  const auto Source =
+      emit({booleanSourceFunction(SwiftBooleanObjectEqualityImport)}, true,
+           Arch::AArch64);
+  EXPECT_NE(Source.find("extern _Bool neverd_swift_nsobject_equal_bool"),
+            std::string::npos);
+  EXPECT_NE(Source.find("swift_context"), std::string::npos);
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos);
+  const auto Program = Source + R"(
+static unsigned calls;
+_Bool __attribute__((swiftcall)) neverd_swift_nsobject_equal_bool(
+    void *a, void *b, void *metadata __attribute__((swift_context))) {
+  ++calls;
+  return a == (void *)0x1234 && b == (void *)0x5678 && metadata == (void *)0x9abc;
+}
+int main(void) {
+  if (projected_bool((void *)0x1234, (void *)0x5678, (void *)0x9abc) != 1 || calls != 1) return 1;
+  if (projected_bool((void *)0x1234, (void *)0x5678, (void *)0x9abd) != 0 || calls != 2) return 2;
+  return 0;
+}
+)";
+  compileAndRun(Program, {"-O0", "-Werror"});
+  compileAndRun(Program, {"-O2", "-Werror"});
+  for (unsigned Mutation = 0; Mutation != 2; ++Mutation) {
+    auto Function = booleanSourceFunction(SwiftBooleanObjectEqualityImport);
+    auto E = Function.Body[0].RetVal;
+    auto Hint = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+    E->SourceCallHint = Hint;
+    if (Mutation == 0)
+      Hint->Signature.Parameters.back().TheRole =
+          SourceParameterTypeHint::Role::Ordinary;
+    else
+      Hint->Signature.Parameters.back().Location.RegisterOffset = 16;
+    EXPECT_NE(emit({Function}, false, Arch::AArch64).find("bad source call"),
+              std::string::npos);
+  }
 }
 
 TEST(HighCSourceCalls, SwiftBooleanRejectsForeignBindingsAndBytePrototypes) {

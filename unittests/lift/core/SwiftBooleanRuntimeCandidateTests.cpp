@@ -160,6 +160,42 @@ TEST(SwiftBooleanRuntimeCandidate, PrefixHasFourInputsAndNoByteReturnBinding) {
 }
 
 TEST(SwiftBooleanRuntimeCandidate,
+     ObjectEqualityUsesSwiftContextAndExactProvider) {
+  auto Image = candidateImage(SwiftBooleanObjectEqualityImport,
+                              SwiftBooleanObjectEqualityProvider);
+  addVeneer(Image);
+  const auto Candidate = swiftBooleanRuntimeVeneerCandidate(Image, 0x1000);
+  ASSERT_TRUE(Candidate);
+  const auto Inputs = sourceBooleanInputParameters(Candidate->RawContract);
+  ASSERT_TRUE(Inputs);
+  ASSERT_EQ(Inputs->size(), 3U);
+  for (unsigned I = 0; I != 3; ++I) {
+    EXPECT_EQ((*Inputs)[I].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ((*Inputs)[I].Type->Size, 8U);
+    EXPECT_EQ((*Inputs)[I].Location.RegisterOffset, (I == 2 ? 20 : I) * 8U);
+    EXPECT_EQ(Candidate->RawContract.Parameters[I].TheRole,
+              I == 2 ? SourceParameterTypeHint::Role::SwiftContext
+                     : SourceParameterTypeHint::Role::Ordinary);
+  }
+  EXPECT_EQ(Candidate->RawContract.DefinedResultBits, 1U);
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, Slot));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, veneerCaller()).empty());
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    auto Changed = Image;
+    if (Mutation == 0)
+      Changed.DyldBindSlots[Slot].Module = SwiftBooleanComparisonProvider.str();
+    else if (Mutation == 1)
+      Changed.DyldBindSlots[Slot].WeakImport = true;
+    else if (Mutation == 2)
+      Changed.DynInfo.NeededLibs.clear();
+    else
+      Changed.DynInfo.NeededLibs.push_back(
+          SwiftBooleanObjectEqualityProvider.str());
+    EXPECT_FALSE(swiftBooleanRuntimeVeneerCandidate(Changed, 0x1000));
+  }
+}
+
+TEST(SwiftBooleanRuntimeCandidate,
      ExistingCatalogAndSelectorBindingStaySeparate) {
   auto Ordinary = candidateImage("_objc_retain", "/usr/lib/libobjc.A.dylib");
   addVeneer(Ordinary);

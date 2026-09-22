@@ -1011,10 +1011,15 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   if (NeedsObjCSuper2)
     OS << "extern void objc_msgSendSuper2(void);\n";
   for (const auto &Import : SwiftBooleanProjectionImports) {
-    OS << "extern _Bool " << swiftBooleanSourceName(Import)
-       << "(uint64_t, void *, uint64_t, void *";
-    if (Import == SwiftBooleanComparisonImport.drop_front())
-      OS << ", uint8_t";
+    const auto Inputs = swiftBooleanRuntimeInputs("_" + Import);
+    if (!Inputs)
+      throw std::invalid_argument("Unsupported Swift Boolean runtime inputs");
+    OS << "extern _Bool " << swiftBooleanSourceName(Import) << "(";
+    for (unsigned I = 0; I != Inputs->Parameters.size(); ++I) {
+      if (I)
+        OS << ", ";
+      OS << sourceParameterType(Inputs->Parameters[I]);
+    }
     OS << ") __asm__(\"_" << Import << "\") "
        << sourceConventionAttribute(
               SourceFunctionTypeHint::ConventionKind::Swift)
