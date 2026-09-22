@@ -329,7 +329,7 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   if (!Request || Request->IRP != IRP || Request->Completed)
     return ioError("completion requires the active IRP and cannot occur twice");
   if (PriorityBoost)
-    return ioError("synchronous completion supports IO_NO_INCREMENT only");
+    return ioError("modeled completion supports IO_NO_INCREMENT only");
   for (unsigned I = 0; I < Request->IOStatusWritten.size(); ++I)
     if ((I < 4 || I >= 8) && !Request->IOStatusWritten[I])
       return ioError(
@@ -375,6 +375,28 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
       *Information > MaxCreateInformation)
     return ioError(
         "CREATE IoStatus.Information is not a defined create result");
+  // Completion retires several allocations together. Preflight every range
+  // before unregistering any dispatcher state or delivering output bytes.
+  std::vector<std::pair<uint64_t, uint64_t>> Retiring{
+      {IRP, IRPSize + StackSize}};
+  if (Request->SystemBuffer)
+    Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
+  if (Request->UserBuffer)
+    Retiring.emplace_back(Request->UserBuffer, Request->Direct
+                                                   ? Request->TransferSize
+                                                   : Request->OutputSize);
+  if (Request->SecurityContext)
+    Retiring.emplace_back(Request->SecurityContext, SecurityContextSize);
+  if (Request->Mdl) {
+    auto It = MDLs.find(Request->Mdl);
+    if (It == MDLs.end())
+      return ioError("active request lost ownership of its MDL");
+    Retiring.emplace_back(It->second.Address, It->second.Size);
+    Retiring.emplace_back(It->second.Buffer & ~(profile::PageSize - 1),
+                          It->second.AllocationSize);
+  }
+  if (auto E = prepareReleaseRanges(Retiring))
+    return E;
   if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&
       !ntError(*Status) && *Information) {
     if (Request->Direct) {
@@ -474,8 +496,9 @@ llvm::Error KernelModel::finishRequest(uint32_t DispatchStatus) {
 }
 
 llvm::Expected<KernelModel::Invocation> KernelModel::beginUnload() {
-  if (Scheduler.hasPending())
-    return ioError("unload requires scheduled callbacks and timers to drain");
+  if (Scheduler.queuedCallbackCount() || Scheduler.active() ||
+      Scheduler.suspendedCallbackCount())
+    return ioError("unload requires scheduled callbacks to drain");
   if (Request || !Files.empty())
     return ioError(
         "unload requires all requests completed and the file closed");

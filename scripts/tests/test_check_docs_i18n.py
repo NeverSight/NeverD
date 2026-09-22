@@ -97,12 +97,36 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             "IoQueueWorkItem",
             "IoFreeWorkItem",
             "IoMarkIrpPending",
+            "KeInitializeDpc",
+            "KeSetTimerEx",
+            "KeSetEvent",
+            "KeWaitForSingleObject",
+            "KeDelayExecutionThread",
         ):
             with self.subTest(symbol=symbol):
                 errors: list[str] = []
                 changed = original.replace(f"`{symbol}`", "`UnknownAPI`")
                 i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
                 self.assertTrue(any(symbol in error for error in errors), errors)
+
+    def test_driver_guide_tracks_new_dispatcher_exports_from_source(self) -> None:
+        path = Path("lib/emulation/windows/KernelDispatcherAPIs.def")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original + "\nNEVERD_KERNEL_DISPATCHER_API(KeFutureDispatcherAPI, 1)\n"
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("KeFutureDispatcherAPI" in error for error in errors), errors)
+
+    def test_driver_guide_requires_concrete_dispatcher_limits(self) -> None:
+        path = Path("docs/ja/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        for token in ("DISPATCH_LEVEL", "KernelMode", "Executive", "CPU0",
+                      "Increment=0", "Wait=FALSE"):
+            with self.subTest(token=token):
+                errors: list[str] = []
+                changed = original.replace(token, "RemovedContract")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(token in error for error in errors), errors)
 
     def test_driver_guide_requires_localized_testing_entry(self) -> None:
         path = Path("docs/fr/testing.md")

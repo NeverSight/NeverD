@@ -21,7 +21,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [Architecture](architecture.md) | IR routes, component boundaries, strict lifting, support depth, and where to edit |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Windows exception reconstruction](windows-exception-reconstruction.md) | SEH/C++ unwind support matrix, IR contract, native patch rules, and PE validation |
-| [Windows driver emulation](driver-emulation.md) | Bounded x64 WDM initialization, serial buffered/direct requests, queued work-item completion, behavior reports, and limits |
+| [Windows driver emulation](driver-emulation.md) | Bounded x64 WDM initialization, serial buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits |
 | [Memory-safety audit & hunt](memory-safety.md) | Heap-lifetime and copy-overflow analysis: identity contract per format, sink/source catalog, verdicts, budgets, and JSON schema |
 | [Native plugins](plugins.md) | Pure-C descriptor ABI, callbacks and events, build/link workflow, discovery, and compatibility rules |
 | [Python plugins](python-plugins.md) | Typed authoring SDK, embedded host, lifecycle, loading, safety, tests, and publishing |

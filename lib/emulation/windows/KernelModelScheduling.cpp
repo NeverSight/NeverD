@@ -13,6 +13,8 @@
 #include "WindowsKernelLayout.h"
 
 #include <algorithm>
+#include <bit>
+#include <utility>
 
 namespace neverd::emulation {
 namespace {
@@ -88,8 +90,8 @@ llvm::Error KernelModel::updateDeviceReferences(uint64_t Device) {
 }
 
 llvm::Expected<std::optional<KernelScheduler::Invocation>>
-KernelModel::nextScheduled(bool AdvanceTime) {
-  auto Next = Scheduler.next(AdvanceTime);
+KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
+  auto Next = Scheduler.next(AdvanceTime, Deadline);
   if (!Next)
     return Next.takeError();
   if (*Next)
@@ -113,6 +115,153 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
       return E;
     return retireDeviceIfUnreferenced(Invocation.Owner);
   }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::suspendScheduled(uint64_t ID) {
+  if (auto E = Scheduler.suspend(ID))
+    return E;
+  CurrentIRQL = scheduler::PassiveLevel;
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::resumeScheduled(uint64_t ID) {
+  if (auto E = Scheduler.resume(ID))
+    return E;
+  CurrentIRQL = Scheduler.active()->IRQL;
+  return llvm::Error::success();
+}
+
+std::optional<uint64_t> KernelModel::nextEventTime() const {
+  return Scheduler.nextEventTime100ns();
+}
+
+std::optional<KernelModel::Wait> KernelModel::takeWait() {
+  return std::exchange(PendingWait, std::nullopt);
+}
+
+llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
+                                                bool Delay) {
+  const uint8_t Mode = A[Delay ? 0 : 2];
+  const uint8_t Alertable = A[Delay ? 1 : 3];
+  if (Mode != windows::KernelMode || Alertable)
+    return schedulingError(
+        "wait requires KernelMode and nonalertable execution");
+  if (!Delay && A[1] != windows::ExecutiveWaitReason)
+    return schedulingError("only Executive wait reason is currently modeled");
+  const uint64_t TimeoutAddress = A[Delay ? 2 : 4];
+  if (Delay && !TimeoutAddress)
+    return schedulingError("KeDelayExecutionThread requires an interval");
+  Wait Pending;
+  Pending.Object = Delay ? 0 : A[0];
+  bool PollOnly = false;
+  if (TimeoutAddress) {
+    if (auto E = validateGuestAccess(TimeoutAddress, sizeof(int64_t), false))
+      return E;
+    auto Raw = Memory.readInteger(TimeoutAddress, sizeof(int64_t));
+    if (!Raw)
+      return Raw.takeError();
+    auto Deadline = Scheduler.computeDeadline(std::bit_cast<int64_t>(*Raw));
+    if (!Deadline)
+      return Deadline.takeError();
+    Pending.Deadline = *Deadline;
+    PollOnly = !*Raw;
+  }
+  if (CurrentIRQL >
+      ((!Delay && PollOnly) ? scheduler::DispatchLevel : windows::APCLevel))
+    return schedulingError("blocking wait requires IRQL <= APC_LEVEL");
+  if (!Delay) {
+    auto Acquired = Dispatcher.tryAcquire(Pending.Object);
+    if (!Acquired)
+      return Acquired.takeError();
+    if (*Acquired)
+      return windows::StatusSuccess;
+  }
+  if (Pending.Deadline && *Pending.Deadline <= Scheduler.now100ns())
+    return Delay ? windows::StatusSuccess : windows::StatusTimeout;
+  if (PendingWait)
+    return schedulingError("previous deferred wait was not consumed");
+  if (Pending.Object)
+    ++WaitReferences[Pending.Object];
+  PendingWait = Pending;
+  // The session does not expose this placeholder as a guest return or event
+  // result. It saves the complete call frame until pollWait returns a status.
+  return 0;
+}
+
+llvm::Expected<std::optional<uint32_t>>
+KernelModel::pollWait(const Wait &Pending) {
+  bool Signaled = false;
+  if (Pending.Object) {
+    auto Acquired = Dispatcher.tryAcquire(Pending.Object);
+    if (!Acquired)
+      return Acquired.takeError();
+    Signaled = *Acquired;
+  }
+  const bool Expired =
+      Pending.Deadline && *Pending.Deadline <= Scheduler.now100ns();
+  if (!Signaled && !Expired)
+    return std::optional<uint32_t>{};
+  if (Pending.Object) {
+    auto Reference = WaitReferences.find(Pending.Object);
+    if (Reference == WaitReferences.end() || !Reference->second)
+      return schedulingError("wait lost its dispatcher object reference");
+    if (!--Reference->second)
+      WaitReferences.erase(Reference);
+  }
+  return std::optional<uint32_t>{Signaled || !Pending.Object
+                                     ? windows::StatusSuccess
+                                     : windows::StatusTimeout};
+}
+
+llvm::Error KernelModel::prepareReleaseRange(uint64_t Base, uint64_t Size) {
+  return prepareReleaseRanges({{Base, Size}});
+}
+
+llvm::Error KernelModel::prepareReleaseRanges(
+    llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges) {
+  for (const auto &[Base, Size] : Ranges) {
+    if (Size > UINT64_MAX - Base)
+      return schedulingError("overflowing dispatcher storage range");
+    for (const auto &[Object, References] : WaitReferences)
+      if (References && Object >= Base && Object < Base + Size)
+        return schedulingError("cannot release storage with outstanding waits");
+    if (auto E = Dispatcher.canReleaseRange(Base, Size))
+      return E;
+  }
+  for (const auto &[Base, Size] : Ranges)
+    if (auto E = Dispatcher.prepareReleaseRange(Base, Size))
+      return E;
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::validateDispatcherStorage(uint64_t Address,
+                                                   uint32_t Size,
+                                                   bool IsWrite) const {
+  if (auto E = validateGuestAccessImpl(Address, Size, IsWrite, false))
+    return E;
+  for (const auto &[Base, Allocation] : Allocations)
+    if (Address < Base + Allocation.Size && Base < Address + Size &&
+        !Allocation.NonPaged)
+      return schedulingError("dispatcher objects require nonpaged storage");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::activateStack(uint64_t Base, uint64_t Size) {
+  auto Old = FreedRanges.find(Base);
+  if (Old != FreedRanges.end()) {
+    if (Old->second != Size)
+      return schedulingError(
+          "reused thread stack changed its allocation extent");
+    FreedRanges.erase(Old);
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::retireStack(uint64_t Base, uint64_t Size) {
+  if (auto E = prepareReleaseRange(Base, Size))
+    return E;
+  FreedRanges.emplace(Base, Size);
   return llvm::Error::success();
 }
 } // namespace neverd::emulation

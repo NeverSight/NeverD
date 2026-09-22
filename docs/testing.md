@@ -63,13 +63,24 @@ deletion and leaks, and full-width `information_hex` for zero-output IOCTLs.
 External acceptance also covers Zero synchronous direct reads/writes and
 statistics queries.
 
-Focused backend tests execute CPU-context roundtrips for general registers,
-flags, SIMD, FPU and CR8 while preserving shared guest memory and rejecting
-fault recovery or foreign contexts. Worker fixtures exercise marked pending
-requests, deferred completion, queue/lifetime errors, stalled requests, shared
-budgets and separate dispatch/completion statuses through public reports.
-Internal scheduler timer/DPC tests validate state transitions only; they do not
-establish guest timer/DPC API or full asynchronous Windows support.
+Backend tests verify full CPU contexts (registers, flags, SIMD, FPU and CR8),
+shared memory and rejection of foreign or faulted contexts. Compiled
+`driver_dispatcher.c` fixtures execute real DPC and worker callbacks, timer
+boundaries, notification/synchronization events and timers, nonalertable
+`KernelMode` waits with reason `Executive`, timeout/delay, multiple blocked
+stacks, set/reset wake latching, callback arguments and invalid
+IRQL/lifetimes. Worker tests retain pending/completion, queue, stall and
+shared-budget coverage. These cases establish the documented subset, not full
+Windows asynchronous support.
+
+`driver_context_limits.c`: API IRQL ceilings come from `KernelAPIIRQL.def`,
+with argument-dependent checks in the owning model. DPCs cannot call registry
+APIs or allocate, free or access paged pool; Unicode `DbgPrint` conversions
+require `PASSIVE_LEVEL`, while supported ANSI output and nonpaged operations
+remain usable at `DISPATCH_LEVEL`. Callback stacks have bounded ranges; an
+escaping stack pointer cannot enter another blocked worker’s stack. Armed
+timers in a device extension prevent premature device retirement. These checks
+do not expose general IRQL transitions.
 
 ## Test layout
 

@@ -1,0 +1,24 @@
+//===- KernelDispatcherValues.def - Windows x64 dispatcher constants ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Public WDK wdm.h x64 object extents and enum values. Objects remain opaque;
+/// the implementation does not depend on their private member layout.
+/// https://learn.microsoft.com/windows-hardware/drivers/kernel/opaque-structures
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimerex
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_DISPATCHER_VALUE(DpcSize, 64)
+NEVERD_KERNEL_DISPATCHER_VALUE(TimerSize, 64)
+NEVERD_KERNEL_DISPATCHER_VALUE(EventSize, 24)
+NEVERD_KERNEL_DISPATCHER_VALUE(ObjectAlignment, 8)
+NEVERD_KERNEL_DISPATCHER_VALUE(NotificationObject, 0)
+NEVERD_KERNEL_DISPATCHER_VALUE(SynchronizationObject, 1)
+NEVERD_KERNEL_DISPATCHER_VALUE(DispatchLevel, 2)
+NEVERD_KERNEL_DISPATCHER_VALUE(HighLevel, 15)
+NEVERD_KERNEL_DISPATCHER_VALUE(MaxObjects, 1024)

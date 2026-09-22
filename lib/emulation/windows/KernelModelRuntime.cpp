@@ -290,6 +290,8 @@ class Formatter {
 
   llvm::Expected<std::string> countedString(uint64_t Address,
                                             const FormatSpec &Spec) {
+    if (Model.currentIRQL() != scheduler::PassiveLevel)
+      return runtimeError("Unicode DbgPrint requires IRQL PASSIVE_LEVEL");
     if (Spec.Length != LengthKind::Wide && Spec.Length != LengthKind::Long)
       return runtimeError("DbgPrint counted strings require %wZ or %lZ");
     auto Record = readCountedString(Model, Memory, Address);
@@ -371,6 +373,8 @@ class Formatter {
     } else if (Kind == Conversion::String || Kind == Conversion::Character) {
       const bool Wide =
           Spec.Length == LengthKind::Wide || Spec.Length == LengthKind::Long;
+      if (Wide && Model.currentIRQL() != scheduler::PassiveLevel)
+        return runtimeError("Unicode DbgPrint requires IRQL PASSIVE_LEVEL");
       if (Spec.Length != LengthKind::None && Spec.Length != LengthKind::Short &&
           !Wide)
         return runtimeError(

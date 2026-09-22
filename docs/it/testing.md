@@ -57,7 +57,9 @@ deve richiedere una configurazione Unicorn riservata ai test.
 
 I test aggiuntivi coprono MDL del pool non paginato appartenenti al driver, durate indipendenti di descrittore e buffer, strutture di interrogazione del registro e buffer corti, diritti degli handle, eliminazioni e perdite, oltre ai 64 bit completi di `information_hex` per gli IOCTL senza output. La convalida esterna include anche letture/scritture dirette sincrone e statistiche di Zero.
 
-I test aggiuntivi verificano contesti CPU completi (registri, flag, SIMD, FPU, CR8), memoria condivisa e rifiuto di contesti dopo fault o di altri backend. Le fixture di lavoro coprono IRP marcati pendenti, completamento differito, errori di coda e durata, stallo, budget condivisi e stati dispatch/completamento distinti nei report pubblici. I test interni timer/DPC verificano solo transizioni, non API guest o un ambiente Windows asincrono completo.
+I test verificano contesti CPU completi (registri, flag, SIMD, FPU, CR8), memoria condivisa e rifiuto di contesti estranei o in fault. Le fixture compilate `driver_dispatcher.c` eseguono DPC e callback di lavoro reali, scadenze, eventi/timer di notifica e sincronizzazione, attese non alertable `KernelMode` con motivo `Executive`, timeout/delay, più stack bloccati, risvegli conservati dopo set/reset, argomenti e errori IRQL/durata. I test di lavoro mantengono copertura pending/completamento, code, stalli e budget comuni. Provano il sottoinsieme descritto, non tutto l’asincronismo Windows.
+
+`driver_context_limits.c`: I limiti IRQL provengono da `KernelAPIIRQL.def`; il modello responsabile verifica le restrizioni dipendenti dagli argomenti. Un DPC non può chiamare il registro né allocare, liberare o accedere al pool paginato. Le conversioni Unicode di `DbgPrint` richiedono `PASSIVE_LEVEL`; output ANSI e operazioni non paginate supportate restano utilizzabili a `DISPATCH_LEVEL`. Gli stack hanno limiti: un puntatore fuori intervallo non può entrare nello stack di un altro worker bloccato. I timer armati nell’estensione impediscono il rilascio prematuro del dispositivo. Ciò non espone cambi generali di IRQL.
 
 
 ## Organizzazione dei test

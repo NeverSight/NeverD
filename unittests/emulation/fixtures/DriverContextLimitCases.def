@@ -1,0 +1,27 @@
+//===- DriverContextLimitCases.def - Callback context cases ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared compiled guest selectors and expected context restrictions.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_CONTEXT_LIMIT_FAILURE(RegistryAtDpc, 0x223000, "IRQL", "ZwOpenKey")
+NEVERD_CONTEXT_LIMIT_FAILURE(LegacyPagedAtDpc, 0x223004, "paged",
+                             "ExAllocatePoolWithTag")
+NEVERD_CONTEXT_LIMIT_FAILURE(ModernPagedAtDpc, 0x223008, "paged",
+                             "ExAllocatePool2")
+NEVERD_CONTEXT_LIMIT_SUCCESS(NonpagedAtDpc, 0x22300c)
+NEVERD_CONTEXT_LIMIT_FAILURE(PagedReadAtDpc, 0x223010, "paged", "")
+NEVERD_CONTEXT_LIMIT_FAILURE(PagedWriteAtDpc, 0x223014, "paged", "")
+NEVERD_CONTEXT_LIMIT_FAILURE(UnicodePrintAtDpc, 0x223018, "PASSIVE_LEVEL",
+                             "DbgPrint")
+NEVERD_CONTEXT_LIMIT_SUCCESS(AnsiPrintAtDpc, 0x22301c)
+NEVERD_CONTEXT_LIMIT_STACK(WorkerStackEscape, 0x223020)
+NEVERD_CONTEXT_LIMIT_STORAGE(MdlUnmapQueuedDpc, 0x223026)
+NEVERD_CONTEXT_LIMIT_STORAGE(ReplaceWaitedEvent, 0x223028)
+NEVERD_CONTEXT_LIMIT_ENTRY(DeleteDeviceArmedTimer, 'X', "NeverDContextDeleteX")
+NEVERD_CONTEXT_LIMIT_ENTRY(RegistryPathQueuedDpc, 'R', "NeverDContextRegistryR")

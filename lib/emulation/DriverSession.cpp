@@ -24,6 +24,7 @@
 #include <array>
 #include <chrono>
 #include <map>
+#include <memory>
 
 namespace neverd::emulation {
 namespace {
@@ -70,7 +71,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   Result.Entry = Image->Entry;
   Result.PC = Image->Entry;
   if (Image->Imports.size() > (ThunkSize / ThunkStride) - 1)
-    return failure("too many driver imports for the synchronous profile");
+    return failure("too many driver imports for the bounded x64 profile");
   auto Backend = UnicornBackend::create(Options.MemoryLimit);
   if (!Backend)
     return Backend.takeError();
@@ -106,7 +107,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   KernelModel Kernel(CPU, Result, &Exports);
   if (auto E = Kernel.initialize(*Image, Options))
     return std::move(E);
-  const uint64_t InitialSP = StackBase + StackSize - EntryStackReservation;
+  uint64_t ExpectedReturnSP = 0;
+  uint64_t ActiveStackBase = 0;
+  uint64_t ActiveStackSize = 0;
   X64ExecutionPolicy Policy;
   if (auto E = Policy.initialize())
     return std::move(E);
@@ -133,6 +136,18 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     if (Stopped)
       return;
     Result.PC = Address;
+    auto StackPointer = CPU.reg(X64Register::SP);
+    if (!StackPointer) {
+      Stop(DriverStopReason::EngineError,
+           llvm::toString(StackPointer.takeError()));
+      return;
+    }
+    if (*StackPointer < ActiveStackBase ||
+        *StackPointer >= ActiveStackBase + ActiveStackSize) {
+      Stop(DriverStopReason::ModelError,
+           "guest stack pointer exceeds the invocation stack");
+      return;
+    }
     if (Address == ReturnSentinel) {
       auto SP = CPU.reg(X64Register::SP);
       auto AX = CPU.reg(X64Register::AX);
@@ -143,7 +158,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (!AX)
           Error += llvm::toString(AX.takeError());
         Stop(DriverStopReason::EngineError, Error);
-      } else if (*SP != InitialSP + PointerSize) {
+      } else if (*SP != ExpectedReturnSP) {
         Stop(DriverStopReason::ModelError,
              "driver callback returned with an unbalanced stack");
       } else {
@@ -210,7 +225,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
       return;
     }
-    if (Stopped || (Address >= StackBase && Address < StackBase + StackSize))
+    if (Stopped || ((Address >= StackBase && Address < StackBase + StackSize) ||
+                    (Address >= CallbackStackBase &&
+                     Address < CallbackStackBase + MaxConcurrentCallbacks *
+                                                       CallbackStackStride)))
       return;
     if (!EventAvailable())
       return;
@@ -256,36 +274,123 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     Stop(DriverStopReason::Timeout, "execution time limit reached");
     return true;
   };
-  auto Invoke = [&](const KernelModel::Invocation &Invocation,
-                    const std::string &Phase) -> llvm::Error {
-    Result.Phase = Phase;
-    Result.PC = Invocation.PC;
+  auto ModelFailure = [&](llvm::Error E) {
+    Stopped = false;
+    Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
+                              : DriverStopReason::ModelError,
+         llvm::toString(std::move(E)));
+  };
+  struct Execution {
+    uint64_t ID = 0; // Zero denotes the foreground driver invocation.
+    uint64_t Base = 0;
+    uint64_t Size = 0;
+    uint64_t InitialSP = 0;
+    uint64_t PC = 0;
+    std::string Phase;
+    std::unique_ptr<BackendContext> Context;
+    std::optional<KernelModel::Wait> Wait;
+    std::optional<uint32_t> ResumeValue;
+    size_t WaitEvent = 0;
+  };
+  std::vector<std::unique_ptr<Execution>> Waiting;
+  std::array<bool, MaxConcurrentCallbacks> StackMapped{}, StackInUse{};
+  auto NewExecution =
+      [&](uint64_t PC, llvm::ArrayRef<uint64_t> Arguments,
+          const std::string &Phase,
+          uint64_t ID) -> llvm::Expected<std::unique_ptr<Execution>> {
+    if (!CPU.executable(PC) || (PC >= ThunkBase && PC < ThunkBase + ThunkSize))
+      return failure("driver callback does not name guest executable code");
+    if (Arguments.size() > MaxCallbackArguments)
+      return failure("scheduled callback exceeds the argument limit");
+    auto Frame = std::make_unique<Execution>();
+    Frame->ID = ID;
+    Frame->PC = PC;
+    Frame->Phase = Phase;
+    Frame->Base = StackBase;
+    Frame->Size = StackSize;
+    if (ID) {
+      auto Slot = std::find(StackInUse.begin(), StackInUse.end(), false);
+      if (Slot == StackInUse.end())
+        return failure("concurrent callback stack limit exhausted");
+      const size_t Index = Slot - StackInUse.begin();
+      Frame->Base = CallbackStackBase + PageSize + Index * CallbackStackStride;
+      Frame->Size = CallbackStackSize;
+      if (!StackMapped[Index]) {
+        if (auto E = CPU.map(Frame->Base, Frame->Size, Read | Write))
+          return std::move(E);
+        StackMapped[Index] = true;
+      }
+      StackInUse[Index] = true;
+    }
+    if (auto E = Kernel.activateStack(Frame->Base, Frame->Size))
+      return std::move(E);
+    // Reserve the return address, Win64 shadow space and all stack parameters.
+    // Callee entry RSP is always 8 mod 16, including odd stack-argument counts.
+    const uint64_t Extra =
+        Arguments.size() > RegisterArgumentCount
+            ? (Arguments.size() - RegisterArgumentCount) * PointerSize
+            : 0;
+    const uint64_t Reservation =
+        EntryStackReservation +
+        ((Extra + StackAlignment - 1) & ~(StackAlignment - 1));
+    Frame->InitialSP = Frame->Base + Frame->Size - Reservation;
+    if (auto E =
+            CPU.writeInteger(Frame->InitialSP, ReturnSentinel, PointerSize))
+      return std::move(E);
+    if (auto E = CPU.setReg(X64Register::SP, Frame->InitialSP))
+      return std::move(E);
+    constexpr X64Register Registers[] = {X64Register::CX, X64Register::DX,
+                                         X64Register::R8, X64Register::R9};
+    for (size_t I = 0;
+         I < std::max(Arguments.size(), size_t(RegisterArgumentCount)); ++I) {
+      const auto Value = I < Arguments.size() ? Arguments[I] : 0;
+      if (I < RegisterArgumentCount) {
+        if (auto E = CPU.setReg(Registers[I], Value))
+          return std::move(E);
+      } else if (auto E = CPU.writeInteger(
+                     Frame->InitialSP + StackArgumentOffset +
+                         (I - RegisterArgumentCount) * PointerSize,
+                     Value, PointerSize)) {
+        return std::move(E);
+      }
+    }
+    if (auto E = CPU.setReg(X64Register::CR8, Kernel.currentIRQL()))
+      return std::move(E);
+    return Frame;
+  };
+  auto RefreshWaiters = [&]() -> llvm::Error {
+    for (auto &Frame : Waiting) {
+      if (!Frame->Wait)
+        continue;
+      auto Status = Kernel.pollWait(*Frame->Wait);
+      if (!Status)
+        return Status.takeError();
+      if (*Status) {
+        Frame->Wait.reset();
+        Frame->ResumeValue = **Status;
+        Result.Calls[Frame->WaitEvent].Result = **Status;
+      }
+    }
+    return llvm::Error::success();
+  };
+  auto RunExecution = [&](Execution &Frame) -> llvm::Error {
+    if (Frame.Context) {
+      if (auto E = CPU.restoreContext(*Frame.Context))
+        return E;
+      if (Frame.ResumeValue) {
+        if (auto E = CPU.setReg(X64Register::AX, *Frame.ResumeValue))
+          return E;
+        Frame.ResumeValue.reset();
+      }
+    }
+    Result.Phase = Frame.Phase;
+    Result.PC = Frame.PC;
+    ExpectedReturnSP = Frame.InitialSP + PointerSize;
+    ActiveStackBase = Frame.Base;
+    ActiveStackSize = Frame.Size;
     Stopped = false;
     InvocationReturn.reset();
-    if (!CPU.executable(Invocation.PC) ||
-        (Invocation.PC >= ThunkBase && Invocation.PC < ThunkBase + ThunkSize)) {
-      Stop(DriverStopReason::ModelError,
-           "driver callback does not name guest executable code");
-      return llvm::Error::success();
-    }
-    // Each host-to-driver invocation receives a fresh stack frame, while all
-    // guest globals, objects, budgets and the wall-clock deadline remain
-    // shared.
-    if (auto E = CPU.writeInteger(InitialSP, ReturnSentinel, PointerSize))
-      return E;
-    if (auto E = CPU.setReg(X64Register::SP, InitialSP))
-      return E;
-    if (auto E = CPU.setReg(X64Register::CX, Invocation.Argument0))
-      return E;
-    if (auto E = CPU.setReg(X64Register::DX, Invocation.Argument1))
-      return E;
-    if (auto E = CPU.setReg(X64Register::R8, Invocation.Argument2))
-      return E;
-    if (auto E = CPU.setReg(X64Register::R9, Invocation.Argument3))
-      return E;
-    if (auto E = CPU.setReg(X64Register::CR8, Kernel.currentIRQL()))
-      return E;
-    uint64_t NextPC = Invocation.PC;
+    uint64_t NextPC = Frame.PC;
     while (!Stopped) {
       auto Remaining = std::chrono::duration_cast<std::chrono::microseconds>(
                            Deadline - std::chrono::steady_clock::now())
@@ -409,6 +514,23 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
              Error);
         break;
       }
+      if (auto E = RefreshWaiters())
+        return E;
+      if (auto Wait = Kernel.takeWait()) {
+        Frame.Wait = *Wait;
+        Frame.WaitEvent = Result.Calls.size() - 1;
+        Frame.PC = *ReturnPC;
+        if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
+          return E;
+        auto Context = CPU.saveContext();
+        if (!Context)
+          return Context.takeError();
+        Frame.Context = std::move(*Context);
+        if (Frame.ID)
+          if (auto E = Kernel.suspendScheduled(Frame.ID))
+            return E;
+        return llvm::Error::success();
+      }
       Result.Calls.back().Result = *Value;
       if (auto E = CPU.setReg(X64Register::AX, *Value))
         return std::move(E);
@@ -418,61 +540,137 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     }
     return llvm::Error::success();
   };
+  auto Pump = [&](std::unique_ptr<Execution> Current,
+                  const std::string &ParentPhase) -> llvm::Error {
+    const bool Foreground = bool(Current) && !Current->ID;
+    while (!DeadlineExceeded()) {
+      if (Current) {
+        if (auto E = RunExecution(*Current)) {
+          ModelFailure(std::move(E));
+          return llvm::Error::success();
+        }
+        if (Current->Wait) {
+          Waiting.push_back(std::move(Current));
+        } else {
+          if (Result.Stop != DriverStopReason::Returned)
+            return llvm::Error::success();
+          if (auto E = Kernel.retireStack(Current->Base, Current->Size)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
+          if (!Current->ID)
+            return llvm::Error::success();
+          if (auto E = Kernel.finishScheduled(Current->ID)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
+          StackInUse[(Current->Base - CallbackStackBase) /
+                     CallbackStackStride] = false;
+          Current.reset();
+        }
+      }
+      // Waiters retain independent stacks and CPU state. A ready PASSIVE_LEVEL
+      // frame must still yield to the scheduler's queued DISPATCH_LEVEL DPCs.
+      if (auto E = RefreshWaiters()) {
+        ModelFailure(std::move(E));
+        return llvm::Error::success();
+      }
+      for (size_t I = 0; I < Waiting.size() && !Kernel.hasQueuedDPC(); ++I) {
+        if (Waiting[I]->Wait)
+          continue;
+        Current = std::move(Waiting[I]);
+        Waiting.erase(Waiting.begin() + I);
+        if (Current->ID) {
+          if (auto E = Kernel.resumeScheduled(Current->ID)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
+        } else {
+          Kernel.enterForeground();
+        }
+        break;
+      }
+      if (Current)
+        continue;
+      auto Next = Kernel.nextScheduled(false);
+      if (!Next) {
+        ModelFailure(Next.takeError());
+        return llvm::Error::success();
+      }
+      if (auto E = RefreshWaiters()) {
+        ModelFailure(std::move(E));
+        return llvm::Error::success();
+      }
+      if (!*Next) {
+        if (std::any_of(Waiting.begin(), Waiting.end(),
+                        [](const auto &Frame) { return !Frame->Wait; }))
+          continue;
+        if (!Foreground && Waiting.empty() && !Kernel.requestPending()) {
+          Result.Phase = ParentPhase;
+          Result.Stop = DriverStopReason::Returned;
+          return llvm::Error::success();
+        }
+        std::optional<uint64_t> Bound = Kernel.nextEventTime();
+        for (const auto &Frame : Waiting)
+          if (Frame->Wait && Frame->Wait->Deadline &&
+              (!Bound || *Frame->Wait->Deadline < *Bound))
+            Bound = Frame->Wait->Deadline;
+        if (!Bound) {
+          ModelFailure(
+              failure("STATUS_PENDING request or blocked wait is "
+                      "stalled: no scheduled completion source remains"));
+          return llvm::Error::success();
+        }
+        Next = Kernel.nextScheduled(true, Bound);
+        if (!Next) {
+          ModelFailure(Next.takeError());
+          return llvm::Error::success();
+        }
+        // Timer expiration satisfies existing waits before its queued DPC can
+        // rearm the timer and clear its signal.
+        if (auto E = RefreshWaiters()) {
+          ModelFailure(std::move(E));
+          return llvm::Error::success();
+        }
+        if (!*Next)
+          continue;
+      }
+      auto Frame =
+          NewExecution((**Next).PC, (**Next).Arguments,
+                       std::string(CallbackPhase) + std::to_string((**Next).ID),
+                       (**Next).ID);
+      if (!Frame) {
+        ModelFailure(Frame.takeError());
+        return llvm::Error::success();
+      }
+      Current = std::move(*Frame);
+    }
+    return llvm::Error::success();
+  };
+  auto Invoke = [&](const KernelModel::Invocation &Invocation,
+                    const std::string &Phase) -> llvm::Error {
+    Kernel.enterForeground();
+    std::vector<uint64_t> Arguments{Invocation.Argument0, Invocation.Argument1,
+                                    Invocation.Argument2, Invocation.Argument3};
+    Arguments.insert(Arguments.end(), Invocation.StackArguments.begin(),
+                     Invocation.StackArguments.end());
+    auto Frame = NewExecution(Invocation.PC, Arguments, Phase, 0);
+    if (!Frame) {
+      ModelFailure(Frame.takeError());
+      return llvm::Error::success();
+    }
+    return Pump(std::move(*Frame), Phase);
+  };
+  auto DrainCallbacks = [&]() -> llvm::Error {
+    const std::string ParentPhase = Result.Phase;
+    return Pump(nullptr, ParentPhase);
+  };
   if (auto E =
           Invoke({Image->Entry, Kernel.driverObject(), Kernel.registryPath()},
                  EntryPhase))
     return std::move(E);
   if (Result.Stop == DriverStopReason::Returned)
     Result.NTStatus = InvocationReturn;
-  auto ModelFailure = [&](llvm::Error E) {
-    Stopped = false;
-    Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
-                              : DriverStopReason::ModelError,
-         llvm::toString(std::move(E)));
-  };
-  auto DrainCallbacks = [&]() -> llvm::Error {
-    const std::string ParentPhase = Result.Phase;
-    while (!DeadlineExceeded()) {
-      auto Next = Kernel.nextScheduled(Kernel.requestPending());
-      if (!Next) {
-        ModelFailure(Next.takeError());
-        return llvm::Error::success();
-      }
-      if (!*Next) {
-        if (Kernel.requestPending())
-          ModelFailure(
-              failure("STATUS_PENDING request is stalled: no scheduled "
-                      "completion source remains"));
-        else
-          Result.Phase = ParentPhase;
-        return llvm::Error::success();
-      }
-      const auto &Task = **Next;
-      if (Task.Arguments.size() > RegisterArgumentCount) {
-        ModelFailure(failure("scheduled callback exceeds register arguments"));
-        return llvm::Error::success();
-      }
-      auto Context = CPU.saveContext();
-      if (!Context)
-        return Context.takeError();
-      auto Argument = [&](size_t Index) {
-        return Index < Task.Arguments.size() ? Task.Arguments[Index] : 0;
-      };
-      if (auto E = Invoke(
-              {Task.PC, Argument(0), Argument(1), Argument(2), Argument(3)},
-              std::string(CallbackPhase) + std::to_string(Task.ID)))
-        return E;
-      if (Result.Stop != DriverStopReason::Returned)
-        return llvm::Error::success();
-      if (auto E = Kernel.finishScheduled(Task.ID)) {
-        ModelFailure(std::move(E));
-        return llvm::Error::success();
-      }
-      if (auto E = CPU.restoreContext(**Context))
-        return E;
-    }
-    return llvm::Error::success();
-  };
   if (Result.Stop == DriverStopReason::Returned) {
     if (auto E = Kernel.finishEntry())
       ModelFailure(std::move(E));

@@ -213,6 +213,34 @@ TEST_F(DriverScenarioPublic, CLIDoesNotHideFailedAsynchronousCompletion) {
   EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("io_status"), 0xc000000d);
 }
 
+TEST_F(DriverScenarioPublic, CAPIAndCLIRunTimerDpcAndResumableWaits) {
+  for (const char *Code : {"0x222000", "0x22201c", "0x222020", "0x222028"}) {
+    std::string Scenario = LifecycleScenario;
+    Scenario.replace(Scenario.find("0x222000"), 8, Code);
+    Scenario.replace(Scenario.find("\"output_size\":4"), 15,
+                     "\"output_size\":8");
+    for (bool UseCLI : {false, true}) {
+      auto Text = UseCLI ? runCLI(Scenario, 0, "driver_dispatcher")
+                         : takeString(neverd_emulate_driver_scenario_json(
+                               Session, fixture("driver_dispatcher").c_str(),
+                               Scenario.c_str(), nullptr));
+      auto Parsed = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 4u);
+      EXPECT_EQ((*Requests)[1].getAsObject()->getBoolean("completed"), true);
+      EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("io_status"), 0);
+      EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("information"), 8);
+    }
+  }
+}
+
 TEST_F(DriverScenarioPublic, CLIRunsOrderedLifecycleScenario) {
   auto Parsed = llvm::json::parse(
       runCLI(LifecycleScenario, 0, "success", NEVERD_DRIVER_IO_FIXTURE));

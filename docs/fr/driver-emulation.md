@@ -52,16 +52,16 @@ tiers arbitraires.
 
 | Classe de pilote ou exigence | Périmètre actuel | Environnement manquant |
 |-----------------------------|------------------|------------------------|
-| Pilote WDM logiciel x64 utilisant les API listées | Initialisation, cycles de fichiers sériels et callbacks bornés de travail | Toute API supplémentaire exécutée nécessite un modèle défini |
-| IOCTL `METHOD_BUFFERED` | Identités indépendantes, requêtes sérielles entrelacées et achèvement par élément de travail | Les autres producteurs asynchrones restent non pris en charge |
+| Pilote WDM logiciel x64 utilisant les API listées | Initialisation WDM x64 bornée, requêtes sérielles buffered/direct, travail, timers, DPC, événements et attentes, rapports et limites | Toute API supplémentaire exécutée nécessite un modèle défini |
+| IOCTL `METHOD_BUFFERED` | E/S buffered/direct sérielles, achèvement par travail ou DPC | Sous-ensemble d’API ci-dessous seulement ; ni IRP concurrents ni annulation de requête |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes et mappages système | identités de pages physiques, DMA et mappages utilisateur |
 | MDL alloués par le pilote | Descripteurs autonomes du pool non paginé modélisé, partageant les adresses originales | Association à un IRP, chaînes de MDL, sondage/verrouillage, pages physiques et mappages utilisateur |
-| READ/WRITE | Bufferisés ou directs selon le périphérique, avec achèvement par élément de travail | E/S neither, position implicite et autres producteurs asynchrones |
+| READ/WRITE | E/S buffered/direct sérielles, achèvement par travail ou DPC | Sous-ensemble d’API ci-dessous seulement ; ni IRP concurrents ni annulation de requête ; `METHOD_NEITHER` et position implicite du fichier |
 | `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès et gestion des exceptions invitées |
 | Pilote KMDF / UMDF | Non pris en charge | Liaison au framework, objets, files, callbacks et environnement d’exécution hôte approprié |
 | Pilote PnP de bus, de fonction ou de filtre | L’initialisation peut s’exécuter dans le sous-ensemble d’API ; le cycle de vie de la pile de périphériques n’est pas pris en charge | Attachement de périphériques, dispatch vers les pilotes inférieurs, IRP PnP et d’alimentation |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
-| Pilote utilisant des éléments de travail | Callbacks déterministes `DelayedWorkQueue` à `PASSIVE_LEVEL` | Threads de travail, timers, DPC, APC, attentes et annulation restent non pris en charge |
+| Travail, timers, DPC, événements et attentes | L’IRQL courant est `PASSIVE_LEVEL` pour le dispatch et le travail, et `DISPATCH_LEVEL` pour les DPC | Sous-ensemble d’API ci-dessous seulement ; ni IRP concurrents ni annulation de requête |
 | Opérations de registre via les API Zw listées | Arborescence explicite de session et droits par handle | ACL, privilèges, vues alternatives et persistance |
 | Pilote utilisant des callbacks de processus/thread, d’autres handles, des opérations de fichier ou la découverte de modules noyau | Non pris en charge hors des API listées | Gestionnaire d’objets, état système et producteurs de callbacks/événements |
 | Pilote matériel, DMA, PCI, d’interruption ou de virtualisation | Environnement non pris en charge | Modèles de périphériques, mémoire physique, bus, interruptions et état CPU privilégié |
@@ -76,8 +76,7 @@ framework. Le tableau des API ci-dessous définit le sous-ensemble pris en charg
 
 ## Contrat d’exécution
 
-Le profil modélise un unique cycle de vie WDM x64 monothread à `PASSIVE_LEVEL`.
-L’exécution commence au point d’entrée PE et conserve l’enveloppe d’entrée du
+Le profil modélise un cycle WDM x64 sur CPU0 avec un ordonnancement coopératif déterministe. L’exécution commence au point d’entrée PE et conserve l’enveloppe d’entrée du
 compilateur lorsqu’elle existe. DriverEntry doit renvoyer `STATUS_SUCCESS` pour
 initialiser le pilote ; un autre statut de réussite non nul ou un statut en
 attente arrête l’exécution comme contrat d’initialisation non pris en charge.
@@ -90,7 +89,7 @@ virtuelles invitées, y compris les adresses noyau canoniques hautes, sans
 synthétiser de tables de pages Windows. La valeur initiale de RFLAGS est `0x202` ;
 le profil de périphérique logiciel utilise une ligne de cache fixe de 64 octets.
 Ce sont des propriétés explicites de ce scénario d’exécution.
-Les lectures x64 de CR8 en ligne observent le même `PASSIVE_LEVEL` ; les écritures
+Les lectures x64 de CR8 en ligne observent le même `PASSIVE_LEVEL` / `DISPATCH_LEVEL` ; les écritures
 de CR8 et les autres opérations sur les registres de contrôle restent non prises en charge.
 
 Les imports inconnus sont liés à des pièges déclenchés à l’utilisation. Un import
@@ -101,9 +100,9 @@ NeverD ne remplace pas les appels non implémentés par des valeurs de réussite
 Les images malformées et les exigences de chargement non prises en charge
 échouent avant l’exécution.
 
-Les callbacks de travail en file s’exécutent de manière déterministe après le retour d’un appel du pilote, dont DriverEntry, le dispatch d’une requête et un autre callback de travail. Les requêtes restent sérielles : une requête en attente doit se terminer avant la suivante. Le dispatch doit marquer l’IRP en attente et retourner `STATUS_PENDING` ; un élément en file peut ensuite le terminer à `PASSIVE_LEVEL`. Sans producteur d’achèvement exécutable, la requête bloquée s’arrête avec `model_error`. Les budgets communs d’instructions, de mémoire, d’événements et de temps bornent aussi les callbacks.
+Les éléments `DelayedWorkQueue` s’exécutent à `PASSIVE_LEVEL`, les callbacks DPC invités à `DISPATCH_LEVEL` avec les quatre arguments prévus. L’ordonnancement coopératif déterministe sur CPU0 intervient aux retours d’appels et aux attentes bloquantes. Les timers relatifs, absolus et périodiques utilisent un temps virtuel qui avance jusqu’à la prochaine échéance de timer ou d’attente lorsqu’aucun cadre ne peut s’exécuter. Les événements/timers de notification et de synchronisation conservent leurs règles distinctes de consommation du signal. Chaque callback dispose de sa pile invitée ; plusieurs cadres bloqués gardent leurs variables locales et contextes CPU complets, avec une mémoire partagée. Win64 passe les quatre premiers arguments en registres, les suivants sur la pile. Les requêtes restent sérielles : un dispatch marquant l’IRP en attente doit retourner `STATUS_PENDING` et terminer avant la requête suivante. Sans producteur disponible, une requête en attente ou une attente infinie s’arrête avec un `model_error` de blocage. Les budgets d’instructions, mémoire, observations et temps réel restent communs.
 
-Un noyau Windows complet, KMDF, PnP/alimentation, les IOCTL neither, interruptions, attentes générales, threads, annulations et API invitées de timers/DPC/APC restent non implémentés. Les tests internes de la machine d’états du planificateur ne prouvent pas leur prise en charge publique. Un appel limité à l’initialisation exécute aussi le travail explicitement mis en file par DriverEntry ; il ne crée ni requêtes du scénario ni déchargement implicite.
+Ce modèle borné n’offre pas tout l’asynchronisme Windows. Attentes alertables ou utilisateur, threads système, APC, annulation des requêtes, spinlocks, IRP concurrents, changements généraux d’IRQL, `METHOD_NEITHER`, KMDF/UMDF, PnP/alimentation complet, matériel, DMA et interruptions restent non pris en charge. L’initialisation seule exécute les callbacks explicitement mis en file sans créer de requêtes ni déchargement implicites.
 
 L’élément est retiré de la file avant le début de son callback, qui peut donc le libérer. La libération d’un élément encore en file, la double mise en file, les objets expirés et les cibles hors mémoire invitée exécutable échouent explicitement. La référence au périphérique reste détenue jusqu’au retour. Le déchargement exige la libération de tous les éléments et l’achèvement du travail en file. Les contextes CPU préservent les registres généraux, SIMD, FPU et l’état de contrôle ; la mémoire invitée reste partagée et restaurer un contexte ne permet pas de reprendre un CPU en faute.
 La suppression est différée tant que subsistent des objets fichiers ou des références de travail en file/en cours. L’allocation d’un élément retourne NULL si l’arène d’objets est épuisée.
@@ -135,11 +134,20 @@ Le modèle initial d’API possède volontairement un contrat limité :
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` ou `\??\Name` dans un espace de noms de session, ciblant `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Formatage variadique Win64 vérifié, au plus 512 octets en sortie ; tous les filtres du débogueur sont activés |
 | `IoGetCurrentIrpStackLocation` | Renvoie l’emplacement de pile de l’IRP modélisé actif ; les macros WDM compilées habituelles lisent le même champ invité |
-| `KeGetCurrentIrql` | Renvoie `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | L’IRQL courant est `PASSIVE_LEVEL` pour le dispatch et le travail, et `DISPATCH_LEVEL` pour les DPC |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Éléments opaques appartenant au périphérique ; `DelayedWorkQueue` uniquement, périphérique et contexte passés à `PASSIVE_LEVEL` ; un élément encore en file ne peut être libéré |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | DPC opaque, quatre arguments invités, `DISPATCH_LEVEL`, doublons/retrait et importance ; cible CPU0 uniquement |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Timers notification/synchronisation ; échéances relatives/absolues en 100 ns, périodes en millisecondes, réarmement/annulation et signaux en temps virtuel |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Événements notification/synchronisation avec consommation distincte ; `KeSetEvent` accepte uniquement Increment=0 et Wait=FALSE |
+| `KeWaitForSingleObject` | Un événement ou timer initialisé ; `KernelMode` non alertable, raison `Executive` ; polling zéro, attente relative/absolue finie ou infinie ; attente non nulle/infinie à IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | Délai relatif/absolu `KernelMode` non alertable à IRQL <= APC_LEVEL ; reprise du cadre invité après progression du temps virtuel |
 | `IoMarkIrpPending` | Marque l’IRP actif ; l’écriture équivalente de la macro WDM dans le contrôle de pile est aussi modélisée ; le dispatch doit retourner `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Termine l’IRP modélisé actif, synchrone ou en attente avec `IO_NO_INCREMENT` ; aucun nouvel accès à un IRP terminé ou à son tampon n’est autorisé |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Opérations bornées sur les tampons invités, au plus 1 MiB par appel ; les API de copie sans chevauchement rejettent les chevauchements |
+
+Les plafonds IRQL proviennent de `KernelAPIIRQL.def` ; le modèle propriétaire vérifie les restrictions dépendant des arguments. Un DPC ne peut ni appeler le registre ni allouer, libérer ou accéder au pool paginé. Les conversions Unicode de `DbgPrint` exigent `PASSIVE_LEVEL`, tandis que l’ANSI et les opérations non paginées pris en charge restent utilisables à `DISPATCH_LEVEL`. Les piles sont bornées : un pointeur de pile sortant ne peut atteindre celle d’un autre worker bloqué. Un timer armé dans l’extension empêche la destruction prématurée du périphérique. Cela n’expose pas les changements généraux d’IRQL.
+
+L’expiration satisfait les attentes déjà inscrites avant qu’un DPC puisse réinitialiser ou réarmer le timer. Les DPC en file passent avant la reprise des cadres `PASSIVE_LEVEL` réveillés. Si le stockage d’une requête contient encore un DPC en file, l’achèvement IRP refuse sa libération avant de terminer ou d’invalider le tampon.
 
 Le formatage de `DbgPrint` prend en charge les entiers `d/i/u/o/x/X`, les
 pointeurs `p`, le texte `s/c`, `%%`, l’Unicode de longueur explicite `wZ/lZ`,
@@ -204,7 +212,7 @@ create, transferts, cleanup puis close dans cet ordre. Les requêtes de fichiers
 indépendants peuvent être entrelacées. Les périphériques exclusifs rejettent une
 seconde ouverture. Ces identités représentent des objets fichiers, et non des
 handles dupliqués. Les méthodes IOCTL bufferisée et les deux méthodes directes
-sont prises en charge. Le dispatch doit terminer de façon synchrone ou respecter le contrat de travail en attente décrit ci-dessus. Les longueurs de sortie invalides et l’accès à un IRP terminé provoquent un échec explicite. Le déchargement
+sont prises en charge. Le dispatch doit terminer de façon synchrone ou respecter le contrat de callbacks en attente décrit ci-dessus. Les longueurs de sortie invalides et l’accès à un IRP terminé provoquent un échec explicite. Le déchargement
 demandé ne doit laisser aucun périphérique, lien symbolique, allocation de pool
 ou objet fichier actif.
 

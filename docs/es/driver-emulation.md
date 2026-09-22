@@ -53,16 +53,16 @@ arbitrarios de terceros.
 
 | Clase de controlador o requisito | Alcance actual | Entorno que falta |
 |---------------------------------|----------------|-------------------|
-| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización, ciclos de archivos en serie y callbacks acotados de elementos de trabajo | Cada API adicional ejecutada requiere un modelo definido |
-| IOCTL `METHOD_BUFFERED` | Identidades independientes, solicitudes intercaladas en serie y finalización por elementos de trabajo | Otros productores asíncronos siguen sin admitirse |
+| Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización WDM x64 acotada, solicitudes seriales buffered/direct, trabajo, temporizadores, DPC, eventos y esperas, informes y límites | Cada API adicional ejecutada requiere un modelo definido |
+| IOCTL `METHOD_BUFFERED` | E/S buffered/direct serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos ni cancelación de solicitudes |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propios de cada solicitud y asignaciones de memoria del sistema | identidades de páginas físicas, DMA y asignaciones de memoria de usuario |
 | MDL asignados por el controlador | Descriptores independientes del pool no paginado modelado, con las direcciones originales de los búferes | Asociación con IRP, cadenas MDL, sondeo/bloqueo, páginas físicas y asignaciones de usuario |
-| READ/WRITE | Con búfer o directos según el dispositivo, incluida la finalización por elementos de trabajo | E/S neither, posición implícita y otros productores asíncronos |
+| READ/WRITE | E/S buffered/direct serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos ni cancelación de solicitudes; `METHOD_NEITHER` y posición implícita del archivo |
 | `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, comprobación de accesos y gestión de excepciones del invitado |
 | Controlador KMDF / UMDF | No compatible | Vinculación al framework, objetos, colas, callbacks y entorno de ejecución anfitrión adecuado |
 | Controlador PnP de bus, función o filtro | La inicialización puede ejecutarse dentro del subconjunto de API; no se admite el ciclo de vida de la pila de dispositivos | Conexión de dispositivos, despacho al controlador inferior, IRP PnP y de energía |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
-| Controlador con elementos de trabajo | Callbacks deterministas de `DelayedWorkQueue` a `PASSIVE_LEVEL` | Hilos de trabajo, temporizadores, DPC, APC, esperas y cancelación siguen sin admitirse |
+| Trabajo, temporizadores, DPC, eventos y esperas | El IRQL actual es `PASSIVE_LEVEL` para despacho y trabajo, y `DISPATCH_LEVEL` para DPC | Solo las API siguientes; sin IRP simultáneos ni cancelación de solicitudes |
 | Operaciones del registro mediante las API Zw listadas | Árbol explícito de sesión y derechos por handle | ACL, privilegios, vistas alternativas y persistencia |
 | Controlador con callbacks de proceso/hilo, otros handles, operaciones de archivo o descubrimiento de módulos del kernel | No compatible fuera de las API enumeradas | Administrador de objetos, estado del sistema y productores de callbacks/eventos |
 | Controlador de hardware, DMA, PCI, interrupciones o virtualización | Entorno no compatible | Modelos de dispositivos, memoria física, buses, interrupciones y estado privilegiado de CPU |
@@ -78,8 +78,7 @@ compatible de referencia.
 
 ## Contrato de ejecución
 
-El perfil modela un único ciclo de vida WDM x64 de un solo hilo en
-`PASSIVE_LEVEL`. La ejecución comienza en el punto de entrada PE y conserva
+El perfil modela un ciclo WDM x64 en CPU0 con planificación cooperativa determinista. La ejecución comienza en el punto de entrada PE y conserva
 el wrapper de entrada del compilador, si existe. DriverEntry debe devolver
 `STATUS_SUCCESS` para inicializar; cualquier otro estado satisfactorio no nulo
 o pendiente detiene la ejecución como contrato de inicialización no compatible.
@@ -92,7 +91,7 @@ virtuales del invitado, incluidas las direcciones canónicas altas del kernel,
 sin sintetizar tablas de páginas de Windows. El valor inicial de RFLAGS es
 `0x202`; el perfil de dispositivo de software utiliza una línea de caché fija
 de 64 bytes. Son propiedades explícitas de este escenario de ejecución.
-Las lecturas x64 de CR8 en línea observan el mismo `PASSIVE_LEVEL`; las escrituras
+Las lecturas x64 de CR8 en línea observan el mismo `PASSIVE_LEVEL` / `DISPATCH_LEVEL`; las escrituras
 de CR8 y otras operaciones de registros de control siguen sin estar admitidas.
 
 Las importaciones desconocidas se vinculan a trampas que se activan al usarlas.
@@ -103,9 +102,9 @@ explícita. NeverD no sustituye llamadas sin implementar por valores de éxito.
 Las imágenes malformadas o los requisitos de carga no compatibles fallan antes
 de la ejecución.
 
-Los callbacks de elementos de trabajo en cola se ejecutan de forma determinista cuando retorna una llamada del controlador, incluido DriverEntry, el despacho de solicitudes y otro callback de trabajo. Las solicitudes siguen siendo seriales: una pendiente debe terminar antes de iniciar la siguiente. El despacho debe marcar el IRP como pendiente y devolver `STATUS_PENDING`; un elemento en cola puede completarlo después a `PASSIVE_LEVEL`. Si no queda un productor de finalización ejecutable, la solicitud atascada se detiene con `model_error`. Los callbacks comparten los límites de instrucciones, memoria, eventos y tiempo.
+Los elementos `DelayedWorkQueue` se ejecutan a `PASSIVE_LEVEL` y los callbacks DPC invitados a `DISPATCH_LEVEL` con los cuatro argumentos definidos. CPU0 usa planificación cooperativa determinista al retornar llamadas o bloquear esperas. Los temporizadores relativos, absolutos y periódicos usan tiempo virtual que avanza al siguiente vencimiento de temporizador o espera cuando no hay marcos ejecutables. Eventos/temporizadores de notificación y sincronización conservan sus reglas distintas de consumo de señales. Cada callback tiene una pila invitada independiente; varios marcos bloqueados conservan variables locales y contextos CPU completos con memoria compartida. Win64 pasa los primeros cuatro argumentos en registros y los demás en la pila. Las solicitudes siguen siendo seriales: el despacho que marca un IRP pendiente debe devolver `STATUS_PENDING` y terminar antes de la siguiente solicitud. Sin productor disponible, una solicitud pendiente o espera infinita se detiene con `model_error` por bloqueo. Se comparten los límites de instrucciones, memoria, observaciones y tiempo real.
 
-Siguen sin implementarse un kernel Windows completo, KMDF, PnP/energía, IOCTL neither, interrupciones, esperas generales, hilos, cancelación y API invitadas de temporizadores/DPC/APC. Las pruebas internas de la máquina de estados del planificador no demuestran compatibilidad pública con esas operaciones. Una llamada de solo inicialización también ejecuta el trabajo puesto explícitamente en cola por DriverEntry; no crea solicitudes del escenario ni una descarga implícita.
+Este modelo acotado no ofrece todo el comportamiento asíncrono de Windows. No admite esperas alertables o de usuario, hilos del sistema, APC, cancelación de solicitudes, spinlocks, IRP simultáneos, cambios generales de IRQL, `METHOD_NEITHER`, KMDF/UMDF, PnP/energía completo, hardware, DMA ni interrupciones. La inicialización sola ejecuta callbacks explícitamente encolados sin crear solicitudes ni descarga implícita.
 
 El elemento sale de la cola antes de iniciar su callback, que puede liberar su propio elemento. Liberar uno aún en cola, encolarlo dos veces, usar objetos caducados o destinos fuera de memoria invitada ejecutable provoca un fallo explícito. La referencia al dispositivo se conserva hasta que retorna el callback. La descarga exige liberar todos los elementos y terminar el trabajo en cola. Los contextos CPU conservan registros generales, SIMD, FPU y estado de control; la memoria invitada sigue compartida y restaurar un contexto no permite reanudar una CPU con fallo.
 La eliminación se aplaza mientras queden objetos de archivo o referencias de trabajo en cola/en ejecución. La asignación de elementos devuelve NULL al agotarse el espacio de objetos.
@@ -137,11 +136,20 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` o `\??\Name` dentro de un espacio de nombres de sesión, con destino `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Formato variádico Win64 verificado, con un máximo de 512 bytes de salida; todos los filtros del depurador habilitados |
 | `IoGetCurrentIrpStackLocation` | Devuelve la ubicación de pila de la IRP modelada activa; las macros WDM compiladas normales leen el mismo campo del invitado |
-| `KeGetCurrentIrql` | Devuelve `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | El IRQL actual es `PASSIVE_LEVEL` para despacho y trabajo, y `DISPATCH_LEVEL` para DPC |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Elementos opacos asociados al dispositivo; solo `DelayedWorkQueue`, con dispositivo y contexto a `PASSIVE_LEVEL`; no se puede liberar un elemento aún en cola |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | DPC opaco, cuatro argumentos invitados, `DISPATCH_LEVEL`, duplicados/retirada e importancia; solo destino CPU0 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Temporizadores de notificación/sincronización; vencimientos relativos/absolutos en 100 ns, períodos en milisegundos, rearme/cancelación y señales en tiempo virtual |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Eventos de notificación/sincronización con consumo distinto; `KeSetEvent` solo acepta Increment=0 y Wait=FALSE |
+| `KeWaitForSingleObject` | Un evento o temporizador inicializado; `KernelMode` no alertable, razón `Executive`; sondeo cero, espera finita relativa/absoluta o infinita; espera no nula/infinita requiere IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | Retardo relativo/absoluto `KernelMode` no alertable con IRQL <= APC_LEVEL; reanuda el marco invitado tras avanzar el tiempo virtual |
 | `IoMarkIrpPending` | Marca el IRP activo; también se modela la escritura equivalente de la macro WDM en el control de pila; el despacho debe devolver `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Completa la IRP modelada activa, síncrona o pendiente con `IO_NO_INCREMENT`; no se puede volver a acceder a una IRP completada ni a su búfer |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operaciones acotadas sobre búferes del invitado, como máximo 1 MiB por llamada; las API de copia sin solapamiento rechazan los solapamientos |
+
+Los límites IRQL proceden de `KernelAPIIRQL.def`; el modelo propietario comprueba las restricciones por argumento. Un DPC no puede llamar al registro ni asignar, liberar o acceder al pool paginado. Las conversiones Unicode de `DbgPrint` requieren `PASSIVE_LEVEL`; la salida ANSI y operaciones no paginadas admitidas funcionan a `DISPATCH_LEVEL`. Las pilas tienen límites: un puntero escapado no puede entrar en la pila de otro worker bloqueado. Los temporizadores armados en la extensión impiden retirar prematuramente el dispositivo. Estas comprobaciones no exponen cambios generales de IRQL.
+
+El vencimiento satisface las esperas registradas antes de que un DPC reinicie o rearme el temporizador. Los DPC en cola se ejecutan antes de reanudar marcos `PASSIVE_LEVEL` despertados. Si el almacenamiento de una solicitud contiene un DPC en cola, la finalización IRP rechaza liberarlo antes de completar e invalidar el búfer.
 
 El formato de `DbgPrint` admite enteros `d/i/u/o/x/X`, punteros `p`, texto
 `s/c`, `%%`, Unicode de longitud explícita `wZ/lZ`, cadenas anchas `ls/ws`,
@@ -207,7 +215,7 @@ transferencias, cleanup y close en ese orden. Las solicitudes de archivos
 independientes pueden intercalarse. Los dispositivos exclusivos rechazan una
 segunda apertura. Estas identidades representan objetos de archivo, no handles
 duplicados. Se admiten el método IOCTL con búfer y ambos métodos directos.
-El despacho debe completar de forma síncrona o cumplir el contrato anterior de elementos de trabajo pendientes. Las longitudes de salida inválidas y el acceso a un IRP completado provocan un fallo explícito. La descarga solicitada no debe dejar
+El despacho debe completar de forma síncrona o cumplir el contrato anterior de finalización pendiente por callbacks. Las longitudes de salida inválidas y el acceso a un IRP completado provocan un fallo explícito. La descarga solicitada no debe dejar
 ningún dispositivo, enlace simbólico, asignación de pool u objeto de archivo activo.
 
 El campo raíz opcional `"load_address": "0x190000000"` solicita cambiar la base;
