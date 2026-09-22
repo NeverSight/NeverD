@@ -5763,6 +5763,42 @@ TEST(ObjCCallHints,
   }
 }
 
+TEST(ObjCCallHints,
+     CoreDataNonescapingBlocksFollowRevalidatedReceiverHierarchy) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (llvm::StringRef Owner : {"NSManagedObjectContext",
+                                  "NSPersistentStoreCoordinator"}) {
+      auto Image = receiverImage(Architecture);
+      auto &Class = Image.ObjCClasses.front();
+      Class.RootClass = false;
+      Class.InheritanceStatus = "resolved";
+      Class.SuperclassName = Owner.str();
+      Image.DynInfo.NeededLibs = {
+          "/System/Library/Frameworks/CoreData.framework/CoreData",
+          "/System/Library/Frameworks/Foundation.framework/Foundation"};
+      const auto Receiver = objcMethodReceiverTypeHint(Image, 0x1200);
+      ASSERT_TRUE(Receiver);
+      SourceCallTypeHint Call;
+      Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+      Call.Selector = "performBlockAndWait:";
+      Call.Receiver = *Receiver;
+      const auto Parent =
+          objcReceiverSourceTypeHint(Image, Call.Selector, *Receiver);
+      ASSERT_TRUE(Parent.Signature);
+      Call.Signature = *Parent.Signature;
+      const auto Callback = objcNonEscapingBlockSignature(Image, Call, 2);
+      ASSERT_TRUE(Callback) << Owner.str();
+      EXPECT_EQ(Callback->ReturnType->Kind, NdTypeKind::Void);
+      EXPECT_EQ(Callback->Parameters.size(), 1U);
+
+      auto Unknown = Image;
+      Unknown.ObjCClasses.front().SuperclassName = "NSPersistentContainer";
+      EXPECT_FALSE(objcNonEscapingBlockSignature(Unknown, Call, 2));
+      EXPECT_FALSE(objcNonEscapingBlockSignature(Image, Call, 1));
+    }
+  }
+}
+
 TEST(ObjCCallHints, SuperDispatchUsesExactCurrentClassSuperclassDeclaration) {
   auto Image = receiverImage(Arch::AArch64);
   auto &Class = Image.ObjCClasses.front();

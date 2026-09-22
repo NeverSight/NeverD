@@ -965,7 +965,7 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
     const char *X64Callback;
     const char *Owner;
   };
-  // Compiler-derived from Foundation SDK 15.5 public NS_NOESCAPE method
+  // Compiler-derived from public SDK 15.5 NS_NOESCAPE method
   // parameters. A null callback records architecture profiles where the
   // macOS and iOS declarations disagree; no implementation is included.
   static constexpr Declaration Declarations[] = {
@@ -988,6 +988,10 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
        "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSArray"},
       {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSOrderedSet"},
+      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v8@?0", "v8@?0", "NSManagedObjectContext"},
+      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v8@?0", "v8@?0", "NSPersistentStoreCoordinator"},
   };
   std::optional<SourceFunctionTypeHint> Result;
   for (const auto &D : Declarations) {
