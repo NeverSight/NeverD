@@ -1,0 +1,41 @@
+//===- DriverPower.def - Public power request values and spellings --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Power request type/action values and public JSON spellings. Minor numbers
+/// and device/system power-state values remain in DeviceLifecycle.def.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_POWER_TYPE
+NEVERD_DRIVER_POWER_TYPE(System, 0, "system")
+NEVERD_DRIVER_POWER_TYPE(Device, 1, "device")
+#endif
+
+#ifdef NEVERD_DRIVER_POWER_ACTION
+NEVERD_DRIVER_POWER_ACTION(None, 0, "none")
+NEVERD_DRIVER_POWER_ACTION(Sleep, 2, "sleep")
+#endif
+
+#ifdef NEVERD_DRIVER_POWER_REQUEST
+NEVERD_DRIVER_POWER_REQUEST(Query, "query")
+NEVERD_DRIVER_POWER_REQUEST(Set, "set")
+#endif
+
+#ifdef NEVERD_DRIVER_REQUEST_ORIGIN
+NEVERD_DRIVER_REQUEST_ORIGIN(Scenario, "scenario")
+NEVERD_DRIVER_REQUEST_ORIGIN(PoRequestPowerIrp, "PoRequestPowerIrp")
+#endif
+
+#ifdef NEVERD_DRIVER_POWER_DEVICE_STATE
+NEVERD_DRIVER_POWER_DEVICE_STATE(D0)
+NEVERD_DRIVER_POWER_DEVICE_STATE(D3)
+#endif
+
+#ifdef NEVERD_DRIVER_POWER_SYSTEM_STATE
+NEVERD_DRIVER_POWER_SYSTEM_STATE(Working)
+NEVERD_DRIVER_POWER_SYSTEM_STATE(Sleeping3)
+#endif

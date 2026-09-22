@@ -125,7 +125,7 @@ private:
   std::unique_ptr<KernelFramework> Framework;
   std::optional<KernelGuestCall> takeWdmGuestCall();
   llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
-                                                            uint64_t Result);
+                                                             uint64_t Result);
   void configureFrameworkDeviceHost();
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
@@ -184,6 +184,7 @@ private:
     // DEVICE_OBJECT.ReferenceCount field. Attachment links also prevent retire.
     uint64_t InternalReferences = 0;
     bool DeletePending = false;
+    std::optional<DevicePowerState> ReportedDevicePower;
   };
   std::map<uint64_t, DeviceRecord> Devices;
   // PnP provider identities persist after the concrete PDO is retired.
@@ -195,6 +196,9 @@ private:
     bool AddDeviceActive = false;
     std::set<uint64_t> ExistingGuestDevices;
     std::set<uint64_t> GuestDevices;
+    std::optional<DevicePowerState> InitialReportedDevicePower;
+    std::vector<DriverPowerOperation> RequestedDevicePower;
+    uint32_t RequestedPowerIndex = 0;
   };
   uint64_t PnpProviderDriver = 0;
   bool PnpDevicesPrepared = false;
@@ -222,6 +226,16 @@ private:
   std::map<uint32_t, OpenFile> Files;
   bool Unloading = false;
   bool Unloaded = false;
+  struct RequestedPower {
+    uint64_t RequestDevice = 0;
+    uint64_t Callback = 0;
+    uint64_t Context = 0;
+    // A separate callback input snapshot; the completed IRP stays retired.
+    uint64_t StatusBlock = 0;
+    uint32_t ResponseIndex = 0;
+    bool CallbackStarted = false;
+    bool CallbackReturned = false;
+  };
   struct ActiveRequest {
     DriverRequestKind Kind;
     size_t ResultIndex;
@@ -230,6 +244,9 @@ private:
     uint64_t PnpDevice = 0;
     std::optional<DeviceLifecycleTicket> PnpTicket;
     std::optional<DriverPnpOperation> PnpOperation;
+    std::optional<DeviceLifecycleTicket> PowerTicket;
+    std::optional<DriverPowerOperation> PowerOperation;
+    std::optional<RequestedPower> ChildPower;
     bool LifecycleIo = false;
     uint64_t Stack = 0;
     uint8_t StackCount = 1;
@@ -259,7 +276,12 @@ private:
   };
   std::map<uint64_t, ActiveRequest> Requests;
   std::set<uint64_t> FinalizedRequests;
-  enum class IRPCallKind { Dispatch, Completion };
+  enum class IRPCallKind {
+    Dispatch,
+    Completion,
+    PowerDispatch,
+    PowerCompletion
+  };
   struct IRPCall {
     IRPCallKind Kind;
     uint64_t IRP = 0;
@@ -281,10 +303,12 @@ private:
     uint32_t StartSlot = 0;
     std::vector<IRPCompletionStep> Steps;
     uint64_t PC = 0, Device = 0, Context = 0;
+    bool PowerCompletion = false;
+    std::vector<uint64_t> Arguments;
   };
-  llvm::Expected<IRPCompletionPlan>
-  planIRPCompletion(uint64_t IRP,
-                    std::optional<uint32_t> StatusOverride = std::nullopt) const;
+  llvm::Expected<IRPCompletionPlan> planIRPCompletion(
+      uint64_t IRP,
+      std::optional<uint32_t> StatusOverride = std::nullopt) const;
   struct ProviderCompletion {
     uint64_t Device = 0, Deadline = 0, Sequence = 0;
     uint32_t Status = 0;
@@ -306,6 +330,20 @@ private:
                                     uint64_t Device);
   llvm::Expected<Invocation> beginPnpRequest(const DriverRequest &Input,
                                              size_t ResultIndex);
+  llvm::Expected<Invocation> beginPowerRequest(const DriverRequest &Input,
+                                               size_t ResultIndex);
+  /// Prepare without calling the guest. A generated child uses the next result
+  /// index and publishes its observation only after successful preparation.
+  llvm::Expected<Invocation>
+  preparePowerRequest(const DriverRequest &Input, size_t ResultIndex,
+                      std::optional<RequestedPower> Child = std::nullopt);
+  llvm::Expected<uint64_t> requestPowerIrp(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> setPowerState(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error startNextPowerIrp(uint64_t IRP);
+  llvm::Error tryFinalizePowerRequest(uint64_t IRP);
+  llvm::Expected<std::optional<uint64_t>> finishPowerCompletion(uint64_t Token);
+  llvm::Error validatePowerRequestCompletion(const ActiveRequest &Request,
+                                             uint32_t Status) const;
   llvm::Error finishRequestLifecycle(ActiveRequest &Request, uint32_t Status);
   llvm::Error initializeRequestPacket(ActiveRequest &Record,
                                       const DriverRequest &Input);
@@ -378,8 +416,7 @@ private:
   llvm::Error detachDevice(uint64_t Lower);
   llvm::Error retainDevice(uint64_t Device);
   llvm::Error releaseDevice(uint64_t Device);
-  llvm::Error validateDeviceStackMutation(
-      llvm::ArrayRef<uint64_t> Stack) const;
+  llvm::Error validateDeviceStackMutation(llvm::ArrayRef<uint64_t> Stack) const;
 };
 } // namespace neverd::emulation
 #endif

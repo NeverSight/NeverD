@@ -1,4 +1,4 @@
-//===- KernelModelPnpDevices.cpp - Scenario PDO and AddDevice ownership ----===//
+//===- KernelModelPnpDevices.cpp - PDO and AddDevice ownership -----------===//
 //
 // NeverD Decompiler
 //
@@ -11,8 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "KernelModel.h"
 #include "../DriverScenario.h"
+#include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
 #include <algorithm>
@@ -52,16 +52,14 @@ KernelModel::pnpDeviceForPDO(uint64_t PDO) const {
   return nullptr;
 }
 
-llvm::Expected<uint64_t>
-KernelModel::pnpDeviceForRoute(uint64_t Device) const {
+llvm::Expected<uint64_t> KernelModel::pnpDeviceForRoute(uint64_t Device) const {
   auto Route = deviceStack(Device);
   if (!Route)
     return Route.takeError();
   uint64_t Identity = 0;
   for (uint64_t Address : *Route) {
-    const uint64_t Owner = isProviderDevice(Address)
-                               ? Address
-                               : Devices.at(Address).PnpDevice;
+    const uint64_t Owner =
+        isProviderDevice(Address) ? Address : Devices.at(Address).PnpDevice;
     if (!Owner)
       continue;
     if (!pnpDeviceForPDO(Owner))
@@ -123,6 +121,16 @@ llvm::Error KernelModel::preparePnpDevices() {
     Record.PDO = Created->Address;
     Record.ResultIndex = Index;
     Record.BusResourceFree = true;
+    Record.InitialReportedDevicePower = Configured.InitialReportedDevicePower;
+    Record.RequestedDevicePower = Configured.RequestedDevicePower;
+    Devices.at(Created->Address).ReportedDevicePower =
+        Configured.InitialReportedDevicePower;
+    auto Flags = Memory.readInteger(Created->Address + DeviceFlagsOffset, 4);
+    if (!Flags)
+      return Flags.takeError();
+    if (auto E = Memory.writeInteger(Created->Address + DeviceFlagsOffset,
+                                     *Flags | DevicePowerPageable, 4))
+      return E;
     PnpDevices.emplace(Configured.ID, Record);
   }
   PnpDevicesPrepared = true;
@@ -136,12 +144,14 @@ KernelModel::beginAddDevice(llvm::StringRef ID) {
     return pnpDeviceError("AddDevice requires a configured PDO identity");
   auto &Device = Found->second;
   if (Device.AddDeviceStatus || Device.AddDeviceActive ||
-      std::any_of(PnpDevices.begin(), PnpDevices.end(),
-                  [](const auto &Entry) { return Entry.second.AddDeviceActive; }))
+      std::any_of(PnpDevices.begin(), PnpDevices.end(), [](const auto &Entry) {
+        return Entry.second.AddDeviceActive;
+      }))
     return pnpDeviceError("AddDevice can execute only once and serially");
   if (!isProviderDevice(Device.PDO) || Unloading || Unloaded ||
       !Requests.empty() || CurrentIRQL != scheduler::PassiveLevel)
-    return pnpDeviceError("AddDevice requires a live idle PDO at PASSIVE_LEVEL");
+    return pnpDeviceError(
+        "AddDevice requires a live idle PDO at PASSIVE_LEVEL");
   if (auto E = snapshot())
     return E;
   if (!Result.AddDevice)
@@ -180,9 +190,9 @@ llvm::Error KernelModel::finishAddDevice(llvm::StringRef ID, uint32_t Status) {
   const bool HasReferences =
       PDO.Lower || PDO.Upper || PDO.InternalReferences ||
       Scheduler.hasOutstanding(Device.PDO) ||
-      std::any_of(WorkItems.begin(), WorkItems.end(), [&](const auto &Entry) {
-        return Entry.second == Device.PDO;
-      }) ||
+      std::any_of(
+          WorkItems.begin(), WorkItems.end(),
+          [&](const auto &Entry) { return Entry.second == Device.PDO; }) ||
       std::any_of(Files.begin(), Files.end(), [&](const auto &Entry) {
         return Entry.second.Device == Device.PDO;
       });
@@ -208,8 +218,9 @@ llvm::Error KernelModel::retirePnpProvider(uint64_t PDO) {
       Scheduler.hasOutstanding(PDO) ||
       std::any_of(WorkItems.begin(), WorkItems.end(),
                   [PDO](const auto &Entry) { return Entry.second == PDO; }) ||
-      std::any_of(Files.begin(), Files.end(),
-                  [PDO](const auto &Entry) { return Entry.second.Device == PDO; }) ||
+      std::any_of(
+          Files.begin(), Files.end(),
+          [PDO](const auto &Entry) { return Entry.second.Device == PDO; }) ||
       std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
         const auto &Request = Entry.second;
         return Request.Device == PDO ||
@@ -260,6 +271,8 @@ llvm::Error KernelModel::snapshotPnpDevices() {
     if (!State)
       return State.takeError();
     Observation.PnpState = State->Pnp;
+    Observation.DevicePower = State->DevicePower;
+    Observation.SystemPower = State->SystemPower;
   }
   return llvm::Error::success();
 }

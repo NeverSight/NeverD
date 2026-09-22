@@ -33,9 +33,13 @@ const char *requestKindName(DriverRequestKind Kind) {
 }
 
 bool scenarioSucceeded(const DriverResult &Result) {
+  const size_t ScenarioRequests =
+      llvm::count_if(Result.Requests, [](const DriverRequestResult &Request) {
+        return Request.Origin == DriverRequestOrigin::Scenario;
+      });
   if (Result.Stop != DriverStopReason::Returned || !Result.NTStatus ||
       *Result.NTStatus != 0 ||
-      Result.Requests.size() != Result.Configuration.Requests.size() ||
+      ScenarioRequests != Result.Configuration.Requests.size() ||
       Result.PnpDevices.size() != Result.Configuration.PnpDevices.size() ||
       (Result.Configuration.Unload && !Result.UnloadCompleted))
     return false;
@@ -126,19 +130,96 @@ const char *systemPowerName(SystemPowerState State) {
   llvm_unreachable("invalid driver system power state");
 }
 
+const char *powerRequestName(DevicePowerRequest Minor) {
+  switch (Minor) {
+#define NEVERD_DRIVER_POWER_REQUEST(Name, Spelling)                            \
+  case DevicePowerRequest::Name:                                               \
+    return Spelling;
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_REQUEST
+  }
+  llvm_unreachable("invalid driver power request");
+}
+
+const char *powerTypeName(DriverPowerType Type) {
+  switch (Type) {
+#define NEVERD_DRIVER_POWER_TYPE(Name, Value, Spelling)                        \
+  case DriverPowerType::Name:                                                  \
+    return Spelling;
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_TYPE
+  }
+  llvm_unreachable("invalid driver power type");
+}
+
+const char *powerActionName(DriverPowerAction Action) {
+  switch (Action) {
+#define NEVERD_DRIVER_POWER_ACTION(Name, Value, Spelling)                      \
+  case DriverPowerAction::Name:                                                \
+    return Spelling;
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_ACTION
+  }
+  llvm_unreachable("invalid driver power action");
+}
+
+const char *requestOriginName(DriverRequestOrigin Origin) {
+  switch (Origin) {
+#define NEVERD_DRIVER_REQUEST_ORIGIN(Name, Spelling)                           \
+  case DriverRequestOrigin::Name:                                              \
+    return Spelling;
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_REQUEST_ORIGIN
+  }
+  llvm_unreachable("invalid driver request origin");
+}
+
+const char *powerStateName(DriverPowerType Type, uint32_t State) {
+  switch (Type) {
+  case DriverPowerType::Device:
+    return devicePowerName(static_cast<DevicePowerState>(State));
+  case DriverPowerType::System:
+    return systemPowerName(static_cast<SystemPowerState>(State));
+  }
+  llvm_unreachable("invalid driver power type");
+}
+
+llvm::json::Object powerOperationJSON(const DriverPowerOperation &Operation) {
+  llvm::json::Object Bus{
+      {field::Status, nullptr},
+      {field::Delay100ns, Operation.BusCompletion.Delay100ns}};
+  if (Operation.BusCompletion.Status)
+    Bus[field::Status] = *Operation.BusCompletion.Status;
+  return llvm::json::Object{
+      {field::Minor, powerRequestName(Operation.Minor)},
+      {field::PowerType, powerTypeName(Operation.Type)},
+      {field::PowerState, powerStateName(Operation.Type, Operation.State)},
+      {field::PowerAction, powerActionName(Operation.Action)},
+      {field::SystemContext, Operation.SystemContext},
+      {field::BusCompletion, std::move(Bus)}};
+}
+
 llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
   llvm::json::Array Devices;
   for (const auto &Device : Options.PnpDevices) {
     llvm::json::Object Item{{field::ID, Device.ID},
                             {field::Bus, busKindName(Device.Bus)},
                             {field::InitialDevicePower, nullptr},
-                            {field::InitialSystemPower, nullptr}};
+                            {field::InitialSystemPower, nullptr},
+                            {field::InitialReportedDevicePower, nullptr}};
     if (Device.InitialDevicePower)
       Item[field::InitialDevicePower] =
           devicePowerName(*Device.InitialDevicePower);
     if (Device.InitialSystemPower)
       Item[field::InitialSystemPower] =
           systemPowerName(*Device.InitialSystemPower);
+    if (Device.InitialReportedDevicePower)
+      Item[field::InitialReportedDevicePower] =
+          devicePowerName(*Device.InitialReportedDevicePower);
+    llvm::json::Array Responses;
+    for (const auto &Response : Device.RequestedDevicePower)
+      Responses.push_back(powerOperationJSON(Response));
+    Item[field::RequestedDevicePower] = std::move(Responses);
     Devices.push_back(std::move(Item));
   }
   return Devices;
@@ -219,21 +300,29 @@ std::string driverResultJSON(const DriverResult &Result) {
     Functions.push_back(Address(Function));
   Root[field::MajorFunctions] = std::move(Functions);
   llvm::json::Array Devices;
-  for (const auto &Device : Result.Devices)
-    Devices.push_back(
-        llvm::json::Object{{field::Address, Address(Device.Address)},
-                           {field::Extension, Address(Device.Extension)},
-                           {field::Type, Device.Type},
-                           {field::Name, Device.Name}});
+  for (const auto &Device : Result.Devices) {
+    llvm::json::Object Item{{field::Address, Address(Device.Address)},
+                            {field::Extension, Address(Device.Extension)},
+                            {field::Type, Device.Type},
+                            {field::Name, Device.Name},
+                            {field::ReportedDevicePower, nullptr}};
+    if (Device.ReportedDevicePower)
+      Item[field::ReportedDevicePower] =
+          devicePowerName(*Device.ReportedDevicePower);
+    Devices.push_back(std::move(Item));
+  }
   Root[field::Devices] = std::move(Devices);
   llvm::json::Array PnpDevices;
   for (const auto &Device : Result.PnpDevices) {
-    llvm::json::Object Item{{field::ID, Device.ID},
-                            {field::PDO, Address(Device.PDO)},
-                            {field::AddDeviceStatus, nullptr},
-                            {field::Attached, Device.Attached},
-                            {field::PnpState, pnpStateName(Device.PnpState)},
-                            {field::ProviderPresent, Device.ProviderPresent}};
+    llvm::json::Object Item{
+        {field::ID, Device.ID},
+        {field::PDO, Address(Device.PDO)},
+        {field::AddDeviceStatus, nullptr},
+        {field::Attached, Device.Attached},
+        {field::PnpState, pnpStateName(Device.PnpState)},
+        {field::ProviderPresent, Device.ProviderPresent},
+        {field::DevicePower, devicePowerName(Device.DevicePower)},
+        {field::SystemPower, systemPowerName(Device.SystemPower)}};
     if (Device.AddDeviceStatus)
       Item[field::AddDeviceStatus] = *Device.AddDeviceStatus;
     PnpDevices.push_back(std::move(Item));
@@ -277,6 +366,9 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::Device, Request.Device},
         {field::DeviceID, nullptr},
         {field::Pnp, nullptr},
+        {field::Power, nullptr},
+        {field::Origin, requestOriginName(Request.Origin)},
+        {field::ResponseIndex, nullptr},
         {field::File, Request.File},
         {field::ByteOffset, Address(Request.ByteOffset)},
         {field::ControlCode, Request.ControlCode},
@@ -291,7 +383,10 @@ std::string driverResultJSON(const DriverResult &Result) {
          llvm::toHex(llvm::ArrayRef<uint8_t>(Request.Output), true)}};
     if (!Request.DeviceID.empty())
       Item[field::DeviceID] = Request.DeviceID;
-    if (Request.Kind == DriverRequestKind::Pnp)
+    if (Request.ResponseIndex)
+      Item[field::ResponseIndex] = *Request.ResponseIndex;
+    if (Request.Kind == DriverRequestKind::Pnp ||
+        Request.Kind == DriverRequestKind::Power)
       Item[field::File] = nullptr;
     if (Request.Pnp) {
       const auto &Pnp = *Request.Pnp;
@@ -309,6 +404,33 @@ std::string driverResultJSON(const DriverResult &Result) {
       if (Pnp.BusCompletedAt100ns)
         Observation[field::BusCompletedAt100ns] = *Pnp.BusCompletedAt100ns;
       Item[field::Pnp] = std::move(Observation);
+    }
+    if (Request.Power) {
+      const auto &Power = *Request.Power;
+      llvm::json::Object Observation{
+          {field::Minor, powerRequestName(Power.Minor)},
+          {field::PowerType, powerTypeName(Power.Type)},
+          {field::PowerState, powerStateName(Power.Type, Power.State)},
+          {field::PowerAction, powerActionName(Power.Action)},
+          {field::SystemContext, Power.SystemContext},
+          {field::DeviceStateBefore, devicePowerName(Power.DeviceStateBefore)},
+          {field::DeviceStateAfter, devicePowerName(Power.DeviceStateAfter)},
+          {field::SystemStateBefore, systemPowerName(Power.SystemStateBefore)},
+          {field::SystemStateAfter, systemPowerName(Power.SystemStateAfter)},
+          {field::RequestedDeviceObject, nullptr},
+          {field::BusStatus, nullptr},
+          {field::BusReceivedAt100ns, nullptr},
+          {field::BusCompletedAt100ns, nullptr}};
+      if (Power.RequestedDeviceObject)
+        Observation[field::RequestedDeviceObject] =
+            Address(*Power.RequestedDeviceObject);
+      if (Power.BusStatus)
+        Observation[field::BusStatus] = *Power.BusStatus;
+      if (Power.BusReceivedAt100ns)
+        Observation[field::BusReceivedAt100ns] = *Power.BusReceivedAt100ns;
+      if (Power.BusCompletedAt100ns)
+        Observation[field::BusCompletedAt100ns] = *Power.BusCompletedAt100ns;
+      Item[field::Power] = std::move(Observation);
     }
     if (Request.DispatchStatus)
       Item[field::DispatchStatus] = *Request.DispatchStatus;

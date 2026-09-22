@@ -81,7 +81,19 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// surprise-removal, cancel-remove and remove require status zero. Query-stop
 /// status 0x119 requires unmodeled resource requery and is rejected. PnP
 /// requests forbid device, file, transfer and
-/// cancellation fields. Unknown keys and malformed/excessive requests are
+/// cancellation fields. Optional initial_reported_device_power (D0/D3) is a
+/// separate per-device notification fact; its absence does not imply D0.
+/// Optional requested_device_power is a per-PDO FIFO of explicit device-power
+/// responses, consumed only by matching guest PoRequestPowerIrp calls. Both
+/// those entries and kind="power" requests require minor (query/set),
+/// power_type (device/system), power_state (D0/D3 or working/sleeping3),
+/// power_action (none/sleep), system_context (opaque u32 or 0x string) and
+/// bus_completion. Power requests require device_id and forbid file, transfer
+/// and cancellation fields. System query to working is unsupported. Child
+/// power requests have independent report rows with origin="PoRequestPowerIrp"
+/// and response_index; unused responses do not create observations. At most
+/// NEVERD_DRIVER_SCENARIO_POWER_RESPONSE_LIMIT response entries are accepted
+/// across all PDOs. Unknown keys and malformed/excessive requests are
 /// errors. The original v1 entry point remains initialization-only.
 NEVERD_API const char *
 neverd_emulate_driver_scenario_json(neverd_session_t Sess, const char *Path,

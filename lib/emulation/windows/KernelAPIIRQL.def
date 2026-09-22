@@ -91,6 +91,17 @@ NEVERD_KERNEL_IRQL_API(RtlInitUnicodeString, Dispatch)
 NEVERD_KERNEL_IRQL_API(IofCompleteRequest, Dispatch)
 NEVERD_KERNEL_IRQL_API(IofCallDriver, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoCallDriver, Dispatch)
+// Vista+ forwarding has the IoCallDriver contract. Pageable stacks impose a
+// narrower execution context in the power packet model. PoSet(D3) also narrows
+// the ceiling to APC_LEVEL; PoRequest currently dispatches only at PASSIVE.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-porequestpowerirp
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-posetpowerstate
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-postartnextpowerirp
+NEVERD_KERNEL_IRQL_API(PoCallDriver, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoRequestPowerIrp, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoSetPowerState, Dispatch)
+NEVERD_KERNEL_IRQL_API(PoStartNextPowerIrp, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoAttachDeviceToDeviceStack, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoDetachDevice, Passive)
 NEVERD_KERNEL_IRQL_API(IoCompleteRequest, Dispatch)

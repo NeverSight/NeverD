@@ -3482,14 +3482,14 @@
         "docs/testing.md"
       ],
       "limitations": [
-        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close, configured AddDevice/resource-free PnP and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
+        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close, configured AddDevice/resource-free PnP, explicit pageable Query/Set power and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "WDM stacks contain several DEVICE_OBJECTs owned by the same guest driver. IoAttachDeviceToDeviceStack returns the previous top and derives StackSize/AlignmentRequirement without changing the NextDevice inventory or buffer flags. IoDetachDevice receives the saved lower at PASSIVE_LEVEL; attach permits DISPATCH_LEVEL. Named lower FILE_OBJECT/report identity stays distinct from top dispatch and top READ/WRITE flags; retained routes survive detach/delete through dispatch return. Internal holds do not inflate the open-handle ReferenceCount.",
+        "WDM stacks contain guest-owned DEVICE_OBJECTs and optionally a separately owned scenario PDO. IoAttachDeviceToDeviceStack returns the previous top and derives StackSize/AlignmentRequirement without changing the NextDevice inventory or buffer flags. IoDetachDevice receives the saved lower at PASSIVE_LEVEL; attach permits DISPATCH_LEVEL. Named lower FILE_OBJECT/report identity stays distinct from top dispatch and top READ/WRITE flags; retained routes survive detach/delete through dispatch return. Internal holds do not inflate the open-handle ReferenceCount.",
         "IofCallDriver and the IoCallDriver helper dispatch to the exact retained target; genuine inline Copy/Skip/SetCompletion operate on the original bounded guest IRP stack. Completion clears consumed lower slots before upper callbacks and separates lower NTSTATUS, callback control results and final IoStatus. Success/error/cancel masks and pending propagation are modeled, including propagation after STATUS_PENDING dispatch returns; invoked callbacks own propagation. STATUS_MORE_PROCESSING_REQUIRED and nested completion preserve packet/MDL/buffer lifetime until terminal unwind, with exactly-once retirement.",
-        "KernelGuestCall uses subsystem-owner tags and local tokens for nested WDM/WDF continuations, preserving parent CPU frames and inherited IRQL. WDF attachment/forwarding, attachment to live stacks, intermediate detach, changed forwarded major functions, targets outside retained routes, driver-allocated IRPs, additional PnP operations, power IRPs and hardware/resource models remain unsupported.",
+        "KernelGuestCall uses subsystem-owner tags and local tokens for nested WDM/WDF continuations, preserving parent CPU frames and inherited IRQL. WDF attachment/forwarding, attachment to live stacks, intermediate detach, changed forwarded major functions, targets outside retained routes, driver-allocated IRPs, additional PnP operations and hardware/resource models remain unsupported.",
         "Optional genuine-WDK driver_wdm_stack.c images use NEVERD_WDM_STACK_FIXTURE and NEVERD_WDM_STACK_CFG_FIXTURE. Model/native/public tests cover Copy and Skip, buffered READ/WRITE and file lifecycle, IOCTL completion ordering, worker/DPC completion, MPR waits with direct MDLs, nested completion, malformed cursors and normal/active-CFG rebasing. Missing artifacts skip explicitly; evidence remains Linux-only.",
         "Public DriverPnp.h and DeviceLifecycle.def own lifecycle enums; pnp_devices explicitly supplies up to 64 unique case-sensitive ASCII IDs of 1-64 bytes (leading alphanumeric, then alphanumeric/_/-/.), resource_free bus, D0 device power and working system power. No missing hardware/power facts are guessed. Ordinary device_id and device selectors are exclusive; PnP requires device_id, minor and bus_completion and rejects file/transfer/cancellation fields even when zero. JSON/native preflight share the same contract.",
-        "The eight public common PnP minors are Start, QueryRemove, CancelRemove, Remove, QueryStop, Stop, CancelStop and SurpriseRemoval. Every configured bus completion requires an explicit final 32-bit status, rejects STATUS_PENDING, and accepts optional nonnegative delay_100ns through INT64_MAX from actual provider receipt. Stop/CancelStop/SurpriseRemoval/CancelRemove/Remove require exactly STATUS_SUCCESS (0). Shared devicePnpFinalStatusError validates both configured bus policy and final guest completion. QueryStop STATUS_RESOURCE_REQUIREMENTS_CHANGED (0x119) is explicitly unsupported because it requests resource requery. Other PnP operations, power IRPs, physical resources, relations/capabilities, hardware and KMDF PnP remain unsupported.",
+        "The eight public common PnP minors are Start, QueryRemove, CancelRemove, Remove, QueryStop, Stop, CancelStop and SurpriseRemoval. Every configured bus completion requires an explicit final 32-bit status, rejects STATUS_PENDING, and accepts optional nonnegative delay_100ns through INT64_MAX from actual provider receipt. Stop/CancelStop/SurpriseRemoval/CancelRemove/Remove require exactly STATUS_SUCCESS (0). Shared devicePnpFinalStatusError validates both configured bus policy and final guest completion. QueryStop STATUS_RESOURCE_REQUIREMENTS_CHANGED (0x119) is explicitly unsupported because it requests resource requery. Other PnP operations, general power policy, physical resources, relations/capabilities, hardware and KMDF PnP remain unsupported.",
         "After successful DriverEntry, each configured PDO invokes the actual guest AddDevice callback once in add_device:<ID>. Provider-owned PDO/DRIVER_OBJECT inventory remains separate from the guest driver and cannot be deleted, mutated or impersonated by guest code. Successful filters may decline attachment. Failed AddDevice records its status and retires only a clean provider; new guest devices left behind, including detached leaks, cause ModelError without fabricated cleanup.",
         "PnP IRPs share the existing captured route, guest stack and completion authority; they are KernelMode, file-free/resource-free and initially STATUS_NOT_SUPPORTED. Only actual provider receipt consumes the configured response; timed completion participates in the virtual scheduler without inventing a guest callback. Final upper completion owns lifecycle commit/rollback and may differ from the recorded bus status; successful PnP requires actual completed bus forwarding. Early Start/QueryStop/QueryRemove guest failure can leave bus observations null.",
         "Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE reach real guest dispatch outside Removing/Removed; model stop, remove-pending and power state do not synthesize an I/O refusal. Guest code may complete software operations, reject them or hold them. Immutable FDO/PDO and FILE_OBJECT lifecycle identity survives detach. The public runner is serial; a held IRP without a currently available producer cannot wait for a later scenario start or cleanup request and is an explicit stalled ModelError. Normal Remove from Started still requires successful query; closed files and drained earlier requests/callbacks before Remove are bounded-profile restrictions. Providers must be absent before unload; guest and provider retirement remain independent.",
@@ -3508,8 +3508,8 @@
         "Input/output WdmMdl retrieval lazily describes existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each direction is validated as nonempty before reuse; one cache per request preserves the first successful direction's ByteCount. The safe mapping helper returns the original VA; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output preserve IRP.MdlAddress without mapping on retrieval; direct IOCTL input uses the SystemBuffer cache. Completion retires descriptors with packet/buffers; METHOD_NEITHER and physical PFNs remain unsupported.",
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
-        "wdm-x64-scheduled-v9 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
+        "wdm-x64-scheduled-v10 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
@@ -3525,7 +3525,14 @@
         "zero-output IOCTLs preserve driver-defined IoStatus.Information without treating it as a transfer length; information_hex preserves all 64 bits alongside the compatible numeric information field",
         "CPU write records are attempted guest writes outside the stack, may include a faulting write and exclude model API writes; object snapshots describe observed state at termination",
         "the existing C API remains initialization-only; the added scenario C API and CLI --scenario route share strict preflight, preserve the session image and require unchanged input files",
-        "current execution evidence is limited to Linux hosts with Clang and lld-link fixture tools; no macOS or Windows host validation is claimed and the Python SDK provides only raw ABI bindings"
+        "current execution evidence is limited to Linux hosts with Clang and lld-link fixture tools; no macOS or Windows host validation is claimed and the Python SDK provides only raw ABI bindings",
+        "DriverPower.def and DriverPowerOperation share strict scenario and per-PDO response packet facts: query/set, device/system, D0/D3 or working/sleeping3, none/sleep action, explicit opaque 32-bit system_context, and required final bus_completion status with optional delay. System query to working is unsupported. Power requests are file-free and forbid transfer/cancellation fields. JSON/native preflight share type, enum, target and count checks.",
+        "The power execution profile requires DO_POWER_PAGABLE without DO_POWER_INRUSH on the captured route and PASSIVE_LEVEL dispatch and PoRequestPowerIrp. PoCallDriver forwards the original owned power IRP; Vista+ PoStartNextPowerIrp validates lifetime without inventing a serialization token. General policy, WAIT_WAKE, shutdown/hibernate, other states/actions, nonpageable/inrush routes, hardware and KMDF PnP remain unsupported.",
+        "Optional initial_reported_device_power explicitly seeds D0/D3 notification state separately for the provider PDO and each first-associated guest DEVICE_OBJECT. PoSetPowerState returns and updates only that object's previous value, independently of lifecycle transactions; missing seed fails without guessing. D0 notification permits DISPATCH_LEVEL, D3 requires IRQL <= APC_LEVEL.",
+        "Each PDO owns an independent requested_device_power FIFO, at most 64 templates across all PDOs. Only an actual PoRequestPowerIrp matching the PDO queue-head minor and target consumes a device-type template; absent/mismatched policy fails and unused templates create no observation. Callback context never determines a parent. Actual children have separate IRPs and report rows with origin PoRequestPowerIrp and zero-based response_index; scenario rows use origin scenario and null response_index.",
+        "Real PoRequestPowerIrp Query/Set uses six API arguments with a null output-IRP pointer. Its terminal five-argument void callback receives the original API device, minor, state, context and a distinct completed IO_STATUS_BLOCK snapshot. Inline child completion can precede the API STATUS_PENDING return; callbacks may wait and retain their snapshot until return. A system S0 parent may complete before its independent D0 child; parent result and packet storage are not reused.",
+        "Reports add nullable power, per-row origin/response_index, explicit packet facts, device/system before/after, original requested_device_object and actual nullable bus status/receipt/completion times. Final PnP snapshots add device_power/system_power; live devices add nullable reported_device_power. scenario_success matches only scenario-origin count while requiring all actual scenario and child rows to complete successfully; unused FIFO entries do not fail the scenario.",
+        "Original genuine-WDK driver_wdm_power.c uses optional NEVERD_WDM_POWER_FIXTURE/NEVERD_WDM_POWER_CFG_FIXTURE. Native normal/active-CFG rebasing covers Query/Set, independent delayed children, inline and S0-before-D0 completion, callback waits, workers, null callbacks, query failures and independent PDO notification/FIFO state. C API/CLI execute six scenario requests and three real children; missing artifacts skip explicitly and execution evidence remains Linux-only."
       ],
       "tests": [
         {
@@ -5171,6 +5178,123 @@
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverKMDFControlTests.cpp",
           "filter": "DriverKMDFControl.RequestCleanupKeepsBuffersAndReferenceKeepsContext",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverPowerScenarioTests.cpp",
+          "filter": "DriverPowerScenario.ExplicitPacketFactsPreserveOpaqueContext",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverPowerScenarioTests.cpp",
+          "filter": "DriverPowerScenario.TypesTargetsActionsAndContextHaveStrictBoundaries",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverPowerScenarioTests.cpp",
+          "filter": "DriverPowerScenario.ResponseLimitCountsAllDevicesIndependentlyOfRequests",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverPowerScenarioTests.cpp",
+          "filter": "DriverPowerScenario.ObservedChildrenHaveIndependentRowsAndResponseIdentity",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPowerRequestTests.cpp",
+          "filter": "KernelPowerRequest.DevicePacketUsesExactFileFreeKernelModeAbi",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPowerRequestTests.cpp",
+          "filter": "KernelPowerRequest.VistaStartNextHasNoHandshakeOrCompletionSideEffect",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPowerCompletionTests.cpp",
+          "filter": "KernelPowerCompletion.SynchronousChildHasItsOwnResultAndVoidCallback",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelPowerCompletionTests.cpp",
+          "filter": "KernelPowerCompletion.SnapshotRemainsLiveAcrossWaitAndWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMPowerTests.cpp",
+          "filter": "DriverWDMPower.VistaS0CompletesBeforeDelayedD0ChildWithoutParentReuse",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMPowerTests.cpp",
+          "filter": "DriverWDMPower.TwoPdosKeepNotificationSeedsAndResponseFifosIndependent",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMPowerTests.cpp",
+          "filter": "DriverWDMPower.MissingOrMismatchedChildResponseNeverInventsCompletion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIObserveIndependentPowerChildren",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIRejectIncompletePowerFactsBeforeLoading",
           "platforms": [
             "linux"
           ]

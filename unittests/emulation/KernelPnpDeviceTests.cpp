@@ -1,5 +1,4 @@
-//===- KernelPnpDeviceTests.cpp - Provider PDO and AddDevice ownership
-//-----===//
+//===- KernelPnpDeviceTests.cpp - PDO and AddDevice ownership ------------===//
 //
 // NeverD Decompiler
 //
@@ -134,7 +133,8 @@ TEST_F(KernelPnpDevice, ProviderAndGuestKeepSeparateDriverDeviceLists) {
   EXPECT_EQ(get(Owner + DriverDeviceHead), B);
   EXPECT_EQ(get(B + DeviceNext), A);
   EXPECT_EQ(get(A + DeviceNext), 0u);
-  EXPECT_EQ(get(A + DeviceFlagsOffset, 4), DeviceBusEnumerated);
+  EXPECT_EQ(get(A + DeviceFlagsOffset, 4),
+            DeviceBusEnumerated | DevicePowerPageable);
   const auto Fdo = createFdo();
   EXPECT_EQ(get(Model->driverObject() + DriverDeviceHead), Fdo);
   EXPECT_EQ(get(Fdo + DeviceNext), 0u);

@@ -16,6 +16,10 @@ set(NEVERD_WDM_PNP_FIXTURE "" CACHE FILEPATH
   "Optional original WDM PnP fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_PNP_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK PnP fixture linked with active CFG")
+set(NEVERD_WDM_POWER_FIXTURE "" CACHE FILEPATH
+  "Optional original WDM power fixture linked with genuine WDK libraries")
+set(NEVERD_WDM_POWER_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK power fixture linked with active CFG")
 if(NOT NEVERD_TEST_CLANG_EXECUTABLE OR NOT NEVERD_DRIVER_LLD_LINK)
   message(STATUS "Driver emulation fixtures unavailable: Clang and lld-link are required")
   return()
@@ -216,6 +220,31 @@ foreach(_driver_pnp_variable NEVERD_WDM_PNP_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_power_definitions)
+set(_driver_has_wdm_power_fixture FALSE)
+foreach(_driver_power_variable NEVERD_WDM_POWER_FIXTURE
+    NEVERD_WDM_POWER_CFG_FIXTURE)
+  if(_driver_power_variable STREQUAL "NEVERD_WDM_POWER_CFG_FIXTURE"
+      AND NOT _driver_has_wdm_power_fixture)
+    message(STATUS "Driver WDM power CFG tests skipped: NEVERD_WDM_POWER_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(NOT "${${_driver_power_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_power_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_power_variable}}")
+    get_filename_component(_driver_power_path
+      "${${_driver_power_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_power_definitions
+      "${_driver_power_variable}=\"${_driver_power_path}\"")
+    if(_driver_power_variable STREQUAL "NEVERD_WDM_POWER_FIXTURE")
+      set(_driver_has_wdm_power_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM power fixture ${_driver_power_variable}: ${_driver_power_path}")
+  else()
+    message(STATUS "Driver WDM power tests requiring ${_driver_power_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
   DriverSessionTests.cpp
   DriverLoaderAdvancedTests.cpp
@@ -224,6 +253,7 @@ add_neverd_unittest(NeverDDriverEmulationTests
   DriverKMDFControlTests.cpp
   DriverWDMStackTests.cpp
   DriverWDMPnpTests.cpp
+  DriverWDMPowerTests.cpp
   DriverIOTests.cpp
   ExecutionPolicyTests.cpp
   DriverScenarioTests.cpp
@@ -240,8 +270,11 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelPnpRequestTests.cpp
   KernelPnpDeviceTests.cpp
   DriverPnpScenarioTests.cpp
+  DriverPowerScenarioTests.cpp
   KernelIRPStackTests.cpp
   KernelPnpCompletionTests.cpp
+  KernelPowerRequestTests.cpp
+  KernelPowerCompletionTests.cpp
   BackendFaultTests.cpp
   BackendContextTests.cpp
   KernelSchedulerTests.cpp
@@ -268,7 +301,8 @@ target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   NEVERD_DRIVER_IO_FIXTURE="${_driver_fixture_dir}/driver_io.sys"
   ${_driver_kmdf_definitions}
   ${_driver_wdm_stack_definitions}
-  ${_driver_wdm_pnp_definitions})
+  ${_driver_wdm_pnp_definitions}
+  ${_driver_wdm_power_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -286,7 +320,8 @@ if(TARGET neverd_shared AND TARGET neverd)
     NEVERD_DRIVER_CLI="$<TARGET_FILE:neverd>"
     ${_driver_kmdf_definitions}
     ${_driver_wdm_stack_definitions}
-  ${_driver_wdm_pnp_definitions})
+  ${_driver_wdm_pnp_definitions}
+  ${_driver_wdm_power_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

@@ -29,19 +29,32 @@ llvm::Error providerError(const llvm::Twine &Message) {
 
 llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
                                                          uint64_t IRP) {
-  if (CurrentIRQL >= scheduler::DispatchLevel)
-    return providerError("PnP forwarding requires IRQL below DISPATCH_LEVEL");
   auto *Request = requestForIRP(IRP);
   const auto *Provider = pnpDeviceForPDO(Device);
   if (!Request || Request->Completed || !isProviderDevice(Device) ||
-      !Provider || !Provider->BusResourceFree || Request->PnpDevice != Device ||
-      Request->Kind != DriverRequestKind::Pnp || !Request->PnpOperation)
+      !Provider || !Provider->BusResourceFree || Request->PnpDevice != Device)
+    return providerError("dispatch requires its configured resource-free IRP");
+  const DriverBusCompletion *Response = nullptr;
+  uint8_t ExpectedMinor = 0;
+  if (Request->Kind == DriverRequestKind::Pnp && Request->PnpOperation) {
+    if (CurrentIRQL >= scheduler::DispatchLevel)
+      return providerError("PnP forwarding requires IRQL below DISPATCH_LEVEL");
+    if (auto E = validateDriverPnpOperation(*Request->PnpOperation))
+      return E;
+    Response = &Request->PnpOperation->BusCompletion;
+    ExpectedMinor = uint8_t(Request->PnpOperation->Minor);
+  } else if (Request->Kind == DriverRequestKind::Power &&
+             Request->PowerOperation) {
+    if (CurrentIRQL != scheduler::PassiveLevel)
+      return providerError("pageable power forwarding requires PASSIVE_LEVEL");
+    if (auto E = validateDriverPowerOperation(*Request->PowerOperation))
+      return E;
+    Response = &Request->PowerOperation->BusCompletion;
+    ExpectedMinor = uint8_t(Request->PowerOperation->Minor);
+  } else {
     return providerError(
-        "dispatch requires its configured resource-free PnP IRP");
-  const auto &Operation = *Request->PnpOperation;
-  if (auto E = validateDriverPnpOperation(Operation))
-    return E;
-  const auto &Response = Operation.BusCompletion;
+        "dispatch requires a configured PnP or power operation");
+  }
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return providerError("cannot replace a pending guest callback");
   auto Stack = currentRequestStack(IRP);
@@ -50,46 +63,85 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
   auto Minor = Memory.readInteger(*Stack + StackMinorOffset, 1);
   if (!Minor)
     return Minor.takeError();
-  if (*Minor != uint8_t(Operation.Minor))
+  if (*Minor != ExpectedMinor)
     return providerError(
-        "raw PnP minor does not match the configured operation");
-  auto &Observation = Result.Requests[Request->ResultIndex].Pnp;
-  if (!Observation)
-    return providerError("request lost its PnP observation");
-  if (Observation->BusReceivedAt100ns || ProviderCompletions.count(IRP))
+        Request->PowerOperation
+            ? "raw power minor does not match the configured operation"
+            : "raw PnP minor does not match the configured operation");
+  if (Request->PowerOperation) {
+    const auto &Operation = *Request->PowerOperation;
+    for (const auto &[Offset, Expected] :
+         std::initializer_list<std::pair<uint64_t, uint32_t>>{
+             {StackPowerSystemContextOffset, Operation.SystemContext},
+             {StackPowerTypeOffset, uint32_t(Operation.Type)},
+             {StackPowerStateOffset, Operation.State},
+             {StackPowerActionOffset, uint32_t(Operation.Action)}}) {
+      auto Actual = Memory.readInteger(*Stack + Offset, 4);
+      if (!Actual)
+        return Actual.takeError();
+      if (*Actual != Expected)
+        return providerError("raw power parameters changed while forwarding");
+    }
+  }
+  auto &Observation = Result.Requests[Request->ResultIndex];
+  const auto Received = Observation.Pnp ? Observation.Pnp->BusReceivedAt100ns
+                        : Observation.Power
+                            ? Observation.Power->BusReceivedAt100ns
+                            : std::optional<uint64_t>{};
+  if (!Observation.Pnp && !Observation.Power)
+    return providerError("request lost its bus observation");
+  if (Received || ProviderCompletions.count(IRP))
     return providerError("configured bus response was already dispatched");
-  auto Deadline = Scheduler.computeDeadline(-int64_t(Response.Delay100ns));
+  auto Deadline = Scheduler.computeDeadline(-int64_t(Response->Delay100ns));
   if (!Deadline)
     return Deadline.takeError();
   // This probe shares all cursor, invocation-mask and upper-device decisions
   // with real completion. It publishes neither status nor completion progress.
-  auto Plan = planIRPCompletion(IRP, *Response.Status);
+  auto Plan = planIRPCompletion(IRP, *Response->Status);
   if (!Plan)
     return Plan.takeError();
   if (NextIRPCall == UINT64_MAX || NextProviderSequence == UINT64_MAX)
     return providerError("completion identity exhausted");
-  if (Response.Delay100ns) {
+  if (Response->Delay100ns) {
     if (auto E = markRequestPending(IRP))
       return E;
     ProviderCompletions.emplace(IRP, ProviderCompletion{Device, *Deadline,
                                                         NextProviderSequence++,
-                                                        *Response.Status});
-    Observation->BusReceivedAt100ns = Scheduler.now100ns();
+                                                        *Response->Status});
+    if (Observation.Pnp)
+      Observation.Pnp->BusReceivedAt100ns = Scheduler.now100ns();
+    else
+      Observation.Power->BusReceivedAt100ns = Scheduler.now100ns();
     return StatusPending;
   }
-  if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, *Response.Status, 4))
+  // Completion can finalize a generated child; preserve the configured value
+  // before any operation that can retire its owning request record.
+  const uint32_t Status = *Response->Status;
+  if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, Status, 4))
     return E;
   if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
     return E;
   Request->IOStatusWritten.fill(true);
-  Observation->BusReceivedAt100ns = Scheduler.now100ns();
-  Observation->BusStatus = *Response.Status;
-  Observation->BusCompletedAt100ns = Scheduler.now100ns();
+  auto Publish = [&](auto &Bus) {
+    Bus.BusReceivedAt100ns = Scheduler.now100ns();
+    Bus.BusStatus = Status;
+    Bus.BusCompletedAt100ns = Scheduler.now100ns();
+  };
+  if (Observation.Pnp)
+    Publish(*Observation.Pnp);
+  else
+    Publish(*Observation.Power);
+  if (Request->PowerOperation &&
+      Request->PowerOperation->Type == DriverPowerType::Device &&
+      Request->PowerOperation->Minor == DevicePowerRequest::Set &&
+      !(Status & profile::NTStatusFailureMask))
+    Devices.at(Device).ReportedDevicePower =
+        static_cast<DevicePowerState>(Request->PowerOperation->State);
   if (auto E = completeRequest(IRP, 0))
     return E;
   if (PendingWdmCall)
-    IRPCalls.at(PendingWdmCall->Token.ID).ReturnValue = *Response.Status;
-  return *Response.Status;
+    IRPCalls.at(PendingWdmCall->Token.ID).ReturnValue = Status;
+  return Status;
 }
 
 llvm::Error KernelModel::processProviderCompletions() {
@@ -110,11 +162,8 @@ llvm::Error KernelModel::processProviderCompletions() {
     if (!Plan)
       return Plan.takeError();
     if (Plan->PC)
-      Callbacks.push_back({IRP,
-                           Provider.Device,
-                           profile::WorkerThreadIdentity,
-                           Plan->PC,
-                           {Plan->Device, IRP, Plan->Context}});
+      Callbacks.push_back({IRP, Provider.Device, profile::WorkerThreadIdentity,
+                           Plan->PC, Plan->Arguments});
     Due.push_back({IRP, Provider, std::move(*Plan)});
   }
   if (Due.empty())
@@ -140,11 +189,23 @@ llvm::Error KernelModel::processProviderCompletions() {
     if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
       return E;
     Request.IOStatusWritten.fill(true);
-    auto &Observation = Result.Requests[Request.ResultIndex].Pnp;
-    if (!Observation)
-      return providerError("completed request lost its PnP observation");
-    Observation->BusStatus = Completion.Provider.Status;
-    Observation->BusCompletedAt100ns = Scheduler.now100ns();
+    auto &Observation = Result.Requests[Request.ResultIndex];
+    auto Publish = [&](auto &Bus) {
+      Bus.BusStatus = Completion.Provider.Status;
+      Bus.BusCompletedAt100ns = Scheduler.now100ns();
+    };
+    if (Observation.Pnp)
+      Publish(*Observation.Pnp);
+    else if (Observation.Power)
+      Publish(*Observation.Power);
+    else
+      return providerError("completed request lost its bus observation");
+    if (Request.PowerOperation &&
+        Request.PowerOperation->Type == DriverPowerType::Device &&
+        Request.PowerOperation->Minor == DevicePowerRequest::Set &&
+        !(Completion.Provider.Status & profile::NTStatusFailureMask))
+      Devices.at(Completion.Provider.Device).ReportedDevicePower =
+          static_cast<DevicePowerState>(Request.PowerOperation->State);
     ProviderCompletions.erase(IRP);
     if (auto E = completeRequest(IRP, 0)) {
       ProviderCompletions.emplace(IRP, Completion.Provider);
@@ -157,8 +218,7 @@ llvm::Error KernelModel::processProviderCompletions() {
       continue;
     if (Call->Token.Owner != GuestCallOwner::WDM ||
         Call->PC != Completion.Plan.PC ||
-        Call->Arguments != std::vector<uint64_t>{Completion.Plan.Device, IRP,
-                                                 Completion.Plan.Context})
+        Call->Arguments != Completion.Plan.Arguments)
       return providerError("completion callback changed after preflight");
     auto ID = Scheduler.enqueueWDMCompletion(
         {IRP, Completion.Provider.Device, profile::WorkerThreadIdentity,

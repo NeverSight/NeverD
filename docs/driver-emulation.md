@@ -52,15 +52,15 @@ establish compatibility with arbitrary third-party drivers.
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, serial buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or WDM request cancellation |
+| `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | physical page identities, DMA and user mappings |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
-| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or WDM request cancellation; `METHOD_NEITHER` and implicit file position |
+| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation; `METHOD_NEITHER` and implicit file position |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
-| PnP bus/function/filter driver | Explicit resource-free PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, power IRPs, hardware/resources and KMDF PnP |
+| PnP bus/function/filter driver | Explicit resource-free PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, hardware/resources and KMDF PnP |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
-| Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent IRPs or WDM request cancellation |
+| Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Unsupported environment | Device models, physical memory, buses, interrupts and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
@@ -110,7 +110,7 @@ instruction, memory, observation and wall-clock budgets still apply.
 
 This is a bounded scheduling model, not full Windows asynchronous support.
 Alertable or user-mode waits, system threads, APCs, WDM request cancellation,
-spinlocks, concurrent IRPs, general IRQL transitions, `METHOD_NEITHER`,
+spinlocks, concurrent scenario-submitted IRPs, general IRQL transitions, `METHOD_NEITHER`,
 UMDF, KMDF PnP devices and general queue scheduling, full PnP/power, hardware, DMA and interrupts remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
 inventing requests or unload.
@@ -130,7 +130,7 @@ WDM stacks can contain several device objects owned by the same guest driver. `I
 
 `IofCallDriver` and the `IoCallDriver` helper invoke the exact target on that retained route. Real inline `IoCopyCurrentIrpStackLocationToNext`, `IoSkipCurrentIrpStackLocation` and `IoSetCompletionRoutine` operate on the original guest IRP; cursor, count and control flags are validated. Lower dispatch returns its actual status independently of `IoStatus` and completion-routine return values. Completion advances the cursor, selects callbacks using success/error/cancel flags and carries pending state upward; a completion routine owns its pending propagation, including after an earlier `STATUS_PENDING` dispatch return. `STATUS_MORE_PROCESSING_REQUIRED` stops unwinding without retiring the IRP, MDLs or buffers; later completion resumes it. Nested completion is supported with the required outer stop result, and terminal unwinding retires storage once. Owner-tagged continuations preserve nested WDM/WDF caller frames and inherited IRQL. Each consumed lower stack location is cleared before the upper completion callback runs.
 
-Power IRPs, driver-allocated IRPs, additional PnP minors and hardware/resource models remain unsupported. WDF attachment/forwarding, attaching to stacks with live files or callbacks, detaching an intermediate layer, changing the forwarded major function and targeting devices outside the captured route fail explicitly. Optional genuine-WDK `driver_wdm_stack.c` images use `NEVERD_WDM_STACK_FIXTURE` and `NEVERD_WDM_STACK_CFG_FIXTURE`; native and C API/CLI coverage includes relocation, with missing artifacts explicitly skipped. Execution evidence remains Linux-only.
+Driver-allocated IRPs, additional PnP minors and hardware/resource models remain unsupported. WDF attachment/forwarding, attaching to stacks with live files or callbacks, detaching an intermediate layer, changing the forwarded major function and targeting devices outside the captured route fail explicitly. Optional genuine-WDK `driver_wdm_stack.c` images use `NEVERD_WDM_STACK_FIXTURE` and `NEVERD_WDM_STACK_CFG_FIXTURE`; native and C API/CLI coverage includes relocation, with missing artifacts explicitly skipped. Execution evidence remains Linux-only.
 
 A scenario can explicitly configure `pnp_devices` (at most 64). Every entry requires `id`, `bus: "resource_free"`, `initial_device_power: "D0"` and `initial_system_power: "working"`; omitted facts are not guessed. IDs are case-sensitive ASCII, 1–64 bytes, beginning with an alphanumeric character and otherwise containing only alphanumerics, `_`, `-` or `.`. Ordinary requests may select a configured `device_id` instead of `device`; the two selectors are exclusive. A `kind: "pnp"` request requires `device_id`, `minor` and `bus_completion`. Supported minors are `start`, `query_remove`, `cancel_remove`, `remove`, `query_stop`, `stop`, `cancel_stop`, and `surprise_removal`. `bus_completion.status` is required as a 32-bit integer or hexadecimal string; optional `delay_100ns` is a nonnegative integer at most INT64_MAX, measured from actual provider receipt. `STATUS_PENDING` is not a final bus status; stop/cancel-stop/surprise-removal/cancel-remove/remove require exactly `STATUS_SUCCESS` (0). PnP requests reject file, transfer and cancellation fields, even when zero. The C++ API applies the same preflight.
 
@@ -155,13 +155,21 @@ A scenario can explicitly configure `pnp_devices` (at most 64). Every entry requ
 }
 ```
 
-After successful DriverEntry, `AddDevice` runs once per configured PDO with a separate provider-owned `DRIVER_OBJECT`; the guest cannot delete or impersonate provider objects. PnP IRPs are `KernelMode`, file-free and resource-free, initially `STATUS_NOT_SUPPORTED`. The bus response is consumed only if forwarding reaches that PDO; delayed completion uses the shared virtual clock and existing completion continuations. Final upper completion commits or rolls back lifecycle state independently of the bus status. Normal removal from Started requires a successful query, closed files, drained prior requests/callbacks and guest detach/delete. Clean AddDevice failure retires only the provider; leaked new guest devices cause `model_error`, including detached devices. All providers must be absent before unload. This does not implement other PnP minors, power IRPs, hardware/resources or KMDF PnP. PnP success requires actual provider completion; an early START/QUERY_STOP/QUERY_REMOVE failure may retain null bus observations. Device/file lifecycle identity persists after detach.
+After successful DriverEntry, `AddDevice` runs once per configured PDO with a separate provider-owned `DRIVER_OBJECT`; the guest cannot delete or impersonate provider objects. PnP IRPs are `KernelMode`, file-free and resource-free, initially `STATUS_NOT_SUPPORTED`. The bus response is consumed only if forwarding reaches that PDO; delayed completion uses the shared virtual clock and existing completion continuations. Final upper completion commits or rolls back lifecycle state independently of the bus status. Normal removal from Started requires a successful query, closed files, drained prior requests/callbacks and guest detach/delete. Clean AddDevice failure retires only the provider; leaked new guest devices cause `model_error`, including detached devices. All providers must be absent before unload. This does not implement other PnP minors, hardware/resources or KMDF PnP. PnP success requires actual provider completion; an early START/QUERY_STOP/QUERY_REMOVE failure may retain null bus observations. Device/file lifecycle identity persists after detach.
 
 Reports retain the initial inventory in `configuration.pnp_devices`. Observed `pnp_devices` entries contain `id`, `pdo`, nullable `add_device_status`, current `attached`, `pnp_state` and `provider_present`; removal leaves `attached` false. AddDevice phases are `add_device:<ID>`, and failures contribute to `scenario_success` without replacing DriverEntry `nt_status`. Each request adds nullable `device_id` and `pnp`; PnP requests have `file: null`. The `pnp` object records `minor`, `state_before`, `state_after`, nullable `bus_status`, `bus_received_at_100ns` and `bus_completed_at_100ns`. Configured status becomes an observation only at actual bus completion; receipt time is independent. Existing request field types are unchanged.
 
-Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE requests reach real guest dispatch while the device exists outside Removing/Removed. The model does not synthesize a failure from Stopped, StopPending, RemovePending or power state: a driver can complete software I/O, reject a request or hold it according to its own code. The public runner remains serial; a held IRP with no available producer cannot be released by a later scenario start or cleanup request, and stops as stalled `model_error`. The closed-file and drained-request/callback requirements before Remove are profile restrictions. `query_stop` with final `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) is rejected in both scenario preflight and final guest completion because it requests unmodeled resource requery; see [Microsoft’s QUERY_STOP contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device). Stop/restart and surprise-removal support do not add resources, power IRPs or KMDF PnP.
+Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE requests reach real guest dispatch while the device exists outside Removing/Removed. The model does not synthesize a failure from Stopped, StopPending, RemovePending or power state: a driver can complete software I/O, reject a request or hold it according to its own code. The public runner remains serial; a held IRP with no available producer cannot be released by a later scenario start or cleanup request, and stops as stalled `model_error`. The closed-file and drained-request/callback requirements before Remove are profile restrictions. `query_stop` with final `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) is rejected in both scenario preflight and final guest completion because it requests unmodeled resource requery; see [Microsoft’s QUERY_STOP contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device). Stop/restart and surprise-removal support do not add resources or KMDF PnP.
 
 Resource-free PnP uses the original genuine-WDK `driver_wdm_pnp.c`, optional `NEVERD_WDM_PNP_FIXTURE` / `NEVERD_WDM_PNP_CFG_FIXTURE`, and native plus C API/CLI tests. Missing artifacts skip explicitly; execution evidence remains Linux-only.
+
+Resource-free WDM power execution uses `kind: "power"` with a configured `device_id`. Every packet explicitly requires `minor` (`query` or `set`), `power_type` (`device` or `system`), `power_state` (`D0`/`D3` or `working`/`sleeping3`), `power_action` (`none` or `sleep`), `system_context` (a 32-bit integer or hexadecimal string) and `bus_completion`. System Query to Working is unsupported. Power packets reject file, transfer and cancellation fields. The complete `system_context` value is retained as an opaque packet fact; it does not select a parent or imply hibernate/fast-startup support. Routes require `DO_POWER_PAGABLE` without `DO_POWER_INRUSH`, and this profile executes power dispatch and `PoRequestPowerIrp` at `PASSIVE_LEVEL`. `PoCallDriver` forwards the same owned power IRP; `PoStartNextPowerIrp` follows the Vista+ contract without an extra serialization handshake. General power policy, WAIT_WAKE, other states/actions, shutdown/hibernate, inrush, nonpageable routes, hardware and KMDF PnP remain unsupported.
+
+Each `pnp_devices` entry may include `initial_reported_device_power: "D0"` or `"D3"`, independent of the required initial lifecycle facts D0/working. The provider PDO and each newly associated guest DEVICE_OBJECT receive separate notification state; `PoSetPowerState` returns and updates only the calling device's previous value. Without this explicit seed, a reached `PoSetPowerState` fails instead of assuming D0. Optional `requested_device_power` contains device-type packet templates, with the same six required power facts. At most 64 templates are accepted across all PDOs. Only a real `PoRequestPowerIrp` with matching PDO, minor and target consumes that PDO's FIFO head; missing or mismatched entries fail, unused entries create no requests. No parent is guessed from the callback context. Each child owns an independent IRP and result row with `origin: "PoRequestPowerIrp"` and zero-based `response_index`; scenario rows use `origin: "scenario"` and null response index. Synchronous child completion can run its five-argument void callback before `PoRequestPowerIrp` returns `STATUS_PENDING`; callbacks may wait, and system S0 can complete before the independent D0 child. The callback's IO_STATUS_BLOCK snapshot remains valid through its return.
+
+Request reports add nullable `power` alongside `pnp`; power rows have `file: null`. `power` records the explicit packet facts, `device_state_before`/`device_state_after`, `system_state_before`/`system_state_after`, nullable `requested_device_object` and actual `bus_status`/`bus_received_at_100ns`/`bus_completed_at_100ns`. Final PnP-device snapshots add `device_power` and `system_power`; live device snapshots add nullable `reported_device_power`. `scenario_success` counts scenario-origin rows against configured requests and requires every actual child and scenario row to complete successfully; unused FIFO templates do not fail the scenario. Genuine `driver_wdm_power.c` images use `NEVERD_WDM_POWER_FIXTURE` / `NEVERD_WDM_POWER_CFG_FIXTURE`, with normal/active-CFG native and C API/CLI coverage. Missing artifacts skip explicitly; execution evidence is Linux-only.
+
+The [complete power scenario](examples/driver-power-scenario.json) runs the genuine power fixture through start, system query/sleep/wake and removal, with three explicit child responses; pass it with `--scenario`.
 
 KMDF 1.33 support uses the exact 1.33.0 ABI: 458 function slots have stable guest identities, while the 38 APIs below have execution semantics. `WdfVersionBind` and `WdfVersionUnbind` manage guest bindings around the genuine WDK `FxDriverEntry` wrapper. `WdfGetDriver` reads the public driver globals. Non-PnP drivers, generic objects, control devices, queues and incoming requests share typed contexts, reference counts and executed cleanup/destroy/unload callbacks. All modeled framework calls and callbacks currently require `PASSIVE_LEVEL`; adding references after completed cleanup remains outside this profile. Unmodeled function slots, `WdfLdrQueryInterface`, class extensions and UMDF stop explicitly.
 
@@ -198,6 +206,8 @@ The initial API model deliberately has a finite contract:
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
 | `IoAttachDeviceToDeviceStack`, `IoDetachDevice` | Same-driver attachment; attach returns the previous top, detach consumes the saved lower device; explicit topology/lifetime limits above |
 | `IofCallDriver`, `IoCallDriver` | Exact-target dispatch on the retained route; validated guest stack cursor and distinct lower NTSTATUS |
+| `PoCallDriver`, `PoStartNextPowerIrp` | Forward an owned power IRP; Vista+ start-next validation without a serialization handshake |
+| `PoSetPowerState`, `PoRequestPowerIrp` | Independent per-device notification state and real device-power children from explicit per-PDO response FIFOs; bounded pageable profile above |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` or `\??\Name` within one session namespace, targeting `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
@@ -304,7 +314,7 @@ satisfied by the image. No scenario is implied by the original initialization
 command or C API.
 
 Only `load_address`, `requests`, `unload`, `kernel_exports`, `registry`, and `pnp_devices` are accepted at
-the root. Non-PnP requests accept `kind`, optional `device` or `device_id` (mutually exclusive), and optional `file`.
+the root. Ordinary file requests accept `kind`, optional `device` or `device_id` (mutually exclusive), and optional `file`.
 IOCTLs require `code` and accept `input`, `output_size`, and `direct_input`.
 A `read` accepts `output_size` and `byte_offset`; a `write` accepts `input` and
 `byte_offset`. Offsets default to zero, accept integers or hex strings, and must
@@ -344,7 +354,7 @@ remain unsupported. Unload must release every driver-owned descriptor.
 When an IOCTL has a nonzero `output_size`, `Information` must not exceed that
 size, even when the input buffer is larger. An IOCTL without an output buffer
 may return a driver-defined result in this field, and no output bytes are
-copied. `information_hex` preserves its exact raw 64-bit value.
+copied. `information_hex` preserves its exact raw64-bit value.
 
 For READ/WRITE, `DO_BUFFERED_IO` or `DO_DIRECT_IO` selects the transfer method.
 Neither or conflicting flags stop. Information is checked against the transfer
@@ -462,7 +472,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v9`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v10`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -476,7 +486,7 @@ the request's contribution to `scenario_success`.
 guest address of the initialized cookie, or `"0x0"` if none was required.
 Request fields are `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`,
 `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`, `information_hex`, and `output_hex`.
-`information_hex` preserves the raw 64-bit `IoStatus.Information` as an exact
+`information_hex` preserves the raw64-bit `IoStatus.Information` as an exact
 hexadecimal string; the existing numeric `information` field remains available.
 
 The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,

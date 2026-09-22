@@ -58,13 +58,17 @@ KernelModel::requestForIRP(uint64_t IRP) const {
 }
 
 bool KernelModel::requestPending(uint64_t IRP) const {
+  auto Pending = [](const ActiveRequest &Request) {
+    return Request.DispatchReturned &&
+           (!Request.Completed ||
+            (Request.ChildPower && !Request.ChildPower->CallbackReturned));
+  };
   if (IRP) {
     const auto *Request = requestForIRP(IRP);
-    return Request && Request->DispatchReturned && !Request->Completed;
+    return Request && Pending(*Request);
   }
-  return std::any_of(Requests.begin(), Requests.end(), [](const auto &Entry) {
-    return Entry.second.DispatchReturned && !Entry.second.Completed;
-  });
+  return std::any_of(Requests.begin(), Requests.end(),
+                     [&](const auto &Entry) { return Pending(Entry.second); });
 }
 
 llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
@@ -137,7 +141,9 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
   const uint64_t Packet = Request->IRP;
   const uint64_t File = Request->FileAddress;
   const bool IsPnp = Input.Kind == DriverRequestKind::Pnp;
-  uint32_t Flags = IsPnp ? 0 : IRPSynchronous;
+  const bool IsPower = Input.Kind == DriverRequestKind::Power;
+  const bool FileFree = IsPnp || IsPower;
+  uint32_t Flags = FileFree ? 0 : IRPSynchronous;
   if (Input.Kind == DriverRequestKind::Create)
     Flags |= IRPCreate;
   if (Input.Kind == DriverRequestKind::Close)
@@ -160,8 +166,8 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
             {IRPMdlOffset, Request->Mdl, 8},
             {IRPFlagsOffset, Flags, 4},
             {IRPSystemBufferOffset, Request->SystemBuffer, 8},
-            {IRPStatusOffset, IsPnp ? StatusNotSupported : 0, 4},
-            {IRPRequestorModeOffset, IsPnp ? KernelMode : UserMode, 1},
+            {IRPStatusOffset, FileFree ? StatusNotSupported : 0, 4},
+            {IRPRequestorModeOffset, FileFree ? KernelMode : UserMode, 1},
             {IRPStackCountOffset, Request->StackCount, 1},
             {IRPLocationOffset, Request->StackCount, 1},
             {IRPUserBufferOffset, Request->UserBuffer, 8},
@@ -183,6 +189,20 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
     for (uint64_t Offset :
          {StackStartResourcesOffset, StackStartTranslatedResourcesOffset})
       if (auto E = Memory.writeInteger(Request->Stack + Offset, 0, 8))
+        return E;
+    if (auto E = Memory.writeInteger(Packet + IRPInformationOffset, 0, 8))
+      return E;
+    Request->IOStatusWritten.fill(true);
+  } else if (IsPower) {
+    const auto &Power = *Input.Power;
+    for (const Field &F : std::array<Field, 5>{
+             {{StackMinorOffset, uint8_t(Power.Minor), 1},
+              {StackPowerSystemContextOffset, Power.SystemContext, 4},
+              {StackPowerTypeOffset, uint32_t(Power.Type), 4},
+              {StackPowerStateOffset, Power.State, 4},
+              {StackPowerActionOffset, uint32_t(Power.Action), 4}}})
+      if (auto E =
+              Memory.writeInteger(Request->Stack + F.Offset, F.Value, F.Size))
         return E;
     if (auto E = Memory.writeInteger(Packet + IRPInformationOffset, 0, 8))
       return E;
@@ -247,7 +267,13 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       return E;
     return beginPnpRequest(Input, Index);
   }
-  if (Input.Pnp || (!Input.Device.empty() && !Input.DeviceID.empty()))
+  if (Input.Kind == DriverRequestKind::Power) {
+    if (auto E = snapshot())
+      return E;
+    return beginPowerRequest(Input, Index);
+  }
+  if (Input.Pnp || Input.Power ||
+      (!Input.Device.empty() && !Input.DeviceID.empty()))
     return ioError("file request has incompatible PnP fields or selectors");
   const unsigned Major = majorFunction(Input.Kind);
   if (Major >= 28)
@@ -553,7 +579,10 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
       return ioError("active request lost ownership of its system-buffer MDL");
     Retiring.emplace_back(It->second.Address, It->second.Size);
   }
-  if (Request->PnpTicket) {
+  if (Request->PowerTicket) {
+    if (auto E = validatePowerRequestCompletion(*Request, uint32_t(*Status)))
+      return E;
+  } else if (Request->PnpTicket) {
     if (auto E = Lifecycle.validatePnpCompletion(*Request->PnpTicket, *Status))
       return E;
   } else if (Request->LifecycleIo) {
@@ -562,6 +591,14 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   }
   if (auto E = prepareReleaseRanges(Retiring))
     return E;
+  if (Request->ChildPower && Request->ChildPower->StatusBlock) {
+    const auto Block = Request->ChildPower->StatusBlock;
+    if (auto E = Memory.writeInteger(Block, uint32_t(*Status), 4))
+      return E;
+    if (auto E = Memory.writeInteger(Block + PowerStatusBlockInformationOffset,
+                                     *Information, 8))
+      return E;
+  }
   if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&
       !ntError(*Status) && *Information) {
     if (Request->Direct) {
@@ -646,6 +683,17 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
                   [&](const auto &Entry) { return Entry.second.IRP == IRP; }))
     return ioError(
         "request finalization requires its guest continuations to return");
+  if (Request->PowerTicket) {
+    if (Request->ChildPower && !Request->ChildPower->CallbackReturned)
+      return ioError("power request finalization requires its callback return");
+    auto Route = std::move(Request->DeviceRoute);
+    Requests.erase(IRP);
+    FinalizedRequests.insert(IRP);
+    for (uint64_t Owner : Route)
+      if (auto E = releaseDevice(Owner))
+        return E;
+    return snapshot();
+  }
   if (Request->PnpTicket) {
     const uint64_t PDO = Request->PnpDevice;
     const bool Removed =

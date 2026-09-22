@@ -10,14 +10,17 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioJSONLimit,
-                           NEVERD_DRIVER_SCENARIO_JSON_LIMIT, 2 * 1024 * 1024)
+                             NEVERD_DRIVER_SCENARIO_JSON_LIMIT, 2 * 1024 * 1024)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioRequestLimit,
-                           NEVERD_DRIVER_SCENARIO_REQUEST_LIMIT, 64)
+                             NEVERD_DRIVER_SCENARIO_REQUEST_LIMIT, 64)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioBufferLimit,
-                           NEVERD_DRIVER_SCENARIO_BUFFER_LIMIT, 65536)
+                             NEVERD_DRIVER_SCENARIO_BUFFER_LIMIT, 65536)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioTotalBufferLimit,
-                           NEVERD_DRIVER_SCENARIO_TOTAL_BUFFER_LIMIT, 512 * 1024)
+                             NEVERD_DRIVER_SCENARIO_TOTAL_BUFFER_LIMIT,
+                             512 * 1024)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioPnpDeviceLimit,
-                           NEVERD_DRIVER_SCENARIO_PNP_DEVICE_LIMIT, 64)
+                             NEVERD_DRIVER_SCENARIO_PNP_DEVICE_LIMIT, 64)
 NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioDeviceIDLimit,
-                           NEVERD_DRIVER_SCENARIO_DEVICE_ID_LIMIT, 64)
+                             NEVERD_DRIVER_SCENARIO_DEVICE_ID_LIMIT, 64)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioPowerResponseLimit,
+                             NEVERD_DRIVER_SCENARIO_POWER_RESPONSE_LIMIT, 64)

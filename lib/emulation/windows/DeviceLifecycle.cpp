@@ -1,5 +1,4 @@
-//===- DeviceLifecycle.cpp - WDM PnP and power state transitions
-//-----------===//
+//===- DeviceLifecycle.cpp - WDM PnP and power transitions ---------------===//
 //
 // NeverD Decompiler
 //
@@ -352,26 +351,21 @@ DeviceLifecycle::beginSystemPower(uint64_t Identity, DevicePowerRequest Request,
   return *Ticket;
 }
 
-llvm::Error DeviceLifecycle::finishDevicePower(DeviceLifecycleTicket Ticket,
-                                               uint32_t Status) {
+llvm::Error
+DeviceLifecycle::validateDevicePowerCompletion(DeviceLifecycleTicket Ticket,
+                                               uint32_t Status) const {
   auto Found = lookup(Ticket.Device);
   if (!Found)
     return Found.takeError();
-  Device &D = **Found;
+  const Device &D = **Found;
   if (!D.DevicePowerPending || D.DevicePowerPending->Ticket != Ticket)
     return lifecycleError("stale or mismatched device power ticket");
   if (auto E = finalStatus(Status))
     return E;
-  const auto Operation = *D.DevicePowerPending;
+  const auto &Operation = *D.DevicePowerPending;
   if (succeeded(Status)) {
     if (absent(D.Pnp))
       return lifecycleError("power completion cannot revive a removed device");
-    if (Operation.Request == DevicePowerRequest::Set) {
-      D.DevicePower = Operation.Target;
-      D.DevicePowerQueryAccepted = false;
-    } else {
-      D.DevicePowerQueryAccepted = true;
-    }
   } else if (Operation.Request == DevicePowerRequest::Set) {
     const bool RemovingPowerUp = D.Pnp == DevicePnpState::RemovePending &&
                                  static_cast<uint32_t>(Operation.Target) <
@@ -380,35 +374,71 @@ llvm::Error DeviceLifecycle::finishDevicePower(DeviceLifecycleTicket Ticket,
       return lifecycleError(
           "device set-power must not fail on a present device");
   }
+  return llvm::Error::success();
+}
+
+llvm::Error DeviceLifecycle::finishDevicePower(DeviceLifecycleTicket Ticket,
+                                               uint32_t Status) {
+  if (auto E = validateDevicePowerCompletion(Ticket, Status))
+    return E;
+  Device &D = Devices.at(Ticket.Device);
+  const auto Operation = *D.DevicePowerPending;
+  if (succeeded(Status)) {
+    if (Operation.Request == DevicePowerRequest::Set) {
+      D.DevicePower = Operation.Target;
+      D.DevicePowerQueryAccepted = false;
+    } else {
+      D.DevicePowerQueryAccepted = true;
+    }
+  }
   D.DevicePowerPending.reset();
+  return llvm::Error::success();
+}
+
+llvm::Error
+DeviceLifecycle::validateSystemPowerCompletion(DeviceLifecycleTicket Ticket,
+                                               uint32_t Status) const {
+  auto Found = lookup(Ticket.Device);
+  if (!Found)
+    return Found.takeError();
+  const Device &D = **Found;
+  if (!D.SystemPowerPending || D.SystemPowerPending->Ticket != Ticket)
+    return lifecycleError("stale or mismatched system power ticket");
+  if (auto E = finalStatus(Status))
+    return E;
+  const auto &Operation = *D.SystemPowerPending;
+  // Vista+ permits completing S0 immediately after issuing the D0 request.
+  // It does not consume that device transaction: its completion remains live.
+  // https://learn.microsoft.com/windows-hardware/drivers/kernel/handling-a-system-set-power-irp-in-a-device-power-policy-owner
+  if (D.DevicePowerPending &&
+      !(Operation.Request == DevicePowerRequest::Set &&
+        Operation.Target == SystemPowerState::Working &&
+        D.DevicePowerPending->Request == DevicePowerRequest::Set &&
+        D.DevicePowerPending->Target == DevicePowerState::D0))
+    return lifecycleError(
+        "system power completion has a device power operation");
+  if (succeeded(Status)) {
+    if (absent(D.Pnp))
+      return lifecycleError("power completion cannot revive a removed device");
+  } else if (Operation.Request == DevicePowerRequest::Set && !absent(D.Pnp)) {
+    return lifecycleError("system set-power must not fail on a present device");
+  }
   return llvm::Error::success();
 }
 
 llvm::Error DeviceLifecycle::finishSystemPower(DeviceLifecycleTicket Ticket,
                                                uint32_t Status) {
-  auto Found = lookup(Ticket.Device);
-  if (!Found)
-    return Found.takeError();
-  Device &D = **Found;
-  if (!D.SystemPowerPending || D.SystemPowerPending->Ticket != Ticket)
-    return lifecycleError("stale or mismatched system power ticket");
-  if (auto E = finalStatus(Status))
+  if (auto E = validateSystemPowerCompletion(Ticket, Status))
     return E;
-  if (D.DevicePowerPending)
-    return lifecycleError(
-        "system power completion has a device power operation");
+  Device &D = Devices.at(Ticket.Device);
   const auto Operation = *D.SystemPowerPending;
   if (succeeded(Status)) {
-    if (absent(D.Pnp))
-      return lifecycleError("power completion cannot revive a removed device");
     if (Operation.Request == DevicePowerRequest::Set) {
       D.SystemPower = Operation.Target;
       D.SystemPowerQueryAccepted = false;
     } else {
       D.SystemPowerQueryAccepted = true;
     }
-  } else if (Operation.Request == DevicePowerRequest::Set && !absent(D.Pnp)) {
-    return lifecycleError("system set-power must not fail on a present device");
   }
   D.SystemPowerPending.reset();
   return llvm::Error::success();

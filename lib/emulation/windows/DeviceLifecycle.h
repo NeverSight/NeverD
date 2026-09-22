@@ -69,7 +69,7 @@ public:
                                                  DevicePnpRequest Request);
   /// Validate a final completion without publishing a lifecycle transition.
   llvm::Error validatePnpCompletion(DeviceLifecycleTicket Ticket,
-                                     uint32_t Status) const;
+                                    uint32_t Status) const;
   llvm::Error finishPnp(DeviceLifecycleTicket Ticket, uint32_t Status);
   llvm::Expected<DeviceLifecycleTicket>
   beginDevicePower(uint64_t Device, DevicePowerRequest Request,
@@ -77,6 +77,10 @@ public:
   llvm::Expected<DeviceLifecycleTicket>
   beginSystemPower(uint64_t Device, DevicePowerRequest Request,
                    SystemPowerState Target);
+  llvm::Error validateDevicePowerCompletion(DeviceLifecycleTicket Ticket,
+                                            uint32_t Status) const;
+  llvm::Error validateSystemPowerCompletion(DeviceLifecycleTicket Ticket,
+                                            uint32_t Status) const;
   llvm::Error finishDevicePower(DeviceLifecycleTicket Ticket, uint32_t Status);
   llvm::Error finishSystemPower(DeviceLifecycleTicket Ticket, uint32_t Status);
 

@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v9",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v10",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -191,6 +191,31 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
         i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
         self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
+
+    def test_driver_power_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("initial_reported_device_power", "requested_device_power",
+                                      "power_type", "power_state", "power_action",
+                                      "system_context", "response_index", "origin",
+                                      "requested_device_object", "device_state_before",
+                                      "device_state_after", "system_state_before",
+                                      "system_state_after", "reported_device_power",
+                                      "DO_POWER_PAGABLE", "DO_POWER_INRUSH",
+                                      "driver-power-scenario.json")),
+            ("architecture.md", ("DriverPower.def", "DriverPowerOperation",
+                                 "KernelModelPowerRequests", "KernelModelPowerCompletion")),
+            ("testing.md", ("DriverPowerScenarioTests.cpp", "KernelPowerRequestTests.cpp",
+                            "KernelPowerCompletionTests.cpp", "DriverWDMPowerTests.cpp",
+                            "NEVERD_WDM_POWER_FIXTURE", "NEVERD_WDM_POWER_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedPowerContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
 
     def test_driver_pnp_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (

@@ -1,5 +1,4 @@
-//===- DeviceLifecycleTests.cpp - PnP, power and removal contracts
-//---------===//
+//===- DeviceLifecycleTests.cpp - PnP and power contracts ----------------===//
 //
 // NeverD Decompiler
 //
@@ -95,7 +94,8 @@ TEST_F(DriverDeviceLifecycle, PowerRequestCodesMatchWindowsMinorFunctions) {
   EXPECT_EQ(static_cast<uint8_t>(DevicePowerRequest::Query), 0x03);
 }
 
-TEST_F(DriverDeviceLifecycle, StartFailureAndQueriesRollbackWithoutChoosingIoPolicy) {
+TEST_F(DriverDeviceLifecycle,
+       StartFailureAndQueriesRollbackWithoutChoosingIoPolicy) {
   success(Model.trackIo(FirstDevice, 1));
   success(Model.finishIo(FirstDevice, 1));
   const auto FailedStart = begin(DevicePnpRequest::Start);
@@ -184,7 +184,8 @@ TEST_F(DriverDeviceLifecycle,
 }
 
 TEST_F(DriverDeviceLifecycle, RemoveAndCancelRequireExactSuccess) {
-  for (auto Minor : {DevicePnpRequest::CancelRemove, DevicePnpRequest::Remove}) {
+  for (auto Minor :
+       {DevicePnpRequest::CancelRemove, DevicePnpRequest::Remove}) {
     const auto Ticket = begin(Minor);
     const auto Before = state().Pnp;
     failure(Model.validatePnpCompletion(Ticket, 1), "STATUS_SUCCESS");
@@ -225,7 +226,8 @@ TEST_F(DriverDeviceLifecycle, ResourceRequeryStatusKeepsQueryStopUncommitted) {
   EXPECT_EQ(state().Pnp, DevicePnpState::Started);
 }
 
-TEST_F(DriverDeviceLifecycle, IoLifetimeSurvivesStopRestartAndPowerTransactions) {
+TEST_F(DriverDeviceLifecycle,
+       IoLifetimeSurvivesStopRestartAndPowerTransactions) {
   // Dispatch acceptance does not infer whether an IRP touches hardware.
   success(Model.trackIo(FirstDevice, 1));
   start();
@@ -245,7 +247,8 @@ TEST_F(DriverDeviceLifecycle, IoLifetimeSurvivesStopRestartAndPowerTransactions)
   auto Set = devicePower(DevicePowerRequest::Set, DevicePowerState::D3);
   success(Model.finishDevicePower(Set, Success));
   success(Model.trackIo(FirstDevice, 6));
-  auto Sleep = systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3);
+  auto Sleep =
+      systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3);
   success(Model.finishSystemPower(Sleep, Success));
   success(Model.trackIo(FirstDevice, 7));
   for (uint64_t IRP : {4, 5, 6, 7})
@@ -484,6 +487,49 @@ TEST_F(DriverDeviceLifecycle,
   Device = devicePower(DevicePowerRequest::Set, DevicePowerState::D0);
   success(Model.finishDevicePower(Device, Success));
   success(Model.finishSystemPower(System, Success));
+}
+
+TEST_F(DriverDeviceLifecycle, SystemResumeCanFinishBeforeDeviceD0Completes) {
+  start();
+  auto Device = devicePower(DevicePowerRequest::Set, DevicePowerState::D3);
+  success(Model.finishDevicePower(Device, Success));
+  auto System =
+      systemPower(DevicePowerRequest::Set, SystemPowerState::Sleeping3);
+  success(Model.finishSystemPower(System, Success));
+  System = systemPower(DevicePowerRequest::Set, SystemPowerState::Working);
+  Device = devicePower(DevicePowerRequest::Set, DevicePowerState::D0);
+  success(Model.validateSystemPowerCompletion(System, Success));
+  EXPECT_EQ(state().SystemPower, SystemPowerState::Sleeping3);
+  EXPECT_EQ(state().DevicePowerOperation, Device);
+  success(Model.finishSystemPower(System, Success));
+  EXPECT_EQ(state().SystemPower, SystemPowerState::Working);
+  EXPECT_EQ(state().DevicePower, DevicePowerState::D3);
+  EXPECT_FALSE(state().SystemPowerOperation);
+  EXPECT_EQ(state().DevicePowerOperation, Device);
+  success(Model.validateDevicePowerCompletion(Device, Success));
+  EXPECT_EQ(state().DevicePower, DevicePowerState::D3);
+  success(Model.finishDevicePower(Device, Success));
+  EXPECT_EQ(state().DevicePower, DevicePowerState::D0);
+}
+
+TEST_F(DriverDeviceLifecycle,
+       PowerDownAndQueryPreflightRetainBothTransactions) {
+  start();
+  for (auto Minor : {DevicePowerRequest::Query, DevicePowerRequest::Set}) {
+    const auto System = systemPower(Minor, SystemPowerState::Sleeping3);
+    const auto Device = devicePower(Minor, DevicePowerState::D3);
+    failure(Model.validateSystemPowerCompletion(System, Success),
+            "device power operation");
+    EXPECT_EQ(state().SystemPowerOperation, System);
+    EXPECT_EQ(state().DevicePowerOperation, Device);
+    EXPECT_EQ(state().SystemPower, SystemPowerState::Working);
+    EXPECT_EQ(state().DevicePower, DevicePowerState::D0);
+    const auto Status = Minor == DevicePowerRequest::Query ? Failure : Success;
+    success(Model.finishDevicePower(Device, Status));
+    success(Model.finishSystemPower(System, Status));
+  }
+  EXPECT_EQ(state().SystemPower, SystemPowerState::Sleeping3);
+  EXPECT_EQ(state().DevicePower, DevicePowerState::D3);
 }
 
 TEST_F(DriverDeviceLifecycle, FailedSystemQueryAllowsAnySubsequentSet) {
