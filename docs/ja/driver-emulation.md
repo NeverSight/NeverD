@@ -39,15 +39,15 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | ドライバーの種類または要件 | 現在の対象範囲 | 不足する環境 |
 |----------------------------|----------------|--------------|
 | 下記 API を使用する x64 ソフトウェア WDM ドライバー | 有界 x64 WDM 初期化、逐次 buffered/direct 要求、ワーク項目、タイマー、DPC、イベントと待機、動作レポートと制限 | 追加で実行される API ごとに明確なモデルが必要 |
-| `METHOD_BUFFERED` IOCTL | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。並行 IRP と要求キャンセルは未対応 |
+| `METHOD_BUFFERED` IOCTL | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。並行 IRP と WDM 要求キャンセルは未対応 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | リクエストが所有する MDL とシステムマッピング | 物理ページの識別、DMA、ユーザーマッピング |
 | ドライバーが割り当てる MDL | モデルの非ページプールを記述する独立した MDL。元のバッファーアドレスを共有 | IRP との関連付け、MDL チェーン、プローブ／ロック、物理ページ、ユーザーマッピング |
-| READ/WRITE | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。並行 IRP と要求キャンセルは未対応。`METHOD_NEITHER` と暗黙のファイル位置も未対応 |
+| READ/WRITE | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。並行 IRP と WDM 要求キャンセルは未対応。`METHOD_NEITHER` と暗黙のファイル位置も未対応 |
 | `METHOD_NEITHER` | 拒否 | ユーザーアドレス空間のコンテキスト、アクセスのプローブ、ゲストの例外処理 |
-| KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、キャンセル、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
+| KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
 | PnP バス／ファンクション／フィルタードライバー | API サブセット内で初期化できる場合がある。デバイススタックのライフサイクルは未対応 | デバイスのアタッチ、下位ドライバーへのディスパッチ、PnP および電源 IRP |
 | ストレージ、ネットワーク、ディスプレイ、ファイルシステム、ミニフィルタードライバー | 各サブシステムの契約に未対応 | ポート／クラス／ミニポートのフレームワーク、NDIS/WFP、グラフィックスまたはファイルシステムのサービス |
-| ワーク項目、タイマー、DPC、イベントと待機 | 現在の実行 IRQL はディスパッチとワーク項目で `PASSIVE_LEVEL`、DPC で `DISPATCH_LEVEL` です | 以下の API 部分集合のみ。並行 IRP と要求キャンセルは未対応 |
+| ワーク項目、タイマー、DPC、イベントと待機 | 現在の実行 IRQL はディスパッチとワーク項目で `PASSIVE_LEVEL`、DPC で `DISPATCH_LEVEL` です | 以下の API 部分集合のみ。並行 IRP と WDM 要求キャンセルは未対応 |
 | プロセス／スレッドのコールバック、ハンドル、レジストリ／ファイル操作、カーネルモジュールの検出を使うドライバー | 設定済みレジストリに対応。その他の動作は下記 API の範囲内のみ | オブジェクトマネージャー、システム状態、コールバック／イベントの発生元 |
 | ハードウェア、DMA、PCI、割り込み、仮想化を扱うドライバー | 必要な環境に未対応 | デバイスモデル、物理メモリ、バス、割り込み、特権 CPU 状態 |
 | x86 または ARM64 Windows ドライバー | 拒否 | アーキテクチャ固有のロード、ABI、実行モデル |
@@ -63,9 +63,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 未知のインポートは遅延トラップにバインドされます。未使用なら実行を妨げませんが、その thunk を実行するか、モデル化していないエクスポートデータ値を読み取ると `unsupported_api` で停止します。未対応の CPU 環境への作用も明示的に停止します。NeverD は未実装の呼び出しを成功値で置き換えません。不正なイメージや未対応のロード要件は、実行前に失敗します。
 
-`DelayedWorkQueue` のワーク項目は `PASSIVE_LEVEL`、ゲスト DPC は規定の四引数で `DISPATCH_LEVEL` にて実行します。CPU0 上で呼び出しの復帰とブロッキング待機の境界に決定的な協調スケジューリングを行います。相対・絶対・周期タイマーは仮想時間を使い、実行可能なフレームがなければ次のタイマーまたは待機期限へ進めます。通知型と同期型のイベント／タイマーは異なるシグナル消費を保持します。各コールバックは独立したゲストスタックを持ち、複数の待機フレームのローカル変数と完全な CPU コンテキストを保持しつつ、ゲストメモリを共有します。Win64 コールバックの先頭四引数はレジスタ、それ以降はスタックに渡します。要求は逐次処理し、IRP を保留としてマークしたディスパッチは `STATUS_PENDING` を返し、次の要求の前に完了する必要があります。保留要求や無限待機に実行可能な生成元がなければ、停滞した `model_error` で停止します。命令・メモリ・観測・実時間の予算は共有します。
+`DelayedWorkQueue` のワーク項目は `PASSIVE_LEVEL`、ゲスト DPC は規定の四引数で `DISPATCH_LEVEL` にて実行します。CPU0 上で呼び出しの復帰とブロッキング待機の境界に決定的な協調スケジューリングを行います。相対・絶対・周期タイマーは仮想時間を使い、実行可能なフレームがなければ次のタイマー、待機、キャンセルの期限へ進めます。通知型と同期型のイベント／タイマーは異なるシグナル消費を保持します。各コールバックは独立したゲストスタックを持ち、複数の待機フレームのローカル変数と完全な CPU コンテキストを保持しつつ、ゲストメモリを共有します。Win64 コールバックの先頭四引数はレジスタ、それ以降はスタックに渡します。要求は逐次処理し、IRP を保留としてマークしたディスパッチは `STATUS_PENDING` を返し、次の要求の前に完了する必要があります。保留要求や無限待機に実行可能な生成元がなければ、停滞した `model_error` で停止します。命令・メモリ・観測・実時間の予算は共有します。
 
-これは限定的なスケジューリングモデルであり、完全な Windows 非同期対応ではありません。アラート可能／ユーザーモード待機、システムスレッド、APC、要求キャンセル、スピンロック、並行 IRP、一般の IRQL 変更、`METHOD_NEITHER`、UMDF、KMDF PnP デバイスと一般のキュースケジューリング、完全な PnP／電源、ハードウェア、DMA、割り込みは未対応です。初期化のみの呼び出しも明示的に登録したコールバックを実行しますが、要求やアンロードを暗黙には生成しません。
+これは限定的なスケジューリングモデルであり、完全な Windows 非同期対応ではありません。アラート可能／ユーザーモード待機、システムスレッド、APC、WDM 要求キャンセル、スピンロック、並行 IRP、一般の IRQL 変更、`METHOD_NEITHER`、UMDF、KMDF PnP デバイスと一般のキュースケジューリング、完全な PnP／電源、ハードウェア、DMA、割り込みは未対応です。初期化のみの呼び出しも明示的に登録したコールバックを実行しますが、要求やアンロードを暗黙には生成しません。
 
 ワーク項目はコールバック開始前にキューから外れるため、コールバックは自身の項目を解放できます。キュー内の項目の解放、二重登録、失効したオブジェクト、実行可能なゲストメモリ外のコールバック先は明示的に失敗します。デバイス参照はコールバックが戻るまで保持します。アンロードには全ワーク項目の解放とキュー内の処理の完了が必要です。CPU コンテキストは汎用、SIMD、FPU、制御状態を保存・復元します。ゲストメモリは共有され、障害後の CPU を保存コンテキストで再開することはできません。
 ファイルオブジェクトやキュー内／実行中ワーク項目の参照が残る間は削除を延期します。オブジェクト領域が不足するとワーク項目の割り当ては NULL を返します。
@@ -76,15 +76,17 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 有効な Control Flow Guard（CFG）は PE フラグ、ポインタスロット、ソート済み実行可能ターゲット表を検証します。check/dispatch ヘルパーは宣言済みイメージ入口または登録済み API サンクだけを許可し、Win64 呼び出し状態を保持して未宣言ターゲットを拒否します。CFG を有効にしない計装では元のゲストのフォールバックポインタを維持します。有効な XFG、エクスポート抑制、その他の未モデル化ポリシーは拒否し、実行可能メモリ内という理由だけでターゲットを許可しません。
 
-KMDF 1.33 対応は正確な 1.33.0 ABI を使用します。458 個の関数スロットに安定したゲスト識別子を割り当て、以下の 27 API に実行意味論を実装しています。`WdfVersionBind` と `WdfVersionUnbind` は実際の WDK `FxDriverEntry` ラッパーの前後でゲストのバインドを管理します。`WdfGetDriver` は公開ドライバーグローバル構造を読みます。非 PnP ドライバー、汎用オブジェクト、制御デバイス、キュー、受信要求は、型付きコンテキスト、参照カウント、実際に実行するクリーンアップ／破棄／アンロードコールバックを共有します。モデル化したすべてのフレームワーク呼び出しとコールバックは現在 `PASSIVE_LEVEL` を必要とし、クリーンアップ完了後の新しい参照取得はこのプロファイルの対象外です。未実装スロット、`WdfLdrQueryInterface`、クラス拡張、UMDF は明示的に停止します。
+KMDF 1.33 対応は正確な 1.33.0 ABI を使用します。458 個の関数スロットに安定したゲスト識別子を割り当て、以下の 30 API に実行意味論を実装しています。`WdfVersionBind` と `WdfVersionUnbind` は実際の WDK `FxDriverEntry` ラッパーの前後でゲストのバインドを管理します。`WdfGetDriver` は公開ドライバーグローバル構造を読みます。非 PnP ドライバー、汎用オブジェクト、制御デバイス、キュー、受信要求は、型付きコンテキスト、参照カウント、実際に実行するクリーンアップ／破棄／アンロードコールバックを共有します。モデル化したすべてのフレームワーク呼び出しとコールバックは現在 `PASSIVE_LEVEL` を必要とし、クリーンアップ完了後の新しい参照取得はこのプロファイルの対象外です。未実装スロット、`WdfLdrQueryInterface`、クラス拡張、UMDF は明示的に停止します。
 
 制御デバイスには、コピーされた表示可能 ASCII 名と、正確に `D:P(A;;GA;;;WD)` という SDDL が必要です。すべての呼び出し元にアクセスを許可し、呼び出し元トークンを仮定しません。他のセキュリティ記述子、名前なしデバイス、自動命名は未対応です。デバイス初期化は一つの WDM デバイスを所有します。要求は既存のセッション名前空間のシンボリックリンク別名 `\DosDevices\Name` または `\??\Name` でデバイスを選択でき、レポートには正規のデバイス名を保持します。作成成功時は初期化オブジェクトを消費してそのポインターをクリアし、失敗時は部分的なデバイス所有権をロールバックします。`WdfControlFinishInitializing` が I/O 配信を許可します。モデル内のファイル、ワークアイテム、要求が許可する場合にのみ、削除によってデバイスとリンクを除去します。削除時のキャンセルや要求の排出は未対応です。
 
-96 バイトの `WDF_IO_QUEUE_CONFIG` は、明示的なパッシブ実行とフレームワーク同期なしの順次処理の既定キューに対応します。制御デバイスのキューは電源管理の対象外です。専用 READ／WRITE／IOCTL コールバックは既定のコールバックより優先されます。受け付けたキュー要求は同期完了時も `STATUS_PENDING` を返し、void コールバックの戻り値レジスターでは要求は完了しません。遅延完了は既存のスケジューラーを使います。ハンドラーがなければ `STATUS_INVALID_DEVICE_REQUEST` で完了し、ゼロ長 READ／WRITE は配信を有効にしない限りそのまま完了します。既定のファイルパッケージは CREATE／CLEANUP／CLOSE を成功、Information=0 で完了します。並列／手動キュー、キャンセル、ファイルコールバック、PnP デバイス、完全な PnP／電源は未対応です。
+96 バイトの `WDF_IO_QUEUE_CONFIG` は、明示的なパッシブ実行とフレームワーク同期なしの順次処理の既定キューに対応します。制御デバイスのキューは電源管理の対象外です。専用 READ／WRITE／IOCTL コールバックは既定のコールバックより優先されます。受け付けたキュー要求は同期完了時も `STATUS_PENDING` を返し、void コールバックの戻り値レジスターでは要求は完了しません。遅延完了は既存のスケジューラーを使います。ハンドラーがなければ `STATUS_INVALID_DEVICE_REQUEST` で完了し、ゼロ長 READ／WRITE は配信を有効にしない限りそのまま完了します。既定のファイルパッケージは CREATE／CLEANUP／CLOSE を成功、Information=0 で完了します。並列／手動キュー、ファイルコールバック、PnP デバイス、完全な PnP／電源は未対応です。
 
 要求パラメーターは 40 バイトの `WDF_REQUEST_PARAMETERS` レイアウトを使います。入力／出力アクセサーは論理長を返し、バッファーの別名関係と既存の直接 I/O MDL マッピングを維持します。直接 IOCTL の入力は引き続きバッファー方式です。方向の誤りやバッファー不足は文書化されたステータスを返します。完了処理は要求のクリーンアップと子オブジェクトの破棄を実行してから IRP／バッファーを無効化し、参照が許す時点で要求を破棄します。完了処理開始後は新たな要求アクセサー呼び出しを拒否しますが、取得済みのバッファーポインターはクリーンアップ中も使用できます。外部オブジェクト参照が維持するのはコンテキストであり、完了済み IRP へのアクセスではありません。ユーザーモードの `METHOD_NEITHER` には未実装の呼び出し元コンテキスト／プローブ／ロック対応が必要です。
 
-モデル化済み KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceCreate`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`.
+キャンセル対応は、上記の制御デバイスのキューに渡された要求に限定されます。既にキャンセルされていれば、`WdfRequestMarkCancelableEx` はコールバックを呼ばずに `STATUS_CANCELLED` を返します。`WdfRequestUnmarkCancelable` が成功するとコールバックを解除し、その後のキャンセルは状態の記録のみを行います。`WdfRequestIsCanceled` はキャンセル可能としてマークされていない有効な要求でその状態を読み取ります。キャンセル可能としてのマークに成功した後は、完了にはマーク解除の成功、またはキャンセルコールバックの配信開始が必要です。キューに入っただけでは完了できません。配信開始後は、コールバックが待機中の場合もワーク項目と協調して完了できます。独立した内部参照により、キャンセルコールバックが戻るまで要求を保持します。完了時には先に IRP が無効となり、最後の要求破棄の継続処理自体も待機できます。DPC、FIFO 順のキャンセルコールバック、通常のワーク項目の順に優先し、キャンセルコールバックは実行可能なパッシブ待機フレームの再開よりも先に配信します。
+
+モデル化済み KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceCreate`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`.
 
 任意の実 WDK 検証では、`driver_kmdf_lifecycle.c` と `driver_kmdf_control.c` を本物の KMDF エントリーライブラリで別々にコンパイルします。`NEVERD_KMDF_FIXTURE`／`NEVERD_KMDF_CFG_FIXTURE` はライフサイクルイメージを、`NEVERD_KMDF_CONTROL_FIXTURE`／`NEVERD_KMDF_CONTROL_CFG_FIXTURE` は通常版／CFG 有効版の制御デバイスイメージを選択します。外部成果物がなければ明示的にスキップします。ネイティブおよび C API／CLI の範囲は[テスト](testing.md)を参照してください。現在の実行証拠は Linux ホストに限定されます。
 
@@ -154,6 +156,8 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 ルートで受け付けるフィールドは `load_address`、`requests`、`unload`、`kernel_exports`、`registry` だけです。すべてのリクエストは `kind`、任意の `device`、任意の `file` を受け付けます。IOCTL は `code` が必須で、`input`、`output_size`、`direct_input` を受け付けます。`read` は `output_size` と `byte_offset`、`write` は `input` と `byte_offset` を受け付けます。オフセットのデフォルトはゼロで、整数または 16 進文字列を使えますが、非負の符号付き 64 ビット値に収まる必要があります。ライフサイクルのリクエストは転送フィールドを拒否します。未知のフィールドや重複フィールドは拒否します。`code` は符号なし 32 ビット JSON 整数または `0x` で始まる 16 進文字列を受け付けます。`input` は、プレフィックスや空白を含まない、長さが偶数の 16 進バイト文字列です。省略すると空の入力になります。`output_size` は符号なし JSON 整数で、省略時はゼロです。小数や浮動小数点形式の表記は拒否します。
 
+READ／WRITE／IOCTL 要求だけが省略可能な `cancel_after_100ns` を受け付けます。値は 0 から `INT64_MAX`（9223372036854775807）までの JSON 整数です。要求の提出時点を基準に、実時間ではなく仮想時間の 100 ns 単位でキャンセルを予約します。ゼロの場合はフレームワークのルーティング後、ゲスト I/O コールバックの前に適用します。ルーティングが既に要求を完了していれば、完了が優先されます。正の遅延では、実行可能なコールバックやフレームがないときだけ、タイマー、待機、キャンセルの期限へ時間を進めます。WDM 要求へのキャンセル設定は `model_error` で停止し、一般のキューや PnP のキャンセルは未対応です。各要求レポートの `cancel_requested_at_100ns` は、キャンセルが実際に発生した絶対仮想時刻、または発生しなかった場合の null です。先に完了した場合も null のままです。キャンセル要求だけでは IRP は完了せず、最終ステータスも決まりません。
+
 ダイレクト IOCTL では、`input` が最初のシステムバッファーを初期化し、`direct_input` が MDL で記述される別の第 2 バッファーを初期化して、`output_size` までゼロで埋めます。`METHOD_IN_DIRECT` は読み取りアクセスを要求しますが、システムマッピングが読み取り専用であることを意味しません。両方式とも読み書き可能なシナリオバッファーを使います。`MdlMappingNoWrite` はマッピングの書き込み権限を、`MdlMappingNoExecute` は実行権限を除去します。アンマップはシステム VA を無効にしますが、再マップしても同じロック済みデータを保持します。完了時に MDL とマッピングの寿命が終了します。WDM マクロが使う公開 MDL フィールドはモデル化しますが、プロセス／PFN フィールド、手作りの MDL、ユーザーマッピング、生の UserBuffer を介した直接アクセスは拒否します。長さがゼロのダイレクトバッファーは null MDL を持ちます。
 
 `IoAllocateMdl` は、空でなく、アドレスがオーバーフローせず、1 MiB 以下のバッファーに対して独立したメタデータを割り当てます。バッファーのプローブやロックは行いません。`Irp` は NULL、`SecondaryBuffer` と `ChargeQuota` は FALSE が必要です。アリーナが枯渇すると NULL を返します。`MmBuildMdlForNonPagedPool` では、記述範囲全体が有効な単一の非ページプール割り当て内にある必要があります。安全ヘルパーと通常の WDM マクロは元のアドレスを再利用し、別名参照と既存の権限を維持します。書き込み／実行禁止フラグを追加しても既存の権限は変わりません。追加のシステムマッピングとアンマップは拒否します。`IoFreeMdl` は MDL だけを無効にし、プールバッファーの寿命は独立しています。解放済み領域を再使用しなければ、どちらの解放順序も利用できます。モデルの MDL フィールドはすべて読み取り専用で、プロセス／PFN へのアクセス、MDL チェーン、手動のフィールド変更は未対応です。アンロード時にはドライバー所有の MDL をすべて解放する必要があります。
@@ -199,7 +203,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v4` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v5` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 

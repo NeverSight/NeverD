@@ -104,6 +104,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             "KeDelayExecutionThread",
             "WdfDriverCreate",
             "WdfObjectAllocateContext",
+            "WdfRequestMarkCancelableEx",
+            "WdfRequestUnmarkCancelable",
+            "WdfRequestIsCanceled",
             "WdfVersionBind",
             "WdfVersionUnbind",
         ):
@@ -157,7 +160,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
                       "NEVERD_KMDF_CFG_FIXTURE", "NEVERD_KMDF_CONTROL_FIXTURE",
                       "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG",
-                      "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)"):
+                      "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
+                      "cancel_after_100ns", "cancel_requested_at_100ns",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v5"):
             with self.subTest(token=token):
                 errors: list[str] = []
                 changed = original.replace(token, "RemovedContract")

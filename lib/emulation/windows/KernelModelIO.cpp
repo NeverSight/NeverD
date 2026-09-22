@@ -74,6 +74,9 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
   const bool IsRead = Input.Kind == DriverRequestKind::Read;
   const bool IsWrite = Input.Kind == DriverRequestKind::Write;
   const bool IsIOCTL = Input.Kind == DriverRequestKind::DeviceControl;
+  if (Input.CancelAfter100ns &&
+      (*Input.CancelAfter100ns > INT64_MAX || (!IsRead && !IsWrite && !IsIOCTL)))
+    return ioError("cancellation requires a transfer request and bounded delay");
   Request->OutputSize = Input.OutputSize;
   Request->InputSize = Input.Input.size();
   Request->ByteOffset = Input.ByteOffset;
@@ -272,6 +275,8 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       return ioError("request device name does not identify a live device");
   }
   Result.Requests[Index].Device = Devices.at(Device).Name;
+  if (Input.CancelAfter100ns && !FrameworkDevices.count(Device))
+    return ioError("scheduled cancellation requires a KMDF control request");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
     if (DeletePendingDevices.count(Device))
@@ -334,6 +339,14 @@ KernelModel::beginRequest(const DriverRequest &Input) {
   Record.Device = Device;
   Record.FileAddress = FileIt->second.Address;
   Record.FileId = Input.File;
+  if (Input.CancelAfter100ns) {
+    llvm::Expected<uint64_t> Deadline = Scheduler.now100ns();
+    if (*Input.CancelAfter100ns)
+      Deadline = Scheduler.computeDeadline(-int64_t(*Input.CancelAfter100ns));
+    if (!Deadline)
+      return Deadline.takeError();
+    Record.CancelDeadline = *Deadline;
+  }
   auto *Request = &Requests.emplace(*Packet, std::move(Record)).first->second;
   if (auto E = prepareRequestBuffers(*Request, Input, Device))
     return E;
@@ -360,6 +373,8 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       Call.PC = Dispatch.PC;
       Call.FrameworkDispatchStatus = Dispatch.Status;
       Call.IRP = *Packet;
+      if (auto E = processRequestCancellations())
+        return E;
       uint64_t *Registers[] = {&Call.Argument0, &Call.Argument1,
                                &Call.Argument2, &Call.Argument3};
       for (size_t I = 0; I < Dispatch.Arguments.size(); ++I)
@@ -467,6 +482,7 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   // dispatch routine returns to the session.
   Observation.Completed = true;
   Request->Completed = true;
+  Request->CancelDeadline.reset();
   FreedRanges.emplace(IRP, IRPSize + StackSize);
   if (Request->SystemBuffer)
     FreedRanges.emplace(Request->SystemBuffer, Request->BufferSize);

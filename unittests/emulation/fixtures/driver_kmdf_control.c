@@ -12,6 +12,10 @@
 /// The final service-name character selects buffered READ/WRITE (B, default),
 /// direct READ/WRITE (D), or buffered READ/WRITE with deferred IOCTL completion
 /// (W). C observes request cleanup, child destruction and retained context.
+/// X completes from a cancel callback; H delegates cancel completion to a
+/// worker while the cancel callback waits; U unmarks before a delayed worker;
+/// N deliberately completes a still-cancelable request. Buffered mode B polls
+/// cancellation before processing, including the CLI's default service name.
 /// Q deliberately supplies an invalid queue configuration size. CREATE,
 /// CLEANUP and CLOSE use the default framework file package without callbacks.
 ///
@@ -85,11 +89,14 @@ ABI_SLOT(WdfObjectReferenceActual, 205);
 ABI_SLOT(WdfObjectDereferenceActual, 206);
 ABI_SLOT(WdfObjectCreate, 207);
 ABI_SLOT(WdfObjectDelete, 208);
+ABI_SLOT(WdfRequestUnmarkCancelable, 256);
+ABI_SLOT(WdfRequestIsCanceled, 257);
 ABI_SLOT(WdfRequestComplete, 263);
 ABI_SLOT(WdfRequestCompleteWithInformation, 265);
 ABI_SLOT(WdfRequestGetParameters, 266);
 ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
+ABI_SLOT(WdfRequestMarkCancelableEx, 393);
 
 typedef struct {
   WDFREQUEST Request;
@@ -112,6 +119,16 @@ typedef struct {
   CLEANUP_REQUEST_CONTEXT *RequestContext;
 } CLEANUP_CHILD_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CLEANUP_CHILD_CONTEXT, CleanupChildContext);
+
+typedef struct {
+  ULONG Cookie;
+  ULONG Phase;
+  UCHAR Mode;
+  BOOLEAN CallbackActive;
+  BOOLEAN DeferredDestroy;
+  KEVENT Completed;
+} CANCEL_REQUEST_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CANCEL_REQUEST_CONTEXT, CancelContext);
 
 static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
@@ -316,6 +333,182 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
   TransformRequest(Request, OutputLength, InputLength);
 }
 
+static void CancelCleanup(WDFOBJECT Object) {
+  CANCEL_REQUEST_CONTEXT *Context = CancelContext(Object);
+  if (Check(Context->Cookie == 0xca1ce133 && Context->Phase == 1 &&
+                KeGetCurrentIrql() == PASSIVE_LEVEL,
+            80)) {
+    Context->Phase = 2;
+    DbgPrint("KMDF control: %c request cleanup\n", Context->Mode);
+  }
+}
+
+static void CancelDestroy(WDFOBJECT Object) {
+  CANCEL_REQUEST_CONTEXT *Context = CancelContext(Object);
+  volatile ULONG SavedCookie = Context->Cookie;
+  LARGE_INTEGER Delay;
+  if (!Check(Context->Cookie == 0xca1ce133 && !Context->CallbackActive &&
+                 Context->Phase == (Context->DeferredDestroy ? 3u : 2u) &&
+                 KeGetCurrentIrql() == PASSIVE_LEVEL,
+             81))
+    return;
+  Context->Phase = 4;
+  DbgPrint("KMDF control: %c request destroy\n", Context->Mode);
+  if (!Context->DeferredDestroy)
+    return;
+  Delay.QuadPart = -7;
+  if (Check(KeDelayExecutionThread(KernelMode, FALSE, &Delay) ==
+                    STATUS_SUCCESS &&
+                SavedCookie == 0xca1ce133 && Context->Cookie == SavedCookie &&
+                Context->Phase == 4,
+            82))
+    DbgPrint("KMDF control: %c destroy resumed\n", Context->Mode);
+}
+
+static void CancellationWorker(PDEVICE_OBJECT Device, PVOID Context) {
+  DEFERRED_IOCTL_CONTEXT *Work = Context;
+  WDFREQUEST Request = Work->Request;
+  size_t OutputLength = Work->OutputLength;
+  size_t InputLength = Work->InputLength;
+  LARGE_INTEGER Delay;
+  BOOLEAN Valid =
+      Check(Work == &Deferred &&
+                Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
+                KeGetCurrentIrql() == PASSIVE_LEVEL,
+            83);
+  IoFreeWorkItem(Work->Item);
+  Work->Item = NULL;
+  Work->Request = NULL;
+  if (!Valid)
+    return;
+  if (TransferMode == 'U') {
+    Delay.QuadPart = -20;
+    if (!Check(KeDelayExecutionThread(KernelMode, FALSE, &Delay) ==
+                   STATUS_SUCCESS,
+               84))
+      return;
+    DbgPrint("KMDF control: U worker cancelled=%u\n",
+             (unsigned)WdfRequestIsCanceled(Request));
+    TransformRequest(Request, OutputLength, InputLength);
+    return;
+  }
+
+  CANCEL_REQUEST_CONTEXT *Cancel = CancelContext(Request);
+  // The running cancel callback explicitly delegated completion and waits
+  // for this worker. STATUS_CANCELLED alone is not permission to complete:
+  // this handshake establishes that cancellation already owns the request.
+  // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestunmarkcancelable
+  if (!Check(Cancel->CallbackActive && Cancel->Phase == 1 &&
+                 WdfRequestUnmarkCancelable(Request) == STATUS_CANCELLED,
+             85))
+    return;
+  DbgPrint("KMDF control: H worker owns completion\n");
+  WdfRequestComplete(Request, STATUS_CANCELLED);
+  if (!Check(CancelContext(Request) == Cancel && Cancel->Cookie == 0xca1ce133 &&
+                 Cancel->Phase == 2 && Cancel->CallbackActive,
+             86))
+    return;
+  KeSetEvent(&Cancel->Completed, IO_NO_INCREMENT, FALSE);
+}
+
+static BOOLEAN QueueCancellationWorker(WDFREQUEST Request, size_t OutputLength,
+                                       size_t InputLength) {
+  if (!Check(Deferred.Item == NULL && Deferred.Request == NULL, 87))
+    return FALSE;
+  Deferred.Item =
+      IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
+  if (!Check(Deferred.Item != NULL, 88))
+    return FALSE;
+  Deferred.Request = Request;
+  Deferred.OutputLength = OutputLength;
+  Deferred.InputLength = InputLength;
+  IoQueueWorkItem(Deferred.Item, CancellationWorker, DelayedWorkQueue,
+                  &Deferred);
+  return TRUE;
+}
+
+static void CancelRequest(WDFREQUEST Request) {
+  CANCEL_REQUEST_CONTEXT *Context = CancelContext(Request);
+  if (!Check(Context->Cookie == 0xca1ce133 && Context->Phase == 0 &&
+                 !Context->CallbackActive &&
+                 KeGetCurrentIrql() == PASSIVE_LEVEL,
+             89))
+    return;
+  Context->Phase = 1;
+  Context->CallbackActive = TRUE;
+  Context->DeferredDestroy = TRUE;
+  DbgPrint("KMDF control: %c cancel callback\n", Context->Mode);
+  if (Context->Mode == 'H') {
+    if (!QueueCancellationWorker(Request, 0, 0))
+      return;
+    if (!Check(KeWaitForSingleObject(&Context->Completed, Executive, KernelMode,
+                                     FALSE, NULL) == STATUS_SUCCESS,
+               90))
+      return;
+  } else {
+    WdfRequestComplete(Request, STATUS_CANCELLED);
+  }
+  // No external WdfObjectReference is held here. The framework's cancel
+  // callback hold must preserve typed context until this callback returns.
+  if (Check(CancelContext(Request) == Context &&
+                Context->Cookie == 0xca1ce133 && Context->Phase == 2 &&
+                Context->CallbackActive,
+            91)) {
+    Context->Phase = 3;
+    Context->CallbackActive = FALSE;
+    DbgPrint("KMDF control: %c cancel callback retained context\n",
+             Context->Mode);
+  }
+}
+
+static void CancelableIoctl(WDFREQUEST Request, size_t OutputLength,
+                            size_t InputLength) {
+  CANCEL_REQUEST_CONTEXT *Context = NULL;
+  WDF_OBJECT_ATTRIBUTES Attributes;
+  NTSTATUS Status;
+  if (TransferMode == 'X' || TransferMode == 'H') {
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes,
+                                            CANCEL_REQUEST_CONTEXT);
+    Attributes.EvtCleanupCallback = CancelCleanup;
+    Attributes.EvtDestroyCallback = CancelDestroy;
+    Status = WdfObjectAllocateContext(Request, &Attributes, (PVOID *)&Context);
+    if (!NT_SUCCESS(Status)) {
+      WdfRequestComplete(Request, Status);
+      return;
+    }
+    Context->Cookie = 0xca1ce133;
+    Context->Mode = TransferMode;
+    if (TransferMode == 'H')
+      KeInitializeEvent(&Context->Completed, NotificationEvent, FALSE);
+  }
+  Status = WdfRequestMarkCancelableEx(Request, CancelRequest);
+  if (Status == STATUS_CANCELLED) {
+    if (!Check(WdfRequestIsCanceled(Request), 92))
+      return;
+    if (Context)
+      Context->Phase = 1;
+    DbgPrint("KMDF control: %c already cancelled\n", TransferMode);
+    WdfRequestComplete(Request, STATUS_CANCELLED);
+    return;
+  }
+  if (!Check(Status == STATUS_SUCCESS, 93))
+    return;
+  DbgPrint("KMDF control: %c marked cancelable\n", TransferMode);
+  if (TransferMode == 'N') {
+    // Deliberate verifier violation: no cancel callback has begun and the
+    // driver has not successfully unmarked the request before completion.
+    WdfRequestComplete(Request, STATUS_SUCCESS);
+    DbgPrint("KMDF control: forbidden marked completion returned\n");
+    return;
+  }
+  if (TransferMode == 'U') {
+    if (!Check(WdfRequestUnmarkCancelable(Request) == STATUS_SUCCESS, 94))
+      return;
+    DbgPrint("KMDF control: U unmarked cancelable\n");
+    QueueCancellationWorker(Request, OutputLength, InputLength);
+  }
+}
+
 static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
                             size_t OutputLength, size_t InputLength,
                             ULONG IoControlCode) {
@@ -326,6 +519,16 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
   // IoControlCode is the fifth Windows x64 argument, passed on the stack.
   if (IoControlCode != IOCTL_NEVERD_KMDF_TRANSFORM) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+    return;
+  }
+  if (TransferMode == 'X' || TransferMode == 'H' || TransferMode == 'U' ||
+      TransferMode == 'N') {
+    CancelableIoctl(Request, OutputLength, InputLength);
+    return;
+  }
+  if (TransferMode == 'B' && WdfRequestIsCanceled(Request)) {
+    DbgPrint("KMDF control: B observed cancellation\n");
+    WdfRequestComplete(Request, STATUS_CANCELLED);
     return;
   }
   if (TransferMode != 'W') {
@@ -447,6 +650,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   TransferMode = Marker == L'D'   ? 'D'
                  : Marker == L'W' ? 'W'
                  : Marker == L'C' ? 'C'
+                 : Marker == L'X' ? 'X'
+                 : Marker == L'H' ? 'H'
+                 : Marker == L'U' ? 'U'
+                 : Marker == L'N' ? 'N'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);

@@ -68,6 +68,7 @@ public:
     std::function<llvm::Expected<RequestView>(uint64_t)> View;
     std::function<llvm::Expected<uint64_t>(uint64_t, bool)> Buffer;
     std::function<llvm::Error(uint64_t)> MarkPending;
+    std::function<llvm::Expected<bool>(uint64_t)> IsCanceled;
     std::function<llvm::Expected<uint64_t>(uint64_t)> Information;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> ValidateCompletion;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
@@ -82,6 +83,11 @@ public:
   /// framework dispatch status independently from a void callback's RAX.
   llvm::Expected<std::optional<RequestDispatch>>
   routeRequest(uint64_t WdmDevice, uint64_t IRP);
+  /// The WDM host first records cancellation, then asks for the one guest
+  /// notification owned by this request. Ordinary WDM requests return nullopt.
+  llvm::Expected<std::optional<GuestCall>> requestCancellation(uint64_t IRP);
+  /// Latch delivery only when the scheduler actually enters this callback.
+  llvm::Error beginCancelCallback(uint64_t Token);
   KernelFramework(GuestMemory &Memory, KernelExportRegistry &Exports,
                   Allocate AllocateStorage, Validate ValidateAccess,
                   Release ReleaseStorage)
@@ -148,12 +154,15 @@ private:
   };
   std::map<uint64_t, Queue> Queues;
   RequestHost RequestsHost;
+  enum class CancelState { Unmarked, Marked, Queued, Delivered };
   struct Request {
     uint64_t IRP = 0, Queue = 0;
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;
     uint64_t CompletionInformation = 0;
+    CancelState Cancellation = CancelState::Unmarked;
+    uint64_t CancelRoutine = 0;
   };
   std::map<uint64_t, Request> Requests;
   struct Context {
@@ -173,6 +182,7 @@ private:
     bool Deleting = false, Cleaned = false;
     bool DestroyEligible = false;
     uint64_t References = 0;
+    uint64_t InternalReferences = 0;
     std::map<uint64_t, Context> Contexts;
     std::vector<uint64_t> ContextOrder;
     std::vector<uint64_t> Children;
@@ -182,6 +192,7 @@ private:
     Callback,
     Cleaned,
     CompleteRequest,
+    CancelReturned,
     TryDestroy,
     Destroy,
     BeginDriverDelete,
@@ -199,6 +210,7 @@ private:
   };
   uint64_t NextContinuation = 1;
   std::map<uint64_t, Continuation> Continuations;
+  std::map<uint64_t, uint64_t> CancelCallbacks;
   std::optional<GuestCall> PendingCall;
 
   llvm::Expected<uint64_t> read(uint64_t Address, unsigned Width = 8);

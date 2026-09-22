@@ -565,6 +565,10 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
         return invalid(
             "deletion with a live request requires queue cancellation "
             "or draining, which is not modeled");
+      if (Current != Handle && I->second.InternalReferences)
+        return invalid(
+            "deletion with an outstanding cancellation callback requires "
+            "asynchronous draining, which is not modeled");
     }
     for (uint64_t Child : I->second.Children)
       if (Objects.count(Child))
@@ -642,6 +646,26 @@ KernelFramework::advance(uint64_t Token) {
       R->second.Queue = 0;
       continue;
     }
+    if (S.Kind == StepKind::CancelReturned) {
+      auto Callback = CancelCallbacks.find(Token);
+      auto R = Requests.find(S.Object);
+      auto O = Objects.find(S.Object);
+      if (Callback == CancelCallbacks.end() || Callback->second != S.Object ||
+          R == Requests.end() ||
+          R->second.Cancellation != CancelState::Delivered ||
+          O == Objects.end() || !O->second.InternalReferences)
+        return invalid("cancellation return lost its request reference");
+      --O->second.InternalReferences;
+      CancelCallbacks.erase(Callback);
+      // Completion may already have run cleanup and retired the WDM IRP while
+      // this callback was suspended. Reuse the normal guest destroy sequence
+      // only after both framework and driver holds are gone.
+      if (O->second.Cleaned && O->second.DestroyEligible &&
+          !O->second.References && !O->second.InternalReferences)
+        C.Steps.insert(C.Steps.begin() + C.Index,
+                       {StepKind::TryDestroy, S.Object});
+      continue;
+    }
     auto OI = Objects.find(S.Object);
     if (OI == Objects.end())
       return invalid("callback sequence lost its object");
@@ -652,7 +676,7 @@ KernelFramework::advance(uint64_t Token) {
     }
     if (S.Kind == StepKind::TryDestroy) {
       O.DestroyEligible = true;
-      if (O.References)
+      if (O.References || O.InternalReferences)
         continue;
       std::vector<Step> Destroy;
       for (uint64_t Type : O.ContextOrder)
@@ -663,7 +687,7 @@ KernelFramework::advance(uint64_t Token) {
       C.Steps.insert(C.Steps.begin() + C.Index, Destroy.begin(), Destroy.end());
       continue;
     }
-    if (O.References)
+    if (O.References || O.InternalReferences)
       return invalid("destroy callback retained an object reference");
     if (O.Kind == ObjectKind::Device) {
       for (const auto &[Handle, Queue] : Queues)
@@ -705,6 +729,10 @@ std::optional<KernelFramework::GuestCall> KernelFramework::takeGuestCall() {
 
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::finishGuestCall(uint64_t Token, uint64_t) {
+  auto Cancel = CancelCallbacks.find(Token);
+  if (Cancel != CancelCallbacks.end() &&
+      Requests.at(Cancel->second).Cancellation != CancelState::Delivered)
+    return invalid("cancellation callback has not entered guest execution");
   return advance(Token);
 }
 
@@ -839,7 +867,8 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     if (!O.References)
       return invalid("framework reference count underflow");
     --O.References;
-    if (O.Cleaned && O.DestroyEligible && !O.References)
+    if (O.Cleaned && O.DestroyEligible && !O.References &&
+        !O.InternalReferences)
       return start({{StepKind::TryDestroy, A[1]}});
     return 0;
   }

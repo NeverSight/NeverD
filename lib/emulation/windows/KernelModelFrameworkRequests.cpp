@@ -138,6 +138,13 @@ void KernelModel::configureFrameworkRequestHost() {
     return Request->SystemBuffer;
   };
   Host.MarkPending = [this](uint64_t IRP) { return markRequestPending(IRP); };
+  Host.IsCanceled = [this](uint64_t IRP) -> llvm::Expected<bool> {
+    const auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
+      return frameworkRequestError(
+          "framework cancellation inspection requires a live IRP");
+    return Request->CancelRequested;
+  };
   Host.Information = [this](uint64_t IRP) -> llvm::Expected<uint64_t> {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed)

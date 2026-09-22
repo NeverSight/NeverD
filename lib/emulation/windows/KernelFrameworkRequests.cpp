@@ -26,6 +26,58 @@ llvm::Error requestError(const llvm::Twine &Message) {
 }
 } // namespace
 
+llvm::Expected<std::optional<KernelFramework::GuestCall>>
+KernelFramework::requestCancellation(uint64_t IRP) {
+  auto R =
+      std::find_if(Requests.begin(), Requests.end(),
+                   [&](const auto &Entry) { return Entry.second.IRP == IRP; });
+  if (R == Requests.end() || R->second.Completed || R->second.Completing ||
+      R->second.Cancellation != CancelState::Marked)
+    return std::optional<GuestCall>{};
+  if (PendingCall)
+    return requestError("cancellation cannot replace a pending guest callback");
+  if (!RequestsHost.IsCanceled)
+    return requestError("cancellation host is unavailable");
+  auto Canceled = RequestsHost.IsCanceled(IRP);
+  if (!Canceled)
+    return Canceled.takeError();
+  if (!*Canceled)
+    return requestError("cancellation requires the underlying IRP cancel flag");
+  auto &O = Objects.at(R->first);
+  if (!O.InternalReferences || !R->second.CancelRoutine)
+    return requestError("cancelable request lost its callback reference");
+  const uint64_t Token = NextContinuation++;
+  // FxRequest::InsertTailIrpQueue holds FXREQUEST_QUEUE_TAG. Cancellation
+  // transfers that hold to ProcessCancelledRequests, which releases it only
+  // after InvokeCancel returns. Driver references are a separate authority.
+  // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/irphandlers/io/fxioqueue.cpp#L4892-L4935
+  Continuations.emplace(
+      Token,
+      Continuation{{{StepKind::Callback, R->first, R->second.CancelRoutine},
+                    {StepKind::CancelReturned, R->first}}});
+  CancelCallbacks.emplace(Token, R->first);
+  R->second.Cancellation = CancelState::Queued;
+  R->second.CancelRoutine = 0;
+  auto Result = advance(Token);
+  if (!Result)
+    return Result.takeError();
+  return takeGuestCall();
+}
+
+llvm::Error KernelFramework::beginCancelCallback(uint64_t Token) {
+  auto C = CancelCallbacks.find(Token);
+  if (C == CancelCallbacks.end())
+    return requestError("unknown cancellation callback token");
+  auto R = Requests.find(C->second);
+  if (R == Requests.end() || R->second.Completed || R->second.Completing ||
+      R->second.Cancellation != CancelState::Queued)
+    return requestError("cancellation callback was already delivered");
+  // Queueing a callback does not authorize completion. The public framework
+  // sets FXREQUEST_FLAG_CANCELLED immediately before invoking the driver.
+  R->second.Cancellation = CancelState::Delivered;
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::optional<KernelFramework::RequestDispatch>>
 KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
   auto D = std::find_if(Devices.begin(), Devices.end(), [&](const auto &Entry) {
@@ -123,7 +175,9 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       Name != "WdfRequestCompleteWithInformation" &&
       Name != "WdfRequestGetParameters" &&
       Name != "WdfRequestRetrieveInputBuffer" &&
-      Name != "WdfRequestRetrieveOutputBuffer")
+      Name != "WdfRequestRetrieveOutputBuffer" &&
+      Name != "WdfRequestMarkCancelableEx" &&
+      Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled")
     return Result{};
   auto O = Objects.find(A[1]);
   auto R = Requests.find(A[1]);
@@ -133,8 +187,58 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
+  if (Name == "WdfRequestMarkCancelableEx") {
+    if (!A[2])
+      return requestError("marking cancelable requires a cancel callback");
+    if (R->second.Cancellation != CancelState::Unmarked)
+      return Result{ControlInvalidDeviceRequest};
+    if (!RequestsHost.IsCanceled)
+      return requestError("cancellation host is unavailable");
+    auto Canceled = RequestsHost.IsCanceled(R->second.IRP);
+    if (!Canceled)
+      return Canceled.takeError();
+    // Unlike the legacy void MarkCancelable API, Ex never delivers a cancel
+    // callback for an IRP that was already canceled when registration began.
+    if (*Canceled)
+      return Result{RequestCancelled};
+    if (O->second.InternalReferences == UINT64_MAX)
+      return requestError("internal reference count overflow");
+    ++O->second.InternalReferences;
+    R->second.CancelRoutine = A[2];
+    R->second.Cancellation = CancelState::Marked;
+    return Result{0};
+  }
+  if (Name == "WdfRequestUnmarkCancelable") {
+    if (R->second.Cancellation == CancelState::Unmarked)
+      return Result{ControlInvalidDeviceRequest};
+    if (R->second.Cancellation != CancelState::Marked)
+      return Result{RequestCancelled};
+    if (!O->second.InternalReferences)
+      return requestError("cancelable request lost its callback reference");
+    --O->second.InternalReferences;
+    R->second.CancelRoutine = 0;
+    R->second.Cancellation = CancelState::Unmarked;
+    return Result{0};
+  }
+  if (Name == "WdfRequestIsCanceled") {
+    // The public verifier requires an owned, noncancelable request here.
+    // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestiscanceled
+    if (R->second.Cancellation != CancelState::Unmarked)
+      return requestError("IsCanceled requires an unmarked request");
+    if (!RequestsHost.IsCanceled)
+      return requestError("cancellation host is unavailable");
+    auto Canceled = RequestsHost.IsCanceled(R->second.IRP);
+    if (!Canceled)
+      return Canceled.takeError();
+    return Result{*Canceled ? 1 : 0};
+  }
   if (Name == "WdfRequestComplete" ||
       Name == "WdfRequestCompleteWithInformation") {
+    if (R->second.Cancellation == CancelState::Marked ||
+        R->second.Cancellation == CancelState::Queued)
+      return requestError(
+          "completion requires successful UnmarkCancelable or delivered "
+          "EvtRequestCancel");
     if (!RequestsHost.Complete || !RequestsHost.Information ||
         !RequestsHost.ValidateCompletion)
       return requestError("completion host is unavailable");

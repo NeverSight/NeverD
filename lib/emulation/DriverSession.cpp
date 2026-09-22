@@ -682,6 +682,23 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           }
           if (!Current->ID)
             return llvm::Error::success();
+          auto Continuation =
+              Kernel.continueScheduled(Current->ID, *InvocationReturn);
+          if (!Continuation) {
+            ModelFailure(Continuation.takeError());
+            return llvm::Error::success();
+          }
+          if (*Continuation) {
+            auto Frame = NewExecution((**Continuation).PC,
+                                      (**Continuation).Arguments,
+                                      Current->Phase, Current->ID);
+            if (!Frame) {
+              ModelFailure(Frame.takeError());
+              return llvm::Error::success();
+            }
+            Current = std::move(*Frame);
+            continue;
+          }
           if (auto E = Kernel.finishScheduled(Current->ID)) {
             ModelFailure(std::move(E));
             return llvm::Error::success();
@@ -689,13 +706,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           Current.reset();
         }
       }
-      // Waiters retain independent stacks and CPU state. A ready PASSIVE_LEVEL
-      // frame must still yield to the scheduler's queued DISPATCH_LEVEL DPCs.
+      // Waiters retain independent stacks and CPU state. Ready passive frames
+      // yield to queued DPCs and request cancellation callbacks.
       if (auto E = RefreshWaiters()) {
         ModelFailure(std::move(E));
         return llvm::Error::success();
       }
-      for (size_t I = 0; I < Waiting.size() && !Kernel.hasQueuedDPC(); ++I) {
+      for (size_t I = 0;
+           I < Waiting.size() && !Kernel.hasQueuedPriorityCallback(); ++I) {
         if (Waiting[I]->Wait)
           continue;
         Current = std::move(Waiting[I]);

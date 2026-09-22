@@ -878,5 +878,200 @@ TEST(DriverKernelScheduler, RearmingTimerCannotInventActivePeriodicProvenance) {
   EXPECT_FALSE(S.hasOutstanding(100));
 }
 
+TEST(DriverKernelScheduler,
+     FrameworkCancellationHasAnIndependentObjectNamespace) {
+  Scheduler S;
+  const auto CancelID = take(S.enqueueFrameworkCancel(work(1, 101)));
+  EXPECT_TRUE(S.hasQueuedFrameworkCancel());
+  EXPECT_FALSE(S.isWorkItemQueued(1));
+  EXPECT_FALSE(S.cancelWorkItem(1));
+  EXPECT_FALSE(S.isDPCQueued(1));
+  EXPECT_FALSE(S.removeDPC(1));
+  take(S.enqueueWorkItem(work(1, 102)));
+  EXPECT_TRUE(take(S.queueDPC(dpc(1))));
+  EXPECT_EQ(S.queuedCallbackCount(), 3u);
+  EXPECT_TRUE(S.removeDPC(1));
+  EXPECT_TRUE(S.cancelWorkItem(1));
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+  EXPECT_FALSE(S.hasOutstanding(100));
+  EXPECT_FALSE(S.hasOutstanding(102));
+  EXPECT_TRUE(S.hasOutstanding(101));
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, CancelID);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::FrameworkCancel);
+  EXPECT_FALSE(S.hasQueuedFrameworkCancel());
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, DPCsPrecedeCancellationFIFOWhichPrecedesWorkers) {
+  Scheduler S;
+  const auto WorkerID = take(S.enqueueWorkItem(work(1, 101)));
+  auto First = work(2, 102);
+  First.Thread = 300;
+  First.PC = 0x180003000;
+  First.Arguments = {0x1234};
+  const auto FirstID = take(S.enqueueFrameworkCancel(First));
+  const auto SecondID = take(S.enqueueFrameworkCancel(work(3, 103)));
+  EXPECT_TRUE(take(S.queueDPC(dpc(4))));
+  auto Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::DPC);
+  EXPECT_EQ(Call->IRQL, 2u);
+  success(S.finish(Call->ID));
+  Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, FirstID);
+  EXPECT_EQ(Call->Object, First.Object);
+  EXPECT_EQ(Call->Owner, First.Owner);
+  EXPECT_EQ(Call->Thread, First.Thread);
+  EXPECT_EQ(Call->PC, First.PC);
+  EXPECT_EQ(Call->Arguments, First.Arguments);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::FrameworkCancel);
+  EXPECT_EQ(Call->IRQL, 0u);
+  success(S.finish(Call->ID));
+  Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, SecondID);
+  success(S.finish(Call->ID));
+  Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, WorkerID);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::WorkItem);
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.hasPending());
+  EXPECT_EQ(S.dispatchCount(), 4u);
+}
+
+TEST(DriverKernelScheduler,
+     DuplicateQueuedCancellationCannotReplaceItsDelivery) {
+  Scheduler S;
+  const auto ID = take(S.enqueueFrameworkCancel(work(1, 101)));
+  auto Replacement = work(1, 102);
+  Replacement.Arguments = {0x9999};
+  expectError(S.enqueueFrameworkCancel(Replacement), "already queued");
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+  EXPECT_FALSE(S.hasOutstanding(102));
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, ID);
+  EXPECT_EQ(Call->Owner, 101u);
+  EXPECT_EQ(Call->Arguments, (std::vector<uint64_t>{11, 21}));
+  success(S.finish(Call->ID));
+}
+
+TEST(DriverKernelScheduler, CancellationAdmissionSharesAllCallbackCapacity) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 1;
+  Scheduler S(Limits);
+  take(S.enqueueWorkItem(work(1)));
+  expectError(S.enqueueFrameworkCancel(work(2, 102)), "pending callback limit");
+  EXPECT_FALSE(S.hasOutstanding(102));
+  EXPECT_TRUE(S.cancelWorkItem(1));
+  const auto ID = take(S.enqueueFrameworkCancel(work(2, 102)));
+  expectError(S.enqueueWorkItem(work(3)), "pending callback limit");
+  auto Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, ID);
+  expectError(S.enqueueFrameworkCancel(work(4)), "pending callback limit");
+  success(S.suspend(ID));
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+  EXPECT_EQ(S.suspendedCallbackCount(), 1u);
+  EXPECT_TRUE(S.hasPending());
+  EXPECT_TRUE(S.hasOutstanding(102));
+  expectError(S.queueDPC(dpc(5)), "pending callback limit");
+  success(S.resume(ID));
+  success(S.finish(ID));
+  EXPECT_FALSE(S.hasOutstanding(102));
+  EXPECT_TRUE(take(S.enqueueWorkItem(work(6))));
+}
+
+TEST(DriverKernelScheduler,
+     SuspendedCancellationKeepsKindAcrossInterveningWorker) {
+  Scheduler S;
+  const auto CancelID = take(S.enqueueFrameworkCancel(work(1, 101)));
+  const auto WorkerID = take(S.enqueueWorkItem(work(2, 102)));
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, CancelID);
+  success(S.suspend(CancelID));
+  EXPECT_FALSE(S.hasQueuedFrameworkCancel());
+  ASSERT_NE(S.suspended(CancelID), nullptr);
+  EXPECT_EQ(S.suspended(CancelID)->Kind,
+            Scheduler::CallbackKind::FrameworkCancel);
+  EXPECT_EQ(S.suspended(CancelID)->Arguments, (std::vector<uint64_t>{11, 21}));
+  Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, WorkerID);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::WorkItem);
+  EXPECT_TRUE(S.hasOutstanding(101));
+  expectError(S.resume(CancelID), "unfinished callback");
+  success(S.finish(WorkerID));
+  EXPECT_FALSE(take(S.next(false)));
+  EXPECT_TRUE(S.hasPending());
+  success(S.resume(CancelID));
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, CancelID);
+  EXPECT_EQ(S.active()->Object, 1u);
+  EXPECT_EQ(S.active()->Owner, 101u);
+  EXPECT_EQ(S.active()->Thread, 200u);
+  EXPECT_EQ(S.active()->Kind, Scheduler::CallbackKind::FrameworkCancel);
+  EXPECT_EQ(S.active()->IRQL, 0u);
+  EXPECT_FALSE(S.cancelWorkItem(1));
+  EXPECT_EQ(S.dispatchCount(), 2u);
+  success(S.finish(CancelID));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, ReadyCancellationPreventsAdvancingToFutureTimer) {
+  Scheduler S;
+  const auto ID = take(S.enqueueFrameworkCancel(work(1)));
+  EXPECT_FALSE(take(S.setTimer(10, 100, -50, 0, dpc(2))));
+  auto Call = take(S.next(true, 100));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, ID);
+  EXPECT_EQ(Call->DueTime100ns, 0u);
+  EXPECT_EQ(Call->SourceTimer, 0u);
+  EXPECT_EQ(S.now100ns(), 0u);
+  success(S.finish(ID));
+  Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::DPC);
+  EXPECT_EQ(Call->SourceTimer, 10u);
+  EXPECT_EQ(S.now100ns(), 50u);
+  success(S.finish(Call->ID));
+}
+
+TEST(DriverKernelScheduler,
+     CancellationDispatchExhaustionKeepsQueuedOwnership) {
+  Scheduler::Limits Limits;
+  Limits.MaxDispatches = 1;
+  Scheduler S(Limits);
+  const auto ID = take(S.enqueueFrameworkCancel(work(1, 101)));
+  take(S.enqueueFrameworkCancel(work(2, 102)));
+  ASSERT_TRUE(take(S.next(false)));
+  success(S.finish(ID));
+  expectError(S.next(false), "dispatch limit");
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+  EXPECT_TRUE(S.hasOutstanding(102));
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  EXPECT_FALSE(S.active());
+}
+
+TEST(DriverKernelScheduler, InvalidCancellationMetadataCannotRetainOwnership) {
+  Scheduler S;
+  auto Invalid = work(1, 101);
+  Invalid.Thread = 0;
+  expectError(S.enqueueFrameworkCancel(Invalid), "nonzero");
+  Invalid = work(1, 101);
+  Invalid.Arguments.resize(scheduler::MaxArguments + 1);
+  expectError(S.enqueueFrameworkCancel(Invalid), "argument count");
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_FALSE(S.hasPending());
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+}
+
 } // namespace
 } // namespace neverd::emulation

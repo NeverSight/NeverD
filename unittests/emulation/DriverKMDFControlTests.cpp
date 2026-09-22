@@ -25,6 +25,15 @@ constexpr uint32_t Pending = 0x103;
 constexpr uint32_t BufferTooSmall = 0xc0000023;
 constexpr uint32_t InvalidDeviceRequest = 0xc0000010;
 constexpr uint32_t DataError = 0xc000003e;
+constexpr uint32_t Cancelled = 0xc0000120;
+
+std::vector<const char *> controlImages() {
+  std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
+#ifdef NEVERD_KMDF_CONTROL_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_CONTROL_CFG_FIXTURE);
+#endif
+  return Images;
+}
 
 DriverRequest controlRequest(DriverRequestKind Kind) {
   DriverRequest Request;
@@ -315,6 +324,171 @@ TEST(DriverKMDFControl, RelocatedActiveCFGExecutesQueueAndWorkerCallbacks) {
   GTEST_SKIP()
       << "A genuine WDK control fixture linked with /guard:cf was not supplied";
 #endif
+}
+
+TEST(DriverKMDFControl, CancelCallbackRetainsContextUntilItsDestroyEpilogue) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('X');
+    Options.LoadAddress = 0x190000000;
+    Options.Requests[1].CancelAfter100ns = 10;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    checkCompletedLifecycle(*Result, 6);
+    ASSERT_EQ(Result->Requests.size(), 6u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+    EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, 10u);
+    EXPECT_EQ(Result->Requests[1].Information, 0u);
+    EXPECT_TRUE(Result->Requests[1].Output.empty());
+    EXPECT_EQ(Result->Requests[2].IOStatus, 0u);
+    EXPECT_EQ(Result->Requests[3].IOStatus, 0u);
+    EXPECT_EQ(apiCount(*Result, "KeDelayExecutionThread"), 1u);
+    EXPECT_EQ(
+        controlMessages(*Result),
+        (std::vector<std::string>{
+            "KMDF control: ready in mode X\n",
+            "KMDF control: X marked cancelable\n",
+            "KMDF control: X cancel callback\n",
+            "KMDF control: X request cleanup\n",
+            "KMDF control: X cancel callback retained context\n",
+            "KMDF control: X request destroy\n",
+            "KMDF control: X destroy resumed\n",
+            "KMDF control: read 40 bytes\n", "KMDF control: write 40 bytes\n",
+            "KMDF control: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFControl,
+     CancellationBeforeDispatchDoesNotDeliverCancelCallback) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('X');
+    Options.LoadAddress = 0x190000000;
+    Options.Requests[1].CancelAfter100ns = 0;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    checkCompletedLifecycle(*Result, 6);
+    ASSERT_EQ(Result->Requests.size(), 6u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+    EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, 0u);
+    EXPECT_TRUE(Result->Requests[1].Output.empty());
+    EXPECT_EQ(apiCount(*Result, "KeDelayExecutionThread"), 0u);
+    auto Mark = std::find_if(Result->Calls.begin(), Result->Calls.end(),
+                             [](const auto &Call) {
+                               return Call.Name == "WdfRequestMarkCancelableEx";
+                             });
+    ASSERT_NE(Mark, Result->Calls.end());
+    EXPECT_EQ(Mark->Result, Cancelled);
+    EXPECT_EQ(controlMessages(*Result),
+              (std::vector<std::string>{"KMDF control: ready in mode X\n",
+                                        "KMDF control: X already cancelled\n",
+                                        "KMDF control: X request cleanup\n",
+                                        "KMDF control: X request destroy\n",
+                                        "KMDF control: read 40 bytes\n",
+                                        "KMDF control: write 40 bytes\n",
+                                        "KMDF control: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFControl, CancelCallbackWaitsForCooperatingWorkerCompletion) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('H');
+    Options.LoadAddress = 0x190000000;
+    Options.Requests[1].CancelAfter100ns = 10;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    checkCompletedLifecycle(*Result, 6);
+    ASSERT_EQ(Result->Requests.size(), 6u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+    EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, 10u);
+    EXPECT_TRUE(Result->Requests[1].Output.empty());
+    EXPECT_EQ(apiCount(*Result, "KeWaitForSingleObject"), 1u);
+    EXPECT_EQ(apiCount(*Result, "KeDelayExecutionThread"), 1u);
+    EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), 1u);
+    EXPECT_EQ(apiCount(*Result, "IoFreeWorkItem"), 1u);
+    auto Unmark = std::find_if(
+        Result->Calls.begin(), Result->Calls.end(), [](const auto &Call) {
+          return Call.Name == "WdfRequestUnmarkCancelable";
+        });
+    ASSERT_NE(Unmark, Result->Calls.end());
+    EXPECT_EQ(Unmark->Result, Cancelled);
+    EXPECT_EQ(
+        controlMessages(*Result),
+        (std::vector<std::string>{
+            "KMDF control: ready in mode H\n",
+            "KMDF control: H marked cancelable\n",
+            "KMDF control: H cancel callback\n",
+            "KMDF control: H worker owns completion\n",
+            "KMDF control: H request cleanup\n",
+            "KMDF control: H cancel callback retained context\n",
+            "KMDF control: H request destroy\n",
+            "KMDF control: H destroy resumed\n",
+            "KMDF control: read 40 bytes\n", "KMDF control: write 40 bytes\n",
+            "KMDF control: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFControl,
+     UnmarkSeparatesTheCancellationFactFromCallbackDelivery) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    for (uint64_t Delay : {10u, 30u}) {
+      SCOPED_TRACE(Delay);
+      auto Options = controlOptions('U');
+      Options.LoadAddress = 0x190000000;
+      Options.Requests[1].CancelAfter100ns = Delay;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 6);
+      checkSuccessfulTransfers(*Result, 'U');
+      ASSERT_EQ(Result->Requests.size(), 6u);
+      if (Delay == 10)
+        EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, 10u);
+      else
+        EXPECT_FALSE(Result->Requests[1].CancelRequestedAt100ns);
+      EXPECT_EQ(
+          controlMessages(*Result),
+          (std::vector<std::string>{
+              "KMDF control: ready in mode U\n",
+              "KMDF control: U marked cancelable\n",
+              "KMDF control: U unmarked cancelable\n",
+              Delay == 10 ? "KMDF control: U worker cancelled=1\n"
+                          : "KMDF control: U worker cancelled=0\n",
+              "KMDF control: transformed 4 bytes in mode U\n",
+              "KMDF control: read 40 bytes\n", "KMDF control: write 40 bytes\n",
+              "KMDF control: driver unload\n"}));
+      auto Unmark = std::find_if(
+          Result->Calls.begin(), Result->Calls.end(), [](const auto &Call) {
+            return Call.Name == "WdfRequestUnmarkCancelable";
+          });
+      ASSERT_NE(Unmark, Result->Calls.end());
+      EXPECT_EQ(Unmark->Result, 0u);
+    }
+  }
+}
+
+TEST(DriverKMDFControl, CompletingMarkedRequestWithoutUnmarkIsRejected) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('N');
+    Options.LoadAddress = 0x190000000;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("UnmarkCancelable"), std::string::npos);
+    EXPECT_FALSE(Result->UnloadCompleted);
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_FALSE(Result->Requests[1].Completed);
+    EXPECT_FALSE(Result->Requests[1].CancelRequestedAt100ns);
+    ASSERT_FALSE(Result->Calls.empty());
+    EXPECT_EQ(Result->Calls.back().Name, "WdfRequestComplete");
+    EXPECT_FALSE(Result->Calls.back().Result);
+    EXPECT_EQ(
+        controlMessages(*Result),
+        (std::vector<std::string>{"KMDF control: ready in mode N\n",
+                                  "KMDF control: N marked cancelable\n"}));
+  }
 }
 
 #else

@@ -49,6 +49,10 @@ struct DriverRequest {
   uint64_t ByteOffset = 0;
   /// Scenario identity of an independently opened FILE_OBJECT.
   uint32_t File = 0;
+  /// Optional cancellation event relative to submission in virtual 100 ns
+  /// units. Zero requests cancellation before dispatch; only READ/WRITE/IOCTL
+  /// accept this field. Runtime cancellation requires a supported KMDF route.
+  std::optional<uint64_t> CancelAfter100ns;
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -118,6 +122,9 @@ struct DriverRequestResult {
   std::vector<uint8_t> Output;
   uint32_t File = 0;
   uint64_t ByteOffset = 0;
+  /// Actual virtual time when cancellation was requested; absent when the
+  /// request completed before its configured cancellation event could fire.
+  std::optional<uint64_t> CancelRequestedAt100ns;
 };
 
 struct DriverFault {

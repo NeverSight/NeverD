@@ -50,6 +50,8 @@ fixture는 게스트 초기화, 성공/실패 반환, 미지원 동작, 메모�
 
 `DriverGuardTests.cpp`와 네 가지 원본 `driver_guard.c` 변형은 활성/비활성 CFG, 기준 주소 재배치, check/dispatch ABI와 잘못된 대상을 검증합니다. `KernelFrameworkTests.cpp`, `KernelFrameworkControlTests.cpp`, `KernelFrameworkQueueTests.cpp`, `KernelFrameworkRequestTests.cpp`는 바인딩, 실패 시 롤백되는 장치 생성, 큐 라우팅, 논리적 버퍼 길이와 정리 순서와 IRP/컨텍스트 수명을 검증합니다. 원본 `driver_kmdf_lifecycle.c`와 `driver_kmdf_control.c`는 실제 WDK 1.33 헤더로 선택적으로 컴파일하고 진짜 `FxDriverEntry` 라이브러리를 통해 링크합니다. CMake 캐시 경로에서 수명 주기 이미지에는 `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE`를, 일반 및 활성 CFG 제어 장치 이미지에는 `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE`를 지정합니다. 외부 산출물이 없으면 명시적으로 건너뜁니다. `DriverKMDFLifecycleTests.cpp`, `DriverKMDFControlTests.cpp`와 `DriverScenarioPublicTests.cpp`의 C API/CLI 사례는 실제 콜백, 버퍼/직접 I/O, 작업 항목을 통한 대기 요청 완료, 실패 상태, 언로드와 재배치된 CFG 실행을 검증합니다. 실행 증거는 Linux에 한정되며 완전한 KMDF나 PnP/전원 관리 지원을 입증하지 않습니다.
 
+취소 테스트는 전송 요청에만 허용되는 가상 기한과 보고서 필드, 완료 우선 및 이미 취소된 경로, 표시/해제 결과, 큐 등록과 전달 완료 상태의 완료 권한, 콜백 대기와 내부 참조 수명을 검증합니다. 스케줄러 테스트는 DPC/취소/작업 항목 순서, 용량, 식별자 분리와 중단/복원을 독립적으로 검증합니다. WDM 취소는 여전히 명시적 모델 오류입니다.
+
 
 ## 테스트 배치
 

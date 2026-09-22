@@ -286,9 +286,11 @@ Unicorn 通过 `cmake/NeverDUnicorn.cmake` 统一配置一次，与语义测试�
 
 Windows 模型还管理独立的非分页池 MDL；描述符释放不会释放底层缓冲区。独立注册表模型管理显式场景树、句柄权限和键值生命周期，与静态导出目录分开。场景预检与执行使用同一注册表验证规则，报告保留最终键值；卸载检查遗留句柄。
 
-`KernelScheduler` 管理就绪队列顺序、回调身份和定时器期限；`KernelDispatcher` 管理不透明 DPC、定时器、事件及其信号。`KernelModel` 管理等待登记、工作项／设备生命周期和 IRP 完成。`DriverSession` 保存并恢复各回调的独立栈及完整 CPU 上下文，包括 Win64 栈参数，来宾内存保持共享。虚拟时间在定时器／等待边界推进；CPU0 以确定性的协作调度执行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作项。这不提供通用线程／APC／取消／自旋锁调度、并发 IRP、完整 PnP／电源或硬件。 API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。
+`KernelScheduler` 管理就绪队列顺序、回调身份和定时器期限；`KernelDispatcher` 管理不透明 DPC、定时器、事件及其信号。`KernelModel` 管理等待登记、工作项／设备生命周期和 IRP 完成。`DriverSession` 保存并恢复各回调的独立栈及完整 CPU 上下文，包括 Win64 栈参数，来宾内存保持共享。仅在没有就绪执行帧时，虚拟时间才推进到定时器／等待／取消边界；CPU0 以确定性的协作调度执行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作项。这不提供通用线程／APC／自旋锁调度、WDM／PnP 取消、并发 IRP、完整 PnP／电源或硬件。 API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。
 
-`KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、WDF 对象与上下文、控制设备初始化记录、顺序默认队列和请求句柄。其类型化设备与请求宿主接口将 WDM 命名空间、存储、数据包状态、MDL 映射及完成验证交给 `KernelModel`；双方均不创建重复的设备或 IRP。队列路由将框架拥有的分派状态与返回类型为 `void` 的来宾回调返回分开记录。完成续接流程先执行清理和子对象销毁，再释放 IRP；外部引用仅保留 WDF 上下文。在取消和队列排空尚未建模时，删除待处理请求会在修改祖先对象之前被拒绝。`DriverSession` 在共享预算下执行嵌套回调。`DriverImage` 验证 CFG 元数据；`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。PnP 设备、通用队列与取消、类扩展及 UMDF 仍不受支持。
+`KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、WDF 对象与上下文、控制设备初始化记录、顺序默认队列和请求句柄。其类型化设备与请求宿主接口将 WDM 命名空间、存储、数据包状态、MDL 映射及完成验证交给 `KernelModel`；双方均不创建重复的设备或 IRP。队列路由将框架拥有的分派状态与返回类型为 `void` 的来宾回调返回分开记录。完成续接流程先执行清理和子对象销毁，再释放 IRP；外部引用仅保留 WDF 上下文。删除待处理请求会在修改祖先对象之前被拒绝；删除时自动取消或排空请求仍不受支持。`DriverSession` 在共享预算下执行嵌套回调。`DriverImage` 验证 CFG 元数据；`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。PnP 设备、通用队列调度及其取消、类扩展及 UMDF 仍不受支持。
+
+场景通过 `cancel_after_100ns` 为传输请求设置虚拟取消期限，`KernelModel` 的独立 IRP 记录管理此期限及实际发生的绝对 `cancel_requested_at_100ns`；公开场景仍串行提交请求。`KernelModel` 在框架路由后、来宾 I/O 回调前应用零延迟取消，保留完成先发生的结果，并在空闲时间推进时考虑正数取消期限。`KernelFramework` 管理标记／解除标记、排队／已递送状态，以及保留到取消回调返回的内部引用。仅排队的取消回调不允许完成请求；递送后，工作项可在回调等待期间协调完成。保留 WDF 对象不会恢复已失效的 IRP 存储。`KernelScheduler` 将取消回调与工作项分开管理，在暂停／恢复时保留回调类别并共用容量和派发预算；优先级为 DPC、FIFO 取消回调、普通工作项及就绪被动等待帧的恢复，后两者均后于取消递送。取消回调在 `PASSIVE_LEVEL` 执行。此控制设备契约不提供 WDM 取消例程或通用队列调度器。
 
 
 ## 异常重写边界

@@ -84,6 +84,10 @@ public:
   nextScheduled(bool AdvanceTime,
                 std::optional<uint64_t> Deadline = std::nullopt);
   llvm::Error finishScheduled(uint64_t ID);
+  /// Finish a scheduled framework callback, including any destruction callbacks
+  /// required before releasing its scheduler ownership.
+  llvm::Expected<std::optional<KernelFramework::GuestCall>>
+  continueScheduled(uint64_t ID, uint64_t ReturnValue);
   llvm::Error suspendScheduled(uint64_t ID);
   llvm::Error resumeScheduled(uint64_t ID);
   struct Wait {
@@ -94,6 +98,9 @@ public:
   llvm::Expected<std::optional<uint32_t>> pollWait(const Wait &Pending);
   std::optional<uint64_t> nextEventTime() const;
   bool hasQueuedDPC() const { return Scheduler.hasQueuedDPC(); }
+  bool hasQueuedPriorityCallback() const {
+    return hasQueuedDPC() || Scheduler.hasQueuedFrameworkCancel();
+  }
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
   void enterForeground() { CurrentIRQL = 0; }
@@ -130,6 +137,8 @@ private:
   uint8_t CurrentIRQL = 0;
   std::map<uint64_t, uint64_t> WorkItems;
   std::map<uint64_t, uint64_t> WorkReferences;
+  std::map<uint64_t, uint64_t> ScheduledCancelContinuations;
+  llvm::Error processRequestCancellations();
   llvm::Expected<uint64_t> allocateWorkItem(uint64_t Device);
   llvm::Error queueWorkItem(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error freeWorkItem(uint64_t Address);
@@ -177,6 +186,8 @@ private:
     bool Completed = false;
     bool DispatchReturned = false;
     bool PendingMarked = false;
+    bool CancelRequested = false;
+    std::optional<uint64_t> CancelDeadline = std::nullopt;
     uint32_t FileId = 0;
     uint32_t InputSize = 0;
     uint32_t TransferSize = 0;
