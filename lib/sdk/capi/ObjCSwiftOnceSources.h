@@ -695,8 +695,9 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
       return std::nullopt;
     Method = &Candidate;
   }
+  const bool SeparateRetain = F.Body.size() == 7;
   if (!Method || F.Params.size() != 3 || !F.ReturnType ||
-      F.ReturnType->Size != 8 || F.Body.size() != 6)
+      F.ReturnType->Size != 8 || (F.Body.size() != 6 && !SeparateRetain))
     return std::nullopt;
   const auto Parameters = sourceABIParameters(*Method->TypeHint);
   if (Parameters.size() != 2 || !Method->TypeHint->ReturnType ||
@@ -765,17 +766,34 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   const auto *PredicateAssignment = Assignment(0);
   const auto *StorageAssignment = Assignment(3);
   const auto *RetainAssignment = Assignment(4);
+  const auto *ResultAssignment = Assignment(SeparateRetain ? 5 : 4);
   const auto &Branch = F.Body[1];
   const auto &Label = F.Body[2];
-  const auto &Return = F.Body[5];
+  const auto &Return = F.Body[SeparateRetain ? 6 : 5];
+  const size_t OnceIndex = Branch.Body.size() == 3 ? 1 : 0;
+  if (OnceIndex) {
+    const auto &EntryLabel = Branch.Body.front();
+    bool HasExpression = false;
+    forEachExpr(EntryLabel, [&](const ExprPtr &) { HasExpression = true; });
+    if (EntryLabel.Kind != StmtKind::Block || HasExpression ||
+        !EntryLabel.Body.empty() || !EntryLabel.ElseBody.empty() ||
+        !EntryLabel.Cases.empty() || !EntryLabel.DefaultBody.empty() ||
+        !EntryLabel.EHClauseBodies.empty() || EntryLabel.GotoTarget ||
+        EntryLabel.MemoryOrdering != NdMemoryOrdering::None ||
+        EntryLabel.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+  }
   if (!PredicateAssignment || !StorageAssignment || !RetainAssignment ||
-      Branch.Kind != StmtKind::If || !Branch.Cond || !Branch.ElseBody.empty() ||
-      Branch.Body.size() != 2 || Branch.Body[0].Kind != StmtKind::Call ||
-      !Branch.Body[0].CallExpr || Branch.Body[1].Kind != StmtKind::Goto ||
-      !Branch.Body[1].GotoTarget || Label.Kind != StmtKind::Block ||
-      Label.Addr != Branch.Body[1].GotoTarget || !Label.Body.empty() ||
-      !Label.ElseBody.empty() || Return.Kind != StmtKind::Return ||
-      !Return.RetVal || !SameLocal(Return.RetVal, RetainAssignment->Dst))
+      !ResultAssignment || Branch.Kind != StmtKind::If || !Branch.Cond ||
+      !Branch.ElseBody.empty() || Branch.Body.size() != OnceIndex + 2 ||
+      Branch.Body[OnceIndex].Kind != StmtKind::Call ||
+      !Branch.Body[OnceIndex].CallExpr ||
+      Branch.Body[OnceIndex + 1].Kind != StmtKind::Goto ||
+      !Branch.Body[OnceIndex + 1].GotoTarget || Label.Kind != StmtKind::Block ||
+      Label.Addr != Branch.Body[OnceIndex + 1].GotoTarget ||
+      !Label.Body.empty() || !Label.ElseBody.empty() ||
+      Return.Kind != StmtKind::Return || !Return.RetVal ||
+      !SameLocal(Return.RetVal, ResultAssignment->Dst))
     return std::nullopt;
 
   const auto Predicate = LoadAddress(PredicateAssignment->Val);
@@ -802,7 +820,7 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   if (!SameLocal(Loaded, PredicateAssignment->Dst))
     return std::nullopt;
 
-  const auto &Once = *Branch.Body[0].CallExpr;
+  const auto &Once = *Branch.Body[OnceIndex].CallExpr;
   if (!onceCall(Once, Image))
     return std::nullopt;
   const auto OncePredicate =
@@ -818,17 +836,60 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
   if (!Retain || Retain->Kind != ExprKind::Call || Retain->IsIndirectCall ||
       Retain->Operands.size() != 1 || !Retain->SourceCallHint ||
       Retain->SourceCallHint->CallKind !=
-          SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+          (SeparateRetain ? SourceCallTypeHint::Kind::SwiftRuntimeCall
+                          : SourceCallTypeHint::Kind::ObjCRuntimeCall) ||
       Retain->SourceCallHint->TargetName !=
-          "objc_retainAutoreleaseReturnValue" ||
-      Retain->SourceCallHint->ReturnedArgument != 0 ||
+          (SeparateRetain ? "swift_retain"
+                          : "objc_retainAutoreleaseReturnValue") ||
+      (!SeparateRetain && Retain->SourceCallHint->ReturnedArgument != 0) ||
       !SameLocal(Retain->Operands[0], StorageAssignment->Dst))
     return std::nullopt;
   const auto ExpectedRetain =
-      objcRuntimeSourceCallHint(Image, Retain->SourceCallHint->TargetAddress);
+      SeparateRetain
+          ? swiftRuntimeSourceCallHint(Image,
+                                       Retain->SourceCallHint->TargetAddress)
+          : objcRuntimeSourceCallHint(Image,
+                                      Retain->SourceCallHint->TargetAddress);
   if (!ExpectedRetain || !objc_binding_detail::runtimeBindingMatches(
                              *Retain->SourceCallHint, *ExpectedRetain))
     return std::nullopt;
+  if (SeparateRetain) {
+    // Native Swift objects use two operations. Preserve both calls and feed
+    // the actual retain result to autorelease; no identity folding is needed.
+    const auto Autorelease = Plain(ResultAssignment->Val);
+    const auto SwiftBind =
+        Image.DyldBindSlots.find(Retain->SourceCallHint->TargetAddress);
+    if (SwiftBind == Image.DyldBindSlots.end() ||
+        SwiftBind->second.Module != "/usr/lib/swift/libswiftCore.dylib" ||
+        Retain->IntrinsicId != Intrinsic::None ||
+        !Retain->IntrinsicOutputs.empty() ||
+        Retain->MemoryOrdering != NdMemoryOrdering::None ||
+        Retain->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      return std::nullopt;
+    if (!Autorelease || Autorelease->Kind != ExprKind::Call ||
+        Autorelease->IsIndirectCall || Autorelease->Operands.size() != 1 ||
+        !Autorelease->SourceCallHint ||
+        Autorelease->SourceCallHint->CallKind !=
+            SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+        Autorelease->SourceCallHint->TargetName !=
+            "objc_autoreleaseReturnValue" ||
+        Autorelease->IntrinsicId != Intrinsic::None ||
+        !Autorelease->IntrinsicOutputs.empty() ||
+        Autorelease->MemoryOrdering != NdMemoryOrdering::None ||
+        Autorelease->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !SameLocal(Autorelease->Operands[0], RetainAssignment->Dst))
+      return std::nullopt;
+    const auto ObjCBind =
+        Image.DyldBindSlots.find(Autorelease->SourceCallHint->TargetAddress);
+    if (ObjCBind == Image.DyldBindSlots.end() ||
+        ObjCBind->second.Module != "/usr/lib/libobjc.A.dylib")
+      return std::nullopt;
+    const auto Expected = objcRuntimeSourceCallHint(
+        Image, Autorelease->SourceCallHint->TargetAddress);
+    if (!Expected || !objc_binding_detail::runtimeBindingMatches(
+                         *Autorelease->SourceCallHint, *Expected))
+      return std::nullopt;
+  }
 
   size_t ContextUses = 0;
   walkStmts(F.Body, [&](const HighStmt &Statement) {

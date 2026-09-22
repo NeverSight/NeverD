@@ -322,12 +322,17 @@ struct ObjCThunkFixture : AddressorFixture {
   static constexpr va_t RetainSlot = 0x2088;
   static constexpr const char *ThunkName = "_$s4Test5valueSo8NSObjectCvgZTo";
 
-  explicit ObjCThunkFixture(Arch Architecture)
+  explicit ObjCThunkFixture(Arch Architecture, bool SeparateRetain = false)
       : AddressorFixture(Architecture) {
     Image.Symbols.push_back({ThunkName, ThunkAddress, 0, true});
-    Image.ImportPtrSlots[RetainSlot] = "_objc_retainAutoreleaseReturnValue";
-    Image.DyldBindSlots[RetainSlot] = {"_objc_retainAutoreleaseReturnValue", 0,
-                                       "/usr/lib/libobjc.A.dylib", false};
+    const auto RetainName =
+        SeparateRetain ? "_swift_retain" : "_objc_retainAutoreleaseReturnValue";
+    Image.ImportPtrSlots[RetainSlot] = RetainName;
+    Image.DyldBindSlots[RetainSlot] = {RetainName, 0,
+                                       SeparateRetain
+                                           ? "/usr/lib/swift/libswiftCore.dylib"
+                                           : "/usr/lib/libobjc.A.dylib",
+                                       false};
     ObjCMethod Method;
     Method.Status = "supported";
     Method.Implementation = ThunkAddress;
@@ -411,7 +416,9 @@ struct ObjCThunkFixture : AddressorFixture {
         HighExpr::makeConst(StorageAddress, 8,
                             ConstantAddressProvenance::DataAddress),
         Integer);
-    const auto Retain = objcRuntimeSourceCallHint(Image, RetainSlot);
+    const auto Retain = SeparateRetain
+                            ? swiftRuntimeSourceCallHint(Image, RetainSlot)
+                            : objcRuntimeSourceCallHint(Image, RetainSlot);
     EXPECT_TRUE(Retain);
     if (!Retain)
       return;
@@ -429,6 +436,31 @@ struct ObjCThunkFixture : AddressorFixture {
     Return.RetVal = ResultValue;
     Thunk.Body = {LoadPredicate, Initialize,   Label,
                   LoadStorage,   RetainResult, Return};
+    if (SeparateRetain) {
+      HighStmt EntryLabel;
+      EntryLabel.Kind = StmtKind::Block;
+      EntryLabel.Addr = ThunkAddress + 0x40;
+      Thunk.Body[1].Body.insert(Thunk.Body[1].Body.begin(), EntryLabel);
+      const va_t AutoreleaseSlot = 0x20a0;
+      Image.ImportPtrSlots[AutoreleaseSlot] = "_objc_autoreleaseReturnValue";
+      Image.DyldBindSlots[AutoreleaseSlot] = {
+          "_objc_autoreleaseReturnValue", 0, "/usr/lib/libobjc.A.dylib", false};
+      const auto Autorelease =
+          objcRuntimeSourceCallHint(Image, AutoreleaseSlot);
+      EXPECT_TRUE(Autorelease);
+      if (!Autorelease)
+        return;
+      HighStmt ReleaseResult;
+      ReleaseResult.Kind = StmtKind::Assign;
+      ReleaseResult.Dst = Local(4, Pointer);
+      ReleaseResult.Val = HighExpr::makeCall(Autorelease->TargetName,
+                                             AutoreleaseSlot, {ResultValue});
+      ReleaseResult.Val->Type = Pointer;
+      ReleaseResult.Val->SourceCallHint =
+          std::make_shared<SourceCallTypeHint>(*Autorelease);
+      Thunk.Body.back().RetVal = ReleaseResult.Dst;
+      Thunk.Body.insert(Thunk.Body.end() - 1, ReleaseResult);
+    }
     Pipeline.HighFuncs[0] = std::move(Thunk);
   }
 };
@@ -869,6 +901,60 @@ TEST(SwiftOnceSources, RejectsObjCLazyStaticGetterEvidenceDrift) {
     EXPECT_TRUE(
         discoverSwiftOnceSources(F.Image, F.Pipeline).ObjCThunks.empty())
         << Mutation;
+  }
+}
+
+TEST(SwiftOnceSources, NativeSwiftGetterPreservesRetainAndAutoreleaseCalls) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      ObjCThunkFixture F(Architecture, true);
+      auto &Thunk = F.Pipeline.HighFuncs[0];
+      if (Mutation == 1)
+        F.Image.DyldBindSlots[ObjCThunkFixture::RetainSlot].Module =
+            "/tmp/libswiftCore.dylib";
+      if (Mutation == 2)
+        F.Image.DyldBindSlots[0x20a0].Module = "/tmp/libobjc.A.dylib";
+      if (Mutation == 3)
+        Thunk.Body[5].Val->Operands[0] = Thunk.Body[3].Dst;
+      if (Mutation == 4)
+        Thunk.Body[6].RetVal = Thunk.Body[4].Dst;
+      if (Mutation == 5)
+        Thunk.Body[5].Val->IsIndirectCall = true;
+      if (Mutation == 6)
+        F.Image.DyldBindSlots[ObjCThunkFixture::RetainSlot].WeakImport = true;
+      if (Mutation == 7)
+        Thunk.Body[4].Val->MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation == 8)
+        Thunk.Body[5].Val->MemoryOrdering = NdMemoryOrdering::Acquire;
+      if (Mutation == 9)
+        Thunk.Body[1].Body[0].Val = HighExpr::makeConst(1, 8);
+      if (Mutation == 10)
+        Thunk.Body[1].Body[0].Body.push_back(Thunk.Body[4]);
+      if (Mutation == 11)
+        Thunk.Body[1].Body[0].MemoryOrdering = NdMemoryOrdering::Acquire;
+      const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      if (Mutation) {
+        EXPECT_TRUE(Plan.ObjCThunks.empty());
+        continue;
+      }
+      ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+      auto Bound =
+          bindSwiftOnceSourceReferences(Thunk, F.Image, Plan, F.functions());
+      ASSERT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+      EXPECT_EQ(Bound.Function.Params.size(), 2U);
+      ASSERT_EQ(Bound.Function.Body.size(), 7U);
+      EXPECT_EQ(Bound.Function.Body[4].Val->SourceCallHint->TargetName,
+                "swift_retain");
+      EXPECT_EQ(Bound.Function.Body[5].Val->SourceCallHint->TargetName,
+                "objc_autoreleaseReturnValue");
+      EXPECT_EQ(Bound.Function.Body[1].Body[1].CallExpr->Operands[2]->ConstVal,
+                0U);
+      const auto Functions = F.functions();
+      const auto Projection = bindObjCSourceReferences(Bound.Function, F.Image,
+                                                       nullptr, &Functions);
+      EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
+    }
   }
 }
 
