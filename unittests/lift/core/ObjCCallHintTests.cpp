@@ -5731,6 +5731,19 @@ TEST(ObjCCallHints,
     if (ArrayOptionsCallback)
       EXPECT_EQ(ArrayOptionsCallback->Parameters.size(), 4U);
 
+    auto SortedCall = Call;
+    SortedCall.Selector = "sortedArrayUsingComparator:";
+    const auto SortedParent =
+        objcReceiverSourceTypeHint(Image, SortedCall.Selector, *Receiver);
+    ASSERT_TRUE(SortedParent.Signature);
+    SortedCall.Signature = *SortedParent.Signature;
+    const auto SortedCallback =
+        objcNonEscapingBlockSignature(Image, SortedCall, 2);
+    ASSERT_TRUE(SortedCallback);
+    EXPECT_EQ(SortedCallback->ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(SortedCallback->ReturnType->Size, 8U);
+    EXPECT_EQ(SortedCallback->Parameters.size(), 3U);
+
     auto SetImage = Image;
     SetImage.ObjCClasses.front().SuperclassName = "NSSet";
     const auto SetParent =
@@ -5760,6 +5773,39 @@ TEST(ObjCCallHints,
     auto Unknown = Image;
     Unknown.ObjCClasses.front().SuperclassName = "UnknownCollection";
     EXPECT_FALSE(objcNonEscapingBlockSignature(Unknown, Call, 2));
+
+    auto DictionaryImage = Image;
+    DictionaryImage.ObjCClasses.front().SuperclassName = "NSDictionary";
+    auto DictionaryCall = Call;
+    DictionaryCall.Selector =
+        "keysSortedByValueWithOptions:usingComparator:";
+    const auto DictionaryParent = objcReceiverSourceTypeHint(
+        DictionaryImage, DictionaryCall.Selector, *Receiver);
+    ASSERT_TRUE(DictionaryParent.Signature);
+    DictionaryCall.Signature = *DictionaryParent.Signature;
+    const auto DictionaryCallback = objcNonEscapingBlockSignature(
+        DictionaryImage, DictionaryCall, 3);
+    ASSERT_TRUE(DictionaryCallback);
+    EXPECT_EQ(DictionaryCallback->ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(DictionaryCallback->ReturnType->Size, 8U);
+    EXPECT_EQ(DictionaryCallback->Parameters.size(), 3U);
+
+    auto RegularExpressionImage = Image;
+    RegularExpressionImage.ObjCClasses.front().SuperclassName =
+        "NSRegularExpression";
+    auto RegularExpressionCall = Call;
+    RegularExpressionCall.Selector =
+        "enumerateMatchesInString:options:range:usingBlock:";
+    const auto RegularExpressionParent = objcReceiverSourceTypeHint(
+        RegularExpressionImage, RegularExpressionCall.Selector, *Receiver);
+    ASSERT_TRUE(RegularExpressionParent.Signature);
+    RegularExpressionCall.Signature = *RegularExpressionParent.Signature;
+    const auto RegularExpressionCallback = objcNonEscapingBlockSignature(
+        RegularExpressionImage, RegularExpressionCall, 5);
+    EXPECT_EQ(RegularExpressionCallback.has_value(),
+              Architecture == Arch::AArch64);
+    if (RegularExpressionCallback)
+      EXPECT_EQ(RegularExpressionCallback->Parameters.size(), 4U);
   }
 }
 
@@ -5796,6 +5842,39 @@ TEST(ObjCCallHints,
       EXPECT_FALSE(objcNonEscapingBlockSignature(Unknown, Call, 2));
       EXPECT_FALSE(objcNonEscapingBlockSignature(Image, Call, 1));
     }
+  }
+}
+
+TEST(ObjCCallHints,
+     UIKitNonescapingBlocksFollowRevalidatedReceiverHierarchy) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = receiverImage(Architecture);
+    auto &Class = Image.ObjCClasses.front();
+    Class.RootClass = false;
+    Class.InheritanceStatus = "resolved";
+    Class.SuperclassName = "UIGraphicsImageRenderer";
+    Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/UIKit.framework/UIKit",
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    const auto Receiver = objcMethodReceiverTypeHint(Image, 0x1200);
+    ASSERT_TRUE(Receiver);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "imageWithActions:";
+    Call.Receiver = *Receiver;
+    const auto Parent =
+        objcReceiverSourceTypeHint(Image, Call.Selector, *Receiver);
+    ASSERT_TRUE(Parent.Signature);
+    Call.Signature = *Parent.Signature;
+    const auto Callback = objcNonEscapingBlockSignature(Image, Call, 2);
+    ASSERT_TRUE(Callback);
+    EXPECT_EQ(Callback->ReturnType->Kind, NdTypeKind::Void);
+    EXPECT_EQ(Callback->Parameters.size(), 2U);
+
+    auto Unknown = Image;
+    Unknown.ObjCClasses.front().SuperclassName = "UIGraphicsPDFRenderer";
+    EXPECT_FALSE(objcNonEscapingBlockSignature(Unknown, Call, 2));
+    EXPECT_FALSE(objcNonEscapingBlockSignature(Image, Call, 1));
   }
 }
 

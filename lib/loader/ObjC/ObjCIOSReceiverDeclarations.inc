@@ -32,6 +32,15 @@ ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clas
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsRendererFormat", "", true, "defaultFormat", "@16@0:8", "", true, nullptr, "", false)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRendererFormat", "", false, "scale", "d16@0:8", "", false, nullptr, "", false)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRendererFormat", "", false, "setScale:", "v24@0:8d16", "", false, nullptr, "", false)
+// MacOSX SDK 15.5's public UIKit headers agree across arm64/x86_64 iOS
+// simulator and Mac Catalyst profiles on this renderer hierarchy and the
+// complete method encodings. The image action parameter is independently
+// recorded as nonescaping by ObjCSourceDeclarations.cpp.
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsRenderer", "", "C:NSObject", "C:NSObject")
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRenderer", "", "C:UIGraphicsRenderer", "C:UIGraphicsRenderer")
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRenderer", "", false, "initWithSize:", "@32@0:8{CGSize=dd}16", "", true, "@32@0:8{CGSize=dd}16", "", true)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRenderer", "", false, "initWithSize:format:", "@40@0:8{CGSize=dd}16@32", "", true, "@40@0:8{CGSize=dd}16@32", "", true)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGraphicsImageRenderer", "", false, "imageWithActions:", "@24@0:8@?16", "UIImage", false, "@24@0:8@?16", "UIImage", false)
 // UIProgressView receiver closure, observed in the complete Xcode 26.5 ASTs
 // from GitHub Actions artifact 10653622473. Every superclass/protocol edge
 // agrees; no parent declares setProgress:. Foundation and QuartzCore retain
