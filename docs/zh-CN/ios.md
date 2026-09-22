@@ -340,3 +340,5 @@ Mach-O generic64 链式重定位在 `DYLD_CHAINED_PTR_64` 和 `DYLD_CHAINED_PTR_
 ARM64 Objective-C 源码恢复支持由调用方证明的最多八个 Swift 字符串比较及其原始单比特结果。清零扩展前会验证当前入口 ABI、强导入、精确调用点和所有消费者。生成的 C 以 `swiftcall` 的 `_Bool` 声明运行时函数，再显式转换为 `uint8_t`，保留原有掩码及周围调用。发布时重新检查 LowIR 和流水线审计，拒绝重复求值及来自其他函数的证据。普通字节返回、原生调用猜测以及 patch、lift 模式不使用这种归一化。 每个调用点必须独立通过证明；其他原始布尔调用只证明输入位置，不声明任何结果字节已定义。发布时，每次保留的求值都必须对应不同的当前机器调用点。
 
 手动 Swift String ABI 取证工作流还支持固定的 `prefix` 探针，用于 `String.hasPrefix`。它保留两个 ARM64 iOS SDK 的独立 Swift/C 编译输出，并要求精确的 `swiftcc i1(i64, ptr, i64, ptr)` 调用。清单记录探针、符号、编译器身份和源码哈希；收集证据不会自动安装源码绑定。
+
+逐次调用的布尔值证明现已支持精确的 `String.hasPrefix` 导入。Xcode 26.5 的设备与模拟器探针确认其为四参数 `swiftcc i1` 调用，前缀 String 的两个值位于接收者 String 之前。生成的 `_Bool swiftcall` 声明与五参数比较助手分别匹配，发布时同时复核当前导入种类及每次调用。连续两次前缀判断保留原有分支顺序和副作用。

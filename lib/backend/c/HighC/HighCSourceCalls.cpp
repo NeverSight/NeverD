@@ -132,21 +132,21 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
         CurrentFunc->Entry != Hint.BooleanResult->FunctionEntry ||
         E.IsIndirectCall ||
         E.CallAddr != Hint.BooleanResult->Site.StaticTarget ||
-        E.Operands.size() != 5 ||
+        E.Operands.size() != Hint.Signature.Parameters.size() ||
         !equalSourceTypes(E.Type, Hint.Signature.ReturnType))
       return bad("invalid Swift Boolean projection");
-    const auto Link = SwiftBooleanComparisonImport.drop_front().str();
+    const auto Link = Hint.TargetName;
+    const auto SourceName = swiftBooleanSourceName(Link);
     if (SourceNativeSignatures.count(Link) ||
         SourceRuntimeLinkNames.count(Link) ||
         std::any_of(SourceRuntimeLinkNames.begin(),
                     SourceRuntimeLinkNames.end(),
                     [&](const auto &Entry) { return Entry.second == Link; }) ||
-        DefinedFuncs.count(Link) ||
-        DefinedFuncs.count(SwiftBooleanComparisonImport.str()) ||
-        SourceNativeSignatures.count(SwiftBooleanSourceName.str()))
+        DefinedFuncs.count(Link) || DefinedFuncs.count("_" + Link) ||
+        SourceNativeSignatures.count(SourceName))
       return bad("conflicting Swift Boolean runtime declaration");
-    std::string Call = "((uint8_t)" + SwiftBooleanSourceName.str() + "(";
-    for (unsigned I = 0; I != 5; ++I) {
+    std::string Call = "((uint8_t)" + SourceName + "(";
+    for (unsigned I = 0; I != E.Operands.size(); ++I) {
       if (!E.Operands[I])
         return bad("missing Swift Boolean argument");
       const auto Value =

@@ -78,8 +78,9 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (Image && EntrySignature) {
     const auto Booleans =
         qualifySwiftBooleanProjections(*Image, Low, *EntrySignature);
-    const auto Signature = swiftBooleanNormalizedSignature();
     for (const auto &Boolean : Booleans) {
+      const auto Signature =
+          swiftBooleanNormalizedSignature(Boolean.Runtime.ImportName);
       if (!Signature)
         continue;
       SourceCallTypeHint Hint;
@@ -88,7 +89,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Low.Entry, Boolean.Normalization.Site};
       Hint.Signature = *Signature;
       Hint.TargetAddress = Boolean.Runtime.ImportSlot;
-      Hint.TargetName = SwiftBooleanComparisonImport.drop_front().str();
+      Hint.TargetName =
+          llvm::StringRef(Boolean.Runtime.ImportName).drop_front().str();
       Hints.emplace(Boolean.Normalization.Site.Instruction, std::move(Hint));
     }
   }

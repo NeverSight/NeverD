@@ -123,7 +123,7 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       if (Candidate) {
         if (Selected.size() == 8)
           return {};
-        auto Inputs = swiftBooleanComparisonInputs();
+        auto Inputs = swiftBooleanRuntimeInputs(Candidate->ImportName);
         if (!Inputs)
           return {};
         // Other raw Boolean calls establish only their inputs. No result byte

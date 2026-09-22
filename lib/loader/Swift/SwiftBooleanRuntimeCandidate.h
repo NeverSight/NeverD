@@ -16,6 +16,7 @@ struct SwiftBooleanRuntimeCandidate {
   const BinaryImage *SourceImage = nullptr;
   va_t ImportSlot = 0;
   SourceBooleanResultContract RawContract;
+  std::string ImportName;
 };
 
 inline constexpr llvm::StringLiteral SwiftBooleanComparisonImport =
@@ -23,22 +24,31 @@ inline constexpr llvm::StringLiteral SwiftBooleanComparisonImport =
     "ADs01_G16ComparisonResultOtF";
 inline constexpr llvm::StringLiteral SwiftBooleanComparisonProvider =
     "/usr/lib/swift/libswiftCore.dylib";
+inline constexpr llvm::StringLiteral SwiftBooleanPrefixImport =
+    "_$sSS9hasPrefixySbSSF";
 
 /// Canonical physical inputs shared by raw runtime and logical source facts.
-inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
+inline std::optional<SourceFunctionTypeHint> swiftBooleanRuntimeInputs(
+    llvm::StringRef Import = SwiftBooleanComparisonImport) {
+  if (Import != SwiftBooleanComparisonImport &&
+      Import != SwiftBooleanPrefixImport)
+    return std::nullopt;
   SourceFunctionTypeHint Inputs;
   Inputs.ReturnType = NdType::makeVoid();
   const auto Word = NdType::makeInt(8, false);
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
-  Inputs.Parameters = {{"lhs0", Word},
-                       {"lhs1", Pointer},
-                       {"rhs0", Word},
-                       {"rhs1", Pointer},
-                       {"expecting", NdType::makeInt(1, false)}};
+  Inputs.Parameters = {
+      {"lhs0", Word}, {"lhs1", Pointer}, {"rhs0", Word}, {"rhs1", Pointer}};
+  if (Import == SwiftBooleanComparisonImport)
+    Inputs.Parameters.push_back({"expecting", NdType::makeInt(1, false)});
   std::string Error;
   if (!assignDarwinSwiftSourceABI(Inputs, Arch::AArch64, Error))
     return std::nullopt;
   return Inputs;
+}
+
+inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
+  return swiftBooleanRuntimeInputs();
 }
 
 /// Compiler evidence: Actions 35653573282, consumer db8d4079f67bd90beb8bbf50ff7
@@ -48,13 +58,20 @@ inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
 /// Device TBD exports arm64e-ios; simulator exports include
 /// arm64-ios-simulator. This candidate is deliberately absent from the ordinary
 /// byte-return table.
+/// Prefix evidence: Actions 35683213827, consumer bfe0f17b3d7140d468f53a6f7a0
+/// 7375d3b7d898a, Xcode 26.5/17F42. Both SDKs independently produce
+/// swiftcc i1(i64, ptr, i64, ptr), prefix words before receiver words, with the
+/// same genuine _Bool normalization. Their libswiftCore TBDs export the exact
+/// hasPrefix symbol for arm64e-ios and arm64-ios-simulator respectively.
 inline std::optional<SwiftBooleanRuntimeCandidate>
 swiftBooleanRuntimeCandidate(const BinaryImage &Image, va_t ImportSlot) {
   if (Image.Arch != Arch::AArch64 || Image.MachOChainedFixupsAmbiguous)
     return std::nullopt;
   const auto Import = darwinRuntimeImport(Image, ImportSlot);
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
-  if (!Import || *Import != SwiftBooleanComparisonImport ||
+  if (!Import ||
+      (*Import != SwiftBooleanComparisonImport &&
+       *Import != SwiftBooleanPrefixImport) ||
       Bind == Image.DyldBindSlots.end() ||
       Bind->second.Module != SwiftBooleanComparisonProvider ||
       !Image.isValidImportStorageSlot(ImportSlot, *Import) ||
@@ -68,7 +85,7 @@ swiftBooleanRuntimeCandidate(const BinaryImage &Image, va_t ImportSlot) {
       Slot->second.Name != *Import || Slot->second.Addend)
     return std::nullopt;
 
-  auto Inputs = swiftBooleanComparisonInputs();
+  auto Inputs = swiftBooleanRuntimeInputs(*Import);
   if (!Inputs)
     return std::nullopt;
   SourceBooleanResultContract Raw;
@@ -79,7 +96,8 @@ swiftBooleanRuntimeCandidate(const BinaryImage &Image, va_t ImportSlot) {
   Raw.DefinedResultBits = 1;
   if (!sourceBooleanInputParameters(Raw))
     return std::nullopt;
-  return SwiftBooleanRuntimeCandidate{&Image, ImportSlot, std::move(Raw)};
+  return SwiftBooleanRuntimeCandidate{&Image, ImportSlot, std::move(Raw),
+                                      Import->str()};
 }
 
 /// The same non-publishing fact reached through one exact ordinary veneer.

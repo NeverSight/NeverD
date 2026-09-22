@@ -7,11 +7,20 @@ namespace neverd {
 inline constexpr llvm::StringLiteral SwiftBooleanSourceName =
     "neverd_swift_string_compare_bool";
 
+inline std::string swiftBooleanSourceName(llvm::StringRef TargetName) {
+  if (TargetName == SwiftBooleanComparisonImport.drop_front())
+    return SwiftBooleanSourceName.str();
+  if (TargetName == SwiftBooleanPrefixImport.drop_front())
+    return "neverd_swift_string_has_prefix_bool";
+  return {};
+}
+
 /// This is the normalized expression's ABI-shaped carrier description. The
 /// emitter must declare the linked routine as true swiftcc _Bool, then convert
 /// its result to uint8_t. It must never use this signature as that prototype.
-inline std::optional<SourceFunctionTypeHint> swiftBooleanNormalizedSignature() {
-  auto Signature = swiftBooleanComparisonInputs();
+inline std::optional<SourceFunctionTypeHint> swiftBooleanNormalizedSignature(
+    llvm::StringRef Import = SwiftBooleanComparisonImport) {
+  auto Signature = swiftBooleanRuntimeInputs(Import);
   if (!Signature)
     return std::nullopt;
   Signature->Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
@@ -23,7 +32,8 @@ inline std::optional<SourceFunctionTypeHint> swiftBooleanNormalizedSignature() {
 }
 
 inline bool isSwiftBooleanSourceBinding(const SourceCallTypeHint &Binding) {
-  const auto Expected = swiftBooleanNormalizedSignature();
+  const auto Expected =
+      swiftBooleanNormalizedSignature("_" + Binding.TargetName);
   return Expected &&
          Binding.CallKind == SourceCallTypeHint::Kind::SwiftBooleanProjection &&
          Binding.BooleanResult && Binding.BooleanResult->FunctionEntry &&
@@ -35,7 +45,7 @@ inline bool isSwiftBooleanSourceBinding(const SourceCallTypeHint &Binding) {
          Binding.BooleanResult->Site.StaticTarget &&
          *Binding.BooleanResult->Site.StaticTarget % 4 == 0 &&
          Binding.TargetAddress && Binding.TargetAddress % 8 == 0 &&
-         Binding.TargetName == SwiftBooleanComparisonImport.drop_front() &&
+         !swiftBooleanSourceName(Binding.TargetName).empty() &&
          equalSourceABIs(Binding.Signature, *Expected) &&
          !Binding.ValueWitness && !Binding.DoesNotReturn &&
          !Binding.WeakImport && !Binding.ReturnedArgument &&

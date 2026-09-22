@@ -142,6 +142,23 @@ TEST(SwiftBooleanRuntimeCandidate, VeneerRequiresCurrentImmutableMachineBytes) {
   }
 }
 
+TEST(SwiftBooleanRuntimeCandidate, PrefixHasFourInputsAndNoByteReturnBinding) {
+  auto Image = candidateImage(SwiftBooleanPrefixImport);
+  addVeneer(Image);
+  const auto Candidate = swiftBooleanRuntimeVeneerCandidate(Image, 0x1000);
+  ASSERT_TRUE(Candidate);
+  EXPECT_EQ(Candidate->ImportName, SwiftBooleanPrefixImport);
+  EXPECT_EQ(Candidate->RawContract.Parameters.size(), 4U);
+  EXPECT_EQ(Candidate->RawContract.DefinedResultBits, 1U);
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, veneerCaller()).empty());
+  EXPECT_FALSE(swiftBooleanRuntimeInputs("_$sSS9hasSuffixySbSSF"));
+  Image.DyldBindSlots[Slot].WeakImport = true;
+  EXPECT_FALSE(swiftBooleanRuntimeVeneerCandidate(Image, 0x1000));
+  Image.DyldBindSlots[Slot].WeakImport = false;
+  Image.DyldBindSlots[Slot].Module = "/tmp/libswiftCore.dylib";
+  EXPECT_FALSE(swiftBooleanRuntimeVeneerCandidate(Image, 0x1000));
+}
+
 TEST(SwiftBooleanRuntimeCandidate,
      ExistingCatalogAndSelectorBindingStaySeparate) {
   auto Ordinary = candidateImage("_objc_retain", "/usr/lib/libobjc.A.dylib");

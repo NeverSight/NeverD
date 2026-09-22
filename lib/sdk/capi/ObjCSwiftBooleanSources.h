@@ -15,9 +15,11 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
       Expression.IsIndirectCall || Expression.IntrinsicId != Intrinsic::None ||
       Expression.MemoryOrdering != NdMemoryOrdering::None ||
       Expression.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-      Expression.Operands.size() != 5 || !Result.Success ||
-      Result.SourceImage != &Image || !Function.SourceTypeHint ||
-      Function.DoesNotReturn || Function.StructuredExceptionRegions ||
+      Expression.Operands.size() !=
+          Expression.SourceCallHint->Signature.Parameters.size() ||
+      !Result.Success || Result.SourceImage != &Image ||
+      !Function.SourceTypeHint || Function.DoesNotReturn ||
+      Function.StructuredExceptionRegions ||
       Function.UnstructuredExceptionRegions ||
       (Function.ExceptionMetadata &&
        !objc_projection_detail::isPlainUnwind(*Function.ExceptionMetadata)))
@@ -27,7 +29,7 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
       Expression.CallAddr != Binding.BooleanResult->Site.StaticTarget ||
       !equalSourceTypes(Expression.Type, Binding.Signature.ReturnType))
     return false;
-  for (unsigned I = 0; I != 5; ++I) {
+  for (unsigned I = 0; I != Expression.Operands.size(); ++I) {
     const auto &Argument = Expression.Operands[I];
     if (!Argument || !Argument->Type ||
         Argument->Type->Size != Binding.Signature.Parameters[I].Type->Size ||
@@ -64,11 +66,15 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
     return false;
   const auto Current =
       qualifySwiftBooleanProjections(Image, *Low, *Function.SourceTypeHint);
-  std::map<SourceCallOccurrenceKey, va_t> Sites;
+  std::map<SourceCallOccurrenceKey, std::pair<va_t, std::string>> Sites;
   for (const auto &Projection : Current)
-    Sites.emplace(Projection.Normalization.Site, Projection.Runtime.ImportSlot);
+    Sites.emplace(Projection.Normalization.Site,
+                  std::pair{Projection.Runtime.ImportSlot,
+                            Projection.Runtime.ImportName});
   const auto Selected = Sites.find(Binding.BooleanResult->Site);
-  if (Selected == Sites.end() || Selected->second != Binding.TargetAddress)
+  if (Selected == Sites.end() ||
+      Selected->second !=
+          std::pair{Binding.TargetAddress, "_" + Binding.TargetName})
     return false;
   // Count evaluations, not unique expression pointers: sharing one node in
   // two statements cannot reuse this one machine occurrence's evidence.
@@ -101,19 +107,20 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
           Matches += E.get() == &Expression;
           const auto &Other = *E->SourceCallHint;
           const auto Site = Sites.find(Other.BooleanResult->Site);
-          Foreign |=
-              !isSwiftBooleanSourceBinding(Other) ||
-              E->Kind != ExprKind::Call || E->IsIndirectCall ||
-              E->CallAddr != Other.BooleanResult->Site.StaticTarget ||
-              E->IntrinsicId != Intrinsic::None ||
-              E->MemoryOrdering != NdMemoryOrdering::None ||
-              E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-              E->Operands.size() != Other.Signature.Parameters.size() ||
-              !equalSourceTypes(E->Type, Other.Signature.ReturnType) ||
-              Other.BooleanResult->FunctionEntry != Function.Entry ||
-              Site == Sites.end() ||
-              (Site != Sites.end() && Site->second != Other.TargetAddress) ||
-              !Evaluated.insert(Other.BooleanResult->Site).second;
+          Foreign |= !isSwiftBooleanSourceBinding(Other) ||
+                     E->Kind != ExprKind::Call || E->IsIndirectCall ||
+                     E->CallAddr != Other.BooleanResult->Site.StaticTarget ||
+                     E->IntrinsicId != Intrinsic::None ||
+                     E->MemoryOrdering != NdMemoryOrdering::None ||
+                     E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+                     E->Operands.size() != Other.Signature.Parameters.size() ||
+                     !equalSourceTypes(E->Type, Other.Signature.ReturnType) ||
+                     Other.BooleanResult->FunctionEntry != Function.Entry ||
+                     Site == Sites.end() ||
+                     (Site != Sites.end() &&
+                      Site->second != std::pair{Other.TargetAddress,
+                                                "_" + Other.TargetName}) ||
+                     !Evaluated.insert(Other.BooleanResult->Site).second;
           if (!Foreign)
             for (size_t I = 0; I < E->Operands.size(); ++I) {
               const auto &A = E->Operands[I];

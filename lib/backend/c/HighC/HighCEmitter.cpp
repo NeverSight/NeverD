@@ -200,7 +200,7 @@ void HighCWriter::prepareFunctionIdentifiers(
           Name = Hint.TargetName;
       }
       if (Hint.CallKind == Kind::SwiftBooleanProjection)
-        Name = SwiftBooleanSourceName.str();
+        Name = swiftBooleanSourceName(Hint.TargetName);
       if (!Name.empty())
         LinkedRuntimeNames.insert(std::move(Name));
     }
@@ -661,7 +661,8 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
           NeedsSwiftStringBridge = true;
         } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::SwiftBooleanProjection) {
-          NeedsSwiftBooleanProjection |= isSwiftBooleanSourceBinding(Hint);
+          if (isSwiftBooleanSourceBinding(Hint))
+            SwiftBooleanProjectionImports.insert(Hint.TargetName);
         } else if (Hint.CallKind ==
                    SourceCallTypeHint::Kind::SwiftStringFromNSString) {
           NeedsSwiftStringFromNSString = true;
@@ -1009,14 +1010,17 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
   if (NeedsObjCSuper2)
     OS << "extern void objc_msgSendSuper2(void);\n";
-  if (NeedsSwiftBooleanProjection)
-    OS << "extern _Bool " << SwiftBooleanSourceName
-       << "(uint64_t, void *, uint64_t, void *, uint8_t) __asm__(\""
-       << SwiftBooleanComparisonImport << "\") "
+  for (const auto &Import : SwiftBooleanProjectionImports) {
+    OS << "extern _Bool " << swiftBooleanSourceName(Import)
+       << "(uint64_t, void *, uint64_t, void *";
+    if (Import == SwiftBooleanComparisonImport.drop_front())
+      OS << ", uint8_t";
+    OS << ") __asm__(\"_" << Import << "\") "
        << sourceConventionAttribute(
               SourceFunctionTypeHint::ConventionKind::Swift)
               .rtrim()
        << ";\n";
+  }
   if (NeedsSwiftStringBridge)
     OS << "extern void *neverd_swift_string_to_nsstring(uint64_t, void *) "
           "__asm__(\"_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF\") "

@@ -13,7 +13,8 @@ struct BooleanFixture {
   BinaryImage Image;
   llvm::LLVMContext Context;
   PipelineResult Result;
-  BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false) {
+  BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
+                 bool Prefix = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -50,10 +51,11 @@ struct BooleanFixture {
     word(0x1100, 0xb0000010);
     word(0x1104, 0xf9404210);
     word(0x1108, 0xd61f0200);
-    Image.ImportPtrSlots[0x2080] = SwiftBooleanComparisonImport.str();
-    EXPECT_TRUE(Image.recordDyldBindSlot(0x2080, SwiftBooleanComparisonImport,
-                                         0, SwiftBooleanComparisonProvider,
-                                         false));
+    const auto Import =
+        Prefix ? SwiftBooleanPrefixImport : SwiftBooleanComparisonImport;
+    Image.ImportPtrSlots[0x2080] = Import.str();
+    EXPECT_TRUE(Image.recordDyldBindSlot(
+        0x2080, Import, 0, SwiftBooleanComparisonProvider, false));
     ObjCMethod Method;
     Method.Implementation = 0x1000;
     Method.ClassName = "BooleanFixture";
@@ -236,6 +238,25 @@ TEST(ObjCSwiftBooleanSources, RejectsStaleCurrentProofAndDuplicateEvaluations) {
     EXPECT_FALSE(
         objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
   }
+}
+
+TEST(ObjCSwiftBooleanSources,
+     PrefixUsesFourInputsAndRejectsComparisonEvidence) {
+  BooleanFixture F(true, false, true, true);
+  auto E = F.expression();
+  ASSERT_TRUE(E);
+  ASSERT_EQ(E->Operands.size(), 4U);
+  EXPECT_EQ(E->SourceCallHint->TargetName,
+            SwiftBooleanPrefixImport.drop_front());
+  ASSERT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  auto Forged = std::make_shared<SourceCallTypeHint>(*E->SourceCallHint);
+  Forged->TargetName = SwiftBooleanComparisonImport.drop_front().str();
+  Forged->Signature = *swiftBooleanNormalizedSignature();
+  E->Operands.push_back(HighExpr::makeConst(0, 1));
+  E->SourceCallHint = Forged;
+  ASSERT_TRUE(isSwiftBooleanSourceBinding(*Forged));
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }
 
 TEST(ObjCSwiftBooleanSources, MachineModesDoNotNormalizeTheRuntimeResult) {
