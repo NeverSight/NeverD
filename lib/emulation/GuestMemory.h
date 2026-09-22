@@ -54,6 +54,18 @@ public:
                            llvm::MutableArrayRef<uint8_t> Bytes) = 0;
   virtual llvm::Error write(uint64_t Address,
                             llvm::ArrayRef<uint8_t> Bytes) = 0;
+  /// Pure whole-range validation for device access to existing RAM backing.
+  /// This bypasses CPU permissions, never MMIO or mapping/lifetime checks.
+  /// The model must separately authorize the exact live allocation and pins.
+  virtual llvm::Error validateBacking(uint64_t Address, uint64_t Size) const;
+  /// Access the same RAM bytes without changing CPU permissions.
+  /// Implementations validate the complete span before effects and reject
+  /// running/faulted CPUs. Unexpected engine failures must prevent further
+  /// execution or device access.
+  virtual llvm::Error readBacking(uint64_t Address,
+                                  llvm::MutableArrayRef<uint8_t> Bytes);
+  virtual llvm::Error writeBacking(uint64_t Address,
+                                   llvm::ArrayRef<uint8_t> Bytes);
   llvm::Expected<uint64_t> readInteger(uint64_t Address, unsigned Size);
   llvm::Error writeInteger(uint64_t Address, uint64_t Value, unsigned Size);
 };

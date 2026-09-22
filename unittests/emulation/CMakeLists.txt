@@ -24,6 +24,10 @@ set(NEVERD_WDM_RESOURCE_FIXTURE "" CACHE FILEPATH
   "Optional original WDM resource/MMIO fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_RESOURCE_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK resource/MMIO fixture linked with active CFG")
+set(NEVERD_WDM_DMA_FIXTURE "" CACHE FILEPATH
+  "Optional original WDM DMA fixture linked with genuine WDK libraries")
+set(NEVERD_WDM_DMA_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK DMA fixture linked with active CFG")
 set(NEVERD_WDM_INTERRUPT_FIXTURE "" CACHE FILEPATH
   "Optional original WDM interrupt fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_INTERRUPT_CFG_FIXTURE "" CACHE FILEPATH
@@ -337,7 +341,39 @@ foreach(_driver_interrupt_variable NEVERD_WDM_INTERRUPT_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_dma_definitions)
+set(_driver_has_wdm_dma_fixture FALSE)
+foreach(_driver_dma_variable NEVERD_WDM_DMA_FIXTURE
+    NEVERD_WDM_DMA_CFG_FIXTURE)
+  if(NOT _driver_dma_variable STREQUAL "NEVERD_WDM_DMA_FIXTURE"
+      AND NOT _driver_has_wdm_dma_fixture)
+    message(STATUS "Driver WDM dma variant skipped: NEVERD_WDM_DMA_FIXTURE is unavailable")
+    continue()
+  endif()
+  if(NOT "${${_driver_dma_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_dma_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_dma_variable}}")
+    get_filename_component(_driver_dma_path
+      "${${_driver_dma_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_dma_definitions
+      "${_driver_dma_variable}=\"${_driver_dma_path}\"")
+    if(_driver_dma_variable STREQUAL "NEVERD_WDM_DMA_FIXTURE")
+      set(_driver_has_wdm_dma_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM dma fixture ${_driver_dma_variable}: ${_driver_dma_path}")
+  else()
+    message(STATUS "Driver WDM dma tests requiring ${_driver_dma_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
+  DriverWDMDMATests.cpp
+  DriverDMAScenarioTests.cpp
+  KernelDMATests.cpp
+  KernelDMABridgeTests.cpp
+  KernelPhysicalMemoryTests.cpp
+  SchedulerDMATests.cpp
+  BackendBackingTests.cpp
   DriverSessionTests.cpp
   DriverLoaderAdvancedTests.cpp
   DriverGuardTests.cpp
@@ -412,7 +448,8 @@ target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   ${_driver_wdm_power_definitions}
   ${_driver_wdm_remove_lock_definitions}
   ${_driver_wdm_resource_definitions}
-  ${_driver_wdm_interrupt_definitions})
+  ${_driver_wdm_interrupt_definitions}
+  ${_driver_wdm_dma_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -434,7 +471,8 @@ if(TARGET neverd_shared AND TARGET neverd)
   ${_driver_wdm_power_definitions}
   ${_driver_wdm_remove_lock_definitions}
   ${_driver_wdm_resource_definitions}
-  ${_driver_wdm_interrupt_definitions})
+  ${_driver_wdm_interrupt_definitions}
+  ${_driver_wdm_dma_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

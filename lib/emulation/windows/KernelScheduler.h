@@ -34,16 +34,22 @@ namespace scheduler {
 } // namespace scheduler
 
 /// A concrete single-processor schedule, not an assertion of Windows timing or
-/// interleaving equivalence. Interrupts precede DPCs, framework cancellation,
-/// provider completions and workers at dispatch boundaries. Interrupts use
-/// descending assigned priority and FIFO ties; high-importance DPCs insert at
-/// the head. No callback executes here: next() returns guest metadata.
+/// interleaving equivalence. Interrupts precede DPCs, DMA list callbacks,
+/// framework cancellation, provider completions and workers at dispatch
+/// boundaries. Interrupts use descending assigned priority and FIFO ties;
+/// high-importance DPCs insert at the head. No callback executes here: next()
+/// returns guest metadata.
 /// Virtual time advances only when no callback is ready or running. Guest API
 /// wrappers own object initialization, thread identities, and memory semantics.
 class KernelScheduler {
 public:
   enum class CallbackKind {
-    WorkItem, DPC, FrameworkCancel, WDMCompletion, Interrupt
+    WorkItem,
+    DPC,
+    FrameworkCancel,
+    WDMCompletion,
+    Interrupt,
+    DMAListControl
   };
   enum class DpcImportance { Low = 0, Medium = 1, High = 2, MediumHigh = 3 };
 
@@ -113,6 +119,29 @@ public:
   canEnqueueInterrupts(llvm::ArrayRef<InterruptCallback> Interrupts) const;
   llvm::Expected<uint64_t> enqueueInterrupt(InterruptCallback Interrupt);
   bool hasQueuedInterrupt() const { return !Interrupts.empty(); }
+
+  /// Successful DMA admission reserves callback capacity and identity even
+  /// while waiting for map registers. Each reservation is independent; Object
+  /// never coalesces requests. Waiting reservations do not create deadlines or
+  /// become runnable until explicitly promoted by the owning DMA model.
+  llvm::Error canReserveDMAListControl(const Callback &Call) const;
+  llvm::Expected<uint64_t> reserveDMAListControl(Callback Call);
+  /// Validate the complete ordered batch before moving any reservation to the
+  /// DISPATCH_LEVEL FIFO. Promotion consumes no new identity or capacity.
+  llvm::Error canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const;
+  llvm::Error readyDMAListControls(llvm::ArrayRef<uint64_t> IDs);
+  bool hasQueuedDMAListControl() const { return !ReadyDMA.empty(); }
+
+  /// Immediate guest delivery retains the scheduled parent (if any) as Active.
+  /// Nested inline callbacks count toward the same capacity/dispatch limits
+  /// and must return in order; their guest return registers are not
+  /// interpreted. Validate dispatch budget before reserving an immediate
+  /// callback identity.
+  llvm::Error canDispatchInlineDMAListControl() const;
+  llvm::Error canBeginInlineDMAListControl(uint64_t ID) const;
+  llvm::Error beginInlineDMAListControl(uint64_t ID);
+  llvm::Error canFinishInlineDMAListControl(uint64_t ID) const;
+  llvm::Error finishInlineDMAListControl(uint64_t ID);
 
   /// An already-queued DPC is unchanged and returns false, as KeInsertQueueDpc.
   /// Removing a DPC does not cancel any timer that may queue it again.
@@ -186,7 +215,7 @@ public:
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const {
     return Workers.size() + DPCs.size() + Cancellations.size() +
-           Completions.size() + Interrupts.size();
+           Completions.size() + Interrupts.size() + ReadyDMA.size();
   }
   size_t suspendedCallbackCount() const { return Suspended.size(); }
   const std::optional<Invocation> &active() const { return Active; }
@@ -213,6 +242,9 @@ private:
   std::deque<Invocation> Cancellations;
   std::deque<Invocation> Completions;
   std::deque<Invocation> Interrupts;
+  std::map<uint64_t, Invocation> WaitingDMA;
+  std::deque<Invocation> ReadyDMA;
+  std::vector<Invocation> InlineDMA;
   std::optional<Invocation> Active;
   std::map<uint64_t, Invocation> Suspended;
   std::map<uint64_t, TimerState> Timers;

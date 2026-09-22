@@ -980,7 +980,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1345,7 +1345,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1471,7 +1471,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1592,7 +1592,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
             << llvm::toString(Parsed.takeError()) << error();
         const auto *Report = Parsed->getAsObject();
         ASSERT_NE(Report, nullptr);
-        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
         EXPECT_EQ(Report->getString("stop_reason"), "returned")
             << Report->getString("diagnostic").value_or("").str();
         EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1760,7 +1760,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1926,7 +1926,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v13");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2005,6 +2005,94 @@ TEST_F(DriverScenarioPublic,
 #else
   GTEST_SKIP() << "NEVERD_WDM_INTERRUPT_FIXTURE requires a genuine WDK fixture";
 #endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIObserveDmaRamBeforeExplicitInterrupt) {
+#ifdef NEVERD_WDM_DMA_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_DMA_FIXTURE};
+#ifdef NEVERD_WDM_DMA_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_DMA_CFG_FIXTURE);
+#endif
+  const std::string Scenario =
+      R"dma({"load_address":"0x190000000","unload":true,"pnp_devices":[{"id":"dma0","bus":"register_bank","initial_device_power":"D0","initial_system_power":"working","interrupts":[{"id":"line0","raw_vector":17,"raw_level":7,"raw_affinity":1,"translated_vector":145,"translated_level":5,"translated_affinity":1,"mode":"latched","share":"device_exclusive"}],"dma":{"address_bits":64,"maximum_length":4096,"map_registers":4,"alignment":1,"logical_base":"0x40000000","logical_length":65536,"scatter_gather":true}}],"requests":[{"kind":"pnp","device_id":"dma0","minor":"start","bus_completion":{"status":0,"delay_100ns":11}},{"kind":"create","device_id":"dma0","file":1},{"kind":"ioctl","file":1,"code":"0x222000","output_size":32,"interrupt_events":[{"after_100ns":7,"device_id":"dma0","interrupt_id":"line0"}],"dma_events":[{"after_100ns":5,"device_id":"dma0","logical_address":"0x40000000","direction":"read_memory","length":16},{"after_100ns":7,"device_id":"dma0","logical_address":"0x40000000","direction":"write_memory","length":16,"data_hex":"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"}]},{"kind":"cleanup","file":1},{"kind":"close","file":1},{"kind":"pnp","device_id":"dma0","minor":"query_remove","bus_completion":{"status":0,"delay_100ns":0}},{"kind":"pnp","device_id":"dma0","minor":"remove","bus_completion":{"status":0,"delay_100ns":3}}]})dma";
+  for (const char *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.c_str(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v14");
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Transfers = Report->getArray("dma_transfers");
+      ASSERT_NE(Transfers, nullptr);
+      ASSERT_EQ(Transfers->size(), 2u);
+      for (unsigned I = 0; I < 2; ++I) {
+        const auto *Transfer = (*Transfers)[I].getAsObject();
+        ASSERT_NE(Transfer, nullptr);
+        EXPECT_EQ(Transfer->getInteger("source_request_index"), 2);
+        EXPECT_EQ(Transfer->getInteger("event_index"), I);
+        EXPECT_EQ(Transfer->getInteger("epoch"), 1);
+        EXPECT_EQ(Transfer->getInteger("length"), 16);
+        EXPECT_EQ(Transfer->getInteger("completed_at_100ns"), I ? 18 : 16);
+        EXPECT_EQ(Transfer->getInteger("occurred_at_100ns"), I ? 18 : 16);
+        EXPECT_EQ(Transfer->getString("logical_address"), "0x40000000");
+        EXPECT_EQ(Transfer->getString("direction"),
+                  I ? "write_memory" : "read_memory");
+        EXPECT_TRUE(Transfer->get("failure_reason")->getAsNull());
+        EXPECT_TRUE(Transfer->getString("adapter"));
+        EXPECT_TRUE(Transfer->getString("mapping"));
+        EXPECT_EQ(Transfer->getString("data_hex"),
+                  I ? "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+                    : "1112131415161718191a1b1c1d1e1f20");
+      }
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 7u);
+      const auto *IO = (*Requests)[2].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      EXPECT_EQ(IO->getInteger("dispatch_status"), 0x103);
+      EXPECT_EQ(IO->getBoolean("completed"), true);
+      EXPECT_EQ(
+          IO->getString("output_hex"),
+          "01000000010000000000000001000000a0a1a2a3a4a5a6a7a8a9aaabacadaeaf");
+      const auto *IRQ = Report->getArray("interrupts");
+      ASSERT_NE(IRQ, nullptr);
+      ASSERT_EQ(IRQ->size(), 1u);
+      EXPECT_EQ(IRQ->front().getAsObject()->getInteger("delivered_at_100ns"),
+                18);
+      const auto *Config = Report->getObject("configuration");
+      ASSERT_NE(Config, nullptr);
+      ASSERT_NE(Config->getArray("dma_events"), nullptr);
+      EXPECT_EQ(Config->getArray("dma_events")->size(), 2u);
+      EXPECT_TRUE(Report->getArray("devices")->empty());
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_DMA_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, DMAInvalidFieldFailsAtPublicScenarioBoundary) {
+  for (
+      const char *Scenario :
+      {R"({"requests":[{"kind":"create","dma_events":[]}]})",
+       R"({"requests":[{"kind":"ioctl","code":0,"dma_events":[{"after_100ns":0,"device_id":"missing","logical_address":1,"direction":"write_memory","length":4,"data_hex":"00"}]}]})"}) {
+    EXPECT_EQ(neverd_emulate_driver_scenario_json(
+                  Session, fixture("success").c_str(), Scenario, nullptr),
+              nullptr);
+    const auto Message = error();
+    EXPECT_TRUE(Message.find("DMA") != std::string::npos ||
+                Message.find("dma_events") != std::string::npos)
+        << Message;
+  }
 }
 
 } // namespace

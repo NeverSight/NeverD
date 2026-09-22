@@ -13,11 +13,12 @@
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
 #include "DeviceLifecycle.h"
+#include "KernelDMA.h"
 #include "KernelDispatcher.h"
 #include "KernelFramework.h"
 #include "KernelGuestCall.h"
-#include "KernelMMIO.h"
 #include "KernelInterrupts.h"
+#include "KernelMMIO.h"
 #include "KernelRegistry.h"
 #include "KernelRemoveLocks.h"
 #include "KernelScheduler.h"
@@ -41,8 +42,14 @@ public:
                    [this](uint64_t Address, uint32_t Size, bool IsWrite) {
                      return validateDispatcherStorage(Address, Size, IsWrite);
                    }),
-        Resources([this](uint64_t PDO) { return canReleaseResources(PDO); }),
-        MMIO(Memory, Resources), Interrupts(Resources, Result) {}
+        Resources([this](uint64_t PDO) { return canReleaseResources(PDO); },
+                  [this](uint64_t PDO) {
+                    // DMA adapter acquisition in AddDevice precedes START.
+                    return llvm::joinErrors(MMIO.canRemove(PDO),
+                                            Interrupts.canRelease(PDO));
+                  }),
+        MMIO(Memory, Resources), Interrupts(Resources, Result),
+        Physical(Memory), DMA(Physical, Resources, Result) {}
   KernelModel(const KernelModel &) = delete;
   KernelModel &operator=(const KernelModel &) = delete;
   KernelModel(KernelModel &&) = delete;
@@ -116,8 +123,11 @@ public:
   bool hasQueuedDPC() const { return Scheduler.hasQueuedDPC(); }
   bool hasQueuedPriorityCallback() const {
     const auto Interrupt = nextInterruptEventTime();
+    const auto Transfer = DMA.nextEventTime();
     return (Interrupt && *Interrupt <= Scheduler.now100ns()) ||
+           (Transfer && *Transfer <= Scheduler.now100ns()) ||
            Scheduler.hasQueuedInterrupt() || hasQueuedDPC() ||
+           Scheduler.hasQueuedDMAListControl() ||
            Scheduler.hasQueuedFrameworkCancel() ||
            Scheduler.hasQueuedWDMCompletion();
   }
@@ -127,6 +137,10 @@ public:
   void enterExecution(uint64_t Identity) { CurrentExecution = Identity; }
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
   bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
+  bool hasPendingHardwareWork() const {
+    return Interrupts.hasPendingEvents() || DMA.hasPendingEvents() ||
+           DMA.hasPendingCallbacks();
+  }
   uint8_t currentIRQL() const { return CurrentIRQL; }
   llvm::Expected<Invocation> beginUnload();
   llvm::Error finishUnload();
@@ -152,6 +166,29 @@ private:
   KernelResources Resources;
   KernelMMIO MMIO;
   KernelInterrupts Interrupts;
+  KernelPhysicalMemory Physical;
+  KernelDMA DMA;
+  std::optional<KernelGuestCall> PendingDMACall;
+  std::set<uint64_t> InlineDMACalls;
+  bool hasPendingModelGuestCall() const {
+    return PendingWdmCall || PendingInterruptCall || PendingDMACall ||
+           (Framework && Framework->hasPendingGuestCall());
+  }
+  static std::optional<unsigned> dmaArgumentCount(llvm::StringRef Name);
+  llvm::Expected<uint64_t>
+  callDMAExport(const KernelExportRegistry::Export &Export,
+                llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> getDMAAdapter(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t>
+  allocateCommonBuffer(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error freeCommonBuffer(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t>
+  getScatterGatherList(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error putScatterGatherList(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Error releaseDMAMapping(const KernelDMA::ReleasePlan &Plan);
+  llvm::Error beginDMACall(uint64_t Object);
+  llvm::Expected<std::optional<uint64_t>> finishDMACall(uint64_t Object);
+
   uint64_t CurrentExecution = 0;
   std::optional<KernelGuestCall> PendingInterruptCall;
   llvm::Expected<uint64_t> callInterruptAPI(llvm::StringRef Name,
@@ -175,12 +212,17 @@ private:
                                              bool Wait);
   llvm::Error validateRemoveLockOwner(uint64_t Lock) const;
   llvm::Error canReleaseRemoveLockStorage(uint64_t Base, uint64_t Size) const;
-  llvm::Error canReleaseRange(uint64_t Base, uint64_t Size) const;
+  llvm::Error canReleaseRange(uint64_t Base, uint64_t Size,
+                              uint64_t IgnoredDMAPin = 0) const;
   llvm::Expected<uint64_t> beginWait(llvm::ArrayRef<uint64_t> Arguments,
                                      bool Delay);
-  llvm::Error prepareReleaseRange(uint64_t Base, uint64_t Size);
+  llvm::Error canRevokeVirtualRange(uint64_t Base, uint64_t Size) const;
+  llvm::Error prepareRevokeVirtualRange(uint64_t Base, uint64_t Size);
+  llvm::Error prepareReleaseRange(uint64_t Base, uint64_t Size,
+                                  uint64_t IgnoredDMAPin = 0);
   llvm::Error
-  prepareReleaseRanges(llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges);
+  prepareReleaseRanges(llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges,
+                       uint64_t IgnoredDMAPin = 0);
   llvm::Error validateGuestAccessImpl(uint64_t Address, uint32_t Size,
                                       bool IsWrite,
                                       bool IncludeDispatcher) const;
@@ -411,10 +453,12 @@ private:
     uint32_t ByteCount = 0;
     uint64_t Pool = 0;
     bool Writable = false;
+    bool DmaWritable = false;
     bool Mapped = false;
     bool MappingWritable = false;
   };
   std::map<uint64_t, LockedMdl> MDLs;
+  llvm::Error initializeMDLPhysicalPages(const LockedMdl &State);
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error buildNonPagedMDL(uint64_t MDL);
   llvm::Error freeMDL(uint64_t MDL);
@@ -423,8 +467,8 @@ private:
   llvm::Expected<uint64_t> frameworkRequestMDL(uint64_t IRP, bool Output);
   llvm::Expected<uint64_t> createRequestMDL(uint64_t IRP, uint32_t Size,
                                             llvm::ArrayRef<uint8_t> Initial,
-                                            bool Writable,
-                                            uint64_t UserAddress);
+                                            bool Writable, uint64_t UserAddress,
+                                            bool DmaWritable);
   llvm::Expected<uint64_t> mapLockedPages(uint64_t MDL, uint32_t Priority,
                                           bool ReuseExisting);
   llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL);
@@ -439,6 +483,10 @@ private:
   llvm::Error validateIOAccess(uint64_t Address, uint32_t Size,
                                bool IsWrite) const;
   llvm::Expected<uint64_t> allocate(uint64_t Size, uint64_t Alignment = 16);
+  llvm::Expected<uint64_t> allocatePhysicalBuffer(uint64_t AllocationSize,
+                                                  uint64_t Alignment,
+                                                  uint64_t DataOffset,
+                                                  uint64_t DataSize);
   llvm::Expected<uint64_t> makeUnicodeString(const std::string &Text);
   llvm::Expected<std::string> readObjectName(uint64_t Address);
   llvm::Expected<uint64_t> createDevice(llvm::ArrayRef<uint64_t> Arguments);

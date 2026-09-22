@@ -213,6 +213,8 @@ llvm::Error KernelModel::retirePnpProvider(uint64_t PDO) {
   if (Found == Devices.end())
     return llvm::Error::success();
   auto &Device = Found->second;
+  if (auto E = canReleaseResources(PDO))
+    return E;
   if (Device.OwnerKind != DeviceOwnerKind::Provider ||
       Device.OwnerDriver != PnpProviderDriver)
     return pnpDeviceError("provider teardown cannot delete a guest device");

@@ -63,6 +63,8 @@ struct DriverRequest {
   /// Explicit external pulses for READ/WRITE/IOCTL. These events survive the
   /// source IRP's completion and do not imply device enable/ack semantics.
   std::vector<DriverInterruptEvent> InterruptEvents{};
+  /// Independent external DMA transactions for READ/WRITE/IOCTL requests.
+  std::vector<DriverDmaEvent> DmaEvents{};
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -185,6 +187,7 @@ struct DriverResult {
   std::optional<std::vector<DriverRegistryKey>> Registry;
   std::vector<DriverPnpDeviceResult> PnpDevices;
   std::vector<DriverInterruptResult> Interrupts;
+  std::vector<DriverDmaResult> DmaTransfers;
 };
 
 /// Parse and validate a fresh complete PE image. Request/format/setup failures

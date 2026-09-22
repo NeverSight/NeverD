@@ -103,7 +103,8 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
                                         : std::max<uint64_t>(Input.Input.size(),
                                                              Input.OutputSize);
   if (Request->BufferSize) {
-    auto Buffer = allocate(Request->BufferSize);
+    auto Buffer = allocatePhysicalBuffer(Request->BufferSize, PoolAlignment, 0,
+                                         Request->BufferSize);
     if (!Buffer)
       return Buffer.takeError();
     Request->SystemBuffer = *Buffer;
@@ -116,7 +117,7 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
   const uint64_t UserSize =
       Request->Direct ? Request->TransferSize : Request->OutputSize;
   if (UserSize) {
-    auto Buffer = allocate(UserSize);
+    auto Buffer = allocatePhysicalBuffer(UserSize, PoolAlignment, 0, UserSize);
     if (!Buffer)
       return Buffer.takeError();
     Request->UserBuffer = *Buffer;
@@ -126,8 +127,13 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
     // IN_DIRECT only requires readable caller pages; it does not require a
     // read-only system mapping. Scenario buffers are readable and writable.
     // MdlMappingNoWrite independently restricts an explicitly created mapping.
+    // DMA writes require the request's write-lock contract independently of
+    // those CPU mapping permissions.
+    const bool DmaWritable =
+        IsRead || (IsIOCTL && (Input.ControlCode & IoControlMethodMask) ==
+                                  MethodOutDirect);
     auto MDL = createRequestMDL(Request->IRP, Request->TransferSize, Initial,
-                                true, Request->UserBuffer);
+                                true, Request->UserBuffer, DmaWritable);
     if (!MDL)
       return MDL.takeError();
     Request->Mdl = *MDL;
@@ -260,13 +266,16 @@ KernelModel::beginRequest(const DriverRequest &Input,
       }))
     return ioError(
         "cannot begin a request during another invocation or after unload");
-  if (!Input.InterruptEvents.empty() &&
+  if ((!Input.InterruptEvents.empty() || !Input.DmaEvents.empty()) &&
       Input.Kind != DriverRequestKind::Read &&
       Input.Kind != DriverRequestKind::Write &&
       Input.Kind != DriverRequestKind::DeviceControl)
     return ioError("interrupt events require a transfer request");
   if (auto E = Interrupts.canArm(Input.InterruptEvents, SourceIndex.value_or(Index),
                                  Scheduler.now100ns()))
+    return E;
+  if (auto E = DMA.canArm(Input.DmaEvents, SourceIndex.value_or(Index),
+                          Scheduler.now100ns()))
     return E;
   if (Input.Kind == DriverRequestKind::Pnp) {
     if (auto E = snapshot())
@@ -471,6 +480,9 @@ KernelModel::beginRequest(const DriverRequest &Input,
   if (auto E = Interrupts.arm(Input.InterruptEvents, SourceIndex.value_or(Index),
                               Scheduler.now100ns()))
     return E;
+  if (auto E = DMA.arm(Input.DmaEvents, SourceIndex.value_or(Index),
+                       Scheduler.now100ns()))
+    return E;
   const uint64_t Callback = Result.MajorFunctions[Major];
   if (Framework) {
     auto Route = Framework->routeRequest(*Top, Request->IRP);
@@ -632,6 +644,12 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
     return E;
   if (auto E = finishRequestLifecycle(*Request, uint32_t(*Status)))
     return E;
+  if (Request->SystemBuffer)
+    if (auto E = Physical.retire(Request->SystemBuffer))
+      return E;
+  if (Request->UserBuffer)
+    if (auto E = Physical.retire(Request->UserBuffer))
+      return E;
   // Completion consumes the IRP. Preserve observations now; subsequent guest
   // accesses to the packet and its system buffer are invalid even before the
   // dispatch routine returns to the session.

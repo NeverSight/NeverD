@@ -1,0 +1,59 @@
+//===- DriverDMA.def - Explicit DMA scenario facts -----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// DMA capabilities, external transactions and observation field inventory.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_DMA_DIRECTION
+NEVERD_DRIVER_DMA_DIRECTION(ReadMemory, "read_memory")
+NEVERD_DRIVER_DMA_DIRECTION(WriteMemory, "write_memory")
+#endif
+
+#ifdef NEVERD_DRIVER_DMA_LIMIT
+NEVERD_DRIVER_DMA_LIMIT(DriverDmaMaximumLengthLimit, 1048576)
+NEVERD_DRIVER_DMA_LIMIT(DriverDmaMapRegisterLimit, 256)
+NEVERD_DRIVER_DMA_LIMIT(DriverDmaAlignmentLimit, 4096)
+NEVERD_DRIVER_DMA_LIMIT(DriverDmaPageSize, 4096)
+NEVERD_DRIVER_DMA_LIMIT(DriverDmaLogicalLengthLimit, 1073741824)
+NEVERD_DRIVER_DMA_LIMIT(DriverScenarioDmaEventsPerRequestLimit, 64)
+NEVERD_DRIVER_DMA_LIMIT(DriverScenarioDmaEventLimit, 1024)
+NEVERD_DRIVER_DMA_LIMIT(DriverScenarioDmaBytesLimit, 16777216)
+#endif
+
+#ifdef NEVERD_DRIVER_DMA_ADDRESS
+NEVERD_DRIVER_DMA_ADDRESS(DriverDmaPhysicalBase, 0x1000000000ULL)
+NEVERD_DRIVER_DMA_ADDRESS(DriverDmaPhysicalSize, 0x100000ULL)
+#endif
+
+#ifdef NEVERD_DRIVER_DMA_FIELD
+NEVERD_DRIVER_DMA_FIELD(Dma, "dma")
+NEVERD_DRIVER_DMA_FIELD(AddressBits, "address_bits")
+NEVERD_DRIVER_DMA_FIELD(MaximumLength, "maximum_length")
+NEVERD_DRIVER_DMA_FIELD(MapRegisters, "map_registers")
+NEVERD_DRIVER_DMA_FIELD(Alignment, "alignment")
+NEVERD_DRIVER_DMA_FIELD(LogicalBase, "logical_base")
+NEVERD_DRIVER_DMA_FIELD(LogicalLength, "logical_length")
+NEVERD_DRIVER_DMA_FIELD(ScatterGather, "scatter_gather")
+NEVERD_DRIVER_DMA_FIELD(DmaEvents, "dma_events")
+NEVERD_DRIVER_DMA_FIELD(After100ns, "after_100ns")
+NEVERD_DRIVER_DMA_FIELD(DeviceID, "device_id")
+NEVERD_DRIVER_DMA_FIELD(LogicalAddress, "logical_address")
+NEVERD_DRIVER_DMA_FIELD(Direction, "direction")
+NEVERD_DRIVER_DMA_FIELD(Length, "length")
+NEVERD_DRIVER_DMA_FIELD(Data, "data_hex")
+NEVERD_DRIVER_DMA_FIELD(DmaTransfers, "dma_transfers")
+NEVERD_DRIVER_DMA_FIELD(SourceRequestIndex, "source_request_index")
+NEVERD_DRIVER_DMA_FIELD(EventIndex, "event_index")
+NEVERD_DRIVER_DMA_FIELD(Epoch, "epoch")
+NEVERD_DRIVER_DMA_FIELD(DueAt100ns, "due_at_100ns")
+NEVERD_DRIVER_DMA_FIELD(OccurredAt100ns, "occurred_at_100ns")
+NEVERD_DRIVER_DMA_FIELD(CompletedAt100ns, "completed_at_100ns")
+NEVERD_DRIVER_DMA_FIELD(Mapping, "mapping")
+NEVERD_DRIVER_DMA_FIELD(Adapter, "adapter")
+NEVERD_DRIVER_DMA_FIELD(FailureReason, "failure_reason")
+#endif

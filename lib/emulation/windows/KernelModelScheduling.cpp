@@ -111,6 +111,8 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
       return E;
     if (auto E = processRequestCancellations())
       return E;
+    if (auto E = DMA.processEvents(Scheduler.now100ns()))
+      return E;
     return processInterruptEvents();
   };
   if (auto E = ProcessBoundary(Scheduler.now100ns()))
@@ -152,6 +154,14 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
         return schedulingError("interrupt entry disagrees with its IRQL");
     } else {
       CurrentIRQL = (**Next).IRQL;
+      if ((**Next).Kind == KernelScheduler::CallbackKind::DMAListControl) {
+        auto Token = ScheduledModelContinuations.find((**Next).ID);
+        if (Token == ScheduledModelContinuations.end() ||
+            Token->second.Owner != GuestCallOwner::DMA)
+          return schedulingError("DMA callback lost its model continuation");
+        if (auto E = beginGuestCall(Token->second))
+          return E;
+      }
     }
   }
   return std::move(*Next);
@@ -178,7 +188,8 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
-      Invocation.Kind == KernelScheduler::CallbackKind::Interrupt)
+      Invocation.Kind == KernelScheduler::CallbackKind::Interrupt ||
+      Invocation.Kind == KernelScheduler::CallbackKind::DMAListControl)
     return retireDeviceIfUnreferenced(Invocation.Owner);
   return llvm::Error::success();
 }
@@ -209,6 +220,9 @@ std::optional<uint64_t> KernelModel::nextEventTime() const {
   auto Interrupt = nextInterruptEventTime();
   if (Interrupt && (!Deadline || *Interrupt < *Deadline))
     Deadline = std::max(*Interrupt, Scheduler.now100ns());
+  auto Transfer = DMA.nextEventTime();
+  if (Transfer && (!Deadline || *Transfer < *Deadline))
+    Deadline = std::max(*Transfer, Scheduler.now100ns());
   return Deadline;
 }
 
@@ -304,13 +318,27 @@ KernelModel::pollWait(const Wait &Pending) {
                                      : windows::StatusTimeout};
 }
 
-llvm::Error KernelModel::prepareReleaseRange(uint64_t Base, uint64_t Size) {
-  return prepareReleaseRanges({{Base, Size}});
+llvm::Error KernelModel::prepareReleaseRange(uint64_t Base, uint64_t Size,
+                                             uint64_t IgnoredDMAPin) {
+  return prepareReleaseRanges({{Base, Size}}, IgnoredDMAPin);
 }
 
-llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size) const {
+llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size,
+                                         uint64_t IgnoredDMAPin) const {
   if (Size > UINT64_MAX - Base)
     return schedulingError("overflowing object storage range");
+  if (Size)
+    if (auto E = Physical.canReleaseRange(Base, Size, IgnoredDMAPin))
+      return E;
+  return canRevokeVirtualRange(Base, Size);
+}
+
+llvm::Error KernelModel::canRevokeVirtualRange(uint64_t Base,
+                                               uint64_t Size) const {
+  if (Size > UINT64_MAX - Base)
+    return schedulingError("overflowing virtual storage range");
+  if (auto E = DMA.canReleaseRange(Base, Size))
+    return E;
   if (auto E = Interrupts.canReleaseRange(Base, Size))
     return E;
   for (const auto &[Object, References] : WaitReferences)
@@ -321,10 +349,20 @@ llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size) const {
   return Dispatcher.canReleaseRange(Base, Size);
 }
 
+llvm::Error KernelModel::prepareRevokeVirtualRange(uint64_t Base,
+                                                   uint64_t Size) {
+  if (auto E = canRevokeVirtualRange(Base, Size))
+    return E;
+  if (auto E = Dispatcher.prepareReleaseRange(Base, Size))
+    return E;
+  return RemoveLocks.forgetRange(Base, Size);
+}
+
 llvm::Error KernelModel::prepareReleaseRanges(
-    llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges) {
+    llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges,
+    uint64_t IgnoredDMAPin) {
   for (const auto &[Base, Size] : Ranges)
-    if (auto E = canReleaseRange(Base, Size))
+    if (auto E = canReleaseRange(Base, Size, IgnoredDMAPin))
       return E;
   for (const auto &[Base, Size] : Ranges) {
     if (auto E = Dispatcher.prepareReleaseRange(Base, Size))

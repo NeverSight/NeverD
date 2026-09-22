@@ -45,6 +45,9 @@ std::string guestCallPhase(const GuestCallToken &Token) {
   case GuestCallOwner::WDM:
     Prefix = "callback:wdm";
     break;
+  case GuestCallOwner::DMA:
+    Prefix = "callback:dma";
+    break;
   case GuestCallOwner::Interrupt:
     Prefix = "callback:interrupt";
     break;
@@ -817,7 +820,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                         [](const auto &Frame) { return !Frame->Wait; }))
           continue;
         if (!Foreground && Waiting.empty() && !Kernel.requestPending() &&
-            !Kernel.hasPendingInterruptEvents()) {
+            !Kernel.hasPendingHardwareWork()) {
           Result.Phase = ParentPhase;
           Result.Stop = DriverStopReason::Returned;
           return llvm::Error::success();

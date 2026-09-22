@@ -360,8 +360,14 @@ TEST_F(KernelRequestMDL,
     rejected(Model->validateGuestAccess(First + windows::MDLByteCountOffset, 4,
                                         true),
              "read-only");
-    rejected(Model->validateGuestAccess(First + windows::MDLSize, 8, false),
-             "PFN");
+    success(Model->validateGuestAccess(First + windows::MDLSize, 8, false));
+    const auto PFN = get(First + windows::MDLSize);
+    EXPECT_GE(PFN, DriverDmaPhysicalBase / DriverDmaPageSize);
+    EXPECT_LT(PFN, (DriverDmaPhysicalBase + DriverDmaPhysicalSize) /
+                       DriverDmaPageSize);
+    EXPECT_NE(PFN, System / DriverDmaPageSize);
+    rejected(Model->validateGuestAccess(First + windows::MDLSize, 8, true),
+             "read-only");
     rejected(
         Model->call("MmMapLockedPagesSpecifyCache", {First, 0, 1, 0, 0, 0x10}),
         "additional");
@@ -397,6 +403,11 @@ TEST_F(KernelRequestMDL,
     EXPECT_EQ(get(Output + windows::MDLMappedSystemVAOffset), 0u);
     EXPECT_EQ(get(Output + windows::MDLFlagsOffset, 2),
               windows::MDLPagesLocked);
+    success(Model->validateGuestAccess(Output + windows::MDLSize, 8, false));
+    const auto OutputPFN = get(Output + windows::MDLSize);
+    EXPECT_GE(OutputPFN, DriverDmaPhysicalBase / DriverDmaPageSize);
+    EXPECT_NE(OutputPFN,
+              get(Output + windows::MDLStartVAOffset) / DriverDmaPageSize);
     EXPECT_EQ(get(Input + windows::MDLByteCountOffset, 4), 3u);
     EXPECT_EQ(get(Output + windows::MDLByteCountOffset, 4), 7u);
     const auto System = get(Request.IRP + windows::IRPSystemBufferOffset);
@@ -418,6 +429,35 @@ TEST_F(KernelRequestMDL,
       rejected(Model->validateGuestAccess(Address, 1, false), "freed");
     finalize(Request);
   }
+}
+
+TEST_F(KernelRequestMDL, PoolMDLViewsSharePhysicalPagesAndRemainReadOnly) {
+  const auto Pool =
+      kernel("ExAllocatePoolWithTag",
+             {windows::PoolNX, 2 * DriverDmaPageSize, 0x70666e31});
+  ASSERT_NE(Pool, 0u);
+  const auto First =
+      kernel("IoAllocateMdl", {Pool + 16, DriverDmaPageSize, 0, 0, 0});
+  const auto Second =
+      kernel("IoAllocateMdl", {Pool + DriverDmaPageSize, 16, 0, 0, 0});
+  ASSERT_NE(First, 0u);
+  ASSERT_NE(Second, 0u);
+  rejected(Model->validateGuestAccess(First + windows::MDLSize, 8, false),
+           "unbuilt");
+  kernel("MmBuildMdlForNonPagedPool", {First});
+  kernel("MmBuildMdlForNonPagedPool", {Second});
+  success(Model->validateGuestAccess(First + windows::MDLSize, 16, false));
+  success(Model->validateGuestAccess(Second + windows::MDLSize, 8, false));
+  EXPECT_EQ(get(First + windows::MDLSize + 8), get(Second + windows::MDLSize));
+  EXPECT_NE(get(First + windows::MDLSize), get(First + windows::MDLSize + 8));
+  EXPECT_EQ(mapping(First), Pool + 16);
+  EXPECT_EQ(mapping(Second), Pool + DriverDmaPageSize);
+  rejected(Model->validateGuestAccess(Second + windows::MDLSize, 8, true),
+           "read-only");
+  kernel("IoFreeMdl", {First});
+  success(Model->validateGuestAccess(Second + windows::MDLSize, 8, false));
+  kernel("IoFreeMdl", {Second});
+  kernel("ExFreePoolWithTag", {Pool, 0x70666e31});
 }
 
 TEST_F(KernelRequestMDL, BufferedReadWriteDirectionsAndZeroLengthStatus) {

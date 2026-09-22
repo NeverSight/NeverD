@@ -146,6 +146,15 @@ KernelExportRegistry::insertFrameworkFunction(uint64_t BindingIdentity,
                 BindingIdentity);
 }
 
+llvm::Expected<uint64_t>
+KernelExportRegistry::insertDMAFunction(uint64_t Adapter,
+                                        llvm::StringRef Name) {
+  if (!Initialized || !Adapter || !validName(Name))
+    return invalid(
+        "DMA function requires an initialized namespace, adapter and name");
+  return insert(DMAProvider, Name, ExportKind::DMAFunction, Adapter);
+}
+
 const KernelExportRegistry::Export *
 KernelExportRegistry::lookup(uint64_t Address) const {
   auto I = Exports.find(Address);

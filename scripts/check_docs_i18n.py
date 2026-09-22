@@ -2151,6 +2151,21 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         matches_interrupt = False
     if not matches_interrupt:
         report(errors, "driver interrupt example differs from public execution scenario")
+    dma_example = Path("docs/examples/driver-dma-scenario.json")
+    dma_scenario = re.search(
+        r'CAPIAndCLIObserveDmaRamBeforeExplicitInterrupt.*?'
+        r'const std::string Scenario\s*=\s*R"dma\((.*?)\)dma";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_dma = dma_scenario is not None and json.loads(
+            view.read_text(dma_example)
+        ) == json.loads(dma_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_dma = False
+    if not matches_dma:
+        report(errors, "driver DMA example differs from public execution scenario")
     exports = re.findall(
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
@@ -2175,6 +2190,12 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
             rf"{macro}\((\w+),",
             view.read_text(Path("lib/emulation/windows") / inventory),
         )
+    # These are adapter-bound indirect methods, not kernel import names. Only
+    # implemented entries belong to the supported API documentation inventory.
+    exports += re.findall(
+        r"NEVERD_DMA_OPERATION\((\w+),[^\n]*, true\)",
+        view.read_text(Path("lib/emulation/windows/KernelDMAOperations.def")),
+    )
     required = (
         "NEVERD_ENABLE_DRIVER_EMULATION=ON",
         "BUILD_TESTING",
@@ -2249,7 +2270,14 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v13",
+        "wdm-x64-scheduled-v14",
+        "DriverDMA.h", "DriverDMA.def", "dma_events", "dma_transfers",
+        "address_bits", "maximum_length", "map_registers", "alignment",
+        "logical_base", "logical_length", "scatter_gather", "logical_address",
+        "read_memory", "write_memory", "data_hex", "completed_at_100ns",
+        "mapping", "adapter", "failure_reason", "DmaWritable",
+        "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
+        "driver-dma-scenario.json",
         "DriverInterrupts.h", "DriverInterrupts.def", "interrupt_events",
         "after_100ns", "interrupt_id", "raw_vector", "raw_level", "raw_affinity",
         "translated_vector", "translated_level", "translated_affinity",
@@ -2309,6 +2337,9 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
              "KernelRemoveLocks", "DriverResources.h", "DriverResources.def",
              "KernelMMIO", "KernelModelResources", "UnicornBackend",
              "KernelResources", "KernelInterrupts", "DriverInterrupts.h",
+             "DriverDMA.h", "DriverDMA.def", "KernelPhysicalMemory", "KernelDMA",
+             "KernelDMAEvents", "KernelModelPhysicalMemory", "KernelModelDMA",
+             "KernelModelDMATransfers", "DmaWritable",
              "KernelModelInterruptEvents", "KernelModelInterrupts",
              "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
              "KernelModelPowerCompletion"),
@@ -2328,6 +2359,13 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
                 "NEVERD_WDM_STACK_FIXTURE",
                 "NEVERD_WDM_STACK_CFG_FIXTURE",
                 "DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                "DriverDMAScenarioTests.cpp", "KernelPhysicalMemoryTests.cpp",
+                "BackendBackingTests.cpp", "KernelDMATests.cpp", "KernelDMABridgeTests.cpp",
+                "SchedulerDMATests.cpp", "DriverWDMDMATests.cpp",
+                "NEVERD_WDM_DMA_FIXTURE", "NEVERD_WDM_DMA_CFG_FIXTURE",
+                "driver-dma-scenario.json", "test_driver_dma_integration.py",
+                "NEVERD_TEST_LIBNEVERD", "NEVERD_TEST_WDM_DMA_FIXTURE",
+                "NEVERD_TEST_WDM_DMA_CFG_FIXTURE",
                 "DriverInterruptScenarioTests.cpp", "KernelInterruptsTests.cpp",
                 "KernelInterruptBridgeTests.cpp", "SchedulerInterruptTests.cpp",
                 "DriverWDMInterruptTests.cpp", "NEVERD_WDM_INTERRUPT_FIXTURE",

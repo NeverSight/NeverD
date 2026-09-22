@@ -32,13 +32,16 @@ public:
   /// The coordinator checks all live resource consumers before assignment
   /// release. This callback is pure and must outlive this authority.
   using CheckRelease = std::function<llvm::Error(uint64_t)>;
-  explicit KernelResources(CheckRelease Check) : Check(std::move(Check)) {}
+  explicit KernelResources(CheckRelease Release, CheckRelease Start = {})
+      : Check(std::move(Release)),
+        StartCheck(Start ? std::move(Start) : Check) {}
   KernelResources(const KernelResources &) = delete;
   KernelResources &operator=(const KernelResources &) = delete;
   struct Device {
     std::string ID;
     std::vector<DriverMemoryResource> Memory;
     std::vector<DriverInterruptResource> Interrupts;
+    std::optional<DriverDmaConfig> Dma;
     uint64_t Epoch = 0;
     bool Starting = false;
     bool Assigned = false;
@@ -62,6 +65,7 @@ public:
 
 private:
   CheckRelease Check;
+  CheckRelease StartCheck;
   std::map<uint64_t, Device> Devices;
 };
 } // namespace neverd::emulation

@@ -40,8 +40,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     return 0;
   }
   if (Name == "KeSynchronizeExecution") {
-    if (PendingInterruptCall || PendingWdmCall ||
-        (Framework && Framework->hasPendingGuestCall()))
+    if (hasPendingModelGuestCall())
       return apiError("cannot replace a prepared guest callback");
     const auto *Connection = Interrupts.connection(A[0]);
     if (!Connection || CurrentIRQL > Connection->IRQL)
@@ -201,6 +200,8 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
 llvm::Error KernelModel::beginGuestCall(GuestCallToken Token) {
   if (!Token.ID)
     return apiError("guest callback has no continuation identity");
+  if (Token.Owner == GuestCallOwner::DMA)
+    return beginDMACall(Token.ID);
   if (Token.Owner != GuestCallOwner::Interrupt)
     return llvm::Error::success();
   auto IRQL = Interrupts.beginCall(Token.ID, CurrentIRQL, Scheduler.now100ns());

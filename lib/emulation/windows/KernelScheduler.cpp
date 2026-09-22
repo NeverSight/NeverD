@@ -91,8 +91,9 @@ llvm::Error KernelScheduler::validateInterrupt(
 }
 
 llvm::Error KernelScheduler::checkCapacity(uint64_t Additional) const {
-  const uint64_t Outstanding =
-      queuedCallbackCount() + Suspended.size() + bool(Active);
+  const uint64_t Outstanding = queuedCallbackCount() + Suspended.size() +
+                               bool(Active) + WaitingDMA.size() +
+                               InlineDMA.size();
   if (Outstanding > Bounds.MaxPendingCallbacks ||
       Additional > Bounds.MaxPendingCallbacks - Outstanding)
     return schedulerError("scheduler pending callback limit exhausted");
@@ -108,8 +109,9 @@ KernelScheduler::Invocation KernelScheduler::makeInvocation(Callback Work,
   static_cast<Callback &>(Call) = std::move(Work);
   Call.ID = NextID++;
   Call.Kind = Kind;
-  Call.IRQL = Kind == CallbackKind::DPC ? scheduler::DispatchLevel
-                                        : scheduler::PassiveLevel;
+  Call.IRQL = Kind == CallbackKind::DPC || Kind == CallbackKind::DMAListControl
+                  ? scheduler::DispatchLevel
+                  : scheduler::PassiveLevel;
   Call.DueTime100ns = DueTime;
   return Call;
 }
@@ -222,6 +224,88 @@ KernelScheduler::enqueueInterrupt(InterruptCallback Interrupt) {
 
 bool KernelScheduler::removeDPC(uint64_t Object) {
   return removeObject(DPCs, Object);
+}
+
+llvm::Error
+KernelScheduler::canReserveDMAListControl(const Callback &Call) const {
+  if (auto E = validateCallback(Call))
+    return E;
+  return checkCapacity(1);
+}
+
+llvm::Expected<uint64_t> KernelScheduler::reserveDMAListControl(Callback Call) {
+  if (auto E = canReserveDMAListControl(Call))
+    return E;
+  auto Reserved =
+      makeInvocation(std::move(Call), CallbackKind::DMAListControl, Now);
+  const uint64_t ID = Reserved.ID;
+  WaitingDMA.emplace(ID, std::move(Reserved));
+  return ID;
+}
+
+llvm::Error
+KernelScheduler::canReadyDMAListControls(llvm::ArrayRef<uint64_t> IDs) const {
+  if (auto E = validateTime())
+    return E;
+  std::set<uint64_t> Seen;
+  for (uint64_t ID : IDs) {
+    if (!WaitingDMA.count(ID))
+      return schedulerError("DMA callback is not waiting for resources");
+    if (!Seen.insert(ID).second)
+      return schedulerError("duplicate DMA callback in admission batch");
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error
+KernelScheduler::readyDMAListControls(llvm::ArrayRef<uint64_t> IDs) {
+  if (auto E = canReadyDMAListControls(IDs))
+    return E;
+  for (uint64_t ID : IDs) {
+    auto Reserved = WaitingDMA.extract(ID);
+    Reserved.mapped().DueTime100ns = Now;
+    ReadyDMA.push_back(std::move(Reserved.mapped()));
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::canDispatchInlineDMAListControl() const {
+  if (auto E = validateTime())
+    return E;
+  if (Dispatches >= Bounds.MaxDispatches)
+    return schedulerError("scheduler callback dispatch limit exhausted");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::canBeginInlineDMAListControl(uint64_t ID) const {
+  if (auto E = canDispatchInlineDMAListControl())
+    return E;
+  if (!WaitingDMA.count(ID))
+    return schedulerError("DMA callback is not waiting for inline delivery");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::beginInlineDMAListControl(uint64_t ID) {
+  if (auto E = canBeginInlineDMAListControl(ID))
+    return E;
+  auto Reserved = WaitingDMA.extract(ID);
+  Reserved.mapped().DueTime100ns = Now;
+  InlineDMA.push_back(std::move(Reserved.mapped()));
+  ++Dispatches;
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::canFinishInlineDMAListControl(uint64_t ID) const {
+  if (InlineDMA.empty() || InlineDMA.back().ID != ID)
+    return schedulerError("inline DMA callback return identity mismatch");
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::finishInlineDMAListControl(uint64_t ID) {
+  if (auto E = canFinishInlineDMAListControl(ID))
+    return E;
+  InlineDMA.pop_back();
+  return llvm::Error::success();
 }
 
 bool KernelScheduler::isDPCQueued(uint64_t Object) const {
@@ -410,7 +494,7 @@ KernelScheduler::next(bool AdvanceTime,
                       std::optional<uint64_t> MaxAdvanceTime) {
   if (auto E = validateTime())
     return E;
-  if (Active)
+  if (Active || !InlineDMA.empty())
     return schedulerError("cannot dispatch with an unfinished callback");
   if (MaxAdvanceTime && *MaxAdvanceTime > Bounds.MaxTime100ns)
     return schedulerError("wait deadline exceeds virtual time limit");
@@ -422,8 +506,9 @@ KernelScheduler::next(bool AdvanceTime,
     if (queuedCallbackCount()) {
       if (Dispatches >= Bounds.MaxDispatches)
         return schedulerError("scheduler callback dispatch limit exhausted");
-      auto &Queue = !Interrupts.empty()       ? Interrupts
-                    : !DPCs.empty()           ? DPCs
+      auto &Queue = !Interrupts.empty()      ? Interrupts
+                    : !DPCs.empty()          ? DPCs
+                    : !ReadyDMA.empty()      ? ReadyDMA
                     : !Cancellations.empty() ? Cancellations
                     : !Completions.empty()   ? Completions
                                              : Workers;
@@ -466,7 +551,7 @@ llvm::Error KernelScheduler::processDueTimers() {
 llvm::Error KernelScheduler::canAdvanceTo100ns(
     uint64_t Time, uint64_t AdditionalCallbacks) const {
   if (Time > Now) {
-    if (Active || queuedCallbackCount())
+    if (Active || !InlineDMA.empty() || queuedCallbackCount())
       return schedulerError("cannot advance virtual time with runnable work");
     auto Earliest = nextEventTime100ns();
     if (Earliest && Time > *Earliest)
@@ -484,6 +569,8 @@ llvm::Error KernelScheduler::advanceTo100ns(uint64_t Time) {
 llvm::Error KernelScheduler::finish(uint64_t ID) {
   if (!Active || Active->ID != ID)
     return schedulerError("scheduler callback completion identity mismatch");
+  if (!InlineDMA.empty())
+    return schedulerError("callback still owns an inline DMA invocation");
   Active.reset();
   return llvm::Error::success();
 }
@@ -491,6 +578,8 @@ llvm::Error KernelScheduler::finish(uint64_t ID) {
 llvm::Error KernelScheduler::suspend(uint64_t ID) {
   if (!Active || Active->ID != ID)
     return schedulerError("scheduler callback suspension identity mismatch");
+  if (!InlineDMA.empty())
+    return schedulerError("callback still owns an inline DMA invocation");
   if (Suspended.count(ID))
     return schedulerError("scheduler callback is already suspended");
   Suspended.emplace(ID, std::move(*Active));
@@ -499,7 +588,7 @@ llvm::Error KernelScheduler::suspend(uint64_t ID) {
 }
 
 llvm::Error KernelScheduler::resume(uint64_t ID) {
-  if (Active)
+  if (Active || !InlineDMA.empty())
     return schedulerError("cannot resume with an unfinished callback");
   auto I = Suspended.find(ID);
   if (I == Suspended.end())
@@ -521,11 +610,14 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
   if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches) ||
       llvm::any_of(Cancellations, Matches) ||
-      llvm::any_of(Completions, Matches) || llvm::any_of(Interrupts, Matches))
+      llvm::any_of(Completions, Matches) || llvm::any_of(Interrupts, Matches) ||
+      llvm::any_of(ReadyDMA, Matches) || llvm::any_of(InlineDMA, Matches))
     return true;
-  if (llvm::any_of(Suspended, [Owner](const auto &Item) {
-        return Item.second.Owner == Owner;
-      }))
+  auto HeldMatches = [Owner](const auto &Item) {
+    return Item.second.Owner == Owner;
+  };
+  if (llvm::any_of(Suspended, HeldMatches) ||
+      llvm::any_of(WaitingDMA, HeldMatches))
     return true;
   return llvm::any_of(Timers, [Owner](const auto &Item) {
     return Item.second.Armed && Item.second.Owner == Owner;
@@ -533,7 +625,8 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
 }
 
 bool KernelScheduler::hasPending() const {
-  if (Active || !Suspended.empty() || queuedCallbackCount())
+  if (Active || !Suspended.empty() || queuedCallbackCount() ||
+      !WaitingDMA.empty() || !InlineDMA.empty())
     return true;
   return llvm::any_of(Timers,
                       [](const auto &Item) { return Item.second.Armed; });

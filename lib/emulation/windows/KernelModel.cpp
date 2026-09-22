@@ -600,6 +600,8 @@ llvm::Expected<uint64_t> KernelModel::call(
       return E;
     return 0;
   }
+  if (Kind == KernelAPIKind::IoGetDmaAdapter)
+    return getDMAAdapter(A);
   if (Kind == KernelAPIKind::IoAllocateMdl)
     return allocateMDL(A);
   if (Kind == KernelAPIKind::IoFreeMdl) {
@@ -768,9 +770,15 @@ llvm::Expected<uint64_t> KernelModel::call(
     }
     if (Start > AllocationEnd || A[1] > AllocationEnd - Start)
       return AllocationFailure();
-    auto Pointer = allocate(A[1], Alignment);
-    if (!Pointer)
-      return Pointer.takeError();
+    auto Pointer = allocatePhysicalBuffer(A[1], Alignment, 0, A[1]);
+    if (!Pointer) {
+      auto Error = Pointer.takeError();
+      if (Error.isA<PhysicalMemoryLimitError>()) {
+        llvm::consumeError(std::move(Error));
+        return AllocationFailure();
+      }
+      return std::move(Error);
+    }
     // ExAllocatePool2 zeroes by default; old pool and explicit uninitialized
     // allocations use a deterministic concrete byte pattern, never host data.
     if (!Modern || (Flags & pool::Uninitialized))
@@ -790,9 +798,13 @@ llvm::Expected<uint64_t> KernelModel::call(
       return modelError("ExFreePoolWithTag tag does not match allocation");
     if (!It->second.NonPaged && CurrentIRQL > APCLevel)
       return modelError("paged pool free requires IRQL <= APC_LEVEL");
+    if (auto E = Physical.canRetire(A[0]))
+      return E;
     if (auto E = prepareReleaseRange(A[0], It->second.Size))
       return E;
     if (auto E = writeBytes(Memory, A[0], It->second.Size, FreedPoolByte))
+      return E;
+    if (auto E = Physical.retire(A[0]))
       return E;
     FreedRanges.emplace(A[0], It->second.Size);
     Allocations.erase(It);
@@ -987,6 +999,8 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
     if (auto E = Dispatcher.validateGuestAccess(Address, Size, IsWrite))
       return E;
   if (auto E = RemoveLocks.validateGuestAccess(Address, Size, IsWrite))
+    return E;
+  if (auto E = DMA.validateGuestAccess(Address, Size, IsWrite))
     return E;
   if (auto E = Interrupts.validateGuestAccess(Address, Size))
     return E;

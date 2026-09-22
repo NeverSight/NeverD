@@ -41,8 +41,7 @@ KernelModel::preflightScheduledBoundary(uint64_t Time) {
     ++ProviderCount;
   }
   if (ProviderCount) {
-    if (PendingWdmCall || PendingInterruptCall ||
-        (Framework && Framework->hasPendingGuestCall()))
+    if (hasPendingModelGuestCall())
       return interruptEventError(
           "PnP provider: deadline cannot replace a pending guest callback");
     if (ProviderCount > UINT64_MAX - NextIRPCall)
