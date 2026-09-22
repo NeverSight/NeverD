@@ -14,6 +14,13 @@ struct LowFunc;
 /// before dispatch. This machine fact does not establish a method signature.
 bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address);
 
+/// Reuse the same selector-stub machine owner while also requiring its decoded
+/// selector slot and name to match current metadata. This authenticates only
+/// dispatch identity, not a method signature or call effects.
+bool objcSelectorStubMatches(const BinaryImage &Image, va_t Address,
+                             va_t SelectorReferenceAddress,
+                             llvm::StringRef Selector);
+
 /// Authenticate an exact selector-loading objc_msgSend stub and return its
 /// declared dynamic-format signature only when the call has no variadic tail.
 /// The caller must independently prove that its actual argument count equals

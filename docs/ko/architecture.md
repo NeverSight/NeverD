@@ -597,3 +597,5 @@ AArch64 Swift 타입 참조 구성은 보존된 기기 및 시뮬레이터 SDK �
 Swift 지연 객체 getter는 각각 검증된 `swift_retain`과 뒤따르는 `objc_autoreleaseReturnValue`도 허용하며 두 호출과 실제 반환 값 전달을 유지합니다. 초기화 앞의 선택적 빈 레이블에는 표현식, 중첩 문 또는 메모리 효과가 없어야 합니다. 부수적인 once 컨텍스트를 제거하려면 초기화 함수가 컨텍스트를 사용하지 않는다는 독립적 증명과 게시 시 재검증이 필요합니다.
 
 Swift `NSObject` 동등 비교 후보는 기기와 시뮬레이터에서 독립적으로 검증한 ABI `swiftcc i1(ptr, ptr, ptr swiftself)`를 사용합니다. 객체 인수는 x0/x1, 메타데이터는 x20에 배치됩니다. `libswiftObjectiveC`의 정확한 강한 가져오기, 불변 저장소 및 기존의 완전한 호출자 정규화 증명이 필요합니다. HighC는 동일한 표준 입력 계약에서 `_Bool` 선언과 `swift_context` 매개변수를 생성하며, 조회만으로 바이트 반환 ABI를 게시하지 않습니다.
+
+고정된 무인수 Objective-C 객체 getter는 opaque identical-state 호출로만 이 정규화 증명에 참여할 수 있습니다. 현재 selector stub의 불변 20바이트 전체, selector 참조, 강한 `objc_msgSend` 가져오기 및 정확한 SDK 포인터 ABI가 일치해야 하며, 실패한 `__objc_stubs` 증거는 알 수 없는 네이티브 호출로 되돌아갈 수 없습니다. clobber, 결과 또는 소스 바인딩 사실을 부여하지 않으므로 호출 지점의 모든 물리 레지스터, 플래그 및 메모리 관찰이 이미 같아야 합니다.

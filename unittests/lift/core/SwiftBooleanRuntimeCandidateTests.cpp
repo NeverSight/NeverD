@@ -396,6 +396,7 @@ struct ProjectionFixture {
     Text.FileOff = 0x200;
     Image.Segments.push_back(Text);
     auto Code = Image.Sections.front();
+    Code.Name = "__text";
     Code.VA = Text.VA;
     Code.FileOff = Text.FileOff;
     Image.Sections.push_back(Code);
@@ -434,6 +435,42 @@ struct ProjectionFixture {
     return qualifySwiftBooleanProjection(Image, Low, Entry);
   }
 };
+
+SourceCallTypeHint addOpaqueGetter(ProjectionFixture &F) {
+  constexpr va_t Getter = 0x1040, SelectorSlot = 0x2040;
+  constexpr va_t MessageSlot = Slot + 8;
+  Section Data;
+  Data.Name = "__got";
+  Data.VA = 0x2000;
+  Data.Size = Data.FileSz = 0x100;
+  Data.Flags = SegmentFlags::Readable;
+  F.Image.Sections.push_back(Data);
+  F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+  F.Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/UIKit.framework/UIKit");
+  F.Image.ImportPtrSlots[MessageSlot] = "_objc_msgSend";
+  EXPECT_TRUE(F.Image.recordDyldBindSlot(MessageSlot, "_objc_msgSend", 0,
+                                         "/usr/lib/libobjc.A.dylib", false));
+  F.Image.ObjCSourceReferences[SelectorSlot] = {
+      ObjCSourceReference::Kind::Selector, SelectorSlot, 8,
+      "interactivePopGestureRecognizer"};
+  const uint32_t Stub[] = {0xb0000001, 0xf9402021, 0xb0000010, 0xf9404610,
+                           0xd61f0200};
+  for (unsigned I = 0; I != std::size(Stub); ++I)
+    F.word(Getter + I * 4, Stub[I]);
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  auto Signature =
+      objcSelectorSourceTypeHint(F.Image, "interactivePopGestureRecognizer");
+  EXPECT_TRUE(Signature);
+  if (Signature)
+    Hint.Signature = *Signature;
+  Hint.TargetAddress = Getter;
+  Hint.TargetName = "objc_msgSend";
+  Hint.Selector = "interactivePopGestureRecognizer";
+  Hint.SelectorReferenceAddress = SelectorSlot;
+  return Hint;
+}
 } // namespace
 
 TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
@@ -448,6 +485,130 @@ TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
   EXPECT_EQ(Result->Runtime.ImportSlot, Slot);
   EXPECT_EQ(Result->Runtime.RawContract.DefinedResultBits, 1U);
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
+}
+
+TEST(SwiftBooleanProjection,
+     OpaqueGetterRequiresCurrentStubImportSelectorAndFixedABI) {
+  ProjectionFixture F;
+  const auto Hint = addOpaqueGetter(F);
+  SourceCallOccurrenceKey Site{0x3000, 0, NdOp::CALL, 0x1040};
+  EXPECT_TRUE(readImmutableCodeBytes(F.Image, 0x1040, 20));
+  EXPECT_TRUE(objcSelectorStubOverwritesCommand(F.Image, 0x1040));
+  EXPECT_TRUE(objcSelectorStubMatches(F.Image, 0x1040, 0x2040,
+                                      "interactivePopGestureRecognizer"));
+  EXPECT_EQ(darwinImportVeneerSlot(F.Image, 0x1048), Slot + 8);
+  EXPECT_TRUE(isImmutableImageImportSlot(F.Image, Slot + 8));
+  EXPECT_EQ(Hint.Signature.Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  EXPECT_TRUE(Hint.Signature.HasExplicitABI);
+  ASSERT_TRUE(
+      swift_boolean_projection_detail::opaqueObjectGetter(F.Image, Site, Hint));
+  for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = F.Image;
+    auto Changed = Hint;
+    switch (Mutation) {
+    case 0:
+      Changed.TargetName = "objc_msgSendSuper2";
+      break;
+    case 1:
+      Changed.Selector += ":";
+      break;
+    case 2:
+      Changed.SelectorReferenceAddress += 8;
+      break;
+    case 3:
+      Image.ObjCSourceReferences[0x2040].Name = "parentViewController";
+      break;
+    case 4:
+      Image.CodePtrRelocSlots.insert(0x1040);
+      break;
+    case 5:
+      Image.Sections.push_back(Image.Sections.front());
+      break;
+    case 6:
+      Image.Segments[1].Flags = SegmentFlags::Readable |
+                                SegmentFlags::Writable |
+                                SegmentFlags::Executable;
+      break;
+    case 7:
+      Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
+      break;
+    case 8:
+      Image.DyldBindSlots[Slot + 8].WeakImport = true;
+      break;
+    case 9:
+      Image.DyldBindSlots[Slot + 8].Addend = 1;
+      break;
+    case 10:
+      Image.DynInfo.NeededLibs.pop_back();
+      Image.DynInfo.NeededLibs.pop_back();
+      break;
+    case 11:
+      Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+      break;
+    case 12:
+      Changed.Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      break;
+    case 13:
+      Changed.Signature.Parameters[1].Location.RegisterOffset = 16;
+      break;
+    case 14:
+      Changed.Signature.Parameters[1].Components = {
+          Changed.Signature.Parameters[1].Location};
+      Changed.Signature.Parameters[1].Location = {};
+      break;
+    case 15:
+      Changed.Signature.ReturnLocation.RegisterOffset = 8;
+      break;
+    case 16:
+      Changed.Format = SourceCallTypeHint::FormatArguments{};
+      break;
+    case 17:
+      Image.MachOChainedFixupsAmbiguous = true;
+      break;
+    case 18:
+      Site.StaticTarget = 0x1044;
+      break;
+    case 19:
+      Image.Sections.back().FileSz = 0x80;
+      break;
+    case 20:
+      Image.Segments.front().Flags =
+          SegmentFlags::Readable | SegmentFlags::Executable;
+      break;
+    }
+    EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectGetter(
+        Image, Site, Changed));
+  }
+}
+
+TEST(SwiftBooleanProjection,
+     OpaqueGetterBeforeSelectedCallKeepsFailedStubsClosed) {
+  ProjectionFixture F;
+  addOpaqueGetter(F);
+  auto &Block = F.Low.Blocks.front();
+  auto Getter = Block.Ops.front();
+  Getter.Addr = 0x3000;
+  Getter.Inputs[0].Offset = 0x1040;
+  for (auto &Op : Block.Ops)
+    Op.Addr += 4;
+  Block.Ops.insert(Block.Ops.begin(), Getter);
+  Block.EndAddr += 4;
+  F.word(0x3000, 0x97fff810); // BL selector stub.
+  F.word(0x3004, 0x97fff7ff); // BL comparison veneer.
+  F.word(0x3008, 0x92400000);
+  F.word(0x300c, 0xd65f03c0);
+  const auto Hints = buildObjCSourceCallHints(F.Image, F.Low);
+  ASSERT_EQ(Hints.count(0x3000), 1U);
+  EXPECT_EQ(Hints.at(0x3000).CallKind, SourceCallTypeHint::Kind::ObjCMessage);
+  EXPECT_TRUE(F.qualify());
+
+  // If the selector prefix no longer has its shared machine proof, this
+  // __objc_stubs target cannot fall back to an unknown native opaque call.
+  F.word(0x1040, 0xb0000000);
+  EXPECT_EQ(buildObjCSourceCallHints(F.Image, F.Low).count(0x3000), 0U);
+  EXPECT_FALSE(F.qualify());
 }
 
 TEST(SwiftBooleanProjection, UnknownPrefixRequiresIdenticalPhysicalState) {

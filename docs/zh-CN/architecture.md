@@ -615,3 +615,5 @@ AArch64 Swift 类型引用配方还接受 `libswiftCore` 导出的精确 `_Conti
 Swift 延迟对象 getter 也接受分别验证的 `swift_retain` 和后续 `objc_autoreleaseReturnValue`，保留两次调用及其实际返回值传递链。初始化前可存在一个空标签，但不能携带表达式、嵌套语句或内存效果。移除附带的 once 上下文仍须独立证明初始化器不使用上下文，并在发布时重新验证。
 
 Swift `NSObject` 相等比较候选使用已独立验证的真机和模拟器 ABI `swiftcc i1(ptr, ptr, ptr swiftself)`：对象参数位于 x0/x1，元数据位于 x20。它要求来自 `libswiftObjectiveC` 的精确强导入、不可变存储及现有的完整调用方归一化证明。HighC 从同一规范输入契约生成 `_Bool` 原型和 `swift_context` 参数；仅查找到符号不能发布字节返回 ABI。
+
+固定的零参数 Objective-C 对象 getter 只能作为 opaque identical-state 调用参与该归一化证明。当前 selector stub 的全部 20 个不可变指令字节、selector 引用、强 `objc_msgSend` 导入及精确 SDK 指针 ABI 必须一致；失败的 `__objc_stubs` 证据不能退回未知原生调用。该规则不授予 clobber、结果或源码绑定事实，因此调用点的每个物理寄存器、标志和内存观察都必须已经相同。

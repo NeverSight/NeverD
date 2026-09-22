@@ -278,9 +278,9 @@ TEST(NativeBooleanResultProof, RejectsObservableUpperBitsAndPartialWrites) {
 
 TEST(NativeBooleanResultProof, OpaqueCallsRequireEveryPhysicalByteToAgree) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
-  const std::vector<uint64_t> Registers = {a64reg::X8,         a64reg::X19,
-                                           a64reg::X30,        a64reg::SP,
-                                           TRI.VecRegBase + 8, a64reg::NFLAG};
+  const std::vector<uint64_t> Registers = {
+      a64reg::X1, a64reg::X8,         a64reg::X19,  a64reg::X30,
+      a64reg::SP, TRI.VecRegBase + 8, a64reg::NFLAG};
   for (const auto Register : Registers) {
     for (bool Clear : {false, true}) {
       SCOPED_TRACE(Register);

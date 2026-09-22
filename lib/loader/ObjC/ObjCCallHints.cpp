@@ -805,6 +805,17 @@ bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address) {
          Target->SelectorSlot != 0 && !Target->Selector.empty();
 }
 
+bool objcSelectorStubMatches(const BinaryImage &Image, va_t Address,
+                             va_t SelectorReferenceAddress,
+                             llvm::StringRef Selector) {
+  if (!SelectorReferenceAddress || Selector.empty() ||
+      !objcSelectorStubOverwritesCommand(Image, Address))
+    return false;
+  const auto Target = veneer(Image, Address);
+  return Target && Target->SelectorSlot == SelectorReferenceAddress &&
+         Target->Selector == Selector;
+}
+
 std::optional<SourceCallTypeHint>
 objcSelectorStubSentinelSourceCallHint(const BinaryImage &Image, va_t Address,
                                        const ObjCReceiverTypeHint &Receiver,

@@ -51,6 +51,75 @@ inline bool ordinaryRuntime(const SourceCallTypeHint &Hint) {
          Hint.CallKind == Kind::DarwinRuntimeCall;
 }
 
+// This identifies a current fixed getter occurrence only. Its implementation
+// remains opaque: no ABI, clobber or result fact is supplied to the proof.
+inline bool opaqueObjectGetter(const BinaryImage &Image,
+                               const SourceCallOccurrenceKey &Site,
+                               const SourceCallTypeHint &Hint) {
+  if (!Site.StaticTarget || *Site.StaticTarget % 4 ||
+      *Site.StaticTarget > UINT64_MAX - 20 ||
+      Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      Hint.TargetAddress != Site.StaticTarget ||
+      Hint.TargetName != "objc_msgSend" || Hint.Selector.empty() ||
+      Hint.Selector.find(':') != std::string::npos ||
+      !Hint.SelectorReferenceAddress || Hint.Format || Hint.NilTerminated ||
+      Hint.WeakImport || Hint.DoesNotReturn ||
+      !readImmutableCodeBytes(Image, *Site.StaticTarget, 20) ||
+      !objcSelectorStubMatches(Image, *Site.StaticTarget,
+                               Hint.SelectorReferenceAddress, Hint.Selector))
+    return false;
+  const auto Ref =
+      Image.ObjCSourceReferences.find(Hint.SelectorReferenceAddress);
+  if (Ref == Image.ObjCSourceReferences.end() ||
+      Ref->second.TheKind != ObjCSourceReference::Kind::Selector ||
+      Ref->second.Address != Hint.SelectorReferenceAddress ||
+      Ref->second.Size != 8 || Ref->second.Name != Hint.Selector)
+    return false;
+  const auto Slot = darwinImportVeneerSlot(Image, *Site.StaticTarget + 8);
+  if (!Slot || !isImmutableImageImportSlot(Image, *Slot))
+    return false;
+  const auto Import = darwinRuntimeImport(Image, *Slot);
+  const auto Bind = Image.DyldBindSlots.find(*Slot);
+  const auto &Signature = Hint.Signature;
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  std::string Error;
+  return Import && *Import == "_objc_msgSend" &&
+         Bind != Image.DyldBindSlots.end() &&
+         Bind->second.Module == "/usr/lib/libobjc.A.dylib" &&
+         std::count(Image.DynInfo.NeededLibs.begin(),
+                    Image.DynInfo.NeededLibs.end(), Bind->second.Module) == 1 &&
+         Signature.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK &&
+         Signature.Architecture == Arch::AArch64 && Signature.HasExplicitABI &&
+         Signature.Convention == SourceFunctionTypeHint::ConventionKind::C &&
+         validateSourceABI(Signature, Error) && Signature.ReturnType &&
+         Signature.ReturnType->Kind == NdTypeKind::Ptr &&
+         Signature.ReturnType->Size == 8 &&
+         Signature.ReturnLocation.Kind ==
+             SourceABICarrierKind::IntegerRegister &&
+         Signature.ReturnLocation.RegisterOffset == TRI.IntReturnReg &&
+         Signature.ReturnLocation.ValueBytes == 8 &&
+         !Signature.ReturnLocation.ExtendTo32Bits &&
+         Signature.ReturnComponents.empty() &&
+         Signature.Parameters.size() == 2 &&
+         std::all_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                     [](const auto &P) {
+                       return P.Type && P.Type->Kind == NdTypeKind::Ptr &&
+                              P.Type->Size == 8 && P.Components.empty() &&
+                              P.TheRole ==
+                                  SourceParameterTypeHint::Role::Ordinary;
+                     }) &&
+         Signature.Parameters[0].Location.Kind ==
+             SourceABICarrierKind::IntegerRegister &&
+         Signature.Parameters[0].Location.RegisterOffset == 0 &&
+         Signature.Parameters[0].Location.ValueBytes == 8 &&
+         !Signature.Parameters[0].Location.ExtendTo32Bits &&
+         Signature.Parameters[1].Location.Kind ==
+             SourceABICarrierKind::IntegerRegister &&
+         Signature.Parameters[1].Location.RegisterOffset == 8 &&
+         Signature.Parameters[1].Location.ValueBytes == 8 &&
+         !Signature.Parameters[1].Location.ExtendTo32Bits;
+}
+
 // This supplies only the complete physical ABI to the difference proof. The
 // existing super-dispatch publication gate still owns receiver/frame binding.
 inline bool superInit(const BinaryImage &Image,
@@ -141,7 +210,9 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       if (Hint == Hints.end()) {
         // A recognizable import veneer with no current ABI is failed import
         // evidence, not an opaque native-body candidate.
-        if (Slot)
+        const auto *TargetSection = Image.getSectionFor(*Site->StaticTarget);
+        if (Slot || (TargetSection &&
+                     TargetSection->Name == section_names::macho::ObjCStubs))
           return {};
         const auto Machine =
             objcClassAccessorMachine(Image, *Site->StaticTarget);
@@ -155,6 +226,12 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
         if (!Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
                  .second)
           return {};
+        continue;
+      }
+      if (swift_boolean_projection_detail::opaqueObjectGetter(Image, *Site,
+                                                              Hint->second)) {
+        Calls.emplace(*Site,
+                      SourceBooleanOtherCallContract{nullptr, false, true});
         continue;
       }
       if (!Slot ||

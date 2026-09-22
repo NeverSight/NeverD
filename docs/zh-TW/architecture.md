@@ -549,3 +549,5 @@ AArch64 Swift 型別參照配方亦接受 `libswiftCore` 匯出的精確 `_Conti
 Swift 延遲物件 getter 也接受分別驗證的 `swift_retain` 與後續 `objc_autoreleaseReturnValue`，保留兩次呼叫及其實際回傳值傳遞鏈。初始化前可存在一個空標籤，但不能帶有運算式、巢狀陳述式或記憶體效果。移除附帶的 once 上下文仍須獨立證明初始化器不使用上下文，並在發布時重新驗證。
 
 Swift `NSObject` 相等比較候選使用已獨立驗證的實機和模擬器 ABI `swiftcc i1(ptr, ptr, ptr swiftself)`：物件參數位於 x0/x1，中繼資料位於 x20。它要求來自 `libswiftObjectiveC` 的精確強匯入、不可變儲存及既有的完整呼叫端正規化證明。HighC 從同一規範輸入契約產生 `_Bool` 原型和 `swift_context` 參數；僅查找到符號不能發布位元組回傳 ABI。
+
+固定的零參數 Objective-C 物件 getter 只能作為 opaque identical-state 呼叫參與該正規化證明。當前 selector stub 的全部 20 個不可變指令位元組、selector 參照、強 `objc_msgSend` 匯入及精確 SDK 指標 ABI 必須一致；失敗的 `__objc_stubs` 證據不能退回未知原生呼叫。此規則不授予 clobber、結果或原始碼綁定事實，因此呼叫點的每個實體暫存器、旗標和記憶體觀察都必須已相同。

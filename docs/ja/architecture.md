@@ -619,3 +619,5 @@ AArch64 Swift の型参照レシピは、保存された実機・シミュレー
 Swift の遅延オブジェクト getter は、個別に検証した `swift_retain` と後続の `objc_autoreleaseReturnValue` も受け入れます。両呼び出しと実際の戻り値の連鎖を保持します。初期化前の任意の空ラベルには式、入れ子の文、メモリ効果を含められません。付随する once コンテキストの除去には、初期化子がコンテキストを使わない独立した証明と公開時の再検証が必要です。
 
 Swift の `NSObject` 等価比較候補は、実機とシミュレータで独立に検証した ABI `swiftcc i1(ptr, ptr, ptr swiftself)` を使います。オブジェクト引数は x0/x1、メタデータは x20 に配置されます。`libswiftObjectiveC` からの正確な強インポート、不変ストレージ、既存の完全な呼び出し元正規化証明が必要です。HighC は同じ正規入力契約から `_Bool` 宣言と `swift_context` 引数を生成します。検索だけではバイト戻り値 ABI を公開しません。
+
+固定の引数なし Objective-C オブジェクト getter は、opaque identical-state 呼び出しとしてだけこの正規化証明に参加できます。現在の selector stub の不変な 20 バイトすべて、selector 参照、強い `objc_msgSend` インポート、正確な SDK ポインター ABI が一致しなければなりません。失敗した `__objc_stubs` 証拠は未知のネイティブ呼び出しへフォールバックできません。clobber、結果、ソース束縛の事実は付与されず、呼び出し時点の全物理レジスタ、フラグ、メモリ観測が既に同一である必要があります。
