@@ -332,3 +332,5 @@ ARM64 原生栈帧保存分析可读取当前推断入口签名明确描述的�
 完整的设备与模拟器 UIKit SDK 声明将 `UIAccessibilityPostNotification` 绑定为 `void(uint32_t, id nullable)`：ARM64 通过 `w0` 传递无符号通知值，通过 `x1` 传递对象指针。`UIAccessibilityAnnouncementNotification` 是外部 `const uint32_t` 存储。精确 UIKit 导入只证明存储地址，源码保留原有四字节读取和真实调用，包括 nil 参数，不替换通知编号。错误提供方、弱导入、宽度或符号变化及返回契约变化均被拒绝；其他惰性存储依赖仍须独立证明。
 
 Mach-O generic64 链式重定位在 `DYLD_CHAINED_PTR_64` 和 `DYLD_CHAINED_PTR_64_OFFSET` 两种格式下均保留编码中的高八位。偏移格式先重建完整字，再带溢出检查地加上首选映像基址，与 [dyld 的执行方式](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/common/MachOLoaded.cpp#L771-L792) 一致。加载后的字节保留完整运行时值。普通代码和数据指针的归属检查使用完整映射地址；带标记的 Swift 字符串需要独立的字符串表示证明。合法映射的高地址仍受支持。
+
+独立的不可变链式值读取接口只对具有唯一归属、由文件支持的不可变存储中的精确 Mach-O 重定位槽返回完整的已解析运行时字。未解析、歧义、导入或重叠的修正记录会被拒绝。该值不授予普通指针身份或复制重定位字节的权限；源码消费者必须独立证明其表示和重定位方式，包括 Swift 字符串标记。

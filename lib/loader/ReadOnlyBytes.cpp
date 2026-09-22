@@ -115,6 +115,17 @@ readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }
 
+std::optional<uint64_t> readImmutableChainedImageValue(const BinaryImage &Image,
+                                                    va_t Address) {
+  if (!supportedImage(Image) || !Image.MachOHasChainedFixups ||
+      !Image.MachOResolvedChainedPointerSlots.count(Address))
+    return std::nullopt;
+  const auto *Bytes = mappedBytes(Image, Address, 8, true);
+  if (!Bytes || hasConflictingFixups(Image, Address, 8, true))
+    return std::nullopt;
+  return llvm::support::endian::read64le(Bytes);
+}
+
 bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
                               uint16_t Width) {
   return Bits && Width == (Image.is64Bit() ? 8 : 4) &&

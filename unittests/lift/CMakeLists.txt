@@ -168,6 +168,7 @@ add_neverd_unittest(NeverDLiftTests
   format/COFFImportStorageBoundaryTests.cpp
   format/LLVMImportVeneerBoundaryTests.cpp
   format/MachOPointerRelocationBoundaryTests.cpp
+  format/ImmutableChainedValueTests.cpp
   format/COFFRelocatableAbsoluteRelocationTests.cpp
   format/NativePointerRelocationBoundaryTests.cpp
   core/MedCallingConvTests.cpp
@@ -950,6 +951,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/NativeFloatingReturnProofTests.cpp
   core/NativeBooleanResultProofTests.cpp
   core/SwiftBooleanRuntimeCandidateTests.cpp
+  format/ImmutableChainedValueTests.cpp
   core/ObjCStorageTests.cpp
   core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
@@ -1294,6 +1296,7 @@ target_include_directories(NeverDLLVMImportVeneerBoundaryTests PRIVATE
 # without relinking the full lift suite during local RED/GREEN iterations.
 add_neverd_unittest(NeverDMachOPointerRelocationBoundaryTests
   format/MachOPointerRelocationBoundaryTests.cpp
+  format/ImmutableChainedValueTests.cpp
 
   LINK_COMPONENTS
   BackendLLVM

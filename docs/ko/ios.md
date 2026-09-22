@@ -318,3 +318,5 @@ ARM64 네이티브 프레임 보존 분석은 현재 추론된 진입 시그니�
 기기와 시뮬레이터의 완전한 UIKit SDK 선언은 `UIAccessibilityPostNotification`을 `void(uint32_t, id nullable)`로 바인딩합니다. ARM64는 부호 없는 알림 값을 `w0`, 객체 포인터를 `x1`으로 전달합니다. `UIAccessibilityAnnouncementNotification`은 외부 `const uint32_t` 저장소입니다. 정확한 UIKit 임포트로 저장소 주소를 확인하고 원래의 4바이트 읽기와 nil 인수를 포함한 실제 호출을 유지하며 알림 번호를 대입하지 않습니다. 잘못된 제공자, 약한 임포트, 너비·부호·반환 계약 변경은 거부하고 다른 지연 저장소 의존성에는 독립된 증명을 요구합니다.
 
 Mach-O generic64 체인 재배치는 `DYLD_CHAINED_PTR_64`와 `DYLD_CHAINED_PTR_64_OFFSET` 모두에서 인코딩된 상위 8비트를 보존합니다. 오프셋 형식은 먼저 전체 워드를 복원한 뒤 오버플로를 검사하며 기본 이미지 주소를 더해 [dyld의 실행](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/common/MachOLoaded.cpp#L771-L792)과 일치시킵니다. 로드된 바이트에는 완전한 런타임 값이 유지됩니다. 일반 코드 및 데이터 포인터의 소유 범위 검사는 전체 매핑 주소를 사용하며, 태그가 있는 Swift 문자열에는 별도의 문자열 표현 증명이 필요합니다. 적법하게 매핑된 상위 주소도 계속 지원합니다.
+
+별도의 불변 체인 값 읽기 API는 파일에 존재하고 소유 범위가 유일한 불변 저장소의 정확한 Mach-O 재배치 슬롯에 대해서만 완전히 해석된 런타임 워드를 제공합니다. 미해결, 모호한, 가져오기 또는 중첩된 fixup은 거부합니다. 이 값은 일반 포인터의 정체성이나 재배치된 바이트 복사 권한을 부여하지 않습니다. 소스 소비자는 Swift 문자열 태그를 포함한 표현과 재배치를 별도로 증명해야 합니다.

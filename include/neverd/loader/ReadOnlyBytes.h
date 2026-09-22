@@ -21,6 +21,13 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
 std::optional<std::vector<uint8_t>>
 readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
 
+/// Read the complete runtime bits of one exact, resolved Mach-O chained
+/// rebase in unique immutable storage. Competing or overlapping fixups are
+/// rejected. This grants no ordinary pointer identity or byte-copy authority;
+/// a consumer must separately prove the value's representation and relocation.
+std::optional<uint64_t> readImmutableChainedImageValue(const BinaryImage &Image,
+                                                    va_t Address);
+
 /// Prove a complete store range lies in unique file-backed writable image
 /// storage, disjoint from a function's private frame and newly allocated
 /// objects. This proves only the storage owner, never its contents or a source
