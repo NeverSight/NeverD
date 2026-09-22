@@ -17,16 +17,19 @@ TARGETS = {"iphoneos": "arm64-apple-ios18.0",
 
 
 def ir(language, target="arm64-apple-ios18.0", probe="comparison"):
-    symbol = SYMBOL if probe == "comparison" else "$sSS9hasPrefixySbSSF"
+    symbol = {"comparison": SYMBOL, "prefix": "$sSS9hasPrefixySbSSF",
+              "object-equality": "$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ"}[probe]
     name = symbol if language == "swift" else r"\01_" + symbol
     attrs = "" if language == "swift" else " noundef"
     types = ("i64", "ptr", "i64", "ptr", "i8")
     if probe == "prefix":
         types = types[:-1]
+    elif probe == "object-equality":
+        types = ("ptr", "ptr", "ptr swiftself")
     result = f'target triple = "{target}"\n'
-    result += f'declare swiftcc i1 @"{name}"(' + ", ".join(t + attrs for t in types) + ") #1\n"
+    result += f'declare swiftcc i1 @"{name}"(' + ", ".join(t.replace(" swiftself", "") + attrs + (" swiftself" if "swiftself" in t else "") for t in types) + ") #1\n"
     for mode in (0, 1) if language == "swift" and probe == "comparison" else (None,):
-        args = [t + attrs + " %" + str(i) for i, t in enumerate(types)]
+        args = [t.replace(" swiftself", "") + attrs + (" swiftself" if "swiftself" in t else "") + " %" + str(i) for i, t in enumerate(types)]
         if mode is not None:
             args[-1] = "i8 " + str(mode)
         result += f'  %5 = tail call swiftcc i1 @"{name}"(' + ", ".join(args) + ")\n"
@@ -36,6 +39,21 @@ def ir(language, target="arm64-apple-ios18.0", probe="comparison"):
 
 
 class SwiftStringIRTests(unittest.TestCase):
+    def test_object_equality_requires_exact_context_contract(self):
+        for language in ("swift", "c"):
+            base = ir(language, probe="object-equality")
+            result = collector.validate_ir(base, language, probe="object-equality")
+            self.assertEqual(result["parameters"], ["ptr", "ptr", "ptr swiftself"])
+            for bad in (ir(language, probe="prefix"), base.replace("swiftcc i1", "swiftcc i8"),
+                        base.replace(" swiftself", ""), base.replace(", ptr swiftself", ""),
+                        base.replace("ptr)", "ptr, ptr swiftself)"),
+                        base.replace("ptr noundef)", "ptr noundef, ptr swiftself)"),
+                        base.replace("ptr %1", "ptr 0"),
+                        base.replace("ptr noundef %1", "ptr noundef 0")):
+                if bad != base:
+                    with self.subTest(language=language, bad=bad), self.assertRaises(ValueError):
+                        collector.validate_ir(bad, language, probe="object-equality")
+
     def test_prefix_requires_its_own_four_input_i1_contract(self):
         for language in ("swift", "c"):
             base = ir(language, probe="prefix")
@@ -130,6 +148,7 @@ class SwiftStringCollectionTests(unittest.TestCase):
             (root / "usr/lib/swift").mkdir(parents=True)
             (root / "SDKSettings.json").write_text(json.dumps({"Version": "26.5", "CanonicalName": sdk}))
             (root / "usr/lib/swift/libswiftCore.tbd").write_text("fixed mock linker identity " + sdk)
+            (root / "usr/lib/swift/libswiftObjectiveC.tbd").write_text("fixed mock ObjectiveC linker identity " + sdk)
             self.sdks[sdk] = root
         self.output = self.root / "evidence"
         self.versions = dict.fromkeys(TARGETS, "26.5")
@@ -179,12 +198,16 @@ class SwiftStringCollectionTests(unittest.TestCase):
                 if self.probe == "comparison":
                     self.assertIn("lhs == rhs", source)
                     self.assertIn("lhs < rhs", source)
-                else:
+                elif self.probe == "prefix":
                     self.assertIn("value.hasPrefix(prefix)", source)
+                else:
+                    self.assertIn("lhs: NSObject", source)
+                    self.assertIn("lhs == rhs", source)
                 self.assertIn("-O", args)
             else:
                 self.assertIn("extern _Bool neverd_" +
-                              ("compare" if self.probe == "comparison" else "has_prefix"), source)
+                              {"comparison": "compare", "prefix": "has_prefix",
+                               "object-equality": "equal_objects"}[self.probe], source)
                 self.assertIn("__attribute__((swiftcall))", source)
                 self.assertIn("-Werror", args)
                 self.assertIn("-std=gnu11", args)
@@ -245,6 +268,18 @@ class SwiftStringCollectionTests(unittest.TestCase):
                 self.assertEqual(profile[language + "_abi"]["parameters"],
                                  ["i64", "ptr", "i64", "ptr"])
                 self.assertEqual(profile[language + "_abi"]["call_count"], 1)
+
+    def test_object_equality_retains_its_provider_and_context_abi(self):
+        self.probe = "object-equality"
+        report = self.collect()
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["symbol"], "$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ")
+        for profile in report["profiles"]:
+            paths = [entry["path"] for entry in profile["files"]]
+            self.assertIn(profile["sdk"] + "-libswiftObjectiveC.tbd", paths)
+            self.assertNotIn(profile["sdk"] + "-libswiftCore.tbd", paths)
+            for language in ("swift", "c"):
+                self.assertEqual(profile[language + "_abi"]["parameters"], ["ptr", "ptr", "ptr swiftself"])
 
     def test_wrong_sdk_version_preserves_completed_device_profile(self):
         self.versions["iphonesimulator"] = "26.4"

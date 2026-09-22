@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       probe:
-        description: Fixed Swift String import to inspect
+        description: Fixed Swift boolean import to inspect
         type: choice
         default: comparison
         options:
           - comparison
           - prefix
+          - object-equality
 
 permissions:
   contents: read

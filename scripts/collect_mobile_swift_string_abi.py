@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retain compiler evidence for an exact Swift String boolean import.
+"""Retain compiler evidence for an exact Swift boolean import.
 
 Fixed device/simulator acquisition on macOS Actions. No application code or
 recovery engine is executed, and no declaration is installed by this script.
@@ -43,6 +43,17 @@ uint8_t prefix_byte(uint64_t a, void *b, uint64_t c, void *d) {
   return neverd_has_prefix(a, b, c, d);
 }
 """
+OBJECT_EQUALITY_SYMBOL = "$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ"
+OBJECT_EQUALITY_SWIFT_SOURCE = """import ObjectiveC
+@inline(never) public func equalObjects(_ lhs: NSObject, _ rhs: NSObject) -> Bool { lhs == rhs }
+"""
+OBJECT_EQUALITY_C_SOURCE = """#include <stdint.h>
+extern _Bool neverd_equal_objects(void *, void *, void * __attribute__((swift_context)))
+  __asm__(\"_""" + OBJECT_EQUALITY_SYMBOL + """\") __attribute__((swiftcall));
+uint8_t equal_objects_byte(void *a, void *b, void *metadata) {
+  return neverd_equal_objects(a, b, metadata);
+}
+"""
 
 
 def probe_inputs(probe):
@@ -50,7 +61,9 @@ def probe_inputs(probe):
         return SYMBOL, TYPES, SWIFT_SOURCE, C_SOURCE
     if probe == "prefix":
         return PREFIX_SYMBOL, PREFIX_TYPES, PREFIX_SWIFT_SOURCE, PREFIX_C_SOURCE
-    raise ValueError("unknown fixed Swift String probe")
+    if probe == "object-equality":
+        return OBJECT_EQUALITY_SYMBOL, ("ptr", "ptr", "ptr swiftself"), OBJECT_EQUALITY_SWIFT_SOURCE, OBJECT_EQUALITY_C_SOURCE
+    raise ValueError("unknown fixed Swift boolean probe")
 
 
 def validate_ir(text, language, target=None, probe="comparison"):
@@ -70,10 +83,10 @@ def validate_ir(text, language, target=None, probe="comparison"):
                        r'\(([^\n]*)\)[^\n]*$', text, re.M)
     if len(decls) != 1:
         raise ValueError("exact swiftcc i1 declaration is absent or duplicated")
-    parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)?', value.strip())
+    parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)?( swiftself)?', value.strip())
                   for value in decls[0].split(',')]
     if any(value is None for value in parameters) or tuple(
-            value.group(1) for value in parameters) != types:
+            value.group(1) + (value.group(2) or '') for value in parameters) != types:
         raise ValueError("declaration has a different or hidden argument ABI")
     calls = re.findall(r'(%[A-Za-z0-9._-]+) = (?:tail )?call swiftcc i1 @' + quoted +
                        r'\(([^\n]*)\)', text)
@@ -81,15 +94,15 @@ def validate_ir(text, language, target=None, probe="comparison"):
         raise ValueError("probe did not call the exact declaration")
     modes = set()
     for result, call in calls:
-        parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)? (%[A-Za-z0-9._-]+|[0-9]+)',
+        parameters = [re.fullmatch(r'(i64|ptr|i8)(?: noundef)?( swiftself)? (%[A-Za-z0-9._-]+|[0-9]+)',
                                    value.strip()) for value in call.split(',')]
         if any(value is None for value in parameters) or tuple(
-                value.group(1) for value in parameters) != types:
+                value.group(1) + (value.group(2) or '') for value in parameters) != types:
             raise ValueError("call arguments disagree with the declaration")
-        if any(not value.group(2).startswith('%') for value in parameters[:4]):
-            raise ValueError("probe does not pass its dynamic String arguments")
+        if any(not value.group(3).startswith('%') for value in parameters[:4]):
+            raise ValueError("probe does not pass its dynamic arguments")
         if probe == "comparison":
-            modes.add(parameters[-1].group(2))
+            modes.add(parameters[-1].group(3))
     if language == "swift" and probe == "comparison" and modes != {"0", "1"}:
         raise ValueError("equality and ordering modes were not independently observed")
     if language == "c":
@@ -210,7 +223,9 @@ def collect(output, probe="comparison"):
                 raise ValueError("SDK is outside the selected Xcode")
             profile["sdk_root"] = str(root)
             profile["files"].append(copy_evidence(root / "SDKSettings.json", root, sdk + "-SDKSettings.json"))
-            profile["files"].append(copy_evidence(root / "usr/lib/swift/libswiftCore.tbd", root, sdk + "-libswiftCore.tbd"))
+            provider = "libswiftObjectiveC" if probe == "object-equality" else "libswiftCore"
+            profile["files"].append(copy_evidence(root / ("usr/lib/swift/" + provider + ".tbd"), root,
+                                                   sdk + "-" + provider + ".tbd"))
             swift, clang = (command(sdk + "-" + tool + "-path", [*prefix, "--find", tool])
                             for tool in ("swiftc", "clang"))
             profile["tools"] = [tool_identity(path, developer) for path in (swift, clang)]
@@ -255,7 +270,7 @@ def collect(output, probe="comparison"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--probe", choices=("comparison", "prefix"), default="comparison")
+    parser.add_argument("--probe", choices=("comparison", "prefix", "object-equality"), default="comparison")
     args = parser.parse_args()
     return 0 if collect(args.output, args.probe) else 1
 
