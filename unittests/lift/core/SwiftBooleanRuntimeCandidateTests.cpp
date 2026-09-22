@@ -1,8 +1,9 @@
-#include "../../../lib/loader/Swift/SwiftBooleanRuntimeCandidate.h"
+#include "../../../lib/loader/Swift/SwiftBooleanProjection.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 
 #include "llvm/Support/Endian.h"
@@ -321,4 +322,177 @@ TEST(SwiftBooleanRuntimeCandidate, RawContractRejectsByteAndMalformedInputs) {
     }
     EXPECT_FALSE(sourceBooleanInputParameters(Raw));
   }
+}
+
+namespace {
+struct ProjectionFixture {
+  BinaryImage Image = candidateImage();
+  LowFunc Low;
+  SourceFunctionTypeHint Entry;
+
+  void word(va_t Address, uint32_t Value) {
+    uint8_t Bytes[4];
+    llvm::support::endian::write32le(Bytes, Value);
+    ASSERT_TRUE(Image.writeVA(Address, Bytes, 4));
+  }
+  ProjectionFixture() {
+    addVeneer(Image);
+    auto Text = Image.Segments.back();
+    Text.VA = 0x3000;
+    Text.FileOff = 0x200;
+    Image.Segments.push_back(Text);
+    auto Code = Image.Sections.front();
+    Code.VA = Text.VA;
+    Code.FileOff = Text.FileOff;
+    Image.Sections.push_back(Code);
+    word(0x3000, 0x97fff800); // BL 0x1000.
+    word(0x3004, 0x92400000); // AND X0, X0, #1.
+    word(0x3008, 0xd65f03c0); // RET.
+    Low = veneerCaller();
+    auto &Block = Low.Blocks.front();
+    Block.EndAddr = 0x300c;
+    LowOp Mask;
+    Mask.Addr = 0x3004;
+    Mask.Seq = 0;
+    Mask.Opcode = NdOp::INT_AND;
+    Mask.Output = NdVar::reg(0, 8);
+    Mask.addInput(NdVar::reg(0, 8));
+    Mask.addInput(NdVar::cst(1, 8));
+    Block.Ops.push_back(Mask);
+    LowOp Return;
+    Return.Addr = 0x3008;
+    Return.Seq = 0;
+    Return.Opcode = NdOp::RETURN;
+    Return.addInput(
+        NdVar::reg(getTargetRegInfo(Arch::AArch64).LinkRegister, 8));
+    Block.Ops.push_back(Return);
+    ObjCMethod Method;
+    Method.Implementation = Low.Entry;
+    Method.Status = "supported";
+    Method.TypeHint = parseObjCMethodEncoding("value", "B16@0:8");
+    Image.ObjCMethods.push_back(Method);
+    const auto ABI = objcMethodSourceTypeHint(Image, Low.Entry);
+    if (!ABI)
+      throw std::runtime_error("missing Boolean fixture entry ABI");
+    Entry = *ABI;
+  }
+  auto qualify() const {
+    return qualifySwiftBooleanProjection(Image, Low, Entry);
+  }
+};
+} // namespace
+
+TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
+  ProjectionFixture F;
+  const auto Result = F.qualify();
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(Result->Normalization.Function, &F.Low);
+  EXPECT_EQ(Result->Normalization.Site.Instruction, 0x3000U);
+  EXPECT_EQ(Result->Normalization.Site.Sequence, 0);
+  EXPECT_EQ(Result->Normalization.Site.StaticTarget, 0x1000U);
+  EXPECT_EQ(Result->Runtime.SourceImage, &F.Image);
+  EXPECT_EQ(Result->Runtime.ImportSlot, Slot);
+  EXPECT_EQ(Result->Runtime.RawContract.DefinedResultBits, 1U);
+  EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
+}
+
+TEST(SwiftBooleanProjection, RejectsStaleIdentityABIAndObservableUpperBits) {
+  for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ProjectionFixture F;
+    switch (Mutation) {
+    case 0:
+      F.Image.ObjCMethods.clear();
+      break;
+    case 1:
+      F.Image.ObjCMethods[0].Status = "ambiguous_dispatch";
+      break;
+    case 2:
+      F.Image.ObjCMethods[0].TypeHint.reset();
+      break;
+    case 3:
+      F.Entry.ReturnType = NdType::makeInt(8, false);
+      break;
+    case 4:
+      F.Low.Entry += 4;
+      break;
+    case 5:
+      F.Low.Blocks[0].Ops[1].Inputs[1].Offset = 3;
+      break;
+    case 6:
+      F.word(0x3000, 0x17fff800);
+      break; // Tail branch, not BL.
+    case 7:
+      F.word(0x3000, 0x97fff801);
+      break; // Different direct target.
+    case 8:
+      F.Low.Blocks[0].Ops[0].Inputs[0].Offset += 4;
+      break;
+    case 9:
+      F.Image.Segments.back().Flags = SegmentFlags::Readable |
+                                      SegmentFlags::Writable |
+                                      SegmentFlags::Executable;
+      break;
+    case 10:
+      F.Image.Sections.back().FileSz = 4;
+      break;
+    case 11:
+      F.Image.Sections.push_back(F.Image.Sections.back());
+      break;
+    case 12:
+      F.Image.CodePtrRelocSlots.insert(0x3004);
+      break;
+    case 13:
+      F.Image.DyldBindSlots[Slot].Module = "/tmp/libswiftCore.dylib";
+      break;
+    case 14:
+      F.Image.IsRelocatable = true;
+      break;
+    case 15:
+      F.Image.Arch = Arch::X64;
+      break;
+    case 16:
+      F.Low.Blocks[0].Ops[0].Opcode = NdOp::INDIR_CALL;
+      break;
+    case 17:
+      F.Low.Blocks[0].Ops.insert(F.Low.Blocks[0].Ops.begin(),
+                                 F.Low.Blocks[0].Ops.front());
+      break;
+    case 18:
+      F.Low.Blocks[0].ExceptionalSuccs.push_back({});
+      break;
+    case 19:
+      F.Image.ObjCMethods[0].Implementation += 4;
+      break;
+    }
+    EXPECT_FALSE(F.qualify());
+  }
+}
+
+TEST(SwiftBooleanProjection,
+     RebuildsOtherCallContractsAndRejectsNativeGuesses) {
+  ProjectionFixture F;
+  const va_t ReleaseSlot = Slot + 8;
+  F.Image.ImportPtrSlots[ReleaseSlot] = "_swift_bridgeObjectRelease";
+  ASSERT_TRUE(
+      F.Image.recordDyldBindSlot(ReleaseSlot, "_swift_bridgeObjectRelease", 0,
+                                 SwiftBooleanComparisonProvider, false));
+  F.word(0x1020, 0xb0000010);
+  F.word(0x1024, 0xf9404610);
+  F.word(0x1028, 0xd61f0200);
+  auto &Block = F.Low.Blocks.front();
+  auto Release = Block.Ops.front();
+  Release.Inputs[0].Offset = 0x1020;
+  for (auto &Op : Block.Ops)
+    Op.Addr += 4;
+  Block.Ops.insert(Block.Ops.begin(), Release);
+  Block.EndAddr += 4;
+  F.word(0x3000, 0x97fff808); // BL release veneer.
+  F.word(0x3004, 0x97fff7ff); // BL comparison veneer.
+  F.word(0x3008, 0x92400000);
+  F.word(0x300c, 0xd65f03c0);
+  ASSERT_TRUE(F.qualify());
+  F.Image.ImportPtrSlots.erase(ReleaseSlot);
+  F.Image.DyldBindSlots.erase(ReleaseSlot);
+  EXPECT_FALSE(F.qualify());
 }
