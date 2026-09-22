@@ -13,6 +13,7 @@
 
 #include "neverd/emulation/DriverProfile.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -67,6 +68,11 @@ const char *backendAccessKindName(BackendAccessKind Kind) {
 }
 
 struct UnicornBackend::Impl {
+  struct MMIORegion {
+    Impl *Backend;
+    uint64_t Address, Size;
+    GuestMMIOCallbacks Callbacks;
+  };
   uc_engine *Engine = nullptr;
   // A separate identity survives address reuse without extending engine life.
   std::shared_ptr<const void> Identity = std::make_shared<unsigned char>(0);
@@ -75,6 +81,7 @@ struct UnicornBackend::Impl {
   // The adapter owns permissions for API accesses as uc_mem_read/write bypass
   // guest permissions. CPU accesses use Unicorn's corresponding page metadata.
   std::map<uint64_t, unsigned> Pages;
+  std::map<uint64_t, std::unique_ptr<MMIORegion>> MMIO;
   BackendHooks Hooks;
   std::vector<uc_hook> HookHandles;
   std::optional<BackendFault> FirstFault;
@@ -82,6 +89,10 @@ struct UnicornBackend::Impl {
   bool Timeout = false;
   bool CallbackFailed = false;
   bool Running = false;
+  bool StopRequested = false;
+  bool DeviceCallbackActive = false;
+  bool MMIOFailed = false;
+  std::string MMIOFailure;
 
   ~Impl() {
     if (Engine)
@@ -109,6 +120,103 @@ struct UnicornBackend::Impl {
 
   bool accessible(uint64_t Address, uint64_t Size, unsigned Permission) const {
     return !accessFault(Address, Size, Permission);
+  }
+
+  MMIORegion *overlappingMMIO(uint64_t Address, uint64_t Size) const {
+    if (!Size)
+      return nullptr;
+    for (const auto &[Base, Region] : MMIO)
+      if (Address <= Base ? Base - Address < Size
+                          : Address - Base < Region->Size)
+        return Region.get();
+    return nullptr;
+  }
+
+  bool effectsStopped() const {
+    return MMIOFailed || CallbackFailed || FirstFault ||
+           (Running && StopRequested);
+  }
+
+  llvm::Error deviceError() const {
+    if (MMIOFailed)
+      return failure(MMIOFailure.empty() ? "MMIO callback failed"
+                                         : MMIOFailure);
+    if (CallbackFailed)
+      return failure("exception in emulator hook");
+    return llvm::Error::success();
+  }
+
+  void failMMIO(llvm::Error Error) {
+    if (!MMIOFailed) {
+      MMIOFailed = true;
+      MMIOFailure = llvm::toString(std::move(Error));
+    } else {
+      llvm::consumeError(std::move(Error));
+    }
+    uc_emu_stop(Engine);
+  }
+
+  llvm::Error validateMMIO(uint64_t Address, uint64_t Size, bool IsWrite) {
+    auto *Region = overlappingMMIO(Address, Size);
+    if (!Region)
+      return llvm::Error::success();
+    if (Address < Region->Address ||
+        Address - Region->Address >= Region->Size ||
+        Size > Region->Size - (Address - Region->Address))
+      return failure("MMIO access crosses a mapping boundary");
+    if ((Size != 1 && Size != 2 && Size != 4) || Address % Size)
+      return failure("MMIO requires an aligned 1, 2 or 4 byte transaction");
+    if (DeviceCallbackActive)
+      return failure("recursive MMIO callback access is unsupported");
+    DeviceCallbackActive = true;
+    auto Reset = llvm::scope_exit([&] { DeviceCallbackActive = false; });
+    return Region->Callbacks.Validate(Address - Region->Address, Size, IsWrite);
+  }
+
+  void preflightMMIO(uint64_t Address, uint64_t Size, bool IsWrite) {
+    if (auto E = validateMMIO(Address, Size, IsWrite))
+      failMMIO(std::move(E));
+  }
+
+  static uint64_t mmioRead(uc_engine *, uint64_t Offset, unsigned Size,
+                           void *Opaque) noexcept {
+    auto &Region = *static_cast<MMIORegion *>(Opaque);
+    auto &S = *Region.Backend;
+    uint64_t Value = 0;
+    S.invoke([&] {
+      if (S.effectsStopped())
+        return;
+      S.preflightMMIO(Region.Address + Offset, Size, false);
+      if (S.effectsStopped())
+        return;
+      S.DeviceCallbackActive = true;
+      auto Reset = llvm::scope_exit([&] { S.DeviceCallbackActive = false; });
+      auto Result = Region.Callbacks.Read(Offset, Size);
+      if (!Result) {
+        S.failMMIO(Result.takeError());
+        return;
+      }
+      Value = *Result & ((uint64_t(1) << (Size * 8)) - 1);
+    });
+    return Value;
+  }
+
+  static void mmioWrite(uc_engine *, uint64_t Offset, unsigned Size,
+                        uint64_t Value, void *Opaque) noexcept {
+    auto &Region = *static_cast<MMIORegion *>(Opaque);
+    auto &S = *Region.Backend;
+    S.invoke([&] {
+      if (S.effectsStopped())
+        return;
+      S.preflightMMIO(Region.Address + Offset, Size, true);
+      if (S.effectsStopped())
+        return;
+      S.DeviceCallbackActive = true;
+      auto Reset = llvm::scope_exit([&] { S.DeviceCallbackActive = false; });
+      if (auto E = Region.Callbacks.Write(
+              Offset, Size, Value & ((uint64_t(1) << (Size * 8)) - 1)))
+        S.failMMIO(std::move(E));
+    });
   }
 
   uint64_t currentPC() const noexcept {
@@ -152,6 +260,11 @@ struct UnicornBackend::Impl {
                     int64_t Value, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
     S.invoke([&] {
+      if (S.effectsStopped())
+        return;
+      S.preflightMMIO(Address, Size, true);
+      if (S.effectsStopped())
+        return;
       if (S.Hooks.Write)
         S.Hooks.Write(Address, Size, uint64_t(Value));
     });
@@ -160,6 +273,11 @@ struct UnicornBackend::Impl {
                    int64_t, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
     S.invoke([&] {
+      if (S.effectsStopped())
+        return;
+      S.preflightMMIO(Address, Size, false);
+      if (S.effectsStopped())
+        return;
       if (S.Hooks.Read)
         S.Hooks.Read(Address, Size);
     });
@@ -295,6 +413,8 @@ llvm::Error UnicornBackend::protect(uint64_t Address, uint64_t Size,
       (Permissions & ~(Read | Write | Execute)) ||
       !State->accessible(Address, Size, 0))
     return failure("invalid guest protection range");
+  if (State->overlappingMMIO(Address, Size))
+    return failure("changing MMIO page permissions is unsupported");
   if (auto E = check(uc_mem_protect(State->Engine, Address, Size, Permissions),
                      "protect guest memory"))
     return E;
@@ -303,27 +423,91 @@ llvm::Error UnicornBackend::protect(uint64_t Address, uint64_t Size,
   return llvm::Error::success();
 }
 
+llvm::Error UnicornBackend::mapMMIO(uint64_t Address, uint64_t Size,
+                                    GuestMMIOCallbacks Callbacks) {
+  if (State->Running || State->DeviceCallbackActive)
+    return failure("cannot map MMIO during guest execution or a callback");
+  if (!Size || (Address & (profile::PageSize - 1)) ||
+      (Size & (profile::PageSize - 1)) || Size - 1 > UINT64_MAX - Address)
+    return failure("invalid MMIO mapping");
+  if (Size > State->Limit - State->Mapped)
+    return llvm::make_error<GuestMemoryLimitError>();
+  if (!Callbacks.Validate || !Callbacks.Read || !Callbacks.Write)
+    return failure("MMIO mapping requires validate, read and write callbacks");
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize)
+    if (State->Pages.count(Address + Offset))
+      return failure("overlapping guest mapping");
+  auto Region = std::make_unique<Impl::MMIORegion>(
+      Impl::MMIORegion{State.get(), Address, Size, std::move(Callbacks)});
+  auto *Identity = Region.get();
+  State->MMIO.emplace(Address, std::move(Region));
+  if (auto E = check(uc_mmio_map(State->Engine, Address, Size, Impl::mmioRead,
+                                 Identity, Impl::mmioWrite, Identity),
+                     "map guest MMIO")) {
+    State->MMIO.erase(Address);
+    return E;
+  }
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize)
+    State->Pages.emplace(Address + Offset, Read | Write);
+  State->Mapped += Size;
+  return llvm::Error::success();
+}
+
+llvm::Error UnicornBackend::unmapMMIO(uint64_t Address, uint64_t Size) {
+  if (State->Running || State->DeviceCallbackActive)
+    return failure("cannot unmap MMIO during guest execution or a callback");
+  auto I = State->MMIO.find(Address);
+  if (I == State->MMIO.end() || I->second->Size != Size)
+    return failure("MMIO unmap requires one exact complete mapping");
+  if (auto E =
+          check(uc_mem_unmap(State->Engine, Address, Size), "unmap guest MMIO"))
+    return E;
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize)
+    State->Pages.erase(Address + Offset);
+  State->Mapped -= Size;
+  State->MMIO.erase(I);
+  return llvm::Error::success();
+}
+
 llvm::Error UnicornBackend::read(uint64_t Address,
                                  llvm::MutableArrayRef<uint8_t> Bytes) {
+  if (auto E = State->deviceError())
+    return E;
   if (auto Kind = State->accessFault(Address, Bytes.size(), Read)) {
     State->memoryFault(*Kind, BackendAccessKind::Read, Address, Bytes.size());
     return failure("guest read fault at 0x" + llvm::utohexstr(Address));
   }
-  return Bytes.empty() ? llvm::Error::success()
-                       : check(uc_mem_read(State->Engine, Address, Bytes.data(),
-                                           Bytes.size()),
-                               "read guest memory");
+  if (State->overlappingMMIO(Address, Bytes.size()) && State->effectsStopped())
+    return failure("cannot access MMIO on a stopped or faulted CPU");
+  State->invoke([&] { State->preflightMMIO(Address, Bytes.size(), false); });
+  if (auto E = State->deviceError())
+    return E;
+  auto Status = Bytes.empty() ? UC_ERR_OK
+                              : uc_mem_read(State->Engine, Address,
+                                            Bytes.data(), Bytes.size());
+  if (auto E = State->deviceError())
+    return E;
+  return check(Status, "read guest memory");
 }
 llvm::Error UnicornBackend::write(uint64_t Address,
                                   llvm::ArrayRef<uint8_t> Bytes) {
+  if (auto E = State->deviceError())
+    return E;
   if (auto Kind = State->accessFault(Address, Bytes.size(), Write)) {
     State->memoryFault(*Kind, BackendAccessKind::Write, Address, Bytes.size());
     return failure("guest write fault at 0x" + llvm::utohexstr(Address));
   }
-  return Bytes.empty() ? llvm::Error::success()
-                       : check(uc_mem_write(State->Engine, Address,
-                                            Bytes.data(), Bytes.size()),
-                               "write guest memory");
+  if (State->overlappingMMIO(Address, Bytes.size()) && State->effectsStopped())
+    return failure("cannot access MMIO on a stopped or faulted CPU");
+  State->invoke([&] { State->preflightMMIO(Address, Bytes.size(), true); });
+  if (auto E = State->deviceError())
+    return E;
+  auto Status = Bytes.empty() ? UC_ERR_OK
+                              : uc_mem_write(State->Engine, Address,
+                                             Bytes.data(), Bytes.size());
+  if (auto E = State->deviceError())
+    return E;
+  return check(Status, "write guest memory");
 }
 llvm::Error UnicornBackend::fetch(uint64_t Address,
                                   llvm::MutableArrayRef<uint8_t> Bytes) {
@@ -348,7 +532,7 @@ llvm::Error UnicornBackend::setReg(X64Register Register, uint64_t Value) {
 }
 
 llvm::Expected<std::unique_ptr<BackendContext>> UnicornBackend::saveContext() {
-  if (State->FirstFault || State->CallbackFailed)
+  if (State->FirstFault || State->CallbackFailed || State->MMIOFailed)
     return failure("cannot save a faulted CPU instance");
   auto Saved = std::make_unique<BackendContext::Impl>();
   Saved->Owner = State->Identity;
@@ -367,7 +551,7 @@ llvm::Error UnicornBackend::saveContext(BackendContext &Context) {
     return failure("cannot save to an expired CPU context");
   if (Context.State->Owner.lock() != State->Identity)
     return failure("CPU context belongs to another backend instance");
-  if (State->FirstFault || State->CallbackFailed)
+  if (State->FirstFault || State->CallbackFailed || State->MMIOFailed)
     return failure("cannot save a faulted CPU instance");
   return check(uc_context_save(State->Engine, Context.State->Context),
                "save CPU context");
@@ -378,7 +562,7 @@ llvm::Error UnicornBackend::restoreContext(const BackendContext &Context) {
     return failure("cannot restore an expired CPU context");
   if (Context.State->Owner.lock() != State->Identity)
     return failure("CPU context belongs to another backend instance");
-  if (State->FirstFault || State->CallbackFailed)
+  if (State->FirstFault || State->CallbackFailed || State->MMIOFailed)
     return failure("cannot restore a faulted CPU instance");
   if (State->Running)
     return failure("cannot restore CPU context during guest execution");
@@ -414,16 +598,21 @@ llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
   return llvm::Error::success();
 }
 llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
+  if (auto E = State->deviceError())
+    return E;
   if (State->FirstFault || State->CallbackFailed)
     return failure("cannot resume a faulted CPU instance");
   if (State->Running)
     return failure("cannot recursively execute a CPU instance");
   State->InstructionPC = PC;
   State->Timeout = false;
+  State->StopRequested = false;
   State->Running = true;
   uc_err Status =
       uc_emu_start(State->Engine, PC, UINT64_MAX, TimeoutMicroseconds, 0);
   State->Running = false;
+  if (auto E = State->deviceError())
+    return E;
   if (Status == UC_ERR_INSN_INVALID || Status == UC_ERR_EXCEPTION)
     State->retain({Status == UC_ERR_INSN_INVALID
                        ? BackendFaultKind::InvalidInstruction
@@ -440,10 +629,15 @@ llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
   return check(Status, "execute guest");
 }
 bool UnicornBackend::timedOut() const { return State->Timeout; }
-void UnicornBackend::stop() { uc_emu_stop(State->Engine); }
+void UnicornBackend::stop() {
+  if (State->Running)
+    State->StopRequested = true;
+  uc_emu_stop(State->Engine);
+}
 bool UnicornBackend::hasMemoryFault() const {
   return State->FirstFault && State->FirstFault->Access.has_value();
 }
+bool UnicornBackend::hasDeviceError() const { return State->MMIOFailed; }
 std::optional<BackendFault> UnicornBackend::fault() const {
   return State->FirstFault;
 }

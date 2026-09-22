@@ -12,6 +12,7 @@
 
 #ifdef NEVERD_DRIVER_BUS_KIND
 NEVERD_DRIVER_BUS_KIND(ResourceFree, "resource_free")
+NEVERD_DRIVER_BUS_KIND(RegisterBank, "register_bank")
 #endif
 
 #ifdef NEVERD_DRIVER_PNP_REQUEST

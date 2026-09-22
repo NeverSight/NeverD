@@ -81,6 +81,9 @@ public:
                   unsigned Permissions) override;
   llvm::Error protect(uint64_t Address, uint64_t Size,
                       unsigned Permissions) override;
+  llvm::Error mapMMIO(uint64_t Address, uint64_t Size,
+                      GuestMMIOCallbacks Callbacks) override;
+  llvm::Error unmapMMIO(uint64_t Address, uint64_t Size) override;
   llvm::Error read(uint64_t Address,
                    llvm::MutableArrayRef<uint8_t> Bytes) override;
   llvm::Error write(uint64_t Address, llvm::ArrayRef<uint8_t> Bytes) override;
@@ -100,6 +103,8 @@ public:
   bool timedOut() const;
   void stop();
   bool hasMemoryFault() const;
+  /// A known MMIO transaction rejection, distinct from callback exceptions.
+  bool hasDeviceError() const;
   /// The first CPU or checked GuestMemory fault survives later observations.
   std::optional<BackendFault> fault() const;
   bool executable(uint64_t Address) const;

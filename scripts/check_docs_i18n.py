@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import posixpath
 import re
 import subprocess
@@ -2117,6 +2118,24 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
     )
     source = view.read_text(english)
     examples = re.findall(r"```[^\n]*\n(.*?)```", source, re.DOTALL)
+    register_example = Path("docs/examples/driver-register-bank-scenario.json")
+    public_tests = view.read_text(
+        Path("unittests/emulation/DriverScenarioPublicTests.cpp")
+    )
+    public_scenario = re.search(
+        r'CAPIAndCLIExecuteRegisterBanksAcrossStopAndRestart.*?'
+        r'const std::string Scenario = R"\((.*?)\)";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_public = public_scenario is not None and json.loads(
+            view.read_text(register_example)
+        ) == json.loads(public_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_public = False
+    if not matches_public:
+        report(errors, "driver register-bank example differs from public execution scenario")
     exports = re.findall(
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
@@ -2214,7 +2233,11 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v11",
+        "wdm-x64-scheduled-v12",
+        "register_bank", "resources", "raw_start", "translated_start", "registers",
+        "read_only", "read_write", "DriverResources.h", "DriverResources.def",
+        "CM_RESOURCE_LIST", "NEVERD_WDM_RESOURCE_FIXTURE",
+        "NEVERD_WDM_RESOURCE_CFG_FIXTURE", "driver-register-bank-scenario.json",
         "STATUS_DELETE_PENDING", "Driver Verifier",
         "NEVERD_WDM_REMOVE_LOCK_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE",
         "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE",
@@ -2259,7 +2282,8 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
              "STATUS_MORE_PROCESSING_REQUIRED", "DriverPnp.h", "DeviceLifecycle.def",
              "devicePnpFinalStatusError",
              "KernelModelPnpDevices", "KernelModelPnpRequests", "KernelModelPnpCompletion",
-             "KernelRemoveLocks",
+             "KernelRemoveLocks", "DriverResources.h", "DriverResources.def",
+             "KernelMMIO", "KernelModelResources", "UnicornBackend",
              "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
              "KernelModelPowerCompletion"),
             errors,
@@ -2277,6 +2301,11 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
                 "DriverWDMStackTests.cpp",
                 "NEVERD_WDM_STACK_FIXTURE",
                 "NEVERD_WDM_STACK_CFG_FIXTURE",
+                "DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                "KernelMMIOFailureTests.cpp",
+                "KernelResourceBridgeTests.cpp", "UnicornMMIOTests.cpp",
+                "DriverWDMResourceTests.cpp", "NEVERD_WDM_RESOURCE_FIXTURE",
+                "NEVERD_WDM_RESOURCE_CFG_FIXTURE", "driver-register-bank-scenario.json",
                 "KernelRemoveLocksTests.cpp", "KernelRemoveLockBridgeTests.cpp",
                 "DriverWDMRemoveLockTests.cpp", "NEVERD_WDM_REMOVE_LOCK_FIXTURE",
                 "NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE", "NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE",

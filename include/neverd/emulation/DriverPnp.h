@@ -13,6 +13,8 @@
 #ifndef NEVERD_EMULATION_DRIVERPNP_H
 #define NEVERD_EMULATION_DRIVERPNP_H
 
+#include "neverd/emulation/DriverResources.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -114,6 +116,9 @@ struct DriverPnpDevice {
   std::optional<DevicePowerState> InitialReportedDevicePower = std::nullopt;
   /// Per-PDO FIFO consumed only by matching real PoRequestPowerIrp calls.
   std::vector<DriverPowerOperation> RequestedDevicePower{};
+  /// Fixed ordered raw/translated assignments for the register_bank provider.
+  /// The resource_free provider requires an empty inventory.
+  std::vector<DriverMemoryResource> Resources{};
 };
 
 struct DriverPnpOperation {

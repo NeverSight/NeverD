@@ -185,11 +185,8 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
     if (auto E = Memory.writeInteger(Request->Stack + StackMinorOffset,
                                      uint8_t(Input.Pnp->Minor), 1))
       return E;
-    // A resource-free bus has no raw or translated resource descriptors.
-    for (uint64_t Offset :
-         {StackStartResourcesOffset, StackStartTranslatedResourcesOffset})
-      if (auto E = Memory.writeInteger(Request->Stack + Offset, 0, 8))
-        return E;
+    if (auto E = initializePnpResources(Record))
+      return E;
     if (auto E = Memory.writeInteger(Packet + IRPInformationOffset, 0, 8))
       return E;
     Request->IOStatusWritten.fill(true);
@@ -556,6 +553,11 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   // before unregistering any dispatcher state or delivering output bytes.
   std::vector<std::pair<uint64_t, uint64_t>> Retiring{
       {IRP, IRPSize + Request->StackCount * StackSize}};
+  if (Request->RawResources) {
+    Retiring.emplace_back(Request->RawResources, Request->ResourceListSize);
+    Retiring.emplace_back(Request->TranslatedResources,
+                          Request->ResourceListSize);
+  }
   if (Request->SystemBuffer)
     Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
   if (Request->UserBuffer)
@@ -583,7 +585,7 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
     if (auto E = validatePowerRequestCompletion(*Request, uint32_t(*Status)))
       return E;
   } else if (Request->PnpTicket) {
-    if (auto E = Lifecycle.validatePnpCompletion(*Request->PnpTicket, *Status))
+    if (auto E = validatePnpRequestCompletion(*Request, uint32_t(*Status)))
       return E;
   } else if (Request->LifecycleIo) {
     if (auto E = Lifecycle.validateIoCompletion(Request->PnpDevice, IRP))
@@ -625,6 +627,11 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   Request->Completed = true;
   Request->CancelDeadline.reset();
   FreedRanges.emplace(IRP, IRPSize + Request->StackCount * StackSize);
+  if (Request->RawResources) {
+    FreedRanges.emplace(Request->RawResources, Request->ResourceListSize);
+    FreedRanges.emplace(Request->TranslatedResources,
+                        Request->ResourceListSize);
+  }
   if (Request->SystemBuffer)
     FreedRanges.emplace(Request->SystemBuffer, Request->BufferSize);
   if (Request->UserBuffer)
@@ -872,6 +879,11 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
                                 Offset < SecurityDesiredAccessOffset + 4;
                        }))
       return E;
+    for (uint64_t ResourceList :
+         {Request->RawResources, Request->TranslatedResources})
+      if (auto E = Check(ResourceList, Request->ResourceListSize,
+                         [&](uint64_t) { return !IsWrite; }))
+        return E;
     // Raw user pointers are outside this kernel-only profile. Buffered requests
     // use SystemBuffer; direct requests access the locked system mapping.
     if (auto E =

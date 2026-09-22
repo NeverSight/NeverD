@@ -1,0 +1,44 @@
+//===- DriverResources.def - Explicit register-bank scenario facts -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared register access, widths, limits and JSON resource field spellings.
+/// These describe the synthetic register-bank bus, not arbitrary hardware.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_REGISTER_ACCESS
+NEVERD_DRIVER_REGISTER_ACCESS(ReadOnly, "read_only")
+NEVERD_DRIVER_REGISTER_ACCESS(ReadWrite, "read_write")
+#endif
+
+#ifdef NEVERD_DRIVER_REGISTER_WIDTH
+NEVERD_DRIVER_REGISTER_WIDTH(1)
+NEVERD_DRIVER_REGISTER_WIDTH(2)
+NEVERD_DRIVER_REGISTER_WIDTH(4)
+#endif
+
+#ifdef NEVERD_DRIVER_RESOURCE_LIMIT
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioResourcesPerDeviceLimit, 8)
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioResourceLimit, 32)
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioRegistersPerResourceLimit, 256)
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioRegisterLimit, 4096)
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioResourceLengthLimit, 1024 * 1024)
+NEVERD_DRIVER_RESOURCE_LIMIT(DriverScenarioResourceIDLimit, 64)
+#endif
+
+#ifdef NEVERD_DRIVER_RESOURCE_FIELD
+NEVERD_DRIVER_RESOURCE_FIELD(Resources, "resources")
+NEVERD_DRIVER_RESOURCE_FIELD(ID, "id")
+NEVERD_DRIVER_RESOURCE_FIELD(RawStart, "raw_start")
+NEVERD_DRIVER_RESOURCE_FIELD(TranslatedStart, "translated_start")
+NEVERD_DRIVER_RESOURCE_FIELD(Length, "length")
+NEVERD_DRIVER_RESOURCE_FIELD(Registers, "registers")
+NEVERD_DRIVER_RESOURCE_FIELD(Offset, "offset")
+NEVERD_DRIVER_RESOURCE_FIELD(Width, "width")
+NEVERD_DRIVER_RESOURCE_FIELD(Access, "access")
+NEVERD_DRIVER_RESOURCE_FIELD(Value, "value")
+#endif

@@ -88,12 +88,21 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
     return pnpError("attached driver did not register a PnP dispatch callback");
   if (FrameworkDevices.count(*Top))
     return pnpError("framework PnP device dispatch is outside this profile");
+  if (Minor == DevicePnpRequest::Start)
+    if (auto E = MMIO.canStart(PDO))
+      return E;
   auto Packet = allocate(IRPSize + *Count * StackSize);
   if (!Packet)
     return Packet.takeError();
   auto Ticket = Lifecycle.beginPnp(PDO, Minor);
   if (!Ticket)
     return Ticket.takeError();
+  if (Minor == DevicePnpRequest::Start) {
+    if (auto E = MMIO.beginStart(PDO))
+      return E;
+  } else if (Minor == DevicePnpRequest::SurpriseRemoval) {
+    MMIO.surpriseRemoval(PDO);
+  }
   ActiveRequest Record{Input.Kind, Index};
   Record.IRP = *Packet;
   Record.Device = PDO;
@@ -150,6 +159,9 @@ llvm::Error KernelModel::finishRequestLifecycle(ActiveRequest &Request,
     Observation.DeviceStateAfter = State->DevicePower;
     Observation.SystemStateAfter = State->SystemPower;
   } else if (Request.PnpTicket) {
+    if (auto E = MMIO.finishPnp(Request.PnpDevice, Request.PnpOperation->Minor,
+                                Status))
+      return E;
     if (auto E = Lifecycle.finishPnp(*Request.PnpTicket, Status))
       return E;
     auto State = Lifecycle.snapshot(Request.PnpDevice);

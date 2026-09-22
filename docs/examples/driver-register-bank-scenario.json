@@ -1,0 +1,167 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "pnp_devices": [
+    {
+      "id": "register0",
+      "bus": "register_bank",
+      "initial_device_power": "D0",
+      "initial_system_power": "working",
+      "resources": [
+        {
+          "id": "bank0",
+          "raw_start": "0x200000000",
+          "translated_start": "0x300000000",
+          "length": "0x1000",
+          "registers": [
+            {
+              "offset": 0,
+              "width": 1,
+              "access": "read_write",
+              "value": "0x12"
+            },
+            {
+              "offset": 2,
+              "width": 2,
+              "access": "read_write",
+              "value": "0x3456"
+            },
+            {
+              "offset": 4,
+              "width": 4,
+              "access": "read_write",
+              "value": "0x789abcde"
+            },
+            {
+              "offset": 8,
+              "width": 4,
+              "access": "read_only",
+              "value": "0x10203040"
+            },
+            {
+              "offset": "0x10",
+              "width": 4,
+              "access": "read_write",
+              "value": 1
+            },
+            {
+              "offset": "0x14",
+              "width": 4,
+              "access": "read_write",
+              "value": 2
+            },
+            {
+              "offset": "0x18",
+              "width": 4,
+              "access": "read_write",
+              "value": 3
+            },
+            {
+              "offset": "0x1c",
+              "width": 4,
+              "access": "read_write",
+              "value": 4
+            },
+            {
+              "offset": "0xffc",
+              "width": 4,
+              "access": "read_write",
+              "value": 5
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "start",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 11
+      }
+    },
+    {
+      "kind": "create",
+      "device_id": "register0",
+      "file": 1
+    },
+    {
+      "kind": "ioctl",
+      "file": 1,
+      "code": "0x222000",
+      "output_size": 32
+    },
+    {
+      "kind": "cleanup",
+      "file": 1
+    },
+    {
+      "kind": "close",
+      "file": 1
+    },
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "query_stop",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "stop",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "start",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 5
+      }
+    },
+    {
+      "kind": "create",
+      "device_id": "register0",
+      "file": 2
+    },
+    {
+      "kind": "ioctl",
+      "file": 2,
+      "code": "0x222000",
+      "output_size": 32
+    },
+    {
+      "kind": "cleanup",
+      "file": 2
+    },
+    {
+      "kind": "close",
+      "file": 2
+    },
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "query_remove",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "register0",
+      "minor": "remove",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 7
+      }
+    }
+  ]
+}

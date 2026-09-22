@@ -750,7 +750,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
                       profile::MaxConcurrentCallbacks *
                           profile::CallbackStackStride},
         std::pair{profile::GuardThunkBase,
-                  profile::GuardThunkBase + profile::PageSize}})
+                  profile::GuardThunkBase + profile::PageSize},
+        std::pair{profile::MMIOBase, profile::MMIOBase + profile::MMIOSize}})
     if (ActualBase < Limit && End > Start)
       return invalid("image overlaps reserved emulation memory");
 
