@@ -32,12 +32,22 @@ struct DriverImport {
   std::string Module;
   std::string Name;
 };
+struct DriverGuardControlFlow {
+  bool Enabled = false;
+  /// Addresses of read-only guest pointer slots, not helper entry points.
+  /// The session replaces them only when Enabled; otherwise guest fallbacks
+  /// and their original instructions remain authoritative.
+  uint64_t CheckPointerAddress = 0;
+  uint64_t DispatchPointerAddress = 0;
+  std::vector<uint64_t> ValidTargets;
+};
 struct DriverImage {
   uint64_t Base = 0;
   uint64_t PreferredBase = 0;
   uint64_t SecurityCookieAddress = 0;
   uint64_t Entry = 0;
   uint64_t Size = 0;
+  DriverGuardControlFlow Guard;
   std::vector<DriverImageRegion> Regions;
   std::vector<DriverImport> Imports;
 };

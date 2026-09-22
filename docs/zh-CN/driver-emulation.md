@@ -44,14 +44,14 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
 | READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发 IRP 或请求取消；`METHOD_NEITHER` 与隐式文件位置 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
-| KMDF / UMDF 驱动 | 不支持 | 框架绑定、对象、队列、回调及相应宿主运行时 |
+| KMDF 1.33 非 PnP 驱动 | 版本绑定、驱动和通用对象、类型化上下文、引用及实际执行的清理／卸载回调 | KMDF 设备、队列、请求、类扩展和 UMDF 仍不支持 |
 | PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发 IRP 或请求取消 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
 | 硬件、DMA、PCI、中断或虚拟化驱动 | 不支持所需环境 | 设备模型、物理内存、总线、中断及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
-| 需要 CFG、不支持的加载配置、TLS 或其他被拒绝的 PE 特性的 x64 映像 | 加载时拒绝 | 针对这些要求的明确加载器／运行时语义 |
+| x64 CFG | 验证目标表及检查／分派调用；未启用的插桩保留来宾回退函数 | XFG、导出抑制、不支持的加载配置和 TLS 仍被拒绝 |
 
 未使用的不支持导入项可以保持绑定。一旦执行到不支持的操作，便会停止并给出诊断及此前收集的观察结果。仅 DriverEntry 成功，并不能证明后续派发、硬件或框架路径也受支持。下方 API 表是受支持子集的权威定义。
 
@@ -65,14 +65,22 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排队的 `DelayedWorkQueue` 工作项在 `PASSIVE_LEVEL` 执行，来宾 DPC 回调在 `DISPATCH_LEVEL` 接收规定的四个参数。CPU0 在调用返回和阻塞等待的边界进行确定性的协作调度。相对、绝对和周期定时器使用虚拟时间；没有可运行的执行帧时，时间推进到下一定时器或等待期限。通知型与同步型事件／定时器保留各自的信号消耗语义。每个回调拥有独立的来宾栈；多个阻塞帧保留局部变量和完整 CPU 上下文，来宾内存仍然共享。Win64 回调入口将前四个参数放入寄存器，其余参数放入栈。请求仍串行处理：标记 IRP 为待处理的派发函数必须返回 `STATUS_PENDING`，且该请求完成后才能开始下一个。待处理请求或无限等待没有可用生产者时，以停滞的 `model_error` 停止。指令、内存、观察记录与墙钟时间预算仍共用。
 
-这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、请求取消、自旋锁、并发 IRP、通用 IRQL 切换、`METHOD_NEITHER`、KMDF／UMDF、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
+这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、请求取消、自旋锁、并发 IRP、通用 IRQL 切换、`METHOD_NEITHER`、UMDF 及 KMDF 设备／队列／请求契约、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
 
 工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
 删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
 
-映像默认使用首选基址，除非场景选择了有效的重定位地址。映像必须为使用 native 子系统的 PE32+ x64 可执行文件。导入可来自 `ntoskrnl.exe` 或 `ntkrnlmp.exe`。
+映像默认使用首选基址，除非场景选择了有效的重定位地址。映像必须为使用 native 子系统的 PE32+ x64 可执行文件。导入可来自 `ntoskrnl.exe`、`ntkrnlmp.exe` 或 `WDFLDR.SYS`。
 
-执行加载器支持经验证的 x64 `DIR64` 基址重定位，以及有限的安全 cookie 加载配置；它会在入口包装函数执行前设置确定性的来宾 cookie。CFG、其他未建模的加载配置字段、TLS、延迟／绑定导入、按序号导入以及托管映像都会被拒绝。映像还必须通过严格的范围与对齐检查。
+执行加载器支持经验证的 x64 `DIR64` 基址重定位，以及有限的安全 cookie 加载配置；它会在入口包装函数执行前设置确定性的来宾 cookie。其他未建模的加载配置字段、TLS、延迟／绑定导入、按序号导入以及托管映像都会被拒绝。映像还必须通过严格的范围与对齐检查。
+
+启用的控制流保护（CFG）会验证 PE 标志、指针槽和已排序的可执行目标表。检查与分派辅助函数仅允许已声明的映像入口或已登记的 API 跳板，保留 Win64 调用状态，并拒绝未声明的目标。只有插桩而未启用 CFG 时，保留原始来宾回退指针。启用的 XFG、导出抑制和其他未建模的保护策略仍被拒绝；地址位于可执行内存并不使它成为合法目标。
+
+KMDF 支持限于精确的 1.33.0 ABI：458 个函数槽具有稳定的来宾身份，只有下列 11 个 API 实现了执行语义。`WdfVersionBind` 和 `WdfVersionUnbind` 验证并管理来宾绑定。真正的 WDK `FxDriverEntry` 包装函数仍是映像入口；`WdfGetDriver` 从公共全局结构读取模型中的驱动句柄。非 PnP 驱动与通用对象支持清零的类型化上下文、引用计数、父对象所有权，以及在共享预算下实际执行的嵌套清理／销毁／卸载回调。这些操作目前要求 `PASSIVE_LEVEL`。设备、队列、请求、类扩展、UMDF 和完整 PnP／电源不在此子集内。未建模的函数槽、`WdfLdrQueryInterface` 和类绑定调用会明确停止；列入函数表不代表已经实现。 对象回调仅在 `PASSIVE_LEVEL` 执行；清理完成后新增引用仍不在此框架执行配置的支持范围内。
+
+已建模的 KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`.
+
+可选的真实 WDK 验证使用 `driver_kmdf_lifecycle.c`，需以真正的 KMDF 入口库单独编译链接。将 `NEVERD_KMDF_FIXTURE` 与 `NEVERD_KMDF_CFG_FIXTURE` 指向普通和启用 CFG 的映像；缺少外部产物时明确跳过。原生及 C API／CLI 覆盖见[测试指南](testing.md)。当前执行证据仅来自 Linux 主机。
 
 初始 API 模型刻意采用有限契约：
 

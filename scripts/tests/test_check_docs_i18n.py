@@ -102,6 +102,10 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             "KeSetEvent",
             "KeWaitForSingleObject",
             "KeDelayExecutionThread",
+            "WdfDriverCreate",
+            "WdfObjectAllocateContext",
+            "WdfVersionBind",
+            "WdfVersionUnbind",
         ):
             with self.subTest(symbol=symbol):
                 errors: list[str] = []
@@ -122,6 +126,36 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         original = i18n.RepositoryView(use_index=False).read_text(path)
         for token in ("DISPATCH_LEVEL", "KernelMode", "Executive", "CPU0",
                       "Increment=0", "Wait=FALSE"):
+            with self.subTest(token=token):
+                errors: list[str] = []
+                changed = original.replace(token, "RemovedContract")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_guide_tracks_modeled_framework_inventories(self) -> None:
+        view = i18n.RepositoryView(use_index=False)
+        for inventory, macro in (
+            ("KernelFrameworkAPIs.def", "NEVERD_FRAMEWORK_API"),
+            ("KernelFrameworkLoaderAPIs.def", "NEVERD_FRAMEWORK_LOADER_API"),
+        ):
+            with self.subTest(inventory=inventory):
+                path = Path("lib/emulation/windows") / inventory
+                changed = view.read_text(path) + f"\n{macro}(WdfFutureModel, 1)\n"
+                errors: list[str] = []
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any("WdfFutureModel" in error for error in errors), errors)
+
+        path = Path("lib/emulation/windows/KernelFrameworkFunctions.def")
+        changed = view.read_text(path) + "\nNEVERD_FRAMEWORK_FUNCTION(WdfUnmodeledIdentity, 459)\n"
+        errors = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertFalse(any("WdfUnmodeledIdentity" in error for error in errors), errors)
+
+    def test_driver_guide_requires_framework_and_guard_limits(self) -> None:
+        path = Path("docs/zh-TW/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
+                      "NEVERD_KMDF_CFG_FIXTURE"):
             with self.subTest(token=token):
                 errors: list[str] = []
                 changed = original.replace(token, "RemovedContract")

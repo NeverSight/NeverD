@@ -7,6 +7,9 @@ add_neverd_component_library(NeverDEmulation
   unicorn/UnicornBackend.cpp
   windows/DriverImage.cpp
   windows/KernelExportRegistry.cpp
+  windows/GuardControlFlow.cpp
+  windows/KernelFramework.cpp
+  windows/KernelModelFramework.cpp
   windows/KernelModelExports.cpp
   windows/KernelModel.cpp
   windows/KernelModelIO.cpp

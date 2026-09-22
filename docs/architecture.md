@@ -483,9 +483,11 @@ callback stacks and complete CPU contexts, including Win64 stack arguments,
 with shared guest memory. Virtual time advances at timer/wait boundaries; DPCs
 run at `DISPATCH_LEVEL`, workers at `PASSIVE_LEVEL`, on CPU0 with
 deterministic cooperative scheduling. This does not provide general
-thread/APC/cancellation/spinlock scheduling, concurrent IRPs, KMDF, full
+thread/APC/cancellation/spinlock scheduling, concurrent IRPs, full
 PnP/power or hardware. API IRQL ceilings come from `KernelAPIIRQL.def`, with
 argument-dependent checks in the owning model.
+
+`KernelFramework` owns KMDF 1.33 binding, function-table identity, driver/generic objects and typed-context lifetime. `DriverSession` executes nested guest callbacks and resumes the suspended framework operation with shared execution budgets. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. This does not add KMDF devices, queues, requests, class extensions or UMDF.
 
 ## Exception-rewrite boundaries
 

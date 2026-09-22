@@ -82,6 +82,8 @@ escaping stack pointer cannot enter another blocked worker’s stack. Armed
 timers in a device extension prevent premature device retirement. These checks
 do not expose general IRQL transitions.
 
+`DriverGuardTests.cpp` and four original `driver_guard.c` variants cover active and inactive CFG, rebasing, check/dispatch ABI and malformed or undeclared targets. `KernelFrameworkTests.cpp` covers binding and object contracts. The original `driver_kmdf_lifecycle.c` is optionally compiled against genuine WDK 1.33 headers and linked through the real `FxDriverEntry` library; set `NEVERD_KMDF_FIXTURE` and `NEVERD_KMDF_CFG_FIXTURE` to the separately built normal and active-CFG images. Missing external artifacts are explicitly skipped. `DriverKMDFLifecycleTests.cpp` and the C API/CLI cases in `DriverScenarioPublicTests.cpp` check binding, typed contexts, reference-delayed destruction, actual guest callbacks, unload and documented create failures. This evidence is from Linux hosts and does not establish broader KMDF support.
+
 ## Test layout
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every

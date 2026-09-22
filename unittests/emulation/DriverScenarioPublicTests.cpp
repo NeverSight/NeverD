@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <vector>
 
 namespace {
 
@@ -239,6 +240,149 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIRunTimerDpcAndResumableWaits) {
       EXPECT_EQ((*Requests)[1].getAsObject()->getInteger("information"), 8);
     }
   }
+}
+
+#ifdef NEVERD_KMDF_FIXTURE
+void checkKMDFLifecycleReport(const llvm::json::Object &Report,
+                              bool DuplicateDriver = false) {
+  EXPECT_EQ(Report.getString("stop_reason"), "returned");
+  EXPECT_EQ(Report.getInteger("nt_status"), 0);
+  EXPECT_EQ(Report.getBoolean("scenario_success"), true);
+  EXPECT_EQ(Report.getBoolean("unload_completed"), true);
+  const auto *Messages = Report.getArray("messages");
+  ASSERT_NE(Messages, nullptr);
+  std::vector<std::string> Observed;
+  for (const auto &Message : *Messages) {
+    auto Text = Message.getAsString();
+    ASSERT_TRUE(Text);
+    if (Text->starts_with("KMDF lifecycle:"))
+      Observed.push_back(Text->str());
+  }
+  std::vector<std::string> Expected{
+      "KMDF lifecycle: driver created\n", "KMDF lifecycle: child cleanup\n",
+      "KMDF lifecycle: child destroy\n",  "KMDF lifecycle: child released\n",
+      "KMDF lifecycle: driver unload\n",  "KMDF lifecycle: driver cleanup\n",
+      "KMDF lifecycle: driver destroy\n"};
+  if (DuplicateDriver)
+    Expected.insert(Expected.begin() + 1,
+                    "KMDF lifecycle: duplicate driver checked\n");
+  EXPECT_EQ(Observed, Expected);
+  const auto *Calls = Report.getArray("calls");
+  ASSERT_NE(Calls, nullptr);
+  size_t Binds = 0, Unbinds = 0, Creates = 0, DuplicateContexts = 0;
+  for (const auto &Value : *Calls) {
+    const auto *Call = Value.getAsObject();
+    ASSERT_NE(Call, nullptr);
+    auto Name = Call->getString("name");
+    if (Name == "WdfVersionBind")
+      ++Binds;
+    else if (Name == "WdfVersionUnbind")
+      ++Unbinds;
+    else if (Name == "WdfDriverCreate") {
+      auto Status = Call->getString("result");
+      ASSERT_TRUE(Status);
+      EXPECT_TRUE(
+          Status->equals_insensitive(Creates == 0 ? "0x0" : "0xC0000183"));
+      ++Creates;
+    } else if (Name == "WdfObjectAllocateContext" &&
+               Call->getString("result") == "0x40000000") {
+      ++DuplicateContexts;
+    }
+  }
+  EXPECT_EQ(Binds, 1u);
+  EXPECT_EQ(Unbinds, 1u);
+  EXPECT_EQ(Creates, DuplicateDriver ? 2u : 1u);
+  EXPECT_EQ(DuplicateContexts, 1u);
+}
+
+neverd_driver_options_v1 kmdfOptions(const char *Service) {
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = Service;
+  return Options;
+}
+#endif
+
+TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFLifecycle) {
+#ifdef NEVERD_KMDF_FIXTURE
+  constexpr char Scenario[] = R"({"unload":true})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(Scenario, 0, "success", NEVERD_KMDF_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_KMDF_FIXTURE, Scenario, nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    ASSERT_NE(Parsed->getAsObject(), nullptr);
+    checkKMDFLifecycleReport(*Parsed->getAsObject());
+    EXPECT_TRUE(error().empty());
+    EXPECT_FALSE(neverd_session_is_loaded(Session));
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_FIXTURE requires a genuine WDK-linked fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFWithActiveCFG) {
+#if defined(NEVERD_KMDF_FIXTURE) && defined(NEVERD_KMDF_CFG_FIXTURE)
+  constexpr char Scenario[] = R"({"unload":true,"load_address":"0x190000000"})";
+  for (bool CLI : {false, true}) {
+    SCOPED_TRACE(CLI);
+    auto Parsed = llvm::json::parse(
+        CLI ? runCLI(Scenario, 0, "success", NEVERD_KMDF_CFG_FIXTURE)
+            : takeString(neverd_emulate_driver_scenario_json(
+                  Session, NEVERD_KMDF_CFG_FIXTURE, Scenario, nullptr)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    ASSERT_NE(Parsed->getAsObject(), nullptr);
+    checkKMDFLifecycleReport(*Parsed->getAsObject());
+  }
+#else
+  GTEST_SKIP() << "Genuine WDK normal and active-CFG fixtures are required";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIPreservesDuplicateKMDFDriverStatus) {
+#ifdef NEVERD_KMDF_FIXTURE
+  auto Options = kmdfOptions("NeverDKmdfD");
+  auto Parsed =
+      llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+          Session, NEVERD_KMDF_FIXTURE, R"({"unload":true})", &Options)));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+  ASSERT_NE(Parsed->getAsObject(), nullptr);
+  checkKMDFLifecycleReport(*Parsed->getAsObject(), true);
+  EXPECT_TRUE(error().empty());
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_FIXTURE requires a genuine WDK-linked fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIPreservesDocumentedKMDFCreateFailures) {
+#ifdef NEVERD_KMDF_FIXTURE
+  for (const auto &[Service, Status] :
+       {std::pair{"NeverDKmdfS", 0xc0000004LL},
+        std::pair{"NeverDKmdfA", 0xc000000dLL}}) {
+    SCOPED_TRACE(Service);
+    auto Options = kmdfOptions(Service);
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, NEVERD_KMDF_FIXTURE, R"({"unload":true})", &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned");
+    EXPECT_EQ(Report->getInteger("nt_status"), Status);
+    EXPECT_EQ(Report->getBoolean("nt_success"), false);
+    EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+    EXPECT_EQ(Report->getBoolean("unload_completed"), false);
+    EXPECT_TRUE(error().empty());
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_FIXTURE requires a genuine WDK-linked fixture";
+#endif
 }
 
 TEST_F(DriverScenarioPublic, CLIRunsOrderedLifecycleScenario) {

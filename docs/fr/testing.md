@@ -63,6 +63,8 @@ Les tests vérifient les contextes CPU complets (registres, flags, SIMD, FPU, CR
 
 `driver_context_limits.c`: Les plafonds IRQL proviennent de `KernelAPIIRQL.def` ; le modèle propriétaire vérifie les restrictions dépendant des arguments. Un DPC ne peut ni appeler le registre ni allouer, libérer ou accéder au pool paginé. Les conversions Unicode de `DbgPrint` exigent `PASSIVE_LEVEL`, tandis que l’ANSI et les opérations non paginées pris en charge restent utilisables à `DISPATCH_LEVEL`. Les piles sont bornées : un pointeur de pile sortant ne peut atteindre celle d’un autre worker bloqué. Un timer armé dans l’extension empêche la destruction prématurée du périphérique. Cela n’expose pas les changements généraux d’IRQL.
 
+`DriverGuardTests.cpp` et quatre variantes originales de `driver_guard.c` couvrent CFG actif/inactif, relocalisation, ABI check/dispatch et cibles malformées ou non déclarées. `KernelFrameworkTests.cpp` couvre liaison et objets. Le fichier original `driver_kmdf_lifecycle.c` se compile facultativement avec les véritables en-têtes WDK 1.33 et la bibliothèque réelle `FxDriverEntry` ; `NEVERD_KMDF_FIXTURE` et `NEVERD_KMDF_CFG_FIXTURE` désignent les images normale et CFG actif construites séparément. L’absence de ces artefacts externes provoque un saut explicite. `DriverKMDFLifecycleTests.cpp` et les cas C API/CLI de `DriverScenarioPublicTests.cpp` vérifient liaison, contextes typés, destruction différée par référence, callbacks invités réels, déchargement et échecs de création documentés. Ces preuves proviennent de Linux et n’établissent pas un support KMDF plus large.
+
 
 ## Organisation des tests
 

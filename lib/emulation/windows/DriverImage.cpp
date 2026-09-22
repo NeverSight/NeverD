@@ -13,6 +13,8 @@
 #include "DriverImage.h"
 
 #include "../GuestMemory.h"
+#include "GuardControlFlow.h"
+#include "KernelExportRegistry.h"
 
 #include "neverd/emulation/DriverProfile.h"
 #include "neverd/loader/Loader.h"
@@ -126,8 +128,7 @@ validateImports(const COFFObjectFile &Object,
     auto Module = nameAt(Object, Sections, Entry.NameRVA);
     if (!Module)
       return Module.takeError();
-    const std::string Provider = llvm::StringRef(*Module).lower();
-    if (Provider != "ntoskrnl.exe" && Provider != "ntkrnlmp.exe")
+    if (!KernelExportRegistry::canonicalImportModule(*Module))
       return invalid("unsupported import provider: " + *Module);
     const uint64_t Lookup = Entry.ImportLookupTableRVA
                                 ? uint32_t(Entry.ImportLookupTableRVA)
@@ -226,8 +227,8 @@ struct CookiePlan {
   uint64_t PointerRVA = 0;
 };
 
-/// Size/timestamp/version are descriptive. SecurityCookie is the only
-/// supported environment requirement. Every other present field must be zero.
+/// Size/timestamp/version are descriptive. Cookie and supported guard fields
+/// have dedicated validation. Other environment requirements must be zero.
 /// Microsoft documents these fields at:
 /// https://learn.microsoft.com/windows/win32/debug/pe-format#the-load-configuration-structure-image-only
 llvm::Error validateLoadConfigurationBytes(llvm::ArrayRef<uint8_t> Bytes) {
@@ -236,11 +237,31 @@ llvm::Error validateLoadConfigurationBytes(llvm::ArrayRef<uint8_t> Bytes) {
   const uint64_t DeclaredSize = llvm::support::endian::read32le(Bytes.data());
   if (DeclaredSize < 12 || DeclaredSize > Bytes.size())
     return invalid("invalid load configuration declared size");
-  constexpr size_t CookieStart =
+  constexpr size_t CookieOffset =
       offsetof(coff_load_configuration64, SecurityCookie);
-  constexpr size_t CookieEnd = CookieStart + 8;
-  if (DeclaredSize > CookieStart && DeclaredSize < CookieEnd)
+  if (DeclaredSize > CookieOffset && DeclaredSize < CookieOffset + 8)
     return invalid("partial load configuration SecurityCookie field");
+  const size_t PointerOffsets[] = {
+      offsetof(coff_load_configuration64, SecurityCookie),
+      offsetof(coff_load_configuration64, GuardCFCheckFunction),
+      offsetof(coff_load_configuration64, GuardCFCheckDispatch),
+      offsetof(coff_load_configuration64, GuardCFFunctionTable),
+      offsetof(coff_load_configuration64, GuardCFFunctionCount),
+      offsetof(coff_load_configuration64, GuardAddressTakenIatEntryTable),
+      offsetof(coff_load_configuration64, GuardAddressTakenIatEntryCount),
+      offsetof(coff_load_configuration64, GuardXFGCheckFunctionPointer),
+      offsetof(coff_load_configuration64, GuardXFGDispatchFunctionPointer),
+      offsetof(coff_load_configuration64, GuardXFGTableDispatchFunctionPointer),
+      offsetof(coff_load_configuration64, CastGuardOsDeterminedFailureMode),
+      guard::GuardMemcpyPointerOffset,
+      guard::UmaPointersOffset};
+  for (size_t Offset : PointerOffsets)
+    if (DeclaredSize > Offset && DeclaredSize < Offset + 8)
+      return invalid("partial load configuration pointer or count field");
+  constexpr size_t FlagsOffset =
+      offsetof(coff_load_configuration64, GuardFlags);
+  if (DeclaredSize > FlagsOffset && DeclaredSize < FlagsOffset + 4)
+    return invalid("partial load configuration GuardFlags field");
   // Named byte ranges also reject partial nonzero unsupported fields. Future
   // layouts can extend the table only when their runtime semantics are owned.
   struct Field {
@@ -265,7 +286,7 @@ llvm::Error validateLoadConfigurationBytes(llvm::ArrayRef<uint8_t> Bytes) {
         return invalid("unsupported load configuration field: " +
                        llvm::Twine(Field.Name));
   }
-  for (size_t Offset = sizeof(coff_load_configuration64); Offset < DeclaredSize;
+  for (size_t Offset = guard::KnownLoadConfigurationSize; Offset < DeclaredSize;
        ++Offset)
     if (Bytes[Offset])
       return invalid(
@@ -400,6 +421,268 @@ validateCookie(const COFFObjectFile &Object,
   }
   return invalid("SecurityCookie is outside mapped image storage");
 }
+/// Public CFG metadata and AMD64 helper ABI:
+/// https://learn.microsoft.com/windows/win32/secbp/pe-metadata
+/// A library may advertise dormant guard slots without DLL_GUARD_CF. Those
+/// slots retain their guest fallback code; only an enabled image is patched.
+llvm::Expected<DriverGuardControlFlow>
+validateGuard(const COFFObjectFile &Object,
+              const std::vector<SectionPlan> &Sections,
+              const std::vector<DriverImport> &Imports,
+              const std::set<uint64_t> &Relocations, uint64_t ActualBase) {
+  DriverGuardControlFlow Guard;
+  const auto *Header = Object.getPE32PlusHeader();
+  const uint64_t Base = Header->ImageBase;
+  Guard.Enabled = Header->DLLCharacteristics &
+                  llvm::COFF::IMAGE_DLL_CHARACTERISTICS_GUARD_CF;
+  const auto *Directory =
+      Object.getDataDirectory(llvm::COFF::LOAD_CONFIG_TABLE);
+  if (!Directory || !Directory->Size) {
+    if (Guard.Enabled)
+      return invalid("CFG image has no load configuration");
+    return Guard;
+  }
+  const uint64_t ConfigRVA = Directory->RelativeVirtualAddress;
+  auto Prefix = fileBytes(Object, Sections, ConfigRVA, 4);
+  if (!Prefix)
+    return Prefix.takeError();
+  const uint64_t DeclaredSize = llvm::support::endian::read32le(Prefix->data());
+  auto Bytes = fileBytes(Object, Sections, ConfigRVA, DeclaredSize);
+  if (!Bytes)
+    return Bytes.takeError();
+  auto Read64 = [&](size_t Offset) -> uint64_t {
+    return Offset + 8 <= Bytes->size()
+               ? llvm::support::endian::read64le(Bytes->data() + Offset)
+               : 0;
+  };
+  constexpr size_t FlagsOffset =
+      offsetof(coff_load_configuration64, GuardFlags);
+  const uint32_t Flags =
+      FlagsOffset + 4 <= Bytes->size()
+          ? llvm::support::endian::read32le(Bytes->data() + FlagsOffset)
+          : 0;
+  constexpr uint64_t SupportedFlags =
+      guard::Instrumented | guard::FunctionTablePresent |
+      guard::SecurityCookieUnused | guard::LongJumpTablePresent |
+      guard::FunctionTableSizeMask;
+  if (Flags & ~SupportedFlags)
+    return invalid(
+        "unsupported CFG GuardFlags (including XFG/export suppression)");
+  const uint64_t ExtraBytes =
+      (Flags & guard::FunctionTableSizeMask) >> guard::FunctionTableSizeShift;
+  if (ExtraBytes > 1)
+    return invalid("unsupported CFG function table metadata stride");
+  if (Guard.Enabled && (!(Flags & guard::Instrumented) ||
+                        !(Flags & guard::FunctionTablePresent)))
+    return invalid("CFG image requires instrumented and function-table flags");
+
+  auto Executable = [&](uint64_t RVA) {
+    for (const auto &Section : Sections) {
+      const uint64_t Start = Section.Header->VirtualAddress;
+      if (RVA >= Start && RVA - Start < Section.Header->VirtualSize &&
+          RVA - Start < Section.Contents.size() &&
+          (Section.Header->Characteristics & llvm::COFF::IMAGE_SCN_MEM_EXECUTE))
+        return true;
+    }
+    return false;
+  };
+  auto ReadOnly = [&](uint64_t RVA, uint64_t Size) {
+    for (const auto &Section : Sections) {
+      const uint64_t Start = Section.Header->VirtualAddress;
+      const uint64_t Span = Section.Header->VirtualSize;
+      if (RVA >= Start && RVA - Start <= Span && Size <= Span - (RVA - Start))
+        return (Section.Header->Characteristics &
+                llvm::COFF::IMAGE_SCN_MEM_READ) &&
+               !(Section.Header->Characteristics &
+                 (llvm::COFF::IMAGE_SCN_MEM_WRITE |
+                  llvm::COFF::IMAGE_SCN_MEM_EXECUTE));
+    }
+    return false;
+  };
+  std::set<uint64_t> PointerFields;
+  std::set<uint64_t> PointerSlots;
+  std::vector<std::pair<uint64_t, uint64_t>> Storage;
+  auto RegisterStorage = [&](uint64_t RVA, uint64_t Size) -> llvm::Error {
+    if (!ReadOnly(RVA, Size))
+      return invalid("CFG metadata requires read-only nonexecutable storage");
+    if (RVA < ConfigRVA + DeclaredSize && RVA + Size > ConfigRVA)
+      return invalid("CFG storage overlaps load configuration");
+    for (unsigned Index = 0; Index != 16; ++Index) {
+      const auto *Other = Object.getDataDirectory(Index);
+      if (!Other || !Other->Size || Index == llvm::COFF::CERTIFICATE_TABLE)
+        continue;
+      const uint64_t Start = Other->RelativeVirtualAddress;
+      if (RVA < Start + Other->Size && RVA + Size > Start)
+        return invalid("CFG storage overlaps loader metadata");
+    }
+    for (const auto &Import : Imports)
+      if (RVA < Import.Slot - Base + 8 && RVA + Size > Import.Slot - Base)
+        return invalid("CFG storage overlaps import binding storage");
+    for (auto [Start, Length] : Storage)
+      if (RVA < Start + Length && RVA + Size > Start)
+        return invalid("overlapping CFG metadata storage");
+    Storage.emplace_back(RVA, Size);
+    return llvm::Error::success();
+  };
+  auto PointerRVA = [&](size_t Offset) -> llvm::Expected<uint64_t> {
+    const uint64_t Address = Read64(Offset);
+    if (!Address)
+      return uint64_t(0);
+    if (Address <= Base || Address - Base >= Header->SizeOfImage)
+      return invalid("CFG pointer is outside image storage");
+    PointerFields.insert(ConfigRVA + Offset);
+    return Address - Base;
+  };
+  auto Slot = [&](size_t Offset, bool ZeroOnly) -> llvm::Expected<uint64_t> {
+    auto RVA = PointerRVA(Offset);
+    if (!RVA || !*RVA)
+      return RVA;
+    if (*RVA & 7)
+      return invalid("unaligned CFG pointer slot");
+    auto Contents = fileBytes(Object, Sections, *RVA, 8);
+    if (!Contents)
+      return Contents.takeError();
+    if (auto Error = RegisterStorage(*RVA, 8))
+      return std::move(Error);
+    const uint64_t Target = llvm::support::endian::read64le(Contents->data());
+    if (ZeroOnly) {
+      if (Target)
+        return invalid("unsupported active load configuration guard extension");
+    } else {
+      if (Target < Base || !Executable(Target - Base))
+        return invalid("CFG fallback target is not file-backed image code");
+      PointerSlots.insert(*RVA);
+    }
+    return *RVA;
+  };
+  auto Check =
+      Slot(offsetof(coff_load_configuration64, GuardCFCheckFunction), false);
+  if (!Check)
+    return Check.takeError();
+  auto Dispatch =
+      Slot(offsetof(coff_load_configuration64, GuardCFCheckDispatch), false);
+  if (!Dispatch)
+    return Dispatch.takeError();
+  if ((*Check || *Dispatch) && !(Flags & guard::Instrumented))
+    return invalid("CFG slots require the instrumented flag");
+  if (Guard.Enabled && !*Check)
+    return invalid("CFG image requires a check pointer slot");
+  Guard.CheckPointerAddress = *Check ? ActualBase + *Check : 0;
+  Guard.DispatchPointerAddress = *Dispatch ? ActualBase + *Dispatch : 0;
+
+  // No XFG policy is installed. Unadvertised XFG fallbacks remain ordinary
+  // guest code; active XFG is rejected above. New optional extension slots
+  // are admitted only as inert zero storage, never synthesized by the host.
+  for (size_t Offset :
+       {offsetof(coff_load_configuration64, GuardXFGCheckFunctionPointer),
+        offsetof(coff_load_configuration64, GuardXFGDispatchFunctionPointer),
+        offsetof(coff_load_configuration64,
+                 GuardXFGTableDispatchFunctionPointer)}) {
+    auto Result = Slot(Offset, false);
+    if (!Result)
+      return Result.takeError();
+  }
+  for (size_t Offset :
+       {offsetof(coff_load_configuration64, CastGuardOsDeterminedFailureMode),
+        size_t(guard::GuardMemcpyPointerOffset),
+        size_t(guard::UmaPointersOffset)}) {
+    auto Result = Slot(Offset, true);
+    if (!Result)
+      return Result.takeError();
+  }
+  const uint64_t Stride = 4 + ExtraBytes;
+  auto Table = [&](size_t PointerOffset, size_t CountOffset,
+                   bool IAT) -> llvm::Error {
+    auto RVA = PointerRVA(PointerOffset);
+    if (!RVA)
+      return RVA.takeError();
+    const uint64_t Count = Read64(CountOffset);
+    if (bool(*RVA) != bool(Count))
+      return invalid("inconsistent CFG table pointer and count");
+    if (!IAT && (Count || ExtraBytes) && !(Flags & guard::FunctionTablePresent))
+      return invalid("CFG function table is missing its presence flag");
+    if (!IAT && Guard.Enabled && !Count)
+      return invalid("CFG image requires declared function targets");
+    if (!Count)
+      return llvm::Error::success();
+    if (Count > guard::MaximumTargets)
+      return invalid("CFG target count exceeds execution profile");
+    // GFIDS and address-taken IAT tables are packed 4+n-byte records. PE
+    // defines no DWORD alignment for the table base (LLD uses byte alignment).
+    // The executable targets' alignment is independent of this storage.
+    auto Contents = fileBytes(Object, Sections, *RVA, Count * Stride);
+    if (!Contents)
+      return Contents.takeError();
+    if (auto Error = RegisterStorage(*RVA, Count * Stride))
+      return Error;
+    uint32_t Previous = 0;
+    for (uint64_t Index = 0; Index != Count; ++Index) {
+      const uint8_t *Entry = Contents->data() + Index * Stride;
+      const uint32_t Target = llvm::support::endian::read32le(Entry);
+      const uint8_t Metadata = ExtraBytes ? Entry[4] : 0;
+      if (!Target || (Index && Target <= Previous))
+        return invalid("CFG targets must be unique and sorted");
+      Previous = Target;
+      if (IAT) {
+        if (Metadata || std::none_of(Imports.begin(), Imports.end(),
+                                     [&](const auto &Import) {
+                                       return Import.Slot - Base == Target;
+                                     }))
+          return invalid(
+              "CFG address-taken IAT target is not a declared import slot");
+      } else {
+        if (!Executable(Target))
+          return invalid(
+              "CFG function target is not file-backed executable code");
+        if (Metadata & ~guard::FunctionSuppressed)
+          return invalid("unsupported CFG function target metadata");
+        // The linker may explicitly include compatibility fallbacks when
+        // inferring targets from non-CFG objects. Honor its declared GFIDS;
+        // recommending that toolchains suppress a helper is not a PE validity
+        // condition and does not permit inventing a different target set.
+        if (!(Metadata & guard::FunctionSuppressed))
+          Guard.ValidTargets.push_back(ActualBase + Target);
+      }
+    }
+    return llvm::Error::success();
+  };
+  if (auto Error = Table(
+          offsetof(coff_load_configuration64, GuardCFFunctionTable),
+          offsetof(coff_load_configuration64, GuardCFFunctionCount), false))
+    return std::move(Error);
+  if (auto Error = Table(
+          offsetof(coff_load_configuration64, GuardAddressTakenIatEntryTable),
+          offsetof(coff_load_configuration64, GuardAddressTakenIatEntryCount),
+          true))
+    return std::move(Error);
+  if (Guard.Enabled &&
+      !std::binary_search(Guard.ValidTargets.begin(), Guard.ValidTargets.end(),
+                          ActualBase + Header->AddressOfEntryPoint))
+    return invalid("CFG entry point is missing from declared valid targets");
+
+  // DIR64 must cover each surviving absolute pointer on a requested rebase.
+  // It may not rewrite counts, flags, RVAs or partial guard records.
+  const auto CookieOffset = offsetof(coff_load_configuration64, SecurityCookie);
+  if (Read64(CookieOffset))
+    PointerFields.insert(ConfigRVA + CookieOffset);
+  for (uint64_t RVA : Relocations) {
+    if (RVA < ConfigRVA + DeclaredSize && RVA + 8 > ConfigRVA &&
+        !PointerFields.count(RVA))
+      return invalid(
+          "DIR64 relocation overlaps nonpointer load configuration metadata");
+    for (auto [Start, Size] : Storage)
+      if (RVA < Start + Size && RVA + 8 > Start && !PointerSlots.count(RVA))
+        return invalid("DIR64 relocation overlaps CFG metadata");
+  }
+  if (ActualBase != Base) {
+    PointerFields.insert(PointerSlots.begin(), PointerSlots.end());
+    for (uint64_t RVA : PointerFields)
+      if (!Relocations.count(RVA))
+        return invalid(
+            "rebasing CFG metadata requires complete DIR64 relocations");
+  }
+  return Guard;
+}
 } // namespace
 
 llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
@@ -432,9 +715,6 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   if (Header->NumberOfRvaAndSize > 16 || Header->LoaderFlags ||
       Header->Win32VersionValue)
     return invalid("unsupported optional-header fields");
-  if (Header->DLLCharacteristics &
-      llvm::COFF::IMAGE_DLL_CHARACTERISTICS_GUARD_CF)
-    return invalid("CFG initialization is unsupported");
   const uint64_t Base = Header->ImageBase;
   const uint64_t ActualBase = LoadAddress ? LoadAddress : Base;
   const uint64_t Size = Header->SizeOfImage;
@@ -464,7 +744,13 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
        {std::pair{profile::KernelArenaBase,
                   profile::KernelArenaBase + profile::KernelArenaSize},
         std::pair{profile::StackBase, profile::StackBase + profile::StackSize},
-        std::pair{profile::ThunkBase, profile::ThunkBase + profile::ThunkSize}})
+        std::pair{profile::ThunkBase, profile::ThunkBase + profile::ThunkSize},
+        std::pair{profile::CallbackStackBase,
+                  profile::CallbackStackBase +
+                      profile::MaxConcurrentCallbacks *
+                          profile::CallbackStackStride},
+        std::pair{profile::GuardThunkBase,
+                  profile::GuardThunkBase + profile::PageSize}})
     if (ActualBase < Limit && End > Start)
       return invalid("image overlaps reserved emulation memory");
 
@@ -607,6 +893,11 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
       return invalid("DIR64 relocation overlaps SecurityCookie storage");
   }
 
+  auto Guard =
+      validateGuard(Object, Sections, *Imports, Relocations, ActualBase);
+  if (!Guard)
+    return Guard.takeError();
+
   // Keep the repository loader authoritative for the BinaryImage model. The
   // execution preflight above is deliberately stricter than analysis loading.
   auto Loader = neverd::Loader::create(BinaryFormat::COFF);
@@ -647,6 +938,7 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   Image.Entry = ActualBase + (Loaded->Entry - Base);
   Image.SecurityCookieAddress = Cookie->RVA ? ActualBase + Cookie->RVA : 0;
   Image.Size = Size;
+  Image.Guard = std::move(*Guard);
   Image.Imports = std::move(*Imports);
   for (auto &Import : Image.Imports)
     Import.Slot = ActualBase + (Import.Slot - Base);
