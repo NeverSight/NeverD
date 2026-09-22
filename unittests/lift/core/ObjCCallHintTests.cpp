@@ -6976,6 +6976,10 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"initWithProgressViewStyle:", NdTypeKind::Ptr, 3},
       {"initWithActivityIndicatorStyle:", NdTypeKind::Ptr, 3},
       {"isHighDynamicRange", NdTypeKind::Int, 2},
+      {"interactivePopGestureRecognizer", NdTypeKind::Ptr, 2},
+      {"parentViewController", NdTypeKind::Ptr, 2},
+      {"flashScrollIndicators", NdTypeKind::Void, 2},
+      {"endBackgroundTask:", NdTypeKind::Void, 3},
       {"initWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"insertSubview:belowSubview:", NdTypeKind::Void, 4},
       {"instantiateWithOwner:options:", NdTypeKind::Ptr, 4},
@@ -7007,6 +7011,11 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
     EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
     EXPECT_EQ(Hint->ReturnType->Kind, Case.ReturnKind);
     ASSERT_EQ(Hint->Parameters.size(), Case.Parameters);
+    if (llvm::StringRef(Case.Selector) == "endBackgroundTask:") {
+      EXPECT_EQ(Hint->Parameters[2].Type->Size, 8U);
+      EXPECT_FALSE(Hint->Parameters[2].Type->IsSigned);
+      EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
+    }
     if (llvm::StringRef(Case.Selector) == "isHighDynamicRange") {
       EXPECT_EQ(Hint->ReturnType->Size, 1U);
       EXPECT_FALSE(Hint->ReturnType->IsSigned);
@@ -7604,6 +7613,12 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
   } Cases[] = {
       {"UIImage", "imageOrientation", false, NdTypeKind::Int, 2, ""},
       {"UIImage", "isHighDynamicRange", false, NdTypeKind::Int, 2, ""},
+      {"UINavigationController", "interactivePopGestureRecognizer", false,
+       NdTypeKind::Ptr, 2, "UIGestureRecognizer"},
+      {"UIViewController", "parentViewController", false, NdTypeKind::Ptr, 2,
+       "UIViewController"},
+      {"UIScrollView", "flashScrollIndicators", false, NdTypeKind::Void, 2, ""},
+      {"UIApplication", "endBackgroundTask:", false, NdTypeKind::Void, 3, ""},
       {"UIActivityIndicatorView", "initWithActivityIndicatorStyle:", false,
        NdTypeKind::Ptr, 3, "First"},
       {"UIImage", "imageFlippedForRightToLeftLayoutDirection", false,
@@ -7630,7 +7645,8 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
     Image.DynInfo.NeededLibs = {
         "/System/Library/Frameworks/UIKit.framework/UIKit",
         "/System/Library/Frameworks/Foundation.framework/Foundation"};
-    if (llvm::StringRef(Case.Owner) == "UIActivityIndicatorView")
+    if (llvm::StringRef(Case.Owner) == "UIActivityIndicatorView" ||
+        llvm::StringRef(Case.Owner) == "UIScrollView")
       Image.DynInfo.NeededLibs.push_back(
           "/System/Library/Frameworks/QuartzCore.framework/QuartzCore");
     auto &Class = Image.ObjCClasses.front();

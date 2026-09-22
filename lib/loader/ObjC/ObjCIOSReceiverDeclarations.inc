@@ -62,4 +62,17 @@ ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clas
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIImage", "", false, "isHighDynamicRange", "B16@0:8", "", false, nullptr, "", false)
 ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIActivityIndicatorView", "", "C:UIView|P:NSCoding", nullptr)
 ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIActivityIndicatorView", "", false, "initWithActivityIndicatorStyle:", "@24@0:8q16", "", true, nullptr, "", false)
+// Navigation, scrolling and application declarations from the same complete
+// device/simulator ASTs; retain their exact receiver hierarchy and results.
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIViewController", "", "C:UIResponder|P:NSCoding|P:UIAppearanceContainer|P:UITraitEnvironment|P:UIContentContainer|P:UIFocusEnvironment", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UINavigationController", "", "C:UIViewController", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIScrollView", "", "C:UIView|P:NSCoding|P:UIFocusItemScrollableContainer", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIGestureRecognizer", "", "C:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIContentContainer", "", "P:NSObject", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIApplication", "", "C:UIResponder", nullptr)
+ND_OBJC_OWNER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "protocol", "UIFocusItemScrollableContainer", "", "P:UIFocusItemContainer", nullptr)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UINavigationController", "", false, "interactivePopGestureRecognizer", "@16@0:8", "UIGestureRecognizer", false, nullptr, "", false)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIViewController", "", false, "parentViewController", "@16@0:8", "UIViewController", false, nullptr, "", false)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIScrollView", "", false, "flashScrollIndicators", "v16@0:8", "", false, nullptr, "", false)
+ND_OBJC_MEMBER("UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "class", "UIApplication", "", false, "endBackgroundTask:", "v24@0:8Q16", "", false, nullptr, "", false)
 // clang-format on
