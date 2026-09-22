@@ -458,6 +458,13 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
     Retiring.emplace_back(It->second.Buffer & ~(profile::PageSize - 1),
                           It->second.AllocationSize);
   }
+  if (Request->SystemMdl) {
+    auto It = MDLs.find(Request->SystemMdl);
+    if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
+        It->second.Owner != LockedMdl::Ownership::RequestSystemBuffer)
+      return ioError("active request lost ownership of its system-buffer MDL");
+    Retiring.emplace_back(It->second.Address, It->second.Size);
+  }
   if (auto E = prepareReleaseRanges(Retiring))
     return E;
   if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&

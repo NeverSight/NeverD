@@ -176,6 +176,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       Name != "WdfRequestGetParameters" &&
       Name != "WdfRequestRetrieveInputBuffer" &&
       Name != "WdfRequestRetrieveOutputBuffer" &&
+      Name != "WdfRequestMarkCancelable" &&
       Name != "WdfRequestMarkCancelableEx" &&
       Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled")
     return Result{};
@@ -187,11 +188,16 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
-  if (Name == "WdfRequestMarkCancelableEx") {
+  if (Name == "WdfRequestMarkCancelable" ||
+      Name == "WdfRequestMarkCancelableEx") {
+    const bool Legacy = Name == "WdfRequestMarkCancelable";
     if (!A[2])
       return requestError("marking cancelable requires a cancel callback");
-    if (R->second.Cancellation != CancelState::Unmarked)
+    if (R->second.Cancellation != CancelState::Unmarked) {
+      if (Legacy)
+        return requestError("legacy marking requires an unmarked request");
       return Result{ControlInvalidDeviceRequest};
+    }
     if (!RequestsHost.IsCanceled)
       return requestError("cancellation host is unavailable");
     auto Canceled = RequestsHost.IsCanceled(R->second.IRP);
@@ -199,13 +205,33 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return Canceled.takeError();
     // Unlike the legacy void MarkCancelable API, Ex never delivers a cancel
     // callback for an IRP that was already canceled when registration began.
-    if (*Canceled)
+    if (*Canceled && !Legacy)
       return Result{RequestCancelled};
+    if (*Canceled && PendingCall)
+      return requestError("cancellation cannot replace a pending guest callback");
     if (O->second.InternalReferences == UINT64_MAX)
       return requestError("internal reference count overflow");
     ++O->second.InternalReferences;
     R->second.CancelRoutine = A[2];
     R->second.Cancellation = CancelState::Marked;
+    if (*Canceled) {
+      // RequestCancelable(..., FALSE) takes the same cancellation reference
+      // even when insertion finds an already canceled IRP. In this profile,
+      // PASSIVE_LEVEL and SynchronizationNone let DispatchEvents invoke the
+      // driver recursively before the legacy void API returns.
+      // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/irphandlers/io/fxioqueue.cpp#L2195-L2223
+      auto Call = requestCancellation(R->second.IRP);
+      if (!Call)
+        return Call.takeError();
+      if (!*Call)
+        return requestError("legacy cancellation lost its guest callback");
+      if (auto E = beginCancelCallback((**Call).Token))
+        return E;
+      // Publishing this as the current API's child preserves caller state and
+      // keeps the API suspended through callback waits, nested completion and
+      // the final CancelReturned/destroy continuation. No worker is queued.
+      PendingCall = std::move(**Call);
+    }
     return Result{0};
   }
   if (Name == "WdfRequestUnmarkCancelable") {
@@ -240,7 +266,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
           "completion requires successful UnmarkCancelable or delivered "
           "EvtRequestCancel");
     if (!RequestsHost.Complete || !RequestsHost.Information ||
-        !RequestsHost.ValidateCompletion)
+        !RequestsHost.SetInformation || !RequestsHost.ValidateCompletion)
       return requestError("completion host is unavailable");
     uint64_t Information = 0;
     if (Name == "WdfRequestCompleteWithInformation") {
@@ -254,12 +280,18 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (auto E = RequestsHost.ValidateCompletion(R->second.IRP, uint32_t(A[2]),
                                                  Information))
       return E;
+    // CompleteWithInformation publishes to the IRP before EarlyDispose, so a
+    // cleanup callback holding the raw packet observes the supplied value.
+    // Keep that packet authoritative through cleanup and final completion.
+    // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/inc/private/common/fxrequest.hpp#L810-L821
+    if (Name == "WdfRequestCompleteWithInformation")
+      if (auto E = RequestsHost.SetInformation(R->second.IRP, Information))
+        return E;
     // FxRequest::CompleteInternal performs EarlyDispose before giving up the
     // IRP. A cleanup callback may still use its buffers or release resources
     // embedded in them; explicit references only extend the object lifetime.
     R->second.Completing = true;
     R->second.CompletionStatus = uint32_t(A[2]);
-    R->second.CompletionInformation = Information;
     std::vector<Step> Steps;
     if (auto E = planDelete(A[1], Steps))
       return E;

@@ -194,6 +194,7 @@ private:
     uint64_t ByteOffset = 0;
     bool Direct = false;
     uint64_t Mdl = 0;
+    uint64_t SystemMdl = 0;
     mutable std::array<bool, 16> IOStatusWritten{};
   };
   std::map<uint64_t, ActiveRequest> Requests;
@@ -208,7 +209,7 @@ private:
   llvm::Error initializeRequestPacket(ActiveRequest &Record,
                                       const DriverRequest &Input);
   struct LockedMdl {
-    enum class Ownership { Request, Driver, NonPagedPool };
+    enum class Ownership { Request, RequestSystemBuffer, Driver, NonPagedPool };
     Ownership Owner = Ownership::Request;
     uint64_t OwnerIRP = 0;
     uint64_t Address = 0;
@@ -228,6 +229,7 @@ private:
   llvm::Error freeMDL(uint64_t MDL);
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
                                            uint16_t Flags);
+  llvm::Expected<uint64_t> frameworkRequestMDL(uint64_t IRP, bool Output);
   llvm::Expected<uint64_t> createRequestMDL(uint64_t IRP, uint32_t Size,
                                             llvm::ArrayRef<uint8_t> Initial,
                                             bool Writable,

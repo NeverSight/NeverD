@@ -168,11 +168,31 @@ TEST(DriverKMDFControl, RequestCleanupKeepsBuffersAndReferenceKeepsContext) {
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     checkCompletedLifecycle(*Result, 6);
     checkSuccessfulTransfers(*Result, 'C');
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveInputWdmMdl"), 2u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveOutputWdmMdl"), 2u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestSetInformation"), 1u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestWdmGetIrp"), 1u);
+    bool SawShorterCompletionInformation = false;
+    for (const auto &Call : Result->Calls) {
+      if (Call.Name == "WdfRequestRetrieveInputWdmMdl" ||
+          Call.Name == "WdfRequestRetrieveOutputWdmMdl")
+        EXPECT_EQ(Call.Result, 0xc00000e5u); // STATUS_INTERNAL_ERROR.
+      if (Call.Name == "WdfRequestGetInformation" ||
+          Call.Name == "WdfRequestGetIoQueue")
+        EXPECT_EQ(Call.Result, 0u);
+      if (Call.Name == "WdfRequestCompleteWithInformation" &&
+          Call.Arguments.size() == 4 && Call.Arguments[3] == 7)
+        SawShorterCompletionInformation = true;
+    }
+    // The cleanup callback observes 7 from CompleteWithInformation and writes
+    // 8 into the saved IRP. That raw value must drive the final transfer.
+    EXPECT_TRUE(SawShorterCompletionInformation);
     EXPECT_EQ(
         controlMessages(*Result),
         (std::vector<std::string>{
             "KMDF control: ready in mode C\n",
             "KMDF control: transformed 4 bytes in mode C\n",
+            "KMDF control: C cleanup information checked\n",
             "KMDF control: C request cleanup\n",
             "KMDF control: C child destroy\n",
             "KMDF control: C retained context\n",
@@ -488,6 +508,103 @@ TEST(DriverKMDFControl, CompletingMarkedRequestWithoutUnmarkIsRejected) {
         controlMessages(*Result),
         (std::vector<std::string>{"KMDF control: ready in mode N\n",
                                   "KMDF control: N marked cancelable\n"}));
+  }
+}
+
+TEST(DriverKMDFControl, BufferedRequestMetadataAndMDLsShareTheOriginalIRP) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('M');
+    Options.LoadAddress = 0x190000000;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    checkCompletedLifecycle(*Result, 6);
+    checkSuccessfulTransfers(*Result, 'M');
+    ASSERT_EQ(Result->Requests.size(), 6u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveInputWdmMdl"), 2u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveOutputWdmMdl"), 2u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestSetInformation"), 6u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestGetInformation"), 9u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestComplete"), 3u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestCompleteWithInformation"), 0u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestGetFileObject"), 3u);
+    for (size_t Index : {1u, 2u, 3u}) {
+      EXPECT_TRUE(std::any_of(
+          Result->Calls.begin(), Result->Calls.end(), [&](const auto &Call) {
+            return Call.Name == "WdfRequestWdmGetIrp" &&
+                   Call.Result == Result->Requests[Index].IRP;
+          }));
+    }
+    EXPECT_EQ(controlMessages(*Result),
+              (std::vector<std::string>{
+                  "KMDF control: ready in mode M\n",
+                  "KMDF control: transformed 4 bytes in mode M\n",
+                  "KMDF control: M metadata checked\n",
+                  "KMDF control: read 40 bytes\n",
+                  "KMDF control: M metadata checked\n",
+                  "KMDF control: write 40 bytes\n",
+                  "KMDF control: M metadata checked\n",
+                  "KMDF control: driver unload\n"}));
+  }
+}
+
+TEST(DriverKMDFControl, DirectTransfersExposeOriginalMDLsAndSharedInformation) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('D');
+    Options.LoadAddress = 0x190000000;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    checkCompletedLifecycle(*Result, 6);
+    checkSuccessfulTransfers(*Result, 'D');
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveInputWdmMdl"), 1u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveOutputWdmMdl"), 1u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestSetInformation"), 4u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestGetInformation"), 6u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestComplete"), 2u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestCompleteWithInformation"), 1u);
+    EXPECT_EQ(apiCount(*Result, "WdfRequestGetFileObject"), 2u);
+    for (const auto &Call : Result->Calls)
+      if (Call.Name == "WdfRequestGetFileObject")
+        EXPECT_EQ(Call.Result, 0u);
+  }
+}
+
+TEST(DriverKMDFControl,
+     LegacyMarkCancellationDistinguishesSynchronousAndFutureDelivery) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    for (uint64_t Delay : {0u, 10u}) {
+      SCOPED_TRACE(Delay);
+      auto Options = controlOptions('L');
+      Options.LoadAddress = 0x190000000;
+      Options.Requests[1].CancelAfter100ns = Delay;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 6);
+      ASSERT_EQ(Result->Requests.size(), 6u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+      EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, Delay);
+      EXPECT_EQ(Result->Requests[1].Information, 0u);
+      EXPECT_TRUE(Result->Requests[1].Output.empty());
+      EXPECT_EQ(apiCount(*Result, "WdfRequestMarkCancelable"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestMarkCancelableEx"), 0u);
+      EXPECT_EQ(apiCount(*Result, "KeDelayExecutionThread"), 1u);
+      std::vector<std::string> Expected{
+          "KMDF control: ready in mode L\n",
+          "KMDF control: L before mark\n",
+          "KMDF control: L cancel callback\n",
+          "KMDF control: L request cleanup\n",
+          "KMDF control: L cancel callback retained context\n",
+          "KMDF control: L request destroy\n",
+          "KMDF control: L destroy resumed\n",
+          "KMDF control: read 40 bytes\n",
+          "KMDF control: write 40 bytes\n",
+          "KMDF control: driver unload\n"};
+      Expected.insert(Expected.begin() + (Delay == 0 ? 7 : 2),
+                      "KMDF control: L after mark\n");
+      EXPECT_EQ(controlMessages(*Result), Expected);
+    }
   }
 }
 

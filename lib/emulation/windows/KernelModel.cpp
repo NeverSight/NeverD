@@ -572,6 +572,9 @@ llvm::Expected<uint64_t> KernelModel::call(
   }
   if (Kind == KernelAPIKind::IofCompleteRequest ||
       Kind == KernelAPIKind::IoCompleteRequest) {
+    if (Framework && Framework->ownsRequestIRP(A[0]))
+      return modelError(
+          "framework-owned requests must complete through WdfRequestComplete");
     if (auto E = completeRequest(A[0], static_cast<uint8_t>(A[1])))
       return E;
     return 0;

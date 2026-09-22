@@ -152,6 +152,23 @@ void KernelModel::configureFrameworkRequestHost() {
           "framework information retrieval requires the live active IRP");
     return Memory.readInteger(IRP + IRPInformationOffset, 8);
   };
+  Host.SetInformation = [this](uint64_t IRP, uint64_t Value) -> llvm::Error {
+    auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
+      return frameworkRequestError(
+          "framework information update requires the live active IRP");
+    if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, Value, 8))
+      return E;
+    // SetInformation is not completion: leave Status initialization and the
+    // eventual transfer-count validation to their existing authoritative paths.
+    constexpr uint64_t Offset = IRPInformationOffset - IRPStatusOffset;
+    for (unsigned I = Offset; I < Offset + sizeof(uint64_t); ++I)
+      Request->IOStatusWritten[I] = true;
+    return llvm::Error::success();
+  };
+  Host.Mdl = [this](uint64_t IRP, bool Output) {
+    return frameworkRequestMDL(IRP, Output);
+  };
   Host.ValidateCompletion = [this](uint64_t IRP, uint32_t Status,
                                    uint64_t Information) -> llvm::Error {
     return validateRequestCompletion(IRP, Status, Information);
