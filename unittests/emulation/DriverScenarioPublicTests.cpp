@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v9");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1344,7 +1344,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v9");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1392,6 +1392,160 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
     }
 #else
   GTEST_SKIP() << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIRejectIncompletePowerFactsBeforeLoading) {
+  constexpr char Prefix[] = R"({"pnp_devices":[{"id":"power0",
+    "bus":"resource_free","initial_device_power":"D0",
+    "initial_system_power":"working"}],"requests":[)";
+  for (
+      const char *Request :
+      {R"({"kind":"power","device_id":"power0","minor":"set","power_type":"device","power_state":"D3","power_action":"sleep","bus_completion":{"status":0}})",
+       R"({"kind":"power","device_id":"power0","minor":"query","power_type":"system","power_state":"working","power_action":"sleep","system_context":0,"bus_completion":{"status":0}})",
+       R"({"kind":"power","device_id":"power0","minor":"set","power_type":"device","power_state":"D1","power_action":"none","system_context":0,"bus_completion":{"status":0}})",
+       R"({"kind":"power","device_id":"power0","minor":"set","power_type":"device","power_state":"D3","power_action":"sleep","system_context":4294967296,"bus_completion":{"status":0}})"}) {
+    const std::string Scenario = std::string(Prefix) + Request + "]}";
+    SCOPED_TRACE(Scenario);
+    EXPECT_EQ(neverd_emulate_driver_scenario_json(Session,
+                                                  "missing-power-public.sys",
+                                                  Scenario.c_str(), nullptr),
+              nullptr);
+    EXPECT_NE(error().find("driver scenario:"), std::string::npos);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+    EXPECT_TRUE(
+        runCLI(Scenario, 1, "success", "missing-power-public.sys").empty());
+    std::ifstream Errors(Directory / "error.txt");
+    const std::string Diagnostic(std::istreambuf_iterator<char>(Errors), {});
+    EXPECT_NE(Diagnostic.find("driver scenario:"), std::string::npos);
+  }
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
+#ifdef NEVERD_WDM_POWER_FIXTURE
+  constexpr char Scenario[] = R"({
+    "load_address":"0x190000000","unload":true,
+    "pnp_devices":[{"id":"power0","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working",
+      "initial_reported_device_power":"D3","requested_device_power":[
+        {"minor":"query","power_type":"device","power_state":"D3",
+         "power_action":"sleep","system_context":"0x14400",
+         "bus_completion":{"status":0,"delay_100ns":11}},
+        {"minor":"set","power_type":"device","power_state":"D3",
+         "power_action":"sleep","system_context":"0x14400",
+         "bus_completion":{"status":0,"delay_100ns":11}},
+        {"minor":"set","power_type":"device","power_state":"D0",
+         "power_action":"sleep","system_context":"0x41100",
+         "bus_completion":{"status":0,"delay_100ns":11}}]}],
+    "requests":[
+      {"kind":"pnp","device_id":"power0","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"power","device_id":"power0","minor":"query",
+       "power_type":"system","power_state":"sleeping3","power_action":"sleep",
+       "system_context":"0x14400","bus_completion":{"status":0,"delay_100ns":7}},
+      {"kind":"power","device_id":"power0","minor":"set",
+       "power_type":"system","power_state":"sleeping3","power_action":"sleep",
+       "system_context":"0x14400","bus_completion":{"status":0,"delay_100ns":7}},
+      {"kind":"power","device_id":"power0","minor":"set",
+       "power_type":"system","power_state":"working","power_action":"sleep",
+       "system_context":"0x41100","bus_completion":{"status":0,"delay_100ns":7}},
+      {"kind":"pnp","device_id":"power0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"power0","minor":"remove",
+       "bus_completion":{"status":0}}]})";
+  std::vector<const char *> Images{NEVERD_WDM_POWER_FIXTURE};
+#ifdef NEVERD_WDM_POWER_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_POWER_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario, nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v10");
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 9u);
+      std::vector<std::string> IRPs;
+      unsigned Scenarios = 0, Children = 0;
+      for (const auto &Value : *Requests) {
+        const auto *Request = Value.getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getString("device_id"), "power0");
+        EXPECT_EQ(Request->getBoolean("completed"), true);
+        EXPECT_EQ(Request->getInteger("io_status"), 0);
+        EXPECT_EQ(Request->getInteger("information"), 0);
+        ASSERT_TRUE(Request->getString("irp"));
+        const auto IRP = Request->getString("irp")->str();
+        for (const auto &Previous : IRPs)
+          EXPECT_NE(IRP, Previous);
+        IRPs.push_back(IRP);
+        const bool Child = Request->getString("origin") == "PoRequestPowerIrp";
+        if (Child) {
+          EXPECT_EQ(Request->getInteger("response_index"), Children);
+          ++Children;
+        } else {
+          EXPECT_EQ(Request->getString("origin"), "scenario");
+          ASSERT_NE(Request->get("response_index"), nullptr);
+          EXPECT_EQ(Request->get("response_index")->kind(),
+                    llvm::json::Value::Null);
+          ++Scenarios;
+        }
+        if (Request->getString("kind") != "power")
+          continue;
+        ASSERT_NE(Request->get("file"), nullptr);
+        EXPECT_EQ(Request->get("file")->kind(), llvm::json::Value::Null);
+        const auto *Power = Request->getObject("power");
+        ASSERT_NE(Power, nullptr);
+        EXPECT_EQ(Power->getString("power_type"), Child ? "device" : "system");
+        EXPECT_EQ(Power->getString("power_action"), "sleep");
+        EXPECT_EQ(Power->getInteger("bus_status"), 0);
+        ASSERT_TRUE(Power->getInteger("bus_received_at_100ns"));
+        ASSERT_TRUE(Power->getInteger("bus_completed_at_100ns"));
+        EXPECT_EQ(*Power->getInteger("bus_completed_at_100ns") -
+                      *Power->getInteger("bus_received_at_100ns"),
+                  Child ? 11 : 7);
+        if (Child)
+          EXPECT_TRUE(Power->getString("requested_device_object"));
+      }
+      EXPECT_EQ(Scenarios, 6u);
+      EXPECT_EQ(Children, 3u);
+      const auto *Devices = Report->getArray("pnp_devices");
+      ASSERT_NE(Devices, nullptr);
+      ASSERT_EQ(Devices->size(), 1u);
+      const auto *Device = Devices->front().getAsObject();
+      ASSERT_NE(Device, nullptr);
+      EXPECT_EQ(Device->getString("pnp_state"), "removed");
+      EXPECT_EQ(Device->getString("device_power"), "D0");
+      EXPECT_EQ(Device->getString("system_power"), "working");
+      EXPECT_EQ(Device->getBoolean("provider_present"), false);
+      const auto *Calls = Report->getArray("calls");
+      ASSERT_NE(Calls, nullptr);
+      unsigned PoRequests = 0;
+      for (const auto &Value : *Calls) {
+        const auto *Call = Value.getAsObject();
+        ASSERT_NE(Call, nullptr);
+        if (Call->getString("name") == "PoRequestPowerIrp") {
+          ++PoRequests;
+          EXPECT_EQ(Call->getString("result"), "0x103");
+        }
+      }
+      EXPECT_EQ(PoRequests, 3u);
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_POWER_FIXTURE requires a genuine WDK fixture";
 #endif
 }
 

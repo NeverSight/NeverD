@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neverd::emulation {
 enum class DevicePnpState : uint8_t {
@@ -68,17 +69,51 @@ enum class DriverBusKind {
 #undef NEVERD_DRIVER_BUS_KIND
 };
 
-struct DriverPnpDevice {
-  std::string ID;
-  DriverBusKind Bus = DriverBusKind::ResourceFree;
-  std::optional<DevicePowerState> InitialDevicePower;
-  std::optional<SystemPowerState> InitialSystemPower;
+enum class DriverPowerType : uint32_t {
+#define NEVERD_DRIVER_POWER_TYPE(Name, Value, Spelling) Name = Value,
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_TYPE
+};
+
+enum class DriverPowerAction : uint32_t {
+#define NEVERD_DRIVER_POWER_ACTION(Name, Value, Spelling) Name = Value,
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_ACTION
+};
+
+enum class DriverRequestOrigin {
+#define NEVERD_DRIVER_REQUEST_ORIGIN(Name, Spelling) Name,
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_REQUEST_ORIGIN
 };
 
 struct DriverBusCompletion {
   /// Omission is invalid; the provider never invents a completion status.
   std::optional<uint32_t> Status;
   uint64_t Delay100ns = 0;
+};
+
+struct DriverPowerOperation {
+  DevicePowerRequest Minor = DevicePowerRequest::Set;
+  DriverPowerType Type = DriverPowerType::Device;
+  /// Interpreted only according to Type; zero is not a supported target.
+  uint32_t State = 0;
+  /// Explicit scenario packet facts, never inferred from another request.
+  uint32_t SystemContext = 0;
+  DriverPowerAction Action = DriverPowerAction::None;
+  DriverBusCompletion BusCompletion;
+};
+
+struct DriverPnpDevice {
+  std::string ID;
+  DriverBusKind Bus = DriverBusKind::ResourceFree;
+  std::optional<DevicePowerState> InitialDevicePower;
+  std::optional<SystemPowerState> InitialSystemPower;
+  /// Independent notification state for each newly associated device object.
+  /// Absence is unknown, not an assumed D0 or a copy of lifecycle state.
+  std::optional<DevicePowerState> InitialReportedDevicePower = std::nullopt;
+  /// Per-PDO FIFO consumed only by matching real PoRequestPowerIrp calls.
+  std::vector<DriverPowerOperation> RequestedDevicePower{};
 };
 
 struct DriverPnpOperation {
@@ -93,6 +128,8 @@ struct DriverPnpDeviceResult {
   bool Attached = false;
   DevicePnpState PnpState = DevicePnpState::NotStarted;
   bool ProviderPresent = false;
+  DevicePowerState DevicePower = DevicePowerState::D0;
+  SystemPowerState SystemPower = SystemPowerState::Working;
 };
 
 struct DriverPnpRequestResult {
@@ -102,6 +139,23 @@ struct DriverPnpRequestResult {
   std::optional<uint32_t> BusStatus;
   std::optional<uint64_t> BusReceivedAt100ns;
   std::optional<uint64_t> BusCompletedAt100ns;
+};
+
+struct DriverPowerRequestResult {
+  DevicePowerRequest Minor = DevicePowerRequest::Set;
+  DriverPowerType Type = DriverPowerType::Device;
+  uint32_t State = 0;
+  uint32_t SystemContext = 0;
+  DriverPowerAction Action = DriverPowerAction::None;
+  DevicePowerState DeviceStateBefore = DevicePowerState::D0;
+  DevicePowerState DeviceStateAfter = DevicePowerState::D0;
+  SystemPowerState SystemStateBefore = SystemPowerState::Working;
+  SystemPowerState SystemStateAfter = SystemPowerState::Working;
+  std::optional<uint32_t> BusStatus;
+  std::optional<uint64_t> BusReceivedAt100ns;
+  std::optional<uint64_t> BusCompletedAt100ns;
+  /// Original API device argument, independent of canonical PDO identity.
+  std::optional<uint64_t> RequestedDeviceObject;
 };
 } // namespace neverd::emulation
 

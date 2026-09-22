@@ -17,8 +17,12 @@
 namespace neverd::emulation {
 struct DriverOptions;
 struct DriverPnpOperation;
+struct DriverPowerOperation;
 
 llvm::Error validateDriverPnpOperation(const DriverPnpOperation &Operation);
+
+llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
+                                         bool RequireDeviceType = false);
 
 llvm::Error validateDriverScenario(const DriverOptions &Options);
 

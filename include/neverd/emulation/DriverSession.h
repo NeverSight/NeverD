@@ -13,8 +13,8 @@
 #ifndef NEVERD_EMULATION_DRIVERSESSION_H
 #define NEVERD_EMULATION_DRIVERSESSION_H
 
-#include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/DriverPnp.h"
+#include "neverd/emulation/DriverProfile.h"
 #include "neverd/emulation/DriverRegistry.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -58,6 +58,8 @@ struct DriverRequest {
   std::string DeviceID;
   /// Present exactly when Kind is Pnp; those packets have no FILE_OBJECT.
   std::optional<DriverPnpOperation> Pnp;
+  /// Present exactly when Kind is Power; those packets have no FILE_OBJECT.
+  std::optional<DriverPowerOperation> Power;
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -114,6 +116,8 @@ struct DriverDevice {
   uint64_t Extension = 0;
   uint32_t Type = 0;
   std::string Name;
+  /// Independent notification last given to PoSetPowerState, when known.
+  std::optional<DevicePowerState> ReportedDevicePower = std::nullopt;
 };
 
 struct DriverRequestResult {
@@ -133,6 +137,10 @@ struct DriverRequestResult {
   std::optional<uint64_t> CancelRequestedAt100ns;
   std::string DeviceID;
   std::optional<DriverPnpRequestResult> Pnp;
+  std::optional<DriverPowerRequestResult> Power;
+  DriverRequestOrigin Origin = DriverRequestOrigin::Scenario;
+  /// Consumed per-PDO RequestedDevicePower entry; absent for scenario requests.
+  std::optional<uint32_t> ResponseIndex;
 };
 
 struct DriverFault {

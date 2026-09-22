@@ -1,5 +1,4 @@
-//===- KernelModelPnpRequests.cpp - Scenario PnP packet lifetime
-//-----------===//
+//===- KernelModelPnpRequests.cpp - Scenario PnP packets -----------------===//
 //
 // NeverD Decompiler
 //
@@ -28,10 +27,10 @@ llvm::Error pnpError(const llvm::Twine &Message) {
 
 llvm::Expected<KernelModel::Invocation>
 KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
-  if (!Input.Pnp || Input.DeviceID.empty() || !Input.Device.empty() ||
-      Input.File || Input.ControlCode || !Input.Input.empty() ||
-      !Input.DirectInput.empty() || Input.OutputSize || Input.ByteOffset ||
-      Input.CancelAfter100ns)
+  if (!Input.Pnp || Input.Power || Input.DeviceID.empty() ||
+      !Input.Device.empty() || Input.File || Input.ControlCode ||
+      !Input.Input.empty() || !Input.DirectInput.empty() || Input.OutputSize ||
+      Input.ByteOffset || Input.CancelAfter100ns)
     return pnpError(
         "PnP requires a device_id and operation without file fields");
   const auto &Operation = *Input.Pnp;
@@ -140,7 +139,20 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
 
 llvm::Error KernelModel::finishRequestLifecycle(ActiveRequest &Request,
                                                 uint32_t Status) {
-  if (Request.PnpTicket) {
+  if (Request.PowerTicket) {
+    const auto &Power = *Request.PowerOperation;
+    auto E = Power.Type == DriverPowerType::Device
+                 ? Lifecycle.finishDevicePower(*Request.PowerTicket, Status)
+                 : Lifecycle.finishSystemPower(*Request.PowerTicket, Status);
+    if (E)
+      return E;
+    auto State = Lifecycle.snapshot(Request.PnpDevice);
+    if (!State)
+      return State.takeError();
+    auto &Observation = *Result.Requests[Request.ResultIndex].Power;
+    Observation.DeviceStateAfter = State->DevicePower;
+    Observation.SystemStateAfter = State->SystemPower;
+  } else if (Request.PnpTicket) {
     if (auto E = Lifecycle.finishPnp(*Request.PnpTicket, Status))
       return E;
     auto State = Lifecycle.snapshot(Request.PnpDevice);

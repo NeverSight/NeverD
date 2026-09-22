@@ -367,10 +367,11 @@ KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
 }
 
 llvm::Expected<KernelModel::DeviceCreation>
-KernelModel::createDeviceObjectForOwner(
-    llvm::StringRef Name, uint32_t ExtensionSize, uint32_t Type,
-    uint32_t Characteristics, bool Exclusive, uint64_t Owner,
-    DeviceOwnerKind OwnerKind) {
+KernelModel::createDeviceObjectForOwner(llvm::StringRef Name,
+                                        uint32_t ExtensionSize, uint32_t Type,
+                                        uint32_t Characteristics,
+                                        bool Exclusive, uint64_t Owner,
+                                        DeviceOwnerKind OwnerKind) {
   if (auto E = validateDeviceTopology())
     return E;
   if (!Owner ||
@@ -378,9 +379,8 @@ KernelModel::createDeviceObjectForOwner(
       (OwnerKind == DeviceOwnerKind::Provider && Owner != PnpProviderDriver))
     return modelError("device creation requires a registered driver owner");
   if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
-    return modelError(
-        "IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
-        "FILE_DEVICE_SECURE_OPEN only");
+    return modelError("IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
+                      "FILE_DEVICE_SECURE_OPEN only");
   if (ExtensionSize > UINT16_MAX - DeviceObjectSize)
     return modelError(
         "device extension exceeds the bounded DEVICE_OBJECT size");
@@ -397,8 +397,8 @@ KernelModel::createDeviceObjectForOwner(
   auto Previous = Memory.readInteger(Owner + DriverDeviceHead, 8);
   if (!Previous)
     return Previous.takeError();
-  if (*Previous && (!Devices.count(*Previous) ||
-                    Devices.at(*Previous).OwnerDriver != Owner))
+  if (*Previous &&
+      (!Devices.count(*Previous) || Devices.at(*Previous).OwnerDriver != Owner))
     return modelError("DRIVER_OBJECT device list was corrupted");
   const uint64_t Size = DeviceObjectSize + ExtensionSize;
   const uint64_t Start = (NextAllocation + 15) & ~uint64_t(15);
@@ -615,6 +615,21 @@ llvm::Expected<uint64_t> KernelModel::call(
   if (Kind == KernelAPIKind::IofCallDriver ||
       Kind == KernelAPIKind::IoCallDriver)
     return callDriver(A[0], A[1]);
+  if (Kind == KernelAPIKind::PoCallDriver) {
+    const auto *Request = requestForIRP(A[1]);
+    if (!Request || Request->Kind != DriverRequestKind::Power)
+      return modelError("PoCallDriver requires an owned power IRP");
+    return callDriver(A[0], A[1]);
+  }
+  if (Kind == KernelAPIKind::PoRequestPowerIrp)
+    return requestPowerIrp(A);
+  if (Kind == KernelAPIKind::PoSetPowerState)
+    return setPowerState(A);
+  if (Kind == KernelAPIKind::PoStartNextPowerIrp) {
+    if (auto E = startNextPowerIrp(A[0]))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::IofCompleteRequest ||
       Kind == KernelAPIKind::IoCompleteRequest) {
     if (Framework && Framework->ownsRequestIRP(A[0]))
@@ -895,11 +910,12 @@ llvm::Error KernelModel::snapshot() {
       auto It = Devices.find(Current);
       if (It == Devices.end() || It->second.OwnerDriver != Owner ||
           !Seen.insert(Current).second)
-        return modelError("unknown device or cycle in DRIVER_OBJECT device list");
+        return modelError(
+            "unknown device or cycle in DRIVER_OBJECT device list");
       const auto &Device = It->second;
       if (Device.OwnerKind == DeviceOwnerKind::Guest)
-        Result.Devices.push_back(
-            {Device.Address, Device.Extension, Device.Type, Device.Name});
+        Result.Devices.push_back({Device.Address, Device.Extension, Device.Type,
+                                  Device.Name, Device.ReportedDevicePower});
       auto Next = Memory.readInteger(Current + DeviceNext, 8);
       if (!Next)
         return Next.takeError();

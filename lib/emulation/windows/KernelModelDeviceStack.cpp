@@ -154,7 +154,8 @@ llvm::Expected<uint64_t> KernelModel::attachDevice(uint64_t Source,
   if (SourceIt == Devices.end() || TargetIt == Devices.end())
     return deviceError("IoAttachDeviceToDeviceStack requires live devices");
   if (SourceIt->second.OwnerKind != DeviceOwnerKind::Guest)
-    return deviceError("IoAttachDeviceToDeviceStack source must be guest-owned");
+    return deviceError(
+        "IoAttachDeviceToDeviceStack source must be guest-owned");
   if (Source == Target)
     return deviceError("IoAttachDeviceToDeviceStack cannot attach a device to "
                        "itself");
@@ -216,6 +217,9 @@ llvm::Expected<uint64_t> KernelModel::attachDevice(uint64_t Source,
   SourceIt->second.Lower = *Top;
   Devices.at(*Top).Upper = Source;
   if (*PnpOwner) {
+    if (!SourceIt->second.PnpDevice)
+      SourceIt->second.ReportedDevicePower =
+          pnpDeviceForPDO(*PnpOwner)->InitialReportedDevicePower;
     SourceIt->second.PnpDevice = *PnpOwner;
     pnpDeviceForPDO(*PnpOwner)->GuestDevices.insert(Source);
   }

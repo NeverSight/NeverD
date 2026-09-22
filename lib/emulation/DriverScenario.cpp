@@ -16,6 +16,7 @@
 #include "neverd/emulation/DriverReportFields.h"
 #include "neverd/emulation/DriverSession.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 
@@ -90,6 +91,28 @@ bool pnpRequestMayFail(DevicePnpRequest Minor) {
   return false;
 }
 
+bool supportedDevicePower(uint32_t State) {
+  switch (static_cast<DevicePowerState>(State)) {
+#define NEVERD_DRIVER_POWER_DEVICE_STATE(Name) case DevicePowerState::Name:
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_DEVICE_STATE
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool supportedSystemPower(uint32_t State) {
+  switch (static_cast<SystemPowerState>(State)) {
+#define NEVERD_DRIVER_POWER_SYSTEM_STATE(Name) case SystemPowerState::Name:
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_SYSTEM_STATE
+    return true;
+  default:
+    return false;
+  }
+}
+
 // LLVM's object parser retains the final value of a duplicate key. Scenarios
 // reject ambiguity instead. Run this scanner only after JSON syntax validation;
 // decode each key using that same parser so escaped key aliases also collide.
@@ -162,6 +185,30 @@ llvm::Expected<uint32_t> unsigned32(const llvm::json::Value &Value,
   return static_cast<uint32_t>(Number);
 }
 
+llvm::Expected<DriverBusCompletion>
+busCompletion(const llvm::json::Object &Object) {
+  const auto *Completion = Object.getObject(BusCompletionField);
+  if (!Completion)
+    return invalid("bus_completion must be an explicit object");
+  if (auto E = fields(*Completion, {field::Status, field::Delay100ns}))
+    return std::move(E);
+  const auto *Status = Completion->get(field::Status);
+  if (!Status)
+    return invalid("bus_completion requires an explicit status");
+  auto ParsedStatus = unsigned32(*Status, field::Status);
+  if (!ParsedStatus)
+    return ParsedStatus.takeError();
+  DriverBusCompletion Result;
+  Result.Status = *ParsedStatus;
+  if (const auto *Delay = Completion->get(field::Delay100ns)) {
+    auto Number = Delay->getAsUINT64();
+    if (!Number)
+      return invalid("delay_100ns must be a nonnegative integer");
+    Result.Delay100ns = *Number;
+  }
+  return Result;
+}
+
 llvm::Expected<DriverPnpOperation>
 pnpOperation(const llvm::json::Object &Object) {
   if (auto E = fields(
@@ -181,24 +228,76 @@ pnpOperation(const llvm::json::Object &Object) {
 #undef NEVERD_DRIVER_PNP_REQUEST
   if (!Found)
     return invalid("unsupported pnp minor '" + *Minor + "'");
-  const auto *Completion = Object.getObject(BusCompletionField);
-  if (!Completion)
-    return invalid("pnp bus_completion must be an explicit object");
-  if (auto E = fields(*Completion, {field::Status, field::Delay100ns}))
-    return std::move(E);
-  const auto *Status = Completion->get(field::Status);
-  if (!Status)
-    return invalid("bus_completion requires an explicit status");
-  auto ParsedStatus = unsigned32(*Status, field::Status);
-  if (!ParsedStatus)
-    return ParsedStatus.takeError();
-  Result.BusCompletion.Status = *ParsedStatus;
-  if (const auto *Delay = Completion->get(field::Delay100ns)) {
-    auto Number = Delay->getAsUINT64();
-    if (!Number)
-      return invalid("delay_100ns must be a nonnegative integer");
-    Result.BusCompletion.Delay100ns = *Number;
+  auto Bus = busCompletion(Object);
+  if (!Bus)
+    return Bus.takeError();
+  Result.BusCompletion = *Bus;
+  return Result;
+}
+
+llvm::Expected<DriverPowerOperation>
+powerOperation(const llvm::json::Object &Object, bool ResponseTemplate) {
+  llvm::SmallVector<llvm::StringRef, 8> Allowed{
+      MinorField,       PowerTypeField,     PowerStateField,
+      PowerActionField, SystemContextField, BusCompletionField};
+  if (!ResponseTemplate) {
+    Allowed.push_back(KindField);
+    Allowed.push_back(DeviceIDField);
   }
+  if (auto E = fields(Object, Allowed))
+    return std::move(E);
+  auto Minor = Object.getString(MinorField);
+  auto Type = Object.getString(PowerTypeField);
+  auto State = Object.getString(PowerStateField);
+  auto Action = Object.getString(PowerActionField);
+  const auto *Context = Object.get(SystemContextField);
+  if (!Minor || !Type || !State || !Action || !Context)
+    return invalid("power requires explicit minor, power_type, power_state, "
+                   "power_action and system_context");
+  DriverPowerOperation Result;
+  bool FoundMinor = false, FoundType = false, FoundAction = false;
+#define NEVERD_DRIVER_POWER_REQUEST(Name, Spelling)                            \
+  if (*Minor == Spelling) {                                                    \
+    Result.Minor = DevicePowerRequest::Name;                                   \
+    FoundMinor = true;                                                         \
+  }
+#define NEVERD_DRIVER_POWER_TYPE(Name, Value, Spelling)                        \
+  if (*Type == Spelling) {                                                     \
+    Result.Type = DriverPowerType::Name;                                       \
+    FoundType = true;                                                          \
+  }
+#define NEVERD_DRIVER_POWER_ACTION(Name, Value, Spelling)                      \
+  if (*Action == Spelling) {                                                   \
+    Result.Action = DriverPowerAction::Name;                                   \
+    FoundAction = true;                                                        \
+  }
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_REQUEST
+#undef NEVERD_DRIVER_POWER_TYPE
+#undef NEVERD_DRIVER_POWER_ACTION
+  if (!FoundMinor || !FoundType || !FoundAction)
+    return invalid("unsupported power minor, type or action");
+  if (Result.Type == DriverPowerType::Device) {
+#define NEVERD_DRIVER_DEVICE_POWER(Name, Spelling)                             \
+  if (*State == Spelling)                                                      \
+    Result.State = static_cast<uint32_t>(DevicePowerState::Name);
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_DEVICE_POWER
+  } else {
+#define NEVERD_DRIVER_SYSTEM_POWER(Name, Spelling)                             \
+  if (*State == Spelling)                                                      \
+    Result.State = static_cast<uint32_t>(SystemPowerState::Name);
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_SYSTEM_POWER
+  }
+  auto RawContext = unsigned32(*Context, SystemContextField);
+  if (!RawContext)
+    return RawContext.takeError();
+  Result.SystemContext = *RawContext;
+  auto Bus = busCompletion(Object);
+  if (!Bus)
+    return Bus.takeError();
+  Result.BusCompletion = *Bus;
   return Result;
 }
 
@@ -214,7 +313,9 @@ pnpDevices(const llvm::json::Value &Value) {
       return invalid("each pnp_devices entry must be an object");
     if (auto E =
             fields(*Object, {field::ID, field::Bus, field::InitialDevicePower,
-                             field::InitialSystemPower}))
+                             field::InitialSystemPower,
+                             field::InitialReportedDevicePower,
+                             field::RequestedDevicePower}))
       return std::move(E);
     auto ID = Object->getString(field::ID);
     auto Bus = Object->getString(field::Bus);
@@ -247,6 +348,32 @@ pnpDevices(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_SYSTEM_POWER
     if (!Device.InitialDevicePower || !Device.InitialSystemPower)
       return invalid("unknown initial PnP power state");
+    if (const auto *Reported = Object->get(field::InitialReportedDevicePower)) {
+      auto ReportedName = Reported->getAsString();
+      if (!ReportedName)
+        return invalid("initial_reported_device_power must be a state string");
+#define NEVERD_DRIVER_DEVICE_POWER(Name, Spelling)                             \
+  if (*ReportedName == Spelling)                                               \
+    Device.InitialReportedDevicePower = DevicePowerState::Name;
+#include "neverd/emulation/DriverPnpNames.def"
+#undef NEVERD_DRIVER_DEVICE_POWER
+      if (!Device.InitialReportedDevicePower)
+        return invalid("unknown initial_reported_device_power");
+    }
+    if (const auto *Responses = Object->get(field::RequestedDevicePower)) {
+      const auto *Queue = Responses->getAsArray();
+      if (!Queue || Queue->size() > DriverScenarioPowerResponseLimit)
+        return invalid("requested_device_power must be a bounded array");
+      for (const auto &Entry : *Queue) {
+        const auto *Template = Entry.getAsObject();
+        if (!Template)
+          return invalid("each requested_device_power entry must be an object");
+        auto Operation = powerOperation(*Template, true);
+        if (!Operation)
+          return Operation.takeError();
+        Device.RequestedDevicePower.push_back(*Operation);
+      }
+    }
     Result.push_back(std::move(Device));
   }
   return Result;
@@ -291,8 +418,17 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     Result.Pnp = *Pnp;
     return Result;
   }
-  if (Object->get(MinorField) || Object->get(BusCompletionField))
-    return invalid("minor and bus_completion require request kind pnp");
+  if (Result.Kind == DriverRequestKind::Power) {
+    auto Power = powerOperation(*Object, false);
+    if (!Power)
+      return Power.takeError();
+    Result.Power = *Power;
+    return Result;
+  }
+  if (Object->get(MinorField) || Object->get(BusCompletionField) ||
+      Object->get(PowerTypeField) || Object->get(PowerStateField) ||
+      Object->get(PowerActionField) || Object->get(SystemContextField))
+    return invalid("power or pnp fields require the matching request kind");
   const bool IOCTL = Result.Kind == DriverRequestKind::DeviceControl;
   const bool Read = Result.Kind == DriverRequestKind::Read;
   const bool Write = Result.Kind == DriverRequestKind::Write;
@@ -452,12 +588,60 @@ llvm::Error validateDriverPnpOperation(const DriverPnpOperation &Operation) {
   return llvm::Error::success();
 }
 
+llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
+                                         bool RequireDeviceType) {
+  switch (Operation.Minor) {
+#define NEVERD_DRIVER_POWER_REQUEST(Name, Spelling)                            \
+  case DevicePowerRequest::Name:
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_REQUEST
+    break;
+  default:
+    return invalid("unsupported power minor");
+  }
+  if (RequireDeviceType && Operation.Type != DriverPowerType::Device)
+    return invalid("requested_device_power requires device power type");
+  switch (Operation.Type) {
+  case DriverPowerType::Device:
+    if (!supportedDevicePower(Operation.State))
+      return invalid("device power target must be D0 or D3");
+    break;
+  case DriverPowerType::System:
+    if (!supportedSystemPower(Operation.State))
+      return invalid("system power target must be working or sleeping3");
+    if (Operation.Minor == DevicePowerRequest::Query &&
+        Operation.State == static_cast<uint32_t>(SystemPowerState::Working))
+      return invalid("system query-power to working is unsupported");
+    break;
+  default:
+    return invalid("unsupported power type");
+  }
+  switch (Operation.Action) {
+#define NEVERD_DRIVER_POWER_ACTION(Name, Value, Spelling)                      \
+  case DriverPowerAction::Name:
+#include "neverd/emulation/DriverPower.def"
+#undef NEVERD_DRIVER_POWER_ACTION
+    break;
+  default:
+    return invalid("unsupported power action");
+  }
+  const auto &Bus = Operation.BusCompletion;
+  if (!Bus.Status)
+    return invalid("bus_completion requires an explicit status");
+  if (*Bus.Status == windows::StatusPending)
+    return invalid("STATUS_PENDING is not a final power completion");
+  if (Bus.Delay100ns > INT64_MAX)
+    return invalid("delay_100ns exceeds the signed 64-bit time limit");
+  return llvm::Error::success();
+}
+
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
   if (auto E = validateDriverRegistry(Options.Registry))
     return invalid(llvm::toString(std::move(E)));
   if (Options.PnpDevices.size() > DriverScenarioPnpDeviceLimit)
     return invalid("pnp_devices exceeds the device count limit");
   std::set<std::string> DeviceIDs;
+  size_t PowerResponses = 0;
   for (const auto &Device : Options.PnpDevices) {
     if (!validDeviceID(Device.ID))
       return invalid("pnp device id must be a bounded ASCII identifier");
@@ -471,6 +655,18 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
         *Device.InitialSystemPower != SystemPowerState::Working)
       return invalid("resource_free devices require D0 and working initial "
                      "power states");
+    if (Device.InitialReportedDevicePower &&
+        !supportedDevicePower(
+            static_cast<uint32_t>(*Device.InitialReportedDevicePower)))
+      return invalid("initial_reported_device_power must be D0 or D3");
+    if (Device.RequestedDevicePower.size() >
+        DriverScenarioPowerResponseLimit - PowerResponses)
+      return invalid("requested_device_power exceeds the combined response "
+                     "limit");
+    PowerResponses += Device.RequestedDevicePower.size();
+    for (const auto &Operation : Device.RequestedDevicePower)
+      if (auto E = validateDriverPowerOperation(Operation, true))
+        return E;
   }
   if (Options.Requests.size() > DriverScenarioRequestLimit)
     return invalid("at most 64 requests are permitted");
@@ -484,8 +680,8 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
     if (Request.Kind == DriverRequestKind::Pnp) {
       if (Request.DeviceID.empty() || !Request.Pnp)
         return invalid("pnp requests require device_id and a PnP operation");
-      if (!Request.Device.empty() || Request.File || Request.ControlCode ||
-          !Request.Input.empty() || Request.OutputSize ||
+      if (Request.Power || !Request.Device.empty() || Request.File ||
+          Request.ControlCode || !Request.Input.empty() || Request.OutputSize ||
           !Request.DirectInput.empty() || Request.ByteOffset ||
           Request.CancelAfter100ns)
         return invalid("pnp requests cannot contain file or transfer fields");
@@ -493,8 +689,24 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
         return E;
       continue;
     }
+    if (Request.Kind == DriverRequestKind::Power) {
+      if (Request.DeviceID.empty() || !Request.Power)
+        return invalid(
+            "power requests require device_id and a power operation");
+      if (Request.Pnp || !Request.Device.empty() || Request.File ||
+          Request.ControlCode || !Request.Input.empty() || Request.OutputSize ||
+          !Request.DirectInput.empty() || Request.ByteOffset ||
+          Request.CancelAfter100ns)
+        return invalid("power requests cannot contain file, transfer or PnP "
+                       "fields");
+      if (auto E = validateDriverPowerOperation(*Request.Power))
+        return E;
+      continue;
+    }
     if (Request.Pnp)
       return invalid("PnP operation requires request kind pnp");
+    if (Request.Power)
+      return invalid("power operation requires request kind power");
     if (Request.CancelAfter100ns) {
       if (*Request.CancelAfter100ns > INT64_MAX)
         return invalid(
