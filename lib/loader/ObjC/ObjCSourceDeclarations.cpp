@@ -966,15 +966,24 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
     const char *Owner;
   };
   // Compiler-derived from Foundation SDK 15.5 public NS_NOESCAPE method
-  // parameters. Parent and callback ABIs agree across the corresponding
-  // macOS/iOS and simulator/device profiles; no implementation is included.
+  // parameters. A null callback records architecture profiles where the
+  // macOS and iOS declarations disagree; no implementation is included.
   static constexpr Declaration Declarations[] = {
+      {"enumerateKeysAndObjectsUsingBlock:", "v24@0:8@?16",
+       "v24@0:8@?16", 2, "v32@?0@8@16^B24", nullptr, "NSDictionary"},
       {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
        "v32@?0@8Q16^B24", "v32@?0@8Q16^B24", "NSArray"},
       {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
        "v32@?0@8Q16^B24", "v32@?0@8Q16^B24", "NSOrderedSet"},
       {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
        "v24@?0@8^B16", "v24@?0@8^B16", "NSSet"},
+      {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
+       "v32@0:8Q16@?24", 3, "v32@?0@8Q16^B24", nullptr, "NSArray"},
+      {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
+       "v32@0:8Q16@?24", 3, "v32@?0@8Q16^B24", nullptr,
+       "NSOrderedSet"},
+      {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
+       "v32@0:8Q16@?24", 3, "v24@?0@8^B16", nullptr, "NSSet"},
       {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSArray"},
       {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
@@ -984,13 +993,17 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
   for (const auto &D : Declarations) {
     if (Call.Selector != D.Selector || Parameter != D.Parameter)
       continue;
+    const auto *ParentEncoding =
+        Image.Arch == Arch::AArch64 ? D.AArch64Parent : D.X64Parent;
+    const auto *CallbackEncoding =
+        Image.Arch == Arch::AArch64 ? D.AArch64Callback : D.X64Callback;
+    if (!ParentEncoding || !CallbackEncoding)
+      continue;
     auto Parent = parseObjCMethodEncoding(
-        D.Selector,
-        Image.Arch == Arch::AArch64 ? D.AArch64Parent : D.X64Parent);
+        D.Selector, ParentEncoding);
     std::string Error;
-    auto Callback = parseObjCBlockSignature(
-        Image.Arch == Arch::AArch64 ? D.AArch64Callback : D.X64Callback,
-        Image.Arch, Error);
+    auto Callback =
+        parseObjCBlockSignature(CallbackEncoding, Image.Arch, Error);
     if (Parent)
       Parent->Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
     if (!Parent || !Callback ||

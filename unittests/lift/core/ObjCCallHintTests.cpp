@@ -5660,6 +5660,18 @@ TEST(ObjCCallHints,
     EXPECT_EQ(Callback->ReturnType->Size, 1U);
     EXPECT_EQ(Callback->Parameters.size(), 4U);
 
+    auto DictionaryCall = Call;
+    DictionaryCall.Selector = "enumerateKeysAndObjectsUsingBlock:";
+    const auto DictionaryParent =
+        objcSelectorSourceTypeHint(Image, DictionaryCall.Selector);
+    ASSERT_TRUE(DictionaryParent);
+    DictionaryCall.Signature = *DictionaryParent;
+    const auto DictionaryCallback =
+        objcNonEscapingBlockSignature(Image, DictionaryCall, 2);
+    EXPECT_EQ(DictionaryCallback.has_value(), Architecture == Arch::AArch64);
+    if (DictionaryCallback)
+      EXPECT_EQ(DictionaryCallback->Parameters.size(), 4U);
+
     for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
       auto ChangedImage = Image;
       auto ChangedCall = Call;
@@ -5707,6 +5719,18 @@ TEST(ObjCCallHints,
     ASSERT_TRUE(ArrayCallback);
     EXPECT_EQ(ArrayCallback->Parameters.size(), 4U);
 
+    auto OptionsCall = Call;
+    OptionsCall.Selector = "enumerateObjectsWithOptions:usingBlock:";
+    const auto OptionsParent =
+        objcReceiverSourceTypeHint(Image, OptionsCall.Selector, *Receiver);
+    ASSERT_TRUE(OptionsParent.Signature);
+    OptionsCall.Signature = *OptionsParent.Signature;
+    const auto ArrayOptionsCallback =
+        objcNonEscapingBlockSignature(Image, OptionsCall, 3);
+    EXPECT_EQ(ArrayOptionsCallback.has_value(), Architecture == Arch::AArch64);
+    if (ArrayOptionsCallback)
+      EXPECT_EQ(ArrayOptionsCallback->Parameters.size(), 4U);
+
     auto SetImage = Image;
     SetImage.ObjCClasses.front().SuperclassName = "NSSet";
     const auto SetParent =
@@ -5718,6 +5742,17 @@ TEST(ObjCCallHints,
         objcNonEscapingBlockSignature(SetImage, SetCall, 2);
     ASSERT_TRUE(SetCallback);
     EXPECT_EQ(SetCallback->Parameters.size(), 3U);
+
+    const auto SetOptionsParent =
+        objcReceiverSourceTypeHint(SetImage, OptionsCall.Selector, *Receiver);
+    ASSERT_TRUE(SetOptionsParent.Signature);
+    auto SetOptionsCall = OptionsCall;
+    SetOptionsCall.Signature = *SetOptionsParent.Signature;
+    const auto SetOptionsCallback =
+        objcNonEscapingBlockSignature(SetImage, SetOptionsCall, 3);
+    EXPECT_EQ(SetOptionsCallback.has_value(), Architecture == Arch::AArch64);
+    if (SetOptionsCallback)
+      EXPECT_EQ(SetOptionsCallback->Parameters.size(), 3U);
 
     auto Unqualified = Call;
     Unqualified.Receiver.reset();
