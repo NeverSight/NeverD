@@ -45,7 +45,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | READ/WRITE | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。並行 IRP と WDM 要求キャンセルは未対応。`METHOD_NEITHER` と暗黙のファイル位置も未対応 |
 | `METHOD_NEITHER` | 拒否 | ユーザーアドレス空間のコンテキスト、アクセスのプローブ、ゲストの例外処理 |
 | KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
-| PnP バス／ファンクション／フィルタードライバー | 明示的なリソースなし PDO、ゲスト AddDevice、4 種の PnP ライフサイクル機能 | その他の PnP、電源 IRP、ハードウェア／リソース、KMDF PnP |
+| PnP バス／ファンクション／フィルタードライバー | 明示的なリソースなし PDO、ゲスト AddDevice、8 種の一般的な PnP ライフサイクル機能 | その他の PnP、電源 IRP、ハードウェア／リソース、KMDF PnP |
 | ストレージ、ネットワーク、ディスプレイ、ファイルシステム、ミニフィルタードライバー | 各サブシステムの契約に未対応 | ポート／クラス／ミニポートのフレームワーク、NDIS/WFP、グラフィックスまたはファイルシステムのサービス |
 | ワーク項目、タイマー、DPC、イベントと待機 | 現在の実行 IRQL はディスパッチとワーク項目で `PASSIVE_LEVEL`、DPC で `DISPATCH_LEVEL` です | 以下の API 部分集合のみ。並行 IRP と WDM 要求キャンセルは未対応 |
 | プロセス／スレッドのコールバック、ハンドル、レジストリ／ファイル操作、カーネルモジュールの検出を使うドライバー | 設定済みレジストリに対応。その他の動作は下記 API の範囲内のみ | オブジェクトマネージャー、システム状態、コールバック／イベントの発生元 |
@@ -82,7 +82,7 @@ WDM スタックには同じゲストドライバーが所有する複数のデ�
 
 電源 IRP、ドライバー割り当て IRP、その他の PnP マイナー機能、ハードウェア／リソースモデルは未対応です。WDF の接続／転送、ファイルやコールバックが残るスタックへの接続、中間層の切断、転送時のメジャー機能変更、保持経路外への転送は明示的に失敗します。実 WDK の任意フィクスチャ `driver_wdm_stack.c` は `NEVERD_WDM_STACK_FIXTURE` と `NEVERD_WDM_STACK_CFG_FIXTURE` で指定します。ネイティブと C API／CLI の検証には再配置も含み、成果物がなければ明示的にスキップします。実行証拠は Linux のみです。
 
-シナリオは `pnp_devices` を最大 64 個、明示的に設定できます。各項目には `id`、`bus: "resource_free"`、`initial_device_power: "D0"`、`initial_system_power: "working"` が必須で、省略情報を推測しません。ID は大文字小文字を区別する 1–64 バイトの ASCII で、先頭は英数字、以降は英数字、`_`、`-`、`.` のみです。通常の要求は `device` の代わりに設定済みの `device_id` を使えますが、併用できません。`kind: "pnp"` には `device_id`、`minor`、`bus_completion` が必須です。対応する minor は `start`、`query_remove`、`cancel_remove`、`remove`。`bus_completion.status` は 32 ビット整数または 16 進文字列で必須、任意の `delay_100ns` は INT64_MAX 以下の非負整数で、プロバイダーの実受信時から計測します。最終状態に `STATUS_PENDING` は指定できず、cancel-remove/remove は正確に `STATUS_SUCCESS` (0) が必要です。PnP 要求はファイル・転送・キャンセルのフィールドをゼロでも拒否します。C++ API も同じ事前検証を適用します。
+シナリオは `pnp_devices` を最大 64 個、明示的に設定できます。各項目には `id`、`bus: "resource_free"`、`initial_device_power: "D0"`、`initial_system_power: "working"` が必須で、省略情報を推測しません。ID は大文字小文字を区別する 1–64 バイトの ASCII で、先頭は英数字、以降は英数字、`_`、`-`、`.` のみです。通常の要求は `device` の代わりに設定済みの `device_id` を使えますが、併用できません。`kind: "pnp"` には `device_id`、`minor`、`bus_completion` が必須です。対応する minor は `start`、`query_remove`、`cancel_remove`、`remove`、`query_stop`、`stop`、`cancel_stop`、`surprise_removal`。`bus_completion.status` は 32 ビット整数または 16 進文字列で必須、任意の `delay_100ns` は INT64_MAX 以下の非負整数で、プロバイダーの実受信時から計測します。最終状態に `STATUS_PENDING` は指定できず、stop/cancel-stop/surprise-removal/cancel-remove/remove は正確に `STATUS_SUCCESS` (0) が必要です。PnP 要求はファイル・転送・キャンセルのフィールドをゼロでも拒否します。C++ API も同じ事前検証を適用します。
 
 ```json
 {
@@ -91,16 +91,25 @@ WDM スタックには同じゲストドライバーが所有する複数のデ�
   ],
   "requests": [
     {"kind": "pnp", "device_id": "sensor0", "minor": "start", "bus_completion": {"status": "0x0", "delay_100ns": 10}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "query_stop", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "cancel_stop", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "query_stop", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "stop", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "start", "bus_completion": {"status": "0x0"}},
     {"kind": "pnp", "device_id": "sensor0", "minor": "query_remove", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "cancel_remove", "bus_completion": {"status": "0x0"}},
+    {"kind": "pnp", "device_id": "sensor0", "minor": "surprise_removal", "bus_completion": {"status": "0x0"}},
     {"kind": "pnp", "device_id": "sensor0", "minor": "remove", "bus_completion": {"status": "0x0"}}
   ],
   "unload": true
 }
 ```
 
-DriverEntry 成功後、設定された PDO ごとに `AddDevice` を一度実行します。プロバイダーは独立した `DRIVER_OBJECT` を所有し、ゲストはそのオブジェクトを削除・偽装できません。PnP IRP は `KernelMode`、ファイルなし、リソースなしで、初期状態は `STATUS_NOT_SUPPORTED` です。対象 PDO まで転送した場合だけバス応答を使用し、遅延完了は共通の仮想時計と完了継続を使います。ライフサイクルの確定／ロールバックは、バス状態とは別に最終上位完了が決めます。CREATE と転送には Started/D0/Working が必要で、query-remove 後も cleanup/close は可能です。Started から通常削除するには query 成功、ファイルのクローズ、先行要求／コールバックの終了、ゲストによる切断／削除が必要です。リークのない AddDevice 失敗ではプロバイダーだけを破棄します。新規ゲストデバイスのリークは切断済みでも `model_error` です。unload 前には全プロバイダーが不在でなければなりません。その他の PnP、電源 IRP、ハードウェア／リソース、KMDF PnP は含みません。 PnP 成功には実際のプロバイダー完了が必要です。START/QUERY_REMOVE の早期上位失敗ではバス観測を null のまま保持できます。デバイス／ファイルのライフサイクル識別は切断後も維持します。
+DriverEntry 成功後、設定された PDO ごとに `AddDevice` を一度実行します。プロバイダーは独立した `DRIVER_OBJECT` を所有し、ゲストはそのオブジェクトを削除・偽装できません。PnP IRP は `KernelMode`、ファイルなし、リソースなしで、初期状態は `STATUS_NOT_SUPPORTED` です。対象 PDO まで転送した場合だけバス応答を使用し、遅延完了は共通の仮想時計と完了継続を使います。ライフサイクルの確定／ロールバックは、バス状態とは別に最終上位完了が決めます。Started から通常削除するには query 成功、ファイルのクローズ、先行要求／コールバックの終了、ゲストによる切断／削除が必要です。リークのない AddDevice 失敗ではプロバイダーだけを破棄します。新規ゲストデバイスのリークは切断済みでも `model_error` です。unload 前には全プロバイダーが不在でなければなりません。その他の PnP、電源 IRP、ハードウェア／リソース、KMDF PnP は含みません。 PnP 成功には実際のプロバイダー完了が必要です。START/QUERY_STOP/QUERY_REMOVE の早期上位失敗ではバス観測を null のまま保持できます。デバイス／ファイルのライフサイクル識別は切断後も維持します。
 
 初期設定は `configuration.pnp_devices` に保持します。観測された `pnp_devices` は `id`、`pdo`、nullable な `add_device_status`、現在の `attached`、`pnp_state`、`provider_present` を持ち、削除後の `attached` は false です。AddDevice のフェーズは `add_device:<ID>`。失敗は `scenario_success` に反映し、DriverEntry の `nt_status` は上書きしません。各要求に nullable な `device_id` と `pnp` を追加し、PnP の `file` は null です。`pnp` は `minor`、`state_before`、`state_after`、nullable な `bus_status`、`bus_received_at_100ns`、`bus_completed_at_100ns` を記録します。設定した状態は実際のバス完了時だけ観測となり、受信時刻は独立です。既存フィールドの型は変わりません。
+
+Removing/Removed 以外でデバイスが存在する限り、通常の CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE は実際のゲストへディスパッチします。モデルは Stopped、StopPending、RemovePending、電源状態だけで失敗を生成しません。ドライバー自身がソフトウェア I/O の完了、拒否、保持を決めます。公開実行器は直列です。保持 IRP に現在利用可能な生成元がなければ、後続シナリオの start や cleanup で解除できず、停滞 `model_error` になります。Remove 前のファイルクローズと先行要求／コールバック終了はプロファイル上の制限です。`query_stop` の最終 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) は未実装のリソース再照会を要求するため、事前検証とゲスト最終完了の両方で拒否します。[Microsoft の QUERY_STOP 契約](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)を参照してください。停止／再開と突然の取り外しは、リソース、電源 IRP、KMDF PnP 対応を意味しません。
 
 リソースなし PnP は独自の実 WDK `driver_wdm_pnp.c`、任意の `NEVERD_WDM_PNP_FIXTURE`／`NEVERD_WDM_PNP_CFG_FIXTURE` とネイティブ／C API／CLI テストを使います。成果物なしは明示的にスキップし、実行証拠は Linux のみです。
 
@@ -239,7 +248,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v8` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v9` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 

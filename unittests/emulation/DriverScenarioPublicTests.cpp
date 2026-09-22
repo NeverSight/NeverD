@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v8");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v9");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1254,8 +1254,141 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteExplicitDelayedPnpLifecycle) {
         EXPECT_EQ(Pnp->getInteger("bus_completed_at_100ns"),
                   Index == 6 ? 30 : 10);
       }
-      EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"), "504e5021");
+      EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"),
+                "504e5021");
       EXPECT_EQ((*Requests)[2].getAsObject()->getInteger("file"), 9);
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, ResourceRequeryStatusFailsBeforeImageLoading) {
+  const std::string Scenario = R"({
+    "pnp_devices":[{"id":"resource0","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[{"kind":"pnp","device_id":"resource0","minor":"query_stop",
+      "bus_completion":{"status":"0x119"}}]})";
+  EXPECT_EQ(neverd_emulate_driver_scenario_json(Session,
+                                                "missing-pnp-status-image.sys",
+                                                Scenario.c_str(), nullptr),
+            nullptr);
+  EXPECT_NE(error().find("resource requery"), std::string::npos);
+  EXPECT_TRUE(
+      runCLI(Scenario, 1, "success", "missing-pnp-status-image.sys").empty());
+  EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
+#ifdef NEVERD_WDM_PNP_FIXTURE
+  const std::string Scenario = R"({
+    "pnp_devices":[{"id":"resource0","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[
+      {"kind":"pnp","device_id":"resource0","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"create","device_id":"resource0","file":9},
+      {"kind":"pnp","device_id":"resource0","minor":"query_stop",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"resource0","minor":"cancel_stop",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"resource0","minor":"query_stop",
+       "bus_completion":{"status":0,"delay_100ns":7}},
+      {"kind":"pnp","device_id":"resource0","minor":"stop",
+       "bus_completion":{"status":0}},
+      {"kind":"ioctl","file":9,"code":"0x222000","output_size":4},
+      {"kind":"pnp","device_id":"resource0","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"resource0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"ioctl","file":9,"code":"0x222000","output_size":4},
+      {"kind":"pnp","device_id":"resource0","minor":"cancel_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"resource0","minor":"surprise_removal",
+       "bus_completion":{"status":0,"delay_100ns":13}},
+      {"kind":"ioctl","file":9,"code":"0x222000","output_size":4},
+      {"kind":"cleanup","file":9},{"kind":"close","file":9},
+      {"kind":"pnp","device_id":"resource0","minor":"remove",
+       "bus_completion":{"status":0}}],
+    "unload":true})";
+  std::vector<const char *> Images{NEVERD_WDM_PNP_FIXTURE};
+#ifdef NEVERD_WDM_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_PNP_CFG_FIXTURE);
+#endif
+  const struct {
+    size_t Index;
+    const char *Minor;
+    const char *Before;
+    const char *After;
+  } Transitions[] = {
+      {0, "start", "not_started", "started"},
+      {2, "query_stop", "started", "stop_pending"},
+      {3, "cancel_stop", "stop_pending", "started"},
+      {4, "query_stop", "started", "stop_pending"},
+      {5, "stop", "stop_pending", "stopped"},
+      {7, "start", "stopped", "started"},
+      {8, "query_remove", "started", "remove_pending"},
+      {10, "cancel_remove", "remove_pending", "started"},
+      {11, "surprise_removal", "started", "surprise_removed"},
+      {15, "remove", "surprise_removed", "removed"},
+  };
+  for (const auto *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 2, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.c_str(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v9");
+      EXPECT_EQ(Report->getString("stop_reason"), "returned");
+      EXPECT_EQ(Report->getInteger("nt_status"), 0);
+      EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 16u);
+      for (const auto &Expected : Transitions) {
+        SCOPED_TRACE(Expected.Index);
+        const auto *Request = (*Requests)[Expected.Index].getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getBoolean("completed"), true);
+        EXPECT_EQ(Request->getInteger("io_status"), 0);
+        const auto *Pnp = Request->getObject("pnp");
+        ASSERT_NE(Pnp, nullptr);
+        EXPECT_EQ(Pnp->getString("minor"), Expected.Minor);
+        EXPECT_EQ(Pnp->getString("state_before"), Expected.Before);
+        EXPECT_EQ(Pnp->getString("state_after"), Expected.After);
+        EXPECT_EQ(Pnp->getInteger("bus_status"), 0);
+        const int64_t Completed = Expected.Index < 4    ? 0
+                                  : Expected.Index < 11 ? 7
+                                                        : 20;
+        EXPECT_EQ(Pnp->getInteger("bus_completed_at_100ns"), Completed);
+      }
+      for (size_t Index : {6u, 9u}) {
+        const auto *IO = (*Requests)[Index].getAsObject();
+        ASSERT_NE(IO, nullptr);
+        EXPECT_EQ(IO->getInteger("io_status"), 0);
+        EXPECT_EQ(IO->getString("output_hex"), "504e5021");
+      }
+      const auto *SurpriseIO = (*Requests)[12].getAsObject();
+      ASSERT_NE(SurpriseIO, nullptr);
+      EXPECT_EQ(SurpriseIO->getBoolean("completed"), true);
+      EXPECT_EQ(SurpriseIO->getInteger("dispatch_status"), 0xc000000eu);
+      EXPECT_EQ(SurpriseIO->getInteger("io_status"), 0xc000000eu);
+      EXPECT_EQ(SurpriseIO->getInteger("information"), 0);
+      EXPECT_EQ(SurpriseIO->getString("output_hex"), "");
+      const auto *Devices = Report->getArray("pnp_devices");
+      ASSERT_NE(Devices, nullptr);
+      ASSERT_EQ(Devices->size(), 1u);
+      EXPECT_EQ(Devices->front().getAsObject()->getString("pnp_state"),
+                "removed");
+      EXPECT_EQ(Devices->front().getAsObject()->getBoolean("provider_present"),
+                false);
     }
 #else
   GTEST_SKIP() << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK fixture";

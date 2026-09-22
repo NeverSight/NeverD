@@ -19,6 +19,10 @@ NEVERD_DRIVER_PNP_REQUEST(Start, "start")
 NEVERD_DRIVER_PNP_REQUEST(QueryRemove, "query_remove")
 NEVERD_DRIVER_PNP_REQUEST(CancelRemove, "cancel_remove")
 NEVERD_DRIVER_PNP_REQUEST(Remove, "remove")
+NEVERD_DRIVER_PNP_REQUEST(QueryStop, "query_stop")
+NEVERD_DRIVER_PNP_REQUEST(Stop, "stop")
+NEVERD_DRIVER_PNP_REQUEST(CancelStop, "cancel_stop")
+NEVERD_DRIVER_PNP_REQUEST(SurpriseRemoval, "surprise_removal")
 #endif
 
 #ifdef NEVERD_DRIVER_PNP_STATE

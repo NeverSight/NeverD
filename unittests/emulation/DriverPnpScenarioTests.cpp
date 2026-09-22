@@ -17,6 +17,8 @@
 
 #include "llvm/Support/JSON.h"
 
+#include <utility>
+
 namespace neverd::emulation {
 namespace {
 
@@ -169,7 +171,7 @@ TEST(DriverPnpScenario, PnpFieldsCannotMixWithFilesOrTransfersEvenWhenZero) {
       {R"({"kind":"pnp","minor":"start","bus_completion":{"status":0}})",
        R"({"kind":"pnp","device_id":"port-0","bus_completion":{"status":0}})",
        R"({"kind":"pnp","device_id":"port-0","minor":"start"})",
-       R"({"kind":"pnp","device_id":"port-0","minor":"stop","bus_completion":{"status":0}})",
+       R"({"kind":"pnp","device_id":"port-0","minor":"query_resources","bus_completion":{"status":0}})",
        R"({"kind":"pnp","device_id":"port-0","minor":0,"bus_completion":{"status":0}})",
        R"({"kind":"create","minor":"start"})",
        R"({"kind":"create","bus_completion":null})"})
@@ -190,7 +192,8 @@ TEST(DriverPnpScenario, BusCompletionHasExplicitFinalStatusAndBoundedDelay) {
         std::string(
             R"({"kind":"pnp","device_id":"port-0","minor":"start","bus_completion":)") +
         Completion + "}"));
-  for (const char *Minor : {"remove", "cancel_remove"})
+  for (const char *Minor :
+       {"remove", "cancel_remove", "stop", "cancel_stop", "surprise_removal"})
     for (const char *Status : {"0x1", "0x80000005", "0xc0000001"})
       invalidJSON(scenario(
           std::string(R"({"kind":"pnp","device_id":"port-0","minor":")") +
@@ -229,7 +232,10 @@ TEST(DriverPnpScenario, NativePreflightMatchesJSONBeforeImageLoading) {
   Add([](auto &O) {
     O.Requests[0].Pnp->BusCompletion.Delay100ns = UINT64_MAX;
   });
-  Add([](auto &O) { O.Requests[0].Pnp->Minor = DevicePnpRequest::Stop; });
+  Add([](auto &O) {
+    O.Requests[0].Pnp->Minor = DevicePnpRequest::QueryStop;
+    O.Requests[0].Pnp->BusCompletion.Status = 0x119;
+  });
   Add([](auto &O) {
     O.Requests[0].Pnp->Minor = static_cast<DevicePnpRequest>(0xff);
   });
@@ -387,6 +393,88 @@ TEST(DriverPnpScenario,
   EXPECT_EQ(Item->getString("kind"), "read");
   EXPECT_EQ(Item->get("device_id")->kind(), llvm::json::Value::Null);
   EXPECT_EQ(Item->get("pnp")->kind(), llvm::json::Value::Null);
+}
+
+TEST(DriverPnpScenario, EightMinorSpellingsRoundTripThroughReports) {
+  const std::pair<const char *, DevicePnpRequest> Cases[] = {
+      {"start", DevicePnpRequest::Start},
+      {"query_remove", DevicePnpRequest::QueryRemove},
+      {"cancel_remove", DevicePnpRequest::CancelRemove},
+      {"remove", DevicePnpRequest::Remove},
+      {"query_stop", DevicePnpRequest::QueryStop},
+      {"stop", DevicePnpRequest::Stop},
+      {"cancel_stop", DevicePnpRequest::CancelStop},
+      {"surprise_removal", DevicePnpRequest::SurpriseRemoval},
+  };
+  for (const auto &[Spelling, Minor] : Cases) {
+    SCOPED_TRACE(Spelling);
+    auto Options = driverOptionsFromScenarioJSON(scenario(
+        std::string(R"({"kind":"pnp","device_id":"port-0","minor":")") +
+        Spelling + R"(","bus_completion":{"status":0}})"));
+    ASSERT_TRUE(bool(Options)) << llvm::toString(Options.takeError());
+    ASSERT_EQ(Options->Requests.size(), 1u);
+    EXPECT_EQ(Options->Requests[0].Pnp->Minor, Minor);
+    DriverResult Result;
+    Result.Configuration = *Options;
+    DriverRequestResult Request;
+    Request.Kind = DriverRequestKind::Pnp;
+    Request.DeviceID = "port-0";
+    Request.Pnp = DriverPnpRequestResult{};
+    Request.Pnp->Minor = Minor;
+    Request.Pnp->StateBefore = DevicePnpState::StopPending;
+    Request.Pnp->StateAfter = DevicePnpState::Stopped;
+    Result.Requests.push_back(Request);
+    auto JSON = llvm::json::parse(driverResultJSON(Result));
+    ASSERT_TRUE(bool(JSON)) << llvm::toString(JSON.takeError());
+    const auto *Pnp = (*JSON->getAsObject()->getArray("requests"))[0]
+                          .getAsObject()
+                          ->getObject("pnp");
+    ASSERT_NE(Pnp, nullptr);
+    EXPECT_EQ(Pnp->getString("minor"), Spelling);
+    EXPECT_EQ(Pnp->getString("state_before"), "stop_pending");
+    EXPECT_EQ(Pnp->getString("state_after"), "stopped");
+    EXPECT_EQ(Pnp->get("bus_status")->kind(), llvm::json::Value::Null);
+  }
+}
+
+TEST(DriverPnpScenario, QueryStopResourceRequeryFailsJSONAndNativePreflight) {
+  for (const char *Status : {"281", "\"0x119\""})
+    invalidJSON(scenario(
+        std::string(
+            R"({"kind":"pnp","device_id":"port-0","minor":"query_stop","bus_completion":{"status":)") +
+        Status + "}}"));
+  DriverOptions Options;
+  Options.PnpDevices.push_back(pnpDevice());
+  Options.Requests.push_back(pnpRequest(DevicePnpRequest::QueryStop));
+  Options.Requests[0].Pnp->BusCompletion.Status = 0x119;
+  invalidNative(Options, "resource requery");
+  EXPECT_STREQ(devicePnpFinalStatusError(DevicePnpRequest::QueryStop, 0x119),
+               "STATUS_RESOURCE_REQUIREMENTS_CHANGED requires unsupported "
+               "resource requery");
+  EXPECT_EQ(devicePnpFinalStatusError(DevicePnpRequest::QueryStop, 0), nullptr);
+  EXPECT_EQ(devicePnpFinalStatusError(DevicePnpRequest::QueryStop, 0xc0000001),
+            nullptr);
+  EXPECT_EQ(devicePnpFinalStatusError(DevicePnpRequest::Start, 0x119), nullptr);
+  EXPECT_EQ(devicePnpFinalStatusError(DevicePnpRequest::QueryRemove, 0x119),
+            nullptr);
+}
+
+TEST(DriverPnpScenario, FinalStatusPolicyIsSharedWithoutWeakeningExactSuccess) {
+  for (DevicePnpRequest Minor :
+       {DevicePnpRequest::Stop, DevicePnpRequest::CancelStop,
+        DevicePnpRequest::SurpriseRemoval, DevicePnpRequest::Remove,
+        DevicePnpRequest::CancelRemove}) {
+    EXPECT_EQ(devicePnpFinalStatusError(Minor, 0), nullptr);
+    EXPECT_STREQ(devicePnpFinalStatusError(Minor, 1),
+                 "this PnP request requires STATUS_SUCCESS");
+    EXPECT_STREQ(devicePnpFinalStatusError(Minor, 0xc0000001),
+                 "this PnP request must not fail");
+    EXPECT_STREQ(devicePnpFinalStatusError(Minor, 0x103),
+                 "STATUS_PENDING is not a final PnP completion");
+  }
+  EXPECT_STREQ(
+      devicePnpFinalStatusError(static_cast<DevicePnpRequest>(0xff), 0),
+      "unsupported pnp minor");
 }
 } // namespace
 } // namespace neverd::emulation

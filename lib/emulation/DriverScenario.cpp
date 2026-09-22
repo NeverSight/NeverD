@@ -418,22 +418,37 @@ registry(const llvm::json::Value &Value) {
 
 } // namespace
 
+const char *devicePnpFinalStatusError(DevicePnpRequest Request,
+                                      uint32_t Status) {
+  if (!supportedPnpRequest(Request))
+    return "unsupported pnp minor";
+  if (Status == windows::StatusPending)
+    return "STATUS_PENDING is not a final PnP completion";
+  if (!pnpRequestMayFail(Request) && (Status & profile::NTStatusFailureMask))
+    return "this PnP request must not fail";
+  if (devicePnpRequiresSuccess(Request) && Status != windows::StatusSuccess)
+    return "this PnP request requires STATUS_SUCCESS";
+  // This informational result asks the PnP manager to requery resources; it
+  // cannot be treated as an ordinary success in the resource-free profile.
+  // https://learn.microsoft.com/windows-hardware/drivers/kernel/irp-mn-query-stop-device
+  if (Request == DevicePnpRequest::QueryStop &&
+      Status == windows::StatusResourceRequirementsChanged)
+    return "STATUS_RESOURCE_REQUIREMENTS_CHANGED requires unsupported resource "
+           "requery";
+  return nullptr;
+}
+
 llvm::Error validateDriverPnpOperation(const DriverPnpOperation &Operation) {
   if (!supportedPnpRequest(Operation.Minor))
     return invalid("unsupported pnp minor");
   const auto &Bus = Operation.BusCompletion;
   if (!Bus.Status)
     return invalid("bus_completion requires an explicit status");
-  if (*Bus.Status == windows::StatusPending)
-    return invalid("bus_completion status cannot be STATUS_PENDING");
+  if (const char *Error =
+          devicePnpFinalStatusError(Operation.Minor, *Bus.Status))
+    return invalid(Error);
   if (Bus.Delay100ns > INT64_MAX)
     return invalid("delay_100ns exceeds the signed 64-bit time limit");
-  if (!pnpRequestMayFail(Operation.Minor) &&
-      (*Bus.Status & profile::NTStatusFailureMask))
-    return invalid("this pnp minor requires a successful bus completion");
-  if (devicePnpRequiresSuccess(Operation.Minor) &&
-      *Bus.Status != windows::StatusSuccess)
-    return invalid("this pnp minor requires STATUS_SUCCESS bus completion");
   return llvm::Error::success();
 }
 

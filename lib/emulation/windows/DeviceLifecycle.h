@@ -43,7 +43,6 @@ struct DeviceLifecycleSnapshot {
   size_t RemoveLockReferences = 0;
   bool DevicePowerQueryAccepted = false;
   bool SystemPowerQueryAccepted = false;
-  bool CanStartIo = false;
 };
 
 /// Session-local Windows 2000+ PnP state and Vista+ power sequencing.
@@ -81,10 +80,12 @@ public:
   llvm::Error finishDevicePower(DeviceLifecycleTicket Ticket, uint32_t Status);
   llvm::Error finishSystemPower(DeviceLifecycleTicket Ticket, uint32_t Status);
 
-  /// New dispatch is allowed only while started, in D0, and not quiesced by a
-  /// PnP/power transaction or successful power query. Existing requests may
-  /// complete while stopped, sleeping, surprise-removed, or removing.
-  llvm::Error beginIo(uint64_t Device, uint64_t Irp);
+  /// This profile accepts new file IRPs until REMOVE begins. Other PnP/power
+  /// states do not decide whether a guest dispatch queues or fails a request.
+  llvm::Error validateIoSubmission(uint64_t Device) const;
+  /// Register an actual IRP's lifetime independently of hardware use. Existing
+  /// requests may complete while stopped, sleeping, or being removed.
+  llvm::Error trackIo(uint64_t Device, uint64_t Irp);
   llvm::Error validateIoCompletion(uint64_t Device, uint64_t Irp) const;
   llvm::Error finishIo(uint64_t Device, uint64_t Irp);
 
@@ -139,7 +140,6 @@ private:
   llvm::Expected<Device *> lookup(uint64_t Identity);
   llvm::Expected<const Device *> lookup(uint64_t Identity) const;
   llvm::Expected<DeviceLifecycleTicket> nextTicket(uint64_t Identity);
-  static bool canStartIo(const Device &D);
 };
 
 } // namespace neverd::emulation
