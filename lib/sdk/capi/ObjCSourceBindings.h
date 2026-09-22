@@ -521,17 +521,20 @@ inline const Symbol *uniqueWritableDataSymbol(const BinaryImage &Image,
 }
 
 inline std::optional<SourceCallTypeHint>
-staticIdentityHint(const BinaryImage &Image, va_t Address) {
+staticIdentityHint(const BinaryImage &Image, va_t Address,
+                   bool StorageAddress = false) {
   const auto *Symbol = uniqueWritableDataSymbol(Image, Address, 8);
   const auto Value =
       Symbol ? objc::RuntimeData(Image).localPointer(Address) : std::nullopt;
   if (!Symbol || !Value || *Value != Address ||
-      !Image.MachOResolvedChainedPointerSlots.count(Address))
+      !Image.MachOResolvedChainedPointerSlots.count(Address) ||
+      (StorageAddress && readImmutableImagePointer(Image, Address) != Address))
     return std::nullopt;
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeStaticIdentity;
   Hint.TargetAddress = Address;
   Hint.TargetName = Symbol->Name;
+  Hint.ByteCount = StorageAddress ? 8 : 0;
   Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
   std::string Reason;
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
@@ -2494,6 +2497,18 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         !(Original->Kind == ExprKind::Const &&
           Original->ConstProvenance == ConstantAddressProvenance::Scalar)) {
       const auto Address = constantAddress(*Original);
+      // An immutable self-pointer's value and storage address are the same
+      // identity. Preserve its pointer-sized contents as well as that alias.
+      // Mutable storage cannot acquire an address binding from its initializer.
+      if (ObjectAddress && Address)
+        if (auto Identity = staticIdentityHint(Image, *Address, true)) {
+          *Expression = *HighExpr::makeCall({}, 0, {});
+          Expression->Type = Original->Type;
+          Expression->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Identity));
+          Result.StaticIdentities.insert(*Address);
+          return Expression;
+        }
       auto Hint =
           Address ? constantStringSourceHint(Image, *Address) : std::nullopt;
       if (!Hint && Address)
@@ -3580,10 +3595,12 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeStaticIdentity) {
-    const auto Expected = staticIdentityHint(Image, Binding.TargetAddress);
+    const auto Expected = staticIdentityHint(Image, Binding.TargetAddress,
+                                             Binding.ByteCount == 8);
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
-           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           !Binding.SelectorReferenceAddress &&
+           Binding.ByteCount == Expected->ByteCount &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind ==
@@ -4215,7 +4232,7 @@ renderObjCStaticIdentityHelpers(const std::set<va_t> &Identities,
     SharedFunctions.insert(Name);
     Source += "\nuintptr_t " + Name +
               "(void) {\n"
-              "  static unsigned char identity;\n"
+              "  static void *identity = &identity;\n"
               "  return (uintptr_t)&identity;\n}\n";
   }
   return Source;

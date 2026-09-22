@@ -4363,6 +4363,146 @@ TEST(ObjCSourceBindings, KVOContextsRejectUnprovedStorageAndUses) {
   EXPECT_TRUE(Ordinary.KVOContexts.empty());
 }
 
+namespace {
+Fixture immutableSelfPointerFixture(Arch Architecture) {
+  Fixture F;
+  F.Image.Arch = Architecture;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Segments[0].ReadOnlyAfterRelocations = true;
+  F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+  F.Image.Symbols.push_back({"_QueueKey", 0x1040, 8, false});
+  F.Image.MachOHasChainedFixups = true;
+  F.Image.MachOResolvedChainedPointerSlots.insert(0x1040);
+  F.Image.DataPtrRelocSlots.insert(0x1040);
+  F.Image.DataPtrRelocTargetOwners[0x1040] = 0x1000;
+  llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                   0x1040);
+  F.Function.ReturnType = NdType::makeInt(8, false);
+  F.Function.Body[0].RetVal =
+      HighExpr::makeConst(0x1040, 8, ConstantAddressProvenance::DataAddress);
+  return F;
+}
+} // namespace
+
+TEST(ObjCSourceBindings, ImmutableSelfPointerAddressesShareLoadedIdentity) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto F = immutableSelfPointerFixture(Architecture);
+    const auto Direct = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Direct.Limitation.empty()) << Direct.Limitation;
+    ASSERT_EQ(Direct.StaticIdentities, std::set<va_t>{0x1040});
+    const auto Address = Direct.Function.Body[0].RetVal;
+    ASSERT_TRUE(Address->SourceCallHint);
+    EXPECT_EQ(Address->SourceCallHint->ByteCount, 8U);
+    EXPECT_TRUE(objcSourceCallBound(*Address, F.Image, {}));
+    F.Function.Body[0].RetVal = HighExpr::makeLoad(F.Function.Body[0].RetVal,
+                                                   NdType::makeInt(8, false));
+    const auto Loaded = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Loaded.Limitation.empty()) << Loaded.Limitation;
+    EXPECT_EQ(Direct.StaticIdentities, Loaded.StaticIdentities);
+    F.Image.Segments[0].ReadOnlyAfterRelocations = false;
+    EXPECT_FALSE(objcSourceCallBound(*Address, F.Image, {}));
+  }
+}
+
+TEST(ObjCSourceBindings, ImmutableSelfPointerAddressesRejectStaleStorage) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = immutableSelfPointerFixture(Arch::AArch64);
+    switch (Mutation) {
+    case 0:
+      F.Image.Segments[0].ReadOnlyAfterRelocations = false;
+      break;
+    case 1:
+      F.Image.DataPtrRelocSlots.clear();
+      break;
+    case 2:
+      F.Image.DataPtrRelocTargetOwners[0x1040] = 0x2000;
+      break;
+    case 3:
+      F.Image.MachOResolvedChainedPointerSlots.clear();
+      break;
+    case 4:
+      F.Image.Sections.push_back(F.Image.Sections[0]);
+      break;
+    case 5:
+      F.Image.Symbols.push_back({"_Alias", 0x1040, 8, false});
+      break;
+    case 6:
+      F.Image.CodePtrRelocSlots.insert(0x103f);
+      break;
+    case 7:
+      F.Image.ImportPtrSlots[0x1040] = "_external";
+      break;
+    case 8:
+      F.Image.Sections[0].FileSz = 0x47;
+      break;
+    case 9:
+      F.Function.Body[0].RetVal->AddressOwnerVA = 0x1038;
+      break;
+    case 10:
+      llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                       0x1048);
+      break;
+    }
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Result.Limitation.empty());
+    EXPECT_TRUE(Result.StaticIdentities.empty());
+  }
+}
+
+TEST(ObjCSourceBindings, ImmutableSelfPointerIdentityExecutesWithItsContents) {
+  auto F = immutableSelfPointerFixture(Arch::AArch64);
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  std::set<std::string> Shared;
+  std::string Source =
+      "#include <stdint.h>\n#include <string.h>\n" +
+      renderObjCStaticIdentityHelpers(Result.StaticIdentities, Shared);
+  Source += R"(
+int main(void) {
+  const void *key = (const void *)neverd_static_identity_1040_address();
+  const void *loaded;
+  memcpy(&loaded, key, sizeof(loaded));
+  if (key != loaded) return 1;
+  if ((const void *)neverd_static_identity_1040_address() != key) return 2;
+  return 0;
+}
+)";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-self-pointer", Directory));
+  const std::filesystem::path Work(Directory.str().str());
+  struct Cleanup {
+    std::filesystem::path Work;
+    ~Cleanup() {
+      std::error_code Error;
+      std::filesystem::remove_all(Work, Error);
+    }
+  } Cleanup{Work};
+  const auto Path = (Work / "objects.c").string();
+  const auto Executable = (Work / "objects").string();
+  const auto ErrorPath = (Work / "stderr").string();
+  std::ofstream(Path) << Source;
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    const std::vector<std::string> Arguments{
+        Compiler, "-std=c11", Optimization, "-Werror", Path, "-o", Executable};
+    std::vector<llvm::StringRef> Refs(Arguments.begin(), Arguments.end());
+    const std::optional<llvm::StringRef> Redirects[] = {
+        std::nullopt, std::nullopt, ErrorPath};
+    std::string Error;
+    const auto Status = llvm::sys::ExecuteAndWait(Compiler, Refs, std::nullopt,
+                                                  Redirects, 60, 0, &Error);
+    auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+    ASSERT_EQ(Status, 0) << Error
+                         << (Errors ? (*Errors)->getBuffer().str() : "");
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(Executable, {Executable}, std::nullopt,
+                                        Redirects, 30, 0, &Error),
+              0)
+        << Error;
+  }
+}
 TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
   Fixture F;
   constexpr va_t Address = 0x1040;
@@ -4392,7 +4532,8 @@ TEST(ObjCSourceBindings, SelfPointerGlobalsBecomeSharedStaticIdentities) {
       renderObjCStaticIdentityHelpers(Result.StaticIdentities, Helpers);
   EXPECT_EQ(Helpers,
             std::set<std::string>{"neverd_static_identity_1040_address"});
-  EXPECT_NE(Source.find("static unsigned char identity"), std::string::npos);
+  EXPECT_NE(Source.find("static void *identity = &identity"),
+            std::string::npos);
 
   F.Image.MachOResolvedChainedPointerSlots.clear();
   Result = bindObjCSourceReferences(F.Function, F.Image);
