@@ -18,6 +18,8 @@ struct SourceCallOccurrenceKey {
   NdOp Opcode = NdOp::CALL;
   std::optional<va_t> StaticTarget;
 
+  bool operator==(const SourceCallOccurrenceKey &) const = default;
+
   bool operator<(const SourceCallOccurrenceKey &Other) const {
     return std::tie(Instruction, Sequence, Opcode, StaticTarget) <
            std::tie(Other.Instruction, Other.Sequence, Other.Opcode,

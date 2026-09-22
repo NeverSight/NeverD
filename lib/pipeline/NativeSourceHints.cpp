@@ -11,6 +11,7 @@
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -123,6 +124,8 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
   if (!Low || Low->Entry != Med.Entry || Low->Blocks.empty() ||
       Low->Blocks.size() > 16384)
     return {};
+  if (!validateSourceRegisterCopies(Image, *Low, Med.RegisterCopyProjections))
+    return {};
   auto Observed = observedMedSourceEntryRegisters(Med, Hint);
   // An earlier, narrow call result can leave an unobserved high word in a
   // return register. It cannot invalidate independent evidence that an entry
@@ -148,6 +151,16 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
     for (const auto &Op : Block.Ops) {
       if (!Remaining-- || Op.NumInputs > 6)
         return {};
+      if (const auto Site = sourceCallOccurrenceKey(Op); Site) {
+        const auto Copy = Med.RegisterCopyProjections.find(*Site);
+        if (Copy != Med.RegisterCopyProjections.end())
+          for (const auto &[Destination, Source] : Copy->second.Registers) {
+            if (Observed->count(Source))
+              Reads.insert(Source);
+            if (TRI.isCallPreserved(Destination, 8))
+              WrittenPreserved.insert(Destination);
+          }
+      }
       const auto &Output = Op.Output;
       if (Output.isReg() && Output.Size &&
           !(TRI.isFrameOrLinkReg(Output.Offset) && Output.Size <= 8))
@@ -276,6 +289,14 @@ bool hasNativeSourceStateContract(
       Low->Blocks.size() > 16384)
     return false;
   NativeSourceCalls Calls;
+  if (!validateSourceRegisterCopies(Image, *Low, Med.RegisterCopyProjections) ||
+      (TerminalContext && !Med.RegisterCopyProjections.empty()))
+    return false;
+  for (const auto &[Site, Copy] : Med.RegisterCopyProjections) {
+    NativeSourceCallContract Contract;
+    Contract.RegisterCopy = &Copy;
+    Calls.emplace(Site, std::move(Contract));
+  }
   std::optional<std::map<va_t, SourceCallTypeHint>> CurrentCallBindings;
   size_t Remaining = 262144;
   for (const auto &Block : Med.Blocks)
@@ -863,6 +884,11 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     Diagnostic = Reason;
     return std::nullopt;
   };
+  if (High.RegisterCopyProjections != Med.RegisterCopyProjections ||
+      (!Med.RegisterCopyProjections.empty() &&
+       (!Low || !validateSourceRegisterCopies(Image, *Low,
+                                              Med.RegisterCopyProjections))))
+    return Reject("source register-copy proof is no longer valid");
   if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
       Image.IsRelocatable ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
@@ -873,6 +899,10 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
     return Reject("native source inference requires complete verified lifting");
   if (Med.SourceTypeHint || High.SourceTypeHint || Med.SourceParametersBound)
     return Reject("native function already has a source declaration");
+  if (const auto Copies = sourceRegisterCopyLeafRegisters(Image, Med.Entry))
+    for (const auto &[Destination, Source] : *Copies)
+      if (getTargetRegInfo(Image.Arch).isCallPreserved(Destination, 8))
+        return Reject("native register-copy leaf has private register outputs");
   const bool NoReturn = Med.DoesNotReturn && High.DoesNotReturn &&
                         hasProvenNoReturnExit(Med, Image.Arch);
   if (Med.IsVariadic || !Med.MultiReturn.empty() || Med.FPReturnViaX87 ||
@@ -1103,6 +1133,10 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
            {SourceABICarrierKind::IntegerRegister, Register, 0, 8}});
   if (!validateSourceABI(Hint, Diagnostic))
     return std::nullopt;
+  if (!Med.RegisterCopyProjections.empty() &&
+      !hasNativeSourceStateContract(Image, Low, Med, false, nullptr, false,
+                                    CalleeContracts, &Hint))
+    return Reject("projected register copies do not restore native call state");
   auto Exact = compilerRTPlatformVersionContract(Image, Med, Hint, Diagnostic);
   if (Exact.Recognized)
     return Exact.Signature;

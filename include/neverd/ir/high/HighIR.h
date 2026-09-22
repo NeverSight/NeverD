@@ -448,6 +448,7 @@ struct HighFunc {
   bool DoesNotReturn = false;
   TypeRef ReturnType;
   std::optional<SourceFunctionTypeHint> SourceTypeHint;
+  SourceRegisterCopies RegisterCopyProjections;
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;

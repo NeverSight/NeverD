@@ -697,6 +697,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.ReturnType =
       Med.ReturnType ? Med.ReturnType : NdType::makeInt(inferReturnSize(Med));
   Func.SourceTypeHint = Med.SourceTypeHint;
+  Func.RegisterCopyProjections = Med.RegisterCopyProjections;
 
   for (auto &ML : Med.Locals) {
     HighLocal HL;

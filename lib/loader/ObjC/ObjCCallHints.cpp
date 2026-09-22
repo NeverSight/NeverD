@@ -9,6 +9,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/DarwinImportVeneer.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
@@ -22,6 +23,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <optional>
 #include <tuple>
@@ -854,6 +856,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
     return Result;
   const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto RegisterCopies = sourceRegisterCopies(Image, Function);
   const size_t Count = Function.Blocks.size();
   if (Count > 16384)
     return {};
@@ -1156,6 +1159,47 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         if (CallOccurrences.at(Op.Addr) != 1) {
           Clobber(nullptr);
           continue;
+        }
+        if (const auto Site = sourceCallOccurrenceKey(Op); Site) {
+          const auto Found = RegisterCopies.find(*Site);
+          if (Found != RegisterCopies.end()) {
+            struct Snapshot {
+              uint64_t Destination;
+              std::optional<Value> Fact;
+              std::array<bool, 8> Frame;
+            };
+            std::vector<Snapshot> Snapshots;
+            for (const auto &[Destination, Source] : Found->second.Registers) {
+              Snapshot Copy{Destination, Read(NdVar::reg(Source, 8)), {}};
+              for (unsigned I = 0; I < 8; ++I)
+                Copy.Frame[I] =
+                    State.FrameBytes.count({VnodeSpace::REG, Source + I});
+              Snapshots.push_back(std::move(Copy));
+            }
+            for (auto &Copy : Snapshots) {
+              for (auto It = Values.begin(); It != Values.end();)
+                if (std::get<0>(It->first) == VnodeSpace::REG &&
+                    std::get<1>(It->first) < Copy.Destination + 8 &&
+                    Copy.Destination <
+                        std::get<1>(It->first) + std::get<2>(It->first))
+                  It = Values.erase(It);
+                else
+                  ++It;
+              if (Copy.Fact)
+                Values.emplace(key(NdVar::reg(Copy.Destination, 8)),
+                               std::move(*Copy.Fact));
+              for (unsigned I = 0; I < 8; ++I) {
+                const auto Byte =
+                    std::pair{VnodeSpace::REG, Copy.Destination + I};
+                State.FrameBytes.erase(Byte);
+                if (Copy.Frame[I])
+                  State.FrameBytes.insert(Byte);
+              }
+            }
+            if (State.FrameBytes.size() > 4096)
+              return std::nullopt;
+            continue;
+          }
         }
         std::optional<Dispatch> Target;
         auto V = Op.NumInputs ? Read(Op.Inputs[0]) : std::nullopt;

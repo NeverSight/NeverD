@@ -1,6 +1,7 @@
 #include "JSONText.h"
 #include "ObjCSourceProjection.h"
 #include "SessionImpl.h"
+#include "SourceRegisterCopyProjection.h"
 #include "SwiftABIProjectionPlan.h"
 #include "SwiftRuntimeProjection.h"
 #include "SwiftRuntimeSignatures.h"
@@ -322,6 +323,8 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
     };
     auto EmitRows = [&](const std::vector<size_t> &Indices,
                         const PipelineResult &Projection) {
+      const SourceRegisterCopyProjectionValidator RegisterCopies(Session->Img,
+                                                                  Projection);
       std::map<va_t, const HighFunc *> Functions;
       std::map<va_t, const PipelineFunctionAudit *> Audits;
       for (const auto &Function : Projection.HighFuncs)
@@ -346,6 +349,8 @@ const char *neverd_swift_methods_json(neverd_session_t Sess,
         else if (!Function)
           Reason = "Swift source projection has no recovered native body "
                    "(possibly limited by max-func)";
+        else if (!RegisterCopies.valid(*Function))
+          Reason = "source register-copy proof is no longer valid";
         else
           Reason = sourceBodyLimitation(*Function, *Hints[Index], Audit,
                                         CallAllowed);

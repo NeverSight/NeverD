@@ -19,6 +19,7 @@
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SourceRegisterCopy.h"
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -303,6 +304,7 @@ struct MedFunc {
   /// registers not represented by the call's explicit return value.
   std::vector<MedCallClobber> CallClobbers;
   std::vector<MedStructReturnCandidate> StructReturnCandidates;
+  SourceRegisterCopies RegisterCopyProjections;
   CallingConv CC = CallingConv::Unknown;
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;

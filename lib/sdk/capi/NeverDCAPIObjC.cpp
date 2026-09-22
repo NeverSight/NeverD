@@ -19,6 +19,7 @@
 #include "ObjCSwiftOnceSources.h"
 #include "SessionImpl.h"
 #include "SourceProjectionEvidenceJSON.h"
+#include "SourceRegisterCopyProjection.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -223,6 +224,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
 
     std::map<va_t, ObjCSourceBindingResult> Projections;
     const ObjCProfileStorage ProfileStorage(S->Img);
+    const SourceRegisterCopyProjectionValidator RegisterCopies(S->Img, Result);
     std::map<va_t, ObjCBlockSourceBindingResult> BlockProjections;
     const auto SuperGetterPlan = discoverObjCSuperGetterSources(S->Img, Result);
     std::set<va_t> SuperGetterProjections;
@@ -301,6 +303,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::string Reason = BlockBinding.Limitation.empty()
                                ? Binding.Limitation
                                : BlockBinding.Limitation;
+      if (!RegisterCopies.valid(Binding.Function))
+        Reason = "source register-copy proof is no longer valid";
       if (Reason.empty()) {
         auto ReadOnlyHelpers =
             readOnlyScalarSourceHelpers(Binding.Function, S->Img);
@@ -516,6 +520,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           Evidence.add(SourceProjectionIssue::Body, Reason);
         }
         Evidence.append(Projection.Diagnostics);
+        if (!RegisterCopies.valid(Projection.Function)) {
+          Reason = "source register-copy proof is no longer valid";
+          Evidence.Complete = false;
+          Evidence.add(SourceProjectionIssue::Body, Reason);
+        }
         const auto &Block = BlockProjections.at(Method.Implementation);
         if (!Block.Limitation.empty()) {
           // Block binding currently stops at its first failed proof.

@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/SourceRegisterCopy.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -277,6 +278,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.JumpTables = Low.JumpTables;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.ExceptionMetadata = Low.ExceptionMetadata;
+  if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
+      TheArch == Arch::AArch64 && Image->Arch == TheArch)
+    Func.RegisterCopyProjections = sourceRegisterCopies(*Image, Low);
 
   for (const auto &LB : Low.Blocks) {
     MedBlock MB;
@@ -301,6 +305,35 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       }
 
       MedOp MOp;
+      if (const auto Site = sourceCallOccurrenceKey(LOp); Site) {
+        const auto Found = Func.RegisterCopyProjections.find(*Site);
+        if (Found != Func.RegisterCopyProjections.end()) {
+          // All normalized sources refer to leaf entry, including when a
+          // sequence temporarily uses another destination as scratch.
+          std::vector<std::pair<uint64_t, MedVar>> Snapshots;
+          for (const auto &[Destination, Source] : Found->second.Registers) {
+            MedOp Read;
+            Read.Opcode = NdOp::COPY;
+            Read.Addr = LOp.Addr;
+            Read.Output.Kind = MedVar::Temp;
+            Read.Output.Id = allocVarId();
+            Read.Output.Size = 8;
+            Read.Output.TheArch = TheArch;
+            Read.addInput(ndVarToMedVar(NdVar::reg(Source, 8)));
+            Snapshots.emplace_back(Destination, Read.Output);
+            MB.Ops.push_back(std::move(Read));
+          }
+          for (const auto &[Destination, Value] : Snapshots) {
+            MedOp Write;
+            Write.Opcode = NdOp::COPY;
+            Write.Addr = LOp.Addr;
+            Write.Output = ndVarToMedVar(NdVar::reg(Destination, 8));
+            Write.addInput(Value);
+            MB.Ops.push_back(std::move(Write));
+          }
+          continue;
+        }
+      }
       MOp.Opcode = LOp.Opcode;
       MOp.MemoryOrdering = LOp.MemoryOrdering;
       MOp.MemoryAddressSpace = LOp.MemoryAddressSpace;

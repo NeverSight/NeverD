@@ -61,6 +61,7 @@ add_neverd_component_library(NeverDLoader
   MachO/MachOLoader.cpp
   MachO/MachOLoaderUtils.cpp
   MachO/MachOLocalFunction.cpp
+  MachO/SourceRegisterCopy.cpp
   MachO/MachORelocations.cpp
   ObjC/ObjCEH.cpp
   ObjC/ObjCMethods.cpp

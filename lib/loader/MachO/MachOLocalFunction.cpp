@@ -11,7 +11,7 @@
 
 namespace neverd {
 bool isMachOLocalFunctionRange(const BinaryImage &Image, va_t Entry,
-                               uint64_t Size) {
+                               uint64_t Size, MachOLocalFunctionAliases Aliases) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Arch != Arch::AArch64 || Image.Bits != Bitness::Bits64 || !Size ||
       Entry > InvalidVA - Size || Image.Segments.size() > 64)
@@ -115,7 +115,7 @@ bool isMachOLocalFunctionRange(const BinaryImage &Image, va_t Entry,
       continue;
     if (Record.n_value != Entry || Record.n_type != llvm::MachO::N_SECT ||
         !Record.n_sect || Record.n_sect > Image.Sections.size() ||
-        ++Matches != 1)
+        (++Matches != 1 && Aliases == MachOLocalFunctionAliases::Reject))
       return false;
     const auto &Section = Image.Sections[Record.n_sect - 1];
     if (!Section.isExecutable() || !Section.contains(Entry) ||
@@ -129,7 +129,7 @@ bool isMachOLocalFunctionRange(const BinaryImage &Image, va_t Entry,
     if (Name->empty())
       return false;
   }
-  if (Matches != 1)
+  if (!Matches)
     return false;
   bool Exported = false;
   size_t Budget = 1024 * 1024;

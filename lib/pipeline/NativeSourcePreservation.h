@@ -4,6 +4,7 @@
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/low/SourceRegisterCopy.h"
 
 #include <map>
 #include <optional>
@@ -16,6 +17,9 @@ using NativeSourceCallKey = SourceCallOccurrenceKey;
 
 struct NativeSourceCallContract {
   const SourceFunctionTypeHint *Signature = nullptr;
+  // Mutually exclusive with Signature. The caller must freshly authenticate
+  // this exact occurrence against the original image and LowIR.
+  const SourceRegisterCopy *RegisterCopy = nullptr;
   // One authoritative effect/proof kind; an ordinary returning frame accepts
   // only the exact stack-check failure contract authenticated by its caller.
   enum class TerminationKind { None, RuntimeEntry, StackCheckFailure };

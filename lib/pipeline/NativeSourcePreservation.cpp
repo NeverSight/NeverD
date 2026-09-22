@@ -4,6 +4,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <limits>
 #include <optional>
@@ -230,6 +231,19 @@ public:
         for (unsigned I = 0; I < Op.Inputs[0].Size; ++I)
           if (Read(Op.Inputs[0], I).MayBeFrame)
             return false;
+        if (const auto *Copy = Found->second.RegisterCopy) {
+          std::vector<std::pair<uint64_t, std::array<ByteFact, 8>>> Snapshots;
+          for (const auto &[Destination, Source] : Copy->Registers) {
+            std::array<ByteFact, 8> Value;
+            for (unsigned I = 0; I < 8; ++I)
+              Value[I] = Read(NdVar::reg(Source, 8), I);
+            Snapshots.emplace_back(Destination, Value);
+          }
+          for (const auto &[Destination, Value] : Snapshots)
+            for (unsigned I = 0; I < 8; ++I)
+              put(Current.Registers, Destination + I, Value[I]);
+          continue;
+        }
         if (!Found->second.Signature)
           return false;
         if (Found->second.terminates() && !TerminalOnly &&
@@ -568,6 +582,19 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
       (Architecture != Arch::AArch64 && Architecture != Arch::X64))
     return false;
   for (const auto &[Site, Contract] : Calls) {
+    if (const auto *Copy = Contract.RegisterCopy) {
+      if (Architecture != Arch::AArch64 || Contract.Signature ||
+          Contract.terminates() || !Contract.ReadOnlyFrameParameters.empty() ||
+          !Contract.WritableFrameParameters.empty() ||
+          Copy->Caller != Function.Entry || Copy->Site != Site ||
+          Copy->Registers.empty() || Copy->Registers.size() > 16)
+        return false;
+      for (const auto &[Destination, Source] : Copy->Registers)
+        if (Destination > 28 * 8 || Source > 28 * 8 || Destination % 8 ||
+            Source % 8 || Destination == 18 * 8 || Source == 18 * 8)
+          return false;
+      continue;
+    }
     const auto *Signature = Contract.Signature;
     std::string Error;
     // Hidden result storage needs its own bounded frame-write proof before
@@ -721,6 +748,8 @@ bool observesTerminalNativeSourceState(
     return false;
   unsigned TerminatingCalls = 0;
   for (const auto &[Site, Contract] : Calls) {
+    if (Contract.RegisterCopy)
+      return false;
     const auto *Signature = Contract.Signature;
     std::string Error;
     if ((Contract.terminates() &&
@@ -777,6 +806,8 @@ bool preservesNativeSourceLeafState(const LowFunc &Function, Arch Architecture,
     return false;
   const auto &TRI = getTargetRegInfo(Architecture);
   for (const auto &[Site, Contract] : Calls) {
+    if (Contract.RegisterCopy)
+      return false;
     const auto *Signature = Contract.Signature;
     std::string Error;
     if (Contract.terminates() || !Signature ||
