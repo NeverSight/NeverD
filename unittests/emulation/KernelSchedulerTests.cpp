@@ -1073,5 +1073,95 @@ TEST(DriverKernelScheduler, InvalidCancellationMetadataCannotRetainOwnership) {
   EXPECT_EQ(S.queuedCallbackCount(), 0u);
 }
 
+TEST(DriverKernelScheduler, WDMCompletionPriorityAndObjectNamespacesAreIndependent) {
+  Scheduler S;
+  const auto Worker = take(S.enqueueWorkItem(work(7)));
+  const auto First = take(S.enqueueWDMCompletion(work(7, 101)));
+  const auto Second = take(S.enqueueWDMCompletion(work(8, 102)));
+  const auto Cancel = take(S.enqueueFrameworkCancel(work(7, 103)));
+  EXPECT_TRUE(take(S.queueDPC(dpc(7))));
+  EXPECT_TRUE(S.hasQueuedWDMCompletion());
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::DPC);
+  success(S.finish(Call->ID));
+  for (auto ID : {Cancel, First, Second, Worker}) {
+    Call = take(S.next(false));
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ID, ID);
+    EXPECT_EQ(Call->IRQL, 0u);
+    if (ID == First || ID == Second)
+      EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::WDMCompletion);
+    success(S.finish(ID));
+  }
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, WDMCompletionBatchAdmissionDoesNotReserveOrMutate) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 2;
+  Scheduler S(Limits);
+  take(S.enqueueWorkItem(work(1)));
+  expectError(S.canEnqueueWDMCompletions({work(2), work(3)}), "pending callback");
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+  EXPECT_FALSE(S.hasQueuedWDMCompletion());
+  success(S.canEnqueueWDMCompletions({work(2)}));
+  success(S.canEnqueueWDMCompletions({work(2)}));
+  EXPECT_EQ(take(S.enqueueWDMCompletion(work(2))), 2u);
+  expectError(S.enqueueWDMCompletion(work(3)), "pending callback");
+  EXPECT_TRUE(S.cancelWorkItem(1));
+  EXPECT_FALSE(S.cancelWorkItem(2));
+  EXPECT_FALSE(S.isWorkItemQueued(2));
+  EXPECT_TRUE(S.hasQueuedWDMCompletion());
+}
+
+TEST(DriverKernelScheduler, WDMCompletionBatchRejectsDuplicatesAndInvalidPC) {
+  Scheduler S;
+  expectError(S.canEnqueueWDMCompletions({work(1), work(1)}), "already queued");
+  auto Invalid = work(1);
+  Invalid.PC = 0;
+  expectError(S.canEnqueueWDMCompletions({work(2), Invalid}), "nonzero");
+  EXPECT_FALSE(S.hasPending());
+  const auto ID = take(S.enqueueWDMCompletion(work(1)));
+  expectError(S.canEnqueueWDMCompletions({work(1)}), "already queued");
+  EXPECT_EQ(ID, 1u);
+  EXPECT_EQ(S.queuedCallbackCount(), 1u);
+}
+
+TEST(DriverKernelScheduler, WDMCompletionSuspensionRetainsKindCapacityAndOwner) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 2;
+  Scheduler S(Limits);
+  const auto Completion = take(S.enqueueWDMCompletion(work(1, 101)));
+  const auto Worker = take(S.enqueueWorkItem(work(2, 102)));
+  ASSERT_TRUE(take(S.next(false)));
+  success(S.suspend(Completion));
+  EXPECT_FALSE(S.hasQueuedWDMCompletion());
+  EXPECT_TRUE(S.hasOutstanding(101));
+  expectError(S.canEnqueueWDMCompletions({work(3)}), "pending callback");
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, Worker);
+  success(S.finish(Worker));
+  success(S.resume(Completion));
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->Kind, Scheduler::CallbackKind::WDMCompletion);
+  EXPECT_EQ(S.active()->IRQL, 0u);
+  EXPECT_EQ(S.active()->Arguments, (std::vector<uint64_t>{11, 21}));
+  success(S.finish(Completion));
+  EXPECT_FALSE(S.hasOutstanding(101));
+}
+
+TEST(DriverKernelScheduler, WDMCompletionDispatchLimitPreservesQueuedOwnership) {
+  Scheduler::Limits Limits;
+  Limits.MaxDispatches = 0;
+  Scheduler S(Limits);
+  take(S.enqueueWDMCompletion(work(1, 101)));
+  expectError(S.next(false), "dispatch limit");
+  EXPECT_TRUE(S.hasQueuedWDMCompletion());
+  EXPECT_TRUE(S.hasOutstanding(101));
+  EXPECT_FALSE(S.active());
+}
+
 } // namespace
 } // namespace neverd::emulation

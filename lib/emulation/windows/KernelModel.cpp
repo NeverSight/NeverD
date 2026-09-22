@@ -189,6 +189,7 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
                                     const DriverOptions &Options) {
   if (DriverObject)
     return modelError("kernel model cannot be initialized twice");
+  ConfiguredPnpDevices = Options.PnpDevices;
   if (auto E = Registry.initialize(Options.Registry))
     return E;
   if (auto E = Memory.map(profile::KernelArenaBase, profile::KernelArenaSize,
@@ -360,12 +361,26 @@ llvm::Expected<KernelModel::DeviceCreation>
 KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
                                 uint32_t Type, uint32_t Characteristics,
                                 bool Exclusive) {
+  return createDeviceObjectForOwner(Name, ExtensionSize, Type, Characteristics,
+                                    Exclusive, DriverObject,
+                                    DeviceOwnerKind::Guest);
+}
+
+llvm::Expected<KernelModel::DeviceCreation>
+KernelModel::createDeviceObjectForOwner(
+    llvm::StringRef Name, uint32_t ExtensionSize, uint32_t Type,
+    uint32_t Characteristics, bool Exclusive, uint64_t Owner,
+    DeviceOwnerKind OwnerKind) {
   if (auto E = validateDeviceTopology())
     return E;
+  if (!Owner ||
+      (OwnerKind == DeviceOwnerKind::Guest && Owner != DriverObject) ||
+      (OwnerKind == DeviceOwnerKind::Provider && Owner != PnpProviderDriver))
+    return modelError("device creation requires a registered driver owner");
   if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
     return modelError(
         "IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
-        "FILE_DEVICE_SECURE_OPEN only; hardware/PnP is unsupported");
+        "FILE_DEVICE_SECURE_OPEN only");
   if (ExtensionSize > UINT16_MAX - DeviceObjectSize)
     return modelError(
         "device extension exceeds the bounded DEVICE_OBJECT size");
@@ -379,10 +394,11 @@ KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
       if (foldedASCII(Existing.Name) == Key)
         return DeviceCreation{StatusObjectNameCollision, 0};
   }
-  auto Previous = Memory.readInteger(DriverObject + DriverDeviceHead, 8);
+  auto Previous = Memory.readInteger(Owner + DriverDeviceHead, 8);
   if (!Previous)
     return Previous.takeError();
-  if (*Previous && !Devices.count(*Previous))
+  if (*Previous && (!Devices.count(*Previous) ||
+                    Devices.at(*Previous).OwnerDriver != Owner))
     return modelError("DRIVER_OBJECT device list was corrupted");
   const uint64_t Size = DeviceObjectSize + ExtensionSize;
   const uint64_t Start = (NextAllocation + 15) & ~uint64_t(15);
@@ -399,10 +415,13 @@ KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
   for (const Field &F : std::array<Field, 10>{
            {{0, DeviceType, 2},
             {2, Size, 2},
-            {DeviceDriverOffset, DriverObject, 8},
+            {DeviceDriverOffset, Owner, 8},
             {DeviceNext, *Previous, 8},
             {DeviceFlagsOffset,
-             DeviceInitializing | (Exclusive ? DeviceExclusive : 0), 4},
+             OwnerKind == DeviceOwnerKind::Provider
+                 ? DeviceBusEnumerated
+                 : DeviceInitializing | (Exclusive ? DeviceExclusive : 0),
+             4},
             {DeviceCharacteristicsOffset, Characteristics, 4},
             {DeviceExtensionOffset, Extension, 8},
             {DeviceTypeOffset, Type, 4},
@@ -410,14 +429,15 @@ KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
             {DeviceAlignmentOffset, DeviceAlignmentMask, 4}}})
     if (auto E = Memory.writeInteger(*Object + F.Offset, F.Value, F.Size))
       return E;
-  if (auto E = Memory.writeInteger(DriverObject + DriverDeviceHead, *Object, 8))
+  if (auto E = Memory.writeInteger(Owner + DriverDeviceHead, *Object, 8))
     return E;
   DeviceRecord Device;
   Device.Address = *Object;
   Device.Extension = Extension;
   Device.Type = Type;
   Device.Name = Name.str();
-  Device.OwnerDriver = DriverObject;
+  Device.OwnerDriver = Owner;
+  Device.OwnerKind = OwnerKind;
   Device.Size = Size;
   Devices.emplace(*Object, std::move(Device));
   return DeviceCreation{StatusSuccess, *Object};
@@ -449,6 +469,8 @@ llvm::Error KernelModel::deleteDevice(uint64_t Address) {
   auto Device = Devices.find(Address);
   if (Device == Devices.end() || Device->second.DeletePending)
     return modelError("IoDeleteDevice received an unknown or deleted device");
+  if (Device->second.OwnerKind != DeviceOwnerKind::Guest)
+    return modelError("IoDeleteDevice cannot delete a provider-owned PDO");
   if (auto E = validateDeviceTopology())
     return E;
   Device->second.DeletePending = true;
@@ -861,27 +883,32 @@ llvm::Error KernelModel::snapshot() {
     Result.MajorFunctions[I] = *Function;
   }
   Result.Devices.clear();
-  auto Head = Memory.readInteger(DriverObject + DriverDeviceHead, 8);
-  if (!Head)
-    return Head.takeError();
   std::set<uint64_t> Seen;
-  uint64_t Current = *Head;
-  while (Current) {
-    auto It = Devices.find(Current);
-    if (It == Devices.end() || It->second.OwnerDriver != DriverObject ||
-        !Seen.insert(Current).second)
-      return modelError("unknown device or cycle in DRIVER_OBJECT device list");
-    const auto &Device = It->second;
-    Result.Devices.push_back(
-        {Device.Address, Device.Extension, Device.Type, Device.Name});
-    auto Next = Memory.readInteger(Current + DeviceNext, 8);
-    if (!Next)
-      return Next.takeError();
-    Current = *Next;
+  for (uint64_t Owner : {DriverObject, PnpProviderDriver}) {
+    if (!Owner)
+      continue;
+    auto Head = Memory.readInteger(Owner + DriverDeviceHead, 8);
+    if (!Head)
+      return Head.takeError();
+    uint64_t Current = *Head;
+    while (Current) {
+      auto It = Devices.find(Current);
+      if (It == Devices.end() || It->second.OwnerDriver != Owner ||
+          !Seen.insert(Current).second)
+        return modelError("unknown device or cycle in DRIVER_OBJECT device list");
+      const auto &Device = It->second;
+      if (Device.OwnerKind == DeviceOwnerKind::Guest)
+        Result.Devices.push_back(
+            {Device.Address, Device.Extension, Device.Type, Device.Name});
+      auto Next = Memory.readInteger(Current + DeviceNext, 8);
+      if (!Next)
+        return Next.takeError();
+      Current = *Next;
+    }
   }
   if (Seen.size() != Devices.size())
     return modelError("live device detached from DRIVER_OBJECT device list");
-  return llvm::Error::success();
+  return snapshotPnpDevices();
 }
 
 llvm::Error KernelModel::validateGuestAccess(uint64_t Address, uint32_t Size,
@@ -981,16 +1008,26 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
                    Offset < DriverAddDeviceOffset + profile::PointerSize;
           }))
     return E;
+  if (auto E = CheckObject(
+          PnpProviderDriver, DriverObjectSize, [&](uint64_t Offset) {
+            return !IsWrite &&
+                   (Offset < 4 ||
+                    (Offset >= DriverDeviceHead &&
+                     Offset < DriverDeviceHead + profile::PointerSize));
+          }))
+    return E;
   for (const auto &[Object, Device] : Devices) {
-    (void)Device;
     if (auto E = CheckObject(Object, DeviceObjectSize, [&](uint64_t Offset) {
-          if (IsWrite)
+          if (IsWrite) {
+            if (Device.OwnerKind == DeviceOwnerKind::Provider)
+              return false;
             return (Offset >= DeviceNext && Offset < DeviceAttachedOffset) ||
                    (Offset >= DeviceFlagsOffset &&
                     Offset < DeviceCharacteristicsOffset) ||
                    Offset == DeviceStackCountOffset ||
                    (Offset >= DeviceAlignmentOffset &&
                     Offset < DeviceAlignmentOffset + 4);
+          }
           return Offset < DeviceAttachedOffset ||
                  (Offset >= DeviceCurrentIRP && Offset < DeviceVPBOffset) ||
                  (Offset >= DeviceExtensionOffset &&

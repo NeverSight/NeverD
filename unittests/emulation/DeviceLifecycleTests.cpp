@@ -90,6 +90,11 @@ protected:
   }
 };
 
+TEST_F(DriverDeviceLifecycle, PowerRequestCodesMatchWindowsMinorFunctions) {
+  EXPECT_EQ(static_cast<uint8_t>(DevicePowerRequest::Set), 0x02);
+  EXPECT_EQ(static_cast<uint8_t>(DevicePowerRequest::Query), 0x03);
+}
+
 TEST_F(DriverDeviceLifecycle, StartFailureAndQueriesRollbackWithoutStartingIo) {
   EXPECT_FALSE(state().CanStartIo);
   failure(Model.beginIo(FirstDevice, 1), "not ready");
@@ -181,6 +186,19 @@ TEST_F(DriverDeviceLifecycle,
   failure(Model.finishPnp(Remove, Failure), "must not fail");
   EXPECT_EQ(state().Pnp, DevicePnpState::Removing);
   success(Model.finishPnp(Remove, Success));
+  EXPECT_EQ(state().Pnp, DevicePnpState::Removed);
+}
+
+TEST_F(DriverDeviceLifecycle, RemoveAndCancelRequireExactSuccess) {
+  for (auto Minor : {DevicePnpRequest::CancelRemove, DevicePnpRequest::Remove}) {
+    const auto Ticket = begin(Minor);
+    const auto Before = state().Pnp;
+    failure(Model.validatePnpCompletion(Ticket, 1), "STATUS_SUCCESS");
+    failure(Model.finishPnp(Ticket, 0x40000000), "STATUS_SUCCESS");
+    EXPECT_EQ(state().Pnp, Before);
+    EXPECT_EQ(state().PnpOperation, Ticket);
+    success(Model.finishPnp(Ticket, Success));
+  }
   EXPECT_EQ(state().Pnp, DevicePnpState::Removed);
 }
 

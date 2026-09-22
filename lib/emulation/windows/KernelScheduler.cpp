@@ -150,6 +150,30 @@ llvm::Expected<bool> KernelScheduler::queueDPC(DpcCallback DPC) {
   return true;
 }
 
+llvm::Error KernelScheduler::canEnqueueWDMCompletions(
+    llvm::ArrayRef<Callback> Batch) const {
+  if (auto E = validateTime())
+    return E;
+  std::set<uint64_t> Objects;
+  for (const auto &Completion : Batch) {
+    if (auto E = validateCallback(Completion))
+      return E;
+    if (containsObject(Completions, Completion.Object) ||
+        !Objects.insert(Completion.Object).second)
+      return schedulerError("WDM completion is already queued");
+  }
+  return checkCapacity(Batch.size());
+}
+
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueWDMCompletion(Callback Completion) {
+  if (auto E = canEnqueueWDMCompletions({Completion}))
+    return E;
+  Completions.push_back(makeInvocation(std::move(Completion),
+                                       CallbackKind::WDMCompletion, Now));
+  return Completions.back().ID;
+}
+
 bool KernelScheduler::removeDPC(uint64_t Object) {
   return removeObject(DPCs, Object);
 }
@@ -338,8 +362,9 @@ KernelScheduler::next(bool AdvanceTime,
     if (queuedCallbackCount()) {
       if (Dispatches >= Bounds.MaxDispatches)
         return schedulerError("scheduler callback dispatch limit exhausted");
-      auto &Queue = !DPCs.empty()            ? DPCs
+      auto &Queue = !DPCs.empty()             ? DPCs
                     : !Cancellations.empty() ? Cancellations
+                    : !Completions.empty()   ? Completions
                                              : Workers;
       Active = std::move(Queue.front());
       Queue.pop_front();
@@ -416,7 +441,7 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
     return true;
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
   if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches) ||
-      llvm::any_of(Cancellations, Matches))
+      llvm::any_of(Cancellations, Matches) || llvm::any_of(Completions, Matches))
     return true;
   if (llvm::any_of(Suspended, [Owner](const auto &Item) {
         return Item.second.Owner == Owner;

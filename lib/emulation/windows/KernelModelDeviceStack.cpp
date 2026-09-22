@@ -28,7 +28,11 @@ llvm::Error deviceError(const llvm::Twine &Message) {
 
 llvm::Error KernelModel::validateDeviceTopology() const {
   for (const auto &[Address, Device] : Devices) {
-    if (Device.Address != Address || Device.OwnerDriver != DriverObject)
+    const uint64_t ExpectedOwner = Device.OwnerKind == DeviceOwnerKind::Guest
+                                       ? DriverObject
+                                       : PnpProviderDriver;
+    if (Device.Address != Address || !ExpectedOwner ||
+        Device.OwnerDriver != ExpectedOwner)
       return deviceError("device has an unsupported driver owner");
     struct Field {
       uint64_t Offset;
@@ -54,6 +58,14 @@ llvm::Error KernelModel::validateDeviceTopology() const {
       return Count.takeError();
     if (!*Count || *Count > MaxIRPStackCount)
       return deviceError("DEVICE_OBJECT.StackSize must be a positive CCHAR");
+    auto Flags = Memory.readInteger(Address + DeviceFlagsOffset, 4);
+    if (!Flags)
+      return Flags.takeError();
+    if (bool(*Flags & DeviceBusEnumerated) !=
+        (Device.OwnerKind == DeviceOwnerKind::Provider))
+      return deviceError("DEVICE_OBJECT bus-enumerated role was corrupted");
+    if (Device.OwnerKind == DeviceOwnerKind::Provider && Device.Lower)
+      return deviceError("provider PDO cannot attach above another device");
     if (Device.Lower) {
       auto Lower = Devices.find(Device.Lower);
       if (Lower == Devices.end() || Lower->second.Upper != Address)
@@ -141,6 +153,8 @@ llvm::Expected<uint64_t> KernelModel::attachDevice(uint64_t Source,
   auto TargetIt = Devices.find(Target);
   if (SourceIt == Devices.end() || TargetIt == Devices.end())
     return deviceError("IoAttachDeviceToDeviceStack requires live devices");
+  if (SourceIt->second.OwnerKind != DeviceOwnerKind::Guest)
+    return deviceError("IoAttachDeviceToDeviceStack source must be guest-owned");
   if (Source == Target)
     return deviceError("IoAttachDeviceToDeviceStack cannot attach a device to "
                        "itself");
@@ -152,6 +166,15 @@ llvm::Expected<uint64_t> KernelModel::attachDevice(uint64_t Source,
   auto Stack = deviceStack(*Top);
   if (!Stack)
     return Stack.takeError();
+  auto PnpOwner = pnpDeviceForRoute(*Top);
+  if (!PnpOwner)
+    return PnpOwner.takeError();
+  if (SourceIt->second.PnpDevice && SourceIt->second.PnpDevice != *PnpOwner)
+    return deviceError("reattaching a device to another PnP identity is "
+                       "outside this profile");
+  if (*PnpOwner &&
+      (!isProviderDevice(Stack->back()) || Stack->back() != *PnpOwner))
+    return deviceError("PnP attachment target no longer reaches its PDO");
   Stack->push_back(Source);
   for (uint64_t Address : *Stack)
     if (Devices.at(Address).DeletePending)
@@ -192,6 +215,10 @@ llvm::Expected<uint64_t> KernelModel::attachDevice(uint64_t Source,
       return E;
   SourceIt->second.Lower = *Top;
   Devices.at(*Top).Upper = Source;
+  if (*PnpOwner) {
+    SourceIt->second.PnpDevice = *PnpOwner;
+    pnpDeviceForPDO(*PnpOwner)->GuestDevices.insert(Source);
+  }
   return *Top;
 }
 

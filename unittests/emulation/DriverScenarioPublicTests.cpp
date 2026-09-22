@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v7");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v8");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1163,10 +1163,11 @@ TEST_F(DriverScenarioPublic, CAPIExecutesWdmRetainedAndNestedCompletion) {
       Options.timeout_milliseconds = 5000;
       Options.service_name = Service.c_str();
       const auto Scenario = wdmStackScenario(Mode == 'D');
-      auto Parsed = llvm::json::parse(takeString(
-          neverd_emulate_driver_scenario_json(Session, Image, Scenario.c_str(),
-                                              &Options)));
-      ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+      auto Parsed =
+          llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+              Session, Image, Scenario.c_str(), &Options)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
       ASSERT_NE(Parsed->getAsObject(), nullptr);
       const auto &Report = *Parsed->getAsObject();
       checkWdmStackReport(Report, Mode);
@@ -1190,6 +1191,74 @@ TEST_F(DriverScenarioPublic, CAPIExecutesWdmRetainedAndNestedCompletion) {
     }
 #else
   GTEST_SKIP() << "NEVERD_WDM_STACK_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteExplicitDelayedPnpLifecycle) {
+#ifdef NEVERD_WDM_PNP_FIXTURE
+  const std::string Scenario = R"({
+    "pnp_devices":[{"id":"resource0","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[
+      {"kind":"pnp","device_id":"resource0","minor":"start",
+       "bus_completion":{"status":0,"delay_100ns":10}},
+      {"kind":"create","device_id":"resource0","file":9},
+      {"kind":"ioctl","file":9,"code":"0x222000","output_size":4},
+      {"kind":"cleanup","file":9},{"kind":"close","file":9},
+      {"kind":"pnp","device_id":"resource0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"resource0","minor":"remove",
+       "bus_completion":{"status":0,"delay_100ns":20}}],
+    "unload":true})";
+  std::vector<const char *> Images{NEVERD_WDM_PNP_FIXTURE};
+#ifdef NEVERD_WDM_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_PNP_CFG_FIXTURE);
+#endif
+  for (const auto *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.c_str(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "returned");
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Devices = Report->getArray("pnp_devices");
+      ASSERT_NE(Devices, nullptr);
+      ASSERT_EQ(Devices->size(), 1u);
+      const auto *Device = Devices->front().getAsObject();
+      ASSERT_NE(Device, nullptr);
+      EXPECT_EQ(Device->getString("id"), "resource0");
+      EXPECT_EQ(Device->getInteger("add_device_status"), 0);
+      EXPECT_EQ(Device->getString("pnp_state"), "removed");
+      EXPECT_EQ(Device->getBoolean("provider_present"), false);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 7u);
+      for (size_t Index : {0u, 5u, 6u}) {
+        const auto *Request = (*Requests)[Index].getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getString("device_id"), "resource0");
+        ASSERT_NE(Request->get("file"), nullptr);
+        EXPECT_EQ(Request->get("file")->kind(), llvm::json::Value::Null);
+        const auto *Pnp = Request->getObject("pnp");
+        ASSERT_NE(Pnp, nullptr);
+        EXPECT_EQ(Pnp->getInteger("bus_status"), 0);
+        EXPECT_EQ(Pnp->getInteger("bus_received_at_100ns"), Index ? 10 : 0);
+        EXPECT_EQ(Pnp->getInteger("bus_completed_at_100ns"),
+                  Index == 6 ? 30 : 10);
+      }
+      EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"), "504e5021");
+      EXPECT_EQ((*Requests)[2].getAsObject()->getInteger("file"), 9);
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_PNP_FIXTURE requires a genuine WDK fixture";
 #endif
 }
 

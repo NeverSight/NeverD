@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v7",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v8",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -191,6 +191,31 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
         i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
         self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
+
+    def test_driver_pnp_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("configuration.pnp_devices", "resource_free",
+                                      "initial_device_power", "initial_system_power",
+                                      "device_id", "bus_completion", "delay_100ns",
+                                      "query_remove", "cancel_remove", "add_device_status",
+                                      "provider_present", "bus_received_at_100ns",
+                                      "bus_completed_at_100ns", "add_device:<ID>")),
+            ("architecture.md", ("DriverPnp.h", "DeviceLifecycle.def",
+                                 "KernelModelPnpDevices", "KernelModelPnpRequests",
+                                 "KernelModelPnpCompletion")),
+            ("testing.md", ("DriverPnpScenarioTests.cpp", "KernelPnpDeviceTests.cpp",
+                            "KernelPnpRequestTests.cpp", "KernelPnpCompletionTests.cpp",
+                            "DriverWDMPnpTests.cpp", "NEVERD_WDM_PNP_FIXTURE",
+                            "NEVERD_WDM_PNP_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
 
     def test_repository_documentation_matrix_is_valid(self) -> None:
         """Exercise the same working-tree validation that the CLI performs."""

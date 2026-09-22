@@ -14,6 +14,7 @@
 #define NEVERD_EMULATION_DRIVERSESSION_H
 
 #include "neverd/emulation/DriverProfile.h"
+#include "neverd/emulation/DriverPnp.h"
 #include "neverd/emulation/DriverRegistry.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -53,6 +54,10 @@ struct DriverRequest {
   /// units. Zero requests cancellation before dispatch; only READ/WRITE/IOCTL
   /// accept this field. Runtime cancellation requires a supported KMDF route.
   std::optional<uint64_t> CancelAfter100ns;
+  /// Stable configured PDO identity; mutually exclusive with Device.
+  std::string DeviceID;
+  /// Present exactly when Kind is Pnp; those packets have no FILE_OBJECT.
+  std::optional<DriverPnpOperation> Pnp;
 };
 
 /// This profile models a single-processor x64 WDM lifecycle with cooperative
@@ -75,6 +80,7 @@ struct DriverOptions {
   /// An explicitly populated registry namespace. Omission leaves registry
   /// availability unspecified; an empty inventory models an empty namespace.
   std::optional<std::vector<DriverRegistryKey>> Registry;
+  std::vector<DriverPnpDevice> PnpDevices;
 };
 
 enum class DriverStopReason {
@@ -125,6 +131,8 @@ struct DriverRequestResult {
   /// Actual virtual time when cancellation was requested; absent when the
   /// request completed before its configured cancellation event could fire.
   std::optional<uint64_t> CancelRequestedAt100ns;
+  std::string DeviceID;
+  std::optional<DriverPnpRequestResult> Pnp;
 };
 
 struct DriverFault {
@@ -164,6 +172,7 @@ struct DriverResult {
   std::optional<DriverFault> Fault;
   /// Final registry state, including changes observed before execution stops.
   std::optional<std::vector<DriverRegistryKey>> Registry;
+  std::vector<DriverPnpDeviceResult> PnpDevices;
 };
 
 /// Parse and validate a fresh complete PE image. Request/format/setup failures
