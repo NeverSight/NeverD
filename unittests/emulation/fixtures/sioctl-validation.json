@@ -1,0 +1,33 @@
+{
+  "repository": "https://github.com/microsoft/Windows-driver-samples",
+  "revision": "3c3fb49073c047c4cc8e6c203c6331f62b426507",
+  "raw_root": "https://raw.githubusercontent.com/microsoft/Windows-driver-samples",
+  "files": {
+    "general/ioctl/wdm/sys/sioctl.c": "62c6564752cde71fab47c6545aa915f5adfa3305ecf879d6678730185fa443db",
+    "general/ioctl/wdm/sys/sioctl.h": "e0181de7bbd75949ad01933cfe650dba958b226a4e6755ed7b02a9f789397312",
+    "LICENSE": "07639618c7b94ab9953cc61715f6325877e1854dca611ed9b1bd54497cf5e93a"
+  },
+  "expected_output": "This String is from Device Driver !!!\u0000",
+  "expected_cleanup_status": 3221225488,
+  "scenario": {
+    "requests": [
+      {
+        "kind": "create",
+        "device": "\\Device\\SIOCTL"
+      },
+      {
+        "kind": "ioctl",
+        "code": "0x9c402408",
+        "input": "7465737400",
+        "output_size": 38
+      },
+      {
+        "kind": "cleanup"
+      },
+      {
+        "kind": "close"
+      }
+    ],
+    "unload": true
+  }
+}

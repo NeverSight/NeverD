@@ -292,6 +292,14 @@ atomic 및 system instruction은 이 계약의 범위 밖입니다. `ProvenSeman
 fixed point까지 실행해야 합니다. 이 정책 자체는 실행 가능한 translation backend를
 제공하지 않습니다.
 
+## Windows 드라이버 에뮬레이션
+
+`lib/emulation`은 `NEVERD_ENABLE_DRIVER_EMULATION`으로 활성화하는 선택적 실행 구성 요소입니다. `emulate-driver` CLI는 공개 C API를 통해 이 구성 요소를 호출합니다. `DriverSession`은 제한된 x64 WDM 초기화와 선택적인 동기 create/IOCTL/cleanup/close/unload 호출을 담당합니다. Windows 이미지 매핑은 기존 로더의 완전한 `BinaryImage`를 사용하며, Windows 모델은 게스트 객체와 API 의미론을 담당합니다. Unicorn 어댑터는 CPU 실행과 기준이 되는 게스트 메모리를 담당합니다. 이 경로는 실험적인 네이티브 변환 파이프라인을 사용하지 않으며 해당 파이프라인의 지원 프로필을 변경하지 않습니다.
+
+Unicorn은 `cmake/NeverDUnicorn.cmake`에서 한 번 구성되며 의미론 테스트와 공유합니다. `BUILD_TESTING=OFF`일 때도 사용할 수 있습니다. 알 수 없는 API와 CPU 환경 동작은 명시적으로 중단되며, 드라이버가 반환한 실패는 미완료 에뮬레이션과 구별됩니다. 한도, 보고서 및 지원하지 않는 수명 주기 작업은 [드라이버 에뮬레이션](driver-emulation.md)을 참조하세요.
+
+기존 C API는 초기화만 수행합니다. 시나리오 JSON은 동일한 실행 옵션에 대해 하나의 엄격한 파서를 사용하며, 필드와 요청 종류는 `.def` 목록에 선언됩니다. 요청한 베이스 재배치와 security-cookie 초기화는 실행 로더가 담당합니다. Windows 모델은 IRP/스택 위치/파일 객체를 소유하고 동기 완료를 검증하며, 세션은 공유 실행 예산 아래에서 콜백 순서를 제어합니다. 사용되지 않는 알 수 없는 import는 지연 바인딩이며, 이를 실행하거나 모델링되지 않은 export 데이터를 읽으면 명시적으로 중단됩니다.
+
 ## 예외 재작성 경계
 
 Mach-O compact unwind에는 원본 `__unwind_info`용 strict parser, 생성된

@@ -1,0 +1,19 @@
+//===- DriverScenarioFields.def - Scenario JSON fields --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Strict root and request field inventories for driver scenario JSON.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(LoadAddress, "load_address")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Unload, "unload")
+NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Requests, "requests")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Kind, "kind")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Device, "device")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Code, "code")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Input, "input")
+NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(OutputSize, "output_size")

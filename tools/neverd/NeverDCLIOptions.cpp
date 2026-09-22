@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "NeverDCLI.h"
+#include "neverd/emulation/DriverProfile.h"
 
 using namespace llvm;
 
@@ -114,6 +115,8 @@ cl::SubCommand
 cl::SubCommand SimplifyCmd("simplify", "Simplify a bitvector expression");
 cl::SubCommand OptimizeIRCmd("optimize-ir",
                              "Optimize textual LLVM IR transactionally");
+cl::SubCommand EmulateDriverCmd(
+    "emulate-driver", "Run bounded x64 WDM driver initialization and emit JSON");
 cl::SubCommand TranslateObjectCmd(
     "translate-object",
     "Compile canonical legacy-prefix-free x86-64 v1 REX.W full-width GPR MOV, "
@@ -1018,6 +1021,21 @@ cl::opt<bool> OptimizeIRExhaustive(
 cl::opt<bool> OptimizeIRJson("json",
                              cl::desc("Output result and telemetry as JSON"),
                              cl::sub(OptimizeIRCmd));
+
+//===----------------------------------------------------------------------===//
+// Driver-emulation-specific options
+//===----------------------------------------------------------------------===//
+
+cl::opt<std::string> EmulateDriverInput(
+    cl::Positional, cl::desc("<driver.sys>"), cl::Required,
+    cl::sub(EmulateDriverCmd));
+cl::opt<unsigned long long> DriverInstructionLimit(
+    "instruction-limit", cl::desc("Maximum guest instructions (must be positive)"),
+    cl::init(emulation::profile::DefaultInstructionLimit),
+    cl::sub(EmulateDriverCmd));
+cl::opt<std::string> DriverScenarioFile(
+    "scenario", cl::desc("Strict driver lifecycle scenario JSON file"),
+    cl::value_desc("path"), cl::init(""), cl::sub(EmulateDriverCmd));
 
 //===----------------------------------------------------------------------===//
 // Translate-object-specific options

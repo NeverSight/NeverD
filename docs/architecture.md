@@ -427,6 +427,31 @@ run NeverD's proof-gated semantic simplification to a joint fixed point with
 LLVM optimization; the policy does not supply an executable translation
 backend.
 
+## Windows driver emulation
+
+`lib/emulation` is an optional execution component, enabled by
+`NEVERD_ENABLE_DRIVER_EMULATION`. The `emulate-driver` CLI reaches it through
+the public C API. `DriverSession` owns bounded x64 WDM initialization and
+optional synchronous create/IOCTL/cleanup/close/unload invocations;
+Windows image mapping consumes the existing loader's complete `BinaryImage`,
+and the Windows model owns guest objects and API semantics. The Unicorn adapter
+owns CPU execution and the authoritative guest memory. This path does not use
+the experimental native translation pipeline or alter its supported profile.
+
+Unicorn is configured once through `cmake/NeverDUnicorn.cmake`, shared with
+semantic tests and available when `BUILD_TESTING=OFF`. Unknown APIs and CPU
+environment behavior stop explicitly; a driver-returned failure remains
+distinct from an incomplete emulation. See [driver emulation](driver-emulation.md)
+for limits, reports, and unsupported lifecycle operations.
+
+The original C API remains initialization-only. Scenario JSON uses one strict
+parser over the same execution options, with fields and request kinds declared
+in `.def` inventories. Requested rebasing and security-cookie initialization
+belong to the execution loader. The Windows model owns IRP/stack-location/file
+objects and validates synchronous completion; the session sequences callbacks
+under shared execution budgets. Unused unknown imports are lazy bindings;
+executing them or reading unmodeled export data stops explicitly.
+
 ## Exception-rewrite boundaries
 
 Mach-O compact unwind has a strict parser for original `__unwind_info`, a

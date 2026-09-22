@@ -1,0 +1,19 @@
+//===- DriverScenarioLimits.def - Bounded scenario limits -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared C++/C/CLI limits for driver scenario input.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioJSONLimit,
+                           NEVERD_DRIVER_SCENARIO_JSON_LIMIT, 2 * 1024 * 1024)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioRequestLimit,
+                           NEVERD_DRIVER_SCENARIO_REQUEST_LIMIT, 64)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioBufferLimit,
+                           NEVERD_DRIVER_SCENARIO_BUFFER_LIMIT, 65536)
+NEVERD_DRIVER_SCENARIO_LIMIT(DriverScenarioTotalBufferLimit,
+                           NEVERD_DRIVER_SCENARIO_TOTAL_BUFFER_LIMIT, 512 * 1024)

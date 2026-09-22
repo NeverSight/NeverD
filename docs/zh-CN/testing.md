@@ -28,6 +28,18 @@ cmake --build build-release --parallel 4
 克隆、构建配置与 macOS 预编译 LLVM 说明见
 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 驱动模拟检查
+
+同时启用 `NEVERD_ENABLE_DRIVER_EMULATION=ON` 与 `BUILD_TESTING=ON`，即可构建专项执行套件及共享 C API／CLI 检查：
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+fixture 覆盖来宾初始化、成功与失败返回、不支持的行为、内存故障、严格场景解析、有界执行，以及经过 create、IOCTL、cleanup、close 和 unload 的同步缓冲 I/O。使用 [`emulate-driver` CLI](driver-emulation.md) 验证 JSON 与进程退出码。生产构建可在 `BUILD_TESTING=OFF` 时启用此功能；`libneverd` 不得依赖仅供测试使用的 Unicorn 配置。
+
 ## 测试布局
 
 `add_neverd_unittest` 创建一个 GoogleTest 可执行文件，并为每个发现的用例分配

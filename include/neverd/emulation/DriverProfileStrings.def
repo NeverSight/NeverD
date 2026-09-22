@@ -1,0 +1,17 @@
+//===- DriverProfileStrings.def - Driver profile string constants ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Driver profile string constants.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-synchronous-v1")
+NEVERD_DRIVER_PROFILE_STRING(DefaultServiceName, "NeverDDriver")
+NEVERD_DRIVER_PROFILE_STRING(EntryPhase, "driver_entry")
+NEVERD_DRIVER_PROFILE_STRING(RequestPhase, "request:")
+NEVERD_DRIVER_PROFILE_STRING(UnloadPhase, "unload")
+NEVERD_DRIVER_PROFILE_STRING(WriteSemantics, "attempted_guest_write")

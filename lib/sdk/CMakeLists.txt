@@ -6,6 +6,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPIBenchDecode.cpp
     capi/NeverDCAPIConcolic.cpp
     capi/NeverDCAPIDecompile.cpp
+    capi/NeverDCAPIEmulation.cpp
     capi/NeverDCAPIObjC.cpp
     capi/NeverDCAPISwift.cpp
     capi/NeverDCAPIDisasm.cpp
@@ -82,6 +83,12 @@ target_link_libraries(neverd_shared PRIVATE
     ${CMAKE_DL_LIBS}
     ${NEVERD_COMMON_LIBS})
 
+if(NEVERD_ENABLE_DRIVER_EMULATION)
+    target_link_libraries(neverd_shared PRIVATE NeverDEmulation)
+    target_compile_definitions(neverd_shared PRIVATE
+        NEVERD_ENABLE_DRIVER_EMULATION=1)
+endif()
+
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
     target_link_libraries(neverd_shared PRIVATE Python3::Python)
     target_compile_definitions(neverd_shared PRIVATE
@@ -137,6 +144,7 @@ set(NEVERD_SDK_HEADERS
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPITypes.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISession.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIDisasm.h
+    ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIEmulation.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPIQuery.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISymbolic.h
     ${CMAKE_SOURCE_DIR}/include/neverd/sdk/NeverDCAPISafety.h
@@ -160,6 +168,8 @@ add_custom_command(TARGET neverd_shared POST_BUILD
         "${NEVERD_STAGED_SDK_DIRECTORY}/neverd/sdk"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${NEVERD_STAGED_SDK_DIRECTORY}/neverd"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd/emulation"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NEVERD_SDK_HEADERS}
         "${NEVERD_STAGED_SDK_DIRECTORY}"
@@ -170,11 +180,41 @@ add_custom_command(TARGET neverd_shared POST_BUILD
         "${CMAKE_SOURCE_DIR}/include/neverd/OutputLanguages.def"
         "${NEVERD_STAGED_SDK_DIRECTORY}/neverd"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/include/neverd/emulation/DriverScenarioLimits.def"
+        "${NEVERD_STAGED_SDK_DIRECTORY}/neverd/emulation"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/LICENSE"
         "${CMAKE_SOURCE_DIR}/NOTICE"
         "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
         "${NEVERD_STAGED_SDK_DIRECTORY}"
     COMMENT "Copying SDK headers and legal notices next to libneverd")
+
+if(NEVERD_ENABLE_DRIVER_EMULATION)
+  # The production library now contains Unicorn. Preserve the dependency's
+  # original notices both beside binaries and inside the staged SDK.
+  foreach(_neverd_unicorn_notices_dir
+      "$<TARGET_FILE_DIR:neverd_shared>/licenses/unicorn"
+      "${NEVERD_STAGED_SDK_DIRECTORY}/licenses/unicorn")
+    add_custom_command(TARGET neverd_shared POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_neverd_unicorn_notices_dir}/qemu"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/COPYING"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/COPYING.LGPL2"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/COPYING_GLIB"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/AUTHORS.TXT"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/CREDITS.TXT"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/THIRD_PARTY_NOTICES.md"
+          "${_neverd_unicorn_notices_dir}"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/qemu/LICENSE"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/qemu/COPYING"
+          "${CMAKE_SOURCE_DIR}/third_party/unicorn/qemu/COPYING.LIB"
+          "${_neverd_unicorn_notices_dir}/qemu"
+      COMMENT "Copying Unicorn dependency notices"
+      VERBATIM)
+  endforeach()
+endif()
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
   set(NEVERD_PYTHON_SDK_ROOT_FILES

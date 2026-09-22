@@ -1,0 +1,19 @@
+//===- UnicornRegisters.def - Driver ABI register mapping -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Register names shared by the driver ABI and the Unicorn adapter.
+/// Define NEVERD_UNICORN_REGISTER(Name, Register) before inclusion.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_UNICORN_REGISTER(PC, UC_X86_REG_RIP)
+NEVERD_UNICORN_REGISTER(SP, UC_X86_REG_RSP)
+NEVERD_UNICORN_REGISTER(AX, UC_X86_REG_RAX)
+NEVERD_UNICORN_REGISTER(CX, UC_X86_REG_RCX)
+NEVERD_UNICORN_REGISTER(DX, UC_X86_REG_RDX)
+NEVERD_UNICORN_REGISTER(R8, UC_X86_REG_R8)
+NEVERD_UNICORN_REGISTER(R9, UC_X86_REG_R9)

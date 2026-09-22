@@ -1,0 +1,21 @@
+//===- DriverStopReasons.def - Execution stop identities ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Stable internal stop identities and their report spellings. Define
+/// NEVERD_DRIVER_STOP(Name, Spelling) before including this file.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_STOP(Returned, "returned")
+NEVERD_DRIVER_STOP(UnsupportedAPI, "unsupported_api")
+NEVERD_DRIVER_STOP(UnsupportedInstruction, "unsupported_instruction")
+NEVERD_DRIVER_STOP(MemoryFault, "memory_fault")
+NEVERD_DRIVER_STOP(InstructionLimit, "instruction_limit")
+NEVERD_DRIVER_STOP(EventLimit, "event_limit")
+NEVERD_DRIVER_STOP(Timeout, "timeout")
+NEVERD_DRIVER_STOP(ModelError, "model_error")
+NEVERD_DRIVER_STOP(EngineError, "engine_error")

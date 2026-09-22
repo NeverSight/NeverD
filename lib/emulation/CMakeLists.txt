@@ -1,0 +1,15 @@
+add_neverd_component_library(NeverDEmulation
+  DriverResult.cpp
+  DriverScenario.cpp
+  DriverSession.cpp
+  GuestMemory.cpp
+  X64ExecutionPolicy.cpp
+  unicorn/UnicornBackend.cpp
+  windows/DriverImage.cpp
+  windows/KernelModel.cpp
+  windows/KernelModelIO.cpp
+  LINK_COMPONENTS Loader
+  LINK_LIBS unicorn)
+if(WIN32)
+  target_compile_definitions(NeverDEmulation PRIVATE NOMINMAX)
+endif()

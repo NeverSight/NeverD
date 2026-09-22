@@ -30,6 +30,18 @@ linker(`ld.lld`, `lld-link`)가 필요합니다. CMake는 많은 재배치 가�
 복제, 빌드 프로필, macOS 사전 빌드 LLVM은
 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
 
+## 드라이버 에뮬레이션 검사
+
+`NEVERD_ENABLE_DRIVER_EMULATION=ON`과 `BUILD_TESTING=ON`을 함께 활성화하면 전용 실행 스위트와 공유 C API/CLI 검사를 빌드할 수 있습니다.
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+fixture는 게스트 초기화, 성공/실패 반환, 미지원 동작, 메모리 오류, 엄격한 시나리오 파싱, 제한된 실행, 그리고 create, IOCTL, cleanup, close, unload를 통한 동기 buffered I/O를 검증합니다. JSON과 프로세스 종료 코드를 확인하려면 [`emulate-driver` CLI](driver-emulation.md)를 사용하세요. 프로덕션 빌드는 `BUILD_TESTING=OFF`에서도 이 기능을 활성화할 수 있으며, `libneverd`가 테스트 전용 Unicorn 구성에 의존해서는 안 됩니다.
+
 ## 테스트 배치
 
 `add_neverd_unittest`는 GoogleTest 실행 파일 하나를 만들고 발견한 각 사례에 실행

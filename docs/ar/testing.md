@@ -30,6 +30,18 @@ cmake --build build-release --parallel 4
 راجع [CONTRIBUTING.md](CONTRIBUTING.md) للاستنساخ وملفات البناء وLLVM
 الجاهز على macOS.
 
+## فحوص محاكاة برامج التشغيل
+
+فعّل `NEVERD_ENABLE_DRIVER_EMULATION=ON` مع `BUILD_TESTING=ON` لبناء مجموعة اختبارات التنفيذ المركّزة وفحوص واجهة C API/CLI المشتركة:
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+تختبر حالات الاختبار تهيئة الضيف والعودة الناجحة والفاشلة والسلوك غير المدعوم وأعطال الذاكرة والتحليل الصارم للسيناريو والتنفيذ المحدود، وكذلك الإدخال/الإخراج المتزامن المخزّن مؤقتًا عبر create وIOCTL وcleanup وclose وunload. استخدم [واجهة `emulate-driver` لسطر الأوامر](driver-emulation.md) للتحقق من JSON ورموز خروج العملية. يمكن لبنى الإنتاج تفعيل هذه الميزة مع `BUILD_TESTING=OFF`؛ ويجب ألا تتطلب `libneverd` إعداد Unicorn المخصص للاختبارات وحدها.
+
 ## توزيع الاختبارات
 
 ينشئ `add_neverd_unittest` ملف GoogleTest تنفيذيًا واحدًا، ويمنح كل حالة مكتشفة

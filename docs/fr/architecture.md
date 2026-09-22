@@ -353,6 +353,35 @@ hors de ce contrat. Toute implémentation qui sélectionne
 soumise à preuve, jusqu’à un point fixe conjoint avec l’optimisation LLVM ; la
 politique ne fournit pas de backend de traduction exécutable.
 
+## Émulation des pilotes Windows
+
+`lib/emulation` est un composant d’exécution optionnel, activé par
+`NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` y accède par l’API C
+publique. `DriverSession` gère l’initialisation WDM x64 bornée et les appels
+synchrones optionnels create/IOCTL/cleanup/close/unload ; le mappage d’images
+Windows consomme le `BinaryImage` complet du chargeur existant, et le modèle
+Windows possède les objets invités et la sémantique des API. L’adaptateur
+Unicorn possède l’exécution CPU et la mémoire invitée faisant autorité. Cette
+voie n’utilise pas le pipeline expérimental de traduction native et ne modifie
+pas son profil pris en charge.
+
+Unicorn est configuré une seule fois via `cmake/NeverDUnicorn.cmake`, partagé
+avec les tests sémantiques et disponible avec `BUILD_TESTING=OFF`. Les API
+inconnues et les comportements non modélisés de l’environnement CPU provoquent
+un arrêt explicite ; un échec renvoyé par le pilote reste distinct d’une
+émulation incomplète. Voir [l’émulation des pilotes](driver-emulation.md) pour
+les limites, les rapports et les opérations de cycle de vie non prises en charge.
+
+L’API C d’origine reste limitée à l’initialisation. Le JSON de scénario utilise
+un seul parseur strict avec les mêmes options d’exécution ; les champs et types
+de requêtes sont déclarés dans des inventaires `.def`. Le changement de base
+demandé et l’initialisation du cookie de sécurité appartiennent au chargeur
+d’exécution. Le modèle Windows possède les objets IRP, emplacement de pile et
+fichier et valide l’achèvement synchrone ; la session ordonne les callbacks
+sous des budgets d’exécution communs. Les imports inconnus inutilisés sont
+liés paresseusement ; les exécuter ou lire des données exportées non modélisées
+provoque un arrêt explicite.
+
 ## Frontières de réécriture des exceptions
 
 Le compact unwind Mach-O dispose d’un parser strict du `__unwind_info` original,

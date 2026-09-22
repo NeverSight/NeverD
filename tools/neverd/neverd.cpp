@@ -87,6 +87,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runOptimizeIR();
   if (TranslateObjectCmd)
     return runTranslateObject();
+  if (EmulateDriverCmd)
+    return runEmulateDriver();
   if (ConcolicCmd)
     return runConcolic();
   if (MobileCmd)

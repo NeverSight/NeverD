@@ -36,6 +36,25 @@ backend evidence, not as semantic success.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for clone, build-profile, and macOS
 prebuilt-LLVM guidance.
 
+## Driver emulation checks
+
+Enable `NEVERD_ENABLE_DRIVER_EMULATION=ON` together with `BUILD_TESTING=ON`
+to build the focused execution suite and the shared C API/CLI checks:
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+Fixtures exercise guest initialization, returned success and failure,
+unsupported behavior, memory faults, strict scenario parsing, bounded execution,
+and synchronous buffered I/O through create, IOCTL, cleanup, close and unload.
+Use the
+[`emulate-driver` CLI](driver-emulation.md) to verify JSON and process exit
+codes. Production builds may enable this feature with `BUILD_TESTING=OFF`;
+test-only Unicorn configuration must not be required by `libneverd`.
+
 ## Test layout
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every

@@ -14,6 +14,7 @@
 | [贡献指南](CONTRIBUTING.md) | 开发环境、构建配置、工作流、风格与 PR 要求 |
 | [架构](architecture.md) | IR 路径、组件边界、严格提升、支持深度与修改位置 |
 | [测试](testing.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
+| [Windows 驱动模拟](driver-emulation.md) | x64 WDM 初始化、同步缓冲 I/O 场景、兼容范围、JSON 报告与 SDK |
 | [Windows 异常重建](windows-exception-reconstruction.md) | SEH/C++ 展开支持矩阵、IR 契约、原生 patch 规则与 PE 验证 |
 | [内存安全审计与猎取](memory-safety.md) | 堆对象生命周期与拷贝越界分析：各格式身份契约、汇/源目录、判定、预算与 JSON 模式 |
 | [原生插件](plugins.md) | 纯 C 描述符 ABI、回调与事件、构建/链接流程、发现顺序及兼容性规则 |
