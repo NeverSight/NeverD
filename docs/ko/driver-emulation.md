@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 드라이버 종류 또는 요구 사항 | 현재 범위 | 부족한 환경 |
 |-----------------------------|-----------|-------------|
-| 아래 API를 사용하는 x64 소프트웨어 WDM 드라이버 | 초기화, 순차 파일 수명 주기 및 제한된 작업 항목 콜백 | 추가로 실행되는 각 API에 명확한 모델이 필요함 |
-| `METHOD_BUFFERED` IOCTL | 독립 파일 식별자, 교차 순차 요청과 작업 항목 완료 | 다른 비동기 완료 생성 주체는 지원하지 않음 |
+| 아래 API를 사용하는 x64 소프트웨어 WDM 드라이버 | 제한된 x64 WDM 초기화, 순차 buffered/direct 요청, 작업 항목, 타이머, DPC, 이벤트와 대기, 동작 보고서 및 한도 | 추가로 실행되는 각 API에 명확한 모델이 필요함 |
+| `METHOD_BUFFERED` IOCTL | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 IRP와 요청 취소는 미지원 |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | 요청 소유 MDL과 시스템 매핑 | 물리 페이지 식별자, DMA와 사용자 매핑 |
 | 드라이버가 할당한 MDL | 모델의 비페이지 풀을 설명하는 독립 MDL, 원래 버퍼 주소 공유 | IRP 연결, MDL 체인, 프로브/잠금, 물리 페이지와 사용자 매핑 |
-| READ/WRITE | 장치 플래그에 따른 buffered 또는 direct 전송과 작업 항목 완료 | Neither I/O, 암묵적 파일 위치 및 다른 비동기 완료 생성 주체 |
+| READ/WRITE | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 IRP와 요청 취소는 미지원; `METHOD_NEITHER`와 암묵적 파일 위치도 미지원 |
 | `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사와 게스트 예외 처리 |
 | KMDF / UMDF 드라이버 | 지원하지 않음 | 프레임워크 바인딩, 객체, 큐, 콜백과 해당 호스트 런타임 |
 | PnP 버스/기능/필터 드라이버 | API 하위 집합 내에서 초기화가 실행될 수 있으나 장치 스택 수명 주기는 지원하지 않음 | 장치 연결, 하위 드라이버 디스패치, PnP 및 전원 IRP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
-| 작업 항목을 사용하는 드라이버 | `PASSIVE_LEVEL`에서 결정적으로 실행하는 `DelayedWorkQueue` 콜백 | 작업자 스레드, 타이머, DPC, APC, 대기와 취소는 지원하지 않음 |
+| 작업 항목, 타이머, DPC, 이벤트와 대기 | 현재 실행 IRQL은 디스패치와 작업 항목에서는 `PASSIVE_LEVEL`, DPC에서는 `DISPATCH_LEVEL`입니다 | 아래 API 부분집합만 지원하며 동시 IRP와 요청 취소는 미지원 |
 | 프로세스/스레드 콜백, 핸들, 레지스트리/파일 작업 또는 커널 모듈 탐색을 사용하는 드라이버 | 구성한 레지스트리는 지원하며 그 외 동작은 아래 API 범위로 제한 | 객체 관리자, 시스템 상태와 콜백/이벤트 생성 주체 |
 | 하드웨어, DMA, PCI, 인터럽트 또는 가상화 드라이버 | 환경을 지원하지 않음 | 장치 모델, 물리 메모리, 버스, 인터럽트와 특권 CPU 상태 |
 | x86 또는 ARM64 Windows 드라이버 | 거부됨 | 아키텍처별 로딩, ABI와 실행 모델 |
@@ -57,14 +57,14 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 ## 실행 계약
 
-이 프로필은 `PASSIVE_LEVEL`에서 단일 스레드로 동작하는 하나의 x64 WDM 수명 주기를 모델링합니다. 실행은 PE 진입점에서 시작하며, 컴파일러의 진입 래퍼가 있으면 그대로 유지합니다. 초기화하려면 DriverEntry가 `STATUS_SUCCESS`를 반환해야 합니다. 0이 아닌 성공 상태나 pending 상태는 지원하지 않는 초기화 계약으로 중단됩니다. 실패 상태는 완료된 초기화 결과로 보존됩니다. 모든 객체, 문자열, 스택, 함수 포인터와 할당은 게스트 메모리에 존재합니다. 모델은 설정된 서비스 이름(기본값 `NeverDDriver`)에 대한 `DRIVER_OBJECT`와 레지스트리 경로를 제공합니다. 어댑터는 Windows 페이지 테이블을 합성하지 않고 Unicorn의 가상 TLB 모드로 정규 상위 커널 주소를 포함한 게스트 가상 주소를 보존합니다. 초기 RFLAGS는 `0x202`이며, 소프트웨어 장치 프로필은 고정된 64바이트 캐시 라인을 사용합니다. 이는 이 실행 시나리오의 명시적인 속성입니다.
-인라인 x64 CR8 읽기도 같은 `PASSIVE_LEVEL`을 관찰합니다. CR8 쓰기와 다른 제어 레지스터 작업은 계속 지원하지 않습니다.
+이 프로필은 CPU0에서 결정적 협력 스케줄링으로 x64 WDM 수명 주기를 모델링합니다. 실행은 PE 진입점에서 시작하며, 컴파일러의 진입 래퍼가 있으면 그대로 유지합니다. 초기화하려면 DriverEntry가 `STATUS_SUCCESS`를 반환해야 합니다. 0이 아닌 성공 상태나 pending 상태는 지원하지 않는 초기화 계약으로 중단됩니다. 실패 상태는 완료된 초기화 결과로 보존됩니다. 모든 객체, 문자열, 스택, 함수 포인터와 할당은 게스트 메모리에 존재합니다. 모델은 설정된 서비스 이름(기본값 `NeverDDriver`)에 대한 `DRIVER_OBJECT`와 레지스트리 경로를 제공합니다. 어댑터는 Windows 페이지 테이블을 합성하지 않고 Unicorn의 가상 TLB 모드로 정규 상위 커널 주소를 포함한 게스트 가상 주소를 보존합니다. 초기 RFLAGS는 `0x202`이며, 소프트웨어 장치 프로필은 고정된 64바이트 캐시 라인을 사용합니다. 이는 이 실행 시나리오의 명시적인 속성입니다.
+인라인 x64 CR8 읽기도 같은 `PASSIVE_LEVEL` / `DISPATCH_LEVEL`을 관찰합니다. CR8 쓰기와 다른 제어 레지스터 작업은 계속 지원하지 않습니다.
 
 알 수 없는 import는 지연 트랩에 바인딩됩니다. 사용되지 않는 import는 실행을 막지 않지만, 해당 thunk를 실행하거나 모델링되지 않은 export 데이터 값을 읽으면 `unsupported_api`로 중단됩니다. 지원하지 않는 CPU 환경 효과도 명시적으로 중단됩니다. NeverD는 미구현 호출을 성공 값으로 대체하지 않습니다. 잘못된 이미지나 지원하지 않는 로딩 요구 사항은 실행 전에 실패합니다.
 
-대기열의 작업 항목은 DriverEntry, 요청 디스패치, 다른 작업 항목 콜백 등 드라이버 호출이 반환한 뒤 결정적으로 실행됩니다. 요청은 순차적으로 처리되며 보류 요청이 완료되어야 다음 요청을 시작합니다. 디스패치는 IRP를 보류로 표시하고 `STATUS_PENDING`을 반환해야 합니다. 이후 대기열의 작업 항목이 `PASSIVE_LEVEL`에서 완료할 수 있습니다. 완료를 생성할 실행 가능한 작업이 없는데 요청이 계속 보류되면 정체된 `model_error`로 중단합니다. 콜백에도 공통 명령어, 메모리, 이벤트 및 시간 예산을 적용합니다.
+`DelayedWorkQueue` 작업 항목은 `PASSIVE_LEVEL`에서, 게스트 DPC 콜백은 정해진 네 인수와 함께 `DISPATCH_LEVEL`에서 실행됩니다. CPU0의 호출 반환 및 차단 대기 경계에서 결정적 협력 스케줄링을 수행합니다. 상대·절대·주기 타이머는 가상 시간을 사용하며 실행할 프레임이 없으면 다음 타이머 또는 대기 기한으로 진행합니다. 알림형과 동기화형 이벤트/타이머는 서로 다른 신호 소비 동작을 유지합니다. 콜백마다 별도 게스트 스택을 사용하며 여러 차단 프레임의 지역 변수와 전체 CPU 컨텍스트를 보존하고 게스트 메모리는 공유합니다. Win64 콜백의 처음 네 인수는 레지스터에, 나머지는 스택에 전달합니다. 요청은 순차 처리하며 IRP를 보류로 표시한 디스패치는 `STATUS_PENDING`을 반환하고 다음 요청 전에 완료해야 합니다. 보류 요청이나 무한 대기에 실행 가능한 생성 주체가 없으면 정체된 `model_error`로 중단합니다. 명령어·메모리·관찰·실시간 예산은 공유합니다.
 
-완전한 Windows 커널, KMDF, PnP/전원 수명 주기, neither IOCTL, 인터럽트, 일반 대기, 스레드, 취소 및 게스트 타이머/DPC/APC API는 여전히 구현하지 않습니다. 내부 스케줄러 상태 머신의 단위 테스트는 이러한 공개 기능 지원을 뜻하지 않습니다. 초기화만 요청해도 DriverEntry가 명시적으로 큐에 넣은 작업 항목을 실행하지만 시나리오 요청이나 언로드를 암묵적으로 만들지는 않습니다.
+이는 제한된 스케줄링 모델이며 완전한 Windows 비동기 지원은 아닙니다. 경고 가능/사용자 모드 대기, 시스템 스레드, APC, 요청 취소, 스핀락, 동시 IRP, 일반 IRQL 전환, `METHOD_NEITHER`, KMDF/UMDF, 전체 PnP/전원, 하드웨어, DMA와 인터럽트는 지원하지 않습니다. 초기화 전용 호출도 명시적으로 대기열에 넣은 콜백을 실행하지만 요청이나 언로드를 암묵적으로 만들지 않습니다.
 
 콜백 시작 전에 작업 항목이 대기열에서 제거되므로 콜백은 자신의 작업 항목을 해제할 수 있습니다. 대기열 항목 해제, 중복 큐 삽입, 만료 객체 및 실행 가능한 게스트 메모리 밖의 콜백 주소는 명시적으로 실패합니다. 장치 참조는 콜백 반환까지 유지합니다. 언로드에는 모든 작업 항목 해제와 큐 작업 완료가 필요합니다. CPU 컨텍스트는 일반, SIMD, FPU 및 제어 상태를 저장하고 복원합니다. 게스트 메모리는 공유되며 장애가 난 CPU는 저장된 컨텍스트로 재개할 수 없습니다.
 파일 객체 또는 대기/실행 중인 작업 항목 참조가 남아 있으면 삭제를 연기합니다. 객체 영역이 소진되면 작업 항목 할당은 NULL을 반환합니다.
@@ -87,11 +87,20 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | 하나의 세션 네임스페이스에서 ASCII `\DosDevices\Name` 또는 `\??\Name`을 사용하며 `\Device\Name`을 가리킴 |
 | `DbgPrint`, `DbgPrintEx` | 검증된 Win64 가변 인수 포맷팅, 최대 출력 512바이트. 모든 디버거 필터가 활성화됨 |
 | `IoGetCurrentIrpStackLocation` | 활성 모델 IRP의 스택 위치를 반환함. 일반적인 컴파일된 WDM 매크로도 동일한 게스트 필드를 읽음 |
-| `KeGetCurrentIrql` | `PASSIVE_LEVEL`을 반환함 |
+| `KeGetCurrentIrql` | 현재 실행 IRQL은 디스패치와 작업 항목에서는 `PASSIVE_LEVEL`, DPC에서는 `DISPATCH_LEVEL`입니다 |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 장치 소유의 불투명 작업 항목. `DelayedWorkQueue`만 지원하며 `PASSIVE_LEVEL`에서 장치와 컨텍스트를 콜백에 전달. 대기열에 있는 항목은 해제 불가 |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | 불투명 DPC, 게스트 콜백 인수 네 개, `DISPATCH_LEVEL`, 중복/제거 동작과 중요도; 대상 CPU0만 지원 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | 알림/동기화 타이머, 상대/절대 100 ns 기한, 밀리초 주기, 재설정/취소와 가상 시간 신호 조회 |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | 알림/동기화 이벤트의 서로 다른 신호 소비; `KeSetEvent`는 Increment=0, Wait=FALSE만 허용 |
+| `KeWaitForSingleObject` | 초기화된 이벤트 또는 타이머 하나, 비경고 `KernelMode`, 사유 `Executive`; 0 폴링, 유한 상대/절대 또는 무한 대기; 0이 아닌/무한 대기는 IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | IRQL <= APC_LEVEL에서 비경고 `KernelMode` 상대/절대 지연; 가상 시간 진행 후 저장된 게스트 프레임 재개 |
 | `IoMarkIrpPending` | 현재 유효한 IRP를 보류로 표시. WDM 매크로의 스택 제어 필드 쓰기도 지원. 디스패치는 `STATUS_PENDING`을 반환해야 함 |
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`로 활성 동기 또는 보류 모델 IRP를 완료함. 완료된 IRP나 버퍼에는 다시 접근할 수 없음 |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | 호출당 최대 1 MiB의 제한된 게스트 버퍼 작업. 비중첩 복사 API는 겹치는 범위를 거부함 |
+
+API IRQL 상한은 `KernelAPIIRQL.def`에 정의되며 인수별 제한은 담당 모델이 검사합니다. DPC는 레지스트리 API나 페이징 풀 할당·해제·접근을 사용할 수 없습니다. Unicode `DbgPrint` 변환은 `PASSIVE_LEVEL`이 필요하며 지원되는 ANSI 출력과 비페이징 작업은 `DISPATCH_LEVEL`에서 사용할 수 있습니다. 콜백 스택에는 경계가 있어 이탈한 스택 포인터가 다른 차단 작업자의 스택을 침범할 수 없습니다. 장치 확장의 활성 타이머는 조기 장치 회수를 막습니다. 일반 IRQL 전환을 제공하는 기능은 아닙니다.
+
+타이머 만료는 DPC가 타이머를 재설정하기 전에 등록된 대기를 충족합니다. 대기열의 DPC는 깨어난 `PASSIVE_LEVEL` 프레임이 재개되기 전에 실행합니다. 요청 저장소에 대기 중인 DPC가 있으면 IRP 완료 처리는 완료와 버퍼 무효화 전에 해제를 거부합니다.
 
 `DbgPrint` 포맷팅은 정수 `d/i/u/o/x/X`, 포인터 `p`, 텍스트 `s/c`, `%%`, 길이가 지정된 Unicode `wZ/lZ`, wide 형식 `ls/ws`, 플래그, `*`를 포함한 너비/정밀도, Windows 정수 길이 수정자를 지원합니다. 가변 인수는 최대 32개, 형식 문자열은 최대 1024바이트를 읽습니다. 너비와 정밀도는 512로 제한됩니다. 부동소수점, `%n`, 알 수 없는 조합 및 비ASCII 텍스트 변환은 명시적으로 중단합니다. 모델은 Windows 코드 페이지를 추측하거나 게스트 데이터에 호스트 printf를 호출하지 않습니다.
 
@@ -122,7 +131,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-장치 이름과 IOCTL 코드는 드라이버와 일치해야 합니다. create에서 `device`를 생략하면 유일한 활성 장치를 선택하며, 선택이 모호하면 실패합니다. 이후 요청은 명시적으로 일치하는 이름을 지정하지 않는 한 해당 파일의 장치를 사용합니다. 선택적인 `file`은 부호 없는 32비트 시나리오 식별자이며 기본값은 0입니다. 각 식별자에는 자체 FILE_OBJECT와 FsContext가 있으며 create, 전송, cleanup, close 순서를 따라야 합니다. 독립된 파일의 요청은 서로 교차할 수 있습니다. 독점 장치는 두 번째 열기를 거부합니다. 이 식별자는 복제된 핸들이 아니라 파일 객체를 나타냅니다. Buffered 및 두 direct IOCTL 방식을 지원합니다. 디스패치는 동기적으로 완료하거나 위의 작업 항목 보류 계약을 따라야 합니다. 잘못된 출력 길이와 완료된 IRP 접근은 명시적으로 실패합니다. 언로드를 요청했다면 활성 장치, 심볼릭 링크, 풀 할당 또는 파일 객체가 남아서는 안 됩니다.
+장치 이름과 IOCTL 코드는 드라이버와 일치해야 합니다. create에서 `device`를 생략하면 유일한 활성 장치를 선택하며, 선택이 모호하면 실패합니다. 이후 요청은 명시적으로 일치하는 이름을 지정하지 않는 한 해당 파일의 장치를 사용합니다. 선택적인 `file`은 부호 없는 32비트 시나리오 식별자이며 기본값은 0입니다. 각 식별자에는 자체 FILE_OBJECT와 FsContext가 있으며 create, 전송, cleanup, close 순서를 따라야 합니다. 독립된 파일의 요청은 서로 교차할 수 있습니다. 독점 장치는 두 번째 열기를 거부합니다. 이 식별자는 복제된 핸들이 아니라 파일 객체를 나타냅니다. Buffered 및 두 direct IOCTL 방식을 지원합니다. 디스패치는 동기적으로 완료하거나 위의 콜백 보류 계약을 따라야 합니다. 잘못된 출력 길이와 완료된 IRP 접근은 명시적으로 실패합니다. 언로드를 요청했다면 활성 장치, 심볼릭 링크, 풀 할당 또는 파일 객체가 남아서는 안 됩니다.
 
 선택적인 루트 필드 `"load_address": "0x190000000"`는 베이스 재배치를 요청합니다. 생략하거나 `"0x0"`을 지정하면 선호 주소를 사용합니다. 이미지는 재배치 요구 사항을 충족해야 합니다. 기존 초기화 명령이나 C API에는 암묵적인 시나리오가 없습니다.
 

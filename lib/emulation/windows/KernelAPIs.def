@@ -51,6 +51,13 @@ NEVERD_KERNEL_API(IoAllocateWorkItem, 1, Export)
 NEVERD_KERNEL_API(IoQueueWorkItem, 4, Export)
 NEVERD_KERNEL_API(IoFreeWorkItem, 1, Export)
 NEVERD_KERNEL_API(IoMarkIrpPending, 1, Helper)
+NEVERD_KERNEL_API(KeWaitForSingleObject, 5, Export)
+NEVERD_KERNEL_API(KeDelayExecutionThread, 3, Export)
+
+#define NEVERD_KERNEL_DISPATCHER_API(Name, Arity)                              \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelDispatcherAPIs.def"
+#undef NEVERD_KERNEL_DISPATCHER_API
 
 #define NEVERD_KERNEL_REGISTRY_API(Name, Arity)                                \
   NEVERD_KERNEL_API(Name, Arity, Export)

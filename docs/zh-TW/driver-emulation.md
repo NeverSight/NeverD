@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 驅動程式類別或需求 | 目前範圍 | 缺少的環境 |
 |--------------------|----------|------------|
-| 使用下列 API 的 x64 軟體 WDM 驅動程式 | 初始化、循序檔案生命週期與有界工作項目回呼 | 每個額外執行到的 API 都必須有明確的模型 |
-| `METHOD_BUFFERED` IOCTL | 獨立檔案識別碼、交錯循序請求及工作項目完成 | 其他非同步完成來源仍不支援 |
+| 使用下列 API 的 x64 軟體 WDM 驅動程式 | 有界 x64 WDM 初始化、循序緩衝／直接請求、工作項目、計時器、DPC、事件與等待，以及行為報告和限制 | 每個額外執行到的 API 都必須有明確的模型 |
+| `METHOD_BUFFERED` IOCTL | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行 IRP 或請求取消 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL 及系統對映 | 實體頁面識別、DMA 及使用者對映 |
 | 驅動程式自行配置的 MDL | 描述模型非分頁集區的獨立描述元，重複使用原始緩衝區位址 | IRP 關聯、MDL 鏈、探查／鎖定頁面、實體頁面及使用者對映 |
-| READ/WRITE | 依裝置旗標使用緩衝或直接傳輸，支援工作項目完成 | Neither I/O、隱含檔案位置及其他非同步完成來源 |
+| READ/WRITE | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行 IRP 或請求取消；`METHOD_NEITHER` 與隱含檔案位置 |
 | `METHOD_NEITHER` | 拒絕 | 使用者位址空間環境、存取探測及客體例外處理 |
 | KMDF / UMDF 驅動程式 | 不支援 | 框架繫結、物件、佇列、回呼及對應的主機執行階段 |
 | PnP 匯流排／功能／篩選驅動程式 | 初始化可在 API 子集內執行；不支援裝置堆疊生命週期 | 裝置附加、向下層驅動程式派送、PnP 與電源 IRP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
-| 使用工作項目的驅動程式 | 在 `PASSIVE_LEVEL` 確定性執行 `DelayedWorkQueue` 回呼 | 背景工作執行緒、計時器、DPC、APC、等待與取消仍不支援 |
+| 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行 IRP 或請求取消 |
 | 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 支援配置的登錄；其他行為限於下列 API | 物件管理員、系統狀態及回呼／事件產生機制 |
 | 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 不支援所需環境 | 裝置模型、實體記憶體、匯流排、中斷及特權 CPU 狀態 |
 | x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
@@ -57,15 +57,15 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 ## 執行契約
 
-此設定在 `PASSIVE_LEVEL` 下模擬單執行緒的 x64 WDM 生命週期。執行從 PE 進入點開始；若有編譯器產生的進入點包裝函式，也會保留並執行。DriverEntry 必須傳回 `STATUS_SUCCESS` 才能完成初始化；非零的成功狀態或待處理狀態會因初始化契約不受支援而停止。失敗狀態則保留為已完成的初始化結果。所有物件、字串、堆疊、函式指標及配置均位於客體記憶體。模型依設定的服務名稱（預設為 `NeverDDriver`）提供 `DRIVER_OBJECT` 和登錄路徑。
+此設定在 CPU0 上以確定性的合作排程模擬 x64 WDM 生命週期。 執行從 PE 進入點開始；若有編譯器產生的進入點包裝函式，也會保留並執行。DriverEntry 必須傳回 `STATUS_SUCCESS` 才能完成初始化；非零的成功狀態或待處理狀態會因初始化契約不受支援而停止。失敗狀態則保留為已完成的初始化結果。所有物件、字串、堆疊、函式指標及配置均位於客體記憶體。模型依設定的服務名稱（預設為 `NeverDDriver`）提供 `DRIVER_OBJECT` 和登錄路徑。
 
-配接器使用 Unicorn 的虛擬 TLB 模式保留客體虛擬位址，包括規範的高位核心位址，無須合成 Windows 頁表。初始 RFLAGS 為 `0x202`；軟體裝置設定採用固定的 64 位元組快取列。這些都是本執行情境的明確屬性。行內 x64 CR8 讀取觀察到相同的 `PASSIVE_LEVEL`；CR8 寫入與其他控制暫存器操作仍不受支援。
+配接器使用 Unicorn 的虛擬 TLB 模式保留客體虛擬位址，包括規範的高位核心位址，無須合成 Windows 頁表。初始 RFLAGS 為 `0x202`；軟體裝置設定採用固定的 64 位元組快取列。這些都是本執行情境的明確屬性。行內 x64 CR8 讀取觀察到相同的 `PASSIVE_LEVEL` / `DISPATCH_LEVEL`；CR8 寫入與其他控制暫存器操作仍不受支援。
 
 未知匯入項目繫結至延遲陷阱。未使用的匯入項目不會阻止執行；執行其 thunk 或讀取未建模的匯出資料值時，會以 `unsupported_api` 停止。不支援的 CPU 環境效果也會明確停止。NeverD 不會用成功傳回值替代未實作的呼叫。格式錯誤的映像或不支援的載入需求會在執行前失敗。
 
-佇列中的工作項目在驅動程式呼叫傳回後確定性執行，包括 DriverEntry、請求派送與其他工作項目回呼傳回時。請求仍循序處理：待處理請求必須完成後才能開始下一個請求。派送函式必須將 IRP 標記為待處理並傳回 `STATUS_PENDING`，再由排入佇列的工作項目於 `PASSIVE_LEVEL` 完成。若請求仍待處理卻沒有可執行的完成來源，執行會因停滯而以 `model_error` 停止。回呼共用指令、記憶體、事件與時間預算。
+排入佇列的 `DelayedWorkQueue` 工作項目在 `PASSIVE_LEVEL` 執行，客體 DPC 回呼在 `DISPATCH_LEVEL` 接收規定的四個參數。CPU0 在呼叫傳回及阻塞等待邊界進行確定性的合作排程。相對、絕對與週期計時器使用虛擬時間；沒有可執行的框架時，時間推進至下一計時器或等待期限。通知型與同步型事件／計時器保留各自的訊號消耗語意。每個回呼擁有獨立的客體堆疊；多個阻塞框架保留區域變數及完整 CPU 內容，客體記憶體仍共用。Win64 回呼入口將前四個參數放入暫存器，其餘放入堆疊。請求仍循序處理：標記 IRP 為待處理的派送函式必須傳回 `STATUS_PENDING`，且完成後才能開始下一個請求。待處理請求或無限等待沒有可用來源時，以停滯的 `model_error` 停止。指令、記憶體、觀察記錄與實際時間預算仍共用。
 
-此設定仍未實作完整 Windows 核心、KMDF、PnP／電源生命週期、neither IOCTL、中斷、通用等待、執行緒、取消或客體計時器／DPC／APC API。內部排程狀態機的單元測試不代表這些公開能力已可用。僅初始化呼叫也會執行 DriverEntry 明確排入佇列的工作項目，但不會隱含產生情境請求或執行卸載。
+這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、請求取消、自旋鎖、並行 IRP、一般 IRQL 切換、`METHOD_NEITHER`、KMDF／UMDF、完整 PnP／電源、硬體、DMA 與中斷仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
 
 工作項目在回呼開始前出佇列，因此回呼可釋放自身的工作項目。釋放仍在佇列中的項目、重複排入、使用失效物件或非客體可執行記憶體中的回呼位址都會明確失敗。裝置參考保留到回呼傳回。請求卸載要求釋放所有工作項目並完成佇列工作。CPU 內容保存與還原包含通用、SIMD、FPU 與控制狀態；客體記憶體始終共用，故障 CPU 不能藉還原內容繼續執行。
 刪除會延後到檔案物件及排隊／執行中的工作項目參考全部釋放。物件區耗盡時，工作項目配置傳回 NULL。
@@ -90,11 +90,20 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一個工作階段命名空間內的 ASCII `\DosDevices\Name` 或 `\??\Name`，目標為 `\Device\Name` |
 | `DbgPrint`、`DbgPrintEx` | 經檢查的 Win64 可變參數格式化，最多輸出 512 位元組；啟用所有偵錯器篩選器 |
 | `IoGetCurrentIrpStackLocation` | 傳回目前建模 IRP 的堆疊位置；正常編譯的 WDM 巨集讀取相同客體欄位 |
-| `KeGetCurrentIrql` | 傳回 `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 裝置擁有的不透明工作項目；僅支援 `DelayedWorkQueue`，在 `PASSIVE_LEVEL` 將裝置與內容傳給回呼；禁止釋放仍在佇列中的項目 |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | 不透明 DPC 儲存、四個客體回呼參數、`DISPATCH_LEVEL`、重複排入／移除及優先順序；僅目標 CPU0 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | 通知／同步計時器；相對／絕對 100 ns 期限、毫秒週期、重新設定／取消及虛擬時間中的訊號查詢 |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | 通知／同步事件保留不同訊號消耗行為；`KeSetEvent` 僅接受 Increment=0、Wait=FALSE |
+| `KeWaitForSingleObject` | 單個已初始化事件或計時器；非警示 `KernelMode`、原因 `Executive`；零逾時輪詢、有限相對／絕對或無限等待；非零／無限等待要求 IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | IRQL <= APC_LEVEL 的非警示 `KernelMode` 相對／絕對延遲；虛擬時間推進後還原儲存的客體執行框架 |
 | `IoMarkIrpPending` | 標記目前存活的 IRP；也支援 WDM 巨集對堆疊控制欄位的等效寫入；派送必須傳回 `STATUS_PENDING` |
 | `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成目前同步或待處理的建模 IRP；已完成的 IRP 或緩衝區不能再次存取 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的客體緩衝區操作，每次呼叫最多 1 MiB；要求不重疊的複製 API 會拒絕重疊 |
+
+API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。DPC 不能呼叫登錄 API，也不能配置、釋放或存取分頁集區；Unicode `DbgPrint` 轉換要求 `PASSIVE_LEVEL`，支援的 ANSI 輸出與非分頁操作仍可在 `DISPATCH_LEVEL` 使用。回呼堆疊有明確邊界，越界堆疊指標不能進入另一阻塞工作項目的堆疊。裝置擴充中的已啟動計時器會阻止裝置提早回收。這些檢查並未開放一般 IRQL 切換。
+
+計時器到期會先滿足已登記的等待，再允許 DPC 重設或重新設定計時器。排入佇列的 DPC 先於已喚醒的 `PASSIVE_LEVEL` 執行框架還原執行。若請求儲存仍包含排入佇列的 DPC，IRP 完成操作會在完成及緩衝區失效之前拒絕釋放。
 
 `DbgPrint` 格式化支援整數 `d/i/u/o/x/X`、指標 `p`、文字 `s/c`、`%%`、計數式 Unicode `wZ/lZ`、寬字元 `ls/ws`、旗標、包含 `*` 的寬度／精度，以及 Windows 整數長度修飾符。最多讀取 32 個可變參數及 1024 個格式位元組。寬度與精度上限為 512。浮點數、`%n`、未知組合及非 ASCII 文字轉換會明確停止；模型不會猜測 Windows 字碼頁，也不會對客體資料呼叫主機 printf。
 
@@ -125,7 +134,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-裝置名稱與 IOCTL 代碼必須符合驅動程式。create 省略 `device` 時選擇唯一的存活裝置；無法唯一選擇則失敗。後續請求使用其檔案的裝置，除非明確提供相符的名稱。選用的 `file` 是無號 32 位元情境識別碼，預設為零。每個識別碼各有自己的 FILE_OBJECT 與 FsContext，且必須依 create、傳輸、cleanup、close 的順序執行。獨立檔案的請求可以交錯執行。獨占裝置會拒絕第二次開啟。這些識別碼代表檔案物件，而非複製的控制代碼。支援緩衝及兩種直接 IOCTL 方法。派送必須同步完成，或遵循上述工作項目待處理契約。輸出長度無效及存取已完成的 IRP 都會明確失敗。請求卸載後，不得留下存活的裝置、符號連結、集區配置或檔案物件。
+裝置名稱與 IOCTL 代碼必須符合驅動程式。create 省略 `device` 時選擇唯一的存活裝置；無法唯一選擇則失敗。後續請求使用其檔案的裝置，除非明確提供相符的名稱。選用的 `file` 是無號 32 位元情境識別碼，預設為零。每個識別碼各有自己的 FILE_OBJECT 與 FsContext，且必須依 create、傳輸、cleanup、close 的順序執行。獨立檔案的請求可以交錯執行。獨占裝置會拒絕第二次開啟。這些識別碼代表檔案物件，而非複製的控制代碼。支援緩衝及兩種直接 IOCTL 方法。派送必須同步完成，或遵循上述回呼待處理契約。輸出長度無效及存取已完成的 IRP 都會明確失敗。請求卸載後，不得留下存活的裝置、符號連結、集區配置或檔案物件。
 
 選用根欄位 `"load_address": "0x190000000"` 請求變更載入基底位址；省略此欄位或指定 `"0x0"` 時使用慣用位址。映像必須滿足重新定位需求。原有的初始化命令或 C API 不會隱含執行任何請求情境。
 

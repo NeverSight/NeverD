@@ -1,0 +1,40 @@
+//===- DriverDispatcherCases.def - Dispatcher guest cases -----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared IOCTL selectors and expected observations from the original fixture.
+///
+//===----------------------------------------------------------------------===//
+
+// Name, control code, pending dispatch, DPC runs, worker runs, waits, stack
+// proof.
+NEVERD_DISPATCHER_CASE(TimerRelative, 0x222000, 1, 1, 0, 0, 0)
+NEVERD_DISPATCHER_CASE(TimerAbsolute, 0x222004, 1, 1, 0, 0, 0)
+NEVERD_DISPATCHER_CASE(PeriodicCancel, 0x222008, 1, 3, 0, 0, 0)
+NEVERD_DISPATCHER_CASE(TimerRearmCancel, 0x22200c, 0, 0, 0, 0, 0)
+NEVERD_DISPATCHER_CASE(DpcArguments, 0x222010, 1, 1, 0, 1, 0)
+NEVERD_DISPATCHER_CASE(DpcRemoval, 0x222014, 1, 1, 0, 0, 0)
+NEVERD_DISPATCHER_CASE(DpcToWorker, 0x222018, 1, 1, 1, 0, 0)
+NEVERD_DISPATCHER_CASE(DispatchEventWait, 0x22201c, 0, 0, 1, 1, 0xa5)
+NEVERD_DISPATCHER_CASE(WorkerEventWait, 0x222020, 1, 0, 2, 1, 0xa5)
+NEVERD_DISPATCHER_CASE(WorkerTimerWait, 0x222024, 1, 1, 1, 1, 0xa5)
+NEVERD_DISPATCHER_CASE(FiniteTimeoutAndDelay, 0x222028, 0, 0, 0, 3, 0xa5)
+NEVERD_DISPATCHER_CASE(NotificationEvent, 0x22202c, 0, 0, 0, 2, 0)
+NEVERD_DISPATCHER_CASE(SynchronizationEvent, 0x222030, 0, 0, 0, 3, 0)
+NEVERD_DISPATCHER_CASE(NotificationTimer, 0x222034, 0, 0, 0, 2, 0)
+NEVERD_DISPATCHER_CASE(SynchronizationTimer, 0x222038, 0, 0, 0, 2, 0)
+
+// Invalid cases stop at the indicated operation before completing the IRP.
+NEVERD_DISPATCHER_FAILURE(InvalidDpcWait, 0x22203c, "IRQL")
+NEVERD_DISPATCHER_FAILURE(OpaqueDpc, 0x222040, "opaque")
+NEVERD_DISPATCHER_FAILURE(FreePendingTimer, 0x222044, "timer")
+
+NEVERD_DISPATCHER_CASE(TimerImmediateWait, 0x222048, 0, 0, 0, 2, 0)
+NEVERD_DISPATCHER_CASE(WorkerEventSetReset, 0x22204c, 1, 0, 2, 1, 0xa5)
+NEVERD_DISPATCHER_CASE(TimerExpiryLatchesBeforeDpcRearm, 0x222050, 0, 1, 0, 1,
+                       0)
+NEVERD_DISPATCHER_FAILURE(CompleteIrpWithQueuedDpcStorage, 0x222054, "queued")
+NEVERD_DISPATCHER_CASE(DpcBeforeResumedWorker, 0x222058, 1, 1, 2, 1, 0xa5)

@@ -52,16 +52,16 @@ compatibilità con driver arbitrari di terze parti.
 
 | Classe di driver o requisito | Ambito attuale | Ambiente mancante |
 |-----------------------------|----------------|-------------------|
-| Driver WDM software x64 che usa le API elencate | Inizializzazione, cicli di file seriali e callback di lavoro limitati | Ogni ulteriore API eseguita richiede un modello definito |
-| IOCTL `METHOD_BUFFERED` | Identità indipendenti, richieste seriali intercalate e completamento da elementi di lavoro | Gli altri produttori asincroni restano non supportati |
+| Driver WDM software x64 che usa le API elencate | Inizializzazione WDM x64 limitata, richieste seriali buffered/direct, lavoro, timer, DPC, eventi e attese, report e limiti | Ogni ulteriore API eseguita richiede un modello definito |
+| IOCTL `METHOD_BUFFERED` | I/O buffered/direct seriale con completamento da lavoro o DPC | Solo le API seguenti; nessun IRP concorrente o annullamento di richiesta |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL di proprietà delle richieste e mapping di sistema | identità delle pagine fisiche, DMA e mapping utente |
 | MDL allocati dal driver | Descrittori autonomi del pool non paginato modellato, con indirizzi originali condivisi | Associazione IRP, catene MDL, verifica/blocco, pagine fisiche e mapping utente |
-| READ/WRITE | Con buffer o diretti secondo i flag, incluso il completamento da elementi di lavoro | I/O neither, posizione implicita e altri produttori asincroni |
+| READ/WRITE | I/O buffered/direct seriale con completamento da lavoro o DPC | Solo le API seguenti; nessun IRP concorrente o annullamento di richiesta; `METHOD_NEITHER` e posizione implicita del file |
 | `METHOD_NEITHER` | Rifiutato | Contesto degli indirizzi utente, verifica degli accessi e gestione delle eccezioni guest |
 | Driver KMDF / UMDF | Non supportato | Binding al framework, oggetti, code, callback e runtime host appropriato |
 | Driver PnP di bus, funzione o filtro | L’inizializzazione può essere eseguita nel sottoinsieme di API; il ciclo di vita dello stack di dispositivi non è supportato | Collegamento dei dispositivi, dispatch al driver sottostante, IRP PnP e di alimentazione |
 | Driver di archiviazione, rete, visualizzazione, file system e minifilter | Contratti dei sottosistemi non supportati | Framework port/class/miniport, NDIS/WFP, servizi grafici o del file system |
-| Driver con elementi di lavoro | Callback deterministici `DelayedWorkQueue` a `PASSIVE_LEVEL` | Thread di lavoro, timer, DPC, APC, attese e annullamento restano non supportati |
+| Lavoro, timer, DPC, eventi e attese | L’IRQL corrente è `PASSIVE_LEVEL` per dispatch e lavoro, `DISPATCH_LEVEL` per i DPC | Solo le API seguenti; nessun IRP concorrente o annullamento di richiesta |
 | Driver con callback di processo/thread, handle, operazioni su registro/file o ricerca di moduli kernel | Sono supportate le operazioni di registro elencate su un albero configurato esplicitamente; le altre operazioni non sono supportate | Gestore degli oggetti generale, operazioni sui file, stato del sistema e produttori di callback/eventi |
 | Driver hardware, DMA, PCI, di interrupt o di virtualizzazione | Ambiente non supportato | Modelli di dispositivi, memoria fisica, bus, interrupt e stato CPU privilegiato |
 | Driver Windows x86 o ARM64 | Rifiutato | Caricamento, ABI e modello di esecuzione specifici dell’architettura |
@@ -75,8 +75,7 @@ La tabella delle API seguente definisce il sottoinsieme supportato di riferiment
 
 ## Contratto di esecuzione
 
-Il profilo modella un unico ciclo di vita WDM x64 a thread singolo a
-`PASSIVE_LEVEL`. L’esecuzione inizia dal punto di ingresso PE, mantenendo il
+Il profilo modella un ciclo WDM x64 su CPU0 con scheduling cooperativo deterministico. L’esecuzione inizia dal punto di ingresso PE, mantenendo il
 wrapper di ingresso del compilatore quando presente. DriverEntry deve restituire
 `STATUS_SUCCESS` per inizializzare il driver; uno stato di successo diverso da
 zero o uno stato pending interrompe l’esecuzione come contratto di
@@ -90,7 +89,7 @@ virtuali guest, inclusi gli indirizzi kernel canonici alti, senza sintetizzare
 tabelle delle pagine Windows. Il valore iniziale di RFLAGS è `0x202`; il profilo
 del dispositivo software usa una linea di cache fissa di 64 byte. Queste sono
 proprietà esplicite dello scenario di esecuzione.
-Le letture inline x64 di CR8 osservano lo stesso `PASSIVE_LEVEL`; le scritture
+Le letture inline x64 di CR8 osservano lo stesso `PASSIVE_LEVEL` / `DISPATCH_LEVEL`; le scritture
 di CR8 e le altre operazioni sui registri di controllo restano non supportate.
 
 Le importazioni sconosciute vengono collegate a trap attivate solo all’uso.
@@ -101,9 +100,9 @@ un arresto esplicito. NeverD non sostituisce le chiamate non implementate con
 valori di successo. Le immagini malformate o i requisiti di caricamento non
 supportati falliscono prima dell’esecuzione.
 
-I callback di lavoro in coda vengono eseguiti deterministicamente al ritorno di una chiamata del driver, inclusi DriverEntry, dispatch e altri callback di lavoro. Le richieste restano seriali: una richiesta pendente deve completarsi prima della successiva. Il dispatch deve marcare l’IRP come pendente e restituire `STATUS_PENDING`; un elemento in coda può poi completarlo a `PASSIVE_LEVEL`. Senza un produttore di completamento eseguibile, la richiesta bloccata si arresta con `model_error`. I budget condivisi di istruzioni, memoria, eventi e tempo limitano anche i callback.
+Gli elementi `DelayedWorkQueue` eseguono a `PASSIVE_LEVEL`, i callback DPC guest a `DISPATCH_LEVEL` con i quattro argomenti previsti. CPU0 usa scheduling cooperativo deterministico ai ritorni delle chiamate e alle attese bloccanti. Timer relativi, assoluti e periodici usano tempo virtuale che avanza alla prossima scadenza di timer o attesa quando nessun frame può eseguire. Eventi/timer di notifica e sincronizzazione mantengono regole distinte di consumo del segnale. Ogni callback ha uno stack guest separato; più frame bloccati conservano variabili locali e contesti CPU completi con memoria condivisa. Win64 passa i primi quattro argomenti nei registri, gli altri sullo stack. Le richieste restano seriali: il dispatch che marca un IRP pendente deve restituire `STATUS_PENDING` e completarlo prima della richiesta successiva. Senza produttore disponibile, richieste pendenti o attese infinite si arrestano con `model_error` per stallo. I budget di istruzioni, memoria, osservazioni e tempo reale restano condivisi.
 
-Restano non implementati un kernel Windows completo, KMDF, PnP/alimentazione, IOCTL neither, interrupt, attese generali, thread, annullamento e API guest timer/DPC/APC. I test interni della macchina a stati dello scheduler non dimostrano supporto pubblico per tali operazioni. Le chiamate di sola inizializzazione eseguono anche il lavoro esplicitamente accodato da DriverEntry; non creano richieste di scenario né scaricamenti impliciti.
+Il modello limitato non offre tutto l’asincronismo Windows. Attese alertable o utente, thread di sistema, APC, annullamento delle richieste, spinlock, IRP concorrenti, cambi generali di IRQL, `METHOD_NEITHER`, KMDF/UMDF, PnP/alimentazione completo, hardware, DMA e interrupt restano non supportati. L’inizializzazione sola esegue callback esplicitamente accodati senza creare richieste o scaricamenti impliciti.
 
 L’elemento esce dalla coda prima dell’inizio del callback, che può liberare il proprio elemento. Liberare elementi ancora in coda, accodarli due volte, usare oggetti scaduti o destinazioni fuori dalla memoria guest eseguibile causa errori espliciti. Il riferimento al dispositivo resta fino al ritorno del callback. Lo scaricamento richiede la liberazione di tutti gli elementi e il completamento del lavoro in coda. I contesti CPU conservano registri generali, SIMD, FPU e stato di controllo; la memoria guest resta condivisa e un contesto salvato non consente di riprendere una CPU in errore.
 L’eliminazione viene rinviata finché restano oggetti file o riferimenti di lavoro in coda/in esecuzione. L’allocazione degli elementi restituisce NULL quando l’arena oggetti è esaurita.
@@ -135,11 +134,20 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` o `\??\Name` in un unico namespace di sessione, con destinazione `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Formattazione variadica Win64 verificata, al massimo 512 byte di output; tutti i filtri del debugger abilitati |
 | `IoGetCurrentIrpStackLocation` | Restituisce la posizione nello stack dell’IRP modellato attivo; le normali macro WDM compilate leggono lo stesso campo guest |
-| `KeGetCurrentIrql` | Restituisce `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | L’IRQL corrente è `PASSIVE_LEVEL` per dispatch e lavoro, `DISPATCH_LEVEL` per i DPC |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Elementi opachi del dispositivo; solo `DelayedWorkQueue`, dispositivo e contesto passati a `PASSIVE_LEVEL`; vietato liberare elementi ancora in coda |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | DPC opaco, quattro argomenti guest, `DISPATCH_LEVEL`, duplicati/rimozione e importanza; solo destinazione CPU0 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Timer di notifica/sincronizzazione; scadenze relative/assolute in 100 ns, periodi in millisecondi, riarmo/annullamento e segnali nel tempo virtuale |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Eventi di notifica/sincronizzazione con consumo distinto; `KeSetEvent` accetta solo Increment=0 e Wait=FALSE |
+| `KeWaitForSingleObject` | Un evento o timer inizializzato; `KernelMode` non alertable, motivo `Executive`; polling zero, attesa finita relativa/assoluta o infinita; attesa non nulla/infinita richiede IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | Ritardo relativo/assoluto `KernelMode` non alertable con IRQL <= APC_LEVEL; riprende il frame guest dopo l’avanzamento del tempo virtuale |
 | `IoMarkIrpPending` | Marca l’IRP attivo; è modellata anche la scrittura equivalente della macro WDM nel controllo dello stack; il dispatch deve restituire `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Completa l’IRP modellato attivo, sincrono o pendente con `IO_NO_INCREMENT`; non si può accedere nuovamente a un IRP completato o al suo buffer |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Operazioni limitate sui buffer guest, al massimo 1 MiB per chiamata; le API di copia senza sovrapposizione rifiutano le sovrapposizioni |
+
+I limiti IRQL provengono da `KernelAPIIRQL.def`; il modello responsabile verifica le restrizioni dipendenti dagli argomenti. Un DPC non può chiamare il registro né allocare, liberare o accedere al pool paginato. Le conversioni Unicode di `DbgPrint` richiedono `PASSIVE_LEVEL`; output ANSI e operazioni non paginate supportate restano utilizzabili a `DISPATCH_LEVEL`. Gli stack hanno limiti: un puntatore fuori intervallo non può entrare nello stack di un altro worker bloccato. I timer armati nell’estensione impediscono il rilascio prematuro del dispositivo. Ciò non espone cambi generali di IRQL.
+
+La scadenza soddisfa le attese registrate prima che un DPC reimposti o riarmi il timer. I DPC accodati precedono la ripresa dei frame `PASSIVE_LEVEL` risvegliati. Se la memoria della richiesta contiene ancora un DPC accodato, il completamento IRP ne rifiuta il rilascio prima di completare e invalidare il buffer.
 
 La formattazione di `DbgPrint` supporta interi `d/i/u/o/x/X`, puntatori `p`,
 testo `s/c`, `%%`, Unicode a lunghezza esplicita `wZ/lZ`, stringhe wide `ls/ws`,
@@ -204,7 +212,7 @@ propri e richiede create, trasferimenti, cleanup e close in quest’ordine.
 Le richieste di file indipendenti possono essere intercalate. I dispositivi
 esclusivi rifiutano una seconda apertura. Queste identità rappresentano oggetti
 file, non handle duplicati. Sono supportati il metodo IOCTL con buffer ed
-entrambi i metodi diretti. Il dispatch deve completare in modo sincrono o rispettare il contratto di lavoro pendente sopra descritto. Lunghezze di output non valide e accessi a IRP completati causano errori espliciti. L’unload richiesto
+entrambi i metodi diretti. Il dispatch deve completare in modo sincrono o rispettare il contratto di completamento pendente tramite callback sopra descritto. Lunghezze di output non valide e accessi a IRP completati causano errori espliciti. L’unload richiesto
 non deve lasciare dispositivi, link simbolici, allocazioni di pool o oggetti
 file attivi.
 

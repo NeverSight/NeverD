@@ -2126,6 +2126,10 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         r"NEVERD_KERNEL_REGISTRY_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelRegistryAPIs.def")),
     )
+    exports += re.findall(
+        r"NEVERD_KERNEL_DISPATCHER_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelDispatcherAPIs.def")),
+    )
     required = (
         "NEVERD_ENABLE_DRIVER_EMULATION=ON",
         "BUILD_TESTING",
@@ -2137,6 +2141,12 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "KMDF",
         "UMDF",
         "PASSIVE_LEVEL",
+        "DISPATCH_LEVEL",
+        "KernelMode",
+        "Executive",
+        "CPU0",
+        "Increment=0",
+        "Wait=FALSE",
         "STATUS_PENDING",
         "DelayedWorkQueue",
         "callback:N",

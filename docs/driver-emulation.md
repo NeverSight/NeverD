@@ -51,16 +51,16 @@ establish compatibility with arbitrary third-party drivers.
 
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
-| x64 software WDM driver using the listed APIs | Initialization, serial file lifecycles and bounded work-item callbacks | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Independent file identities, interleaved serial requests and work-item completion | Other asynchronous producers remain unsupported |
+| x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, serial buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
+| `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or request cancellation |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | physical page identities, DMA and user mappings |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
-| READ/WRITE | Buffered or direct according to device flags, including work-item completion | Neither I/O, implicit file-position selection and other asynchronous producers |
+| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent IRPs or request cancellation; `METHOD_NEITHER` and implicit file position |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF / UMDF driver | Unsupported | Framework binding, objects, queues, callbacks, and the appropriate host runtime |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
-| Driver using work items | Deterministic `DelayedWorkQueue` callbacks at `PASSIVE_LEVEL` | Worker threads, timers, DPCs, APCs, waits and cancellation remain unsupported |
+| Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent IRPs or request cancellation |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Unsupported environment | Device models, physical memory, buses, interrupts and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
@@ -73,8 +73,7 @@ paths are supported. The API table below is the authoritative supported subset.
 
 ## Execution contract
 
-The profile models one single-threaded x64 WDM lifecycle at `PASSIVE_LEVEL`.
-Execution begins at the PE entry point, retaining a compiler's entry wrapper
+The profile models an x64 WDM lifecycle on CPU0 with deterministic cooperative scheduling. Execution begins at the PE entry point, retaining a compiler's entry wrapper
 when present. DriverEntry must return `STATUS_SUCCESS` to initialize; a
 nonzero successful or pending status stops as an unsupported initialization
 contract. A failing status is retained as a completed initialization result.
@@ -84,7 +83,7 @@ The adapter uses Unicorn’s virtual TLB mode to preserve guest virtual addresse
 including canonical high kernel addresses, without synthesizing Windows page
 tables. The initial RFLAGS value is `0x202`; the software-device profile uses a
 fixed 64-byte cache line. These are explicit properties of this execution scenario.
-Inline x64 CR8 reads observe the same `PASSIVE_LEVEL`; CR8 writes and other
+Inline x64 CR8 reads observe the current execution IRQL; CR8 writes and other
 control-register operations remain unsupported.
 
 Unknown imports bind to lazy traps. An unused import does not prevent execution;
@@ -93,20 +92,27 @@ executing its thunk or reading an unmodeled exported data value stops with
 NeverD does not replace unimplemented calls with success values. Malformed
 images or unsupported loading requirements fail before execution.
 
-Queued work-item callbacks run deterministically after a driver invocation
-returns, including DriverEntry, request dispatch and another worker callback.
-Requests remain serial: a pending request must complete before the next request
-starts. The dispatcher must mark the IRP pending and return `STATUS_PENDING`;
-a queued worker can then complete it at `PASSIVE_LEVEL`. If the request remains
-pending without an available completion producer, execution stops with a stalled
-`model_error`. Instruction, memory, event and time budgets also bound callbacks.
+Queued `DelayedWorkQueue` workers execute at `PASSIVE_LEVEL`; guest DPC
+callbacks execute at `DISPATCH_LEVEL` with the documented four arguments.
+Scheduling is deterministic and cooperative on CPU0, at returned-call and
+blocking-wait boundaries. Relative, absolute and periodic timers use virtual
+time, advancing to the next timer or wait deadline when no frame can run.
+Notification and synchronization events/timers retain their distinct
+signal-consumption behavior. Each callback has a separate guest stack;
+multiple blocked frames retain their locals and complete CPU contexts while
+guest memory remains shared. Win64 callback entry places the first four
+arguments in registers and additional arguments on the stack. Requests remain
+serial: a dispatch that marks an IRP pending must return `STATUS_PENDING`, and
+it must complete before the next request starts. No available producer for a
+pending request or infinite wait causes a stalled `model_error`. Shared
+instruction, memory, observation and wall-clock budgets still apply.
 
-This profile does not implement a complete Windows kernel, KMDF runtime,
-PnP/power lifecycle, neither-method IOCTLs, interrupts, general waits, threads,
-cancellation, or guest timer/DPC/APC APIs. Internal scheduler state-machine tests
-do not establish public support for those operations. Initialization-only calls
-also drain work explicitly queued by DriverEntry; they do not create scenario
-requests or invoke unload implicitly.
+This is a bounded scheduling model, not full Windows asynchronous support.
+Alertable or user-mode waits, system threads, APCs, request cancellation,
+spinlocks, concurrent IRPs, general IRQL transitions, `METHOD_NEITHER`,
+KMDF/UMDF, full PnP/power, hardware, DMA and interrupts remain unsupported.
+Initialization-only calls execute explicitly queued callbacks without
+inventing requests or unload.
 
 Images use their preferred base unless a scenario selects a valid relocated
 address, and must be PE32+ x64 executables with the native subsystem. Imports
@@ -133,11 +139,31 @@ The initial API model deliberately has a finite contract:
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` or `\??\Name` within one session namespace, targeting `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
-| `KeGetCurrentIrql` | Returns `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Device-owned opaque work items; `DelayedWorkQueue` only, callbacks receive the device and context at `PASSIVE_LEVEL`; queued items cannot be freed |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | Opaque DPC storage, four guest callback arguments, `DISPATCH_LEVEL`, duplicate/remove semantics and importance; target CPU0 only |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Notification/synchronization timers; relative/absolute 100 ns deadlines, periodic milliseconds, rearm/cancel and signal queries in virtual time |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Notification/synchronization events with distinct signal consumption; `KeSetEvent` accepts Increment=0 and Wait=FALSE only |
+| `KeWaitForSingleObject` | One initialized event or timer; nonalertable `KernelMode`, reason `Executive`; zero polling, finite relative/absolute or infinite waits; nonzero/infinite waits require IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | Nonalertable `KernelMode` relative/absolute delay at IRQL <= APC_LEVEL; resumes the saved guest frame after virtual time advances |
 | `IoMarkIrpPending` | Marks the live active IRP; the equivalent WDM macro's stack-control write is also modeled; dispatch must return `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Completes the active synchronous or pending modeled IRP with `IO_NO_INCREMENT`; a completed IRP or buffer cannot be accessed again |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
+
+API IRQL ceilings come from `KernelAPIIRQL.def`, with argument-dependent
+checks in the owning model. DPCs cannot call registry APIs or allocate, free
+or access paged pool; Unicode `DbgPrint` conversions require `PASSIVE_LEVEL`,
+while supported ANSI output and nonpaged operations remain usable at
+`DISPATCH_LEVEL`. Callback stacks have bounded ranges; an escaping stack
+pointer cannot enter another blocked worker’s stack. Armed timers in a device
+extension prevent premature device retirement. These checks do not expose
+general IRQL transitions.
+
+Timer expiry satisfies already registered waits before a DPC can reset or
+rearm the timer. Queued DPCs run before awakened `PASSIVE_LEVEL` frames
+resume. Completing an IRP rejects release of request storage that still
+contains a queued DPC; the failure precedes completion and buffer
+invalidation.
 
 `DbgPrint` formatting supports integer `d/i/u/o/x/X`, pointer `p`, text `s/c`,
 `%%`, counted Unicode `wZ/lZ`, wide `ls/ws`, flags, width/precision including
@@ -205,7 +231,7 @@ has its own FILE_OBJECT and FsContext and requires create, transfers, cleanup,
 and close in that order. Requests for independent files may be interleaved.
 Exclusive devices reject a second open. These identities represent file objects,
 not duplicated handles. Buffered and both direct IOCTL methods are supported.
-Dispatch must either complete synchronously or use the pending work-item
+Dispatch must either complete synchronously or use the pending callback
 contract above. Invalid output lengths and access to a completed IRP fail
 explicitly. Requested unload must
 leave no live device, symbolic link, pool allocation, or file object.
@@ -379,7 +405,7 @@ parts of the requested lifecycle ran. Each API call and CPU write also records
 its phase (`driver_entry`, `request:N`, `callback:N`, or `unload`). Each request
 reports dispatch and I/O statuses, completion, information length, and returned
 `output_hex` bytes.
-Pending requests retain `STATUS_PENDING` in `dispatch_status`; the worker's
+Pending requests retain `STATUS_PENDING` in `dispatch_status`; the callback's
 final completion status is reported separately in `io_status` and determines
 the request's contribution to `scenario_success`.
 `preferred_image_base` describes the original PE base. `security_cookie` is the

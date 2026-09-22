@@ -14,7 +14,7 @@
 | [貢獻指南](CONTRIBUTING.md) | 開發環境、建置設定、工作流程、風格與 PR 要求 |
 | [架構](architecture.md) | IR 路徑、元件邊界、嚴格提升、支援深度與修改位置 |
 | [測試](testing.md) | 測試套件、產生的 fixture、Unicorn 往返與增量命令 |
-| [Windows 驅動程式模擬](driver-emulation.md) | 有界 x64 WDM 初始化、循序緩衝／直接請求、工作項目完成、行為報告與限制 |
+| [Windows 驅動程式模擬](driver-emulation.md) | 有界 x64 WDM 初始化、循序緩衝／直接請求、工作項目、計時器、DPC、事件與等待，以及行為報告和限制 |
 | [Windows 例外重建](windows-exception-reconstruction.md) | SEH/C++ 展開支援矩陣、IR 契約、原生 patch 規則與 PE 驗證 |
 | [記憶體安全稽核與獵取](memory-safety.md) | 堆積生命週期與拷貝越界分析：各格式身分契約、匯/源目錄、判定、預算與 JSON 模式 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |

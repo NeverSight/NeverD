@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_KERNELMODEL_H
 #define NEVERD_EMULATION_KERNELMODEL_H
 #include "../GuestMemory.h"
+#include "KernelDispatcher.h"
 #include "KernelRegistry.h"
 #include "KernelScheduler.h"
 
@@ -29,7 +30,15 @@ class KernelModel {
 public:
   KernelModel(GuestMemory &Memory, DriverResult &Result,
               const KernelExportRegistry *Exports = nullptr)
-      : Memory(Memory), Result(Result), Exports(Exports), Registry(Memory) {}
+      : Memory(Memory), Result(Result), Exports(Exports), Registry(Memory),
+        Dispatcher(Memory, Scheduler,
+                   [this](uint64_t Address, uint32_t Size, bool IsWrite) {
+                     return validateDispatcherStorage(Address, Size, IsWrite);
+                   }) {}
+  KernelModel(const KernelModel &) = delete;
+  KernelModel &operator=(const KernelModel &) = delete;
+  KernelModel(KernelModel &&) = delete;
+  KernelModel &operator=(KernelModel &&) = delete;
   llvm::Error initialize(const DriverImage &Image,
                          const DriverOptions &Options);
   /// End a normally returned DriverEntry, regardless of its NTSTATUS. The
@@ -50,6 +59,7 @@ public:
     uint64_t Argument1 = 0;
     uint64_t Argument2 = 0;
     uint64_t Argument3 = 0;
+    std::vector<uint64_t> StackArguments;
   };
   /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
@@ -58,8 +68,22 @@ public:
     return Request && Request->DispatchReturned && !Request->Completed;
   }
   llvm::Expected<std::optional<KernelScheduler::Invocation>>
-  nextScheduled(bool AdvanceTime);
+  nextScheduled(bool AdvanceTime,
+                std::optional<uint64_t> Deadline = std::nullopt);
   llvm::Error finishScheduled(uint64_t ID);
+  llvm::Error suspendScheduled(uint64_t ID);
+  llvm::Error resumeScheduled(uint64_t ID);
+  struct Wait {
+    uint64_t Object = 0;
+    std::optional<uint64_t> Deadline;
+  };
+  std::optional<Wait> takeWait();
+  llvm::Expected<std::optional<uint32_t>> pollWait(const Wait &Pending);
+  std::optional<uint64_t> nextEventTime() const;
+  bool hasQueuedDPC() const { return Scheduler.hasQueuedDPC(); }
+  llvm::Error activateStack(uint64_t Base, uint64_t Size);
+  llvm::Error retireStack(uint64_t Base, uint64_t Size);
+  void enterForeground() { CurrentIRQL = 0; }
   uint8_t currentIRQL() const { return CurrentIRQL; }
   llvm::Expected<Invocation> beginUnload();
   llvm::Error finishUnload();
@@ -73,6 +97,19 @@ private:
   const KernelExportRegistry *Exports;
   KernelRegistry Registry;
   KernelScheduler Scheduler;
+  KernelDispatcher Dispatcher;
+  std::optional<Wait> PendingWait;
+  std::map<uint64_t, size_t> WaitReferences;
+  llvm::Expected<uint64_t> beginWait(llvm::ArrayRef<uint64_t> Arguments,
+                                     bool Delay);
+  llvm::Error prepareReleaseRange(uint64_t Base, uint64_t Size);
+  llvm::Error
+  prepareReleaseRanges(llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges);
+  llvm::Error validateGuestAccessImpl(uint64_t Address, uint32_t Size,
+                                      bool IsWrite,
+                                      bool IncludeDispatcher) const;
+  llvm::Error validateDispatcherStorage(uint64_t Address, uint32_t Size,
+                                        bool IsWrite) const;
   uint8_t CurrentIRQL = 0;
   std::map<uint64_t, uint64_t> WorkItems;
   std::map<uint64_t, uint64_t> WorkReferences;

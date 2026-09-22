@@ -14,6 +14,8 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelRuntime.cpp
   windows/KernelModelScheduling.cpp
   windows/KernelScheduler.cpp
+  windows/KernelDispatcher.cpp
+  windows/KernelAPIIRQL.cpp
   windows/DeviceLifecycle.cpp
   windows/KernelRegistry.cpp
   LINK_COMPONENTS Loader

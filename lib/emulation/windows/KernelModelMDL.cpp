@@ -233,6 +233,9 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
   auto &State = MDLs.at(MDL);
   if (!State.Mapped || State.Buffer != Address)
     return mdlError("MDL unmapping requires its live system mapping address");
+  if (auto E =
+          prepareReleaseRange(pageBase(State.Buffer), State.AllocationSize))
+    return E;
   if (auto E = Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
     return E;
   if (auto E = Memory.writeInteger(MDL + MDLMappedSystemVAOffset, 0,

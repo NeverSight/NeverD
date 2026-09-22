@@ -78,7 +78,8 @@ llvm::Error KernelScheduler::validateDPC(const DpcCallback &DPC) const {
 }
 
 llvm::Error KernelScheduler::checkCapacity(uint64_t Additional) const {
-  const uint64_t Outstanding = queuedCallbackCount() + bool(Active);
+  const uint64_t Outstanding =
+      queuedCallbackCount() + Suspended.size() + bool(Active);
   if (Outstanding > Bounds.MaxPendingCallbacks ||
       Additional > Bounds.MaxPendingCallbacks - Outstanding)
     return schedulerError("scheduler pending callback limit exhausted");
@@ -144,6 +145,22 @@ bool KernelScheduler::isDPCQueued(uint64_t Object) const {
   return containsObject(DPCs, Object);
 }
 
+llvm::Expected<uint64_t>
+KernelScheduler::computeDeadline(int64_t Time100ns) const {
+  if (auto E = validateTime())
+    return E;
+  uint64_t Due = Time100ns;
+  if (Time100ns < 0) {
+    const uint64_t Interval = uint64_t(-(Time100ns + 1)) + 1;
+    if (Interval > UINT64_MAX - Now)
+      return schedulerError("relative deadline overflows virtual time");
+    Due = Now + Interval;
+  }
+  if (Due > Bounds.MaxTime100ns)
+    return schedulerError("deadline exceeds virtual time limit");
+  return Due;
+}
+
 llvm::Expected<bool> KernelScheduler::setTimer(uint64_t Timer, uint64_t Owner,
                                                int64_t DueTime100ns,
                                                uint32_t PeriodMilliseconds,
@@ -169,19 +186,13 @@ llvm::Expected<bool> KernelScheduler::setTimer(uint64_t Timer, uint64_t Owner,
         "timer owner cannot change before its object is freed");
   if (NextTimerSequence == UINT64_MAX)
     return schedulerError("scheduler timer sequence overflow");
-  uint64_t Due = DueTime100ns;
-  if (DueTime100ns < 0) {
-    const uint64_t Interval = uint64_t(-(DueTime100ns + 1)) + 1;
-    if (Interval > UINT64_MAX - Now)
-      return schedulerError("relative timer deadline overflows virtual time");
-    Due = Now + Interval;
-  }
-  if (Due > Bounds.MaxTime100ns)
-    return schedulerError("timer deadline exceeds virtual time limit");
+  auto Due = computeDeadline(DueTime100ns);
+  if (!Due)
+    return Due.takeError();
   const bool WasArmed = I != Timers.end() && I->second.Armed;
   TimerState State;
   State.Owner = Owner;
-  State.DueTime100ns = Due;
+  State.DueTime100ns = *Due;
   State.Period100ns =
       uint64_t(PeriodMilliseconds) * scheduler::TicksPerMillisecond;
   State.Sequence = NextTimerSequence++;
@@ -222,17 +233,27 @@ llvm::Expected<bool> KernelScheduler::consumeTimerSignal(uint64_t Timer) {
   return WasSignaled;
 }
 
-llvm::Error KernelScheduler::forgetTimer(uint64_t Timer) {
+llvm::Error KernelScheduler::canForgetTimer(uint64_t Timer) const {
   auto I = Timers.find(Timer);
   if (I == Timers.end())
     return schedulerError("unknown scheduler timer");
   if (I->second.Armed ||
-      (Active && Active->SourceTimer == Timer && I->second.Period100ns) ||
+      (Active && Active->SourceTimer == Timer && Active->SourceTimerPeriodic) ||
+      llvm::any_of(Suspended,
+                   [Timer](const auto &Item) {
+                     return Item.second.SourceTimer == Timer;
+                   }) ||
       llvm::any_of(DPCs, [Timer](const auto &Call) {
         return Call.SourceTimer == Timer;
       }))
     return schedulerError("timer still has an armed expiry or outstanding DPC");
-  Timers.erase(I);
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::forgetTimer(uint64_t Timer) {
+  if (auto E = canForgetTimer(Timer))
+    return E;
+  Timers.erase(Timer);
   return llvm::Error::success();
 }
 
@@ -278,6 +299,7 @@ llvm::Error KernelScheduler::expireTimers(uint64_t Time) {
       continue;
     auto Call = makeInvocation(*Timer->DPC, CallbackKind::DPC, ExpiredTime);
     Call.SourceTimer = Object;
+    Call.SourceTimerPeriodic = Timer->Period100ns != 0;
     if (Timer->DPC->Importance == DpcImportance::High)
       DPCs.push_front(std::move(Call));
     else
@@ -287,12 +309,17 @@ llvm::Error KernelScheduler::expireTimers(uint64_t Time) {
 }
 
 llvm::Expected<std::optional<KernelScheduler::Invocation>>
-KernelScheduler::next(bool AdvanceTime) {
+KernelScheduler::next(bool AdvanceTime,
+                      std::optional<uint64_t> MaxAdvanceTime) {
   if (auto E = validateTime())
     return E;
   if (Active)
     return schedulerError("cannot dispatch with an unfinished callback");
+  if (MaxAdvanceTime && *MaxAdvanceTime > Bounds.MaxTime100ns)
+    return schedulerError("wait deadline exceeds virtual time limit");
+  bool Advanced = false;
   for (;;) {
+    const uint64_t PreviousExpirations = TimerExpirations;
     if (auto E = expireTimers(Now))
       return E;
     if (!DPCs.empty() || !Workers.empty()) {
@@ -304,17 +331,35 @@ KernelScheduler::next(bool AdvanceTime) {
       ++Dispatches;
       return Active;
     }
-    if (!AdvanceTime)
+    if (!AdvanceTime ||
+        (MaxAdvanceTime && (Advanced || Now >= *MaxAdvanceTime ||
+                            TimerExpirations != PreviousExpirations)))
       return std::optional<Invocation>();
-    std::optional<uint64_t> Earliest;
-    for (const auto &[Object, Timer] : Timers)
-      if (Timer.Armed && (!Earliest || Timer.DueTime100ns < *Earliest))
-        Earliest = Timer.DueTime100ns;
+    auto Earliest = nextEventTime100ns();
+    if (MaxAdvanceTime && (!Earliest || *MaxAdvanceTime < *Earliest))
+      Earliest = MaxAdvanceTime;
     if (!Earliest)
       return std::optional<Invocation>();
     if (auto E = expireTimers(*Earliest))
       return E;
+    Advanced = true;
   }
+}
+
+std::optional<uint64_t> KernelScheduler::nextEventTime100ns() const {
+  std::optional<uint64_t> Earliest;
+  for (const auto &[Object, Timer] : Timers)
+    if (Timer.Armed && (!Earliest || Timer.DueTime100ns < *Earliest))
+      Earliest = Timer.DueTime100ns;
+  if (Earliest)
+    return std::max(Now, *Earliest);
+  return std::nullopt;
+}
+
+llvm::Error KernelScheduler::processDueTimers() {
+  if (auto E = validateTime())
+    return E;
+  return expireTimers(Now);
 }
 
 llvm::Error KernelScheduler::finish(uint64_t ID) {
@@ -324,11 +369,42 @@ llvm::Error KernelScheduler::finish(uint64_t ID) {
   return llvm::Error::success();
 }
 
+llvm::Error KernelScheduler::suspend(uint64_t ID) {
+  if (!Active || Active->ID != ID)
+    return schedulerError("scheduler callback suspension identity mismatch");
+  if (Suspended.count(ID))
+    return schedulerError("scheduler callback is already suspended");
+  Suspended.emplace(ID, std::move(*Active));
+  Active.reset();
+  return llvm::Error::success();
+}
+
+llvm::Error KernelScheduler::resume(uint64_t ID) {
+  if (Active)
+    return schedulerError("cannot resume with an unfinished callback");
+  auto I = Suspended.find(ID);
+  if (I == Suspended.end())
+    return schedulerError("scheduler callback resume identity mismatch");
+  Active = std::move(I->second);
+  Suspended.erase(I);
+  return llvm::Error::success();
+}
+
+const KernelScheduler::Invocation *
+KernelScheduler::suspended(uint64_t ID) const {
+  auto I = Suspended.find(ID);
+  return I == Suspended.end() ? nullptr : &I->second;
+}
+
 bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
   if (Active && Active->Owner == Owner)
     return true;
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
   if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches))
+    return true;
+  if (llvm::any_of(Suspended, [Owner](const auto &Item) {
+        return Item.second.Owner == Owner;
+      }))
     return true;
   return llvm::any_of(Timers, [Owner](const auto &Item) {
     return Item.second.Armed && Item.second.Owner == Owner;
@@ -336,7 +412,7 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
 }
 
 bool KernelScheduler::hasPending() const {
-  if (Active || !Workers.empty() || !DPCs.empty())
+  if (Active || !Suspended.empty() || !Workers.empty() || !DPCs.empty())
     return true;
   return llvm::any_of(Timers,
                       [](const auto &Item) { return Item.second.Armed; });

@@ -491,5 +491,392 @@ TEST(DriverKernelScheduler, InvalidCallbackAndTimeConfigurationFailClearly) {
   expectError(Invalid.setTimer(1, 100, -1, 0), "initial time");
 }
 
+TEST(DriverKernelScheduler, SuspendedWorkerRetainsOwnershipAcrossNestedDPC) {
+  Scheduler S;
+  auto Original = work(1, 101);
+  const uint64_t WorkerID = take(S.enqueueWorkItem(Original));
+  auto Worker = take(S.next());
+  ASSERT_TRUE(Worker);
+  success(S.suspend(WorkerID));
+  EXPECT_FALSE(S.active());
+  EXPECT_EQ(S.suspendedCallbackCount(), 1u);
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+  EXPECT_TRUE(S.hasPending());
+  EXPECT_TRUE(S.hasOutstanding(101));
+  EXPECT_FALSE(S.isWorkItemQueued(1));
+  EXPECT_FALSE(S.cancelWorkItem(1));
+  EXPECT_TRUE(take(S.queueDPC(dpc(2))));
+  auto DPC = take(S.next());
+  ASSERT_TRUE(DPC);
+  EXPECT_EQ(DPC->Kind, Scheduler::CallbackKind::DPC);
+  EXPECT_EQ(DPC->IRQL, scheduler::DispatchLevel);
+  EXPECT_TRUE(S.hasOutstanding(101));
+  EXPECT_TRUE(S.hasOutstanding(100));
+  expectError(S.resume(WorkerID), "unfinished callback");
+  success(S.finish(DPC->ID));
+  success(S.resume(WorkerID));
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, WorkerID);
+  EXPECT_EQ(S.active()->Object, Original.Object);
+  EXPECT_EQ(S.active()->Owner, Original.Owner);
+  EXPECT_EQ(S.active()->Thread, Original.Thread);
+  EXPECT_EQ(S.active()->PC, Original.PC);
+  EXPECT_EQ(S.active()->Arguments, Original.Arguments);
+  EXPECT_EQ(S.active()->Kind, Scheduler::CallbackKind::WorkItem);
+  EXPECT_EQ(S.active()->IRQL, scheduler::PassiveLevel);
+  EXPECT_EQ(S.suspendedCallbackCount(), 0u);
+  EXPECT_EQ(S.dispatchCount(), 2u);
+  EXPECT_FALSE(S.hasOutstanding(100));
+  success(S.finish(WorkerID));
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, WaitPredicateChoosesWhichSuspendedWorkerResumes) {
+  Scheduler S;
+  const uint64_t FirstID = take(S.enqueueWorkItem(work(1, 101)));
+  const uint64_t SecondID = take(S.enqueueWorkItem(work(2, 102)));
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(FirstID));
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(SecondID));
+  EXPECT_EQ(S.suspendedCallbackCount(), 2u);
+  ASSERT_NE(S.suspended(FirstID), nullptr);
+  ASSERT_NE(S.suspended(SecondID), nullptr);
+  EXPECT_FALSE(take(S.next(false)));
+  // Readiness belongs to the wait model, not suspension order or nesting.
+  success(S.resume(FirstID));
+  success(S.finish(FirstID));
+  EXPECT_EQ(S.suspended(FirstID), nullptr);
+  EXPECT_FALSE(S.hasOutstanding(101));
+  EXPECT_TRUE(S.hasOutstanding(102));
+  success(S.resume(SecondID));
+  success(S.finish(SecondID));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, InvalidSuspendResumeAndFinishPreserveOwnership) {
+  Scheduler S;
+  expectError(S.suspend(99), "identity mismatch");
+  expectError(S.resume(99), "identity mismatch");
+  auto ID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  expectError(S.suspend(ID + 1), "identity mismatch");
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, ID);
+  EXPECT_EQ(S.suspendedCallbackCount(), 0u);
+  success(S.suspend(ID));
+  expectError(S.suspend(ID), "identity mismatch");
+  expectError(S.finish(ID), "identity mismatch");
+  expectError(S.resume(ID + 1), "identity mismatch");
+  EXPECT_FALSE(S.active());
+  ASSERT_NE(S.suspended(ID), nullptr);
+  EXPECT_TRUE(S.hasOutstanding(100));
+  success(S.resume(ID));
+  expectError(S.resume(ID), "unfinished callback");
+  success(S.finish(ID));
+  expectError(S.resume(ID), "identity mismatch");
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, SuspendedCallbacksConsumeCapacityUntilFinished) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 2;
+  Scheduler S(Limits);
+  const auto FirstID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(FirstID));
+  // Requeueing the same dequeued work item is a new invocation, not a resume.
+  const auto SecondID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_NE(FirstID, SecondID);
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(SecondID));
+  expectError(S.enqueueWorkItem(work(2)), "pending callback limit");
+  expectError(S.queueDPC(dpc(3)), "pending callback limit");
+  EXPECT_EQ(S.suspendedCallbackCount(), 2u);
+  EXPECT_FALSE(S.cancelWorkItem(1));
+  success(S.resume(FirstID));
+  expectError(S.enqueueWorkItem(work(2)), "pending callback limit");
+  success(S.finish(FirstID));
+  EXPECT_TRUE(take(S.queueDPC(dpc(3))));
+  EXPECT_TRUE(S.removeDPC(3));
+  success(S.resume(SecondID));
+  success(S.finish(SecondID));
+  EXPECT_FALSE(S.hasPending());
+}
+
+TEST(DriverKernelScheduler, ResumeDoesNotRedispatchOrConsumeDispatchBudget) {
+  Scheduler::Limits Limits;
+  Limits.MaxDispatches = 1;
+  Scheduler S(Limits);
+  const auto ID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  for (unsigned I = 0; I < 3; ++I) {
+    success(S.suspend(ID));
+    success(S.resume(ID));
+  }
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  success(S.finish(ID));
+}
+
+TEST(DriverKernelScheduler, SuspendedTimerDPCRetainsReleasePreflightOwnership) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, -5, 0, dpc(1))));
+  expectError(S.canForgetTimer(10), "outstanding");
+  auto Call = take(S.next());
+  ASSERT_TRUE(Call);
+  success(S.canForgetTimer(10));
+  EXPECT_TRUE(take(S.timerSignaled(10))); // Preflight does not release.
+  success(S.suspend(Call->ID));
+  expectError(S.canForgetTimer(10), "outstanding");
+  expectError(S.forgetTimer(10), "outstanding");
+  EXPECT_FALSE(S.removeDPC(1));
+  EXPECT_FALSE(S.cancelTimer(10));
+  EXPECT_TRUE(S.hasOutstanding(100));
+  auto Saved = S.suspended(Call->ID);
+  ASSERT_NE(Saved, nullptr);
+  EXPECT_EQ(Saved->SourceTimer, 10u);
+  EXPECT_EQ(Saved->DueTime100ns, 5u);
+  EXPECT_EQ(Saved->IRQL, scheduler::DispatchLevel);
+  success(S.resume(Call->ID));
+  success(S.canForgetTimer(10));
+  success(S.forgetTimer(10));
+  expectError(S.canForgetTimer(10), "unknown");
+  EXPECT_TRUE(S.hasOutstanding(100));
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.hasOutstanding(100));
+}
+
+TEST(DriverKernelScheduler, DeadlineConversionIsSharedCheckedAndNonmutating) {
+  Scheduler::Limits Limits;
+  Limits.InitialTime100ns = 10;
+  Limits.MaxTime100ns = 100;
+  Scheduler S(Limits);
+  EXPECT_EQ(take(S.computeDeadline(-5)), 15u);
+  EXPECT_EQ(take(S.computeDeadline(50)), 50u);
+  EXPECT_EQ(take(S.computeDeadline(0)), 0u);
+  expectError(S.computeDeadline(-91), "virtual time limit");
+  expectError(S.computeDeadline(101), "virtual time limit");
+  EXPECT_EQ(S.now100ns(), 10u);
+  EXPECT_FALSE(S.hasPending());
+  Scheduler Unbounded;
+  EXPECT_EQ(take(Unbounded.computeDeadline(INT64_MIN)), uint64_t(1) << 63);
+  Limits.InitialTime100ns = UINT64_MAX - 1;
+  Limits.MaxTime100ns = UINT64_MAX;
+  Scheduler Overflow(Limits);
+  expectError(Overflow.computeDeadline(-2), "overflows");
+}
+
+TEST(DriverKernelScheduler, DeadlineCanAdvanceIdleClockWithoutScheduledTimers) {
+  Scheduler S;
+  EXPECT_FALSE(S.nextEventTime100ns());
+  EXPECT_FALSE(take(S.next(true, 100)));
+  EXPECT_EQ(S.now100ns(), 100u);
+  EXPECT_FALSE(S.hasPending());
+  EXPECT_EQ(S.timerExpirationCount(), 0u);
+  EXPECT_FALSE(take(S.next(true, 50)));
+  EXPECT_EQ(S.now100ns(), 100u);
+  EXPECT_FALSE(take(S.next(false, 200)));
+  EXPECT_EQ(S.now100ns(), 100u);
+}
+
+TEST(DriverKernelScheduler, WaitDeadlinePrecedesFutureTimerWithoutLosingIt) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, 100, 0, dpc(1))));
+  EXPECT_EQ(S.nextEventTime100ns(), 100u);
+  EXPECT_FALSE(take(S.next(true, 40)));
+  EXPECT_EQ(S.now100ns(), 40u);
+  EXPECT_EQ(S.timerExpirationCount(), 0u);
+  EXPECT_TRUE(S.isTimerArmed(10));
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+  auto Call = take(S.next(true, 100));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(S.now100ns(), 100u);
+  EXPECT_EQ(Call->SourceTimer, 10u);
+  EXPECT_TRUE(take(S.timerSignaled(10)));
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.nextEventTime100ns());
+}
+
+TEST(DriverKernelScheduler, SignalOnlyExpiryYieldsBeforeLaterWaitDeadline) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, 25, 0)));
+  EXPECT_FALSE(take(S.setTimer(20, 100, 50, 0, dpc(1))));
+  EXPECT_FALSE(take(S.next(true, 100)));
+  EXPECT_EQ(S.now100ns(), 25u);
+  EXPECT_TRUE(take(S.consumeTimerSignal(10)));
+  EXPECT_FALSE(take(S.timerSignaled(20)));
+  EXPECT_EQ(S.nextEventTime100ns(), 50u);
+  auto Call = take(S.next(true, 100));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(S.now100ns(), 50u);
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(take(S.next(true, 100)));
+  EXPECT_EQ(S.now100ns(), 100u);
+}
+
+TEST(DriverKernelScheduler, AlreadyDueSignalOnlyExpiryDoesNotOvershootWait) {
+  Scheduler::Limits Limits;
+  Limits.InitialTime100ns = 100;
+  Scheduler S(Limits);
+  EXPECT_FALSE(take(S.setTimer(10, 100, 50, 0)));
+  EXPECT_EQ(S.nextEventTime100ns(), 100u);
+  EXPECT_FALSE(take(S.next(true, 200)));
+  EXPECT_EQ(S.now100ns(), 100u);
+  EXPECT_TRUE(take(S.consumeTimerSignal(10)));
+  EXPECT_FALSE(take(S.next(true, 200)));
+  EXPECT_EQ(S.now100ns(), 200u);
+}
+
+TEST(DriverKernelScheduler, PeriodicSignalOnlyTimerYieldsBetweenEveryExpiry) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, -1, 1)));
+  for (uint64_t Time : {1, 10001, 20001}) {
+    EXPECT_FALSE(take(S.next(true, 25000)));
+    EXPECT_EQ(S.now100ns(), Time);
+    EXPECT_TRUE(take(S.consumeTimerSignal(10)));
+  }
+  EXPECT_FALSE(take(S.next(true, 25000)));
+  EXPECT_EQ(S.now100ns(), 25000u);
+  EXPECT_EQ(S.timerExpirationCount(), 3u);
+  EXPECT_EQ(S.nextEventTime100ns(), 30001u);
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+}
+
+TEST(DriverKernelScheduler, SuspendedWaitRetainsCapacityWhenTimerBatchExpires) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 1;
+  Scheduler S(Limits);
+  const auto ID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  success(S.suspend(ID));
+  EXPECT_FALSE(take(S.setTimer(10, 100, 5, 0, dpc(2))));
+  expectError(S.next(true, 10), "pending callback limit");
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_EQ(S.timerExpirationCount(), 0u);
+  ASSERT_NE(S.suspended(ID), nullptr);
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+  success(S.resume(ID));
+  success(S.finish(ID));
+  auto Call = take(S.next(true, 10));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(S.now100ns(), 5u);
+  success(S.finish(Call->ID));
+}
+
+TEST(DriverKernelScheduler, InvalidWaitDeadlineCannotMutateTimeOrReadyQueue) {
+  Scheduler::Limits Limits;
+  Limits.MaxTime100ns = 100;
+  Scheduler S(Limits);
+  const auto ID = take(S.enqueueWorkItem(work(1)));
+  EXPECT_FALSE(take(S.setTimer(10, 100, 0, 0)));
+  expectError(S.next(true, 101), "virtual time limit");
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_EQ(S.dispatchCount(), 0u);
+  EXPECT_TRUE(S.isWorkItemQueued(1));
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, ID);
+  EXPECT_TRUE(take(S.timerSignaled(10)));
+  success(S.finish(ID));
+}
+
+TEST(DriverKernelScheduler, DueTimersCanSignalWithoutPreemptingActiveCallback) {
+  Scheduler S;
+  const auto ID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  EXPECT_FALSE(take(S.setTimer(10, 100, 0, 0)));
+  EXPECT_FALSE(take(S.setTimer(20, 100, 0, 0, dpc(2))));
+  EXPECT_FALSE(take(S.setTimer(30, 100, -10, 0, dpc(3))));
+  success(S.processDueTimers());
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, ID);
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_TRUE(take(S.timerSignaled(10)));
+  EXPECT_TRUE(take(S.timerSignaled(20)));
+  EXPECT_FALSE(take(S.timerSignaled(30)));
+  EXPECT_TRUE(S.isDPCQueued(2));
+  EXPECT_FALSE(S.isDPCQueued(3));
+  EXPECT_EQ(S.dispatchCount(), 1u);
+  EXPECT_EQ(S.timerExpirationCount(), 2u);
+  success(S.processDueTimers());
+  EXPECT_EQ(S.timerExpirationCount(), 2u);
+  success(S.finish(ID));
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->Object, 2u);
+  EXPECT_EQ(S.now100ns(), 0u);
+  success(S.finish(Call->ID));
+}
+
+TEST(DriverKernelScheduler, DueTimerFailureRetainsActiveCallbackAndTimerBatch) {
+  Scheduler::Limits Limits;
+  Limits.MaxPendingCallbacks = 1;
+  Scheduler S(Limits);
+  const auto ID = take(S.enqueueWorkItem(work(1)));
+  ASSERT_TRUE(take(S.next()));
+  EXPECT_FALSE(take(S.setTimer(10, 100, 0, 0)));
+  EXPECT_FALSE(take(S.setTimer(20, 100, 0, 0, dpc(2))));
+  expectError(S.processDueTimers(), "pending callback limit");
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, ID);
+  EXPECT_EQ(S.timerExpirationCount(), 0u);
+  EXPECT_EQ(S.queuedCallbackCount(), 0u);
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+  EXPECT_FALSE(take(S.timerSignaled(20)));
+  EXPECT_TRUE(S.isTimerArmed(10));
+  EXPECT_TRUE(S.isTimerArmed(20));
+  success(S.finish(ID));
+  success(S.processDueTimers());
+  EXPECT_TRUE(take(S.timerSignaled(10)));
+  EXPECT_TRUE(take(S.timerSignaled(20)));
+  EXPECT_FALSE(S.active());
+  EXPECT_TRUE(S.isDPCQueued(2));
+}
+
+TEST(DriverKernelScheduler, ProcessingDuePeriodicTimerNeverAdvancesIdleTime) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, 0, 1)));
+  success(S.processDueTimers());
+  EXPECT_TRUE(take(S.consumeTimerSignal(10)));
+  EXPECT_EQ(S.nextEventTime100ns(), scheduler::TicksPerMillisecond);
+  success(S.processDueTimers());
+  EXPECT_FALSE(take(S.timerSignaled(10)));
+  EXPECT_EQ(S.now100ns(), 0u);
+  EXPECT_EQ(S.timerExpirationCount(), 1u);
+}
+
+TEST(DriverKernelScheduler, RearmingTimerCannotEraseActivePeriodicProvenance) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, -1, 1, dpc(1))));
+  auto Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_TRUE(Call->SourceTimerPeriodic);
+  EXPECT_TRUE(take(S.setTimer(10, 100, -5, 0, dpc(2))));
+  EXPECT_TRUE(S.cancelTimer(10));
+  expectError(S.canForgetTimer(10), "outstanding");
+  expectError(S.forgetTimer(10), "outstanding");
+  ASSERT_TRUE(S.active());
+  EXPECT_EQ(S.active()->ID, Call->ID);
+  success(S.finish(Call->ID));
+  success(S.forgetTimer(10));
+}
+
+TEST(DriverKernelScheduler, RearmingTimerCannotInventActivePeriodicProvenance) {
+  Scheduler S;
+  EXPECT_FALSE(take(S.setTimer(10, 100, -1, 0, dpc(1))));
+  auto Call = take(S.next());
+  ASSERT_TRUE(Call);
+  EXPECT_FALSE(Call->SourceTimerPeriodic);
+  EXPECT_FALSE(take(S.setTimer(10, 100, -5, 1, dpc(2))));
+  EXPECT_TRUE(S.cancelTimer(10));
+  success(S.canForgetTimer(10));
+  success(S.forgetTimer(10));
+  EXPECT_TRUE(S.hasOutstanding(100));
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.hasOutstanding(100));
+}
+
 } // namespace
 } // namespace neverd::emulation

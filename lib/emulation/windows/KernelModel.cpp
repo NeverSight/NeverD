@@ -12,6 +12,7 @@
 #include "KernelModel.h"
 
 #include "DriverImage.h"
+#include "KernelAPIIRQL.h"
 #include "KernelModelRuntime.h"
 #include "WindowsKernelLayout.h"
 
@@ -200,6 +201,9 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
   if (auto E = Memory.writeInteger(DriverExtension, DriverObject, 8))
     return E;
   Result.DriverObject = DriverObject;
+  if (auto E =
+          Dispatcher.configure(DriverObject, profile::WorkerThreadIdentity))
+    return E;
   return llvm::Error::success();
 }
 
@@ -213,6 +217,8 @@ llvm::Error KernelModel::finishEntry() {
   // The WDK requires the driver to copy RegistryPath's contents if it needs
   // them later: the I/O manager releases this input after DriverEntry returns.
   // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nc-wdm-driver_initialize
+  if (auto E = prepareReleaseRange(RegistryPath, Allocation->second))
+    return E;
   FreedRanges.emplace(RegistryPath, Allocation->second);
   EntryFinished = true;
   return llvm::Error::success();
@@ -358,6 +364,8 @@ llvm::Error KernelModel::retireDeviceIfUnreferenced(uint64_t Address) {
     if (!Next)
       return Next.takeError();
     if (*Current == Address) {
+      if (auto E = prepareReleaseRange(Address, DeviceSizes.at(Address)))
+        return E;
       if (auto E = Memory.writeInteger(Link, *Next, 8))
         return E;
       FreedRanges.emplace(Address, DeviceSizes.at(Address));
@@ -380,7 +388,26 @@ llvm::Expected<uint64_t> KernelModel::call(
   const auto Kind = API->Kind;
   if (!DriverObject)
     return modelError("kernel model has not been initialized");
+  auto MaximumIRQL = maximumKernelIRQL(Name);
+  if (!MaximumIRQL)
+    return MaximumIRQL.takeError();
+  if (CurrentIRQL > *MaximumIRQL) {
+    if (*MaximumIRQL == scheduler::PassiveLevel)
+      return modelError(Name + " requires IRQL PASSIVE_LEVEL");
+    return modelError(Name +
+                      " requires IRQL <= " + std::to_string(*MaximumIRQL));
+  }
+  if ((Kind == KernelAPIKind::KeInitializeDpc ||
+       Kind == KernelAPIKind::KeInitializeEvent ||
+       Kind == KernelAPIKind::KeInitializeTimer ||
+       Kind == KernelAPIKind::KeInitializeTimerEx) &&
+      WaitReferences.count(A[0]))
+    return modelError("cannot reinitialize an object with outstanding waits");
   switch (Kind) {
+#define NEVERD_KERNEL_DISPATCHER_API(Name, Arity) case KernelAPIKind::Name:
+#include "KernelDispatcherAPIs.def"
+#undef NEVERD_KERNEL_DISPATCHER_API
+    return Dispatcher.call(Name, A, CurrentIRQL);
 #define NEVERD_KERNEL_REGISTRY_API(Name, Arity) case KernelAPIKind::Name:
 #include "KernelRegistryAPIs.def"
 #undef NEVERD_KERNEL_REGISTRY_API
@@ -390,6 +417,9 @@ llvm::Expected<uint64_t> KernelModel::call(
   }
   if (Kind == KernelAPIKind::MmGetSystemRoutineAddress)
     return resolveRoutine(A[0]);
+  if (Kind == KernelAPIKind::KeWaitForSingleObject ||
+      Kind == KernelAPIKind::KeDelayExecutionThread)
+    return beginWait(A, Kind == KernelAPIKind::KeDelayExecutionThread);
   if (Kind == KernelAPIKind::IoAllocateWorkItem)
     return allocateWorkItem(A[0]);
   if (Kind == KernelAPIKind::IoQueueWorkItem) {
@@ -535,6 +565,10 @@ llvm::Expected<uint64_t> KernelModel::call(
     }
     if (!A[1])
       return modelError("pool allocation requires non-zero size and tag");
+    const bool NonPaged = Modern ? (Flags & pool::NonPaged) != 0
+                                 : static_cast<uint32_t>(A[0]) != PoolPaged;
+    if (!NonPaged && CurrentIRQL > APCLevel)
+      return modelError("paged pool allocation requires IRQL <= APC_LEVEL");
     uint64_t Alignment = Modern && (Flags & pool::CacheAligned)
                              ? DeviceAlignmentMask + 1
                              : PoolAlignment;
@@ -556,8 +590,6 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (!Modern || (Flags & pool::Uninitialized))
       if (auto E = writeBytes(Memory, *Pointer, A[1], UninitializedPoolByte))
         return E;
-    const bool NonPaged = Modern ? (Flags & pool::NonPaged) != 0
-                                 : static_cast<uint32_t>(A[0]) != PoolPaged;
     Allocations.emplace(*Pointer, PoolAllocation{A[1], Tag, NonPaged});
     return *Pointer;
   }
@@ -570,6 +602,10 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (Kind == KernelAPIKind::ExFreePoolWithTag &&
         static_cast<uint32_t>(A[1]) != It->second.Tag)
       return modelError("ExFreePoolWithTag tag does not match allocation");
+    if (!It->second.NonPaged && CurrentIRQL > APCLevel)
+      return modelError("paged pool free requires IRQL <= APC_LEVEL");
+    if (auto E = prepareReleaseRange(A[0], It->second.Size))
+      return E;
     if (auto E = writeBytes(Memory, A[0], It->second.Size, FreedPoolByte))
       return E;
     FreedRanges.emplace(A[0], It->second.Size);
@@ -722,11 +758,22 @@ llvm::Error KernelModel::snapshot() {
 
 llvm::Error KernelModel::validateGuestAccess(uint64_t Address, uint32_t Size,
                                              bool IsWrite) const {
+  return validateGuestAccessImpl(Address, Size, IsWrite, true);
+}
+
+llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
+                                                 uint32_t Size, bool IsWrite,
+                                                 bool IncludeDispatcher) const {
   if (!Size)
     return llvm::Error::success();
   if (Size > UINT64_MAX - Address)
     return modelError("overflowing guest access in Windows model");
   const uint64_t End = Address + Size;
+  if (CurrentIRQL > APCLevel)
+    for (const auto &[Base, Allocation] : Allocations)
+      if (!Allocation.NonPaged && Address < Base + Allocation.Size &&
+          Base < End)
+        return modelError("paged pool access requires IRQL <= APC_LEVEL");
   if (Address < profile::ThunkBase + profile::ThunkSize &&
       profile::ThunkBase < End)
     return modelError(
@@ -752,6 +799,9 @@ llvm::Error KernelModel::validateGuestAccess(uint64_t Address, uint32_t Size,
   for (const auto &[Start, Length] : FreedRanges)
     if (Address < Start + Length && Start < End)
       return modelError("guest access to a freed model object or allocation");
+  if (IncludeDispatcher)
+    if (auto E = Dispatcher.validateGuestAccess(Address, Size, IsWrite))
+      return E;
   for (const auto &[Item, Device] : WorkItems)
     if (Address < Item + profile::WorkItemTokenSize && Item < End)
       return modelError("guest access to an opaque IO_WORKITEM");

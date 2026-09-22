@@ -51,7 +51,8 @@ struct DriverRequest {
   uint32_t File = 0;
 };
 
-/// This profile models a single-threaded x64 WDM lifecycle at PASSIVE_LEVEL.
+/// This profile models a single-processor x64 WDM lifecycle with cooperative
+/// worker scheduling, dispatcher waits and DPC execution at modeled IRQLs.
 /// All pointers describe guest addresses, never native pointers. No host OS
 /// services are forwarded. Unsupported APIs and CPU environment effects stop.
 struct DriverOptions {

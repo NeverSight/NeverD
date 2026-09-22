@@ -475,13 +475,17 @@ The runtime reads guest varargs through the session's checked Win64 argument
 reader. Backend faults retain their first structured cause; observation and
 reporting do not resume a faulted CPU or imply Windows exception handling.
 
-`KernelScheduler` owns deterministic work-item queue order and callback identity;
-`KernelModel` owns work-item/device lifetime and the IRP pending/completion
-contract. `DriverSession` drains callbacks at returned guest-call boundaries,
-at `PASSIVE_LEVEL`, before advancing serial requests. The Unicorn adapter saves
-complete CPU contexts while guest memory remains shared. Internal timer/DPC
-state-machine models do not imply exposed guest APIs, general thread/wait
-scheduling, cancellation, KMDF, PnP/power or hardware support.
+`KernelScheduler` owns ready-queue order, callback identity and timer
+deadlines; `KernelDispatcher` owns opaque DPC, timer and event objects and
+their signals. `KernelModel` owns wait registrations, work-item/device
+lifetimes and IRP completion. `DriverSession` suspends and resumes separate
+callback stacks and complete CPU contexts, including Win64 stack arguments,
+with shared guest memory. Virtual time advances at timer/wait boundaries; DPCs
+run at `DISPATCH_LEVEL`, workers at `PASSIVE_LEVEL`, on CPU0 with
+deterministic cooperative scheduling. This does not provide general
+thread/APC/cancellation/spinlock scheduling, concurrent IRPs, KMDF, full
+PnP/power or hardware. API IRQL ceilings come from `KernelAPIIRQL.def`, with
+argument-dependent checks in the owning model.
 
 ## Exception-rewrite boundaries
 

@@ -53,16 +53,16 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 
 | Treiberklasse oder Anforderung | Aktueller Umfang | Fehlende Umgebung |
 |-------------------------------|------------------|-------------------|
-| x64-Software-WDM-Treiber mit den aufgeführten APIs | Initialisierung, serielle Dateilebenszyklen und begrenzte Work-Item-Callbacks | Jede weitere ausgeführte API benötigt ein definiertes Modell |
-| `METHOD_BUFFERED`-IOCTL | Unabhängige Dateiidentitäten, verschachtelte serielle Anforderungen und Abschluss durch Work Items | Andere asynchrone Abschlussquellen bleiben unmodelliert |
+| x64-Software-WDM-Treiber mit den aufgeführten APIs | Begrenzte x64-WDM-Initialisierung, serielle buffered/direct Anforderungen, Work Items, Timer, DPCs, Ereignisse und Warten, Berichte und Grenzen | Jede weitere ausgeführte API benötigt ein definiertes Modell |
+| `METHOD_BUFFERED`-IOCTL | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen IRPs oder Anforderungsabbrüche |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs und Systemabbildungen | physische Seitenidentitäten, DMA und Benutzerabbildungen |
 | Vom Treiber allokierte MDLs | Eigenständige Deskriptoren für modellierten nicht auslagerbaren Pool mit ursprünglichen Pufferadressen | IRP-Zuordnung, MDL-Ketten, Prüfen/Sperren, physische Seiten und Benutzerabbildungen |
-| READ/WRITE | Gepuffert oder direkt gemäß Geräteflags, auch mit Abschluss durch Work Items | Neither-I/O, implizite Dateiposition und andere asynchrone Abschlussquellen |
+| READ/WRITE | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen IRPs oder Anforderungsabbrüche; `METHOD_NEITHER` und implizite Dateiposition |
 | `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
 | KMDF-/UMDF-Treiber | Nicht unterstützt | Framework-Anbindung, Objekte, Warteschlangen, Callbacks und passende Host-Laufzeit |
 | PnP-Bus-, Funktions- oder Filtertreiber | Initialisierung kann innerhalb der API-Teilmenge laufen; Gerätestapel-Lebenszyklus nicht unterstützt | Geräteanbindung, Dispatch an untergeordnete Treiber sowie PnP- und Power-IRPs |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
-| Treiber mit Work Items | Deterministische `DelayedWorkQueue`-Callbacks auf `PASSIVE_LEVEL` | Worker-Threads, Timer, DPCs, APCs, Warten und Abbruch bleiben nicht unterstützt |
+| Work Items, Timer, DPCs, Ereignisse und Warten | Der aktuelle IRQL ist bei Dispatch und Work Items `PASSIVE_LEVEL`, bei DPCs `DISPATCH_LEVEL` | Nur die unten genannten APIs; keine gleichzeitigen IRPs oder Anforderungsabbrüche |
 | Registry-Operationen über die aufgeführten Zw-APIs | Expliziter Sitzungsbaum und Rechte pro Handle | ACLs, Privilegien, alternative Ansichten und Persistenz |
 | Treiber mit Prozess-/Thread-Callbacks, anderen Handles, Dateioperationen oder Kernel-Modulsuche | Außerhalb der aufgeführten APIs nicht unterstützt | Objektmanager, Systemzustand und Erzeuger von Callbacks/Ereignissen |
 | Hardware-, DMA-, PCI-, Interrupt- oder Virtualisierungstreiber | Umgebung nicht unterstützt | Gerätemodelle, physischer Speicher, Busse, Interrupts und privilegierter CPU-Zustand |
@@ -77,8 +77,7 @@ Die folgende API-Tabelle definiert verbindlich die unterstützte Teilmenge.
 
 ## Ausführungsvertrag
 
-Das Profil modelliert einen einzigen, einsträngigen x64-WDM-Lebenszyklus auf
-`PASSIVE_LEVEL`. Die Ausführung beginnt am PE-Einsprungpunkt und behält einen
+Das Profil modelliert einen x64-WDM-Lebenszyklus auf CPU0 mit deterministischem kooperativem Scheduling. Die Ausführung beginnt am PE-Einsprungpunkt und behält einen
 vorhandenen Compiler-Einstiegswrapper bei. DriverEntry muss zur Initialisierung
 `STATUS_SUCCESS` zurückgeben; ein anderer erfolgreicher Status oder ein
 Pending-Status beendet den Lauf als nicht unterstützter Initialisierungsvertrag.
@@ -91,7 +90,7 @@ einschließlich kanonischer hoher Kernel-Adressen ohne künstliche Windows-
 Seitentabellen zu erhalten. Der anfängliche RFLAGS-Wert ist `0x202`; das
 Softwaregeräteprofil verwendet eine feste Cachezeilengröße von 64 Byte.
 Dies sind ausdrückliche Eigenschaften dieses Ausführungsszenarios.
-Inline-Lesezugriffe auf CR8 unter x64 sehen ebenfalls `PASSIVE_LEVEL`;
+Inline-Lesezugriffe auf CR8 unter x64 sehen ebenfalls `PASSIVE_LEVEL` / `DISPATCH_LEVEL`;
 CR8-Schreibzugriffe und andere Kontrollregisteroperationen bleiben nicht unterstützt.
 
 Unbekannte Importe werden an erst bei Nutzung auslösende Traps gebunden. Ein
@@ -102,9 +101,9 @@ ausdrücklich. NeverD ersetzt nicht implementierte Aufrufe nicht durch
 Erfolgswerte. Fehlerhafte Images oder nicht unterstützte Ladeanforderungen
 scheitern vor Beginn der Ausführung.
 
-Eingereihte Work-Item-Callbacks laufen deterministisch nach der Rückkehr eines Treiberaufrufs, einschließlich DriverEntry, Anforderungs-Dispatch und weiterer Worker-Callbacks. Anforderungen bleiben seriell: Ein ausstehendes IRP muss vor der nächsten Anforderung abgeschlossen sein. Dispatch muss das IRP als ausstehend markieren und `STATUS_PENDING` zurückgeben; ein eingereihtes Work Item kann es anschließend auf `PASSIVE_LEVEL` abschließen. Fehlt eine ausführbare Abschlussquelle, stoppt die festgefahrene Anforderung mit `model_error`. Die gemeinsamen Befehls-, Speicher-, Ereignis- und Zeitbudgets gelten auch für Callbacks.
+`DelayedWorkQueue`-Work-Items laufen auf `PASSIVE_LEVEL`, Gast-DPC-Callbacks mit den vier vorgesehenen Argumenten auf `DISPATCH_LEVEL`. CPU0 plant deterministisch und kooperativ an Aufrufrückkehr und blockierenden Warteoperationen. Relative, absolute und periodische Timer verwenden virtuelle Zeit; ohne ausführbaren Frame wird bis zur nächsten Timer- oder Wartefrist fortgeschritten. Benachrichtigungs- und Synchronisationsereignisse/-timer behalten ihre unterschiedlichen Signalverbrauchsregeln. Jeder Callback besitzt einen eigenen Gaststack; mehrere blockierte Frames behalten lokale Variablen und vollständige CPU-Kontexte bei gemeinsamem Gastspeicher. Win64 übergibt die ersten vier Argumente in Registern, weitere auf dem Stack. Anforderungen bleiben seriell: Ein Dispatch mit Pending-Markierung muss `STATUS_PENDING` liefern und vor der nächsten Anforderung abschließen. Fehlt ein verfügbarer Erzeuger für eine ausstehende Anforderung oder unbegrenztes Warten, stoppt ein Stau mit `model_error`. Befehls-, Speicher-, Beobachtungs- und Echtzeitbudgets bleiben gemeinsam.
 
-Ein vollständiger Windows-Kernel, KMDF, PnP/Power, Neither-IOCTLs, Interrupts, allgemeine Warteoperationen, Threads, Abbruch und Gast-APIs für Timer/DPC/APC bleiben unimplementiert. Interne Tests der Scheduling-Zustandsmaschine belegen keine öffentliche Unterstützung dieser Funktionen. Reine Initialisierungsaufrufe führen auch explizit von DriverEntry eingereihte Arbeit aus; sie erzeugen weder Szenarioanforderungen noch implizites Entladen.
+Das begrenzte Modell ist keine vollständige asynchrone Windows-Umgebung. Alertable-/User-Mode-Warten, Systemthreads, APCs, Anforderungsabbruch, Spinlocks, gleichzeitige IRPs, allgemeine IRQL-Wechsel, `METHOD_NEITHER`, KMDF/UMDF, vollständiges PnP/Power, Hardware, DMA und Interrupts bleiben unmodelliert. Reine Initialisierung führt explizit eingereihte Callbacks aus, erzeugt aber keine Anforderungen oder implizites Entladen.
 
 Ein Work Item wird vor Beginn seines Callbacks aus der Warteschlange entfernt; der Callback darf sein eigenes Item freigeben. Freigabe eingereihter Items, doppelte Einreihung, veraltete Objekte und Callback-Ziele außerhalb ausführbaren Gastspeichers scheitern ausdrücklich. Die Gerätereferenz bleibt bis zur Rückkehr erhalten. Entladen verlangt die Freigabe aller Work Items und den Abschluss eingereihter Arbeit. CPU-Kontexte enthalten allgemeine Register, SIMD-, FPU- und Steuerzustand; Gastspeicher bleibt gemeinsam, und fehlerhafte CPUs lassen sich durch Kontextwiederherstellung nicht fortsetzen.
 Löschen wird aufgeschoben, solange Dateiobjekte oder eingereihte/laufende Work-Item-Referenzen bestehen. Work-Item-Allokation liefert NULL bei erschöpfter Objektarena.
@@ -135,11 +134,20 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` oder `\??\Name` in einem Sitzungsnamensraum, Ziel `\Device\Name` |
 | `DbgPrint`, `DbgPrintEx` | Geprüfte variadische Win64-Formatierung, höchstens 512 Ausgabebytes; alle Debuggerfilter aktiviert |
 | `IoGetCurrentIrpStackLocation` | Gibt die Stackposition des aktiven modellierten IRP zurück; normale kompilierte WDM-Makros lesen dasselbe Gastfeld |
-| `KeGetCurrentIrql` | Gibt `PASSIVE_LEVEL` zurück |
+| `KeGetCurrentIrql` | Der aktuelle IRQL ist bei Dispatch und Work Items `PASSIVE_LEVEL`, bei DPCs `DISPATCH_LEVEL` |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Geräteeigene undurchsichtige Work Items; nur `DelayedWorkQueue`, Gerät und Kontext werden auf `PASSIVE_LEVEL` übergeben; eingereihte Einträge dürfen nicht freigegeben werden |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | Opaker DPC, vier Gastargumente, `DISPATCH_LEVEL`, Duplikat-/Entfernungsregeln und Wichtigkeit; nur Ziel CPU0 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Benachrichtigungs-/Synchronisationstimer, relative/absolute 100-ns-Fristen, Millisekundenperioden, Neusetzen/Abbruch und Signalabfrage in virtueller Zeit |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Benachrichtigungs-/Synchronisationsereignisse mit unterschiedlichem Signalverbrauch; `KeSetEvent` nur mit Increment=0 und Wait=FALSE |
+| `KeWaitForSingleObject` | Ein initialisiertes Ereignis oder Timer; nicht alertable `KernelMode`, Grund `Executive`; Null-Polling, endliche relative/absolute oder unbegrenzte Wartezeit; Nichtnull-/unbegrenztes Warten erfordert IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | Nicht alertable relative/absolute `KernelMode`-Verzögerung bei IRQL <= APC_LEVEL; Gastframe wird nach virtuellem Zeitfortschritt fortgesetzt |
 | `IoMarkIrpPending` | Markiert das aktive lebende IRP; der entsprechende Schreibzugriff des WDM-Makros auf das Stack-Control-Feld wird ebenfalls modelliert; Dispatch muss `STATUS_PENDING` zurückgeben |
 | `IofCompleteRequest`, `IoCompleteRequest` | Schließt das aktive synchrone oder ausstehende modellierte IRP mit `IO_NO_INCREMENT` ab; auf ein abgeschlossenes IRP oder seinen Puffer darf nicht erneut zugegriffen werden |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Begrenzte Gastpufferoperationen, höchstens 1 MiB pro Aufruf; Kopier-APIs ohne Überlappungsunterstützung weisen Überlappungen ab |
+
+IRQL-Obergrenzen stehen in `KernelAPIIRQL.def`; argumentabhängige Regeln prüft das zuständige Modell. DPCs dürfen weder Registry-APIs aufrufen noch paged Pool allokieren, freigeben oder darauf zugreifen. Unicode-Konvertierungen von `DbgPrint` erfordern `PASSIVE_LEVEL`; unterstützte ANSI-Ausgabe und nonpaged Operationen bleiben auf `DISPATCH_LEVEL` nutzbar. Callback-Stacks sind begrenzt: Ein ausbrechender Stackpointer darf nicht den Stack eines anderen blockierten Workers erreichen. Aktive Timer in der Geräteerweiterung verhindern vorzeitige Gerätefreigabe. Allgemeine IRQL-Wechsel werden dadurch nicht bereitgestellt.
+
+Der Timerablauf erfüllt registrierte Warteoperationen, bevor ein DPC den Timer zurücksetzen oder neu starten kann. Eingereihte DPCs laufen vor dem Fortsetzen aufgeweckter `PASSIVE_LEVEL`-Frames. Enthält Anforderungsspeicher noch einen eingereihten DPC, verweigert der IRP-Abschluss die Freigabe vor Abschluss und Pufferinvalidierung.
 
 Die Formatierung von `DbgPrint` unterstützt Ganzzahlen `d/i/u/o/x/X`, Zeiger
 `p`, Text `s/c`, `%%`, längengezähltes Unicode `wZ/lZ`, breite Zeichenfolgen
@@ -202,7 +210,7 @@ FILE_OBJECT und FsContext und verlangt create, Transfers, cleanup und close in
 dieser Reihenfolge. Anforderungen unabhängiger Dateien dürfen ineinander
 verschachtelt werden. Exklusive Geräte weisen ein zweites Öffnen ab. Diese
 Identitäten stehen für Dateiobjekte, nicht für duplizierte Handles. Gepufferte
-und beide direkten IOCTL-Methoden werden unterstützt. Dispatch muss synchron abschließen oder den oben beschriebenen Vertrag für ausstehende IRPs mit Work Items erfüllen. Ungültige Ausgabelängen und Zugriffe auf abgeschlossene IRPs führen ausdrücklich zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte, symbolischen Links,
+und beide direkten IOCTL-Methoden werden unterstützt. Dispatch muss synchron abschließen oder den oben beschriebenen Vertrag für ausstehende IRPs mit Callbacks erfüllen. Ungültige Ausgabelängen und Zugriffe auf abgeschlossene IRPs führen ausdrücklich zu Fehlern. Angefordertes Entladen darf keine aktiven Geräte, symbolischen Links,
 Poolallokationen oder Dateiobjekte zurücklassen.
 
 Das optionale Wurzelfeld `"load_address": "0x190000000"` fordert eine

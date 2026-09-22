@@ -18,6 +18,24 @@ EXPORTS
   IoFreeWorkItem
   IoMarkIrpPending
   KeGetCurrentIrql
+  KeInitializeDpc
+  KeInsertQueueDpc
+  KeRemoveQueueDpc
+  KeSetImportanceDpc
+  KeSetTargetProcessorDpc
+  KeInitializeTimer
+  KeInitializeTimerEx
+  KeSetTimer
+  KeSetTimerEx
+  KeCancelTimer
+  KeReadStateTimer
+  KeInitializeEvent
+  KeSetEvent
+  KeResetEvent
+  KeClearEvent
+  KeReadStateEvent
+  KeWaitForSingleObject
+  KeDelayExecutionThread
   IoDeleteSymbolicLink
   IofCompleteRequest
   ZwOpenFile

@@ -38,16 +38,16 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 | 驱动类别或要求 | 当前范围 | 缺少的环境 |
 |----------------|----------|------------|
-| 使用下列 API 的 x64 软件 WDM 驱动 | 初始化、串行文件生命周期与有界工作项回调 | 每个额外执行到的 API 都必须具有明确的模型 |
-| `METHOD_BUFFERED` IOCTL | 独立文件身份、交错串行请求及工作项完成 | 其他异步完成来源仍不支持 |
+| 使用下列 API 的 x64 软件 WDM 驱动 | 有界 x64 WDM 初始化、串行缓冲／直接请求、工作项、定时器、DPC、事件与等待，以及行为报告和限制 | 每个额外执行到的 API 都必须具有明确的模型 |
+| `METHOD_BUFFERED` IOCTL | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发 IRP 或请求取消 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL 及系统映射 | 物理页身份、DMA 及用户映射 |
 | 驱动自行分配的 MDL | 覆盖模型非分页池的独立描述符，复用原始缓冲区地址 | IRP 关联、MDL 链、探测／锁页、物理页及用户映射 |
-| READ/WRITE | 根据设备标志选择 buffered 或 direct，支持工作项完成 | Neither I/O、隐式文件位置及其他异步完成来源 |
+| READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发 IRP 或请求取消；`METHOD_NEITHER` 与隐式文件位置 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
 | KMDF / UMDF 驱动 | 不支持 | 框架绑定、对象、队列、回调及相应宿主运行时 |
 | PnP 总线／功能／过滤驱动 | 初始化可在 API 子集内运行；不支持设备栈生命周期 | 设备附加、向下层驱动派发、PnP 和电源 IRP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
-| 使用工作项的驱动 | 在 `PASSIVE_LEVEL` 确定性执行 `DelayedWorkQueue` 回调 | 工作线程、定时器、DPC、APC、等待与取消仍不支持 |
+| 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发 IRP 或请求取消 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
 | 硬件、DMA、PCI、中断或虚拟化驱动 | 不支持所需环境 | 设备模型、物理内存、总线、中断及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
@@ -57,15 +57,15 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 ## 执行契约
 
-该配置在 `PASSIVE_LEVEL` 下模拟单线程的 x64 WDM 生命周期。执行从 PE 入口点开始；若存在编译器生成的入口包装函数，也会保留并执行。DriverEntry 必须返回 `STATUS_SUCCESS` 才能完成初始化；非零的成功状态或待处理状态会因初始化契约不受支持而停止。失败状态则作为已完成的初始化结果保留。所有对象、字符串、栈、函数指针与分配均位于来宾内存。模型根据配置的服务名（默认为 `NeverDDriver`）提供 `DRIVER_OBJECT` 和注册表路径。
+此配置在 CPU0 上以确定性的协作调度模拟 x64 WDM 生命周期。 执行从 PE 入口点开始；若存在编译器生成的入口包装函数，也会保留并执行。DriverEntry 必须返回 `STATUS_SUCCESS` 才能完成初始化；非零的成功状态或待处理状态会因初始化契约不受支持而停止。失败状态则作为已完成的初始化结果保留。所有对象、字符串、栈、函数指针与分配均位于来宾内存。模型根据配置的服务名（默认为 `NeverDDriver`）提供 `DRIVER_OBJECT` 和注册表路径。
 
-适配器使用 Unicorn 的虚拟 TLB 模式保留来宾虚拟地址，包括规范的高位内核地址，无需合成 Windows 页表。初始 RFLAGS 为 `0x202`；软件设备配置采用固定的 64 字节缓存行。这些都是本执行场景的显式属性。内联 x64 CR8 读取观察到相同的 `PASSIVE_LEVEL`；CR8 写入及其他控制寄存器操作仍不受支持。
+适配器使用 Unicorn 的虚拟 TLB 模式保留来宾虚拟地址，包括规范的高位内核地址，无需合成 Windows 页表。初始 RFLAGS 为 `0x202`；软件设备配置采用固定的 64 字节缓存行。这些都是本执行场景的显式属性。内联 x64 CR8 读取观察到相同的 `PASSIVE_LEVEL` / `DISPATCH_LEVEL`；CR8 写入及其他控制寄存器操作仍不受支持。
 
 未知导入项绑定到延迟陷阱。未使用的导入项不会阻止执行；执行其 thunk 或读取未建模的导出数据值时，会以 `unsupported_api` 停止。不支持的 CPU 环境效果也会明确停止。NeverD 不会用成功返回值替代未实现的调用。格式错误的映像或不支持的加载要求会在执行前失败。
 
-队列中的工作项在驱动调用返回后确定性执行，包括 DriverEntry、请求派发和其他工作项回调返回时。请求仍按串行处理：待处理请求必须完成后才能开始下一个请求。派发函数必须标记 IRP 为待处理并返回 `STATUS_PENDING`，随后由排队的工作项在 `PASSIVE_LEVEL` 完成。如果请求仍待处理却没有可执行的完成来源，执行会因停滞而以 `model_error` 停止。回调共用指令、内存、事件与时间预算。
+排队的 `DelayedWorkQueue` 工作项在 `PASSIVE_LEVEL` 执行，来宾 DPC 回调在 `DISPATCH_LEVEL` 接收规定的四个参数。CPU0 在调用返回和阻塞等待的边界进行确定性的协作调度。相对、绝对和周期定时器使用虚拟时间；没有可运行的执行帧时，时间推进到下一定时器或等待期限。通知型与同步型事件／定时器保留各自的信号消耗语义。每个回调拥有独立的来宾栈；多个阻塞帧保留局部变量和完整 CPU 上下文，来宾内存仍然共享。Win64 回调入口将前四个参数放入寄存器，其余参数放入栈。请求仍串行处理：标记 IRP 为待处理的派发函数必须返回 `STATUS_PENDING`，且该请求完成后才能开始下一个。待处理请求或无限等待没有可用生产者时，以停滞的 `model_error` 停止。指令、内存、观察记录与墙钟时间预算仍共用。
 
-此配置仍未实现完整 Windows 内核、KMDF、PnP／电源生命周期、neither IOCTL、中断、通用等待、线程、取消或来宾定时器／DPC／APC API。内部调度状态机的单元测试不代表这些公开能力已经可用。仅初始化调用也会执行 DriverEntry 显式排队的工作项，但不会隐式生成场景请求或执行卸载。
+这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、请求取消、自旋锁、并发 IRP、通用 IRQL 切换、`METHOD_NEITHER`、KMDF／UMDF、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
 
 工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
 删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
@@ -90,11 +90,20 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一个会话命名空间内的 ASCII `\DosDevices\Name` 或 `\??\Name`，目标为 `\Device\Name` |
 | `DbgPrint`、`DbgPrintEx` | 经检查的 Win64 可变参数格式化，最多输出 512 字节；启用所有调试器过滤器 |
 | `IoGetCurrentIrpStackLocation` | 返回当前建模 IRP 的栈位置；正常编译的 WDM 宏读取相同来宾字段 |
-| `KeGetCurrentIrql` | 返回 `PASSIVE_LEVEL` |
+| `KeGetCurrentIrql` | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | 设备拥有的不透明工作项；仅支持 `DelayedWorkQueue`，在 `PASSIVE_LEVEL` 将设备和上下文传给回调；禁止释放仍在队列中的项 |
+| `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | 不透明 DPC 存储、四个来宾回调参数、`DISPATCH_LEVEL`、重复入队／移除及优先级；仅目标 CPU0 |
+| `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | 通知／同步定时器；相对／绝对 100 ns 期限、毫秒周期、重新设置／取消及虚拟时间中的信号查询 |
+| `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | 通知／同步事件保留不同信号消耗行为；`KeSetEvent` 仅接受 Increment=0、Wait=FALSE |
+| `KeWaitForSingleObject` | 单个已初始化事件或定时器；非警报 `KernelMode`、原因 `Executive`；零超时轮询、有限相对／绝对或无限等待；非零／无限等待要求 IRQL <= APC_LEVEL |
+| `KeDelayExecutionThread` | IRQL <= APC_LEVEL 的非警报 `KernelMode` 相对／绝对延迟；虚拟时间推进后恢复保存的来宾执行帧 |
 | `IoMarkIrpPending` | 标记当前存活的 IRP；也支持 WDM 宏对栈控制字段的等效写入；派发必须返回 `STATUS_PENDING` |
 | `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成当前同步或待处理的建模 IRP；已完成的 IRP 或缓冲区不能再次访问 |
 | `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的来宾缓冲区操作，每次调用最多 1 MiB；要求不重叠的复制 API 会拒绝重叠 |
+
+API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。DPC 不能调用注册表 API，也不能分配、释放或访问分页池；Unicode `DbgPrint` 转换要求 `PASSIVE_LEVEL`，支持的 ANSI 输出和非分页操作仍可在 `DISPATCH_LEVEL` 使用。回调栈有明确边界，越界栈指针不能进入另一阻塞工作项的栈。设备扩展中的已启动定时器会阻止设备提前回收。这些检查并未开放通用 IRQL 切换。
+
+定时器到期会先满足已登记的等待，再允许 DPC 重置或重新设置定时器。排队 DPC 先于已唤醒的 `PASSIVE_LEVEL` 执行帧恢复运行。若请求存储仍包含排队的 DPC，IRP 完成操作会在完成和缓冲区失效之前拒绝释放。
 
 `DbgPrint` 格式化支持整数 `d/i/u/o/x/X`、指针 `p`、文本 `s/c`、`%%`、带长度的 Unicode `wZ/lZ`、宽字符串 `ls/ws`、标志、宽度／精度（包括 `*`），以及 Windows 整数长度修饰符。最多读取 32 个可变参数及 1024 字节格式串，宽度与精度上限均为 512。浮点数、`%n`、未知组合及非 ASCII 文本转换都会明确停止；模型不会猜测 Windows 代码页，也不会将来宾数据交给宿主 printf。
 
@@ -125,7 +134,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 }
 ```
 
-设备名称与 IOCTL 代码必须匹配驱动。create 时省略 `device` 会选择唯一的存活设备；无法唯一选择则失败。后续请求默认使用所属文件的设备，也可显式指定匹配的设备名称。可选的 `file` 是无符号 32 位场景身份，默认为零。每个身份有独立的 FILE_OBJECT 和 FsContext，并要求按 create、传输、cleanup、close 的顺序执行。不同文件的请求可以交错执行。独占设备会拒绝第二次打开。这些身份表示文件对象，而非复制的句柄。支持 buffered 和两种 direct IOCTL 方法。派发必须同步完成，或遵循上述工作项待处理契约。输出长度无效及访问已完成的 IRP 都会明确失败。请求卸载后，不得留下存活的设备、符号链接、池分配或文件对象。
+设备名称与 IOCTL 代码必须匹配驱动。create 时省略 `device` 会选择唯一的存活设备；无法唯一选择则失败。后续请求默认使用所属文件的设备，也可显式指定匹配的设备名称。可选的 `file` 是无符号 32 位场景身份，默认为零。每个身份有独立的 FILE_OBJECT 和 FsContext，并要求按 create、传输、cleanup、close 的顺序执行。不同文件的请求可以交错执行。独占设备会拒绝第二次打开。这些身份表示文件对象，而非复制的句柄。支持 buffered 和两种 direct IOCTL 方法。派发必须同步完成，或遵循上述回调待处理契约。输出长度无效及访问已完成的 IRP 都会明确失败。请求卸载后，不得留下存活的设备、符号链接、池分配或文件对象。
 
 可选根字段 `"load_address": "0x190000000"` 请求更改加载基址；省略该字段或指定 `"0x0"` 时使用首选地址。映像必须满足重定位要求。原有的初始化命令或 C API 不会隐式执行任何请求场景。
 

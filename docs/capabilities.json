@@ -3484,10 +3484,14 @@
       "limitations": [
         "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested serial create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through queued work items after marked STATUS_PENDING; general waits/threads/cancellation, guest timer/DPC/APC APIs, neither-method IOCTLs, KMDF, PnP/power, interrupts and hardware remain unsupported",
-        "wdm-x64-scheduled-v3 drains deterministic DelayedWorkQueue callbacks at returned driver-call boundaries at PASSIVE_LEVEL; no available producer for an incomplete pending request is a stalled model_error; work-item objects and device references retain separate lifetimes, and a dequeued running item may be freed by its callback",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent IRPs, request cancellation, system threads, APCs, spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF/UMDF, full PnP/power, interrupts, hardware and DMA remain unsupported",
+        "wdm-x64-scheduled-v3 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
-        "full CPU contexts include SIMD/FPU/control state but never snapshot guest memory; foreign, expired and faulted contexts cannot resume execution; internal scheduler timer/DPC unit tests are not public API support evidence",
+        "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
+        "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer and wait boundaries; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
+        "KeSetEvent supports Increment=0 and Wait=FALSE only; event signal consumption and waiter wakeups remain distinct from callback return; DPC targets are restricted to CPU0, nonzero/infinite waits require IRQL <= APC_LEVEL, and pending dispatcher-object or wait references prohibit premature storage release",
+        "KernelAPIIRQL.def owns routine ceilings with argument-dependent checks in the API or memory owner; DPC registry calls, paged-pool allocation/free/access and Unicode DbgPrint conversions fail before mutation; supported ANSI output and nonpaged operations remain usable at DISPATCH_LEVEL; bounded callback stacks reject escape into suspended workers and armed extension timers prevent premature device retirement",
+        "timer expiration satisfies registered waits before a DPC can reset or rearm the signal; queued DPCs execute before awakened PASSIVE_LEVEL frames resume; IRP completion rejects release of request storage containing pending dispatcher objects before marking completion or invalidating buffers",
         "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total requested buffer bytes including direct_input over 512 KiB; requested load addresses require valid supported PE relocations",
         "dynamic export lookup shares stable thunk identity with static imports; explicit kernel_exports availability overrides distinguish absent exports from present unmodeled routines; unspecified dynamic availability stops instead of changing driver capability branches",
         "direct requests expose request-owned MDL system mappings with independent write/execute permissions; standalone driver MDLs can describe live nonpaged pool allocations and retain their original alias; IRP associations/chains, physical PFN data, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
@@ -3756,7 +3760,7 @@
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverSessionTests.cpp",
-          "filter": "DriverEmulation.OpaqueFixedArgumentIsAModelErrorWithoutABackendFault",
+          "filter": "DriverEmulation.StackPivotIntoDriverObjectStopsBeforeAPIDispatch",
           "platforms": [
             "linux"
           ]
@@ -3982,6 +3986,213 @@
           "target": "NeverDDriverEmulationPublicTests",
           "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
           "filter": "DriverScenarioPublic.CLIDoesNotHideFailedAsynchronousCompletion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.TimerRelative",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.TimerAbsolute",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.PeriodicCancel",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.DpcArguments",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.DpcToWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.DispatchEventWait",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.WorkerEventSetReset",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.WorkerTimerWait",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.FiniteTimeoutAndDelay",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.SynchronizationEvent",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.SynchronizationTimer",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.TimerImmediateWait",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.InvalidDpcWait",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.FreePendingTimer",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDispatcherTests.cpp",
+          "filter": "DriverKernelDispatcher.UnsupportedEventHandoffDoesNotSetSignal",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverContextLimitTests.cpp",
+          "filter": "DriverContextLimits.NonpagedMemoryAndAnsiDebugRemainUsableAtDpc",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverContextLimitTests.cpp",
+          "filter": "DriverContextLimits.StackLeapStopsBeforeTouchingSuspendedWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverContextLimitTests.cpp",
+          "filter": "DriverContextLimits.DeviceExtensionTimerPreventsImmediateDeviceDeletion",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelAPIIRQLTests.cpp",
+          "filter": "DriverKernelAPIIRQL.EveryRegistryOperationRequiresPassiveLevel",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelAPIIRQLTests.cpp",
+          "filter": "DriverKernelAPIIRQL.CoversExactSupportedInventoryWithoutDuplicates",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.TimerExpiryLatchesBeforeDpcRearm",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.CompleteIrpWithQueuedDpcStorage",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDispatcherTests.cpp",
+          "filter": "DriverDispatcher.DpcBeforeResumedWorker",
           "platforms": [
             "linux"
           ]

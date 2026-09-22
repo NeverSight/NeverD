@@ -68,6 +68,7 @@ public:
     uint8_t IRQL = scheduler::PassiveLevel;
     uint64_t DueTime100ns = 0;
     uint64_t SourceTimer = 0;
+    bool SourceTimerPeriodic = false;
   };
 
   KernelScheduler() = default;
@@ -85,13 +86,35 @@ public:
   llvm::Expected<bool> queueDPC(DpcCallback DPC);
   bool removeDPC(uint64_t Object);
   bool isDPCQueued(uint64_t Object) const;
+  bool hasQueuedDPC() const { return !DPCs.empty(); }
 
   /// Returns one callback, retaining its ownership until finish(). Calling
-  /// next() with an unfinished callback is an error. With AdvanceTime false,
+  /// next() with an active callback is an error. With AdvanceTime false,
   /// already-due timers are still processed but future deadlines are untouched.
   /// Timer-only expirations are bounded even when they produce no callback.
-  llvm::Expected<std::optional<Invocation>> next(bool AdvanceTime = true);
+  /// If MaxAdvanceTime is supplied, yield after the first timer expiry
+  /// even if no callback became ready, so callers can recheck wait predicates.
+  /// Otherwise idle time can advance to MaxAdvanceTime, but never beyond it.
+  /// A deadline at or before now does not move time backwards.
+  llvm::Expected<std::optional<Invocation>>
+  next(bool AdvanceTime = true,
+       std::optional<uint64_t> MaxAdvanceTime = std::nullopt);
   llvm::Error finish(uint64_t ID);
+  /// A blocked callback retains its identity, device ownership and capacity.
+  /// While it is suspended, other callbacks may run. Only the caller knows
+  /// which wait predicate makes a suspended callback ready to resume.
+  llvm::Error suspend(uint64_t ID);
+  llvm::Error resume(uint64_t ID);
+  const Invocation *suspended(uint64_t ID) const;
+
+  /// Nonnegative deadlines are absolute; negative intervals are relative to
+  /// the current virtual clock. Includes overflow and configured-limit checks.
+  llvm::Expected<uint64_t> computeDeadline(int64_t Time100ns) const;
+  /// Earliest armed timer boundary, clamped to now if it is already due.
+  std::optional<uint64_t> nextEventTime100ns() const;
+  /// Expire timers at the current clock, including during an active callback.
+  /// Does not advance time or dequeue callbacks; budget failures are atomic.
+  llvm::Error processDueTimers();
 
   /// Nonnegative DueTime100ns is absolute; negative is relative. Period is
   /// milliseconds and must fit Windows LONG. Resetting an armed timer replaces
@@ -110,6 +133,7 @@ public:
   llvm::Expected<bool> consumeTimerSignal(uint64_t Timer);
   /// Rejects forgetting an armed timer or one with a queued callback. A
   /// nonperiodic timer can be freed inside its running callback.
+  llvm::Error canForgetTimer(uint64_t Timer) const;
   llvm::Error forgetTimer(uint64_t Timer);
 
   bool hasOutstanding(uint64_t Owner) const;
@@ -118,6 +142,7 @@ public:
   uint64_t dispatchCount() const { return Dispatches; }
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const { return Workers.size() + DPCs.size(); }
+  size_t suspendedCallbackCount() const { return Suspended.size(); }
   const std::optional<Invocation> &active() const { return Active; }
 
 private:
@@ -140,6 +165,7 @@ private:
   std::deque<Invocation> Workers;
   std::deque<Invocation> DPCs;
   std::optional<Invocation> Active;
+  std::map<uint64_t, Invocation> Suspended;
   std::map<uint64_t, TimerState> Timers;
 
   llvm::Error validateTime() const;

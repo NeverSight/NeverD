@@ -268,7 +268,7 @@ Unicorn 透過 `cmake/NeverDUnicorn.cmake` 統一設定一次，與語義測試�
 
 Windows 模型亦管理獨立的非分頁池 MDL；釋放描述符不會釋放底層緩衝區。獨立登錄模型管理明確場景樹、控制代碼權限與機碼值生命週期，與靜態匯出目錄分開。場景預檢與執行使用相同登錄驗證規則，報告保留最終機碼值；卸載檢查遺留控制代碼。
 
-`KernelScheduler` 負責確定性的工作項目佇列順序與回呼識別；`KernelModel` 負責工作項目／裝置生命週期及 IRP 待處理／完成契約。`DriverSession` 在客體呼叫傳回的邊界以 `PASSIVE_LEVEL` 執行佇列，再推進循序請求。Unicorn 配接器保存完整 CPU 內容，客體記憶體始終共用。內部計時器／DPC 狀態機並不代表已公開支援對應客體 API、執行緒／等待、取消、KMDF、PnP／電源或硬體。
+`KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。虛擬時間在計時器／等待邊界推進；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／取消／自旋鎖排程、並行 IRP、KMDF、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
 
 
 ## 例外重寫邊界
