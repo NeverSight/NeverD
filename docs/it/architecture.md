@@ -348,6 +348,34 @@ eseguire la semplificazione semantica di NeverD, subordinata a prova, fino a un
 fixed point congiunto con l’ottimizzazione LLVM; la policy non fornisce un
 backend di traduzione eseguibile.
 
+## Emulazione dei driver Windows
+
+`lib/emulation` è un componente di esecuzione opzionale, abilitato da
+`NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` vi accede tramite
+l’API C pubblica. `DriverSession` gestisce l’inizializzazione WDM x64 limitata
+e le invocazioni sincrone opzionali create/IOCTL/cleanup/close/unload;
+il mapping delle immagini Windows usa il `BinaryImage` completo del loader
+esistente, mentre il modello Windows gestisce gli oggetti guest e la semantica
+delle API. L’adattatore Unicorn gestisce l’esecuzione CPU e la memoria guest
+che costituisce la fonte autorevole. Questo percorso non usa la pipeline
+sperimentale di traduzione nativa e non ne altera il profilo supportato.
+
+Unicorn viene configurato una sola volta tramite `cmake/NeverDUnicorn.cmake`,
+condiviso con i test semantici e disponibile con `BUILD_TESTING=OFF`. Le API
+sconosciute e i comportamenti non modellati dell’ambiente CPU causano un arresto
+esplicito; un errore restituito dal driver resta distinto da un’emulazione
+incompleta. Vedere [emulazione dei driver](driver-emulation.md) per limiti,
+report e operazioni del ciclo di vita non supportate.
+
+L’API C originale rimane limitata all’inizializzazione. Il JSON dello scenario
+usa un unico parser rigoroso con le stesse opzioni di esecuzione, con campi e
+tipi di richiesta dichiarati in cataloghi `.def`. Il cambio di base richiesto
+e l’inizializzazione del cookie di sicurezza appartengono al loader di esecuzione.
+Il modello Windows gestisce gli oggetti IRP, posizione nello stack e file e
+valida il completamento sincrono; la sessione ordina i callback entro budget
+di esecuzione condivisi. Le importazioni sconosciute inutilizzate sono binding
+lazy; eseguirle o leggere dati esportati non modellati causa un arresto esplicito.
+
 ## Confini della riscrittura delle eccezioni
 
 Il compact unwind Mach-O dispone di un parser rigoroso del `__unwind_info`

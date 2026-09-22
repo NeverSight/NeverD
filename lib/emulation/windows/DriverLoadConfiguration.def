@@ -1,0 +1,56 @@
+//===- DriverLoadConfiguration.def - Load configuration requirements ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Runtime requirements unsupported by this PE loader profile. Each field must
+/// remain zero. Size, timestamp, version and SecurityCookie are handled by the
+/// loader directly. Define LOAD_FIELD(Name) before including this file.
+///
+//===----------------------------------------------------------------------===//
+
+LOAD_FIELD(GlobalFlagsClear),
+LOAD_FIELD(GlobalFlagsSet),
+LOAD_FIELD(CriticalSectionDefaultTimeout),
+LOAD_FIELD(DeCommitFreeBlockThreshold),
+LOAD_FIELD(DeCommitTotalFreeThreshold),
+LOAD_FIELD(LockPrefixTable),
+LOAD_FIELD(MaximumAllocationSize),
+LOAD_FIELD(VirtualMemoryThreshold),
+LOAD_FIELD(ProcessAffinityMask),
+LOAD_FIELD(ProcessHeapFlags),
+LOAD_FIELD(CSDVersion),
+LOAD_FIELD(DependentLoadFlags),
+LOAD_FIELD(EditList),
+LOAD_FIELD(SEHandlerTable),
+LOAD_FIELD(SEHandlerCount),
+LOAD_FIELD(GuardCFCheckFunction),
+LOAD_FIELD(GuardCFCheckDispatch),
+LOAD_FIELD(GuardCFFunctionTable),
+LOAD_FIELD(GuardCFFunctionCount),
+LOAD_FIELD(GuardFlags),
+LOAD_FIELD(CodeIntegrity),
+LOAD_FIELD(GuardAddressTakenIatEntryTable),
+LOAD_FIELD(GuardAddressTakenIatEntryCount),
+LOAD_FIELD(GuardLongJumpTargetTable),
+LOAD_FIELD(GuardLongJumpTargetCount),
+LOAD_FIELD(DynamicValueRelocTable),
+LOAD_FIELD(CHPEMetadataPointer),
+LOAD_FIELD(GuardRFFailureRoutine),
+LOAD_FIELD(GuardRFFailureRoutineFunctionPointer),
+LOAD_FIELD(DynamicValueRelocTableOffset),
+LOAD_FIELD(DynamicValueRelocTableSection),
+LOAD_FIELD(Reserved2),
+LOAD_FIELD(GuardRFVerifyStackPointerFunctionPointer),
+LOAD_FIELD(HotPatchTableOffset),
+LOAD_FIELD(Reserved3),
+LOAD_FIELD(EnclaveConfigurationPointer),
+LOAD_FIELD(VolatileMetadataPointer),
+LOAD_FIELD(GuardEHContinuationTable),
+LOAD_FIELD(GuardEHContinuationCount),
+LOAD_FIELD(GuardXFGCheckFunctionPointer),
+LOAD_FIELD(GuardXFGDispatchFunctionPointer),
+LOAD_FIELD(GuardXFGTableDispatchFunctionPointer),
+LOAD_FIELD(CastGuardOsDeterminedFailureMode),

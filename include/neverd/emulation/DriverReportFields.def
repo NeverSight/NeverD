@@ -1,0 +1,62 @@
+//===- DriverReportFields.def - JSON report field spellings ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// JSON report field spellings.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_REPORT_FIELD(SchemaVersion, "schema_version")
+NEVERD_DRIVER_REPORT_FIELD(Profile, "profile")
+NEVERD_DRIVER_REPORT_FIELD(StopReason, "stop_reason")
+NEVERD_DRIVER_REPORT_FIELD(PC, "pc")
+NEVERD_DRIVER_REPORT_FIELD(Instructions, "instructions")
+NEVERD_DRIVER_REPORT_FIELD(ImageBase, "image_base")
+NEVERD_DRIVER_REPORT_FIELD(PreferredImageBase, "preferred_image_base")
+NEVERD_DRIVER_REPORT_FIELD(SecurityCookie, "security_cookie")
+NEVERD_DRIVER_REPORT_FIELD(Entry, "entry")
+NEVERD_DRIVER_REPORT_FIELD(DriverObject, "driver_object")
+NEVERD_DRIVER_REPORT_FIELD(DriverUnload, "driver_unload")
+NEVERD_DRIVER_REPORT_FIELD(AddDevice, "add_device")
+NEVERD_DRIVER_REPORT_FIELD(Diagnostic, "diagnostic")
+NEVERD_DRIVER_REPORT_FIELD(NTStatus, "nt_status")
+NEVERD_DRIVER_REPORT_FIELD(NTSuccess, "nt_success")
+NEVERD_DRIVER_REPORT_FIELD(ScenarioSuccess, "scenario_success")
+NEVERD_DRIVER_REPORT_FIELD(Configuration, "configuration")
+NEVERD_DRIVER_REPORT_FIELD(ServiceName, "service_name")
+NEVERD_DRIVER_REPORT_FIELD(InstructionLimit, "instruction_limit")
+NEVERD_DRIVER_REPORT_FIELD(MemoryLimit, "memory_limit")
+NEVERD_DRIVER_REPORT_FIELD(EventLimit, "event_limit")
+NEVERD_DRIVER_REPORT_FIELD(TimeoutMilliseconds, "timeout_milliseconds")
+NEVERD_DRIVER_REPORT_FIELD(LoadAddress, "load_address")
+NEVERD_DRIVER_REPORT_FIELD(Unload, "unload")
+NEVERD_DRIVER_REPORT_FIELD(UnloadCompleted, "unload_completed")
+NEVERD_DRIVER_REPORT_FIELD(Phase, "phase")
+NEVERD_DRIVER_REPORT_FIELD(MajorFunctions, "major_functions")
+NEVERD_DRIVER_REPORT_FIELD(Devices, "devices")
+NEVERD_DRIVER_REPORT_FIELD(Address, "address")
+NEVERD_DRIVER_REPORT_FIELD(Extension, "extension")
+NEVERD_DRIVER_REPORT_FIELD(Type, "type")
+NEVERD_DRIVER_REPORT_FIELD(Name, "name")
+NEVERD_DRIVER_REPORT_FIELD(Calls, "calls")
+NEVERD_DRIVER_REPORT_FIELD(Arguments, "arguments")
+NEVERD_DRIVER_REPORT_FIELD(Result, "result")
+NEVERD_DRIVER_REPORT_FIELD(Detail, "detail")
+NEVERD_DRIVER_REPORT_FIELD(Writes, "writes")
+NEVERD_DRIVER_REPORT_FIELD(Size, "size")
+NEVERD_DRIVER_REPORT_FIELD(Value, "value")
+NEVERD_DRIVER_REPORT_FIELD(Semantics, "semantics")
+NEVERD_DRIVER_REPORT_FIELD(Messages, "messages")
+NEVERD_DRIVER_REPORT_FIELD(Requests, "requests")
+NEVERD_DRIVER_REPORT_FIELD(Kind, "kind")
+NEVERD_DRIVER_REPORT_FIELD(Device, "device")
+NEVERD_DRIVER_REPORT_FIELD(ControlCode, "code")
+NEVERD_DRIVER_REPORT_FIELD(IRP, "irp")
+NEVERD_DRIVER_REPORT_FIELD(Completed, "completed")
+NEVERD_DRIVER_REPORT_FIELD(DispatchStatus, "dispatch_status")
+NEVERD_DRIVER_REPORT_FIELD(IOStatus, "io_status")
+NEVERD_DRIVER_REPORT_FIELD(Information, "information")
+NEVERD_DRIVER_REPORT_FIELD(Output, "output_hex")

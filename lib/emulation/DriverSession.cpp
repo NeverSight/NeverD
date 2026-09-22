@@ -1,0 +1,469 @@
+//===- DriverSession.cpp - Bounded WDM driver execution -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bounded WDM driver execution.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/emulation/DriverSession.h"
+
+#include "X64ExecutionPolicy.h"
+#include "unicorn/UnicornBackend.h"
+#include "windows/DriverImage.h"
+#include "windows/KernelModel.h"
+
+#include "llvm/ADT/StringExtras.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <map>
+
+namespace neverd::emulation {
+namespace {
+using namespace profile;
+constexpr uint64_t ReturnSentinel = ThunkBase + ThunkSize - ThunkStride;
+
+llvm::Error failure(const std::string &Text) {
+  return llvm::createStringError(llvm::inconvertibleErrorCode(), Text);
+}
+
+} // namespace
+
+llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
+                                           const DriverOptions &Options) {
+  if (!Options.InstructionLimit || !Options.MemoryLimit ||
+      !Options.EventLimit || !Options.TimeoutMilliseconds ||
+      Options.TimeoutMilliseconds > MaxTimeoutMilliseconds ||
+      Options.MemoryLimit > MaxMemoryLimit ||
+      Options.EventLimit > MaxEventLimit)
+    return failure("driver limits must be positive (memory <= 1 GiB, events <= "
+                   "1000000, timeout <= 3600000 ms)");
+  if (Options.ServiceName.empty() ||
+      Options.ServiceName.size() > MaxServiceNameSize ||
+      !std::all_of(Options.ServiceName.begin(), Options.ServiceName.end(),
+                   [](unsigned char C) {
+                     return (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') ||
+                            (C >= '0' && C <= '9') || C == '_' || C == '-';
+                   }))
+    return failure("service name must contain 1..128 ASCII letters, digits, "
+                   "underscores or hyphens");
+  if (Options.Requests.size() > DriverScenarioRequestLimit)
+    return failure("driver scenario exceeds 64 requests");
+  uint64_t ScenarioBytes = 0;
+  for (const auto &Request : Options.Requests) {
+    if (Request.Input.size() > DriverScenarioBufferLimit ||
+        Request.OutputSize > DriverScenarioBufferLimit ||
+        Request.Device.size() > MaxDeviceNameSize)
+      return failure("driver request exceeds the bounded buffer or name limit");
+    ScenarioBytes += Request.Input.size() + Request.OutputSize;
+    if (ScenarioBytes > DriverScenarioTotalBufferLimit)
+      return failure("driver scenario exceeds 512 KiB of requested buffers");
+    switch (Request.Kind) {
+    case DriverRequestKind::Create:
+    case DriverRequestKind::Cleanup:
+    case DriverRequestKind::Close:
+      if (Request.ControlCode || !Request.Input.empty() || Request.OutputSize)
+        return failure("only device-control requests accept code and buffers");
+      break;
+    case DriverRequestKind::DeviceControl:
+      break;
+    default:
+      return failure("invalid driver request kind");
+    }
+  }
+  auto Image = loadDriverImage(Path, Options.MemoryLimit, Options.LoadAddress);
+  if (!Image)
+    return Image.takeError();
+  DriverResult Result;
+  Result.Configuration = Options;
+  Result.ImageBase = Image->Base;
+  Result.PreferredImageBase = Image->PreferredBase;
+  Result.SecurityCookieAddress = Image->SecurityCookieAddress;
+  Result.Entry = Image->Entry;
+  Result.PC = Image->Entry;
+  if (Image->Imports.size() > (ThunkSize / ThunkStride) - 1)
+    return failure("too many driver imports for the synchronous profile");
+  auto Backend = UnicornBackend::create(Options.MemoryLimit);
+  if (!Backend)
+    return Backend.takeError();
+  auto &CPU = **Backend;
+  // Temporary writable image pages are private setup state. Final permissions
+  // are applied before any guest instruction can run.
+  for (const auto &Region : Image->Regions) {
+    if (auto E = CPU.map(Region.Address, Region.Bytes.size(), Read | Write))
+      return std::move(E);
+    if (auto E = CPU.write(Region.Address, Region.Bytes))
+      return std::move(E);
+  }
+  std::map<uint64_t, const DriverImport *> Thunks;
+  for (size_t I = 0; I < Image->Imports.size(); ++I) {
+    const auto &Import = Image->Imports[I];
+    uint64_t Address = ThunkBase + ThunkStride * I;
+    if (auto E = CPU.writeInteger(Import.Slot, Address, PointerSize))
+      return std::move(E);
+    Thunks.emplace(Address, &Import);
+  }
+  for (const auto &Region : Image->Regions)
+    if (auto E = CPU.protect(Region.Address, Region.Bytes.size(),
+                             Region.Permissions))
+      return std::move(E);
+  if (auto E = CPU.map(ThunkBase, ThunkSize, Read | Write))
+    return std::move(E);
+  std::vector<uint8_t> TrapBytes(ThunkSize, ThunkTrapByte);
+  if (auto E = CPU.write(ThunkBase, TrapBytes))
+    return std::move(E);
+  if (auto E = CPU.protect(ThunkBase, ThunkSize, Read | Execute))
+    return std::move(E);
+  if (auto E = CPU.map(StackBase, StackSize, Read | Write))
+    return std::move(E);
+  KernelModel Kernel(CPU, Result);
+  if (auto E = Kernel.initialize(*Image, Options))
+    return std::move(E);
+  const uint64_t InitialSP = StackBase + StackSize - EntryStackReservation;
+  X64ExecutionPolicy Policy;
+  if (auto E = Policy.initialize())
+    return std::move(E);
+  bool Stopped = false;
+  std::optional<uint32_t> InvocationReturn;
+  const DriverImport *Pending = nullptr;
+  auto Stop = [&](DriverStopReason Reason, const std::string &Diagnostic) {
+    if (Stopped)
+      return;
+    Result.Stop = Reason;
+    Result.Diagnostic = Diagnostic;
+    Stopped = true;
+    CPU.stop();
+  };
+  auto EventAvailable = [&]() {
+    if (Result.Calls.size() + Result.Writes.size() >= Options.EventLimit) {
+      Stop(DriverStopReason::EventLimit, "behavior event limit reached");
+      return false;
+    }
+    return true;
+  };
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t Address, uint32_t Size) {
+    if (Stopped)
+      return;
+    Result.PC = Address;
+    if (Address == ReturnSentinel) {
+      auto SP = CPU.reg(X64Register::SP);
+      auto AX = CPU.reg(X64Register::AX);
+      if (!SP || !AX) {
+        std::string Error;
+        if (!SP)
+          Error += llvm::toString(SP.takeError());
+        if (!AX)
+          Error += llvm::toString(AX.takeError());
+        Stop(DriverStopReason::EngineError, Error);
+      } else if (*SP != InitialSP + PointerSize) {
+        Stop(DriverStopReason::ModelError,
+             "driver callback returned with an unbalanced stack");
+      } else {
+        InvocationReturn = static_cast<uint32_t>(*AX);
+        Stop(DriverStopReason::Returned, "");
+      }
+      return;
+    }
+    if (auto I = Thunks.find(Address); I != Thunks.end()) {
+      if (!KernelModel::argumentCount(I->second->Name)) {
+        Stop(DriverStopReason::UnsupportedAPI,
+             "unsupported import: " + I->second->Module + "!" +
+                 I->second->Name);
+        return;
+      }
+      Pending = I->second;
+      CPU.stop();
+      return;
+    }
+    if (Result.Instructions >= Options.InstructionLimit) {
+      Stop(DriverStopReason::InstructionLimit,
+           "guest instruction limit reached");
+      return;
+    }
+    if (!Size || Size > MaxInstructionSize) {
+      Stop(DriverStopReason::UnsupportedInstruction,
+           "invalid x64 instruction extent");
+      return;
+    }
+    std::array<uint8_t, MaxInstructionSize> Bytes{};
+    if (auto E = CPU.fetch(
+            Address, llvm::MutableArrayRef<uint8_t>(Bytes.data(), Size))) {
+      Stop(DriverStopReason::MemoryFault, llvm::toString(std::move(E)));
+      return;
+    }
+    if (auto E = Policy.validate(llvm::ArrayRef<uint8_t>(Bytes.data(), Size),
+                                 Address)) {
+      Stop(DriverStopReason::UnsupportedInstruction,
+           llvm::toString(std::move(E)));
+      return;
+    }
+    ++Result.Instructions;
+  };
+  Hooks.Read = [&](uint64_t Address, uint32_t Size) {
+    if (Stopped)
+      return;
+    if (Address < ThunkBase + ThunkSize &&
+        (Address >= ThunkBase || Size > ThunkBase - Address)) {
+      Stop(DriverStopReason::UnsupportedAPI,
+           "reading bytes of an imported symbol requires an unmodeled kernel "
+           "image");
+      return;
+    }
+    if (auto E = Kernel.validateGuestAccess(Address, Size, false))
+      Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
+  };
+  Hooks.Write = [&](uint64_t Address, uint32_t Size, uint64_t Value) {
+    if (Stopped)
+      return;
+    if (auto E = Kernel.validateGuestAccess(Address, Size, true)) {
+      Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
+      return;
+    }
+    if (Stopped || (Address >= StackBase && Address < StackBase + StackSize))
+      return;
+    if (!EventAvailable())
+      return;
+    DriverMemoryWrite Event;
+    Event.PC = Result.PC;
+    Event.Phase = Result.Phase;
+    Event.Address = Address;
+    Event.Size = Size;
+    if (Size && Size <= PointerSize)
+      Event.Value = Size == PointerSize
+                        ? Value
+                        : Value & ((uint64_t(1) << (Size * 8)) - 1);
+    Result.Writes.push_back(std::move(Event));
+  };
+  Hooks.Fault = [&](uint64_t Address, uint32_t Size, const char *Access) {
+    Stop(DriverStopReason::MemoryFault, std::string("guest ") + Access +
+                                            " fault at 0x" +
+                                            llvm::utohexstr(Address) + " (" +
+                                            std::to_string(Size) + " bytes)");
+  };
+  Hooks.Interrupt = [&](uint32_t Number) {
+    Stop(DriverStopReason::UnsupportedInstruction,
+         "unmodeled CPU exception/interrupt " + std::to_string(Number));
+  };
+  Hooks.InvalidInstruction = [&]() {
+    auto PC = CPU.reg(X64Register::PC);
+    if (PC)
+      Result.PC = *PC;
+    else
+      llvm::consumeError(PC.takeError());
+    Stop(DriverStopReason::UnsupportedInstruction,
+         "CPU rejected an invalid or unsupported instruction");
+  };
+  if (auto E = CPU.installHooks(std::move(Hooks)))
+    return std::move(E);
+
+  auto Deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(Options.TimeoutMilliseconds);
+  auto Invoke = [&](const KernelModel::Invocation &Invocation,
+                    const std::string &Phase) -> llvm::Error {
+    Result.Phase = Phase;
+    Result.PC = Invocation.PC;
+    Stopped = false;
+    InvocationReturn.reset();
+    if (!CPU.executable(Invocation.PC) ||
+        (Invocation.PC >= ThunkBase && Invocation.PC < ThunkBase + ThunkSize)) {
+      Stop(DriverStopReason::ModelError,
+           "driver callback does not name guest executable code");
+      return llvm::Error::success();
+    }
+    // Each host-to-driver invocation receives a fresh stack frame, while all
+    // guest globals, objects, budgets and the wall-clock deadline remain
+    // shared.
+    if (auto E = CPU.writeInteger(InitialSP, ReturnSentinel, PointerSize))
+      return E;
+    if (auto E = CPU.setReg(X64Register::SP, InitialSP))
+      return E;
+    if (auto E = CPU.setReg(X64Register::CX, Invocation.Argument0))
+      return E;
+    if (auto E = CPU.setReg(X64Register::DX, Invocation.Argument1))
+      return E;
+    uint64_t NextPC = Invocation.PC;
+    while (!Stopped) {
+      auto Remaining = std::chrono::duration_cast<std::chrono::microseconds>(
+                           Deadline - std::chrono::steady_clock::now())
+                           .count();
+      if (Remaining <= 0) {
+        Stop(DriverStopReason::Timeout, "execution time limit reached");
+        break;
+      }
+      Pending = nullptr;
+      if (auto E = CPU.run(NextPC, Remaining)) {
+        std::string Message = llvm::toString(std::move(E));
+        if (!Stopped)
+          Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
+                                    : DriverStopReason::EngineError,
+               Message);
+      }
+      if (Stopped)
+        break;
+      if (CPU.timedOut()) {
+        Stop(DriverStopReason::Timeout, "execution time limit reached");
+        break;
+      }
+      if (!Pending) {
+        Stop(DriverStopReason::EngineError,
+             "CPU stopped without a recognized exit");
+        break;
+      }
+      if (!EventAvailable())
+        break;
+      DriverAPIEvent Event;
+      Event.PC = Result.PC;
+      Event.Phase = Result.Phase;
+      Event.Name = Pending->Name;
+      auto SP = CPU.reg(X64Register::SP);
+      if (!SP)
+        return SP.takeError();
+      if ((*SP & (StackAlignment - 1)) != PointerSize ||
+          *SP > UINT64_MAX -
+                    (StackArgumentOffset + MaxAPIArguments * PointerSize)) {
+        Stop(DriverStopReason::ModelError,
+             "kernel call violates x64 stack alignment");
+        break;
+      }
+      constexpr X64Register ArgumentRegisters[] = {
+          X64Register::CX, X64Register::DX, X64Register::R8, X64Register::R9};
+      unsigned Count = *KernelModel::argumentCount(Event.Name);
+      if (Count > MaxAPIArguments) {
+        Stop(DriverStopReason::EngineError,
+             "kernel API argument contract exceeds the x64 dispatcher limit");
+        break;
+      }
+      if (auto E = Kernel.validateGuestAccess(*SP, 8, false)) {
+        Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
+        break;
+      }
+      for (unsigned I = 0; I < Count; ++I) {
+        if (I >= RegisterArgumentCount) {
+          if (auto E = Kernel.validateGuestAccess(
+                  *SP + StackArgumentOffset +
+                      (I - RegisterArgumentCount) * PointerSize,
+                  8, false)) {
+            Stop(DriverStopReason::ModelError, llvm::toString(std::move(E)));
+            break;
+          }
+        }
+        auto Argument =
+            I < RegisterArgumentCount
+                ? CPU.reg(ArgumentRegisters[I])
+                : CPU.readInteger(*SP + StackArgumentOffset +
+                                      (I - RegisterArgumentCount) * PointerSize,
+                                  PointerSize);
+        if (!Argument) {
+          Stop(DriverStopReason::MemoryFault,
+               llvm::toString(Argument.takeError()));
+          break;
+        }
+        Event.Arguments.push_back(*Argument);
+      }
+      Result.Calls.push_back(std::move(Event));
+      if (Stopped)
+        break;
+      auto ReturnPC = CPU.readInteger(*SP, PointerSize);
+      if (!ReturnPC) {
+        Stop(DriverStopReason::MemoryFault,
+             llvm::toString(ReturnPC.takeError()));
+        break;
+      }
+      if (!CPU.executable(*ReturnPC)) {
+        Stop(DriverStopReason::MemoryFault,
+             "kernel call has a non-executable return address");
+        break;
+      }
+      auto Value = Kernel.call(Pending->Name, Result.Calls.back().Arguments);
+      if (!Value) {
+        std::string Error = llvm::toString(Value.takeError());
+        Result.Calls.back().Detail = Error;
+        Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
+                                  : DriverStopReason::ModelError,
+             Error);
+        break;
+      }
+      Result.Calls.back().Result = *Value;
+      if (auto E = CPU.setReg(X64Register::AX, *Value))
+        return std::move(E);
+      if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
+        return std::move(E);
+      NextPC = *ReturnPC;
+    }
+    return llvm::Error::success();
+  };
+  if (auto E =
+          Invoke({Image->Entry, Kernel.driverObject(), Kernel.registryPath()},
+                 EntryPhase))
+    return std::move(E);
+  if (Result.Stop == DriverStopReason::Returned)
+    Result.NTStatus = InvocationReturn;
+  auto ModelFailure = [&](llvm::Error E) {
+    Stopped = false;
+    Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
+                              : DriverStopReason::ModelError,
+         llvm::toString(std::move(E)));
+  };
+  if (Result.Stop == DriverStopReason::Returned) {
+    if (auto E = Kernel.finishEntry())
+      ModelFailure(std::move(E));
+    else if (*Result.NTStatus && !(*Result.NTStatus & NTStatusFailureMask))
+      ModelFailure(
+          failure("DriverEntry must return STATUS_SUCCESS to initialize; "
+                  "nonzero successful or pending status is unsupported"));
+  }
+  // Entry failure is a valid completed observation. No requests or unload are
+  // delivered to a driver whose initialization did not succeed.
+  if (Result.Stop == DriverStopReason::Returned && Result.NTStatus == 0) {
+    for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
+      Result.Phase = std::string(RequestPhase) + std::to_string(Index);
+      auto Invocation = Kernel.beginRequest(Options.Requests[Index]);
+      if (!Invocation) {
+        ModelFailure(Invocation.takeError());
+        break;
+      }
+      if (Invocation->PC) {
+        if (auto E = Invoke(*Invocation, Result.Phase))
+          return std::move(E);
+        if (Result.Stop != DriverStopReason::Returned)
+          break;
+        if (auto E = Kernel.finishRequest(*InvocationReturn)) {
+          ModelFailure(std::move(E));
+          break;
+        }
+      }
+    }
+    if (Result.Stop == DriverStopReason::Returned && Options.Unload) {
+      Result.Phase = UnloadPhase;
+      auto Invocation = Kernel.beginUnload();
+      if (!Invocation) {
+        ModelFailure(Invocation.takeError());
+      } else {
+        if (auto E = Invoke(*Invocation, UnloadPhase))
+          return std::move(E);
+        if (Result.Stop == DriverStopReason::Returned) {
+          if (auto E = Kernel.finishUnload())
+            ModelFailure(std::move(E));
+          else
+            Result.UnloadCompleted = true;
+        }
+      }
+    }
+  }
+  if (auto E = Kernel.snapshot()) {
+    Result.Diagnostic += (Result.Diagnostic.empty() ? "" : "; ") +
+                         std::string("object snapshot failed: ") +
+                         llvm::toString(std::move(E));
+    if (Result.Stop == DriverStopReason::Returned) {
+      Result.Stop = DriverStopReason::ModelError;
+    }
+  }
+  return Result;
+}
+} // namespace neverd::emulation

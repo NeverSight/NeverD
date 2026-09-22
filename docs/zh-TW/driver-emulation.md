@@ -1,0 +1,144 @@
+**語言**: [English](../driver-emulation.md) | [简体中文](../zh-CN/driver-emulation.md) | [繁體中文](driver-emulation.md) | [日本語](../ja/driver-emulation.md) | [한국어](../ko/driver-emulation.md) | [Français](../fr/driver-emulation.md) | [Deutsch](../de/driver-emulation.md) | [Español](../es/driver-emulation.md) | [Italiano](../it/driver-emulation.md) | [Русский](../ru/driver-emulation.md) | [العربية](../ar/driver-emulation.md)
+
+[← 文件索引](README.md)
+
+# Windows 驅動程式模擬
+
+NeverD 的選用驅動程式模擬器執行受支援 x64 WDM 驅動程式的 PE 進入點，並可在卸載前執行明確指定的同步請求情境。它使用 Unicorn 執行 CPU 指令，使用 NeverD 自有的有界 Windows 環境模型。它不會將驅動程式載入主機核心，也不會把客體 API 呼叫轉送給主機作業系統服務。
+
+## 建置與執行
+
+此功能須明確啟用，且不依賴 `BUILD_TESTING`：
+
+```bash
+cmake -S . -B build-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNEVERD_ENABLE_DRIVER_EMULATION=ON
+cmake --build build-release --target neverd --parallel 4
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --instruction-limit 100000 > driver-report.json
+```
+
+報告一律以 JSON 輸出至 stdout；請求與環境設定診斷輸出至 stderr。預設預算為 100000 條客體指令、64 MiB 客體記憶體、10000 筆記錄事件及 5000 毫秒。指令數限制必須為正數。任一預算耗盡便停止執行，並保留已收集的部分觀察結果。
+
+| 結束碼 | 意義 |
+|--------|------|
+| `0` | 初始化及所有請求中已完成的操作皆成功 |
+| `1` | 輸入或選項無效、執行環境建立失敗，或建置時未啟用此功能 |
+| `2` | 初始化或已完成的請求傳回失敗的 `NTSTATUS` |
+| `3` | 情境尚未完成便停止執行，例如遇到不支援的 API、錯誤或預算限制 |
+
+傳回失敗狀態仍表示已完整觀察到該操作的結果。成功傳回只描述這一次模型執行，不能證明該驅動程式可在 Windows 下正常運作。
+
+## 驅動程式相容性
+
+相容性取決於實際執行的程式碼路徑及其相依項目，而非 `.sys` 副檔名。目前的驗收證據涵蓋原創的獨立測試樣例，以及 Microsoft SIOCTL WDM 範例的緩衝 I/O 路徑；這並不代表與任意第三方驅動程式相容。
+
+| 驅動程式類別或需求 | 目前範圍 | 缺少的環境 |
+|--------------------|----------|------------|
+| 使用下列 API 的 x64 軟體 WDM 驅動程式 | 有界初始化與一個同步檔案生命週期 | 每個額外執行到的 API 都必須有明確的模型 |
+| `METHOD_BUFFERED` IOCTL | 支援明確指定的請求情境 | 尚不支援同時開啟多個檔案及非同步完成 |
+| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT`、`METHOD_NEITHER` | 拒絕 | MDL、鎖定頁面、存取探測及使用者緩衝區生命週期 |
+| KMDF / UMDF 驅動程式 | 不支援 | 框架繫結、物件、佇列、回呼及對應的主機執行階段 |
+| PnP 匯流排／功能／篩選驅動程式 | 初始化可在 API 子集內執行；不支援裝置堆疊生命週期 | 裝置附加、向下層驅動程式派送、PnP 與電源 IRP |
+| 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
+| 使用背景工作執行緒、計時器、DPC、APC、等待或取消的驅動程式 | 不支援 | 排程、IRQL 轉換、同步與非同步所有權 |
+| 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 下列 API 以外的行為不支援 | 物件管理員、系統狀態及回呼／事件產生機制 |
+| 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 不支援所需環境 | 裝置模型、實體記憶體、匯流排、中斷及特權 CPU 狀態 |
+| x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
+| 需要 CFG、不支援的載入組態、TLS 或其他遭拒絕 PE 功能的 x64 映像 | 載入時拒絕 | 針對這些需求的明確載入器／執行階段語義 |
+
+未使用的不支援匯入項目可以維持繫結。一旦執行到不支援的操作，便停止並提供診斷及先前收集的觀察結果。僅 DriverEntry 成功，不能證明後續派送、硬體或框架路徑也受支援。下方 API 表是受支援子集的權威定義。
+
+## 執行契約
+
+此設定在 `PASSIVE_LEVEL` 下模擬單執行緒的 x64 WDM 生命週期。執行從 PE 進入點開始；若有編譯器產生的進入點包裝函式，也會保留並執行。DriverEntry 必須傳回 `STATUS_SUCCESS` 才能完成初始化；非零的成功狀態或待處理狀態會因初始化契約不受支援而停止。失敗狀態則保留為已完成的初始化結果。所有物件、字串、堆疊、函式指標及配置均位於客體記憶體。模型依設定的服務名稱（預設為 `NeverDDriver`）提供 `DRIVER_OBJECT` 和登錄路徑。
+
+配接器使用 Unicorn 的虛擬 TLB 模式保留客體虛擬位址，包括規範的高位核心位址，無須合成 Windows 頁表。初始 RFLAGS 為 `0x202`；軟體裝置設定採用固定的 64 位元組快取列。這些都是本執行情境的明確屬性。
+
+未知匯入項目繫結至延遲陷阱。未使用的匯入項目不會阻止執行；執行其 thunk 或讀取未建模的匯出資料值時，會以 `unsupported_api` 停止。不支援的 CPU 環境效果也會明確停止。NeverD 不會用成功傳回值替代未實作的呼叫。格式錯誤的映像或不支援的載入需求會在執行前失敗。
+
+此設定並未實作完整的 Windows 核心、KMDF 執行階段、PnP／電源生命週期、非同步或待處理 IRP、直接／neither 方法 IOCTL、中斷或多執行緒排程。只有情境明確請求時才執行回呼；僅初始化模式仍在 DriverEntry 之後停止。
+
+映像預設使用慣用基底位址，除非情境選擇了有效的重新定位位址。映像必須為使用 native 子系統的 PE32+ x64 可執行檔。匯入可來自 `ntoskrnl.exe` 或 `ntkrnlmp.exe`。
+
+執行載入器支援經驗證的 x64 `DIR64` 基底重新定位，以及有限的安全性 cookie 載入組態；它會在進入點包裝函式執行前設定具確定性的客體 cookie。CFG、其他未建模的載入組態欄位、TLS、延遲／繫結匯入、依序號匯入及受控映像皆會遭拒絕。映像還必須通過嚴格的範圍與對齊檢查。
+
+初始 API 模型刻意採用有限契約：
+
+| API | 建模行為與限制 |
+|-----|----------------|
+| `RtlInitUnicodeString` | 根據有界且以 NUL 結尾的來源字串建立客體 `UNICODE_STRING` |
+| `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | 對集區類型 `0`、`1`、`512` 提供資料配置；大小／標籤必須為正，帶標籤釋放必須相符，位址不重複使用 |
+| `IoCreateDevice`、`IoDeleteDevice` | 裝置類型為 `0x22`，characteristics 為 `0` 或 `0x100`，擴充區大小有界，名稱為 ASCII `\Device\Name` |
+| `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 一個工作階段命名空間內的 ASCII `\DosDevices\Name` 或 `\??\Name`，目標為 `\Device\Name` |
+| `DbgPrint`、`DbgPrintEx` | ASCII 常值文字與 `%%`，最多輸出 512 位元組；可變參數格式化會停止；啟用所有偵錯器篩選器 |
+| `IoGetCurrentIrpStackLocation` | 傳回目前建模 IRP 的堆疊位置；正常編譯的 WDM 巨集讀取相同客體欄位 |
+| `KeGetCurrentIrql` | 傳回 `PASSIVE_LEVEL` |
+| `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 完成目前同步建模 IRP；已完成的 IRP 或緩衝區不能再次存取 |
+| `memcpy`、`memmove`、`memset`、`memcmp`、`RtlCopyMemory`、`RtlMoveMemory`、`RtlFillMemory`、`RtlZeroMemory`、`RtlCompareMemory` | 有界的客體緩衝區操作，每次呼叫最多 1 MiB；要求不重疊的複製 API 會拒絕重疊 |
+
+原始 RegistryPath 記錄及其緩衝區在 DriverEntry 傳回時失效。後續仍需使用該字串的驅動程式，必須在初始化期間複製它。
+
+物件／集區區域大小為 1 MiB。未初始化集區位元組採用具確定性的 `0xCD` 內容；釋放後的集區位元組採用 `0xDD`。這是一種具體執行情境。CPU 存取及建模的緩衝區 API 會拒絕存取已釋放的集區配置、已刪除裝置、區域內尚未配置的位元組、不透明物件欄位，以及對唯讀物件欄位的寫入。這些檢查涵蓋的是本模型的物件生命週期，並非通用的驅動程式記憶體安全分析。未寫入的派送表槽位在報告中以零表示「未註冊」。情境請求若對應未註冊的主要功能，則由模型的預設處理常式完成，狀態為 `STATUS_INVALID_DEVICE_REQUEST`；該失敗在派送狀態與 I/O 狀態中皆可見。模型不會為此處理常式虛構客體函式位址，客體讀取未寫入槽位仍不受支援。明確註冊空回呼屬於錯誤。
+
+## 請求情境
+
+透過 `--scenario` 傳入 JSON 檔案，指定請求及選用的卸載操作：
+
+```bash
+build-release/bin/neverd emulate-driver path/to/driver.sys \
+  --scenario scenario.json > driver-report.json
+```
+
+對於建立 `\Device\NeverDIO` 並接受緩衝 IOCTL `0x222000` 的驅動程式，`scenario.json` 範例為：
+
+```json
+{
+  "requests": [
+    {"kind": "create", "device": "\\Device\\NeverDIO"},
+    {"kind": "ioctl", "code": "0x222000", "input": "00112233", "output_size": 4},
+    {"kind": "cleanup"},
+    {"kind": "close"}
+  ],
+  "unload": true
+}
+```
+
+裝置名稱與 IOCTL 代碼必須符合驅動程式。省略 `device` 時選擇唯一的存活裝置；無法唯一選擇則失敗。本模型追蹤一個開啟的檔案，並要求依 create、IOCTL、cleanup、close 的順序執行。僅支援 `METHOD_BUFFERED` IOCTL。派送必須同步完成每個 IRP；傳回 `STATUS_PENDING`、未完成請求、輸出長度無效及存取已完成的 IRP 都會明確失敗。請求卸載後，不得留下存活的裝置、符號連結、集區配置或檔案物件。
+
+選用根欄位 `"load_address": "0x190000000"` 請求變更載入基底位址；省略此欄位或指定 `"0x0"` 時使用慣用位址。映像必須滿足重新定位需求。原有的初始化命令或 C API 不會隱含執行任何請求情境。
+
+根物件僅接受 `load_address`、`requests` 和 `unload`。請求欄位為 `kind`、選用的 `device`，以及僅適用於 `ioctl` 的必填 `code` 與選用 `input`、`output_size`。未知或重複欄位會遭拒絕。`code` 接受無號 32 位元 JSON 整數或 `0x` 十六進位字串。`input` 是長度為偶數且不帶前綴或空格的十六進位位元組字串；省略表示空輸入。`output_size` 為無號 JSON 整數，省略表示零。不接受小數及浮點數寫法。
+
+情境文字上限為 2 MiB，最多包含 64 個請求，每個輸入或輸出緩衝區最多 65536 位元組，輸入加輸出的總位元組數最多 512 KiB。指令、觀察事件、客體記憶體及時間預算涵蓋整個情境。1 MiB 區域還需存放物件與中繼資料，因此即使尚未用盡情境緩衝區總額度，也可能耗盡模型記憶體。
+
+## Microsoft 範例驗收檢查
+
+選用的[驗證指令碼](../../scripts/validate_windows_driver_sample.py)下載[驗證清單](../../unittests/emulation/fixtures/sioctl-validation.json)中固定版本的 Microsoft SIOCTL 原始碼，驗證 SHA-256 雜湊，並使用 MinGW-w64 DDK 標頭檔編譯未修改的原始碼。指令碼在選定的輸出目錄中保留上游授權／來源資訊、建置命令、情境與報告。它需要網路存取、Clang、`lld-link`、`nm` 及 MinGW-w64 的 DDK 標頭檔：
+
+```bash
+python3 scripts/validate_windows_driver_sample.py \
+  --neverd build-release/bin/neverd \
+  --output build-release/driver-validation/sioctl
+```
+
+非預設 MinGW-w64 包含目錄可透過 `--headers` 指定。指令碼根據已編譯物件的相依項目產生 MS COFF 匯入程式庫。檢查依序執行 DriverEntry、create、範例的緩衝 IOCTL、cleanup、close 和 unload。上游範例未註冊 cleanup 處理常式，因此模型的預設處理常式以 `STATUS_INVALID_DEVICE_REQUEST`（`0xC0000010`）完成 cleanup。驅動程式仍會關閉並卸載，成功的 IOCTL 則傳回預期位元組。對於這個完整情境，CLI 的預期結束碼為 **2**，`scenario_success` 為 false。指令碼僅在所有結果皆符合預期時成功，包括可見的 cleanup 失敗；它不會改寫範例來隱藏該結果。
+
+## 報告與 SDK
+
+JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
+
+`configuration` 物件記錄本次執行的限制與服務名稱。設定識別為 `wdm-x64-synchronous-v1`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`request:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information` 和 `output_hex`。
+
+`instructions` 統計執行策略已准許的客體指令嘗試次數。遭執行策略拒絕的指令不計數；已准許但在 CPU 中發生錯誤的指令計數。合成的 API 派送及返回哨兵不會增加此計數。
+
+每個 `writes` 項目都帶有 `semantics: "attempted_guest_write"`：記錄堆疊外的 CPU 寫入嘗試，包括之後可能發生錯誤或被預算停止的嘗試。它不保證寫入已完成，也不包含 API 模型所做的寫入。裝置與驅動程式物件快照描述執行停止時觀察到的狀態。
+
+包含 `neverd/sdk/NeverDCAPIEmulation.h`（或 C API 總標頭檔），建立工作階段，然後呼叫 `neverd_emulate_driver_json(session, path, options)`。明確傳入非空路徑會直接進入嚴格執行預檢，無須先透過通用分析 API 載入。CLI 採用此路徑。傳入 `NULL` options 使用預設值。明確指定 `neverd_driver_options_v1` 選項時，要求 `struct_size` 精確相符，且指令、記憶體、事件及逾時預算皆為正數。結果須用 `neverd_free_string` 釋放。
+
+若路徑傳入 `NULL`，則要求工作階段已載入檔案，並獨立於 IR 分析及函式受限載入重新解析該檔案。兩種方式都會保留工作階段映像不變。呼叫期間必須保持輸入檔案可用且不變。請求／執行環境建立失敗時傳回 `NULL` 並設定 `neverd_last_error`；執行停止則傳回 JSON。未啟用此功能的建置仍提供此 API，並回報啟用方法。
+
+`neverd_emulate_driver_scenario_json(session, path, scenario_json, options)` 使用相同的 v1 選項及所有權規則，另外接受嚴格驗證的情境輸入。必須傳入非 NULL、以 NUL 結尾的 JSON 字串。原有 `neverd_emulate_driver_json` ABI 維持不變，仍僅執行初始化。C++ 解析器 `driverOptionsFromScenarioJSON` 為 `emulateDriver` 呼叫端提供相同的情境驗證。
+
+內部 C++ 進入點為 `include/neverd/emulation/DriverSession.h` 中的 `neverd::emulation::emulateDriver`。格式解析由現有載入器負責；Windows 物件／API 行為由 `lib/emulation/windows` 負責；CPU 狀態及執行由 Unicorn 配接器負責。配接器與模型使用相同的客體記憶體介面。Windows API 行為不應放入 Unicorn fork。

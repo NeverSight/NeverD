@@ -75,8 +75,33 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                 Path("docs/sbf.md"),
                 Path("docs/android.md"),
                 Path("docs/ios.md"),
+                Path("docs/driver-emulation.md"),
             },
         )
+
+    def test_driver_guide_rejects_changed_executable_example(self) -> None:
+        path = Path("docs/zh-CN/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        changed = original.replace('"output_size": 4', '"output_size": 8')
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("driver examples differ" in error for error in errors), errors)
+
+    def test_driver_guide_tracks_supported_export_inventory(self) -> None:
+        path = Path("docs/de/driver-emulation.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        changed = original.replace("`IoGetCurrentIrpStackLocation`", "`UnknownAPI`")
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("IoGetCurrentIrpStackLocation" in error for error in errors), errors)
+
+    def test_driver_guide_requires_localized_testing_entry(self) -> None:
+        path = Path("docs/fr/testing.md")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        errors: list[str] = []
+        changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
 
     def test_repository_documentation_matrix_is_valid(self) -> None:
         """Exercise the same working-tree validation that the CLI performs."""

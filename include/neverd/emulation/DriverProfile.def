@@ -1,0 +1,42 @@
+//===- DriverProfile.def - Driver execution profile constants -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared resource defaults and guest address-space assignments. Define
+/// NEVERD_DRIVER_PROFILE(Name, Value) before including this file.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_PROFILE(PageSize, 4096)
+NEVERD_DRIVER_PROFILE(DefaultInstructionLimit, 100000)
+NEVERD_DRIVER_PROFILE(DefaultMemoryLimit, 64 * 1024 * 1024)
+NEVERD_DRIVER_PROFILE(DefaultEventLimit, 10000)
+NEVERD_DRIVER_PROFILE(DefaultTimeoutMilliseconds, 5000)
+NEVERD_DRIVER_PROFILE(MaxMemoryLimit, 1024ull * 1024 * 1024)
+NEVERD_DRIVER_PROFILE(MaxEventLimit, 1000000)
+NEVERD_DRIVER_PROFILE(MaxTimeoutMilliseconds, 3600000)
+NEVERD_DRIVER_PROFILE(MaxServiceNameSize, 128)
+NEVERD_DRIVER_PROFILE(MaxDeviceNameSize, 512)
+NEVERD_DRIVER_PROFILE(StackBase, 0x71000000)
+NEVERD_DRIVER_PROFILE(StackSize, 0x100000)
+NEVERD_DRIVER_PROFILE(KernelArenaBase, 0x70000000)
+NEVERD_DRIVER_PROFILE(KernelArenaSize, 0x100000)
+NEVERD_DRIVER_PROFILE(ThunkBase, 0x72000000)
+NEVERD_DRIVER_PROFILE(ThunkSize, 0x10000)
+NEVERD_DRIVER_PROFILE(ThunkStride, 16)
+NEVERD_DRIVER_PROFILE(EntryStackReservation, 40)
+NEVERD_DRIVER_PROFILE(StackArgumentOffset, 40)
+NEVERD_DRIVER_PROFILE(StackAlignment, 16)
+NEVERD_DRIVER_PROFILE(PointerSize, 8)
+NEVERD_DRIVER_PROFILE(MaxAPIArguments, 8)
+NEVERD_DRIVER_PROFILE(InitialRFLAGS, 0x202)
+NEVERD_DRIVER_PROFILE(MaxInstructionSize, 15)
+NEVERD_DRIVER_PROFILE(NTStatusFailureMask, 0x80000000u)
+NEVERD_DRIVER_PROFILE(ThunkTrapByte, 0xcc)
+NEVERD_DRIVER_PROFILE(RegisterArgumentCount, 4)
+NEVERD_DRIVER_PROFILE(MajorFunctionCount, 28)
+NEVERD_DRIVER_PROFILE(MaxImports, 4096)
+NEVERD_DRIVER_PROFILE(SecurityCookie, 0x00004e5644434f4fULL)

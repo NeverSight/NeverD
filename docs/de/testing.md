@@ -34,6 +34,26 @@ bestandener Zielpfad.
 Klonen, Build-Profile und vorgefertigtes LLVM unter macOS beschreibt
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Prüfungen der Treiberemulation
+
+Aktivieren Sie `NEVERD_ENABLE_DRIVER_EMULATION=ON` zusammen mit `BUILD_TESTING=ON`,
+um die gezielte Ausführungssuite und die Prüfungen der öffentlichen C-API/CLI
+über die Shared Library zu bauen:
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+Fixtures prüfen Gastinitialisierung, zurückgegebenen Erfolg und Fehler,
+nicht unterstütztes Verhalten, Speicherfehler, striktes Szenarioparsing,
+begrenzte Ausführung und synchrone gepufferte I/O über create, IOCTL, cleanup,
+close und unload. Verwenden Sie die [`emulate-driver`-CLI](driver-emulation.md),
+um JSON und Prozess-Exitcodes zu prüfen. Produktionsbuilds dürfen diese
+Funktion mit `BUILD_TESTING=OFF` aktivieren; `libneverd` darf keine ausschließlich
+für Tests bestimmte Unicorn-Konfiguration benötigen.
+
 ## Testaufteilung
 
 `add_neverd_unittest` erzeugt ein GoogleTest-Programm und weist jedem

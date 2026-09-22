@@ -708,6 +708,7 @@ ENGLISH_DOCS = (
     Path("docs/testing.md"),
     Path("docs/windows-exception-reconstruction.md"),
     *(Path(f"docs/{stem}.md") for stem in GUIDE_STEMS),
+    Path("docs/driver-emulation.md"),
 )
 
 
@@ -728,6 +729,7 @@ def localized_paths(locale: str) -> tuple[Path, ...]:
         Path(f"docs/{locale}/sbf.md"),
         Path(f"docs/{locale}/android.md"),
         Path(f"docs/{locale}/ios.md"),
+        Path(f"docs/{locale}/driver-emulation.md"),
     )
 
 
@@ -2106,6 +2108,79 @@ def validate_markdown_structure(
             )
 
 
+def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
+    """Keep execution examples, supported exports and locale entry points aligned."""
+    english = Path("docs/driver-emulation.md")
+    guides = (
+        english,
+        *(Path(f"docs/{locale}/driver-emulation.md") for locale in LOCALES),
+    )
+    source = view.read_text(english)
+    examples = re.findall(r"```[^\n]*\n(.*?)```", source, re.DOTALL)
+    exports = re.findall(
+        r"NEVERD_KERNEL_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
+    )
+    required = (
+        "NEVERD_ENABLE_DRIVER_EMULATION=ON",
+        "BUILD_TESTING",
+        "--scenario",
+        "METHOD_BUFFERED",
+        "METHOD_IN_DIRECT",
+        "METHOD_OUT_DIRECT",
+        "METHOD_NEITHER",
+        "KMDF",
+        "UMDF",
+        "PASSIVE_LEVEL",
+        "STATUS_PENDING",
+        "STATUS_INVALID_DEVICE_REQUEST",
+        "RegistryPath",
+        "security_cookie",
+        "neverd_emulate_driver_json",
+        "neverd_emulate_driver_scenario_json",
+        "neverd_driver_options_v1",
+        "neverd_free_string",
+        "neverd_last_error",
+        "scenario_success",
+        "output_hex",
+        "wdm-x64-synchronous-v1",
+        "validate_windows_driver_sample.py",
+        "sioctl-validation.json",
+        *(f"`{name}`" for name in exports),
+    )
+    for guide in guides:
+        require_tokens(guide, required, errors, view)
+        text = view.read_text(guide)
+        if re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL) != examples:
+            report(
+                errors,
+                f"{display_path(guide)}: driver examples differ from the English execution contract",
+            )
+        selectors = tuple(
+            posixpath.relpath(target.as_posix(), guide.parent.as_posix())
+            for target in guides
+        )
+        require_tokens(guide, selectors, errors, view)
+        require_tokens(guide.parent / "README.md", ("(driver-emulation.md)",), errors, view)
+        require_tokens(
+            guide.parent / "architecture.md",
+            ("NEVERD_ENABLE_DRIVER_EMULATION", "`lib/emulation`", "(driver-emulation.md)"),
+            errors,
+            view,
+        )
+        require_tokens(
+            guide.parent / "testing.md",
+            (
+                "NeverDDriverEmulationTests",
+                "NeverDDriverEmulationPublicTests",
+                "'^NeverDDriverEmulation'",
+                "(driver-emulation.md)",
+            ),
+            errors,
+            view,
+        )
+
+
 def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     for path in MARKDOWN_DOCS:
         if not view.exists(path):
@@ -2116,6 +2191,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
     if errors:
         return
 
+    validate_driver_documents(errors, view)
     validate_architecture_semantics(errors, view)
     validate_sbf_evidence(errors, view)
     validate_sbf_testing_rows(errors, view)
@@ -2175,6 +2251,7 @@ def validate_matrix(errors: list[str], view: RepositoryView) -> None:
             sbf_guide,
             android_guide,
             ios_guide,
+            _driver_guide,
         ) = localized_paths(locale)
         require_tokens(
             project_readme,

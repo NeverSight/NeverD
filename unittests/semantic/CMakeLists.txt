@@ -1,11 +1,5 @@
-# --- Unicorn (from third_party submodule) ---
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
-set(UNICORN_ARCH "x86;arm;aarch64" CACHE STRING "" FORCE)
-add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/unicorn
-                 ${CMAKE_BINARY_DIR}/third_party/unicorn
-                 EXCLUDE_FROM_ALL)
+# --- Shared Unicorn dependency (also usable without BUILD_TESTING) ---
+neverd_require_unicorn()
 
 # Unicorn's public platform header includes windows.h on MSVC.  Keep the
 # Windows min/max macros out of every semantic-test translation unit because

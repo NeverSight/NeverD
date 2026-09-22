@@ -1,0 +1,36 @@
+//===- KernelAPIs.def - Supported kernel API contracts --------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Supported kernel export identifiers and exact argument counts. The symbol
+/// generates both its export spelling and KernelAPIKind; dispatch uses that
+/// identifier instead of a second string-name inventory.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_API(IoCreateDevice, 7)
+NEVERD_KERNEL_API(ExAllocatePoolWithTag, 3)
+NEVERD_KERNEL_API(memcpy, 3)
+NEVERD_KERNEL_API(memmove, 3)
+NEVERD_KERNEL_API(memset, 3)
+NEVERD_KERNEL_API(memcmp, 3)
+NEVERD_KERNEL_API(RtlCopyMemory, 3)
+NEVERD_KERNEL_API(RtlMoveMemory, 3)
+NEVERD_KERNEL_API(RtlFillMemory, 3)
+NEVERD_KERNEL_API(RtlCompareMemory, 3)
+NEVERD_KERNEL_API(DbgPrintEx, 3)
+NEVERD_KERNEL_API(RtlInitUnicodeString, 2)
+NEVERD_KERNEL_API(ExFreePoolWithTag, 2)
+NEVERD_KERNEL_API(IoCreateSymbolicLink, 2)
+NEVERD_KERNEL_API(RtlZeroMemory, 2)
+NEVERD_KERNEL_API(IofCompleteRequest, 2)
+NEVERD_KERNEL_API(IoCompleteRequest, 2)
+NEVERD_KERNEL_API(ExFreePool, 1)
+NEVERD_KERNEL_API(IoDeleteDevice, 1)
+NEVERD_KERNEL_API(IoDeleteSymbolicLink, 1)
+NEVERD_KERNEL_API(DbgPrint, 1)
+NEVERD_KERNEL_API(IoGetCurrentIrpStackLocation, 1)
+NEVERD_KERNEL_API(KeGetCurrentIrql, 0)

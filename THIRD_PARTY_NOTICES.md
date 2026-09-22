@@ -1,5 +1,22 @@
 # Third-Party Notices
 
+## Unicorn Engine
+
+The optional Windows driver emulator (`NEVERD_ENABLE_DRIVER_EMULATION`) links
+the repository's pinned `third_party/unicorn` CPU engine. Semantic tests also
+use this dependency. Unicorn is based on QEMU; its README identifies the
+engine's license as GPLv2. Component-specific notices and licenses remain in
+the original source files.
+
+See [Unicorn's license](third_party/unicorn/COPYING),
+[authors](third_party/unicorn/AUTHORS.TXT),
+[credits](third_party/unicorn/CREDITS.TXT),
+[third-party notices](third_party/unicorn/THIRD_PARTY_NOTICES.md), and
+[QEMU's licensing description](third_party/unicorn/qemu/LICENSE).
+Enabled builds stage these notices and the dependency's GPL/LGPL texts under
+`licenses/unicorn` beside the binaries and in the staged SDK. NeverD's project
+license does not replace these dependency notices.
+
 ## Swift runtime ABI declarations
 
 `lib/loader/Swift/SwiftRuntimeDeclarations.inc` derives fixed C and Swift ABI declarations

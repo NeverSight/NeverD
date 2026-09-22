@@ -31,6 +31,18 @@ fixture и слинкованные ELF/PE fixture при наличии соо�
 Клонирование, профили сборки и готовый LLVM для macOS описаны в
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Проверки эмуляции драйверов
+
+Включите `NEVERD_ENABLE_DRIVER_EMULATION=ON` вместе с `BUILD_TESTING=ON`, чтобы собрать специализированный набор тестов выполнения и проверки общего C API/CLI:
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+Fixture проверяют гостевую инициализацию, успешные и ошибочные возвраты, неподдерживаемое поведение, ошибки памяти, строгий разбор сценариев, ограниченное выполнение и синхронный буферизованный ввод-вывод через create, IOCTL, cleanup, close и unload. Для проверки JSON и кодов завершения процесса используйте [CLI `emulate-driver`](driver-emulation.md). Производственные сборки могут включать эту функцию с `BUILD_TESTING=OFF`; `libneverd` не должна требовать настройки Unicorn, предназначенной только для тестов.
+
 ## Структура тестов
 
 `add_neverd_unittest` создаёт один исполняемый GoogleTest и назначает каждому

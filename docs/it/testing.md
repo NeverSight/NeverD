@@ -33,6 +33,26 @@ fixture è copertura non eseguita, non un superamento per quel target.
 Consulta [CONTRIBUTING.md](CONTRIBUTING.md) per clonazione, profili di
 build e LLVM precompilato su macOS.
 
+## Verifiche dell’emulazione dei driver
+
+Abilitare `NEVERD_ENABLE_DRIVER_EMULATION=ON` insieme a `BUILD_TESTING=ON` per
+compilare la suite di esecuzione mirata e le verifiche dell’API C/CLI tramite
+la libreria condivisa:
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+Le fixture verificano l’inizializzazione guest, ritorni di successo ed errore,
+comportamenti non supportati, fault di memoria, parsing rigoroso degli scenari,
+esecuzione limitata e I/O sincrono con buffer attraverso create, IOCTL, cleanup,
+close e unload. Usare la [CLI `emulate-driver`](driver-emulation.md) per
+verificare il JSON e i codici di uscita dei processi. Le build di produzione
+possono abilitare questa funzionalità con `BUILD_TESTING=OFF`; `libneverd` non
+deve richiedere una configurazione Unicorn riservata ai test.
+
 ## Organizzazione dei test
 
 `add_neverd_unittest` crea un eseguibile GoogleTest e assegna a ogni caso

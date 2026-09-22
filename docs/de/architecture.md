@@ -351,6 +351,35 @@ NeverDs beweisgesicherte semantische Vereinfachung bis zu einem gemeinsamen
 Fixpunkt mit der LLVM-Optimierung ausführen; die Richtlinie stellt kein
 ausführbares Übersetzungs-Backend bereit.
 
+## Emulation von Windows-Treibern
+
+`lib/emulation` ist eine optionale Ausführungskomponente, aktiviert durch
+`NEVERD_ENABLE_DRIVER_EMULATION`. Die CLI `emulate-driver` erreicht sie über
+die öffentliche C-API. `DriverSession` verwaltet die begrenzte x64-WDM-
+Initialisierung und optionale synchrone create-/IOCTL-/cleanup-/close-/unload-
+Aufrufe. Die Windows-Image-Abbildung verwendet das vollständige `BinaryImage`
+des vorhandenen Loaders; das Windows-Modell besitzt Gastobjekte und API-Semantik.
+Der Unicorn-Adapter verwaltet CPU-Ausführung und den maßgeblichen Gastspeicher.
+Dieser Pfad verwendet weder die experimentelle native Übersetzungspipeline
+noch verändert er deren unterstütztes Profil.
+
+Unicorn wird einmalig über `cmake/NeverDUnicorn.cmake` konfiguriert, gemeinsam
+mit den semantischen Tests und auch bei `BUILD_TESTING=OFF` verfügbar. Unbekannte
+APIs und nicht modelliertes CPU-Umgebungsverhalten stoppen ausdrücklich; ein
+vom Treiber zurückgegebener Fehler bleibt von unvollständiger Emulation
+unterschieden. [Treiberemulation](driver-emulation.md) beschreibt Grenzen,
+Berichte und nicht unterstützte Lebenszyklusoperationen.
+
+Die ursprüngliche C-API bleibt auf Initialisierung beschränkt. Szenario-JSON
+verwendet einen einzigen strikten Parser mit denselben Ausführungsoptionen;
+Felder und Anforderungsarten sind in `.def`-Katalogen deklariert. Angeforderte
+Basisverschiebung und Security-Cookie-Initialisierung gehören zum Ausführungsloader.
+Das Windows-Modell besitzt IRP-, Stackpositions- und Dateiobjekte und validiert
+den synchronen Abschluss; die Sitzung ordnet Callbacks unter gemeinsamen
+Ausführungsbudgets an. Ungenutzte unbekannte Importe werden erst bei Nutzung
+aufgelöst; ihre Ausführung oder das Lesen nicht modellierter Exportdaten
+stoppt ausdrücklich.
+
 ## Grenzen der Ausnahmeumschreibung
 
 Mach-O Compact Unwind verfügt über einen strikten Parser für das ursprüngliche

@@ -27,6 +27,7 @@
 ///   - NeverDCAPISynth.h    -- proof-gated expression synthesis
 ///   - NeverDCAPIOptimize.h -- transactional textual LLVM IR optimization
 ///   - NeverDCAPITranslate.h -- x86-64 to AArch64 relocatable objects
+///   - NeverDCAPIEmulation.h -- bounded Windows driver initialization
 ///
 //===----------------------------------------------------------------------===//
 
@@ -34,6 +35,7 @@
 #define NEVERD_SDK_CAPI_H
 
 #include "neverd/sdk/NeverDCAPIDisasm.h"
+#include "neverd/sdk/NeverDCAPIEmulation.h"
 #include "neverd/sdk/NeverDCAPIOptimize.h"
 #include "neverd/sdk/NeverDCAPIPatch.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"

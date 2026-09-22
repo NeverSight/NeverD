@@ -1,0 +1,15 @@
+//===- DriverRequestKinds.def - WDM scenario request kinds ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Request kind, JSON spelling, and WDM major-function number.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_REQUEST_KIND(Create, "create", 0x00)
+NEVERD_DRIVER_REQUEST_KIND(DeviceControl, "ioctl", 0x0e)
+NEVERD_DRIVER_REQUEST_KIND(Cleanup, "cleanup", 0x12)
+NEVERD_DRIVER_REQUEST_KIND(Close, "close", 0x02)

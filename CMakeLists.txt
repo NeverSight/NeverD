@@ -141,6 +141,12 @@ add_custom_target(check-neverd-capabilities
 )
 
 # --- NeverD component libraries ---
+option(NEVERD_ENABLE_DRIVER_EMULATION
+       "Enable bounded x64 Windows driver initialization with Unicorn" OFF)
+include(${CMAKE_SOURCE_DIR}/cmake/NeverDUnicorn.cmake)
+if(NEVERD_ENABLE_DRIVER_EMULATION)
+    neverd_require_unicorn()
+endif()
 add_subdirectory(lib)
 
 # --- libneverd shared library (core engine, C API) ---

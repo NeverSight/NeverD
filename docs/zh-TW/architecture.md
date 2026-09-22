@@ -256,6 +256,14 @@ generated-code ABI 只為純量整數定義。浮點、SIMD、x87、原子操作
 該契約之外。選擇 `ProvenSemanticAndLLVM` 策略的實作必須執行 NeverD 現有的證明
 閘控語意簡化，並與 LLVM 最佳化共同達到不動點；該策略本身不提供可執行翻譯後端。
 
+## Windows 驅動程式模擬
+
+`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 啟用的選用執行元件。`emulate-driver` CLI 透過公開 C API 存取此元件。`DriverSession` 負責有界的 x64 WDM 初始化，以及選用的同步 create／IOCTL／cleanup／close／unload 呼叫；Windows 映像映射使用現有載入器提供的完整 `BinaryImage`，Windows 模型負責客體物件與 API 語義。Unicorn 配接器負責 CPU 執行，並持有客體記憶體的權威狀態。此路徑不使用實驗性的原生翻譯管線，也不改變其支援範圍。
+
+Unicorn 透過 `cmake/NeverDUnicorn.cmake` 統一設定一次，與語義測試共用，並在 `BUILD_TESTING=OFF` 時仍可用。未知 API 與 CPU 環境行為會明確停止；驅動程式傳回失敗與模擬未完成始終保持區分。限制、報告及不支援的生命週期操作見[驅動程式模擬](driver-emulation.md)。
+
+原有 C API 仍僅執行初始化。情境 JSON 在相同執行選項上使用統一的嚴格解析器，欄位與請求類型透過 `.def` 目錄宣告。要求的基底重新定位與安全性 cookie 初始化由執行載入器負責。Windows 模型負責 IRP／堆疊位置／檔案物件，並驗證同步完成；工作階段在共用執行預算下依序呼叫回呼。未使用的未知匯入採用延遲繫結；執行它們或讀取未建模的匯出資料時會明確停止。
+
 ## 例外重寫邊界
 
 Mach-O compact unwind 目前具備原始 `__unwind_info` 的嚴格 parser、產生

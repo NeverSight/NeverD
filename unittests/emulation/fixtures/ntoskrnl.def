@@ -1,0 +1,11 @@
+LIBRARY ntoskrnl.exe
+EXPORTS
+  RtlInitUnicodeString
+  ExAllocatePoolWithTag
+  ExFreePoolWithTag
+  IoCreateDevice
+  IoCreateSymbolicLink
+  IoDeleteDevice
+  IoDeleteSymbolicLink
+  IofCompleteRequest
+  ZwOpenFile

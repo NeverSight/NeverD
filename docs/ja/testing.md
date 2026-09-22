@@ -31,6 +31,18 @@ fixture をコンパイル/リンクできずスキップされたテストは�
 クローン、ビルドプロファイル、macOS のプリビルド LLVM は
 [CONTRIBUTING.md](CONTRIBUTING.md)を参照してください。
 
+## ドライバーエミュレーションの検査
+
+`NEVERD_ENABLE_DRIVER_EMULATION=ON` と `BUILD_TESTING=ON` を両方有効にすると、専用の実行スイートと共有 C API／CLI の検査をビルドできます。
+
+```bash
+cmake --build build-release --target \
+  NeverDDriverEmulationTests NeverDDriverEmulationPublicTests --parallel 4
+ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
+```
+
+fixture は、ゲストの初期化、成功／失敗の戻り値、未対応動作、メモリフォールト、厳格なシナリオ解析、予算内の実行、および create、IOCTL、cleanup、close、unload を通る同期バッファード I/O を検証します。[`emulate-driver` CLI](driver-emulation.md) で JSON とプロセスの終了コードを確認してください。製品ビルドは `BUILD_TESTING=OFF` でもこの機能を有効にできます。`libneverd` がテスト専用の Unicorn 構成を必要としてはなりません。
+
 ## テスト構成
 
 `add_neverd_unittest` は GoogleTest 実行ファイルを 1 つ作り、検出した各ケースに

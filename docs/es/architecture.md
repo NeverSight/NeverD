@@ -348,6 +348,35 @@ quedan fuera de este contrato. Toda implementación que seleccione
 condicionada por prueba, hasta un punto fijo conjunto con la optimización LLVM;
 la política no proporciona un backend de traducción ejecutable.
 
+## Emulación de controladores de Windows
+
+`lib/emulation` es un componente opcional de ejecución, activado mediante
+`NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` accede a él a través
+de la API C pública. `DriverSession` controla la inicialización WDM x64 acotada
+y las invocaciones síncronas opcionales create/IOCTL/cleanup/close/unload;
+el mapeo de imágenes Windows utiliza el `BinaryImage` completo del cargador
+existente, y el modelo de Windows controla los objetos del invitado y la
+semántica de las API. El adaptador Unicorn controla la ejecución de CPU y la
+memoria del invitado que actúa como fuente de verdad. Esta vía no utiliza
+el pipeline experimental de traducción nativa ni modifica su perfil compatible.
+
+Unicorn se configura una sola vez mediante `cmake/NeverDUnicorn.cmake`, compartido
+con las pruebas semánticas y disponible con `BUILD_TESTING=OFF`. Las API
+desconocidas y el comportamiento no modelado del entorno de CPU se detienen
+explícitamente; un fallo devuelto por el controlador sigue distinguiéndose de
+una emulación incompleta. Consulte [emulación de controladores](driver-emulation.md)
+para conocer los límites, informes y operaciones del ciclo de vida no compatibles.
+
+La API C original sigue limitada a la inicialización. El JSON de escenario
+utiliza un único parser estricto con las mismas opciones de ejecución, con
+campos y tipos de solicitud declarados en catálogos `.def`. El cambio de base
+solicitado y la inicialización de la cookie de seguridad pertenecen al cargador
+de ejecución. El modelo de Windows controla los objetos IRP, de ubicación de
+pila y de archivo, y valida la finalización síncrona; la sesión ordena los
+callbacks bajo presupuestos de ejecución compartidos. Las importaciones
+desconocidas no utilizadas tienen vinculación diferida; ejecutarlas o leer
+datos exportados no modelados provoca una detención explícita.
+
 ## Fronteras de reescritura de excepciones
 
 El compact unwind de Mach-O dispone de un parser estricto del `__unwind_info`
