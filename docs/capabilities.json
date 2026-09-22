@@ -3487,9 +3487,11 @@
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; the model supports independent file identities and synchronous buffered/direct requests, not pending/asynchronous I/O, neither-method IOCTLs, KMDF, PnP/power, interrupts or multithread scheduling",
         "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total requested buffer bytes including direct_input over 512 KiB; requested load addresses require valid supported PE relocations",
         "dynamic export lookup shares stable thunk identity with static imports; explicit kernel_exports availability overrides distinguish absent exports from present unmodeled routines; unspecified dynamic availability stops instead of changing driver capability branches",
-        "direct requests expose request-owned MDL system mappings with independent write/execute permissions; physical PFN data, driver-allocated MDLs, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
+        "direct requests expose request-owned MDL system mappings with independent write/execute permissions; standalone driver MDLs can describe live nonpaged pool allocations and retain their original alias; IRP associations/chains, physical PFN data, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
+        "an explicit registry scenario defines a bounded accessible ASCII tree with per-handle capabilities and observable key/value mutations; omitted registry availability stops; ACLs, privileges, alternate views, registry symbolic links, persistence and non-ASCII name folding remain unsupported",
         "DbgPrint and DbgPrintEx read at most 32 guest variable arguments under Win64 widths; formatting is bounded to 512 output bytes and 1024 format bytes; float, %n and unsupported text conversions stop explicitly",
         "reports preserve DriverEntry NTSTATUS separately from per-request dispatch and completion status and aggregate scenario_success; success in the model does not establish that a driver works under Windows",
+        "zero-output IOCTLs preserve driver-defined IoStatus.Information without treating it as a transfer length; information_hex preserves all 64 bits alongside the compatible numeric information field",
         "CPU write records are attempted guest writes outside the stack, may include a faulting write and exclude model API writes; object snapshots describe observed state at termination",
         "the existing C API remains initialization-only; the added scenario C API and CLI --scenario route share strict preflight, preserve the session image and require unchanged input files",
         "current execution evidence is limited to Linux hosts with Clang and lld-link fixture tools; no macOS or Windows host validation is claimed and the Python SDK provides only raw ABI bindings"
@@ -3779,6 +3781,78 @@
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/KernelRuntimeTests.cpp",
           "filter": "KernelRuntime.CountedCopyTerminatesOnlyWhenSourceAndCapacityPermit",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverMDLTests.cpp",
+          "filter": "DriverMDL.NonPageAlignedPoolAliasesSurviveRequestsAndCompleteUnload",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverMDLTests.cpp",
+          "filter": "DriverMDL.DescriptorAndPoolUseAfterFreeStopAtTheFirstAccess",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverRegistryTests.cpp",
+          "filter": "DriverRegistry.ExecutesQueriesMutationsAndHandleCleanup",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverRegistryTests.cpp",
+          "filter": "DriverRegistry.SnapshotRetainsMutationsBeforeAFaultOrHandleLeakStop",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRegistryTests.cpp",
+          "filter": "DriverKernelRegistry.PartialQueryDistinguishesShortBufferContracts",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRegistryTests.cpp",
+          "filter": "DriverKernelRegistry.HandlesEnforceQuerySetCreateAndDeleteCapabilities",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIPreserveFullWidthIOCTLInformation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.RegistryScenarioRunsThroughCAPIAndCLI",
           "platforms": [
             "linux"
           ]

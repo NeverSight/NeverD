@@ -90,10 +90,12 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     def test_driver_guide_tracks_supported_export_inventory(self) -> None:
         path = Path("docs/de/driver-emulation.md")
         original = i18n.RepositoryView(use_index=False).read_text(path)
-        errors: list[str] = []
-        changed = original.replace("`IoGetCurrentIrpStackLocation`", "`UnknownAPI`")
-        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
-        self.assertTrue(any("IoGetCurrentIrpStackLocation" in error for error in errors), errors)
+        for symbol in ("IoGetCurrentIrpStackLocation", "ZwQueryValueKey"):
+            with self.subTest(symbol=symbol):
+                errors: list[str] = []
+                changed = original.replace(f"`{symbol}`", "`UnknownAPI`")
+                i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                self.assertTrue(any(symbol in error for error in errors), errors)
 
     def test_driver_guide_requires_localized_testing_entry(self) -> None:
         path = Path("docs/fr/testing.md")

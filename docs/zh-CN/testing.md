@@ -40,6 +40,8 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 fixture 覆盖来宾初始化、成功与失败返回、不支持的行为、内存故障、严格场景解析、有界执行，以及经过 create、传输、cleanup、close 和 unload 的同步 buffered／direct I/O、READ/WRITE、独立文件生命周期、MDL 权限、动态导出解析、来宾变参和结构化 CPU 故障。使用 [`emulate-driver` CLI](driver-emulation.md) 验证 JSON 与进程退出码。生产构建可在 `BUILD_TESTING=OFF` 时启用此功能；`libneverd` 不得依赖仅供测试使用的 Unicorn 配置。
 
+补充测试覆盖驱动独立拥有的非分页池 MDL、描述符与缓冲区的独立生命周期、注册表查询布局与短缓冲区、句柄权限、删除和泄漏，以及无输出 IOCTL 的完整 64 位 `information_hex`。真实样本验收还包括 Zero 的同步直接读写和统计查询。
+
 ## 测试布局
 
 `add_neverd_unittest` 创建一个 GoogleTest 可执行文件，并为每个发现的用例分配

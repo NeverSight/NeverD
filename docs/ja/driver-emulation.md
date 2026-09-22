@@ -34,18 +34,21 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 互換性は `.sys` 拡張子ではなく、実行されたコード経路とその依存関係で決まります。現在の受け入れ検証の根拠は、独自に作成したフリースタンディングの fixture と、Microsoft の SIOCTL WDM サンプルのバッファード、in-direct、out-direct の各経路であり、デバッグログを有効にしたビルドも含みます。任意のサードパーティードライバーとの互換性を示すものではありません。
 
+変更していない Pavel Yosifovich の Zero WDM サンプルでも、direct READ/WRITE、アトミック統計、統計 IOCTL を検証しています。
+
 | ドライバーの種類または要件 | 現在の対象範囲 | 不足する環境 |
 |----------------------------|----------------|--------------|
 | 下記 API を使用する x64 ソフトウェア WDM ドライバー | 初期化と同期ファイルライフサイクル | 追加で実行される API ごとに明確なモデルが必要 |
 | `METHOD_BUFFERED` IOCTL | 独立したファイル識別子とリクエストの交互実行に対応 | 非同期完了は未対応 |
-| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | リクエストが所有する MDL とシステムマッピング | ドライバー自身による MDL の割り当て、物理ページの識別、DMA、ユーザーマッピング |
+| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | リクエストが所有する MDL とシステムマッピング | 物理ページの識別、DMA、ユーザーマッピング |
+| ドライバーが割り当てる MDL | モデルの非ページプールを記述する独立した MDL。元のバッファーアドレスを共有 | IRP との関連付け、MDL チェーン、プローブ／ロック、物理ページ、ユーザーマッピング |
 | 同期 READ/WRITE | デバイスフラグに応じたバッファードまたはダイレクト転送 | Neither I/O、暗黙のファイル位置選択、非同期完了 |
 | `METHOD_NEITHER` | 拒否 | ユーザーアドレス空間のコンテキスト、アクセスのプローブ、ゲストの例外処理 |
 | KMDF / UMDF ドライバー | 未対応 | フレームワークのバインド、オブジェクト、キュー、コールバック、適切なホストランタイム |
 | PnP バス／ファンクション／フィルタードライバー | API サブセット内で初期化できる場合がある。デバイススタックのライフサイクルは未対応 | デバイスのアタッチ、下位ドライバーへのディスパッチ、PnP および電源 IRP |
 | ストレージ、ネットワーク、ディスプレイ、ファイルシステム、ミニフィルタードライバー | 各サブシステムの契約に未対応 | ポート／クラス／ミニポートのフレームワーク、NDIS/WFP、グラフィックスまたはファイルシステムのサービス |
 | ワーカースレッド、タイマー、DPC、APC、待機、キャンセルを使うドライバー | 未対応 | スケジューリング、IRQL の遷移、同期、非同期の所有権 |
-| プロセス／スレッドのコールバック、ハンドル、レジストリ／ファイル操作、カーネルモジュールの検出を使うドライバー | 下記 API の範囲外は未対応 | オブジェクトマネージャー、システム状態、コールバック／イベントの発生元 |
+| プロセス／スレッドのコールバック、ハンドル、レジストリ／ファイル操作、カーネルモジュールの検出を使うドライバー | 設定済みレジストリに対応。その他の動作は下記 API の範囲内のみ | オブジェクトマネージャー、システム状態、コールバック／イベントの発生元 |
 | ハードウェア、DMA、PCI、割り込み、仮想化を扱うドライバー | 必要な環境に未対応 | デバイスモデル、物理メモリ、バス、割り込み、特権 CPU 状態 |
 | x86 または ARM64 Windows ドライバー | 拒否 | アーキテクチャ固有のロード、ABI、実行モデル |
 | CFG、未対応のロード構成、TLS、その他の拒否対象 PE 機能を必要とする x64 イメージ | ロード時に拒否 | 各要件に対する明示的なローダー／ランタイムのセマンティクス |
@@ -74,7 +77,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 長さを持つ UTF-16 文字列のコピーと、大文字小文字を区別する比較。区別しない比較には Windows の大小文字テーブルが必要なため停止する |
 | `ExAllocatePool2` | ページプール／非ページ NX プールの割り当て。デフォルトでゼロ初期化し、未初期化とキャッシュ整列のフラグをモデル化する。無効な必須フラグは NULL を返し、クォータ／実行可能プールおよび割り当て例外の送出では停止する |
 | `MmGetSystemRoutineAddress` | 長さを持つゲストの名前を、共通のエクスポート一覧で解決する |
-| `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | リクエストが所有する MDL、キャッシュ付き KernelMode システムマッピング、明示的な権限と寿命。既存の安全なマッピングを再利用する |
+| `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | リクエスト所有 MDL のキャッシュ付き KernelMode マッピングと権限。非ページプール MDL は安全ヘルパーで元のプールマッピングを再利用 |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 独立した MDL。全範囲が有効な単一の非ページプール割り当て内にあること。MDL とバッファーの寿命は独立。IRP 関連付け、チェーン、クォータは未対応 |
+| `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 明示的なセッションレジストリ、ハンドルごとの権限と寿命、クエリバッファーサイズと変更。ホストレジストリは使用しない |
 | `ExAllocatePoolWithTag`、`ExFreePoolWithTag`、`ExFreePool` | プール種別 `0`、`1`、`512` のデータ割り当て。サイズ／タグは正で、タグ付き解放は割り当てと一致する必要があり、アドレスは再利用しない |
 | `IoCreateDevice`、`IoDeleteDevice` | デバイス種別 `0x22`、characteristics は `0` または `0x100`、拡張領域のサイズは有限、名前は ASCII の `\Device\Name` |
 | `IoCreateSymbolicLink`、`IoDeleteSymbolicLink` | 1 セッションの名前空間内の ASCII `\DosDevices\Name` または `\??\Name`。リンク先は `\Device\Name` |
@@ -117,9 +122,13 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 省略可能なルートフィールド `"load_address": "0x190000000"` はベースアドレスの変更を要求します。省略または `"0x0"` なら優先アドレスを使用します。イメージは再配置の要件を満たす必要があります。元の初期化コマンドや C API が暗黙にシナリオを実行することはありません。
 
-ルートで受け付けるフィールドは `load_address`、`requests`、`unload`、`kernel_exports` だけです。すべてのリクエストは `kind`、任意の `device`、任意の `file` を受け付けます。IOCTL は `code` が必須で、`input`、`output_size`、`direct_input` を受け付けます。`read` は `output_size` と `byte_offset`、`write` は `input` と `byte_offset` を受け付けます。オフセットのデフォルトはゼロで、整数または 16 進文字列を使えますが、非負の符号付き 64 ビット値に収まる必要があります。ライフサイクルのリクエストは転送フィールドを拒否します。未知のフィールドや重複フィールドは拒否します。`code` は符号なし 32 ビット JSON 整数または `0x` で始まる 16 進文字列を受け付けます。`input` は、プレフィックスや空白を含まない、長さが偶数の 16 進バイト文字列です。省略すると空の入力になります。`output_size` は符号なし JSON 整数で、省略時はゼロです。小数や浮動小数点形式の表記は拒否します。
+ルートで受け付けるフィールドは `load_address`、`requests`、`unload`、`kernel_exports`、`registry` だけです。すべてのリクエストは `kind`、任意の `device`、任意の `file` を受け付けます。IOCTL は `code` が必須で、`input`、`output_size`、`direct_input` を受け付けます。`read` は `output_size` と `byte_offset`、`write` は `input` と `byte_offset` を受け付けます。オフセットのデフォルトはゼロで、整数または 16 進文字列を使えますが、非負の符号付き 64 ビット値に収まる必要があります。ライフサイクルのリクエストは転送フィールドを拒否します。未知のフィールドや重複フィールドは拒否します。`code` は符号なし 32 ビット JSON 整数または `0x` で始まる 16 進文字列を受け付けます。`input` は、プレフィックスや空白を含まない、長さが偶数の 16 進バイト文字列です。省略すると空の入力になります。`output_size` は符号なし JSON 整数で、省略時はゼロです。小数や浮動小数点形式の表記は拒否します。
 
 ダイレクト IOCTL では、`input` が最初のシステムバッファーを初期化し、`direct_input` が MDL で記述される別の第 2 バッファーを初期化して、`output_size` までゼロで埋めます。`METHOD_IN_DIRECT` は読み取りアクセスを要求しますが、システムマッピングが読み取り専用であることを意味しません。両方式とも読み書き可能なシナリオバッファーを使います。`MdlMappingNoWrite` はマッピングの書き込み権限を、`MdlMappingNoExecute` は実行権限を除去します。アンマップはシステム VA を無効にしますが、再マップしても同じロック済みデータを保持します。完了時に MDL とマッピングの寿命が終了します。WDM マクロが使う公開 MDL フィールドはモデル化しますが、プロセス／PFN フィールド、手作りの MDL、ユーザーマッピング、生の UserBuffer を介した直接アクセスは拒否します。長さがゼロのダイレクトバッファーは null MDL を持ちます。
+
+`IoAllocateMdl` は、空でなく、アドレスがオーバーフローせず、1 MiB 以下のバッファーに対して独立したメタデータを割り当てます。バッファーのプローブやロックは行いません。`Irp` は NULL、`SecondaryBuffer` と `ChargeQuota` は FALSE が必要です。アリーナが枯渇すると NULL を返します。`MmBuildMdlForNonPagedPool` では、記述範囲全体が有効な単一の非ページプール割り当て内にある必要があります。安全ヘルパーと通常の WDM マクロは元のアドレスを再利用し、別名参照と既存の権限を維持します。書き込み／実行禁止フラグを追加しても既存の権限は変わりません。追加のシステムマッピングとアンマップは拒否します。`IoFreeMdl` は MDL だけを無効にし、プールバッファーの寿命は独立しています。解放済み領域を再使用しなければ、どちらの解放順序も利用できます。モデルの MDL フィールドはすべて読み取り専用で、プロセス／PFN へのアクセス、MDL チェーン、手動のフィールド変更は未対応です。アンロード時にはドライバー所有の MDL をすべて解放する必要があります。
+
+IOCTL の `output_size` が非ゼロなら、入力バッファーが大きくても `Information` はそのサイズを超えてはいけません。出力バッファーがない IOCTL はドライバー定義の結果を返すことができ、出力バイトはコピーしません。`information_hex` は元の 64 ビット値を正確に保持します。
 
 READ/WRITE では、`DO_BUFFERED_IO` または `DO_DIRECT_IO` が転送方式を選びます。Neither または競合するフラグでは停止します。Information は転送長に対して検査します。書き込みはバイト数を、読み取りはバイト列を返します。
 
@@ -127,6 +136,18 @@ READ/WRITE では、`DO_BUFFERED_IO` または `DO_DIRECT_IO` が転送方式を
 `IoGetCurrentIrpStackLocation` と `MmGetSystemAddressForMdlSafe` はモデル化した WDM ヘッダーの補助関数であり、モデル化されているだけではデフォルトのエクスポートとは宣言されないため、その可用性には静的インポートまたは明示的な `kernel_exports` 宣言が必要です。
 
 シナリオテキストは最大 2 MiB、リクエストは最大 64 件、各入力／出力バッファーは最大 65536 バイト、`direct_input` の内容を含む要求バイト数の合計は最大 512 KiB です。命令、観測、ゲストメモリ、時間の予算は、シナリオ全体に適用します。1 MiB の領域にはオブジェクトやメタデータも配置するため、シナリオのバッファー上限に達する前にモデルのメモリを使い切る場合があります。
+
+## レジストリシナリオ
+
+任意の `registry` 配列は、具体的なセッション内レジストリツリーを定義します。各キーには必須の `path` と任意の `values` 配列があり、各値には `name`、符号なし整数の `type`、16 進数の `data` を指定します。空の値名は既定値です。DWORD の例は `{"name":"Mode","type":4,"data":"01000000"}` です。値のバイトはそのまま保持し、文字列終端の修復や環境変数の展開は行いません。
+
+パスは `\Registry\Machine` または `\Registry\User` 配下の絶対 ASCII パスが必要です。祖先キーは自動作成します。キーと値は ASCII 規則で大文字小文字を区別せず比較し、非 ASCII 名や重複は拒否します。省略すると可用性は未指定となり、レジストリ呼び出しは停止します。`"registry": []` は空の名前空間を明示します。ドライバーからキー、値、ホストのデータやサービス設定を推測しません。
+
+`ZwOpenKey` と `ZwCreateKey` は独立した不透明ハンドルを返し、クエリ、設定、子キー作成、削除の権限をハンドルごとに検査します。設定ツリーは通常の `KEY_READ`、`KEY_WRITE` を含む対応済みの `KEY_ALL_ACCESS` ビットを許可します。これは明示的にアクセス可能なテストツリーで、Windows ACL や特権評価は行いません。汎用権限、`MAXIMUM_ALLOWED`、別のレジストリビュー、独自のセキュリティ記述子、クラス、シンボリックリンクは未対応です。相対作成には `KEY_CREATE_SUB_KEY` を持つ直接の親ハンドルが必要です。入力キーは非揮発性で、新規キーは揮発性にもできますが、揮発性キーの下に非揮発性の子を作ることは拒否します。再起動やディスク永続化はモデル化しません。
+
+`ZwQueryValueKey` は Basic、Full、Partial および定義済み Align64 情報クラスを実装し、正確な長さ、データ整列、部分出力、`STATUS_BUFFER_TOO_SMALL` と `STATUS_BUFFER_OVERFLOW` の区別に対応します。`ZwSetValueKey` と `ZwDeleteValueKey` はこのセッションだけを変更します。`ZwDeleteKey` は子キーの残るキーを拒否し、削除済みキーのハンドルは閉じるまで `STATUS_KEY_DELETED` を返します。`ZwClose` はキーとは独立してハンドルを解放し、レジストリハンドルが残った状態のアンロードは失敗します。
+
+上限は祖先を含む 256 キー、合計 1024 値、値ごとに 65536 バイト、値データ合計 512 KiB、キーパス 1024 ASCII バイト、値名 256 バイト、同時に開くハンドル 256 個です。作成と変更にもシナリオ事前検証と同じ制限が適用されます。報告の `configuration.registry` は元の入力、`registry` は停止前の変更を含む最終的なキーと値を保持します。未指定なら null です。この値スナップショットには揮発性属性とハンドル識別子は含まれません。
 
 ## Microsoft サンプルの受け入れ検証
 
@@ -140,11 +161,15 @@ python3 scripts/validate_windows_driver_sample.py \
 
 MinGW-w64 の include ディレクトリがデフォルトと異なる場合は `--headers` を使います。スクリプトはコンパイル済みオブジェクトの依存関係から MS COFF インポートライブラリを生成します。検証では、バッファード、in-direct、out-direct の各シナリオで DriverEntry、create、IOCTL、cleanup、close、unload を実行します。`--debug` を追加して別の出力ディレクトリを選ぶと、`DBG=1` でコンパイルし、ゲストのログメッセージも検証できます。上流サンプルは cleanup ハンドラーを登録していないため、モデルのデフォルトハンドラーが cleanup を `STATUS_INVALID_DEVICE_REQUEST`（`0xC0000010`）で完了させます。それでもドライバーは close と unload を実行し、成功した IOCTL は期待したバイト列を返します。この完全なシナリオでは、CLI の期待終了コードは **2**、`scenario_success` は false です。スクリプト自体が成功するのは、可視化された cleanup の失敗も含め、これらの結果がすべて一致した場合だけです。結果を隠すためにサンプルを書き換えることはありません。
 
+## Zero サンプルの受け入れ検証
+
+追加の [Zero 検証スクリプト](../../scripts/validate_zero_driver_sample.py)は、[マニフェスト](../../unittests/emulation/fixtures/zero-validation.json)のリビジョンとハッシュに基づき、Pavel Yosifovich の公開 Zero WDM サンプルを無変更でビルドします。同じツールチェーンで `python3 scripts/validate_zero_driver_sample.py` を実行します。既定では `build-release/driver-validation/zero` にソース、MIT ライセンス、コマンド、シナリオ、報告を保存します。9 個のリクエストでページ境界をまたぐ direct read、write のバイト数、ゲストのアトミック統計、buffered 統計 IOCTL を検証します。ゼロ長 read の失敗と CLEANUP ハンドラーの欠落はそのまま可視化されます。期待 CLI 終了コードは 2 で、close と unload は成功します。すべての結果と出力バイトが一致する場合のみ検証は成功します。
+
 ## レポートと SDK
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-synchronous-v2` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`request:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`output_hex` です。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-synchronous-v2` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`request:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`file`、`byte_offset`、`code`、`irp`、`completed`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 null を取り得る `fault` オブジェクトは、最初のバックエンドフォールトを保持します。`kind`、`pc`、null を取り得る `address`、`size`、`access`、`interrupt` により、未マップまたは保護されたメモリ、無効な範囲、無効な命令、CPU 例外を区別します。アドレスは 16 進文字列、サイズと割り込みベクターは整数で表します。観測用の読み取りが元のフォールトを置き換えることはありません。フォールトが発生したバックエンドは再開できず、この記録はゲストの SEH 処理を意味しません。
 

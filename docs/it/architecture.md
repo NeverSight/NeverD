@@ -388,6 +388,8 @@ guest tramite il lettore Win64 verificato della sessione. Il backend conserva
 la prima causa strutturata di un fault; l’osservazione e i report non riprendono
 una CPU in fault né implicano una gestione delle eccezioni Windows.
 
+Il modello Windows gestisce anche MDL autonomi del pool non paginato; liberare il descrittore non libera il buffer sottostante. Un modello del registro separato gestisce l’albero esplicito dello scenario, i diritti degli handle e la durata di chiavi e valori, indipendentemente dall’inventario delle esportazioni. Verifica preliminare ed esecuzione condividono le stesse regole. Il rapporto conserva i valori finali e lo scaricamento controlla gli handle ancora aperti.
+
 ## Confini della riscrittura delle eccezioni
 
 Il compact unwind Mach-O dispone di un parser rigoroso del `__unwind_info`

@@ -45,20 +45,23 @@ Compatibility is determined by the executed code path and its dependencies,
 not by the `.sys` extension. The current acceptance evidence covers original
 freestanding fixtures and the buffered, in-direct and out-direct paths of
 Microsoft's SIOCTL WDM sample, including its debug logging build.
-It does not establish compatibility with arbitrary third-party drivers.
+Acceptance also covers Pavel Yosifovich's unmodified Zero WDM sample, including
+direct READ/WRITE, atomic statistics and a statistics IOCTL. This does not
+establish compatibility with arbitrary third-party drivers.
 
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
 | x64 software WDM driver using the listed APIs | Initialization and synchronous file lifecycles | Each additional executed API must have a defined model |
 | `METHOD_BUFFERED` IOCTL | Supported, with independent file identities and interleaved requests | Asynchronous completion is unavailable |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | Driver-allocated MDLs, physical page identities, DMA and user mappings |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs and system mappings | physical page identities, DMA and user mappings |
+| Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses | IRP association, MDL chains, probing/locking, physical pages and user mappings |
 | Synchronous READ/WRITE | Buffered or direct according to device flags | Neither I/O, implicit file-position selection and asynchronous completion |
 | `METHOD_NEITHER` | Rejected | User address-space context, access probing and guest exception handling |
 | KMDF / UMDF driver | Unsupported | Framework binding, objects, queues, callbacks, and the appropriate host runtime |
 | PnP bus/function/filter driver | Initialization may run within the API subset; device-stack lifecycle is unsupported | Device attachment, lower-driver dispatch, PnP and power IRPs |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
 | Driver using worker threads, timers, DPCs, APCs, waits or cancellation | Unsupported | Scheduling, IRQL transitions, synchronization and asynchronous ownership |
-| Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Unsupported outside the listed APIs | Object manager, system state and callback/event producers |
+| Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Unsupported environment | Device models, physical memory, buses, interrupts and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
 | x64 image requiring CFG, unsupported load configuration, TLS or other rejected PE features | Rejected at load time | Explicit loader/runtime semantics for those requirements |
@@ -112,7 +115,9 @@ The initial API model deliberately has a finite contract:
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Counted UTF-16 copy and case-sensitive comparison; case-insensitive comparison requires a Windows case table and stops |
 | `ExAllocatePool2` | Paged/nonpaged NX allocations, zeroed by default; uninitialized and cache-aligned flags modeled; invalid required flags return NULL, quota/executable pools and raised allocation exceptions stop |
 | `MmGetSystemRoutineAddress` | Resolves a counted guest name through the shared export inventory |
-| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs, cached KernelMode system mappings, explicit permissions and lifetime; existing safe mappings are reused |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs with cached KernelMode mappings and permissions; nonpaged pool MDLs reuse the original pool mapping through the safe helper |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | Standalone descriptors, complete ranges in one live nonpaged pool allocation, independent descriptor/buffer lifetimes; no IRP association, MDL chains or quota |
+| `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Explicit session registry, per-handle rights and lifetime, query buffer sizing and mutations; no host registry access |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` or `\??\Name` within one session namespace, targeting `\Device\Name` |
@@ -186,7 +191,7 @@ omission or `"0x0"` uses the preferred address. Relocation requirements must be
 satisfied by the image. No scenario is implied by the original initialization
 command or C API.
 
-Only `load_address`, `requests`, `unload`, and `kernel_exports` are accepted at
+Only `load_address`, `requests`, `unload`, `kernel_exports`, and `registry` are accepted at
 the root. All requests accept `kind`, optional `device` and optional `file`.
 IOCTLs require `code` and accept `input`, `output_size`, and `direct_input`.
 A `read` accepts `output_size` and `byte_offset`; a `write` accepts `input` and
@@ -209,6 +214,24 @@ The public MDL fields used by WDM macros are modeled; process/PFN fields,
 hand-built MDLs, user mappings and direct access through raw UserBuffer are
 rejected. A zero-length direct buffer has a null MDL.
 
+`IoAllocateMdl` allocates standalone metadata for a nonempty, nonoverflowing
+buffer of at most 1 MiB; it does not probe or lock that buffer. `Irp` must be
+NULL and `SecondaryBuffer` and `ChargeQuota` must be FALSE. Arena exhaustion
+returns NULL. `MmBuildMdlForNonPagedPool` requires the entire described range
+to belong to one live nonpaged pool allocation. The safe helper and ordinary
+WDM macro reuse its original address, preserving aliases and existing
+permissions even when new no-write/no-execute flags are supplied. Additional
+system mappings and unmapping are rejected. `IoFreeMdl` expires only the
+descriptor; the pool buffer has its own lifetime. Both release orders are
+supported when freed storage is not used afterward. All modeled MDL fields are
+read-only; process/PFN access, descriptor chains and manual field changes
+remain unsupported. Unload must release every driver-owned descriptor.
+
+When an IOCTL has a nonzero `output_size`, `Information` must not exceed that
+size, even when the input buffer is larger. An IOCTL without an output buffer
+may return a driver-defined result in this field, and no output bytes are
+copied. `information_hex` preserves its exact raw 64-bit value.
+
 For READ/WRITE, `DO_BUFFERED_IO` or `DO_DIRECT_IO` selects the transfer method.
 Neither or conflicting flags stop. Information is checked against the transfer
 length; writes return a count and reads return bytes.
@@ -230,6 +253,49 @@ per input or output buffer, and at most 512 KiB total requested bytes, including
 Instruction, observation, guest-memory, and time budgets apply across the
 entire scenario. The 1 MiB arena also holds objects and metadata, so an image
 can exhaust model memory before consuming the maximum scenario buffers.
+
+## Registry scenarios
+
+The optional `registry` array defines a concrete session-local registry tree.
+Each key has a required `path` and an optional `values` array; each value has
+`name`, unsigned integer `type`, and hexadecimal `data`. An empty value name
+selects the default value. For example, a DWORD value is
+`{"name":"Mode","type":4,"data":"01000000"}`. Value bytes are preserved exactly;
+the model does not repair string terminators or expand environment variables.
+
+Paths must be absolute ASCII below `\Registry\Machine` or `\Registry\User`.
+Key ancestors are created implicitly. Key and value identities are compared
+case-insensitively using ASCII rules; non-ASCII names and duplicate identities
+are rejected. Omission leaves registry availability unspecified and registry
+calls stop. `"registry": []` explicitly describes an empty namespace. No key,
+value, host registry data, or service configuration is inferred from the driver.
+
+`ZwOpenKey` and `ZwCreateKey` return independent opaque handles, with per-handle
+access checks for query, set, child creation and deletion. The configured tree
+grants supported `KEY_ALL_ACCESS` bits, including ordinary `KEY_READ` and
+`KEY_WRITE` masks. This is an explicitly accessible test tree, without Windows
+ACLs or privilege evaluation. Generic rights, `MAXIMUM_ALLOWED`, alternate
+registry views, custom security descriptors, classes and symbolic links are
+unsupported. Relative creation requires a direct parent handle with
+`KEY_CREATE_SUB_KEY`. Input keys are nonvolatile; newly created keys may be
+volatile, and a nonvolatile child of a volatile key is rejected. There is no
+reboot or disk persistence model.
+
+`ZwQueryValueKey` implements Basic, Full, Partial and their defined Align64
+information classes, including exact lengths, aligned data, partial output and
+distinct `STATUS_BUFFER_TOO_SMALL` / `STATUS_BUFFER_OVERFLOW` results.
+`ZwSetValueKey` and `ZwDeleteValueKey` change only this session's tree.
+`ZwDeleteKey` rejects a key with live children; handles to a deleted key return
+`STATUS_KEY_DELETED` until closed. `ZwClose` releases a handle independently of
+the key, and requested unload fails while registry handles remain open.
+
+Limits are 256 keys including ancestors, 1024 total values, 65536 bytes per
+value, 512 KiB total value data, 1024 ASCII bytes per key path, 256 bytes per
+value name, and 256 simultaneously open handles. Creation and mutation enforce
+the same limits as scenario preflight. The report's `configuration.registry`
+retains the original input; `registry` lists final live key paths and values,
+including mutations observed before a stop. Unspecified registry state reports
+as null. Volatility and handle identities are not part of that value snapshot.
 
 ## Microsoft sample acceptance check
 
@@ -259,6 +325,20 @@ scenario, the CLI's expected exit code is **2** and `scenario_success` is false.
 The script itself succeeds only when all those outcomes match, including the
 visible cleanup failure; it does not rewrite the sample to hide that result.
 
+## Zero sample acceptance check
+
+The additional [Zero validation script](../scripts/validate_zero_driver_sample.py)
+builds Pavel Yosifovich's unmodified public Zero WDM sample from the revision
+and hashes in [its manifest](../unittests/emulation/fixtures/zero-validation.json).
+Run `python3 scripts/validate_zero_driver_sample.py` with the same toolchain
+requirements. Source, MIT license, commands, scenario and report are retained
+under `build-release/driver-validation/zero` by default. Nine requests exercise
+direct reads across page boundaries, write counts, guest atomic statistics and
+a buffered statistics IOCTL. The sample's zero-length read failure and missing
+CLEANUP handler remain visible; expected CLI exit is 2, followed by successful
+close and unload. This validation script succeeds only when those exact results
+and all output bytes agree.
+
 ## Reports and SDK
 
 The JSON report distinguishes `stop_reason`, nullable `nt_status` and
@@ -266,8 +346,8 @@ The JSON report distinguishes `stop_reason`, nullable `nt_status` and
 calls and observable state collected before a stop, including device objects
 and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
-The `configuration` object records the run's limits, service name and
-`kernel_exports` overrides.
+The `configuration` object records the run's limits, service name,
+`kernel_exports` overrides and original `registry` input.
 The profile is `wdm-x64-synchronous-v2`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
@@ -277,7 +357,9 @@ dispatch and I/O statuses, completion, information length, and returned `output_
 `preferred_image_base` describes the original PE base. `security_cookie` is the
 guest address of the initialized cookie, or `"0x0"` if none was required.
 Request fields are `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`,
-`dispatch_status`, `io_status`, `information`, and `output_hex`.
+`dispatch_status`, `io_status`, `information`, `information_hex`, and `output_hex`.
+`information_hex` preserves the raw 64-bit `IoStatus.Information` as an exact
+hexadecimal string; the existing numeric `information` field remains available.
 
 The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,
 nullable `address`, `size`, `access` and `interrupt` distinguish unmapped or

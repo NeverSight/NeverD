@@ -20,6 +20,9 @@ NEVERD_KERNEL_API(RtlCopyUnicodeString, 2, Export)
 NEVERD_KERNEL_API(RtlCompareUnicodeString, 3, Export)
 NEVERD_KERNEL_API(RtlEqualUnicodeString, 3, Export)
 NEVERD_KERNEL_API(MmGetSystemRoutineAddress, 1, Export)
+NEVERD_KERNEL_API(IoAllocateMdl, 5, Export)
+NEVERD_KERNEL_API(IoFreeMdl, 1, Export)
+NEVERD_KERNEL_API(MmBuildMdlForNonPagedPool, 1, Export)
 NEVERD_KERNEL_API(MmMapLockedPagesSpecifyCache, 6, Export)
 NEVERD_KERNEL_API(MmGetSystemAddressForMdlSafe, 2, Helper)
 NEVERD_KERNEL_API(MmUnmapLockedPages, 2, Export)
@@ -44,3 +47,8 @@ NEVERD_KERNEL_API(IoDeleteSymbolicLink, 1, Export)
 NEVERD_KERNEL_API(DbgPrint, 1, Export)
 NEVERD_KERNEL_API(IoGetCurrentIrpStackLocation, 1, Helper)
 NEVERD_KERNEL_API(KeGetCurrentIrql, 0, Export)
+
+#define NEVERD_KERNEL_REGISTRY_API(Name, Arity)                                \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelRegistryAPIs.def"
+#undef NEVERD_KERNEL_REGISTRY_API

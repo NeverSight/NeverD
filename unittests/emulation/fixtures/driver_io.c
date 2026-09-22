@@ -99,6 +99,14 @@ static NTSTATUS Dispatch(void *Target, IRP *Request) {
       Request->SystemBuffer[0] =
           (U8) * (const volatile U16 *)SavedRegistryBuffer;
       Information = 1;
+    } else if ((Stack->ControlCode & ~3U) == 0x22201cU)
+      Information = 0xffffffffffffffffULL;
+    else if ((Stack->ControlCode & ~3U) == 0x222014U ||
+             (Stack->ControlCode & ~3U) == 0x222018U) {
+      // With no output buffer, an IOCTL can return driver-defined information.
+      Information = 0x123456789abcdef0ULL;
+      if ((Stack->ControlCode & ~3U) == 0x222018U)
+        Status = (NTSTATUS)0xc000000dU;
     } else if (Stack->ControlCode == 0x22200cU)
       Information = (U64)Stack->OutputLength + 1;
     else if (Stack->ControlCode != 0x222000U ||

@@ -35,7 +35,7 @@ foreach(_driver_name success failure unknown fault loop devices readonly privile
 endforeach()
 # The loader fixture deliberately retains relocations and a compiler-inserted
 # stack protector. The WDM fixture covers the complete synchronous lifecycle.
-foreach(_driver_name loader driver_io driver_direct driver_runtime)
+foreach(_driver_name loader driver_io driver_direct driver_runtime driver_mdl driver_registry)
   set(_driver_object "${_driver_fixture_dir}/${_driver_name}.obj")
   set(_driver_image "${_driver_fixture_dir}/${_driver_name}.sys")
   if(_driver_name STREQUAL "loader")
@@ -71,6 +71,9 @@ add_neverd_unittest(NeverDDriverEmulationTests
   BackendFaultTests.cpp
   KernelRuntimeTests.cpp
   DriverDirectIOTests.cpp
+  DriverMDLTests.cpp
+  DriverRegistryTests.cpp
+  KernelRegistryTests.cpp
   KernelExportTests.cpp
   LINK_COMPONENTS Emulation
 )

@@ -13,6 +13,8 @@
 
 #include "neverd/emulation/DriverSession.h"
 
+#include "llvm/Support/JSON.h"
+
 namespace neverd::emulation {
 namespace {
 
@@ -98,6 +100,60 @@ TEST(DriverIO, CompletionRejectsInformationBeyondTheOutputBuffer) {
   EXPECT_FALSE(Result->Requests[1].Completed);
   EXPECT_TRUE(Result->Requests[1].Output.empty());
   EXPECT_NE(Result->Diagnostic.find("Information"), std::string::npos);
+}
+
+TEST(DriverIO, NoOutputIOCTLRetainsDriverDefinedInformation) {
+  for (uint32_t Method : {0u, 1u, 2u}) {
+    for (uint32_t Code : {0x222014u, 0x222018u, 0x22201cu}) {
+      SCOPED_TRACE(Method);
+      SCOPED_TRACE(Code);
+      auto Options = lifecycle(Code | Method);
+      Options.Requests[1].OutputSize = 0;
+      auto Result = emulateDriver(NEVERD_DRIVER_IO_FIXTURE, Options);
+      ASSERT_TRUE(static_cast<bool>(Result))
+          << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      const auto &Request = Result->Requests[1];
+      const uint32_t Status = Code == 0x222018u ? 0xc000000du : 0u;
+      const uint64_t Information =
+          Code == 0x22201cu ? UINT64_MAX : 0x123456789abcdef0ULL;
+      EXPECT_TRUE(Request.Completed);
+      EXPECT_EQ(Request.DispatchStatus, Status);
+      EXPECT_EQ(Request.IOStatus, Status);
+      EXPECT_EQ(Request.Information, Information);
+      EXPECT_TRUE(Request.Output.empty());
+      EXPECT_TRUE(Result->UnloadCompleted);
+      auto JSON = llvm::json::parse(driverResultJSON(*Result));
+      ASSERT_TRUE(static_cast<bool>(JSON)) << llvm::toString(JSON.takeError());
+      ASSERT_NE(JSON->getAsObject(), nullptr);
+      const auto *Requests = JSON->getAsObject()->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 4u);
+      const auto *IO = (*Requests)[1].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      ASSERT_NE(IO->get("information"), nullptr);
+      EXPECT_EQ(IO->get("information")->getAsUINT64(), Information);
+      EXPECT_EQ(IO->getString("information_hex"), Code == 0x22201cu
+                                                      ? "0xFFFFFFFFFFFFFFFF"
+                                                      : "0x123456789ABCDEF0");
+    }
+  }
+}
+
+TEST(DriverIO, OutputIOCTLStillBoundsInformationForEveryMethod) {
+  for (uint32_t Method : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Method);
+    auto Result =
+        emulateDriver(NEVERD_DRIVER_IO_FIXTURE, lifecycle(0x222014u | Method));
+    ASSERT_TRUE(static_cast<bool>(Result))
+        << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_FALSE(Result->Requests[1].Completed);
+    EXPECT_TRUE(Result->Requests[1].Output.empty());
+    EXPECT_NE(Result->Diagnostic.find("Information"), std::string::npos);
+  }
 }
 
 TEST(DriverIO, RegistryPathStorageExpiresWhenDriverEntryReturns) {

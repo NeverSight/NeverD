@@ -2121,6 +2121,11 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
     )
+    exports = [name for name in exports if name != "Name"]
+    exports += re.findall(
+        r"NEVERD_KERNEL_REGISTRY_API\((\w+),",
+        view.read_text(Path("lib/emulation/windows/KernelRegistryAPIs.def")),
+    )
     required = (
         "NEVERD_ENABLE_DRIVER_EMULATION=ON",
         "BUILD_TESTING",
@@ -2143,9 +2148,13 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "neverd_last_error",
         "scenario_success",
         "output_hex",
+        "information_hex",
+        "configuration.registry",
         "wdm-x64-synchronous-v2",
         "validate_windows_driver_sample.py",
         "sioctl-validation.json",
+        "validate_zero_driver_sample.py",
+        "zero-validation.json",
         *(f"`{name}`" for name in exports),
     )
     for guide in guides:

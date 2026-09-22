@@ -57,6 +57,8 @@ de sortie des processus. Les builds de production peuvent activer cette
 fonctionnalité avec `BUILD_TESTING=OFF` ; `libneverd` ne doit pas exiger une
 configuration Unicorn réservée aux tests.
 
+Les tests supplémentaires couvrent les MDL de pool non paginé appartenant au pilote, les durées de vie indépendantes du descripteur et du tampon, les structures de requête du registre et les tampons courts, les droits des handles, les suppressions et les fuites, ainsi que les 64 bits de `information_hex` pour les IOCTL sans sortie. La validation externe couvre aussi les lectures/écritures directes synchrones et les statistiques de Zero.
+
 ## Organisation des tests
 
 `add_neverd_unittest` crée un exécutable GoogleTest et attribue à chaque cas

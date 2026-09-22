@@ -47,20 +47,24 @@ La compatibilidad depende de la ruta de código ejecutada y sus dependencias,
 no de la extensión `.sys`. La evidencia actual de aceptación cubre fixtures
 originales independientes y las rutas con búfer, in-direct y out-direct del
 ejemplo WDM SIOCTL de Microsoft, incluida su compilación con registros de
-depuración. No demuestra compatibilidad con controladores arbitrarios de terceros.
+depuración, y el ejemplo público Zero de Pavel Yosifovich para READ/WRITE
+directos y estadísticas. No demuestra compatibilidad con controladores
+arbitrarios de terceros.
 
 | Clase de controlador o requisito | Alcance actual | Entorno que falta |
 |---------------------------------|----------------|-------------------|
 | Controlador WDM de software x64 que utiliza las API enumeradas | Inicialización y ciclos de vida síncronos de archivos | Cada API adicional ejecutada requiere un modelo definido |
 | IOCTL `METHOD_BUFFERED` | Compatible, con identidades de archivo independientes y solicitudes intercaladas | La finalización asíncrona no está disponible |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propios de cada solicitud y asignaciones de memoria del sistema | MDL asignados por el controlador, identidades de páginas físicas, DMA y asignaciones de memoria de usuario |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propios de cada solicitud y asignaciones de memoria del sistema | identidades de páginas físicas, DMA y asignaciones de memoria de usuario |
+| MDL asignados por el controlador | Descriptores independientes del pool no paginado modelado, con las direcciones originales de los búferes | Asociación con IRP, cadenas MDL, sondeo/bloqueo, páginas físicas y asignaciones de usuario |
 | READ/WRITE síncronos | Con búfer o directos según los indicadores del dispositivo | E/S neither, selección implícita de la posición de archivo y finalización asíncrona |
 | `METHOD_NEITHER` | Rechazado | Contexto de direcciones de usuario, comprobación de accesos y gestión de excepciones del invitado |
 | Controlador KMDF / UMDF | No compatible | Vinculación al framework, objetos, colas, callbacks y entorno de ejecución anfitrión adecuado |
 | Controlador PnP de bus, función o filtro | La inicialización puede ejecutarse dentro del subconjunto de API; no se admite el ciclo de vida de la pila de dispositivos | Conexión de dispositivos, despacho al controlador inferior, IRP PnP y de energía |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
 | Controlador con hilos de trabajo, temporizadores, DPC, APC, esperas o cancelaciones | No compatible | Planificación, transiciones IRQL, sincronización y responsabilidad asíncrona sobre los recursos |
-| Controlador con callbacks de proceso/hilo, handles, operaciones de registro/archivo o descubrimiento de módulos del kernel | No compatible fuera de las API enumeradas | Administrador de objetos, estado del sistema y productores de callbacks/eventos |
+| Operaciones del registro mediante las API Zw listadas | Árbol explícito de sesión y derechos por handle | ACL, privilegios, vistas alternativas y persistencia |
+| Controlador con callbacks de proceso/hilo, otros handles, operaciones de archivo o descubrimiento de módulos del kernel | No compatible fuera de las API enumeradas | Administrador de objetos, estado del sistema y productores de callbacks/eventos |
 | Controlador de hardware, DMA, PCI, interrupciones o virtualización | Entorno no compatible | Modelos de dispositivos, memoria física, buses, interrupciones y estado privilegiado de CPU |
 | Controlador de Windows x86 o ARM64 | Rechazado | Carga, ABI y modelo de ejecución específicos de la arquitectura |
 | Imagen x64 que requiere CFG, configuración de carga no compatible, TLS u otras funciones PE rechazadas | Rechazada durante la carga | Semántica explícita del cargador y del entorno de ejecución para esos requisitos |
@@ -124,7 +128,9 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copia UTF-16 de longitud explícita y comparación sensible a mayúsculas; la comparación sin distinguir mayúsculas necesita una tabla de conversión de Windows y detiene la ejecución |
 | `ExAllocatePool2` | Asignaciones NX paginadas/no paginadas, inicializadas a cero por defecto; se modelan los indicadores de memoria sin inicializar y de alineación a la caché; los indicadores requeridos inválidos devuelven NULL; los pools con cuotas/ejecutables y las excepciones de asignación detienen la ejecución |
 | `MmGetSystemRoutineAddress` | Resuelve un nombre del invitado de longitud explícita mediante el inventario compartido de exportaciones |
-| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | MDL propios de cada solicitud, asignaciones de memoria del sistema KernelMode con caché, permisos y duración explícitos; se reutilizan las asignaciones seguras existentes |
+| `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Árbol explícito del registro limitado a la sesión, derechos por handle, consultas con tamaños de salida exactos y duración tras la eliminación; véanse los escenarios del registro |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | MDL de solicitud con asignaciones KernelMode en caché y permisos; los MDL del pool no paginado reutilizan la asignación original mediante el auxiliar seguro |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | Descriptores independientes con todo el rango en una asignación activa del pool no paginado; duración independiente del descriptor y el búfer; sin IRP, cadenas ni cuotas |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Asignaciones de datos para los tipos de pool `0`, `1` y `512`; tamaño/tag positivos, tags coincidentes al liberar con tag y sin reutilización de direcciones |
 | `IoCreateDevice`, `IoDeleteDevice` | Tipo de dispositivo `0x22`, características `0` o `0x100`, extensiones acotadas y nombres ASCII `\Device\Name` |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` o `\??\Name` dentro de un espacio de nombres de sesión, con destino `\Device\Name` |
@@ -208,8 +214,8 @@ su omisión o `"0x0"` utiliza la dirección preferida. La imagen debe cumplir lo
 requisitos de reubicación. El comando de inicialización y la API C originales
 no implican ningún escenario.
 
-En la raíz solo se aceptan `load_address`, `requests`, `unload` y
-`kernel_exports`. Todas las solicitudes aceptan `kind`, un `device` opcional y
+En la raíz solo se aceptan `load_address`, `requests`, `unload`,
+`kernel_exports` y `registry`. Todas las solicitudes aceptan `kind`, un `device` opcional y
 un `file` opcional. Los IOCTL requieren `code` y aceptan `input`, `output_size`
 y `direct_input`. Un `read` acepta `output_size` y `byte_offset`; un `write`
 acepta `input` y `byte_offset`. Los desplazamientos valen cero por defecto,
@@ -234,6 +240,14 @@ La finalización caduca el MDL y la asignación. Se modelan los campos públicos
 del MDL usados por macros WDM; se rechazan los campos de proceso/PFN, los MDL
 construidos a mano, las asignaciones de usuario y el acceso directo mediante
 el UserBuffer sin procesar. Un búfer directo de longitud cero tiene un MDL nulo.
+
+`IoAllocateMdl` asigna metadatos independientes para un búfer no vacío, sin desbordamiento y de hasta 1 MiB; no sondea ni bloquea el búfer. `Irp` debe ser NULL y `SecondaryBuffer` y `ChargeQuota` deben ser FALSE. Si se agota la arena, devuelve NULL. `MmBuildMdlForNonPagedPool` exige que todo el rango pertenezca a una sola asignación activa del pool no paginado. El auxiliar seguro y las macros WDM normales reutilizan la dirección original, manteniendo los alias y los permisos existentes aunque se añadan indicadores que prohíban escritura o ejecución. Se rechazan las asignaciones de sistema adicionales y su liberación. `IoFreeMdl` invalida solo el descriptor; el búfer del pool tiene una duración independiente. Se permiten ambos órdenes de liberación si después no se utiliza memoria liberada. Todos los campos MDL modelados son de solo lectura; siguen sin admitirse acceso a proceso/PFN, cadenas ni cambios manuales de campos. La descarga debe liberar todos los descriptores del controlador.
+
+Para todo método IOCTL con un `output_size` distinto de cero, `Information` no
+puede superar `output_size`, aunque el búfer de entrada sea mayor. Sin búfer de
+salida, `Information` puede contener un resultado de 64 bits propio del IOCTL;
+no se copia ningún byte de salida. El informe conserva el valor exacto en
+`information_hex`.
 
 Para READ/WRITE, `DO_BUFFERED_IO` o `DO_DIRECT_IO` selecciona el método de
 transferencia. La ausencia de ambos indicadores o su conflicto detiene la
@@ -261,6 +275,56 @@ observaciones, memoria del invitado y tiempo se aplican a todo el escenario.
 La arena de 1 MiB también contiene objetos y metadatos, por lo que una imagen
 puede agotar la memoria del modelo antes de consumir el máximo de los búferes
 del escenario.
+
+## Escenarios del registro
+
+El array opcional `registry` define un árbol concreto del registro limitado a
+la sesión. Cada clave tiene un `path` obligatorio y un array `values` opcional;
+cada valor contiene `name`, un entero sin signo `type` y datos hexadecimales
+`data`. Un nombre vacío selecciona el valor predeterminado. Por ejemplo, un
+valor DWORD se expresa como
+`{"name":"Mode","type":4,"data":"01000000"}`. Los bytes se conservan exactamente;
+el modelo no corrige terminadores de cadenas ni expande variables de entorno.
+
+Las rutas deben ser absolutas y ASCII bajo `\Registry\Machine` o
+`\Registry\User`. Las claves antecesoras se crean implícitamente. Las identidades
+de claves y valores se comparan sin distinguir mayúsculas según las reglas
+ASCII; se rechazan los nombres no ASCII y las identidades duplicadas. Omitir el
+array deja sin especificar la disponibilidad del registro y las llamadas al
+registro detienen la ejecución. `"registry": []` describe explícitamente un
+espacio de nombres vacío. No se deduce del controlador ninguna clave, valor,
+dato del registro anfitrión ni configuración del servicio.
+
+`ZwOpenKey` y `ZwCreateKey` devuelven handles opacos independientes, con
+comprobaciones de acceso por handle para consultar, escribir, crear subclaves y
+eliminar. El árbol configurado concede los bits admitidos de `KEY_ALL_ACCESS`,
+incluidas las máscaras habituales `KEY_READ` y `KEY_WRITE`. Es un árbol de prueba
+explícitamente accesible, sin ACL de Windows ni evaluación de privilegios.
+No se admiten derechos genéricos, `MAXIMUM_ALLOWED`, vistas alternativas del
+registro, descriptores de seguridad personalizados, clases ni enlaces
+simbólicos. La creación relativa requiere un handle de la clave padre directa
+con `KEY_CREATE_SUB_KEY`. Las claves de entrada no son volátiles; las nuevas
+pueden serlo, y se rechaza una subclave no volátil de una clave volátil. No se
+modelan reinicios ni persistencia en disco.
+
+`ZwQueryValueKey` implementa las clases de información Basic, Full y Partial y
+sus variantes Align64 definidas, incluidas longitudes exactas, datos alineados,
+salida parcial y resultados distintos `STATUS_BUFFER_TOO_SMALL` y
+`STATUS_BUFFER_OVERFLOW`. `ZwSetValueKey` y `ZwDeleteValueKey` solo modifican el
+árbol de esta sesión. `ZwDeleteKey` rechaza una clave con subclaves activas;
+los handles de una clave eliminada devuelven `STATUS_KEY_DELETED` hasta cerrarse.
+`ZwClose` libera un handle independientemente de la clave, y la descarga
+solicitada falla mientras queden handles del registro abiertos.
+
+Los límites son 256 claves incluidas las antecesoras, 1024 valores en total,
+65536 bytes por valor, 512 KiB de datos de valores en total, 1024 bytes ASCII por
+ruta de clave, 256 bytes por nombre de valor y 256 handles abiertos a la vez.
+La creación y modificación aplican los mismos límites que la validación previa
+del escenario. `configuration.registry` conserva la entrada original en el
+informe; `registry` enumera las rutas y valores de las claves activas al final,
+incluidos los cambios observados antes de una detención. El estado del registro
+sin especificar se representa como null. La volatilidad y las identidades de
+handles no forman parte de esta instantánea de valores.
 
 ## Comprobación de aceptación con el ejemplo de Microsoft
 
@@ -294,6 +358,22 @@ escenario completo, el código de salida esperado de la CLI es **2** y
 esos resultados coinciden, incluido el fallo visible de cleanup; no reescribe
 el ejemplo para ocultar ese resultado.
 
+## Comprobación de aceptación con el ejemplo Zero
+
+El [script de validación de Zero](../../scripts/validate_zero_driver_sample.py)
+adicional compila sin modificar el ejemplo WDM público Zero de Pavel Yosifovich,
+a partir de la revisión y los hashes de
+[su manifiesto](../../unittests/emulation/fixtures/zero-validation.json).
+Ejecute `python3 scripts/validate_zero_driver_sample.py` con los mismos requisitos
+de herramientas. El código fuente, la licencia MIT, los comandos, el escenario
+y el informe se conservan por defecto en `build-release/driver-validation/zero`.
+Nueve solicitudes ejercitan lecturas directas que cruzan límites de página,
+recuentos de escritura, estadísticas atómicas del invitado y un IOCTL con búfer
+para estadísticas. El fallo de lectura de longitud cero del ejemplo y la
+falta de un manejador CLEANUP siguen visibles; el código de salida esperado de
+la CLI es 2, con cierre y descarga satisfactorios. El script de validación solo
+tiene éxito cuando coinciden esos resultados exactos y todos los bytes de salida.
+
 ## Informes y SDK
 
 El informe JSON distingue `stop_reason`, los campos que admiten null `nt_status`
@@ -302,18 +382,23 @@ llamadas de API y el estado observable recopilados antes de detenerse, incluidos
 los objetos de dispositivo y las direcciones de callbacks del controlador.
 Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
-límites, el nombre de servicio y las sustituciones de `kernel_exports` de la ejecución. El perfil es
+límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
+entrada `registry` de la ejecución. El perfil es
 `wdm-x64-synchronous-v2`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
 escritura de CPU también registra su fase (`driver_entry`, `request:N` o
 `unload`). Cada solicitud informa de los estados de despacho y E/S, finalización,
-longitud de información y bytes devueltos en `output_hex`. `preferred_image_base`
+el valor Information y los bytes devueltos en `output_hex`. `preferred_image_base`
 describe la base PE original. `security_cookie` es la dirección del invitado
 de la cookie inicializada, o `"0x0"` si no se requería. Los campos de solicitud
 son `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`,
-`information` y `output_hex`.
+`information`, `information_hex` y `output_hex`. `information` conserva su forma
+numérica; `information_hex` es una cadena hexadecimal con prefijo `0x` que
+conserva exactamente todos los bits del resultado sin signo de 64 bits. Use
+`information_hex` si el consumidor JSON no conserva la precisión de los enteros
+de 64 bits, especialmente para IOCTL sin búfer de salida.
 
 El objeto anulable `fault` conserva el primer fallo del backend. Sus campos
 `kind`, `pc`, `address` anulable, `size`, `access` e `interrupt` distinguen memoria

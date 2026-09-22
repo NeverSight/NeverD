@@ -390,6 +390,8 @@ del invitado mediante el lector Win64 verificado de la sesión. El backend
 conserva la primera causa estructurada de un fallo; la observación y los informes
 no reanudan una CPU con un fallo ni implican gestión de excepciones de Windows.
 
+El modelo de Windows también administra MDL independientes de pool no paginado; liberar el descriptor no libera el búfer subyacente. Un modelo de registro separado administra el árbol explícito del escenario, los permisos de identificadores y la vida de claves y valores, independientemente del inventario de exportaciones. La comprobación previa y la ejecución comparten las mismas reglas de validación. El informe conserva los valores finales y la descarga comprueba los identificadores abiertos.
+
 ## Fronteras de reescritura de excepciones
 
 El compact unwind de Mach-O dispone de un parser estricto del `__unwind_info`

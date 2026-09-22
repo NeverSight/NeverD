@@ -55,6 +55,8 @@ um JSON und Prozess-Exitcodes zu prüfen. Produktionsbuilds dürfen diese
 Funktion mit `BUILD_TESTING=OFF` aktivieren; `libneverd` darf keine ausschließlich
 für Tests bestimmte Unicorn-Konfiguration benötigen.
 
+Zusätzliche Tests prüfen treibereigene MDLs für nicht auslagerbaren Pool, unabhängige Lebenszeiten von Deskriptor und Puffer, Registry-Abfragelayouts und kurze Puffer, Handle-Rechte, Löschung und Lecks sowie die vollständigen 64 Bit von `information_hex` bei IOCTLs ohne Ausgabe. Die externe Validierung umfasst auch synchrone direkte Lese-/Schreibzugriffe und Statistikabfragen von Zero.
+
 ## Testaufteilung
 
 `add_neverd_unittest` erzeugt ein GoogleTest-Programm und weist jedem

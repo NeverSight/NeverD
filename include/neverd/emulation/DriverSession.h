@@ -14,6 +14,7 @@
 #define NEVERD_EMULATION_DRIVERSESSION_H
 
 #include "neverd/emulation/DriverProfile.h"
+#include "neverd/emulation/DriverRegistry.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -66,6 +67,9 @@ struct DriverOptions {
   /// Explicit export availability overrides for this concrete environment.
   /// Unknown dynamic names stop unless availability is declared here.
   std::map<std::string, bool> KernelExports;
+  /// An explicitly populated registry namespace. Omission leaves registry
+  /// availability unspecified; an empty inventory models an empty namespace.
+  std::optional<std::vector<DriverRegistryKey>> Registry;
 };
 
 enum class DriverStopReason {
@@ -150,6 +154,8 @@ struct DriverResult {
   bool UnloadCompleted = false;
   std::string Diagnostic;
   std::optional<DriverFault> Fault;
+  /// Final registry state, including changes observed before execution stops.
+  std::optional<std::vector<DriverRegistryKey>> Registry;
 };
 
 /// Parse and validate a fresh complete PE image. Request/format/setup failures

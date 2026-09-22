@@ -349,10 +349,17 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
     return Control.takeError();
   if (*Status == StatusPending || *Pending || *Control)
     return ioError("pending or asynchronous IRP completion is unsupported");
-  const bool IsTransfer = Request->Kind == DriverRequestKind::DeviceControl ||
-                          Request->Kind == DriverRequestKind::Read ||
-                          Request->Kind == DriverRequestKind::Write;
-  if (IsTransfer && *Information > Request->TransferSize)
+  // An IOCTL without an output buffer may use Information for a driver-defined
+  // result instead of a byte count. Direct IOCTLs do not set
+  // IRP_INPUT_OPERATION, even when an output buffer exists, so use the
+  // request's buffer contract.
+  // https://learn.microsoft.com/windows-hardware/drivers/kernel/failure-to-initialize-output-buffers
+  const bool HasIOCTLOutput =
+      Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
+  const bool HasTransferCount = HasIOCTLOutput ||
+                                Request->Kind == DriverRequestKind::Read ||
+                                Request->Kind == DriverRequestKind::Write;
+  if (HasTransferCount && *Information > Request->TransferSize)
     return ioError(
         "IoStatus.Information exceeds the requested transfer buffer");
   if ((Request->Kind == DriverRequestKind::Cleanup ||
@@ -363,8 +370,7 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
       *Information > MaxCreateInformation)
     return ioError(
         "CREATE IoStatus.Information is not a defined create result");
-  if ((Request->Kind == DriverRequestKind::DeviceControl ||
-       Request->Kind == DriverRequestKind::Read) &&
+  if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&
       !ntError(*Status) && *Information) {
     if (Request->Direct) {
       auto Bytes = readMDLBytes(Request->Mdl, *Information);
@@ -472,6 +478,8 @@ llvm::Error KernelModel::finishUnload() {
     return ioError("no active unload invocation");
   if (auto E = snapshot())
     return E;
+  if (Registry.hasOpenHandles())
+    return ioError("unload returned with live registry handles");
   if (!Devices.empty() || !SymbolicLinks.empty() || !Allocations.empty() ||
       !Files.empty() || Request || !MDLs.empty())
     return ioError("unload returned with live devices, symbolic links, pool "

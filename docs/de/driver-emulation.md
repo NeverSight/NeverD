@@ -46,21 +46,25 @@ sie belegt nicht, dass der Treiber unter Windows funktioniert.
 Die Kompatibilität hängt vom ausgeführten Codepfad und seinen Abhängigkeiten ab,
 nicht von der Dateiendung `.sys`. Die bisherigen Abnahmen decken selbst entwickelte,
 freistehende Fixtures sowie die gepufferten, In-Direct- und Out-Direct-Pfade von
-Microsofts WDM-Beispiel SIOCTL einschließlich seines Builds mit Debugausgaben ab.
+Microsofts WDM-Beispiel SIOCTL einschließlich seines Builds mit Debugausgaben
+sowie Pavel Yosifovichs öffentliches Beispiel Zero für direkte READ/WRITE und
+Statistiken ab.
 Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 
 | Treiberklasse oder Anforderung | Aktueller Umfang | Fehlende Umgebung |
 |-------------------------------|------------------|-------------------|
 | x64-Software-WDM-Treiber mit den aufgeführten APIs | Initialisierung und synchrone Dateilebenszyklen | Jede weitere ausgeführte API benötigt ein definiertes Modell |
 | `METHOD_BUFFERED`-IOCTL | Unterstützt, mit unabhängigen Dateiidentitäten und verschachtelten Anforderungsfolgen | Asynchroner Abschluss ist nicht verfügbar |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs und Systemabbildungen | Vom Treiber allokierte MDLs, physische Seitenidentitäten, DMA und Benutzerabbildungen |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs und Systemabbildungen | physische Seitenidentitäten, DMA und Benutzerabbildungen |
+| Vom Treiber allokierte MDLs | Eigenständige Deskriptoren für modellierten nicht auslagerbaren Pool mit ursprünglichen Pufferadressen | IRP-Zuordnung, MDL-Ketten, Prüfen/Sperren, physische Seiten und Benutzerabbildungen |
 | Synchrone READ/WRITE | Gepuffert oder direkt entsprechend den Geräteflags | Neither-I/O, implizite Wahl der Dateiposition und asynchroner Abschluss |
 | `METHOD_NEITHER` | Abgewiesen | Benutzeradressraumkontext, Zugriffsprüfung und Gast-Ausnahmebehandlung |
 | KMDF-/UMDF-Treiber | Nicht unterstützt | Framework-Anbindung, Objekte, Warteschlangen, Callbacks und passende Host-Laufzeit |
 | PnP-Bus-, Funktions- oder Filtertreiber | Initialisierung kann innerhalb der API-Teilmenge laufen; Gerätestapel-Lebenszyklus nicht unterstützt | Geräteanbindung, Dispatch an untergeordnete Treiber sowie PnP- und Power-IRPs |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
 | Treiber mit Worker-Threads, Timern, DPCs, APCs, Warteoperationen oder Abbruch | Nicht unterstützt | Scheduling, IRQL-Wechsel, Synchronisation und asynchrone Zuständigkeit |
-| Treiber mit Prozess-/Thread-Callbacks, Handles, Registry-/Dateioperationen oder Kernel-Modulsuche | Außerhalb der aufgeführten APIs nicht unterstützt | Objektmanager, Systemzustand und Erzeuger von Callbacks/Ereignissen |
+| Registry-Operationen über die aufgeführten Zw-APIs | Expliziter Sitzungsbaum und Rechte pro Handle | ACLs, Privilegien, alternative Ansichten und Persistenz |
+| Treiber mit Prozess-/Thread-Callbacks, anderen Handles, Dateioperationen oder Kernel-Modulsuche | Außerhalb der aufgeführten APIs nicht unterstützt | Objektmanager, Systemzustand und Erzeuger von Callbacks/Ereignissen |
 | Hardware-, DMA-, PCI-, Interrupt- oder Virtualisierungstreiber | Umgebung nicht unterstützt | Gerätemodelle, physischer Speicher, Busse, Interrupts und privilegierter CPU-Zustand |
 | x86- oder ARM64-Windows-Treiber | Abgewiesen | Architekturspezifisches Laden, ABI und Ausführungsmodell |
 | x64-Image mit CFG, nicht unterstützter Ladekonfiguration, TLS oder anderen abgewiesenen PE-Funktionen | Beim Laden abgewiesen | Explizite Loader-/Laufzeitsemantik für diese Anforderungen |
@@ -122,7 +126,9 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Längengezähltes UTF-16-Kopieren und Vergleich unter Beachtung der Groß-/Kleinschreibung; Vergleich ohne Beachtung der Groß-/Kleinschreibung benötigt eine Windows-Tabelle zur Groß-/Kleinschreibung und stoppt |
 | `ExAllocatePool2` | Auslagerbare/nicht auslagerbare NX-Allokationen, standardmäßig genullt; Flags für nicht initialisierte und cacheausgerichtete Allokationen modelliert; ungültige erforderliche Flags liefern NULL, Quota-/ausführbare Pools und ausgelöste Allokationsausnahmen stoppen |
 | `MmGetSystemRoutineAddress` | Löst einen längengezählten Gastnamen über den gemeinsamen Exportkatalog auf |
-| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Anforderungseigene MDLs, gecachte KernelMode-Systemabbildungen, explizite Rechte und Lebensdauer; vorhandene sichere Abbildungen werden wiederverwendet |
+| `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Expliziter sitzungslokaler Registry-Baum, Rechte pro Handle, Abfragen mit exakten Ausgabegrößen und Lebensdauer nach dem Löschen; siehe Registry-Szenarien |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Anforderungseigene MDLs mit gecachten KernelMode-Abbildungen und Rechten; MDLs für nicht auslagerbaren Pool verwenden über den sicheren Helfer die ursprüngliche Abbildung |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | Eigenständige Deskriptoren; vollständiger Bereich innerhalb einer gültigen Allokation im nicht auslagerbaren Pool; unabhängige Lebensdauer von Deskriptor und Puffer; ohne IRP-Zuordnung, Ketten oder Kontingente |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Datenallokationen für Pooltypen `0`, `1` und `512`; positive Größe/Tag, passende Tags beim Freigeben, keine Wiederverwendung von Adressen |
 | `IoCreateDevice`, `IoDeleteDevice` | Gerätetyp `0x22`, Characteristics `0` oder `0x100`, begrenzte Erweiterungen, ASCII-Namen der Form `\Device\Name` |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` oder `\??\Name` in einem Sitzungsnamensraum, Ziel `\Device\Name` |
@@ -204,7 +210,7 @@ Basisverschiebung an; ohne dieses Feld oder mit `"0x0"` gilt die bevorzugte
 Adresse. Das Image muss die Relokationsanforderungen erfüllen. Der ursprüngliche
 Initialisierungsbefehl und die C-API implizieren kein Szenario.
 
-An der Wurzel sind nur `load_address`, `requests`, `unload` und `kernel_exports`
+An der Wurzel sind nur `load_address`, `requests`, `unload`, `kernel_exports` und `registry`
 erlaubt. Alle Anforderungen akzeptieren `kind`, optional `device` und optional
 `file`. IOCTLs benötigen `code` und akzeptieren `input`, `output_size` und
 `direct_input`. Ein `read` akzeptiert `output_size` und `byte_offset`; ein
@@ -231,6 +237,14 @@ Prozess-/PFN-Felder, selbst erstellte MDLs, Benutzerabbildungen und direkter
 Zugriff über den rohen UserBuffer werden abgewiesen. Ein direkter Puffer der
 Länge null hat eine Null-MDL.
 
+`IoAllocateMdl` allokiert eigenständige Metadaten für einen nicht leeren, nicht überlaufenden Puffer von höchstens 1 MiB; es prüft oder sperrt diesen Puffer nicht. `Irp` muss NULL sein, `SecondaryBuffer` und `ChargeQuota` müssen FALSE sein. Bei erschöpfter Arena wird NULL zurückgegeben. `MmBuildMdlForNonPagedPool` verlangt, dass der gesamte beschriebene Bereich innerhalb einer einzigen gültigen Allokation im nicht auslagerbaren Pool liegt. Der sichere Helfer und normale WDM-Makros verwenden die ursprüngliche Adresse; Aliase und bestehende Rechte bleiben auch bei neuen Schreib-/Ausführungsverboten erhalten. Zusätzliche Systemabbildungen und das Aufheben der Abbildung werden abgelehnt. `IoFreeMdl` beendet nur die Lebensdauer des Deskriptors; der Poolpuffer hat eine eigene Lebensdauer. Beide Freigabereihenfolgen sind zulässig, solange freigegebener Speicher anschließend nicht verwendet wird. Alle modellierten MDL-Felder sind schreibgeschützt; Prozess-/PFN-Zugriffe, Ketten und manuelle Feldänderungen bleiben unmodelliert. Beim Entladen müssen alle treibereigenen Deskriptoren freigegeben sein.
+
+Bei jeder IOCTL-Methode mit einem `output_size` ungleich null darf `Information`
+den Wert `output_size` nicht überschreiten, auch wenn der Eingabepuffer größer
+ist. Ohne Ausgabepuffer darf `Information` ein IOCTL-spezifisches 64-Bit-Ergebnis
+enthalten; es werden keine Ausgabebytes kopiert. Der Bericht erhält den exakten
+Wert in `information_hex`.
+
 Für READ/WRITE wählt `DO_BUFFERED_IO` oder `DO_DIRECT_IO` die Transfermethode.
 Neither-I/O oder widersprüchliche Flags stoppen. Information wird gegen die
 Transferlänge geprüft; Schreiboperationen liefern eine Anzahl, Leseoperationen Bytes.
@@ -254,6 +268,59 @@ Bytes insgesamt, einschließlich des Inhalts von `direct_input`. Instruktions-,
 Beobachtungs-, Gastspeicher- und Zeitbudgets gelten für das gesamte Szenario.
 Die 1-MiB-Arena enthält auch Objekte und Metadaten; daher kann ein Image den
 Modellspeicher erschöpfen, bevor die maximalen Szenariopuffer verbraucht sind.
+
+## Registry-Szenarien
+
+Das optionale Array `registry` definiert einen konkreten, auf die Sitzung
+begrenzten Registry-Baum. Jeder Schlüssel hat ein erforderliches `path` und ein
+optionales Array `values`; jeder Wert enthält `name`, den vorzeichenlosen
+Ganzzahltyp `type` und hexadezimale `data`. Ein leerer Wertname bezeichnet den
+Standardwert. Ein DWORD-Wert lautet beispielsweise
+`{"name":"Mode","type":4,"data":"01000000"}`. Wertbytes bleiben unverändert;
+das Modell ergänzt keine Zeichenfolgenabschlüsse und expandiert keine
+Umgebungsvariablen.
+
+Pfade müssen absolute ASCII-Pfade unter `\Registry\Machine` oder
+`\Registry\User` sein. Übergeordnete Schlüssel werden implizit angelegt.
+Schlüssel- und Wertidentitäten werden nach ASCII-Regeln ohne Beachtung der
+Groß-/Kleinschreibung verglichen; Nicht-ASCII-Namen und doppelte Identitäten
+werden abgewiesen. Ohne dieses Array bleibt die Registry-Verfügbarkeit
+unbestimmt und Registry-Aufrufe stoppen. `"registry": []` beschreibt ausdrücklich
+einen leeren Namensraum. Schlüssel, Werte, Daten der Host-Registry oder
+Dienstkonfigurationen werden nicht aus dem Treiber abgeleitet.
+
+`ZwOpenKey` und `ZwCreateKey` liefern unabhängige opake Handles mit eigenen
+Zugriffsprüfungen für Abfragen, Setzen von Werten, Anlegen von Unterschlüsseln
+und Löschen. Der konfigurierte Baum gewährt die unterstützten
+`KEY_ALL_ACCESS`-Bits einschließlich der üblichen Masken `KEY_READ` und
+`KEY_WRITE`. Er ist ein ausdrücklich zugänglicher Testbaum ohne Windows-ACLs
+oder Privilegienprüfung. Generische Rechte, `MAXIMUM_ALLOWED`, alternative
+Registry-Ansichten, eigene Sicherheitsdeskriptoren, Klassen und symbolische
+Verknüpfungen werden nicht unterstützt. Relatives Anlegen erfordert ein Handle
+des direkten Elternschlüssels mit `KEY_CREATE_SUB_KEY`. Eingabeschlüssel sind
+nicht flüchtig; neu angelegte Schlüssel dürfen flüchtig sein. Ein nicht
+flüchtiger Unterschlüssel eines flüchtigen Schlüssels wird abgewiesen. Neustarts
+und dauerhafte Speicherung auf Datenträgern werden nicht modelliert.
+
+`ZwQueryValueKey` implementiert die Informationsklassen Basic, Full und Partial
+sowie deren definierte Align64-Varianten mit exakten Längen, ausgerichteten
+Daten, Teilausgaben und unterschiedlichen Ergebnissen für
+`STATUS_BUFFER_TOO_SMALL` und `STATUS_BUFFER_OVERFLOW`. `ZwSetValueKey` und
+`ZwDeleteValueKey` ändern nur den Baum dieser Sitzung. `ZwDeleteKey` weist einen
+Schlüssel mit aktiven Unterschlüsseln ab; Handles eines gelöschten Schlüssels
+liefern bis zum Schließen `STATUS_KEY_DELETED`. `ZwClose` gibt ein Handle
+unabhängig vom Schlüssel frei. Angefordertes Entladen scheitert, solange
+Registry-Handles offen bleiben.
+
+Die Grenzen sind 256 Schlüssel einschließlich übergeordneter Schlüssel,
+insgesamt 1024 Werte, 65536 Bytes pro Wert, insgesamt 512 KiB Wertdaten,
+1024 ASCII-Bytes pro Schlüsselpfad, 256 Bytes pro Wertname und 256 gleichzeitig
+offene Handles. Anlegen und Ändern unterliegen denselben Grenzen wie die
+Szenariovorprüfung. `configuration.registry` im Bericht erhält die ursprüngliche
+Eingabe; `registry` enthält die am Ende aktiven Schlüsselpfade und Werte,
+einschließlich der vor einem Stopp beobachteten Änderungen. Ein nicht
+festgelegter Registry-Zustand wird als null ausgegeben. Flüchtigkeit und
+Handle-Identitäten sind nicht Teil dieses Wert-Snapshots.
 
 ## Abnahme mit dem Microsoft-Beispiel
 
@@ -287,6 +354,22 @@ ist nur erfolgreich, wenn alle diese Ergebnisse einschließlich des sichtbaren
 Cleanup-Fehlers übereinstimmen; es verändert das Beispiel nicht, um dieses
 Ergebnis zu verbergen.
 
+## Abnahmeprüfung mit dem Beispiel Zero
+
+Das zusätzliche [Zero-Validierungsskript](../../scripts/validate_zero_driver_sample.py)
+übersetzt Pavel Yosifovichs unverändertes öffentliches WDM-Beispiel Zero anhand
+der Revision und Hashwerte in
+[seinem Manifest](../../unittests/emulation/fixtures/zero-validation.json).
+Führen Sie `python3 scripts/validate_zero_driver_sample.py` mit denselben
+Werkzeugvoraussetzungen aus. Quelltext, MIT-Lizenz, Befehle, Szenario und Bericht
+werden standardmäßig unter `build-release/driver-validation/zero` aufbewahrt.
+Neun Anforderungen prüfen direkte Lesezugriffe über Seitengrenzen hinweg,
+Schreibmengen, atomare Gaststatistiken und einen gepufferten Statistik-IOCTL.
+Der Fehler beim Lesen mit Länge null und der fehlende CLEANUP-Handler des
+Beispiels bleiben sichtbar; der erwartete CLI-Exitcode ist 2, bei erfolgreichem
+Schließen und Entladen. Das Validierungsskript ist nur erfolgreich, wenn diese
+exakten Ergebnisse und sämtliche Ausgabebytes übereinstimmen.
+
 ## Berichte und SDK
 
 Der JSON-Bericht unterscheidet `stop_reason`, die nullable Felder `nt_status`
@@ -295,17 +378,23 @@ die vor dem Stopp gesammelten API-Aufrufe und beobachtbaren Zustände,
 einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
-`kernel_exports`-Überschreibungen des Laufs. Das Profil lautet `wdm-x64-synchronous-v2`. `nt_status` bleibt das
+`kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
+Profil lautet `wdm-x64-synchronous-v2`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
 Lebenszyklus. Jeder API-Aufruf und CPU-Schreibzugriff protokolliert auch seine
 Phase (`driver_entry`, `request:N` oder `unload`). Jede Anforderung meldet
-Dispatch- und I/O-Status, Abschluss, Informationslänge und zurückgegebene Bytes
+Dispatch- und I/O-Status, Abschluss, den Information-Wert und zurückgegebene Bytes
 in `output_hex`. `preferred_image_base` beschreibt die ursprüngliche PE-Basis.
 `security_cookie` ist die Gastadresse des initialisierten Cookies oder `"0x0"`,
 wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `file`, `byte_offset`, `code`,
-`irp`, `completed`, `dispatch_status`, `io_status`, `information` und `output_hex`.
+`irp`, `completed`, `dispatch_status`, `io_status`, `information`,
+`information_hex` und `output_hex`. `information` behält seine Zahlenform;
+`information_hex` ist eine Hexadezimalzeichenfolge mit dem Präfix `0x`, die jedes
+Bit des vorzeichenlosen 64-Bit-Ergebnisses exakt erhält. Verwenden Sie
+`information_hex`, wenn der JSON-Verbraucher keine exakten 64-Bit-Ganzzahlen
+erhält, insbesondere bei IOCTLs ohne Ausgabepuffer.
 
 Das nullable Objekt `fault` erhält den ersten Backend-Fehler. Seine Felder
 `kind`, `pc`, das nullable `address`, `size`, `access` und `interrupt` unterscheiden
