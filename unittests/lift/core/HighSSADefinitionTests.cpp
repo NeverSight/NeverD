@@ -817,8 +817,10 @@ TEST(HighSourceScalarLocals, CopyChainsRequireEveryWholeCopyConsumerToNarrow) {
         F.Body[2].ElseBody[0].Val = HighExpr::makeConst(42, Carrier);
       if (Mutation == 4) {
         auto Shared = F.Body[1].Val;
-        F.Body.back().RetVal =
-            HighExpr::makeCall("escape_shared", 0x3000, {Shared});
+        HighStmt Call;
+        Call.Kind = StmtKind::ExprStmt;
+        Call.CallExpr = HighExpr::makeCall("escape_shared", 0x3000, {Shared});
+        F.Body.insert(F.Body.end() - 1, Call);
       }
       if (Mutation == 5)
         F.Body.push_back(assign(variable(9, Carrier), variable(7, Carrier)));
@@ -837,6 +839,7 @@ TEST(HighSourceScalarLocals, CopyChainsRequireEveryWholeCopyConsumerToNarrow) {
       EXPECT_EQ(F.Body[0].ElseBody[0].Dst->Var.Size, Carrier) << Mutation;
       EXPECT_EQ(F.Body[0].Body[0].Val->Op, NdOp::CONCAT) << Mutation;
       if (Mutation == 4) {
+        ASSERT_EQ(F.Body[1].Val->Kind, ExprKind::BinOp) << Carrier;
         EXPECT_EQ(F.Body[1].Dst->Var.Size, 4U);
         EXPECT_EQ(F.Body[1].Val->Op, NdOp::SUBBYTES);
         EXPECT_EQ(F.Body[1].Val->Type->Size, 4U);
