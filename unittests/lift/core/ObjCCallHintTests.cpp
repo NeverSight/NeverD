@@ -4500,6 +4500,14 @@ TEST(ObjCCallHints, SDKCDeclarationsPreservePointerIntegerAndFloatCarriers) {
                      NdTypeKind::Int, 8U},
           std::tuple{"fmod", "/usr/lib/libSystem.B.dylib", 2U,
                      NdTypeKind::Float, 8U},
+          std::tuple{
+              "CACurrentMediaTime",
+              "/System/Library/Frameworks/QuartzCore.framework/QuartzCore", 0U,
+              NdTypeKind::Float, 8U},
+          std::tuple{"UTTypeIsDynamic",
+                     "/System/Library/Frameworks/CoreServices.framework/"
+                     "CoreServices",
+                     1U, NdTypeKind::Int, 1U},
           std::tuple{"__error", "/usr/lib/libSystem.B.dylib", 0U,
                      NdTypeKind::Ptr, 8U}}) {
       SCOPED_TRACE(Name);

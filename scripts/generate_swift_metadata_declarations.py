@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract compiler-proven Foundation metadata call declarations.
+"""Extract compiler-proven Swift SDK metadata call declarations.
 
 Public, nongeneric nominal types come from compiler symbol graphs. Metadata
 queries must compile on ARM64/x86-64 macOS and Mac Catalyst; the emitted Swift
@@ -24,11 +24,12 @@ TARGETS = ("arm64-apple-macos15.0", "arm64-apple-ios18.0-macabi",
            "x86_64-apple-macos15.0", "x86_64-apple-ios18.0-macabi")
 EXPORT_TARGETS = ("arm64-macos", "arm64-maccatalyst",
                   "x86_64-macos", "x86_64-maccatalyst")
+MODULES = ("Foundation", "_Concurrency")
 
 
-def nominal_types(document):
-    if document.get("module", {}).get("name") != "Foundation":
-        raise ValueError("symbol graph does not identify Foundation")
+def nominal_types(document, module="Foundation"):
+    if document.get("module", {}).get("name") != module:
+        raise ValueError(f"symbol graph does not identify {module}")
     symbols = document.get("symbols")
     if not isinstance(symbols, list) or len(symbols) > 200000:
         raise ValueError("invalid symbol graph inventory")
@@ -121,21 +122,32 @@ def main():
         for index, target in enumerate(TARGETS):
             output = directory / str(index)
             output.mkdir()
-            run([str(args.symbolgraph_extract), "-module-name", "Foundation",
-                 "-target", target, "-sdk", str(sdk), "-minimum-access-level", "public",
-                 "-skip-inherited-docs", "-skip-synthesized-members",
-                 "-skip-protocol-implementations", "-output-dir", str(output)])
-            graphs.append(nominal_types(json.loads(
-                (output / "Foundation.symbols.json").read_text())))
+            profile = {}
+            for module in MODULES:
+                module_output = output / module
+                module_output.mkdir()
+                run([str(args.symbolgraph_extract), "-module-name", module,
+                     "-target", target, "-sdk", str(sdk),
+                     "-minimum-access-level", "public", "-skip-inherited-docs",
+                     "-skip-synthesized-members", "-skip-protocol-implementations",
+                     "-output-dir", str(module_output)])
+                declarations = nominal_types(json.loads(
+                    (module_output / f"{module}.symbols.json").read_text()), module)
+                profile.update({(module, name): identity
+                                for name, identity in declarations.items()})
+            graphs.append(profile)
         names = common_nominals(graphs)
         if not names:
             parser.error("no common public nominal declarations")
         source = directory / "queries.swift"
-        source.write_text("import Foundation\n" + "\n".join(
-            f'@_cdecl("metadata_probe_{i}")\n'
-            f'public func metadataProbe{i}() -> UnsafeRawPointer {{ '
-            f'unsafeBitCast(Foundation.{name}.self, to: UnsafeRawPointer.self) }}'
-            for i, name in enumerate(names)) + "\n")
+        source.write_text(
+            "\n".join(f"import {module}" for module in MODULES) + "\n" +
+            "\n".join(
+                f'@_cdecl("metadata_probe_{i}")\n'
+                f'public func metadataProbe{i}() -> UnsafeRawPointer {{ '
+                f'unsafeBitCast({module}.{name}.self, '
+                f'to: UnsafeRawPointer.self) }}'
+                for i, (module, name) in enumerate(names)) + "\n")
         profiles = []
         for index, target in enumerate(TARGETS):
             ir = directory / f"{index}.ll"
@@ -143,7 +155,9 @@ def main():
                  "-target", target, "-sdk", str(sdk), "-emit-ir", str(source), "-o", str(ir)])
             profiles.append(metadata_calls(ir.read_text(),
                                            (graphs[index][name] for name in names)))
-    output = render(profiles, load_exports(sdk, targets=EXPORT_TARGETS),
+    output = render(profiles, load_exports(
+        sdk, targets=EXPORT_TARGETS,
+        extra_libraries=("libswift_Concurrency",)),
                     json.loads((sdk / "SDKSettings.json").read_text())["Version"],
                     run([str(args.swiftc), "--version"]).strip())
     count = sum(line.startswith("{") for line in output.splitlines())

@@ -28,6 +28,12 @@ def query(name=ACCESSOR):
 class SwiftMetadataDeclarationTests(unittest.TestCase):
     def test_only_public_root_nongeneric_nominals_supply_identities(self):
         self.assertEqual(nominal_types(graph()), {'URL': IDENTITY})
+        concurrency = graph()
+        concurrency['module']['name'] = '_Concurrency'
+        concurrency['symbols'][0]['identifier']['precise'] = 's:ScM'
+        concurrency['symbols'][0]['pathComponents'] = ['MainActor']
+        self.assertEqual(nominal_types(concurrency, '_Concurrency'),
+                         {'MainActor': 's:ScM'})
         for key, value in [
             ('kind', {'identifier': 'swift.protocol'}),
             ('identifier', {'interfaceLanguage': 'objc', 'precise': IDENTITY}),

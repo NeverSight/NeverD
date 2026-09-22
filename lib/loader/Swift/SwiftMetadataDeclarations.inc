@@ -53,4 +53,8 @@
 {"$s10Foundation8URLErrorVMa", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"},
 {"$s10Foundation9IndexPathVMa", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"},
 {"$s10Foundation9MachErrorVMa", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation", "/System/Library/Frameworks/Foundation.framework/Foundation|/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"},
+{"$sScEMa", "/usr/lib/swift/libswift_Concurrency.dylib", "/usr/lib/swift/libswift_Concurrency.dylib"},
+{"$sScMMa", "/usr/lib/swift/libswift_Concurrency.dylib", "/usr/lib/swift/libswift_Concurrency.dylib"},
+{"$sScPMa", "/usr/lib/swift/libswift_Concurrency.dylib", "/usr/lib/swift/libswift_Concurrency.dylib"},
+{"$sSctMa", "/usr/lib/swift/libswift_Concurrency.dylib", "/usr/lib/swift/libswift_Concurrency.dylib"},
 // clang-format on

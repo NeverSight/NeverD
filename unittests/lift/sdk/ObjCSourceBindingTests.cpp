@@ -3939,6 +3939,28 @@ TEST(ObjCSourceBindings, SwiftMetadataCallsRevalidateDeclarationAndConvention) {
   }
 }
 
+TEST(ObjCSourceBindings, SwiftConcurrencyMetadataRequiresExactProvider) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F;
+    F.Image.Arch = Architecture;
+    constexpr va_t Slot = 0x10e0;
+    const std::string Symbol = "_$sScMMa";
+    F.Image.ImportPtrSlots[Slot] = Symbol;
+    ASSERT_TRUE(F.Image.recordDyldBindSlot(
+        Slot, Symbol, 0, "/usr/lib/swift/libswift_Concurrency.dylib", false));
+    const auto Hint = swiftRuntimeSourceCallHint(F.Image, Slot);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Hint->Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_EQ(Hint->Signature.Parameters.size(), 1U);
+    ASSERT_EQ(Hint->Signature.ReturnComponents.size(), 2U);
+    F.Image.DyldBindSlots[Slot].Module = "/usr/lib/swift/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(F.Image, Slot));
+  }
+}
+
 TEST(ObjCSourceBindings, FixedCRecordsRevalidateExportsTypesAndCarriers) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (bool Floating : {false, true}) {
