@@ -30,10 +30,15 @@ std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
     const SourceABIValueLocation &RequiredResult,
     std::optional<NdTypeKind> RequiredType = std::nullopt);
 
-/// Resolve a selector conflict when a caller's exact declared pointer-to-
-/// pointer parameter reaches one message argument unchanged. MethodEntry and
-/// Source are revalidated against all runtime method records sharing the
-/// entry; bare object pointers and other source types supply no evidence.
+/// Whether a complete declared source type can identify one message argument
+/// while it is transported unchanged through an integer pointer carrier.
+bool isObjCSelectorArgumentEvidenceType(const TypeRef &Type,
+                                        bool ConsumedAsObject);
+
+/// Resolve a selector conflict when a caller's exact declared pointer
+/// parameter reaches one message argument unchanged. MethodEntry and Source
+/// are revalidated against all runtime method records sharing the entry; the
+/// complete source type must select exactly one declaration at that position.
 std::optional<SourceFunctionTypeHint>
 objcSelectorSourceTypeHintForArgumentTypeUse(
     const BinaryImage &Image, llvm::StringRef Selector,

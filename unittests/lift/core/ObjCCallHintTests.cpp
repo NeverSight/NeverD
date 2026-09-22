@@ -554,6 +554,92 @@ TEST(ObjCCallHints,
 }
 
 TEST(ObjCCallHints,
+     DeclaredObjectArgumentDisambiguatesPointerAndFloatingDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "setProgress:";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+
+  ObjCMethod ObjectSetter;
+  ObjectSetter.ClassName = "LoadState";
+  ObjectSetter.Selector = "setProgress:";
+  ObjectSetter.TypeHint =
+      parseObjCMethodEncoding(ObjectSetter.Selector, "v24@0:8@16");
+  ASSERT_TRUE(ObjectSetter.TypeHint);
+  Image.ObjCMethods.push_back(ObjectSetter);
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, ObjectSetter.Selector));
+
+  ObjCMethod Caller;
+  Caller.ClassName = "ImageView";
+  Caller.Selector = "forwardProgress:";
+  Caller.Implementation = 0x1200;
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, "v24@0:8@16");
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+
+  const auto CallerSignature =
+      objcMethodSourceTypeHint(Image, Caller.Implementation);
+  ASSERT_TRUE(CallerSignature);
+  SourceCallTypeHint::SelectorArgumentTypeEvidence Evidence;
+  Evidence.Parameter = 2;
+  Evidence.MethodEntry = Caller.Implementation;
+  Evidence.Source = CallerSignature->Parameters[2].Location;
+  EXPECT_FALSE(objcSelectorSourceTypeHintForArgumentTypeUse(
+      Image, ObjectSetter.Selector, Evidence));
+  Evidence.ConsumedAsObject = true;
+  auto Direct = objcSelectorSourceTypeHintForArgumentTypeUse(
+      Image, ObjectSetter.Selector, Evidence);
+  ASSERT_TRUE(Direct);
+  ASSERT_EQ(Direct->Parameters.size(), 3U);
+  ASSERT_TRUE(Direct->Parameters[2].Type);
+  EXPECT_EQ(Direct->Parameters[2].Type->Kind, NdTypeKind::Ptr);
+
+  LowFunc Function;
+  Function.Entry = Caller.Implementation;
+  Function.Name = "object_argument_caller";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1214;
+  Image.ImportPtrSlots[0x2190] = "_objc_retain";
+  const uint32_t RetainStub[] = {0xb0000010, 0xf940ca10, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, RetainStub[I]);
+  Block.Ops = {
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(a64reg::X2, 8)}, 0x1200),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x1204),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1140, 8)}, 0x1208),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X2, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x120c),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                {NdVar::cst(0x1100, 8)}, 0x1210)};
+  Function.Blocks.push_back(Block);
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_EQ(Hints.size(), 2U);
+  const auto &Hint = Hints.at(0x1210);
+  ASSERT_TRUE(Hint.SelectorArgumentTypeUse);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->Parameter, 2U);
+  EXPECT_EQ(Hint.SelectorArgumentTypeUse->MethodEntry, Caller.Implementation);
+  EXPECT_TRUE(Hint.SelectorArgumentTypeUse->ConsumedAsObject);
+  EXPECT_EQ(Hint.Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+
+  // The fact is exact source provenance, not a width guess. An overwrite of
+  // the saved carrier removes the evidence even though the value stays eight
+  // bytes wide.
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin() + 1,
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::cst(1, 8)}, 0x1202));
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Function).count(0x1210));
+}
+
+TEST(ObjCCallHints,
      PrivateFrameStorageDisambiguatesPointerToPointerSelectorArguments) {
   auto Image = image();
   Image.ObjCMethods.clear();

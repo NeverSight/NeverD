@@ -245,17 +245,21 @@ stored with the source-call hint and revalidated against the current image at
 publication, so a local dataflow observation cannot bypass global declaration
 checks.
 
-An exact pointer-to-pointer parameter from the enclosing Objective-C method may
+An exact declared pointer parameter from the enclosing Objective-C method may
 also narrow incompatible declarations when that unchanged entry value reaches
 one message argument and exactly one complete declaration has the same source
-type at that position. Every method record sharing the entry must agree before
-the parameter fact is seeded. Bare object pointers, stack reloads after the
-frame escapes, transformed values, multiple matching arguments and incomplete
-declarations remain unresolved. The hint records the method entry, source ABI
-carrier and message parameter index; publication rebuilds the method and
-selector declarations from the current image before accepting the call.
+type at that position. An ordinary opaque object pointer additionally requires
+that the unchanged entry value first reach an exactly bound `objc_retain` call;
+this authenticated object consumer may distinguish a pointer declaration from
+a non-pointer declaration. Every method record sharing the entry must agree
+before the parameter fact is seeded. Stack reloads after the frame escapes,
+transformed values, multiple matching arguments or pointer declarations, and
+incomplete declarations remain unresolved. The hint records the method entry,
+source ABI carrier, object-consumer fact and message parameter index;
+publication rebuilds the method and selector declarations from the current
+image before accepting the call.
 
-Full-width receiver and declared pointer-to-pointer identities may survive an
+Full-width receiver and declared pointer identities may survive an
 exact private-frame spill and reload. A returning call preserves the entry-SP
 identity even when its source signature is unknown. When a frame address is
 visible to a call or stored elsewhere, only typed spills wholly below that

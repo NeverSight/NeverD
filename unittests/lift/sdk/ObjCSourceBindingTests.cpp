@@ -5698,6 +5698,56 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     ObjectConsumedArgumentTypeIsRevalidatedAtPublication) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+  ObjCMethod Setter;
+  Setter.ClassName = "LoadState";
+  Setter.Selector = "setProgress:";
+  Setter.TypeHint = parseObjCMethodEncoding(Setter.Selector, "v24@0:8@16");
+  ASSERT_TRUE(Setter.TypeHint);
+  Image.ObjCMethods.push_back(Setter);
+  ObjCMethod Caller;
+  Caller.ClassName = "ImageView";
+  Caller.Selector = "forwardProgress:";
+  Caller.Implementation = 0x1200;
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, "v24@0:8@16");
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+
+  SourceCallTypeHint::SelectorArgumentTypeEvidence Use;
+  Use.Parameter = 2;
+  Use.MethodEntry = Caller.Implementation;
+  Use.Source.Kind = SourceABICarrierKind::IntegerRegister;
+  Use.Source.RegisterOffset = a64reg::X2;
+  Use.Source.ValueBytes = 8;
+  Use.ConsumedAsObject = true;
+  const auto Signature = objcSelectorSourceTypeHintForArgumentTypeUse(
+      Image, Setter.Selector, Use);
+  ASSERT_TRUE(Signature);
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding->TargetName = "objc_msgSend";
+  Binding->Selector = Setter.Selector;
+  Binding->Signature = *Signature;
+  Binding->SelectorArgumentTypeUse = Use;
+  auto Call =
+      HighExpr::makeCall("objc_msgSend", 0,
+                         {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8),
+                          HighExpr::makeConst(0, 8)});
+  Call->Type = Signature->ReturnType;
+  Call->SourceCallHint = Binding;
+  EXPECT_TRUE(objcSourceCallBound(*Call, Image, {}));
+
+  Binding->SelectorArgumentTypeUse->ConsumedAsObject = false;
+  EXPECT_FALSE(objcSourceCallBound(*Call, Image, {}));
+}
+
+TEST(ObjCSourceBindings,
      ConflictingSelectorFrameStorageIsRevalidatedAtPublication) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;

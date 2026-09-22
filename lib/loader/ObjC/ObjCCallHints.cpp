@@ -182,12 +182,14 @@ struct Value {
   std::optional<BlockIdentity> Block;
   va_t SourceMethodEntry = 0;
   SourceABIValueLocation SourceLocation;
+  bool SourceConsumedAsObject = false;
   std::vector<uint64_t> AlternativeNumbers;
   bool operator==(const Value &Other) const {
     return std::tie(TheKind, Number, Name, Object, Block, SourceMethodEntry,
                     SourceLocation.Kind, SourceLocation.RegisterOffset,
                     SourceLocation.EntryStackOffset, SourceLocation.ValueBytes,
-                    SourceLocation.ExtendTo32Bits, AlternativeNumbers) ==
+                    SourceLocation.ExtendTo32Bits, SourceConsumedAsObject,
+                    AlternativeNumbers) ==
            std::tie(Other.TheKind, Other.Number, Other.Name, Other.Object,
                     Other.Block, Other.SourceMethodEntry,
                     Other.SourceLocation.Kind,
@@ -195,6 +197,7 @@ struct Value {
                     Other.SourceLocation.EntryStackOffset,
                     Other.SourceLocation.ValueBytes,
                     Other.SourceLocation.ExtendTo32Bits,
+                    Other.SourceConsumedAsObject,
                     Other.AlternativeNumbers);
   }
 };
@@ -935,9 +938,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       for (const auto &Parameter : Signature->Parameters) {
         const auto &Type = Parameter.Type;
         const auto &Location = Parameter.Location;
-        if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
-            !Type->Pointee || Type->Pointee->Kind != NdTypeKind::Ptr ||
-            Type->Pointee->Size != 8 ||
+        if (!isObjCSelectorArgumentEvidenceType(Type, true) ||
             Location.Kind != SourceABICarrierKind::IntegerRegister ||
             Location.ValueBytes != 8)
           continue;
@@ -1342,6 +1343,39 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             const auto &Signature = Runtime->Signature;
             const auto &Return = Signature.ReturnLocation;
             const auto Bind = Image.DyldBindSlots.find(Runtime->TargetAddress);
+            if (Runtime->CallKind ==
+                    SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+                Runtime->TargetName == "objc_retain" &&
+                Signature.Parameters.size() == 1 &&
+                Signature.Parameters[0].Location.Kind ==
+                    SourceABICarrierKind::IntegerRegister &&
+                Signature.Parameters[0].Location.ValueBytes == 8) {
+              const auto Input = Read(NdVar::reg(
+                  Signature.Parameters[0].Location.RegisterOffset, 8));
+              if (Input && Input->TheKind == Value::Kind::SourceParameter) {
+                const auto SameSourceLocation = [&](const auto &Location) {
+                  return std::tie(Location.Kind, Location.RegisterOffset,
+                                  Location.EntryStackOffset,
+                                  Location.ValueBytes,
+                                  Location.ExtendTo32Bits) ==
+                         std::tie(Input->SourceLocation.Kind,
+                                  Input->SourceLocation.RegisterOffset,
+                                  Input->SourceLocation.EntryStackOffset,
+                                  Input->SourceLocation.ValueBytes,
+                                  Input->SourceLocation.ExtendTo32Bits);
+                };
+                auto Mark = [&](auto &Facts) {
+                  for (auto &[K, Fact] : Facts)
+                    if (Fact.TheKind == Value::Kind::SourceParameter &&
+                        Fact.SourceMethodEntry == Input->SourceMethodEntry &&
+                        SameSourceLocation(Fact.SourceLocation))
+                      Fact.SourceConsumedAsObject = true;
+                };
+                Mark(Values);
+                Mark(State.FrameSlots);
+                Mark(State.TypedFrameSlots);
+              }
+            }
             const bool CopiesStackBlock =
                 Bind != Image.DyldBindSlots.end() &&
                 ((Runtime->CallKind ==
@@ -1545,6 +1579,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               Evidence.Parameter = static_cast<unsigned>(Parameter);
               Evidence.MethodEntry = Argument->SourceMethodEntry;
               Evidence.Source = Argument->SourceLocation;
+              Evidence.ConsumedAsObject = Argument->SourceConsumedAsObject;
               auto Candidate = objcSelectorSourceTypeHintForArgumentTypeUse(
                   Image, Target->Selector, Evidence);
               if (!Candidate)

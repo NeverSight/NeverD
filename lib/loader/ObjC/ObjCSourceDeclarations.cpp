@@ -308,13 +308,8 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
         return std::nullopt;
       Source = &Parameter;
     }
-  // Restrict this evidence to a complete pointer-to-pointer source type. A
-  // bare id/object pointer has the same machine carrier as many unrelated
-  // declarations and cannot narrow dynamic dispatch.
-  if (!Source || !Source->Type || Source->Type->Kind != NdTypeKind::Ptr ||
-      Source->Type->Size != 8 || !Source->Type->Pointee ||
-      Source->Type->Pointee->Kind != NdTypeKind::Ptr ||
-      Source->Type->Pointee->Size != 8)
+  if (!Source || !isObjCSelectorArgumentEvidenceType(
+                     Source->Type, Evidence.ConsumedAsObject))
     return std::nullopt;
   auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
   if (!Candidates)
@@ -330,6 +325,21 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
     Result = std::move(Candidate);
   }
   return Result;
+}
+
+bool isObjCSelectorArgumentEvidenceType(const TypeRef &Type,
+                                        bool ConsumedAsObject) {
+  // The declaration, not the machine width alone, supplies this evidence.
+  // Keep it to complete Darwin pointer carriers and require a unique exact
+  // source-type match below. An opaque object pointer additionally needs an
+  // authenticated object consumer; pointer-to-pointer evidence retains its
+  // original declaration-only contract.
+  if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
+      !Type->Pointee)
+    return false;
+  return (Type->Pointee->Kind == NdTypeKind::Ptr &&
+          Type->Pointee->Size == 8) ||
+         (ConsumedAsObject && Type->Pointee->Kind == NdTypeKind::Void);
 }
 
 std::optional<SourceFunctionTypeHint>

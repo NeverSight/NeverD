@@ -307,6 +307,9 @@ struct SourceCallTypeHint {
     unsigned Parameter = 0;
     va_t MethodEntry = 0;
     SourceABIValueLocation Source;
+    /// A bound objc_retain consumed this unchanged entry value before the
+    /// selector use, proving that an opaque pointer is used as an object.
+    bool ConsumedAsObject = false;
   };
   std::optional<SelectorArgumentTypeEvidence> SelectorArgumentTypeUse;
   /// An exact address inside the current function's private frame flowed to
