@@ -270,7 +270,7 @@ Windows 模型亦管理獨立的非分頁池 MDL；釋放描述符不會釋放�
 
 `KernelScheduler` 管理就緒佇列順序、回呼識別與計時器期限；`KernelDispatcher` 管理不透明 DPC、計時器、事件及其訊號。`KernelModel` 管理等待登記、工作項目／裝置生命週期與 IRP 完成。`DriverSession` 儲存並還原各回呼的獨立堆疊及完整 CPU 內容，包括 Win64 堆疊參數，客體記憶體保持共用。虛擬時間在計時器／等待邊界推進；CPU0 以確定性的合作排程執行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作項目。這不提供一般執行緒／APC／取消／自旋鎖排程、並行 IRP、完整 PnP／電源或硬體。 API 的 IRQL 上限來自 `KernelAPIIRQL.def`，參數相關限制由所屬模型檢查。
 
-`KernelFramework` 管理 KMDF 1.33 繫結、函式表識別、驅動程式／一般物件與具型別內容生命週期。`DriverSession` 在共用執行預算下執行巢狀客體回呼並還原暫停的框架操作。`DriverImage` 驗證 CFG 中繼資料，`GuardControlFlow` 管理已宣告的映像／API 目標，CPU 介面卡保留檢查／分派呼叫狀態。這不包含 KMDF 裝置、佇列、請求、類別擴充或 UMDF。
+`KernelFramework` 管理 KMDF 1.33 繫結、函式表識別、WDF 物件與內容、控制裝置初始化記錄、循序預設佇列及要求控制代碼。其具型別的裝置與要求主控介面將 WDM 命名空間、儲存空間、封包狀態、MDL 對應及完成驗證交由 `KernelModel` 負責；雙方均不建立重複的裝置或 IRP。佇列路由將框架擁有的分派狀態與傳回型別為 `void` 的客體回呼返回分開記錄。完成接續流程先執行清理及子物件銷毀，再釋放 IRP；外部參考僅保留 WDF 內容。在取消及佇列排空尚未建模時，刪除待處理要求會在修改上層祖先物件之前遭到拒絕。`DriverSession` 在共用預算下執行巢狀回呼。`DriverImage` 驗證 CFG 中繼資料；`GuardControlFlow` 管理已宣告的映像／API 目標，CPU 介面卡保留檢查／分派呼叫狀態。PnP 裝置、一般佇列與取消、類別擴充及 UMDF 仍不受支援。
 
 
 ## 例外重寫邊界

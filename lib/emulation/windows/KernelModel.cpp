@@ -99,8 +99,22 @@ bool singleComponent(llvm::StringRef Name, llvm::StringRef Prefix) {
          !Name.drop_front(Prefix.size()).contains('\\');
 }
 
-llvm::Expected<std::string> linkKey(const std::string &Name) {
-  std::string Key = foldedASCII(Name);
+llvm::Error validateObjectNameText(llvm::StringRef Name) {
+  if (Name.size() > profile::MaxDeviceNameSize)
+    return modelError("object name exceeds the bounded namespace size");
+  for (unsigned char C : Name)
+    if (C < 0x20 || C > 0x7e)
+      return modelError("object-name model supports printable ASCII only; "
+                        "Unicode namespace case folding is unsupported");
+  return llvm::Error::success();
+}
+
+} // namespace
+
+llvm::Expected<std::string> KernelModel::linkKey(llvm::StringRef Name) const {
+  if (auto E = validateObjectNameText(Name))
+    return E;
+  std::string Key = foldedASCII(Name.str());
   if (singleComponent(Key, DosDevicesPrefix))
     return DosDeviceAliasPrefix.str() + Key.substr(DosDevicesPrefix.size());
   if (singleComponent(Key, DosDeviceAliasPrefix))
@@ -109,7 +123,29 @@ llvm::Expected<std::string> linkKey(const std::string &Name) {
                     "\\??\\Name in one session namespace");
 }
 
-} // namespace
+llvm::Expected<uint64_t>
+KernelModel::resolveDeviceName(llvm::StringRef Name) const {
+  if (auto E = validateObjectNameText(Name))
+    return E;
+  for (const auto &[Address, Object] : Devices)
+    if (Object.Name == Name)
+      return Address;
+  const auto Folded = foldedASCII(Name.str());
+  if (!singleComponent(Folded, DosDevicesPrefix) &&
+      !singleComponent(Folded, DosDeviceAliasPrefix))
+    return 0;
+  auto Key = linkKey(Name);
+  if (!Key)
+    return Key.takeError();
+  auto Link = SymbolicLinks.find(*Key);
+  if (Link == SymbolicLinks.end())
+    return 0;
+  const auto Target = foldedASCII(Link->second);
+  for (const auto &[Address, Object] : Devices)
+    if (foldedASCII(Object.Name) == Target)
+      return Address;
+  return 0;
+}
 
 llvm::Expected<uint64_t> KernelModel::allocate(uint64_t Size,
                                                uint64_t Alignment) {
@@ -214,6 +250,8 @@ llvm::Error KernelModel::initialize(const DriverImage &Image,
           return prepareReleaseRange(Address, Size);
         });
     Framework->configure(DriverObject, RegistryPath, Options.ServiceName);
+    configureFrameworkDeviceHost();
+    configureFrameworkRequestHost();
   }
   return llvm::Error::success();
 }
@@ -268,28 +306,22 @@ llvm::Expected<std::string> KernelModel::readObjectName(uint64_t Address) {
       return E;
   std::string Name;
   for (size_t I = 0; I < Bytes.size(); I += 2) {
-    if (Bytes[I + 1] || Bytes[I] < 0x20 || Bytes[I] > 0x7e)
+    if (Bytes[I + 1])
       return modelError("object-name model supports printable ASCII only; "
                         "Unicode namespace case folding is unsupported");
     Name.push_back(static_cast<char>(Bytes[I]));
   }
+  if (auto E = validateObjectNameText(Name))
+    return E;
   return Name;
 }
 
 llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
   if (A[0] != DriverObject)
     return modelError("IoCreateDevice received an unknown DRIVER_OBJECT");
-  const uint64_t ExtensionSize = static_cast<uint32_t>(A[1]);
-  const uint32_t Type = static_cast<uint32_t>(A[3]);
-  const uint32_t Characteristics = static_cast<uint32_t>(A[4]);
-  if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
-    return modelError(
-        "IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
-        "FILE_DEVICE_SECURE_OPEN only; hardware/PnP is unsupported");
-  if (ExtensionSize > UINT16_MAX - DeviceObjectSize)
-    return modelError(
-        "device extension exceeds the bounded DEVICE_OBJECT size");
   if (auto E = checkRange(A[6], 8))
+    return E;
+  if (auto E = validateGuestAccess(A[6], 8, true))
     return E;
   std::string Name;
   if (A[2]) {
@@ -297,12 +329,53 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
     if (!Parsed)
       return Parsed.takeError();
     Name = *Parsed;
-    const std::string Key = foldedASCII(Name);
+    // A null name requests an unnamed device; a supplied empty name is invalid.
+    if (Name.empty())
+      return modelError("device-name model supports \\Device\\Name only");
+  }
+  auto Created = createDeviceObject(
+      Name, static_cast<uint32_t>(A[1]), static_cast<uint32_t>(A[3]),
+      static_cast<uint32_t>(A[4]), static_cast<uint8_t>(A[5]) != 0);
+  if (!Created)
+    return Created.takeError();
+  if (Created->Status != StatusSuccess)
+    return Created->Status;
+  if (auto E = Memory.writeInteger(A[6], Created->Address, 8)) {
+    // A backend mapping/permission failure is discovered only by the write.
+    // Preserve the old API's unpublished-device state and allocated bytes.
+    auto Previous = Memory.readInteger(Created->Address + DeviceNext, 8);
+    if (!Previous)
+      return llvm::joinErrors(std::move(E), Previous.takeError());
+    if (auto Restore =
+            Memory.writeInteger(DriverObject + DriverDeviceHead, *Previous, 8))
+      return llvm::joinErrors(std::move(E), std::move(Restore));
+    DeviceSizes.erase(Created->Address);
+    Devices.erase(Created->Address);
+    return E;
+  }
+  return Created->Status;
+}
+
+llvm::Expected<KernelModel::DeviceCreation>
+KernelModel::createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
+                                uint32_t Type, uint32_t Characteristics,
+                                bool Exclusive) {
+  if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
+    return modelError(
+        "IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
+        "FILE_DEVICE_SECURE_OPEN only; hardware/PnP is unsupported");
+  if (ExtensionSize > UINT16_MAX - DeviceObjectSize)
+    return modelError(
+        "device extension exceeds the bounded DEVICE_OBJECT size");
+  if (auto E = validateObjectNameText(Name))
+    return E;
+  if (!Name.empty()) {
+    const std::string Key = foldedASCII(Name.str());
     if (!singleComponent(Key, DevicePrefix))
       return modelError("device-name model supports \\Device\\Name only");
     for (const auto &[Address, Existing] : Devices)
       if (foldedASCII(Existing.Name) == Key)
-        return StatusObjectNameCollision;
+        return DeviceCreation{StatusObjectNameCollision, 0};
   }
   auto Previous = Memory.readInteger(DriverObject + DriverDeviceHead, 8);
   if (!Previous)
@@ -312,7 +385,7 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
   const uint64_t Size = DeviceObjectSize + ExtensionSize;
   const uint64_t Start = (NextAllocation + 15) & ~uint64_t(15);
   if (Start > AllocationEnd || Size > AllocationEnd - Start)
-    return StatusInsufficientResources;
+    return DeviceCreation{StatusInsufficientResources, 0};
   auto Object = allocate(Size);
   if (!Object)
     return Object.takeError();
@@ -327,9 +400,7 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
             {DeviceDriverOffset, DriverObject, 8},
             {DeviceNext, *Previous, 8},
             {DeviceFlagsOffset,
-             DeviceInitializing |
-                 (static_cast<uint8_t>(A[5]) ? DeviceExclusive : 0),
-             4},
+             DeviceInitializing | (Exclusive ? DeviceExclusive : 0), 4},
             {DeviceCharacteristicsOffset, Characteristics, 4},
             {DeviceExtensionOffset, Extension, 8},
             {DeviceTypeOffset, Type, 4},
@@ -337,15 +408,33 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
             {DeviceAlignmentOffset, DeviceAlignmentMask, 4}}})
     if (auto E = Memory.writeInteger(*Object + F.Offset, F.Value, F.Size))
       return E;
-  if (auto E = validateGuestAccess(A[6], 8, true))
-    return E;
-  if (auto E = Memory.writeInteger(A[6], *Object, 8))
-    return E;
   if (auto E = Memory.writeInteger(DriverObject + DriverDeviceHead, *Object, 8))
     return E;
-  Devices.emplace(*Object, DriverDevice{*Object, Extension, Type, Name});
+  Devices.emplace(*Object, DriverDevice{*Object, Extension, Type, Name.str()});
   DeviceSizes.emplace(*Object, Size);
+  return DeviceCreation{StatusSuccess, *Object};
+}
+
+llvm::Expected<uint32_t>
+KernelModel::createSymbolicLink(llvm::StringRef Name, llvm::StringRef Target) {
+  auto Key = linkKey(Name.str());
+  if (!Key)
+    return Key.takeError();
+  if (auto E = validateObjectNameText(Target))
+    return E;
+  if (!singleComponent(foldedASCII(Target.str()), DevicePrefix))
+    return modelError("symbolic-link targets must be \\Device\\Name");
+  if (SymbolicLinks.count(*Key))
+    return StatusObjectNameCollision;
+  SymbolicLinks.emplace(*Key, Target.str());
   return StatusSuccess;
+}
+
+llvm::Expected<uint32_t> KernelModel::deleteSymbolicLink(llvm::StringRef Name) {
+  auto Key = linkKey(Name.str());
+  if (!Key)
+    return Key.takeError();
+  return SymbolicLinks.erase(*Key) ? StatusSuccess : StatusObjectNameNotFound;
 }
 
 llvm::Error KernelModel::deleteDevice(uint64_t Address) {
@@ -444,13 +533,7 @@ llvm::Expected<uint64_t> KernelModel::call(
     return 0;
   }
   if (Kind == KernelAPIKind::IoMarkIrpPending) {
-    if (!Request || Request->IRP != A[0] || Request->Completed)
-      return modelError("IoMarkIrpPending requires the live active IRP");
-    auto Control = Memory.readInteger(Request->Stack + StackControlOffset, 1);
-    if (!Control)
-      return Control.takeError();
-    if (auto E = Memory.writeInteger(Request->Stack + StackControlOffset,
-                                     *Control | StackPendingReturned, 1))
+    if (auto E = markRequestPending(A[0]))
       return E;
     return 0;
   }
@@ -635,21 +718,19 @@ llvm::Expected<uint64_t> KernelModel::call(
     auto ObjectName = readObjectName(A[0]);
     if (!ObjectName)
       return ObjectName.takeError();
-    auto Key = linkKey(*ObjectName);
-    if (!Key)
-      return Key.takeError();
-    if (Kind == KernelAPIKind::IoDeleteSymbolicLink)
-      return SymbolicLinks.erase(*Key) ? StatusSuccess
-                                       : StatusObjectNameNotFound;
+    if (Kind == KernelAPIKind::IoDeleteSymbolicLink) {
+      auto Status = deleteSymbolicLink(*ObjectName);
+      if (!Status)
+        return Status.takeError();
+      return *Status;
+    }
     auto Target = readObjectName(A[1]);
     if (!Target)
       return Target.takeError();
-    if (!singleComponent(foldedASCII(*Target), DevicePrefix))
-      return modelError("symbolic-link targets must be \\Device\\Name");
-    if (SymbolicLinks.count(*Key))
-      return StatusObjectNameCollision;
-    SymbolicLinks.emplace(*Key, *Target);
-    return StatusSuccess;
+    auto Status = createSymbolicLink(*ObjectName, *Target);
+    if (!Status)
+      return Status.takeError();
+    return *Status;
   }
   if (Kind == KernelAPIKind::DbgPrint || Kind == KernelAPIKind::DbgPrintEx) {
     const unsigned FormatIndex = Kind == KernelAPIKind::DbgPrint ? 0 : 2;

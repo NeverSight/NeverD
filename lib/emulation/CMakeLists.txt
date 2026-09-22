@@ -9,7 +9,11 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelExportRegistry.cpp
   windows/GuardControlFlow.cpp
   windows/KernelFramework.cpp
+  windows/KernelFrameworkControl.cpp
+  windows/KernelFrameworkQueue.cpp
+  windows/KernelFrameworkRequests.cpp
   windows/KernelModelFramework.cpp
+  windows/KernelModelFrameworkRequests.cpp
   windows/KernelModelExports.cpp
   windows/KernelModel.cpp
   windows/KernelModelIO.cpp

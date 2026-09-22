@@ -71,6 +71,27 @@ TEST(DriverIO, FailedIOCTLStillCompletesAndAllowsCleanupCloseUnload) {
   EXPECT_TRUE(Result->UnloadCompleted);
 }
 
+TEST(DriverIO, SymbolicLinkAliasesUseTheSharedSessionNamespace) {
+  for (const char *Name :
+       {"\\DosDevices\\NeverDIO", "\\??\\NeverDIO", "\\dosdevices\\neverdIO"}) {
+    SCOPED_TRACE(Name);
+    auto Options = lifecycle();
+    for (auto &Request : Options.Requests)
+      Request.Device = Name;
+    auto Result = emulateDriver(NEVERD_DRIVER_IO_FIXTURE, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 4u);
+    for (const auto &Request : Result->Requests) {
+      EXPECT_EQ(Request.Device, "\\Device\\NeverDIO");
+      EXPECT_EQ(Request.IOStatus, 0u);
+    }
+    EXPECT_EQ(Result->Requests[1].Output,
+              (std::vector<uint8_t>{0x5a, 0x5b, 0, 0xa5}));
+    EXPECT_TRUE(Result->UnloadCompleted);
+  }
+}
+
 TEST(DriverIO, ReturningWithoutCompletionRetainsTheIncompleteRequest) {
   auto Result = emulateDriver(NEVERD_DRIVER_IO_FIXTURE, lifecycle(0x222004));
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());

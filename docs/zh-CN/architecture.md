@@ -288,7 +288,7 @@ Windows 模型还管理独立的非分页池 MDL；描述符释放不会释放�
 
 `KernelScheduler` 管理就绪队列顺序、回调身份和定时器期限；`KernelDispatcher` 管理不透明 DPC、定时器、事件及其信号。`KernelModel` 管理等待登记、工作项／设备生命周期和 IRP 完成。`DriverSession` 保存并恢复各回调的独立栈及完整 CPU 上下文，包括 Win64 栈参数，来宾内存保持共享。虚拟时间在定时器／等待边界推进；CPU0 以确定性的协作调度执行 `DISPATCH_LEVEL` 的 DPC 和 `PASSIVE_LEVEL` 的工作项。这不提供通用线程／APC／取消／自旋锁调度、并发 IRP、完整 PnP／电源或硬件。 API 的 IRQL 上限来自 `KernelAPIIRQL.def`，参数相关限制由所属模型检查。
 
-`KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、驱动／通用对象和类型化上下文生命周期。`DriverSession` 在共享执行预算下执行嵌套来宾回调并恢复暂停的框架操作。`DriverImage` 验证 CFG 元数据，`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。这不包含 KMDF 设备、队列、请求、类扩展或 UMDF。
+`KernelFramework` 管理 KMDF 1.33 绑定、函数表身份、WDF 对象与上下文、控制设备初始化记录、顺序默认队列和请求句柄。其类型化设备与请求宿主接口将 WDM 命名空间、存储、数据包状态、MDL 映射及完成验证交给 `KernelModel`；双方均不创建重复的设备或 IRP。队列路由将框架拥有的分派状态与返回类型为 `void` 的来宾回调返回分开记录。完成续接流程先执行清理和子对象销毁，再释放 IRP；外部引用仅保留 WDF 上下文。在取消和队列排空尚未建模时，删除待处理请求会在修改祖先对象之前被拒绝。`DriverSession` 在共享预算下执行嵌套回调。`DriverImage` 验证 CFG 元数据；`GuardControlFlow` 管理已声明的映像／API 目标，CPU 适配器保留检查／分派调用状态。PnP 设备、通用队列与取消、类扩展及 UMDF 仍不受支持。
 
 
 ## 异常重写边界

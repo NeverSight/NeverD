@@ -155,7 +155,9 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         path = Path("docs/zh-TW/driver-emulation.md")
         original = i18n.RepositoryView(use_index=False).read_text(path)
         for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
-                      "NEVERD_KMDF_CFG_FIXTURE"):
+                      "NEVERD_KMDF_CFG_FIXTURE", "NEVERD_KMDF_CONTROL_FIXTURE",
+                      "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG",
+                      "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)"):
             with self.subTest(token=token):
                 errors: list[str] = []
                 changed = original.replace(token, "RemovedContract")

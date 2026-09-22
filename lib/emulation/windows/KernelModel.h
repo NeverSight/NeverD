@@ -70,6 +70,7 @@ public:
     uint64_t Argument2 = 0;
     uint64_t Argument3 = 0;
     std::vector<uint64_t> StackArguments;
+    std::optional<uint32_t> FrameworkDispatchStatus;
   };
   /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
@@ -106,6 +107,9 @@ private:
   DriverResult &Result;
   KernelExportRegistry *Exports;
   std::unique_ptr<KernelFramework> Framework;
+  void configureFrameworkDeviceHost();
+  /// Framework-owned WDM devices and their canonical symbolic-link keys.
+  std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
   KernelRegistry Registry;
   KernelScheduler Scheduler;
   KernelDispatcher Dispatcher;
@@ -179,6 +183,8 @@ private:
     mutable std::array<bool, 16> IOStatusWritten{};
   };
   std::optional<ActiveRequest> Request;
+  void configureFrameworkRequestHost();
+  llvm::Error markRequestPending(uint64_t IRP);
   llvm::Error prepareRequestBuffers(const DriverRequest &Input,
                                     uint64_t Device);
   llvm::Error initializeRequestPacket(const DriverRequest &Input,
@@ -216,12 +222,26 @@ private:
   llvm::Expected<std::vector<uint8_t>> readMDLBytes(uint64_t MDL,
                                                     uint32_t Count);
   llvm::Error completeRequest(uint64_t IRP, uint8_t PriorityBoost);
+  llvm::Error validateRequestCompletion(uint64_t IRP, uint32_t Status,
+                                        uint64_t Information) const;
   llvm::Error validateIOAccess(uint64_t Address, uint32_t Size,
                                bool IsWrite) const;
   llvm::Expected<uint64_t> allocate(uint64_t Size, uint64_t Alignment = 16);
   llvm::Expected<uint64_t> makeUnicodeString(const std::string &Text);
   llvm::Expected<std::string> readObjectName(uint64_t Address);
   llvm::Expected<uint64_t> createDevice(llvm::ArrayRef<uint64_t> Arguments);
+  struct DeviceCreation {
+    uint32_t Status;
+    uint64_t Address;
+  };
+  llvm::Expected<DeviceCreation>
+  createDeviceObject(llvm::StringRef Name, uint32_t ExtensionSize,
+                     uint32_t Type, uint32_t Characteristics, bool Exclusive);
+  llvm::Expected<uint32_t> createSymbolicLink(llvm::StringRef Name,
+                                              llvm::StringRef Target);
+  llvm::Expected<uint32_t> deleteSymbolicLink(llvm::StringRef Name);
+  llvm::Expected<std::string> linkKey(llvm::StringRef Name) const;
+  llvm::Expected<uint64_t> resolveDeviceName(llvm::StringRef Name) const;
   llvm::Error deleteDevice(uint64_t Address);
   llvm::Error retireDeviceIfUnreferenced(uint64_t Address);
 };

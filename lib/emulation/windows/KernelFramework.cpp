@@ -313,6 +313,9 @@ llvm::Expected<uint64_t> KernelFramework::unbind(llvm::ArrayRef<uint64_t> A) {
 }
 
 llvm::Error KernelFramework::finishUnbind(Binding &B) {
+  for (const auto &[Address, Init] : DeviceInits)
+    if (Init.Binding == B.Globals)
+      return invalid("unbind still owns an unconsumed device initializer");
   if (std::any_of(Objects.begin(), Objects.end(), [&](const auto &Entry) {
         return Entry.second.Binding == B.Globals;
       }))
@@ -441,10 +444,10 @@ llvm::Expected<uint64_t> KernelFramework::createObject(uint64_t Globals,
   Object O;
   O.Binding = Globals;
   O.Parent = Parent;
-  O.DriverObject = IsDriver;
+  O.Kind = IsDriver ? ObjectKind::Driver : ObjectKind::Generic;
   auto Context = addContext(O, A);
   if (!Context)
-    return Context.takeError();
+    return llvm::joinErrors(Context.takeError(), retire(*Handle));
   Objects.emplace(*Handle, std::move(O));
   if (Parent)
     Objects.at(Parent).Children.push_back(*Handle);
@@ -550,6 +553,27 @@ KernelFramework::createDriver(Binding &B, llvm::ArrayRef<uint64_t> A) {
 
 llvm::Error KernelFramework::planDelete(uint64_t Handle,
                                         std::vector<Step> &Steps) {
+  // Cancellation/draining of live queue requests needs an explicit schedule.
+  // Detect that boundary before changing any ancestor or invoking cleanup.
+  auto Preflight = [&](auto &&Self, uint64_t Current) -> llvm::Error {
+    auto I = Objects.find(Current);
+    if (I == Objects.end())
+      return invalid("delete requires a live framework object");
+    if (I->second.Kind == ObjectKind::Request) {
+      const auto &R = Requests.at(Current);
+      if (!R.Completed && !(Current == Handle && R.Completing))
+        return invalid(
+            "deletion with a live request requires queue cancellation "
+            "or draining, which is not modeled");
+    }
+    for (uint64_t Child : I->second.Children)
+      if (Objects.count(Child))
+        if (auto E = Self(Self, Child))
+          return E;
+    return llvm::Error::success();
+  };
+  if (auto E = Preflight(Preflight, Handle))
+    return E;
   std::vector<Step> Destruction;
   auto Visit = [&](auto &&Self, uint64_t Handle) -> llvm::Error {
     auto I = Objects.find(Handle);
@@ -605,6 +629,19 @@ KernelFramework::advance(uint64_t Token) {
       C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
       continue;
     }
+    if (S.Kind == StepKind::CompleteRequest) {
+      auto R = Requests.find(S.Object);
+      if (R == Requests.end() || !R->second.Completing || R->second.Completed)
+        return invalid("completion continuation lost its live request");
+      if (auto E =
+              RequestsHost.Complete(R->second.IRP, R->second.CompletionStatus,
+                                    R->second.CompletionInformation))
+        return E;
+      R->second.Completed = true;
+      R->second.Completing = false;
+      R->second.Queue = 0;
+      continue;
+    }
     auto OI = Objects.find(S.Object);
     if (OI == Objects.end())
       return invalid("callback sequence lost its object");
@@ -628,6 +665,20 @@ KernelFramework::advance(uint64_t Token) {
     }
     if (O.References)
       return invalid("destroy callback retained an object reference");
+    if (O.Kind == ObjectKind::Device) {
+      for (const auto &[Handle, Queue] : Queues)
+        if (Queue.Device == S.Object)
+          return invalid("device deletion still owns a referenced queue");
+      if (!DevicesHost.Delete)
+        return invalid("framework device host is not configured");
+      if (auto E = DevicesHost.Delete(Devices.at(S.Object).Wdm))
+        return E;
+      Devices.erase(S.Object);
+    }
+    if (O.Kind == ObjectKind::Queue)
+      Queues.erase(S.Object);
+    if (O.Kind == ObjectKind::Request)
+      Requests.erase(S.Object);
     for (const auto &[Type, Context] : O.Contexts)
       if (auto E = retire(Context.Address))
         return E;
@@ -687,6 +738,21 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   }
   if (A[0] != B.Globals)
     return invalid("framework function received another binding's globals");
+  auto Control = callControl(Export.Name, B, A);
+  if (!Control)
+    return Control.takeError();
+  if (*Control)
+    return **Control;
+  auto Queue = callQueue(Export.Name, B, A);
+  if (!Queue)
+    return Queue.takeError();
+  if (*Queue)
+    return **Queue;
+  auto Request = callRequest(Export.Name, B, A);
+  if (!Request)
+    return Request.takeError();
+  if (*Request)
+    return **Request;
   if (Export.Name == "WdfDriverCreate")
     return createDriver(B, A);
   if (Export.Name == "WdfWdmDriverGetWdfDriverHandle") {
@@ -724,7 +790,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   auto &O = OI->second;
   if (Export.Name == "WdfDriverGetRegistryPath" ||
       Export.Name == "WdfDriverWdmGetDriverObject") {
-    if (!O.DriverObject)
+    if (O.Kind != ObjectKind::Driver)
       return invalid("framework handle has the wrong object type");
     return Export.Name == "WdfDriverGetRegistryPath" ? B.RegistryCopy : Driver;
   }
@@ -778,8 +844,12 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     return 0;
   }
   if (Export.Name == "WdfObjectDelete") {
-    if (O.DriverObject)
+    if (O.Kind == ObjectKind::Driver)
       return invalid("WDFDRIVER cannot be deleted by the driver");
+    if (O.Kind == ObjectKind::Queue && Queues.at(A[1]).IsDefault)
+      return invalid("the default queue cannot be deleted by the driver");
+    if (O.Kind == ObjectKind::Request)
+      return invalid("an incoming framework request is released by completion");
     std::vector<Step> Steps;
     if (auto E = planDelete(A[1], Steps))
       return E;

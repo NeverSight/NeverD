@@ -1,0 +1,38 @@
+//===- KernelFrameworkQueueValues.def - Public KMDF queue ABI -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// x64 WDF_IO_QUEUE_CONFIG and statuses from Microsoft's KMDF 1.33 headers.
+/// Legacy sizes follow shared/inc/private/common/fxversionedstructures.h.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_FRAMEWORK_VALUE(QueueConfigSize, 96)
+NEVERD_FRAMEWORK_VALUE(QueueConfigV17Size, 80)
+NEVERD_FRAMEWORK_VALUE(QueueConfigV19Size, 88)
+NEVERD_FRAMEWORK_VALUE(QueueConfigDispatch, 4)
+NEVERD_FRAMEWORK_VALUE(QueueConfigPowerManaged, 8)
+NEVERD_FRAMEWORK_VALUE(QueueConfigAllowZeroLength, 12)
+NEVERD_FRAMEWORK_VALUE(QueueConfigIsDefault, 13)
+NEVERD_FRAMEWORK_VALUE(QueueConfigDefault, 16)
+NEVERD_FRAMEWORK_VALUE(QueueConfigRead, 24)
+NEVERD_FRAMEWORK_VALUE(QueueConfigWrite, 32)
+NEVERD_FRAMEWORK_VALUE(QueueConfigDeviceControl, 40)
+NEVERD_FRAMEWORK_VALUE(QueueConfigInternalDeviceControl, 48)
+NEVERD_FRAMEWORK_VALUE(QueueConfigStop, 56)
+NEVERD_FRAMEWORK_VALUE(QueueConfigResume, 64)
+NEVERD_FRAMEWORK_VALUE(QueueConfigCanceled, 72)
+NEVERD_FRAMEWORK_VALUE(QueueConfigPresentedRequests, 80)
+NEVERD_FRAMEWORK_VALUE(QueueConfigDriver, 88)
+NEVERD_FRAMEWORK_VALUE(QueueDispatchSequential, 1)
+NEVERD_FRAMEWORK_VALUE(QueueDispatchParallel, 2)
+NEVERD_FRAMEWORK_VALUE(QueueDispatchManual, 3)
+NEVERD_FRAMEWORK_VALUE(QueuePowerUseDefault, 2)
+NEVERD_FRAMEWORK_VALUE(QueueNoCallback, 0xc020020b)
+NEVERD_FRAMEWORK_VALUE(QueueInvalidDeviceRequest, 0xc0000010)
+NEVERD_FRAMEWORK_VALUE(QueueInvalidDeviceState, 0xc0000184)
+NEVERD_FRAMEWORK_VALUE(QueueInvalidOutputParameter, 0xc00000f2)
+NEVERD_FRAMEWORK_VALUE(QueueUnsuccessful, 0xc0000001)
