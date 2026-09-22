@@ -145,6 +145,8 @@ KernelModel::argumentCount(const KernelExportRegistry::Export &Export) {
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == KernelProvider)
     return argumentCount(Export.Name);
+  if (Export.Kind == KernelExportRegistry::ExportKind::DMAFunction)
+    return dmaArgumentCount(Export.Name);
   return KernelFramework::argumentCount(Export);
 }
 
@@ -155,6 +157,8 @@ llvm::Expected<uint64_t> KernelModel::call(
   if (Export.Kind == KernelExportRegistry::ExportKind::ModuleExport &&
       Export.Module == KernelProvider)
     return call(Export.Name, Arguments, ReadArgument);
+  if (Export.Kind == KernelExportRegistry::ExportKind::DMAFunction)
+    return callDMAExport(Export, Arguments);
   if (!Framework)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "framework model is not initialized");
@@ -165,6 +169,8 @@ llvm::Expected<uint64_t> KernelModel::call(
 }
 
 std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
+  if (PendingDMACall)
+    return std::exchange(PendingDMACall, std::nullopt);
   if (PendingInterruptCall)
     return std::exchange(PendingInterruptCall, std::nullopt);
   if (auto Call = takeWdmGuestCall())
@@ -191,6 +197,8 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     return finishWdmGuestCall(Token.ID, Result);
   case GuestCallOwner::Interrupt:
     return finishInterruptCall(Token.ID, Result);
+  case GuestCallOwner::DMA:
+    return finishDMACall(Token.ID);
   }
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "guest callback has an invalid owner");

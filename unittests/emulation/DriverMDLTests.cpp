@@ -111,8 +111,10 @@ TEST(DriverMDL, NonpagedPoolRejectsAdditionalMappingAndUnmapping) {
   expectRejected(8, "existing system-space mapping");
 }
 
-TEST(DriverMDL, PublicFieldsAreReadOnlyAndPhysicalStateRemainsOpaque) {
-  expectRejected(9, "PFN");
+TEST(DriverMDL, BuiltPhysicalPagesAreReadableAndPublicFieldsRemainReadOnly) {
+  auto Result = emulateDriver(mdlFixture(), mdlScenario(9));
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  expectCompleted(*Result);
   expectRejected(24, "process");
   expectRejected(10, "read-only");
   expectRejected(28, "read-only");

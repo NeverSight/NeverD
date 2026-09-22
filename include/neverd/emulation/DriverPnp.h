@@ -13,6 +13,7 @@
 #ifndef NEVERD_EMULATION_DRIVERPNP_H
 #define NEVERD_EMULATION_DRIVERPNP_H
 
+#include "neverd/emulation/DriverDMA.h"
 #include "neverd/emulation/DriverInterrupts.h"
 #include "neverd/emulation/DriverResources.h"
 
@@ -122,6 +123,8 @@ struct DriverPnpDevice {
   std::vector<DriverMemoryResource> Resources{};
   /// Fixed interrupt assignments, following memory entries in each CM list.
   std::vector<DriverInterruptResource> Interrupts{};
+  /// Optional explicit bus-master capability and independent logical domain.
+  std::optional<DriverDmaConfig> Dma = std::nullopt;
 };
 
 struct DriverPnpOperation {

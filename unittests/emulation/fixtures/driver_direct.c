@@ -177,7 +177,7 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Device, IRP *Request) {
           if (Buffer[0] != 0x39)
             Status = (NTSTATUS)0xc000000dU;
         } else if (Action == 5) {
-          Observed = *(volatile U64 *)(Mdl + 1); // Physical PFNs are unmodeled.
+          Observed = *(volatile U64 *)(Mdl + 1); // Read the model-owned PFN.
         } else if (Action == 8) {
           MmMapLockedPagesSpecifyCache(Mdl, 0, 1, 0, 0, Priority);
         } else if (Action == 9) {

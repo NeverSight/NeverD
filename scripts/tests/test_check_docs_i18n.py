@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v13",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v14",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -258,6 +258,43 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         errors: list[str] = []
         i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
         self.assertTrue(any("interrupt example differs" in error for error in errors), errors)
+
+    def test_driver_dma_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("DriverDMA.h", "dma_events", "dma_transfers",
+                                     "logical_address", "map_registers", "read_memory",
+                                     "write_memory", "DmaWritable", "IoGetDmaAdapter",
+                                     "GetScatterGatherList", "PutScatterGatherList")),
+            ("architecture.md", ("KernelPhysicalMemory", "KernelDMAEvents",
+                                  "KernelModelPhysicalMemory", "KernelModelDMATransfers")),
+            ("testing.md", ("DriverDMAScenarioTests.cpp", "KernelPhysicalMemoryTests.cpp",
+                             "BackendBackingTests.cpp", "KernelDMATests.cpp",
+                             "KernelDMABridgeTests.cpp", "SchedulerDMATests.cpp",
+                             "DriverWDMDMATests.cpp", "NEVERD_WDM_DMA_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedDmaContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_dma_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-dma-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"after_100ns": 5', '"after_100ns": 6')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("DMA example differs" in error for error in errors), errors)
+
+    def test_driver_dma_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-dma-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("DMA example differs" in error for error in errors), errors)
 
     def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (

@@ -28,7 +28,8 @@ bool failed(uint32_t Status) { return Status & profile::NTStatusFailureMask; }
 
 llvm::Error KernelResources::configure(uint64_t PDO,
                                        const DriverPnpDevice &Configuration) {
-  if (Configuration.Resources.empty() && Configuration.Interrupts.empty())
+  if (Configuration.Resources.empty() && Configuration.Interrupts.empty() &&
+      !Configuration.Dma)
     return llvm::Error::success();
   if (!PDO || Devices.count(PDO) || !Configuration.InitialDevicePower ||
       Configuration.Bus != DriverBusKind::RegisterBank)
@@ -37,6 +38,7 @@ llvm::Error KernelResources::configure(uint64_t PDO,
   Record.ID = Configuration.ID;
   Record.Memory = Configuration.Resources;
   Record.Interrupts = Configuration.Interrupts;
+  Record.Dma = Configuration.Dma;
   Record.Power = *Configuration.InitialDevicePower;
   Devices.emplace(PDO, std::move(Record));
   return llvm::Error::success();
@@ -104,7 +106,7 @@ llvm::Error KernelResources::canStart(uint64_t PDO) const {
   if (!Device.Present || Device.Assigned || Device.Starting ||
       Device.Epoch == UINT64_MAX)
     return resourceError("START requires a present unassigned resource epoch");
-  return Check(PDO);
+  return StartCheck(PDO);
 }
 
 llvm::Error KernelResources::beginStart(uint64_t PDO) {

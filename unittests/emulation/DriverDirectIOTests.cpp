@@ -172,13 +172,13 @@ TEST(DriverDirectIO, CompletionRetainsDataAfterExplicitUnmapping) {
             (std::vector<uint8_t>{0x71, 2, 3, 0, 0}));
 }
 
-TEST(DriverDirectIO, PhysicalPageNumbersRemainExplicitlyUnmodeled) {
+TEST(DriverDirectIO, LockedPhysicalPageNumbersAreReadableWithoutChangingData) {
   auto Result = emulateDriver(directFixture(), directScenario(2, 5));
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
-  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-  EXPECT_NE(Result->Diagnostic.find("PFN"), std::string::npos);
-  ASSERT_EQ(Result->Requests.size(), 2u);
-  EXPECT_FALSE(Result->Requests[1].Completed);
+  ASSERT_TRUE(completed(*Result));
+  ASSERT_EQ(Result->Requests.size(), 4u);
+  EXPECT_EQ(Result->Requests[1].Output,
+            (std::vector<uint8_t>{0x11, 0x12, 0x13, 0x10, 0x10}));
 }
 
 TEST(DriverDirectIO, CompletionExpiresTheSystemMapping) {

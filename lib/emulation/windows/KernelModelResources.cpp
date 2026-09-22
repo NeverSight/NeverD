@@ -17,7 +17,9 @@
 namespace neverd::emulation {
 
 llvm::Error KernelModel::canReleaseResources(uint64_t PDO) const {
-  return llvm::joinErrors(MMIO.canRemove(PDO), Interrupts.canRelease(PDO));
+  return llvm::joinErrors(
+      llvm::joinErrors(MMIO.canRemove(PDO), Interrupts.canRelease(PDO)),
+      DMA.canReleasePDO(PDO));
 }
 
 llvm::Error KernelModel::initializePnpResources(ActiveRequest &Request) {

@@ -1,0 +1,17 @@
+//===- KernelPhysicalMemoryValues.def - RAM identity limits --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Physical window authority is shared with the public DMA configuration.
+/// Owner registrations are cumulative; the pin bound applies to live views.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_PHYSICAL_VALUE(PhysicalBase, DriverDmaPhysicalBase)
+NEVERD_KERNEL_PHYSICAL_VALUE(PhysicalSize, DriverDmaPhysicalSize)
+NEVERD_KERNEL_PHYSICAL_VALUE(PageSize, DriverDmaPageSize)
+NEVERD_KERNEL_PHYSICAL_VALUE(RegionLimit, 4096)
+NEVERD_KERNEL_PHYSICAL_VALUE(PinLimit, 2048)

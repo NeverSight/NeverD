@@ -33,6 +33,13 @@ namespace resourceField {
 #undef NEVERD_DRIVER_RESOURCE_FIELD
 } // namespace resourceField
 
+namespace dmaField {
+#define NEVERD_DRIVER_DMA_FIELD(Name, Spelling)                                \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverDMA.def"
+#undef NEVERD_DRIVER_DMA_FIELD
+} // namespace dmaField
+
 namespace interruptField {
 #define NEVERD_DRIVER_INTERRUPT_FIELD(Name, Spelling)                          \
   constexpr llvm::StringLiteral Name = Spelling;
@@ -57,6 +64,7 @@ constexpr llvm::StringRef RootFields[] = {
 };
 constexpr llvm::StringRef RequestFields[] = {
     interruptField::InterruptEvents,
+    dmaField::DmaEvents,
 #define NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Name, Spelling)
 #define NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Name, Spelling) Spelling,
 #include "DriverScenarioFields.def"
@@ -520,6 +528,116 @@ interruptEvents(const llvm::json::Value &Value) {
   return Result;
 }
 
+llvm::Expected<DriverDmaConfig>
+dmaConfiguration(const llvm::json::Value &Value) {
+  const auto *Object = Value.getAsObject();
+  if (!Object)
+    return invalid("dma must be an explicit object");
+  if (auto E = fields(*Object, {dmaField::AddressBits, dmaField::MaximumLength,
+                                dmaField::MapRegisters, dmaField::Alignment,
+                                dmaField::LogicalBase, dmaField::LogicalLength,
+                                dmaField::ScatterGather}))
+    return std::move(E);
+  DriverDmaConfig Result;
+  const std::pair<llvm::StringRef, uint32_t DriverDmaConfig::*> Words[] = {
+      {dmaField::AddressBits, &DriverDmaConfig::AddressBits},
+      {dmaField::MaximumLength, &DriverDmaConfig::MaximumLength},
+      {dmaField::MapRegisters, &DriverDmaConfig::MapRegisters},
+      {dmaField::Alignment, &DriverDmaConfig::Alignment}};
+  for (const auto &[Name, Member] : Words) {
+    const auto *Fact = Object->get(Name);
+    if (!Fact)
+      return invalid("dma requires explicit " + Name);
+    auto Parsed = unsigned32(*Fact, Name);
+    if (!Parsed)
+      return Parsed.takeError();
+    Result.*Member = *Parsed;
+  }
+  const std::pair<llvm::StringRef, uint64_t DriverDmaConfig::*> Addresses[] = {
+      {dmaField::LogicalBase, &DriverDmaConfig::LogicalBase},
+      {dmaField::LogicalLength, &DriverDmaConfig::LogicalLength}};
+  for (const auto &[Name, Member] : Addresses) {
+    const auto *Fact = Object->get(Name);
+    if (!Fact)
+      return invalid("dma requires explicit " + Name);
+    auto Parsed = unsigned64(*Fact, Name);
+    if (!Parsed)
+      return Parsed.takeError();
+    Result.*Member = *Parsed;
+  }
+  auto ScatterGather = Object->getBoolean(dmaField::ScatterGather);
+  if (!ScatterGather)
+    return invalid("dma requires explicit scatter_gather boolean");
+  Result.ScatterGather = *ScatterGather;
+  return Result;
+}
+
+llvm::Expected<std::vector<DriverDmaEvent>>
+dmaEvents(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->size() > DriverScenarioDmaEventsPerRequestLimit)
+    return invalid("dma_events must be a bounded array");
+  std::vector<DriverDmaEvent> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each DMA event must be an object");
+    if (auto E = fields(*Object, {dmaField::After100ns, dmaField::DeviceID,
+                                  dmaField::LogicalAddress, dmaField::Direction,
+                                  dmaField::Length, dmaField::Data}))
+      return std::move(E);
+    const auto *After = Object->get(dmaField::After100ns);
+    const auto *Address = Object->get(dmaField::LogicalAddress);
+    const auto *Length = Object->get(dmaField::Length);
+    auto DeviceID = Object->getString(dmaField::DeviceID);
+    auto Direction = Object->getString(dmaField::Direction);
+    if (!After || !Address || !Length || !DeviceID || !Direction)
+      return invalid("DMA events require explicit after_100ns, device_id, "
+                     "logical_address, direction and length");
+    DriverDmaEvent Event;
+    Event.DeviceID = DeviceID->str();
+    bool Found = false;
+#define NEVERD_DRIVER_DMA_DIRECTION(Name, Spelling)                            \
+  if (*Direction == Spelling) {                                                \
+    Event.Direction = DriverDmaDirection::Name;                                \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverDMA.def"
+#undef NEVERD_DRIVER_DMA_DIRECTION
+    if (!Found)
+      return invalid("unsupported DMA direction");
+    auto ParsedAfter = unsigned64(*After, dmaField::After100ns);
+    if (!ParsedAfter)
+      return ParsedAfter.takeError();
+    Event.After100ns = *ParsedAfter;
+    auto ParsedAddress = unsigned64(*Address, dmaField::LogicalAddress);
+    if (!ParsedAddress)
+      return ParsedAddress.takeError();
+    Event.LogicalAddress = *ParsedAddress;
+    auto ParsedLength = unsigned32(*Length, dmaField::Length);
+    if (!ParsedLength)
+      return ParsedLength.takeError();
+    Event.Length = *ParsedLength;
+    const auto *Data = Object->get(dmaField::Data);
+    if (Event.Direction == DriverDmaDirection::ReadMemory && Data)
+      return invalid("read_memory DMA events cannot specify data_hex");
+    if (Event.Direction == DriverDmaDirection::WriteMemory) {
+      auto Bytes = Data ? Data->getAsString() : std::nullopt;
+      if (!Bytes || Bytes->size() > DriverDmaMaximumLengthLimit * 2 ||
+          Bytes->size() % 2 || Bytes->size() / 2 != Event.Length ||
+          !std::all_of(Bytes->begin(), Bytes->end(), llvm::isHexDigit))
+        return invalid("write_memory DMA events require data_hex with exactly "
+                       "length bytes");
+      Event.Data.reserve(Event.Length);
+      for (size_t I = 0; I < Bytes->size(); I += 2)
+        Event.Data.push_back((llvm::hexDigitValue((*Bytes)[I]) << 4) |
+                             llvm::hexDigitValue((*Bytes)[I + 1]));
+    }
+    Result.push_back(std::move(Event));
+  }
+  return Result;
+}
+
 llvm::Expected<std::vector<DriverPnpDevice>>
 pnpDevices(const llvm::json::Value &Value) {
   const auto *Array = Value.getAsArray();
@@ -535,7 +653,7 @@ pnpDevices(const llvm::json::Value &Value) {
                          field::InitialSystemPower,
                          field::InitialReportedDevicePower,
                          field::RequestedDevicePower, resourceField::Resources,
-                         interruptField::Interrupts}))
+                         interruptField::Interrupts, dmaField::Dma}))
       return std::move(E);
     auto ID = Object->getString(field::ID);
     auto Bus = Object->getString(field::Bus);
@@ -572,6 +690,14 @@ pnpDevices(const llvm::json::Value &Value) {
       if (!ParsedInterrupts)
         return ParsedInterrupts.takeError();
       Device.Interrupts = std::move(*ParsedInterrupts);
+    }
+    if (const auto *Dma = Object->get(dmaField::Dma)) {
+      if (Device.Bus == DriverBusKind::ResourceFree)
+        return invalid("resource_free devices cannot specify dma");
+      auto ParsedDma = dmaConfiguration(*Dma);
+      if (!ParsedDma)
+        return ParsedDma.takeError();
+      Device.Dma = *ParsedDma;
     }
     if (Device.Bus == DriverBusKind::RegisterBank &&
         !Object->get(resourceField::Resources) &&
@@ -640,6 +766,17 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_REQUEST_KIND
   if (!KnownKind)
     return invalid("unsupported request kind '" + *Kind + "'");
+  if (const auto *Events = Object->get(dmaField::DmaEvents)) {
+    if (Result.Kind != DriverRequestKind::Read &&
+        Result.Kind != DriverRequestKind::Write &&
+        Result.Kind != DriverRequestKind::DeviceControl)
+      return invalid(
+          "dma_events is valid only for read, write and ioctl requests");
+    auto ParsedEvents = dmaEvents(*Events);
+    if (!ParsedEvents)
+      return ParsedEvents.takeError();
+    Result.DmaEvents = std::move(*ParsedEvents);
+  }
   if (const auto *Events = Object->get(interruptField::InterruptEvents)) {
     if (Result.Kind != DriverRequestKind::Read &&
         Result.Kind != DriverRequestKind::Write &&
@@ -940,8 +1077,104 @@ llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
   return llvm::Error::success();
 }
 
+llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices) {
+  for (const auto &Device : Devices) {
+    if (!Device.Dma)
+      continue;
+    if (Device.Bus != DriverBusKind::RegisterBank)
+      return invalid("dma requires a register_bank device");
+    const auto &Dma = *Device.Dma;
+    if (Dma.AddressBits != 32 && Dma.AddressBits != 64)
+      return invalid("DMA address_bits must be 32 or 64");
+    if (!Dma.MaximumLength || Dma.MaximumLength > DriverDmaMaximumLengthLimit)
+      return invalid("DMA maximum_length must be between 1 and 1 MiB");
+    if (!Dma.MapRegisters || Dma.MapRegisters > DriverDmaMapRegisterLimit)
+      return invalid("DMA map_registers must be between 1 and 256");
+    if (!Dma.Alignment || Dma.Alignment > DriverDmaAlignmentLimit ||
+        (Dma.Alignment & (Dma.Alignment - 1)))
+      return invalid("DMA alignment must be a power of two between 1 and 4096");
+    if (!Dma.LogicalBase || Dma.LogicalBase % DriverDmaPageSize)
+      return invalid("DMA logical_base must be nonzero and page aligned");
+    if (!Dma.LogicalLength || Dma.LogicalLength > DriverDmaLogicalLengthLimit ||
+        Dma.LogicalLength % DriverDmaPageSize)
+      return invalid(
+          "DMA logical_length must be page aligned from 4 KiB to 1 GiB");
+    if (Dma.LogicalBase > UINT64_MAX - Dma.LogicalLength)
+      return invalid("DMA logical aperture overflows 64 bits");
+    if (Dma.AddressBits == 32 &&
+        Dma.LogicalBase + Dma.LogicalLength - 1 > UINT32_MAX)
+      return invalid("DMA logical aperture exceeds address_bits");
+  }
+  // MDL page identities use this RAM reservation even without a DMA adapter.
+  // It is independent of every device logical domain and MMIO assignment.
+  for (const auto &Device : Devices)
+    for (const auto &Resource : Device.Resources)
+      if (Resource.Length &&
+          Resource.TranslatedStart <
+              DriverDmaPhysicalBase + DriverDmaPhysicalSize &&
+          (Resource.TranslatedStart >= DriverDmaPhysicalBase ||
+           Resource.Length > DriverDmaPhysicalBase - Resource.TranslatedStart))
+        return invalid(
+            "translated resource overlaps reserved DMA physical RAM");
+  return llvm::Error::success();
+}
+
+namespace {
+llvm::Error validateDmaEvents(const DriverOptions &Options) {
+  size_t Count = 0;
+  uint64_t Bytes = 0;
+  for (const auto &Request : Options.Requests) {
+    if (!Request.DmaEvents.empty() && Request.Kind != DriverRequestKind::Read &&
+        Request.Kind != DriverRequestKind::Write &&
+        Request.Kind != DriverRequestKind::DeviceControl)
+      return invalid(
+          "dma_events is valid only for read, write and ioctl requests");
+    if (Request.DmaEvents.size() > DriverScenarioDmaEventsPerRequestLimit)
+      return invalid("dma_events exceeds the per-request count limit");
+    if (Request.DmaEvents.size() > DriverScenarioDmaEventLimit - Count)
+      return invalid("dma_events exceeds the combined count limit");
+    Count += Request.DmaEvents.size();
+    for (const auto &Event : Request.DmaEvents) {
+      if (Event.After100ns > INT64_MAX)
+        return invalid("DMA after_100ns exceeds the signed 64-bit time limit");
+      if (!validDeviceID(Event.DeviceID))
+        return invalid(
+            "DMA event device_id must be a bounded ASCII identifier");
+      const auto Device = std::find_if(
+          Options.PnpDevices.begin(), Options.PnpDevices.end(),
+          [&](const DriverPnpDevice &D) { return D.ID == Event.DeviceID; });
+      if (Device == Options.PnpDevices.end() || !Device->Dma)
+        return invalid("DMA event device_id must name a configured DMA device");
+      if (!Event.Length || Event.Length > DriverDmaMaximumLengthLimit)
+        return invalid("DMA event length must be between 1 and 1 MiB");
+      if (Event.LogicalAddress > UINT64_MAX - Event.Length)
+        return invalid("DMA event logical address interval overflows 64 bits");
+      if (Event.Length > DriverScenarioDmaBytesLimit - Bytes)
+        return invalid("dma_events exceeds the combined byte limit");
+      Bytes += Event.Length;
+      switch (Event.Direction) {
+      case DriverDmaDirection::ReadMemory:
+        if (!Event.Data.empty())
+          return invalid("read_memory DMA events cannot contain data");
+        break;
+      case DriverDmaDirection::WriteMemory:
+        if (Event.Data.size() != Event.Length)
+          return invalid(
+              "write_memory DMA events require exactly length bytes");
+        break;
+      default:
+        return invalid("unsupported DMA direction");
+      }
+    }
+  }
+  return llvm::Error::success();
+}
+} // namespace
+
 llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices) {
   if (auto E = validateDriverInterrupts(Devices))
+    return E;
+  if (auto E = validateDriverDma(Devices))
     return E;
   using Interval = std::pair<uint64_t, uint64_t>;
   const auto HasOverlap = [](std::vector<Interval> Ranges) {
@@ -1073,6 +1306,8 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   }
   if (Options.Requests.size() > DriverScenarioRequestLimit)
     return invalid("at most 64 requests are permitted");
+  if (auto E = validateDmaEvents(Options))
+    return E;
   uint64_t Total = 0;
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {

@@ -28,6 +28,13 @@ namespace resourceField {
 #undef NEVERD_DRIVER_RESOURCE_FIELD
 } // namespace resourceField
 
+namespace dmaField {
+#define NEVERD_DRIVER_DMA_FIELD(Name, Spelling)                                \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverDMA.def"
+#undef NEVERD_DRIVER_DMA_FIELD
+} // namespace dmaField
+
 namespace interruptField {
 #define NEVERD_DRIVER_INTERRUPT_FIELD(Name, Spelling)                          \
   constexpr llvm::StringLiteral Name = Spelling;
@@ -47,9 +54,11 @@ const char *requestKindName(DriverRequestKind Kind) {
 }
 
 bool scenarioSucceeded(const DriverResult &Result) {
-  size_t InterruptCount = 0;
-  for (const auto &Request : Result.Configuration.Requests)
+  size_t InterruptCount = 0, DmaCount = 0;
+  for (const auto &Request : Result.Configuration.Requests) {
     InterruptCount += Request.InterruptEvents.size();
+    DmaCount += Request.DmaEvents.size();
+  }
   const size_t ScenarioRequests =
       llvm::count_if(Result.Requests, [](const DriverRequestResult &Request) {
         return Request.Origin == DriverRequestOrigin::Scenario;
@@ -58,6 +67,7 @@ bool scenarioSucceeded(const DriverResult &Result) {
       *Result.NTStatus != 0 ||
       ScenarioRequests != Result.Configuration.Requests.size() ||
       InterruptCount != Result.Interrupts.size() ||
+      DmaCount != Result.DmaTransfers.size() ||
       Result.PnpDevices.size() != Result.Configuration.PnpDevices.size() ||
       (Result.Configuration.Unload && !Result.UnloadCompleted))
     return false;
@@ -65,6 +75,13 @@ bool scenarioSucceeded(const DriverResult &Result) {
         return Event.OccurredAt100ns && Event.DeliveredAt100ns &&
                Event.ReturnedAt100ns && Event.ReturnValue &&
                !Event.UndeliveredReason;
+      }))
+    return false;
+  if (!llvm::all_of(Result.DmaTransfers, [](const DriverDmaResult &Event) {
+        return Event.OccurredAt100ns && Event.CompletedAt100ns &&
+               !Event.FailureReason &&
+               (Event.Direction != DriverDmaDirection::ReadMemory ||
+                Event.Data.size() == Event.Length);
       }))
     return false;
   if (!llvm::all_of(Result.PnpDevices, [](const DriverPnpDeviceResult &Device) {
@@ -312,6 +329,52 @@ interruptEventConfigurationJSON(const DriverOptions &Options) {
   return Result;
 }
 
+const char *dmaDirectionName(DriverDmaDirection Direction) {
+  switch (Direction) {
+#define NEVERD_DRIVER_DMA_DIRECTION(Name, Spelling)                            \
+  case DriverDmaDirection::Name:                                               \
+    return Spelling;
+#include "neverd/emulation/DriverDMA.def"
+#undef NEVERD_DRIVER_DMA_DIRECTION
+  }
+  llvm_unreachable("invalid driver DMA direction");
+}
+
+llvm::json::Object dmaConfigurationJSON(const DriverDmaConfig &Dma) {
+  return llvm::json::Object{
+      {dmaField::AddressBits, Dma.AddressBits},
+      {dmaField::MaximumLength, Dma.MaximumLength},
+      {dmaField::MapRegisters, Dma.MapRegisters},
+      {dmaField::Alignment, Dma.Alignment},
+      {dmaField::LogicalBase, "0x" + llvm::utohexstr(Dma.LogicalBase)},
+      {dmaField::LogicalLength, Dma.LogicalLength},
+      {dmaField::ScatterGather, Dma.ScatterGather}};
+}
+
+llvm::json::Array dmaEventConfigurationJSON(const DriverOptions &Options) {
+  llvm::json::Array Result;
+  for (size_t I = 0; I < Options.Requests.size(); ++I) {
+    const auto &Events = Options.Requests[I].DmaEvents;
+    for (size_t J = 0; J < Events.size(); ++J) {
+      const auto &Event = Events[J];
+      llvm::json::Object Item{
+          {dmaField::SourceRequestIndex, static_cast<uint64_t>(I)},
+          {dmaField::EventIndex, static_cast<uint64_t>(J)},
+          {dmaField::After100ns, Event.After100ns},
+          {dmaField::DeviceID, Event.DeviceID},
+          {dmaField::LogicalAddress,
+           "0x" + llvm::utohexstr(Event.LogicalAddress)},
+          {dmaField::Direction, dmaDirectionName(Event.Direction)},
+          {dmaField::Length, Event.Length}};
+      if (Event.Direction == DriverDmaDirection::WriteMemory)
+        Item[dmaField::Data] =
+            llvm::toHex(llvm::ArrayRef<uint8_t>(Event.Data), true);
+      Result.push_back(std::move(Item));
+    }
+  }
+  return Result;
+}
+
 llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
   llvm::json::Array Devices;
   for (const auto &Device : Options.PnpDevices) {
@@ -339,6 +402,8 @@ llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
       Item[interruptField::Interrupts] =
           interruptConfigurationJSON(Device.Interrupts);
     }
+    if (Device.Dma)
+      Item[dmaField::Dma] = dmaConfigurationJSON(*Device.Dma);
     Devices.push_back(std::move(Item));
   }
   return Devices;
@@ -394,6 +459,7 @@ std::string driverResultJSON(const DriverResult &Result) {
       {field::PnpDevices, pnpConfigurationJSON(Result.Configuration)},
       {interruptField::InterruptEvents,
        interruptEventConfigurationJSON(Result.Configuration)},
+      {dmaField::DmaEvents, dmaEventConfigurationJSON(Result.Configuration)},
       {field::KernelExports, std::move(Exports)}};
   if (Result.Fault) {
     const auto &Fault = *Result.Fault;
@@ -483,6 +549,37 @@ std::string driverResultJSON(const DriverResult &Result) {
     Interrupts.push_back(std::move(Item));
   }
   Root[interruptField::Interrupts] = std::move(Interrupts);
+  llvm::json::Array DmaTransfers;
+  for (const auto &Transfer : Result.DmaTransfers) {
+    llvm::json::Object Item{
+        {dmaField::SourceRequestIndex, Transfer.SourceRequestIndex},
+        {dmaField::EventIndex, Transfer.EventIndex},
+        {dmaField::DeviceID, Transfer.DeviceID},
+        {dmaField::Epoch, Transfer.Epoch},
+        {dmaField::DueAt100ns, Transfer.DueAt100ns},
+        {dmaField::LogicalAddress, Address(Transfer.LogicalAddress)},
+        {dmaField::Length, Transfer.Length},
+        {dmaField::Direction, dmaDirectionName(Transfer.Direction)},
+        {dmaField::OccurredAt100ns, nullptr},
+        {dmaField::CompletedAt100ns, nullptr},
+        {dmaField::Mapping, nullptr},
+        {dmaField::Adapter, nullptr},
+        {dmaField::FailureReason, nullptr},
+        {dmaField::Data,
+         llvm::toHex(llvm::ArrayRef<uint8_t>(Transfer.Data), true)}};
+    if (Transfer.OccurredAt100ns)
+      Item[dmaField::OccurredAt100ns] = *Transfer.OccurredAt100ns;
+    if (Transfer.CompletedAt100ns)
+      Item[dmaField::CompletedAt100ns] = *Transfer.CompletedAt100ns;
+    if (Transfer.Mapping)
+      Item[dmaField::Mapping] = Address(*Transfer.Mapping);
+    if (Transfer.Adapter)
+      Item[dmaField::Adapter] = Address(*Transfer.Adapter);
+    if (Transfer.FailureReason)
+      Item[dmaField::FailureReason] = *Transfer.FailureReason;
+    DmaTransfers.push_back(std::move(Item));
+  }
+  Root[dmaField::DmaTransfers] = std::move(DmaTransfers);
   llvm::json::Array Calls;
   for (const auto &Call : Result.Calls) {
     llvm::json::Array Arguments;

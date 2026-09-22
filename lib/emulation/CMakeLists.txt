@@ -18,6 +18,7 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelExports.cpp
   windows/KernelModel.cpp
   windows/KernelModelIO.cpp
+  windows/KernelModelPhysicalMemory.cpp
   windows/KernelModelMDL.cpp
   windows/KernelModelIRPStack.cpp
   windows/KernelModelDeviceStack.cpp
@@ -31,6 +32,11 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelInterrupts.cpp
   windows/KernelModelInterruptEvents.cpp
   windows/KernelResources.cpp
+  windows/KernelPhysicalMemory.cpp
+  windows/KernelDMA.cpp
+  windows/KernelDMAEvents.cpp
+  windows/KernelModelDMA.cpp
+  windows/KernelModelDMATransfers.cpp
   windows/KernelMMIO.cpp
   windows/KernelModelRemoveLocks.cpp
   windows/KernelRemoveLocks.cpp

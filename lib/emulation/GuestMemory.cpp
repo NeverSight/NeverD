@@ -29,6 +29,21 @@ llvm::Error GuestMemory::unmapMMIO(uint64_t, uint64_t) {
       llvm::inconvertibleErrorCode(),
       "guest memory does not support MMIO unmapping");
 }
+llvm::Error GuestMemory::validateBacking(uint64_t, uint64_t) const {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support RAM backing access");
+}
+llvm::Error GuestMemory::readBacking(uint64_t, llvm::MutableArrayRef<uint8_t>) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support RAM backing reads");
+}
+llvm::Error GuestMemory::writeBacking(uint64_t, llvm::ArrayRef<uint8_t>) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support RAM backing writes");
+}
 llvm::Expected<uint64_t> GuestMemory::readInteger(uint64_t Address,
                                                   unsigned Size) {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)

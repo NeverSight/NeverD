@@ -519,6 +519,51 @@ llvm::Error UnicornBackend::fetch(uint64_t Address,
   return check(uc_mem_read(State->Engine, Address, Bytes.data(), Bytes.size()),
                "fetch guest instruction");
 }
+
+llvm::Error UnicornBackend::validateBacking(uint64_t Address,
+                                            uint64_t Size) const {
+  if (State->Running || State->DeviceCallbackActive)
+    return failure(
+        "RAM backing access requires a stopped CPU without an active "
+        "device callback");
+  if (State->effectsStopped())
+    return failure("cannot access RAM backing on a faulted CPU");
+  if (State->accessFault(Address, Size, 0))
+    return failure("RAM backing range is unmapped or overflowing");
+  if (State->overlappingMMIO(Address, Size))
+    return failure("RAM backing access cannot include MMIO");
+  return llvm::Error::success();
+}
+
+llvm::Error UnicornBackend::readBacking(uint64_t Address,
+                                        llvm::MutableArrayRef<uint8_t> Bytes) {
+  if (auto E = validateBacking(Address, Bytes.size()))
+    return E;
+  const uc_err Status = Bytes.empty() ? UC_ERR_OK
+                                      : uc_mem_read(State->Engine, Address,
+                                                    Bytes.data(), Bytes.size());
+  if (Status != UC_ERR_OK)
+    State->memoryFault(BackendFaultKind::UnhandledException,
+                       BackendAccessKind::Read, Address, Bytes.size());
+  return check(Status, "read RAM backing");
+}
+
+llvm::Error UnicornBackend::writeBacking(uint64_t Address,
+                                         llvm::ArrayRef<uint8_t> Bytes) {
+  if (auto E = validateBacking(Address, Bytes.size()))
+    return E;
+  const uc_err Status =
+      Bytes.empty()
+          ? UC_ERR_OK
+          : uc_mem_write(State->Engine, Address, Bytes.data(), Bytes.size());
+  // Unicorn's host write bypasses CPU permissions internally. An unexpected
+  // failure does not promise a usable engine or a restored internal readonly
+  // state, so preserve the fault and prohibit resume rather than retrying.
+  if (Status != UC_ERR_OK)
+    State->memoryFault(BackendFaultKind::UnhandledException,
+                       BackendAccessKind::Write, Address, Bytes.size());
+  return check(Status, "write RAM backing");
+}
 llvm::Expected<uint64_t> UnicornBackend::reg(X64Register Register) {
   uint64_t Value = 0;
   if (auto E = check(uc_reg_read(State->Engine, registerID(Register), &Value),
