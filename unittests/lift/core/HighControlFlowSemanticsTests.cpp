@@ -457,6 +457,56 @@ TEST(HighControlFlowSemantics, LowSlicesIgnoreOnlyUnobservedConcatPadding) {
   }
 }
 
+TEST(HighControlFlowSemantics, VectorCarrierSlicesKeepOnlyProvenLowBytes) {
+  for (unsigned LowBytes : {4U, 8U})
+    for (unsigned Mutation = 0; Mutation < 9; ++Mutation)
+      for (const bool Cast : {false, true}) {
+        auto High = HighExpr::makeUndef(16 - LowBytes);
+        auto Low = HighExpr::makeCall("low_effect", 0x4000, {});
+        Low->Type = NdType::makeInt(LowBytes, Mutation == 8);
+        if (Mutation == 1)
+          High = HighExpr::makeLoad(local(0), NdType::makeInt(16 - LowBytes));
+        if (Mutation == 2) {
+          High = HighExpr::makeCall("high_effect", 0x5000, {});
+          High->Type = NdType::makeInt(16 - LowBytes);
+        }
+        if (Mutation == 3)
+          High->MemoryOrdering = NdMemoryOrdering::Acquire;
+        if (Mutation == 4)
+          High->IntrinsicOutputs = {local(2)->Var};
+        auto Joined = concatenate(High, Low);
+        if (Mutation == 5)
+          Joined->Type = NdType::makeInt(15, false);
+        auto View = byteSlice(Joined, 0, Mutation == 6 ? 16 : LowBytes);
+        if (Cast) {
+          View->Kind = ExprKind::Cast;
+          View->CastTo = View->Type;
+          View->Operands = {Joined};
+        }
+        if (Mutation == 7) {
+          if (Cast)
+            View->CastTo = NdType::makeFloat(LowBytes);
+          else
+            View->Operands[1]->ConstVal = 1;
+        }
+        HighFunc F;
+        F.Body = {result(0, View), result(0, Joined)};
+        simplifyAllExprs(F.Body);
+        if (!Mutation)
+          EXPECT_EQ(F.Body[0].RetVal, Low);
+        else if (Mutation == 8) {
+          ASSERT_EQ(F.Body[0].RetVal->Kind, ExprKind::Cast);
+          EXPECT_EQ(F.Body[0].RetVal->Operands[0], Low);
+          EXPECT_EQ(F.Body[0].RetVal->CastTo->Size, LowBytes);
+          EXPECT_FALSE(F.Body[0].RetVal->CastTo->IsSigned);
+        } else
+          EXPECT_NE(F.Body[0].RetVal, Low) << Mutation;
+        EXPECT_EQ(F.Body[1].RetVal, Joined);
+        EXPECT_EQ(Joined->Operands[0], High);
+        EXPECT_EQ(Joined->Operands[1], Low);
+      }
+}
+
 TEST(HighControlFlowSemantics, LowSliceFoldingKeepsEffectsAndObservedUnknowns) {
   for (unsigned Case = 0; Case < 7; ++Case) {
     auto High = byteSlice(local(0), 4, 4);

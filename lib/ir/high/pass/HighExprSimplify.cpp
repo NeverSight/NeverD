@@ -199,7 +199,7 @@ static void simplifyExprRecursive(ExprPtr &E,
     if (Joined && Joined->Kind == ExprKind::BinOp &&
         Joined->Op == NdOp::CONCAT && Joined->Operands.size() == 2 &&
         Joined->Type && Joined->Type->Kind == NdTypeKind::Int &&
-        Joined->Type->Size <= 8 && Joined->IntrinsicId == Intrinsic::None &&
+        Joined->Type->Size <= 16 && Joined->IntrinsicId == Intrinsic::None &&
         Joined->IntrinsicOutputs.empty() &&
         Joined->MemoryOrdering == NdMemoryOrdering::None &&
         Joined->MemoryAddressSpace == NdMemoryAddressSpace::Default) {
