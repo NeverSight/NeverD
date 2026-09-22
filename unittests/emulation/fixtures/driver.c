@@ -115,6 +115,15 @@ NTSTATUS DriverEntry(DRIVER_OBJECT *Driver, UNICODE_STRING *RegistryPath) {
   return 0;
 #elif DRIVER_CASE == 11
   return 0x103; // STATUS_PENDING is not valid asynchronous DriverEntry.
+#elif DRIVER_CASE == 12
+  // A mapped stack can still point at opaque modeled data. The final fixed
+  // IoCreateDevice argument overlaps an unregistered dispatch-table field.
+  __asm__ volatile("lea 0x38(%%rcx), %%rsp\n\t"
+                   "jmp *__imp_IoCreateDevice(%%rip)"
+                   :
+                   : "c"(Driver)
+                   : "memory");
+  __builtin_unreachable();
 #else
   if (Counter != 0)
     return (NTSTATUS)0xc000000dU;

@@ -13,6 +13,7 @@
 #include "unicorn/UnicornBackend.h"
 #include "windows/DriverImage.h"
 #include "windows/KernelModel.h"
+#include "windows/WindowsKernelLayout.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -130,6 +131,44 @@ TEST_F(DriverKernelModel, PoolOwnershipSurvivesBadTagAndRejectsUseAfterFree) {
   EXPECT_NE(denied(Pointer + 47, 1, true).find("freed"), std::string::npos);
   EXPECT_NE(failure("ExFreePoolWithTag", {Pointer, Tag}).find("freed"),
             std::string::npos);
+}
+
+TEST_F(DriverKernelModel, MDLMappingIgnoresUnspecifiedNarrowArgumentHighBits) {
+  using namespace windows;
+  invoke("IoCreateDevice",
+         {Model->driverObject(), 0, 0, UnknownDeviceType, 0, 0, Scratch});
+  for (unsigned Major : {0u, 14u}) {
+    const uint64_t Slot =
+        Model->driverObject() + DriverDispatchOffset + Major * 8;
+    success(Model->validateGuestAccess(Slot, 8, true));
+    success(Memory->writeInteger(Slot, Entry, 8));
+  }
+  DriverRequest Create;
+  Create.Kind = DriverRequestKind::Create;
+  auto Call = Model->beginRequest(Create);
+  ASSERT_TRUE(static_cast<bool>(Call)) << llvm::toString(Call.takeError());
+  const uint64_t IRP = Call->Argument1;
+  success(Model->validateGuestAccess(IRP + IRPStatusOffset, 16, true));
+  success(Memory->writeInteger(IRP + IRPStatusOffset, 0, 4));
+  success(Memory->writeInteger(IRP + IRPInformationOffset, 0, 8));
+  invoke("IofCompleteRequest", {IRP, 0});
+  success(Model->finishRequest(0));
+  DriverRequest IO;
+  IO.ControlCode = 0x222002;
+  IO.OutputSize = 2;
+  IO.DirectInput = {0xab, 0xcd};
+  Call = Model->beginRequest(IO);
+  ASSERT_TRUE(static_cast<bool>(Call)) << llvm::toString(Call.takeError());
+  const uint64_t MDL = integer(Call->Argument1 + IRPMdlOffset);
+  constexpr uint64_t Upper = 0xaabbccdd00000000;
+  const uint64_t Pointer = invoke("MmMapLockedPagesSpecifyCache",
+                                  {MDL, Upper, Upper | MmCached, 0,
+                                   Upper | 0x100, Upper | NormalPagePriority});
+  ASSERT_NE(Pointer, 0u);
+  EXPECT_EQ(bytes(Pointer, 2), (std::vector<uint8_t>{0xab, 0xcd}));
+  EXPECT_EQ(
+      invoke("MmGetSystemAddressForMdlSafe", {MDL, Upper | NormalPagePriority}),
+      Pointer);
 }
 
 TEST_F(DriverKernelModel, UnicodeInitializationUsesByteLengthsAndNullSource) {

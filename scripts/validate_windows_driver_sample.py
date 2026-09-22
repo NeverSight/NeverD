@@ -6,7 +6,7 @@
 # ===----------------------------------------------------------------------===#
 #
 # Download, verify and build Microsoft's unmodified SIOCTL sample, then check
-# the bounded buffered-I/O scenario. This opt-in validation needs network access,
+# buffered and direct-I/O scenarios. This opt-in validation needs network access,
 # Clang, LLD and MinGW-w64's DDK headers and nm. No host driver is loaded.
 #
 # ===----------------------------------------------------------------------===#
@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -39,6 +40,7 @@ def main() -> None:
     parser.add_argument("--linker", default="lld-link")
     parser.add_argument("--headers", type=Path, default=Path("/usr/share/mingw-w64/include"))
     parser.add_argument("--nm", default="nm")
+    parser.add_argument("--debug", action="store_true", help="Enable the sample's DBG logging")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -59,7 +61,7 @@ def main() -> None:
         [args.clang, "--target=x86_64-w64-windows-gnu",
          "-isystem", str(args.headers), "-isystem", str(args.headers / "ddk"),
          "-fms-extensions", "-Dtry=__try", "-Dexcept=__except", "-D_Dispatch_type_(x)=",
-         "-DMdlMappingNoExecute=0x40000000", "-DDBG=0", "-D_WIN64", "-D_AMD64_", "-D_M_AMD64",
+         "-DMdlMappingNoExecute=0x40000000", f"-DDBG={int(args.debug)}", "-D_WIN64", "-D_AMD64_", "-D_M_AMD64",
          "-fno-stack-protector", "-O2", "-c", str(output / "sioctl.c"),
          "-o", str(output / "sioctl.obj")],
         [args.linker, "/machine:x64", "/entry:DriverEntry", "/subsystem:native", "/driver",
@@ -79,12 +81,29 @@ def main() -> None:
     for command in commands[1:]:
         subprocess.run(command, check=True, timeout=60)
     (output / "build-commands.json").write_text(json.dumps(commands, indent=2) + "\n")
-    scenario = output / "scenario.json"
-    scenario.write_text(json.dumps(manifest["scenario"], indent=2) + "\n")
-    run = subprocess.run([str(args.neverd.resolve()), "emulate-driver", str(output / "sioctl.sys"),
+    for transfer in manifest["transfers"]:
+        validate_transfer(args.neverd.resolve(), output, manifest, transfer, args.debug)
+    print(f"Validated Microsoft SIOCTL: buffered, in-direct and out-direct IOCTLs, "
+          f"default cleanup, close and unload (DBG={int(args.debug)}).\n{output}")
+
+
+def validate_transfer(neverd: Path, output: Path, manifest: dict,
+                      transfer: dict, debug: bool) -> None:
+    configuration = copy.deepcopy(manifest["scenario"])
+    request = configuration["requests"][1]
+    expected = transfer["expected_output"].encode()
+    request["code"] = transfer["code"]
+    request["output_size"] = len(expected)
+    if "direct_input" in transfer:
+        request["direct_input"] = transfer["direct_input"].encode().hex()
+    # Preserve the original artifact names for the buffered acceptance case.
+    suffix = "" if transfer["name"] == "buffered" else f'-{transfer["name"]}'
+    scenario = output / f"scenario{suffix}.json"
+    scenario.write_text(json.dumps(configuration, indent=2) + "\n")
+    run = subprocess.run([str(neverd), "emulate-driver", str(output / "sioctl.sys"),
                           "--scenario", str(scenario)], capture_output=True, text=True, timeout=30)
-    (output / "report.json").write_text(run.stdout)
-    (output / "stderr.txt").write_text(run.stderr)
+    (output / f"report{suffix}.json").write_text(run.stdout)
+    (output / f"stderr{suffix}.txt").write_text(run.stderr)
     require(bool(run.stdout), f"No report: {run.stderr}")
     report = json.loads(run.stdout)
     require(report["stop_reason"] == "returned", f"Incomplete execution: {report['diagnostic']}")
@@ -94,12 +113,13 @@ def main() -> None:
     expected_statuses = [0, 0, manifest["expected_cleanup_status"], 0]
     require([item["io_status"] for item in requests] == expected_statuses, "Unexpected completion status")
     require([item["dispatch_status"] for item in requests] == expected_statuses, "Unexpected dispatch status")
-    require(bytes.fromhex(requests[1]["output_hex"]) == manifest["expected_output"].encode(), "Wrong IOCTL output")
+    require(bytes.fromhex(requests[1]["output_hex"]) == expected, "Wrong IOCTL output")
     require(not report["devices"], "Device leaked after unload")
     # Upstream has no CLEANUP handler. The modeled default completes with
     # STATUS_INVALID_DEVICE_REQUEST, still allowing CLOSE and unload.
     require(run.returncode == 2 and report["scenario_success"] is False, "Cleanup failure was hidden")
-    print(f"Validated Microsoft SIOCTL: DriverEntry, buffered IOCTL, default cleanup, close, unload.\n{output / 'report.json'}")
+    if debug:
+        require(bool(report["messages"]), "Debug build produced no observed messages")
 
 
 if __name__ == "__main__":

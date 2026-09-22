@@ -9,3 +9,11 @@ EXPORTS
   IoDeleteSymbolicLink
   IofCompleteRequest
   ZwOpenFile
+  MmMapLockedPagesSpecifyCache
+  MmUnmapLockedPages
+  DbgPrint
+  DbgPrintEx
+  MmGetSystemRoutineAddress
+  RtlCopyUnicodeString
+  RtlCompareUnicodeString
+  RtlEqualUnicodeString

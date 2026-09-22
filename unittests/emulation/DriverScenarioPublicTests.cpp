@@ -107,9 +107,17 @@ TEST_F(DriverScenarioPublic,
                                                 nullptr),
             nullptr);
   EXPECT_NE(error().find("required"), std::string::npos);
-  for (const std::string &JSON :
-       {std::string("{"), std::string(R"({"typo":true})"),
-        std::string(NEVERD_DRIVER_SCENARIO_JSON_LIMIT + 1, ' ')}) {
+  for (
+      const std::string &JSON :
+      {std::string("{"), std::string(R"({"typo":true})"),
+       std::string(
+           R"({"requests":[{"kind":"read","byte_offset":"0x7fffffffffffffff","output_size":1}]})"),
+       std::string(
+           R"({"requests":[{"kind":"write","byte_offset":9223372036854775807,"input":"ab"}]})"),
+       std::string(
+           R"({"requests":[{"kind":"ioctl","code":0,"direct_input":"aa","output_size":1}]})"),
+       std::string(NEVERD_DRIVER_SCENARIO_JSON_LIMIT + 1, ' ')}) {
+    SCOPED_TRACE(JSON.size() > 256 ? "oversized scenario" : JSON);
     EXPECT_EQ(neverd_emulate_driver_scenario_json(Session, "missing.sys",
                                                   JSON.c_str(), nullptr),
               nullptr);
@@ -171,6 +179,73 @@ TEST_F(DriverScenarioPublic, CLIRunsOrderedLifecycleScenario) {
   ASSERT_NE(Parsed->getAsObject(), nullptr);
   EXPECT_EQ(Parsed->getAsObject()->getBoolean("scenario_success"), true);
   EXPECT_EQ(Parsed->getAsObject()->getBoolean("unload_completed"), true);
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
+  const char *Scenario = R"({"requests":[
+    {"kind":"create","device":"\\Device\\NeverDDirect","file":7},
+    {"kind":"ioctl","file":7,"code":"0x222002","input":"10",
+     "direct_input":"010203","output_size":5},
+    {"kind":"cleanup","file":7},{"kind":"close","file":7}
+  ],"unload":true})";
+  for (bool CLI : {false, true}) {
+    auto Parsed =
+        llvm::json::parse(CLI ? runCLI(Scenario, 0, "driver_direct")
+                              : takeString(neverd_emulate_driver_scenario_json(
+                                    Session, fixture("driver_direct").c_str(),
+                                    Scenario, nullptr)));
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << llvm::toString(Parsed.takeError());
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-synchronous-v2");
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 4u);
+    const auto *IO = (*Requests)[1].getAsObject();
+    ASSERT_NE(IO, nullptr);
+    EXPECT_EQ(IO->getInteger("file"), 7);
+    EXPECT_EQ(IO->getString("output_hex"), "1112131010");
+  }
+}
+
+TEST_F(DriverScenarioPublic, ExplicitExportAbsenceControlsTheGuestBranch) {
+  auto Parsed = llvm::json::parse(runCLI(
+      R"({"kernel_exports":{"ExAllocatePool2":false}})", 2, "driver_runtime"));
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  EXPECT_EQ(Report->getString("stop_reason"), "returned");
+  EXPECT_EQ(Report->getInteger("nt_status"), 0xc000000dULL);
+  const auto *Configuration = Report->getObject("configuration");
+  ASSERT_NE(Configuration, nullptr);
+  const auto *Exports = Configuration->getObject("kernel_exports");
+  ASSERT_NE(Exports, nullptr);
+  EXPECT_EQ(Exports->getBoolean("ExAllocatePool2"), false);
+  const auto *Calls = Report->getArray("calls");
+  ASSERT_NE(Calls, nullptr);
+  ASSERT_EQ(Calls->size(), 2u);
+  EXPECT_EQ((*Calls)[1].getAsObject()->getString("name"),
+            "MmGetSystemRoutineAddress");
+  EXPECT_EQ((*Calls)[1].getAsObject()->getString("result"), "0x0");
+}
+
+TEST_F(DriverScenarioPublic, CLIPreservesTheFirstStructuredMemoryFault) {
+  auto Parsed = llvm::json::parse(runCLI("{}", 3, "fault"));
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << llvm::toString(Parsed.takeError());
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  EXPECT_EQ(Report->getString("stop_reason"), "memory_fault");
+  const auto *Fault = Report->getObject("fault");
+  ASSERT_NE(Fault, nullptr);
+  EXPECT_EQ(Fault->getString("kind"), "unmapped_memory");
+  EXPECT_EQ(Fault->getString("pc"), Report->getString("pc"));
+  EXPECT_EQ(Fault->getString("address"), "0x12345000");
+  EXPECT_EQ(Fault->getString("access"), "write");
+  EXPECT_EQ(Fault->getInteger("size"), 8);
+  ASSERT_NE(Fault->get("interrupt"), nullptr);
+  EXPECT_EQ(Fault->get("interrupt")->kind(), llvm::json::Value::Null);
 }
 
 } // namespace

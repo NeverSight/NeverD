@@ -148,8 +148,8 @@ TEST(DriverIO, UnloadRequiresClosedFilesAndExactDeviceSelection) {
   EXPECT_NE(Result->Diagnostic.find("device name"), std::string::npos);
 }
 
-TEST(DriverIO, DirectAndNeitherTransfersStopBeforeCallingDispatch) {
-  for (uint32_t Method = 1; Method != 4; ++Method) {
+TEST(DriverIO, NeitherTransfersStopBeforeCallingDispatch) {
+  for (uint32_t Method = 3; Method != 4; ++Method) {
     auto Result =
         emulateDriver(NEVERD_DRIVER_IO_FIXTURE, lifecycle(0x222000 | Method));
     ASSERT_TRUE(static_cast<bool>(Result))
@@ -158,7 +158,7 @@ TEST(DriverIO, DirectAndNeitherTransfersStopBeforeCallingDispatch) {
     ASSERT_EQ(Result->Requests.size(), 2u);
     EXPECT_FALSE(Result->Requests[1].Completed);
     EXPECT_EQ(Result->Requests[1].IRP, 0u);
-    EXPECT_NE(Result->Diagnostic.find("METHOD_BUFFERED"), std::string::npos);
+    EXPECT_NE(Result->Diagnostic.find("METHOD_NEITHER"), std::string::npos);
   }
 }
 

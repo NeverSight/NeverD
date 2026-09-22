@@ -47,8 +47,10 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 Las fixtures ejercitan la inicialización del invitado, retornos satisfactorios
 y fallidos, comportamientos no compatibles, fallos de memoria, análisis estricto
-de escenarios, ejecución acotada y E/S síncrona con búfer mediante create, IOCTL,
-cleanup, close y unload. Utilice la [CLI `emulate-driver`](driver-emulation.md)
+de escenarios, ejecución acotada, E/S síncrona con búfer y directa, READ/WRITE,
+ciclos de vida independientes de archivos, permisos MDL, exportaciones dinámicas,
+argumentos variables del invitado y fallos estructurados de CPU mediante create,
+transferencias, cleanup, close y unload. Utilice la [CLI `emulate-driver`](driver-emulation.md)
 para verificar el JSON y los códigos de salida del proceso. Las compilaciones
 de producción pueden activar esta función con `BUILD_TESTING=OFF`; `libneverd`
 no debe requerir una configuración de Unicorn exclusiva de las pruebas.

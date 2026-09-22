@@ -9,6 +9,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "DriverScenario.h"
+
+#include "windows/WindowsKernelLayout.h"
+
 #include "neverd/emulation/DriverSession.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -46,6 +50,12 @@ constexpr llvm::StringRef RequestFields[] = {
 llvm::Error invalid(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "driver scenario: " + Message);
+}
+
+bool validDeviceName(llvm::StringRef Name) {
+  return Name.size() <= profile::MaxDeviceNameSize &&
+         std::all_of(Name.begin(), Name.end(),
+                     [](unsigned char C) { return C >= 0x20 && C <= 0x7e; });
 }
 
 // LLVM's object parser retains the final value of a duplicate key. Scenarios
@@ -141,38 +151,66 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     return invalid("unsupported request kind '" + *Kind + "'");
   if (const auto *Device = Object->get(DeviceField)) {
     auto Name = Device->getAsString();
-    if (!Name || Name->empty() || Name->size() > profile::MaxDeviceNameSize ||
-        !std::all_of(Name->begin(), Name->end(),
-                     [](unsigned char C) { return C >= 0x20 && C <= 0x7e; }))
+    if (!Name || Name->empty() || !validDeviceName(*Name))
       return invalid("device must contain 1..512 printable ASCII bytes");
     Result.Device = Name->str();
   }
-  if (Result.Kind != DriverRequestKind::DeviceControl) {
-    if (Object->get(CodeField) || Object->get(InputField) ||
-        Object->get(OutputSizeField))
-      return invalid(
-          "code, input and output_size are only valid for ioctl requests");
-    return Result;
+  const bool IOCTL = Result.Kind == DriverRequestKind::DeviceControl;
+  const bool Read = Result.Kind == DriverRequestKind::Read;
+  const bool Write = Result.Kind == DriverRequestKind::Write;
+  if ((!IOCTL && (Object->get(CodeField) || Object->get(DirectInputField))) ||
+      (!IOCTL && !Write && Object->get(InputField)) ||
+      (!IOCTL && !Read && Object->get(OutputSizeField)) ||
+      (!Read && !Write && Object->get(ByteOffsetField)))
+    return invalid("request fields do not match the request kind");
+  if (const auto *File = Object->get(FileField)) {
+    auto Number = File->getAsUINT64();
+    if (!Number || *Number > UINT32_MAX)
+      return invalid("file must be an unsigned 32-bit scenario identity");
+    Result.File = static_cast<uint32_t>(*Number);
   }
-  const auto *Code = Object->get(CodeField);
-  if (!Code)
-    return invalid("ioctl requests require code");
-  auto ParsedCode = controlCode(*Code);
-  if (!ParsedCode)
-    return ParsedCode.takeError();
-  Result.ControlCode = *ParsedCode;
-  if (const auto *Input = Object->get(InputField)) {
+  if (const auto *Offset = Object->get(ByteOffsetField)) {
+    if (auto Text = Offset->getAsString()) {
+      auto Number = hexNumber(*Text, ByteOffsetField);
+      if (!Number)
+        return Number.takeError();
+      Result.ByteOffset = *Number;
+    } else if (auto Number = Offset->getAsUINT64()) {
+      Result.ByteOffset = *Number;
+    } else {
+      return invalid("byte_offset must be an unsigned integer or hex string");
+    }
+  }
+  if (IOCTL) {
+    const auto *Code = Object->get(CodeField);
+    if (!Code)
+      return invalid("ioctl requests require code");
+    auto ParsedCode = controlCode(*Code);
+    if (!ParsedCode)
+      return ParsedCode.takeError();
+    Result.ControlCode = *ParsedCode;
+  }
+  auto Bytes = [&](llvm::StringRef Field,
+                   std::vector<uint8_t> &Output) -> llvm::Error {
+    const auto *Input = Object->get(Field);
+    if (!Input)
+      return llvm::Error::success();
     auto Text = Input->getAsString();
     if (!Text || Text->size() > DriverScenarioBufferLimit * 2 ||
         Text->size() % 2 ||
         !std::all_of(Text->begin(), Text->end(), llvm::isHexDigit))
-      return invalid("input must be an even-length hexadecimal byte string of "
-                     "at most 65536 bytes");
-    Result.Input.reserve(Text->size() / 2);
+      return invalid(Field + " must be an even-length hexadecimal byte string "
+                             "of at most 65536 bytes");
+    Output.reserve(Text->size() / 2);
     for (size_t I = 0; I < Text->size(); I += 2)
-      Result.Input.push_back((llvm::hexDigitValue((*Text)[I]) << 4) |
-                             llvm::hexDigitValue((*Text)[I + 1]));
-  }
+      Output.push_back((llvm::hexDigitValue((*Text)[I]) << 4) |
+                       llvm::hexDigitValue((*Text)[I + 1]));
+    return llvm::Error::success();
+  };
+  if (auto E = Bytes(InputField, Result.Input))
+    return std::move(E);
+  if (auto E = Bytes(DirectInputField, Result.DirectInput))
+    return std::move(E);
   if (const auto *Output = Object->get(OutputSizeField)) {
     auto Size = Output->getAsUINT64();
     if (!Size || *Size > DriverScenarioBufferLimit)
@@ -184,6 +222,61 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
 }
 
 } // namespace
+
+llvm::Error validateDriverScenario(const DriverOptions &Options) {
+  if (Options.Requests.size() > DriverScenarioRequestLimit)
+    return invalid("at most 64 requests are permitted");
+  uint64_t Total = 0;
+  for (const auto &Request : Options.Requests) {
+    if (Request.Input.size() > DriverScenarioBufferLimit ||
+        Request.OutputSize > DriverScenarioBufferLimit ||
+        Request.DirectInput.size() > Request.OutputSize ||
+        Request.ByteOffset > INT64_MAX)
+      return invalid("request exceeds the buffer or signed offset limit");
+    if (!validDeviceName(Request.Device))
+      return invalid("device must contain at most 512 printable ASCII bytes");
+    Total +=
+        Request.Input.size() + Request.OutputSize + Request.DirectInput.size();
+    if (Total > DriverScenarioTotalBufferLimit)
+      return invalid("combined request buffers exceed 512 KiB");
+    switch (Request.Kind) {
+    case DriverRequestKind::Create:
+    case DriverRequestKind::Cleanup:
+    case DriverRequestKind::Close:
+      if (Request.ControlCode || !Request.Input.empty() || Request.OutputSize ||
+          !Request.DirectInput.empty() || Request.ByteOffset)
+        return invalid("lifecycle requests cannot contain transfer parameters");
+      break;
+    case DriverRequestKind::Read:
+      if (Request.ControlCode || !Request.Input.empty() ||
+          !Request.DirectInput.empty())
+        return invalid("read requests accept output_size and byte_offset");
+      if (Request.OutputSize > INT64_MAX - Request.ByteOffset)
+        return invalid("READ byte range exceeds a nonnegative file offset");
+      break;
+    case DriverRequestKind::Write:
+      if (Request.ControlCode || Request.OutputSize ||
+          !Request.DirectInput.empty())
+        return invalid("write requests accept input and byte_offset");
+      if (Request.Input.size() > INT64_MAX - Request.ByteOffset)
+        return invalid("WRITE byte range exceeds a nonnegative file offset");
+      break;
+    case DriverRequestKind::DeviceControl: {
+      if (Request.ByteOffset)
+        return invalid("ioctl requests cannot contain byte_offset");
+      const uint32_t Method =
+          Request.ControlCode & windows::IoControlMethodMask;
+      if (!Request.DirectInput.empty() && Method != windows::MethodInDirect &&
+          Method != windows::MethodOutDirect)
+        return invalid("direct_input is valid only for direct IOCTLs");
+      break;
+    }
+    default:
+      return invalid("invalid driver request kind");
+    }
+  }
+  return llvm::Error::success();
+}
 
 llvm::Expected<DriverOptions>
 driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
@@ -199,6 +292,23 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
     return invalid("root must be an object");
   if (auto E = fields(*Object, RootFields))
     return std::move(E);
+  if (const auto *Exports = Object->get(KernelExportsField)) {
+    const auto *Inventory = Exports->getAsObject();
+    if (!Inventory || Inventory->size() > profile::MaxImports)
+      return invalid("kernel_exports must be a bounded object of booleans");
+    Base.KernelExports.clear();
+    for (const auto &[Name, Value] : *Inventory) {
+      auto Present = Value.getAsBoolean();
+      const std::string ExportName = Name.str();
+      if (!Present || ExportName.empty() ||
+          ExportName.size() > profile::MaxKernelExportNameSize ||
+          !std::all_of(ExportName.begin(), ExportName.end(),
+                       [](unsigned char C) { return C >= 0x21 && C <= 0x7e; }))
+        return invalid(
+            "kernel_exports requires printable names and boolean values");
+      Base.KernelExports.emplace(ExportName, *Present);
+    }
+  }
   if (const auto *Address = Object->get(LoadAddressField)) {
     auto Text = Address->getAsString();
     if (!Text)
@@ -226,17 +336,8 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
       Base.Requests.push_back(std::move(*Request));
     }
   }
-  if (Base.Requests.size() > DriverScenarioRequestLimit)
-    return invalid("at most 64 requests are permitted");
-  uint64_t Total = 0;
-  for (const auto &Request : Base.Requests) {
-    if (Request.Input.size() > DriverScenarioBufferLimit ||
-        Request.OutputSize > DriverScenarioBufferLimit)
-      return invalid("each input and output buffer is limited to 65536 bytes");
-    Total += Request.Input.size() + Request.OutputSize;
-    if (Total > DriverScenarioTotalBufferLimit)
-      return invalid("combined input and output buffers exceed 512 KiB");
-  }
+  if (auto E = validateDriverScenario(Base))
+    return std::move(E);
   return Base;
 }
 

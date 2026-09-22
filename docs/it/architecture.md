@@ -353,7 +353,7 @@ backend di traduzione eseguibile.
 `lib/emulation` è un componente di esecuzione opzionale, abilitato da
 `NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` vi accede tramite
 l’API C pubblica. `DriverSession` gestisce l’inizializzazione WDM x64 limitata
-e le invocazioni sincrone opzionali create/IOCTL/cleanup/close/unload;
+e le invocazioni sincrone opzionali create/IOCTL/read/write/cleanup/close/unload;
 il mapping delle immagini Windows usa il `BinaryImage` completo del loader
 esistente, mentre il modello Windows gestisce gli oggetti guest e la semantica
 delle API. L’adattatore Unicorn gestisce l’esecuzione CPU e la memoria guest
@@ -375,6 +375,18 @@ Il modello Windows gestisce gli oggetti IRP, posizione nello stack e file e
 valida il completamento sincrono; la sessione ordina i callback entro budget
 di esecuzione condivisi. Le importazioni sconosciute inutilizzate sono binding
 lazy; eseguirle o leggere dati esportati non modellati causa un arresto esplicito.
+
+Un registro condiviso degli export assegna indirizzi guest stabili agli
+import statici e alla risoluzione dinamica. La disponibilità rimane separata
+dall’implementazione API: gli export esplicitamente assenti restituiscono NULL,
+quelli presenti non modellati attivano una trap alla chiamata e la disponibilità
+dinamica non specificata arresta l’esecuzione. Il modello delle richieste
+possiede le identità di file indipendenti e gli MDL delle richieste, controllando
+i permessi e
+la scadenza dei loro mapping. Le API del runtime leggono gli argomenti variabili
+guest tramite il lettore Win64 verificato della sessione. Il backend conserva
+la prima causa strutturata di un fault; l’osservazione e i report non riprendono
+una CPU in fault né implicano una gestione delle eccezioni Windows.
 
 ## Confini della riscrittura delle eccezioni
 

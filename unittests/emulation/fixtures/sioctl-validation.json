@@ -29,5 +29,23 @@
       }
     ],
     "unload": true
-  }
+  },
+  "transfers": [
+    {
+      "name": "buffered",
+      "code": "0x9c402408",
+      "expected_output": "This String is from Device Driver !!!\u0000"
+    },
+    {
+      "name": "in-direct",
+      "code": "0x9c402401",
+      "direct_input": "NeverD direct input.\u0000",
+      "expected_output": "NeverD direct input.\u0000"
+    },
+    {
+      "name": "out-direct",
+      "code": "0x9c402406",
+      "expected_output": "This String is from Device Driver !!!\u0000"
+    }
+  ]
 }

@@ -49,7 +49,9 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 
 Fixtures exercise guest initialization, returned success and failure,
 unsupported behavior, memory faults, strict scenario parsing, bounded execution,
-and synchronous buffered I/O through create, IOCTL, cleanup, close and unload.
+and synchronous buffered/direct I/O, READ/WRITE, independent file lifetimes,
+MDL permissions, dynamic export resolution, guest varargs, and structured CPU
+faults through create, transfers, cleanup, close and unload.
 Use the
 [`emulate-driver` CLI](driver-emulation.md) to verify JSON and process exit
 codes. Production builds may enable this feature with `BUILD_TESTING=OFF`;

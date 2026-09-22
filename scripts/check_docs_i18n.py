@@ -2143,7 +2143,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "neverd_last_error",
         "scenario_success",
         "output_hex",
-        "wdm-x64-synchronous-v1",
+        "wdm-x64-synchronous-v2",
         "validate_windows_driver_sample.py",
         "sioctl-validation.json",
         *(f"`{name}`" for name in exports),

@@ -12,6 +12,7 @@
 #include "KernelModel.h"
 
 #include "DriverImage.h"
+#include "KernelModelRuntime.h"
 #include "WindowsKernelLayout.h"
 
 #include "neverd/emulation/DriverProfile.h"
@@ -28,13 +29,19 @@ namespace {
 
 using namespace windows;
 
+namespace pool {
+#define NEVERD_KERNEL_POOL_FLAG(Name, Value) constexpr uint64_t Name = Value;
+#include "KernelPoolFlags.def"
+#undef NEVERD_KERNEL_POOL_FLAG
+} // namespace pool
+
 #define NEVERD_KERNEL_NAME(Name, Value)                                        \
   constexpr llvm::StringLiteral Name(Value);
 #include "KernelNames.def"
 #undef NEVERD_KERNEL_NAME
 
 enum class KernelAPIKind {
-#define NEVERD_KERNEL_API(Symbol, Arity) Symbol,
+#define NEVERD_KERNEL_API(Symbol, Arity, Availability) Symbol,
 #include "KernelAPIs.def"
 #undef NEVERD_KERNEL_API
 };
@@ -47,7 +54,7 @@ struct KernelAPIContract {
 
 const KernelAPIContract *lookupKernelAPI(llvm::StringRef Name) {
   static constexpr KernelAPIContract APIs[] = {
-#define NEVERD_KERNEL_API(Symbol, Arity)                                       \
+#define NEVERD_KERNEL_API(Symbol, Arity, Availability)                         \
   {#Symbol, KernelAPIKind::Symbol, Arity},
 #include "KernelAPIs.def"
 #undef NEVERD_KERNEL_API
@@ -99,43 +106,6 @@ llvm::Expected<std::string> linkKey(const std::string &Name) {
     return Key;
   return modelError("symbolic-link model supports only \\DosDevices\\Name or "
                     "\\??\\Name in one session namespace");
-}
-
-// No printf implementation is delegated to the host. This initial profile
-// accepts only a format that consumes no variadic arguments.
-llvm::Expected<std::string> readDebugLiteral(const KernelModel &Model,
-                                             GuestMemory &Memory,
-                                             uint64_t Address) {
-  if (auto E = checkRange(Address, MaxDebugFormatBytes + 1))
-    return E;
-  std::string Text;
-  bool Percent = false;
-  for (unsigned I = 0; I <= MaxDebugFormatBytes; ++I) {
-    if (auto E = Model.validateGuestAccess(Address + I, 1, false))
-      return E;
-    auto Byte = Memory.readInteger(Address + I, 1);
-    if (!Byte)
-      return Byte.takeError();
-    if (!*Byte) {
-      if (Percent)
-        return modelError("DbgPrint ends with an incomplete format specifier");
-      return Text;
-    }
-    if (*Byte > 0x7f)
-      return modelError("DbgPrint model supports ASCII literals only");
-    if (Percent) {
-      if (*Byte != '%')
-        return modelError("DbgPrint model does not support variadic formats");
-      Percent = false;
-    } else if (*Byte == '%') {
-      Percent = true;
-      continue;
-    }
-    if (Text.size() == MaxDebugBytes)
-      return modelError("DbgPrint literal exceeds the 512-byte model limit");
-    Text.push_back(static_cast<char>(*Byte));
-  }
-  return modelError("unterminated DbgPrint format within the model limit");
 }
 
 } // namespace
@@ -360,8 +330,9 @@ llvm::Expected<uint64_t> KernelModel::createDevice(llvm::ArrayRef<uint64_t> A) {
 }
 
 llvm::Error KernelModel::deleteDevice(uint64_t Address) {
-  if (FileObject && FileDevice == Address)
-    return modelError("cannot delete a device while its file object is live");
+  for (const auto &[Id, File] : Files)
+    if (File.Address && File.Device == Address)
+      return modelError("cannot delete a device while its file object is live");
   auto It = Devices.find(Address);
   if (It == Devices.end())
     return modelError("IoDeleteDevice received an unknown or deleted device");
@@ -388,14 +359,34 @@ llvm::Error KernelModel::deleteDevice(uint64_t Address) {
   }
 }
 
-llvm::Expected<uint64_t> KernelModel::call(const std::string &Name,
-                                           llvm::ArrayRef<uint64_t> A) {
+llvm::Expected<uint64_t> KernelModel::call(
+    const std::string &Name, llvm::ArrayRef<uint64_t> A,
+    llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument) {
   const auto *API = lookupKernelAPI(Name);
   if (!API || A.size() != API->Arity)
     return modelError("unknown API or incorrect argument count: " + Name);
   const auto Kind = API->Kind;
   if (!DriverObject)
     return modelError("kernel model has not been initialized");
+  if (Kind == KernelAPIKind::MmGetSystemRoutineAddress)
+    return resolveRoutine(A[0]);
+  if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
+    if (static_cast<uint32_t>(A[1]) != KernelMode ||
+        static_cast<uint32_t>(A[2]) != MmCached || A[3] ||
+        static_cast<uint8_t>(A[4]))
+      return modelError(
+          "MDL mapping requires KernelMode, MmCached, no requested "
+          "address and no bugcheck");
+    return mapLockedPages(A[0], static_cast<uint32_t>(A[5]), false);
+  }
+  if (Kind == KernelAPIKind::MmGetSystemAddressForMdlSafe) {
+    return mapLockedPages(A[0], static_cast<uint32_t>(A[1]), true);
+  }
+  if (Kind == KernelAPIKind::MmUnmapLockedPages) {
+    if (auto E = unmapLockedPages(A[0], A[1]))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::IofCompleteRequest ||
       Kind == KernelAPIKind::IoCompleteRequest) {
     if (auto E = completeRequest(A[0], static_cast<uint8_t>(A[1])))
@@ -441,33 +432,75 @@ llvm::Expected<uint64_t> KernelModel::call(const std::string &Name,
       return E;
     return 0;
   }
-  if (Kind == KernelAPIKind::ExAllocatePoolWithTag) {
-    const uint32_t Type = static_cast<uint32_t>(A[0]);
+  if (Kind == KernelAPIKind::RtlCopyUnicodeString)
+    return runtime::unicodeOperation(*this, Memory,
+                                     runtime::UnicodeOperation::Copy, A);
+  if (Kind == KernelAPIKind::RtlCompareUnicodeString)
+    return runtime::unicodeOperation(*this, Memory,
+                                     runtime::UnicodeOperation::Compare, A);
+  if (Kind == KernelAPIKind::RtlEqualUnicodeString)
+    return runtime::unicodeOperation(*this, Memory,
+                                     runtime::UnicodeOperation::Equal, A);
+  if (Kind == KernelAPIKind::ExAllocatePoolWithTag ||
+      Kind == KernelAPIKind::ExAllocatePool2) {
+    const bool Modern = Kind == KernelAPIKind::ExAllocatePool2;
     const uint32_t Tag = static_cast<uint32_t>(A[2]);
-    if (Type != 0 && Type != 1 && Type != PoolNX)
-      return modelError("pool model supports NonPagedPool, PagedPool and "
-                        "NonPagedPoolNx without additional flags");
-    if (!A[1] || !Tag)
+    const uint64_t Flags = Modern ? A[0] : 0;
+    const auto AllocationFailure = [&]() -> llvm::Expected<uint64_t> {
+      if (Flags & pool::RaiseOnFailure)
+        return modelError(
+            "POOL_FLAG_RAISE_ON_FAILURE requires guest exception delivery");
+      return 0;
+    };
+    if (Modern) {
+      // Optional high bits may be ignored under the documented POOL_FLAGS
+      // contract. Required but unmodeled state must never be invented.
+      constexpr uint64_t Known = pool::UseQuota | pool::Uninitialized |
+                                 pool::CacheAligned | pool::RaiseOnFailure |
+                                 pool::NonPaged | pool::NonPagedExecute |
+                                 pool::Paged;
+      const uint64_t Type =
+          Flags & (pool::NonPaged | pool::NonPagedExecute | pool::Paged);
+      if (!Tag || !Type || (Type & (Type - 1)) ||
+          ((Flags & pool::RequiredMask) & ~Known))
+        return AllocationFailure();
+      if (Flags & pool::UseQuota)
+        return modelError(
+            "ExAllocatePool2 quota accounting requires an unmodeled process");
+      if (Flags & pool::NonPagedExecute)
+        return modelError(
+            "ExAllocatePool2 executable pool is outside the data-only arena");
+    } else {
+      const uint32_t Type = static_cast<uint32_t>(A[0]);
+      if (Type != 0 && Type != 1 && Type != PoolNX)
+        return modelError("pool model supports NonPagedPool, PagedPool and "
+                          "NonPagedPoolNx without additional flags");
+      if (!Tag)
+        return modelError("pool allocation requires non-zero size and tag");
+    }
+    if (!A[1])
       return modelError("pool allocation requires non-zero size and tag");
-    // Small allocations must not cross a page; large allocations are page
-    // aligned. The arena intentionally does not recycle addresses in one run.
-    uint64_t Alignment = 16;
-    uint64_t Start = (NextAllocation + 15) & ~uint64_t(15);
+    uint64_t Alignment = Modern && (Flags & pool::CacheAligned)
+                             ? DeviceAlignmentMask + 1
+                             : PoolAlignment;
+    uint64_t Start = (NextAllocation + Alignment - 1) & ~(Alignment - 1);
+    // Allocations smaller than one page never cross a page. Larger allocations
+    // are page aligned. A run does not recycle addresses after a free.
     if (A[1] >= profile::PageSize ||
         (Start & (profile::PageSize - 1)) + A[1] > profile::PageSize) {
       Alignment = profile::PageSize;
-      Start = (NextAllocation + (profile::PageSize - 1)) &
-              ~uint64_t((profile::PageSize - 1));
+      Start = (NextAllocation + Alignment - 1) & ~(Alignment - 1);
     }
     if (Start > AllocationEnd || A[1] > AllocationEnd - Start)
-      return 0;
+      return AllocationFailure();
     auto Pointer = allocate(A[1], Alignment);
     if (!Pointer)
       return Pointer.takeError();
-    // ExAllocatePoolWithTag is uninitialized, not zero-initialized. This is one
-    // deterministic concrete memory scenario, never host heap contents.
-    if (auto E = writeBytes(Memory, *Pointer, A[1], UninitializedPoolByte))
-      return E;
+    // ExAllocatePool2 zeroes by default; old pool and explicit uninitialized
+    // allocations use a deterministic concrete byte pattern, never host data.
+    if (!Modern || (Flags & pool::Uninitialized))
+      if (auto E = writeBytes(Memory, *Pointer, A[1], UninitializedPoolByte))
+        return E;
     Allocations.emplace(*Pointer, PoolAllocation{A[1], Tag});
     return *Pointer;
   }
@@ -515,8 +548,9 @@ llvm::Expected<uint64_t> KernelModel::call(const std::string &Name,
     return StatusSuccess;
   }
   if (Kind == KernelAPIKind::DbgPrint || Kind == KernelAPIKind::DbgPrintEx) {
-    auto Text = readDebugLiteral(*this, Memory,
-                                 A[Kind == KernelAPIKind::DbgPrint ? 0 : 2]);
+    const unsigned FormatIndex = Kind == KernelAPIKind::DbgPrint ? 0 : 2;
+    auto Text = runtime::formatDebugMessage(*this, Memory, A[FormatIndex],
+                                            FormatIndex + 1, ReadArgument);
     if (!Text)
       return Text.takeError();
     // The observation profile enables all debugger component/level filters.
@@ -661,6 +695,8 @@ llvm::Error KernelModel::validateGuestAccess(uint64_t Address, uint32_t Size,
     if (Address < Start + Length && Start < End)
       return modelError("guest access to a freed model object or allocation");
   if (auto E = validateIOAccess(Address, Size, IsWrite))
+    return E;
+  if (auto E = validateMDLAccess(Address, Size, IsWrite))
     return E;
 
   auto CheckObject = [&](uint64_t Object, uint64_t Length,

@@ -15,8 +15,31 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 namespace neverd::emulation {
+enum class BackendFaultKind {
+#define NEVERD_UNICORN_FAULT_KIND(Name, Spelling) Name,
+#include "UnicornFaults.def"
+#undef NEVERD_UNICORN_FAULT_KIND
+};
+enum class BackendAccessKind {
+#define NEVERD_UNICORN_ACCESS_KIND(Name, Spelling) Name,
+#include "UnicornFaults.def"
+#undef NEVERD_UNICORN_ACCESS_KIND
+};
+const char *backendFaultKindName(BackendFaultKind Kind);
+const char *backendAccessKindName(BackendAccessKind Kind);
+struct BackendFault {
+  BackendFaultKind Kind;
+  uint64_t PC = 0;
+  /// Memory-event address and access size, not a decoded operand extent.
+  /// Unicorn may split a memory access at a page boundary.
+  std::optional<uint64_t> Address;
+  std::optional<uint64_t> Size;
+  std::optional<BackendAccessKind> Access;
+  std::optional<uint32_t> Interrupt;
+};
 enum class X64Register {
 #define NEVERD_UNICORN_REGISTER(Name, Register) Name,
 #include "UnicornRegisters.def"
@@ -48,10 +71,14 @@ public:
   llvm::Expected<uint64_t> reg(X64Register Register);
   llvm::Error setReg(X64Register Register, uint64_t Value);
   llvm::Error installHooks(BackendHooks Hooks);
+  /// A normally stopped CPU can continue. A faulted CPU cannot resume: Unicorn
+  /// does not guarantee its internal state after an unhandled execution error.
   llvm::Error run(uint64_t PC, uint64_t TimeoutMicroseconds);
   bool timedOut() const;
   void stop();
   bool hasMemoryFault() const;
+  /// The first CPU or checked GuestMemory fault survives later observations.
+  std::optional<BackendFault> fault() const;
   bool executable(uint64_t Address) const;
 
 private:

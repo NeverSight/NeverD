@@ -52,6 +52,34 @@ TEST_F(DriverExecutionPolicy, RejectsFSAndGSImplicitXLATMemory) {
   rejectsThreadAccess({0x67, 0x65, 0xd7});
 }
 
+TEST_F(DriverExecutionPolicy, PermitsPassiveIRQLReadWithoutControlMutation) {
+  accepts({0x44, 0x0f, 0x20, 0xc0});                   // mov rax, cr8.
+  accepts({0x45, 0x0f, 0x20, 0xc1});                   // mov r9, cr8.
+  rejectsEnvironment({0x44, 0x0f, 0x22, 0xc0}, "mov"); // mov cr8, rax.
+  rejectsEnvironment({0x0f, 0x20, 0xc0}, "mov");       // mov rax, cr0.
+  auto Backend = UnicornBackend::create(profile::PageSize);
+  ASSERT_TRUE(static_cast<bool>(Backend))
+      << llvm::toString(Backend.takeError());
+  auto &CPU = **Backend;
+  auto Check = [](llvm::Error E) {
+    ASSERT_FALSE(static_cast<bool>(E)) << llvm::toString(std::move(E));
+  };
+  Check(CPU.map(0x1000, profile::PageSize, Read | Write | Execute));
+  Check(CPU.write(0x1000, {0x44, 0x0f, 0x20, 0xc0, 0x90}));
+  Check(CPU.setReg(X64Register::AX, UINT64_MAX));
+  BackendHooks Hooks;
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    if (PC == 0x1004)
+      CPU.stop();
+  };
+  Check(CPU.installHooks(std::move(Hooks)));
+  Check(CPU.run(0x1000, 100000));
+  auto IRQL = CPU.reg(X64Register::AX);
+  ASSERT_TRUE(static_cast<bool>(IRQL)) << llvm::toString(IRQL.takeError());
+  EXPECT_EQ(*IRQL, 0u);
+  EXPECT_FALSE(CPU.fault().has_value());
+}
+
 TEST_F(DriverExecutionPolicy, KeepsOrdinaryXLATAndIgnoredSegmentPrefixes) {
   accepts({0xd7});
   accepts({0x3e, 0xd7});

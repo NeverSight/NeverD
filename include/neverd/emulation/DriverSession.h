@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,11 +37,17 @@ enum class DriverRequestKind {
 
 struct DriverRequest {
   DriverRequestKind Kind = DriverRequestKind::DeviceControl;
-  /// An empty name selects the sole live device; ambiguous selection fails.
+  /// CREATE with an empty name selects the sole live device; ambiguity fails.
+  /// Later requests use their file's device unless a matching name is given.
   std::string Device;
   uint32_t ControlCode = 0;
   std::vector<uint8_t> Input;
   uint32_t OutputSize = 0;
+  /// Initial contents of a direct IOCTL's second buffer, padded to OutputSize.
+  std::vector<uint8_t> DirectInput;
+  uint64_t ByteOffset = 0;
+  /// Scenario identity of an independently opened FILE_OBJECT.
+  uint32_t File = 0;
 };
 
 /// This profile models a single-threaded x64 WDM lifecycle at PASSIVE_LEVEL.
@@ -56,6 +63,9 @@ struct DriverOptions {
   uint64_t LoadAddress = 0;
   std::vector<DriverRequest> Requests;
   bool Unload = false;
+  /// Explicit export availability overrides for this concrete environment.
+  /// Unknown dynamic names stop unless availability is declared here.
+  std::map<std::string, bool> KernelExports;
 };
 
 enum class DriverStopReason {
@@ -101,6 +111,17 @@ struct DriverRequestResult {
   std::optional<uint32_t> IOStatus;
   uint64_t Information = 0;
   std::vector<uint8_t> Output;
+  uint32_t File = 0;
+  uint64_t ByteOffset = 0;
+};
+
+struct DriverFault {
+  std::string Kind;
+  uint64_t PC = 0;
+  std::optional<uint64_t> Address;
+  std::optional<uint64_t> Size;
+  std::optional<std::string> Access;
+  std::optional<uint32_t> Interrupt;
 };
 
 struct DriverResult {
@@ -128,6 +149,7 @@ struct DriverResult {
   std::string Phase = profile::EntryPhase;
   bool UnloadCompleted = false;
   std::string Diagnostic;
+  std::optional<DriverFault> Fault;
 };
 
 /// Parse and validate a fresh complete PE image. Request/format/setup failures

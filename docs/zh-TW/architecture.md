@@ -258,11 +258,13 @@ generated-code ABI 只為純量整數定義。浮點、SIMD、x87、原子操作
 
 ## Windows 驅動程式模擬
 
-`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 啟用的選用執行元件。`emulate-driver` CLI 透過公開 C API 存取此元件。`DriverSession` 負責有界的 x64 WDM 初始化，以及選用的同步 create／IOCTL／cleanup／close／unload 呼叫；Windows 映像映射使用現有載入器提供的完整 `BinaryImage`，Windows 模型負責客體物件與 API 語義。Unicorn 配接器負責 CPU 執行，並持有客體記憶體的權威狀態。此路徑不使用實驗性的原生翻譯管線，也不改變其支援範圍。
+`lib/emulation` 是由 `NEVERD_ENABLE_DRIVER_EMULATION` 啟用的選用執行元件。`emulate-driver` CLI 透過公開 C API 存取此元件。`DriverSession` 負責有界的 x64 WDM 初始化，以及選用的同步 create／IOCTL／read／write／cleanup／close／unload 呼叫；Windows 映像映射使用現有載入器提供的完整 `BinaryImage`，Windows 模型負責客體物件與 API 語義。Unicorn 配接器負責 CPU 執行，並持有客體記憶體的權威狀態。此路徑不使用實驗性的原生翻譯管線，也不改變其支援範圍。
 
 Unicorn 透過 `cmake/NeverDUnicorn.cmake` 統一設定一次，與語義測試共用，並在 `BUILD_TESTING=OFF` 時仍可用。未知 API 與 CPU 環境行為會明確停止；驅動程式傳回失敗與模擬未完成始終保持區分。限制、報告及不支援的生命週期操作見[驅動程式模擬](driver-emulation.md)。
 
 原有 C API 仍僅執行初始化。情境 JSON 在相同執行選項上使用統一的嚴格解析器，欄位與請求類型透過 `.def` 目錄宣告。要求的基底重新定位與安全性 cookie 初始化由執行載入器負責。Windows 模型負責 IRP／堆疊位置／檔案物件，並驗證同步完成；工作階段在共用執行預算下依序呼叫回呼。未使用的未知匯入採用延遲繫結；執行它們或讀取未建模的匯出資料時會明確停止。
+
+匯出登錄表為靜態匯入與動態解析提供穩定的客體位址，並將可用性與實作分開處理：明確不存在的匯出解析為 NULL；存在但未建模的匯出導向陷阱；未指定可用性的動態查詢會停止。Windows 模型擁有獨立的檔案識別碼及由請求擁有的 MDL，包括對映權限及完成時的失效。執行階段 API 格式化透過經檢查的 Win64 參數讀取器存取客體參數。後端保留第一個結構化錯誤；後續觀察不會清除該錯誤，也不會繼續執行或提供 Windows SEH。
 
 ## 例外重寫邊界
 

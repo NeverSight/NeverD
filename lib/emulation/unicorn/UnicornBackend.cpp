@@ -14,6 +14,7 @@
 #include "neverd/emulation/DriverProfile.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <exception>
 #include <map>
@@ -43,6 +44,28 @@ int registerID(X64Register Register) {
 }
 } // namespace
 
+const char *backendFaultKindName(BackendFaultKind Kind) {
+  switch (Kind) {
+#define NEVERD_UNICORN_FAULT_KIND(Name, Spelling)                              \
+  case BackendFaultKind::Name:                                                 \
+    return Spelling;
+#include "UnicornFaults.def"
+#undef NEVERD_UNICORN_FAULT_KIND
+  }
+  llvm_unreachable("unknown backend fault kind");
+}
+
+const char *backendAccessKindName(BackendAccessKind Kind) {
+  switch (Kind) {
+#define NEVERD_UNICORN_ACCESS_KIND(Name, Spelling)                             \
+  case BackendAccessKind::Name:                                                \
+    return Spelling;
+#include "UnicornFaults.def"
+#undef NEVERD_UNICORN_ACCESS_KIND
+  }
+  llvm_unreachable("unknown backend access kind");
+}
+
 struct UnicornBackend::Impl {
   uc_engine *Engine = nullptr;
   uint64_t Limit = 0;
@@ -52,7 +75,8 @@ struct UnicornBackend::Impl {
   std::map<uint64_t, unsigned> Pages;
   BackendHooks Hooks;
   std::vector<uc_hook> HookHandles;
-  bool Faulted = false;
+  std::optional<BackendFault> FirstFault;
+  uint64_t InstructionPC = 0;
   bool Timeout = false;
   bool CallbackFailed = false;
 
@@ -61,20 +85,45 @@ struct UnicornBackend::Impl {
       uc_close(Engine);
   }
 
-  bool accessible(uint64_t Address, uint64_t Size, unsigned Permission) const {
+  std::optional<BackendFaultKind> accessFault(uint64_t Address, uint64_t Size,
+                                              unsigned Permission) const {
     if (!Size)
-      return true;
+      return std::nullopt;
     if (Size - 1 > UINT64_MAX - Address)
-      return false;
+      return BackendFaultKind::InvalidMemoryRange;
     uint64_t LastPage = (Address + Size - 1) & ~uint64_t(profile::PageSize - 1);
     for (uint64_t Page = Address & ~uint64_t(profile::PageSize - 1);;) {
       auto I = Pages.find(Page);
-      if (I == Pages.end() || (I->second & Permission) != Permission)
-        return false;
+      if (I == Pages.end())
+        return BackendFaultKind::UnmappedMemory;
+      if ((I->second & Permission) != Permission)
+        return BackendFaultKind::Protection;
       if (Page == LastPage)
-        return true;
+        return std::nullopt;
       Page += profile::PageSize;
     }
+  }
+
+  bool accessible(uint64_t Address, uint64_t Size, unsigned Permission) const {
+    return !accessFault(Address, Size, Permission);
+  }
+
+  uint64_t currentPC() const noexcept {
+    uint64_t PC = InstructionPC;
+    // Capture inside the fault boundary, before a hook can change the CPU.
+    if (uc_reg_read(Engine, UC_X86_REG_RIP, &PC) != UC_ERR_OK)
+      return InstructionPC;
+    return PC;
+  }
+
+  void retain(BackendFault Fault) noexcept {
+    if (!FirstFault)
+      FirstFault = Fault;
+  }
+
+  void memoryFault(BackendFaultKind Kind, BackendAccessKind Access,
+                   uint64_t Address, uint64_t Size) noexcept {
+    retain({Kind, currentPC(), Address, Size, Access, std::nullopt});
   }
 
   template <typename F> void invoke(F &&Function) noexcept {
@@ -90,6 +139,7 @@ struct UnicornBackend::Impl {
   }
   static void code(uc_engine *, uint64_t Address, uint32_t Size, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
+    S.InstructionPC = Address;
     S.invoke([&] {
       if (S.Hooks.Instruction)
         S.Hooks.Instruction(Address, Size);
@@ -114,27 +164,47 @@ struct UnicornBackend::Impl {
   static bool fault(uc_engine *, uc_mem_type Type, uint64_t Address, int Size,
                     int64_t, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
-    S.Faulted = true;
-    const char *Access =
-        (Type == UC_MEM_WRITE_UNMAPPED || Type == UC_MEM_WRITE_PROT) ? "write"
-        : (Type == UC_MEM_FETCH_UNMAPPED || Type == UC_MEM_FETCH_PROT)
-            ? "execute"
-            : "read";
+    BackendAccessKind Access;
+    BackendFaultKind Kind;
+    switch (Type) {
+#define NEVERD_UNICORN_MEMORY_FAULT(Event, FaultKind, AccessKind)              \
+  case Event:                                                                  \
+    Kind = BackendFaultKind::FaultKind;                                        \
+    Access = BackendAccessKind::AccessKind;                                    \
+    break;
+#include "UnicornFaults.def"
+#undef NEVERD_UNICORN_MEMORY_FAULT
+    default:
+      S.CallbackFailed = true;
+      uc_emu_stop(S.Engine);
+      return false;
+    }
+    S.retain({Kind, S.currentPC(), Address,
+              Size > 0 ? std::optional<uint64_t>(Size) : std::nullopt, Access,
+              std::nullopt});
     S.invoke([&] {
       if (S.Hooks.Fault)
-        S.Hooks.Fault(Address, Size, Access);
+        S.Hooks.Fault(Address, Size > 0 ? uint32_t(Size) : 0,
+                      backendAccessKindName(Access));
     });
     return false;
   }
   static void interrupt(uc_engine *, uint32_t Number, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
+    // RIP may already follow INT3. The code hook identifies the instruction
+    // that raised the event, including a synchronous CPU exception such as #DE.
+    S.retain({BackendFaultKind::Interrupt, S.InstructionPC, std::nullopt,
+              std::nullopt, std::nullopt, Number});
     S.invoke([&] {
       if (S.Hooks.Interrupt)
         S.Hooks.Interrupt(Number);
     });
+    uc_emu_stop(S.Engine);
   }
   static bool invalidInstruction(uc_engine *, void *Opaque) {
     auto &S = *static_cast<Impl *>(Opaque);
+    S.retain({BackendFaultKind::InvalidInstruction, S.currentPC(), std::nullopt,
+              std::nullopt, std::nullopt, std::nullopt});
     S.invoke([&] {
       if (S.Hooks.InvalidInstruction)
         S.Hooks.InvalidInstruction();
@@ -167,7 +237,12 @@ UnicornBackend::create(uint64_t MemoryLimit) {
   if (auto E = check(uc_reg_write(S->Engine, UC_X86_REG_RFLAGS, &Flags),
                      "initialize flags"))
     return std::move(E);
-  return std::unique_ptr<UnicornBackend>(new UnicornBackend(std::move(S)));
+  auto Backend =
+      std::unique_ptr<UnicornBackend>(new UnicornBackend(std::move(S)));
+  // Core fault capture must also work without optional tracing callbacks.
+  if (auto E = Backend->installHooks({}))
+    return std::move(E);
+  return Backend;
 }
 
 llvm::Error UnicornBackend::map(uint64_t Address, uint64_t Size,
@@ -206,8 +281,8 @@ llvm::Error UnicornBackend::protect(uint64_t Address, uint64_t Size,
 
 llvm::Error UnicornBackend::read(uint64_t Address,
                                  llvm::MutableArrayRef<uint8_t> Bytes) {
-  if (!State->accessible(Address, Bytes.size(), Read)) {
-    State->Faulted = true;
+  if (auto Kind = State->accessFault(Address, Bytes.size(), Read)) {
+    State->memoryFault(*Kind, BackendAccessKind::Read, Address, Bytes.size());
     return failure("guest read fault at 0x" + llvm::utohexstr(Address));
   }
   return Bytes.empty() ? llvm::Error::success()
@@ -217,8 +292,8 @@ llvm::Error UnicornBackend::read(uint64_t Address,
 }
 llvm::Error UnicornBackend::write(uint64_t Address,
                                   llvm::ArrayRef<uint8_t> Bytes) {
-  if (!State->accessible(Address, Bytes.size(), Write)) {
-    State->Faulted = true;
+  if (auto Kind = State->accessFault(Address, Bytes.size(), Write)) {
+    State->memoryFault(*Kind, BackendAccessKind::Write, Address, Bytes.size());
     return failure("guest write fault at 0x" + llvm::utohexstr(Address));
   }
   return Bytes.empty() ? llvm::Error::success()
@@ -228,8 +303,9 @@ llvm::Error UnicornBackend::write(uint64_t Address,
 }
 llvm::Error UnicornBackend::fetch(uint64_t Address,
                                   llvm::MutableArrayRef<uint8_t> Bytes) {
-  if (!State->accessible(Address, Bytes.size(), Execute)) {
-    State->Faulted = true;
+  if (auto Kind = State->accessFault(Address, Bytes.size(), Execute)) {
+    State->memoryFault(*Kind, BackendAccessKind::Execute, Address,
+                       Bytes.size());
     return failure("guest fetch fault at 0x" + llvm::utohexstr(Address));
   }
   return check(uc_mem_read(State->Engine, Address, Bytes.data(), Bytes.size()),
@@ -249,6 +325,9 @@ llvm::Error UnicornBackend::setReg(X64Register Register, uint64_t Value) {
 
 llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
   State->Hooks = std::move(Hooks);
+  // Replacing observers must not duplicate the underlying hooks.
+  if (!State->HookHandles.empty())
+    return llvm::Error::success();
   const std::pair<int, void *> Entries[] = {
       {UC_HOOK_CODE, reinterpret_cast<void *>(Impl::code)},
       {UC_HOOK_MEM_READ, reinterpret_cast<void *>(Impl::read)},
@@ -268,8 +347,18 @@ llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
   return llvm::Error::success();
 }
 llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
+  if (State->FirstFault || State->CallbackFailed)
+    return failure("cannot resume a faulted CPU instance");
+  State->InstructionPC = PC;
+  State->Timeout = false;
   uc_err Status =
       uc_emu_start(State->Engine, PC, UINT64_MAX, TimeoutMicroseconds, 0);
+  if (Status == UC_ERR_INSN_INVALID || Status == UC_ERR_EXCEPTION)
+    State->retain({Status == UC_ERR_INSN_INVALID
+                       ? BackendFaultKind::InvalidInstruction
+                       : BackendFaultKind::UnhandledException,
+                   State->currentPC(), std::nullopt, std::nullopt, std::nullopt,
+                   std::nullopt});
   size_t TimedOut = 0;
   if (auto E = check(uc_query(State->Engine, UC_QUERY_TIMEOUT, &TimedOut),
                      "query CPU timeout"))
@@ -281,7 +370,12 @@ llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
 }
 bool UnicornBackend::timedOut() const { return State->Timeout; }
 void UnicornBackend::stop() { uc_emu_stop(State->Engine); }
-bool UnicornBackend::hasMemoryFault() const { return State->Faulted; }
+bool UnicornBackend::hasMemoryFault() const {
+  return State->FirstFault && State->FirstFault->Access.has_value();
+}
+std::optional<BackendFault> UnicornBackend::fault() const {
+  return State->FirstFault;
+}
 bool UnicornBackend::executable(uint64_t Address) const {
   return State->accessible(Address, 1, Execute);
 }

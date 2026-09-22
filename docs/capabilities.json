@@ -3482,10 +3482,13 @@
         "docs/testing.md"
       ],
       "limitations": [
-        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested synchronous create, buffered IOCTL, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
+        "requires NEVERD_ENABLE_DRIVER_EMULATION=ON; this opt-in profile executes x64 WDM initialization and explicitly requested synchronous create, buffered/direct IOCTL, read/write, cleanup, close and unload phases through Unicorn, without host kernel loading or host OS API forwarding",
         "only the documented native PE32+ loading profile and finite kernel API subset are modeled; unknown imports are lazy traps and stop at first execution or exported-data read, while unmodeled CPU environment operations, opaque object state, malformed images and unsupported loader requirements fail explicitly",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; the model supports one open file and synchronous METHOD_BUFFERED requests, not pending/asynchronous I/O, direct/neither-method IOCTLs, KMDF, PnP/power, interrupts or multithread scheduling",
-        "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total input plus output bytes over 512 KiB; requested load addresses require valid supported PE relocations",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; the model supports independent file identities and synchronous buffered/direct requests, not pending/asynchronous I/O, neither-method IOCTLs, KMDF, PnP/power, interrupts or multithread scheduling",
+        "strict scenario JSON rejects unknown and duplicate fields, invalid types, more than 64 requests, input or output buffers over 65536 bytes and total requested buffer bytes including direct_input over 512 KiB; requested load addresses require valid supported PE relocations",
+        "dynamic export lookup shares stable thunk identity with static imports; explicit kernel_exports availability overrides distinguish absent exports from present unmodeled routines; unspecified dynamic availability stops instead of changing driver capability branches",
+        "direct requests expose request-owned MDL system mappings with independent write/execute permissions; physical PFN data, driver-allocated MDLs, user mappings, guest SEH and Windows Unicode case/code-page tables remain unsupported",
+        "DbgPrint and DbgPrintEx read at most 32 guest variable arguments under Win64 widths; formatting is bounded to 512 output bytes and 1024 format bytes; float, %n and unsupported text conversions stop explicitly",
         "reports preserve DriverEntry NTSTATUS separately from per-request dispatch and completion status and aggregate scenario_success; success in the model does not establish that a driver works under Windows",
         "CPU write records are attempted guest writes outside the stack, may include a faulting write and exclude model API writes; object snapshots describe observed state at termination",
         "the existing C API remains initialization-only; the added scenario C API and CLI --scenario route share strict preflight, preserve the session image and require unchanged input files",
@@ -3659,6 +3662,123 @@
           "target": "NeverDDriverEmulationPublicTests",
           "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
           "filter": "DriverScenarioPublic.CLIRunsOrderedLifecycleScenario",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelExportTests.cpp",
+          "filter": "KernelExports.AvailabilityIsIndependentOfAnExecutionModel",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelExportTests.cpp",
+          "filter": "KernelExportLookup.CountedNameAtMappingEndNeedsNoNullTerminator",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRuntimeTests.cpp",
+          "filter": "KernelRuntimeExecution.CompiledDriverUsesDynamicPoolAndWin64Varargs",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelModelTests.cpp",
+          "filter": "DriverKernelModel.MDLMappingIgnoresUnspecifiedNarrowArgumentHighBits",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDirectIOTests.cpp",
+          "filter": "DriverDirectIO.ExecutePermissionFollowsTheMappingNoExecuteFlag",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDirectIOTests.cpp",
+          "filter": "DriverDirectIO.NonPageAlignedMDLSpansMultiplePagesWithoutLosingData",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDirectIOTests.cpp",
+          "filter": "DriverDirectIO.InterleavedFilesKeepIndependentContextsAndLifetimes",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverDirectIOTests.cpp",
+          "filter": "DriverDirectIO.BufferedAndDirectStreamsHonorOffsetsAndTransferredBytes",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/BackendFaultTests.cpp",
+          "filter": "DriverBackendIsolation.IndependentEnginesKeepRegistersSIMDAndMemory",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverSessionTests.cpp",
+          "filter": "DriverEmulation.OpaqueFixedArgumentIsAModelErrorWithoutABackendFault",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/ExecutionPolicyTests.cpp",
+          "filter": "DriverExecutionPolicy.PermitsPassiveIRQLReadWithoutControlMutation",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelExportTests.cpp",
+          "filter": "KernelExports.AModeledHeaderHelperDoesNotImplyExportAvailability",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRuntimeTests.cpp",
+          "filter": "KernelRuntime.CountedCopyTerminatesOnlyWhenSourceAndCapacityPermit",
           "platforms": [
             "linux"
           ]

@@ -6,8 +6,12 @@ add_neverd_component_library(NeverDEmulation
   X64ExecutionPolicy.cpp
   unicorn/UnicornBackend.cpp
   windows/DriverImage.cpp
+  windows/KernelExportRegistry.cpp
+  windows/KernelModelExports.cpp
   windows/KernelModel.cpp
   windows/KernelModelIO.cpp
+  windows/KernelModelMDL.cpp
+  windows/KernelModelRuntime.cpp
   LINK_COMPONENTS Loader
   LINK_LIBS unicorn)
 if(WIN32)

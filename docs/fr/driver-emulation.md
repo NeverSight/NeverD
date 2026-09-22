@@ -42,16 +42,20 @@ pas que le pilote fonctionne sous Windows.
 
 ## Compatibilité des pilotes
 
-La compatibilité dépend du chemin de code exécuté et de ses dépendances, et non
-de l’extension `.sys`. Les preuves de validation actuelles couvrent des fixtures
-autonomes originales et le chemin bufferisé de l’exemple WDM SIOCTL de Microsoft.
-Elles ne démontrent pas une compatibilité avec des pilotes tiers quelconques.
+La compatibilité dépend du chemin de code exécuté et de ses dépendances,
+non de l’extension `.sys`. Les validations réalisées couvrent des fixtures
+autonomes originales ainsi que les chemins bufferisés, in-direct et out-direct
+de l’exemple WDM SIOCTL de Microsoft, y compris sa compilation avec journalisation
+de débogage. Elles n’établissent pas une compatibilité avec des pilotes tiers
+arbitraires.
 
 | Classe de pilote ou exigence | Périmètre actuel | Environnement manquant |
 |-----------------------------|------------------|------------------------|
-| Pilote WDM logiciel x64 utilisant les API listées | Initialisation bornée et un cycle de vie de fichier synchrone | Chaque API supplémentaire exécutée doit avoir un modèle défini |
-| IOCTL `METHOD_BUFFERED` | Pris en charge dans le scénario explicite de requêtes | Plusieurs fichiers ouverts et l’achèvement asynchrone ne sont pas disponibles |
-| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT`, `METHOD_NEITHER` | Rejetés | MDL, pages verrouillées, vérification des accès et durée de vie des tampons utilisateur |
+| Pilote WDM logiciel x64 utilisant les API listées | Initialisation et cycles de vie synchrones des fichiers | Toute API supplémentaire exécutée nécessite un modèle défini |
+| IOCTL `METHOD_BUFFERED` | Pris en charge, avec des identités de fichiers indépendantes et des requêtes entrelacées | L’achèvement asynchrone n’est pas disponible |
+| `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes et mappages système | MDL alloués par le pilote, identités de pages physiques, DMA et mappages utilisateur |
+| READ/WRITE synchrones | Bufferisés ou directs selon les indicateurs du périphérique | E/S neither, sélection implicite de la position de fichier et achèvement asynchrone |
+| `METHOD_NEITHER` | Rejeté | Contexte d’adressage utilisateur, vérification des accès et gestion des exceptions invitées |
 | Pilote KMDF / UMDF | Non pris en charge | Liaison au framework, objets, files, callbacks et environnement d’exécution hôte approprié |
 | Pilote PnP de bus, de fonction ou de filtre | L’initialisation peut s’exécuter dans le sous-ensemble d’API ; le cycle de vie de la pile de périphériques n’est pas pris en charge | Attachement de périphériques, dispatch vers les pilotes inférieurs, IRP PnP et d’alimentation |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
@@ -83,6 +87,8 @@ virtuelles invitées, y compris les adresses noyau canoniques hautes, sans
 synthétiser de tables de pages Windows. La valeur initiale de RFLAGS est `0x202` ;
 le profil de périphérique logiciel utilise une ligne de cache fixe de 64 octets.
 Ce sont des propriétés explicites de ce scénario d’exécution.
+Les lectures x64 de CR8 en ligne observent le même `PASSIVE_LEVEL` ; les écritures
+de CR8 et les autres opérations sur les registres de contrôle restent non prises en charge.
 
 Les imports inconnus sont liés à des pièges déclenchés à l’utilisation. Un import
 inutilisé n’empêche pas l’exécution ; exécuter son thunk ou lire une donnée
@@ -93,7 +99,7 @@ Les images malformées et les exigences de chargement non prises en charge
 échouent avant l’exécution.
 
 Ce profil n’implémente ni noyau Windows complet, ni runtime KMDF, ni cycle de
-vie PnP/alimentation, ni IRP asynchrones ou en attente, ni IOCTL direct/neither,
+vie PnP/alimentation, ni IRP asynchrones ou en attente, ni IOCTL neither,
 ni interruptions, ni ordonnancement multithread. Les callbacks s’exécutent
 uniquement lorsque le scénario les demande explicitement ; une initialisation
 seule s’arrête toujours après DriverEntry.
@@ -114,14 +120,27 @@ Le modèle initial d’API possède volontairement un contrat limité :
 | API | Comportement modélisé et restrictions |
 |-----|--------------------------------------|
 | `RtlInitUnicodeString` | Construit une `UNICODE_STRING` invitée pour une source bornée terminée par NUL |
+| `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Copie UTF-16 avec longueur explicite et comparaison sensible à la casse ; une comparaison insensible à la casse exige une table de casse Windows et provoque un arrêt |
+| `ExAllocatePool2` | Allocations NX paginées/non paginées, initialisées à zéro par défaut ; indicateurs de non-initialisation et d’alignement sur le cache modélisés ; des indicateurs requis invalides renvoient NULL ; les pools à quotas/exécutables et les exceptions d’allocation provoquent un arrêt |
+| `MmGetSystemRoutineAddress` | Résout un nom invité de longueur explicite via l’inventaire partagé des exports |
+| `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | MDL propres aux requêtes, mappages système KernelMode avec cache, permissions et durées de vie explicites ; les mappages sûrs existants sont réutilisés |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Allocations de données pour les types de pool `0`, `1` et `512` ; taille/tag positifs, tags correspondants lors des libérations avec tag, aucune réutilisation d’adresse |
 | `IoCreateDevice`, `IoDeleteDevice` | Type de périphérique `0x22`, caractéristiques `0` ou `0x100`, extensions bornées, noms ASCII `\Device\Name` |
 | `IoCreateSymbolicLink`, `IoDeleteSymbolicLink` | ASCII `\DosDevices\Name` ou `\??\Name` dans un espace de noms de session, ciblant `\Device\Name` |
-| `DbgPrint`, `DbgPrintEx` | Texte littéral ASCII et `%%`, au plus 512 octets de sortie ; le formatage variadique arrête l’exécution ; tous les filtres du débogueur sont activés |
+| `DbgPrint`, `DbgPrintEx` | Formatage variadique Win64 vérifié, au plus 512 octets en sortie ; tous les filtres du débogueur sont activés |
 | `IoGetCurrentIrpStackLocation` | Renvoie l’emplacement de pile de l’IRP modélisé actif ; les macros WDM compilées habituelles lisent le même champ invité |
 | `KeGetCurrentIrql` | Renvoie `PASSIVE_LEVEL` |
 | `IofCompleteRequest`, `IoCompleteRequest` | Termine l’IRP modélisé synchrone actif avec `IO_NO_INCREMENT` ; aucun nouvel accès à un IRP terminé ou à son tampon n’est autorisé |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Opérations bornées sur les tampons invités, au plus 1 MiB par appel ; les API de copie sans chevauchement rejettent les chevauchements |
+
+Le formatage de `DbgPrint` prend en charge les entiers `d/i/u/o/x/X`, les
+pointeurs `p`, le texte `s/c`, `%%`, l’Unicode de longueur explicite `wZ/lZ`,
+les chaînes larges `ls/ws`, les indicateurs, largeur/précision dont `*`, et les
+modificateurs Windows de longueur des entiers. Au plus 32 arguments variables et
+1024 octets de format sont lus. Largeur et précision sont limitées à 512.
+Les flottants, `%n`, les combinaisons inconnues et les conversions de texte non
+ASCII provoquent un arrêt explicite ; le modèle ne devine pas la page de codes
+Windows et n’appelle pas le printf hôte avec des données invitées.
 
 La structure RegistryPath d’origine et son tampon expirent au retour de
 DriverEntry. Les pilotes qui ont besoin de la chaîne ultérieurement doivent
@@ -167,11 +186,17 @@ Pour un pilote qui crée `\Device\NeverDIO` et accepte l’IOCTL bufferisé
 }
 ```
 
-Le nom de périphérique et le code IOCTL doivent correspondre au pilote.
-L’absence de `device` sélectionne l’unique périphérique actif ; une sélection
-ambiguë échoue. Ce modèle suit un seul fichier ouvert et exige create, les
-IOCTL, cleanup puis close dans cet ordre. Seuls les IOCTL `METHOD_BUFFERED`
-sont pris en charge. Le dispatch doit terminer chaque IRP de façon synchrone ;
+Le nom du périphérique et le code IOCTL doivent correspondre au pilote.
+Lors de create, l’omission de `device` sélectionne le seul périphérique actif ;
+une sélection ambiguë échoue. Les requêtes suivantes utilisent le périphérique
+de leur fichier, sauf si un nom explicite correspondant est fourni. Le champ
+facultatif `file` est une identité de scénario non signée sur 32 bits, nulle par
+défaut. Chaque identité possède ses propres FILE_OBJECT et FsContext et exige
+create, transferts, cleanup puis close dans cet ordre. Les requêtes de fichiers
+indépendants peuvent être entrelacées. Les périphériques exclusifs rejettent une
+seconde ouverture. Ces identités représentent des objets fichiers, et non des
+handles dupliqués. Les méthodes IOCTL bufferisée et les deux méthodes directes
+sont prises en charge. Le dispatch doit terminer chaque IRP de façon synchrone ;
 renvoyer `STATUS_PENDING`, ne pas terminer l’IRP, fournir des longueurs de sortie
 invalides ou accéder à un IRP terminé provoque un échec explicite. Le déchargement
 demandé ne doit laisser aucun périphérique, lien symbolique, allocation de pool
@@ -182,22 +207,57 @@ de base ; son absence ou `"0x0"` utilise l’adresse préférée. L’image doit
 satisfaire les exigences de relocalisation. La commande d’initialisation et
 l’API C d’origine n’impliquent aucun scénario.
 
-Seuls `load_address`, `requests` et `unload` sont acceptés à la racine. Les
-champs de requête sont `kind`, éventuellement `device` et, uniquement pour
-`ioctl`, le champ obligatoire `code` ainsi que les champs optionnels `input`
-et `output_size`. Les champs inconnus ou dupliqués sont rejetés. `code` accepte
-un entier JSON non signé de 32 bits ou une chaîne hexadécimale préfixée par
-`0x`. `input` est une chaîne d’octets hexadécimaux de longueur paire sans préfixe
-ni espaces ; son absence signifie une entrée vide. `output_size` est un entier
-JSON non signé ; son absence signifie zéro. Les fractions numériques et les
-notations à virgule flottante sont rejetées.
+Seuls `load_address`, `requests`, `unload` et `kernel_exports` sont acceptés
+à la racine. Toutes les requêtes acceptent `kind`, ainsi que les champs
+facultatifs `device` et `file`. Les IOCTL exigent `code` et acceptent `input`,
+`output_size` et `direct_input`. Un `read` accepte `output_size` et `byte_offset` ;
+un `write` accepte `input` et `byte_offset`. Les offsets valent zéro par défaut,
+acceptent des entiers ou des chaînes hexadécimales et doivent tenir dans une
+valeur signée non négative sur 64 bits. Les requêtes de cycle de vie rejettent
+les champs de transfert. Les champs inconnus ou dupliqués sont rejetés.
+`code` accepte un entier JSON non signé sur 32 bits ou une chaîne hexadécimale
+`0x`. `input` est une chaîne hexadécimale de longueur paire, sans préfixe ni
+espaces ; son omission signifie une entrée vide. `output_size` est un entier
+JSON non signé ; son omission signifie zéro. Les fractions et les notations
+à virgule flottante sont rejetées.
+
+Pour les IOCTL directs, `input` initialise le premier tampon système,
+tandis que `direct_input` initialise le second tampon distinct décrit par le MDL,
+complété par des zéros jusqu’à `output_size`. `METHOD_IN_DIRECT` exige un accès
+en lecture ; il n’implique pas un mappage système en lecture seule. Les deux
+méthodes utilisent des tampons de scénario accessibles en lecture/écriture.
+`MdlMappingNoWrite` retire le droit d’écriture du mappage et `MdlMappingNoExecute`
+retire le droit d’exécution. Le démappage révoque l’adresse virtuelle système ;
+un nouveau mappage conserve les mêmes données verrouillées. L’achèvement rend
+le MDL et le mappage caducs. Les champs publics du MDL utilisés par les macros
+WDM sont modélisés ; les champs de processus/PFN, les MDL construits manuellement,
+les mappages utilisateur et l’accès direct via le UserBuffer brut sont rejetés.
+Un tampon direct de longueur nulle possède un MDL nul.
+
+Pour READ/WRITE, `DO_BUFFERED_IO` ou `DO_DIRECT_IO` sélectionne la méthode
+de transfert. L’absence de ces indicateurs ou leur conflit provoque un arrêt.
+Information est vérifié par rapport à la longueur du transfert ; les écritures
+renvoient un nombre d’octets et les lectures renvoient des octets.
+
+`kernel_exports` associe les noms de routines à des booléens de disponibilité
+explicites, par exemple `"kernel_exports": {"OptionalRoutine": false}`. Les
+exports modélisés et les imports statiques reçoivent des adresses stables partagées
+avec `MmGetSystemRoutineAddress`. Un export explicitement absent est résolu en
+NULL et ne peut pas satisfaire un import statique. Un export déclaré présent
+sans modèle d’API est résolu vers un piège déclenché à l’appel. Un nom dynamique
+inconnu provoque un arrêt avec un diagnostic de disponibilité non spécifiée ;
+l’absence n’est jamais déduite du manque d’implémentation. Les noms sont en ASCII
+imprimable de longueur bornée et la résolution est sensible à la casse.
+L’inventaire est une propriété concrète du scénario, sans prétendre correspondre
+à toutes les versions de Windows.
+`IoGetCurrentIrpStackLocation` et `MmGetSystemAddressForMdlSafe` sont des fonctions auxiliaires des en-têtes WDM modélisées ; cela ne les déclare pas exportées par défaut, leur disponibilité comme exports nécessitant un import statique ou une déclaration explicite dans `kernel_exports`.
 
 Le texte du scénario est limité à 2 MiB, avec au plus 64 requêtes, 65536 octets
-par tampon d’entrée ou de sortie et 512 KiB d’octets d’entrée et de sortie
-cumulés. Les budgets d’instructions, d’observations, de mémoire invitée et de
-temps s’appliquent à l’ensemble du scénario. L’arène de 1 MiB contient aussi
-les objets et métadonnées : une image peut donc épuiser la mémoire du modèle
-avant de consommer les tailles maximales des tampons du scénario.
+par tampon d’entrée ou de sortie et 512 KiB d’octets demandés au total, contenu
+de `direct_input` compris. Les budgets d’instructions, d’observations, de mémoire
+invitée et de temps s’appliquent à l’ensemble du scénario. L’arène de 1 MiB
+contient aussi les objets et métadonnées : une image peut donc épuiser la mémoire
+du modèle avant d’atteindre le maximum prévu pour les tampons du scénario.
 
 ## Validation avec l’exemple Microsoft
 
@@ -217,13 +277,15 @@ python3 scripts/validate_windows_driver_sample.py \
 
 Utilisez `--headers` pour un répertoire d’inclusion MinGW-w64 différent de celui
 par défaut. Le script génère une bibliothèque d’importation MS COFF à partir
-des dépendances de l’objet compilé. La vérification exécute DriverEntry, create,
-l’IOCTL bufferisé de l’exemple, cleanup, close et unload. L’exemple amont
-n’enregistre pas de gestionnaire cleanup ; le gestionnaire par défaut modélisé
-termine donc cleanup avec `STATUS_INVALID_DEVICE_REQUEST` (`0xC0000010`).
-Le pilote est néanmoins fermé puis déchargé, et l’IOCTL réussi renvoie les
-octets attendus. Pour ce scénario complet, le code de sortie attendu de la CLI
-est **2** et `scenario_success` vaut false. Le script lui-même ne réussit que
+des dépendances de l’objet compilé. La vérification exécute des scénarios
+bufferisés, in-direct et out-direct distincts via DriverEntry, create, IOCTL,
+cleanup, close et unload. Ajoutez `--debug` et choisissez un répertoire de sortie
+distinct pour compiler avec `DBG=1` et vérifier les messages de journalisation
+invités. L’exemple amont n’enregistre pas de gestionnaire cleanup ; le gestionnaire
+par défaut modélisé termine donc cleanup avec `STATUS_INVALID_DEVICE_REQUEST`
+(`0xC0000010`). Le pilote effectue tout de même close et unload, et l’IOCTL réussi
+renvoie les octets attendus. Pour ce scénario complet, le code de sortie attendu
+de la CLI est **2** et `scenario_success` vaut false. Le script ne réussit que
 si tous ces résultats correspondent, y compris l’échec visible de cleanup ;
 il ne réécrit pas l’exemple pour masquer ce résultat.
 
@@ -235,8 +297,8 @@ conserve les appels d’API et l’état observable recueillis avant l’arrêt,
 les objets périphériques et les adresses des callbacks du pilote. Les adresses
 invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
-limites et le nom du service de l’exécution. Le profil est
-`wdm-x64-synchronous-v1`. `nt_status` reste le résultat de DriverEntry, tandis
+limites, le nom du service et les substitutions `kernel_exports` de l’exécution. Le profil est
+`wdm-x64-synchronous-v2`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -244,9 +306,17 @@ aussi sa phase (`driver_entry`, `request:N` ou `unload`). Chaque requête rappor
 les statuts de dispatch et d’E/S, l’achèvement, la longueur d’information et
 les octets renvoyés dans `output_hex`. `preferred_image_base` décrit la base
 PE d’origine. `security_cookie` est l’adresse invitée du cookie initialisé,
-ou `"0x0"` si aucun n’était nécessaire. Les champs des requêtes sont `kind`,
-`device`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`,
+ou `"0x0"` si aucun n’était nécessaire. Les champs des requêtes sont `kind`, `device`, `file`, `byte_offset`, `code`, `irp`, `completed`, `dispatch_status`, `io_status`,
 `information` et `output_hex`.
+
+L’objet nullable `fault` conserve le premier défaut du backend. Ses champs
+`kind`, `pc`, `address` nullable, `size`, `access` et `interrupt` distinguent la
+mémoire non mappée ou protégée, les plages invalides, les instructions invalides
+et les exceptions CPU. Les adresses utilisent des chaînes hexadécimales ; les
+tailles et vecteurs d’interruption utilisent des entiers. Les lectures
+d’observation ne peuvent pas remplacer le défaut d’origine. Un backend en
+défaut ne peut pas reprendre, et cet enregistrement n’implique pas de gestion
+SEH invitée.
 
 `instructions` compte les tentatives d’instructions invitées admises. Une
 instruction rejetée par la politique d’exécution n’est pas comptée ; une

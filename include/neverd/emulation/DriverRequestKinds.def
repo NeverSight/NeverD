@@ -10,6 +10,8 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_DRIVER_REQUEST_KIND(Create, "create", 0x00)
+NEVERD_DRIVER_REQUEST_KIND(Read, "read", 0x03)
+NEVERD_DRIVER_REQUEST_KIND(Write, "write", 0x04)
 NEVERD_DRIVER_REQUEST_KIND(DeviceControl, "ioctl", 0x0e)
 NEVERD_DRIVER_REQUEST_KIND(Cleanup, "cleanup", 0x12)
 NEVERD_DRIVER_REQUEST_KIND(Close, "close", 0x02)

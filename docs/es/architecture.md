@@ -353,7 +353,7 @@ la política no proporciona un backend de traducción ejecutable.
 `lib/emulation` es un componente opcional de ejecución, activado mediante
 `NEVERD_ENABLE_DRIVER_EMULATION`. La CLI `emulate-driver` accede a él a través
 de la API C pública. `DriverSession` controla la inicialización WDM x64 acotada
-y las invocaciones síncronas opcionales create/IOCTL/cleanup/close/unload;
+y las invocaciones síncronas opcionales create/IOCTL/read/write/cleanup/close/unload;
 el mapeo de imágenes Windows utiliza el `BinaryImage` completo del cargador
 existente, y el modelo de Windows controla los objetos del invitado y la
 semántica de las API. El adaptador Unicorn controla la ejecución de CPU y la
@@ -376,6 +376,19 @@ pila y de archivo, y valida la finalización síncrona; la sesión ordena los
 callbacks bajo presupuestos de ejecución compartidos. Las importaciones
 desconocidas no utilizadas tienen vinculación diferida; ejecutarlas o leer
 datos exportados no modelados provoca una detención explícita.
+
+Un registro compartido de exportaciones asigna direcciones estables del
+invitado para importaciones estáticas y resolución dinámica. La disponibilidad
+se mantiene separada de la implementación de API: las exportaciones
+explícitamente ausentes devuelven NULL, las presentes sin modelar activan una
+trampa al llamarlas y la disponibilidad dinámica no especificada detiene la
+ejecución. El modelo de solicitudes posee las identidades de archivo
+independientes y los MDL propios de las solicitudes, y controla los permisos
+y la caducidad de sus
+asignaciones de memoria. Las API del entorno leen los argumentos variables
+del invitado mediante el lector Win64 verificado de la sesión. El backend
+conserva la primera causa estructurada de un fallo; la observación y los informes
+no reanudan una CPU con un fallo ni implican gestión de excepciones de Windows.
 
 ## Fronteras de reescritura de excepciones
 

@@ -432,7 +432,7 @@ backend.
 `lib/emulation` is an optional execution component, enabled by
 `NEVERD_ENABLE_DRIVER_EMULATION`. The `emulate-driver` CLI reaches it through
 the public C API. `DriverSession` owns bounded x64 WDM initialization and
-optional synchronous create/IOCTL/cleanup/close/unload invocations;
+optional synchronous create/IOCTL/read/write/cleanup/close/unload invocations;
 Windows image mapping consumes the existing loader's complete `BinaryImage`,
 and the Windows model owns guest objects and API semantics. The Unicorn adapter
 owns CPU execution and the authoritative guest memory. This path does not use
@@ -451,6 +451,15 @@ belong to the execution loader. The Windows model owns IRP/stack-location/file
 objects and validates synchronous completion; the session sequences callbacks
 under shared execution budgets. Unused unknown imports are lazy bindings;
 executing them or reading unmodeled export data stops explicitly.
+
+The export registry assigns stable guest addresses to both static imports and
+dynamic routine lookups. Export availability is separate from implementation:
+explicit absence resolves to NULL, a present unmodeled routine binds to a trap,
+and unspecified dynamic availability stops. The request model owns independent
+file identities and request-owned MDLs, including mapping permissions and expiry.
+The runtime reads guest varargs through the session's checked Win64 argument
+reader. Backend faults retain their first structured cause; observation and
+reporting do not resume a faulted CPU or imply Windows exception handling.
 
 ## Exception-rewrite boundaries
 
