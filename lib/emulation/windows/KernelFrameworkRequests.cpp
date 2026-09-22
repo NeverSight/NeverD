@@ -26,26 +26,53 @@ llvm::Error requestError(const llvm::Twine &Message) {
 }
 } // namespace
 
-llvm::Expected<std::optional<KernelFramework::GuestCall>>
-KernelFramework::requestCancellation(uint64_t IRP) {
-  auto R =
+llvm::Error
+KernelFramework::preflightCancellationToken(uint64_t EarlierCallbacks) const {
+  if (!NextContinuation || EarlierCallbacks >= UINT64_MAX - NextContinuation)
+    return requestError("cancellation continuation token capacity exhausted");
+  const uint64_t Token = NextContinuation + EarlierCallbacks;
+  if (Continuations.contains(Token) || CancelCallbacks.contains(Token))
+    return requestError("cancellation continuation token is already owned");
+  return llvm::Error::success();
+}
+
+llvm::Expected<bool>
+KernelFramework::preflightRequestCancellation(uint64_t IRP,
+                                              uint64_t EarlierCallbacks) const {
+  const auto R =
       std::find_if(Requests.begin(), Requests.end(),
                    [&](const auto &Entry) { return Entry.second.IRP == IRP; });
   if (R == Requests.end() || R->second.Completed || R->second.Completing ||
       R->second.Cancellation != CancelState::Marked)
-    return std::optional<GuestCall>{};
+    return false;
   if (PendingCall)
     return requestError("cancellation cannot replace a pending guest callback");
   if (!RequestsHost.IsCanceled)
     return requestError("cancellation host is unavailable");
+  const auto O = Objects.find(R->first);
+  if (O == Objects.end() || !O->second.InternalReferences ||
+      !R->second.CancelRoutine)
+    return requestError("cancelable request lost its callback reference");
+  if (auto E = preflightCancellationToken(EarlierCallbacks))
+    return E;
+  return true;
+}
+
+llvm::Expected<std::optional<KernelFramework::GuestCall>>
+KernelFramework::requestCancellation(uint64_t IRP) {
+  auto GeneratesCallback = preflightRequestCancellation(IRP);
+  if (!GeneratesCallback)
+    return GeneratesCallback.takeError();
+  if (!*GeneratesCallback)
+    return std::optional<GuestCall>{};
   auto Canceled = RequestsHost.IsCanceled(IRP);
   if (!Canceled)
     return Canceled.takeError();
   if (!*Canceled)
     return requestError("cancellation requires the underlying IRP cancel flag");
-  auto &O = Objects.at(R->first);
-  if (!O.InternalReferences || !R->second.CancelRoutine)
-    return requestError("cancelable request lost its callback reference");
+  auto R =
+      std::find_if(Requests.begin(), Requests.end(),
+                   [&](const auto &Entry) { return Entry.second.IRP == IRP; });
   const uint64_t Token = NextContinuation++;
   // FxRequest::InsertTailIrpQueue holds FXREQUEST_QUEUE_TAG. Cancellation
   // transfers that hold to ProcessCancelledRequests, which releases it only
@@ -208,7 +235,11 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (*Canceled && !Legacy)
       return Result{RequestCancelled};
     if (*Canceled && PendingCall)
-      return requestError("cancellation cannot replace a pending guest callback");
+      return requestError(
+          "cancellation cannot replace a pending guest callback");
+    if (*Canceled)
+      if (auto E = preflightCancellationToken(0))
+        return E;
     if (O->second.InternalReferences == UINT64_MAX)
       return requestError("internal reference count overflow");
     ++O->second.InternalReferences;

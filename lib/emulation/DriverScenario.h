@@ -28,6 +28,8 @@ llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
 
 llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices);
 
+llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices);
+
 llvm::Error validateDriverScenario(const DriverOptions &Options);
 
 } // namespace neverd::emulation

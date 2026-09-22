@@ -80,6 +80,102 @@ TEST_F(DriverExecutionPolicy, PermitsPassiveIRQLReadWithoutControlMutation) {
   EXPECT_FALSE(CPU.fault().has_value());
 }
 
+TEST_F(DriverExecutionPolicy, NormalizesCR8ReadsToEveryFullWidthGPR) {
+  constexpr std::array<X64Register, 16> Registers = {
+      X64Register::AX,  X64Register::CX,  X64Register::DX,  X64Register::BX,
+      X64Register::SP,  X64Register::BP,  X64Register::SI,  X64Register::DI,
+      X64Register::R8,  X64Register::R9,  X64Register::R10, X64Register::R11,
+      X64Register::R12, X64Register::R13, X64Register::R14, X64Register::R15};
+  for (unsigned I = 0; I < Registers.size(); ++I) {
+    SCOPED_TRACE(I);
+    const std::array<uint8_t, 4> Bytes = {
+        uint8_t(I < 8 ? 0x44 : 0x45), 0x0f, 0x20, uint8_t(0xc0 | (I & 7))};
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+    EXPECT_EQ(*Action, std::optional<X64Register>(Registers[I]));
+  }
+  auto Ordinary = Policy.inspect({0x48, 0x89, 0xd8}, 0x1000);
+  ASSERT_TRUE(bool(Ordinary)) << llvm::toString(Ordinary.takeError());
+  EXPECT_FALSE(*Ordinary);
+}
+
+TEST_F(DriverExecutionPolicy, RejectedControlAccessCannotProduceAnAction) {
+  for (const std::vector<uint8_t> &Bytes : {
+           std::vector<uint8_t>{0x44, 0x0f, 0x22, 0xc0}, // Write CR8.
+           std::vector<uint8_t>{0x0f, 0x20, 0xc0},       // Read CR0.
+           std::vector<uint8_t>{0x44, 0x0f, 0x20, 0xc0, 0x90}}) {
+    auto Action = Policy.inspect(Bytes, 0x1000);
+    ASSERT_FALSE(bool(Action));
+    llvm::consumeError(Action.takeError());
+  }
+}
+
+TEST_F(DriverExecutionPolicy,
+       NonzeroCR8ActionPreservesFlagsAndResumesAfterOneCountedInstruction) {
+  for (uint64_t Level : {2u, 5u, 12u}) {
+    SCOPED_TRACE(Level);
+    auto Backend = UnicornBackend::create(2 * profile::PageSize);
+    ASSERT_TRUE(bool(Backend)) << llvm::toString(Backend.takeError());
+    auto &CPU = **Backend;
+    auto Check = [](llvm::Error E) {
+      ASSERT_FALSE(bool(E)) << llvm::toString(std::move(E));
+    };
+    Check(CPU.map(0x1000, 2 * profile::PageSize, Read | Write | Execute));
+    // xor eax,eax; stc; mov r9,cr8; pushfq; pop rax; nop.
+    const std::array<uint8_t, 10> Bytes = {
+        0x31, 0xc0, 0xf9, 0x45, 0x0f, 0x20, 0xc1, 0x9c, 0x58, 0x90};
+    Check(CPU.write(0x1000, Bytes));
+    Check(CPU.setReg(X64Register::SP, 0x2ff0));
+    Check(CPU.setReg(X64Register::CR8, Level));
+    Check(CPU.setReg(X64Register::R9, UINT64_MAX));
+    Check(CPU.setReg(X64Register::R10, 0x123456789abcdef0));
+    std::optional<X64Register> Pending;
+    uint64_t NextPC = 0;
+    unsigned Instructions = 0, Actions = 0;
+    BackendHooks Hooks;
+    Hooks.Instruction = [&](uint64_t PC, uint32_t Size) {
+      if (PC == 0x1009) {
+        CPU.stop();
+        return;
+      }
+      std::array<uint8_t, profile::MaxInstructionSize> Actual{};
+      ASSERT_LE(Size, Actual.size());
+      Check(CPU.fetch(PC, llvm::MutableArrayRef<uint8_t>(Actual.data(), Size)));
+      auto Action =
+          Policy.inspect(llvm::ArrayRef<uint8_t>(Actual.data(), Size), PC);
+      ASSERT_TRUE(bool(Action)) << llvm::toString(Action.takeError());
+      ++Instructions;
+      if (*Action) {
+        Pending = **Action;
+        NextPC = PC + Size;
+        ++Actions;
+        CPU.stop();
+      }
+    };
+    Check(CPU.installHooks(std::move(Hooks)));
+    Check(CPU.run(0x1000, 100000));
+    ASSERT_EQ(Pending, std::optional<X64Register>(X64Register::R9));
+    auto Original = CPU.reg(X64Register::R9);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    EXPECT_EQ(*Original, UINT64_MAX); // Backend never executes its zero helper.
+    auto IRQL = CPU.reg(X64Register::CR8);
+    ASSERT_TRUE(bool(IRQL)) << llvm::toString(IRQL.takeError());
+    Check(CPU.setReg(*Pending, *IRQL));
+    Check(CPU.run(NextPC, 100000));
+    auto Value = CPU.reg(X64Register::R9);
+    auto Other = CPU.reg(X64Register::R10);
+    auto Flags = CPU.reg(X64Register::AX);
+    ASSERT_TRUE(bool(Value)) << llvm::toString(Value.takeError());
+    ASSERT_TRUE(bool(Other)) << llvm::toString(Other.takeError());
+    ASSERT_TRUE(bool(Flags)) << llvm::toString(Flags.takeError());
+    EXPECT_EQ(*Value, Level);
+    EXPECT_EQ(*Other, 0x123456789abcdef0u);
+    EXPECT_EQ(*Flags & 0x8d5, 0x45u); // CF, PF and ZF survive the MOV action.
+    EXPECT_EQ(Actions, 1u);
+    EXPECT_EQ(Instructions, 5u);
+  }
+}
+
 TEST_F(DriverExecutionPolicy, KeepsOrdinaryXLATAndIgnoredSegmentPrefixes) {
   accepts({0xd7});
   accepts({0x3e, 0xd7});

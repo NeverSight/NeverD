@@ -165,6 +165,8 @@ llvm::Expected<uint64_t> KernelModel::call(
 }
 
 std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
+  if (PendingInterruptCall)
+    return std::exchange(PendingInterruptCall, std::nullopt);
   if (auto Call = takeWdmGuestCall())
     return Call;
   if (Framework)
@@ -187,6 +189,8 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     return Framework->finishGuestCall(Token.ID, Result);
   case GuestCallOwner::WDM:
     return finishWdmGuestCall(Token.ID, Result);
+  case GuestCallOwner::Interrupt:
+    return finishInterruptCall(Token.ID, Result);
   }
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "guest callback has an invalid owner");

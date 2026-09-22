@@ -62,13 +62,17 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
         "callback continuation does not match active task");
   const auto Kind = Scheduler.active()->Kind;
   if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
-      Kind != KernelScheduler::CallbackKind::WDMCompletion)
+      Kind != KernelScheduler::CallbackKind::WDMCompletion &&
+      Kind != KernelScheduler::CallbackKind::Interrupt)
     return std::optional<KernelGuestCall>{};
   auto Token = ScheduledModelContinuations.find(ID);
   if (Token == ScheduledModelContinuations.end())
     return cancellationError("scheduled callback lost its model continuation");
   const auto ExpectedOwner = Kind == KernelScheduler::CallbackKind::FrameworkCancel
-                                 ? GuestCallOwner::Framework : GuestCallOwner::WDM;
+                                 ? GuestCallOwner::Framework
+                             : Kind == KernelScheduler::CallbackKind::Interrupt
+                                 ? GuestCallOwner::Interrupt
+                                 : GuestCallOwner::WDM;
   if (Token->second.Owner != ExpectedOwner)
     return cancellationError("scheduled callback has a foreign continuation owner");
   auto Result = finishGuestCall(Token->second, ReturnValue);

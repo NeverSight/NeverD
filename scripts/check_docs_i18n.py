@@ -2136,6 +2136,21 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         matches_public = False
     if not matches_public:
         report(errors, "driver register-bank example differs from public execution scenario")
+    interrupt_example = Path("docs/examples/driver-interrupt-scenario.json")
+    interrupt_scenario = re.search(
+        r'CAPIAndCLIExecuteExplicitInterruptAndDpcCompletion.*?'
+        r'const std::string Scenario = R"\((.*?)\)";',
+        public_tests,
+        re.DOTALL,
+    )
+    try:
+        matches_interrupt = interrupt_scenario is not None and json.loads(
+            view.read_text(interrupt_example)
+        ) == json.loads(interrupt_scenario.group(1))
+    except (json.JSONDecodeError, OSError):
+        matches_interrupt = False
+    if not matches_interrupt:
+        report(errors, "driver interrupt example differs from public execution scenario")
     exports = re.findall(
         r"NEVERD_KERNEL_API\((\w+),",
         view.read_text(Path("lib/emulation/windows/KernelAPIs.def")),
@@ -2152,6 +2167,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
     # The 458-entry identity inventory also names unmodeled traps. Only the
     # implemented table and loader ABI inventories establish documented APIs.
     for inventory, macro in (
+        ("KernelInterruptAPIs.def", "NEVERD_KERNEL_INTERRUPT_API"),
         ("KernelFrameworkAPIs.def", "NEVERD_FRAMEWORK_API"),
         ("KernelFrameworkLoaderAPIs.def", "NEVERD_FRAMEWORK_LOADER_API"),
     ):
@@ -2233,7 +2249,15 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v12",
+        "wdm-x64-scheduled-v13",
+        "DriverInterrupts.h", "DriverInterrupts.def", "interrupt_events",
+        "after_100ns", "interrupt_id", "raw_vector", "raw_level", "raw_affinity",
+        "translated_vector", "translated_level", "translated_affinity",
+        "latched", "device_exclusive", "source_request_index", "event_index",
+        "due_at_100ns", "occurred_at_100ns", "delivered_at_100ns", "returned_at_100ns",
+        "interrupt_object", "return_value", "claimed", "undelivered_reason",
+        "NEVERD_WDM_INTERRUPT_FIXTURE", "NEVERD_WDM_INTERRUPT_CFG_FIXTURE",
+        "driver-interrupt-scenario.json",
         "register_bank", "resources", "raw_start", "translated_start", "registers",
         "read_only", "read_write", "DriverResources.h", "DriverResources.def",
         "CM_RESOURCE_LIST", "NEVERD_WDM_RESOURCE_FIXTURE",
@@ -2284,6 +2308,8 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
              "KernelModelPnpDevices", "KernelModelPnpRequests", "KernelModelPnpCompletion",
              "KernelRemoveLocks", "DriverResources.h", "DriverResources.def",
              "KernelMMIO", "KernelModelResources", "UnicornBackend",
+             "KernelResources", "KernelInterrupts", "DriverInterrupts.h",
+             "KernelModelInterruptEvents", "KernelModelInterrupts",
              "DriverPower.def", "DriverPowerOperation", "KernelModelPowerRequests",
              "KernelModelPowerCompletion"),
             errors,
@@ -2302,6 +2328,10 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
                 "NEVERD_WDM_STACK_FIXTURE",
                 "NEVERD_WDM_STACK_CFG_FIXTURE",
                 "DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                "DriverInterruptScenarioTests.cpp", "KernelInterruptsTests.cpp",
+                "KernelInterruptBridgeTests.cpp", "SchedulerInterruptTests.cpp",
+                "DriverWDMInterruptTests.cpp", "NEVERD_WDM_INTERRUPT_FIXTURE",
+                "NEVERD_WDM_INTERRUPT_CFG_FIXTURE", "driver-interrupt-scenario.json",
                 "KernelMMIOFailureTests.cpp",
                 "KernelResourceBridgeTests.cpp", "UnicornMMIOTests.cpp",
                 "DriverWDMResourceTests.cpp", "NEVERD_WDM_RESOURCE_FIXTURE",

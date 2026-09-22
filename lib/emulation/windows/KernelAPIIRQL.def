@@ -22,6 +22,15 @@ NEVERD_KERNEL_IRQL_VALUE(Any, dispatcher::HighLevel)
 #endif
 
 #ifdef NEVERD_KERNEL_IRQL_API
+
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioconnectinterrupt
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesynchronizeexecution
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquireinterruptspinlock
+// Object-dependent synchronization DIRQL and release ownership remain in the
+// interrupt model; Any is only the outer x64 valid-IRQL ceiling.
+#define NEVERD_KERNEL_INTERRUPT_API(Name, Arity, IRQL) NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelInterruptAPIs.def"
+#undef NEVERD_KERNEL_INTERRUPT_API
 // These routines require PASSIVE_LEVEL, including case-sensitive comparison.
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcompareunicodestring
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlequalunicodestring

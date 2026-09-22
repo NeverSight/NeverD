@@ -27,6 +27,10 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelPowerRequests.cpp
   windows/KernelModelPowerCompletion.cpp
   windows/KernelModelResources.cpp
+  windows/KernelInterrupts.cpp
+  windows/KernelModelInterrupts.cpp
+  windows/KernelModelInterruptEvents.cpp
+  windows/KernelResources.cpp
   windows/KernelMMIO.cpp
   windows/KernelModelRemoveLocks.cpp
   windows/KernelRemoveLocks.cpp

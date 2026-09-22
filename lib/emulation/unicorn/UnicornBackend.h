@@ -12,6 +12,7 @@
 #ifndef NEVERD_EMULATION_UNICORNBACKEND_H
 #define NEVERD_EMULATION_UNICORNBACKEND_H
 #include "../GuestMemory.h"
+#include "../X64Registers.h"
 
 #include <functional>
 #include <memory>
@@ -39,11 +40,6 @@ struct BackendFault {
   std::optional<uint64_t> Size;
   std::optional<BackendAccessKind> Access;
   std::optional<uint32_t> Interrupt;
-};
-enum class X64Register {
-#define NEVERD_UNICORN_REGISTER(Name, Register) Name,
-#include "UnicornRegisters.def"
-#undef NEVERD_UNICORN_REGISTER
 };
 struct BackendHooks {
   std::function<void(uint64_t, uint32_t)> Instruction;

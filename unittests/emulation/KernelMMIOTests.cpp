@@ -23,6 +23,7 @@ protected:
   static constexpr uint32_t Failure = 0xc0000001;
   std::unique_ptr<UnicornBackend> Memory;
   std::unique_ptr<KernelMMIO> Model;
+  KernelResources Resources{[this](uint64_t PDO) { return Model->canRemove(PDO); }};
   DriverPnpDevice Device;
 
   void ok(llvm::Error E) {
@@ -47,9 +48,9 @@ protected:
     reject(Value.takeError(), Text);
   }
   void start(uint64_t Owner = PDO) {
-    ok(Model->beginStart(Owner));
-    ok(Model->completeLowerStart(Owner, 0));
-    ok(Model->finishPnp(Owner, DevicePnpRequest::Start, 0));
+    ok(Resources.beginStart(Owner));
+    ok(Resources.completeLowerStart(Owner, 0));
+    ok(Resources.finishPnp(Owner, DevicePnpRequest::Start, 0));
   }
   uint64_t map(uint64_t PA = Physical, uint64_t Length = 0x1000) {
     return take(Model->map(PA, Length, mmio::NonCached, false));
@@ -60,7 +61,7 @@ protected:
   void SetUp() override {
     Memory = take(UnicornBackend::create(16 * 1024 * 1024));
     ASSERT_TRUE(Memory);
-    Model = std::make_unique<KernelMMIO>(*Memory);
+    Model = std::make_unique<KernelMMIO>(*Memory, Resources);
     Device.ID = "bank0";
     Device.Bus = DriverBusKind::RegisterBank;
     Device.InitialDevicePower = DevicePowerState::D0;
@@ -75,7 +76,8 @@ protected:
           {8, 1, DriverRegisterAccess::ReadWrite, 42},
           {10, 2, DriverRegisterAccess::ReadWrite, 0x4321},
           {0xffc, 4, DriverRegisterAccess::ReadWrite, 99}}});
-    ok(Model->configure(PDO, Device));
+    ok(Resources.configure(PDO, Device));
+    ok(Model->configure(PDO));
   }
 };
 
@@ -87,8 +89,8 @@ TEST_F(KernelMMIOTest, ResourceListsUsePackedOrderedRawAndTranslatedFacts) {
       Value |= uint64_t(Bytes.at(Offset + I)) << (I * 8);
     return Value;
   };
-  auto Raw = take(Model->resourceList(PDO, false));
-  auto Translated = take(Model->resourceList(PDO, true));
+  auto Raw = take(Resources.resourceList(PDO, false));
+  auto Translated = take(Resources.resourceList(PDO, true));
   ASSERT_EQ(Raw.size(), 40u);
   ASSERT_EQ(Translated.size(), 40u);
   EXPECT_EQ(Read(Raw, 0, 4), 1u);
@@ -106,28 +108,28 @@ TEST_F(KernelMMIOTest, ResourceListsUsePackedOrderedRawAndTranslatedFacts) {
 
 TEST_F(KernelMMIOTest, LowerStartControlsAssignmentBeforeTopCompletion) {
   reject(Model->map(Physical, 4, 0, false), "not assigned");
-  ok(Model->beginStart(PDO));
+  ok(Resources.beginStart(PDO));
   reject(Model->map(Physical, 4, 0, false), "not assigned");
-  reject(Model->validateCompletion(PDO, DevicePnpRequest::Start, 0), "epoch");
-  ok(Model->completeLowerStart(PDO, 0));
+  reject(Resources.validateCompletion(PDO, DevicePnpRequest::Start, 0), "epoch");
+  ok(Resources.completeLowerStart(PDO, 0));
   const uint64_t Alias = map();
   EXPECT_EQ(get(Alias), 17u);
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Start, 0));
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Start, 0));
   ok(Model->unmap(Alias, 0x1000));
 }
 
 TEST_F(KernelMMIOTest, FailedLowerAndUpperStartsRetainTruthfulRegisterEffects) {
-  ok(Model->beginStart(PDO));
-  ok(Model->completeLowerStart(PDO, Failure));
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Start, Failure));
+  ok(Resources.beginStart(PDO));
+  ok(Resources.completeLowerStart(PDO, Failure));
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Start, Failure));
   reject(Model->map(Physical, 4, 0, false), "not assigned");
-  ok(Model->beginStart(PDO));
-  ok(Model->completeLowerStart(PDO, 0));
+  ok(Resources.beginStart(PDO));
+  ok(Resources.completeLowerStart(PDO, 0));
   const uint64_t Alias = map();
   ok(Memory->writeInteger(Alias, 55, 4));
-  reject(Model->finishPnp(PDO, DevicePnpRequest::Start, Failure), "mapping");
+  reject(Resources.finishPnp(PDO, DevicePnpRequest::Start, Failure), "mapping");
   ok(Model->unmap(Alias, 0x1000));
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Start, Failure));
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Start, Failure));
   start();
   EXPECT_EQ(get(map()), 55u);
 }
@@ -153,10 +155,10 @@ TEST_F(KernelMMIOTest, StopRequiresUnmapAndRestartPreservesBankState) {
   start();
   const auto First = map();
   ok(Memory->writeInteger(First, 77, 4));
-  reject(Model->finishPnp(PDO, DevicePnpRequest::Stop, 0), "mapping");
+  reject(Resources.finishPnp(PDO, DevicePnpRequest::Stop, 0), "mapping");
   EXPECT_EQ(get(First), 77u);
   ok(Model->unmap(First, 0x1000));
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Stop, 0));
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Stop, 0));
   reject(Model->map(Physical, 4, 0, false), "not assigned");
   start();
   EXPECT_EQ(get(map()), 77u);
@@ -166,10 +168,10 @@ TEST_F(KernelMMIOTest, PhysicalPowerChangesDoNotResetOrUnmapRegisters) {
   start();
   const auto Alias = map();
   ok(Memory->writeInteger(Alias, 88, 4));
-  Model->setPhysicalPower(PDO, DevicePowerState::D3);
+  Resources.setPhysicalPower(PDO, DevicePowerState::D3);
   // Mapping changes do not perform device register accesses.
   const auto Other = map(Physical, 4);
-  Model->setPhysicalPower(PDO, DevicePowerState::D0);
+  Resources.setPhysicalPower(PDO, DevicePowerState::D0);
   EXPECT_EQ(get(Other), 88u);
   EXPECT_EQ(get(Alias), 88u);
 }
@@ -177,26 +179,26 @@ TEST_F(KernelMMIOTest, PhysicalPowerChangesDoNotResetOrUnmapRegisters) {
 TEST_F(KernelMMIOTest, PhysicalD3RejectsRegisterAccess) {
   start();
   const auto Alias = map();
-  Model->setPhysicalPower(PDO, DevicePowerState::D3);
+  Resources.setPhysicalPower(PDO, DevicePowerState::D3);
   reject(Memory->readInteger(Alias, 4), "D0");
 }
 
 TEST_F(KernelMMIOTest, SurpriseRemovalPermitsCleanupButNoNewMappings) {
   start();
   const auto Alias = map();
-  Model->surpriseRemoval(PDO);
+  Resources.surpriseRemoval(PDO);
   reject(Model->map(Physical, 4, 0, false), "hardware is absent");
   reject(Model->canRemove(PDO), "mapping");
   ok(Model->unmap(Alias, 0x1000));
   ok(Model->canRemove(PDO));
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Remove, 0));
-  reject(Model->beginStart(PDO), "present");
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Remove, 0));
+  reject(Resources.beginStart(PDO), "present");
 }
 
 TEST_F(KernelMMIOTest, SurpriseRemovalRejectsAlreadyMappedAccess) {
   start();
   const auto Alias = map();
-  Model->surpriseRemoval(PDO);
+  Resources.surpriseRemoval(PDO);
   reject(Memory->readInteger(Alias, 4), "unavailable");
 }
 
@@ -257,16 +259,17 @@ TEST_F(KernelMMIOTest,
 
 TEST_F(KernelMMIOTest, IndependentPDOsDoNotShareEpochsOrValues) {
   Device.Resources[0].TranslatedStart += 0x10000;
-  ok(Model->configure(PDO + 8, Device));
+  ok(Resources.configure(PDO + 8, Device));
+  ok(Model->configure(PDO + 8));
   start();
   start(PDO + 8);
   const auto First = map(), Second = map(Physical + 0x10000);
   ok(Memory->writeInteger(First, 61, 4));
   EXPECT_EQ(get(Second), 17u);
-  Model->surpriseRemoval(PDO);
+  Resources.surpriseRemoval(PDO);
   EXPECT_EQ(get(Second), 17u);
   ok(Model->unmap(First, 0x1000));
-  ok(Model->finishPnp(PDO, DevicePnpRequest::Remove, 0));
+  ok(Resources.finishPnp(PDO, DevicePnpRequest::Remove, 0));
   EXPECT_EQ(get(Second), 17u);
 }
 TEST_F(KernelMMIOTest, MappingCallbacksCannotOutliveTheirRegisterBankOwner) {
@@ -279,19 +282,22 @@ TEST_F(KernelMMIOTest, MappingCallbacksCannotOutliveTheirRegisterBankOwner) {
 TEST_F(KernelMMIOTest, BackendMappingCapacityReturnsNullAndCanRecover) {
   auto Limited = take(UnicornBackend::create(3 * 4096));
   ASSERT_TRUE(Limited);
-  KernelMMIO Bank(*Limited);
-  ok(Bank.configure(PDO, Device));
-  ok(Bank.beginStart(PDO));
-  ok(Bank.completeLowerStart(PDO, 0));
-  ok(Bank.finishPnp(PDO, DevicePnpRequest::Start, 0));
-  const auto First = take(Bank.map(Physical, 0x1000, 0, false));
+  std::unique_ptr<KernelMMIO> Bank;
+  KernelResources Assignment{[&](uint64_t Owner) { return Bank->canRemove(Owner); }};
+  Bank = std::make_unique<KernelMMIO>(*Limited, Assignment);
+  ok(Assignment.configure(PDO, Device));
+  ok(Bank->configure(PDO));
+  ok(Assignment.beginStart(PDO));
+  ok(Assignment.completeLowerStart(PDO, 0));
+  ok(Assignment.finishPnp(PDO, DevicePnpRequest::Start, 0));
+  const auto First = take(Bank->map(Physical, 0x1000, 0, false));
   ASSERT_NE(First, 0u);
-  EXPECT_EQ(take(Bank.map(Physical, 0x1000, 0, false)), 0u);
+  EXPECT_EQ(take(Bank->map(Physical, 0x1000, 0, false)), 0u);
   EXPECT_FALSE(Limited->hasDeviceError());
   EXPECT_FALSE(Limited->fault());
   EXPECT_EQ(take(Limited->readInteger(First, 4)), 17u);
-  ok(Bank.unmap(First, 0x1000));
-  const auto Second = take(Bank.map(Physical, 0x1000, 0, false));
+  ok(Bank->unmap(First, 0x1000));
+  const auto Second = take(Bank->map(Physical, 0x1000, 0, false));
   EXPECT_GT(Second, First);
   EXPECT_EQ(take(Limited->readInteger(Second, 4)), 17u);
 }

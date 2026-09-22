@@ -37,10 +37,19 @@ llvm::Error failure(const std::string &Text) {
 }
 
 std::string guestCallPhase(const GuestCallToken &Token) {
-  return std::string(Token.Owner == GuestCallOwner::Framework
-                         ? "callback:framework"
-                         : "callback:wdm") +
-         std::to_string(Token.ID);
+  const char *Prefix = "callback:invalid";
+  switch (Token.Owner) {
+  case GuestCallOwner::Framework:
+    Prefix = "callback:framework";
+    break;
+  case GuestCallOwner::WDM:
+    Prefix = "callback:wdm";
+    break;
+  case GuestCallOwner::Interrupt:
+    Prefix = "callback:interrupt";
+    break;
+  }
+  return std::string(Prefix) + std::to_string(Token.ID);
 }
 
 } // namespace
@@ -137,6 +146,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   std::optional<uint64_t> InvocationReturn;
   const KernelExportRegistry::Export *Pending = nullptr;
   uint64_t PendingGuard = 0;
+  struct EnvironmentRead {
+    X64Register Destination;
+    uint64_t NextPC;
+  };
+  std::optional<EnvironmentRead> PendingCR8Read;
   auto Stop = [&](DriverStopReason Reason, const std::string &Diagnostic) {
     if (Stopped)
       return;
@@ -224,13 +238,23 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Stop(DriverStopReason::MemoryFault, llvm::toString(std::move(E)));
       return;
     }
-    if (auto E = Policy.validate(llvm::ArrayRef<uint8_t>(Bytes.data(), Size),
-                                 Address)) {
+    auto Inspection =
+        Policy.inspect(llvm::ArrayRef<uint8_t>(Bytes.data(), Size), Address);
+    if (!Inspection) {
       Stop(DriverStopReason::UnsupportedInstruction,
-           llvm::toString(std::move(E)));
+           llvm::toString(Inspection.takeError()));
       return;
     }
     ++Result.Instructions;
+    if (*Inspection) {
+      if (Size > UINT64_MAX - Address) {
+        Stop(DriverStopReason::MemoryFault,
+             "CR8 read advances beyond the guest address range");
+        return;
+      }
+      PendingCR8Read = EnvironmentRead{**Inspection, Address + Size};
+      CPU.stop();
+    }
   };
   Hooks.Read = [&](uint64_t Address, uint32_t Size) {
     if (Stopped)
@@ -313,6 +337,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     uint64_t Size = 0;
     uint64_t InitialSP = 0;
     uint64_t PC = 0;
+    uint8_t EntryIRQL = 0;
     std::string Phase;
     std::unique_ptr<BackendContext> Context;
     std::optional<KernelModel::Wait> Wait;
@@ -336,6 +361,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     auto Frame = std::make_unique<Execution>();
     Frame->ID = ID;
     Frame->PC = PC;
+    Frame->EntryIRQL = Kernel.currentIRQL();
     Frame->Phase = Phase;
     Frame->Base = StackBase;
     Frame->Size = StackSize;
@@ -406,6 +432,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     return llvm::Error::success();
   };
   auto RunExecution = [&](Execution &Frame) -> llvm::Error {
+    Kernel.enterExecution(Frame.Base);
     if (Frame.Context) {
       if (auto E = CPU.restoreContext(*Frame.Context))
         return E;
@@ -415,6 +442,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         Frame.ResumeValue.reset();
       }
     }
+    auto IRQL = CPU.reg(X64Register::CR8);
+    if (!IRQL)
+      return IRQL.takeError();
+    if (*IRQL != Kernel.currentIRQL())
+      return failure("saved CPU IRQL disagrees with its model execution");
     Result.Phase = Frame.Phase;
     Result.PC = Frame.PC;
     ExpectedReturnSP = Frame.InitialSP + PointerSize;
@@ -433,6 +465,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       Pending = nullptr;
       PendingGuard = 0;
+      PendingCR8Read.reset();
       if (auto E = CPU.run(NextPC, Remaining)) {
         std::string Message = llvm::toString(std::move(E));
         if (!Stopped)
@@ -446,6 +479,19 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (CPU.timedOut()) {
         Stop(DriverStopReason::Timeout, "execution time limit reached");
         break;
+      }
+      if (PendingCR8Read) {
+        auto IRQL = CPU.reg(X64Register::CR8);
+        if (!IRQL)
+          return IRQL.takeError();
+        if (*IRQL != Kernel.currentIRQL())
+          return failure("CR8 read disagrees with the active model IRQL");
+        // MOV r64, CR8 only changes its destination and instruction pointer;
+        // do not clobber flags, other registers, or re-count this instruction.
+        if (auto E = CPU.setReg(PendingCR8Read->Destination, *IRQL))
+          return E;
+        NextPC = PendingCR8Read->NextPC;
+        continue;
       }
       if (PendingGuard) {
         auto Target =
@@ -607,10 +653,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         return llvm::Error::success();
       }
       Result.Calls.back().Result = *Value;
+      // Direct interrupt-lock APIs change the running frame's IRQL without a
+      // new guest callback. The next instruction must observe that same CR8.
+      if (auto E = CPU.setReg(X64Register::CR8, Kernel.currentIRQL()))
+        return E;
       if (auto E = CPU.setReg(X64Register::AX, *Value))
-        return std::move(E);
+        return E;
       if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
-        return std::move(E);
+        return E;
       NextPC = *ReturnPC;
     }
     return llvm::Error::success();
@@ -627,6 +677,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (Current->ChildCall) {
           auto Call = std::move(*Current->ChildCall);
           Current->ChildCall.reset();
+          if (auto E = Kernel.beginGuestCall(Call.Token)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
           auto Child =
               NewExecution(Call.PC, Call.Arguments, guestCallPhase(Call.Token),
                            Current->ID, true);
@@ -644,6 +698,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         } else {
           if (Result.Stop != DriverStopReason::Returned)
             return llvm::Error::success();
+          if (auto E = Kernel.validateExecutionReturn(Current->Base,
+                                                       Current->EntryIRQL)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
           if (auto E = Kernel.retireStack(Current->Base, Current->Size)) {
             ModelFailure(std::move(E));
             return llvm::Error::success();
@@ -671,6 +730,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
               }
               auto Call = std::move(*Parent->ChildCall);
               Parent->ChildCall.reset();
+              if (auto E = Kernel.beginGuestCall(Call.Token)) {
+                ModelFailure(std::move(E));
+                return llvm::Error::success();
+              }
               auto Child =
                   NewExecution(Call.PC, Call.Arguments,
                                guestCallPhase(Call.Token), Parent->ID, true);
@@ -695,6 +758,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             return llvm::Error::success();
           }
           if (*Continuation) {
+            if (auto E = Kernel.beginGuestCall((**Continuation).Token)) {
+              ModelFailure(std::move(E));
+              return llvm::Error::success();
+            }
             auto Frame =
                 NewExecution((**Continuation).PC, (**Continuation).Arguments,
                              Current->Phase, Current->ID);
@@ -713,7 +780,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         }
       }
       // Waiters retain independent stacks and CPU state. Ready passive frames
-      // yield to queued DPCs, cancellation and provider completion callbacks.
+      // yield to interrupts, DPCs, cancellation and provider completions.
       if (auto E = RefreshWaiters()) {
         ModelFailure(std::move(E));
         return llvm::Error::success();
@@ -749,7 +816,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (std::any_of(Waiting.begin(), Waiting.end(),
                         [](const auto &Frame) { return !Frame->Wait; }))
           continue;
-        if (!Foreground && Waiting.empty() && !Kernel.requestPending()) {
+        if (!Foreground && Waiting.empty() && !Kernel.requestPending() &&
+            !Kernel.hasPendingInterruptEvents()) {
           Result.Phase = ParentPhase;
           Result.Stop = DriverStopReason::Returned;
           return llvm::Error::success();
@@ -860,7 +928,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Result.Phase = std::string(RequestPhase) + std::to_string(Index);
       if (DeadlineExceeded())
         break;
-      auto Invocation = Kernel.beginRequest(Options.Requests[Index]);
+      auto Invocation = Kernel.beginRequest(Options.Requests[Index], Index);
       if (!Invocation) {
         ModelFailure(Invocation.takeError());
         break;

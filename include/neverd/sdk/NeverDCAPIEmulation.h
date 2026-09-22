@@ -75,13 +75,23 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// unique case-sensitive ASCII id, bus="resource_free" or "register_bank",
 /// initial_device_power=
 /// "D0" and initial_system_power="working". The register_bank bus additionally
-/// requires a nonempty resources array: each id/raw_start/translated_start/length
+/// requires nonempty combined resources/interrupts arrays. Each memory resource
+/// id/raw_start/translated_start/length
 /// and registers array is explicit; each register requires offset/width/access/
 /// value. The bounded fixed assignments use exact aligned 1/2/4-byte read_only
-/// or read_write registers. Physical addresses are synthetic, never host memory.
-/// Register initial values persist across unmap/stop/restart. Resource-free
-/// devices omit resources. A kind="pnp" request requires
-/// device_id, minor (start/query_remove/cancel_remove/remove/query_stop/stop/
+/// or read_write registers. Physical addresses are synthetic, never host
+/// memory. Register initial values persist across unmap/stop/restart.
+/// Resource-free devices omit both arrays. Each interrupt requires id,
+/// independent raw_vector/raw_level/raw_affinity and
+/// translated_vector/translated_level/ translated_affinity, mode="latched", and
+/// share="device_exclusive". Only CPU0/group0 and translated DIRQL3..12 are
+/// supported. READ/WRITE/IOCTL may specify interrupt_events with explicit
+/// after_100ns/device_id/interrupt_id; successful submission binds each pulse
+/// to its connected resource epoch. Delivery is cooperative at callback
+/// boundaries, including zero delay; source request completion does not cancel
+/// a pulse. Reports keep interrupt BOOLEAN observations independently of
+/// IRP/NTSTATUS results. A kind="pnp" request requires device_id, minor
+/// (start/query_remove/cancel_remove/remove/query_stop/stop/
 /// cancel_stop/surprise_removal), and
 /// bus_completion with explicit final status (u32 or 0x string) and optional
 /// nonnegative delay_100ns measured from provider receipt. Stop, cancel-stop,

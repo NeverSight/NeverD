@@ -243,7 +243,8 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
 }
 
 llvm::Expected<KernelModel::Invocation>
-KernelModel::beginRequest(const DriverRequest &Input) {
+KernelModel::beginRequest(const DriverRequest &Input,
+                            std::optional<size_t> SourceIndex) {
   DriverRequestResult Observation;
   Observation.Kind = Input.Kind;
   Observation.Device = Input.Device;
@@ -259,6 +260,14 @@ KernelModel::beginRequest(const DriverRequest &Input) {
       }))
     return ioError(
         "cannot begin a request during another invocation or after unload");
+  if (!Input.InterruptEvents.empty() &&
+      Input.Kind != DriverRequestKind::Read &&
+      Input.Kind != DriverRequestKind::Write &&
+      Input.Kind != DriverRequestKind::DeviceControl)
+    return ioError("interrupt events require a transfer request");
+  if (auto E = Interrupts.canArm(Input.InterruptEvents, SourceIndex.value_or(Index),
+                                 Scheduler.now100ns()))
+    return E;
   if (Input.Kind == DriverRequestKind::Pnp) {
     if (auto E = snapshot())
       return E;
@@ -459,6 +468,9 @@ KernelModel::beginRequest(const DriverRequest &Input) {
   if (auto E = initializeRequestPacket(*Request, Input))
     return E;
   Result.Requests[Index].IRP = *Packet;
+  if (auto E = Interrupts.arm(Input.InterruptEvents, SourceIndex.value_or(Index),
+                              Scheduler.now100ns()))
+    return E;
   const uint64_t Callback = Result.MajorFunctions[Major];
   if (Framework) {
     auto Route = Framework->routeRequest(*Top, Request->IRP);

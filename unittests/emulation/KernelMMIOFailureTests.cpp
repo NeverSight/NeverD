@@ -112,7 +112,8 @@ protected:
   static constexpr uint64_t PDO = 0x1230;
   static constexpr uint64_t Physical = 0xf0000004;
   FailingMMIOMemory Memory;
-  KernelMMIO Model{Memory};
+  KernelResources Resources{[this](uint64_t PDO) { return Model.canRemove(PDO); }};
+  KernelMMIO Model{Memory, Resources};
 
   template <typename T> T take(llvm::Expected<T> Value) {
     if (!Value) {
@@ -131,10 +132,11 @@ protected:
                                 Physical,
                                 0x100,
                                 {{0, 4, DriverRegisterAccess::ReadWrite, 17}}});
-    ASSERT_EQ(llvm::toString(Model.configure(PDO, Config)), "");
-    ASSERT_EQ(llvm::toString(Model.beginStart(PDO)), "");
-    ASSERT_EQ(llvm::toString(Model.completeLowerStart(PDO, 0)), "");
-    ASSERT_EQ(llvm::toString(Model.finishPnp(PDO, DevicePnpRequest::Start, 0)),
+    ASSERT_EQ(llvm::toString(Resources.configure(PDO, Config)), "");
+    ASSERT_EQ(llvm::toString(Model.configure(PDO)), "");
+    ASSERT_EQ(llvm::toString(Resources.beginStart(PDO)), "");
+    ASSERT_EQ(llvm::toString(Resources.completeLowerStart(PDO, 0)), "");
+    ASSERT_EQ(llvm::toString(Resources.finishPnp(PDO, DevicePnpRequest::Start, 0)),
               "");
   }
   llvm::Expected<uint64_t> map() {

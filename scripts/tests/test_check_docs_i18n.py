@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v12",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v13",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -223,6 +223,41 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         errors: list[str] = []
         i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
         self.assertTrue(any("register-bank example differs" in error for error in errors), errors)
+
+    def test_driver_interrupt_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("DriverInterrupts.h", "interrupt_events",
+                                     "raw_vector", "translated_level", "claimed",
+                                     "undelivered_reason", "source_request_index")),
+            ("architecture.md", ("KernelResources", "KernelInterrupts",
+                                  "KernelModelInterruptEvents", "KernelModelInterrupts")),
+            ("testing.md", ("DriverInterruptScenarioTests.cpp", "KernelInterruptsTests.cpp",
+                             "KernelInterruptBridgeTests.cpp", "SchedulerInterruptTests.cpp",
+                             "DriverWDMInterruptTests.cpp", "NEVERD_WDM_INTERRUPT_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedInterruptContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_interrupt_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-interrupt-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"after_100ns": 7', '"after_100ns": 8')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("interrupt example differs" in error for error in errors), errors)
+
+    def test_driver_interrupt_example_rejects_malformed_json(self) -> None:
+        path = Path("docs/examples/driver-interrupt-scenario.json")
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: "{"}))
+        self.assertTrue(any("interrupt example differs" in error for error in errors), errors)
 
     def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (

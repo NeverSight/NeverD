@@ -1,0 +1,95 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "pnp_devices": [
+    {
+      "id": "interrupt0",
+      "bus": "register_bank",
+      "initial_device_power": "D0",
+      "initial_system_power": "working",
+      "resources": [
+        {
+          "id": "counter",
+          "raw_start": "0x200000000",
+          "translated_start": "0x300000000",
+          "length": "0x1000",
+          "registers": [
+            {
+              "offset": 0,
+              "width": 4,
+              "access": "read_write",
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "interrupts": [
+        {
+          "id": "line0",
+          "raw_vector": 17,
+          "raw_level": 7,
+          "raw_affinity": 1,
+          "translated_vector": 145,
+          "translated_level": 5,
+          "translated_affinity": 1,
+          "mode": "latched",
+          "share": "device_exclusive"
+        }
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "kind": "pnp",
+      "device_id": "interrupt0",
+      "minor": "start",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 11
+      }
+    },
+    {
+      "kind": "create",
+      "device_id": "interrupt0",
+      "file": 1
+    },
+    {
+      "kind": "ioctl",
+      "file": 1,
+      "code": "0x222000",
+      "output_size": 32,
+      "interrupt_events": [
+        {
+          "after_100ns": 7,
+          "device_id": "interrupt0",
+          "interrupt_id": "line0"
+        }
+      ]
+    },
+    {
+      "kind": "cleanup",
+      "file": 1
+    },
+    {
+      "kind": "close",
+      "file": 1
+    },
+    {
+      "kind": "pnp",
+      "device_id": "interrupt0",
+      "minor": "query_remove",
+      "bus_completion": {
+        "status": 0
+      }
+    },
+    {
+      "kind": "pnp",
+      "device_id": "interrupt0",
+      "minor": "remove",
+      "bus_completion": {
+        "status": 0,
+        "delay_100ns": 3
+      }
+    }
+  ]
+}

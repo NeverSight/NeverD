@@ -119,7 +119,9 @@ llvm::Error KernelModel::preparePnpDevices() {
     Record.PDO = Created->Address;
     Record.ResultIndex = Index;
     Record.Bus = Configured.Bus;
-    if (auto E = MMIO.configure(Created->Address, Configured))
+    if (auto E = Resources.configure(Created->Address, Configured))
+      return E;
+    if (auto E = MMIO.configure(Created->Address))
       return E;
     Record.InitialReportedDevicePower = Configured.InitialReportedDevicePower;
     Record.RequestedDevicePower = Configured.RequestedDevicePower;
@@ -259,7 +261,7 @@ llvm::Error KernelModel::finishPnpRemoval(uint64_t PDO) {
 llvm::Error KernelModel::validatePnpRemovalFinalization(
     const ActiveRequest &Request) const {
   const uint64_t PDO = Request.PnpDevice;
-  if (auto E = MMIO.canRemove(PDO))
+  if (auto E = canReleaseResources(PDO))
     return E;
   const auto *Configured = pnpDeviceForPDO(PDO);
   if (!Configured || !isProviderDevice(PDO))

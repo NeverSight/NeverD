@@ -1,0 +1,58 @@
+//===- DriverInterrupts.def - Explicit interrupt scenario facts -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Synthetic interrupt resource, event, observation and validation inventory.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_DRIVER_INTERRUPT_MODE
+NEVERD_DRIVER_INTERRUPT_MODE(Latched, 1, "latched")
+#endif
+
+#ifdef NEVERD_DRIVER_INTERRUPT_SHARE
+NEVERD_DRIVER_INTERRUPT_SHARE(DeviceExclusive, 1, "device_exclusive")
+#endif
+
+#ifdef NEVERD_DRIVER_INTERRUPT_LIMIT
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptsPerDeviceLimit, 8)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptLimit, 32)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptEventsPerRequestLimit, 64)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptEventLimit, 1024)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverScenarioInterruptIDLimit, 64)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptMinimumLevel, 3)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptMaximumLevel, 12)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptRawLevelLimit, 65535)
+NEVERD_DRIVER_INTERRUPT_LIMIT(DriverInterruptAffinity, 1)
+#endif
+
+#ifdef NEVERD_DRIVER_INTERRUPT_FIELD
+NEVERD_DRIVER_INTERRUPT_FIELD(Interrupts, "interrupts")
+NEVERD_DRIVER_INTERRUPT_FIELD(ID, "id")
+NEVERD_DRIVER_INTERRUPT_FIELD(RawVector, "raw_vector")
+NEVERD_DRIVER_INTERRUPT_FIELD(RawLevel, "raw_level")
+NEVERD_DRIVER_INTERRUPT_FIELD(RawAffinity, "raw_affinity")
+NEVERD_DRIVER_INTERRUPT_FIELD(TranslatedVector, "translated_vector")
+NEVERD_DRIVER_INTERRUPT_FIELD(TranslatedLevel, "translated_level")
+NEVERD_DRIVER_INTERRUPT_FIELD(TranslatedAffinity, "translated_affinity")
+NEVERD_DRIVER_INTERRUPT_FIELD(Mode, "mode")
+NEVERD_DRIVER_INTERRUPT_FIELD(Share, "share")
+NEVERD_DRIVER_INTERRUPT_FIELD(InterruptEvents, "interrupt_events")
+NEVERD_DRIVER_INTERRUPT_FIELD(After100ns, "after_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(DeviceID, "device_id")
+NEVERD_DRIVER_INTERRUPT_FIELD(InterruptID, "interrupt_id")
+NEVERD_DRIVER_INTERRUPT_FIELD(SourceRequestIndex, "source_request_index")
+NEVERD_DRIVER_INTERRUPT_FIELD(EventIndex, "event_index")
+NEVERD_DRIVER_INTERRUPT_FIELD(Epoch, "epoch")
+NEVERD_DRIVER_INTERRUPT_FIELD(DueAt100ns, "due_at_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(OccurredAt100ns, "occurred_at_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(DeliveredAt100ns, "delivered_at_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(ReturnedAt100ns, "returned_at_100ns")
+NEVERD_DRIVER_INTERRUPT_FIELD(InterruptObject, "interrupt_object")
+NEVERD_DRIVER_INTERRUPT_FIELD(ReturnValue, "return_value")
+NEVERD_DRIVER_INTERRUPT_FIELD(Claimed, "claimed")
+NEVERD_DRIVER_INTERRUPT_FIELD(UndeliveredReason, "undelivered_reason")
+#endif

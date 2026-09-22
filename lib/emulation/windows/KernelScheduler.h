@@ -12,6 +12,8 @@
 #ifndef NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 #define NEVERD_EMULATION_WINDOWS_KERNELSCHEDULER_H
 
+#include "neverd/emulation/DriverInterrupts.h"
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
@@ -32,15 +34,17 @@ namespace scheduler {
 } // namespace scheduler
 
 /// A concrete single-processor schedule, not an assertion of Windows timing or
-/// interleaving equivalence. DPCs run before framework cancellation callbacks,
-/// then provider completions and workers at dispatch boundaries. Each queue is FIFO, except
-/// high-importance DPCs insert at the head. No callback executes here: next()
-/// returns guest execution metadata.
+/// interleaving equivalence. Interrupts precede DPCs, framework cancellation,
+/// provider completions and workers at dispatch boundaries. Interrupts use
+/// descending assigned priority and FIFO ties; high-importance DPCs insert at
+/// the head. No callback executes here: next() returns guest metadata.
 /// Virtual time advances only when no callback is ready or running. Guest API
 /// wrappers own object initialization, thread identities, and memory semantics.
 class KernelScheduler {
 public:
-  enum class CallbackKind { WorkItem, DPC, FrameworkCancel, WDMCompletion };
+  enum class CallbackKind {
+    WorkItem, DPC, FrameworkCancel, WDMCompletion, Interrupt
+  };
   enum class DpcImportance { Low = 0, Medium = 1, High = 2, MediumHigh = 3 };
 
   struct Limits {
@@ -64,10 +68,16 @@ public:
     DpcImportance Importance = DpcImportance::Medium;
   };
 
+  struct InterruptCallback : Callback {
+    uint8_t IRQL = 0;     // SynchronizeIrql at callback entry.
+    uint8_t Priority = 0; // Assigned interrupt level for ready ordering.
+  };
+
   struct Invocation : Callback {
     uint64_t ID = 0;
     CallbackKind Kind = CallbackKind::WorkItem;
     uint8_t IRQL = scheduler::PassiveLevel;
+    uint8_t InterruptPriority = 0;
     uint64_t DueTime100ns = 0;
     uint64_t SourceTimer = 0;
     bool SourceTimerPeriodic = false;
@@ -96,6 +106,13 @@ public:
   canEnqueueWDMCompletions(llvm::ArrayRef<Callback> Completions) const;
   llvm::Expected<uint64_t> enqueueWDMCompletion(Callback Completion);
   bool hasQueuedWDMCompletion() const { return !Completions.empty(); }
+
+  /// Object identifies an explicit event, not a connection: separate pulses
+  /// on the same interrupt are never coalesced by DPC/work-item identity rules.
+  llvm::Error
+  canEnqueueInterrupts(llvm::ArrayRef<InterruptCallback> Interrupts) const;
+  llvm::Expected<uint64_t> enqueueInterrupt(InterruptCallback Interrupt);
+  bool hasQueuedInterrupt() const { return !Interrupts.empty(); }
 
   /// An already-queued DPC is unchanged and returns false, as KeInsertQueueDpc.
   /// Removing a DPC does not cancel any timer that may queue it again.
@@ -132,6 +149,16 @@ public:
   /// Does not advance time or dequeue callbacks; budget failures are atomic.
   llvm::Error processDueTimers();
 
+  /// Split idle time advancement from callback selection, allowing all external
+  /// producers at this boundary to be admitted before choosing the next ISR or
+  /// DPC. AdditionalCallbacks reserves nothing: preflight and commit must have
+  /// no intervening mutation. The preflight counts due timer DPCs together with
+  /// that exact external count and checks time, expiration and identity bounds.
+  /// Future time cannot skip an earlier timer or advance with ready/active work.
+  llvm::Error canAdvanceTo100ns(uint64_t Time,
+                               uint64_t AdditionalCallbacks = 0) const;
+  llvm::Error advanceTo100ns(uint64_t Time);
+
   /// Nonnegative DueTime100ns is absolute; negative is relative. Period is
   /// milliseconds and must fit Windows LONG. Resetting an armed timer replaces
   /// its future expiry and resets its signal; already queued DPCs survive.
@@ -158,7 +185,8 @@ public:
   uint64_t dispatchCount() const { return Dispatches; }
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const {
-    return Workers.size() + DPCs.size() + Cancellations.size() + Completions.size();
+    return Workers.size() + DPCs.size() + Cancellations.size() +
+           Completions.size() + Interrupts.size();
   }
   size_t suspendedCallbackCount() const { return Suspended.size(); }
   const std::optional<Invocation> &active() const { return Active; }
@@ -184,6 +212,7 @@ private:
   std::deque<Invocation> DPCs;
   std::deque<Invocation> Cancellations;
   std::deque<Invocation> Completions;
+  std::deque<Invocation> Interrupts;
   std::optional<Invocation> Active;
   std::map<uint64_t, Invocation> Suspended;
   std::map<uint64_t, TimerState> Timers;
@@ -191,9 +220,12 @@ private:
   llvm::Error validateTime() const;
   llvm::Error validateCallback(const Callback &Work) const;
   llvm::Error validateDPC(const DpcCallback &DPC) const;
+  llvm::Error validateInterrupt(const InterruptCallback &Interrupt) const;
   llvm::Error checkCapacity(uint64_t Additional) const;
   Invocation makeInvocation(Callback Work, CallbackKind Kind, uint64_t DueTime);
   llvm::Error expireTimers(uint64_t Time);
+  llvm::Error validateTimerExpirations(uint64_t Time,
+                                      uint64_t AdditionalCallbacks) const;
 };
 
 } // namespace neverd::emulation

@@ -97,26 +97,41 @@ llvm::Expected<std::optional<KernelScheduler::Invocation>>
 KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
   if (Scheduler.active())
     return schedulingError("cannot dispatch with an unfinished callback");
-  if (auto E = processRequestCancellations())
+  auto ProcessBoundary = [&](uint64_t Time) -> llvm::Error {
+    auto Additional = preflightScheduledBoundary(Time);
+    if (!Additional)
+      return Additional.takeError();
+    if (auto E = Scheduler.canAdvanceTo100ns(Time, *Additional))
+      return E;
+    if (auto E = Scheduler.advanceTo100ns(Time))
+      return E;
+    // Hardware publication precedes interrupt eligibility. An actual bus
+    // transition may make a due pulse ineligible; preserve that ordered fact.
+    if (auto E = processProviderCompletions())
+      return E;
+    if (auto E = processRequestCancellations())
+      return E;
+    return processInterruptEvents();
+  };
+  if (auto E = ProcessBoundary(Scheduler.now100ns()))
     return E;
-  if (auto E = processProviderCompletions())
-    return E;
-  // Request deadlines share the scheduler clock, but are not synthetic guest
-  // timers. Stop at their boundary before advancing to a later timer or wait.
-  for (const auto &[IRP, Request] : Requests)
-    if (!Request.Completed && Request.CancelDeadline &&
-        (!Deadline || *Request.CancelDeadline < *Deadline))
-      Deadline = Request.CancelDeadline;
-  for (const auto &[IRP, Completion] : ProviderCompletions)
-    if (!Deadline || Completion.Deadline < *Deadline)
-      Deadline = Completion.Deadline;
-  auto Next = Scheduler.next(AdvanceTime, Deadline);
+  // Admission and time advancement never dequeue. In particular, an ISR due
+  // with a timer must be present before selecting that timer's lower-IRQL DPC.
+  auto Next = Scheduler.next(false, Deadline);
   if (!Next)
     return Next.takeError();
-  if (auto E = processRequestCancellations())
-    return E;
-  if (auto E = processProviderCompletions())
-    return E;
+  if (!*Next && AdvanceTime) {
+    auto Boundary = nextEventTime();
+    if (Deadline && (!Boundary || *Deadline < *Boundary))
+      Boundary = Deadline;
+    if (Boundary && *Boundary > Scheduler.now100ns()) {
+      if (auto E = ProcessBoundary(*Boundary))
+        return E;
+      Next = Scheduler.next(false, Deadline);
+      if (!Next)
+        return Next.takeError();
+    }
+  }
   if (*Next) {
     if ((**Next).Kind == KernelScheduler::CallbackKind::FrameworkCancel) {
       auto Token = ScheduledModelContinuations.find((**Next).ID);
@@ -126,7 +141,18 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
       if (auto E = Framework->beginCancelCallback(Token->second.ID))
         return E;
     }
-    CurrentIRQL = (**Next).IRQL;
+    if ((**Next).Kind == KernelScheduler::CallbackKind::Interrupt) {
+      auto Token = ScheduledModelContinuations.find((**Next).ID);
+      if (Token == ScheduledModelContinuations.end() ||
+          Token->second.Owner != GuestCallOwner::Interrupt)
+        return schedulingError("interrupt lost its model continuation");
+      if (auto E = beginGuestCall(Token->second))
+        return E;
+      if (CurrentIRQL != (**Next).IRQL)
+        return schedulingError("interrupt entry disagrees with its IRQL");
+    } else {
+      CurrentIRQL = (**Next).IRQL;
+    }
   }
   return std::move(*Next);
 }
@@ -151,7 +177,8 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
     return retireDeviceIfUnreferenced(Invocation.Owner);
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
-      Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion)
+      Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
+      Invocation.Kind == KernelScheduler::CallbackKind::Interrupt)
     return retireDeviceIfUnreferenced(Invocation.Owner);
   return llvm::Error::success();
 }
@@ -179,6 +206,9 @@ std::optional<uint64_t> KernelModel::nextEventTime() const {
   for (const auto &[IRP, Completion] : ProviderCompletions)
     if (!Deadline || Completion.Deadline < *Deadline)
       Deadline = std::max(Completion.Deadline, Scheduler.now100ns());
+  auto Interrupt = nextInterruptEventTime();
+  if (Interrupt && (!Deadline || *Interrupt < *Deadline))
+    Deadline = std::max(*Interrupt, Scheduler.now100ns());
   return Deadline;
 }
 
@@ -281,6 +311,8 @@ llvm::Error KernelModel::prepareReleaseRange(uint64_t Base, uint64_t Size) {
 llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size) const {
   if (Size > UINT64_MAX - Base)
     return schedulingError("overflowing object storage range");
+  if (auto E = Interrupts.canReleaseRange(Base, Size))
+    return E;
   for (const auto &[Object, References] : WaitReferences)
     if (References && Object >= Base && Object < Base + Size)
       return schedulingError("cannot release storage with outstanding waits");

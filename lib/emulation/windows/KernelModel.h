@@ -17,6 +17,7 @@
 #include "KernelFramework.h"
 #include "KernelGuestCall.h"
 #include "KernelMMIO.h"
+#include "KernelInterrupts.h"
 #include "KernelRegistry.h"
 #include "KernelRemoveLocks.h"
 #include "KernelScheduler.h"
@@ -40,7 +41,8 @@ public:
                    [this](uint64_t Address, uint32_t Size, bool IsWrite) {
                      return validateDispatcherStorage(Address, Size, IsWrite);
                    }),
-        MMIO(Memory) {}
+        Resources([this](uint64_t PDO) { return canReleaseResources(PDO); }),
+        MMIO(Memory, Resources), Interrupts(Resources, Result) {}
   KernelModel(const KernelModel &) = delete;
   KernelModel &operator=(const KernelModel &) = delete;
   KernelModel(KernelModel &&) = delete;
@@ -61,6 +63,7 @@ public:
        llvm::ArrayRef<uint64_t> Arguments,
        llvm::function_ref<llvm::Expected<uint64_t>(unsigned)> ReadArgument);
   std::optional<KernelGuestCall> takeGuestCall();
+  llvm::Error beginGuestCall(GuestCallToken Token);
   llvm::Expected<std::optional<uint64_t>> finishGuestCall(GuestCallToken Token,
                                                           uint64_t Result);
   llvm::Expected<uint64_t>
@@ -83,7 +86,9 @@ public:
   llvm::Expected<Invocation> beginAddDevice(llvm::StringRef ID);
   llvm::Error finishAddDevice(llvm::StringRef ID, uint32_t Status);
   /// A pending dispatch retains its packet until a guest callback completes it.
-  llvm::Expected<Invocation> beginRequest(const DriverRequest &Request);
+  llvm::Expected<Invocation>
+  beginRequest(const DriverRequest &Request,
+               std::optional<size_t> SourceIndex = std::nullopt);
   llvm::Error recordDispatchReturn(uint64_t IRP, uint32_t DispatchStatus);
   /// Finalization is idempotent only for an already finalized owned IRP.
   llvm::Error finalizeRequest(uint64_t IRP);
@@ -110,12 +115,18 @@ public:
   std::optional<uint64_t> nextEventTime() const;
   bool hasQueuedDPC() const { return Scheduler.hasQueuedDPC(); }
   bool hasQueuedPriorityCallback() const {
-    return hasQueuedDPC() || Scheduler.hasQueuedFrameworkCancel() ||
+    const auto Interrupt = nextInterruptEventTime();
+    return (Interrupt && *Interrupt <= Scheduler.now100ns()) ||
+           Scheduler.hasQueuedInterrupt() || hasQueuedDPC() ||
+           Scheduler.hasQueuedFrameworkCancel() ||
            Scheduler.hasQueuedWDMCompletion();
   }
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
   void enterForeground() { CurrentIRQL = 0; }
+  void enterExecution(uint64_t Identity) { CurrentExecution = Identity; }
+  llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
+  bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
   uint8_t currentIRQL() const { return CurrentIRQL; }
   llvm::Expected<Invocation> beginUnload();
   llvm::Error finishUnload();
@@ -138,7 +149,21 @@ private:
   KernelScheduler Scheduler;
   KernelDispatcher Dispatcher;
   KernelRemoveLocks RemoveLocks;
+  KernelResources Resources;
   KernelMMIO MMIO;
+  KernelInterrupts Interrupts;
+  uint64_t CurrentExecution = 0;
+  std::optional<KernelGuestCall> PendingInterruptCall;
+  llvm::Expected<uint64_t> callInterruptAPI(llvm::StringRef Name,
+                                            llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<std::optional<uint64_t>>
+  finishInterruptCall(uint64_t Token, uint64_t Value);
+  llvm::Expected<uint64_t> preflightScheduledBoundary(uint64_t Time);
+  llvm::Error processInterruptEvents();
+  std::optional<uint64_t> nextInterruptEventTime() const {
+    return Interrupts.nextEventTime();
+  }
+  llvm::Error canReleaseResources(uint64_t PDO) const;
   std::optional<Wait> PendingWait;
   std::map<uint64_t, size_t> WaitReferences;
   std::map<uint64_t, size_t> RemoveLockWaitReferences;

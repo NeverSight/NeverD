@@ -33,6 +33,13 @@ namespace resourceField {
 #undef NEVERD_DRIVER_RESOURCE_FIELD
 } // namespace resourceField
 
+namespace interruptField {
+#define NEVERD_DRIVER_INTERRUPT_FIELD(Name, Spelling)                          \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_FIELD
+} // namespace interruptField
+
 #define NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Name, Spelling)                      \
   constexpr llvm::StringLiteral Name##Field = Spelling;
 #define NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Name, Spelling)                   \
@@ -49,6 +56,7 @@ constexpr llvm::StringRef RootFields[] = {
 #undef NEVERD_DRIVER_SCENARIO_REQUEST_FIELD
 };
 constexpr llvm::StringRef RequestFields[] = {
+    interruptField::InterruptEvents,
 #define NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Name, Spelling)
 #define NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Name, Spelling) Spelling,
 #include "DriverScenarioFields.def"
@@ -407,6 +415,111 @@ memoryResources(const llvm::json::Value &Value) {
   return Result;
 }
 
+llvm::Expected<std::vector<DriverInterruptResource>>
+interruptResources(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->size() > DriverScenarioInterruptsPerDeviceLimit)
+    return invalid("interrupts must be a bounded array");
+  std::vector<DriverInterruptResource> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each interrupt must be an object");
+    if (auto E = fields(*Object,
+                        {interruptField::ID, interruptField::RawVector,
+                         interruptField::RawLevel, interruptField::RawAffinity,
+                         interruptField::TranslatedVector,
+                         interruptField::TranslatedLevel,
+                         interruptField::TranslatedAffinity,
+                         interruptField::Mode, interruptField::Share}))
+      return std::move(E);
+    auto ID = Object->getString(interruptField::ID);
+    auto Mode = Object->getString(interruptField::Mode);
+    auto Share = Object->getString(interruptField::Share);
+    if (!ID || !Mode || !Share)
+      return invalid("interrupts require explicit id, mode and share strings");
+    DriverInterruptResource Resource;
+    Resource.ID = ID->str();
+    bool ModeFound = false, ShareFound = false;
+#define NEVERD_DRIVER_INTERRUPT_MODE(Name, Value, Spelling)                    \
+  if (*Mode == Spelling) {                                                     \
+    Resource.Mode = DriverInterruptMode::Name;                                 \
+    ModeFound = true;                                                          \
+  }
+#define NEVERD_DRIVER_INTERRUPT_SHARE(Name, Value, Spelling)                   \
+  if (*Share == Spelling) {                                                    \
+    Resource.Share = DriverInterruptShare::Name;                               \
+    ShareFound = true;                                                         \
+  }
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_MODE
+#undef NEVERD_DRIVER_INTERRUPT_SHARE
+    if (!ModeFound || !ShareFound)
+      return invalid("unsupported interrupt mode or share");
+    const std::pair<llvm::StringRef, uint32_t DriverInterruptResource::*>
+        Words[] = {
+            {interruptField::RawVector, &DriverInterruptResource::RawVector},
+            {interruptField::RawLevel, &DriverInterruptResource::RawLevel},
+            {interruptField::TranslatedVector,
+             &DriverInterruptResource::TranslatedVector},
+            {interruptField::TranslatedLevel,
+             &DriverInterruptResource::TranslatedLevel}};
+    for (const auto &[Name, Member] : Words) {
+      const auto *Fact = Object->get(Name);
+      if (!Fact)
+        return invalid("interrupts require explicit " + Name);
+      auto Parsed = unsigned32(*Fact, Name);
+      if (!Parsed)
+        return Parsed.takeError();
+      Resource.*Member = *Parsed;
+    }
+    const std::pair<llvm::StringRef, uint64_t DriverInterruptResource::*>
+        Masks[] = {{interruptField::RawAffinity,
+                    &DriverInterruptResource::RawAffinity},
+                   {interruptField::TranslatedAffinity,
+                    &DriverInterruptResource::TranslatedAffinity}};
+    for (const auto &[Name, Member] : Masks) {
+      const auto *Fact = Object->get(Name);
+      if (!Fact)
+        return invalid("interrupts require explicit " + Name);
+      auto Parsed = unsigned64(*Fact, Name);
+      if (!Parsed)
+        return Parsed.takeError();
+      Resource.*Member = *Parsed;
+    }
+    Result.push_back(std::move(Resource));
+  }
+  return Result;
+}
+
+llvm::Expected<std::vector<DriverInterruptEvent>>
+interruptEvents(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->size() > DriverScenarioInterruptEventsPerRequestLimit)
+    return invalid("interrupt_events must be a bounded array");
+  std::vector<DriverInterruptEvent> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each interrupt event must be an object");
+    if (auto E = fields(*Object,
+                        {interruptField::After100ns, interruptField::DeviceID,
+                         interruptField::InterruptID}))
+      return std::move(E);
+    const auto *After = Object->get(interruptField::After100ns);
+    auto DeviceID = Object->getString(interruptField::DeviceID);
+    auto InterruptID = Object->getString(interruptField::InterruptID);
+    if (!After || !DeviceID || !InterruptID)
+      return invalid("interrupt events require explicit after_100ns, "
+                     "device_id and interrupt_id");
+    auto ParsedAfter = unsigned64(*After, interruptField::After100ns);
+    if (!ParsedAfter)
+      return ParsedAfter.takeError();
+    Result.push_back({*ParsedAfter, DeviceID->str(), InterruptID->str()});
+  }
+  return Result;
+}
+
 llvm::Expected<std::vector<DriverPnpDevice>>
 pnpDevices(const llvm::json::Value &Value) {
   const auto *Array = Value.getAsArray();
@@ -417,11 +530,12 @@ pnpDevices(const llvm::json::Value &Value) {
     const auto *Object = Item.getAsObject();
     if (!Object)
       return invalid("each pnp_devices entry must be an object");
-    if (auto E = fields(
-            *Object,
-            {field::ID, field::Bus, field::InitialDevicePower,
-             field::InitialSystemPower, field::InitialReportedDevicePower,
-             field::RequestedDevicePower, resourceField::Resources}))
+    if (auto E = fields(*Object,
+                        {field::ID, field::Bus, field::InitialDevicePower,
+                         field::InitialSystemPower,
+                         field::InitialReportedDevicePower,
+                         field::RequestedDevicePower, resourceField::Resources,
+                         interruptField::Interrupts}))
       return std::move(E);
     auto ID = Object->getString(field::ID);
     auto Bus = Object->getString(field::Bus);
@@ -450,9 +564,20 @@ pnpDevices(const llvm::json::Value &Value) {
       if (!ParsedResources)
         return ParsedResources.takeError();
       Device.Resources = std::move(*ParsedResources);
-    } else if (Device.Bus == DriverBusKind::RegisterBank) {
-      return invalid("register_bank devices require explicit resources");
     }
+    if (const auto *Interrupts = Object->get(interruptField::Interrupts)) {
+      if (Device.Bus == DriverBusKind::ResourceFree)
+        return invalid("resource_free devices cannot specify interrupts");
+      auto ParsedInterrupts = interruptResources(*Interrupts);
+      if (!ParsedInterrupts)
+        return ParsedInterrupts.takeError();
+      Device.Interrupts = std::move(*ParsedInterrupts);
+    }
+    if (Device.Bus == DriverBusKind::RegisterBank &&
+        !Object->get(resourceField::Resources) &&
+        !Object->get(interruptField::Interrupts))
+      return invalid(
+          "register_bank devices require explicit resources or interrupts");
 #define NEVERD_DRIVER_DEVICE_POWER(Name, Spelling)                             \
   if (*DevicePower == Spelling)                                                \
     Device.InitialDevicePower = DevicePowerState::Name;
@@ -515,6 +640,17 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_REQUEST_KIND
   if (!KnownKind)
     return invalid("unsupported request kind '" + *Kind + "'");
+  if (const auto *Events = Object->get(interruptField::InterruptEvents)) {
+    if (Result.Kind != DriverRequestKind::Read &&
+        Result.Kind != DriverRequestKind::Write &&
+        Result.Kind != DriverRequestKind::DeviceControl)
+      return invalid(
+          "interrupt_events is valid only for read, write and ioctl requests");
+    auto ParsedEvents = interruptEvents(*Events);
+    if (!ParsedEvents)
+      return ParsedEvents.takeError();
+    Result.InterruptEvents = std::move(*ParsedEvents);
+  }
   if (const auto *Device = Object->get(DeviceField)) {
     auto Name = Device->getAsString();
     if (!Name || Name->empty() || !validDeviceName(*Name))
@@ -751,7 +887,62 @@ llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
   return llvm::Error::success();
 }
 
+llvm::Error validateDriverInterrupts(llvm::ArrayRef<DriverPnpDevice> Devices) {
+  size_t Count = 0;
+  std::set<uint32_t> Vectors;
+  for (const auto &Device : Devices) {
+    if (Device.Bus == DriverBusKind::ResourceFree && !Device.Interrupts.empty())
+      return invalid("resource_free devices cannot have interrupts");
+    if (Device.Interrupts.size() > DriverScenarioInterruptsPerDeviceLimit)
+      return invalid("interrupts exceeds the per-device count limit");
+    if (Device.Interrupts.size() > DriverScenarioInterruptLimit - Count)
+      return invalid("interrupts exceeds the combined count limit");
+    Count += Device.Interrupts.size();
+    std::set<std::string> IDs;
+    for (const auto &Interrupt : Device.Interrupts) {
+      if (!validIdentifier(Interrupt.ID, DriverScenarioInterruptIDLimit))
+        return invalid("interrupt id must be a bounded ASCII identifier");
+      if (!IDs.insert(Interrupt.ID).second)
+        return invalid("duplicate interrupt id '" + Interrupt.ID + "'");
+      if (!Vectors.insert(Interrupt.TranslatedVector).second)
+        return invalid(
+            "translated interrupt vectors must be globally exclusive");
+      switch (Interrupt.Mode) {
+#define NEVERD_DRIVER_INTERRUPT_MODE(Name, Value, Spelling)                    \
+  case DriverInterruptMode::Name:                                              \
+    break;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_MODE
+      default:
+        return invalid("unsupported interrupt mode");
+      }
+      switch (Interrupt.Share) {
+#define NEVERD_DRIVER_INTERRUPT_SHARE(Name, Value, Spelling)                   \
+  case DriverInterruptShare::Name:                                             \
+    break;
+#include "neverd/emulation/DriverInterrupts.def"
+#undef NEVERD_DRIVER_INTERRUPT_SHARE
+      default:
+        return invalid("unsupported interrupt share");
+      }
+      if (Interrupt.RawLevel > DriverInterruptRawLevelLimit)
+        return invalid(
+            "raw interrupt level must fit the group-zero descriptor");
+      if (Interrupt.TranslatedLevel < DriverInterruptMinimumLevel ||
+          Interrupt.TranslatedLevel > DriverInterruptMaximumLevel)
+        return invalid(
+            "translated interrupt level must be a supported device DIRQL");
+      if (Interrupt.RawAffinity != DriverInterruptAffinity ||
+          Interrupt.TranslatedAffinity != DriverInterruptAffinity)
+        return invalid("interrupt affinity must name only CPU zero");
+    }
+  }
+  return llvm::Error::success();
+}
+
 llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices) {
+  if (auto E = validateDriverInterrupts(Devices))
+    return E;
   using Interval = std::pair<uint64_t, uint64_t>;
   const auto HasOverlap = [](std::vector<Interval> Ranges) {
     std::sort(Ranges.begin(), Ranges.end());
@@ -769,8 +960,8 @@ llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices) {
         return invalid("resource_free devices cannot have resources");
       continue;
     case DriverBusKind::RegisterBank:
-      if (Device.Resources.empty())
-        return invalid("register_bank devices require resources");
+      if (Device.Resources.empty() && Device.Interrupts.empty())
+        return invalid("register_bank devices require resources or interrupts");
       break;
     default:
       return invalid("unsupported PnP bus");
@@ -883,7 +1074,41 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   if (Options.Requests.size() > DriverScenarioRequestLimit)
     return invalid("at most 64 requests are permitted");
   uint64_t Total = 0;
+  size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
+    if (!Request.InterruptEvents.empty() &&
+        Request.Kind != DriverRequestKind::Read &&
+        Request.Kind != DriverRequestKind::Write &&
+        Request.Kind != DriverRequestKind::DeviceControl)
+      return invalid(
+          "interrupt_events is valid only for read, write and ioctl requests");
+    if (Request.InterruptEvents.size() >
+        DriverScenarioInterruptEventsPerRequestLimit)
+      return invalid("interrupt_events exceeds the per-request count limit");
+    if (Request.InterruptEvents.size() >
+        DriverScenarioInterruptEventLimit - InterruptEventCount)
+      return invalid("interrupt_events exceeds the combined count limit");
+    InterruptEventCount += Request.InterruptEvents.size();
+    for (const auto &Event : Request.InterruptEvents) {
+      if (Event.After100ns > INT64_MAX)
+        return invalid("after_100ns exceeds the signed 64-bit time limit");
+      if (!validDeviceID(Event.DeviceID) ||
+          !validIdentifier(Event.InterruptID, DriverScenarioInterruptIDLimit))
+        return invalid("interrupt event device_id and interrupt_id must be "
+                       "bounded ASCII identifiers");
+      const auto Device = std::find_if(
+          Options.PnpDevices.begin(), Options.PnpDevices.end(),
+          [&](const DriverPnpDevice &D) { return D.ID == Event.DeviceID; });
+      if (Device == Options.PnpDevices.end())
+        return invalid(
+            "interrupt event device_id must name a configured pnp device");
+      if (std::none_of(Device->Interrupts.begin(), Device->Interrupts.end(),
+                       [&](const DriverInterruptResource &I) {
+                         return I.ID == Event.InterruptID;
+                       }))
+        return invalid(
+            "interrupt_id must name an interrupt on the event device");
+    }
     if (!Request.Device.empty() && !Request.DeviceID.empty())
       return invalid("device and device_id are mutually exclusive");
     if (!Request.DeviceID.empty() && (!validDeviceID(Request.DeviceID) ||

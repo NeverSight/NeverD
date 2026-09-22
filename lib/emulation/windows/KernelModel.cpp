@@ -475,6 +475,8 @@ llvm::Error KernelModel::deleteDevice(uint64_t Address) {
     return E;
   if (auto E = canReleaseRemoveLockStorage(Address, Device->second.Size))
     return E;
+  if (auto E = Interrupts.canReleaseRange(Address, Device->second.Size))
+    return E;
   Device->second.DeletePending = true;
   return retireDeviceIfUnreferenced(Address);
 }
@@ -545,6 +547,10 @@ llvm::Expected<uint64_t> KernelModel::call(
       WaitReferences.count(A[0]))
     return modelError("cannot reinitialize an object with outstanding waits");
   switch (Kind) {
+#define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL) case KernelAPIKind::Symbol:
+#include "KernelInterruptAPIs.def"
+#undef NEVERD_KERNEL_INTERRUPT_API
+    return callInterruptAPI(Name, A);
   case KernelAPIKind::MmMapIoSpace:
   case KernelAPIKind::MmMapIoSpaceEx:
     return MMIO.map(A[0], A[1], uint32_t(A[2]),
@@ -981,6 +987,8 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
     if (auto E = Dispatcher.validateGuestAccess(Address, Size, IsWrite))
       return E;
   if (auto E = RemoveLocks.validateGuestAccess(Address, Size, IsWrite))
+    return E;
+  if (auto E = Interrupts.validateGuestAccess(Address, Size))
     return E;
   for (const auto &[Item, Device] : WorkItems)
     if (Address < Item + profile::WorkItemTokenSize && Item < End)

@@ -49,7 +49,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
 | 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行公開情境提交 或 WDM 請求取消 |
 | 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 支援配置的登錄；其他行為限於下列 API | 物件管理員、系統狀態及回呼／事件產生機制 |
-| 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 明確宣告的記憶體暫存器組及 MMIO | 其他裝置模型、實體 RAM、PCI、連接埠、中斷、DMA 及特權 CPU 狀態 |
+| 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 明確暫存器組、MMIO 及獨佔 latched 中斷回呼 | 其他裝置模型、實體 RAM、PCI、連接埠、共用／電位觸發／MSI 中斷、DMA 及特權 CPU 狀態 |
 | x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
 | x64 CFG | 驗證目標表及檢查／分派呼叫；未啟用的插樁保留客體後援函式 | XFG、匯出抑制、不支援的載入組態與 TLS 仍遭拒絕 |
 
@@ -65,7 +65,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排入佇列的 `DelayedWorkQueue` 工作項目在 `PASSIVE_LEVEL` 執行，客體 DPC 回呼在 `DISPATCH_LEVEL` 接收規定的四個參數。CPU0 在呼叫傳回及阻塞等待邊界進行確定性的合作排程。相對、絕對與週期計時器使用虛擬時間；沒有可執行的框架時，時間推進至下一計時器、等待或取消期限。通知型與同步型事件／計時器保留各自的訊號消耗語意。每個回呼擁有獨立的客體堆疊；多個阻塞框架保留區域變數及完整 CPU 內容，客體記憶體仍共用。Win64 回呼入口將前四個參數放入暫存器，其餘放入堆疊。請求仍循序處理：標記 IRP 為待處理的派送函式必須傳回 `STATUS_PENDING`，且完成後才能開始下一個請求。待處理請求或無限等待沒有可用來源時，以停滯的 `model_error` 停止。指令、記憶體、觀察記錄與實際時間預算仍共用。
 
-這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、WDM 請求取消、自旋鎖、並行公開情境提交、一般 IRQL 切換、`METHOD_NEITHER`、UMDF、KMDF PnP 裝置及一般佇列排程、完整 PnP／電源、一般硬體、DMA 與中斷仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
+這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、WDM 請求取消、自旋鎖、並行公開情境提交、一般 IRQL 切換、`METHOD_NEITHER`、UMDF、KMDF PnP 裝置及一般佇列排程、完整 PnP／電源、一般硬體、DMA 與其他中斷模式仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
 
 工作項目在回呼開始前出佇列，因此回呼可釋放自身的工作項目。釋放仍在佇列中的項目、重複排入、使用失效物件或非客體可執行記憶體中的回呼位址都會明確失敗。裝置參考保留到回呼傳回。請求卸載要求釋放所有工作項目並完成佇列工作。CPU 內容保存與還原包含通用、SIMD、FPU 與控制狀態；客體記憶體始終共用，故障 CPU 不能藉還原內容繼續執行。
 刪除會延後到檔案物件及排隊／執行中的工作項目參考全部釋放。物件區耗盡時，工作項目配置傳回 NULL。
@@ -119,13 +119,21 @@ AndWait 關閉取得入口、釋放一次符合的取得，並暫停真正客體
 
 未知或大小不符的儲存、不符 release、重複 drain、重新初始化，以及仍有取得或未消耗 drain 等待時刪除延伸區，均在修改前失敗。乾淨的 AddDevice 失敗可刪除已初始化但未使用的鎖。鎖不取代真正裝置／工作項目參考，只在延伸區實體退役時取消登記；有效除錯中繼資料不啟用 Verifier 逾時／高水位行為。真正 WDK `driver_wdm_remove_lock.c` 以 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE` 提供四種變體。缺少產物明確略過；原生及 C API／CLI 證據僅來自 Linux，不代表完整移除管理或一般並行 I/O 排空。
 
-合成 `bus: "register_bank"` 為 PDO 加入明確的固定記憶體資源。非空 `resources` 陣列包含 `id`、`raw_start`、`translated_start`、`length` 和 `registers`；每個暫存器必須有 `offset`、`width`、`access`（`read_only` 或 `read_write`）及初始 `value`。`DriverResources.h`／`DriverResources.def` 定義 C++ 與 JSON 的共用契約。資源 ID 遵循有界 ASCII 識別碼規則，在每個 PDO 內唯一。限制為每 PDO 8 個／總計 32 個資源、每資源 256 個／總計 4096 個暫存器，以及每資源 1–1048576 位元組。僅支援自然對齊、精確 1／2／4 位元組存取，數值必須符合寬度。兩種實體區間皆不可溢位；同 PDO 的原始範圍不可重疊，轉譯範圍則全域不可重疊。空 `registers` 明確表示整組皆不可存取。位址與初值是宣告，不是主機硬體或預設填零的記憶體。`resource_free` 維持省略資源清單與 null START 指標。
+合成 `bus: "register_bank"` 為 PDO 加入明確的固定記憶體資源。若提供 `resources` 陣列，則包含 `id`、`raw_start`、`translated_start`、`length` 和 `registers`；每個暫存器必須有 `offset`、`width`、`access`（`read_only` 或 `read_write`）及初始 `value`。`DriverResources.h`／`DriverResources.def` 定義 C++ 與 JSON 的共用契約。資源 ID 遵循有界 ASCII 識別碼規則，在每個 PDO 內唯一。限制為每 PDO 8 個／總計 32 個資源、每資源 256 個／總計 4096 個暫存器，以及每資源 1–1048576 位元組。僅支援自然對齊、精確 1／2／4 位元組存取，數值必須符合寬度。兩種實體區間皆不可溢位；同 PDO 的原始範圍不可重疊，轉譯範圍則全域不可重疊。空 `registers` 明確表示整組皆不可存取。位址與初值是宣告，不是主機硬體或預設填零的記憶體。`resource_free` 維持省略資源清單與 null START 指標。
 
 START 取得分開配置且唯讀的原始與轉譯 `CM_RESOURCE_LIST`，包含順序對應的 Memory 描述子：一個完整描述子、Internal 介面、匯流排 0、版本／修訂 1、DeviceExclusive 共用方式和 READ_WRITE 範圍旗標。個別暫存器的 RO 權限獨立存在。下層 START 成功後，資源配置先於上層完成回呼可用；每次從 NotStarted／Stopped 發起 START 都以相同固定配置建立新的資源世代。暫存器值只在每個 PDO 初始化一次，解除映射、STOP 和重新啟動皆保留。START 失敗及 STOP／REMOVE 成功時，驅動程式必須在 IRP 最終完成前釋放映射，不會靜默清理。意外移除立即禁止新映射及暫存器存取，但仍允許解除既有映射。提供者實際成功完成裝置 SET 時變更硬體可存取性：D3 阻止存取，D0 僅在資源配置可用時允許存取；D3 仍可建立映射但不可存取暫存器，電源變更不會丟棄映射或重設數值。
 
-`MmMapIoSpace` 支援 NonCached；`MmMapIoSpaceEx` 支援 PAGE_NOCACHE 搭配 PAGE_READONLY 或 PAGE_READWRITE。兩者僅接受單一配置內已宣告的轉譯子範圍，保留頁內偏移。映射別名共用一組暫存器、保有獨立權限，並要求 `MmUnmapIoSpace` 使用完全相同的原始基址與長度。映射數量、視窗或設定的記憶體預算耗盡時傳回 NULL；後端錯誤仍明確失敗。已解除的位址不會因之後建立映射而重新有效。純量與真正 REP 暫存器緩衝區指令經過 CPU MMIO 檢查；未宣告區域、錯誤寬度、不對齊、RO 寫入、跨映射存取及執行都會在影響暫存器前失敗。模型 API 的記憶體存取也必須符合單次對齊的 1／2／4 位元組交易；較大的範圍會明確失敗，不會拆成多次暫存器存取。不實作任意實體 RAM、資源重新平衡、連接埠、中斷、DMA 或一般硬體行為。
+`MmMapIoSpace` 支援 NonCached；`MmMapIoSpaceEx` 支援 PAGE_NOCACHE 搭配 PAGE_READONLY 或 PAGE_READWRITE。兩者僅接受單一配置內已宣告的轉譯子範圍，保留頁內偏移。映射別名共用一組暫存器、保有獨立權限，並要求 `MmUnmapIoSpace` 使用完全相同的原始基址與長度。映射數量、視窗或設定的記憶體預算耗盡時傳回 NULL；後端錯誤仍明確失敗。已解除的位址不會因之後建立映射而重新有效。純量與真正 REP 暫存器緩衝區指令經過 CPU MMIO 檢查；未宣告區域、錯誤寬度、不對齊、RO 寫入、跨映射存取及執行都會在影響暫存器前失敗。模型 API 的記憶體存取也必須符合單次對齊的 1／2／4 位元組交易；較大的範圍會明確失敗，不會拆成多次暫存器存取。不實作任意實體 RAM、資源重新平衡、連接埠、其他中斷模式、DMA 或一般硬體行為。
 
 可執行的[暫存器組情境](../examples/driver-register-bank-scenario.json) 透過選用 `NEVERD_WDM_RESOURCE_FIXTURE`／`NEVERD_WDM_RESOURCE_CFG_FIXTURE` 使用原創且由真正 WDK 建置的 `driver_wdm_resources.c`。它執行 14 個要求，涵蓋延遲 START、檔案 I/O、STOP、重新啟動與移除，並由驅動程式 IOCTL 觀測持久數值。`configuration.pnp_devices[].resources` 以無損十六進位實體位址記錄初始事實，不是第二份暫存器組狀態報告。C API 與 Python 沿用既有 `scenario_json` 入口和未變更的 `neverd_driver_options_v1`。缺少真正產物時明確跳過；目前執行證據僅來自 Linux。
+
+相同 `register_bank` 提供者可單獨宣告 `interrupts`，或與 `resources` 一起宣告；至少一份清單必須非空。`resource_free` 拒絕明確提供的 `interrupts` 欄位，包含 `[]`。每個中斷必須有 `id`、`raw_vector`、`raw_level`、`raw_affinity`、`translated_vector`、`translated_level`、`translated_affinity`、`mode: "latched"` 及 `share: "device_exclusive"`。`DriverInterrupts.h`／`DriverInterrupts.def` 定義型別、拼法及限制：每 PDO 8 個／總計 32 個中斷、每 PDO 內唯一的有界 ASCII ID、全域獨佔的轉譯向量、原始層級 0–65535 與轉譯 DIRQL 3–12。向量保留完整 32 位元，不猜測向量與 IRQL 的關係。兩個 affinity 遮罩都必須是 1；CPU0 與群組0 是提供者明確事實。原始與轉譯值相互獨立。記憶體描述元保留順序，接著在同一 `CM_RESOURCE_LIST` 內排列中斷描述元；中斷使用型別 2、DeviceExclusive 共用設定及 LATCHED 旗標。此合成邊緣觸發設定不代表 PCI 共用電位觸發線路。
+
+READ／WRITE／IOCTL 要求可宣告 `interrupt_events`，每項明確提供 `after_100ns`、`device_id` 及 `interrupt_id`；其他要求種類拒絕此欄位，即使為空。最多每要求 64 個／總計 1024 個事件，延遲為不超過 INT64_MAX 的非負值。要求成功提交時確定延遲起點，並擷取已連接中斷及其 PDO 資源世代。事件是獨立外部線路脈衝：來源 IRP 完成不會取消事件，寫入暫存器也不會推導 enable、status 或 acknowledgment 行為。時間只在閒置時推進；到期事件於下一個支援的回呼邊界執行，因此 `after_100ns: 0` 不承諾指令級搶占或在第一條客體指令前遞送。同一時刻的產生者一起接受容量預檢；提供者硬體狀態發布先於資格檢查，ISR 回呼先於 DPC／工作項目。失去連線、過期／不可用世代或實體 D3 會記錄 `undelivered_reason` 並以 `model_error` 停止；事件不會重新綁定或默默延後。
+
+`IoConnectInterrupt` 使用實際十一個引數及完全相符的轉譯配置。`IoConnectInterruptEx` 支援 FullySpecified（1）、LineBased（2，明確 PDO 上的一條配置線路）及 FullySpecifiedGroup（4，群組 0）；`IoDisconnectInterruptEx` 要求相符版本／內容。註冊與斷開都要求 PASSIVE_LEVEL。僅支援中斷私有鎖、獨佔 latched 模式、CPU0／群組0，且不保存浮點狀態。同步 IRQL 必須等於配置的 DIRQL；LineBased 的零值選用該層級。`KINTERRUPT` 不透明，其位址永不重用。真正 ISR 接收 `(Interrupt, ServiceContext)`，從 AL 傳回 BOOLEAN；`FALSE` 表示未認領，不是 NTSTATUS 失敗。`KeSynchronizeExecution` 在同一把鎖與 DIRQL 下執行真正單引數回呼，傳回 BOOLEAN 並恢復呼叫者 IRQL／CR8。`KeAcquireInterruptSpinLock`／`KeReleaseInterruptSpinLock` 強制不可遞迴所有權、原始執行身分及儲存的 IRQL；未釋放的鎖不能跨越回呼返回。中斷等待、呼叫者提供的共用鎖、共用／電位觸發／MSI／被動中斷與指令級搶占仍不支援。失敗 START 與成功 STOP／REMOVE 必須在最終完成前斷開連線；上層完成回呼可先清理，而斷開連線絕不默默丟棄已排入佇列的 DPC。
+
+報告分開記錄宣告與觀測。`configuration.pnp_devices[].interrupts` 保留資源，`configuration.interrupt_events` 將輸入事件展平，帶有從零開始的 `source_request_index`（設定要求索引）及 `event_index`。根層級 `interrupts` 資料列加入 `device_id`、`interrupt_id`、`epoch`、絕對 `due_at_100ns`，以及可為 null 的 `occurred_at_100ns`、`delivered_at_100ns`、`returned_at_100ns`、`interrupt_object`、`return_value`、`claimed`、`undelivered_reason`。`claimed` 僅由實際傳回值的低位元組推導；時間戳記是觀測，不會虛構回呼結果。`scenario_success` 要求每個設定事件都返回且沒有未遞送失敗；未認領的 ISR 仍有效。DPC 效果透過真正要求完成、API 呼叫及訊息呈現。可執行的[中斷情境](../examples/driver-interrupt-scenario.json) 使用原創、真正 WDK 建置的 `driver_wdm_interrupts.c` 及選用 `NEVERD_WDM_INTERRUPT_FIXTURE`／`NEVERD_WDM_INTERRUPT_CFG_FIXTURE`：七個要求包含延遲 START、由 ISR→DPC 完成的 pending IOCTL、檔案清理／關閉與移除。既有 C／Python `scenario_json` 邊界及 `neverd_driver_options_v1` 版面維持不變。缺少真正產物時明確跳過；執行證據僅來自 Linux。
 
 合成匯流排 WDM 電源要求使用 `kind: "power"` 和已設定的 `device_id`。每個封包必須明確提供 `minor`（`query`／`set`）、`power_type`（`device`／`system`）、`power_state`（`D0`／`D3` 或 `working`／`sleeping3`）、`power_action`（`none`／`sleep`）、32 位元整數或十六進位字串 `system_context` 及 `bus_completion`。不支援 System Query 到 Working；拒絕檔案、傳輸及取消欄位。完整 `system_context` 保留為不透明事實，不推斷父要求、休眠或快速啟動。路徑必須具有 `DO_POWER_PAGABLE` 且沒有 `DO_POWER_INRUSH`；目前電源派送及 `PoRequestPowerIrp` 在 `PASSIVE_LEVEL` 執行。`PoCallDriver` 轉送同一受管理的電源 IRP；`PoStartNextPowerIrp` 遵循 Vista+ 無額外序列化交握的契約。一般電源原則、WAIT_WAKE、其他狀態／動作、關機／休眠、浪湧、不可分頁路徑、一般硬體及 KMDF PnP 仍不支援。
 
@@ -164,6 +172,8 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 | `ExAllocatePool2` | 分頁／非分頁 NX 配置，預設清零；建模未初始化與快取對齊旗標；無效的必要旗標傳回 NULL，配額／可執行集區及引發的配置例外會停止 |
 | `MmGetSystemRoutineAddress` | 透過共用匯出清單解析客體計數式名稱 |
 | `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 宣告之轉譯子範圍的非快取映射、共用 RO／RW 別名，以及原始基址／長度完全相符的解除映射 |
+| `IoConnectInterrupt`, `IoDisconnectInterrupt`, `IoConnectInterruptEx`, `IoDisconnectInterruptEx` | 精確配置的獨佔 latched 線路，PASSIVE_LEVEL 下的傳統及 Ex 1／2／4；不透明連線與精確世代壽命 |
+| `KeSynchronizeExecution`, `KeAcquireInterruptSpinLock`, `KeReleaseInterruptSpinLock` | 真正 BOOLEAN 同步回呼及配置 DIRQL 下的同一把不可遞迴鎖；恢復原始呼叫者 IRQL 與所有權 |
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 請求擁有的 MDL 支援 KernelMode 快取對映及權限；非分頁集區 MDL 透過安全輔助函式重複使用原始集區對映 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 獨立描述元，完整範圍須位於同一個有效非分頁集區配置內；描述元與緩衝區生命週期獨立，不支援 IRP 關聯、MDL 鏈或配額 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 明確配置的工作階段登錄、每個控制代碼的權限與生命週期、查詢緩衝區大小及修改；不存取主機登錄 |
@@ -275,7 +285,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v12`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v13`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
