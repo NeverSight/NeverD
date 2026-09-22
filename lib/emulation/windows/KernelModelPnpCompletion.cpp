@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Apply configured resource-free bus responses only after a real PDO dispatch.
+/// Apply configured bus responses only after a real PDO dispatch.
 /// Deadlines are virtual; only actual guest completion routines are scheduled.
 ///
 //===----------------------------------------------------------------------===//
@@ -32,8 +32,8 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
   auto *Request = requestForIRP(IRP);
   const auto *Provider = pnpDeviceForPDO(Device);
   if (!Request || Request->Completed || !isProviderDevice(Device) ||
-      !Provider || !Provider->BusResourceFree || Request->PnpDevice != Device)
-    return providerError("dispatch requires its configured resource-free IRP");
+      !Provider || Request->PnpDevice != Device)
+    return providerError("dispatch requires its configured provider IRP");
   const DriverBusCompletion *Response = nullptr;
   uint8_t ExpectedMinor = 0;
   if (Request->Kind == DriverRequestKind::Pnp && Request->PnpOperation) {
@@ -68,6 +68,21 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
         Request->PowerOperation
             ? "raw power minor does not match the configured operation"
             : "raw PnP minor does not match the configured operation");
+  if (Request->PnpOperation &&
+      Request->PnpOperation->Minor == DevicePnpRequest::Start) {
+    for (const auto &[Offset, Expected] :
+         std::initializer_list<std::pair<uint64_t, uint64_t>>{
+             {StackStartResourcesOffset, Request->RawResources},
+             {StackStartTranslatedResourcesOffset,
+              Request->TranslatedResources}}) {
+      auto Actual = Memory.readInteger(*Stack + Offset, 8);
+      if (!Actual)
+        return Actual.takeError();
+      if (*Actual != Expected)
+        return providerError(
+            "START resource pointers changed while forwarding");
+    }
+  }
   if (Request->PowerOperation) {
     const auto &Operation = *Request->PowerOperation;
     for (const auto &[Offset, Expected] :
@@ -137,6 +152,8 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
       !(Status & profile::NTStatusFailureMask))
     Devices.at(Device).ReportedDevicePower =
         static_cast<DevicePowerState>(Request->PowerOperation->State);
+  if (auto E = publishProviderHardware(*Request, Status))
+    return E;
   if (auto E = completeRequest(IRP, 0))
     return E;
   if (PendingWdmCall)
@@ -206,6 +223,8 @@ llvm::Error KernelModel::processProviderCompletions() {
         !(Completion.Provider.Status & profile::NTStatusFailureMask))
       Devices.at(Completion.Provider.Device).ReportedDevicePower =
           static_cast<DevicePowerState>(Request.PowerOperation->State);
+    if (auto E = publishProviderHardware(Request, Completion.Provider.Status))
+      return E;
     ProviderCompletions.erase(IRP);
     if (auto E = completeRequest(IRP, 0)) {
       ProviderCompletions.emplace(IRP, Completion.Provider);

@@ -436,8 +436,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (auto E = CPU.run(NextPC, Remaining)) {
         std::string Message = llvm::toString(std::move(E));
         if (!Stopped)
-          Stop(CPU.hasMemoryFault() ? DriverStopReason::MemoryFault
-                                    : DriverStopReason::EngineError,
+          Stop(CPU.hasMemoryFault()   ? DriverStopReason::MemoryFault
+               : CPU.hasDeviceError() ? DriverStopReason::ModelError
+                                      : DriverStopReason::EngineError,
                Message);
       }
       if (Stopped)

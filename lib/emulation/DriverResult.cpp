@@ -21,6 +21,13 @@
 namespace neverd::emulation {
 namespace {
 
+namespace resourceField {
+#define NEVERD_DRIVER_RESOURCE_FIELD(Name, Spelling)                           \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_RESOURCE_FIELD
+} // namespace resourceField
+
 const char *requestKindName(DriverRequestKind Kind) {
   switch (Kind) {
 #define NEVERD_DRIVER_REQUEST_KIND(Name, Spelling, Major)                      \
@@ -199,6 +206,40 @@ llvm::json::Object powerOperationJSON(const DriverPowerOperation &Operation) {
       {field::BusCompletion, std::move(Bus)}};
 }
 
+const char *registerAccessName(DriverRegisterAccess Access) {
+  switch (Access) {
+#define NEVERD_DRIVER_REGISTER_ACCESS(Name, Spelling)                          \
+  case DriverRegisterAccess::Name:                                             \
+    return Spelling;
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_REGISTER_ACCESS
+  }
+  llvm_unreachable("invalid driver register access");
+}
+
+llvm::json::Array
+resourceConfigurationJSON(llvm::ArrayRef<DriverMemoryResource> Resources) {
+  llvm::json::Array Result;
+  for (const auto &Resource : Resources) {
+    llvm::json::Array Registers;
+    for (const auto &Register : Resource.Registers)
+      Registers.push_back(llvm::json::Object{
+          {resourceField::Offset, Register.Offset},
+          {resourceField::Width, Register.Width},
+          {resourceField::Access, registerAccessName(Register.Access)},
+          {resourceField::Value, Register.Value}});
+    Result.push_back(llvm::json::Object{
+        {resourceField::ID, Resource.ID},
+        {resourceField::RawStart,
+         "0x" + llvm::utohexstr(Resource.RawStart, true)},
+        {resourceField::TranslatedStart,
+         "0x" + llvm::utohexstr(Resource.TranslatedStart, true)},
+        {resourceField::Length, Resource.Length},
+        {resourceField::Registers, std::move(Registers)}});
+  }
+  return Result;
+}
+
 llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
   llvm::json::Array Devices;
   for (const auto &Device : Options.PnpDevices) {
@@ -220,6 +261,9 @@ llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
     for (const auto &Response : Device.RequestedDevicePower)
       Responses.push_back(powerOperationJSON(Response));
     Item[field::RequestedDevicePower] = std::move(Responses);
+    if (Device.Bus == DriverBusKind::RegisterBank)
+      Item[resourceField::Resources] =
+          resourceConfigurationJSON(Device.Resources);
     Devices.push_back(std::move(Item));
   }
   return Devices;

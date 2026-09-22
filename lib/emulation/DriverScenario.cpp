@@ -26,6 +26,13 @@
 namespace neverd::emulation {
 namespace {
 
+namespace resourceField {
+#define NEVERD_DRIVER_RESOURCE_FIELD(Name, Spelling)                           \
+  constexpr llvm::StringLiteral Name = Spelling;
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_RESOURCE_FIELD
+} // namespace resourceField
+
 #define NEVERD_DRIVER_SCENARIO_ROOT_FIELD(Name, Spelling)                      \
   constexpr llvm::StringLiteral Name##Field = Spelling;
 #define NEVERD_DRIVER_SCENARIO_REQUEST_FIELD(Name, Spelling)                   \
@@ -60,12 +67,15 @@ bool validDeviceName(llvm::StringRef Name) {
                      [](unsigned char C) { return C >= 0x20 && C <= 0x7e; });
 }
 
-bool validDeviceID(llvm::StringRef ID) {
-  return !ID.empty() && ID.size() <= DriverScenarioDeviceIDLimit &&
-         llvm::isAlnum(ID.front()) &&
+bool validIdentifier(llvm::StringRef ID, size_t Limit) {
+  return !ID.empty() && ID.size() <= Limit && llvm::isAlnum(ID.front()) &&
          std::all_of(ID.begin(), ID.end(), [](unsigned char C) {
            return llvm::isAlnum(C) || C == '_' || C == '-' || C == '.';
          });
+}
+
+bool validDeviceID(llvm::StringRef ID) {
+  return validIdentifier(ID, DriverScenarioDeviceIDLimit);
 }
 
 bool supportedPnpRequest(DevicePnpRequest Minor) {
@@ -166,23 +176,25 @@ llvm::Expected<uint64_t> hexNumber(llvm::StringRef Text,
   return Value;
 }
 
+llvm::Expected<uint64_t> unsigned64(const llvm::json::Value &Value,
+                                    llvm::StringRef Field) {
+  if (auto Text = Value.getAsString()) {
+    return hexNumber(*Text, Field);
+  }
+  if (auto Integer = Value.getAsUINT64())
+    return *Integer;
+  return invalid(Field +
+                 " must be an unsigned integer or a 0x hexadecimal string");
+}
+
 llvm::Expected<uint32_t> unsigned32(const llvm::json::Value &Value,
                                     llvm::StringRef Field) {
-  uint64_t Number;
-  if (auto Text = Value.getAsString()) {
-    auto Parsed = hexNumber(*Text, Field);
-    if (!Parsed)
-      return Parsed.takeError();
-    Number = *Parsed;
-  } else if (auto Integer = Value.getAsUINT64()) {
-    Number = *Integer;
-  } else {
-    return invalid(Field +
-                   " must be an unsigned integer or a 0x hexadecimal string");
-  }
-  if (Number > UINT32_MAX)
+  auto Number = unsigned64(Value, Field);
+  if (!Number)
+    return Number.takeError();
+  if (*Number > UINT32_MAX)
     return invalid(Field + " exceeds 32 bits");
-  return static_cast<uint32_t>(Number);
+  return static_cast<uint32_t>(*Number);
 }
 
 llvm::Expected<DriverBusCompletion>
@@ -301,6 +313,100 @@ powerOperation(const llvm::json::Object &Object, bool ResponseTemplate) {
   return Result;
 }
 
+llvm::Expected<DriverRegister>
+registerDescription(const llvm::json::Value &Value) {
+  const auto *Object = Value.getAsObject();
+  if (!Object)
+    return invalid("each register must be an object");
+  if (auto E = fields(*Object, {resourceField::Offset, resourceField::Width,
+                                resourceField::Access, resourceField::Value}))
+    return std::move(E);
+  const auto *Offset = Object->get(resourceField::Offset);
+  const auto *Width = Object->get(resourceField::Width);
+  const auto *Initial = Object->get(resourceField::Value);
+  auto Access = Object->getString(resourceField::Access);
+  if (!Offset || !Width || !Initial || !Access)
+    return invalid(
+        "registers require explicit offset, width, access and value");
+  DriverRegister Result;
+  auto ParsedOffset = unsigned32(*Offset, resourceField::Offset);
+  if (!ParsedOffset)
+    return ParsedOffset.takeError();
+  Result.Offset = *ParsedOffset;
+  auto ParsedWidth = unsigned32(*Width, resourceField::Width);
+  if (!ParsedWidth)
+    return ParsedWidth.takeError();
+  if (*ParsedWidth > UINT8_MAX)
+    return invalid("register width exceeds 8 bits");
+  Result.Width = static_cast<uint8_t>(*ParsedWidth);
+  auto ParsedInitial = unsigned32(*Initial, resourceField::Value);
+  if (!ParsedInitial)
+    return ParsedInitial.takeError();
+  Result.Value = *ParsedInitial;
+  bool Found = false;
+#define NEVERD_DRIVER_REGISTER_ACCESS(Name, Spelling)                          \
+  if (*Access == Spelling) {                                                   \
+    Result.Access = DriverRegisterAccess::Name;                                \
+    Found = true;                                                              \
+  }
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_REGISTER_ACCESS
+  if (!Found)
+    return invalid("unsupported register access '" + *Access + "'");
+  return Result;
+}
+
+llvm::Expected<std::vector<DriverMemoryResource>>
+memoryResources(const llvm::json::Value &Value) {
+  const auto *Array = Value.getAsArray();
+  if (!Array || Array->size() > DriverScenarioResourcesPerDeviceLimit)
+    return invalid("resources must be a bounded array");
+  std::vector<DriverMemoryResource> Result;
+  for (const auto &Item : *Array) {
+    const auto *Object = Item.getAsObject();
+    if (!Object)
+      return invalid("each resource must be an object");
+    if (auto E =
+            fields(*Object, {resourceField::ID, resourceField::RawStart,
+                             resourceField::TranslatedStart,
+                             resourceField::Length, resourceField::Registers}))
+      return std::move(E);
+    auto ID = Object->getString(resourceField::ID);
+    const auto *Raw = Object->get(resourceField::RawStart);
+    const auto *Translated = Object->get(resourceField::TranslatedStart);
+    const auto *Length = Object->get(resourceField::Length);
+    const auto *Registers = Object->getArray(resourceField::Registers);
+    if (!ID || !Raw || !Translated || !Length || !Registers)
+      return invalid("resources require explicit id, raw_start, "
+                     "translated_start, length and registers");
+    if (Registers->size() > DriverScenarioRegistersPerResourceLimit)
+      return invalid("registers exceeds the per-resource count limit");
+    DriverMemoryResource Resource;
+    Resource.ID = ID->str();
+    auto ParsedRaw = unsigned64(*Raw, resourceField::RawStart);
+    if (!ParsedRaw)
+      return ParsedRaw.takeError();
+    Resource.RawStart = *ParsedRaw;
+    auto ParsedTranslated =
+        unsigned64(*Translated, resourceField::TranslatedStart);
+    if (!ParsedTranslated)
+      return ParsedTranslated.takeError();
+    Resource.TranslatedStart = *ParsedTranslated;
+    auto ParsedLength = unsigned32(*Length, resourceField::Length);
+    if (!ParsedLength)
+      return ParsedLength.takeError();
+    Resource.Length = *ParsedLength;
+    for (const auto &Entry : *Registers) {
+      auto Register = registerDescription(Entry);
+      if (!Register)
+        return Register.takeError();
+      Resource.Registers.push_back(*Register);
+    }
+    Result.push_back(std::move(Resource));
+  }
+  return Result;
+}
+
 llvm::Expected<std::vector<DriverPnpDevice>>
 pnpDevices(const llvm::json::Value &Value) {
   const auto *Array = Value.getAsArray();
@@ -311,11 +417,11 @@ pnpDevices(const llvm::json::Value &Value) {
     const auto *Object = Item.getAsObject();
     if (!Object)
       return invalid("each pnp_devices entry must be an object");
-    if (auto E =
-            fields(*Object, {field::ID, field::Bus, field::InitialDevicePower,
-                             field::InitialSystemPower,
-                             field::InitialReportedDevicePower,
-                             field::RequestedDevicePower}))
+    if (auto E = fields(
+            *Object,
+            {field::ID, field::Bus, field::InitialDevicePower,
+             field::InitialSystemPower, field::InitialReportedDevicePower,
+             field::RequestedDevicePower, resourceField::Resources}))
       return std::move(E);
     auto ID = Object->getString(field::ID);
     auto Bus = Object->getString(field::Bus);
@@ -337,6 +443,16 @@ pnpDevices(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_BUS_KIND
     if (!Found)
       return invalid("unsupported pnp bus '" + *Bus + "'");
+    if (const auto *Resources = Object->get(resourceField::Resources)) {
+      if (Device.Bus == DriverBusKind::ResourceFree)
+        return invalid("resource_free devices cannot specify resources");
+      auto ParsedResources = memoryResources(*Resources);
+      if (!ParsedResources)
+        return ParsedResources.takeError();
+      Device.Resources = std::move(*ParsedResources);
+    } else if (Device.Bus == DriverBusKind::RegisterBank) {
+      return invalid("register_bank devices require explicit resources");
+    }
 #define NEVERD_DRIVER_DEVICE_POWER(Name, Spelling)                             \
   if (*DevicePower == Spelling)                                                \
     Device.InitialDevicePower = DevicePowerState::Name;
@@ -635,11 +751,109 @@ llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
   return llvm::Error::success();
 }
 
+llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices) {
+  using Interval = std::pair<uint64_t, uint64_t>;
+  const auto HasOverlap = [](std::vector<Interval> Ranges) {
+    std::sort(Ranges.begin(), Ranges.end());
+    for (size_t I = 1; I < Ranges.size(); ++I)
+      if (Ranges[I].first < Ranges[I - 1].second)
+        return true;
+    return false;
+  };
+  std::vector<Interval> TranslatedRanges;
+  size_t ResourceCount = 0, RegisterCount = 0;
+  for (const auto &Device : Devices) {
+    switch (Device.Bus) {
+    case DriverBusKind::ResourceFree:
+      if (!Device.Resources.empty())
+        return invalid("resource_free devices cannot have resources");
+      continue;
+    case DriverBusKind::RegisterBank:
+      if (Device.Resources.empty())
+        return invalid("register_bank devices require resources");
+      break;
+    default:
+      return invalid("unsupported PnP bus");
+    }
+    if (Device.Resources.size() > DriverScenarioResourcesPerDeviceLimit)
+      return invalid("resources exceeds the per-device count limit");
+    if (Device.Resources.size() > DriverScenarioResourceLimit - ResourceCount)
+      return invalid("resources exceeds the combined count limit");
+    ResourceCount += Device.Resources.size();
+    std::set<std::string> IDs;
+    std::vector<Interval> RawRanges;
+    for (const auto &Resource : Device.Resources) {
+      if (!validIdentifier(Resource.ID, DriverScenarioResourceIDLimit))
+        return invalid("resource id must be a bounded ASCII identifier");
+      if (!IDs.insert(Resource.ID).second)
+        return invalid("duplicate resource id '" + Resource.ID + "'");
+      if (!Resource.Length ||
+          Resource.Length > DriverScenarioResourceLengthLimit)
+        return invalid("resource length must be between 1 and 1 MiB");
+      if (Resource.RawStart > UINT64_MAX - Resource.Length ||
+          Resource.TranslatedStart > UINT64_MAX - Resource.Length)
+        return invalid("resource physical address interval overflows 64 bits");
+      RawRanges.emplace_back(Resource.RawStart,
+                             Resource.RawStart + Resource.Length);
+      TranslatedRanges.emplace_back(Resource.TranslatedStart,
+                                    Resource.TranslatedStart + Resource.Length);
+      if (Resource.Registers.size() > DriverScenarioRegistersPerResourceLimit)
+        return invalid("registers exceeds the per-resource count limit");
+      if (Resource.Registers.size() >
+          DriverScenarioRegisterLimit - RegisterCount)
+        return invalid("registers exceeds the combined count limit");
+      RegisterCount += Resource.Registers.size();
+      std::vector<Interval> RegisterRanges;
+      for (const auto &Register : Resource.Registers) {
+        switch (Register.Width) {
+#define NEVERD_DRIVER_REGISTER_WIDTH(Value) case Value:
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_REGISTER_WIDTH
+          break;
+        default:
+          return invalid("register width must be 1, 2 or 4 bytes");
+        }
+        switch (Register.Access) {
+#define NEVERD_DRIVER_REGISTER_ACCESS(Name, Spelling)                          \
+  case DriverRegisterAccess::Name:
+#include "neverd/emulation/DriverResources.def"
+#undef NEVERD_DRIVER_REGISTER_ACCESS
+          break;
+        default:
+          return invalid("unsupported register access");
+        }
+        if (Register.Offset >= Resource.Length ||
+            Register.Width > Resource.Length - Register.Offset)
+          return invalid("register extends beyond its resource length");
+        if (Register.Offset % Register.Width ||
+            (Resource.TranslatedStart + Register.Offset) % Register.Width)
+          return invalid("register offset and translated address must be "
+                         "naturally aligned to its width");
+        if (static_cast<uint64_t>(Register.Value) >=
+            (uint64_t{1} << (Register.Width * 8)))
+          return invalid("register value exceeds its width");
+        RegisterRanges.emplace_back(Register.Offset,
+                                    static_cast<uint64_t>(Register.Offset) +
+                                        Register.Width);
+      }
+      if (HasOverlap(std::move(RegisterRanges)))
+        return invalid("register intervals overlap");
+    }
+    if (HasOverlap(std::move(RawRanges)))
+      return invalid("raw resource intervals overlap within a device");
+  }
+  if (HasOverlap(std::move(TranslatedRanges)))
+    return invalid("translated resource intervals overlap across devices");
+  return llvm::Error::success();
+}
+
 llvm::Error validateDriverScenario(const DriverOptions &Options) {
   if (auto E = validateDriverRegistry(Options.Registry))
     return invalid(llvm::toString(std::move(E)));
   if (Options.PnpDevices.size() > DriverScenarioPnpDeviceLimit)
     return invalid("pnp_devices exceeds the device count limit");
+  if (auto E = validateDriverResources(Options.PnpDevices))
+    return E;
   std::set<std::string> DeviceIDs;
   size_t PowerResponses = 0;
   for (const auto &Device : Options.PnpDevices) {
@@ -647,13 +861,11 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
       return invalid("pnp device id must be a bounded ASCII identifier");
     if (!DeviceIDs.insert(Device.ID).second)
       return invalid("duplicate pnp device id '" + Device.ID + "'");
-    if (Device.Bus != DriverBusKind::ResourceFree)
-      return invalid("only the resource_free PnP bus is supported");
     if (!Device.InitialDevicePower || !Device.InitialSystemPower)
       return invalid("pnp devices require explicit initial power states");
     if (*Device.InitialDevicePower != DevicePowerState::D0 ||
         *Device.InitialSystemPower != SystemPowerState::Working)
-      return invalid("resource_free devices require D0 and working initial "
+      return invalid("pnp devices require D0 and working initial "
                      "power states");
     if (Device.InitialReportedDevicePower &&
         !supportedDevicePower(

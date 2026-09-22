@@ -1,0 +1,34 @@
+//===- KernelMMIOValues.def - Synthetic memory-resource ABI ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Genuine x64 WDK packed resource layout and the explicit register-bank bus
+/// contract. Define NEVERD_KERNEL_MMIO_VALUE(Name, Value) before inclusion.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_KERNEL_MMIO_VALUE(ResourceHeaderSize, 20)
+NEVERD_KERNEL_MMIO_VALUE(ResourceDescriptorSize, 20)
+NEVERD_KERNEL_MMIO_VALUE(ResourceCountOffset, 0)
+NEVERD_KERNEL_MMIO_VALUE(ResourceInterfaceOffset, 4)
+NEVERD_KERNEL_MMIO_VALUE(ResourceBusOffset, 8)
+NEVERD_KERNEL_MMIO_VALUE(ResourceVersionOffset, 12)
+NEVERD_KERNEL_MMIO_VALUE(ResourceRevisionOffset, 14)
+NEVERD_KERNEL_MMIO_VALUE(ResourcePartialCountOffset, 16)
+NEVERD_KERNEL_MMIO_VALUE(ResourceTypeOffset, 0)
+NEVERD_KERNEL_MMIO_VALUE(ResourceShareOffset, 1)
+NEVERD_KERNEL_MMIO_VALUE(ResourceFlagsOffset, 2)
+NEVERD_KERNEL_MMIO_VALUE(ResourceStartOffset, 4)
+NEVERD_KERNEL_MMIO_VALUE(ResourceLengthOffset, 12)
+NEVERD_KERNEL_MMIO_VALUE(InterfaceInternal, 0)
+NEVERD_KERNEL_MMIO_VALUE(MemoryType, 3)
+NEVERD_KERNEL_MMIO_VALUE(DeviceExclusive, 1)
+NEVERD_KERNEL_MMIO_VALUE(MemoryReadWrite, 0)
+NEVERD_KERNEL_MMIO_VALUE(NonCached, 0)
+NEVERD_KERNEL_MMIO_VALUE(PageReadOnly, 0x02)
+NEVERD_KERNEL_MMIO_VALUE(PageReadWrite, 0x04)
+NEVERD_KERNEL_MMIO_VALUE(PageNoCache, 0x200)
+NEVERD_KERNEL_MMIO_VALUE(MaxMappings, 64)

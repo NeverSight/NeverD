@@ -153,6 +153,17 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
   }
   if (NextIRPCall == UINT64_MAX)
     return stackError("continuation identity exhausted");
+  auto OldDevice = Memory.readInteger(Stack + StackDeviceOffset, 8);
+  if (!OldDevice)
+    return OldDevice.takeError();
+  const bool WasForwarded = Request->Forwarded;
+  const auto WasPending = Request->UnwoundPending[Slot];
+  const size_t ResultIndex = Request->ResultIndex;
+  const auto &Observation = Result.Requests[ResultIndex];
+  const auto Received = Observation.Pnp ? Observation.Pnp->BusReceivedAt100ns
+                        : Observation.Power
+                            ? Observation.Power->BusReceivedAt100ns
+                            : std::optional<uint64_t>{};
   if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, Slot + 1, 1))
     return std::move(E);
   if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset, Stack, 8))
@@ -161,8 +172,35 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
     return std::move(E);
   Request->Forwarded = true;
   Request->UnwoundPending[Slot].reset();
-  if (Provider)
-    return callProviderDriver(Device, IRP);
+  if (Provider) {
+    auto Status = callProviderDriver(Device, IRP);
+    if (Status)
+      return Status;
+    auto E = Status.takeError();
+    auto *Retained = requestForIRP(IRP);
+    const auto &Current = Result.Requests[ResultIndex];
+    const auto NowReceived = Current.Pnp     ? Current.Pnp->BusReceivedAt100ns
+                             : Current.Power ? Current.Power->BusReceivedAt100ns
+                                             : std::optional<uint64_t>{};
+    // Provider preflight reads the prospective stack cursor. If it rejected
+    // the call without accepting the packet, restore that cursor and its slot
+    // metadata. Once a real receipt occurred, effects cannot be rolled back.
+    if (Retained && !Retained->Completed && NowReceived == Received) {
+      E = llvm::joinErrors(
+          std::move(E),
+          Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1));
+      E = llvm::joinErrors(
+          std::move(E),
+          Memory.writeInteger(IRP + IRPStackPointerOffset,
+                              IRP + IRPSize + *Cursor * StackSize, 8));
+      E = llvm::joinErrors(
+          std::move(E),
+          Memory.writeInteger(Stack + StackDeviceOffset, *OldDevice, 8));
+      Retained->Forwarded = WasForwarded;
+      Retained->UnwoundPending[Slot] = WasPending;
+    }
+    return E;
+  }
   if (!*PC) {
     if (auto E =
             Memory.writeInteger(IRP + IRPStatusOffset, InvalidDeviceRequest, 4))
@@ -217,6 +255,11 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   auto Cursor = requestStackCursor(IRP);
   if (!Cursor)
     return Cursor.takeError();
+  // Invalid terminal ownership must not create a continuation that prevents a
+  // corrected packet from completing or finalizing later.
+  auto Plan = planIRPCompletion(IRP);
+  if (!Plan)
+    return Plan.takeError();
   if (NextIRPCall == UINT64_MAX)
     return stackError("continuation identity exhausted");
   const uint64_t Token = NextIRPCall++;
@@ -289,8 +332,8 @@ KernelModel::planIRPCompletion(uint64_t IRP,
   if (auto E = validateRequestCompletion(IRP, uint32_t(*Status), *Information))
     return E;
   if (Request.PnpTicket)
-    if (auto E = Lifecycle.validatePnpCompletion(*Request.PnpTicket,
-                                                 uint32_t(*Status)))
+    if (auto E = validatePnpRequestCompletion(Request, uint32_t(*Status),
+                                              StatusOverride.has_value()))
       return E;
   if (Request.PnpTicket && !StatusOverride &&
       !(uint32_t(*Status) & profile::NTStatusFailureMask)) {

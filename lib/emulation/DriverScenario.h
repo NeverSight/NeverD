@@ -12,17 +12,21 @@
 #ifndef NEVERD_EMULATION_DRIVERSCENARIO_H
 #define NEVERD_EMULATION_DRIVERSCENARIO_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 namespace neverd::emulation {
 struct DriverOptions;
 struct DriverPnpOperation;
 struct DriverPowerOperation;
+struct DriverPnpDevice;
 
 llvm::Error validateDriverPnpOperation(const DriverPnpOperation &Operation);
 
 llvm::Error validateDriverPowerOperation(const DriverPowerOperation &Operation,
                                          bool RequireDeviceType = false);
+
+llvm::Error validateDriverResources(llvm::ArrayRef<DriverPnpDevice> Devices);
 
 llvm::Error validateDriverScenario(const DriverOptions &Options);
 

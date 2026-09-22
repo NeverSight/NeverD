@@ -979,7 +979,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1344,7 +1344,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1470,7 +1470,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1591,7 +1591,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
             << llvm::toString(Parsed.takeError()) << error();
         const auto *Report = Parsed->getAsObject();
         ASSERT_NE(Report, nullptr);
-        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v11");
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
         EXPECT_EQ(Report->getString("stop_reason"), "returned")
             << Report->getString("diagnostic").value_or("").str();
         EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1680,6 +1680,165 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
 #else
   GTEST_SKIP()
       << "NEVERD_WDM_REMOVE_LOCK_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, RejectsInvalidRegisterFactsBeforeImageLoading) {
+  for (const char *Registers :
+       {R"([{"offset":0,"width":8,"access":"read_write","value":0}])",
+        R"([{"offset":0,"width":1,"access":"read_write","value":256}])",
+        R"([{"offset":2,"width":4,"access":"read_write","value":0}])",
+        R"([{"offset":0,"width":4,"access":"read_write","value":0},
+             {"offset":2,"width":2,"access":"read_only","value":0}])",
+        R"([{"offset":0,"width":4,"access":"write_only","value":0}])"}) {
+    const std::string Scenario =
+        std::string(R"({"pnp_devices":[{"id":"r","bus":"register_bank",
+        "initial_device_power":"D0","initial_system_power":"working",
+        "resources":[{"id":"bank","raw_start":0,"translated_start":4096,
+        "length":8,"registers":)") +
+        Registers + "}]}]}";
+    EXPECT_EQ(neverd_emulate_driver_scenario_json(Session,
+                                                  "missing-resource-driver.sys",
+                                                  Scenario.c_str(), nullptr),
+              nullptr);
+    EXPECT_NE(error().find("driver scenario:"), std::string::npos);
+    EXPECT_EQ(neverd_session_is_loaded(Session), 0);
+  }
+}
+
+TEST_F(DriverScenarioPublic,
+       CAPIAndCLIExecuteRegisterBanksAcrossStopAndRestart) {
+#ifdef NEVERD_WDM_RESOURCE_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_RESOURCE_FIXTURE};
+#ifdef NEVERD_WDM_RESOURCE_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_RESOURCE_CFG_FIXTURE);
+#endif
+  const std::string Scenario = R"({
+    "load_address":"0x190000000","unload":true,
+    "pnp_devices":[{"id":"register0","bus":"register_bank",
+      "initial_device_power":"D0","initial_system_power":"working",
+      "resources":[{"id":"bank0","raw_start":"0x200000000",
+        "translated_start":"0x300000000","length":"0x1000","registers":[
+          {"offset":0,"width":1,"access":"read_write","value":"0x12"},
+          {"offset":2,"width":2,"access":"read_write","value":"0x3456"},
+          {"offset":4,"width":4,"access":"read_write","value":"0x789abcde"},
+          {"offset":8,"width":4,"access":"read_only","value":"0x10203040"},
+          {"offset":"0x10","width":4,"access":"read_write","value":1},
+          {"offset":"0x14","width":4,"access":"read_write","value":2},
+          {"offset":"0x18","width":4,"access":"read_write","value":3},
+          {"offset":"0x1c","width":4,"access":"read_write","value":4},
+          {"offset":"0xffc","width":4,"access":"read_write","value":5}]}]}],
+    "requests":[
+      {"kind":"pnp","device_id":"register0","minor":"start",
+       "bus_completion":{"status":0,"delay_100ns":11}},
+      {"kind":"create","device_id":"register0","file":1},
+      {"kind":"ioctl","file":1,"code":"0x222000","output_size":32},
+      {"kind":"cleanup","file":1},{"kind":"close","file":1},
+      {"kind":"pnp","device_id":"register0","minor":"query_stop",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"register0","minor":"stop",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"register0","minor":"start",
+       "bus_completion":{"status":0,"delay_100ns":5}},
+      {"kind":"create","device_id":"register0","file":2},
+      {"kind":"ioctl","file":2,"code":"0x222000","output_size":32},
+      {"kind":"cleanup","file":2},{"kind":"close","file":2},
+      {"kind":"pnp","device_id":"register0","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"register0","minor":"remove",
+       "bus_completion":{"status":0,"delay_100ns":7}}]})";
+  for (const auto *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario, 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.c_str(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v12");
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 14u);
+      for (const auto &Value : *Requests) {
+        const auto *Request = Value.getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getBoolean("completed"), true);
+        EXPECT_EQ(Request->getInteger("io_status"), 0);
+      }
+      EXPECT_EQ((*Requests)[2].getAsObject()->getInteger("information"), 32);
+      EXPECT_EQ(
+          (*Requests)[2].getAsObject()->getString("output_hex"),
+          "1300000057340000dfbc9a78403020100b0000000c0000000d0000000e000000");
+      EXPECT_EQ((*Requests)[9].getAsObject()->getInteger("information"), 32);
+      EXPECT_EQ(
+          (*Requests)[9].getAsObject()->getString("output_hex"),
+          "1400000058340000e0bc9a784030201015000000160000001700000018000000");
+      EXPECT_EQ((*Requests)[0].getAsObject()->getObject("pnp")->getInteger(
+                    "bus_completed_at_100ns"),
+                11);
+      EXPECT_EQ((*Requests)[7].getAsObject()->getObject("pnp")->getInteger(
+                    "bus_completed_at_100ns"),
+                16);
+      const auto *Configured =
+          Report->getObject("configuration")->getArray("pnp_devices");
+      ASSERT_NE(Configured, nullptr);
+      const auto *Resources =
+          Configured->front().getAsObject()->getArray("resources");
+      ASSERT_NE(Resources, nullptr);
+      ASSERT_EQ(Resources->size(), 1u);
+      const auto *Resource = Resources->front().getAsObject();
+      EXPECT_EQ(Resource->getString("raw_start"), "0x200000000");
+      EXPECT_EQ(Resource->getString("translated_start"), "0x300000000");
+      EXPECT_EQ(Resource->getArray("registers")
+                    ->front()
+                    .getAsObject()
+                    ->getInteger("value"),
+                0x12);
+      const auto *Providers = Report->getArray("pnp_devices");
+      ASSERT_NE(Providers, nullptr);
+      ASSERT_EQ(Providers->size(), 1u);
+      EXPECT_EQ(Providers->front().getAsObject()->getString("pnp_state"),
+                "removed");
+      EXPECT_EQ(
+          Providers->front().getAsObject()->getBoolean("provider_present"),
+          false);
+      EXPECT_TRUE(Report->getArray("devices")->empty());
+      unsigned Map = 0, MapEx = 0, Unmap = 0;
+      for (const auto &Value : *Report->getArray("calls")) {
+        const auto *Call = Value.getAsObject();
+        const auto Name = Call->getString("name");
+        Map += Name == "MmMapIoSpace";
+        MapEx += Name == "MmMapIoSpaceEx";
+        Unmap += Name == "MmUnmapIoSpace";
+      }
+      EXPECT_EQ(Map, 2u);
+      EXPECT_EQ(MapEx, 4u);
+      EXPECT_EQ(Unmap, 6u);
+      std::string Trace;
+      for (const auto &Message : *Report->getArray("messages")) {
+        auto Text = Message.getAsString();
+        ASSERT_TRUE(Text);
+        EXPECT_EQ(Text->find("failure"), llvm::StringRef::npos);
+        Trace += Text->str();
+      }
+      size_t Position = 0;
+      for (const char *Marker : {"mapped unit=1 start=1", "unmapped unit=1",
+                                 "mapped unit=1 start=2", "unmapped unit=1"}) {
+        Position = Trace.find(Marker, Position);
+        ASSERT_NE(Position, std::string::npos) << Marker << "\n" << Trace;
+        Position += std::char_traits<char>::length(Marker);
+      }
+    }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_RESOURCE_FIXTURE requires a genuine WDK fixture";
 #endif
 }
 

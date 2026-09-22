@@ -19,7 +19,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
   --instruction-limit 100000 > driver-report.json
 ```
 
-보고서는 항상 stdout에 JSON으로 출력되며, 요청 및 설정 진단은 stderr로 출력됩니다. 기본 한도는 게스트 명령어 100000개, 게스트 메모리 64 MiB, 기록 이벤트 10000개, 실행 시간 5000밀리초입니다. 명령어 한도는 양수여야 합니다. 예산이 소진되면 수집한 일부 관찰 결과를 보존하고 실행을 중단합니다.
+보고서는 항상 stdout에 JSON으로 출력되며, 요청 및 설정 진단은 stderr로 출력됩니다. 기본 한도는 게스트 명령어 100000개, 게스트 메모리 64 MiB, 기록 이벤트 10000개, 실행 시간 5000밀리초입니다. 명령어 한도는 양수여야 합니다. 실행 예산이 소진되면 수집한 관찰 결과를 보존하고 중단합니다. 다만 할당 API는 공간 부족 시 규정된 결과를 사용하며, MMIO 매핑 공간 부족은 NULL을 반환합니다.
 
 | 종료 코드 | 의미 |
 |-----------|------|
@@ -45,11 +45,11 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | READ/WRITE | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 공개 시나리오 제출와 WDM 요청 취소는 미지원; `METHOD_NEITHER`와 암묵적 파일 위치도 미지원 |
 | `METHOD_NEITHER` | 거부됨 | 사용자 주소 공간 컨텍스트, 접근 검사와 게스트 예외 처리 |
 | KMDF 1.33 비 PnP 드라이버 | 바인딩, 객체/컨텍스트, 이름 있는 제어 장치, 순차 기본 큐 및 콜백을 실제 실행하는 버퍼/직접 요청 | PnP 장치, 일반 큐 스케줄링, 클래스 확장 및 UMDF는 지원하지 않음 |
-| PnP 버스/기능/필터 드라이버 | 명시적 리소스 없는 PDO, 게스트 AddDevice, 여덟 가지 일반 PnP 수명 주기 부 기능 | 기타 PnP 작업, 일반 전원 관리, 하드웨어/리소스 및 KMDF PnP |
+| PnP 버스/기능/필터 드라이버 | 명시적 리소스 없는 PDO 또는 고정 레지스터 뱅크 PDO, 게스트 AddDevice, 여덟 가지 일반 PnP 수명 주기 부 기능 | 기타 PnP 작업, 일반 전원 관리, 기타 하드웨어/리소스 및 KMDF PnP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
 | 작업 항목, 타이머, DPC, 이벤트와 대기 | 현재 실행 IRQL은 디스패치와 작업 항목에서는 `PASSIVE_LEVEL`, DPC에서는 `DISPATCH_LEVEL`입니다 | 아래 API 부분집합만 지원하며 동시 공개 시나리오 제출와 WDM 요청 취소는 미지원 |
 | 프로세스/스레드 콜백, 핸들, 레지스트리/파일 작업 또는 커널 모듈 탐색을 사용하는 드라이버 | 구성한 레지스트리는 지원하며 그 외 동작은 아래 API 범위로 제한 | 객체 관리자, 시스템 상태와 콜백/이벤트 생성 주체 |
-| 하드웨어, DMA, PCI, 인터럽트 또는 가상화 드라이버 | 환경을 지원하지 않음 | 장치 모델, 물리 메모리, 버스, 인터럽트와 특권 CPU 상태 |
+| 하드웨어, DMA, PCI, 인터럽트 또는 가상화 드라이버 | 명시적인 메모리 레지스터 뱅크와 MMIO 지원 | 기타 장치 모델, 임의 물리 RAM, PCI, 포트, 인터럽트, DMA 및 특권 CPU 상태 |
 | x86 또는 ARM64 Windows 드라이버 | 거부됨 | 아키텍처별 로딩, ABI와 실행 모델 |
 | x64 CFG | 검증된 대상 테이블과 check/dispatch 호출, 비활성 계측의 게스트 대체 함수 유지 | XFG, 내보내기 억제, 미지원 로드 구성 및 TLS는 계속 거부 |
 
@@ -64,7 +64,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 `DelayedWorkQueue` 작업 항목은 `PASSIVE_LEVEL`에서, 게스트 DPC 콜백은 정해진 네 인수와 함께 `DISPATCH_LEVEL`에서 실행됩니다. CPU0의 호출 반환 및 차단 대기 경계에서 결정적 협력 스케줄링을 수행합니다. 상대·절대·주기 타이머는 가상 시간을 사용하며 실행할 프레임이 없으면 다음 타이머, 대기 또는 취소 기한으로 진행합니다. 알림형과 동기화형 이벤트/타이머는 서로 다른 신호 소비 동작을 유지합니다. 콜백마다 별도 게스트 스택을 사용하며 여러 차단 프레임의 지역 변수와 전체 CPU 컨텍스트를 보존하고 게스트 메모리는 공유합니다. Win64 콜백의 처음 네 인수는 레지스터에, 나머지는 스택에 전달합니다. 요청은 순차 처리하며 IRP를 보류로 표시한 디스패치는 `STATUS_PENDING`을 반환하고 다음 요청 전에 완료해야 합니다. 보류 요청이나 무한 대기에 실행 가능한 생성 주체가 없으면 정체된 `model_error`로 중단합니다. 명령어·메모리·관찰·실시간 예산은 공유합니다.
 
-이는 제한된 스케줄링 모델이며 완전한 Windows 비동기 지원은 아닙니다. 경고 가능/사용자 모드 대기, 시스템 스레드, APC, WDM 요청 취소, 스핀락, 동시 공개 시나리오 제출, 일반 IRQL 전환, `METHOD_NEITHER`, UMDF, KMDF PnP 장치 및 일반 큐 스케줄링, 전체 PnP/전원, 하드웨어, DMA와 인터럽트는 지원하지 않습니다. 초기화 전용 호출도 명시적으로 대기열에 넣은 콜백을 실행하지만 요청이나 언로드를 암묵적으로 만들지 않습니다.
+이는 제한된 스케줄링 모델이며 완전한 Windows 비동기 지원은 아닙니다. 경고 가능/사용자 모드 대기, 시스템 스레드, APC, WDM 요청 취소, 스핀락, 동시 공개 시나리오 제출, 일반 IRQL 전환, `METHOD_NEITHER`, UMDF, KMDF PnP 장치 및 일반 큐 스케줄링, 전체 PnP/전원, 일반 하드웨어, DMA와 인터럽트는 지원하지 않습니다. 초기화 전용 호출도 명시적으로 대기열에 넣은 콜백을 실행하지만 요청이나 언로드를 암묵적으로 만들지 않습니다.
 
 콜백 시작 전에 작업 항목이 대기열에서 제거되므로 콜백은 자신의 작업 항목을 해제할 수 있습니다. 대기열 항목 해제, 중복 큐 삽입, 만료 객체 및 실행 가능한 게스트 메모리 밖의 콜백 주소는 명시적으로 실패합니다. 장치 참조는 콜백 반환까지 유지합니다. 언로드에는 모든 작업 항목 해제와 큐 작업 완료가 필요합니다. CPU 컨텍스트는 일반, SIMD, FPU 및 제어 상태를 저장하고 복원합니다. 게스트 메모리는 공유되며 장애가 난 CPU는 저장된 컨텍스트로 재개할 수 없습니다.
 파일 객체 또는 대기/실행 중인 작업 항목 참조가 남아 있으면 삭제를 연기합니다. 객체 영역이 소진되면 작업 항목 할당은 NULL을 반환합니다.
@@ -77,9 +77,9 @@ WDM 스택에는 같은 게스트 드라이버가 소유한 여러 장치를 둘
 
 `IofCallDriver`와 `IoCallDriver` 도우미는 보존 경로에서 지정된 정확한 대상을 호출합니다. 실제 인라인 `IoCopyCurrentIrpStackLocationToNext`, `IoSkipCurrentIrpStackLocation`, `IoSetCompletionRoutine`은 원래 게스트 IRP를 조작하며 커서, 개수, 제어 플래그를 검증합니다. 하위 디스패치의 실제 반환 상태는 `IoStatus` 및 완료 루틴 반환값과 분리됩니다. 완료 처리는 커서를 전진시키고 성공/오류/취소 조건에 따라 콜백을 호출하며 pending을 위로 전달합니다. 완료 루틴이 실행되면 해당 루틴이 전달을 책임지며, 디스패치가 이미 `STATUS_PENDING`을 반환한 뒤에도 전달할 수 있습니다. `STATUS_MORE_PROCESSING_REQUIRED`는 IRP, MDL, 버퍼를 유지한 채 완료 해제를 멈추고 이후 완료 호출로 재개합니다. 중첩 완료에는 외부 루틴의 중단 결과가 필요하며 최종 해제 시 저장소를 한 번만 폐기합니다. 소유 하위 시스템이 표시된 continuation은 WDM/WDF 호출 프레임과 상속 IRQL을 보존합니다. 상위 완료 콜백 전에 소비된 하위 스택 위치를 0으로 지웁니다.
 
-일반 전원 관리, 드라이버 할당 IRP, 기타 PnP 부 기능, 하드웨어/리소스 모델은 지원하지 않습니다. WDF 연결/전달, 파일이나 콜백이 남은 스택에 연결, 중간 계층 분리, 전달 중 주 기능 변경, 보존 경로 외부 대상으로 전달하면 명시적으로 실패합니다. 실제 WDK의 선택적 `driver_wdm_stack.c`는 `NEVERD_WDM_STACK_FIXTURE`와 `NEVERD_WDM_STACK_CFG_FIXTURE`로 구성합니다. 네이티브와 C API/CLI 검증에는 재배치가 포함되며 산출물 누락 시 명시적으로 건너뜁니다. 실행 근거는 Linux에 한정됩니다.
+일반 전원 관리, 드라이버 할당 IRP, 기타 PnP 부 기능, 기타 하드웨어/리소스 모델은 지원하지 않습니다. WDF 연결/전달, 파일이나 콜백이 남은 스택에 연결, 중간 계층 분리, 전달 중 주 기능 변경, 보존 경로 외부 대상으로 전달하면 명시적으로 실패합니다. 실제 WDK의 선택적 `driver_wdm_stack.c`는 `NEVERD_WDM_STACK_FIXTURE`와 `NEVERD_WDM_STACK_CFG_FIXTURE`로 구성합니다. 네이티브와 C API/CLI 검증에는 재배치가 포함되며 산출물 누락 시 명시적으로 건너뜁니다. 실행 근거는 Linux에 한정됩니다.
 
-시나리오는 최대 64개의 `pnp_devices`를 명시적으로 구성할 수 있습니다. 각 항목에는 `id`, `bus: "resource_free"`, `initial_device_power: "D0"`, `initial_system_power: "working"`이 필수이며 누락된 사실을 추정하지 않습니다. ID는 대소문자를 구분하는 1–64바이트 ASCII로, 첫 문자는 영숫자이고 나머지는 영숫자, `_`, `-`, `.`만 허용합니다. 일반 요청은 `device` 대신 구성된 `device_id`를 사용할 수 있으나 둘을 함께 지정할 수 없습니다. `kind: "pnp"`는 `device_id`, `minor`, `bus_completion`이 필수입니다. 지원 minor는 `start`, `query_remove`, `cancel_remove`, `remove`, `query_stop`, `stop`, `cancel_stop` 및 `surprise_removal`입니다. `bus_completion.status`는 필수 32비트 정수 또는 16진수 문자열이며, 선택적 `delay_100ns`는 INT64_MAX 이하의 음이 아닌 정수로 제공자의 실제 수신부터 계산합니다. 최종 상태는 `STATUS_PENDING`일 수 없고 stop/cancel-stop/surprise-removal/cancel-remove/remove는 정확히 `STATUS_SUCCESS` (0)이 필요합니다. PnP 요청은 파일/전송/취소 필드를 값이 0이어도 거부합니다. C++ API도 동일하게 사전 검증합니다.
+시나리오는 최대 64개의 `pnp_devices`를 명시적으로 구성할 수 있습니다. 각 항목에는 `id`, `bus: "resource_free"` 또는 `bus: "register_bank"`, `initial_device_power: "D0"`, `initial_system_power: "working"`이 필수이며 누락된 사실을 추정하지 않습니다. ID는 대소문자를 구분하는 1–64바이트 ASCII로, 첫 문자는 영숫자이고 나머지는 영숫자, `_`, `-`, `.`만 허용합니다. 일반 요청은 `device` 대신 구성된 `device_id`를 사용할 수 있으나 둘을 함께 지정할 수 없습니다. `kind: "pnp"`는 `device_id`, `minor`, `bus_completion`이 필수입니다. 지원 minor는 `start`, `query_remove`, `cancel_remove`, `remove`, `query_stop`, `stop`, `cancel_stop` 및 `surprise_removal`입니다. `bus_completion.status`는 필수 32비트 정수 또는 16진수 문자열이며, 선택적 `delay_100ns`는 INT64_MAX 이하의 음이 아닌 정수로 제공자의 실제 수신부터 계산합니다. 최종 상태는 `STATUS_PENDING`일 수 없고 stop/cancel-stop/surprise-removal/cancel-remove/remove는 정확히 `STATUS_SUCCESS` (0)이 필요합니다. PnP 요청은 파일/전송/취소 필드를 값이 0이어도 거부합니다. C++ API도 동일하게 사전 검증합니다.
 
 ```json
 {
@@ -102,13 +102,21 @@ WDM 스택에는 같은 게스트 드라이버가 소유한 여러 장치를 둘
 }
 ```
 
-DriverEntry 성공 후 각 구성 PDO에 대해 `AddDevice`를 한 번 실행합니다. 제공자는 별도 `DRIVER_OBJECT`를 소유하며 게스트는 제공자 객체를 삭제하거나 가장할 수 없습니다. PnP IRP는 `KernelMode`, 파일/리소스 없음, 초기 `STATUS_NOT_SUPPORTED`입니다. 전달이 해당 PDO에 도달해야 버스 응답을 사용하고, 지연 완료는 공유 가상 시계와 기존 완료 continuation을 사용합니다. 최종 상위 완료가 버스 상태와 별도로 수명 주기 확정/롤백을 결정합니다. Started에서 정상 제거하려면 query 성공, 파일 닫기, 이전 요청 종료, 게스트의 분리/삭제가 필요합니다. 누수 없는 AddDevice 실패는 제공자만 퇴역시키고, 새 게스트 장치 누수는 분리된 경우에도 `model_error`입니다. unload 전에 모든 제공자가 없어야 합니다. 기타 PnP, 일반 전원 관리, 하드웨어/리소스 및 KMDF PnP는 포함하지 않습니다. PnP 성공에는 실제 제공자 완료가 필요하며 START/QUERY_STOP/QUERY_REMOVE의 이른 상위 실패는 버스 관측을 null로 남길 수 있습니다. 장치/파일 수명 주기 식별자는 분리 후에도 유지됩니다.
+DriverEntry 성공 후 각 구성 PDO에 대해 `AddDevice`를 한 번 실행합니다. 제공자는 별도 `DRIVER_OBJECT`를 소유하며 게스트는 제공자 객체를 삭제하거나 가장할 수 없습니다. PnP IRP는 `KernelMode`, 파일 없음, START 리소스는 구성된 버스에 따름, 초기 `STATUS_NOT_SUPPORTED`입니다. 전달이 해당 PDO에 도달해야 버스 응답을 사용하고, 지연 완료는 공유 가상 시계와 기존 완료 continuation을 사용합니다. 최종 상위 완료가 버스 상태와 별도로 수명 주기 확정/롤백을 결정합니다. Started에서 정상 제거하려면 query 성공, 파일 닫기, 이전 요청 종료, 게스트의 분리/삭제가 필요합니다. 누수 없는 AddDevice 실패는 제공자만 퇴역시키고, 새 게스트 장치 누수는 분리된 경우에도 `model_error`입니다. unload 전에 모든 제공자가 없어야 합니다. 기타 PnP, 일반 전원 관리, 기타 하드웨어/리소스 및 KMDF PnP는 포함하지 않습니다. PnP 성공에는 실제 제공자 완료가 필요하며 START/QUERY_STOP/QUERY_REMOVE의 이른 상위 실패는 버스 관측을 null로 남길 수 있습니다. 장치/파일 수명 주기 식별자는 분리 후에도 유지됩니다.
 
 초기 구성은 `configuration.pnp_devices`에 보존합니다. 관측 `pnp_devices`에는 `id`, `pdo`, nullable `add_device_status`, 현재 `attached`, `pnp_state`, `provider_present`가 있으며 제거 후 `attached`는 false입니다. AddDevice 단계는 `add_device:<ID>`이고 실패는 `scenario_success`에 반영하되 DriverEntry의 `nt_status`를 덮어쓰지 않습니다. 각 요청에 nullable `device_id`, `pnp`가 추가되며 PnP의 `file`은 null입니다. `pnp`는 `minor`, `state_before`, `state_after`, nullable `bus_status`, `bus_received_at_100ns`, `bus_completed_at_100ns`를 기록합니다. 구성된 상태는 실제 버스 완료 시에만 관측되며 수신 시각은 독립적입니다. 기존 필드 형식은 바뀌지 않습니다.
 
-Removing/Removed 외에 장치가 존재하면 일반 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE는 실제 게스트 디스패치로 전달됩니다. 모델은 Stopped, StopPending, RemovePending 또는 전원 상태만으로 실패를 만들지 않습니다. 드라이버 코드가 소프트웨어 I/O 완료, 거부 또는 보류를 결정합니다. 공개 실행기는 순차적입니다. 보류 IRP에 현재 사용 가능한 생산자가 없으면 나중 시나리오의 start/cleanup으로 해제할 수 없고 정체 `model_error`로 끝납니다. Remove 이전 파일 닫기와 기존 요청/콜백 종료는 프로필 제한입니다. `query_stop` 최종 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119)는 구현되지 않은 리소스 재질의를 요구하므로 사전 검증과 게스트 최종 완료에서 모두 거부합니다. [Microsoft QUERY_STOP 계약](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)을 참고하세요. 중지/재시작 및 갑작스러운 제거는 리소스, 일반 전원 관리 또는 KMDF PnP 지원을 추가하지 않습니다.
+Removing/Removed 외에 장치가 존재하면 일반 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE는 실제 게스트 디스패치로 전달됩니다. 모델은 Stopped, StopPending, RemovePending 또는 전원 상태만으로 실패를 만들지 않습니다. 드라이버 코드가 소프트웨어 I/O 완료, 거부 또는 보류를 결정합니다. 공개 실행기는 순차적입니다. 보류 IRP에 현재 사용 가능한 생산자가 없으면 나중 시나리오의 start/cleanup으로 해제할 수 없고 정체 `model_error`로 끝납니다. Remove 이전 파일 닫기와 기존 요청/콜백 종료는 프로필 제한입니다. `query_stop` 최종 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119)는 구현되지 않은 리소스 재질의를 요구하므로 사전 검증과 게스트 최종 완료에서 모두 거부합니다. [Microsoft QUERY_STOP 계약](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)을 참고하세요. 중지/재시작 및 갑작스러운 제거는 리소스 재배치, 일반 전원 관리 또는 KMDF PnP 지원을 추가하지 않습니다.
 
 리소스 없는 PnP는 원본 실제 WDK `driver_wdm_pnp.c`, 선택적 `NEVERD_WDM_PNP_FIXTURE`/`NEVERD_WDM_PNP_CFG_FIXTURE`와 네이티브 및 C API/CLI 테스트를 사용합니다. 산출물 누락은 명시적으로 건너뛰며 실행 근거는 Linux에 한정됩니다.
+
+합성 버스 `bus: "register_bank"`는 PDO에 명시적인 고정 메모리 리소스를 제공합니다. 비어 있지 않은 `resources` 배열의 각 항목은 `id`, `raw_start`, `translated_start`, `length`, `registers`를 포함하며, 레지스터마다 `offset`, `width`, `access`(`read_only` 또는 `read_write`), 초기 `value`가 필요합니다. `DriverResources.h`／`DriverResources.def`가 C++와 JSON의 공통 계약을 정의합니다. 리소스 ID는 길이가 제한된 ASCII 식별자 규칙을 따르며 PDO 안에서 고유합니다. 한도는 PDO당8개／전체32개 리소스, 리소스당256개／전체4096개 레지스터, 리소스당1–1048576바이트입니다. 자연 정렬된 정확한1／2／4바이트 접근만 지원하며 값은 해당 폭에 들어가야 합니다. 두 물리 구간 모두 오버플로가 없어야 하고, raw 구간은 PDO 안에서, 변환된 구간은 전체에서 겹칠 수 없습니다. 빈 `registers`는 뱅크 전체가 접근 불가임을 명시합니다. 주소와 초기값은 선언된 사실이며 호스트 하드웨어나 암묵적인 영 초기화 메모리가 아닙니다. `resource_free`는 리소스 목록을 생략하고 START 포인터를 null로 유지합니다.
+
+START는 독립적인 읽기 전용 raw／변환된 `CM_RESOURCE_LIST` 할당을 받습니다. 대응하는 Memory 설명자는 동일한 순서를 사용하며 full 설명자1개, Internal 인터페이스, 버스0, version／revision 1, DeviceExclusive 공유와 READ_WRITE 구간 플래그로 구성됩니다. 레지스터 자체의 RO 권한은 독립적입니다. 하위 START가 성공하면 상위 완료 콜백 전에 할당을 사용할 수 있습니다. NotStarted／Stopped에서 시작하는 각 START는 같은 고정 할당에 새 리소스 세대를 만듭니다. 값은 PDO 생성 시 한 번만 초기화하며 unmap, STOP, 재시작에도 유지합니다. START 실패와 STOP／REMOVE 성공은 최종 IRP 완료 전에 드라이버가 매핑을 해제해야 하며 모델이 자동 정리하지 않습니다. 갑작스러운 제거는 즉시 새 map과 레지스터 접근을 금지하지만 기존 매핑의 unmap은 가능합니다. 제공자의 실제 성공한 장치 SET 완료가 하드웨어 접근성을 변경합니다. D3는 접근을 막고 D0는 사용 가능한 할당이 있을 때만 허용합니다. D3에서도 접근 없는 매핑은 가능하며 전원 변경은 매핑이나 값을 버리지 않습니다.
+
+`MmMapIoSpace`는 NonCached를, `MmMapIoSpaceEx`는 PAGE_NOCACHE와 PAGE_READONLY 또는 PAGE_READWRITE 조합을 지원합니다. 단일 할당에 선언된 변환 후 하위 구간만 페이지 오프셋을 보존하여 매핑합니다. 별칭은 하나의 뱅크를 공유하고 독립 권한을 유지하며 `MmUnmapIoSpace`에는 원래 시작 주소와 정확한 길이가 필요합니다. 매핑 수／가상 주소 창 또는 설정된 메모리 예산이 소진되면 NULL을 반환하고 백엔드 결함은 명시적인 실패로 남습니다. unmap한 주소는 후속 매핑으로 다시 유효해지지 않습니다. 스칼라와 실제 REP 레지스터 버퍼 명령은 CPU MMIO 검사를 거칩니다. 선언되지 않은 부분, 잘못된 폭, 비정렬, RO 쓰기, 매핑 경계 통과와 실행은 레지스터 효과 전에 실패합니다. 메모리 API도 자연 정렬된 단일 레지스터에 정확한1／2／4바이트 트랜잭션을 실행할 수 있습니다. MMIO를 포함하는 더 큰 일괄 구간은 레지스터 트랜잭션으로 자동 분할하지 않고 명시적으로 거부합니다. 임의 물리 RAM, 리소스 재배치, 포트, 인터럽트, DMA나 일반 하드웨어 동작은 지원하지 않습니다.
+
+실행 가능한 [레지스터 뱅크 시나리오](../examples/driver-register-bank-scenario.json)는 자체 정품 WDK `driver_wdm_resources.c`와 선택적 `NEVERD_WDM_RESOURCE_FIXTURE`／`NEVERD_WDM_RESOURCE_CFG_FIXTURE`를 사용합니다. 지연 START, 파일 I/O, STOP, 재시작, 제거에 걸친14개 요청을 실행하고 드라이버 IOCTL로 유지된 값을 관측합니다. `configuration.pnp_devices[].resources`는 물리 주소를 손실 없는16진수로 기록한 초기 사실이며 별도의 뱅크 상태 보고서가 아닙니다. C API와 Python은 기존 `scenario_json` 진입점과 변경 없는 `neverd_driver_options_v1`을 사용합니다. 실제 산출물 부재는 명시적으로 건너뛰며 현재 실행 증거는 Linux에 한정됩니다.
 
 WDM remove-lock은 실제 export인 `IoInitializeRemoveLockEx`, `IoAcquireRemoveLockEx`, `IoReleaseRemoveLockEx`, `IoReleaseRemoveLockAndWaitEx`를 실행합니다. Ex 없는 WDK 이름은 매크로입니다. 잠금은 정렬된 전체 저장소를 확장부에 포함하는 정확한 DEVICE_OBJECT에 속하며 PDO 상태나 Tag 형태로 소유자를 추론하지 않습니다. 연결 전 초기화가 가능합니다. retail 32바이트/DBG 120바이트와 일치하는 별도 크기 인수가 필요하며 등록 영역 전체는 불투명합니다. NULL/중복 Tag를 잠금별로 세고 역참조하지 않으므로 IRP 완료 후에도 해제할 수 있습니다. 초기화/AndWait는 `PASSIVE_LEVEL`, acquire/release는 `DISPATCH_LEVEL`까지 허용합니다.
 
@@ -116,7 +124,7 @@ AndWait는 획득 입구를 닫고 일치하는 획득 하나를 해제한 뒤 �
 
 알 수 없거나 크기가 다른 저장소, 대응 없는 release, 중복 drain, 재초기화, 획득이나 미소비 drain 대기가 남은 확장부 삭제는 변경 전에 실패합니다. 깨끗한 AddDevice 실패에서는 초기화한 미사용 잠금을 삭제할 수 있습니다. 잠금은 장치/작업 항목 참조를 대체하지 않으며 실제 확장부 퇴역 때 등록을 해제합니다. 디버그 정보는 Verifier 시간/최고 수위 제한을 활성화하지 않습니다. 정품 `driver_wdm_remove_lock.c`는 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`/`NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`/`NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`/`NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE`의4종을 사용합니다. 없으면 명시적으로 건너뛰며 네이티브 및 C API/CLI 증거는 Linux만 해당합니다. 완전한 제거 관리자나 일반 동시 I/O 배출 지원을 뜻하지 않습니다.
 
-리소스 없는 WDM 전원 요청은 `kind: "power"`와 구성된 `device_id`를 사용합니다. 모든 패킷에 `minor`(`query`/`set`), `power_type`(`device`/`system`), `power_state`(`D0`/`D3` 또는 `working`/`sleeping3`), `power_action`(`none`/`sleep`), 32비트 정수나 16진수 문자열 `system_context`, `bus_completion`이 필수입니다. System Query의 Working 대상과 파일·전송·취소 필드는 지원하지 않습니다. 전체 `system_context`는 불투명한 명시적 사실이며 부모 요청, 최대 절전이나 빠른 시작을 추론하지 않습니다. 경로는 `DO_POWER_PAGABLE`이 필요하고 `DO_POWER_INRUSH`가 없어야 하며 전원 디스패치와 `PoRequestPowerIrp`는 `PASSIVE_LEVEL`에서 실행합니다. `PoCallDriver`는 같은 관리 전원 IRP를 전달하고 `PoStartNextPowerIrp`는 추가 직렬화 핸드셰이크가 없는 Vista+ 계약을 따릅니다. 일반 전원 정책, WAIT_WAKE, 기타 상태/동작, 종료/최대 절전, 돌입 전류, 비페이지 경로, 하드웨어 및 KMDF PnP는 범위 밖입니다.
+WDM 전원 요청은 `kind: "power"`와 구성된 `device_id`를 사용합니다. 모든 패킷에 `minor`(`query`/`set`), `power_type`(`device`/`system`), `power_state`(`D0`/`D3` 또는 `working`/`sleeping3`), `power_action`(`none`/`sleep`), 32비트 정수나 16진수 문자열 `system_context`, `bus_completion`이 필수입니다. System Query의 Working 대상과 파일·전송·취소 필드는 지원하지 않습니다. 전체 `system_context`는 불투명한 명시적 사실이며 부모 요청, 최대 절전이나 빠른 시작을 추론하지 않습니다. 경로는 `DO_POWER_PAGABLE`이 필요하고 `DO_POWER_INRUSH`가 없어야 하며 전원 디스패치와 `PoRequestPowerIrp`는 `PASSIVE_LEVEL`에서 실행합니다. `PoCallDriver`는 같은 관리 전원 IRP를 전달하고 `PoStartNextPowerIrp`는 추가 직렬화 핸드셰이크가 없는 Vista+ 계약을 따릅니다. 일반 전원 정책, WAIT_WAKE, 기타 상태/동작, 종료/최대 절전, 돌입 전류, 비페이지 경로, 일반 하드웨어 및 KMDF PnP는 범위 밖입니다.
 
 각 `pnp_devices`는 필수 초기 수명 상태 D0/working과 별개인 `initial_reported_device_power: "D0"` 또는 `"D3"`를 지정할 수 있습니다. PDO와 처음 연결된 각 게스트 DEVICE_OBJECT의 알림 상태는 독립적이며 `PoSetPowerState`는 호출 장치의 이전 값만 반환하고 갱신합니다. 초기 사실이 없으면 실제 호출은 D0를 가정하지 않고 실패합니다. 선택적 `requested_device_power`는 같은 필수6필드를 가진 device 템플릿이며 모든 PDO 합계64개까지 허용합니다. 실제 `PoRequestPowerIrp`의 PDO/minor/목표가 해당 FIFO 선두와 일치해야 소비합니다. 누락/불일치는 실패하고 미사용 항목은 요청을 만들지 않으며 context로 부모를 추정하지 않습니다. 자식은 별도 IRP/보고 행, `origin: "PoRequestPowerIrp"`, 0부터 시작하는 `response_index`를 갖습니다. 시나리오 행은 `origin: "scenario"`와 null 인덱스입니다. 동기 자식은 API의 `STATUS_PENDING` 반환 전에5인수 void 콜백을 실행할 수 있고 콜백은 대기할 수 있습니다. System S0는 독립 D0 자식보다 먼저 완료할 수 있습니다. IO_STATUS_BLOCK 스냅샷은 콜백 반환까지 유효합니다.
 
@@ -152,6 +160,7 @@ KMDF 1.33 지원은 정확한 1.33.0 ABI를 사용합니다. 458개 함수 슬�
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | 길이가 지정된 UTF-16 복사와 대소문자를 구분하는 비교. 대소문자 무시 비교에는 Windows 대소문자 테이블이 필요하므로 중단함 |
 | `ExAllocatePool2` | Paged/nonpaged NX 할당이며 기본값은 0으로 초기화. uninitialized 및 cache-aligned 플래그를 모델링함. 잘못된 필수 플래그는 NULL을 반환하고, quota/executable 풀과 할당 예외 발생은 중단함 |
 | `MmGetSystemRoutineAddress` | 공유 export 목록을 통해 길이가 지정된 게스트 이름을 해석함 |
+| `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 선언된 변환 후 하위 구간, 비캐시 RO／RW, 공유 별칭과 정확한 unmap. 임의 물리 메모리는 미지원 |
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | 요청 소유 MDL의 캐시된 KernelMode 매핑과 권한. 비페이지 풀 MDL은 안전 도우미로 원래 풀 매핑을 재사용 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 독립 MDL의 전체 범위는 하나의 유효한 비페이지 풀 할당 내부여야 함. MDL과 버퍼 수명은 독립적이며 IRP 연결, 체인, 할당량은 미지원 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 명시적인 세션 레지스트리, 핸들별 권한과 수명, 쿼리 버퍼 크기와 변경. 호스트 레지스트리에 접근하지 않음 |
@@ -261,7 +270,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v11`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v12`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 

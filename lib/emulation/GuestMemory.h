@@ -16,10 +16,27 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace neverd::emulation {
 enum GuestPermission : unsigned { Read = 1, Write = 2, Execute = 4 };
+/// A mapping cannot fit in the configured guest memory budget. Callers may
+/// translate this specific shortage into their documented allocation result.
+class GuestMemoryLimitError : public llvm::ErrorInfo<GuestMemoryLimitError> {
+public:
+  static char ID;
+  void log(llvm::raw_ostream &OS) const override;
+  std::error_code convertToErrorCode() const override;
+};
+/// One device mapping. Validate is pure and receives the original transaction
+/// before any read/write effect. Offsets are relative to the mapped page base.
+/// Callbacks are shared by CPU contexts and live until successful unmap.
+struct GuestMMIOCallbacks {
+  std::function<llvm::Error(uint64_t, uint64_t, bool)> Validate;
+  std::function<llvm::Expected<uint64_t>(uint64_t, unsigned)> Read;
+  std::function<llvm::Error(uint64_t, unsigned, uint64_t)> Write;
+};
 class GuestMemory {
 public:
   virtual ~GuestMemory() = default;
@@ -27,6 +44,12 @@ public:
                           unsigned Permissions) = 0;
   virtual llvm::Error protect(uint64_t Address, uint64_t Size,
                               unsigned Permissions) = 0;
+  /// Optional device access support; unrelated memory implementations reject
+  /// it. Address and Size describe whole nonempty pages. Device pages are NX.
+  virtual llvm::Error mapMMIO(uint64_t Address, uint64_t Size,
+                              GuestMMIOCallbacks Callbacks);
+  /// Retire exactly one complete device mapping, including its callbacks.
+  virtual llvm::Error unmapMMIO(uint64_t Address, uint64_t Size);
   virtual llvm::Error read(uint64_t Address,
                            llvm::MutableArrayRef<uint8_t> Bytes) = 0;
   virtual llvm::Error write(uint64_t Address,

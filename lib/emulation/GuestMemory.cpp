@@ -13,6 +13,22 @@
 
 #include <array>
 namespace neverd::emulation {
+char GuestMemoryLimitError::ID;
+void GuestMemoryLimitError::log(llvm::raw_ostream &OS) const {
+  OS << "guest memory limit exceeded";
+}
+std::error_code GuestMemoryLimitError::convertToErrorCode() const {
+  return llvm::inconvertibleErrorCode();
+}
+llvm::Error GuestMemory::mapMMIO(uint64_t, uint64_t, GuestMMIOCallbacks) {
+  return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                 "guest memory does not support MMIO mappings");
+}
+llvm::Error GuestMemory::unmapMMIO(uint64_t, uint64_t) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support MMIO unmapping");
+}
 llvm::Expected<uint64_t> GuestMemory::readInteger(uint64_t Address,
                                                   unsigned Size) {
   if (Size != 1 && Size != 2 && Size != 4 && Size != 8)

@@ -545,6 +545,14 @@ llvm::Expected<uint64_t> KernelModel::call(
       WaitReferences.count(A[0]))
     return modelError("cannot reinitialize an object with outstanding waits");
   switch (Kind) {
+  case KernelAPIKind::MmMapIoSpace:
+  case KernelAPIKind::MmMapIoSpaceEx:
+    return MMIO.map(A[0], A[1], uint32_t(A[2]),
+                    Kind == KernelAPIKind::MmMapIoSpaceEx);
+  case KernelAPIKind::MmUnmapIoSpace:
+    if (auto E = MMIO.unmap(A[0], A[1]))
+      return E;
+    return 0;
   case KernelAPIKind::IoInitializeRemoveLockEx:
     return initializeRemoveLock(A);
   case KernelAPIKind::IoAcquireRemoveLockEx:

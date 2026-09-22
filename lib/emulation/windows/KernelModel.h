@@ -16,6 +16,7 @@
 #include "KernelDispatcher.h"
 #include "KernelFramework.h"
 #include "KernelGuestCall.h"
+#include "KernelMMIO.h"
 #include "KernelRegistry.h"
 #include "KernelRemoveLocks.h"
 #include "KernelScheduler.h"
@@ -38,7 +39,8 @@ public:
         Dispatcher(Memory, Scheduler,
                    [this](uint64_t Address, uint32_t Size, bool IsWrite) {
                      return validateDispatcherStorage(Address, Size, IsWrite);
-                   }) {}
+                   }),
+        MMIO(Memory) {}
   KernelModel(const KernelModel &) = delete;
   KernelModel &operator=(const KernelModel &) = delete;
   KernelModel(KernelModel &&) = delete;
@@ -136,6 +138,7 @@ private:
   KernelScheduler Scheduler;
   KernelDispatcher Dispatcher;
   KernelRemoveLocks RemoveLocks;
+  KernelMMIO MMIO;
   std::optional<Wait> PendingWait;
   std::map<uint64_t, size_t> WaitReferences;
   std::map<uint64_t, size_t> RemoveLockWaitReferences;
@@ -205,7 +208,7 @@ private:
   struct PnpDeviceRecord {
     uint64_t PDO = 0;
     size_t ResultIndex = 0;
-    bool BusResourceFree = false;
+    DriverBusKind Bus = DriverBusKind::ResourceFree;
     std::optional<uint32_t> AddDeviceStatus;
     bool AddDeviceActive = false;
     std::set<uint64_t> ExistingGuestDevices;
@@ -258,6 +261,9 @@ private:
     uint64_t PnpDevice = 0;
     std::optional<DeviceLifecycleTicket> PnpTicket;
     std::optional<DriverPnpOperation> PnpOperation;
+    uint64_t RawResources = 0;
+    uint64_t TranslatedResources = 0;
+    uint64_t ResourceListSize = 0;
     std::optional<DeviceLifecycleTicket> PowerTicket;
     std::optional<DriverPowerOperation> PowerOperation;
     std::optional<RequestedPower> ChildPower;
@@ -361,6 +367,11 @@ private:
   llvm::Error validatePowerRequestCompletion(const ActiveRequest &Request,
                                              uint32_t Status) const;
   llvm::Error finishRequestLifecycle(ActiveRequest &Request, uint32_t Status);
+  llvm::Error initializePnpResources(ActiveRequest &Request);
+  llvm::Error validatePnpRequestCompletion(const ActiveRequest &Request,
+                                           uint32_t Status,
+                                           bool ProviderProbe = false) const;
+  llvm::Error publishProviderHardware(ActiveRequest &Request, uint32_t Status);
   llvm::Error initializeRequestPacket(ActiveRequest &Record,
                                       const DriverRequest &Input);
   struct LockedMdl {

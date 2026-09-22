@@ -98,11 +98,9 @@ llvm::Error KernelModel::preparePnpDevices() {
     return E;
   PnpProviderDriver = *Provider;
   for (const auto &Configured : ConfiguredPnpDevices) {
-    // The common scenario validator requires explicit initial states and the
-    // resource-free provider. Never supply inferred power or bus responses.
-    if (Configured.Bus != DriverBusKind::ResourceFree ||
-        !Configured.InitialDevicePower || !Configured.InitialSystemPower)
-      return pnpDeviceError("provider requires explicit resource-free states");
+    // The shared scenario validator owns both explicit bus contracts.
+    if (!Configured.InitialDevicePower || !Configured.InitialSystemPower)
+      return pnpDeviceError("provider requires explicit initial power states");
     auto Created = createDeviceObjectForOwner(
         {}, 0, UnknownDeviceType, SecureOpen, false, PnpProviderDriver,
         DeviceOwnerKind::Provider);
@@ -120,7 +118,9 @@ llvm::Error KernelModel::preparePnpDevices() {
     PnpDeviceRecord Record;
     Record.PDO = Created->Address;
     Record.ResultIndex = Index;
-    Record.BusResourceFree = true;
+    Record.Bus = Configured.Bus;
+    if (auto E = MMIO.configure(Created->Address, Configured))
+      return E;
     Record.InitialReportedDevicePower = Configured.InitialReportedDevicePower;
     Record.RequestedDevicePower = Configured.RequestedDevicePower;
     Devices.at(Created->Address).ReportedDevicePower =
@@ -259,6 +259,8 @@ llvm::Error KernelModel::finishPnpRemoval(uint64_t PDO) {
 llvm::Error KernelModel::validatePnpRemovalFinalization(
     const ActiveRequest &Request) const {
   const uint64_t PDO = Request.PnpDevice;
+  if (auto E = MMIO.canRemove(PDO))
+    return E;
   const auto *Configured = pnpDeviceForPDO(PDO);
   if (!Configured || !isProviderDevice(PDO))
     return pnpDeviceError("remove finalization lost its provider identity");

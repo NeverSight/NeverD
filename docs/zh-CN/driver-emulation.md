@@ -19,7 +19,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
   --instruction-limit 100000 > driver-report.json
 ```
 
-报告始终以 JSON 输出到 stdout；请求与初始化配置诊断输出到 stderr。默认预算为 100000 条来宾指令、64 MiB 来宾内存、10000 条记录事件以及 5000 毫秒。指令数限制必须为正数。任一预算耗尽都会停止执行，并保留已收集的部分观察结果。
+报告始终以 JSON 输出到 stdout；请求与初始化配置诊断输出到 stderr。默认预算为 100000 条来宾指令、64 MiB 来宾内存、10000 条记录事件以及 5000 毫秒。指令数限制必须为正数。执行预算耗尽会停止执行并保留已有观察结果；具体分配 API 仍遵循其空间不足返回契约，例如 MMIO 映射空间不足返回 NULL。
 
 | 退出码 | 含义 |
 |--------|------|
@@ -45,11 +45,11 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发场景提交 或 WDM 请求取消；`METHOD_NEITHER` 与隐式文件位置 |
 | `METHOD_NEITHER` | 拒绝 | 用户地址空间上下文、访问探测及来宾异常处理 |
 | KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、顺序默认队列，以及实际执行回调的缓冲／直接请求 | 不支持 PnP 设备、通用队列调度、类扩展或 UMDF |
-| PnP 总线／功能／过滤驱动 | 显式无资源 PDO、来宾 AddDevice 和八种常见 PnP 生命周期次功能 | 其他 PnP 操作、通用电源管理、硬件／资源及 KMDF PnP |
+| PnP 总线／功能／过滤驱动 | 显式无资源或固定寄存器银行 PDO、来宾 AddDevice 和八种常见 PnP 生命周期次功能 | 其他 PnP 操作、通用电源管理、其他硬件／资源及 KMDF PnP |
 | 存储、网络、显示、文件系统及微过滤驱动 | 不支持相关子系统契约 | 端口／类／微端口框架、NDIS/WFP、图形或文件系统服务 |
 | 工作项、定时器、DPC、事件与等待 | 当前执行 IRQL 在派发与工作项中为 `PASSIVE_LEVEL`，在 DPC 中为 `DISPATCH_LEVEL` | 仅支持下列 API 子集；不支持并发场景提交 或 WDM 请求取消 |
 | 使用进程／线程回调、句柄、注册表／文件操作或内核模块发现的驱动 | 支持配置的注册表；其他行为仅限下列 API | 对象管理器、系统状态以及回调／事件产生机制 |
-| 硬件、DMA、PCI、中断或虚拟化驱动 | 不支持所需环境 | 设备模型、物理内存、总线、中断及特权 CPU 状态 |
+| 硬件、DMA、PCI、中断或虚拟化驱动 | 支持显式内存寄存器银行及 MMIO | 其他设备模型、任意物理 RAM、PCI、端口、中断、DMA 及特权 CPU 状态 |
 | x86 或 ARM64 Windows 驱动 | 拒绝 | 相应架构的加载、ABI 及执行模型 |
 | x64 CFG | 验证目标表及检查／分派调用；未启用的插桩保留来宾回退函数 | XFG、导出抑制、不支持的加载配置和 TLS 仍被拒绝 |
 
@@ -65,7 +65,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排队的 `DelayedWorkQueue` 工作项在 `PASSIVE_LEVEL` 执行，来宾 DPC 回调在 `DISPATCH_LEVEL` 接收规定的四个参数。CPU0 在调用返回和阻塞等待的边界进行确定性的协作调度。相对、绝对和周期定时器使用虚拟时间；没有可运行的执行帧时，时间推进到下一定时器、等待或取消期限。通知型与同步型事件／定时器保留各自的信号消耗语义。每个回调拥有独立的来宾栈；多个阻塞帧保留局部变量和完整 CPU 上下文，来宾内存仍然共享。Win64 回调入口将前四个参数放入寄存器，其余参数放入栈。请求仍串行处理：标记 IRP 为待处理的派发函数必须返回 `STATUS_PENDING`，且该请求完成后才能开始下一个。待处理请求或无限等待没有可用生产者时，以停滞的 `model_error` 停止。指令、内存、观察记录与墙钟时间预算仍共用。
 
-这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、WDM 请求取消、自旋锁、并发场景提交、通用 IRQL 切换、`METHOD_NEITHER`、UMDF、KMDF PnP 设备及通用队列调度、完整 PnP／电源、硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
+这是有界调度模型，并不代表完整 Windows 异步支持。可警报或用户模式等待、系统线程、APC、WDM 请求取消、自旋锁、并发场景提交、通用 IRQL 切换、`METHOD_NEITHER`、UMDF、KMDF PnP 设备及通用队列调度、完整 PnP／电源、通用硬件、DMA 与中断仍不支持。仅初始化调用会执行显式排队的回调，不会隐式生成请求或卸载。
 
 工作项在回调开始前出队，因此回调可以释放自身的工作项。释放仍在队列中的项、重复入队、使用失效对象或非来宾可执行内存中的回调地址都会明确失败。设备引用保留到回调返回。请求卸载要求释放全部工作项并完成排队工作。CPU 上下文保存与恢复包含通用、SIMD、FPU 和控制状态；来宾内存始终共享，故障 CPU 不能靠恢复上下文继续执行。
 删除会延后到文件对象及排队／执行中的工作项引用全部释放。对象区耗尽时，工作项分配返回 NULL。
@@ -80,9 +80,9 @@ WDM 设备栈可以包含同一来宾驱动拥有的多个设备对象。`IoAtta
 
 `IofCallDriver` 和 `IoCallDriver` 辅助入口调用保存路径中的确切目标。真实内联 `IoCopyCurrentIrpStackLocationToNext`、`IoSkipCurrentIrpStackLocation` 和 `IoSetCompletionRoutine` 操作原始来宾 IRP；模型验证游标、数量和控制标志。下层派发返回真实状态，与 `IoStatus` 及完成回调返回值分开。完成展开先推进游标，按成功／错误／取消标志选择回调并向上传递 pending 状态；执行完成回调时，回调负责传播 pending，包括派发已返回 `STATUS_PENDING` 后的传播。`STATUS_MORE_PROCESSING_REQUIRED` 暂停展开并保留 IRP、MDL 和缓冲区，后续完成调用可以继续。嵌套完成要求外层返回停止结果，最终展开只释放一次存储。带所属子系统标记的续接保留嵌套 WDM／WDF 调用帧和继承的 IRQL。 在调用上层完成回调之前，已消耗的下层栈位置会被清零。
 
-通用电源管理、驱动自行分配的 IRP、其他 PnP 次功能以及硬件／资源模型仍不支持。WDF 附加／转发、向仍有文件或回调的栈附加设备、拆除中间层、改变转发的主功能及指向保存路径之外的设备均明确报错。可选真实 WDK 样例 `driver_wdm_stack.c` 使用 `NEVERD_WDM_STACK_FIXTURE` 和 `NEVERD_WDM_STACK_CFG_FIXTURE`；原生与 C API／CLI 测试包括重定位，缺少产物会明确跳过。执行证据仍仅来自 Linux。
+通用电源管理、驱动自行分配的 IRP、其他 PnP 次功能以及其他硬件／资源模型仍不支持。WDF 附加／转发、向仍有文件或回调的栈附加设备、拆除中间层、改变转发的主功能及指向保存路径之外的设备均明确报错。可选真实 WDK 样例 `driver_wdm_stack.c` 使用 `NEVERD_WDM_STACK_FIXTURE` 和 `NEVERD_WDM_STACK_CFG_FIXTURE`；原生与 C API／CLI 测试包括重定位，缺少产物会明确跳过。执行证据仍仅来自 Linux。
 
-场景可显式配置 `pnp_devices`，最多 64 个。每项必须包含 `id`、`bus: "resource_free"`、`initial_device_power: "D0"` 和 `initial_system_power: "working"`，不会猜测缺失事实。ID 为区分大小写的 ASCII，长度 1–64 字节，以字母或数字开头，其余只允许字母、数字、`_`、`-`、`.`。普通请求可用已配置的 `device_id` 代替 `device`，两者互斥。`kind: "pnp"` 必须提供 `device_id`、`minor` 和 `bus_completion`；支持 `start`、`query_remove`、`cancel_remove`、`remove`、`query_stop`、`stop`、`cancel_stop`、`surprise_removal`。`bus_completion.status` 必须为 32 位整数或十六进制字符串；可选 `delay_100ns` 是不超过 INT64_MAX 的非负整数，从提供者实际接收请求时计时。最终总线状态不能是 `STATUS_PENDING`；stop/cancel-stop/surprise-removal/cancel-remove/remove 必须精确返回 `STATUS_SUCCESS` (0)。PnP 请求拒绝文件、传输和取消字段，即使值为零；C++ API 执行相同预检。
+场景可显式配置 `pnp_devices`，最多 64 个。每项必须包含 `id`、`bus: "resource_free"` 或 `bus: "register_bank"`、`initial_device_power: "D0"` 和 `initial_system_power: "working"`，不会猜测缺失事实。ID 为区分大小写的 ASCII，长度 1–64 字节，以字母或数字开头，其余只允许字母、数字、`_`、`-`、`.`。普通请求可用已配置的 `device_id` 代替 `device`，两者互斥。`kind: "pnp"` 必须提供 `device_id`、`minor` 和 `bus_completion`；支持 `start`、`query_remove`、`cancel_remove`、`remove`、`query_stop`、`stop`、`cancel_stop`、`surprise_removal`。`bus_completion.status` 必须为 32 位整数或十六进制字符串；可选 `delay_100ns` 是不超过 INT64_MAX 的非负整数，从提供者实际接收请求时计时。最终总线状态不能是 `STATUS_PENDING`；stop/cancel-stop/surprise-removal/cancel-remove/remove 必须精确返回 `STATUS_SUCCESS` (0)。PnP 请求拒绝文件、传输和取消字段，即使值为零；C++ API 执行相同预检。
 
 ```json
 {
@@ -105,13 +105,21 @@ WDM 设备栈可以包含同一来宾驱动拥有的多个设备对象。`IoAtta
 }
 ```
 
-DriverEntry 成功后，每个配置的 PDO 执行一次 `AddDevice`，提供者拥有独立的 `DRIVER_OBJECT`；来宾不能删除或冒充提供者对象。PnP IRP 为 `KernelMode`、不关联文件、无资源，初始状态为 `STATUS_NOT_SUPPORTED`。仅在转发到对应 PDO 后才使用总线响应；延迟完成复用虚拟时钟及现有完成续接。最终上层完成决定生命周期提交或回滚，与总线状态分开。正常从 Started 移除必须先成功 query、关闭文件、排空先前请求，并由来宾拆链／删除。干净的 AddDevice 失败仅退休提供者；新来宾设备泄漏会触发 `model_error`，已拆链的泄漏也不例外。卸载前所有提供者必须已退出。本范围不实现其他 PnP 次功能、通用电源管理、硬件／资源或 KMDF PnP。 成功 PnP 必须实际完成提供者；START/QUERY_STOP/QUERY_REMOVE 的上层早期失败可保留空总线观测。设备／文件生命周期身份在拆链后仍保留。
+DriverEntry 成功后，每个配置的 PDO 执行一次 `AddDevice`，提供者拥有独立的 `DRIVER_OBJECT`；来宾不能删除或冒充提供者对象。PnP IRP 为 `KernelMode`、不关联文件，START 资源由配置的总线决定，初始状态为 `STATUS_NOT_SUPPORTED`。仅在转发到对应 PDO 后才使用总线响应；延迟完成复用虚拟时钟及现有完成续接。最终上层完成决定生命周期提交或回滚，与总线状态分开。正常从 Started 移除必须先成功 query、关闭文件、排空先前请求，并由来宾拆链／删除。干净的 AddDevice 失败仅退休提供者；新来宾设备泄漏会触发 `model_error`，已拆链的泄漏也不例外。卸载前所有提供者必须已退出。本范围不实现其他 PnP 次功能、通用电源管理、其他硬件／资源或 KMDF PnP。 成功 PnP 必须实际完成提供者；START/QUERY_STOP/QUERY_REMOVE 的上层早期失败可保留空总线观测。设备／文件生命周期身份在拆链后仍保留。
 
 报告在 `configuration.pnp_devices` 保留初始配置。观测的 `pnp_devices` 包含 `id`、`pdo`、可空 `add_device_status`、当前 `attached`、`pnp_state` 和 `provider_present`；移除后 `attached` 为 false。AddDevice 阶段为 `add_device:<ID>`，失败影响 `scenario_success`，但不覆盖 DriverEntry 的 `nt_status`。每个请求新增可空 `device_id` 和 `pnp`；PnP 的 `file` 为 null。`pnp` 记录 `minor`、`state_before`、`state_after`、可空 `bus_status`、`bus_received_at_100ns` 和 `bus_completed_at_100ns`。配置状态仅在总线实际完成后成为观测；接收时间单独记录。已有请求字段类型不变。
 
-除 Removing/Removed 外，设备仍存在时，普通 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE 会进入真实来宾派发。模型不根据 Stopped、StopPending、RemovePending 或电源状态虚构失败；驱动可按自身代码完成软件 I/O、拒绝或保留请求。公开执行器仍为串行；当前保留 IRP 若无可用生产者，不能靠后续场景中的 start 或 cleanup 唤醒，会以停滞 `model_error` 结束。Remove 前关闭文件、排空先前请求是当前配置的限制。`query_stop` 的最终 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) 要求尚未实现的资源重新查询，因此场景预检和来宾最终完成都明确拒绝；参见 [Microsoft QUERY_STOP 合约](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)。停止／重启及突然移除不代表资源、通用电源管理 或 KMDF PnP 支持。
+除 Removing/Removed 外，设备仍存在时，普通 CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE 会进入真实来宾派发。模型不根据 Stopped、StopPending、RemovePending 或电源状态虚构失败；驱动可按自身代码完成软件 I/O、拒绝或保留请求。公开执行器仍为串行；当前保留 IRP 若无可用生产者，不能靠后续场景中的 start 或 cleanup 唤醒，会以停滞 `model_error` 结束。Remove 前关闭文件、排空先前请求是当前配置的限制。`query_stop` 的最终 `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) 要求尚未实现的资源重新查询，因此场景预检和来宾最终完成都明确拒绝；参见 [Microsoft QUERY_STOP 合约](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device)。停止／重启及突然移除不代表资源重平衡、通用电源管理 或 KMDF PnP 支持。
 
 无资源 PnP 使用原创真实 WDK `driver_wdm_pnp.c`、可选 `NEVERD_WDM_PNP_FIXTURE`／`NEVERD_WDM_PNP_CFG_FIXTURE`，并提供原生及 C API／CLI 测试；缺少产物会明确跳过，执行证据仍仅来自 Linux。
+
+合成总线 `bus: "register_bank"` 为 PDO 提供显式固定内存资源。非空 `resources` 数组的每项包含 `id`、`raw_start`、`translated_start`、`length` 和 `registers`；每个寄存器必须指定 `offset`、`width`、`access`（`read_only` 或 `read_write`）以及初始 `value`。`DriverResources.h`／`DriverResources.def` 定义共享 C++ 与 JSON 契约。资源 ID 遵循有界 ASCII 标识符规则，并在每个 PDO 内唯一。上限为每 PDO 8 个／合计 32 个资源，每资源 256 个／合计 4096 个寄存器，每资源 1–1048576 字节。只支持自然对齐、精确匹配的 1／2／4 字节寄存器访问，值必须适合该宽度。两种物理区间均不得溢出；同一 PDO 内的原始区间不能重叠，转换后区间在全局不能重叠。空 `registers` 明确表示整个银行不可访问。地址和初值都是声明的事实，不来自宿主硬件，也不隐含零填充内存。`resource_free` 继续省略资源清单，START 指针保持 null。
+
+START 接收独立、只读的原始与转换后 `CM_RESOURCE_LIST` 分配；对应的 Memory 描述符顺序一致，使用一个完整描述符、Internal 接口、总线 0、版本／修订号 1、DeviceExclusive 共享方式及 READ_WRITE 区间标志。寄存器自身的只读权限仍独立生效。下层 START 成功后，资源在上层完成回调之前可用；从 NotStarted／Stopped 发起的每次 START 都为相同固定分配建立新一轮资源身份。寄存器值仅在创建 PDO 时初始化一次，取消映射、STOP 和重启均保留值。失败的 START 及成功的 STOP／REMOVE 要求驱动在最终 IRP 完成前释放映射，模型不会静默清理。突然移除立即禁止新映射和寄存器访问，但仍可取消已有映射。提供者实际成功完成设备 SET 电源请求后更新硬件可访问性：D3 禁止访问，D0 仅在资源分配可用时允许访问；D3 仍允许建立映射，电源变化不会丢弃映射或重置寄存器值。
+
+`MmMapIoSpace` 支持 NonCached；`MmMapIoSpaceEx` 支持 PAGE_NOCACHE 与 PAGE_READONLY 或 PAGE_READWRITE 的组合。两者仅映射单一资源分配内已声明的转换后子区间，并保留页内偏移。别名共享同一寄存器银行、保留独立权限，`MmUnmapIoSpace` 必须使用原始基址和精确长度。映射数量／虚拟地址窗口或配置内存预算耗尽时返回 NULL，后端故障仍明确失败。已取消映射的地址不会因后续映射而重新有效。标量及真实 REP 寄存器缓冲指令通过 CPU MMIO 检查执行；空洞、错误宽度、未对齐、只读写入、跨映射访问和执行均在寄存器产生效果前失败。内存 API 可执行自然对齐、精确匹配单个寄存器的 1／2／4 字节事务；更大的批量区间若触及 MMIO，会明确失败，不会自动拆分成寄存器事务。本范围不提供任意物理 RAM、资源重平衡、端口、中断、DMA 或通用硬件行为。
+
+可运行的[寄存器银行场景](../examples/driver-register-bank-scenario.json) 使用原创真实 WDK `driver_wdm_resources.c`，通过可选 `NEVERD_WDM_RESOURCE_FIXTURE`／`NEVERD_WDM_RESOURCE_CFG_FIXTURE` 指定产物。它执行 14 个请求，覆盖延迟 START、文件 I/O、STOP、重启和移除，并通过驱动 IOCTL 观察持久寄存器值。`configuration.pnp_devices[].resources` 记录初始事实，物理地址使用无损十六进制表示；它不是另一份银行状态报告。C API 与 Python 继续使用原有 `scenario_json` 入口，不改变 `neverd_driver_options_v1`。缺少真实产物时明确跳过；当前执行证据仅来自 Linux。
 
 WDM remove-lock 使用真实导出 `IoInitializeRemoveLockEx`、`IoAcquireRemoveLockEx`、`IoReleaseRemoveLockEx` 和 `IoReleaseRemoveLockAndWaitEx`；不带 Ex 的 WDK 名称是宏。锁属于完整对齐存储所在扩展的确切 DEVICE_OBJECT，与 PDO 生命周期和 Tag 形状无关；附加前即可初始化。支持 retail 32 字节和 DBG 120 字节，必须传入匹配的独立大小参数，注册后整个区域不透明。NULL 和重复 Tag 按每把锁计数，Tag 从不解引用，因此 IRP 完成后仍可释放。初始化与 AndWait 要求 `PASSIVE_LEVEL`，acquire/release 允许 `DISPATCH_LEVEL`。
 
@@ -119,7 +127,7 @@ AndWait 关闭获取入口，释放一次匹配获取，并挂起真实来宾帧
 
 未知或大小不匹配的存储、不匹配 release、重复 drain、重初始化，以及仍有获取或未消费 drain 等待时删除扩展，均在修改前失败。干净的 AddDevice 失败可以删除已初始化但未使用的锁。锁不替代真实设备／工作项引用，只在扩展物理退休时注销；有效调试元数据不启用 Verifier 超时／高水位行为。真实 WDK `driver_wdm_remove_lock.c` 通过 `NEVERD_WDM_REMOVE_LOCK_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_CFG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_FIXTURE`／`NEVERD_WDM_REMOVE_LOCK_DBG_CFG_FIXTURE` 提供四种变体。缺少产物明确跳过；原生与 C API／CLI 证据仅来自 Linux，不代表完整移除管理或通用并发 I/O 排空。
 
-无资源 WDM 电源请求使用 `kind: "power"` 和已配置的 `device_id`。每个包必须显式提供 `minor`（`query`／`set`）、`power_type`（`device`／`system`）、`power_state`（`D0`／`D3` 或 `working`／`sleeping3`）、`power_action`（`none`／`sleep`）、32 位整数或十六进制字符串 `system_context` 及 `bus_completion`。不支持 System Query 到 Working；拒绝文件、传输及取消字段。`system_context` 原样作为不透明事实保留，不用于推断父请求、休眠或快速启动。路径必须具有 `DO_POWER_PAGABLE` 且没有 `DO_POWER_INRUSH`；当前电源派发及 `PoRequestPowerIrp` 在 `PASSIVE_LEVEL` 执行。`PoCallDriver` 转发同一受管理的电源 IRP；`PoStartNextPowerIrp` 遵循 Vista+ 无额外串行化握手的契约。通用电源策略、WAIT_WAKE、其他状态／动作、关机／休眠、浪涌、不可分页路径、硬件及 KMDF PnP 不受支持。
+WDM 电源请求使用 `kind: "power"` 和已配置的 `device_id`。每个包必须显式提供 `minor`（`query`／`set`）、`power_type`（`device`／`system`）、`power_state`（`D0`／`D3` 或 `working`／`sleeping3`）、`power_action`（`none`／`sleep`）、32 位整数或十六进制字符串 `system_context` 及 `bus_completion`。不支持 System Query 到 Working；拒绝文件、传输及取消字段。`system_context` 原样作为不透明事实保留，不用于推断父请求、休眠或快速启动。路径必须具有 `DO_POWER_PAGABLE` 且没有 `DO_POWER_INRUSH`；当前电源派发及 `PoRequestPowerIrp` 在 `PASSIVE_LEVEL` 执行。`PoCallDriver` 转发同一受管理的电源 IRP；`PoStartNextPowerIrp` 遵循 Vista+ 无额外串行化握手的契约。通用电源策略、WAIT_WAKE、其他状态／动作、关机／休眠、浪涌、不可分页路径、通用硬件及 KMDF PnP 不受支持。
 
 每个 `pnp_devices` 条目可提供 `initial_reported_device_power: "D0"` 或 `"D3"`，与必填的初始生命周期 D0／working 独立。PDO 与首次关联的每个来宾 DEVICE_OBJECT 各有独立通知状态；`PoSetPowerState` 只返回并更新调用设备的前值。缺少该事实时，实际调用会失败，不猜测 D0。可选 `requested_device_power` 保存相同六项必填事实的 device 类型模板；所有 PDO 合计最多 64 项。只有实际 `PoRequestPowerIrp` 的 PDO、minor 和目标匹配该 PDO 的 FIFO 队首时才消费；缺失／不匹配报错，未消费条目不生成请求，也不根据回调 context 猜父请求。子请求有独立 IRP 和报告行，`origin: "PoRequestPowerIrp"` 及从零开始的 `response_index`；场景行使用 `origin: "scenario"` 和空索引。同步子请求可在 API 返回 `STATUS_PENDING` 前执行五参数 void 回调；回调可等待，System S0 可先于独立 D0 子请求完成。回调的 IO_STATUS_BLOCK 快照一直有效到回调返回。
 
@@ -155,6 +163,7 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 | `RtlCopyUnicodeString`、`RtlCompareUnicodeString`、`RtlEqualUnicodeString` | 带长度的 UTF-16 复制及区分大小写比较；不区分大小写的比较需要 Windows 大小写表，因此会停止 |
 | `ExAllocatePool2` | 分页／非分页 NX 分配，默认清零；支持未初始化与缓存行对齐标志；无效的必需标志返回 NULL，配额／可执行池以及分配失败引发异常的路径会停止 |
 | `MmGetSystemRoutineAddress` | 通过共享导出清单解析带长度的来宾名称 |
+| `MmMapIoSpace`, `MmMapIoSpaceEx`, `MmUnmapIoSpace` | 声明的转换后子区间；非缓存 RO／RW、共享别名、精确取消映射；不提供任意物理内存 |
 | `MmMapLockedPagesSpecifyCache`、`MmGetSystemAddressForMdlSafe`、`MmUnmapLockedPages` | 请求拥有的 MDL 支持 KernelMode 缓存映射及权限；非分页池 MDL 通过安全辅助函数复用原始池映射 |
 | `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | 独立描述符，完整范围须位于同一个有效非分页池分配内；描述符与缓冲区具有独立生命周期，不支持 IRP 关联、MDL 链或配额 |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | 显式配置的会话注册表、逐句柄权限与生命周期、查询缓冲区大小及修改；不访问宿主注册表 |
@@ -266,7 +275,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v11`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v12`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

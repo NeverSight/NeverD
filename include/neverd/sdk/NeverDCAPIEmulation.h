@@ -72,8 +72,15 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// and byte_offset; WRITE accepts input and byte_offset. Offsets default to
 /// zero, accept integers or 0x strings, and the entire transfer must fit
 /// nonnegative signed 64-bit file offsets. Configured pnp_devices require a
-/// unique case-sensitive ASCII id, bus="resource_free", initial_device_power=
-/// "D0" and initial_system_power="working". A kind="pnp" request requires
+/// unique case-sensitive ASCII id, bus="resource_free" or "register_bank",
+/// initial_device_power=
+/// "D0" and initial_system_power="working". The register_bank bus additionally
+/// requires a nonempty resources array: each id/raw_start/translated_start/length
+/// and registers array is explicit; each register requires offset/width/access/
+/// value. The bounded fixed assignments use exact aligned 1/2/4-byte read_only
+/// or read_write registers. Physical addresses are synthetic, never host memory.
+/// Register initial values persist across unmap/stop/restart. Resource-free
+/// devices omit resources. A kind="pnp" request requires
 /// device_id, minor (start/query_remove/cancel_remove/remove/query_stop/stop/
 /// cancel_stop/surprise_removal), and
 /// bus_completion with explicit final status (u32 or 0x string) and optional

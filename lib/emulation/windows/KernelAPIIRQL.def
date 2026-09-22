@@ -31,6 +31,12 @@ NEVERD_KERNEL_IRQL_VALUE(Any, dispatcher::HighLevel)
 NEVERD_KERNEL_IRQL_API(RtlCompareUnicodeString, Passive)
 NEVERD_KERNEL_IRQL_API(RtlEqualUnicodeString, Passive)
 NEVERD_KERNEL_IRQL_API(MmGetSystemRoutineAddress, Passive)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospace
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmapiospace
+NEVERD_KERNEL_IRQL_API(MmMapIoSpace, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmMapIoSpaceEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmUnmapIoSpace, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoCreateSymbolicLink, Passive)
 NEVERD_KERNEL_IRQL_API(IoDeleteSymbolicLink, Passive)
 

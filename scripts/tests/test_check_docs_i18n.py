@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v11",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v12",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):
@@ -191,6 +191,38 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         changed = original.replace("NeverDDriverEmulationPublicTests", "MissingPublicSuite")
         i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
         self.assertTrue(any("NeverDDriverEmulationPublicTests" in error for error in errors), errors)
+
+    def test_driver_resources_contract_and_evidence_remain_localized(self) -> None:
+        for file, tokens in (
+            ("driver-emulation.md", ("register_bank", "raw_start", "translated_start",
+                                      "DriverResources.h", "CM_RESOURCE_LIST",
+                                      "MmMapIoSpace", "MmMapIoSpaceEx", "MmUnmapIoSpace",
+                                      "driver-register-bank-scenario.json")),
+            ("architecture.md", ("DriverResources.def", "KernelMMIO",
+                                 "KernelModelResources", "UnicornBackend")),
+            ("testing.md", ("DriverResourceScenarioTests.cpp", "KernelMMIOTests.cpp",
+                            "KernelMMIOFailureTests.cpp",
+                            "KernelResourceBridgeTests.cpp", "UnicornMMIOTests.cpp",
+                            "DriverWDMResourceTests.cpp", "NEVERD_WDM_RESOURCE_FIXTURE",
+                            "NEVERD_WDM_RESOURCE_CFG_FIXTURE")),
+        ):
+            path = Path("docs/zh-CN") / file
+            original = i18n.RepositoryView(use_index=False).read_text(path)
+            for token in tokens:
+                with self.subTest(file=file, token=token):
+                    errors: list[str] = []
+                    changed = original.replace(token, "RemovedResourceContract")
+                    i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+                    self.assertTrue(any(token in error for error in errors), errors)
+
+    def test_driver_register_bank_example_matches_public_execution(self) -> None:
+        path = Path("docs/examples/driver-register-bank-scenario.json")
+        original = i18n.RepositoryView(use_index=False).read_text(path)
+        changed = original.replace('"value": "0x12"', '"value": "0x13"')
+        self.assertNotEqual(changed, original)
+        errors: list[str] = []
+        i18n.validate_driver_documents(errors, _OverlayView({path: changed}))
+        self.assertTrue(any("register-bank example differs" in error for error in errors), errors)
 
     def test_driver_remove_lock_contract_and_evidence_remain_localized(self) -> None:
         for file, tokens in (
