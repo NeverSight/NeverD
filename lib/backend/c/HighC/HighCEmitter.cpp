@@ -345,12 +345,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Store && E.Operands.size() >= 2) {
       std::string Type = memoryTypeName(E.Operands[1]->Type);
       validateMemoryAddressSpaceForC(E.MemoryAddressSpace, Opts.TheArch);
-      const bool NeedsHelper =
-          partialIntegerBytes(E.Operands[1]->Type) != 0 ||
-          E.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-          E.MemoryOrdering != NdMemoryOrdering::None;
-      if (NeedsHelper)
-        Names.insert(Type);
+      Names.insert(Type);
       if (E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         SegmentedMemoryTypes.insert({Type, E.MemoryAddressSpace});
       if (E.MemoryOrdering != NdMemoryOrdering::None)
@@ -384,12 +379,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
       if (Stmt.Kind == StmtKind::Store && Stmt.StoreVal) {
         std::string Type = memoryTypeName(Stmt.StoreVal->Type);
         validateMemoryAddressSpaceForC(Stmt.MemoryAddressSpace, Opts.TheArch);
-        const bool NeedsHelper =
-            partialIntegerBytes(Stmt.StoreVal->Type) != 0 ||
-            Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-            Stmt.MemoryOrdering != NdMemoryOrdering::None;
-        if (NeedsHelper)
-          Names.insert(Type);
+        Names.insert(Type);
         if (Stmt.MemoryAddressSpace != NdMemoryAddressSpace::Default)
           SegmentedMemoryTypes.insert({Type, Stmt.MemoryAddressSpace});
         if (Stmt.MemoryOrdering != NdMemoryOrdering::None)
@@ -401,12 +391,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
         const std::string Type = memoryTypeName(Stmt.Dst->Type);
         validateMemoryAddressSpaceForC(Stmt.Dst->MemoryAddressSpace,
                                        Opts.TheArch);
-        const bool NeedsHelper =
-            partialIntegerBytes(Stmt.Dst->Type) != 0 ||
-            Stmt.Dst->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-            Stmt.Dst->MemoryOrdering != NdMemoryOrdering::None;
-        if (NeedsHelper)
-          Names.insert(Type);
+        Names.insert(Type);
         if (Stmt.Dst->MemoryAddressSpace != NdMemoryAddressSpace::Default)
           SegmentedMemoryTypes.insert({Type, Stmt.Dst->MemoryAddressSpace});
         if (Stmt.Dst->MemoryOrdering != NdMemoryOrdering::None)
@@ -570,10 +555,9 @@ HighCWriter::memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr,
   const std::string Value = Ty && Ty->Kind == NdTypeKind::Ptr
                                 ? "(" + Type + ")(uintptr_t)(" + Val.str() + ")"
                                 : Val.str();
-  if (Ordering == NdMemoryOrdering::None &&
-      AddressSpace == NdMemoryAddressSpace::Default &&
-      partialIntegerBytes(Ty) == 0)
-    return "(*(" + Type + " *)(" + Addr.str() + ") = " + Value + ")";
+  // A machine address does not establish C alignment or effective type.
+  // The byte-copy helper also returns the stored value, so expression stores
+  // preserve their assignment result while evaluating address/value once.
   auto It = MemoryTypes.find(Type);
   if (It == MemoryTypes.end())
     llvm::report_fatal_error("HighC memory store type was not collected");

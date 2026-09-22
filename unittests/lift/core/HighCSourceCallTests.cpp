@@ -8,6 +8,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -80,7 +81,8 @@ std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true) {
   return Result;
 }
 
-void compileAndRun(const std::string &Source) {
+void compileAndRun(const std::string &Source,
+                   llvm::ArrayRef<llvm::StringRef> ExtraArguments = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -117,6 +119,7 @@ void compileAndRun(const std::string &Source) {
       SourcePath,
       "-o",
       BinaryPath};
+  Arguments.append(ExtraArguments.begin(), ExtraArguments.end());
   std::string Error;
   const int Compiled = llvm::sys::ExecuteAndWait(
       Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
@@ -126,7 +129,64 @@ void compileAndRun(const std::string &Source) {
                          << Source;
   const int Ran = llvm::sys::ExecuteAndWait(
       BinaryPath, {BinaryPath}, std::nullopt, Redirects, 30, 0, &Error);
-  ASSERT_EQ(Ran, 0) << Error << "\n" << Source;
+  const auto RuntimeErrors = llvm::MemoryBuffer::getFile(ErrorPath);
+  ASSERT_EQ(Ran, 0) << Error
+                    << (RuntimeErrors ? (*RuntimeErrors)->getBuffer().str()
+                                      : "")
+                    << "\n"
+                    << Source;
+}
+
+TEST(HighCSourceCalls,
+     UntypedStoresPreserveUnalignedBytesAndExpressionResults) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Address = NdType::makeInt(8, false);
+  std::vector<HighFunc> Functions;
+  for (unsigned Form = 0; Form < 3; ++Form) {
+    auto F = returning("raw_store_" + std::to_string(Form),
+                       HighExpr::makeLoad(parameter(0, Address), Word),
+                       {Address, Word});
+    if (Form == 1) {
+      auto Store = std::make_shared<HighExpr>();
+      Store->Kind = ExprKind::Store;
+      Store->Type = Word;
+      Store->Operands = {parameter(0, Address), parameter(1, Word)};
+      F.Body[0].RetVal = Store;
+    } else {
+      HighStmt Store;
+      if (Form == 0) {
+        Store.Kind = StmtKind::Store;
+        Store.StoreAddr = parameter(0, Address);
+        Store.StoreVal = parameter(1, Word);
+      } else {
+        Store.Kind = StmtKind::Assign;
+        Store.Dst = HighExpr::makeLoad(parameter(0, Address), Word);
+        Store.Val = parameter(1, Word);
+      }
+      F.Body.insert(F.Body.begin(), Store);
+    }
+    Functions.push_back(std::move(F));
+  }
+  const auto Source = emit(Functions) + R"(
+int main(void) {
+  _Alignas(16) unsigned char bytes[32];
+  uint64_t (*stores[])(uint64_t, uint64_t) = {raw_store_0, raw_store_1, raw_store_2};
+  for (unsigned i = 0; i != 3; ++i) {
+    memset(bytes, 0xA5, sizeof(bytes));
+    uint64_t expected = UINT64_C(0x9182736455463728) + i;
+    uint64_t result = stores[i]((uintptr_t)(bytes + 1), expected);
+    uint64_t actual;
+    memcpy(&actual, bytes + 1, sizeof(actual));
+    if (result != expected || actual != expected || bytes[0] != 0xA5 || bytes[9] != 0xA5)
+      return 1;
+  }
+  return 0;
+}
+)";
+  // Traps exercise alignment without requiring a sanitizer runtime library.
+  for (const llvm::StringRef Opt : {"-O0", "-O2"})
+    compileAndRun(Source,
+                  {Opt, "-fsanitize=alignment", "-fsanitize-trap=alignment"});
 }
 
 TEST(HighCSourceCalls, ExactNarrowZeroSuppliesOnlyPointerNullArguments) {
