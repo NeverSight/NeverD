@@ -19,10 +19,14 @@ except ImportError:
     from generate_swift_metadata_declarations import TARGETS, EXPORT_TARGETS
 
 
-METADATA_TYPES = ("Any", "String", "Bool", "Int", "Int8", "Int16", "Int32",
-                  "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64",
-                  "Float", "Double")
+METADATA_TYPES = ("Any", "AnyHashable", "String", "Bool", "Int", "Int8",
+                  "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                  "UInt32", "UInt64", "Float", "Double")
 HASHABLE_TYPES = tuple(name for name in METADATA_TYPES if name != "Any")
+
+
+def hashable_value(name):
+    return "Swift.AnyHashable(0)" if name == "AnyHashable" else f"Swift.{name}()"
 
 
 def metadata_storage(ir, probes):
@@ -221,7 +225,7 @@ def main():
             '@_silgen_name("neverd_hashable_probe") '
             'func observe<T: Hashable>(_ value: T)\n' + '\n'.join(
                 f'@_cdecl("{probe}") public func {probe}() {{ '
-                f'observe(Swift.{name}()) }}'
+                f'observe({hashable_value(name)}) }}'
                 for probe, name in zip(witnesses, HASHABLE_TYPES)) + '\n' +
             '@_silgen_name("neverd_string_protocol_probe") '
             'func observeStringProtocol<T: StringProtocol>(_ value: T)\n' +

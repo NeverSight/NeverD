@@ -169,7 +169,9 @@ def main():
             "#include <objc/objc-sync.h>\n#include <pthread.h>\n"
             "#include <dispatch/dispatch.h>\n#include <os/log.h>\n"
             "#import <LaunchServices/UTType.h>\n"
-            "#import <LaunchServices/UTCoreTypes.h>\n" +
+            "#import <LaunchServices/UTCoreTypes.h>\n"
+            "#import <UniformTypeIdentifiers/UTCoreTypes.h>\n"
+            "#import <WebKit/WKWebsiteDataRecord.h>\n" +
             # CALayer supplies the public layer constants without pulling in
             # OpenGLES headers absent from the command-line-tools SDK.
             "".join(f"#import <{name}/{'CALayer' if name == 'QuartzCore' else name}.h>\n"
@@ -203,6 +205,14 @@ def main():
     core_services = load_exports(sdk, ("CoreServices",))
     for common, extra in zip(exports, core_services):
         for name in ("kUTTagClassFilenameExtension", "kUTTypeImage"):
+            common[name] = extra[name]
+    uniform_types = load_exports(sdk, ("UniformTypeIdentifiers",))
+    webkit = load_exports(sdk, ("WebKit",))
+    for common, extra in zip(exports, uniform_types):
+        common["UTTypeGIF"] = extra["UTTypeGIF"]
+    for common, extra in zip(exports, webkit):
+        for name in ("WKWebsiteDataTypeDiskCache",
+                     "WKWebsiteDataTypeMemoryCache"):
             common[name] = extra[name]
     output, count = render(profiles, exports, version,
                            clang.string(clang.clang_getClangVersion()), version_match[0])
