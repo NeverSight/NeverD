@@ -84,6 +84,13 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "pp"},
+    // URL.pathExtension reads the URL value through swiftself and returns
+    // both words of the String value.
+    {"$s10Foundation3URLV13pathExtensionSSvg",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "(zz)C"},
     {"$s10Foundation3URLV19_bridgeToObjectiveCSo5NSURLCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
@@ -196,6 +203,14 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "pzC"},
+    // StringProtocol.caseInsensitiveCompare<String> carries five generic
+    // pointers and the String value address in swiftself.
+    {"$sSy10FoundationE22caseInsensitiveCompareySo18NSComparisonResultVqd__"
+     "SyRd__lF",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "zpppppC"},
     // Swift 6.1.2 emits StringProtocol.contains<String> as five ordinary
     // pointer carriers plus the haystack value in swiftself. The generic
     // conformance and metadata arguments remain explicit runtime inputs.

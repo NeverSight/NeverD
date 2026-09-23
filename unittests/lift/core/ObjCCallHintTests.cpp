@@ -2019,6 +2019,60 @@ TEST(ObjCCallHints,
   }
 }
 
+TEST(ObjCCallHints, FoundationURLPathAndStringComparisonKeepSwiftABI) {
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/Foundation.framework/Foundation";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (const auto &[Name, OrdinaryCount, ReturnBytes] :
+         {std::tuple{"$s10Foundation3URLV13pathExtensionSSvg", 0U, 16U},
+          std::tuple{"$sSy10FoundationE22caseInsensitiveCompareySo18NS"
+                     "ComparisonResultVqd__SyRd__lF",
+                     5U, 8U}}) {
+      SCOPED_TRACE(Name);
+      const std::string Import = "_" + std::string(Name);
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+      const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      const auto &Signature = Hint->Signature;
+      EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+      EXPECT_EQ(Signature.Convention,
+                SourceFunctionTypeHint::ConventionKind::Swift);
+      ASSERT_TRUE(Signature.ReturnType);
+      EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Signature.ReturnType->Size, ReturnBytes);
+      ASSERT_EQ(Signature.Parameters.size(), OrdinaryCount + 1);
+      for (unsigned I = 0; I < OrdinaryCount; ++I) {
+        EXPECT_EQ(Signature.Parameters[I].Type->Kind, NdTypeKind::Ptr);
+        EXPECT_EQ(Signature.Parameters[I].TheRole,
+                  SourceParameterTypeHint::Role::Ordinary);
+        EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                  TRI.IntParamRegs[I]);
+      }
+      const auto &Context = Signature.Parameters.back();
+      EXPECT_EQ(Context.Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Context.TheRole, SourceParameterTypeHint::Role::SwiftContext);
+      EXPECT_EQ(Context.Location.RegisterOffset,
+                Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+      if (ReturnBytes == 16) {
+        ASSERT_EQ(Signature.ReturnComponents.size(), 2U);
+        for (unsigned I = 0; I < 2; ++I)
+          EXPECT_EQ(Signature.ReturnComponents[I].RegisterOffset,
+                    TRI.IntReturnRegs[I]);
+      } else {
+        EXPECT_TRUE(Signature.ReturnComponents.empty());
+        EXPECT_EQ(Signature.ReturnLocation.RegisterOffset, TRI.IntReturnReg);
+      }
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+      auto Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Module = "/tmp/Foundation";
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    }
+  }
+}
+
 TEST(ObjCCallHints, StdlibAnyBridgesKeepCompilerObservedSwiftABI) {
   enum class Shape { IndirectAnyResult, GenericToObject };
   struct Bridge {
