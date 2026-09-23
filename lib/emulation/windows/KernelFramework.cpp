@@ -611,6 +611,26 @@ KernelFramework::advance(uint64_t Token) {
   if (I == Continuations.end() || PendingCall)
     return invalid("invalid framework callback continuation");
   auto &C = I->second;
+  auto NotifyStoppedQueue = [&]() {
+    for (auto &[Handle, Q] : Queues) {
+      if (!Q.StopComplete)
+        continue;
+      const bool DriverOwned =
+          std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+            return Entry.second.Queue == Handle && !Entry.second.Queued &&
+                   !Entry.second.Completed;
+          });
+      if (DriverOwned)
+        continue;
+      PendingCall = GuestCall{Token, Q.StopComplete, {Handle, Q.StopContext}};
+      Q.StopComplete = 0;
+      Q.StopContext = 0;
+      return true;
+    }
+    return false;
+  };
+  if (NotifyStoppedQueue())
+    return std::optional<uint64_t>{};
   while (C.Index < C.Steps.size()) {
     const Step S = C.Steps[C.Index++];
     if (S.Kind == StepKind::Callback) {
@@ -663,6 +683,11 @@ KernelFramework::advance(uint64_t Token) {
       R->second.Completed = true;
       R->second.Completing = false;
       R->second.Queue = 0;
+      if (NotifyStoppedQueue()) {
+        C.Steps.insert(C.Steps.begin() + C.Index,
+                       {StepKind::PresentQueue, QueueHandle});
+        return std::optional<uint64_t>{};
+      }
       auto Presented = presentQueued(QueueHandle, Token);
       if (!Presented)
         return Presented.takeError();

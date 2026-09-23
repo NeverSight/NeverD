@@ -188,6 +188,54 @@ TEST(DriverKMDFControl,
     }
 }
 
+TEST(DriverKMDFControl, StopCompletionCallbackRunsBeforeQueueRestart) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('V');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {0x11, 0x22, 0x33, 0x44};
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      Options.Requests[1].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      for (const auto &Message : Result->Messages)
+        SCOPED_TRACE(Message);
+      checkCompletedLifecycle(*Result, 7);
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'V', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(
+          Result->Requests[2].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'V', 0x4b, 0x78, 0x69, 0x1e}));
+      const auto Messages = controlMessages(*Result);
+      auto Position = [&](llvm::StringRef Needle) {
+        return std::find_if(Messages.begin(), Messages.end(),
+                            [&](const auto &Text) {
+                              return llvm::StringRef(Text).contains(Needle);
+                            });
+      };
+      const auto Stopped = Position("stop completion callback");
+      const auto Resumed = Position("resumed queued request");
+      const auto Restarted = Position("queue restarted after worker");
+      ASSERT_NE(Stopped, Messages.end());
+      ASSERT_NE(Resumed, Messages.end());
+      ASSERT_NE(Restarted, Messages.end());
+      EXPECT_LT(Stopped, Resumed);
+      EXPECT_LT(Resumed, Restarted);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueStop"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueStart"), 1u);
+      EXPECT_FALSE(
+          std::any_of(Messages.begin(), Messages.end(), [](const auto &Text) {
+            return Text.find("failure") != std::string::npos;
+          }));
+    }
+}
+
 TEST(DriverKMDFControl, ParallelQueueDeliversTwoPendingRequestsBeforeWorkers) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

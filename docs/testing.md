@@ -112,6 +112,16 @@ paused explicit retrieval, state counts, forwarding to a stopped nondefault
 automatic queue, and resuming all waiters on an unlimited parallel queue; a C
 API test covers the public sequential scenario.
 
+`DriverKMDFControl.StopCompletionCallbackRunsBeforeQueueRestart` uses a
+genuine WDK control driver to verify that a stop-completion callback receives
+its context only after the previously delivered request finishes, without
+waiting for a second request still queued. The callback runs before the worker
+restarts the queue, and the waiting request is then delivered from Start.
+Normal and active-CFG images run at preferred and relocated bases. Model tests
+also cover immediate notification on an idle queue, forwarding away the final
+delivered request, and rejection of a second pending registration; the C API
+exercises the callback path.
+
 `DriverKMDFControl.BoundedParallelQueueWaitsForPresentedCompletion` uses
 `NumberOfPresentedRequests=1`; the second handler runs only after the first
 worker completes. Normal/active-CFG and preferred/rebased images are covered.

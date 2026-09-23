@@ -50,9 +50,16 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
     if (Name == "WdfIoQueueStop") {
-      if (A[2])
-        return invalidQueue("stop-completion callbacks are not modeled");
+      if (A[2] && Q->second.StopComplete)
+        return invalidQueue("queue already has a stop-completion callback");
       Q->second.Dispatching = false;
+      if (A[2]) {
+        Q->second.StopComplete = A[2];
+        Q->second.StopContext = A[3];
+        auto Result = start({});
+        if (!Result)
+          return Result.takeError();
+      }
       return std::optional<uint64_t>{0};
     }
     if (Name == "WdfIoQueueStart") {
