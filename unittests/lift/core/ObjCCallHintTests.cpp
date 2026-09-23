@@ -2110,6 +2110,54 @@ TEST(ObjCCallHints, SwiftStringHashIntoKeepsInoutAndStringCarriers) {
   }
 }
 
+TEST(ObjCCallHints, SwiftHasherSeedAndFinalizeKeepSpecialCarriers) {
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (const auto &Name : {"$ss6HasherV5_seedABSi_tcfC",
+                             "$ss6HasherV9_finalizeSiyF"}) {
+      SCOPED_TRACE(Name);
+      const std::string Import = "_" + std::string(Name);
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+      const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      const auto &Signature = Hint->Signature;
+      EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+      EXPECT_EQ(Signature.Convention,
+                SourceFunctionTypeHint::ConventionKind::Swift);
+      const bool Seed = llvm::StringRef(Name).contains("_seed");
+      EXPECT_EQ(Signature.ReturnType->Kind,
+                Seed ? NdTypeKind::Void : NdTypeKind::Int);
+      ASSERT_EQ(Signature.Parameters.size(), Seed ? 2U : 1U);
+      if (Seed) {
+        EXPECT_EQ(Signature.Parameters[0].TheRole,
+                  SourceParameterTypeHint::Role::SwiftIndirectResult);
+        EXPECT_EQ(Signature.Parameters[0].Location.RegisterOffset,
+                  Architecture == Arch::AArch64 ? TRI.indirectResultReg()
+                                              : TRI.IntReturnReg);
+        EXPECT_EQ(Signature.Parameters[1].TheRole,
+                  SourceParameterTypeHint::Role::Ordinary);
+        EXPECT_EQ(Signature.Parameters[1].Type->Kind, NdTypeKind::Int);
+        EXPECT_EQ(Signature.Parameters[1].Location.RegisterOffset,
+                  TRI.IntParamRegs[0]);
+      } else {
+        EXPECT_EQ(Signature.ReturnType->Size, 8U);
+        EXPECT_EQ(Signature.ReturnLocation.RegisterOffset, TRI.IntReturnReg);
+        EXPECT_EQ(Signature.Parameters[0].TheRole,
+                  SourceParameterTypeHint::Role::SwiftContext);
+        EXPECT_EQ(Signature.Parameters[0].Location.RegisterOffset,
+                  Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+      }
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+      auto Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    }
+  }
+}
+
 TEST(ObjCCallHints, FoundationURLAppendingPathKeepsIndirectResultABI) {
   constexpr llvm::StringLiteral Name =
       "$s10Foundation3URLV22appendingPathComponentyACSSF";

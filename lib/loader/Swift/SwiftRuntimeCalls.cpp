@@ -240,6 +240,12 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftCore.dylib", "zz"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
      "/usr/lib/swift/libswiftCore.dylib", "ppp"},
+    // The Hasher's 72-byte value is returned through x8; the dictionary
+    // caller passes its seed in x0, then _finalize reads the value in x20.
+    {"$ss6HasherV5_seedABSi_tcfC", "/usr/lib/swift/libswiftCore.dylib",
+     "vIz"},
+    {"$ss6HasherV9_finalizeSiyF", "/usr/lib/swift/libswiftCore.dylib",
+     "zC"},
 };
 
 bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
