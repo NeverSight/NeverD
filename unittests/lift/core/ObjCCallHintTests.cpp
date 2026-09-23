@@ -1835,6 +1835,61 @@ TEST(ObjCCallHints, SwiftStringGutsGrowKeepsCapacityAndSwiftSelfABI) {
   }
 }
 
+TEST(ObjCCallHints, SwiftNSObjectEqualityKeepsMetadataContextABI) {
+  constexpr llvm::StringLiteral Name =
+      "$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ";
+  constexpr llvm::StringLiteral Provider =
+      "/usr/lib/swift/libswiftObjectiveC.dylib";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const std::string Import = "_" + Name.str();
+    auto Image = runtimeImage(Import, Architecture);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &Signature = Hint->Signature;
+    EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(Signature.ReturnType);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Signature.ReturnType->Size, 1U);
+    ASSERT_EQ(Signature.Parameters.size(), 3U);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (size_t I = 0; I < 2; ++I) {
+      EXPECT_EQ(Signature.Parameters[I].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.Parameters[I].TheRole,
+                SourceParameterTypeHint::Role::Ordinary);
+      EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                TRI.IntParamRegs[I]);
+    }
+    EXPECT_EQ(Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Signature.Parameters[2].TheRole,
+              SourceParameterTypeHint::Role::SwiftContext);
+    EXPECT_EQ(Signature.Parameters[2].Location.RegisterOffset,
+              Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+
+    auto Call = HighExpr::makeCall("untrusted", 0x2180,
+                                   {HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8)});
+    Call->Type = Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+    auto Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftObjectiveC.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Wrong, {}));
+    Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Wrong, {}));
+  }
+}
+
 TEST(ObjCCallHints, FoundationNSNumberIntegerLiteralKeepsMetatypeABI) {
   constexpr llvm::StringLiteral Name =
       "$sSo8NSNumberC10FoundationE14integerLiteralABSi_tcfC";

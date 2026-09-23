@@ -179,6 +179,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "pzC"},
+    // NSObject equality takes both objects in ordinary registers and the
+    // dynamically selected class metadata in swiftself.
+    {"$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ",
+     "/usr/lib/swift/libswiftObjectiveC.dylib", "bppC"},
     // Swift 6.1.2 emits StringProtocol.contains<String> as five ordinary
     // pointer carriers plus the haystack value in swiftself. The generic
     // conformance and metadata arguments remain explicit runtime inputs.
