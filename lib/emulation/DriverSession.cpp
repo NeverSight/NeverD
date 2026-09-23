@@ -22,6 +22,7 @@
 #include "windows/KernelSEH.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <array>
@@ -39,19 +40,19 @@ llvm::Error failure(const std::string &Text) {
 }
 
 std::string guestCallPhase(const GuestCallToken &Token) {
-  const char *Prefix = "callback:invalid";
+  const char *Prefix = InvalidCallbackPhase;
   switch (Token.Owner) {
   case GuestCallOwner::Framework:
-    Prefix = "callback:framework";
+    Prefix = FrameworkCallbackPhase;
     break;
   case GuestCallOwner::WDM:
-    Prefix = "callback:wdm";
+    Prefix = WDMCallbackPhase;
     break;
   case GuestCallOwner::DMA:
-    Prefix = "callback:dma";
+    Prefix = DMACallbackPhase;
     break;
   case GuestCallOwner::Interrupt:
-    Prefix = "callback:interrupt";
+    Prefix = InterruptCallbackPhase;
     break;
   }
   return std::string(Prefix) + std::to_string(Token.ID);
@@ -66,8 +67,12 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Options.TimeoutMilliseconds > MaxTimeoutMilliseconds ||
       Options.MemoryLimit > MaxMemoryLimit ||
       Options.EventLimit > MaxEventLimit)
-    return failure("driver limits must be positive (memory <= 1 GiB, events <= "
-                   "1000000, timeout <= 3600000 ms)");
+    return failure(llvm::formatv("driver limits must be positive (memory <= "
+                                 "{0} bytes, events <= {1}, timeout <= {2} "
+                                 "ms)",
+                                 MaxMemoryLimit, MaxEventLimit,
+                                 MaxTimeoutMilliseconds)
+                       .str());
   if (Options.ServiceName.empty() ||
       Options.ServiceName.size() > MaxServiceNameSize ||
       !std::all_of(Options.ServiceName.begin(), Options.ServiceName.end(),
@@ -75,8 +80,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                      return (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') ||
                             (C >= '0' && C <= '9') || C == '_' || C == '-';
                    }))
-    return failure("service name must contain 1..128 ASCII letters, digits, "
-                   "underscores or hyphens");
+    return failure(llvm::formatv("service name must contain 1..{0} ASCII "
+                                 "letters, digits, underscores or hyphens",
+                                 MaxServiceNameSize)
+                       .str());
   if (auto E = validateDriverScenario(Options))
     return std::move(E);
   KernelExportRegistry Exports;
@@ -977,7 +984,9 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         if (std::any_of(Waiting.begin(), Waiting.end(),
                         [](const auto &Frame) { return !Frame->Wait; }))
           continue;
-        if (!Foreground && Waiting.empty() && !Kernel.requestPending() &&
+        if (!Foreground && Waiting.empty() &&
+            !Kernel.requestPending(
+                0, KernelModel::PendingRequestScope::ExcludePowerParked) &&
             !Kernel.hasPendingHardwareWork()) {
           Result.Phase = ParentPhase;
           Result.Stop = DriverStopReason::Returned;
@@ -1089,11 +1098,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         }
     }
     std::vector<uint64_t> BatchedIRPs;
-    auto FinalizeBatch = [&]() -> llvm::Error {
-      for (uint64_t IRP : BatchedIRPs)
+    auto FinalizeBatch = [&](bool RequireCompleted = false) -> llvm::Error {
+      std::vector<uint64_t> Remaining;
+      for (uint64_t IRP : BatchedIRPs) {
+        if (!RequireCompleted && Kernel.requestPending(IRP)) {
+          Remaining.push_back(IRP);
+          continue;
+        }
         if (auto E = Kernel.finalizeRequest(IRP))
           return E;
-      BatchedIRPs.clear();
+      }
+      BatchedIRPs = std::move(Remaining);
       return llvm::Error::success();
     };
     for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
@@ -1210,7 +1225,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (auto E = DrainCallbacks())
         return std::move(E);
       if (Result.Stop == DriverStopReason::Returned)
-        if (auto E = FinalizeBatch())
+        if (auto E = FinalizeBatch(true))
           ModelFailure(std::move(E));
     }
     if (Result.Stop == DriverStopReason::Returned && Options.Unload &&

@@ -7,8 +7,10 @@
 /// \file
 /// A KMDF FDO and default I/O queue, linked through the genuine
 /// WDK entry library. Service suffixes M and T use default and explicit power
-/// management; R consumes one assigned memory resource, L leaves its mapping
-/// live, W attempts an invalid descriptor write, and F fails AddDevice.
+/// management; C completes a held request from EvtIoStop, A requeues it,
+/// V resumes it, G purges it on surprise removal, E leaves one
+/// unacknowledged, R consumes one assigned memory resource, L leaves its
+/// mapping live, W attempts an invalid descriptor write, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -40,15 +42,19 @@ ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
 ABI_SLOT(WdfIoQueueCreate, 152);
 ABI_SLOT(WdfIoQueueGetState, 153);
 ABI_SLOT(WdfRequestCompleteWithInformation, 265);
+ABI_SLOT(WdfRequestStopAcknowledge, 284);
 ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
 static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
+static ULONG DeliveryCount;
 
 static BOOLEAN UsesPowerQueue(VOID) {
-  return ServiceMode == L'M' || ServiceMode == L'T';
+  return ServiceMode == L'M' || ServiceMode == L'T' || ServiceMode == L'C' ||
+         ServiceMode == L'A' || ServiceMode == L'V' || ServiceMode == L'G' ||
+         ServiceMode == L'E';
 }
 
 static BOOLEAN UsesAssignedMemory(VOID) {
@@ -185,6 +191,28 @@ static VOID DriverUnload(WDFDRIVER Driver) {
   DbgPrint("KMDF PnP: driver unload\n");
 }
 
+static VOID DeviceIoStop(WDFQUEUE Queue, WDFREQUEST Request,
+                         ULONG ActionFlags) {
+  if (Queue != PowerQueue || !QueueIsPowerHeld(TRUE) ||
+      ActionFlags != (ServiceMode == L'G' ? WdfRequestStopActionPurge
+                                          : WdfRequestStopActionSuspend))
+    return;
+  DbgPrint("KMDF PnP: I/O stop\n");
+  if (ServiceMode == L'C' || ServiceMode == L'G')
+    WdfRequestCompleteWithInformation(Request, STATUS_CANCELLED, 0);
+  else if (ServiceMode == L'A' || ServiceMode == L'V')
+    WdfRequestStopAcknowledge(Request, ServiceMode == L'A');
+}
+
+static VOID DeviceIoResume(WDFQUEUE Queue, WDFREQUEST Request) {
+  DbgPrint("KMDF PnP: I/O resume\n");
+  WdfRequestCompleteWithInformation(Request,
+                                    Queue == PowerQueue && DeliveryCount == 1
+                                        ? STATUS_SUCCESS
+                                        : STATUS_INVALID_DEVICE_STATE,
+                                    0);
+}
+
 static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
                       size_t InputLength, ULONG Code) {
   UCHAR *Input;
@@ -200,6 +228,10 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
     WdfRequestCompleteWithInformation(Request, STATUS_INVALID_PARAMETER, 0);
     return;
   }
+  if (ServiceMode == L'C' || ServiceMode == L'G' || ServiceMode == L'E')
+    return;
+  if ((ServiceMode == L'A' || ServiceMode == L'V') && DeliveryCount++ == 0)
+    return;
   Status = WdfRequestRetrieveInputBuffer(Request, 1, (PVOID *)&Input, NULL);
   if (!NT_SUCCESS(Status)) {
     WdfRequestCompleteWithInformation(Request, Status, 0);
@@ -273,6 +305,11 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   else if (!UsesPowerQueue())
     QueueConfig.PowerManaged = WdfFalse;
   QueueConfig.EvtIoDeviceControl = IoControl;
+  if (ServiceMode == L'C' || ServiceMode == L'E' || ServiceMode == L'A' ||
+      ServiceMode == L'V' || ServiceMode == L'G')
+    QueueConfig.EvtIoStop = DeviceIoStop;
+  if (ServiceMode == L'V')
+    QueueConfig.EvtIoResume = DeviceIoResume;
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
   Attributes.ExecutionLevel = WdfExecutionLevelPassive;
   Attributes.SynchronizationScope = WdfSynchronizationScopeNone;
@@ -297,6 +334,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
           : L'S';
   PowerQueue = NULL;
   MappedResource = NULL;
+  DeliveryCount = 0;
   WDF_DRIVER_CONFIG_INIT(&Config, DeviceAdd);
   if (ServiceMode != L'N')
     Config.EvtDriverUnload = DriverUnload;

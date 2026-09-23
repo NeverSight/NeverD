@@ -9,11 +9,16 @@
 ///
 //===----------------------------------------------------------------------===//
 
-NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v54")
+NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v55")
 NEVERD_DRIVER_PROFILE_STRING(DefaultServiceName, "NeverDDriver")
 NEVERD_DRIVER_PROFILE_STRING(EntryPhase, "driver_entry")
 NEVERD_DRIVER_PROFILE_STRING(AddDevicePhase, "add_device:")
 NEVERD_DRIVER_PROFILE_STRING(RequestPhase, "request:")
 NEVERD_DRIVER_PROFILE_STRING(CallbackPhase, "callback:")
+NEVERD_DRIVER_PROFILE_STRING(InvalidCallbackPhase, "callback:invalid")
+NEVERD_DRIVER_PROFILE_STRING(FrameworkCallbackPhase, "callback:framework")
+NEVERD_DRIVER_PROFILE_STRING(WDMCallbackPhase, "callback:wdm")
+NEVERD_DRIVER_PROFILE_STRING(DMACallbackPhase, "callback:dma")
+NEVERD_DRIVER_PROFILE_STRING(InterruptCallbackPhase, "callback:interrupt")
 NEVERD_DRIVER_PROFILE_STRING(UnloadPhase, "unload")
 NEVERD_DRIVER_PROFILE_STRING(WriteSemantics, "attempted_guest_write")

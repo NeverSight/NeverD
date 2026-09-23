@@ -70,10 +70,15 @@ TEST_F(DriverKernelFrameworkQueue, FailedConfigurationsLeaveNoDefaultQueue) {
 }
 
 TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
-  for (uint64_t Offset : {48, 56, 64}) {
+  for (uint64_t Offset :
+       {framework::QueueConfigInternalDeviceControl, framework::QueueConfigStop,
+        framework::QueueConfigResume}) {
     queueConfiguration();
     put(QueueConfig + Offset, IoControlPC);
-    expectError(createQueue(), "not modeled");
+    expectError(createQueue(),
+                Offset == framework::QueueConfigInternalDeviceControl
+                    ? "not modeled"
+                    : "power-managed PnP queue");
   }
   queueConfiguration();
   put(QueueConfig + 4, 2, 4);

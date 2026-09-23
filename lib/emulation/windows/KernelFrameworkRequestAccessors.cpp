@@ -31,6 +31,20 @@ bool KernelFramework::ownsRequestIRP(uint64_t IRP) const {
   });
 }
 
+bool KernelFramework::isPowerParkedIRP(uint64_t IRP) const {
+  const auto Request =
+      std::find_if(Requests.begin(), Requests.end(),
+                   [&](const auto &Entry) { return Entry.second.IRP == IRP; });
+  if (Request == Requests.end() || Request->second.Completed)
+    return false;
+  auto Queue = Queues.find(Request->second.Queue);
+  if (Queue == Queues.end() || !Queue->second.PowerManaged)
+    return false;
+  auto Device = Devices.find(Queue->second.Device);
+  return Device != Devices.end() && Device->second.PowerQueuesHeld &&
+         (Request->second.Queued || Request->second.PowerSuspended);
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
                                       llvm::ArrayRef<uint64_t> A) {

@@ -136,6 +136,7 @@ public:
   }
   /// Framework-owned packets must complete through their WDF request lifetime.
   bool ownsRequestIRP(uint64_t IRP) const;
+  bool isPowerParkedIRP(uint64_t IRP) const;
   KernelFramework(GuestMemory &Memory, KernelExportRegistry &Exports,
                   Allocate AllocateStorage, Validate ValidateAccess,
                   Release ReleaseStorage)
@@ -256,6 +257,8 @@ private:
     bool Dispatching = true;
     uint64_t StopComplete = 0;
     uint64_t StopContext = 0;
+    uint64_t IoStop = 0;
+    uint64_t IoResume = 0;
     uint64_t DrainComplete = 0;
     uint64_t DrainContext = 0;
     uint64_t CanceledOnQueue = 0;
@@ -278,6 +281,8 @@ private:
     bool CanceledOnQueue = false;
     bool Completed = false;
     bool Completing = false;
+    bool StopAcknowledged = false;
+    bool PowerSuspended = false;
     uint32_t CompletionStatus = 0;
     uint64_t QueuedCallback = 0;
     std::vector<uint64_t> QueuedArguments;
@@ -346,19 +351,35 @@ private:
   std::map<uint64_t, uint64_t> CancelCallbacks;
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
-  enum class PnpPhase { PrepareHardware, D0Entry, D0Exit, ReleaseHardware };
+  enum class PnpPhase {
+    IoStop,
+    IoResume,
+    PrepareHardware,
+    D0Entry,
+    D0Exit,
+    ReleaseHardware
+  };
+  struct PnpStep {
+    PnpPhase Phase;
+    uint64_t Queue = 0;
+    uint64_t Request = 0;
+  };
   struct PnpTransition {
     uint64_t IRP = 0, Device = 0;
     bool Entering = false;
+    bool Removing = false;
+    bool CallbacksComplete = false;
     uint32_t Status = 0;
-    PnpPhase Current = PnpPhase::PrepareHardware;
-    std::deque<PnpPhase> Remaining;
+    PnpStep Current{PnpPhase::PrepareHardware};
+    std::deque<PnpStep> Remaining;
   };
   std::map<uint64_t, PnpTransition> PnpTransitions;
   std::optional<PnpCompletion> CompletedPnp;
   std::optional<GuestCall> PendingCall;
 
   llvm::Error schedulePnpCallback(uint64_t Token);
+  void appendPowerQueuePresentations(uint64_t Device,
+                                     std::vector<Step> &Steps) const;
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;
   llvm::Expected<RequestDispatch> queueDispatch(uint64_t QueueHandle,

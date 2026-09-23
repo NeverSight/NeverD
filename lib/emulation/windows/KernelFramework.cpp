@@ -163,30 +163,47 @@ llvm::Expected<bool> KernelFramework::beginPnpPowerTransition(
     return invalid("PnP START reached an already prepared device");
   if (Leaving && !D.InD0 && !D.HardwarePrepared)
     return false;
+  PnpTransition Transition{IRP, Handle->second, Entering,
+                           Minor == DevicePnpRequest::Remove ||
+                               Minor == DevicePnpRequest::SurpriseRemoval};
+  std::vector<PnpStep> Resumes;
   for (const auto &[QueueHandle, Queue] : Queues) {
     if (Queue.Device != Handle->second || !Queue.PowerManaged)
       continue;
-    if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
-          const auto &Request = Entry.second;
-          return Request.Queue == QueueHandle && !Request.Completed;
-        }))
-      return invalid("power-managed queue transition with a live request "
-                     "requires I/O stop or resume semantics");
+    for (const auto &[RequestHandle, Request] : Requests) {
+      if (Request.Queue != QueueHandle || Request.Completed)
+        continue;
+      if (Entering && Request.PowerSuspended) {
+        if (!Queue.IoResume)
+          return invalid("suspended request has no EvtIoResume callback");
+        Resumes.push_back({PnpPhase::IoResume, QueueHandle, RequestHandle});
+      }
+      if (!Leaving || Request.Queued)
+        continue;
+      if (Request.PowerSuspended)
+        return invalid("power transition found an already suspended request");
+      if (Request.InCallerContext || !Queue.IoStop)
+        return invalid("power-managed queue cannot leave D0 with a "
+                       "driver-owned request and no EvtIoStop");
+      Transition.Remaining.push_back(
+          {PnpPhase::IoStop, QueueHandle, RequestHandle});
+    }
   }
   if (Leaving)
     D.PowerQueuesHeld = true;
 
-  PnpTransition Transition{IRP, Handle->second, Entering};
   if (Entering) {
     if (D.PrepareHardware)
-      Transition.Remaining.push_back(PnpPhase::PrepareHardware);
+      Transition.Remaining.push_back({PnpPhase::PrepareHardware});
     if (D.D0Entry)
-      Transition.Remaining.push_back(PnpPhase::D0Entry);
+      Transition.Remaining.push_back({PnpPhase::D0Entry});
+    Transition.Remaining.insert(Transition.Remaining.end(), Resumes.begin(),
+                                Resumes.end());
   } else {
     if (D.InD0 && D.D0Exit)
-      Transition.Remaining.push_back(PnpPhase::D0Exit);
+      Transition.Remaining.push_back({PnpPhase::D0Exit});
     if (D.HardwarePrepared && D.ReleaseHardware)
-      Transition.Remaining.push_back(PnpPhase::ReleaseHardware);
+      Transition.Remaining.push_back({PnpPhase::ReleaseHardware});
   }
   if (!Transition.Remaining.empty() && NextContinuation == UINT64_MAX)
     return invalid("framework callback identity exhausted");
@@ -220,6 +237,24 @@ llvm::Expected<bool> KernelFramework::beginPnpPowerTransition(
       if (auto E = retireResourceLists(D))
         return std::move(E);
     }
+    if (Entering) {
+      std::vector<Step> Steps;
+      appendPowerQueuePresentations(Handle->second, Steps);
+      if (!Steps.empty()) {
+        if (NextContinuation == UINT64_MAX)
+          return invalid("framework callback identity exhausted");
+        const uint64_t Token = NextContinuation++;
+        Transition.CallbacksComplete = true;
+        Continuations.emplace(Token, Continuation{std::move(Steps)});
+        PnpTransitions.emplace(Token, std::move(Transition));
+        auto Next = advance(Token);
+        if (!Next)
+          return Next.takeError();
+        if (!Next->has_value())
+          return true;
+        PnpTransitions.erase(Token);
+      }
+    }
     return false;
   }
   const uint64_t Token = NextContinuation++;
@@ -228,6 +263,15 @@ llvm::Expected<bool> KernelFramework::beginPnpPowerTransition(
   if (auto E = schedulePnpCallback(Token))
     return E;
   return true;
+}
+
+void KernelFramework::appendPowerQueuePresentations(
+    uint64_t Device, std::vector<Step> &Steps) const {
+  for (const auto &[Handle, Queue] : Queues)
+    if (Queue.Device == Device && Queue.PowerManaged &&
+        Queue.Dispatch != QueueDispatchManual)
+      for (size_t I = 0; I < Queue.Pending.size(); ++I)
+        Steps.push_back({StepKind::PresentQueue, Handle});
 }
 
 llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
@@ -239,7 +283,31 @@ llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
   Transition.Remaining.pop_front();
   uint64_t Callback = 0;
   std::vector<uint64_t> Arguments{Transition.Device};
-  switch (Transition.Current) {
+  switch (Transition.Current.Phase) {
+  case PnpPhase::IoStop: {
+    auto Queue = Queues.find(Transition.Current.Queue);
+    auto Request = Requests.find(Transition.Current.Request);
+    if (Queue == Queues.end() || Request == Requests.end() ||
+        Request->second.Completed || Request->second.Queued)
+      return invalid("I/O stop callback lost its driver-owned request");
+    Callback = Queue->second.IoStop;
+    uint64_t Flags =
+        Transition.Removing ? RequestStopActionPurge : RequestStopActionSuspend;
+    if (Request->second.Cancellation == CancelState::Marked)
+      Flags |= RequestStopRequestCancelable;
+    Arguments = {Transition.Current.Queue, Transition.Current.Request, Flags};
+    break;
+  }
+  case PnpPhase::IoResume: {
+    auto Queue = Queues.find(Transition.Current.Queue);
+    auto Request = Requests.find(Transition.Current.Request);
+    if (Queue == Queues.end() || Request == Requests.end() ||
+        !Request->second.PowerSuspended || Request->second.Completed)
+      return invalid("I/O resume callback lost its suspended request");
+    Callback = Queue->second.IoResume;
+    Arguments = {Transition.Current.Queue, Transition.Current.Request};
+    break;
+  }
   case PnpPhase::PrepareHardware:
     Callback = D.PrepareHardware;
     Arguments.push_back(D.RawResources.Handle);
@@ -1187,40 +1255,62 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
   auto Transition = PnpTransitions.find(Token);
   if (Transition != PnpTransitions.end()) {
-    const uint32_t Status = uint32_t(Result);
-    if (Status == windows::StatusPending)
-      return invalid("PnP power callback returned STATUS_PENDING");
     auto Device = Devices.find(Transition->second.Device);
     if (Device == Devices.end() || CompletedPnp)
       return invalid("PnP power callback lost its device or completion");
     auto &State = Transition->second;
-    const bool Failed = Status & profile::NTStatusFailureMask;
-    if (Failed && !(State.Status & profile::NTStatusFailureMask))
-      State.Status = Status;
-    if (State.Entering && Failed &&
-        (State.Current == PnpPhase::PrepareHardware ||
-         State.Current == PnpPhase::D0Entry)) {
-      State.Remaining.clear();
-      if (Device->second.ReleaseHardware)
-        State.Remaining.push_back(PnpPhase::ReleaseHardware);
+    if (!State.CallbacksComplete) {
+      const bool StoppingRequest = State.Current.Phase == PnpPhase::IoStop;
+      const bool ResumingRequest = State.Current.Phase == PnpPhase::IoResume;
+      if (StoppingRequest) {
+        auto Request = Requests.find(State.Current.Request);
+        if (Request != Requests.end() && !Request->second.Completed) {
+          if (!Request->second.StopAcknowledged)
+            return invalid("EvtIoStop returned without completing or "
+                           "acknowledging its request");
+          Request->second.StopAcknowledged = false;
+        }
+      }
+      if (ResumingRequest)
+        if (auto Request = Requests.find(State.Current.Request);
+            Request != Requests.end())
+          Request->second.PowerSuspended = false;
+      const uint32_t Status = StoppingRequest || ResumingRequest
+                                  ? windows::StatusSuccess
+                                  : uint32_t(Result);
+      if (!StoppingRequest && !ResumingRequest &&
+          Status == windows::StatusPending)
+        return invalid("PnP power callback returned STATUS_PENDING");
+      const bool Failed = Status & profile::NTStatusFailureMask;
+      if (Failed && !(State.Status & profile::NTStatusFailureMask))
+        State.Status = Status;
+      if (State.Entering && Failed &&
+          (State.Current.Phase == PnpPhase::PrepareHardware ||
+           State.Current.Phase == PnpPhase::D0Entry)) {
+        State.Remaining.clear();
+        if (Device->second.ReleaseHardware)
+          State.Remaining.push_back({PnpPhase::ReleaseHardware});
+      }
+      if (!State.Remaining.empty()) {
+        if (auto E = schedulePnpCallback(Token))
+          return E;
+        return std::optional<uint64_t>{};
+      }
+      const bool Ready =
+          State.Entering && !(State.Status & profile::NTStatusFailureMask);
+      Device->second.HardwarePrepared = Ready;
+      Device->second.InD0 = Ready;
+      Device->second.PowerQueuesHeld = !Ready;
+      if (Ready)
+        appendPowerQueuePresentations(State.Device,
+                                      Continuations.at(Token).Steps);
+      if (!Ready) {
+        Device->second.ResourcesActive = false;
+        if (auto E = retireResourceLists(Device->second))
+          return std::move(E);
+      }
+      State.CallbacksComplete = true;
     }
-    if (!State.Remaining.empty()) {
-      if (auto E = schedulePnpCallback(Token))
-        return E;
-      return std::optional<uint64_t>{};
-    }
-    const bool Ready =
-        State.Entering && !(State.Status & profile::NTStatusFailureMask);
-    Device->second.HardwarePrepared = Ready;
-    Device->second.InD0 = Ready;
-    Device->second.PowerQueuesHeld = !Ready;
-    if (!Ready) {
-      Device->second.ResourcesActive = false;
-      if (auto E = retireResourceLists(Device->second))
-        return std::move(E);
-    }
-    CompletedPnp = PnpCompletion{State.IRP, State.Status};
-    PnpTransitions.erase(Transition);
   }
   auto Cancel = CancelCallbacks.find(Token);
   if (Cancel != CancelCallbacks.end() &&
@@ -1229,6 +1319,15 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
   auto Next = advance(Token);
   if (!Next)
     return Next.takeError();
+  if (Next->has_value()) {
+    auto Complete = PnpTransitions.find(Token);
+    if (Complete != PnpTransitions.end() &&
+        Complete->second.CallbacksComplete) {
+      CompletedPnp =
+          PnpCompletion{Complete->second.IRP, Complete->second.Status};
+      PnpTransitions.erase(Complete);
+    }
+  }
   if (*Next) {
     if (auto E = flushReadyNotifications())
       return std::move(E);

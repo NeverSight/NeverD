@@ -103,8 +103,12 @@ public:
   llvm::Error recordDispatchReturn(uint64_t IRP, uint32_t DispatchStatus);
   /// Finalization is idempotent only for an already finalized owned IRP.
   llvm::Error finalizeRequest(uint64_t IRP);
-  /// IRP=0 inspects all requests for the scheduler's drain boundary.
-  bool requestPending(uint64_t IRP = 0) const;
+  /// IRP=0 inspects all requests. The scheduler can exclude framework packets
+  /// parked by device power so a later START can produce their completion.
+  enum class PendingRequestScope { All, ExcludePowerParked };
+  bool
+  requestPending(uint64_t IRP = 0,
+                 PendingRequestScope Scope = PendingRequestScope::All) const;
   llvm::Expected<std::optional<KernelScheduler::Invocation>>
   nextScheduled(bool AdvanceTime,
                 std::optional<uint64_t> Deadline = std::nullopt);

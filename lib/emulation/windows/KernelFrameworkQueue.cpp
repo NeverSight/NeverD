@@ -464,8 +464,16 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (Dispatch == QueueDispatchParallel &&
       !Read32(QueueConfigPresentedRequests))
     return std::optional<uint64_t>{InvalidParameter};
-  if (Internal || Read64(QueueConfigStop) || Read64(QueueConfigResume))
-    return invalidQueue("internal and power callbacks are not modeled");
+  if (Internal)
+    return invalidQueue("internal-device-control callbacks are not modeled");
+  const uint64_t IoStop = Read64(QueueConfigStop);
+  const uint64_t IoResume = Read64(QueueConfigResume);
+  const bool EffectivePowerManagement =
+      Device.PDO && (PowerManaged == QueuePowerEnabled ||
+                     PowerManaged == QueuePowerUseDefault);
+  if ((IoStop || IoResume) && !EffectivePowerManagement)
+    return invalidQueue(
+        "I/O stop and resume require a power-managed PnP queue");
 
   // Effective inherited policies are not recorded by this object profile.
   // Require an explicit policy rather than claiming an inherited PASSIVE IRQL.
@@ -502,8 +510,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     Q.PresentedLimit = Read32(QueueConfigPresentedRequests);
   Q.AllowZeroLength = Config[QueueConfigAllowZeroLength] != 0;
   Q.IsDefault = IsDefault;
-  Q.PowerManaged = Device.PDO && (PowerManaged == QueuePowerEnabled ||
-                                  PowerManaged == QueuePowerUseDefault);
+  Q.PowerManaged = EffectivePowerManagement;
+  Q.IoStop = IoStop;
+  Q.IoResume = IoResume;
   Queues.emplace(*Handle, Q);
   if (IsDefault)
     Device.DefaultQueue = *Handle;

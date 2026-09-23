@@ -519,6 +519,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name != api::WdfRequestComplete &&
       Name != api::WdfRequestCompleteWithInformation &&
+      Name != api::WdfRequestStopAcknowledge &&
       Name != api::WdfRequestGetParameters &&
       Name != api::WdfRequestRetrieveInputBuffer &&
       Name != api::WdfRequestRetrieveOutputBuffer &&
@@ -540,6 +541,59 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
+  if (Name == api::WdfRequestStopAcknowledge) {
+    if (A[2] > 1)
+      return requestError(
+          "stop acknowledgment requires a Boolean requeue flag");
+    const auto Active = std::find_if(
+        PnpTransitions.begin(), PnpTransitions.end(), [&](const auto &Entry) {
+          return Entry.second.Current.Phase == PnpPhase::IoStop &&
+                 Entry.second.Current.Request == A[1];
+        });
+    if (Active == PnpTransitions.end() || R->second.StopAcknowledged ||
+        R->second.InCallerContext || R->second.Queued)
+      return requestError(
+          "stop acknowledgment requires the active EvtIoStop request");
+    auto Q = Queues.find(R->second.Queue);
+    if (Q == Queues.end() || !Q->second.PowerManaged ||
+        Q->first != Active->second.Current.Queue)
+      return requestError("stop acknowledgment lost its power-managed queue");
+    if (A[2]) {
+      if (R->second.Cancellation != CancelState::Unmarked)
+        return requestError("requeue requires an unmarked request");
+      std::optional<RequestDispatch> Dispatch;
+      if (Q->second.Dispatch != QueueDispatchManual) {
+        if (!RequestsHost.View)
+          return requestError("request inspection host is unavailable");
+        auto View = RequestsHost.View(R->second.IRP);
+        if (!View)
+          return View.takeError();
+        auto Planned = queueDispatch(Q->first, A[1], *View);
+        if (!Planned)
+          return Planned.takeError();
+        Dispatch = std::move(*Planned);
+      }
+      R->second.Queued = true;
+      if (Dispatch) {
+        R->second.QueuedCallback = Dispatch->PC;
+        R->second.QueuedArguments = std::move(Dispatch->Arguments);
+        if (!Dispatch->PC)
+          R->second.QueuedCompletionStatus = Dispatch->Status;
+      }
+      const bool WasEmpty = Q->second.Pending.empty();
+      Q->second.Pending.push_back(A[1]);
+      if (WasEmpty && Q->second.Dispatch == QueueDispatchManual &&
+          Q->second.ReadyNotify)
+        Q->second.ReadyPending = true;
+    } else {
+      if (!Q->second.IoResume)
+        return requestError(
+            "retained stop acknowledgment requires EvtIoResume");
+      R->second.PowerSuspended = true;
+    }
+    R->second.StopAcknowledged = true;
+    return Result{0};
+  }
   if (Name == api::WdfRequestForwardToIoQueue ||
       Name == api::WdfRequestRequeue) {
     const bool Requeue = Name == api::WdfRequestRequeue;

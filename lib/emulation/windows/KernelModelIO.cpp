@@ -249,11 +249,14 @@ KernelModel::requestForIRP(uint64_t IRP) const {
   return I == Requests.end() ? nullptr : &I->second;
 }
 
-bool KernelModel::requestPending(uint64_t IRP) const {
-  auto Pending = [](const ActiveRequest &Request) {
+bool KernelModel::requestPending(uint64_t IRP,
+                                 PendingRequestScope Scope) const {
+  auto Pending = [&](const ActiveRequest &Request) {
     return Request.DispatchReturned &&
            (!Request.Completed ||
-            (Request.ChildPower && !Request.ChildPower->CallbackReturned));
+            (Request.ChildPower && !Request.ChildPower->CallbackReturned)) &&
+           (Scope == PendingRequestScope::All || !Framework ||
+            !Framework->isPowerParkedIRP(Request.IRP));
   };
   if (IRP) {
     const auto *Request = requestForIRP(IRP);
