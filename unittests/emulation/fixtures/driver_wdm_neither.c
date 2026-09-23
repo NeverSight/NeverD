@@ -30,9 +30,11 @@ _Static_assert(sizeof(KMUTEX) == 56, "x64 KMUTEX ABI size");
 #define IO_IRQL 0x22203fu
 #define IO_MUTEX 0x222043u
 #define IO_MUTEX_INVALID 0x222047u
+#define IO_SYSTEM_THREAD 0x22204bu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
+static volatile UCHAR ThreadByte;
 
 typedef struct _WORKER_STATE {
   PIRP Irp;
@@ -53,6 +55,19 @@ typedef struct _WORKER_STATE {
 } WORKER_STATE;
 
 static WORKER_STATE WorkerState;
+
+static VOID SystemThreadStart(PVOID Context) {
+  volatile UCHAR *Result = (volatile UCHAR *)Context;
+  Result[0] =
+      KeGetCurrentIrql() == PASSIVE_LEVEL &&
+              ExGetPreviousMode() == KernelMode &&
+              (ULONG)(ULONG_PTR)PsGetCurrentProcessId() == 4 &&
+              (ULONG)(ULONG_PTR)PsGetProcessId(IoGetCurrentProcess()) == 4
+          ? 0xaf
+          : 0;
+  PsTerminateSystemThread(STATUS_SUCCESS);
+  Result[0] = 0;
+}
 
 static NTSTATUS Complete(PIRP Irp, NTSTATUS Status, ULONG_PTR Length) {
   Irp->IoStatus.Status = Status;
@@ -481,6 +496,39 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       Output[0] = 0x9e;
       Length = 1;
     }
+    break;
+  }
+  case IO_SYSTEM_THREAD: {
+    HANDLE Handle = NULL;
+    PVOID ThreadObject = NULL;
+    OBJECT_ATTRIBUTES Attributes;
+    InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL,
+                               NULL);
+    ThreadByte = 0;
+    NTSTATUS Created =
+        PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, &Attributes, NULL,
+                             NULL, SystemThreadStart, (PVOID)&ThreadByte);
+    if (!NT_SUCCESS(Created)) {
+      Status = Created;
+      break;
+    }
+    Status = ObReferenceObjectByHandle(Handle, SYNCHRONIZE, NULL, KernelMode,
+                                       &ThreadObject, NULL);
+    NTSTATUS Closed = ZwClose(Handle);
+    if (!NT_SUCCESS(Status) || !NT_SUCCESS(Closed)) {
+      if (ThreadObject)
+        ObDereferenceObject(ThreadObject);
+      Status = STATUS_INVALID_DEVICE_STATE;
+      break;
+    }
+    Status =
+        KeWaitForSingleObject(ThreadObject, Executive, KernelMode, FALSE, NULL);
+    ObDereferenceObject(ThreadObject);
+    if (NT_SUCCESS(Status) && ThreadByte == 0xaf) {
+      Output[0] = ThreadByte;
+      Length = 1;
+    } else
+      Status = STATUS_INVALID_DEVICE_STATE;
     break;
   }
   case IO_WORKER_LOCKED:

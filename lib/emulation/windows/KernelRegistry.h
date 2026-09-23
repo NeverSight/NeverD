@@ -32,6 +32,7 @@ public:
                                 llvm::ArrayRef<uint64_t> Arguments);
   std::optional<std::vector<DriverRegistryKey>> snapshot() const;
   bool hasOpenHandles() const { return !Handles.empty(); }
+  bool ownsHandle(uint64_t Handle) const { return Handles.contains(Handle); }
 
 private:
   struct Key {

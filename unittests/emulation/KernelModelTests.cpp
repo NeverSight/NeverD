@@ -159,6 +159,52 @@ TEST_F(DriverKernelModel, PoolOwnershipSurvivesBadTagAndRejectsUseAfterFree) {
             std::string::npos);
 }
 
+TEST_F(DriverKernelModel,
+       SystemThreadObjectSurvivesHandleCloseUntilExitAndWait) {
+  constexpr uint32_t ThreadAllAccess = 0x001fffff;
+  EXPECT_EQ(invoke("PsCreateSystemThread",
+                   {Scratch, ThreadAllAccess, 0, 0, 0, Entry, Scratch + 0x100}),
+            0u);
+  const uint64_t Handle = integer(Scratch);
+  ASSERT_NE(Handle, 0u);
+  EXPECT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Handle, 0x100000, 0, 0, Scratch + 8, 0}),
+            0u);
+  const uint64_t Object = integer(Scratch + 8);
+  ASSERT_NE(Object, 0u);
+  EXPECT_NE(denied(Object, 1).find("opaque thread"), std::string::npos);
+  EXPECT_EQ(invoke("ZwClose", {Handle}), 0u);
+  EXPECT_EQ(invoke("ZwClose", {Handle}), 0xc0000008u);
+  EXPECT_EQ(invoke("ObReferenceObjectByHandle",
+                   {Handle, 0x100000, 0, 0, Scratch + 16, 0}),
+            0xc0000008u);
+  EXPECT_EQ(invoke("KeWaitForSingleObject", {Object, 0, 0, 0, 0}), 0u);
+  auto Wait = Model->takeWait();
+  ASSERT_TRUE(Wait);
+  EXPECT_EQ(Wait->Type, KernelModel::Wait::Kind::Thread);
+  auto Invocation = Model->nextScheduled(false);
+  ASSERT_TRUE(bool(Invocation)) << llvm::toString(Invocation.takeError());
+  ASSERT_TRUE(*Invocation);
+  EXPECT_EQ((**Invocation).Kind, KernelScheduler::CallbackKind::SystemThread);
+  EXPECT_EQ((**Invocation).Object, Object);
+  Model->enterExecution(Scratch + 0x8000);
+  // The first completion attempt must not silently treat a normal return as
+  // a terminated system thread.
+  auto EarlyFinish = Model->finishScheduled((**Invocation).ID);
+  ASSERT_TRUE(bool(EarlyFinish));
+  EXPECT_NE(llvm::toString(std::move(EarlyFinish)).find("without PsTerminate"),
+            std::string::npos);
+  EXPECT_EQ(invoke("PsTerminateSystemThread", {0x1234}), 0u);
+  ASSERT_EQ(Model->takeThreadTermination(), std::optional<uint32_t>(0x1234));
+  success(Model->finishScheduled((**Invocation).ID));
+  auto Status = Model->pollWait(*Wait);
+  ASSERT_TRUE(bool(Status)) << llvm::toString(Status.takeError());
+  ASSERT_TRUE(*Status);
+  EXPECT_EQ(**Status, 0u);
+  EXPECT_EQ(invoke("ObfDereferenceObject", {Object}), 0u);
+  EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+}
+
 TEST_F(DriverKernelModel, MDLMappingIgnoresUnspecifiedNarrowArgumentHighBits) {
   using namespace windows;
   invoke("IoCreateDevice",
