@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "KernelFramework.h"
+#include "KernelResources.h"
 
 namespace neverd::emulation {
 namespace {
@@ -68,9 +69,16 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       if (Object.Binding != B.Globals || Object.Deleting ||
           !Device.ResourcesActive)
         continue;
-      if (A[1] == Device.RawResourceList ||
-          A[1] == Device.TranslatedResourceList)
-        return Result{0};
+      for (const ResourceList *List :
+           {&Device.RawResources, &Device.TranslatedResources})
+        if (A[1] == List->Handle) {
+          if (Name == api::WdfCmResourceListGetCount)
+            return Result{List->Count};
+          return Result{A[2] < List->Count
+                            ? List->Descriptors +
+                                  A[2] * resources::ResourceDescriptorSize
+                            : 0};
+        }
     }
     return controlError("resource-list query requires a live assigned list");
   }

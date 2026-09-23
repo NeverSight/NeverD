@@ -268,7 +268,9 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
       !Request->DeviceRoute.empty() &&
       FrameworkDevices.count(Request->DeviceRoute.front())) {
     auto Deferred = Framework->beginPnpPowerTransition(
-        Request->PnpDevice, IRP, Request->PnpOperation->Minor);
+        Request->PnpDevice, IRP, Request->PnpOperation->Minor,
+        Request->RawResources, Request->TranslatedResources,
+        Request->ResourceListSize);
     if (!Deferred)
       return Deferred.takeError();
     Request->FrameworkPnpHandled = !*Deferred;

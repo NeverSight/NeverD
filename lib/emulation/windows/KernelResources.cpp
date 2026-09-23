@@ -62,13 +62,14 @@ KernelResources::resourceList(uint64_t PDO, bool Translated) const {
     for (unsigned I = 0; I < Size; ++I)
       Bytes[Offset + I] = uint8_t(Value >> (I * 8));
   };
-  Put(resources::ResourceCountOffset, 1, 4);
+  Put(resources::ResourceCountOffset, resources::SupportedFullDescriptorCount,
+      resources::ResourceCountFieldSize);
   Put(resources::ResourceInterfaceOffset, resources::InterfaceInternal, 4);
   Put(resources::ResourceBusOffset, 0, 4);
   Put(resources::ResourceVersionOffset, 1, 2);
   Put(resources::ResourceRevisionOffset, 1, 2);
   Put(resources::ResourcePartialCountOffset,
-      Resources.size() + Interrupts.size(), 4);
+      Resources.size() + Interrupts.size(), resources::ResourceCountFieldSize);
   for (size_t I = 0; I < Resources.size(); ++I) {
     const auto &Resource = Resources[I];
     const uint64_t Base =

@@ -158,7 +158,10 @@ public:
   /// The provider has completed successfully, but the framework may still
   /// need to run guest hardware and D0 callbacks before the IRP can unwind.
   llvm::Expected<bool> beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
-                                               DevicePnpRequest Minor);
+                                               DevicePnpRequest Minor,
+                                               uint64_t RawResources,
+                                               uint64_t TranslatedResources,
+                                               uint64_t ResourceListSize);
   std::optional<PnpCompletion> takePnpCompletion();
   static std::optional<unsigned>
   argumentCount(const KernelExportRegistry::Export &Export);
@@ -216,6 +219,11 @@ private:
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
+  struct ResourceList {
+    uint64_t Handle = 0;
+    uint64_t Descriptors = 0;
+    uint32_t Count = 0;
+  };
   struct Device {
     uint64_t Wdm = 0, PDO = 0;
     uint64_t DefaultQueue = 0;
@@ -224,13 +232,17 @@ private:
     bool HasLink = false;
     uint64_t D0Entry = 0, D0Exit = 0;
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;
-    uint64_t RawResourceList = 0, TranslatedResourceList = 0;
+    ResourceList RawResources, TranslatedResources;
     bool HardwarePrepared = false;
     bool ResourcesActive = false;
     bool InD0 = false;
     bool PowerQueuesHeld = true;
   };
   std::map<uint64_t, Device> Devices;
+  llvm::Expected<ResourceList> createResourceList(uint64_t Source,
+                                                  uint64_t Size);
+  llvm::Error retireResourceList(ResourceList &List);
+  llvm::Error retireResourceLists(Device &D);
   std::map<uint64_t, uint64_t> PnpDeviceHandles;
   struct Queue {
     uint64_t Device = 0;

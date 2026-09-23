@@ -5,9 +5,10 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// A resource-free KMDF FDO and default I/O queue, linked through the genuine
+/// A KMDF FDO and default I/O queue, linked through the genuine
 /// WDK entry library. Service suffixes M and T use default and explicit power
-/// management; F returns an AddDevice failure after creating the FDO.
+/// management; R consumes one assigned memory resource, L leaves its mapping
+/// live, W attempts an invalid descriptor write, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -21,6 +22,10 @@
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 enum { ResponseSize = 4 };
+static const ULONGLONG RawMemoryStart = 0x200000000ULL;
+static const ULONGLONG TranslatedMemoryStart = 0x300000000ULL;
+static const ULONG MemoryLength = 0x1000;
+static const ULONG InitialRegisterValue = 0x12345678;
 
 ABI_SLOT(WdfDeviceWdmGetPhysicalDevice, 33);
 ABI_SLOT(WdfDeviceWdmGetAttachedDevice, 32);
@@ -40,9 +45,14 @@ ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
 static WDFQUEUE PowerQueue;
+static PVOID MappedResource;
 
 static BOOLEAN UsesPowerQueue(VOID) {
   return ServiceMode == L'M' || ServiceMode == L'T';
+}
+
+static BOOLEAN UsesAssignedMemory(VOID) {
+  return ServiceMode == L'R' || ServiceMode == L'L' || ServiceMode == L'W';
 }
 
 static BOOLEAN QueueIsPowerHeld(BOOLEAN Expected) {
@@ -82,6 +92,41 @@ static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
 static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
+  if (UsesAssignedMemory()) {
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR RawDescriptor;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR TranslatedDescriptor;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || Raw == NULL ||
+        Translated == NULL || Raw == Translated || MappedResource != NULL ||
+        WdfCmResourceListGetCount(Raw) != 1 ||
+        WdfCmResourceListGetCount(Translated) != 1)
+      return STATUS_INVALID_DEVICE_STATE;
+    RawDescriptor = WdfCmResourceListGetDescriptor(Raw, 0);
+    TranslatedDescriptor = WdfCmResourceListGetDescriptor(Translated, 0);
+    if (RawDescriptor == NULL || TranslatedDescriptor == NULL ||
+        WdfCmResourceListGetDescriptor(Raw, 1) != NULL ||
+        WdfCmResourceListGetDescriptor(Translated, 1) != NULL ||
+        RawDescriptor->Type != CmResourceTypeMemory ||
+        TranslatedDescriptor->Type != CmResourceTypeMemory ||
+        RawDescriptor->u.Memory.Start.QuadPart != RawMemoryStart ||
+        TranslatedDescriptor->u.Memory.Start.QuadPart !=
+            TranslatedMemoryStart ||
+        RawDescriptor->u.Memory.Length != MemoryLength ||
+        TranslatedDescriptor->u.Memory.Length != MemoryLength)
+      return STATUS_INVALID_DEVICE_STATE;
+    if (ServiceMode == L'W') {
+      *((volatile UCHAR *)&TranslatedDescriptor->Type) = CmResourceTypePort;
+      return STATUS_SUCCESS;
+    }
+    MappedResource =
+        MmMapIoSpace(TranslatedDescriptor->u.Memory.Start,
+                     TranslatedDescriptor->u.Memory.Length, MmNonCached);
+    if (MappedResource == NULL ||
+        READ_REGISTER_ULONG((volatile ULONG *)MappedResource) !=
+            InitialRegisterValue)
+      return STATUS_INVALID_DEVICE_STATE;
+    DbgPrint("KMDF PnP: mapped hardware\n");
+    return STATUS_SUCCESS;
+  }
   if (KeGetCurrentIrql() != PASSIVE_LEVEL || Raw == NULL ||
       Translated == NULL || Raw == Translated ||
       WdfCmResourceListGetCount(Raw) != 0 ||
@@ -96,6 +141,22 @@ static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
 static NTSTATUS DeviceReleaseHardware(WDFDEVICE Device,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
+  if (ServiceMode == L'R' || ServiceMode == L'L') {
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || Translated == NULL ||
+        MappedResource == NULL || WdfCmResourceListGetCount(Translated) != 1)
+      return STATUS_INVALID_DEVICE_STATE;
+    Descriptor = WdfCmResourceListGetDescriptor(Translated, 0);
+    if (Descriptor == NULL || Descriptor->Type != CmResourceTypeMemory ||
+        Descriptor->u.Memory.Length != MemoryLength)
+      return STATUS_INVALID_DEVICE_STATE;
+    if (ServiceMode == L'L')
+      return STATUS_SUCCESS;
+    MmUnmapIoSpace(MappedResource, Descriptor->u.Memory.Length);
+    MappedResource = NULL;
+    DbgPrint("KMDF PnP: unmapped hardware\n");
+    return STATUS_SUCCESS;
+  }
   if (KeGetCurrentIrql() != PASSIVE_LEVEL || Translated == NULL ||
       WdfCmResourceListGetCount(Translated) != 0 ||
       WdfCmResourceListGetDescriptor(Translated, 0) != NULL)
@@ -171,13 +232,14 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
-  if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesPowerQueue() ||
-      ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J' ||
-      ServiceMode == L'U') {
+  if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
+      UsesPowerQueue() || ServiceMode == L'H' || ServiceMode == L'I' ||
+      ServiceMode == L'J' || ServiceMode == L'U') {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
-    if (ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J') {
+    if (ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J' ||
+        UsesAssignedMemory()) {
       PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
       PnpCallbacks.EvtDeviceReleaseHardware = DeviceReleaseHardware;
     }
@@ -234,6 +296,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
           ? RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1]
           : L'S';
   PowerQueue = NULL;
+  MappedResource = NULL;
   WDF_DRIVER_CONFIG_INIT(&Config, DeviceAdd);
   if (ServiceMode != L'N')
     Config.EvtDriverUnload = DriverUnload;

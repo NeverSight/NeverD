@@ -16,9 +16,12 @@
 
 #include "KernelFramework.h"
 
+#include "KernelResources.h"
 #include "WindowsKernelLayout.h"
 
 #include "neverd/emulation/DriverProfile.h"
+
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <limits>
@@ -135,9 +138,9 @@ llvm::Error KernelFramework::removePnpDevice(uint64_t PDO) {
   return llvm::Error::success();
 }
 
-llvm::Expected<bool>
-KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
-                                         DevicePnpRequest Minor) {
+llvm::Expected<bool> KernelFramework::beginPnpPowerTransition(
+    uint64_t PDO, uint64_t IRP, DevicePnpRequest Minor, uint64_t RawResources,
+    uint64_t TranslatedResources, uint64_t ResourceListSize) {
   auto Handle = PnpDeviceHandles.find(PDO);
   if (Handle == PnpDeviceHandles.end())
     return invalid("PnP power transition lost its framework device");
@@ -189,24 +192,34 @@ KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
     return invalid("framework callback identity exhausted");
 
   if (Entering && (D.PrepareHardware || D.ReleaseHardware)) {
-    if (!D.RawResourceList) {
-      auto Raw = allocate(HandleSize, false, true);
-      if (!Raw)
-        return Raw.takeError();
-      auto Translated = allocate(HandleSize, false, true);
-      if (!Translated)
-        return llvm::joinErrors(Translated.takeError(), retire(*Raw));
-      D.RawResourceList = *Raw;
-      D.TranslatedResourceList = *Translated;
+    if (D.RawResources.Handle || D.TranslatedResources.Handle)
+      return invalid("previous hardware resource lists remain live");
+    auto Raw = createResourceList(RawResources, ResourceListSize);
+    if (!Raw)
+      return Raw.takeError();
+    auto Translated = createResourceList(TranslatedResources, ResourceListSize);
+    if (!Translated) {
+      auto E = Translated.takeError();
+      return llvm::joinErrors(std::move(E), retireResourceList(*Raw));
     }
+    if (Raw->Count != Translated->Count) {
+      auto E = invalid("raw and translated resource counts differ");
+      return joinedErrors(std::move(E), retireResourceList(*Raw),
+                          retireResourceList(*Translated));
+    }
+    D.RawResources = *Raw;
+    D.TranslatedResources = *Translated;
     D.ResourcesActive = true;
   }
   if (Transition.Remaining.empty()) {
     D.HardwarePrepared = Entering;
     D.InD0 = Entering;
     D.PowerQueuesHeld = !Entering;
-    if (!Entering)
+    if (!Entering) {
       D.ResourcesActive = false;
+      if (auto E = retireResourceLists(D))
+        return std::move(E);
+    }
     return false;
   }
   const uint64_t Token = NextContinuation++;
@@ -229,8 +242,8 @@ llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
   switch (Transition.Current) {
   case PnpPhase::PrepareHardware:
     Callback = D.PrepareHardware;
-    Arguments.push_back(D.RawResourceList);
-    Arguments.push_back(D.TranslatedResourceList);
+    Arguments.push_back(D.RawResources.Handle);
+    Arguments.push_back(D.TranslatedResources.Handle);
     break;
   case PnpPhase::D0Entry:
     Callback = D.D0Entry;
@@ -242,7 +255,7 @@ llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
     break;
   case PnpPhase::ReleaseHardware:
     Callback = D.ReleaseHardware;
-    Arguments.push_back(D.TranslatedResourceList);
+    Arguments.push_back(D.TranslatedResources.Handle);
     break;
   }
   if (!Callback)
@@ -335,6 +348,61 @@ llvm::Error KernelFramework::retire(uint64_t Address) {
   return llvm::Error::success();
 }
 
+llvm::Expected<KernelFramework::ResourceList>
+KernelFramework::createResourceList(uint64_t Source, uint64_t Size) {
+  if (bool(Source) != bool(Size))
+    return invalid("hardware resource list address and size disagree");
+  uint32_t Count = 0;
+  std::vector<uint8_t> Descriptors;
+  if (Source) {
+    if (Size < resources::ResourceHeaderSize ||
+        (Size - resources::ResourceHeaderSize) %
+            resources::ResourceDescriptorSize)
+      return invalid("invalid hardware resource list size");
+    auto FullCount = read(Source + resources::ResourceCountOffset,
+                          resources::ResourceCountFieldSize);
+    auto PartialCount = read(Source + resources::ResourcePartialCountOffset,
+                             resources::ResourceCountFieldSize);
+    if (!FullCount || !PartialCount)
+      return joinedErrors(FullCount.takeError(), PartialCount.takeError());
+    const uint64_t Expected = (Size - resources::ResourceHeaderSize) /
+                              resources::ResourceDescriptorSize;
+    if (*FullCount != resources::SupportedFullDescriptorCount ||
+        *PartialCount != Expected ||
+        Expected > std::numeric_limits<uint32_t>::max())
+      return invalid("unsupported hardware resource list layout");
+    Count = uint32_t(Expected);
+    Descriptors.resize(Count * resources::ResourceDescriptorSize);
+    if (auto E =
+            Memory.read(Source + resources::ResourceHeaderSize, Descriptors))
+      return std::move(E);
+  }
+  auto Handle = allocate(HandleSize, false, true);
+  if (!Handle)
+    return Handle.takeError();
+  uint64_t Address = 0;
+  if (!Descriptors.empty()) {
+    auto Region = allocate(Descriptors.size(), false, false);
+    if (!Region)
+      return llvm::joinErrors(Region.takeError(), retire(*Handle));
+    Address = *Region;
+    if (auto E = Memory.write(Address, Descriptors))
+      return joinedErrors(std::move(E), retire(Address), retire(*Handle));
+  }
+  return ResourceList{*Handle, Address, Count};
+}
+
+llvm::Error KernelFramework::retireResourceList(ResourceList &List) {
+  auto E = llvm::joinErrors(retire(List.Descriptors), retire(List.Handle));
+  List = {};
+  return E;
+}
+
+llvm::Error KernelFramework::retireResourceLists(Device &D) {
+  return llvm::joinErrors(retireResourceList(D.RawResources),
+                          retireResourceList(D.TranslatedResources));
+}
+
 llvm::Error KernelFramework::validateGuestAccess(uint64_t Address,
                                                  uint32_t Size,
                                                  bool IsWrite) const {
@@ -382,10 +450,13 @@ llvm::Expected<uint64_t> KernelFramework::bind(llvm::ArrayRef<uint64_t> A) {
     return joinedErrors(Component.takeError(), Major.takeError(),
                         Minor.takeError(), Build.takeError(), Count.takeError(),
                         TableSlot.takeError(), Module.takeError());
-  if (*Major != MajorVersion || *Minor != MinorVersion || *Build ||
-      *Count != FunctionCount)
-    return invalid(
-        "unsupported framework version or function count; expected 1.33.0/458");
+  if (*Major != MajorVersion || *Minor != MinorVersion ||
+      *Build != BuildVersion || *Count != FunctionCount)
+    return invalid(llvm::formatv("unsupported framework version or function "
+                                 "count; expected {0}.{1}.{2}/{3}",
+                                 MajorVersion, MinorVersion, BuildVersion,
+                                 FunctionCount)
+                       .str());
   if (*Module)
     return invalid("binding record already contains a module identity");
   for (size_t I = 0; I <= FrameworkComponent.size(); ++I) {
@@ -1066,9 +1137,7 @@ KernelFramework::advance(uint64_t Token) {
         return invalid("framework device host is not configured");
       if (auto E = DevicesHost.Delete(Devices.at(S.Object).Wdm))
         return E;
-      if (auto E = retire(Devices.at(S.Object).RawResourceList))
-        return E;
-      if (auto E = retire(Devices.at(S.Object).TranslatedResourceList))
+      if (auto E = retireResourceLists(Devices.at(S.Object)))
         return E;
       if (Devices.at(S.Object).PDO)
         PnpDeviceHandles.erase(Devices.at(S.Object).PDO);
@@ -1145,8 +1214,11 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
     Device->second.HardwarePrepared = Ready;
     Device->second.InD0 = Ready;
     Device->second.PowerQueuesHeld = !Ready;
-    if (!Ready)
+    if (!Ready) {
       Device->second.ResourcesActive = false;
+      if (auto E = retireResourceLists(Device->second))
+        return std::move(E);
+    }
     CompletedPnp = PnpCompletion{State.IRP, State.Status};
     PnpTransitions.erase(Transition);
   }

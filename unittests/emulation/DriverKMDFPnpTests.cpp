@@ -23,6 +23,10 @@ namespace {
 #ifdef NEVERD_KMDF_PNP_FIXTURE
 constexpr uint32_t TransformIoctl = 0x222000;
 constexpr llvm::StringLiteral DeviceID = "kmdf-pdo";
+constexpr uint64_t RawRegisterBase = 0x200000000ULL;
+constexpr uint64_t TranslatedRegisterBase = 0x300000000ULL;
+constexpr uint32_t RegisterRegionSize = 0x1000;
+constexpr uint32_t InitialRegisterValue = 0x12345678;
 
 std::vector<const char *> pnpImages() {
   std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
@@ -73,6 +77,21 @@ DriverOptions options(char Mode = 'S') {
                         pnp(DevicePnpRequest::Remove, 7)};
   }
   return Options;
+}
+
+DriverOptions resourceOptions(char Mode) {
+  auto Input = options(Mode);
+  auto &Device = Input.PnpDevices.front();
+  Device.Bus = DriverBusKind::RegisterBank;
+  DriverMemoryResource Bank;
+  Bank.ID = "registers";
+  Bank.RawStart = RawRegisterBase;
+  Bank.TranslatedStart = TranslatedRegisterBase;
+  Bank.Length = RegisterRegionSize;
+  Bank.Registers = {
+      {0, 4, DriverRegisterAccess::ReadOnly, InitialRegisterValue}};
+  Device.Resources.push_back(Bank);
+  return Input;
 }
 
 std::vector<std::string> pnpMessages(const DriverResult &Result) {
@@ -266,6 +285,63 @@ TEST(DriverKMDFPnp, PowerManagedQueuesTrackD0AcrossStopAndRestart) {
                 "KMDF PnP: D0 exit\n", "KMDF PnP: device cleanup\n",
                 "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
       }
+}
+
+TEST(DriverKMDFPnp, AssignedMemoryIsVisibleUntilReleaseHardware) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Input = resourceOptions('R');
+      Input.LoadAddress = Base;
+      Input.Requests = {
+          pnp(DevicePnpRequest::Start, 11),   pnp(DevicePnpRequest::QueryStop),
+          pnp(DevicePnpRequest::Stop),        pnp(DevicePnpRequest::Start),
+          pnp(DevicePnpRequest::QueryRemove), pnp(DevicePnpRequest::Remove, 7)};
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+      for (const auto &Request : Result->Requests)
+        EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+      EXPECT_EQ(callCount(*Result, "WdfCmResourceListGetCount"), 6u);
+      EXPECT_EQ(callCount(*Result, "WdfCmResourceListGetDescriptor"), 10u);
+      EXPECT_EQ(callCount(*Result, "MmMapIoSpace"), 2u);
+      EXPECT_EQ(callCount(*Result, "MmUnmapIoSpace"), 2u);
+      EXPECT_EQ(
+          pnpMessages(*Result),
+          (std::vector<std::string>{
+              "KMDF PnP: device ready\n", "KMDF PnP: mapped hardware\n",
+              "KMDF PnP: D0 entry\n", "KMDF PnP: D0 exit\n",
+              "KMDF PnP: unmapped hardware\n", "KMDF PnP: mapped hardware\n",
+              "KMDF PnP: D0 entry\n", "KMDF PnP: D0 exit\n",
+              "KMDF PnP: unmapped hardware\n", "KMDF PnP: device cleanup\n",
+              "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
+    }
+}
+
+TEST(DriverKMDFPnp, ResourceDescriptorsRejectGuestMutation) {
+  auto Input = resourceOptions('W');
+  Input.Requests = {pnp(DevicePnpRequest::Start)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("read-only framework storage"),
+            std::string::npos);
+}
+
+TEST(DriverKMDFPnp, StopStillRejectsUnreleasedHardwareMapping) {
+  auto Input = resourceOptions('L');
+  Input.Requests = {pnp(DevicePnpRequest::Start),
+                    pnp(DevicePnpRequest::QueryStop),
+                    pnp(DevicePnpRequest::Stop)};
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("device still owns an I/O-space mapping"),
+            std::string::npos);
+  EXPECT_EQ(callCount(*Result, "WdfCmResourceListGetDescriptor"), 5u);
 }
 
 TEST(DriverKMDFPnp, FailedPowerUpReleasesPreparedResources) {
