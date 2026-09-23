@@ -1587,6 +1587,155 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
   return Hint;
 }
 
+/// Admit a selected counter pointer only when every definition is an exact
+/// address in one reconstructed section and every use is a bounded numeric
+/// memory access. An arbitrary pointer passed to a call or returned to the
+/// caller is not justified by the counter snapshot.
+inline std::map<const HighExpr *, va_t>
+selectedProfileCounterSeeds(const HighFunc &Function,
+                            const ObjCProfileStorage &Storage) {
+  VarKeyMap<std::vector<ExprPtr>> Definitions;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
+        (Statement.Dst->Kind == ExprKind::Var ||
+         Statement.Dst->Kind == ExprKind::Phi) &&
+        Statement.Dst->Var.Kind == MedVar::Temp)
+      Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+  });
+  std::map<const HighExpr *, va_t> Seeds;
+  for (const auto &[Key, Values] : Definitions) {
+    if (Values.empty() || Values.size() > 64)
+      continue;
+    std::vector<va_t> Addresses;
+    std::optional<va_t> Base;
+    bool Valid = true;
+    for (const auto &Value : Values) {
+      if (!Value || Value->Kind != ExprKind::Const || !Value->Type ||
+          Value->Type->Size != 8 ||
+          !isExactAddressProvenance(Value->ConstProvenance) ||
+          isCodeAddressProvenance(Value->ConstProvenance) ||
+          (Value->AddressOwnerVA != InvalidVA &&
+           Value->AddressOwnerVA != Value->ConstVal)) {
+        Valid = false;
+        break;
+      }
+      const auto Section = Storage.sectionFor(Value->ConstVal, 1);
+      if (!Section || (Base && *Base != *Section)) {
+        Valid = false;
+        break;
+      }
+      Base = Section;
+      Addresses.push_back(Value->ConstVal);
+    }
+    if (!Valid || !Base)
+      continue;
+    std::set<const HighExpr *> SeedNodes;
+    for (const auto &Value : Values)
+      SeedNodes.insert(Value.get());
+    const auto ContainsVar = [&](auto &&Self, const ExprPtr &E,
+                                 unsigned Depth) -> bool {
+      if (!E || Depth > 64)
+        return false;
+      if ((E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+          varKey(E->Var) == Key)
+        return true;
+      for (const auto &Operand : E->Operands)
+        if (Self(Self, Operand, Depth + 1))
+          return true;
+      return false;
+    };
+    const auto Offset = [&](auto &&Self, const ExprPtr &E,
+                            unsigned Depth) -> std::optional<uint64_t> {
+      if (!E || !E->Type || E->Type->Size != 8 || Depth > 16)
+        return std::nullopt;
+      if ((E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+          varKey(E->Var) == Key)
+        return 0;
+      if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast) &&
+          E->Operands.size() == 1)
+        return Self(Self, E->Operands[0], Depth + 1);
+      if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_ADD &&
+          E->Operands.size() == 2)
+        for (unsigned I = 0; I < 2; ++I) {
+          const auto Inner = Self(Self, E->Operands[I], Depth + 1);
+          const auto &Constant = E->Operands[1 - I];
+          if (Inner && Constant && Constant->Kind == ExprKind::Const &&
+              (Constant->ConstProvenance ==
+                   ConstantAddressProvenance::Scalar ||
+               Constant->ConstProvenance ==
+                   ConstantAddressProvenance::Unknown) &&
+              Constant->ConstVal <= 4096 &&
+              *Inner <= UINT64_MAX - Constant->ConstVal)
+            return *Inner + Constant->ConstVal;
+        }
+      return std::nullopt;
+    };
+    const auto SafeAccess = [&](const ExprPtr &Address, const TypeRef &Type,
+                                NdMemoryOrdering Ordering,
+                                NdMemoryAddressSpace Space) {
+      if (!Type || Type->Kind != NdTypeKind::Int || !Type->Size ||
+          Type->Size > 16 || Ordering != NdMemoryOrdering::None ||
+          Space != NdMemoryAddressSpace::Default)
+        return false;
+      const auto Delta = Offset(Offset, Address, 0);
+      if (!Delta)
+        return false;
+      for (va_t Candidate : Addresses)
+        if (Candidate > UINT64_MAX - *Delta ||
+            Storage.sectionFor(Candidate + *Delta, Type->Size) != Base)
+          return false;
+      return true;
+    };
+    const auto SafeExpression = [&](auto &&Self, const ExprPtr &E,
+                                    unsigned Depth) -> bool {
+      if (!E || Depth > 64)
+        return !E;
+      if (SeedNodes.count(E.get()))
+        return false;
+      if (E->Kind == ExprKind::Load && E->Operands.size() == 1 &&
+          ContainsVar(ContainsVar, E->Operands[0], 0))
+        return SafeAccess(E->Operands[0], E->Type, E->MemoryOrdering,
+                          E->MemoryAddressSpace);
+      if ((E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+          varKey(E->Var) == Key)
+        return false;
+      for (const auto &Operand : E->Operands)
+        if (!Self(Self, Operand, Depth + 1))
+          return false;
+      return true;
+    };
+    walkStmts(Function.Body, [&](const HighStmt &Statement) {
+      if (!Valid)
+        return;
+      if (Statement.StoreAddr &&
+          ContainsVar(ContainsVar, Statement.StoreAddr, 0) &&
+          !SafeAccess(Statement.StoreAddr,
+                      Statement.StoreVal ? Statement.StoreVal->Type : nullptr,
+                      Statement.MemoryOrdering, Statement.MemoryAddressSpace))
+        Valid = false;
+      forEachExpr(Statement, [&](const ExprPtr &Root) {
+        if ((Root == Statement.Dst &&
+             Statement.Kind == StmtKind::Assign && Statement.Dst &&
+             (Statement.Dst->Kind == ExprKind::Var ||
+              Statement.Dst->Kind == ExprKind::Phi)) ||
+            (Root == Statement.StoreAddr &&
+             ContainsVar(ContainsVar, Root, 0)) ||
+            (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+             (Statement.Dst->Kind == ExprKind::Var ||
+              Statement.Dst->Kind == ExprKind::Phi) &&
+             varKey(Statement.Dst->Var) == Key && Root == Statement.Val))
+          return;
+        if (!SafeExpression(SafeExpression, Root, 0))
+          Valid = false;
+      });
+    });
+    if (Valid)
+      for (const auto &Value : Values)
+        Seeds.emplace(Value.get(), *Base);
+  }
+  return Seeds;
+}
+
 /// A storage address may cross a native source-call boundary only when the
 /// complete typed callee proves that this parameter is used solely as the
 /// exact address of bounded scalar loads/stores. The source ABI's pointer type
@@ -2324,6 +2473,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       readOnlyObjectPointerLoadPlans(Function, Image);
   const auto ObjectPointerConsumers =
       readOnlyObjectPointerLoadConsumers(Function, ObjectPointerLoads);
+  const auto ProfileSeeds =
+      selectedProfileCounterSeeds(Function, *ProfileStorage);
   const auto DirectLocalStorage =
       directLocalStorageAccessExtents(Function, Image);
   const auto KVOCallbackParameter =
@@ -2589,6 +2740,25 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                                     ConstantAddressProvenance::Scalar));
           *Expression = *Storage;
           Result.CStringSections.insert(Base);
+          return Expression;
+        }
+      }
+      if (const auto Seed = ProfileSeeds.find(Original.get());
+          Seed != ProfileSeeds.end() && Address) {
+        auto Profile = profileStorageHint(Image.Arch, Seed->second);
+        if (Profile) {
+          auto Storage = HighExpr::makeCall({}, 0, {});
+          Storage->Type = NdType::makeInt(8, false);
+          Storage->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Profile));
+          *Expression = *(*Address == Seed->second
+                              ? Storage
+                              : HighExpr::makeBinop(
+                                    NdOp::INT_ADD, Storage,
+                                    HighExpr::makeConst(
+                                        *Address - Seed->second, 8,
+                                        ConstantAddressProvenance::Scalar)));
+          Result.ProfileCounterSections.insert(Seed->second);
           return Expression;
         }
       }

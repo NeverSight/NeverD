@@ -5050,6 +5050,62 @@ TEST(ObjCSourceBindings, ProfileCountersKeepOverlappingStorageAndAccessWidths) {
 }
 
 TEST(ObjCSourceBindings,
+     SelectedProfileCounterPointersNeedOnlyBoundedNumericUses) {
+  for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ProfileFixture F;
+    const ObjCProfileStorage Storage(F.Image);
+    MedVar Pointer;
+    Pointer.Kind = Mutation == 8 ? MedVar::Param : MedVar::Temp;
+    Pointer.Id = 42;
+    Pointer.Size = 8;
+    Pointer.TheArch = F.Image.Arch;
+    auto Var = HighExpr::makeVar(Pointer, NdType::makeInt(8, false));
+    auto First = HighExpr::makeConst(
+        0x1020, 8, ConstantAddressProvenance::DataAddress);
+    auto Second = HighExpr::makeConst(
+        Mutation == 1 ? 0x10f8 : 0x1040, 8,
+        Mutation == 2 ? ConstantAddressProvenance::Scalar
+                      : ConstantAddressProvenance::DataAddress);
+    HighStmt A, B, Return;
+    A.Kind = B.Kind = StmtKind::Assign;
+    A.Dst = B.Dst = Var;
+    A.Val = First;
+    B.Val = Second;
+    Return.Kind = StmtKind::Return;
+    auto Address = HighExpr::makeBinop(
+        NdOp::INT_ADD, Var, HighExpr::makeConst(16, 8));
+    Return.RetVal = HighExpr::makeLoad(
+        Address, Mutation == 3 ? NdType::makePtr(NdType::makeVoid())
+                               : NdType::makeInt(8, false));
+    if (Mutation == 4)
+      Return.RetVal = Var;
+    if (Mutation == 5)
+      Return.RetVal->MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Mutation == 6)
+      B.Val = HighExpr::makeVar(Pointer, NdType::makeInt(8, false));
+    if (Mutation == 7)
+      Return.RetVal = First;
+    F.Function.Body = {A, B, Return};
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image, &Storage);
+    if (Mutation == 0) {
+      EXPECT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+      EXPECT_EQ(Result.ProfileCounterSections, std::set<va_t>{0x1000});
+      for (unsigned I = 0; I < 2; ++I) {
+        auto Bound = Result.Function.Body[I].Val;
+        ASSERT_EQ(Bound->Kind, ExprKind::BinOp);
+        ASSERT_TRUE(Bound->Operands[0]->SourceCallHint);
+        EXPECT_TRUE(objcSourceCallBound(*Bound->Operands[0], F.Image, {},
+                                        &Storage));
+      }
+    } else {
+      EXPECT_FALSE(Result.Limitation.empty());
+      EXPECT_TRUE(Result.ProfileCounterSections.empty());
+    }
+  }
+}
+
+TEST(ObjCSourceBindings,
      NativeProfileCounterArgumentsRequireBoundedCalleeAccesses) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     ProfileFixture F;
