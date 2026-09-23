@@ -1,5 +1,7 @@
 #include "neverd/pipeline/NativeSourceHints.h"
 
+#include "../loader/Swift/SwiftBooleanProjection.h"
+#include "../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "NativeSourceFloatingReturn.h"
 #include "NativeSourceIntegerPrefixReturn.h"
 #include "NativeSourcePreservation.h"
@@ -349,6 +351,18 @@ bool hasNativeSourceStateContract(
     Calls.emplace(Site, std::move(Contract));
   }
   std::optional<std::map<va_t, SourceCallTypeHint>> CurrentCallBindings;
+  std::vector<SwiftBooleanProjection> BooleanProjections;
+  if (EntrySignature) {
+    bool HasBoolean = false;
+    for (const auto &Block : Med.Blocks)
+      for (const auto &Op : Block.Ops)
+        HasBoolean |= Op.SourceCallHint &&
+                      Op.SourceCallHint->CallKind ==
+                          SourceCallTypeHint::Kind::SwiftBooleanProjection;
+    if (HasBoolean)
+      BooleanProjections =
+          qualifySwiftBooleanProjections(Image, *Low, *EntrySignature);
+  }
   size_t Remaining = 262144;
   for (const auto &Block : Med.Blocks)
     for (const auto &Op : Block.Ops) {
@@ -391,6 +405,24 @@ bool hasNativeSourceStateContract(
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
+      const bool StaticBoolean = [&] {
+        if (!EntrySignature || !Op.Inputs[0].isConst() ||
+            !isSwiftBooleanSourceBinding(Binding) ||
+            Binding.BooleanResult->FunctionEntry != Med.Entry)
+          return false;
+        const SourceCallOccurrenceKey Site{Op.Addr, Op.OriginSeq, Op.Opcode,
+                                           Op.Inputs[0].ConstVal};
+        if (Site != Binding.BooleanResult->Site)
+          return false;
+        return std::any_of(
+            BooleanProjections.begin(), BooleanProjections.end(),
+            [&](const SwiftBooleanProjection &Projection) {
+              return Projection.Normalization.Site == Site &&
+                     Projection.Runtime.ImportSlot == Binding.TargetAddress &&
+                     llvm::StringRef(Projection.Runtime.ImportName)
+                             .drop_front() == Binding.TargetName;
+            });
+      }();
       NativeSourceCallContract Contract;
       Contract.Signature = &Binding.Signature;
       if (StaticMessage && Binding.CallKind == Kind::ObjCSuper2)
@@ -453,7 +485,7 @@ bool hasNativeSourceStateContract(
             NativeSourceCallContract::TerminationKind::StackCheckFailure;
       }
       if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
-           !StaticMessage && !DynamicWitness) ||
+           !StaticBoolean && !StaticMessage && !DynamicWitness) ||
           (Binding.DoesNotReturn && !Contract.terminates()) ||
           !Binding.Signature.ReturnType || !Image.isCodeAddress(Op.Addr) ||
           !Calls
