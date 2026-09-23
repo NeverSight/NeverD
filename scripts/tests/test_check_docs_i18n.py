@@ -180,7 +180,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v34",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v35",
                       "defer_callback_drain",
                       "asynchronous_file",
                       "IoSetCancelRoutine", "IoAcquireCancelSpinLock",

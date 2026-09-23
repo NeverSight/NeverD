@@ -1,4 +1,4 @@
-//===- KernelFrameworkQueue.cpp - KMDF default queue state ----------------===//
+//===- KernelFrameworkQueue.cpp - KMDF control queue state ----------------=//
 //
 // NeverD Decompiler
 //
@@ -30,12 +30,14 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
                            llvm::ArrayRef<uint64_t> A) {
   if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
-      Name != "WdfIoQueueGetDevice")
+      Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
   const auto Kind =
-      Name == "WdfIoQueueGetDevice" ? ObjectKind::Queue : ObjectKind::Device;
+      Name == "WdfIoQueueGetDevice" || Name == "WdfIoQueueRetrieveNextRequest"
+          ? ObjectKind::Queue
+          : ObjectKind::Device;
   if (OI == Objects.end() || OI->second.Binding != B.Globals ||
       OI->second.Kind != Kind)
     return invalidQueue("invalid, foreign or wrong-kind object handle");
@@ -45,6 +47,31 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (Q == Queues.end() || !Devices.count(Q->second.Device))
       return invalidQueue("queue lost its owning control device");
     return std::optional<uint64_t>{Q->second.Device};
+  }
+  if (Name == "WdfIoQueueRetrieveNextRequest") {
+    auto Q = Queues.find(A[1]);
+    if (Q == Queues.end() || OI->second.Deleting)
+      return invalidQueue("queue has no live framework identity");
+    if (auto E = writable(A[2], sizeof(uint64_t)))
+      return E;
+    if (Q->second.Dispatch == QueueDispatchParallel)
+      return std::optional<uint64_t>{QueueInvalidDeviceState};
+    if (Q->second.Dispatch != QueueDispatchManual)
+      return invalidQueue("sequential queue retrieval is not modeled");
+    if (Q->second.Pending.empty()) {
+      if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
+        return E;
+      return std::optional<uint64_t>{QueueNoMoreEntries};
+    }
+    const uint64_t Handle = Q->second.Pending.front();
+    auto R = Requests.find(Handle);
+    if (R == Requests.end() || !R->second.Queued || R->second.Queue != A[1])
+      return invalidQueue("manual queue lost a pending request");
+    if (auto E = Memory.writeInteger(A[2], Handle, sizeof(uint64_t)))
+      return E;
+    Q->second.Pending.pop_front();
+    R->second.Queued = false;
+    return std::optional<uint64_t>{0};
   }
 
   auto DI = Devices.find(A[1]);
@@ -131,10 +158,10 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid power-management tri-state");
   // A control-device queue is never power managed, including WdfTrue and
   // WdfUseDefault configurations. No PnP state is fabricated here.
-  if (!IsDefault)
-    return invalidQueue("only default queues are currently modeled");
-  if (Dispatch == QueueDispatchManual)
-    return invalidQueue("manual queue retrieval is not modeled");
+  if (IsDefault && Dispatch == QueueDispatchManual)
+    return invalidQueue("manual default queue routing is not modeled");
+  if (!IsDefault && Dispatch != QueueDispatchManual)
+    return invalidQueue("nondefault automatic queue routing is not modeled");
   if (Dispatch == QueueDispatchParallel &&
       Read32(QueueConfigPresentedRequests) != UINT32_MAX)
     return invalidQueue("bounded parallel queue delivery is not modeled");
@@ -155,7 +182,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (*Execution != ExecutionPassive || *Synchronization != SynchronizationNone)
     return invalidQueue(
         "queue requires explicit passive execution and no synchronization");
-  if (Device.DefaultQueue)
+  if (IsDefault && Device.DefaultQueue)
     return std::optional<uint64_t>{QueueUnsuccessful};
   if (A[4])
     if (auto E = writable(A[4], 8))
@@ -174,9 +201,10 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   Q.DeviceControl = DeviceControl;
   Q.Dispatch = Dispatch;
   Q.AllowZeroLength = Config[QueueConfigAllowZeroLength] != 0;
-  Q.IsDefault = true;
+  Q.IsDefault = IsDefault;
   Queues.emplace(*Handle, Q);
-  Device.DefaultQueue = *Handle;
+  if (IsDefault)
+    Device.DefaultQueue = *Handle;
   if (A[4])
     if (auto E = Memory.writeInteger(A[4], *Handle, 8))
       return E;

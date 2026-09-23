@@ -42,6 +42,27 @@ KernelFramework::preflightRequestCancellation(uint64_t IRP,
   const auto R =
       std::find_if(Requests.begin(), Requests.end(),
                    [&](const auto &Entry) { return Entry.second.IRP == IRP; });
+  if (R != Requests.end() && R->second.Queued) {
+    auto Q = Queues.find(R->second.Queue);
+    if (R->second.Completed || R->second.Completing ||
+        R->second.Cancellation != CancelState::Unmarked || Q == Queues.end() ||
+        Q->second.Dispatch != QueueDispatchManual ||
+        std::find(Q->second.Pending.begin(), Q->second.Pending.end(),
+                  R->first) == Q->second.Pending.end())
+      return requestError("queued request lost manual queue ownership");
+    if (PendingCall)
+      return requestError(
+          "cancellation cannot replace a pending guest callback");
+    if (!RequestsHost.IsCanceled || !RequestsHost.ValidateCompletion ||
+        !RequestsHost.SetInformation || !RequestsHost.Information ||
+        !RequestsHost.Complete)
+      return requestError("queued request completion host is unavailable");
+    if (auto E = preflightCancellationToken(EarlierCallbacks))
+      return E;
+    // Even callback-free cancellation consumes a framework continuation.
+    // Reserve one token and one scheduler slot conservatively at this boundary.
+    return true;
+  }
   if (R == Requests.end() || R->second.Completed || R->second.Completing ||
       R->second.Cancellation != CancelState::Marked)
     return false;
@@ -73,6 +94,37 @@ KernelFramework::requestCancellation(uint64_t IRP) {
   auto R =
       std::find_if(Requests.begin(), Requests.end(),
                    [&](const auto &Entry) { return Entry.second.IRP == IRP; });
+  if (R->second.Queued) {
+    auto Q = Queues.find(R->second.Queue);
+    if (Q == Queues.end())
+      return requestError("queued cancellation lost its manual queue");
+    auto Pending =
+        std::find(Q->second.Pending.begin(), Q->second.Pending.end(), R->first);
+    if (Pending == Q->second.Pending.end())
+      return requestError("queued cancellation lost its pending request");
+    if (auto E = RequestsHost.ValidateCompletion(IRP, RequestCancelled, 0))
+      return E;
+    if (auto E = RequestsHost.SetInformation(IRP, 0))
+      return E;
+    R->second.Completing = true;
+    R->second.CompletionStatus = RequestCancelled;
+    std::vector<Step> Steps;
+    if (auto E = planDelete(R->first, Steps)) {
+      R->second.Completing = false;
+      return E;
+    }
+    auto Destruction =
+        std::find_if(Steps.begin(), Steps.end(), [&](const Step &S) {
+          return S.Kind == StepKind::TryDestroy && S.Object == R->first;
+        });
+    Steps.insert(Destruction, {StepKind::CompleteRequest, R->first});
+    Q->second.Pending.erase(Pending);
+    R->second.Queued = false;
+    auto Completed = start(std::move(Steps));
+    if (!Completed)
+      return Completed.takeError();
+    return takeGuestCall();
+  }
   const uint64_t Token = NextContinuation++;
   // FxRequest::InsertTailIrpQueue holds FXREQUEST_QUEUE_TAG. Cancellation
   // transfers that hold to ProcessCancelledRequests, which releases it only
@@ -292,7 +344,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       Name != "WdfRequestProbeAndLockUserBufferForWrite" &&
       Name != "WdfRequestMarkCancelable" &&
       Name != "WdfRequestMarkCancelableEx" &&
-      Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled")
+      Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled" &&
+      Name != "WdfRequestForwardToIoQueue")
     return Result{};
   auto O = Objects.find(A[1]);
   auto R = Requests.find(A[1]);
@@ -302,6 +355,53 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
+  if (Name == "WdfRequestForwardToIoQueue") {
+    auto DestinationObject = Objects.find(A[2]);
+    auto Destination = Queues.find(A[2]);
+    if (DestinationObject == Objects.end() ||
+        DestinationObject->second.Kind != ObjectKind::Queue ||
+        DestinationObject->second.Binding != B.Globals ||
+        Destination == Queues.end() || DestinationObject->second.Deleting)
+      return requestError("invalid, foreign or deleting destination queue");
+    if (R->second.InCallerContext || R->second.Queued || !R->second.Queue ||
+        R->second.Queue == A[2] ||
+        R->second.Device != Destination->second.Device ||
+        R->second.Cancellation != CancelState::Unmarked)
+      return Result{ControlInvalidDeviceRequest};
+    if (Destination->second.Dispatch != QueueDispatchManual)
+      return requestError("forwarding to an automatic queue is not modeled");
+    auto Source = Objects.find(R->second.Queue);
+    if (Source == Objects.end() || Source->second.Kind != ObjectKind::Queue ||
+        Source->second.Deleting || O->second.Parent != R->second.Queue)
+      return requestError("request lost its source queue ownership");
+    auto Child = std::find(Source->second.Children.begin(),
+                           Source->second.Children.end(), A[1]);
+    if (Child == Source->second.Children.end())
+      return requestError("source queue lost its request child");
+    if (!RequestsHost.IsCanceled)
+      return requestError("cancellation host is unavailable");
+    auto AlreadyCanceled = RequestsHost.IsCanceled(R->second.IRP);
+    if (!AlreadyCanceled)
+      return AlreadyCanceled.takeError();
+    DestinationObject->second.Children.push_back(A[1]);
+    Source->second.Children.erase(Child);
+    O->second.Parent = A[2];
+    R->second.Queue = A[2];
+    R->second.Queued = true;
+    Destination->second.Pending.push_back(A[1]);
+    if (*AlreadyCanceled) {
+      // A request canceled before forwarding is subject to framework queue
+      // cancellation as soon as the new queue takes ownership.
+      auto Call = requestCancellation(R->second.IRP);
+      if (!Call)
+        return Call.takeError();
+      if (*Call)
+        PendingCall = std::move(**Call);
+    }
+    return Result{0};
+  }
+  if (R->second.Queued)
+    return requestError("framework owns the request in a manual queue");
   if (Name == "WdfRequestMarkCancelable" ||
       Name == "WdfRequestMarkCancelableEx") {
     const bool Legacy = Name == "WdfRequestMarkCancelable";

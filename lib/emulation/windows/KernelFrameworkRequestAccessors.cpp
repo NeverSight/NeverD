@@ -46,6 +46,8 @@ KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
   if (O == Objects.end() || O->second.Kind != ObjectKind::Request ||
       O->second.Binding != B.Globals || R == Requests.end())
     return accessorError("invalid or foreign framework request");
+  if (R->second.Queued)
+    return accessorError("framework owns the request in a manual queue");
   const bool Completed = R->second.Completed || R->second.Completing;
   // These documented neutral results require a surviving object handle, not
   // a surviving IRP. Completion detaches the queue before request cleanup.

@@ -93,6 +93,16 @@ and relocated bases. Model-level queue tests verify parallel overlap and
 sequential exclusion; another native case batches two independent synchronous
 file objects. The C API test checks the asynchronous-file batch and output bytes.
 
+`DriverKMDFControl.ManualQueueReleasesSequentialSourceAndRetrievesInWorker`
+uses a genuine WDK control driver with a nondefault manual queue. Its first
+IOCTL is forwarded from a sequential default queue; a second IOCTL on the
+same asynchronous file completes before a work item retrieves and completes
+the first. Normal/active-CFG images run at preferred and relocated bases. Model
+tests cover FIFO retrieval, ownership transfer, invalid forwards and deletion
+of a queue with live requests; a C API case checks the public scenario. A
+second genuine mode checks queued cancellation at virtual time zero or while
+the worker waits, with model cases for request cleanup ordering.
+
 An `asynchronous_file` CREATE case checks that the guest FILE_OBJECT and IRP
 omit synchronous flags, two pending IOCTLs on the same file complete with
 distinct output, canceling one overlapping IRP leaves the other live, and
