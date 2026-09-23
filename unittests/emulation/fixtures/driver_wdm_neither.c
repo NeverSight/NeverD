@@ -23,6 +23,7 @@
 #define IO_SELF_CANCEL 0x22202bu
 #define IO_SELF_CANCEL_NO_ROUTINE 0x22202fu
 #define IO_WORKER_ATTACH 0x222033u
+#define IO_SPIN_LOCK 0x222037u
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -365,6 +366,32 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       }
     }
     break;
+  case IO_SPIN_LOCK: {
+    KSPIN_LOCK Lock;
+    KSPIN_LOCK DpcLock;
+    KIRQL OldIRQL;
+    KeInitializeSpinLock(&Lock);
+    KeInitializeSpinLock(&DpcLock);
+    KeAcquireSpinLock(&Lock, &OldIRQL);
+    if (OldIRQL != PASSIVE_LEVEL ||
+        KeGetCurrentIrql() != DISPATCH_LEVEL ||
+        KeTryToAcquireSpinLockAtDpcLevel(&Lock))
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeAcquireSpinLockAtDpcLevel(&DpcLock);
+    KeReleaseSpinLockFromDpcLevel(&DpcLock);
+    if (!KeTryToAcquireSpinLockAtDpcLevel(&DpcLock))
+      Status = STATUS_INVALID_DEVICE_STATE;
+    else
+      KeReleaseSpinLockFromDpcLevel(&DpcLock);
+    KeReleaseSpinLock(&Lock, OldIRQL);
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0x5a;
+      Length = 1;
+    }
+    break;
+  }
   case IO_WORKER_LOCKED:
   case IO_WORKER_RAW:
   case IO_WORKER_ATTACH:

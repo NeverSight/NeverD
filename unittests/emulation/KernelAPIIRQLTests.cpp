@@ -100,6 +100,15 @@ TEST(DriverKernelAPIIRQL, NonpagedPoolMdlAndWorkOperationsPermitDispatch) {
     expectLimit(Name, 2);
 }
 
+TEST(DriverKernelAPIIRQL, ExecutiveSpinLockInitializationHasAnyLevelCeiling) {
+  expectLimit("KeInitializeSpinLock", 15);
+  for (auto Name : {"KeAcquireSpinLockRaiseToDpc", "KeReleaseSpinLock",
+                    "KeAcquireSpinLockAtDpcLevel",
+                    "KeReleaseSpinLockFromDpcLevel",
+                    "KeTryToAcquireSpinLockAtDpcLevel"})
+    expectLimit(Name, 2);
+}
+
 TEST(DriverKernelAPIIRQL, DebugOutputStopsBelowClockAndIpiLevels) {
   expectLimit("DbgPrint", 12);
   expectLimit("DbgPrintEx", 12);

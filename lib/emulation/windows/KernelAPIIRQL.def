@@ -43,6 +43,10 @@ NEVERD_KERNEL_IRQL_API(PsGetProcessId, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
 NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)
 NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#include "KernelSpinLockAPIs.def"
+#undef NEVERD_KERNEL_SPINLOCK_API
 
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioconnectinterrupt
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesynchronizeexecution

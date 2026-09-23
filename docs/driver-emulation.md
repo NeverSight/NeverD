@@ -116,7 +116,7 @@ instruction, memory, observation and wall-clock budgets still apply.
 
 This is a bounded scheduling model, not full Windows asynchronous support.
 Alertable or user-mode waits, system threads, APCs,
-general spinlocks, arbitrary concurrent scenario-submitted IRPs, general IRQL transitions,
+arbitrary concurrent scenario-submitted IRPs, general IRQL transitions,
 UMDF, KMDF PnP devices and general queue scheduling, full PnP/power, general hardware, other DMA interfaces and other interrupt modes remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
 inventing requests or unload.
@@ -272,6 +272,7 @@ The initial API model deliberately has a finite contract:
 | `DbgPrint`, `DbgPrintEx` | Checked Win64 variadic formatting, at most 512 output bytes; all debugger filters enabled |
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
 | `KeGetCurrentIrql` | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs |
+| `KeInitializeSpinLock`, `KeAcquireSpinLockRaiseToDpc`, `KeReleaseSpinLock`, `KeAcquireSpinLockAtDpcLevel`, `KeReleaseSpinLockFromDpcLevel`, `KeTryToAcquireSpinLockAtDpcLevel` | Resident, aligned executive locks on cooperative CPU0; exact owner and acquire/release pairing, saved IRQL restoration, and nonblocking try-acquire. Contended blocking acquisitions stop explicitly because the scheduler cannot make progress while spinning. |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Device-owned opaque work items; `DelayedWorkQueue` only, callbacks receive the device and context at `PASSIVE_LEVEL`; queued items cannot be freed |
 | `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | Opaque DPC storage, four guest callback arguments, `DISPATCH_LEVEL`, duplicate/remove semantics and importance; target CPU0 only |
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Notification/synchronization timers; relative/absolute 100 ns deadlines, periodic milliseconds, rearm/cancel and signal queries in virtual time |
@@ -587,7 +588,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v25`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v26`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
