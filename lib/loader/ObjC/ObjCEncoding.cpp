@@ -99,6 +99,27 @@ std::optional<std::string> objcEncodedObjectClass(llvm::StringRef Encoding) {
   return Encoding.str();
 }
 
+std::optional<std::string>
+objcEncodedObjectProtocol(llvm::StringRef Encoding) {
+  if (Encoding.size() > 4096)
+    return std::nullopt;
+  while (!Encoding.empty() &&
+         llvm::StringRef("rnNoORV").contains(Encoding.front()))
+    Encoding = Encoding.drop_front();
+  if (!Encoding.consume_front("@\"<") || !Encoding.consume_back(">\"") ||
+      Encoding.empty())
+    return std::nullopt;
+  auto Letter = [](char C) {
+    return (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') || C == '_';
+  };
+  if (!Letter(Encoding.front()) ||
+      !std::all_of(Encoding.begin(), Encoding.end(), [&](char C) {
+        return Letter(C) || (C >= '0' && C <= '9');
+      }))
+    return std::nullopt;
+  return Encoding.str();
+}
+
 // Declaration syntax and natural record layout are independent of physical
 // calling conventions. SourceABI must separately accept each value carrier.
 TypeRef parseObjCSourceType(llvm::StringRef Encoding, size_t &I,

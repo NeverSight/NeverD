@@ -7048,6 +7048,23 @@ TEST(ObjCCallHints, ReceiverObjectEncodingsRequireAnExplicitCompleteClass) {
   EXPECT_FALSE(objcEncodedObjectClass("@\"" + std::string(4096, 'A') + "\""));
 }
 
+TEST(ObjCCallHints, ReceiverProtocolEncodingsRequireOneCompleteProtocol) {
+  for (const auto *Encoding :
+       {"@\"<SDImageLoader>\"", "r@\"<SDImageLoader>\"",
+        "n@\"<SDImageLoader>\""})
+    EXPECT_EQ(objcEncodedObjectProtocol(Encoding),
+              std::optional<std::string>("SDImageLoader"));
+  for (const auto *Encoding :
+       {"@", "@?", "^@\"<SDImageLoader>\"", "@\"<>\"",
+        "@\"SDImageLoader\"", "@\"NSObject<SDImageLoader>\"",
+        "@\"<First><Second>\"", "@\"<1Invalid>\"",
+        "@\"<SDImageLoader>\"0", "@\"<SDImageLoader\"",
+        "@\"<SD ImageLoader>\""})
+    EXPECT_FALSE(objcEncodedObjectProtocol(Encoding)) << Encoding;
+  EXPECT_FALSE(objcEncodedObjectProtocol("@\"<" + std::string(4096, 'A') +
+                                         ">\""));
+}
+
 TEST(ObjCCallHints,
      ReceiverFieldsKeepConstantOffsetsDistinctFromRuntimeReferences) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
@@ -7157,6 +7174,49 @@ TEST(ObjCCallHints, ReceiverResultsRevalidatePropertyAndSDKDeclarations) {
   }
 }
 
+TEST(ObjCCallHints, ReceiverResultsPreserveLocalProtocolContracts) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = receiverResultImage(Architecture);
+    Image.ObjCProperties.front().TypeEncoding = "@\"<SDImageLoader>\"";
+    ObjCProtocol Protocol;
+    Protocol.Address = 0x2400;
+    Protocol.Name = "SDImageLoader";
+    Protocol.Status = "recovered";
+    ObjCProtocolMethod Method;
+    Method.MetadataAddress = 0x2410;
+    Method.Selector = "shouldBlockFailedURLWithURL:error:options:context:";
+    Method.TypeEncoding = "B48@0:8@16@24Q32@40";
+    Method.Status = "supported";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    Protocol.Methods.push_back(std::move(Method));
+    Image.ObjCProtocols.push_back(std::move(Protocol));
+
+    const auto Root = objcMethodReceiverTypeHint(Image, 0x1200);
+    ASSERT_TRUE(Root);
+    const auto Loader = objcReceiverCallResultTypeHint(Image, *Root, "error");
+    ASSERT_TRUE(Loader);
+    const auto Declaration = objcReceiverSourceTypeHint(
+        Image, "shouldBlockFailedURLWithURL:error:options:context:", *Loader);
+    ASSERT_TRUE(Declaration.Signature);
+    EXPECT_EQ(Declaration.Signature->ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Declaration.Signature->ReturnType->Size, 1U);
+
+    auto Changed = Image;
+    Changed.ObjCProperties.front().TypeEncoding =
+        "@\"<SDImageLoader><Other>\"";
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Loader));
+    Changed = Image;
+    Changed.ObjCProtocols.front().Status = "unresolved";
+    EXPECT_FALSE(objcReceiverSourceTypeHint(
+                     Changed,
+                     "shouldBlockFailedURLWithURL:error:options:context:",
+                     *Loader)
+                     .Signature);
+  }
+}
+
 TEST(ObjCCallHints, ReceiverResultsRejectUnknownConflictingAndMalformedPaths) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto Image = receiverResultImage(Architecture);
@@ -7179,7 +7239,7 @@ TEST(ObjCCallHints, ReceiverResultsRejectUnknownConflictingAndMalformedPaths) {
       if (Mutation == 5)
         Changed.ObjCProperties.front().TypeEncoding = "@?";
       if (Mutation == 6)
-        Changed.ObjCProperties.front().TypeEncoding = "@\"<NSObject>\"";
+        Changed.ObjCProperties.front().TypeEncoding = "@\"<MissingProtocol>\"";
       for (const bool Reverse : {false, true}) {
         if (Reverse)
           std::reverse(Changed.ObjCMethods.begin(), Changed.ObjCMethods.end());

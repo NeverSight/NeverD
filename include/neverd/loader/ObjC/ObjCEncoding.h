@@ -24,6 +24,11 @@ TypeRef parseObjCScalarType(llvm::StringRef Encoding, size_t &Offset,
 /// protocol-qualified and other pointer encodings do not establish this fact.
 std::optional<std::string> objcEncodedObjectClass(llvm::StringRef Encoding);
 
+/// A complete object encoding qualified by exactly one named protocol.
+/// Bare id, concrete classes, multiple protocols and class-plus-protocol
+/// encodings do not establish this fact.
+std::optional<std::string> objcEncodedObjectProtocol(llvm::StringRef Encoding);
+
 /// Decode a complete fixed method declaration, including hidden parameters
 /// and selector arity. Runtime encodings do not establish a variadic tail.
 /// Physical locations are assigned separately by the authoritative source ABI.

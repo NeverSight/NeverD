@@ -84,6 +84,9 @@ struct ObjCReceiverDeclaration {
   /// Declared instance class returned by the agreed pointer-valued method.
   /// Related result types are instantiated using the current receiver class.
   std::optional<std::string> ReturnClass;
+  /// Declared single protocol returned by the agreed pointer-valued method.
+  /// This names a protocol contract, not a concrete dynamic class.
+  std::optional<std::string> ReturnProtocol;
 };
 ObjCReceiverDeclaration
 objcReceiverSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,

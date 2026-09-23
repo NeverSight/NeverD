@@ -612,7 +612,8 @@ const ObjCIvar *receiverIvar(const BinaryImage &Image, std::string ClassName,
           (Ref->second.Size != 4 && Ref->second.Size != 8) ||
           Ref->second.Name != Ivar.Name ||
           Ref->second.ClassName != Class->Name ||
-          !objcEncodedObjectClass(Ivar.TypeEncoding))
+          (!objcEncodedObjectClass(Ivar.TypeEncoding) &&
+           !objcEncodedObjectProtocol(Ivar.TypeEncoding)))
         return nullptr;
       Result = &Ivar;
     }
@@ -625,6 +626,7 @@ struct ReceiverType {
   std::string ClassName;
   bool IsClassMethod = false;
   bool IncludeSubclasses = false;
+  bool IsProtocol = false;
 };
 
 enum class ReceiverResultMode { ObjCNilDispatch, ProvenNonNullSelf };
@@ -634,13 +636,28 @@ ObjCReceiverDeclaration receiverDeclaration(
     const ReceiverType &Type,
     ReceiverResultMode ResultMode = ReceiverResultMode::ObjCNilDispatch);
 
+bool receiverProtocolKnown(const BinaryImage &Image, llvm::StringRef Name) {
+  bool Present = false;
+  for (const auto &Protocol : Image.ObjCProtocols) {
+    if (Protocol.Name != Name)
+      continue;
+    if (Present || Protocol.Status != "recovered")
+      return false;
+    Present = true;
+  }
+  const auto SDK =
+      objc::sdkReceiverDeclarations(Image, Name, true, false, {});
+  return SDK.Present ? SDK.Complete : Present;
+}
+
 std::optional<ReceiverType> receiverType(const BinaryImage &Image,
                                          const ObjCReceiverTypeHint &Receiver) {
   if (Receiver.Steps.size() > 8 || !validReceiverRoot(Image, Receiver))
     return std::nullopt;
   ReceiverType Result{Receiver.ClassName, Receiver.IsClassMethod,
                       Receiver.Origin !=
-                          ObjCReceiverTypeHint::OriginKind::ClassReference};
+                          ObjCReceiverTypeHint::OriginKind::ClassReference,
+                      false};
   for (const auto &Access : Receiver.Steps) {
     if (Access.TheKind == ObjCReceiverTypeHint::TypeStep::Kind::MessageResult) {
       if (Access.Selector.empty() || Access.OffsetSlot || Access.ByteOffset ||
@@ -649,9 +666,15 @@ std::optional<ReceiverType> receiverType(const BinaryImage &Image,
       const auto Declaration =
           receiverDeclaration(Image, Access.Selector, Result);
       if (!Declaration.Signature || Declaration.RequiresGlobalAgreement ||
-          !Declaration.ReturnClass)
+          (!Declaration.ReturnClass && !Declaration.ReturnProtocol) ||
+          (Declaration.ReturnClass && Declaration.ReturnProtocol))
         return std::nullopt;
-      Result = {*Declaration.ReturnClass, false, true};
+      if (Declaration.ReturnClass)
+        Result = {*Declaration.ReturnClass, false, true, false};
+      else if (receiverProtocolKnown(Image, *Declaration.ReturnProtocol))
+        Result = {*Declaration.ReturnProtocol, false, false, true};
+      else
+        return std::nullopt;
       continue;
     }
     if (Access.TheKind != ObjCReceiverTypeHint::TypeStep::Kind::IvarLoad ||
@@ -664,10 +687,14 @@ std::optional<ReceiverType> receiverType(const BinaryImage &Image,
             Access.OffsetWidth)
       return std::nullopt;
     const auto ClassName = objcEncodedObjectClass(Ivar->TypeEncoding);
-    if (!ClassName)
+    const auto ProtocolName = objcEncodedObjectProtocol(Ivar->TypeEncoding);
+    if ((!ClassName && !ProtocolName) || (ClassName && ProtocolName))
       return std::nullopt;
-    Result.ClassName = *ClassName;
-    Result.IncludeSubclasses = true;
+    if (ProtocolName && !receiverProtocolKnown(Image, *ProtocolName))
+      return std::nullopt;
+    Result.ClassName = ClassName ? *ClassName : *ProtocolName;
+    Result.IncludeSubclasses = ClassName.has_value();
+    Result.IsProtocol = ProtocolName.has_value();
   }
   return Result;
 }
@@ -719,6 +746,14 @@ std::optional<std::string> declaredReturnClass(llvm::StringRef Encoding) {
   return objcEncodedObjectClass(Encoding.take_front(Offset));
 }
 
+std::optional<std::string> declaredReturnProtocol(llvm::StringRef Encoding) {
+  size_t Offset = 0;
+  const auto Type = parseObjCSourceType(Encoding, Offset);
+  if (!Type || Type->Kind != NdTypeKind::Ptr)
+    return std::nullopt;
+  return objcEncodedObjectProtocol(Encoding.take_front(Offset));
+}
+
 ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
                                             llvm::StringRef Selector,
                                             const ReceiverType &Type,
@@ -728,7 +763,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
   bool KnownScope = true;
   bool CompatibleResult = true;
   auto Include = [&](const std::optional<SourceFunctionTypeHint> &Signature,
-                     std::optional<std::string> ReturnClass = std::nullopt) {
+                     std::optional<std::string> ReturnClass = std::nullopt,
+                     std::optional<std::string> ReturnProtocol = std::nullopt) {
     Result.HasDeclaration = true;
     if (!Signature) {
       Complete = false;
@@ -749,13 +785,21 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
       Result.Signature = Hint;
     if (Hint.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK)
       Result.Signature->Origin = Hint.Origin;
-    if (ReturnClass) {
-      if (ReturnClass->empty() || Hint.ReturnType->Kind != NdTypeKind::Ptr ||
+    if (ReturnClass || ReturnProtocol) {
+      if ((ReturnClass && ReturnProtocol) ||
+          (ReturnClass && ReturnClass->empty()) ||
+          (ReturnProtocol && ReturnProtocol->empty()) ||
+          Hint.ReturnType->Kind != NdTypeKind::Ptr ||
           Hint.ReturnType->Size != 8 ||
-          (Result.ReturnClass && Result.ReturnClass != ReturnClass))
+          (Result.ReturnClass && Result.ReturnClass != ReturnClass) ||
+          (Result.ReturnProtocol && Result.ReturnProtocol != ReturnProtocol) ||
+          (Result.ReturnClass && ReturnProtocol) ||
+          (Result.ReturnProtocol && ReturnClass))
         CompatibleResult = false;
-      else
+      else if (ReturnClass)
         Result.ReturnClass = std::move(ReturnClass);
+      else
+        Result.ReturnProtocol = std::move(ReturnProtocol);
     }
   };
   // Class and protocol namespaces can share names (notably NSObject).
@@ -776,12 +820,16 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
     for (const auto &Parent : SDK.Protocols)
       Parents.emplace(true, Parent);
     for (const auto &Member : SDK.Members)
-      Include(Member.Signature,
-              Member.ReturnsReceiverType
-                  ? std::optional<std::string>(Type.ClassName)
-              : !Member.ReturnClass.empty()
-                  ? std::optional<std::string>(Member.ReturnClass)
-                  : std::nullopt);
+      Include(
+          Member.Signature,
+          Member.ReturnsReceiverType && !Type.IsProtocol
+              ? std::optional<std::string>(Type.ClassName)
+          : !Member.ReturnClass.empty()
+              ? std::optional<std::string>(Member.ReturnClass)
+              : std::nullopt,
+          Member.ReturnsReceiverType && Type.IsProtocol
+              ? std::optional<std::string>(Type.ClassName)
+              : std::nullopt);
     bool Present = SDK.Present;
     if (Protocol) {
       for (const auto &Declaration : Image.ObjCProtocols) {
@@ -792,7 +840,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
         for (const auto &Method : Declaration.Methods)
           if (Method.IsClassMethod == Type.IsClassMethod &&
               Method.Selector == Selector)
-            Include(Method.TypeHint, declaredReturnClass(Method.TypeEncoding));
+            Include(Method.TypeHint, declaredReturnClass(Method.TypeEncoding),
+                    declaredReturnProtocol(Method.TypeEncoding));
         for (va_t Address : Declaration.AdoptedProtocols) {
           std::optional<std::string> ParentName;
           for (const auto &Parent : Image.ObjCProtocols)
@@ -827,7 +876,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
         if (Method.ClassName == Name &&
             Method.IsClassMethod == Type.IsClassMethod &&
             Method.Selector == Selector)
-          Include(Method.TypeHint, declaredReturnClass(Method.TypeEncoding));
+          Include(Method.TypeHint, declaredReturnClass(Method.TypeEncoding),
+                  declaredReturnProtocol(Method.TypeEncoding));
       if (!Superclass)
         KnownScope = false;
       else if (!Superclass->empty())
@@ -842,7 +892,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
         continue;
       if (!Property.Getter.empty() && Property.Getter == Selector)
         Include(Property.GetterTypeHint,
-                objcEncodedObjectClass(Property.TypeEncoding));
+                objcEncodedObjectClass(Property.TypeEncoding),
+                objcEncodedObjectProtocol(Property.TypeEncoding));
       if (!Property.Setter.empty() && Property.Setter == Selector)
         Include(Property.SetterTypeHint);
     }
@@ -856,9 +907,16 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
   };
   // Entry self is a base-class constraint. Known subclass declarations still
   // participate, whereas loading an exact class object fixes class dispatch.
-  std::set<std::string> Classes{Type.ClassName};
-  std::vector<std::string> Work{Type.ClassName};
-  if (Type.IncludeSubclasses)
+  std::set<std::string> Classes;
+  std::vector<std::string> Work;
+  if (Type.IsProtocol) {
+    if (!Visit(Visit, {true, Type.ClassName}))
+      return {true, std::nullopt};
+  } else {
+    Classes.insert(Type.ClassName);
+    Work.push_back(Type.ClassName);
+  }
+  if (!Type.IsProtocol && Type.IncludeSubclasses)
     while (!Work.empty()) {
       auto Name = std::move(Work.back());
       Work.pop_back();
@@ -873,17 +931,20 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
           Work.push_back(Child);
       }
     }
-  for (const auto &Class : Classes)
-    if (!Visit(Visit, {false, Class}))
-      return {true, std::nullopt};
+  if (!Type.IsProtocol)
+    for (const auto &Class : Classes)
+      if (!Visit(Visit, {false, Class}))
+        return {true, std::nullopt};
   if (!Complete)
     Result.Signature.reset();
   else if (!KnownScope) {
     Result.Signature.reset();
     Result.RequiresGlobalAgreement = true;
   }
-  if (!Result.Signature || !CompatibleResult)
+  if (!Result.Signature || !CompatibleResult) {
     Result.ReturnClass.reset();
+    Result.ReturnProtocol.reset();
+  }
   return Result;
 }
 
@@ -940,7 +1001,8 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
   const auto Declaration =
       objcReceiverSourceTypeHint(Image, Selector, Receiver);
   if (!Declaration.Signature || Declaration.RequiresGlobalAgreement ||
-      !Declaration.ReturnClass)
+      (!Declaration.ReturnClass && !Declaration.ReturnProtocol) ||
+      (Declaration.ReturnClass && Declaration.ReturnProtocol))
     return std::nullopt;
   auto Result = Receiver;
   ObjCReceiverTypeHint::TypeStep Step;
