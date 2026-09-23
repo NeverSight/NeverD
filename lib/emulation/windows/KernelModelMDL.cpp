@@ -345,6 +345,82 @@ llvm::Expected<uint64_t> KernelModel::frameworkRequestMDL(uint64_t IRP,
   return *Record;
 }
 
+llvm::Expected<KernelFramework::LockedUserBuffer>
+KernelModel::frameworkProbeAndLockUserBuffer(uint64_t IRP, uint64_t Buffer,
+                                             uint64_t Length, bool ForWrite) {
+  using Result = KernelFramework::LockedUserBuffer;
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
+    return mdlError("framework user lock requires a live owning IRP");
+  if (!Length)
+    return Result{framework::RequestInvalidUserBuffer};
+  if (Length > UINT32_MAX || Length > profile::KernelArenaSize)
+    return Result{windows::StatusInvalidParameter};
+  if (!canCatchUserAccess(Buffer, Length) ||
+      CurrentUserProcessID != Request->ProcessID)
+    return Result{framework::RequestAccessViolation};
+  const bool OwnedByRequest =
+      (Request->UserInput && Buffer >= Request->UserInput &&
+       Buffer - Request->UserInput < Request->InputSize &&
+       Length <= Request->InputSize - (Buffer - Request->UserInput)) ||
+      (Request->UserBuffer && Buffer >= Request->UserBuffer &&
+       Buffer - Request->UserBuffer < (Request->Kind == DriverRequestKind::Write
+                                           ? Request->InputSize
+                                           : Request->OutputSize) &&
+       Length <= (Request->Kind == DriverRequestKind::Write
+                      ? Request->InputSize
+                      : Request->OutputSize) -
+                     (Buffer - Request->UserBuffer));
+  if (!OwnedByRequest)
+    return Result{framework::RequestAccessViolation};
+  auto Region = UserAllocations.upper_bound(Buffer);
+  if (Region == UserAllocations.begin())
+    return Result{framework::RequestAccessViolation};
+  --Region;
+  const uint64_t Offset = Buffer - Region->first;
+  if (Region->second.ProcessID != Request->ProcessID ||
+      RevokedUserAllocations.contains(Region->first) ||
+      Offset >= Region->second.Size || Length > Region->second.Size - Offset)
+    return Result{framework::RequestAccessViolation};
+  auto Accessible =
+      Memory.canAccess(Buffer, Length, ForWrite ? Read | Write : Read);
+  if (!Accessible)
+    return Accessible.takeError();
+  if (!*Accessible)
+    return Result{framework::RequestAccessViolation};
+  const std::array<uint64_t, 5> Arguments{Buffer, Length, 0, 0, 0};
+  auto MDL = allocateMDL(Arguments);
+  if (!MDL)
+    return MDL.takeError();
+  if (!*MDL)
+    return Result{windows::StatusInsufficientResources};
+  if (auto E = probeAndLockPages(*MDL, UserMode,
+                                 ForWrite ? IoWriteAccess : IoReadAccess))
+    return llvm::joinErrors(std::move(E), freeMDL(*MDL));
+  MDLs.at(*MDL).OwnerIRP = IRP;
+  auto Alias = mapLockedPages(*MDL, NormalPagePriority, false);
+  if (!Alias)
+    return llvm::joinErrors(Alias.takeError(),
+                            releaseFrameworkUserBuffer(*MDL));
+  if (!*Alias) {
+    if (auto E = releaseFrameworkUserBuffer(*MDL))
+      return E;
+    return Result{windows::StatusInsufficientResources};
+  }
+  return Result{0, *MDL, *Alias};
+}
+
+llvm::Error KernelModel::releaseFrameworkUserBuffer(uint64_t MDL) {
+  auto It = MDLs.find(MDL);
+  if (It == MDLs.end() ||
+      It->second.Owner != LockedMdl::Ownership::UserLocked ||
+      !It->second.OwnerIRP)
+    return mdlError("framework user memory lost its locked MDL");
+  if (auto E = unlockPages(MDL))
+    return E;
+  return freeMDL(MDL);
+}
+
 llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
                                                      uint32_t Priority,
                                                      bool ReuseExisting) {

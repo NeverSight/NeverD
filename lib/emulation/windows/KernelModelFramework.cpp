@@ -28,9 +28,8 @@ llvm::Error frameworkDeviceError(const llvm::Twine &Message) {
 
 void KernelModel::configureFrameworkDeviceHost() {
   KernelFramework::DeviceHost Host;
-  Host.Create =
-      [this](llvm::StringRef Name,
-             bool Direct) -> llvm::Expected<KernelFramework::DeviceCreation> {
+  Host.Create = [this](llvm::StringRef Name, uint32_t IoType)
+      -> llvm::Expected<KernelFramework::DeviceCreation> {
     auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
                                       windows::SecureOpen, false);
     if (!Created)
@@ -42,7 +41,9 @@ void KernelModel::configureFrameworkDeviceHost() {
     if (!Flags)
       return llvm::joinErrors(Flags.takeError(), deleteDevice(Device));
     const uint32_t TransferFlags =
-        Direct ? windows::DeviceDirectIO : windows::DeviceBufferedIO;
+        IoType == framework::ControlIoDirect     ? windows::DeviceDirectIO
+        : IoType == framework::ControlIoBuffered ? windows::DeviceBufferedIO
+                                                 : 0;
     if (auto E = Memory.writeInteger(
             Device + windows::DeviceFlagsOffset,
             (*Flags & ~(windows::DeviceBufferedIO | windows::DeviceDirectIO)) |

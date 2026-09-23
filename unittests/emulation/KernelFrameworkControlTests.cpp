@@ -211,9 +211,8 @@ TEST_F(DriverKernelFrameworkControl,
   const size_t Attempts = AllocationAttempts;
   unsigned HostAttempts = 0;
   KernelFramework::DeviceHost Host;
-  Host.Create = [this, &HostAttempts](
-                    llvm::StringRef,
-                    bool) -> llvm::Expected<KernelFramework::DeviceCreation> {
+  Host.Create = [this, &HostAttempts](llvm::StringRef, uint32_t)
+      -> llvm::Expected<KernelFramework::DeviceCreation> {
     if (++HostAttempts == 1)
       return KernelFramework::DeviceCreation{windows::StatusObjectNameCollision,
                                              0};

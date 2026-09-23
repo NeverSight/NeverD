@@ -609,6 +609,10 @@ private:
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
                                            uint16_t Flags);
   llvm::Expected<uint64_t> frameworkRequestMDL(uint64_t IRP, bool Output);
+  llvm::Expected<KernelFramework::LockedUserBuffer>
+  frameworkProbeAndLockUserBuffer(uint64_t IRP, uint64_t Buffer,
+                                  uint64_t Length, bool ForWrite);
+  llvm::Error releaseFrameworkUserBuffer(uint64_t MDL);
   llvm::Expected<uint64_t> createRequestMDL(uint64_t IRP, uint32_t Size,
                                             llvm::ArrayRef<uint8_t> Initial,
                                             bool Writable, uint64_t UserAddress,

@@ -21,6 +21,8 @@
 /// I preprocesses each transfer in EvtIoInCallerContext before enqueueing it.
 /// J deliberately returns from that callback without enqueue or completion.
 /// K completes the transfer in the caller-context callback without enqueueing.
+/// T probes and locks neither-I/O user buffers in caller context, then uses
+/// request-owned WDFMEMORY system aliases in the default queue.
 /// Q deliberately supplies an invalid queue configuration size. CREATE,
 /// CLEANUP and CLOSE use the default framework file package without callbacks.
 ///
@@ -44,6 +46,8 @@
 
 #define IOCTL_NEVERD_KMDF_TRANSFORM                                            \
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_NEVERD_KMDF_NEITHER                                              \
+  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 enum {
   TransformPrefixLength = 4,
@@ -55,6 +59,7 @@ enum {
 
 _Static_assert(sizeof(void *) == 8, "x64 fixture");
 _Static_assert(IOCTL_NEVERD_KMDF_TRANSFORM == 0x222000, "IOCTL ABI");
+_Static_assert(IOCTL_NEVERD_KMDF_NEITHER == 0x222003, "neither IOCTL ABI");
 _Static_assert(sizeof(WDF_IO_QUEUE_CONFIG) == 96, "queue config ABI");
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, DispatchType, 4);
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, PowerManaged, 8);
@@ -73,7 +78,8 @@ ABI_OFFSET(WDF_REQUEST_PARAMETERS, Parameters.DeviceIoControl.InputBufferLength,
            16);
 ABI_OFFSET(WDF_REQUEST_PARAMETERS, Parameters.DeviceIoControl.IoControlCode,
            24);
-_Static_assert(WdfDeviceIoBuffered == 2 && WdfDeviceIoDirect == 3,
+_Static_assert(WdfDeviceIoNeither == 1 && WdfDeviceIoBuffered == 2 &&
+                   WdfDeviceIoDirect == 3,
                "I/O type ABI");
 _Static_assert(WdfIoQueueDispatchSequential == 1, "queue dispatch ABI");
 _Static_assert(WdfExecutionLevelPassive == 2, "passive execution ABI");
@@ -106,6 +112,11 @@ ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 ABI_SLOT(WdfRequestRetrieveInputWdmMdl, 271);
 ABI_SLOT(WdfRequestRetrieveOutputWdmMdl, 272);
+ABI_SLOT(WdfRequestRetrieveUnsafeUserInputBuffer, 273);
+ABI_SLOT(WdfRequestRetrieveUnsafeUserOutputBuffer, 274);
+ABI_SLOT(WdfRequestProbeAndLockUserBufferForRead, 278);
+ABI_SLOT(WdfRequestProbeAndLockUserBufferForWrite, 279);
+ABI_SLOT(WdfMemoryGetBuffer, 194);
 ABI_SLOT(WdfRequestSetInformation, 275);
 ABI_SLOT(WdfRequestGetInformation, 276);
 ABI_SLOT(WdfRequestGetFileObject, 277);
@@ -145,6 +156,16 @@ typedef struct {
   KEVENT Completed;
 } CANCEL_REQUEST_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CANCEL_REQUEST_CONTEXT, CancelContext);
+
+typedef struct {
+  WDFMEMORY Input;
+  WDFMEMORY Output;
+  PVOID RawInput;
+  PVOID RawOutput;
+  size_t InputLength;
+  size_t OutputLength;
+} NEITHER_REQUEST_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NEITHER_REQUEST_CONTEXT, NeitherContext);
 
 static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
@@ -434,6 +455,43 @@ static void TransformRequest(WDFREQUEST Request, size_t OutputLength,
                                     InputLength + TransformPrefixLength);
 }
 
+static void TransformNeitherRequest(WDFREQUEST Request, size_t OutputLength,
+                                    size_t InputLength) {
+  NEITHER_REQUEST_CONTEXT *Context = NeitherContext(Request);
+  size_t LockedInputLength = 0;
+  size_t LockedOutputLength = 0;
+  PUCHAR Input = (PUCHAR)WdfMemoryGetBuffer(Context->Input, &LockedInputLength);
+  PUCHAR Output =
+      (PUCHAR)WdfMemoryGetBuffer(Context->Output, &LockedOutputLength);
+  PIRP Irp = WdfRequestWdmGetIrp(Request);
+  if (!Check(Input != NULL && Output != NULL && Input != Output &&
+                 Input != Context->RawInput && Output != Context->RawOutput &&
+                 LockedInputLength == InputLength &&
+                 LockedOutputLength == OutputLength &&
+                 Irp->AssociatedIrp.SystemBuffer == NULL &&
+                 Irp->MdlAddress == NULL &&
+                 IoGetCurrentIrpStackLocation(Irp)
+                         ->Parameters.DeviceIoControl.Type3InputBuffer ==
+                     Context->RawInput &&
+                 Irp->UserBuffer == Context->RawOutput,
+             120)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  if (OutputLength < InputLength + TransformPrefixLength) {
+    WdfRequestComplete(Request, STATUS_BUFFER_TOO_SMALL);
+    return;
+  }
+  for (size_t Index = 0; Index != InputLength; ++Index)
+    Output[Index + TransformPrefixLength] = Input[Index] ^ TransformMask;
+  Output[0] = 'K';
+  Output[1] = 'M';
+  Output[2] = 'D';
+  Output[3] = TransferMode;
+  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
+                                    InputLength + TransformPrefixLength);
+}
+
 static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
   DEFERRED_IOCTL_CONTEXT *Work = Context;
   WDFREQUEST Request = Work->Request;
@@ -654,8 +712,13 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     return;
   }
   // IoControlCode is the fifth Windows x64 argument, passed on the stack.
-  if (IoControlCode != IOCTL_NEVERD_KMDF_TRANSFORM) {
+  if (IoControlCode != (TransferMode == 'T' ? IOCTL_NEVERD_KMDF_NEITHER
+                                            : IOCTL_NEVERD_KMDF_TRANSFORM)) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+    return;
+  }
+  if (TransferMode == 'T') {
+    TransformNeitherRequest(Request, OutputLength, InputLength);
     return;
   }
   if (TransferMode == 'X' || TransferMode == 'H' || TransferMode == 'U' ||
@@ -708,9 +771,23 @@ static void IoRead(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
-  Status = WdfRequestRetrieveOutputBuffer(Request, Length, (PVOID *)&Buffer,
-                                          &RetrievedLength);
-  if (!NT_SUCCESS(Status)) {
+  if (TransferMode == 'T') {
+    NEITHER_REQUEST_CONTEXT *Context = NeitherContext(Request);
+    Status = WdfRequestRetrieveOutputBuffer(Request, Length, (PVOID *)&Buffer,
+                                            &RetrievedLength);
+    if (!Check(Status == STATUS_INVALID_DEVICE_REQUEST && Buffer == NULL &&
+                   Context->Input == NULL && Context->Output != NULL &&
+                   Context->OutputLength == Length,
+               121)) {
+      WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+      return;
+    }
+    Buffer = (PUCHAR)WdfMemoryGetBuffer(Context->Output, &RetrievedLength);
+  } else {
+    Status = WdfRequestRetrieveOutputBuffer(Request, Length, (PVOID *)&Buffer,
+                                            &RetrievedLength);
+  }
+  if (TransferMode != 'T' && !NT_SUCCESS(Status)) {
     WdfRequestComplete(Request, Status);
     return;
   }
@@ -752,9 +829,23 @@ static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
-  Status = WdfRequestRetrieveInputBuffer(Request, Length, (PVOID *)&Buffer,
-                                         &RetrievedLength);
-  if (!NT_SUCCESS(Status)) {
+  if (TransferMode == 'T') {
+    NEITHER_REQUEST_CONTEXT *Context = NeitherContext(Request);
+    Status = WdfRequestRetrieveInputBuffer(Request, Length, (PVOID *)&Buffer,
+                                           &RetrievedLength);
+    if (!Check(Status == STATUS_INVALID_DEVICE_REQUEST && Buffer == NULL &&
+                   Context->Input != NULL && Context->Output == NULL &&
+                   Context->InputLength == Length,
+               122)) {
+      WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+      return;
+    }
+    Buffer = (PUCHAR)WdfMemoryGetBuffer(Context->Input, &RetrievedLength);
+  } else {
+    Status = WdfRequestRetrieveInputBuffer(Request, Length, (PVOID *)&Buffer,
+                                           &RetrievedLength);
+  }
+  if (TransferMode != 'T' && !NT_SUCCESS(Status)) {
     WdfRequestComplete(Request, Status);
     return;
   }
@@ -815,6 +906,74 @@ static void IoInCallerContext(WDFDEVICE Device, WDFREQUEST Request) {
     WdfRequestComplete(Request, STATUS_SUCCESS);
     return;
   }
+  if (TransferMode == 'T') {
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    NEITHER_REQUEST_CONTEXT *Context = NULL;
+    PVOID Input = NULL;
+    PVOID Output = NULL;
+    size_t InputLength = 0;
+    size_t OutputLength = 0;
+    NTSTATUS Status;
+    if (Parameters.Type == WdfRequestTypeDeviceControl &&
+        Parameters.Parameters.DeviceIoControl.IoControlCode !=
+            IOCTL_NEVERD_KMDF_NEITHER) {
+      WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+      return;
+    }
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes,
+                                            NEITHER_REQUEST_CONTEXT);
+    Status = WdfObjectAllocateContext(Request, &Attributes, (PVOID *)&Context);
+    if (!NT_SUCCESS(Status)) {
+      WdfRequestComplete(Request, Status);
+      return;
+    }
+    if (Parameters.Type != WdfRequestTypeRead) {
+      Status = WdfRequestRetrieveUnsafeUserInputBuffer(Request, 1, &Input,
+                                                       &InputLength);
+      if (!NT_SUCCESS(Status)) {
+        WdfRequestComplete(Request, Status);
+        return;
+      }
+      Status = WdfRequestProbeAndLockUserBufferForRead(
+          Request, Input, InputLength, &Context->Input);
+      if (!NT_SUCCESS(Status)) {
+        WdfRequestComplete(Request, Status);
+        return;
+      }
+    }
+    if (Parameters.Type != WdfRequestTypeWrite) {
+      Status = WdfRequestRetrieveUnsafeUserOutputBuffer(Request, 1, &Output,
+                                                        &OutputLength);
+      if (!NT_SUCCESS(Status)) {
+        WdfRequestComplete(Request, Status);
+        return;
+      }
+      Status = WdfRequestProbeAndLockUserBufferForWrite(
+          Request, Output, OutputLength, &Context->Output);
+      if (!NT_SUCCESS(Status)) {
+        WdfRequestComplete(Request, Status);
+        return;
+      }
+    }
+    Context->RawInput = Input;
+    Context->RawOutput = Output;
+    Context->InputLength = InputLength;
+    Context->OutputLength = OutputLength;
+    if (!Check((Input == NULL ||
+                (Context->Input != NULL &&
+                 WdfMemoryGetBuffer(Context->Input, NULL) != Input)) &&
+                   (Output == NULL ||
+                    (Context->Output != NULL &&
+                     WdfMemoryGetBuffer(Context->Output, NULL) != Output)),
+               123)) {
+      WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+      return;
+    }
+    Status = WdfDeviceEnqueueRequest(Device, Request);
+    if (!NT_SUCCESS(Status))
+      WdfRequestComplete(Request, Status);
+    return;
+  }
   NTSTATUS Status = WdfDeviceEnqueueRequest(Device, Request);
   if (!NT_SUCCESS(Status))
     WdfRequestComplete(Request, Status);
@@ -849,6 +1008,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'I' ? 'I'
                  : Marker == L'J' ? 'J'
                  : Marker == L'K' ? 'K'
+                 : Marker == L'T' ? 'T'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -867,8 +1027,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   if (DeviceInit == NULL)
     return STATUS_INSUFFICIENT_RESOURCES;
   WdfDeviceInitSetIoType(DeviceInit, TransferMode == 'D' ? WdfDeviceIoDirect
-                                                         : WdfDeviceIoBuffered);
-  if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K')
+                                     : TransferMode == 'T'
+                                         ? WdfDeviceIoNeither
+                                         : WdfDeviceIoBuffered);
+  if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
+      TransferMode == 'T')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
   RtlInitUnicodeString(&Name, L"\\Device\\NeverDKmdfControl");
   Status = WdfDeviceInitAssignName(DeviceInit, &Name);
@@ -914,7 +1077,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   DeviceObject = WdfDeviceWdmGetDeviceObject(CreatedDevice);
   if (!Check(DeviceObject != NULL &&
                  (DeviceObject->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO)) ==
-                     (TransferMode == 'D' ? DO_DIRECT_IO : DO_BUFFERED_IO) &&
+                     (TransferMode == 'D'   ? DO_DIRECT_IO
+                      : TransferMode == 'T' ? 0
+                                            : DO_BUFFERED_IO) &&
                  (DeviceObject->Flags & DO_DEVICE_INITIALIZING) != 0,
              3)) {
     Status = STATUS_UNSUCCESSFUL;

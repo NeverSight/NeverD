@@ -82,7 +82,7 @@ KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
     const bool IsWrite = View->Major == RequestMajorWrite;
     const bool IsIOCTL = View->Major == RequestMajorDeviceControl;
     if ((!IsRead && !IsWrite && !IsIOCTL) || (IsRead && InputMdl) ||
-        (IsWrite && OutputMdl) ||
+        (IsWrite && OutputMdl) || View->Neither ||
         (IsIOCTL && (View->ControlCode & windows::IoControlMethodMask) ==
                         windows::MethodNeither))
       return Result{ControlInvalidDeviceRequest};

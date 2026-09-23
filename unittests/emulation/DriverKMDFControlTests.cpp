@@ -26,6 +26,7 @@ constexpr uint32_t BufferTooSmall = 0xc0000023;
 constexpr uint32_t InvalidDeviceRequest = 0xc0000010;
 constexpr uint32_t DataError = 0xc000003e;
 constexpr uint32_t Cancelled = 0xc0000120;
+constexpr uint32_t AccessViolation = 0xc0000005;
 
 std::vector<const char *> controlImages() {
   std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
@@ -56,7 +57,7 @@ DriverOptions controlOptions(char Mode = 'B') {
   Create.Device = "\\DosDevices\\NeverDKmdfControl";
   Options.Requests.push_back(std::move(Create));
   auto IO = controlRequest(DriverRequestKind::DeviceControl);
-  IO.ControlCode = 0x222000;
+  IO.ControlCode = Mode == 'T' ? 0x222003 : 0x222000;
   IO.Input = {0, 1, 0x5a, 0xff};
   // The fixture checks both logical lengths despite their aliased allocation.
   IO.OutputSize = 19;
@@ -215,6 +216,57 @@ TEST(DriverKMDFControl, CallerContextCanCompleteWithoutQueueDelivery) {
     EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 0u);
     EXPECT_TRUE(Result->UnloadCompleted);
   }
+}
+
+TEST(DriverKMDFControl, NeitherBuffersUseRequestOwnedLockedSystemAliases) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('T');
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 6);
+      checkSuccessfulTransfers(*Result, 'T');
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 3u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveUnsafeUserInputBuffer"),
+                2u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveUnsafeUserOutputBuffer"),
+                2u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestProbeAndLockUserBufferForRead"),
+                2u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestProbeAndLockUserBufferForWrite"),
+                2u);
+      EXPECT_GE(apiCount(*Result, "WdfMemoryGetBuffer"), 4u);
+    }
+}
+
+TEST(DriverKMDFControl, NeitherProbeRejectsInaccessibleUserPages) {
+  for (const auto *Image : controlImages())
+    for (bool InputFault : {true, false}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(InputFault);
+      auto Options = controlOptions('T');
+      Options.Requests.resize(2);
+      Options.Requests[1].UserInputAccess =
+          InputFault ? DriverUserPageAccess::NoAccess
+                     : DriverUserPageAccess::ReadWrite;
+      Options.Requests[1].UserOutputAccess =
+          InputFault ? DriverUserPageAccess::ReadWrite
+                     : DriverUserPageAccess::ReadOnly;
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].DispatchStatus, Pending);
+      EXPECT_EQ(Result->Requests[1].IOStatus, AccessViolation);
+      EXPECT_TRUE(Result->Requests[1].Completed);
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 0u);
+      EXPECT_TRUE(Result->UnloadCompleted);
+    }
 }
 
 TEST(DriverKMDFControl, RequestCleanupKeepsBuffersAndReferenceKeepsContext) {
