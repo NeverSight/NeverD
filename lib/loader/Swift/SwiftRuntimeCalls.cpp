@@ -154,6 +154,9 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "ppppp"},
+    // Swift String is passed as its two scalar carriers; the mutable
+    // destination is the swiftself pointer.
+    {"$sSS6appendyySSF", "/usr/lib/swift/libswiftCore.dylib", "vzpC"},
     {"$sSa10FoundationE19_bridgeToObjectiveCSo7NSArrayCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
