@@ -46,6 +46,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Name != api::WdfIoQueuePurgeSynchronously &&
       Name != api::WdfIoQueueReadyNotify &&
       Name != api::WdfIoQueueRetrieveNextRequest &&
+      Name != api::WdfIoQueueRetrieveRequestByFileObject &&
       Name != api::WdfIoQueueFindRequest &&
       Name != api::WdfIoQueueRetrieveFoundRequest)
     return std::optional<uint64_t>{};
@@ -58,6 +59,54 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (OI == Objects.end() || OI->second.Binding != B.Globals ||
       OI->second.Kind != Kind)
     return invalidQueue("invalid, foreign or wrong-kind object handle");
+
+  const auto FileBelongsToQueue = [&](uint64_t File, const Queue &Q) {
+    auto Object = Objects.find(File);
+    auto State = FileObjects.find(File);
+    return Object != Objects.end() && Object->second.Binding == B.Globals &&
+           Object->second.Kind == ObjectKind::File &&
+           !Object->second.Deleting && State != FileObjects.end() &&
+           State->second.Device == Q.Device;
+  };
+  const auto FindPendingFile =
+      [&](Queue &Q, std::deque<uint64_t>::iterator Begin,
+          uint64_t File) -> llvm::Expected<std::deque<uint64_t>::iterator> {
+    for (auto It = Begin; It != Q.Pending.end(); ++It) {
+      auto Request = Requests.find(*It);
+      auto Object = Objects.find(*It);
+      if (Request == Requests.end() || Object == Objects.end() ||
+          !Request->second.Queued || Request->second.Queue != A[1] ||
+          Object->second.Binding != B.Globals ||
+          Object->second.Kind != ObjectKind::Request)
+        return invalidQueue("queue lost a pending request");
+      if (Request->second.File == File)
+        return It;
+    }
+    return Q.Pending.end();
+  };
+  const auto RetrievePending =
+      [&](Queue &Q, std::deque<uint64_t>::iterator Position,
+          uint64_t Output) -> llvm::Expected<std::optional<uint64_t>> {
+    const uint64_t Handle = *Position;
+    auto Request = Requests.find(Handle);
+    auto Object = Objects.find(Handle);
+    if (Request == Requests.end() || Object == Objects.end() ||
+        !Request->second.Queued || Request->second.Queue != A[1] ||
+        Object->second.Binding != B.Globals ||
+        Object->second.Kind != ObjectKind::Request)
+      return invalidQueue("queue lost a pending request");
+    if (auto E = Memory.writeInteger(Output, Handle, sizeof(uint64_t)))
+      return E;
+    Q.Pending.erase(Position);
+    if (Q.Pending.empty())
+      Q.ReadyPending = false;
+    Request->second.Queued = false;
+    Request->second.DeliveredOnce = true;
+    Request->second.QueuedCallback = 0;
+    Request->second.QueuedArguments.clear();
+    Request->second.QueuedCompletionStatus.reset();
+    return std::optional<uint64_t>{0};
+  };
 
   if (Name == api::WdfIoQueueReadyNotify) {
     auto Q = Queues.find(A[1]);
@@ -283,8 +332,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return std::optional<uint64_t>{QueueInvalidDeviceState};
     if (!Q->second.Dispatching || queuePnpHeld(Q->second))
       return std::optional<uint64_t>{QueuePaused};
-    if (Find && A[3])
-      return invalidQueue("framework file-object filtering is not modeled");
+    if (Find && A[3] && !FileBelongsToQueue(A[3], Q->second))
+      return invalidQueue("invalid or foreign file-object filter");
     const uint64_t Previous = A[2];
     if (!Find && !Previous)
       return invalidQueue("retrieval requires a live request handle");
@@ -306,18 +355,25 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       if (Find)
         ++Position;
     }
+    if (Find && A[3]) {
+      auto Match = FindPendingFile(Q->second, Position, A[3]);
+      if (!Match)
+        return Match.takeError();
+      Position = *Match;
+    }
     if (Position == Q->second.Pending.end()) {
       if (auto E = Memory.writeInteger(Output, 0, sizeof(uint64_t)))
         return E;
       return std::optional<uint64_t>{QueueNoMoreEntries};
     }
-    const uint64_t Handle = *Position;
-    auto R = Requests.find(Handle);
-    auto O = Objects.find(Handle);
-    if (R == Requests.end() || O == Objects.end() || !R->second.Queued ||
-        R->second.Queue != A[1] || O->second.Binding != B.Globals)
-      return invalidQueue("queue lost a pending request");
     if (Find) {
+      const uint64_t Handle = *Position;
+      auto R = Requests.find(Handle);
+      auto O = Objects.find(Handle);
+      if (R == Requests.end() || O == Objects.end() || !R->second.Queued ||
+          R->second.Queue != A[1] || O->second.Binding != B.Globals ||
+          O->second.Kind != ObjectKind::Request)
+        return invalidQueue("queue lost a pending request");
       if (O->second.References == UINT64_MAX)
         return invalidQueue("framework reference count overflow");
       if (A[4]) {
@@ -334,48 +390,39 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       ++O->second.References;
       return std::optional<uint64_t>{0};
     }
-    if (auto E = Memory.writeInteger(Output, Handle, sizeof(uint64_t)))
-      return E;
-    Q->second.Pending.erase(Position);
-    if (Q->second.Pending.empty())
-      Q->second.ReadyPending = false;
-    R->second.Queued = false;
-    R->second.DeliveredOnce = true;
-    R->second.QueuedCallback = 0;
-    R->second.QueuedArguments.clear();
-    R->second.QueuedCompletionStatus.reset();
-    return std::optional<uint64_t>{0};
+    return RetrievePending(Q->second, Position, Output);
   }
-  if (Name == api::WdfIoQueueRetrieveNextRequest) {
+  if (Name == api::WdfIoQueueRetrieveNextRequest ||
+      Name == api::WdfIoQueueRetrieveRequestByFileObject) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
-    if (auto E = writable(A[2], sizeof(uint64_t)))
+    const bool ByFile = Name == api::WdfIoQueueRetrieveRequestByFileObject;
+    const uint64_t Output = A[ByFile ? 3 : 2];
+    if (auto E = writable(Output, sizeof(uint64_t)))
       return E;
     if (Q->second.Dispatch == QueueDispatchParallel)
       return std::optional<uint64_t>{QueueInvalidDeviceState};
     if (!Q->second.Dispatching || queuePnpHeld(Q->second))
       return std::optional<uint64_t>{QueuePaused};
-    if (Q->second.Pending.empty()) {
-      if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
-        return E;
+    if (ByFile && !FileBelongsToQueue(A[2], Q->second))
+      return invalidQueue(
+          "retrieval requires a live file object on the queue device");
+    auto Position = Q->second.Pending.begin();
+    if (ByFile) {
+      auto Match = FindPendingFile(Q->second, Position, A[2]);
+      if (!Match)
+        return Match.takeError();
+      Position = *Match;
+    }
+    if (Position == Q->second.Pending.end()) {
+      if (!ByFile) {
+        if (auto E = Memory.writeInteger(Output, 0, sizeof(uint64_t)))
+          return E;
+      }
       return std::optional<uint64_t>{QueueNoMoreEntries};
     }
-    const uint64_t Handle = Q->second.Pending.front();
-    auto R = Requests.find(Handle);
-    if (R == Requests.end() || !R->second.Queued || R->second.Queue != A[1])
-      return invalidQueue("queue lost a pending request");
-    if (auto E = Memory.writeInteger(A[2], Handle, sizeof(uint64_t)))
-      return E;
-    Q->second.Pending.pop_front();
-    if (Q->second.Pending.empty())
-      Q->second.ReadyPending = false;
-    R->second.Queued = false;
-    R->second.DeliveredOnce = true;
-    R->second.QueuedCallback = 0;
-    R->second.QueuedArguments.clear();
-    R->second.QueuedCompletionStatus.reset();
-    return std::optional<uint64_t>{0};
+    return RetrievePending(Q->second, Position, Output);
   }
 
   auto DI = Devices.find(A[1]);

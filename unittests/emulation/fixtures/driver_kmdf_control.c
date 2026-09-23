@@ -114,6 +114,8 @@ ABI_SLOT(WdfDeviceInitFree, 54);
 ABI_SLOT(WdfDeviceInitSetIoType, 61);
 ABI_SLOT(WdfDeviceInitSetExclusive, 62);
 ABI_SLOT(WdfDeviceInitSetFileObjectConfig, 71);
+ABI_SLOT(WdfFileObjectGetFileName, 137);
+ABI_SLOT(WdfFileObjectGetFlags, 138);
 ABI_SLOT(WdfFileObjectGetDevice, 139);
 ABI_SLOT(WdfFileObjectWdmGetFileObject, 140);
 ABI_SLOT(WdfDeviceInitSetIoInCallerContextCallback, 74);
@@ -125,6 +127,7 @@ ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfIoQueueCreate, 152);
 ABI_SLOT(WdfIoQueueStopSynchronously, 156);
 ABI_SLOT(WdfIoQueueRetrieveNextRequest, 158);
+ABI_SLOT(WdfIoQueueRetrieveRequestByFileObject, 159);
 ABI_SLOT(WdfIoQueueFindRequest, 160);
 ABI_SLOT(WdfIoQueueRetrieveFoundRequest, 161);
 ABI_SLOT(WdfIoQueueDrainSynchronously, 162);
@@ -247,12 +250,15 @@ static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
 static void FileCreate(WDFDEVICE Device, WDFREQUEST Request,
                        WDFFILEOBJECT File) {
   PIRP Irp = WdfRequestWdmGetIrp(Request);
+  PFILE_OBJECT WdmFile = IoGetCurrentIrpStackLocation(Irp)->FileObject;
+  PUNICODE_STRING FileName = WdfFileObjectGetFileName(File);
   FILE_CONTEXT *Context = FileContext(File);
   if (!Check(Device == CreatedDevice && File != NULL && Context != NULL &&
                  WdfRequestGetFileObject(Request) == File &&
                  WdfFileObjectGetDevice(File) == Device &&
-                 WdfFileObjectWdmGetFileObject(File) ==
-                     IoGetCurrentIrpStackLocation(Irp)->FileObject &&
+                 WdfFileObjectWdmGetFileObject(File) == WdmFile &&
+                 FileName != NULL && FileName->Length == 0 &&
+                 WdfFileObjectGetFlags(File) == WdmFile->Flags &&
                  Context->Phase == 0,
              300)) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);

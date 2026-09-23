@@ -79,7 +79,9 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
     Init->second.Files = Config;
     return Result{0};
   }
-  if (Name != api::WdfFileObjectGetDevice &&
+  if (Name != api::WdfFileObjectGetFileName &&
+      Name != api::WdfFileObjectGetFlags &&
+      Name != api::WdfFileObjectGetDevice &&
       Name != api::WdfFileObjectWdmGetFileObject)
     return Result{};
   auto Object = Objects.find(A[1]);
@@ -88,6 +90,15 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
       Object->second.Binding != B.Globals || Object->second.Deleting ||
       File == FileObjects.end())
     return fileError("access requires a live framework file object");
+  if (Name == api::WdfFileObjectGetFileName)
+    return Result{File->second.Wdm + windows::FileNameOffset};
+  if (Name == api::WdfFileObjectGetFlags) {
+    auto Flags =
+        read(File->second.Wdm + windows::FileFlagsOffset, sizeof(uint32_t));
+    if (!Flags)
+      return Flags.takeError();
+    return Result{*Flags};
+  }
   return Result{Name == api::WdfFileObjectGetDevice ? File->second.Device
                                                     : File->second.Wdm};
 }
