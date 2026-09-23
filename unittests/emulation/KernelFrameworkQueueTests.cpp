@@ -85,16 +85,45 @@ TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
   queueConfiguration();
   put(QueueConfig + 4, 3, 4);
   put(QueueConfig + 40, 0);
-  expectError(createQueue(), "manual queue retrieval");
+  expectError(createQueue(), "manual default queue");
   queueConfiguration();
   put(QueueConfig + 13, 0, 1);
-  expectError(createQueue(), "only default queues");
+  expectError(createQueue(), "nondefault automatic queue");
   for (uint64_t Size : {80, 88}) {
     queueConfiguration();
     put(QueueConfig, Size, 4);
     expectError(createQueue(), "legacy");
   }
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+}
+
+TEST_F(DriverKernelFrameworkQueue,
+       ManualQueueHasItsOwnIdentityAndEmptyRetrievalClearsOutput) {
+  put(QueueConfig + 4, framework::QueueDispatchManual, 4);
+  put(QueueConfig + 13, 0, 1);
+  put(QueueConfig + 40, 0);
+  EXPECT_EQ(take(createQueue()), 0u);
+  const auto Manual = get(QueueSlot);
+  EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+  EXPECT_EQ(take(invoke("WdfIoQueueGetDevice", {Globals, Manual})), Device);
+  put(QueueSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, QueueSlot})),
+            framework::QueueNoMoreEntries);
+  EXPECT_EQ(get(QueueSlot), 0u);
+  queueConfiguration();
+  EXPECT_EQ(take(createQueue()), 0u);
+  const auto Default = get(QueueSlot);
+  EXPECT_NE(Default, Manual);
+  EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})),
+            Default);
+  expectError(
+      invoke("WdfIoQueueRetrieveNextRequest", {Globals, Default, QueueSlot}),
+      "sequential queue retrieval");
+  take(invoke("WdfObjectDelete", {Globals, Manual}));
+  EXPECT_TRUE(Released.count(Manual));
+  EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})),
+            Default);
 }
 
 TEST_F(DriverKernelFrameworkQueue,

@@ -12,14 +12,17 @@
 /// The final service-name character selects buffered READ/WRITE (B, default),
 /// direct READ/WRITE (D), or buffered READ/WRITE with deferred IOCTL completion
 /// (W). P uses an unlimited parallel default queue with independent deferred
-/// IOCTL work items. C observes request cleanup, child destruction and retained
-/// context. X completes from a cancel callback; H delegates cancel completion
-/// to a worker while the cancel callback waits; U unmarks before a delayed
-/// worker; N deliberately completes a still-cancelable request. Buffered mode B
-/// polls cancellation before processing, including the CLI's default service
-/// name. L uses legacy MarkCancelable, including synchronous cancellation
-/// before the API returns. M checks request metadata and buffered WDM MDL
-/// aliases. I preprocesses each transfer in EvtIoInCallerContext before
+/// IOCTL work items. Y forwards the first IOCTL from a sequential default
+/// queue to a manual queue, then retrieves it from a worker after a second
+/// IOCTL is delivered. Z verifies framework cancellation while the queued
+/// request waits for retrieval. C observes request cleanup, child destruction
+/// and retained context. X completes from a cancel callback; H delegates cancel
+/// completion to a worker while the cancel callback waits; U unmarks before a
+/// delayed worker; N deliberately completes a still-cancelable request.
+/// Buffered mode B polls cancellation before processing, including the CLI's
+/// default service name. L uses legacy MarkCancelable, including synchronous
+/// cancellation before the API returns. M checks request metadata and buffered
+/// WDM MDL aliases. I preprocesses each transfer in EvtIoInCallerContext before
 /// enqueueing it. J deliberately returns from that callback without enqueue or
 /// completion. K completes the transfer in the caller-context callback without
 /// enqueueing. T probes and locks neither-I/O user buffers in caller context,
@@ -84,6 +87,7 @@ _Static_assert(WdfDeviceIoNeither == 1 && WdfDeviceIoBuffered == 2 &&
                "I/O type ABI");
 _Static_assert(WdfIoQueueDispatchSequential == 1, "queue dispatch ABI");
 _Static_assert(WdfIoQueueDispatchParallel == 2, "parallel queue dispatch ABI");
+_Static_assert(WdfIoQueueDispatchManual == 3, "manual queue dispatch ABI");
 _Static_assert(WdfExecutionLevelPassive == 2, "passive execution ABI");
 _Static_assert(WdfSynchronizationScopeNone == 4, "synchronization ABI");
 ABI_SLOT(WdfControlDeviceInitAllocate, 25);
@@ -98,6 +102,7 @@ ABI_SLOT(WdfDeviceCreateSymbolicLink, 80);
 ABI_SLOT(WdfDeviceGetDefaultQueue, 92);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfIoQueueCreate, 152);
+ABI_SLOT(WdfIoQueueRetrieveNextRequest, 158);
 ABI_SLOT(WdfDeviceEnqueueRequest, 91);
 ABI_SLOT(WdfObjectAllocateContext, 203);
 ABI_SLOT(WdfObjectReferenceActual, 205);
@@ -123,6 +128,7 @@ ABI_SLOT(WdfRequestSetInformation, 275);
 ABI_SLOT(WdfRequestGetInformation, 276);
 ABI_SLOT(WdfRequestGetFileObject, 277);
 ABI_SLOT(WdfRequestGetIoQueue, 282);
+ABI_SLOT(WdfRequestForwardToIoQueue, 281);
 ABI_SLOT(WdfRequestWdmGetIrp, 285);
 ABI_SLOT(WdfRequestMarkCancelableEx, 393);
 
@@ -178,10 +184,13 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NEITHER_REQUEST_CONTEXT, NeitherContext);
 
 static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
+static WDFQUEUE ManualQueue;
+static PIO_WORKITEM ManualItem;
 static UCHAR TransferMode;
 static volatile ULONG CallerRequestCount;
 static volatile ULONG ParallelQueued;
 static volatile ULONG ParallelCompleted;
+static volatile ULONG ManualFollowup;
 static DEFERRED_IOCTL_CONTEXT Deferred;
 
 static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
@@ -549,6 +558,57 @@ static void ParallelWorker(PDEVICE_OBJECT Device, PVOID Context) {
   TransformRequest(Request, OutputLength, InputLength);
 }
 
+static void ManualWorker(PDEVICE_OBJECT Device, PVOID Context) {
+  WDFQUEUE Queue = Context;
+  WDFREQUEST Request = NULL;
+  WDFREQUEST Empty = (WDFREQUEST)(ULONG_PTR)1;
+  WDF_REQUEST_PARAMETERS Parameters;
+  NTSTATUS Status;
+  BOOLEAN Valid =
+      Check(Queue == ManualQueue && ManualItem != NULL &&
+                (ManualFollowup == 1 ||
+                 (TransferMode == 'Z' && ManualFollowup == 0)) &&
+                Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
+                KeGetCurrentIrql() == PASSIVE_LEVEL,
+            140);
+  IoFreeWorkItem(ManualItem);
+  ManualItem = NULL;
+  if (TransferMode == 'Z') {
+    LARGE_INTEGER Delay;
+    Delay.QuadPart = -20;
+    if (!Check(KeDelayExecutionThread(KernelMode, FALSE, &Delay) ==
+                   STATUS_SUCCESS,
+               146))
+      return;
+  }
+  Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+  if (TransferMode == 'Z') {
+    Check(Valid && Status == STATUS_NO_MORE_ENTRIES && Request == NULL, 147);
+    DbgPrint("KMDF control: queued manual request cancelled\n");
+    return;
+  }
+  if (!Check(NT_SUCCESS(Status) && Request != NULL, 141))
+    return;
+  WDF_REQUEST_PARAMETERS_INIT(&Parameters);
+  WdfRequestGetParameters(Request, &Parameters);
+  Valid =
+      Check(Valid && WdfRequestGetIoQueue(Request) == ManualQueue &&
+                Parameters.Type == WdfRequestTypeDeviceControl &&
+                Parameters.Parameters.DeviceIoControl.InputBufferLength == 4,
+            142);
+  Status = WdfIoQueueRetrieveNextRequest(Queue, &Empty);
+  Valid =
+      Check(Valid && Status == STATUS_NO_MORE_ENTRIES && Empty == NULL, 143);
+  DbgPrint("KMDF control: manual worker retrieved request\n");
+  if (!Valid) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  TransformRequest(Request,
+                   Parameters.Parameters.DeviceIoControl.OutputBufferLength,
+                   Parameters.Parameters.DeviceIoControl.InputBufferLength);
+}
+
 static void CancelCleanup(WDFOBJECT Object) {
   CANCEL_REQUEST_CONTEXT *Context = CancelContext(Object);
   if (Check(Context->Cookie == 0xca1ce133 && Context->Phase == 1 &&
@@ -787,6 +847,26 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: queued parallel request\n");
     return;
   }
+  if ((TransferMode == 'Y' || TransferMode == 'Z') && InputLength == 4) {
+    NTSTATUS Status;
+    ManualItem = IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
+    if (!Check(ManualItem != NULL, 144)) {
+      WdfRequestComplete(Request, STATUS_INSUFFICIENT_RESOURCES);
+      return;
+    }
+    Status = WdfRequestForwardToIoQueue(Request, ManualQueue);
+    if (!NT_SUCCESS(Status)) {
+      IoFreeWorkItem(ManualItem);
+      ManualItem = NULL;
+      WdfRequestComplete(Request, Status);
+      return;
+    }
+    IoQueueWorkItem(ManualItem, ManualWorker, DelayedWorkQueue, ManualQueue);
+    DbgPrint("KMDF control: forwarded manual request\n");
+    return;
+  }
+  if (TransferMode == 'Y' || TransferMode == 'Z')
+    ++ManualFollowup;
   if (TransferMode != 'W') {
     TransformRequest(Request, OutputLength, InputLength);
     return;
@@ -932,12 +1012,13 @@ static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
 static void DriverUnload(WDFDRIVER Driver) {
   (void)Driver;
   Check(Deferred.Item == NULL && Deferred.Request == NULL &&
-            ParallelQueued == ParallelCompleted &&
+            ParallelQueued == ParallelCompleted && ManualItem == NULL &&
             KeGetCurrentIrql() == PASSIVE_LEVEL,
         60);
   WdfObjectDelete(CreatedDevice);
   CreatedDevice = NULL;
   DefaultQueue = NULL;
+  ManualQueue = NULL;
   DbgPrint("KMDF control: driver unload\n");
 }
 
@@ -1067,6 +1148,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'K' ? 'K'
                  : Marker == L'T' ? 'T'
                  : Marker == L'P' ? 'P'
+                 : Marker == L'Y' ? 'Y'
+                 : Marker == L'Z' ? 'Z'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1133,6 +1216,23 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     goto Failure;
   }
 
+  if (TransferMode == 'Y' || TransferMode == 'Z') {
+    WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
+    WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
+    Attributes.ExecutionLevel = WdfExecutionLevelPassive;
+    Attributes.SynchronizationScope = WdfSynchronizationScopeNone;
+    Status = WdfIoQueueCreate(CreatedDevice, &QueueConfig, &Attributes,
+                              &ManualQueue);
+    if (!NT_SUCCESS(Status) ||
+        !Check(ManualQueue != NULL && ManualQueue != DefaultQueue &&
+                   WdfIoQueueGetDevice(ManualQueue) == CreatedDevice,
+               145)) {
+      if (NT_SUCCESS(Status))
+        Status = STATUS_UNSUCCESSFUL;
+      goto Failure;
+    }
+  }
+
   DeviceObject = WdfDeviceWdmGetDeviceObject(CreatedDevice);
   if (!Check(DeviceObject != NULL &&
                  (DeviceObject->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO)) ==
@@ -1159,6 +1259,7 @@ Failure:
     WdfObjectDelete(CreatedDevice);
     CreatedDevice = NULL;
     DefaultQueue = NULL;
+    ManualQueue = NULL;
   }
   return Status;
 }

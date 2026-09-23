@@ -16,6 +16,7 @@
 #include "KernelExportRegistry.h"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -112,6 +113,9 @@ public:
                                uint64_t EarlierCallbacks = 0) const;
   /// Latch delivery when the scheduled or nested cancel callback is entered.
   llvm::Error beginCancelCallback(uint64_t Token);
+  bool isCancelCallback(uint64_t Token) const {
+    return CancelCallbacks.contains(Token);
+  }
   /// Framework-owned packets must complete through their WDF request lifetime.
   bool ownsRequestIRP(uint64_t IRP) const;
   KernelFramework(GuestMemory &Memory, KernelExportRegistry &Exports,
@@ -181,6 +185,7 @@ private:
     uint32_t Dispatch = framework::QueueDispatchSequential;
     bool AllowZeroLength = false;
     bool IsDefault = false;
+    std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;
   RequestHost RequestsHost;
@@ -190,6 +195,7 @@ private:
     uint64_t Device = 0;
     bool InCallerContext = false;
     bool Enqueued = false;
+    bool Queued = false;
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;

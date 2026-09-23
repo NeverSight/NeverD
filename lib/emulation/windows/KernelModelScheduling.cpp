@@ -310,8 +310,9 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
       if (!Framework || Token == ScheduledModelContinuations.end() ||
           Token->second.Owner != GuestCallOwner::Framework)
         return schedulingError("cancel callback lost its framework identity");
-      if (auto E = Framework->beginCancelCallback(Token->second.ID))
-        return E;
+      if (Framework->isCancelCallback(Token->second.ID))
+        if (auto E = Framework->beginCancelCallback(Token->second.ID))
+          return E;
     }
     if ((**Next).Kind == KernelScheduler::CallbackKind::Interrupt) {
       auto Token = ScheduledModelContinuations.find((**Next).ID);

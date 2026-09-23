@@ -139,6 +139,15 @@ protected:
     take(invoke("WdfControlFinishInitializing", {Globals, Device}));
   }
 
+  uint64_t manualQueue() {
+    queueConfiguration();
+    put(QueueConfig + 4, framework::QueueDispatchManual, 4);
+    put(QueueConfig + 13, 0, 1);
+    put(QueueConfig + 40, 0);
+    EXPECT_EQ(take(createQueue()), 0u);
+    return get(QueueSlot);
+  }
+
   uint64_t packet(uint32_t Major = 14, uint32_t Input = 3, uint32_t Output = 7,
                   uint64_t Offset = 0) {
     const uint64_t IRP = NextIRP;
@@ -452,6 +461,187 @@ TEST_F(DriverKernelFrameworkRequest,
   EXPECT_NE(Second, First);
   EXPECT_EQ(Packets.at(SecondIRP).PendingCalls, 1u);
   complete(Second);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ForwardedRequestsLeaveSequentialSourceAndReturnInManualFifoOrder) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto First = request(route(FirstIRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, First, Manual})), 0u);
+  expectError(invoke("WdfRequestComplete", {Globals, First, 0}),
+              "framework owns");
+  expectError(invoke("WdfRequestGetIoQueue", {Globals, First}),
+              "framework owns");
+  expectError(invoke("WdfObjectDelete", {Globals, Manual}), "live request");
+  const auto Second = request(route(SecondIRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Second, Manual})),
+      0u);
+  put(BufferSlot, Sentinel);
+  DenyWriteAt = BufferSlot;
+  expectError(
+      invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}),
+      "write validation");
+  EXPECT_EQ(get(BufferSlot), Sentinel);
+  DenyWriteAt = 0;
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            0u);
+  EXPECT_EQ(get(BufferSlot), First);
+  EXPECT_EQ(take(invoke("WdfRequestGetIoQueue", {Globals, First})), Manual);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            0u);
+  EXPECT_EQ(get(BufferSlot), Second);
+  put(BufferSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            framework::QueueNoMoreEntries);
+  EXPECT_EQ(get(BufferSlot), 0u);
+  complete(Second, 2);
+  complete(First, 1);
+  EXPECT_EQ(Packets.at(FirstIRP).Information, 1u);
+  EXPECT_EQ(Packets.at(SecondIRP).Information, 2u);
+  take(invoke("WdfObjectDelete", {Globals, Manual}));
+  EXPECT_TRUE(Released.count(Manual));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ForwardingRejectsInvalidOwnershipWithoutMovingTheRequest) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Queue})),
+      uint64_t(framework::QueueInvalidDeviceRequest));
+  const auto OtherDevice = control();
+  Device = OtherDevice;
+  const auto ForeignManual = manualQueue();
+  Device = take(invoke("WdfIoQueueGetDevice", {Globals, Queue}));
+  EXPECT_EQ(take(invoke("WdfRequestForwardToIoQueue",
+                        {Globals, Request, ForeignManual})),
+            uint64_t(framework::QueueInvalidDeviceRequest));
+  markCancelable(Request);
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      uint64_t(framework::QueueInvalidDeviceRequest));
+  EXPECT_EQ(take(invoke("WdfRequestUnmarkCancelable", {Globals, Request})), 0u);
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Queue})),
+      uint64_t(framework::QueueInvalidDeviceRequest));
+  put(BufferSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            0u);
+  EXPECT_EQ(get(BufferSlot), Request);
+  complete(Request);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       FrameworkCancelsQueuedManualRequestWithoutDriverDelivery) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP)));
+  Packets.at(IRP).Canceled = true;
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  EXPECT_EQ(Packets.at(IRP).Information, 0u);
+  EXPECT_TRUE(Released.count(Request));
+  put(BufferSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            framework::QueueNoMoreEntries);
+  EXPECT_EQ(get(BufferSlot), 0u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       QueuedManualCancellationRunsCleanupBeforeRetiringTheIRP) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  const auto Context = requestContext(Request);
+  put(Context, Sentinel);
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(IRP)));
+  Packets.at(IRP).Canceled = true;
+  auto Cleanup = take(Model.requestCancellation(IRP));
+  ASSERT_TRUE(Cleanup);
+  EXPECT_EQ(Cleanup->PC, ChildCleanup);
+  EXPECT_EQ(Cleanup->Arguments, (std::vector<uint64_t>{Request}));
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  EXPECT_EQ(get(Context), Sentinel);
+  expectError(invoke("WdfRequestComplete", {Globals, Request, 0}),
+              "completion in progress");
+  finish(*Cleanup);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  auto Destroy = callback();
+  EXPECT_EQ(Destroy.PC, ChildDestroy);
+  finish(Destroy);
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       AlreadyCanceledRequestIsRetiredWhenForwardedToManualQueue) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  Packets.at(IRP).Canceled = true;
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  put(BufferSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            framework::QueueNoMoreEntries);
+  EXPECT_EQ(get(BufferSlot), 0u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       AlreadyCanceledForwardRunsNestedRequestCleanup) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  const auto Context = requestContext(Request);
+  put(Context, Sentinel);
+  Packets.at(IRP).Canceled = true;
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  auto Cleanup = callback();
+  EXPECT_EQ(Cleanup.PC, ChildCleanup);
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  EXPECT_EQ(get(Context), Sentinel);
+  finish(Cleanup);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  auto Destroy = callback();
+  EXPECT_EQ(Destroy.PC, ChildDestroy);
+  finish(Destroy);
+  EXPECT_TRUE(Released.count(Request));
+  EXPECT_FALSE(Model.takeGuestCall());
 }
 
 TEST_F(DriverKernelFrameworkRequest,
