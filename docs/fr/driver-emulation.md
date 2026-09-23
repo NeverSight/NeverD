@@ -265,7 +265,8 @@ Le modèle initial d’API possède volontairement un contrat limité :
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Timers notification/synchronisation ; échéances relatives/absolues en 100 ns, périodes en millisecondes, réarmement/annulation et signaux en temps virtuel |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Événements notification/synchronisation avec consommation distincte ; `KeSetEvent` accepte uniquement Increment=0 et Wait=FALSE |
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Sémaphore compteur résident avec limite positive ; chaque attente réussie consomme une unité. Libération avec Increment=0 et Wait=FALSE ; dépasser la limite lève `STATUS_SEMAPHORE_LIMIT_EXCEEDED`. |
-| `KeWaitForSingleObject` | Un événement ou timer initialisé ; `KernelMode` non alertable, raison `Executive` ; polling zéro, attente relative/absolue finie ou infinie ; attente non nulle/infinie à IRQL <= APC_LEVEL |
+| `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | KMUTEX résident avec acquisition récursive propre à une exécution ; KeReleaseMutex renvoie l’état signé précédent, exige le propriétaire et le même contexte DISPATCH_LEVEL, et accepte seulement Wait=FALSE. Un mutex détenu interdit retour, réinitialisation et libération du stockage. Une libération par un autre exécutant lève `STATUS_MUTANT_NOT_OWNED`. |
+| `KeWaitForSingleObject` | Un événement, timer, sémaphore ou mutex initialisé ; `KernelMode` non alertable, raison `Executive` ; polling zéro, attente relative/absolue finie ou infinie ; attente non nulle/infinie à IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Délai relatif/absolu `KernelMode` non alertable à IRQL <= APC_LEVEL ; reprise du cadre invité après progression du temps virtuel |
 | `IoMarkIrpPending` | Marque l’IRP actif ; l’écriture équivalente de la macro WDM dans le contrôle de pile est aussi modélisée ; le dispatch doit retourner `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT` ; déroule la fin avec arrêt/reprise et libère IRP/MDL/tampons uniquement à la limite finale |
@@ -531,7 +532,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v28`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v29`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique

@@ -268,7 +268,8 @@ El modelo inicial de API tiene deliberadamente un contrato limitado:
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Temporizadores de notificación/sincronización; vencimientos relativos/absolutos en 100 ns, períodos en milisegundos, rearme/cancelación y señales en tiempo virtual |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Eventos de notificación/sincronización con consumo distinto; `KeSetEvent` solo acepta Increment=0 y Wait=FALSE |
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Semáforo contador residente con límite positivo; cada espera correcta consume una unidad. La liberación admite Increment=0 y Wait=FALSE; superar el límite genera `STATUS_SEMAPHORE_LIMIT_EXCEEDED`. |
-| `KeWaitForSingleObject` | Un evento o temporizador inicializado; `KernelMode` no alertable, razón `Executive`; sondeo cero, espera finita relativa/absoluta o infinita; espera no nula/infinita requiere IRQL <= APC_LEVEL |
+| `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | KMUTEX residente con adquisición recursiva por ejecución; KeReleaseMutex devuelve el estado con signo anterior, exige el propietario y el mismo contexto DISPATCH_LEVEL, y solo admite Wait=FALSE. Un mutex poseído impide retornar, reinicializar o liberar su almacenamiento. La liberación por otro propietario genera `STATUS_MUTANT_NOT_OWNED`. |
+| `KeWaitForSingleObject` | Un evento, temporizador, semáforo o mutex inicializado; `KernelMode` no alertable, razón `Executive`; sondeo cero, espera finita relativa/absoluta o infinita; espera no nula/infinita requiere IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Retardo relativo/absoluto `KernelMode` no alertable con IRQL <= APC_LEVEL; reanuda el marco invitado tras avanzar el tiempo virtual |
 | `IoMarkIrpPending` | Marca el IRP activo; también se modela la escritura equivalente de la macro WDM en el control de pila; el despacho debe devolver `STATUS_PENDING` |
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; desenrollado con detención/reanudación, retirando IRP/MDL/búferes solo en el límite final |
@@ -534,7 +535,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v28`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v29`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y

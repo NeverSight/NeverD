@@ -3511,13 +3511,14 @@
         "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; buffered/direct/neither requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; arbitrary concurrent public scenario submissions and PnP request cancellation, system threads, APCs, KMDF METHOD_NEITHER caller-context APIs, KMDF PnP devices/general queues, UMDF, full PnP/power, other interrupt modes, general hardware and other DMA interfaces remain unsupported",
         "defer_callback_drain is a strict WDM READ/WRITE/IOCTL Boolean that requires its dispatch to leave an IRP pending. It permits the next request on another file or the same asynchronous file to be submitted before callback draining; the next ordinary request or scenario end drains and finalizes the batch. Synchronous-file overlap, KMDF batching, arbitrary thread preemption and external request arrival remain unsupported.",
         "CREATE-only asynchronous_file sets an asynchronous FILE_OBJECT, clearing FO_SYNCHRONOUS_IO and omitting IRP_SYNCHRONOUS_API on its file IRPs. Such a file admits overlapping READ/WRITE/IOCTL transfers during explicit deferred draining, but CLEANUP/CLOSE require prior transfers to finalize. The model does not advance an implicit current byte offset on asynchronous files; byte_offset remains per request with zero default. Non-CREATE use of the field is rejected even when false. Synthetic, genuine WDK, C API and CLI cases cover this bounded same-file overlap.",
-        "wdm-x64-scheduled-v28 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "wdm-x64-scheduled-v29 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "KeInitializeSpinLock and five executive acquire/release/try APIs model resident, aligned x64 locks on CPU0. Ownership belongs to one guest execution, matching release variants restore the saved IRQL, and try-acquire returns false for a held lock. Guest writes, premature freeing, return or suspension while held stop explicitly. Contended blocking acquisition cannot progress in this cooperative profile and stops rather than spinning indefinitely; in-stack queued locks and cross-CPU contention remain unsupported.",
         "The x64 WDK KeRaiseIrql macros and KeRaiseIrqlToDpcLevel/SynchLevel inline helpers call KfRaiseIrql; KeLowerIrql restores its returned value. The model accepts nested nondecreasing raises through HIGH_LEVEL on one execution, requires exact LIFO restoration, rejects lowering under a held lock, and rejects callback return or suspension with unmatched raises. API boundaries synchronize CR8 and inlined KeGetCurrentIrql observes the new value. This is deterministic CPU0 state, without instruction-level interrupt preemption or a general multiprocessor HAL.",
         "KeInitializeSemaphore, KeReleaseSemaphore and KeReadStateSemaphore model resident counting semaphores with a positive limit, nonnegative initial count, exact previous-count return and one unit consumed per successful wait. Release accepts Increment=0 and Wait=FALSE only; over-limit adjustment raises STATUS_SEMAPHORE_LIMIT_EXCEEDED without changing the count. General wait handoff, priority boosts and multiple-object waits remain unsupported.",
+        "KeInitializeMutex, KeReleaseMutex and KeReadStateMutex model a resident x64 KMUTEX whose owner is the current guest execution. Successful single-object waits acquire recursively, release returns the previous signed signal state, and final release signals the object. Release by another execution raises STATUS_MUTANT_NOT_OWNED; a held mutex rejects return, reinitialization and storage retirement. Level must be zero and Wait=TRUE handoff is unsupported. System-thread APC delivery and priority changes remain unsupported.",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
-        "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
+        "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer/semaphore/mutex single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
         "KeSetEvent supports Increment=0 and Wait=FALSE only; event signal consumption and waiter wakeups remain distinct from callback return; DPC targets are restricted to CPU0, nonzero/infinite waits require IRQL <= APC_LEVEL, and pending dispatcher-object or wait references prohibit premature storage release",
         "KernelAPIIRQL.def owns routine ceilings with argument-dependent checks in the API or memory owner; DPC registry calls, paged-pool allocation/free/access and Unicode DbgPrint conversions fail before mutation; supported ANSI output and nonpaged operations remain usable at DISPATCH_LEVEL; bounded callback stacks reject escape into suspended workers and armed extension timers prevent premature device retirement",
         "timer expiration satisfies registered waits before a DPC can reset or rearm the signal; queued DPCs precede FIFO framework cancellation callbacks, which precede ordinary workers and resuming ready PASSIVE_LEVEL frames; IRP completion rejects release of request storage containing pending dispatcher objects before marking completion or invalidating buffers",
@@ -6651,6 +6652,41 @@
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
           "filter": "DriverWDMNeither.ExplicitIrqlHelpersTrackCR8",
+          "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelDispatcherTests.cpp",
+          "filter": "DriverKernelDispatcher.MutexOwnershipRecursionAndRelease",
+          "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRequestOwnershipTests.cpp",
+          "filter": "KernelRequestOwnership.MutexWaitOwnershipTracksExecutionReturn",
+          "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRequestOwnershipTests.cpp",
+          "filter": "KernelRequestOwnership.MutexWaiterAcquiresOnItsOwnSavedFrame",
+          "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
+          "filter": "DriverWDMNeither.RecursiveMutexWaitsAndReleases",
+          "platforms": ["linux"]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
+          "filter": "DriverWDMNeither.MutexWrongOwnerRaisesCatchableStatus",
           "platforms": ["linux"]
         }
       ],

@@ -12,6 +12,9 @@
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kecanceltimer
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kereleasesemaphore
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializemutex
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kereleasemutex
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kereadstatemutex
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/defining-and-using-an-event-object
 /// No host timers, execution of host function pointers, or native structure
 /// overlays are used. The scheduler chooses one explicit single-CPU schedule.
@@ -34,6 +37,8 @@ enum class API {
 #undef NEVERD_KERNEL_DISPATCHER_API
 };
 constexpr uint32_t StatusSemaphoreLimitExceeded = 0xc0000047U;
+constexpr uint32_t StatusMutantNotOwned = 0xc0000046U;
+constexpr uint32_t StatusMutantLimitExceeded = 0xc0000191U;
 
 llvm::Error dispatcherError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
@@ -76,6 +81,8 @@ bool KernelDispatcher::hasArmedTimerReference(uint64_t DPC) const {
 
 llvm::Error KernelDispatcher::canRelease(uint64_t Address,
                                          const Object &State) const {
+  if (State.Type == Kind::Mutex && State.MutexDepth)
+    return dispatcherError("cannot release storage with an owned mutex");
   if (State.Type == Kind::DPC) {
     if (Scheduler.isDPCQueued(Address))
       return dispatcherError("dispatcher DPC is still queued");
@@ -177,8 +184,20 @@ bool KernelDispatcher::isWaitable(uint64_t Address) const {
   return It != Objects.end() && It->second.Type != Kind::DPC;
 }
 
+bool KernelDispatcher::ownsMutex(uint64_t Execution) const {
+  if (!Execution)
+    return false;
+  for (const auto &[Address, State] : Objects)
+    if (State.Type == Kind::Mutex && State.MutexDepth &&
+        State.MutexOwner == Execution)
+      return true;
+  return false;
+}
+
 llvm::Expected<bool> KernelDispatcher::signaled(uint64_t Address,
                                                 const Object &State) const {
+  if (State.Type == Kind::Mutex)
+    return State.MutexDepth == 0;
   if (State.Type == Kind::Semaphore)
     return State.Count > 0;
   if (State.Type == Kind::Timer)
@@ -187,7 +206,9 @@ llvm::Expected<bool> KernelDispatcher::signaled(uint64_t Address,
   return State.Signaled;
 }
 
-llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address) {
+llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address,
+                                                  uint64_t Execution,
+                                                  uint8_t CurrentIRQL) {
   if (!isWaitable(Address))
     return dispatcherError("unsupported or uninitialized wait object");
   Object &State = Objects.at(Address);
@@ -195,6 +216,23 @@ llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address) {
     return E;
   if (auto E = Scheduler.processDueTimers())
     return E;
+  if (State.Type == Kind::Mutex) {
+    if (!Execution)
+      return dispatcherError("mutex wait requires an active execution");
+    if (State.MutexDepth && State.MutexOwner != Execution)
+      return false;
+    if (State.MutexDepth == uint32_t(std::numeric_limits<int32_t>::max()) + 1)
+      return llvm::make_error<KernelGuestException>(StatusMutantLimitExceeded);
+    if (!State.MutexDepth) {
+      State.MutexOwner = Execution;
+      State.MutexAcquiredAtDispatch = CurrentIRQL == dispatcher::DispatchLevel;
+    } else if (State.MutexAcquiredAtDispatch !=
+               (CurrentIRQL == dispatcher::DispatchLevel)) {
+      return dispatcherError("recursive mutex wait changed DISPATCH_LEVEL");
+    }
+    ++State.MutexDepth;
+    return true;
+  }
   auto Signal = signaled(Address, State);
   if (Signal && *Signal && State.Type == Kind::Semaphore) {
     --State.Count;
@@ -210,7 +248,8 @@ llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address) {
 
 llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
                                                 llvm::ArrayRef<uint64_t> Args,
-                                                uint8_t CurrentIRQL) {
+                                                uint8_t CurrentIRQL,
+                                                uint64_t Execution) {
   const auto Count = argumentCount(Name);
   if (!Count || Args.size() != *Count)
     return dispatcherError("unknown dispatcher API or invalid argument count");
@@ -228,7 +267,8 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
                        Function == API::KeSetImportanceDpc ||
                        Function == API::KeSetTargetProcessorDpc ||
                        Function == API::KeInitializeEvent ||
-                       Function == API::KeReadStateSemaphore;
+                       Function == API::KeReadStateSemaphore ||
+                       Function == API::KeInitializeMutex;
   if (CurrentIRQL >
       (AnyIRQL ? dispatcher::HighLevel : dispatcher::DispatchLevel))
     return dispatcherError("dispatcher API called at unsupported IRQL");
@@ -277,6 +317,14 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
     Object State{Kind::Semaphore, dispatcher::SemaphoreSize};
     State.Count = Count;
     State.Limit = Limit;
+    if (auto E = initialize(Args[0], std::move(State)))
+      return E;
+    return 0;
+  }
+  case API::KeInitializeMutex: {
+    if (Args[1])
+      return dispatcherError("KeInitializeMutex Level must be zero");
+    Object State{Kind::Mutex, dispatcher::MutexSize};
     if (auto E = initialize(Args[0], std::move(State)))
       return E;
     return 0;
@@ -382,8 +430,8 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
   }
   case API::KeReadStateSemaphore:
   case API::KeReleaseSemaphore: {
-    auto State = object(Args[0], Kind::Semaphore,
-                        Function == API::KeReleaseSemaphore);
+    auto State =
+        object(Args[0], Kind::Semaphore, Function == API::KeReleaseSemaphore);
     if (!State)
       return State.takeError();
     const int32_t Count = (*State)->Count;
@@ -402,6 +450,30 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
           StatusSemaphoreLimitExceeded);
     (*State)->Count += Adjustment;
     return static_cast<uint32_t>(Count);
+  }
+  case API::KeReadStateMutex:
+  case API::KeReleaseMutex: {
+    auto State = object(Args[0], Kind::Mutex, Function == API::KeReleaseMutex);
+    if (!State)
+      return State.takeError();
+    const int32_t Previous =
+        static_cast<int32_t>(1 - int64_t((*State)->MutexDepth));
+    if (Function == API::KeReadStateMutex)
+      return static_cast<uint32_t>(Previous);
+    if (static_cast<uint8_t>(Args[1]))
+      return dispatcherError(
+          "KeReleaseMutex Wait=TRUE requires unsupported IRQL handoff");
+    if (!Execution || !(*State)->MutexDepth ||
+        (*State)->MutexOwner != Execution)
+      return llvm::make_error<KernelGuestException>(StatusMutantNotOwned);
+    if ((*State)->MutexAcquiredAtDispatch !=
+        (CurrentIRQL == dispatcher::DispatchLevel))
+      return dispatcherError("mutex release changed DISPATCH_LEVEL");
+    if (!--(*State)->MutexDepth) {
+      (*State)->MutexOwner = 0;
+      (*State)->MutexAcquiredAtDispatch = false;
+    }
+    return static_cast<uint32_t>(Previous);
   }
   case API::Unknown:
     break;

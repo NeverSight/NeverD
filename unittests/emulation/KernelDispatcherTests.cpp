@@ -89,6 +89,7 @@ protected:
   static constexpr uint64_t DPC = Timer + 64;
   static constexpr uint64_t SecondDPC = DPC + 64;
   static constexpr uint64_t Semaphore = SecondDPC + 64;
+  static constexpr uint64_t Mutex = Semaphore + 64;
   static constexpr uint64_t Routine = 0x180001000;
   static constexpr uint64_t Owner = 0x50000000;
   static constexpr uint64_t Thread = 0x51000000;
@@ -173,6 +174,47 @@ TEST_F(DriverKernelDispatcher, SemaphoreCountsConsumeAndRespectLimit) {
   EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}), 3u);
   expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 0, 1, 0}, 3),
               "unsupported IRQL");
+}
+
+TEST_F(DriverKernelDispatcher, MutexOwnershipRecursionAndRelease) {
+  constexpr uint64_t First = 0x1000;
+  constexpr uint64_t Second = 0x2000;
+  expectError(Dispatcher.call("KeInitializeMutex", {Mutex, 1}, 0),
+              "Level must be zero");
+  call("KeInitializeMutex", {Mutex, 0}, 15);
+  EXPECT_TRUE(Dispatcher.isWaitable(Mutex));
+  EXPECT_EQ(call("KeReadStateMutex", {Mutex}), 1u);
+  expectError(Dispatcher.call("KeReadStateMutex", {Mutex}, 3),
+              "unsupported IRQL");
+  expectError(Dispatcher.tryAcquire(Mutex), "active execution");
+  EXPECT_TRUE(take(Dispatcher.tryAcquire(Mutex, First)));
+  EXPECT_TRUE(Dispatcher.ownsMutex(First));
+  EXPECT_FALSE(take(Dispatcher.tryAcquire(Mutex, Second)));
+  EXPECT_TRUE(take(Dispatcher.tryAcquire(Mutex, First)));
+  EXPECT_EQ(call("KeReadStateMutex", {Mutex}), UINT32_MAX);
+  expectError(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 0, Second),
+              "raised guest exception 0xC0000046");
+  expectError(Dispatcher.call("KeReleaseMutex", {Mutex, 1}, 0, First),
+              "Wait=TRUE");
+  expectError(Dispatcher.call("KeInitializeMutex", {Mutex, 0}, 0),
+              "owned mutex");
+  expectError(Dispatcher.prepareReleaseRange(Mutex, dispatcher::MutexSize),
+              "owned mutex");
+  EXPECT_EQ(take(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 0, First)),
+            UINT32_MAX);
+  EXPECT_EQ(call("KeReadStateMutex", {Mutex}), 0u);
+  EXPECT_FALSE(take(Dispatcher.tryAcquire(Mutex, Second)));
+  EXPECT_EQ(take(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 0, First)), 0u);
+  EXPECT_FALSE(Dispatcher.ownsMutex(First));
+  EXPECT_EQ(call("KeReadStateMutex", {Mutex}), 1u);
+  EXPECT_TRUE(take(Dispatcher.tryAcquire(Mutex, Second, 2)));
+  expectError(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 3, Second),
+              "unsupported IRQL");
+  expectError(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 0, Second),
+              "changed DISPATCH_LEVEL");
+  EXPECT_EQ(take(Dispatcher.call("KeReleaseMutex", {Mutex, 0}, 2, Second)), 0u);
+  success(Dispatcher.prepareReleaseRange(Mutex, dispatcher::MutexSize));
+  EXPECT_FALSE(Dispatcher.isWaitable(Mutex));
 }
 
 TEST_F(DriverKernelDispatcher, ImportanceOnlyChangesFutureQueueInsertion) {

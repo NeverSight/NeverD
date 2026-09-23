@@ -222,7 +222,8 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | 通知／同步計時器；相對／絕對 100 ns 期限、毫秒週期、重新設定／取消及虛擬時間中的訊號查詢 |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | 通知／同步事件保留不同訊號消耗行為；`KeSetEvent` 僅接受 Increment=0、Wait=FALSE |
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | 常駐的計數號誌，上限必須為正；每次成功等待消耗一個計數。釋放僅接受 Increment=0、Wait=FALSE；超過上限時擲出 `STATUS_SEMAPHORE_LIMIT_EXCEEDED`。 |
-| `KeWaitForSingleObject` | 單個已初始化事件或計時器；非警示 `KernelMode`、原因 `Executive`；零逾時輪詢、有限相對／絕對或無限等待；非零／無限等待要求 IRQL <= APC_LEVEL |
+| `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | 常駐的 KMUTEX 依執行影格持有並支援遞迴取得；KeReleaseMutex 回傳先前的有號訊號狀態，要求持有者與相符的 DISPATCH_LEVEL 取得情境，且僅接受 Wait=FALSE。持有期間禁止返回、重新初始化或釋放儲存。 非持有者釋放會觸發 `STATUS_MUTANT_NOT_OWNED`。 |
+| `KeWaitForSingleObject` | 單個已初始化的事件、計時器、號誌或互斥體；非警示 `KernelMode`、原因 `Executive`；零逾時輪詢、有限相對／絕對或無限等待；非零／無限等待要求 IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | IRQL <= APC_LEVEL 的非警示 `KernelMode` 相對／絕對延遲；虛擬時間推進後還原儲存的客體執行框架 |
 | `IoMarkIrpPending` | 標記目前存活的 IRP；也支援 WDM 巨集對堆疊控制欄位的等效寫入；派送必須傳回 `STATUS_PENDING` |
 | `IofCompleteRequest`、`IoCompleteRequest` | 以 `IO_NO_INCREMENT` 執行完成展開，支援暫停／繼續；僅在最終展開邊界釋放 IRP、MDL 與緩衝區 |
@@ -321,7 +322,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v28`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v29`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

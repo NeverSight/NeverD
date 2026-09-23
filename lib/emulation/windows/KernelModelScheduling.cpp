@@ -274,6 +274,8 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
   Wait Pending;
   Pending.Type = Delay ? Wait::Kind::Delay : Wait::Kind::Dispatcher;
   Pending.Object = Delay ? 0 : A[0];
+  Pending.Execution = CurrentExecution;
+  Pending.IRQL = CurrentIRQL;
   bool PollOnly = false;
   if (TimeoutAddress) {
     if (auto E = validateGuestAccess(TimeoutAddress, sizeof(int64_t), false))
@@ -291,7 +293,8 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
       ((!Delay && PollOnly) ? scheduler::DispatchLevel : windows::APCLevel))
     return schedulingError("blocking wait requires IRQL <= APC_LEVEL");
   if (!Delay) {
-    auto Acquired = Dispatcher.tryAcquire(Pending.Object);
+    auto Acquired =
+        Dispatcher.tryAcquire(Pending.Object, Pending.Execution, Pending.IRQL);
     if (!Acquired)
       return Acquired.takeError();
     if (*Acquired)
@@ -326,7 +329,8 @@ KernelModel::pollWait(const Wait &Pending) {
   }
   bool Signaled = false;
   if (Pending.Object) {
-    auto Acquired = Dispatcher.tryAcquire(Pending.Object);
+    auto Acquired =
+        Dispatcher.tryAcquire(Pending.Object, Pending.Execution, Pending.IRQL);
     if (!Acquired)
       return Acquired.takeError();
     Signaled = *Acquired;

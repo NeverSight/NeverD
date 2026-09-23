@@ -10,6 +10,8 @@
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/opaque-structures
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimerex
+/// KMUTEX is the x64 WDK KMUTANT alias; its 56-byte extent is checked by the
+/// genuine WDK fixture compile, while the guest contents remain opaque.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -17,6 +19,7 @@ NEVERD_KERNEL_DISPATCHER_VALUE(DpcSize, 64)
 NEVERD_KERNEL_DISPATCHER_VALUE(TimerSize, 64)
 NEVERD_KERNEL_DISPATCHER_VALUE(EventSize, 24)
 NEVERD_KERNEL_DISPATCHER_VALUE(SemaphoreSize, 32)
+NEVERD_KERNEL_DISPATCHER_VALUE(MutexSize, 56)
 NEVERD_KERNEL_DISPATCHER_VALUE(ObjectAlignment, 8)
 NEVERD_KERNEL_DISPATCHER_VALUE(NotificationObject, 0)
 NEVERD_KERNEL_DISPATCHER_VALUE(SynchronizationObject, 1)

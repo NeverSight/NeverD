@@ -647,7 +647,7 @@ llvm::Expected<uint64_t> KernelModel::call(
 #define NEVERD_KERNEL_DISPATCHER_API(Name, Arity) case KernelAPIKind::Name:
 #include "KernelDispatcherAPIs.def"
 #undef NEVERD_KERNEL_DISPATCHER_API
-    return Dispatcher.call(Name, A, CurrentIRQL);
+    return Dispatcher.call(Name, A, CurrentIRQL, CurrentExecution);
 #define NEVERD_KERNEL_REGISTRY_API(Name, Arity) case KernelAPIKind::Name:
 #include "KernelRegistryAPIs.def"
 #undef NEVERD_KERNEL_REGISTRY_API
