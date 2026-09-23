@@ -660,6 +660,8 @@ Gli import libswiftCore esatti per il seed di Hasher, String.hash(into:) e Hashe
 
 L’IR client di Swift 6.1.2 assegna anche all’import libswiftCore esatto `_DictionaryStorage.allocate(capacity:)` un risultato puntatore, una capacità intera e i metadati del dizionario in `swiftself` su ARM64 e x64. Questo ABI autenticato vincola la chiamata preservando gli effetti dell’allocazione; da solo non recupera il chiamante né le altre dipendenze del dizionario.
 
+L’import libswiftCore esatto `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` riceve un puntatore ai metadati del tipo e non ritorna mai, secondo Swift 6.1.2. Solo il fornitore e l’ABI autenticati ricevono questo contratto di terminazione; la chiamata e la trap originali restano nel percorso sorgente.
+
 La prova degli accessori di classe ARM64 a otto istruzioni ha un unico responsabile condiviso. Verifica istruzioni immutabili e l’importazione forte `objc_opt_self`, dimostrando che gli argomenti in ingresso non sono usati e che gli otto byte del risultato provengono dalla chiamata. Questi fatti non provano identità della classe o chiusura del sorgente. Gli accessori super e le fabbriche di metadati mantengono controlli indipendenti su classe, pipeline, frame e dipendenze. Anche l’accettazione dell’unwind strutturale è condivisa; decodifica parziale e dispatch delle eccezioni del linguaggio restano esclusi.
 
 Le prove di normalizzazione booleana considerano SP un ingresso implicito di ogni chiamata, anche senza argomenti o con soli argomenti nei registri. Un SP diverso viene rifiutato prima della chiamata; ripristinarlo dopo non annulla gli accessi allo stack del chiamato.

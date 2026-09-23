@@ -668,6 +668,8 @@ Les imports libswiftCore exacts de la graine de Hasher, de String.hash(into:) et
 
 L’IR client de Swift 6.1.2 attribue aussi à l’import libswiftCore exact `_DictionaryStorage.allocate(capacity:)` un résultat pointeur, une capacité entière et les métadonnées du dictionnaire dans `swiftself` sur ARM64 et x64. Cet ABI authentifié lie l’appel tout en conservant les effets de l’allocation ; il ne récupère pas à lui seul l’appelant ni les autres dépendances du dictionnaire.
 
+L’import libswiftCore exact `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` reçoit un pointeur vers les métadonnées du type et ne retourne jamais, selon Swift 6.1.2. Seuls son fournisseur et son ABI authentifiés reçoivent ce contrat de terminaison ; l’appel et le piège d’origine restent dans le chemin source.
+
 La preuve des accesseurs de classe ARM64 à huit instructions possède un responsable partagé. Elle valide les instructions immuables et l’import fort `objc_opt_self`, prouvant que les arguments entrants sont inutilisés et que les huit octets du résultat proviennent de cet appel. Ces faits ne prouvent ni l’identité de classe ni la fermeture du source. Les accesseurs super et fabriques de métadonnées conservent leurs contrôles indépendants de classe, pipeline, cadre et dépendances. L’acceptation du déroulement structurel est également partagée ; décodage partiel et répartition des exceptions du langage restent exclus.
 
 Les preuves de normalisation booléenne considèrent SP comme une entrée implicite de chaque appel, même sans arguments ou avec des arguments uniquement en registres. Un SP différent est rejeté avant l’appel ; sa restauration ultérieure ne peut annuler les accès à la pile de l’appelé.

@@ -666,6 +666,8 @@ Die exakten libswiftCore-Importe für den Hasher-Seed, String.hash(into:) und Ha
 
 Das Client-IR von Swift 6.1.2 weist dem exakten libswiftCore-Import `_DictionaryStorage.allocate(capacity:)` außerdem ein Zeigerergebnis, eine ganzzahlige Kapazität und Dictionary-Metadaten in `swiftself` auf ARM64 und x64 zu. Dieses authentifizierte ABI bindet den Aufruf unter Erhalt der Allokationseffekte; es stellt den Aufrufer oder andere Dictionary-Abhängigkeiten nicht allein wieder her.
 
+Der exakte libswiftCore-Import `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` nimmt laut Swift 6.1.2 einen Typmetadaten-Zeiger entgegen und kehrt nie zurück. Nur sein authentifizierter Anbieter und sein ABI erhalten diesen Terminierungsvertrag; der ursprüngliche Aufruf und der Trap bleiben im Quellpfad.
+
 Der Nachweis für ARM64-Klassenaccessoren mit acht Instruktionen hat einen gemeinsamen Besitzer. Er prüft unveränderliche Instruktionen und den starken Import `objc_opt_self` und beweist ungenutzte Eingabeargumente sowie acht vollständig vom Laufzeitaufruf gelieferte Ergebnisbytes. Diese Fakten beweisen weder Klassenidentität noch Quellcodeabschluss. Super-Getter und Metadatenfabriken behalten ihre unabhängigen Klassen-, Pipeline-, Frame- und Abhängigkeitsprüfungen. Auch die Annahme struktureller Unwind-Daten ist gemeinsam; partielle Dekodierung und Sprach-Dispatch bleiben ausgeschlossen.
 
 Beweise zur Bool-Normalisierung behandeln SP als implizite Eingabe jedes Aufrufs, auch ohne Argumente oder mit reinen Registerargumenten. Ein abweichender SP wird vor dem Aufruf abgelehnt; spätere Wiederherstellung kann Stackzugriffe des Aufgerufenen nicht rückgängig machen.

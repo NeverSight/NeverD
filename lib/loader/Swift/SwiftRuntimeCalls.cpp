@@ -33,6 +33,7 @@ struct SwiftSDKDeclaration {
   const char *Name;
   const char *Modules;
   const char *Signature;
+  bool DoesNotReturn = false;
 };
 
 // Compiler-observed public Foundation bridge entry points. The compact
@@ -244,6 +245,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftCore.dylib", "pzC"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
      "/usr/lib/swift/libswiftCore.dylib", "ppp"},
+    // Swift 6.1.2 NativeDictionary.swift declares this exact diagnostic
+    // with one Any.Type input and a Never result. It must retain its trap.
+    {"$ss53KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTSys5NeverOypXpF",
+     "/usr/lib/swift/libswiftCore.dylib", "vp", true},
     // The Hasher's 72-byte value is returned through x8; the dictionary
     // caller passes its seed in x0, then _finalize reads the value in x20.
     {"$ss6HasherV5_seedABSi_tcfC", "/usr/lib/swift/libswiftCore.dylib",
@@ -283,6 +288,9 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
     Signature.ReturnType = NdType::makeVoid();
   else
     return false;
+  if (Found->DoesNotReturn && Signature.ReturnType->Kind != NdTypeKind::Void)
+    return false;
+  Hint.DoesNotReturn = Found->DoesNotReturn;
   for (char Code : Encoding) {
     SourceParameterTypeHint Parameter;
     Parameter.Name = "arg" + std::to_string(Signature.Parameters.size());
