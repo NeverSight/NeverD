@@ -698,6 +698,76 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       DrainingIdleQueueRejectsArrivalsUntilRestart) {
+  initializeQueue();
+  take(invoke("WdfIoQueueDrain", {Globals, Queue, CancelPC, 0x1234}));
+  auto Drained = callback();
+  EXPECT_EQ(Drained.PC, CancelPC);
+  EXPECT_EQ(Drained.Arguments, (std::vector<uint64_t>{Queue, 0x1234}));
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueDispatchRequests | framework::QueueNoRequests |
+                framework::QueueDriverNoRequests);
+  finish(Drained);
+  const auto Rejected = packet();
+  EXPECT_EQ(route(Rejected).Status, framework::QueueInvalidDeviceState);
+  EXPECT_TRUE(Packets.at(Rejected).Completed);
+  EXPECT_EQ(Packets.at(Rejected).Status, framework::QueueInvalidDeviceState);
+  EXPECT_EQ(Packets.at(Rejected).PendingCalls, 0u);
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  const auto Accepted = packet();
+  complete(request(route(Accepted)));
+  EXPECT_TRUE(Packets.at(Accepted).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest, DrainWaitsForQueuedAndDeliveredRequests) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  const auto SecondIRP = packet();
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  take(invoke("WdfIoQueueDrain", {Globals, Queue, CancelPC, 0x5678}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueDispatchRequests);
+  expectError(invoke("WdfIoQueueDrain", {Globals, Queue, CancelPC, 0x9999}),
+              "already has a state-completion callback");
+  expectError(invoke("WdfIoQueueDrain", {Globals, Queue, 0, 0}),
+              "already has a state-completion callback");
+  expectError(invoke("WdfIoQueueStart", {Globals, Queue}),
+              "pending drain-completion callback");
+  complete(First);
+  auto Second = callback();
+  EXPECT_EQ(Second.PC, IoControlPC);
+  EXPECT_FALSE(Model.takeGuestCall());
+  complete(Second.Arguments[1]);
+  auto Drained = callback();
+  EXPECT_EQ(Drained.PC, CancelPC);
+  EXPECT_EQ(Drained.Arguments, (std::vector<uint64_t>{Queue, 0x5678}));
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueDispatchRequests | framework::QueueNoRequests |
+                framework::QueueDriverNoRequests);
+  finish(Drained);
+  finish(Second);
+  EXPECT_TRUE(Packets.at(FirstIRP).Completed);
+  EXPECT_TRUE(Packets.at(SecondIRP).Completed);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ForwardingToDrainedQueueLeavesSourceRequestOwned) {
+  const auto Automatic = defaultAndAutomaticQueue();
+  take(invoke("WdfIoQueueDrain", {Globals, Automatic, 0, 0}));
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Automatic})),
+      framework::QueueBusy);
+  EXPECT_EQ(take(invoke("WdfRequestGetIoQueue", {Globals, Request})), Queue);
+  complete(Request);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        ManualDefaultQueueAcceptsRetrievesAndCancelsPendingRequests) {
   put(QueueConfig + 4, framework::QueueDispatchManual, 4);
   put(QueueConfig + 24, 0);

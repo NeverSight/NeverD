@@ -32,7 +32,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
       Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
       Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
-      Name != "WdfIoQueueRetrieveNextRequest")
+      Name != "WdfIoQueueDrain" && Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
@@ -45,11 +45,13 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid, foreign or wrong-kind object handle");
 
   if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
-      Name == "WdfIoQueueStart") {
+      Name == "WdfIoQueueStart" || Name == "WdfIoQueueDrain") {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
     if (Name == "WdfIoQueueStop") {
+      if (Q->second.DrainComplete)
+        return invalidQueue("queue has a pending drain-completion callback");
       if (A[2] && Q->second.StopComplete)
         return invalidQueue("queue already has a stop-completion callback");
       Q->second.Dispatching = false;
@@ -63,6 +65,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return std::optional<uint64_t>{0};
     }
     if (Name == "WdfIoQueueStart") {
+      if (Q->second.DrainComplete)
+        return invalidQueue("queue has a pending drain-completion callback");
+      Q->second.Accepting = true;
       Q->second.Dispatching = true;
       if (Q->second.Dispatch == QueueDispatchManual ||
           Q->second.Pending.empty())
@@ -73,6 +78,19 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       if (!Result)
         return Result.takeError();
       return std::optional<uint64_t>{*Result};
+    }
+    if (Name == "WdfIoQueueDrain") {
+      if (Q->second.DrainComplete || Q->second.StopComplete)
+        return invalidQueue("queue already has a state-completion callback");
+      Q->second.Accepting = false;
+      if (A[2]) {
+        Q->second.DrainComplete = A[2];
+        Q->second.DrainContext = A[3];
+        auto Result = start({});
+        if (!Result)
+          return Result.takeError();
+      }
+      return std::optional<uint64_t>{0};
     }
     if (A[2])
       if (auto E = writable(A[2], 4))
@@ -92,7 +110,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (A[3])
       if (auto E = Memory.writeInteger(A[3], Delivered, 4))
         return E;
-    uint32_t State = QueueAcceptRequests;
+    uint32_t State = Q->second.Accepting ? QueueAcceptRequests : 0;
     if (Q->second.Dispatching)
       State |= QueueDispatchRequests;
     if (!Queued)
