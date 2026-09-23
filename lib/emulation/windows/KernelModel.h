@@ -137,8 +137,15 @@ public:
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
   void enterForeground() { CurrentIRQL = 0; }
-  void enterExecution(uint64_t Identity) {
+  void enterExecution(uint64_t Identity, uint64_t ThreadKey = 0) {
     CurrentExecution = Identity;
+    CurrentThreadKey = ThreadKey ? ThreadKey : Identity;
+    ExecutionThreadKeys[Identity] = CurrentThreadKey;
+    if (Scheduler.active() &&
+        Scheduler.active()->Kind ==
+            KernelScheduler::CallbackKind::SystemThread &&
+        CurrentThreadKey == Scheduler.active()->ID)
+      ApcStates.try_emplace(CurrentThreadKey, ApcState{1, 0});
     if (CancelLock.Held && CancelLock.Callback && !CancelLock.Owner) {
       CancelLock.Owner = Identity;
       CancelLock.CallbackExecution = Identity;
@@ -150,7 +157,8 @@ public:
   llvm::Error revokeRequestUserBuffers(uint64_t IRP);
   llvm::Error exitRequestorProcess(uint64_t IRP);
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
-  llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
+  llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL,
+                                      bool Nested = false) const;
   bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
   bool hasPendingHardwareWork() const {
     return Interrupts.hasPendingEvents() || DMA.hasPendingEvents() ||
@@ -219,6 +227,14 @@ private:
                                                         uint64_t Result);
 
   uint64_t CurrentExecution = 0;
+  uint64_t CurrentThreadKey = 0;
+  std::map<uint64_t, uint64_t> ExecutionThreadKeys;
+  struct ApcState {
+    uint16_t CriticalDepth = 0;
+    uint16_t GuardedDepth = 0;
+  };
+  std::map<uint64_t, ApcState> ApcStates;
+  llvm::Expected<uint64_t> callApcStateAPI(llvm::StringRef Name);
   bool UserRequestContext = false;
   uint32_t CurrentUserProcessID = 0;
   uint64_t NextUserAddress = profile::UserArenaBase;

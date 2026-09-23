@@ -51,7 +51,7 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
             for code, output in (("0x222037", "5a"), ("0x22203b", "6b"),
                                  ("0x22203f", "7c"), ("0x222043", "8d"),
                                  ("0x222047", "9e"),
-                                 ("0x22204b", "af")):
+                                 ("0x22204b", "af"), ("0x22204f", "b1")):
                 with self.subTest(fixture=fixture, code=code):
                     scenario = {
                         "requests": [

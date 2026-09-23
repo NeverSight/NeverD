@@ -31,6 +31,7 @@ _Static_assert(sizeof(KMUTEX) == 56, "x64 KMUTEX ABI size");
 #define IO_MUTEX 0x222043u
 #define IO_MUTEX_INVALID 0x222047u
 #define IO_SYSTEM_THREAD 0x22204bu
+#define IO_APC_REGIONS 0x22204fu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -58,8 +59,14 @@ static WORKER_STATE WorkerState;
 
 static VOID SystemThreadStart(PVOID Context) {
   volatile UCHAR *Result = (volatile UCHAR *)Context;
+  const BOOLEAN InitiallyDisabled =
+      KeAreApcsDisabled() && !KeAreAllApcsDisabled();
+  KeLeaveCriticalRegion();
+  const BOOLEAN Enabled = !KeAreApcsDisabled() && !KeAreAllApcsDisabled();
+  KeEnterCriticalRegion();
   Result[0] =
-      KeGetCurrentIrql() == PASSIVE_LEVEL &&
+      InitiallyDisabled && Enabled && KeAreApcsDisabled() &&
+              KeGetCurrentIrql() == PASSIVE_LEVEL &&
               ExGetPreviousMode() == KernelMode &&
               (ULONG)(ULONG_PTR)PsGetCurrentProcessId() == 4 &&
               (ULONG)(ULONG_PTR)PsGetProcessId(IoGetCurrentProcess()) == 4
@@ -468,12 +475,15 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     if (KeReadStateMutex(&Mutex) != 1 ||
         KeWaitForMutexObject(&Mutex, Executive, KernelMode, FALSE, &Zero) !=
             STATUS_SUCCESS ||
+        !KeAreApcsDisabled() || KeAreAllApcsDisabled() ||
         KeReadStateMutex(&Mutex) != 0 ||
         KeWaitForSingleObject(&Mutex, Executive, KernelMode, FALSE, &Zero) !=
             STATUS_SUCCESS ||
         KeReadStateMutex(&Mutex) != -1 || KeReleaseMutex(&Mutex, FALSE) != -1 ||
         KeReadStateMutex(&Mutex) != 0 || KeReleaseMutex(&Mutex, FALSE) != 0 ||
         KeReadStateMutex(&Mutex) != 1)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    if (KeAreApcsDisabled())
       Status = STATUS_INVALID_DEVICE_STATE;
     if (NT_SUCCESS(Status)) {
       Output[0] = 0x8d;
@@ -529,6 +539,36 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       Length = 1;
     } else
       Status = STATUS_INVALID_DEVICE_STATE;
+    break;
+  }
+  case IO_APC_REGIONS: {
+    if (KeAreApcsDisabled() || KeAreAllApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeEnterCriticalRegion();
+    KeEnterCriticalRegion();
+    if (!KeAreApcsDisabled() || KeAreAllApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLeaveCriticalRegion();
+    if (!KeAreApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeEnterGuardedRegion();
+    if (!KeAreApcsDisabled() || !KeAreAllApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLeaveGuardedRegion();
+    if (KeAreAllApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLeaveCriticalRegion();
+    if (KeAreApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KIRQL OldIRQL;
+    KeRaiseIrql(APC_LEVEL, &OldIRQL);
+    if (!KeAreAllApcsDisabled())
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLowerIrql(OldIRQL);
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0xb1;
+      Length = 1;
+    }
     break;
   }
   case IO_WORKER_LOCKED:

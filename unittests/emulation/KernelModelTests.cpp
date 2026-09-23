@@ -187,7 +187,9 @@ TEST_F(DriverKernelModel,
   ASSERT_TRUE(*Invocation);
   EXPECT_EQ((**Invocation).Kind, KernelScheduler::CallbackKind::SystemThread);
   EXPECT_EQ((**Invocation).Object, Object);
-  Model->enterExecution(Scratch + 0x8000);
+  Model->enterExecution(Scratch + 0x8000, (**Invocation).ID);
+  EXPECT_EQ(invoke("KeAreApcsDisabled", {}), 1u);
+  EXPECT_EQ(invoke("KeAreAllApcsDisabled", {}), 0u);
   // The first completion attempt must not silently treat a normal return as
   // a terminated system thread.
   auto EarlyFinish = Model->finishScheduled((**Invocation).ID);
@@ -203,6 +205,33 @@ TEST_F(DriverKernelModel,
   EXPECT_EQ(**Status, 0u);
   EXPECT_EQ(invoke("ObfDereferenceObject", {Object}), 0u);
   EXPECT_NE(denied(Object, 1).find("freed"), std::string::npos);
+}
+
+TEST_F(DriverKernelModel, CriticalAndGuardedAPCRegionsPairOnOneThread) {
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(invoke("KeAreApcsDisabled", {}), 0u);
+  EXPECT_EQ(invoke("KeAreAllApcsDisabled", {}), 0u);
+  invoke("KeEnterCriticalRegion", {});
+  invoke("KeEnterCriticalRegion", {});
+  EXPECT_EQ(invoke("KeAreApcsDisabled", {}), 1u);
+  EXPECT_EQ(invoke("KeAreAllApcsDisabled", {}), 0u);
+  invoke("KeLeaveCriticalRegion", {});
+  invoke("KeEnterGuardedRegion", {});
+  EXPECT_EQ(invoke("KeAreApcsDisabled", {}), 1u);
+  EXPECT_EQ(invoke("KeAreAllApcsDisabled", {}), 1u);
+  auto Held = Model->validateExecutionReturn(profile::StackBase, 0);
+  ASSERT_TRUE(bool(Held));
+  EXPECT_NE(llvm::toString(std::move(Held)).find("APC-disable region"),
+            std::string::npos);
+  invoke("KeLeaveGuardedRegion", {});
+  EXPECT_EQ(invoke("KeAreAllApcsDisabled", {}), 0u);
+  invoke("KeLeaveCriticalRegion", {});
+  EXPECT_EQ(invoke("KeAreApcsDisabled", {}), 0u);
+  EXPECT_NE(failure("KeLeaveCriticalRegion", {}).find("no matching entry"),
+            std::string::npos);
+  EXPECT_NE(failure("KeLeaveGuardedRegion", {}).find("no matching entry"),
+            std::string::npos);
+  success(Model->validateExecutionReturn(profile::StackBase, 0));
 }
 
 TEST_F(DriverKernelModel, MDLMappingIgnoresUnspecifiedNarrowArgumentHighBits) {

@@ -628,6 +628,13 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::KfRaiseIrql:
   case KernelAPIKind::KeLowerIrql:
     return callIRQLAPI(Name, A);
+  case KernelAPIKind::KeEnterCriticalRegion:
+  case KernelAPIKind::KeLeaveCriticalRegion:
+  case KernelAPIKind::KeEnterGuardedRegion:
+  case KernelAPIKind::KeLeaveGuardedRegion:
+  case KernelAPIKind::KeAreApcsDisabled:
+  case KernelAPIKind::KeAreAllApcsDisabled:
+    return callApcStateAPI(Name);
 #define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                           \
   case KernelAPIKind::Name:
 #include "KernelSpinLockAPIs.def"

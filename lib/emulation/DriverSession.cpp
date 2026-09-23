@@ -452,7 +452,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     return llvm::Error::success();
   };
   auto RunExecution = [&](Execution &Frame) -> llvm::Error {
-    Kernel.enterExecution(Frame.Base);
+    Kernel.enterExecution(Frame.Base, Frame.ID ? Frame.ID : profile::StackBase);
     if (Frame.Context) {
       if (auto E = CPU.restoreContext(*Frame.Context))
         return E;
@@ -798,8 +798,8 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         } else {
           if (Result.Stop != DriverStopReason::Returned)
             return llvm::Error::success();
-          if (auto E = Kernel.validateExecutionReturn(Current->Base,
-                                                       Current->EntryIRQL)) {
+          if (auto E = Kernel.validateExecutionReturn(
+                  Current->Base, Current->EntryIRQL, bool(Current->Parent))) {
             ModelFailure(std::move(E));
             return llvm::Error::success();
           }

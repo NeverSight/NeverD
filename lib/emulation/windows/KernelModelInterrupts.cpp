@@ -222,7 +222,8 @@ KernelModel::finishInterruptCall(uint64_t Token, uint64_t Value) {
 }
 
 llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
-                                                 uint8_t EntryIRQL) const {
+                                                 uint8_t EntryIRQL,
+                                                 bool Nested) const {
   if (Identity != CurrentExecution)
     return apiError("return does not own the active execution identity");
   if (!ProcessAttachments.empty() &&
@@ -236,6 +237,15 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
       return apiError("guest return retains a raised IRQL");
   if (Dispatcher.ownsMutex(Identity))
     return apiError("guest return retains an owned mutex");
+  if (auto It = ApcStates.find(CurrentThreadKey);
+      !Nested && It != ApcStates.end()) {
+    const bool SystemThread =
+        Scheduler.active() &&
+        Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread;
+    if (It->second.GuardedDepth ||
+        It->second.CriticalDepth > (SystemThread ? 1 : 0))
+      return apiError("guest return retains an unmatched APC-disable region");
+  }
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
   if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {

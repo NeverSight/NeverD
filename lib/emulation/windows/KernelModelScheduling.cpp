@@ -372,6 +372,7 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
   if (auto E = Scheduler.finish(ID))
     return E;
   CurrentIRQL = scheduler::PassiveLevel;
+  ApcStates.erase(ID);
   if (Invocation.Kind == KernelScheduler::CallbackKind::SystemThread) {
     SystemThreads.at(Invocation.Object).Exited = true;
     SystemThreads.at(Invocation.Object).Terminating = false;
@@ -640,6 +641,7 @@ llvm::Error KernelModel::activateStack(uint64_t Base, uint64_t Size) {
 llvm::Error KernelModel::retireStack(uint64_t Base, uint64_t Size) {
   if (auto E = prepareReleaseRange(Base, Size))
     return E;
+  ExecutionThreadKeys.erase(Base);
   FreedRanges.emplace(Base, Size);
   return llvm::Error::success();
 }

@@ -268,6 +268,7 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Semaforo di conteggio residente con limite positiva; ogni attesa riuscita consuma un’unità. Il rilascio accetta Increment=0 e Wait=FALSE; oltre il limite solleva `STATUS_SEMAPHORE_LIMIT_EXCEEDED`. |
 | `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | KMUTEX residente con acquisizione ricorsiva per esecuzione; KeReleaseMutex restituisce il precedente stato con segno, richiede il proprietario e lo stesso contesto DISPATCH_LEVEL e accetta solo Wait=FALSE. Un mutex posseduto impedisce ritorno, reinizializzazione e rilascio della memoria. Il rilascio da parte di un altro proprietario solleva `STATUS_MUTANT_NOT_OWNED`. |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | Thread limitati del processo di sistema a PASSIVE_LEVEL. Handle e riferimento all’oggetto thread opaco hanno durate indipendenti; PsTerminateSystemThread termina senza ritornare e segnala l’oggetto attendibile. APC, priorità e riferimenti tipizzati non sono modellati. |
+| `KeEnterCriticalRegion`, `KeLeaveCriticalRegion`, `KeEnterGuardedRegion`, `KeLeaveGuardedRegion`, `KeAreApcsDisabled`, `KeAreAllApcsDisabled` | Stato annidato di disabilitazione APC per thread. Regioni critiche e un KMUTEX posseduto disabilitano gli APC normali; regioni protette e IRQL >= APC_LEVEL disabilitano tutti. I thread di sistema iniziano in una regione critica. Uscite senza ingresso e ritorni sbilanciati falliscono; la consegna APC non è modellata. |
 | `KeWaitForSingleObject` | Un evento, timer, semaforo o mutex inizializzato; `KernelMode` non alertable, motivo `Executive`; polling zero, attesa finita relativa/assoluta o infinita; attesa non nulla/infinita richiede IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Ritardo relativo/assoluto `KernelMode` non alertable con IRQL <= APC_LEVEL; riprende il frame guest dopo l’avanzamento del tempo virtuale |
 | `IoMarkIrpPending` | Marca l’IRP attivo; è modellata anche la scrittura equivalente della macro WDM nel controllo dello stack; il dispatch deve restituire `STATUS_PENDING` |
@@ -526,7 +527,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v30`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v31`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
