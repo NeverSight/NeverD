@@ -181,6 +181,9 @@ struct MedOp {
   /// GPR families (see CallRegisterEffects.h) the direct callee provably
   /// never writes, so SSA keeps their pre-call values across this call.
   uint32_t CallPreservedGPRs = 0;
+  /// Win64 register arguments the direct callee reads (RCX, RDX, R8, R9 in
+  /// order), published as Inputs[1..N]; -1 when the callee is unsummarized.
+  int8_t CalleeRegisterArgs = -1;
   /// This COPY publishes an auxiliary result of the INTRINSIC before it in the
   /// same instruction: its input temp is defined by that INTRINSIC (for
   /// example the flag snapshot of REP CMPS or RDTSC's EDX half), not read.

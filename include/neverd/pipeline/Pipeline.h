@@ -158,6 +158,9 @@ struct PipelineResult {
   /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
   /// callee entry.  Absent entries keep the ABI clobber set.
   std::map<va_t, uint32_t> CallMayWriteGPRs;
+  /// GPR families each lifted callee reads before writing (its register
+  /// arguments, including pass-throughs), keyed by callee entry.
+  std::map<va_t, uint32_t> CallEntryReadGPRs;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;

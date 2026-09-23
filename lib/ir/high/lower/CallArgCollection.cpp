@@ -35,6 +35,11 @@ namespace neverd {
 
 namespace call_args_detail {
 
+bool isWin64(const CallArgScan &Scan) {
+  return Scan.TheArch == Arch::X64 && Scan.Image &&
+         Scan.Image->Format == BinaryFormat::COFF;
+}
+
 void collectSpilledStackArgs(const CallArgScan &Scan,
                              std::vector<ExprPtr> &Found) {
   const auto &Ops = *Scan.Ops;
@@ -88,8 +93,16 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
     if (SlotBytes == 0 || StackOff % SlotBytes != 0)
       continue;
 
-    const int ArgPos =
-        Scan.FirstStackSlot + static_cast<int>(StackOff / SlotBytes);
+    int ArgPos = Scan.FirstStackSlot + static_cast<int>(StackOff / SlotBytes);
+    if (isWin64(Scan)) {
+      // Home-area stores spill register arguments; they are not arguments.
+      constexpr int64_t kHomeBytes = 32;
+      constexpr int kRegisterArgs = 4;
+      if (StackOff < kHomeBytes)
+        continue;
+      ArgPos =
+          kRegisterArgs + static_cast<int>((StackOff - kHomeBytes) / SlotBytes);
+    }
     if (ArgPos >= 0 && ArgPos < Scan.MaxArgs && !Found[ArgPos])
       Found[ArgPos] = Scan.ToExpr(Prev.Inputs[1]);
   }
@@ -291,6 +304,18 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
     }
   }
 
+  // A summarized Win64 callee published exactly the register arguments it
+  // reads as the CALL's inputs (LowToMed); SSA already renamed them to the
+  // values reaching the call, including a caller's pass-through argument.
+  if (CallIdx < Ops.size() && Ops[CallIdx].CalleeRegisterArgs >= 0 &&
+      !Ops[CallIdx].SourceCallHint) {
+    const MedOp &Call = Ops[CallIdx];
+    for (int I = 0; I < 4 && I < MaxArgs; ++I)
+      Found[I] = I < Call.CalleeRegisterArgs && 1 + I < Call.NumInputs
+                     ? medvarToExpr(Call.Inputs[1 + I])
+                     : nullptr;
+  }
+
   int FirstStackSlot = 0;
   for (int K = 0; K < MaxArgs; ++K) {
     if (Found[K])
@@ -311,6 +336,15 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   auto ToExpr = [this](const MedVar &V) { return medvarToExpr(V); };
   Scan.ToExpr = ToExpr;
   Scan.IsCalleeSave = IsCalleeSave;
+  auto ReachingRegArg = [&](int Index) -> ExprPtr {
+    if (Index < 0 || Index >= static_cast<int>(ParamRegs.size()))
+      return nullptr;
+    MedVar LiveIn;
+    if (reachingRegAtBlockEntry(CurBlock, ParamRegs[Index], LiveIn))
+      return medvarToExpr(LiveIn);
+    return nullptr;
+  };
+  Scan.ReachingRegArg = ReachingRegArg;
 
   std::vector<ExprPtr> Args;
   switch (TargetArch) {

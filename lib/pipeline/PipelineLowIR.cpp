@@ -19,6 +19,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -2842,7 +2843,24 @@ void computeCallRegisterEffects(
       Work.push_back(Callee);
     }
   }
-  Result.CallMayWriteGPRs = solveCallRegisterEffects(Effects);
+  auto Family = [](uint64_t RegOff) {
+    return GPRFamilyMask(1) << (RegOff / 8);
+  };
+  const bool Win64 = Img.Format == BinaryFormat::COFF;
+  GPRFamilyMask Volatile = Family(x86reg::RAX) | Family(x86reg::RCX) |
+                           Family(x86reg::RDX) | Family(x86reg::R8) |
+                           Family(x86reg::R9) | Family(x86reg::R10) |
+                           Family(x86reg::R11);
+  GPRFamilyMask Arguments = Family(x86reg::RCX) | Family(x86reg::RDX) |
+                            Family(x86reg::R8) | Family(x86reg::R9);
+  if (!Win64) {
+    Volatile |= Family(x86reg::RSI) | Family(x86reg::RDI);
+    Arguments |= Family(x86reg::RSI) | Family(x86reg::RDI);
+  }
+  CallRegisterSummaries Summaries =
+      solveCallRegisterEffects(Effects, Volatile, Arguments);
+  Result.CallMayWriteGPRs = std::move(Summaries.MayWrite);
+  Result.CallEntryReadGPRs = std::move(Summaries.EntryReads);
 }
 } // namespace
 

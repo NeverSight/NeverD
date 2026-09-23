@@ -16,12 +16,26 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 
+#include <algorithm>
+
 namespace neverd {
 namespace call_args_detail {
 
 void collectCallArgsX86(const CallArgScan &Scan, std::vector<ExprPtr> &Found,
                         std::vector<ExprPtr> &Args) {
   collectSpilledStackArgs(Scan, Found);
+  // A stack argument means all four register arguments are passed, even the
+  // ones this block did not write (a pass-through of the caller's own).
+  if (isWin64(Scan) && Scan.ReachingRegArg &&
+      std::any_of(Found.begin() + std::min<size_t>(4, Found.size()),
+                  Found.end(), [](const ExprPtr &E) { return E != nullptr; }))
+    for (int K = 0; K < 4 && K < static_cast<int>(Found.size()); ++K)
+      if (!Found[K]) {
+        // A slot the callee does not read still occupies its position.
+        Found[K] = Scan.ReachingRegArg(K);
+        if (!Found[K])
+          Found[K] = HighExpr::makeConst(0, 8);
+      }
   for (int K = 0; K < Scan.MaxArgs; ++K) {
     if (!Found[K])
       break;

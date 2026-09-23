@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"
@@ -181,10 +182,28 @@ void markIntrinsicAuxResults(MedFunc &Func) {
 }
 } // namespace
 
-void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp,
-                                                const LowOp &LOp) const {
-  if (!CallMayWriteGPRs || LOp.Opcode != NdOp::CALL || LOp.NumInputs == 0 ||
+void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
+  if (LOp.Opcode != NdOp::CALL || LOp.NumInputs == 0 ||
       !LOp.Inputs[0].isConst())
+    return;
+  // Publish the Win64 register arguments the callee reads as uses, so SSA
+  // sees a pass-through argument and the call site knows its arity.  Mach-O
+  // source-call binding owns single-input calls, hence COFF only.
+  if (CallEntryReadGPRs && TargetArch == Arch::X64 &&
+      TargetFormat == BinaryFormat::COFF && MOp.NumInputs == 1)
+    if (auto R = CallEntryReadGPRs->find(LOp.Inputs[0].Offset);
+        R != CallEntryReadGPRs->end()) {
+      static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
+                                               x86reg::R8, x86reg::R9};
+      int8_t Count = 0;
+      for (int8_t I = 0; I < 4; ++I)
+        if ((R->second >> (Win64Args[I] / 8)) & 1)
+          Count = I + 1;
+      for (int8_t I = 0; I < Count; ++I)
+        MOp.addInput(ndVarToMedVar(NdVar::reg(Win64Args[I], 8)));
+      MOp.CalleeRegisterArgs = Count;
+    }
+  if (!CallMayWriteGPRs)
     return;
   auto It = CallMayWriteGPRs->find(LOp.Inputs[0].Offset);
   if (It == CallMayWriteGPRs->end())
@@ -376,7 +395,6 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
 
       if (LOp.Output.Size > 0)
         MOp.Output = ndVarToMedVar(LOp.Output);
-      applyCallRegisterEffect(MOp, LOp);
 
       // A register/temp XOR with itself is a machine zero idiom, including
       // 128/256/512-bit vector containers. Eliminate the read before liveness
@@ -398,6 +416,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         for (uint8_t I = 0; I < LOp.NumInputs; ++I)
           MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
       }
+      applyCallRegisterEffect(MOp, LOp);
 
       MB.Ops.push_back(MOp);
 

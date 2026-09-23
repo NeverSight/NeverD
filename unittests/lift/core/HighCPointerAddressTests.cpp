@@ -3701,3 +3701,50 @@ TEST(HighCPointerAddresses, DisplacedInvpcidDescriptorPrintsSourceIntrinsic) {
       llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   EXPECT_NE(LLVMC.find("invpcid"), std::string::npos) << LLVMC;
 }
+
+TEST(HighCPointerAddresses, Win64StackArgumentsFollowTheHomeArea) {
+  // ObReferenceObjectByHandle-style call: RCX passes the caller's own first
+  // argument through, [rsp+20h]/[rsp+28h] carry arguments 4 and 5.
+  constexpr va_t Entry = 0x140001000;
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x48,       // sub rsp, 48h
+      0x48, 0x8d, 0x44, 0x24, 0x40, // lea rax, [rsp+40h]
+      0x48, 0xc7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00, // mov [rsp+28h], 0
+      0x48, 0x89, 0x44, 0x24, 0x20,       // mov [rsp+20h], rax
+      0x41, 0xb9, 0x01, 0x00, 0x00, 0x00, // mov r9d, 1
+      0x41, 0xb8, 0x02, 0x00, 0x00, 0x00, // mov r8d, 2
+      0xba, 0x03, 0x00, 0x00, 0x00,       // mov edx, 3
+      0xe8, 0x13, 0x00, 0x00, 0x00,       // call 0x140001040
+      0x48, 0x83, 0xc4, 0x48,             // add rsp, 48h
+      0xc3};
+  Code.resize(0x40, 0xcc);
+  // The callee reads all six arguments.
+  Code.insert(Code.end(), {0x48, 0x8b, 0xc1,             // mov rax, rcx
+                           0x48, 0x03, 0xc2,             // add rax, rdx
+                           0x49, 0x03, 0xc0,             // add rax, r8
+                           0x49, 0x03, 0xc1,             // add rax, r9
+                           0x48, 0x03, 0x44, 0x24, 0x28, // add rax, [rsp+28h]
+                           0x48, 0x03, 0x44, 0x24, 0x30, // add rax, [rsp+30h]
+                           0xc3});
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  std::smatch Call;
+  ASSERT_TRUE(std::regex_search(HighC, Call,
+                                std::regex(R"(= sub_140001040\(([^;]*)\);)")))
+      << HighC;
+  const std::string Args = Call[1].str();
+  EXPECT_EQ(std::count(Args.begin(), Args.end(), ','), 5) << HighC;
+  EXPECT_EQ(Args.rfind("arg0", 0), 0u) << HighC;
+  EXPECT_EQ(Args.substr(Args.size() - 1), "0") << HighC;
+}
+
+TEST(HighCPointerAddresses, SummarizedCalleeTakesOnlyTheArgumentsItReads) {
+  // PsGetJobSilo -> PspGetJobSilo: the caller holds two arguments, the
+  // callee reads RCX only, so the call passes one.
+  constexpr va_t Entry = 0x140001000;
+  const auto Code = callerKeepsRdxAcrossCall({0x48, 0x8b, 0xc1, // mov rax, rcx
+                                              0xc3});
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("sub_140001020(arg0);"), std::string::npos) << HighC;
+}

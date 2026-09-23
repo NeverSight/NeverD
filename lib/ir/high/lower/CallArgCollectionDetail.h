@@ -40,7 +40,14 @@ struct CallArgScan {
   int FirstStackSlot = 0;
   llvm::function_ref<ExprPtr(const MedVar &)> ToExpr;
   llvm::function_ref<bool(const MedVar &)> IsCalleeSave;
+  /// The value register argument \p Index holds at the call, for filling a
+  /// register slot the call did not visibly write (nullptr when unknown).
+  llvm::function_ref<ExprPtr(int)> ReachingRegArg;
 };
+
+/// Win64 passes arguments 0-3 in RCX, RDX, R8, R9 above a 32-byte home area;
+/// argument 4 + K is the 8-byte slot at [rsp + 32 + 8K] at the call.
+bool isWin64(const CallArgScan &Scan);
 
 /// True only for a same-SSA no-op (`COPY rcx = rcx`).  `COPY rcx.3 = rcx`
 /// restores the entry value into a new SSA version and is a real call-arg

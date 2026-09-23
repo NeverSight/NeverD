@@ -112,7 +112,11 @@ indirect or import call. Calls that do not return are ignored. LowToMed marks
 direct calls with the GPR families their callee never writes. MedSSA keeps
 those values across the call and a call whose callee never writes the return
 register has no result. Vector registers, flags and unsummarized callees keep
-the ABI clobber set.
+the ABI clobber set. The same pass records which registers each callee reads
+before writing, including arguments it only passes on to its own callees.
+For Win64 calls LowToMed publishes those argument registers as CALL inputs.
+SSA then sees a caller's pass-through argument, and HighC passes exactly the
+arguments the callee reads. Stack arguments follow the 32-byte home area.
 
 Function starts follow the same evidence rule. An x64 `RUNTIME_FUNCTION` with
 chained unwind info continues its parent function (`BinaryImage::

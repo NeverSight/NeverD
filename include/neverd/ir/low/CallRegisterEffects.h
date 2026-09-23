@@ -31,6 +31,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <vector>
 
 namespace neverd {
 
@@ -45,21 +46,62 @@ using GPRFamilyMask = uint32_t;
 /// of the sixteen x86-64 GPRs this summary tracks.
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff);
 
+/// One straight-line step of a function, for register liveness.
+struct RegisterStep {
+  GPRFamilyMask Reads = 0;
+  /// Families this step fully redefines (a 32- or 64-bit write).
+  GPRFamilyMask Kills = 0;
+  /// A direct call or branch into another function's entry.
+  va_t Callee = InvalidVA;
+  /// Control leaves for code that no summary describes: an import tail
+  /// call or an indirect tail jump.
+  bool UnknownTailCall = false;
+  /// An indirect or import call that returns.
+  bool UnknownCall = false;
+  /// Nothing after this step executes (a call that does not return).
+  bool Exits = false;
+};
+
+struct RegisterBlock {
+  std::vector<RegisterStep> Steps;
+  std::vector<size_t> Succs;
+};
+
 /// Direct call targets of \p F (including rewritten tail calls), and whether
 /// \p F has an effect this summary cannot describe.
 struct LocalRegisterEffect {
   GPRFamilyMask Writes = 0;
   std::set<va_t> Callees;
+  /// Some effect escapes the may-write summary (an unknown call, an
+  /// incomplete lift).
   bool Unknown = false;
+  /// The body itself is not fully known, so neither summary exists.
+  bool Incomplete = false;
+  /// Liveness skeleton; block 0 is the entry.
+  std::vector<RegisterBlock> Blocks;
 };
 
 LocalRegisterEffect localRegisterEffect(const BinaryImage &Img,
                                         const LowFunc &F);
 
-/// Solve may-write GPR sets over \p Funcs (entry -> local effect).  A callee
-/// missing from \p Funcs, or reaching an unknown effect, has no summary.
-std::map<va_t, GPRFamilyMask>
-solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs);
+struct CallRegisterSummaries {
+  /// Families a call may change, for functions whose whole call tree is
+  /// known.
+  std::map<va_t, GPRFamilyMask> MayWrite;
+  /// Families read before being written on some path from entry, including
+  /// through callees.  A pass-through argument counts; a register a nested
+  /// call merely receives does not.
+  std::map<va_t, GPRFamilyMask> EntryReads;
+};
+
+/// Solve may-write and entry-read GPR sets over \p Funcs (entry -> local
+/// effect).  A callee missing from \p Funcs, or reaching an unknown effect,
+/// has no may-write summary.  An unknown call is taken to clobber
+/// \p VolatileFamilies; an unknown tail call to read \p ArgumentFamilies.
+CallRegisterSummaries
+solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
+                         GPRFamilyMask VolatileFamilies,
+                         GPRFamilyMask ArgumentFamilies);
 
 } // namespace neverd
 
