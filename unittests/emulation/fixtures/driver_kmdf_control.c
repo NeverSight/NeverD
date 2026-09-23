@@ -129,6 +129,7 @@ ABI_SLOT(WdfRequestGetInformation, 276);
 ABI_SLOT(WdfRequestGetFileObject, 277);
 ABI_SLOT(WdfRequestGetIoQueue, 282);
 ABI_SLOT(WdfRequestForwardToIoQueue, 281);
+ABI_SLOT(WdfRequestRequeue, 283);
 ABI_SLOT(WdfRequestWdmGetIrp, 285);
 ABI_SLOT(WdfRequestMarkCancelableEx, 393);
 
@@ -596,6 +597,21 @@ static void ManualWorker(PDEVICE_OBJECT Device, PVOID Context) {
                 Parameters.Type == WdfRequestTypeDeviceControl &&
                 Parameters.Parameters.DeviceIoControl.InputBufferLength == 4,
             142);
+  if (TransferMode == 'R') {
+    WDFREQUEST Original = Request;
+    Status = WdfRequestRequeue(Request);
+    if (!Check(Valid && NT_SUCCESS(Status), 148)) {
+      if (!NT_SUCCESS(Status))
+        WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+      return;
+    }
+    Request = NULL;
+    Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+    Valid = Check(NT_SUCCESS(Status) && Request == Original &&
+                      WdfRequestGetIoQueue(Request) == ManualQueue,
+                  149);
+    DbgPrint("KMDF control: manual request requeued at head\n");
+  }
   Status = WdfIoQueueRetrieveNextRequest(Queue, &Empty);
   Valid =
       Check(Valid && Status == STATUS_NO_MORE_ENTRIES && Empty == NULL, 143);
@@ -847,7 +863,8 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: queued parallel request\n");
     return;
   }
-  if ((TransferMode == 'Y' || TransferMode == 'Z') && InputLength == 4) {
+  if ((TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R') &&
+      InputLength == 4) {
     NTSTATUS Status;
     ManualItem = IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
     if (!Check(ManualItem != NULL, 144)) {
@@ -865,7 +882,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: forwarded manual request\n");
     return;
   }
-  if (TransferMode == 'Y' || TransferMode == 'Z')
+  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R')
     ++ManualFollowup;
   if (TransferMode != 'W') {
     TransformRequest(Request, OutputLength, InputLength);
@@ -1150,6 +1167,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'P' ? 'P'
                  : Marker == L'Y' ? 'Y'
                  : Marker == L'Z' ? 'Z'
+                 : Marker == L'R' ? 'R'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1216,7 +1234,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     goto Failure;
   }
 
-  if (TransferMode == 'Y' || TransferMode == 'Z') {
+  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R') {
     WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
     WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
     Attributes.ExecutionLevel = WdfExecutionLevelPassive;
