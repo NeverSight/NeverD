@@ -91,6 +91,14 @@ protected:
         return P.takeError();
       return (*P)->Canceled;
     };
+    Host.RecordCancel = [this](uint64_t IRP) -> llvm::Error {
+      auto P = livePacket(IRP);
+      if (!P)
+        return P.takeError();
+      (*P)->Canceled = true;
+      HostEvents.push_back("cancel");
+      return llvm::Error::success();
+    };
     Host.Information = [this](uint64_t IRP) -> llvm::Expected<uint64_t> {
       auto P = livePacket(IRP);
       if (!P)
@@ -765,6 +773,96 @@ TEST_F(DriverKernelFrameworkRequest,
   EXPECT_EQ(take(invoke("WdfRequestGetIoQueue", {Globals, Request})), Queue);
   complete(Request);
   EXPECT_TRUE(Packets.at(IRP).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       PurgingStoppedQueueCancelsWaitingRequestAndWaitsForDeliveredOwner) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  take(invoke("WdfIoQueueStop", {Globals, Queue, 0, 0}));
+  const auto WaitingIRP = packet();
+  EXPECT_EQ(route(WaitingIRP).PC, 0u);
+  take(invoke("WdfIoQueuePurge", {Globals, Queue, CancelPC, 0x1234}));
+  EXPECT_TRUE(Packets.at(WaitingIRP).Completed);
+  EXPECT_TRUE(Packets.at(WaitingIRP).Canceled);
+  EXPECT_EQ(Packets.at(WaitingIRP).Status, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueNoRequests);
+  const auto RejectedIRP = packet();
+  EXPECT_EQ(route(RejectedIRP).Status, framework::QueueInvalidDeviceState);
+  complete(First);
+  auto Purged = callback();
+  EXPECT_EQ(Purged.PC, CancelPC);
+  EXPECT_EQ(Purged.Arguments, (std::vector<uint64_t>{Queue, 0x1234}));
+  finish(Purged);
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueNoRequests | framework::QueueDriverNoRequests);
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  const auto NextIRP = packet();
+  complete(request(route(NextIRP)));
+  EXPECT_TRUE(Packets.at(NextIRP).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       PurgeInvokesDeliveredCancelableRequestBeforeStateCallback) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, Request, CancelPC})),
+      0u);
+  take(invoke("WdfIoQueuePurge", {Globals, Queue, DefaultPC, 0x5678}));
+  auto Cancel = callback();
+  EXPECT_EQ(Cancel.PC, CancelPC);
+  EXPECT_EQ(Cancel.Arguments, (std::vector<uint64_t>{Request}));
+  EXPECT_TRUE(Packets.at(IRP).Canceled);
+  complete(Request, 0, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+  finish(Cancel);
+  auto Purged = callback();
+  EXPECT_EQ(Purged.PC, DefaultPC);
+  EXPECT_EQ(Purged.Arguments, (std::vector<uint64_t>{Queue, 0x5678}));
+  finish(Purged);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       PurgeDeliversMultipleCancelableCallbacksBeforeFinalNotification) {
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, UINT32_MAX, 4);
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto First = request(route(FirstIRP));
+  const auto Second = request(route(SecondIRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, First, CancelPC})),
+      0u);
+  EXPECT_EQ(
+      take(invoke("WdfRequestMarkCancelableEx", {Globals, Second, CancelPC})),
+      0u);
+  take(invoke("WdfIoQueuePurge", {Globals, Queue, DefaultPC, 0x1234}));
+  auto FirstCancel = callback();
+  EXPECT_EQ(FirstCancel.PC, CancelPC);
+  EXPECT_EQ(FirstCancel.Arguments, (std::vector<uint64_t>{First}));
+  complete(First, 0, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+  finish(FirstCancel);
+  auto SecondCancel = callback();
+  EXPECT_EQ(SecondCancel.PC, CancelPC);
+  EXPECT_EQ(SecondCancel.Arguments, (std::vector<uint64_t>{Second}));
+  complete(Second, 0, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+  finish(SecondCancel);
+  auto Purged = callback();
+  EXPECT_EQ(Purged.PC, DefaultPC);
+  EXPECT_EQ(Purged.Arguments, (std::vector<uint64_t>{Queue, 0x1234}));
+  finish(Purged);
+  EXPECT_TRUE(Packets.at(FirstIRP).Completed);
+  EXPECT_TRUE(Packets.at(SecondIRP).Completed);
 }
 
 TEST_F(DriverKernelFrameworkRequest,

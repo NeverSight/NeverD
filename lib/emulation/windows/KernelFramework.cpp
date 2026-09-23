@@ -622,6 +622,13 @@ KernelFramework::advance(uint64_t Token) {
           });
       if (DriverOwned)
         continue;
+      if (Q.DrainComplete &&
+          std::any_of(CancelCallbacks.begin(), CancelCallbacks.end(),
+                      [&](const auto &Entry) {
+                        auto O = Objects.find(Entry.second);
+                        return O != Objects.end() && O->second.Parent == Handle;
+                      }))
+        continue;
       if (Q.StopComplete) {
         PendingCall = GuestCall{Token, Q.StopComplete, {Handle, Q.StopContext}};
         Q.StopComplete = 0;
@@ -669,6 +676,31 @@ KernelFramework::advance(uint64_t Token) {
         return E;
       C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
       continue;
+    }
+    if (S.Kind == StepKind::PurgeCancelRequest) {
+      auto R = Requests.find(S.Object);
+      auto O = Objects.find(S.Object);
+      if (R == Requests.end() || O == Objects.end())
+        return invalid("purge cancellation lost its request object");
+      if (R->second.Completed || R->second.Completing ||
+          R->second.Cancellation == CancelState::Unmarked)
+        continue;
+      if (R->second.Cancellation != CancelState::Marked ||
+          !R->second.CancelRoutine || !O->second.InternalReferences ||
+          CancelCallbacks.contains(Token) || !RequestsHost.RecordCancel)
+        return invalid("purge cancellation lost driver request ownership");
+      if (auto E = RequestsHost.RecordCancel(R->second.IRP))
+        return E;
+      const uint64_t Routine = R->second.CancelRoutine;
+      R->second.Cancellation = CancelState::Queued;
+      R->second.CancelRoutine = 0;
+      CancelCallbacks.emplace(Token, S.Object);
+      C.Steps.insert(C.Steps.begin() + C.Index,
+                     {StepKind::CancelReturned, S.Object});
+      if (auto E = beginCancelCallback(Token))
+        return E;
+      PendingCall = GuestCall{Token, Routine, {S.Object}};
+      return std::optional<uint64_t>{};
     }
     if (S.Kind == StepKind::CompleteRequest) {
       auto R = Requests.find(S.Object);
@@ -722,6 +754,8 @@ KernelFramework::advance(uint64_t Token) {
           !O->second.References && !O->second.InternalReferences)
         C.Steps.insert(C.Steps.begin() + C.Index,
                        {StepKind::TryDestroy, S.Object});
+      if (NotifyQueueState())
+        return std::optional<uint64_t>{};
       continue;
     }
     auto OI = Objects.find(S.Object);

@@ -234,6 +234,30 @@ static void QueueDrained(WDFQUEUE Queue, WDFCONTEXT Context) {
   DbgPrint("KMDF control: drain completion callback\n");
 }
 
+static void QueuePurged(WDFQUEUE Queue, WDFCONTEXT Context) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State = WdfIoQueueGetState(Queue, &Queued, &Delivered);
+  Check(Queue == DefaultQueue && Context == (WDFCONTEXT)&QueueStopCount &&
+            (State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
+                WdfIoQueueDispatchRequests &&
+            Queued == 0 && Delivered == 0,
+        168);
+  ++QueueStateCallbacks;
+  DbgPrint("KMDF control: purge completion callback\n");
+}
+
+static void PurgeCancel(WDFREQUEST Request) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State =
+      WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
+  Check((State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
+                WdfIoQueueDispatchRequests &&
+            Queued == 0 && Delivered == 1,
+        169);
+  WdfRequestComplete(Request, STATUS_CANCELLED);
+  DbgPrint("KMDF control: purge cancel callback\n");
+}
+
 static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
   PMDL InputMdl = (PMDL)(ULONG_PTR)1;
   PMDL OutputMdl = (PMDL)(ULONG_PTR)1;
@@ -563,6 +587,21 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
     return;
   }
   DbgPrint("KMDF control: deferred worker\n");
+  if (TransferMode == 'O') {
+    ULONG Queued = 0, Delivered = 0;
+    WDF_IO_QUEUE_STATE State;
+    WdfIoQueuePurge(DefaultQueue, QueuePurged, (WDFCONTEXT)&QueueStopCount);
+    State = WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
+    Check((State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests |
+                    WdfIoQueueNoRequests | WdfIoQueueDriverNoRequests)) ==
+                  (WdfIoQueueDispatchRequests | WdfIoQueueNoRequests |
+                   WdfIoQueueDriverNoRequests) &&
+              Queued == 0 && Delivered == 0 && QueueStateCallbacks == 1,
+          170);
+    WdfIoQueueStart(DefaultQueue);
+    DbgPrint("KMDF control: queue restarted after purge\n");
+    return;
+  }
   if (TransferMode == 'E')
     WdfIoQueueDrain(DefaultQueue, QueueDrained, (WDFCONTEXT)&QueueStopCount);
   if (TransferMode == 'S' || TransferMode == 'V' || TransferMode == 'E') {
@@ -977,7 +1016,8 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
   }
   if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R')
     ++ManualFollowup;
-  if (TransferMode == 'S' || TransferMode == 'V' || TransferMode == 'E') {
+  if (TransferMode == 'S' || TransferMode == 'V' || TransferMode == 'E' ||
+      TransferMode == 'O') {
     if (QueueStopCount != 0) {
       ++QueueStopCount;
       DbgPrint("KMDF control: resumed queued request\n");
@@ -995,25 +1035,33 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
       WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
       return;
     }
-    if (TransferMode != 'E')
+    if (TransferMode != 'E' && TransferMode != 'O')
       WdfIoQueueStop(DefaultQueue, TransferMode == 'V' ? QueueStopped : NULL,
                      TransferMode == 'V' ? (WDFCONTEXT)&QueueStopCount : NULL);
     State = WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
     if (!Check(
             (State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
-                    (TransferMode == 'E' ? (WdfIoQueueAcceptRequests |
-                                            WdfIoQueueDispatchRequests)
-                                         : WdfIoQueueAcceptRequests) &&
+                    ((TransferMode == 'E' || TransferMode == 'O')
+                         ? (WdfIoQueueAcceptRequests |
+                            WdfIoQueueDispatchRequests)
+                         : WdfIoQueueAcceptRequests) &&
                 Queued == 0 && Delivered == 1,
             164)) {
       WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
       return;
     }
+    if (TransferMode == 'O') {
+      NTSTATUS CancelStatus = WdfRequestMarkCancelableEx(Request, PurgeCancel);
+      if (!Check(CancelStatus == STATUS_SUCCESS, 171)) {
+        WdfRequestComplete(Request, CancelStatus);
+        return;
+      }
+    }
     ++QueueStopCount;
     DbgPrint("KMDF control: queue state changed with request owned\n");
   }
   if (TransferMode != 'W' && TransferMode != 'S' && TransferMode != 'V' &&
-      TransferMode != 'E') {
+      TransferMode != 'E' && TransferMode != 'O') {
     TransformRequest(Request, OutputLength, InputLength);
     return;
   }
@@ -1304,6 +1352,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'S' ? 'S'
                  : Marker == L'V' ? 'V'
                  : Marker == L'E' ? 'E'
+                 : Marker == L'O' ? 'O'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);

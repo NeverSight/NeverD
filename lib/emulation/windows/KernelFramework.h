@@ -77,6 +77,7 @@ public:
     std::function<llvm::Expected<uint64_t>(uint64_t, bool)> Buffer;
     std::function<llvm::Error(uint64_t)> MarkPending;
     std::function<llvm::Expected<bool>(uint64_t)> IsCanceled;
+    std::function<llvm::Error(uint64_t)> RecordCancel;
     std::function<llvm::Expected<uint64_t>(uint64_t)> Information;
     std::function<llvm::Error(uint64_t, uint64_t)> SetInformation;
     /// Return the request-owned descriptor, or zero on allocation failure.
@@ -247,6 +248,7 @@ private:
     PresentQueue,
     Cleaned,
     CompleteRequest,
+    PurgeCancelRequest,
     CancelReturned,
     TryDestroy,
     Destroy,

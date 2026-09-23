@@ -157,6 +157,20 @@ void KernelModel::configureFrameworkRequestHost() {
           "framework cancellation inspection requires a live IRP");
     return Request->CancelRequested;
   };
+  Host.RecordCancel = [this](uint64_t IRP) -> llvm::Error {
+    auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed)
+      return frameworkRequestError(
+          "framework purge requires a live request IRP");
+    if (auto E = Memory.writeInteger(IRP + IRPCancelOffset, 1, 1))
+      return E;
+    Request->CancelRequested = true;
+    Request->CancelDeadline.reset();
+    auto &Observation = Result.Requests[Request->ResultIndex];
+    if (!Observation.CancelRequestedAt100ns)
+      Observation.CancelRequestedAt100ns = Scheduler.now100ns();
+    return llvm::Error::success();
+  };
   Host.Information = [this](uint64_t IRP) -> llvm::Expected<uint64_t> {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed)
