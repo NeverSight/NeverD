@@ -38,7 +38,8 @@ struct SwiftSDKDeclaration {
 
 // Compiler-observed public Foundation bridge entry points. The compact
 // signature alphabet records only physical scalar carriers: p is a pointer,
-// z is an unsigned word, I is swift_indirect_result, and C is swift_context.
+// z is an unsigned word, b is a Boolean byte, I is swift_indirect_result,
+// and C is swift_context.
 // A parenthesized pair is returned in the two integer result registers.
 constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
     {"$s10Foundation10URLRequestV19_bridgeToObjectiveCSo12NSURLRequestCyF",
@@ -239,6 +240,13 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
     {"$ss11_StringGutsV4growyySiF", "/usr/lib/swift/libswiftCore.dylib", "vzC"},
     {"$ss18_CocoaArrayWrapperV8endIndexSivg",
      "/usr/lib/swift/libswiftCore.dylib", "zz"},
+    // Swift 6.1.2 DictionaryStorage.swift defines the original storage,
+    // capacity and move flag; the specialized generic metadata is swiftself.
+    {"$ss18_DictionaryStorageC4copy8originalAByxq_Gs05__RawaB0C_tFZ",
+     "/usr/lib/swift/libswiftCore.dylib", "ppC"},
+    {"$ss18_DictionaryStorageC6resize8original8capacity4moveAByxq_Gs05__"
+     "RawaB0C_SiSbtFZ",
+     "/usr/lib/swift/libswiftCore.dylib", "ppzbC"},
     // Swift 6.1.2 optimized arm64 and x86_64 client IR passes capacity as
     // an Int and concrete dictionary metadata through swiftself.
     {"$ss18_DictionaryStorageC8allocate8capacityAByxq_GSi_tFZ",
@@ -294,12 +302,12 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
   for (char Code : Encoding) {
     SourceParameterTypeHint Parameter;
     Parameter.Name = "arg" + std::to_string(Signature.Parameters.size());
-    Parameter.Type = Code == 'z' ? Word : Pointer;
+    Parameter.Type = Code == 'z' ? Word : Code == 'b' ? Byte : Pointer;
     if (Code == 'I')
       Parameter.TheRole = SourceParameterTypeHint::Role::SwiftIndirectResult;
     else if (Code == 'C')
       Parameter.TheRole = SourceParameterTypeHint::Role::SwiftContext;
-    else if (Code != 'p' && Code != 'z')
+    else if (Code != 'p' && Code != 'z' && Code != 'b')
       return false;
     Signature.Parameters.push_back(std::move(Parameter));
   }

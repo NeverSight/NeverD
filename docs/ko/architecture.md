@@ -574,6 +574,8 @@ Swift 불리언 검증은 현재 Objective-C 진입 ABI, 변경 불가능한 직
 
 Swift 6.1.2 클라이언트 IR은 정확한 libswiftCore `_DictionaryStorage.allocate(capacity:)` 가져오기가 ARM64와 x64에서 포인터를 반환하고 정수 용량과 `swiftself`의 사전 메타데이터를 받는다고 보여 줍니다. 검증된 ABI는 할당 효과를 유지하며 호출을 바인딩하지만 이것만으로 호출자나 다른 사전 의존성을 복구하지는 않습니다.
 
+Swift 6.1.2는 정확한 libswiftCore `_DictionaryStorage.copy(original:)` 및 `resize(original:capacity:move:)` 가져오기도 `swiftself`에 구체적인 사전 메타데이터를 받고 포인터를 반환하는 호출로 정의합니다. resize는 정수 용량과 1바이트 Bool도 받습니다. 증명은 호출과 할당 효과를 유지하고 제공자와 완전한 ABI를 검증하며 다른 미해결 의존성이 있는 호출자는 공개하지 않습니다.
+
 정확한 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 가져오기는 Swift 6.1.2 선언대로 형식 메타데이터 포인터 하나를 받고 반환하지 않습니다. 이 종료 계약은 검증된 제공자와 ABI에만 적용되며 원래 호출과 트랩은 소스 경로에 남습니다.
 
 8개 명령으로 구성된 ARM64 클래스 접근자 증명을 하나의 공통 구현으로 통합했습니다. 변경 불가능한 명령과 강한 `objc_opt_self` 가져오기를 확인하여 입력 인수가 사용되지 않고 결과의 8바이트 모두가 런타임 호출에서 나옴을 증명합니다. 이 사실만으로 클래스 객체의 동일성이나 소스 의존성 완결을 인정하지 않습니다. super getter와 메타데이터 팩토리는 클래스, 파이프라인, 프레임, 의존성 검사를 유지합니다. 구조적 언와인드 판단도 공유하며 부분 해석과 언어 예외 디스패치는 계속 거부합니다.

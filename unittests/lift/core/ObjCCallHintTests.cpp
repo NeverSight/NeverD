@@ -2232,6 +2232,58 @@ TEST(ObjCCallHints, SwiftDictionaryHashableViolationNeverReturns) {
   }
 }
 
+TEST(ObjCCallHints, SwiftDictionaryStorageCopyAndResizeKeepScalarABI) {
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const auto &Name :
+         {"$ss18_DictionaryStorageC4copy8originalAByxq_Gs05__RawaB0C_tFZ",
+          "$ss18_DictionaryStorageC6resize8original8capacity4moveAByxq_Gs05__"
+          "RawaB0C_SiSbtFZ"}) {
+      SCOPED_TRACE(Name);
+      const bool Resize = llvm::StringRef(Name).contains("resize");
+      const std::string Import = "_" + std::string(Name);
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+      const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      EXPECT_FALSE(Hint->DoesNotReturn);
+      const auto &Signature = Hint->Signature;
+      EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+      EXPECT_EQ(Signature.Convention,
+                SourceFunctionTypeHint::ConventionKind::Swift);
+      ASSERT_TRUE(Signature.ReturnType);
+      EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.ReturnLocation.RegisterOffset,
+                getTargetRegInfo(Architecture).IntReturnReg);
+      ASSERT_EQ(Signature.Parameters.size(), Resize ? 4U : 2U);
+      EXPECT_EQ(Signature.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.Parameters[0].Location.RegisterOffset,
+                getTargetRegInfo(Architecture).IntParamRegs[0]);
+      if (Resize) {
+        EXPECT_EQ(Signature.Parameters[1].Type->Size, 8U);
+        EXPECT_EQ(Signature.Parameters[1].Location.RegisterOffset,
+                  getTargetRegInfo(Architecture).IntParamRegs[1]);
+        EXPECT_EQ(Signature.Parameters[2].Type->Size, 1U);
+        EXPECT_EQ(Signature.Parameters[2].Location.ValueBytes, 1U);
+        EXPECT_EQ(Signature.Parameters[2].Location.RegisterOffset,
+                  getTargetRegInfo(Architecture).IntParamRegs[2]);
+      }
+      const auto &Context = Signature.Parameters.back();
+      EXPECT_EQ(Context.Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Context.TheRole, SourceParameterTypeHint::Role::SwiftContext);
+      EXPECT_EQ(Context.Location.RegisterOffset,
+                Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+      auto Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+      Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Addend = 1;
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    }
+}
+
 TEST(ObjCCallHints, FoundationURLAppendingPathKeepsIndirectResultABI) {
   constexpr llvm::StringLiteral Name =
       "$s10Foundation3URLV22appendingPathComponentyACSSF";
