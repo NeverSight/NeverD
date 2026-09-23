@@ -42,7 +42,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_BUFFERED` IOCTL | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。公開シナリオの並行送信 と WDM 要求キャンセルは未対応 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 要求所有 MDL、システムマッピング、共有物理ページ識別子、SG DMA | ユーザーマッピング、その他の DMA インターフェース |
 | ドライバー割り当て MDL | 非ページプールまたは一つのユーザー割り当てを記述し、物理ページを共有 | IRP への関連付け、MDL チェーン、任意のプロセスは未対応 |
-| READ/WRITE | 逐次 buffered/direct I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。公開シナリオの並行送信、WDM 要求キャンセル、暗黙のファイル位置は未対応 |
+| READ/WRITE | 逐次 buffered/direct/neither I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。公開シナリオの並行送信、WDM 要求キャンセル、暗黙のファイル位置は未対応 |
 | WDM `METHOD_NEITHER` | 独立したユーザーバッファー、プローブ、MDL ロック、捕捉可能なメモリ障害 | 単一の要求元プロセス。WDM キャンセルと任意のユーザーマッピングは未対応 |
 | KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
 | PnP バス／ファンクション／フィルタードライバー | 明示的なリソースなし／固定レジスターバンク PDO、ゲスト AddDevice、8 種の一般的な PnP ライフサイクル機能 | その他の PnP、一般的な電源管理、その他のハードウェア／リソース、KMDF PnP |
@@ -272,7 +272,7 @@ READ／WRITE／IOCTL 要求だけが省略可能な `cancel_after_100ns` を受�
 
 IOCTL の `output_size` が非ゼロなら、入力バッファーが大きくても `Information` はそのサイズを超えてはいけません。出力バッファーがない IOCTL はドライバー定義の結果を返すことができ、出力バイトはコピーしません。`information_hex` は元の 64 ビット値を正確に保持します。
 
-READ/WRITE では、`DO_BUFFERED_IO` または `DO_DIRECT_IO` が転送方式を選びます。Neither または競合するフラグでは停止します。Information は転送長に対して検査します。書き込みはバイト数を、読み取りはバイト列を返します。
+READ/WRITE では、`DO_BUFFERED_IO` または `DO_DIRECT_IO` が buffered/direct 転送を選びます。どちらも設定されていない場合、元のユーザーアドレスは `IRP.UserBuffer` のみに入り、WRITE は入力、READ は出力を示します。SystemBuffer や MDL は暗黙に作成されません。ドライバーは呼び出し元のコンテキストで検査してアクセスするか、処理を延期する前にページをロックします。`user_input_access` は neither WRITE、`user_output_access` は neither READ に適用されます。buffered/direct READ/WRITE で権限を指定した場合と両方のフラグを設定した場合は停止します。Information は転送長に対して検査します。書き込みはバイト数を、読み取りはバイト列を返します。
 
 `kernel_exports` はルーチン名を明示的な可用性の真偽値に対応付けます。例は `"kernel_exports": {"OptionalRoutine": false}` です。モデル化したエクスポートと静的インポートは、`MmGetSystemRoutineAddress` と共有する安定したアドレスを取得します。明示的に存在しないエクスポートは NULL に解決され、静的インポートを満たせません。存在すると宣言されても API モデルがなければ遅延トラップに解決されます。未知の動的な名前は、可用性が未指定であることを診断して停止します。実装がないことから不在を推測しません。名前は長さを制限した表示可能な ASCII で、解決時は大文字小文字を区別します。この一覧は具体的なシナリオの属性であり、すべての Windows リリースとの一致を意味しません。
 `IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` と `MmGetSystemAddressForMdlSafe` はモデル化した WDM ヘッダーの補助関数であり、モデル化されているだけではデフォルトのエクスポートとは宣言されないため、その可用性には静的インポートまたは明示的な `kernel_exports` 宣言が必要です。
@@ -311,7 +311,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v18` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v19` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -337,5 +337,5 @@ null を取り得る `fault` オブジェクトは、最初のバックエンド
 
 WDM `METHOD_NEITHER` では `Type3InputBuffer` と `IRP.UserBuffer` は別々のユーザー割り当てを指します。`ProbeForRead` はページに触れず範囲とアラインメントを確認し、`ProbeForWrite` は各ページに触れます。`ExGetPreviousMode` は要求モードを返します。`MmProbeAndLockPages` は一つのユーザー割り当てをロックし、`MmGetSystemAddressForMdlSafe` は共有エイリアスを返し、`MmUnlockPages` はエイリアスとロックを解除します。任意のプロセスは未対応です。
 
-空でない WDM `METHOD_NEITHER` 要求では、`user_input_access` と `user_output_access` を個別に `read_write`（既定）、`read_only`、`no_access` に設定できます。他の方式や空バッファーでは拒否されます。`no_access` はポインターを残したままページアクセスを禁止します。
+空でない WDM `METHOD_NEITHER` IOCTL 要求では、`user_input_access` と `user_output_access` を個別に `read_write`（既定）、`read_only`、`no_access` に設定できます。buffered/direct 方式や空バッファーでは拒否されます。`no_access` はポインターを残したままページアクセスを禁止します。
 報告の `configuration.user_page_access` は明示された設定のみを、0 始まりの `source_request_index` とともに記録します。省略した方向は `read_write` です。

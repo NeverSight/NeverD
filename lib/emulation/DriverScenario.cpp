@@ -1334,15 +1334,22 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
     if (Request.UserInputAccess || Request.UserOutputAccess) {
-      if (Request.Kind != DriverRequestKind::DeviceControl ||
-          (Request.ControlCode & windows::IoControlMethodMask) !=
-              windows::MethodNeither)
-        return invalid("user page access fields require a METHOD_NEITHER "
-                       "ioctl request");
+      const bool NeitherIOCTL =
+          Request.Kind == DriverRequestKind::DeviceControl &&
+          (Request.ControlCode & windows::IoControlMethodMask) ==
+              windows::MethodNeither;
+      if ((!NeitherIOCTL && Request.Kind != DriverRequestKind::Read &&
+           Request.Kind != DriverRequestKind::Write) ||
+          (Request.Kind == DriverRequestKind::Read &&
+           Request.UserInputAccess) ||
+          (Request.Kind == DriverRequestKind::Write &&
+           Request.UserOutputAccess))
+        return invalid("user page access fields require the matching "
+                       "METHOD_NEITHER ioctl or neither READ/WRITE buffer");
       if ((Request.UserInputAccess && Request.Input.empty()) ||
           (Request.UserOutputAccess && !Request.OutputSize))
         return invalid("user page access requires a nonempty corresponding "
-                       "METHOD_NEITHER buffer");
+                       "neither-I/O buffer");
     }
     if (!Request.InterruptEvents.empty() &&
         Request.Kind != DriverRequestKind::Read &&

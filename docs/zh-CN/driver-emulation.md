@@ -42,7 +42,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_BUFFERED` IOCTL | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发场景提交 或 WDM 请求取消 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL、系统映射、共享物理页身份及 SG DMA | 用户映射及其他 DMA 接口 |
 | 驱动自行分配的 MDL | 描述非分页池或单个用户分配的独立描述符，共享物理页身份 | 不支持 IRP 关联、MDL 链或任意进程 |
-| READ/WRITE | 串行缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发场景提交、WDM 请求取消或隐式文件位置 |
+| READ/WRITE | 串行缓冲／直接／neither I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；不支持并发场景提交、WDM 请求取消或隐式文件位置 |
 | WDM `METHOD_NEITHER` | 独立用户缓冲区、访问探测、MDL 锁页及可捕获的内存故障 | 单一请求进程上下文；不支持 WDM 取消或任意用户映射 |
 | KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、顺序默认队列，以及实际执行回调的缓冲／直接请求 | 不支持 PnP 设备、通用队列调度、类扩展或 UMDF |
 | PnP 总线／功能／过滤驱动 | 显式无资源或固定寄存器银行 PDO、来宾 AddDevice 和八种常见 PnP 生命周期次功能 | 其他 PnP 操作、通用电源管理、其他硬件／资源及 KMDF PnP |
@@ -272,7 +272,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 当 IOCTL 的 `output_size` 非零时，`Information` 不得超过该大小，即使输入缓冲区更大。无输出缓冲区的 IOCTL 可在此字段返回驱动自定义结果，且不会复制输出字节；`information_hex` 精确保留原始 64 位值。
 
-对于 READ/WRITE，`DO_BUFFERED_IO` 或 `DO_DIRECT_IO` 决定传输方法。Neither 或冲突的标志会停止执行。Information 按传输长度检查；write 返回计数，read 返回字节。
+对于 READ/WRITE，`DO_BUFFERED_IO` 或 `DO_DIRECT_IO` 决定缓冲或直接传输。两个标志都未设置时，原始用户地址仅放在 `IRP.UserBuffer`：WRITE 对应输入，READ 对应输出；模型不会隐式创建 SystemBuffer 或 MDL。驱动必须在调用者上下文中探测并访问，或在延后处理前锁页。`user_input_access` 可用于 neither WRITE，`user_output_access` 可用于 neither READ；缓冲／直接 READ/WRITE 若显式指定这些权限，将在派发前停止。两个标志同时设置也会停止。Information 按传输长度检查；write 返回计数，read 返回字节。
 
 `kernel_exports` 将例程名称映射到显式可用性布尔值，例如 `"kernel_exports": {"OptionalRoutine": false}`。已建模的导出和静态导入获得与 `MmGetSystemRoutineAddress` 共享的稳定地址。显式不存在的导出解析为 NULL，且不能满足静态导入。声明存在但没有 API 模型的导出解析为延迟陷阱。未知的动态名称会以可用性未指定的诊断停止；绝不会根据缺少实现推断不存在。名称为有界的可打印 ASCII，解析区分大小写。此清单是具体场景的属性，并不宣称匹配所有 Windows 版本。
 `IoMarkIrpPending`, `IoGetCurrentIrpStackLocation` 和 `MmGetSystemAddressForMdlSafe` 是已建模的 WDM 头文件辅助函数；模型默认不会据此声明它们是导出项，其导出可用性需要静态导入或显式 `kernel_exports` 声明。
@@ -311,7 +311,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v18`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v19`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 
@@ -337,5 +337,5 @@ JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、�
 
 WDM `METHOD_NEITHER` 的 `Type3InputBuffer` 与 `IRP.UserBuffer` 分别指向独立的用户内存。`ProbeForRead` 只检查范围和对齐，不触碰页面；`ProbeForWrite` 会触碰每一页。`ExGetPreviousMode` 返回请求模式。`MmProbeAndLockPages` 锁定单个用户分配的页面，`MmGetSystemAddressForMdlSafe` 建立共享内核别名，`MmUnlockPages` 撤销别名并解锁。不支持任意进程地址空间。
 
-非空 WDM `METHOD_NEITHER` 请求可以分别将 `user_input_access` 和 `user_output_access` 设为 `read_write`（默认）、`read_only` 或 `no_access`。其他传输方式和空缓冲区会拒绝这些字段；`no_access` 保留非空指针，但禁止访问对应页面。
+非空 WDM `METHOD_NEITHER` IOCTL 请求可以分别将 `user_input_access` 和 `user_output_access` 设为 `read_write`（默认）、`read_only` 或 `no_access`。Neither WRITE 仅接受输入权限，neither READ 仅接受输出权限；缓冲／直接传输及空缓冲区拒绝这些字段。`no_access` 保留非空指针，但禁止访问对应页面。
 报告的 `configuration.user_page_access` 仅列出显式设置的权限，并用从零开始的 `source_request_index` 标识请求；未设置的方向默认为 `read_write`。

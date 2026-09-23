@@ -57,7 +57,7 @@ arbitrarios de terceros.
 | IOCTL `METHOD_BUFFERED` | E/S buffered/direct serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos ni cancelación de solicitudes WDM |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL de cada solicitud, mappings de sistema e identidades PFN compartidas de solo lectura | Mappings de usuario y otras interfaces DMA |
 | MDL asignados por el controlador | Descriptores independientes para pool no paginado o una asignación de usuario con páginas físicas compartidas | Sin asociación IRP, cadenas MDL ni procesos arbitrarios |
-| READ/WRITE | E/S buffered/direct serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos, cancelación WDM ni posición implícita del archivo |
+| READ/WRITE | E/S buffered/direct/neither serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos, cancelación WDM ni posición implícita del archivo |
 | WDM `METHOD_NEITHER` | Búferes de usuario separados, sondeo, bloqueo MDL y fallos de memoria recuperables | Un contexto de proceso; sin cancelación WDM ni mapeos de usuario generales |
 | Controlador KMDF 1.33 no PnP | Vinculación, objetos/contextos, dispositivos de control con nombre, colas secuenciales predeterminadas y solicitudes con búfer/directas con callbacks ejecutados | Sin dispositivos PnP, planificación general de colas, extensiones de clase ni UMDF |
 | Controlador PnP de bus, función o filtro | PDO explícitos sin recursos o con bancos de registros, AddDevice invitado y ocho menores comunes del ciclo PnP | Otras operaciones PnP, política general de energía, hardware/recursos generales y KMDF PnP |
@@ -384,7 +384,13 @@ no se copia ningún byte de salida. El informe conserva el valor exacto en
 `information_hex`.
 
 Para READ/WRITE, `DO_BUFFERED_IO` o `DO_DIRECT_IO` selecciona el método de
-transferencia. La ausencia de ambos indicadores o su conflicto detiene la
+transferencia con búfer o directa. Si faltan ambos indicadores, la dirección
+original de usuario aparece solo en `IRP.UserBuffer`: WRITE usa la entrada y
+READ la salida; no se crea SystemBuffer ni MDL implícitamente. El controlador
+debe comprobar y usar la dirección en el contexto del solicitante, o fijar las
+páginas antes de posponer el trabajo. `user_input_access` se aplica a neither
+WRITE y `user_output_access` a neither READ. Los derechos explícitos en
+READ/WRITE con búfer o directa, y los indicadores en conflicto, detienen la
 ejecución. Information se comprueba frente a la longitud de transferencia;
 las escrituras devuelven un recuento y las lecturas devuelven bytes.
 
@@ -518,7 +524,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v18`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v19`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -595,5 +601,5 @@ invitado. Ningún comportamiento de API de Windows pertenece al fork de Unicorn.
 
 En WDM `METHOD_NEITHER`, `Type3InputBuffer` e `IRP.UserBuffer` apuntan a asignaciones de usuario separadas. `ProbeForRead` comprueba rango y alineación sin tocar páginas; `ProbeForWrite` toca cada página. `ExGetPreviousMode` devuelve el modo de la solicitud. `MmProbeAndLockPages` bloquea una asignación de usuario, `MmGetSystemAddressForMdlSafe` crea un alias compartido y `MmUnlockPages` revoca el alias y libera las páginas. No se modelan procesos arbitrarios.
 
-Una solicitud WDM `METHOD_NEITHER` con búfer no vacío puede establecer `user_input_access` y `user_output_access` por separado en `read_write` (predeterminado), `read_only` o `no_access`. Estos campos se rechazan para otros métodos y búferes vacíos; `no_access` conserva el puntero pero impide acceder a las páginas.
+Una solicitud WDM `METHOD_NEITHER` IOCTL con búfer no vacío puede establecer `user_input_access` y `user_output_access` por separado en `read_write` (predeterminado), `read_only` o `no_access`. Estos campos se rechazan para métodos con búfer o directos y búferes vacíos; `no_access` conserva el puntero pero impide acceder a las páginas.
 El informe `configuration.user_page_access` conserva solo las protecciones explícitas, con `source_request_index` desde cero; una dirección omitida usa `read_write`.

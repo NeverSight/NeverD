@@ -108,6 +108,47 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
                 self.assertEqual(result["requests"][1]["io_status"], 0xC0000005)
                 self.assertTrue(result["requests"][1]["completed"])
 
+    def test_neither_read_write_uses_caller_buffer(self) -> None:
+        from neverd_plugin.abi import NeverDDriverOptionsV1
+
+        options = NeverDDriverOptionsV1(
+            struct_size=ctypes.sizeof(NeverDDriverOptionsV1),
+            instruction_limit=1_000_000,
+            memory_limit=64 * 1024 * 1024,
+            event_limit=100_000,
+            timeout_milliseconds=10_000,
+            service_name=b"NeverDNeither",
+        )
+        data = {
+            "requests": [
+                {"kind": "create", "device": "\\Device\\NeverDNeither"},
+                {"kind": "write", "input": "01020304",
+                 "user_input_access": "read_only"},
+                {"kind": "read", "output_size": 4},
+                {"kind": "cleanup"},
+                {"kind": "close"},
+            ],
+            "unload": True,
+        }
+        for fixture in self.fixtures:
+            for address in (0x180000000, 0x190000000):
+                with self.subTest(fixture=fixture, address=address):
+                    data["load_address"] = hex(address)
+                    raw = self.host.owned_string(
+                        "neverd_emulate_driver_scenario_json",
+                        self.session,
+                        os.fsencode(fixture),
+                        json.dumps(data).encode("utf-8"),
+                        ctypes.byref(options),
+                    )
+                    self.assertIsNotNone(raw)
+                    result = json.loads(raw)
+                    self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+                    self.assertTrue(result["scenario_success"])
+                    self.assertTrue(result["unload_completed"])
+                    self.assertEqual(result["requests"][1]["information"], 4)
+                    self.assertEqual(result["requests"][2]["output_hex"], "70717273")
+
 
 if __name__ == "__main__":
     unittest.main()

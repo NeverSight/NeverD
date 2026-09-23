@@ -101,6 +101,60 @@ TEST(DriverWDMNeither, UserPageFactsReachActualProbeLockAndCpuFaultPaths) {
         EXPECT_FALSE(Result->Fault);
       }
 }
+
+TEST(DriverWDMNeither, NeitherReadWriteUsesRawCallerBufferAndPageRights) {
+  struct Case {
+    DriverRequestKind Kind;
+    std::optional<DriverUserPageAccess> Access;
+    uint32_t Status;
+    std::vector<uint8_t> Output;
+  };
+  const Case Cases[]{
+      {DriverRequestKind::Read, std::nullopt, 0, {0x70, 0x71, 0x72, 0x73}},
+      {DriverRequestKind::Write, std::nullopt, 0, {}},
+      {DriverRequestKind::Read,
+       DriverUserPageAccess::ReadOnly,
+       0xc0000005u,
+       {}},
+      {DriverRequestKind::Write,
+       DriverUserPageAccess::NoAccess,
+       0xc0000005u,
+       {}},
+  };
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (const Case &Case : Cases) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(static_cast<unsigned>(Case.Kind));
+        auto Options = options(0x222003, Address);
+        auto &Request = Options.Requests[1];
+        Request.Kind = Case.Kind;
+        Request.ControlCode = 0;
+        if (Case.Kind == DriverRequestKind::Read) {
+          Request.Input.clear();
+          Request.UserOutputAccess = Case.Access;
+        } else {
+          Request.OutputSize = 0;
+          Request.UserInputAccess = Case.Access;
+        }
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        EXPECT_EQ(Result->Requests[1].IOStatus, Case.Status);
+        EXPECT_EQ(Result->Requests[1].Output, Case.Output);
+        EXPECT_EQ(Result->Requests[1].Information, Case.Status ? 0u : 4u);
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
+}
 #endif
 } // namespace
 } // namespace neverd::emulation

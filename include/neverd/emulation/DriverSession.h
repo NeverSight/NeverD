@@ -51,7 +51,7 @@ struct DriverRequest {
   uint32_t ControlCode = 0;
   std::vector<uint8_t> Input;
   uint32_t OutputSize = 0;
-  /// Optional page protection facts for nonempty WDM METHOD_NEITHER buffers.
+  /// Optional page rights for nonempty WDM neither-I/O input/output buffers.
   std::optional<DriverUserPageAccess> UserInputAccess;
   std::optional<DriverUserPageAccess> UserOutputAccess;
   /// Initial contents of a direct IOCTL's second buffer, padded to OutputSize.

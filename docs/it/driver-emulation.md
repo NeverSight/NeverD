@@ -56,7 +56,7 @@ compatibilità con driver arbitrari di terze parti.
 | IOCTL `METHOD_BUFFERED` | I/O buffered/direct seriale con completamento da lavoro o DPC | Solo le API seguenti; nessun IRP concorrente o annullamento di richiesta WDM |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL delle richieste, mapping di sistema e identità PFN condivise in sola lettura | Mapping utente e altre interfacce DMA |
 | MDL allocati dal driver | Descrittori indipendenti per pool non paginato o una singola allocazione utente con pagine fisiche condivise | Nessuna associazione IRP, catena MDL o processo arbitrario |
-| READ/WRITE | I/O buffered/direct seriale con completamento da lavoro o DPC | Solo le API elencate; senza IRP simultanei, annullamento WDM o posizione implicita del file |
+| READ/WRITE | I/O buffered/direct/neither seriale con completamento da lavoro o DPC | Solo le API elencate; senza IRP simultanei, annullamento WDM o posizione implicita del file |
 | WDM `METHOD_NEITHER` | Buffer utente separati, sonde, blocco MDL ed errori di memoria intercettabili | Un solo contesto di processo; nessuna cancellazione WDM o mappatura utente generale |
 | Driver KMDF 1.33 non PnP | Binding, oggetti/contesti, dispositivi di controllo con nome, code sequenziali predefinite e richieste con buffer/dirette con callback eseguiti | Nessun dispositivo PnP, pianificazione generale delle code, estensione di classe o UMDF |
 | Driver PnP di bus, funzione o filtro | PDO espliciti senza risorse o con banchi di registri, AddDevice guest e otto funzioni minori comuni del ciclo PnP | Altre operazioni PnP, politica generale di alimentazione, hardware/risorse generali e KMDF PnP |
@@ -378,8 +378,14 @@ ha un MDL nullo.
 Per ogni metodo IOCTL con `output_size` diverso da zero, `Information` non deve superare `output_size`, anche quando il buffer di input è più grande. Senza un buffer di output, `Information` può contenere un risultato a 64 bit definito dal driver; non viene interpretato come numero di byte da copiare. Il report conserva il valore numerico e aggiunge `information_hex`, una stringa esadecimale esatta per i lettori JSON che non rappresentano tutti gli interi a 64 bit.
 
 Per READ/WRITE, `DO_BUFFERED_IO` o `DO_DIRECT_IO` seleziona il metodo di
-trasferimento. L’assenza di entrambi i flag o il loro conflitto arresta
-l’esecuzione. Information viene verificato rispetto alla lunghezza di
+trasferimento con buffer o diretto. Se mancano entrambi i flag, l’indirizzo
+utente originale compare solo in `IRP.UserBuffer`: WRITE usa l’input e READ
+l’output; SystemBuffer e MDL non vengono creati implicitamente. Il driver deve
+verificare e usare l’indirizzo nel contesto del chiamante oppure bloccare le
+pagine prima di rinviare il lavoro. `user_input_access` si applica a neither
+WRITE e `user_output_access` a neither READ. I diritti espliciti per READ/WRITE
+con buffer o diretto e i flag in conflitto arrestano l’esecuzione. Information
+viene verificato rispetto alla lunghezza di
 trasferimento; le scritture restituiscono un conteggio e le letture restituiscono
 byte.
 
@@ -508,7 +514,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v18`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v19`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -582,5 +588,5 @@ Nessun comportamento di API Windows appartiene al fork di Unicorn.
 
 Per WDM `METHOD_NEITHER`, `Type3InputBuffer` e `IRP.UserBuffer` indicano allocazioni utente distinte. `ProbeForRead` controlla intervallo e allineamento senza toccare le pagine; `ProbeForWrite` tocca ogni pagina. `ExGetPreviousMode` restituisce la modalità della richiesta. `MmProbeAndLockPages` blocca una singola allocazione utente, `MmGetSystemAddressForMdlSafe` fornisce un alias condiviso e `MmUnlockPages` revoca alias e blocco. I processi arbitrari non sono modellati.
 
-Una richiesta WDM `METHOD_NEITHER` con buffer non vuoto può impostare separatamente `user_input_access` e `user_output_access` su `read_write` (predefinito), `read_only` o `no_access`. I campi sono rifiutati per altri metodi e buffer vuoti; `no_access` conserva il puntatore ma impedisce l’accesso alle pagine.
+Una richiesta WDM `METHOD_NEITHER` IOCTL con buffer non vuoto può impostare separatamente `user_input_access` e `user_output_access` su `read_write` (predefinito), `read_only` o `no_access`. I campi sono rifiutati per metodi con buffer o diretti e buffer vuoti; `no_access` conserva il puntatore ma impedisce l’accesso alle pagine.
 Il rapporto `configuration.user_page_access` registra solo le protezioni esplicite, con `source_request_index` a partire da zero; una direzione omessa usa `read_write`.
