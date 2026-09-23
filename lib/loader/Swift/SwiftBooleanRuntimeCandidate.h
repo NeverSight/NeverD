@@ -26,6 +26,8 @@ inline constexpr llvm::StringLiteral SwiftBooleanComparisonProvider =
     "/usr/lib/swift/libswiftCore.dylib";
 inline constexpr llvm::StringLiteral SwiftBooleanPrefixImport =
     "_$sSS9hasPrefixySbSSF";
+inline constexpr llvm::StringLiteral SwiftBooleanSuffixImport =
+    "_$sSS9hasSuffixySbSSF";
 inline constexpr llvm::StringLiteral SwiftBooleanObjectEqualityImport =
     "_$sSo8NSObjectC10ObjectiveCE2eeoiySbAB_ABtFZ";
 inline constexpr llvm::StringLiteral SwiftBooleanObjectEqualityProvider =
@@ -33,7 +35,7 @@ inline constexpr llvm::StringLiteral SwiftBooleanObjectEqualityProvider =
 
 inline llvm::StringRef swiftBooleanRuntimeProvider(llvm::StringRef Import) {
   if (Import == SwiftBooleanComparisonImport ||
-      Import == SwiftBooleanPrefixImport)
+      Import == SwiftBooleanPrefixImport || Import == SwiftBooleanSuffixImport)
     return SwiftBooleanComparisonProvider;
   if (Import == SwiftBooleanObjectEqualityImport)
     return SwiftBooleanObjectEqualityProvider;
@@ -81,6 +83,10 @@ inline std::optional<SourceFunctionTypeHint> swiftBooleanComparisonInputs() {
 /// swiftcc i1(i64, ptr, i64, ptr), prefix words before receiver words, with the
 /// same genuine _Bool normalization. Their libswiftCore TBDs export the exact
 /// hasPrefix symbol for arm64e-ios and arm64-ios-simulator respectively.
+/// Suffix evidence: Apple Swift 6.1.2 arm64-macosx15 client IR declares the
+/// exact libswiftCore symbol as swiftcc i1(i64, ptr, i64, ptr), passing the
+/// suffix words before the receiver words. The call-site LowIR proof below
+/// still has to establish the one-bit result normalization before publication.
 /// NSObject equality: Actions 35710714248, consumer 4c088964d2aa7a0f1d19ca3
 /// f6929551154bc84c4, Xcode 26.5/17F42. Device and simulator Swift/C probes
 /// independently produce swiftcc i1(ptr, ptr, ptr swiftself); the metadata is

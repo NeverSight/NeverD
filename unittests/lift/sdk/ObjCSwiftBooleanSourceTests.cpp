@@ -15,7 +15,7 @@ struct BooleanFixture {
   PipelineResult Result;
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
                  bool Prefix = false, bool OpaquePrefix = false,
-                 bool ObjectEquality = false) {
+                 bool ObjectEquality = false, bool Suffix = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -66,6 +66,7 @@ struct BooleanFixture {
     word(0x1104, 0xf9404210);
     word(0x1108, 0xd61f0200);
     const auto Import = ObjectEquality ? SwiftBooleanObjectEqualityImport
+                        : Suffix       ? SwiftBooleanSuffixImport
                         : Prefix       ? SwiftBooleanPrefixImport
                                        : SwiftBooleanComparisonImport;
     Image.ImportPtrSlots[0x2080] = Import.str();
@@ -323,6 +324,25 @@ TEST(ObjCSwiftBooleanSources,
   E->Operands.push_back(HighExpr::makeConst(0, 1));
   E->SourceCallHint = Forged;
   ASSERT_TRUE(isSwiftBooleanSourceBinding(*Forged));
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+}
+
+TEST(ObjCSwiftBooleanSources, SuffixRequiresCurrentOneBitConsumerProof) {
+  BooleanFixture F(true, false, false, false, false, false, true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  ASSERT_EQ(E->Operands.size(), 4U);
+  EXPECT_EQ(E->SourceCallHint->TargetName,
+            SwiftBooleanSuffixImport.drop_front());
+  EXPECT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  for (auto &Low : F.Result.LowFuncs)
+    for (auto &Block : Low.Blocks)
+      for (auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INT_AND)
+          for (auto &Input : Op.Inputs)
+            if (Input.isConst() && Input.Offset == 1)
+              Input.Offset = 3;
   EXPECT_FALSE(
       objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }

@@ -2348,6 +2348,33 @@ int main(void) {
   compileAndRun(Program, {"-O2", "-Werror"});
 }
 
+TEST(HighCSourceCalls, SwiftSuffixKeepsItsOwnFourArgumentI1Prototype) {
+  const auto Source = emit({booleanSourceFunction(SwiftBooleanSuffixImport)},
+                           true, Arch::AArch64);
+  EXPECT_NE(
+      Source.find("extern _Bool neverd_swift_string_has_suffix_bool(uint64_t, "
+                  "void*, uint64_t, void*)"),
+      std::string::npos);
+  EXPECT_NE(Source.find("__asm__(\"_$sSS9hasSuffixySbSSF\")"),
+            std::string::npos);
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos);
+  const auto Program = Source + R"(
+static unsigned calls;
+_Bool __attribute__((swiftcall)) neverd_swift_string_has_suffix_bool(
+    uint64_t a, void *b, uint64_t c, void *d) {
+  ++calls;
+  return a == 5 && b == (void *)0x1234 && c == 7 && d == (void *)0x5678;
+}
+int main(void) {
+  if (projected_bool(5, (void *)0x1234, 7, (void *)0x5678) != 1 || calls != 1) return 1;
+  if (projected_bool(6, (void *)0x1234, 7, (void *)0x5678) != 0 || calls != 2) return 2;
+  return 0;
+}
+)";
+  compileAndRun(Program, {"-O0", "-Werror"});
+  compileAndRun(Program, {"-O2", "-Werror"});
+}
+
 TEST(HighCSourceCalls, SwiftObjectEqualityPreservesHiddenContextAndI1Result) {
   const auto Source =
       emit({booleanSourceFunction(SwiftBooleanObjectEqualityImport)}, true,
