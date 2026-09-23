@@ -61,6 +61,9 @@ Index signatures(Arch Architecture) {
 std::optional<SourceCallTypeHint>
 darwinDeclaredSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   auto Import = darwinRuntimeImport(Image, ImportSlot);
+  const bool WeakImport = !Import;
+  if (!Import)
+    Import = darwinWeakRuntimeImport(Image, ImportSlot);
   const auto Bind = Image.DyldBindSlots.find(ImportSlot);
   if (!Import || !Import->consume_front("_") ||
       Bind == Image.DyldBindSlots.end() ||
@@ -82,6 +85,7 @@ darwinDeclaredSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
     return std::nullopt;
   SourceCallTypeHint Result;
   Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+  Result.WeakImport = WeakImport;
   Result.TargetAddress = ImportSlot;
   Result.TargetName = Import->str();
   Result.Signature = *Found->second;

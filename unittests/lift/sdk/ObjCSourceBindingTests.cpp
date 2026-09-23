@@ -4027,7 +4027,10 @@ TEST(ObjCSourceBindings, FixedCRecordsRevalidateExportsTypesAndCarriers) {
           F.Image.DyldBindSlots.erase(Slot);
         else
           F.Image.ImportPtrSlots.erase(Slot);
-        EXPECT_FALSE(darwinRuntimeSourceCallHint(F.Image, Slot)) << Mutation;
+        const auto Current = darwinRuntimeSourceCallHint(F.Image, Slot);
+        EXPECT_EQ(bool(Current), Mutation == 2) << Mutation;
+        if (Mutation == 2 && Current)
+          EXPECT_TRUE(Current->WeakImport);
         EXPECT_FALSE(objcSourceCallBound(*Call, F.Image, {})) << Mutation;
       }
       F.Image.DyldBindSlots[Slot] = Bind;

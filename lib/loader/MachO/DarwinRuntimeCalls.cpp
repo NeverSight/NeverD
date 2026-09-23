@@ -78,7 +78,7 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
 
   const auto Import = darwinRuntimeImport(Image, ImportSlot);
   if (!Import)
-    return std::nullopt;
+    return darwinDeclaredSourceCallHint(Image, ImportSlot);
   llvm::StringRef Name(*Import);
   if (!Name.consume_front("_"))
     return std::nullopt;

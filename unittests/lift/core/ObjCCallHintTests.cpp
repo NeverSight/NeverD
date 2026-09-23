@@ -4934,8 +4934,10 @@ TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
         Image.DyldBindSlots[0x2180].Addend = 4;
       if (Mutation == 7)
         Image.ConflictingImportStorageSlots.insert(0x2180);
-      EXPECT_EQ(bool(darwinRuntimeSourceCallHint(Image, 0x2180)), Mutation == 0)
-          << Mutation;
+      const auto Binding = darwinRuntimeSourceCallHint(Image, 0x2180);
+      EXPECT_EQ(bool(Binding), Mutation == 0 || Mutation == 5) << Mutation;
+      if (Mutation == 5 && Binding)
+        EXPECT_TRUE(Binding->WeakImport);
     }
     // Exported names cannot turn a variadic prefix, a by-value aggregate or
     // an unknown callback prototype into a complete scalar declaration.
@@ -4952,6 +4954,75 @@ TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
               : "/usr/lib/libSystem.B.dylib",
           false};
       EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180)) << Name;
+    }
+  }
+}
+
+TEST(ObjCCallHints, WeakSDKFunctionKeepsOptionalExternalCallIdentity) {
+  constexpr llvm::StringLiteral Name = "CGColorSpaceUsesITUR_2100TF";
+  constexpr llvm::StringLiteral Symbol = "_CGColorSpaceUsesITUR_2100TF";
+  constexpr llvm::StringLiteral Module =
+      "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage(Symbol, Architecture);
+    Image.DyldBindSlots[0x2180] = {Symbol.str(), 0, Module.str(), true};
+    const auto Med = convert(Image, caller(Architecture));
+    ASSERT_EQ(Med.CallInfos.size(), 1U);
+    ASSERT_TRUE(Med.CallInfos[0].SourceCallHint);
+    const auto &Binding = *Med.CallInfos[0].SourceCallHint;
+    EXPECT_EQ(Binding.TargetName, Name);
+    EXPECT_EQ(Binding.CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+    EXPECT_EQ(Binding.Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::DarwinSDK);
+    EXPECT_TRUE(Binding.WeakImport);
+    EXPECT_EQ(Binding.Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Binding.Signature.ReturnType->Size, 1U);
+    ASSERT_EQ(Binding.Signature.Parameters.size(), 1U);
+    EXPECT_EQ(Binding.Signature.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(Med, Architecture);
+    const auto *Expression = sourceCall(High);
+    ASSERT_NE(Expression, nullptr);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Expression, Image, {}));
+
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+    EXPECT_NE(Source.find(
+                  "extern __attribute__((weak_import)) uint8_t "
+                  "neverd_darwin_CGColorSpaceUsesITUR_2100TF(void*) "
+                  "__asm__(\"_CGColorSpaceUsesITUR_2100TF\");"),
+              std::string::npos)
+        << Source;
+
+    auto Forged = *Expression;
+    auto ForgedHint =
+        std::make_shared<SourceCallTypeHint>(*Expression->SourceCallHint);
+    ForgedHint->WeakImport = false;
+    Forged.SourceCallHint = std::move(ForgedHint);
+    EXPECT_FALSE(sdk::objcSourceCallBound(Forged, Image, {}));
+
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      auto Changed = Image;
+      if (Mutation == 0)
+        Changed.DyldBindSlots[0x2180].WeakImport = false;
+      if (Mutation == 1)
+        Changed.DyldBindSlots[0x2180].Module += ".impostor";
+      if (Mutation == 2)
+        Changed.DyldBindSlots[0x2180].Addend = 8;
+      if (Mutation == 3)
+        Changed.DyldBindSlots.clear();
+      if (Mutation == 4) {
+        Changed.ImportPtrSlots[0x2180] += "Suffix";
+        Changed.DyldBindSlots[0x2180].Name =
+            Changed.ImportPtrSlots[0x2180];
+      }
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Expression, Changed, {}))
+          << Mutation;
     }
   }
 }
@@ -5234,7 +5305,9 @@ TEST(ObjCCallHints, SystemDeclarationsPreserveWidthsOpaquePointersAndExports) {
       EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
       Image.DyldBindSlots[0x2180].Addend = 0;
       Image.DyldBindSlots[0x2180].WeakImport = true;
-      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint);
+      EXPECT_TRUE(Hint->WeakImport);
     }
     auto Variadic = runtimeImage("_asl_log", Architecture);
     Variadic.DyldBindSlots[0x2180] = {"_asl_log", 0,
@@ -5332,7 +5405,9 @@ TEST(ObjCCallHints, MountEnumerationKeepsArchitectureSpecificLinkerIdentity) {
       EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
       Image.DyldBindSlots[0x2180].Addend = 0;
       Image.DyldBindSlots[0x2180].WeakImport = true;
-      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      const auto Weak = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Weak);
+      EXPECT_TRUE(Weak->WeakImport);
     }
   }
 }
