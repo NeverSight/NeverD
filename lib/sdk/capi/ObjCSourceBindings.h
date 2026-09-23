@@ -901,9 +901,42 @@ swiftTypeMetadataDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
   return DescriptorSymbol;
 }
 
+inline std::optional<std::string>
+swiftDirectTypeMetadataDescriptor(const BinaryImage &Image,
+                                  va_t DescriptorAddress) {
+  const auto *Section = Image.getSectionFor(DescriptorAddress);
+  const auto *Segment = Image.getSegmentFor(DescriptorAddress);
+  if (!Section || !Segment || !Section->isReadable() || Section->isWritable() ||
+      !Segment->isReadable() || Segment->isWritable() ||
+      Image.hasExecutableCodeOwnerAt(DescriptorAddress))
+    return std::nullopt;
+  const Symbol *Descriptor = nullptr;
+  for (const auto &Candidate : Image.Symbols) {
+    if (Candidate.Addr != DescriptorAddress || Candidate.IsFunc ||
+        Candidate.Name.empty())
+      continue;
+    if (Descriptor)
+      return std::nullopt;
+    Descriptor = &Candidate;
+  }
+  if (!Descriptor || (!swiftExportedNominalDescriptor(Descriptor->Name) &&
+                      !swiftProtocolDescriptor(Descriptor->Name)))
+    return std::nullopt;
+  size_t MatchingExports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr != DescriptorAddress)
+      continue;
+    if (Export.Name != Descriptor->Name)
+      return std::nullopt;
+    ++MatchingExports;
+  }
+  return MatchingExports == 1 ? std::optional<std::string>(Descriptor->Name)
+                              : std::nullopt;
+}
+
 struct SwiftTypeMetadataDescriptorReference {
   uint32_t Offset = 0;
-  va_t Slot = 0;
+  va_t Target = 0;
   std::string Symbol;
 };
 
@@ -985,20 +1018,22 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
   std::vector<SwiftTypeMetadataDescriptorReference> Descriptors;
   std::string Expanded = "$s";
   for (uint32_t I = 0; I < Length;) {
-    if (TypeBytes[I] != 2) {
+    if (TypeBytes[I] != 1 && TypeBytes[I] != 2) {
       if (TypeBytes[I] < 0x21 || TypeBytes[I] > 0x7e)
         return std::nullopt;
       Expanded.push_back(static_cast<char>(TypeBytes[I++]));
       continue;
     }
-    if (I > Length - 5 || Descriptors.size() >= MaxDescriptors)
+    if (Length - I < 5 || Descriptors.size() >= MaxDescriptors)
       return std::nullopt;
-    const auto DescriptorSlot =
+    const auto DescriptorAddress =
         swiftRelativeAddress(Image, *TypeReference + I + 1);
     const auto DescriptorSymbol =
-        DescriptorSlot ? swiftTypeMetadataDescriptor(Image, *DescriptorSlot)
-                       : std::nullopt;
-    if (!DescriptorSlot || !DescriptorSymbol)
+        !DescriptorAddress ? std::nullopt
+        : TypeBytes[I] == 1
+            ? swiftDirectTypeMetadataDescriptor(Image, *DescriptorAddress)
+            : swiftTypeMetadataDescriptor(Image, *DescriptorAddress);
+    if (!DescriptorAddress || !DescriptorSymbol)
       return std::nullopt;
     llvm::StringRef Descriptor(*DescriptorSymbol);
     Descriptor.consume_front("_");
@@ -1006,7 +1041,10 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
         (!Descriptor.ends_with("Mn") && !Descriptor.ends_with("Mp")))
       return std::nullopt;
     Expanded += Descriptor.drop_back(2).str();
-    Descriptors.push_back({I, *DescriptorSlot, *DescriptorSymbol});
+    // Rebuild direct local descriptors through a private pointer cell too.
+    // Swift's indirect symbolic-reference kind resolves the same exported
+    // descriptor without requiring a new relative relocation at link time.
+    Descriptors.push_back({I, *DescriptorAddress, *DescriptorSymbol});
     I += 5;
   }
   if (Expanded != Base || !swiftMangledType(Expanded))
@@ -1017,7 +1055,7 @@ swiftTypeMetadataPairProof(const BinaryImage &Image, va_t CacheAddress,
   return SwiftTypeMetadataPairProof{
       SourceCallTypeHint::SwiftTypeMetadataAddress{
           Cache->Addr, Reference->Addr, *TypeReference,
-          Descriptors.empty() ? 0 : Descriptors.front().Slot,
+          Descriptors.empty() ? 0 : Descriptors.front().Target,
           Descriptors.empty() ? std::string{} : Descriptors.front().Symbol,
           Descriptors.empty() ? TypeReferenceBytes
                               : TypeReferenceBytes.substr(5)},

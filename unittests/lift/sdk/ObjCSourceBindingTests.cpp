@@ -1282,7 +1282,7 @@ TEST(ObjCSourceBindings,
 
 TEST(ObjCSourceBindings,
      SwiftTypeMetadataPairsRejectMalformedPrintableTypeReferences) {
-  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation < 7; ++Mutation) {
     auto F = printableSwiftTypeMetadataFixture(
         Arch::AArch64, Mutation == 5 ? "!!!!!" : "ScPSg");
     auto &Data = F.Image.Segments[0].Data;
@@ -1299,6 +1299,12 @@ TEST(ObjCSourceBindings,
     if (Mutation == 4)
       F.Image.DataPtrRelocSlots.insert(SwiftTypeMetadataFixture::TypeReference +
                                        1);
+    if (Mutation == 6) {
+      llvm::support::endian::write32le(
+          Data.data() + SwiftTypeMetadataFixture::Reference + 4 - 0x1000, 3);
+      Type[0] = 1;
+      Type[3] = 0;
+    }
     const auto Result = bindObjCSourceReferences(F.Function, F.Image);
     EXPECT_FALSE(Result.Limitation.empty()) << Mutation;
     EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty()) << Mutation;
@@ -1344,6 +1350,35 @@ TEST(ObjCSourceBindings,
 }
 
 TEST(ObjCSourceBindings,
+     SwiftTypeMetadataPairsRebuildDirectLocalDescriptorIndirectly) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftTypeMetadataFixture F(Architecture, false, false, false, false, true);
+    auto *Type = F.Image.Segments[0].Data.data() +
+                 SwiftTypeMetadataFixture::TypeReference - 0x1000;
+    Type[6] = 1;
+    llvm::support::endian::write32le(
+        Type + 7, static_cast<uint32_t>(static_cast<int32_t>(
+                      SwiftTypeMetadataFixture::LocalDescriptor -
+                      (SwiftTypeMetadataFixture::TypeReference + 7))));
+    const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftTypeMetadataHelpers(
+        F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+    EXPECT_NE(Source.find("_$s7WMFData33WMFDonationReminderDataControllerC"
+                          "20ExperimentAssignmentOMn"),
+              std::string::npos);
+    EXPECT_NE(Source.find(".type_reference[6] = 2"), std::string::npos);
+
+    F.Image.Exports.clear();
+    EXPECT_THROW(renderObjCSwiftTypeMetadataHelpers(
+                     F.Image, Result.SwiftTypeMetadataPairs, Helpers),
+                 std::runtime_error);
+  }
+}
+
+TEST(ObjCSourceBindings,
      SwiftTypeMetadataPairsRejectUnprovenNestedIndirectDescriptors) {
   for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
     const bool SystemDescriptor = Mutation >= 5;
@@ -1352,7 +1387,7 @@ TEST(ObjCSourceBindings,
     auto *Type = F.Image.Segments[0].Data.data() +
                  SwiftTypeMetadataFixture::TypeReference - 0x1000;
     if (Mutation == 0)
-      Type[6] = 1;
+      Type[6] = 3;
     if (Mutation == 1)
       Type[7] = 0;
     if (Mutation == 2)
