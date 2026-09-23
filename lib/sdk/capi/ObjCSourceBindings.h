@@ -789,10 +789,16 @@ inline bool swiftImportedNominalDescriptor(const BinaryImage &Image, va_t Slot,
   // 95e268bb837009a8881ecb210aa6cc3a970602b6277799dc68f048fbd13c6e40.
   // Bind only its identity in a proven type-reference recipe; no descriptor
   // bytes, runtime class layout, or callable ABI are inferred from the name.
-  return Image.Arch == Arch::AArch64 &&
-         Symbol == "_$ss23_ContiguousArrayStorageCMn" &&
-         Provider == "/usr/lib/swift/libswiftCore.dylib" &&
-         isImmutableImageImportSlot(Image, Slot);
+  if (Image.Arch != Arch::AArch64 ||
+      Provider != "/usr/lib/swift/libswiftCore.dylib" ||
+      !isImmutableImageImportSlot(Image, Slot))
+    return false;
+  if (Symbol == "_$ss23_ContiguousArrayStorageCMn")
+    return true;
+  // The linked image's exact strong dyld bind proves this descriptor's
+  // provider on its target runtime. Only its identity is reconstructed;
+  // the storage class layout and metadata contents remain opaque.
+  return Symbol == "_$ss18_DictionaryStorageCMn";
 }
 
 inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,

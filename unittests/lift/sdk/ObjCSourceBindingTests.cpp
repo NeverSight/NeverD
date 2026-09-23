@@ -711,6 +711,25 @@ SwiftTypeMetadataFixture swiftStdlibTypeMetadataFixture() {
   return F;
 }
 
+SwiftTypeMetadataFixture swiftDictionaryTypeMetadataFixture() {
+  auto F = swiftStdlibTypeMetadataFixture();
+  F.Image.ImportPtrSlots.clear();
+  F.Image.ImportStorageSlots.clear();
+  F.Image.DyldBindSlots.clear();
+  EXPECT_TRUE(F.Image.recordDyldBindSlot(
+      SwiftTypeMetadataFixture::DescriptorSlot, "_$ss18_DictionaryStorageCMn",
+      0, "/usr/lib/swift/libswiftCore.dylib", false));
+  F.Image.Symbols[0].Name = "_$ss18_DictionaryStorageCySSSo8NSBundleCGMR";
+  F.Image.Symbols[1].Name = "_$ss18_DictionaryStorageCySSSo8NSBundleCGMd";
+  auto &Data = F.Image.Segments[0].Data;
+  llvm::support::endian::write32le(
+      Data.data() + SwiftTypeMetadataFixture::Reference + 4 - 0x1000, 21);
+  std::memcpy(Data.data() + SwiftTypeMetadataFixture::TypeReference + 5 -
+                  0x1000,
+              "ySSSo8NSBundleCG", 17);
+  return F;
+}
+
 SwiftTypeMetadataFixture
 printableSwiftTypeMetadataFixture(Arch Architecture,
                                   llvm::StringRef TypeReference) {
@@ -1268,6 +1287,25 @@ int main(void) {
         << Error;
   }
 }
+
+TEST(ObjCSourceBindings, SwiftDictionaryStorageMetadataUsesExactStrongImport) {
+  auto F = swiftDictionaryTypeMetadataFixture();
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  EXPECT_EQ(Result.SwiftTypeMetadataPairs.at(F.Cache).Suffix,
+            "ySSSo8NSBundleCG");
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftTypeMetadataHelpers(
+      F.Image, Result.SwiftTypeMetadataPairs, Helpers);
+  EXPECT_NE(Source.find("_$ss18_DictionaryStorageCMn"), std::string::npos);
+
+  F.Image.DyldBindSlots[F.DescriptorSlot].Module = "/tmp/foreign.dylib";
+  Result = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
+  EXPECT_FALSE(Result.Limitation.empty());
+}
+
 TEST(ObjCSourceBindings,
      SwiftSystemFrameworkDescriptorsRequireMatchingInstallNames) {
   constexpr llvm::StringLiteral Descriptor = "_$s7Combine9PublishedVMn";
