@@ -1,5 +1,7 @@
 #include "neverd/loader/ObjC/ObjCSentinelCalls.h"
 
+#include "../MachO/DarwinSourceDeclarations.h"
+
 #include "neverd/ir/SourceABI.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
@@ -80,7 +82,8 @@ objcSentinelSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
       Objects.size() > 61)
     return std::nullopt;
   for (const auto Address : Objects)
-    if (!Address || !readObjCConstantString(Image, Address))
+    if (!Address || (!readObjCConstantString(Image, Address) &&
+                     !darwinDeclaredSourceDataObject(Image, Address)))
       return std::nullopt;
   // Complete device/simulator Messages ASTs agree on NSSet(Creation)'s
   // +setWithObjects:(id)firstObj, ... and SentinelAttr. Their accompanying

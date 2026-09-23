@@ -50,6 +50,10 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
     if (Value->Kind == ExprKind::Load) {
       if (Value->Type->Size != 8 || Value->Operands.size() != 1)
         return false;
+      // A compiler-declared external Objective-C object value is already a
+      // complete object identity; only private-frame loads use the slot map.
+      if (Identify(Value))
+        return Self(Self, Value->Operands.front(), Depth + 1);
       const auto Offset = Address(Value->Operands[0], 8);
       if (!Offset)
         return false;

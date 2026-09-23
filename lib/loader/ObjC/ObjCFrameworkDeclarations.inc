@@ -3,7 +3,7 @@
 // Compiler-derived public framework API facts: MacOSX SDK 15.5.
 // Apple clang version 17.0.0 (clang-1700.0.13.5)
 // Target profiles: arm64-apple-macos15.0, arm64-apple-ios18.0, x86_64-apple-macos15.0, x86_64-apple-ios18.0-simulator
-// Public imports: CoreData/CoreData.h, CoreLocation/CoreLocation.h, CoreSpotlight/CoreSpotlight.h, QuartzCore/CoreAnimation.h, UniformTypeIdentifiers/UniformTypeIdentifiers.h, UserNotifications/UserNotifications.h
+// Public imports: CoreData/CoreData.h, CoreLocation/CoreLocation.h, CoreSpotlight/CoreSpotlight.h, QuartzCore/CoreAnimation.h, UniformTypeIdentifiers/UniformTypeIdentifiers.h, UserNotifications/UserNotifications.h, WebKit/WKWebsiteDataStore.h
 // No framework source implementation is included.
 // Empty encodings are negative evidence; nullptr means no declaration.
 {"CoreData", "/System/Library/Frameworks/CoreData.framework/CoreData|/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData", "URIRepresentation", "@16@0:8", "@16@0:8"},
@@ -1944,4 +1944,22 @@
 {"UserNotifications", "/System/Library/Frameworks/UserNotifications.framework/UserNotifications|/System/Library/Frameworks/UserNotifications.framework/Versions/A/UserNotifications", "userNotificationCenter:openSettingsForNotification:", "v32@0:8@16@24", "v32@0:8@16@24"},
 {"UserNotifications", "/System/Library/Frameworks/UserNotifications.framework/UserNotifications|/System/Library/Frameworks/UserNotifications.framework/Versions/A/UserNotifications", "userNotificationCenter:willPresentNotification:withCompletionHandler:", "v40@0:8@16@24@?32", "v40@0:8@16@24@?32"},
 {"UserNotifications", "/System/Library/Frameworks/UserNotifications.framework/UserNotifications|/System/Library/Frameworks/UserNotifications.framework/Versions/A/UserNotifications", "userText", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "allWebsiteDataTypes", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "dataStoreForIdentifier:", "@24@0:8@16", "@24@0:8@16"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "dataTypes", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "defaultDataStore", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "displayName", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "fetchAllDataStoreIdentifiers:", "v24@0:8@?16", "v24@0:8@?16"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "fetchDataRecordsOfTypes:completionHandler:", "v32@0:8@16@?24", "v32@0:8@16@?24"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "httpCookieStore", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "identifier", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "init", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "isPersistent", "B16@0:8", ""},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "new", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "nonPersistentDataStore", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "proxyConfigurations", "@16@0:8", "@16@0:8"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "removeDataOfTypes:forDataRecords:completionHandler:", "v40@0:8@16@24@?32", "v40@0:8@16@24@?32"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "removeDataOfTypes:modifiedSince:completionHandler:", "v40@0:8@16@24@?32", "v40@0:8@16@24@?32"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "removeDataStoreForIdentifier:completionHandler:", "v32@0:8@16@?24", "v32@0:8@16@?24"},
+{"WebKit", "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit|/System/Library/Frameworks/WebKit.framework/WebKit", "setProxyConfigurations:", "v24@0:8@16", "v24@0:8@16"},
     // clang-format on

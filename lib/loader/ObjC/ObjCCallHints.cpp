@@ -1,6 +1,7 @@
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 
 #include "../MachO/DarwinRuntimeImport.h"
+#include "../MachO/DarwinSourceDeclarations.h"
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -165,6 +166,7 @@ struct Value {
     NumberSet,
     Selector,
     Import,
+    ImportedObject,
     Receiver,
     IvarOffset,
     FieldAddress,
@@ -197,8 +199,7 @@ struct Value {
                     Other.SourceLocation.EntryStackOffset,
                     Other.SourceLocation.ValueBytes,
                     Other.SourceLocation.ExtendTo32Bits,
-                    Other.SourceConsumedAsObject,
-                    Other.AlternativeNumbers);
+                    Other.SourceConsumedAsObject, Other.AlternativeNumbers);
   }
 };
 
@@ -242,11 +243,9 @@ struct LocalResultUse {
   std::optional<NdTypeKind> TypeKind;
 };
 
-std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
-                                             size_t InitialBlock,
-                                             size_t CallIndex,
-                                             const TargetRegInfo &TRI,
-                                             const BinaryImage &Image) {
+std::optional<LocalResultUse>
+localResultUse(const LowFunc &Function, size_t InitialBlock, size_t CallIndex,
+               const TargetRegInfo &TRI, const BinaryImage &Image) {
   struct Alias {
     NdVar Value;
     uint16_t SourceOffset = 0;
@@ -256,8 +255,8 @@ std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
            B.Size && A.Offset < B.Offset + B.Size &&
            B.Offset < A.Offset + A.Size;
   };
-  auto KnownCallSignature = [&](const LowOp &Op)
-      -> std::optional<SourceFunctionTypeHint> {
+  auto KnownCallSignature =
+      [&](const LowOp &Op) -> std::optional<SourceFunctionTypeHint> {
     if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
         Op.Inputs[0].Space != VnodeSpace::CONST)
       return std::nullopt;
@@ -292,16 +291,15 @@ std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
       size_t FirstOp = 0;
       std::vector<Alias> Aliases;
     };
-    std::vector<State> Work{{InitialBlock, CallIndex + 1,
-                             {{NdVar::reg(Begin, FullWidth), 0}}}};
+    std::vector<State> Work{
+        {InitialBlock, CallIndex + 1, {{NdVar::reg(Begin, FullWidth), 0}}}};
     using AliasKey = std::tuple<uint64_t, uint16_t, uint16_t>;
     std::set<std::tuple<size_t, size_t, std::vector<AliasKey>>> Seen;
     std::optional<LocalResultUse> Result;
     bool Ambiguous = false;
     size_t Budget = 4096;
     auto Observe = [&](LocalResultUse Use) {
-      const auto Same = [](const LocalResultUse &A,
-                           const LocalResultUse &B) {
+      const auto Same = [](const LocalResultUse &A, const LocalResultUse &B) {
         return A.Location.Kind == B.Location.Kind &&
                A.Location.RegisterOffset == B.Location.RegisterOffset &&
                A.Location.ValueBytes == B.Location.ValueBytes &&
@@ -353,8 +351,7 @@ std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
             LocalResultUse Use;
             Use.Location.Kind = Kind;
             Use.Location.RegisterOffset =
-                Begin + Alias.SourceOffset +
-                (AliasBegin - Alias.Value.Offset);
+                Begin + Alias.SourceOffset + (AliasBegin - Alias.Value.Offset);
             Use.Location.ValueBytes =
                 static_cast<uint16_t>(AliasEnd - AliasBegin);
             Observe(std::move(Use));
@@ -398,8 +395,8 @@ std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
           }
           for (auto It = Current.Aliases.begin();
                It != Current.Aliases.end();) {
-            const auto Preserved = TRI.callPreservedPrefixSize(
-                It->Value.Offset, It->Value.Size);
+            const auto Preserved =
+                TRI.callPreservedPrefixSize(It->Value.Offset, It->Value.Size);
             if (!Preserved)
               It = Current.Aliases.erase(It);
             else {
@@ -903,8 +900,8 @@ objcSelectorStubSentinelSourceCallHint(const BinaryImage &Image, va_t Address,
       Import->second.WeakImport ||
       Import->second.Module != "/usr/lib/libobjc.A.dylib" ||
       std::find(Image.DynInfo.NeededLibs.begin(),
-                Image.DynInfo.NeededLibs.end(), Import->second.Module) ==
-          Image.DynInfo.NeededLibs.end())
+                Image.DynInfo.NeededLibs.end(),
+                Import->second.Module) == Image.DynInfo.NeededLibs.end())
     return std::nullopt;
   auto Hint =
       objcSentinelSourceCallHint(Image, Target->Selector, Receiver, Objects);
@@ -1011,8 +1008,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         const auto &Location = Parameter.Location;
         const bool CompleteForwardedScalar =
             Type && Type->Size == 8 &&
-            (Type->Kind == NdTypeKind::Int ||
-             Type->Kind == NdTypeKind::Ptr);
+            (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr);
         if ((!isObjCSelectorArgumentEvidenceType(Type, true) &&
              !CompleteForwardedScalar) ||
             Location.Kind != SourceABICarrierKind::IntegerRegister ||
@@ -1393,10 +1389,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Target = veneer(Image, V->Number);
           }
         }
-        if (V && V->TheKind == Value::Kind::Number &&
-            Op.Opcode == NdOp::CALL) {
-          auto CompilerRT =
-              darwinCompilerRTSourceCallHint(Image, V->Number);
+        if (V && V->TheKind == Value::Kind::Number && Op.Opcode == NdOp::CALL) {
+          auto CompilerRT = darwinCompilerRTSourceCallHint(Image, V->Number);
           if (CompilerRT) {
             Clobber(&CompilerRT->Signature);
             BlockHints.emplace(Op.Addr, std::move(*CompilerRT));
@@ -1572,10 +1566,10 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             };
             const auto DynamicValue = StoredReceiver(Base);
             const auto ClassValue = StoredReceiver(Base + 8);
-            const auto Dynamic = DynamicValue ? receiver(*DynamicValue)
-                                              : std::nullopt;
-            const auto CurrentClass = ClassValue ? receiver(*ClassValue)
-                                                 : std::nullopt;
+            const auto Dynamic =
+                DynamicValue ? receiver(*DynamicValue) : std::nullopt;
+            const auto CurrentClass =
+                ClassValue ? receiver(*ClassValue) : std::nullopt;
             if (Dynamic && isObjCInitFamily(Target->Selector))
               SuperInitReceiver = Dynamic;
             // objc_msgSendSuper2 selects the declaration from current_class;
@@ -1652,8 +1646,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           }
           if (!Qualified && Target->Name == "objc_msgSend") {
             const auto Caller = objcMethodSourceTypeHint(Image, Function.Entry);
-            const auto SourceParameter = [&](const Value &V)
-                -> std::optional<unsigned> {
+            const auto SourceParameter =
+                [&](const Value &V) -> std::optional<unsigned> {
               if (!Caller || V.TheKind != Value::Kind::SourceParameter ||
                   V.SourceMethodEntry != Function.Entry)
                 return std::nullopt;
@@ -1696,9 +1690,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             const auto Self = Read(NdVar::reg(TRI.IntParamRegs[0], 8));
             const auto ReceiverParameter =
                 Self ? SourceParameter(*Self) : std::nullopt;
-            const size_t ArgumentCount =
-                std::count(Target->Selector.begin(), Target->Selector.end(),
-                           ':');
+            const size_t ArgumentCount = std::count(
+                Target->Selector.begin(), Target->Selector.end(), ':');
             if (ExactReturn && ReceiverParameter &&
                 ArgumentCount <= TRI.IntParamRegs.size() - 2) {
               SourceCallTypeHint::SelectorForwardingEvidence Evidence;
@@ -1717,9 +1710,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                 Evidence.ArgumentSourceParameters.push_back(*Parameter);
               }
               if (ExactArguments) {
-                const auto Reconstructed =
-                    objcMethodForwardingSourceTypeHint(
-                        Image, Target->Selector, Evidence);
+                const auto Reconstructed = objcMethodForwardingSourceTypeHint(
+                    Image, Target->Selector, Evidence);
                 if (Reconstructed) {
                   SelectorForwardingContract = true;
                   Signature = objcSelectorSourceTypeHintForForwardingUse(
@@ -1826,10 +1818,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                       : std::nullopt;
               std::optional<SourceCallTypeHint> Hint;
               if (Format && Format->TheKind == Value::Kind::Number)
-                Hint = objcFormattedSourceCallHint(
-                    Image, Target->Selector, Format->Number);
-              else if (Format &&
-                       Format->TheKind == Value::Kind::NumberSet) {
+                Hint = objcFormattedSourceCallHint(Image, Target->Selector,
+                                                   Format->Number);
+              else if (Format && Format->TheKind == Value::Kind::NumberSet) {
                 std::vector<va_t> Candidates{Format->Number};
                 Candidates.insert(Candidates.end(),
                                   Format->AlternativeNumbers.begin(),
@@ -1849,34 +1840,46 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                 V->TheKind == Value::Kind::Number &&
                 objcSentinelReceiverValid(Image, Target->Selector, *Receiver)) {
               const auto Objects = [&]() -> std::optional<std::vector<va_t>> {
+                const auto Object =
+                    [&](const Value &Value) -> std::optional<va_t> {
+                  if (Value.TheKind == Value::Kind::Number && Value.Number &&
+                      readObjCConstantString(Image, Value.Number))
+                    return Value.Number;
+                  if (Value.TheKind == Value::Kind::ImportedObject &&
+                      Value.Number &&
+                      darwinDeclaredSourceDataObject(Image, Value.Number))
+                    return Value.Number;
+                  return std::nullopt;
+                };
                 const auto First = Read(NdVar::reg(TRI.IntParamRegs[2], 8));
-                if (!First || First->TheKind != Value::Kind::Number)
+                if (!First)
                   return std::nullopt;
                 // sentinel(0,1) permits firstObject itself to be nil. Do not
                 // require SP, inspect a tail slot, or introduce a tail load.
-                if (!First->Number)
+                if (First->TheKind == Value::Kind::Number && !First->Number)
                   return std::vector<va_t>{};
-                if (!readObjCConstantString(Image, First->Number))
+                const auto FirstObject = Object(*First);
+                if (!FirstObject)
                   return std::nullopt;
                 const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
                 if (!Stack || Stack->TheKind != Value::Kind::Frame ||
                     State.FrameEscaped)
                   return std::nullopt;
                 const int64_t Base = static_cast<int64_t>(Stack->Number);
-                std::vector<va_t> Result{First->Number};
+                std::vector<va_t> Result{*FirstObject};
                 for (;;) {
                   const int64_t Offset =
                       Base + 8 * static_cast<int64_t>(Result.size() - 1);
                   const auto Slot = State.FrameSlots.find({Offset, 8U});
-                  if (Slot == State.FrameSlots.end() ||
-                      Slot->second.TheKind != Value::Kind::Number)
+                  if (Slot == State.FrameSlots.end())
                     return std::nullopt;
-                  if (!Slot->second.Number)
+                  if (Slot->second.TheKind == Value::Kind::Number &&
+                      !Slot->second.Number)
                     return Result; // No reads beyond the first definite nil.
-                  if (Result.size() == 61 ||
-                      !readObjCConstantString(Image, Slot->second.Number))
+                  const auto Next = Object(Slot->second);
+                  if (Result.size() == 61 || !Next)
                     return std::nullopt;
-                  Result.push_back(Slot->second.Number);
+                  Result.push_back(*Next);
                 }
               }();
               if (Objects)
@@ -2187,6 +2190,11 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               objcReceiverFieldTypeHint(Image, *Address->Object, 0);
           if (Field)
             Out = Value{Value::Kind::Receiver, 0, {}, *Field};
+        } else if (Address && Address->TheKind == Value::Kind::Import &&
+                   Op.Output.Size == 8 &&
+                   darwinDeclaredSourceDataObject(Image, Address->Number)) {
+          Out = Value{Value::Kind::ImportedObject, Address->Number,
+                      Address->Name};
         } else if (Address && Address->TheKind == Value::Kind::Number) {
           auto Ref = Image.ObjCSourceReferences.find(Address->Number);
           if (Ref != Image.ObjCSourceReferences.end() &&
@@ -2217,8 +2225,13 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                   Value{Value::Kind::Import, Address->Number, std::move(Name)};
             else if (const auto Data =
                          darwinRuntimeGlobalAddressHint(Image, Address->Number);
-                     Data && Data->TargetName == "_NSConcreteStackBlock")
-              Out = Value{Value::Kind::BlockIsa, Address->Number};
+                     Data) {
+              if (Data->TargetName == "_NSConcreteStackBlock")
+                Out = Value{Value::Kind::BlockIsa, Address->Number};
+              else if (darwinDeclaredSourceDataObject(Image, Address->Number))
+                Out = Value{Value::Kind::Import, Address->Number,
+                            Data->TargetName};
+            }
           }
           if (!Out && PlainMemory && Op.Output.Size && Op.Output.Size <= 8)
             Out = Value{Value::Kind::ImageBytes, Address->Number};

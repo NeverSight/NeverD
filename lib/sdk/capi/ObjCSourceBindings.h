@@ -3,6 +3,7 @@
 
 #include "../../ir/high/pass/HighFrameAddress.h"
 #include "../../loader/MachO/DarwinRuntimeImport.h"
+#include "../../loader/MachO/DarwinSourceDeclarations.h"
 #include "../../loader/ObjC/ObjCRuntimeData.h"
 #include "BorrowedByteSources.h"
 #include "CStringStorageSources.h"
@@ -1461,11 +1462,10 @@ kvoRegistrationContextParameter(const HighExpr &Expression,
       Hint.Selector != Selector || Hint.Format || Hint.NilTerminated ||
       Hint.SelectorResultUse || Hint.SelectorResultTypeUse ||
       Hint.SelectorArgumentTypeUse || Hint.SelectorForwardingUse ||
-      Hint.SelectorArgumentStorageUse ||
-      Hint.ObjCIndirectResultStorage || Hint.DoesNotReturn || Hint.WeakImport ||
-      Hint.ReturnedArgument || Hint.RuntimeObjCResultType ||
-      Hint.ValueWitness || !Hint.BorrowedByteInputs.empty() ||
-      !Hint.SwiftStringInputs.empty() ||
+      Hint.SelectorArgumentStorageUse || Hint.ObjCIndirectResultStorage ||
+      Hint.DoesNotReturn || Hint.WeakImport || Hint.ReturnedArgument ||
+      Hint.RuntimeObjCResultType || Hint.ValueWitness ||
+      !Hint.BorrowedByteInputs.empty() || !Hint.SwiftStringInputs.empty() ||
       Expression.Operands.size() != Hint.Signature.Parameters.size() ||
       ContextParameter >= Expression.Operands.size())
     return std::nullopt;
@@ -2811,10 +2811,10 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Expected = objcDynamicFormatPointerArgumentsSourceCallHint(
               Image, Stub->Selector,
               unsigned(Expression->Operands.size() - Fixed));
-        // The authenticated selector stub fixes the callee and selector. A
-        // redundant native hint is unnecessary when every integer tail value
-        // has an independently declared source result and the complete call's
-        // scalar carriers agree with the format declaration below.
+          // The authenticated selector stub fixes the callee and selector. A
+          // redundant native hint is unnecessary when every integer tail value
+          // has an independently declared source result and the complete call's
+          // scalar carriers agree with the format declaration below.
         } else if (!Expression->SourceCallHint ||
                    plainNativeBinding(*Expression->SourceCallHint)) {
           size_t IntegerBudget = 4096;
@@ -3466,23 +3466,22 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentStorageUse ||
-       Binding.SelectorForwardingUse ||
-       Binding.ObjCIndirectResultStorage ||
+       Binding.SelectorForwardingUse || Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.SelectorArgumentStorageUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
-       Binding.SelectorForwardingUse ||
-       Binding.ObjCIndirectResultStorage ||
+       Binding.SelectorForwardingUse || Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK))
     return false;
   if (Binding.SelectorForwardingUse &&
       (Binding.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
        Binding.Receiver || Binding.Format || Binding.SelectorResultUse ||
        Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
-       Binding.SelectorArgumentStorageUse || Binding.ObjCIndirectResultStorage ||
+       Binding.SelectorArgumentStorageUse ||
+       Binding.ObjCIndirectResultStorage ||
        Hint.Origin != SourceFunctionTypeHint::OriginKind::ObjCRuntime))
     return false;
   if (Binding.ObjCIndirectResultStorage &&
@@ -3490,11 +3489,10 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
        !Binding.Receiver || Binding.Format || Binding.NilTerminated ||
        Binding.SelectorResultUse || Binding.SelectorResultTypeUse ||
        Binding.SelectorArgumentTypeUse || Binding.SelectorForwardingUse ||
-       Binding.SelectorArgumentStorageUse ||
-       Binding.DoesNotReturn || Binding.WeakImport ||
-       Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
-       Binding.ValueWitness || !Binding.OwnerClass.empty() ||
-       !Binding.BorrowedByteInputs.empty() ||
+       Binding.SelectorArgumentStorageUse || Binding.DoesNotReturn ||
+       Binding.WeakImport || Binding.ReturnedArgument ||
+       Binding.RuntimeObjCResultType || Binding.ValueWitness ||
+       !Binding.OwnerClass.empty() || !Binding.BorrowedByteInputs.empty() ||
        !Binding.SwiftStringInputs.empty() || Binding.SwiftTypeMetadata ||
        Binding.ByteCount || Binding.ImmutablePointerSlot))
     return false;
@@ -3527,8 +3525,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     return false;
   if (Binding.WeakImport &&
       Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeCall &&
-      Binding.CallKind !=
-          SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress)
+      Binding.CallKind != SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress)
     return false;
   if (!validateSourceABI(Hint, Reason) || Hint.Architecture != Image.Arch ||
       Expression.Operands.size() != Hint.Parameters.size())
@@ -3586,8 +3583,7 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
             SourceABICarrierKind::IndirectResultPointer ||
         !Hint.ReturnType || Hint.ReturnType->Kind != NdTypeKind::Struct ||
         Hint.ReturnType->Size != Evidence.ByteCount ||
-        !Hint.ReturnComponents.empty() ||
-        ContainingFunction->FrameSize <= 0 ||
+        !Hint.ReturnComponents.empty() || ContainingFunction->FrameSize <= 0 ||
         Evidence.FrameOffset < -ContainingFunction->FrameSize ||
         Evidence.FrameOffset > -static_cast<int64_t>(Evidence.ByteCount) ||
         !ContainingFunction->SourceTypeHint || !Caller ||
@@ -3867,6 +3863,17 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
               SourceCallTypeHint::Kind::RuntimeConstantString &&
           objcSourceCallBound(*Value, Image, Functions))
         return Value->SourceCallHint->TargetAddress;
+      if (Value->Kind == ExprKind::Load && Value->Operands.size() == 1) {
+        const auto &Address = Value->Operands.front();
+        if (Address && Address->Kind == ExprKind::Call &&
+            Address->SourceCallHint &&
+            Address->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress &&
+            darwinDeclaredSourceDataObject(
+                Image, Address->SourceCallHint->TargetAddress) &&
+            objcSourceCallBound(*Address, Image, Functions))
+          return Address->SourceCallHint->TargetAddress;
+      }
       return std::nullopt;
     };
     const auto Query = [&](const HighExpr &Value) {
@@ -3875,7 +3882,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       const auto Kind = Value.SourceCallHint->CallKind;
       return (Kind == SourceCallTypeHint::Kind::RuntimeClass ||
               Kind == SourceCallTypeHint::Kind::RuntimeSelector ||
-              Kind == SourceCallTypeHint::Kind::RuntimeConstantString) &&
+              Kind == SourceCallTypeHint::Kind::RuntimeConstantString ||
+              Kind == SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress) &&
              objcSourceCallBound(Value, Image, Functions);
     };
     const auto StackLoads =
@@ -3913,6 +3921,8 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                                      Value->Type->Kind != NdTypeKind::Ptr))
         return false;
       if (Value->Kind == ExprKind::Load) {
+        if (Kind == Identity::Object && ObjectIdentity(Value) == Address)
+          return true;
         const auto Load = StackLoads.find(Value.get());
         return Kind == Identity::Object && Load != StackLoads.end() &&
                Load->second == Address;

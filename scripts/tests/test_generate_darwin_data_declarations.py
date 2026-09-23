@@ -23,9 +23,9 @@ class DarwinDataDeclarationTests(unittest.TestCase):
                                [{"storage_0": {"A"}, "storage_1": {"A"},
                                  "storage_2": {"A"}}] * 2, "test", "test")
         self.assertEqual(count, 3)
-        self.assertIn('{"storage_0", "A", "A"}', output)
-        self.assertIn('{"storage_1", "", "A"}', output)
-        self.assertIn('{"storage_2", "A", ""}', output)
+        self.assertIn('{"storage_0", "A", "A", false, false}', output)
+        self.assertIn('{"storage_1", "", "A", false, false}', output)
+        self.assertIn('{"storage_2", "A", "", false, false}', output)
         self.assertNotIn('"storage_3"', output)
 
     def test_literal_facts_reject_non_data_returns_and_ambiguous_ir(self):
@@ -70,8 +70,14 @@ class DarwinDataDeclarationTests(unittest.TestCase):
         clang.clang_getCursorLinkage = lambda cursor: cursor.linkage
         clang.clang_Cursor_getMangling = lambda cursor: cursor.name
         clang.clang_getCursorTLSKind = lambda cursor: cursor.tls
-        cursor = SimpleNamespace(kind=9, linkage=4, name="_value", tls=0)
+        clang.clang_getCursorType = lambda cursor: cursor.type
+        clang.clang_getCanonicalType = lambda value: value
+        cursor = SimpleNamespace(kind=9, linkage=4, name="_value", tls=0,
+                                 type=SimpleNamespace(kind=17))
         self.assertEqual(clang.declaration(cursor), ("value", "data"))
+        cursor.type.kind = 109
+        self.assertEqual(clang.declaration(cursor), ("value", "object"))
+        cursor.type.kind = 17
         for tls in (1, 2):
             cursor.tls = tls
             self.assertEqual(clang.declaration(cursor), ("value", ""))
@@ -90,16 +96,16 @@ class DarwinDataDeclarationTests(unittest.TestCase):
         self.assertEqual(count, 4)
         self.assertNotIn('"absent"', output)
         for name in ("tls", "mixed", "conflict"):
-            self.assertIn('{"' + name + '", "", ""}', output)
-        self.assertIn('{"known", "A", "A"}', output)
+            self.assertIn('{"' + name + '", "", "", false, false}', output)
+        self.assertIn('{"known", "A", "A", false, false}', output)
 
     def test_exports_remain_architecture_specific_and_deterministic(self):
         profile = {"first": {"data"}, "second": {"data"}, "missing": {"data"}}
         exports = [{"first": {"B", "A"}}, {"second": {"C"}}]
         output, count = render([profile] * 4, exports, "test", "test")
         self.assertEqual(count, 2)
-        self.assertIn('{"first", "A|B", ""}', output)
-        self.assertIn('{"second", "", "C"}', output)
+        self.assertIn('{"first", "A|B", "", false, false}', output)
+        self.assertIn('{"second", "", "C", false, false}', output)
         self.assertNotIn('"missing"', output)
         reverse = dict(reversed(list(profile.items())))
         self.assertEqual(render([reverse] * 4, exports, "test", "test")[0], output)

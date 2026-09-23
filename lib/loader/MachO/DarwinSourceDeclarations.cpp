@@ -28,6 +28,8 @@ struct DataDeclaration {
   const char *Name;
   const char *AArch64Modules;
   const char *X64Modules;
+  bool AArch64Object;
+  bool X64Object;
 };
 constexpr DataDeclaration DataDeclarations[] = {
 #include "DarwinSourceDataDeclarations.inc"
@@ -100,6 +102,29 @@ bool darwinDeclaredSourceDataExport(Arch Architecture, llvm::StringRef Symbol,
          darwinExportModuleMatches(
              Architecture == Arch::AArch64 ? D->AArch64Modules : D->X64Modules,
              Module);
+}
+
+bool darwinDeclaredSourceDataObjectExport(Arch Architecture,
+                                          llvm::StringRef Symbol,
+                                          llvm::StringRef Module) {
+  if (!darwinDeclaredSourceDataExport(Architecture, Symbol, Module))
+    return false;
+  Symbol.consume_front("_");
+  const auto D = std::lower_bound(
+      std::begin(DataDeclarations), std::end(DataDeclarations), Symbol,
+      [](const DataDeclaration &D, llvm::StringRef Name) {
+        return D.Name < Name;
+      });
+  return D != std::end(DataDeclarations) && D->Name == Symbol &&
+         (Architecture == Arch::AArch64 ? D->AArch64Object : D->X64Object);
+}
+
+bool darwinDeclaredSourceDataObject(const BinaryImage &Image, va_t ImportSlot) {
+  const auto Address = darwinDeclaredSourceGlobalAddressHint(Image, ImportSlot);
+  const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+  return Address && !Address->WeakImport && Bind != Image.DyldBindSlots.end() &&
+         darwinDeclaredSourceDataObjectExport(Image.Arch, Bind->second.Name,
+                                              Bind->second.Module);
 }
 
 std::optional<SourceCallTypeHint>

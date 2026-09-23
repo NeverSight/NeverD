@@ -19,7 +19,7 @@ except ImportError:
 
 DEFAULT_FRAMEWORKS = (
     "CoreData", "CoreLocation", "CoreSpotlight", "QuartzCore",
-    "UniformTypeIdentifiers", "UserNotifications",
+    "UniformTypeIdentifiers", "UserNotifications", "WebKit",
 )
 
 
@@ -29,7 +29,8 @@ def framework_header(framework):
     # QuartzCore.h also imports compatibility headers for CoreImage and
     # CoreVideo. Those declarations belong to separate providers. Its public
     # CoreAnimation umbrella supplies the owned declarations on both targets.
-    header = "CoreAnimation" if framework == "QuartzCore" else framework
+    header = ("CoreAnimation" if framework == "QuartzCore" else
+              "WKWebsiteDataStore" if framework == "WebKit" else framework)
     return f"{framework}/{header}.h"
 
 

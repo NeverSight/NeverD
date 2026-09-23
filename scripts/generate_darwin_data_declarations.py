@@ -13,10 +13,10 @@ import subprocess
 import tempfile
 
 try:
-    from .generate_darwin_declarations import CDeclarations, load_exports
+    from .generate_darwin_declarations import CDeclarations, CXType, load_exports
     from .generate_objc_declarations import CXCursor, TARGETS, catalog_rows
 except ImportError:
-    from generate_darwin_declarations import CDeclarations, load_exports
+    from generate_darwin_declarations import CDeclarations, CXType, load_exports
     from generate_objc_declarations import CXCursor, TARGETS, catalog_rows
 
 
@@ -24,6 +24,7 @@ class DataDeclarations(CDeclarations):
     def __init__(self, library):
         super().__init__(library)
         self.bind("clang_getCursorTLSKind", ctypes.c_uint, CXCursor)
+        self.bind("clang_getCanonicalType", CXType, CXType)
 
     def declaration(self, cursor):
         if cursor.kind != 9 or self.clang_getCursorLinkage(cursor) != 4:
@@ -33,7 +34,13 @@ class DataDeclarations(CDeclarations):
             return None
         # A TLS symbol requires thread-specific access and cannot use an
         # ordinary external storage address. Keep its negative evidence.
-        return name[1:], "data" if self.clang_getCursorTLSKind(cursor) == 0 else ""
+        if self.clang_getCursorTLSKind(cursor) != 0:
+            return name[1:], ""
+        canonical = self.clang_getCanonicalType(self.clang_getCursorType(cursor))
+        # Preserve only the declaration-level fact that loading this external
+        # storage yields an Objective-C object pointer. This grants no class or
+        # object-layout authority, but is enough for an `id` argument carrier.
+        return name[1:], "object" if canonical.kind == 109 else "data"
 
 
 LITERAL_PROBES = {
@@ -141,9 +148,13 @@ def render(profiles, exports, version, compiler, literal_compiler=None):
     for name, arm, intel in catalog_rows(profiles):
         if not any(name in index for index in exports):
             continue
-        modules = ["|".join(sorted(index.get(name, ()))) if kind == "data" else ""
+        modules = ["|".join(sorted(index.get(name, ())))
+                   if kind in ("data", "object") else ""
                    for kind, index in zip((arm, intel), exports)]
-        lines.append("{" + ", ".join(json.dumps(x) for x in (name, *modules)) + "},")
+        values = (name, *modules, arm == "object", intel == "object")
+        lines.append("{" + ", ".join(
+            json.dumps(x) if not isinstance(x, bool) else str(x).lower()
+            for x in values) + "},")
         count += 1
     lines.append("    // clang-format on")
     return "\n".join(lines) + "\n", count

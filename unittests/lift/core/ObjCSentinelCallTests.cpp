@@ -5,6 +5,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/AArch64Regs.h"
+#include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/ObjC/ObjCConstantStrings.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/ObjC/ObjCSentinelCalls.h"
@@ -22,6 +23,7 @@ constexpr auto Foundation =
     "/System/Library/Frameworks/Foundation.framework/Foundation";
 constexpr auto CoreFoundation =
     "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+constexpr auto WebKit = "/System/Library/Frameworks/WebKit.framework/WebKit";
 
 struct Fixture {
   BinaryImage Image;
@@ -86,6 +88,16 @@ struct Fixture {
     Receiver.ClassName = "NSSet";
     Receiver.IsClassMethod = true;
   }
+
+  void addWebKitObjectImports() {
+    Image.DynInfo.NeededLibs.push_back(WebKit);
+    Image.ImportPtrSlots[0x4a00] = "_WKWebsiteDataTypeDiskCache";
+    Image.recordDyldBindSlot(0x4a00, "_WKWebsiteDataTypeDiskCache", 0, WebKit,
+                             false);
+    Image.ImportPtrSlots[0x4a08] = "_WKWebsiteDataTypeMemoryCache";
+    Image.recordDyldBindSlot(0x4a08, "_WKWebsiteDataTypeMemoryCache", 0, WebKit,
+                             false);
+  }
 };
 
 LowOp op(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs) {
@@ -123,6 +135,28 @@ LowFunc caller(unsigned Count) {
                                             : 0x1200 + I * 4;
   B.EndAddr = 0x1600;
   F.Blocks.push_back(B);
+  return F;
+}
+
+LowFunc importedObjectCaller() {
+  auto F = caller(2);
+  auto &Ops = F.Blocks.front().Ops;
+  // Replace the first constant object and the stored tail object with values
+  // loaded from authenticated external Objective-C object storage.
+  Ops.insert(Ops.begin() + 2, op(NdOp::LOAD, NdVar::reg(a64reg::X8, 8),
+                                 {NdVar::cst(0x4a00, 8)}));
+  Ops.insert(Ops.begin() + 3, op(NdOp::LOAD, NdVar::reg(a64reg::X2, 8),
+                                 {NdVar::reg(a64reg::X8, 8)}));
+  Ops.erase(Ops.begin() + 4);
+  Ops.insert(Ops.begin() + 4, op(NdOp::LOAD, NdVar::reg(a64reg::X8, 8),
+                                 {NdVar::cst(0x4a08, 8)}));
+  Ops.insert(Ops.begin() + 5, op(NdOp::LOAD, NdVar::reg(a64reg::X9, 8),
+                                 {NdVar::reg(a64reg::X8, 8)}));
+  Ops[7].Inputs[1] = NdVar::reg(a64reg::X9, 8);
+  for (size_t I = 0; I < Ops.size(); ++I)
+    Ops[I].Addr = I + 2 == Ops.size()   ? 0x1500
+                  : I + 1 == Ops.size() ? 0x1504
+                                        : 0x1200 + I * 4;
   return F;
 }
 
@@ -191,6 +225,46 @@ TEST(ObjCSentinelCalls, UsesTheRealVariadicABIThroughTheFirstNil) {
     EXPECT_TRUE(Emitter.emit({Function}, OS, Options));
     EXPECT_NE(C.find("id, SEL, void*, ..."), std::string::npos) << C;
   }
+}
+
+TEST(ObjCSentinelCalls, AcceptsCompilerDeclaredExternalObjectValues) {
+  Fixture F;
+  F.addWebKitObjectImports();
+  ASSERT_TRUE(darwinRuntimeGlobalAddressHint(F.Image, 0x4a00));
+  ASSERT_TRUE(darwinRuntimeGlobalAddressHint(F.Image, 0x4a08));
+  ASSERT_TRUE(darwinDeclaredSourceDataObject(F.Image, 0x4a00));
+  ASSERT_TRUE(darwinDeclaredSourceDataObject(F.Image, 0x4a08));
+  const auto Hints = buildObjCSourceCallHints(F.Image, importedObjectCaller());
+  ASSERT_TRUE(Hints.count(0x1500));
+  const auto &Hint = Hints.at(0x1500);
+  ASSERT_TRUE(Hint.NilTerminated);
+  EXPECT_EQ(Hint.NilTerminated->Objects, (std::vector<va_t>{0x4a00, 0x4a08}));
+
+  const auto ImportedObject = [&](va_t Address) {
+    const auto Source = darwinRuntimeGlobalAddressHint(F.Image, Address);
+    EXPECT_TRUE(Source);
+    auto Storage = HighExpr::makeCall("", 0, {});
+    Storage->Type = Source->Signature.ReturnType;
+    Storage->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Source);
+    return HighExpr::makeLoad(Storage, NdType::makePtr(NdType::makeVoid()));
+  };
+  auto Call = expression(Hint);
+  Call->Operands[2] = ImportedObject(0x4a00);
+  Call->Operands[3] = ImportedObject(0x4a08);
+  HighFunc Function;
+  Function.Name = "external_objects";
+  Function.ReturnType = Call->Type;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  Function.Body = {Return};
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Call, F.Image, {}, nullptr, nullptr,
+                                       &Function));
+
+  auto Changed = F.Image;
+  Changed.DyldBindSlots.at(0x4a08).Module = Foundation;
+  EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Changed, {}, nullptr, nullptr,
+                                        &Function));
 }
 
 TEST(ObjCSentinelCalls,

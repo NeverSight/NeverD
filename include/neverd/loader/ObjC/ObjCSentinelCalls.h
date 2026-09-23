@@ -17,10 +17,11 @@ bool objcSentinelReceiverValid(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver);
 
 /// Non-null objects occur in original argument order; an empty sequence means
-/// the fixed firstObject itself is nil. Each object must be a verified
-/// immutable Objective-C string. The caller separately proves the complete
-/// machine values through the first nil; this function supplies their real
-/// variadic ABI.
+/// the fixed firstObject itself is nil. Each address identifies either a
+/// verified immutable Objective-C string or authenticated SDK storage whose
+/// declared value is an Objective-C object pointer. The caller separately
+/// proves the complete machine values through the first nil; this function
+/// supplies their real variadic ABI.
 std::optional<SourceCallTypeHint>
 objcSentinelSourceCallHint(const BinaryImage &Image, llvm::StringRef Selector,
                            const ObjCReceiverTypeHint &Receiver,
