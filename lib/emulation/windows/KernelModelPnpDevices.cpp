@@ -80,11 +80,10 @@ llvm::Error KernelModel::preparePnpDevices() {
     return E;
   if (auto E = snapshot())
     return E;
-  if (!ConfiguredPnpDevices.empty() && !Result.AddDevice)
+  if (!ConfiguredPnpDevices.empty() && !Result.AddDevice &&
+      !(Framework && Framework->hasPnpDriver()))
     return pnpDeviceError(
         "configured PDOs require a registered guest AddDevice callback");
-  if (!ConfiguredPnpDevices.empty() && Framework && Framework->hasLiveBinding())
-    return pnpDeviceError("KMDF PnP devices are outside this profile");
   if (ConfiguredPnpDevices.empty()) {
     PnpDevicesPrepared = true;
     return llvm::Error::success();
@@ -156,12 +155,22 @@ KernelModel::beginAddDevice(llvm::StringRef ID) {
         "AddDevice requires a live idle PDO at PASSIVE_LEVEL");
   if (auto E = snapshot())
     return E;
-  if (!Result.AddDevice)
+  if (!Result.AddDevice && !(Framework && Framework->hasPnpDriver()))
     return pnpDeviceError("guest AddDevice callback is missing");
   for (const auto &[Address, Existing] : Devices)
     if (Existing.OwnerKind == DeviceOwnerKind::Guest)
       Device.ExistingGuestDevices.insert(Address);
   Device.AddDeviceActive = true;
+  if (Framework && Framework->hasPnpDriver()) {
+    auto Add = Framework->beginPnpAddDevice(Device.PDO);
+    if (!Add) {
+      Device.AddDeviceActive = false;
+      return Add.takeError();
+    }
+    Device.FrameworkAdd = true;
+    Device.FrameworkInit = Add->Init;
+    return Invocation{Add->Callback, Add->Driver, Add->Init};
+  }
   return Invocation{Result.AddDevice, DriverObject, Device.PDO};
 }
 
@@ -175,10 +184,31 @@ llvm::Error KernelModel::finishAddDevice(llvm::StringRef ID, uint32_t Status) {
   Result.PnpDevices[Device.ResultIndex].AddDeviceStatus = Status;
   if (auto E = snapshot())
     return E;
-  if (Status && !(Status & 0x80000000U))
+  if (Status && !(Status & profile::NTStatusFailureMask))
     return pnpDeviceError(
         "AddDevice must return STATUS_SUCCESS or a failing NTSTATUS");
+  if (Device.FrameworkAdd) {
+    if (auto E = Framework->finishPnpAddDevice(Device.PDO, Device.FrameworkInit,
+                                               Status))
+      return E;
+    Device.FrameworkInit = 0;
+  }
   if (!Status)
+    return llvm::Error::success();
+  if (Device.FrameworkAdd)
+    return llvm::Error::success();
+  return finalizeAddDevice(ID);
+}
+
+llvm::Error KernelModel::finalizeAddDevice(llvm::StringRef ID) {
+  auto Found = PnpDevices.find(ID.str());
+  if (Found == PnpDevices.end() || Found->second.AddDeviceActive ||
+      !Found->second.AddDeviceStatus)
+    return pnpDeviceError("AddDevice finalization lost its returned status");
+  auto &Device = Found->second;
+  if (!(*Device.AddDeviceStatus & profile::NTStatusFailureMask))
+    return llvm::Error::success();
+  if (!isProviderDevice(Device.PDO))
     return llvm::Error::success();
   if (std::any_of(Devices.begin(), Devices.end(), [&](const auto &Entry) {
         return Entry.second.OwnerKind == DeviceOwnerKind::Guest &&
@@ -203,6 +233,24 @@ llvm::Error KernelModel::finishAddDevice(llvm::StringRef ID, uint32_t Status) {
   if (auto E = retirePnpProvider(Device.PDO))
     return E;
   return snapshot();
+}
+
+llvm::Error KernelModel::beginFrameworkRemoval(uint64_t IRP) {
+  auto *Request = requestForIRP(IRP);
+  if (!Request || !Request->PnpTicket || !Request->PnpOperation ||
+      Request->PnpOperation->Minor != DevicePnpRequest::Remove ||
+      !Request->Completed || !Request->DispatchReturned)
+    return pnpDeviceError(
+        "framework removal requires a completed REMOVE dispatch");
+  if (Request->DeviceRoute.empty() ||
+      !FrameworkDevices.count(Request->DeviceRoute.front()))
+    return llvm::Error::success();
+  if (Request->FrameworkRemoveStarted || !Framework)
+    return pnpDeviceError("framework REMOVE callbacks already started");
+  if (auto E = Framework->removePnpDevice(Request->PnpDevice))
+    return E;
+  Request->FrameworkRemoveStarted = true;
+  return llvm::Error::success();
 }
 
 llvm::Error KernelModel::retirePnpProvider(uint64_t PDO) {

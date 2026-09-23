@@ -93,6 +93,8 @@ public:
   llvm::Error preparePnpDevices();
   llvm::Expected<Invocation> beginAddDevice(llvm::StringRef ID);
   llvm::Error finishAddDevice(llvm::StringRef ID, uint32_t Status);
+  llvm::Error finalizeAddDevice(llvm::StringRef ID);
+  llvm::Error beginFrameworkRemoval(uint64_t IRP);
   /// A pending dispatch retains its packet until a guest callback completes it.
   llvm::Expected<Invocation>
   beginRequest(const DriverRequest &Request,
@@ -168,7 +170,9 @@ public:
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL,
                                       bool Nested = false) const;
-  bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
+  bool hasPendingInterruptEvents() const {
+    return Interrupts.hasPendingEvents();
+  }
   bool hasPendingHardwareWork() const {
     return Interrupts.hasPendingEvents() || DMA.hasPendingEvents() ||
            DMA.hasPendingCallbacks();
@@ -189,6 +193,7 @@ private:
   llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
                                                              uint64_t Result);
   void configureFrameworkDeviceHost();
+  llvm::Error detachFrameworkPnpDevice(uint64_t Device, uint64_t PDO);
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;
   KernelRegistry Registry;
@@ -291,12 +296,12 @@ private:
                                               DriverUserPageAccess Access,
                                               uint32_t ProcessID);
   llvm::Expected<uint64_t> probeUserBuffer(uint64_t Address, uint64_t Size,
-                                            uint32_t Alignment, bool ForWrite);
+                                           uint32_t Alignment, bool ForWrite);
   std::optional<KernelGuestCall> PendingInterruptCall;
   llvm::Expected<uint64_t> callInterruptAPI(llvm::StringRef Name,
                                             llvm::ArrayRef<uint64_t> Arguments);
-  llvm::Expected<std::optional<uint64_t>>
-  finishInterruptCall(uint64_t Token, uint64_t Value);
+  llvm::Expected<std::optional<uint64_t>> finishInterruptCall(uint64_t Token,
+                                                              uint64_t Value);
   llvm::Expected<uint64_t> preflightScheduledBoundary(uint64_t Time);
   llvm::Error processInterruptEvents();
   std::optional<uint64_t> nextInterruptEventTime() const {
@@ -412,6 +417,8 @@ private:
     DriverBusKind Bus = DriverBusKind::ResourceFree;
     std::optional<uint32_t> AddDeviceStatus;
     bool AddDeviceActive = false;
+    bool FrameworkAdd = false;
+    uint64_t FrameworkInit = 0;
     std::set<uint64_t> ExistingGuestDevices;
     std::set<uint64_t> GuestDevices;
     std::optional<DevicePowerState> InitialReportedDevicePower;
@@ -485,6 +492,7 @@ private:
     uint32_t OutputSize = 0;
     bool Completed = false;
     bool DispatchReturned = false;
+    bool FrameworkRemoveStarted = false;
     bool PendingMarked = false;
     bool CancelRequested = false;
     std::optional<uint64_t> CancelDeadline = std::nullopt;
@@ -610,7 +618,7 @@ private:
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error buildNonPagedMDL(uint64_t MDL);
   llvm::Error probeAndLockPages(uint64_t MDL, uint32_t Mode,
-                                 uint32_t Operation);
+                                uint32_t Operation);
   llvm::Error unlockPages(uint64_t MDL);
   llvm::Error freeMDL(uint64_t MDL);
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,

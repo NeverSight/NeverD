@@ -281,6 +281,27 @@ llvm::Error KernelModel::detachDevice(uint64_t Lower) {
   return retireDeviceIfUnreferenced(Lower);
 }
 
+llvm::Error KernelModel::detachFrameworkPnpDevice(uint64_t Source,
+                                                  uint64_t PDO) {
+  if (auto E = validateDeviceTopology())
+    return E;
+  auto FDO = Devices.find(Source);
+  auto Physical = Devices.find(PDO);
+  if (FDO == Devices.end() || Physical == Devices.end() ||
+      !FrameworkDevices.count(Source) || !isProviderDevice(PDO) ||
+      FDO->second.PnpDevice != PDO || FDO->second.Lower != PDO ||
+      FDO->second.Upper || Physical->second.Upper != Source)
+    return deviceError("framework PnP detach requires its direct FDO/PDO pair");
+  if (auto E = canReleaseRemoveLockStorage(Source, FDO->second.Size))
+    return E;
+  if (auto E = Memory.writeInteger(PDO + DeviceAttachedOffset, 0, 8))
+    return E;
+  Physical->second.Upper = 0;
+  FDO->second.Lower = 0;
+  // The captured REMOVE route retains both objects until its own finalization.
+  return llvm::Error::success();
+}
+
 llvm::Error KernelModel::retainDevice(uint64_t Address) {
   auto Device = Devices.find(Address);
   if (Device == Devices.end())

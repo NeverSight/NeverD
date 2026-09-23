@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelAPINames.h"
 #include "KernelModel.h"
 
 #include "neverd/emulation/DriverProfile.h"
@@ -26,7 +27,8 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
   const uint64_t Address = Arguments[0];
   if (!Address || (Address & 7))
     return spinLockError("executive spin lock requires aligned kernel storage");
-  if (Name == "KeReleaseSpinLock" || Name == "KeReleaseSpinLockFromDpcLevel") {
+  if (Name == kernel_api::KeReleaseSpinLock ||
+      Name == kernel_api::KeReleaseSpinLockFromDpcLevel) {
     auto Lock = ExecutiveSpinLocks.find(Address);
     if (Lock == ExecutiveSpinLocks.end() ||
         Lock->second.Execution != CurrentExecution)
@@ -34,7 +36,7 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
     if (CurrentIRQL != scheduler::DispatchLevel)
       return spinLockError(
           "executive spin lock release requires DISPATCH_LEVEL");
-    const bool RestoreIRQL = Name == "KeReleaseSpinLock";
+    const bool RestoreIRQL = Name == kernel_api::KeReleaseSpinLock;
     if (Lock->second.RaisedIRQL != RestoreIRQL)
       return spinLockError("executive spin lock release variant does not "
                            "match acquisition");
@@ -55,21 +57,22 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
 
   if (Address < profile::UserProbeLimit)
     return spinLockError("executive spin lock requires kernel storage");
-  if (Name != "KeInitializeSpinLock" && Name != "KeAcquireSpinLockRaiseToDpc" &&
-      Name != "KeAcquireSpinLockAtDpcLevel" &&
-      Name != "KeTryToAcquireSpinLockAtDpcLevel")
+  if (Name != kernel_api::KeInitializeSpinLock &&
+      Name != kernel_api::KeAcquireSpinLockRaiseToDpc &&
+      Name != kernel_api::KeAcquireSpinLockAtDpcLevel &&
+      Name != kernel_api::KeTryToAcquireSpinLockAtDpcLevel)
     return spinLockError("unknown executive spin-lock operation");
-  const bool AtDpc = Name == "KeAcquireSpinLockAtDpcLevel" ||
-                     Name == "KeTryToAcquireSpinLockAtDpcLevel";
+  const bool AtDpc = Name == kernel_api::KeAcquireSpinLockAtDpcLevel ||
+                     Name == kernel_api::KeTryToAcquireSpinLockAtDpcLevel;
   if (AtDpc && CurrentIRQL != scheduler::DispatchLevel)
     return spinLockError("DPC-level spin-lock acquisition requires "
                          "DISPATCH_LEVEL");
-  if (Name != "KeInitializeSpinLock" && !CurrentExecution)
+  if (Name != kernel_api::KeInitializeSpinLock && !CurrentExecution)
     return spinLockError("executive spin lock requires an active guest thread");
   if (ExecutiveSpinLocks.count(Address)) {
-    if (Name == "KeTryToAcquireSpinLockAtDpcLevel")
+    if (Name == kernel_api::KeTryToAcquireSpinLockAtDpcLevel)
       return 0;
-    if (Name == "KeInitializeSpinLock")
+    if (Name == kernel_api::KeInitializeSpinLock)
       return spinLockError("cannot initialize a held executive spin lock");
     return spinLockError("executive spin lock would deadlock on this "
                          "cooperative processor");
@@ -86,7 +89,7 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
         (!Allocation.NonPaged || 8 > Allocation.Size - (Address - Pool)))
       return spinLockError("executive spin lock requires nonpaged storage");
 
-  if (Name == "KeInitializeSpinLock") {
+  if (Name == kernel_api::KeInitializeSpinLock) {
     if (auto E = Memory.writeInteger(Address, 0, 8))
       return E;
     return 0;
@@ -102,8 +105,8 @@ KernelModel::callSpinLockAPI(llvm::StringRef Name,
   CurrentIRQL = scheduler::DispatchLevel;
   ExecutiveSpinLocks.emplace(
       Address, ExecutiveSpinLock{CurrentExecution, OldIRQL, !AtDpc});
-  if (Name == "KeAcquireSpinLockRaiseToDpc")
+  if (Name == kernel_api::KeAcquireSpinLockRaiseToDpc)
     return OldIRQL;
-  return Name == "KeTryToAcquireSpinLockAtDpcLevel" ? 1 : 0;
+  return Name == kernel_api::KeTryToAcquireSpinLockAtDpcLevel ? 1 : 0;
 }
 } // namespace neverd::emulation

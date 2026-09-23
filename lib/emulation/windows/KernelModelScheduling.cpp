@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelAPINames.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -188,7 +189,7 @@ llvm::Expected<uint64_t> KernelModel::closeHandle(uint64_t Handle) {
   auto It = ThreadHandles.find(Handle);
   if (It == ThreadHandles.end()) {
     if (Registry.ownsHandle(Handle))
-      return Registry.call(*this, "ZwClose", {Handle});
+      return Registry.call(*this, kernel_api::ZwClose, {Handle});
     return uint64_t(0xc0000008);
   }
   const uint64_t Object = It->second;

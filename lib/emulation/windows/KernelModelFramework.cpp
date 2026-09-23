@@ -28,7 +28,21 @@ llvm::Error frameworkDeviceError(const llvm::Twine &Message) {
 
 void KernelModel::configureFrameworkDeviceHost() {
   KernelFramework::DeviceHost Host;
-  Host.Create = [this](llvm::StringRef Name, uint32_t IoType)
+  auto SetIoType = [this](uint64_t Device, uint32_t IoType) -> llvm::Error {
+    auto Flags = Memory.readInteger(Device + windows::DeviceFlagsOffset, 4);
+    if (!Flags)
+      return Flags.takeError();
+    const uint32_t TransferFlags =
+        IoType == framework::ControlIoDirect     ? windows::DeviceDirectIO
+        : IoType == framework::ControlIoBuffered ? windows::DeviceBufferedIO
+                                                 : 0;
+    return Memory.writeInteger(
+        Device + windows::DeviceFlagsOffset,
+        (*Flags & ~(windows::DeviceBufferedIO | windows::DeviceDirectIO)) |
+            TransferFlags,
+        4);
+  };
+  Host.Create = [this, SetIoType](llvm::StringRef Name, uint32_t IoType)
       -> llvm::Expected<KernelFramework::DeviceCreation> {
     auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
                                       windows::SecureOpen, false);
@@ -37,19 +51,35 @@ void KernelModel::configureFrameworkDeviceHost() {
     if (Created->Status != windows::StatusSuccess)
       return KernelFramework::DeviceCreation{Created->Status, 0};
     const uint64_t Device = Created->Address;
-    auto Flags = Memory.readInteger(Device + windows::DeviceFlagsOffset, 4);
-    if (!Flags)
-      return llvm::joinErrors(Flags.takeError(), deleteDevice(Device));
-    const uint32_t TransferFlags =
-        IoType == framework::ControlIoDirect     ? windows::DeviceDirectIO
-        : IoType == framework::ControlIoBuffered ? windows::DeviceBufferedIO
-                                                 : 0;
-    if (auto E = Memory.writeInteger(
-            Device + windows::DeviceFlagsOffset,
-            (*Flags & ~(windows::DeviceBufferedIO | windows::DeviceDirectIO)) |
-                TransferFlags,
-            4))
+    if (auto E = SetIoType(Device, IoType))
       return llvm::joinErrors(std::move(E), deleteDevice(Device));
+    FrameworkDevices.emplace(Device, std::vector<std::string>{});
+    return KernelFramework::DeviceCreation{windows::StatusSuccess, Device};
+  };
+  Host.CreatePnp =
+      [this, SetIoType](
+          uint64_t PDO, llvm::StringRef Name,
+          uint32_t IoType) -> llvm::Expected<KernelFramework::DeviceCreation> {
+    auto *Configured = pnpDeviceForPDO(PDO);
+    if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
+      return frameworkDeviceError(
+          "PnP framework creation requires the active physical device");
+    auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
+                                      windows::SecureOpen, false);
+    if (!Created)
+      return Created.takeError();
+    if (Created->Status != windows::StatusSuccess)
+      return KernelFramework::DeviceCreation{Created->Status, 0};
+    const uint64_t Device = Created->Address;
+    if (auto E = SetIoType(Device, IoType))
+      return llvm::joinErrors(std::move(E), deleteDevice(Device));
+    auto Attached = attachDevice(Device, PDO);
+    if (!Attached)
+      return llvm::joinErrors(Attached.takeError(), deleteDevice(Device));
+    if (!*Attached)
+      return llvm::joinErrors(
+          frameworkDeviceError("physical device became delete-pending"),
+          deleteDevice(Device));
     FrameworkDevices.emplace(Device, std::vector<std::string>{});
     return KernelFramework::DeviceCreation{windows::StatusSuccess, Device};
   };
@@ -89,8 +119,10 @@ void KernelModel::configureFrameworkDeviceHost() {
         Object->second.DeletePending)
       return frameworkDeviceError(
           "framework deletion requires its own live WDM device");
+    const uint64_t PDO = Object->second.PnpDevice;
     if (std::any_of(Files.begin(), Files.end(), [&](const auto &File) {
-          return File.second.Address && File.second.Device == Device;
+          return File.second.Address && (File.second.Device == Device ||
+                                         (PDO && File.second.PnpDevice == PDO));
         }))
       return frameworkDeviceError(
           "framework device deletion with live files is outside this profile");
@@ -108,7 +140,13 @@ void KernelModel::configureFrameworkDeviceHost() {
     // invocation has not returned. Model-owned identity survives until the
     // request record is finalized; never recover it from retired guest fields.
     if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
-          return Entry.second.Device == Device;
+          const auto &Request = Entry.second;
+          if (std::find(Request.DeviceRoute.begin(), Request.DeviceRoute.end(),
+                        Device) == Request.DeviceRoute.end())
+            return false;
+          return !(PDO && Request.PnpTicket && Request.PnpOperation &&
+                   Request.PnpOperation->Minor == DevicePnpRequest::Remove &&
+                   Request.Completed && Request.DispatchReturned);
         }))
       return frameworkDeviceError(
           "framework device deletion with an active IRP is outside this "
@@ -125,6 +163,11 @@ void KernelModel::configureFrameworkDeviceHost() {
       return E;
     if (auto E = prepareReleaseRange(Device, Object->second.Size))
       return E;
+    if (auto E = Interrupts.canReleaseRange(Device, Object->second.Size))
+      return E;
+    if (PDO)
+      if (auto E = detachFrameworkPnpDevice(Device, PDO))
+        return E;
     if (auto E = deleteDevice(Device))
       return E;
     for (const auto &Key : Owner->second) {
@@ -164,13 +207,16 @@ llvm::Expected<uint64_t> KernelModel::call(
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "framework model is not initialized");
   if (PendingWdmCall)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "cannot replace a pending WDM guest callback");
-  const bool StopSync = Export.Name == "WdfIoQueueStopSynchronously";
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "cannot replace a pending WDM guest callback");
+  const bool StopSync =
+      Export.Name == framework::api::WdfIoQueueStopSynchronously;
   const bool StopPurgeSync =
-      Export.Name == "WdfIoQueueStopAndPurgeSynchronously";
-  const bool EmptySync = Export.Name == "WdfIoQueueDrainSynchronously" ||
-                         Export.Name == "WdfIoQueuePurgeSynchronously";
+      Export.Name == framework::api::WdfIoQueueStopAndPurgeSynchronously;
+  const bool EmptySync =
+      Export.Name == framework::api::WdfIoQueueDrainSynchronously ||
+      Export.Name == framework::api::WdfIoQueuePurgeSynchronously;
   if ((StopSync || StopPurgeSync || EmptySync) && PendingWait)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "previous deferred wait was not consumed");
@@ -204,7 +250,8 @@ std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
     return Call;
   if (Framework)
     if (auto Call = Framework->takeGuestCall())
-      return KernelGuestCall{{GuestCallOwner::Framework, Call->Token}, Call->PC,
+      return KernelGuestCall{{GuestCallOwner::Framework, Call->Token},
+                             Call->PC,
                              std::move(Call->Arguments)};
   return std::nullopt;
 }

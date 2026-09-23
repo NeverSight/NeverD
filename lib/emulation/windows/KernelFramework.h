@@ -15,6 +15,8 @@
 #include "../GuestMemory.h"
 #include "KernelExportRegistry.h"
 
+#include "llvm/ADT/StringRef.h"
+
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -27,6 +29,16 @@
 
 namespace neverd::emulation {
 namespace framework {
+namespace api {
+#define NEVERD_FRAMEWORK_API(Name, Arity)                                      \
+  constexpr llvm::StringLiteral Name = #Name;
+#include "KernelFrameworkAPIs.def"
+#undef NEVERD_FRAMEWORK_API
+#define NEVERD_FRAMEWORK_LOADER_API(Name, Arity)                               \
+  constexpr llvm::StringLiteral Name = #Name;
+#include "KernelFrameworkLoaderAPIs.def"
+#undef NEVERD_FRAMEWORK_LOADER_API
+} // namespace api
 #define NEVERD_FRAMEWORK_VALUE(Name, Value) constexpr uint64_t Name = Value;
 #include "KernelFrameworkQueueValues.def"
 #include "KernelFrameworkRequestValues.def"
@@ -57,6 +69,9 @@ public:
   struct DeviceHost {
     std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t)>
         Create;
+    std::function<llvm::Expected<DeviceCreation>(uint64_t, llvm::StringRef,
+                                                 uint32_t)>
+        CreatePnp;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
     std::function<llvm::Expected<uint32_t>(uint64_t, llvm::StringRef)> Link;
@@ -127,6 +142,13 @@ public:
 
   void configure(uint64_t Driver, uint64_t RegistryPath,
                  std::string ServiceName);
+  struct PnpAddDevice {
+    uint64_t Callback = 0, Driver = 0, Init = 0;
+  };
+  bool hasPnpDriver() const;
+  llvm::Expected<PnpAddDevice> beginPnpAddDevice(uint64_t PDO);
+  llvm::Error finishPnpAddDevice(uint64_t PDO, uint64_t Init, uint32_t Status);
+  llvm::Error removePnpDevice(uint64_t PDO);
   static std::optional<unsigned>
   argumentCount(const KernelExportRegistry::Export &Export);
   llvm::Expected<uint64_t> call(const KernelExportRegistry::Export &Export,
@@ -165,27 +187,31 @@ private:
   struct Binding {
     uint64_t Info = 0, Globals = 0, Table = 0, Module = 0;
     uint64_t DriverHandle = 0, RegistryCopy = 0;
-    uint64_t UnloadCallback = 0;
+    uint64_t AddDeviceCallback = 0, UnloadCallback = 0;
     std::vector<uint8_t> RegistryBytes;
     bool Unloaded = false, Unbinding = false, Unbound = false;
   };
   std::map<uint64_t, Binding> Bindings;
   DeviceHost DevicesHost;
+  enum class DeviceInitKind { Control, Pnp };
   struct DeviceInit {
     uint64_t Binding = 0;
+    DeviceInitKind Kind = DeviceInitKind::Control;
+    uint64_t PDO = 0;
     std::string Name;
     uint32_t IoType = framework::ControlIoBuffered;
     uint64_t CallerContext = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct Device {
-    uint64_t Wdm = 0;
+    uint64_t Wdm = 0, PDO = 0;
     uint64_t DefaultQueue = 0;
     uint64_t CallerContext = 0;
     bool Initialized = false;
     bool HasLink = false;
   };
   std::map<uint64_t, Device> Devices;
+  std::map<uint64_t, uint64_t> PnpDeviceHandles;
   struct Queue {
     uint64_t Device = 0;
     uint64_t Default = 0, Read = 0, Write = 0, DeviceControl = 0;

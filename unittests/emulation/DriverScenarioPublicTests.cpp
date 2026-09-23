@@ -699,6 +699,66 @@ TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFControlIO) {
 #endif
 }
 
+TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFPnpLifecycle) {
+#ifdef NEVERD_KMDF_PNP_FIXTURE
+  constexpr llvm::StringLiteral Scenario = R"({
+    "pnp_devices":[{"id":"kmdf-pdo","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
+       "bus_completion":{"status":0,"delay_100ns":11}},
+      {"kind":"create","device_id":"kmdf-pdo","file":7},
+      {"kind":"ioctl","device_id":"kmdf-pdo","file":7,
+       "code":"0x222000","input":"7a","output_size":4},
+      {"kind":"cleanup","device_id":"kmdf-pdo","file":7},
+      {"kind":"close","device_id":"kmdf-pdo","file":7},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
+       "bus_completion":{"status":0,"delay_100ns":7}}],
+    "unload":true})";
+  std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
+#ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images)
+    for (bool CLI : {false, true}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(CLI);
+      auto Parsed = llvm::json::parse(
+          CLI ? runCLI(Scenario.str(), 0, "success", Image)
+              : takeString(neverd_emulate_driver_scenario_json(
+                    Session, Image, Scenario.data(), nullptr)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      ASSERT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Devices = Report->getArray("pnp_devices");
+      ASSERT_NE(Devices, nullptr);
+      ASSERT_EQ(Devices->size(), 1u);
+      const auto *Device = Devices->front().getAsObject();
+      ASSERT_NE(Device, nullptr);
+      EXPECT_EQ(Device->getInteger("add_device_status"), 0);
+      EXPECT_EQ(Device->getString("pnp_state"), "removed");
+      EXPECT_EQ(Device->getBoolean("attached"), false);
+      EXPECT_EQ(Device->getBoolean("provider_present"), false);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 7u);
+      const auto *IO = (*Requests)[2].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      EXPECT_EQ(IO->getInteger("io_status"), 0);
+      EXPECT_EQ(IO->getString("output_hex"), "504e507a");
+    }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
 TEST_F(DriverScenarioPublic, CAPIExecutesKMDFCallerContextBeforeQueue) {
 #ifdef NEVERD_KMDF_CONTROL_FIXTURE
   neverd_driver_options_v1 Options{};
@@ -1800,7 +1860,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -2165,7 +2225,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -2291,7 +2351,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2412,7 +2472,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
             << llvm::toString(Parsed.takeError()) << error();
         const auto *Report = Parsed->getAsObject();
         ASSERT_NE(Report, nullptr);
-        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
         EXPECT_EQ(Report->getString("stop_reason"), "returned")
             << Report->getString("diagnostic").value_or("").str();
         EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2580,7 +2640,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2746,7 +2806,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2847,7 +2907,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveDmaRamBeforeExplicitInterrupt) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2935,7 +2995,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIFlushChannelFragmentsBeforeCompletion) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v48");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v49");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);

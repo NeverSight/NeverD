@@ -772,6 +772,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
   auto Pump = [&](std::unique_ptr<Execution> Current,
                   const std::string &ParentPhase) -> llvm::Error {
     const bool Foreground = bool(Current) && !Current->ID;
+    auto StartDetachedCall = [&](const KernelGuestCall &Call) -> llvm::Error {
+      if (auto E = Kernel.beginGuestCall(Call.Token))
+        return E;
+      auto Frame = NewExecution(Call.PC, Call.Arguments,
+                                guestCallPhase(Call.Token), 0, true);
+      if (!Frame)
+        return Frame.takeError();
+      (*Frame)->ReturnToken = Call.Token;
+      Current = std::move(*Frame);
+      return llvm::Error::success();
+    };
     while (!DeadlineExceeded()) {
       if (Current) {
         if (auto E = RunExecution(*Current)) {
@@ -866,6 +877,29 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             Current = std::move(Parent);
             continue;
           }
+          if (Current->ReturnToken.ID) {
+            auto Completion =
+                Kernel.finishGuestCall(Current->ReturnToken, *InvocationReturn);
+            if (!Completion) {
+              ModelFailure(Completion.takeError());
+              return llvm::Error::success();
+            }
+            if (!*Completion) {
+              auto Call = Kernel.takeGuestCall();
+              if (!Call) {
+                ModelFailure(
+                    failure("model continuation lost its guest callback"));
+                return llvm::Error::success();
+              }
+              if (auto E = StartDetachedCall(*Call)) {
+                ModelFailure(std::move(E));
+                return llvm::Error::success();
+              }
+              continue;
+            }
+            Current.reset();
+            continue;
+          }
           if (!Current->ID)
             return llvm::Error::success();
           auto Continuation =
@@ -923,6 +957,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (Current)
         continue;
+      if (auto Call = Kernel.takeGuestCall()) {
+        if (auto E = StartDetachedCall(*Call)) {
+          ModelFailure(std::move(E));
+          return llvm::Error::success();
+        }
+        continue;
+      }
       auto Next = Kernel.nextScheduled(false);
       if (!Next) {
         ModelFailure(Next.takeError());
@@ -1041,6 +1082,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (auto E = DrainCallbacks())
         return std::move(E);
+      if (Result.Stop == DriverStopReason::Returned)
+        if (auto E = Kernel.finalizeAddDevice(Device.ID)) {
+          ModelFailure(std::move(E));
+          break;
+        }
     }
     std::vector<uint64_t> BatchedIRPs;
     auto FinalizeBatch = [&]() -> llvm::Error {
@@ -1139,6 +1185,16 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         return std::move(E);
       if (Result.Stop != DriverStopReason::Returned)
         break;
+      if (Removing) {
+        if (auto E = Kernel.beginFrameworkRemoval(Invocation->IRP)) {
+          ModelFailure(std::move(E));
+          break;
+        }
+        if (auto E = DrainCallbacks())
+          return std::move(E);
+        if (Result.Stop != DriverStopReason::Returned)
+          break;
+      }
       if (Deferred) {
         if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
           ModelFailure(std::move(E));

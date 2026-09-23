@@ -54,6 +54,85 @@ void KernelFramework::configure(uint64_t NewDriver, uint64_t NewRegistryPath,
   ServiceName = std::move(NewServiceName);
 }
 
+bool KernelFramework::hasPnpDriver() const {
+  return std::any_of(Bindings.begin(), Bindings.end(), [](const auto &Entry) {
+    const auto &B = Entry.second;
+    return !B.Unbound && !B.Unloaded && B.DriverHandle && B.AddDeviceCallback;
+  });
+}
+
+llvm::Expected<KernelFramework::PnpAddDevice>
+KernelFramework::beginPnpAddDevice(uint64_t PDO) {
+  if (!PDO || PnpDeviceHandles.count(PDO) ||
+      std::any_of(DeviceInits.begin(), DeviceInits.end(),
+                  [&](const auto &Entry) {
+                    return Entry.second.Kind == DeviceInitKind::Pnp &&
+                           Entry.second.PDO == PDO;
+                  }))
+    return invalid("PnP AddDevice requires a new physical device");
+  auto B =
+      std::find_if(Bindings.begin(), Bindings.end(), [](const auto &Entry) {
+        const auto &Binding = Entry.second;
+        return !Binding.Unbound && !Binding.Unloaded && Binding.DriverHandle &&
+               Binding.AddDeviceCallback;
+      });
+  if (B == Bindings.end())
+    return invalid("PnP AddDevice requires a live framework driver");
+  auto Init = allocate(HandleSize, false, true);
+  if (!Init)
+    return Init.takeError();
+  DeviceInits.emplace(*Init,
+                      DeviceInit{B->second.Globals, DeviceInitKind::Pnp, PDO});
+  return PnpAddDevice{B->second.AddDeviceCallback, B->second.DriverHandle,
+                      *Init};
+}
+
+llvm::Error KernelFramework::finishPnpAddDevice(uint64_t PDO, uint64_t Init,
+                                                uint32_t Status) {
+  auto I = DeviceInits.find(Init);
+  if (I != DeviceInits.end()) {
+    if (I->second.Kind != DeviceInitKind::Pnp || I->second.PDO != PDO)
+      return invalid("PnP AddDevice lost its framework initializer");
+    if (auto E = retire(Init))
+      return E;
+    DeviceInits.erase(I);
+  }
+  auto Device = PnpDeviceHandles.find(PDO);
+  if (!Status) {
+    if (Device == PnpDeviceHandles.end())
+      return invalid("successful PnP AddDevice did not create an FDO");
+    auto &FDO = Devices.at(Device->second);
+    if (!DevicesHost.FinishInitializing)
+      return invalid("PnP device initialization host is unavailable");
+    if (auto E = DevicesHost.FinishInitializing(FDO.Wdm))
+      return E;
+    FDO.Initialized = true;
+    return llvm::Error::success();
+  }
+  if (Device == PnpDeviceHandles.end())
+    return llvm::Error::success();
+  std::vector<Step> Steps;
+  if (auto E = planDelete(Device->second, Steps))
+    return E;
+  auto Started = start(std::move(Steps));
+  if (!Started)
+    return Started.takeError();
+  return llvm::Error::success();
+}
+
+llvm::Error KernelFramework::removePnpDevice(uint64_t PDO) {
+  auto Device = PnpDeviceHandles.find(PDO);
+  if (Device == PnpDeviceHandles.end())
+    return invalid("PnP removal has no live framework device");
+  std::vector<Step> Steps;
+  if (auto E = planDelete(Device->second, Steps))
+    return E;
+  auto Started = start(std::move(Steps));
+  if (!Started)
+    return Started.takeError();
+  return llvm::Error::success();
+}
+
 std::optional<unsigned>
 KernelFramework::argumentCount(const KernelExportRegistry::Export &Export) {
   if (Export.Kind == KernelExportRegistry::ExportKind::FrameworkFunction) {
@@ -475,11 +554,17 @@ KernelFramework::createDriver(Binding &B, llvm::ArrayRef<uint64_t> A) {
   if (!AddDevice || !Unload || !Flags || !Tag)
     return joinedErrors(AddDevice.takeError(), Unload.takeError(),
                         Flags.takeError(), Tag.takeError());
-  if ((*Flags & DriverNonPnp) && *AddDevice)
-    return InvalidParameter;
-  if (*Flags != DriverNonPnp || !*Unload)
-    return invalid("this framework lifecycle requires a non-PnP driver with "
-                   "EvtDriverUnload");
+  if (*Flags == DriverNonPnp) {
+    if (*AddDevice)
+      return InvalidParameter;
+    if (!*Unload)
+      return invalid("non-PnP framework drivers require EvtDriverUnload");
+  } else if (*Flags == 0) {
+    if (!*AddDevice)
+      return invalid("PnP framework drivers require EvtDriverDeviceAdd");
+  } else {
+    return invalid("unsupported framework driver configuration flags");
+  }
   if (B.DriverHandle)
     return DriverInternalError;
   auto Validation = attributes(A[3], AttributesUse::Driver);
@@ -546,6 +631,7 @@ KernelFramework::createDriver(Binding &B, llvm::ArrayRef<uint64_t> A) {
     if (auto E = Memory.writeInteger(A[5], *Handle, 8))
       return E;
   B.DriverHandle = *Handle;
+  B.AddDeviceCallback = *AddDevice;
   B.UnloadCallback = *Unload;
   B.RegistryCopy = *Copy;
   return 0;
@@ -857,6 +943,8 @@ KernelFramework::advance(uint64_t Token) {
         return invalid("framework device host is not configured");
       if (auto E = DevicesHost.Delete(Devices.at(S.Object).Wdm))
         return E;
+      if (Devices.at(S.Object).PDO)
+        PnpDeviceHandles.erase(Devices.at(S.Object).PDO);
       Devices.erase(S.Object);
     }
     if (O.Kind == ObjectKind::Queue)
@@ -955,7 +1043,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   if (IRQL)
     return invalid("current framework object callbacks require PASSIVE_LEVEL");
   if (Export.Kind != KernelExportRegistry::ExportKind::FrameworkFunction)
-    return Export.Name == "WdfVersionBind" ? bind(A) : unbind(A);
+    return Export.Name == api::WdfVersionBind ? bind(A) : unbind(A);
   auto BI = Bindings.find(Export.Binding);
   if (BI == Bindings.end() || BI->second.Unbound)
     return invalid("table entry belongs to an unbound framework instance");
@@ -963,8 +1051,9 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   if (Export.Name == FrameworkUnloadRoutine) {
     if (A[0] != Driver || !B.DriverHandle || B.Unloaded)
       return invalid("invalid or repeated framework driver unload");
-    std::vector<Step> Steps{
-        {StepKind::Callback, B.DriverHandle, B.UnloadCallback}};
+    std::vector<Step> Steps;
+    if (B.UnloadCallback)
+      Steps.push_back({StepKind::Callback, B.DriverHandle, B.UnloadCallback});
     Steps.push_back({StepKind::BeginDriverDelete, B.Globals});
     Steps.push_back({StepKind::DriverUnloaded, B.Globals});
     return start(std::move(Steps));
@@ -991,14 +1080,14 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     return Request.takeError();
   if (*Request)
     return **Request;
-  if (Export.Name == "WdfDriverCreate")
+  if (Export.Name == api::WdfDriverCreate)
     return createDriver(B, A);
-  if (Export.Name == "WdfWdmDriverGetWdfDriverHandle") {
+  if (Export.Name == api::WdfWdmDriverGetWdfDriverHandle) {
     if (A[1] != Driver || !Objects.count(B.DriverHandle))
       return invalid("WDM driver does not own a live framework driver");
     return B.DriverHandle;
   }
-  if (Export.Name == "WdfObjectCreate") {
+  if (Export.Name == api::WdfObjectCreate) {
     auto Validation = attributes(A[1], AttributesUse::Object);
     if (!Validation)
       return Validation.takeError();
@@ -1014,7 +1103,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
       return E;
     return 0;
   }
-  if (Export.Name == "WdfObjectContextGetObject") {
+  if (Export.Name == api::WdfObjectContextGetObject) {
     for (const auto &[Handle, O] : Objects)
       if (O.Binding == B.Globals)
         for (const auto &[Type, Context] : O.Contexts)
@@ -1026,13 +1115,14 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
   if (OI == Objects.end() || OI->second.Binding != B.Globals)
     return invalid("invalid, foreign or deleted framework handle");
   auto &O = OI->second;
-  if (Export.Name == "WdfDriverGetRegistryPath" ||
-      Export.Name == "WdfDriverWdmGetDriverObject") {
+  if (Export.Name == api::WdfDriverGetRegistryPath ||
+      Export.Name == api::WdfDriverWdmGetDriverObject) {
     if (O.Kind != ObjectKind::Driver)
       return invalid("framework handle has the wrong object type");
-    return Export.Name == "WdfDriverGetRegistryPath" ? B.RegistryCopy : Driver;
+    return Export.Name == api::WdfDriverGetRegistryPath ? B.RegistryCopy
+                                                        : Driver;
   }
-  if (Export.Name == "WdfObjectGetTypedContextWorker") {
+  if (Export.Name == api::WdfObjectGetTypedContextWorker) {
     auto TypeSize = read(A[2], 4);
     if (!TypeSize)
       return TypeSize.takeError();
@@ -1041,7 +1131,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     auto CI = O.Contexts.find(A[2]);
     return CI == O.Contexts.end() ? 0 : CI->second.Address;
   }
-  if (Export.Name == "WdfObjectAllocateContext") {
+  if (Export.Name == api::WdfObjectAllocateContext) {
     if (O.Deleting)
       return DeletePending;
     auto Validation = attributes(A[2], AttributesUse::AdditionalContext);
@@ -1064,7 +1154,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
         return E;
     return Exists ? ObjectNameExists : 0;
   }
-  if (Export.Name == "WdfObjectReferenceActual") {
+  if (Export.Name == api::WdfObjectReferenceActual) {
     if (O.Cleaned)
       return invalid(
           "references after cleanup are outside this framework profile");
@@ -1073,7 +1163,7 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     ++O.References;
     return 0;
   }
-  if (Export.Name == "WdfObjectDereferenceActual") {
+  if (Export.Name == api::WdfObjectDereferenceActual) {
     if (!O.References)
       return invalid("framework reference count underflow");
     --O.References;
@@ -1082,13 +1172,15 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
       return start({{StepKind::TryDestroy, A[1]}});
     return 0;
   }
-  if (Export.Name == "WdfObjectDelete") {
+  if (Export.Name == api::WdfObjectDelete) {
     if (O.Kind == ObjectKind::Driver)
       return invalid("WDFDRIVER cannot be deleted by the driver");
     if (O.Kind == ObjectKind::Queue && Queues.at(A[1]).IsDefault)
       return invalid("the default queue cannot be deleted by the driver");
     if (O.Kind == ObjectKind::Request)
       return invalid("an incoming framework request is released by completion");
+    if (O.Kind == ObjectKind::Device && Devices.at(A[1]).PDO)
+      return invalid("a PnP framework device is deleted by removal");
     std::vector<Step> Steps;
     if (auto E = planDelete(A[1], Steps))
       return E;

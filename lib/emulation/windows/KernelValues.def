@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_WDM_VALUE(StatusSuccess, 0)
+NEVERD_WDM_VALUE(StatusUnsuccessful, 0xc0000001)
 NEVERD_WDM_VALUE(StatusInsufficientResources, 0xc000009a)
 NEVERD_WDM_VALUE(StatusObjectNameCollision, 0xc0000035)
 NEVERD_WDM_VALUE(StatusObjectNameNotFound, 0xc0000034)

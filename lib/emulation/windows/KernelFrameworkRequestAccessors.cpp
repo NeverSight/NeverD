@@ -35,11 +35,12 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
                                       llvm::ArrayRef<uint64_t> A) {
   using Result = std::optional<uint64_t>;
-  const bool InputMdl = Name == "WdfRequestRetrieveInputWdmMdl";
-  const bool OutputMdl = Name == "WdfRequestRetrieveOutputWdmMdl";
-  if (!InputMdl && !OutputMdl && Name != "WdfRequestGetInformation" &&
-      Name != "WdfRequestSetInformation" && Name != "WdfRequestGetIoQueue" &&
-      Name != "WdfRequestGetFileObject" && Name != "WdfRequestWdmGetIrp")
+  const bool InputMdl = Name == api::WdfRequestRetrieveInputWdmMdl;
+  const bool OutputMdl = Name == api::WdfRequestRetrieveOutputWdmMdl;
+  if (!InputMdl && !OutputMdl && Name != api::WdfRequestGetInformation &&
+      Name != api::WdfRequestSetInformation &&
+      Name != api::WdfRequestGetIoQueue &&
+      Name != api::WdfRequestGetFileObject && Name != api::WdfRequestWdmGetIrp)
     return Result{};
   auto O = Objects.find(A[1]);
   auto R = Requests.find(A[1]);
@@ -53,9 +54,9 @@ KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
   // a surviving IRP. Completion detaches the queue before request cleanup.
   // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestgetinformation
   // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestgetioqueue
-  if (Name == "WdfRequestGetIoQueue")
+  if (Name == api::WdfRequestGetIoQueue)
     return Result{Completed ? 0 : R->second.Queue};
-  if (Name == "WdfRequestGetInformation") {
+  if (Name == api::WdfRequestGetInformation) {
     if (Completed)
       return Result{0};
     if (!RequestsHost.Information)
@@ -102,14 +103,14 @@ KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
   }
   if (Completed)
     return accessorError("request is completed or completion is in progress");
-  if (Name == "WdfRequestSetInformation") {
+  if (Name == api::WdfRequestSetInformation) {
     if (!RequestsHost.SetInformation)
       return accessorError("information host is unavailable");
     if (auto E = RequestsHost.SetInformation(R->second.IRP, A[2]))
       return std::move(E);
     return Result{0};
   }
-  if (Name == "WdfRequestGetFileObject") {
+  if (Name == api::WdfRequestGetFileObject) {
     // Current devices use the no-file-callback configuration, whose file
     // class is WdfFileObjectNotRequired. A WDM FILE_OBJECT is not this handle.
     // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestgetfileobject

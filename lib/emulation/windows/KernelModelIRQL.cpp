@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelAPINames.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -36,7 +37,7 @@ KernelModel::callIRQLAPI(llvm::StringRef Name,
     CurrentIRQL = RequestedIRQL;
     return PreviousIRQL;
   }
-  if (Name != "KeLowerIrql")
+  if (Name != kernel_api::KeLowerIrql)
     return irqlError("unknown IRQL operation");
   if (RaisedIRQLs.empty() || RaisedIRQLs.back().Execution != CurrentExecution ||
       RaisedIRQLs.back().NewIRQL != CurrentIRQL ||
@@ -63,7 +64,7 @@ llvm::Expected<uint64_t> KernelModel::callApcStateAPI(llvm::StringRef Name) {
   if (!CurrentExecution || !CurrentThreadKey)
     return irqlError("APC state requires an active guest thread");
   auto &State = ApcStates[CurrentThreadKey];
-  if (Name == "KeAreApcsDisabled") {
+  if (Name == kernel_api::KeAreApcsDisabled) {
     bool OwnsMutex = false;
     for (const auto &[Execution, ThreadKey] : ExecutionThreadKeys)
       if (ThreadKey == CurrentThreadKey && Dispatcher.ownsMutex(Execution)) {
@@ -72,27 +73,27 @@ llvm::Expected<uint64_t> KernelModel::callApcStateAPI(llvm::StringRef Name) {
       }
     return uint64_t(State.CriticalDepth || State.GuardedDepth || OwnsMutex);
   }
-  if (Name == "KeAreAllApcsDisabled")
+  if (Name == kernel_api::KeAreAllApcsDisabled)
     return uint64_t(State.GuardedDepth || CurrentIRQL >= windows::APCLevel);
-  if (Name == "KeEnterCriticalRegion") {
+  if (Name == kernel_api::KeEnterCriticalRegion) {
     if (State.CriticalDepth == 64)
       return irqlError("critical-region nesting limit exceeded");
     ++State.CriticalDepth;
     return 0;
   }
-  if (Name == "KeLeaveCriticalRegion") {
+  if (Name == kernel_api::KeLeaveCriticalRegion) {
     if (!State.CriticalDepth)
       return irqlError("KeLeaveCriticalRegion has no matching entry");
     --State.CriticalDepth;
     return 0;
   }
-  if (Name == "KeEnterGuardedRegion") {
+  if (Name == kernel_api::KeEnterGuardedRegion) {
     if (State.GuardedDepth == 64)
       return irqlError("guarded-region nesting limit exceeded");
     ++State.GuardedDepth;
     return 0;
   }
-  if (Name == "KeLeaveGuardedRegion") {
+  if (Name == kernel_api::KeLeaveGuardedRegion) {
     if (!State.GuardedDepth)
       return irqlError("KeLeaveGuardedRegion has no matching entry");
     --State.GuardedDepth;

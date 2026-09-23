@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "KernelAPINames.h"
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
@@ -24,14 +25,14 @@ llvm::Error apiError(const llvm::Twine &Message) {
 llvm::Expected<uint64_t>
 KernelModel::callInterruptAPI(llvm::StringRef Name,
                               llvm::ArrayRef<uint64_t> A) {
-  if (Name == "KeAcquireInterruptSpinLock") {
+  if (Name == kernel_api::KeAcquireInterruptSpinLock) {
     auto Old = Interrupts.acquire(A[0], CurrentExecution, CurrentIRQL);
     if (!Old)
       return Old.takeError();
     CurrentIRQL = Interrupts.connection(A[0])->IRQL;
     return *Old;
   }
-  if (Name == "KeReleaseInterruptSpinLock") {
+  if (Name == kernel_api::KeReleaseInterruptSpinLock) {
     auto Restored =
         Interrupts.release(A[0], CurrentExecution, uint8_t(A[1]), CurrentIRQL);
     if (!Restored)
@@ -39,7 +40,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     CurrentIRQL = *Restored;
     return 0;
   }
-  if (Name == "KeSynchronizeExecution") {
+  if (Name == kernel_api::KeSynchronizeExecution) {
     if (hasPendingModelGuestCall())
       return apiError("cannot replace a prepared guest callback");
     const auto *Connection = Interrupts.connection(A[0]);
@@ -52,10 +53,11 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     PendingInterruptCall = std::move(*Call);
     return 0;
   }
-  if (Name == "IoDisconnectInterrupt" || Name == "IoDisconnectInterruptEx") {
+  if (Name == kernel_api::IoDisconnectInterrupt ||
+      Name == kernel_api::IoDisconnectInterruptEx) {
     uint64_t Object = A[0];
     uint32_t Version = 0;
-    if (Name == "IoDisconnectInterruptEx") {
+    if (Name == kernel_api::IoDisconnectInterruptEx) {
       if (auto E = validateGuestAccess(A[0], interrupts::DisconnectSize, false))
         return E;
       auto VersionField =
@@ -76,7 +78,8 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     FreedRanges.emplace(Object, interrupts::TokenSize);
     return 0;
   }
-  if (Name != "IoConnectInterrupt" && Name != "IoConnectInterruptEx")
+  if (Name != kernel_api::IoConnectInterrupt &&
+      Name != kernel_api::IoConnectInterruptEx)
     return apiError("unknown interrupt routine");
 
   uint64_t Output = 0, Routine = 0, Context = 0, SpinLock = 0, PDO = 0;
@@ -84,7 +87,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
   uint64_t Share = 0, Affinity = 0, Floating = 0, Group = 0;
   uint32_t Version = 0;
   bool LineBased = false;
-  if (Name == "IoConnectInterrupt") {
+  if (Name == kernel_api::IoConnectInterrupt) {
     Output = A[0];
     Routine = A[1];
     Context = A[2];

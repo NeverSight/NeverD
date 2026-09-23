@@ -500,7 +500,7 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
   using Result = std::optional<uint64_t>;
-  if (Name == "WdfMemoryGetBuffer") {
+  if (Name == api::WdfMemoryGetBuffer) {
     auto O = Objects.find(A[1]);
     auto M = UserMemories.find(A[1]);
     if (O == Objects.end() || O->second.Kind != ObjectKind::Memory ||
@@ -516,19 +516,20 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     }
     return Result{M->second.Buffer};
   }
-  if (Name != "WdfRequestComplete" &&
-      Name != "WdfRequestCompleteWithInformation" &&
-      Name != "WdfRequestGetParameters" &&
-      Name != "WdfRequestRetrieveInputBuffer" &&
-      Name != "WdfRequestRetrieveOutputBuffer" &&
-      Name != "WdfRequestRetrieveUnsafeUserInputBuffer" &&
-      Name != "WdfRequestRetrieveUnsafeUserOutputBuffer" &&
-      Name != "WdfRequestProbeAndLockUserBufferForRead" &&
-      Name != "WdfRequestProbeAndLockUserBufferForWrite" &&
-      Name != "WdfRequestMarkCancelable" &&
-      Name != "WdfRequestMarkCancelableEx" &&
-      Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled" &&
-      Name != "WdfRequestForwardToIoQueue" && Name != "WdfRequestRequeue")
+  if (Name != api::WdfRequestComplete &&
+      Name != api::WdfRequestCompleteWithInformation &&
+      Name != api::WdfRequestGetParameters &&
+      Name != api::WdfRequestRetrieveInputBuffer &&
+      Name != api::WdfRequestRetrieveOutputBuffer &&
+      Name != api::WdfRequestRetrieveUnsafeUserInputBuffer &&
+      Name != api::WdfRequestRetrieveUnsafeUserOutputBuffer &&
+      Name != api::WdfRequestProbeAndLockUserBufferForRead &&
+      Name != api::WdfRequestProbeAndLockUserBufferForWrite &&
+      Name != api::WdfRequestMarkCancelable &&
+      Name != api::WdfRequestMarkCancelableEx &&
+      Name != api::WdfRequestUnmarkCancelable &&
+      Name != api::WdfRequestIsCanceled &&
+      Name != api::WdfRequestForwardToIoQueue && Name != api::WdfRequestRequeue)
     return Result{};
   auto O = Objects.find(A[1]);
   auto R = Requests.find(A[1]);
@@ -538,8 +539,9 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
-  if (Name == "WdfRequestForwardToIoQueue" || Name == "WdfRequestRequeue") {
-    const bool Requeue = Name == "WdfRequestRequeue";
+  if (Name == api::WdfRequestForwardToIoQueue ||
+      Name == api::WdfRequestRequeue) {
+    const bool Requeue = Name == api::WdfRequestRequeue;
     const uint64_t Target = Requeue ? R->second.Queue : A[2];
     auto DestinationObject = Objects.find(Target);
     auto Destination = Queues.find(Target);
@@ -652,9 +654,9 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (R->second.Queued)
     return requestError("framework owns the request in a manual queue");
-  if (Name == "WdfRequestMarkCancelable" ||
-      Name == "WdfRequestMarkCancelableEx") {
-    const bool Legacy = Name == "WdfRequestMarkCancelable";
+  if (Name == api::WdfRequestMarkCancelable ||
+      Name == api::WdfRequestMarkCancelableEx) {
+    const bool Legacy = Name == api::WdfRequestMarkCancelable;
     if (!A[2])
       return requestError("marking cancelable requires a cancel callback");
     if (R->second.Cancellation != CancelState::Unmarked) {
@@ -702,7 +704,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     }
     return Result{0};
   }
-  if (Name == "WdfRequestUnmarkCancelable") {
+  if (Name == api::WdfRequestUnmarkCancelable) {
     if (R->second.Cancellation == CancelState::Unmarked)
       return Result{ControlInvalidDeviceRequest};
     if (R->second.Cancellation != CancelState::Marked)
@@ -714,7 +716,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     R->second.Cancellation = CancelState::Unmarked;
     return Result{0};
   }
-  if (Name == "WdfRequestIsCanceled") {
+  if (Name == api::WdfRequestIsCanceled) {
     // The public verifier requires an owned, noncancelable request here.
     // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestiscanceled
     if (R->second.Cancellation != CancelState::Unmarked)
@@ -726,8 +728,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return Canceled.takeError();
     return Result{*Canceled ? 1 : 0};
   }
-  if (Name == "WdfRequestComplete" ||
-      Name == "WdfRequestCompleteWithInformation") {
+  if (Name == api::WdfRequestComplete ||
+      Name == api::WdfRequestCompleteWithInformation) {
     if (R->second.Cancellation == CancelState::Marked ||
         R->second.Cancellation == CancelState::Queued)
       return requestError(
@@ -737,7 +739,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         !RequestsHost.SetInformation || !RequestsHost.ValidateCompletion)
       return requestError("completion host is unavailable");
     uint64_t Information = 0;
-    if (Name == "WdfRequestCompleteWithInformation") {
+    if (Name == api::WdfRequestCompleteWithInformation) {
       Information = A[3];
     } else {
       auto Value = RequestsHost.Information(R->second.IRP);
@@ -752,7 +754,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     // cleanup callback holding the raw packet observes the supplied value.
     // Keep that packet authoritative through cleanup and final completion.
     // https://github.com/microsoft/Windows-Driver-Frameworks/blob/b6191d9543441329154da32f7ab9bdd97228dd3c/src/framework/shared/inc/private/common/fxrequest.hpp#L810-L821
-    if (Name == "WdfRequestCompleteWithInformation")
+    if (Name == api::WdfRequestCompleteWithInformation)
       if (auto E = RequestsHost.SetInformation(R->second.IRP, Information))
         return E;
     // FxRequest::CompleteInternal performs EarlyDispose before giving up the
@@ -778,8 +780,9 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   auto View = RequestsHost.View(R->second.IRP);
   if (!View)
     return View.takeError();
-  const bool UnsafeInput = Name == "WdfRequestRetrieveUnsafeUserInputBuffer";
-  const bool UnsafeOutput = Name == "WdfRequestRetrieveUnsafeUserOutputBuffer";
+  const bool UnsafeInput = Name == api::WdfRequestRetrieveUnsafeUserInputBuffer;
+  const bool UnsafeOutput =
+      Name == api::WdfRequestRetrieveUnsafeUserOutputBuffer;
   if (UnsafeInput || UnsafeOutput) {
     if (auto E = writable(A[3], sizeof(uint64_t)))
       return E;
@@ -807,8 +810,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         return E;
     return Result{0};
   }
-  const bool ProbeRead = Name == "WdfRequestProbeAndLockUserBufferForRead";
-  const bool ProbeWrite = Name == "WdfRequestProbeAndLockUserBufferForWrite";
+  const bool ProbeRead = Name == api::WdfRequestProbeAndLockUserBufferForRead;
+  const bool ProbeWrite = Name == api::WdfRequestProbeAndLockUserBufferForWrite;
   if (ProbeRead || ProbeWrite) {
     if (auto E = writable(A[4], sizeof(uint64_t)))
       return E;
@@ -837,7 +840,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return E;
     return Result{0};
   }
-  if (Name == "WdfRequestGetParameters") {
+  if (Name == api::WdfRequestGetParameters) {
     if (auto E = writeRequestParameters(A[2], *View))
       return E;
     return Result{0};
@@ -852,7 +855,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   if (A[4])
     if (auto E = Memory.writeInteger(A[4], 0, 8))
       return E;
-  const bool Output = Name == "WdfRequestRetrieveOutputBuffer";
+  const bool Output = Name == api::WdfRequestRetrieveOutputBuffer;
   if (View->Neither)
     return Result{ControlInvalidDeviceRequest};
   if ((!Output && View->Major == RequestMajorRead) ||

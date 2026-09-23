@@ -31,30 +31,31 @@ llvm::Error invalidQueue(const llvm::Twine &Message) {
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
                            llvm::ArrayRef<uint64_t> A) {
-  if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
-      Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
-      Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
-      Name != "WdfIoQueueStopSynchronously" && Name != "WdfIoQueueDrain" &&
-      Name != "WdfIoQueueStopAndPurge" &&
-      Name != "WdfIoQueueStopAndPurgeSynchronously" &&
-      Name != "WdfIoQueueDrainSynchronously" && Name != "WdfIoQueuePurge" &&
-      Name != "WdfIoQueuePurgeSynchronously" &&
-      Name != "WdfIoQueueReadyNotify" &&
-      Name != "WdfIoQueueRetrieveNextRequest" &&
-      Name != "WdfIoQueueFindRequest" &&
-      Name != "WdfIoQueueRetrieveFoundRequest")
+  if (Name != api::WdfIoQueueCreate && Name != api::WdfDeviceGetDefaultQueue &&
+      Name != api::WdfIoQueueGetDevice && Name != api::WdfIoQueueGetState &&
+      Name != api::WdfIoQueueStop && Name != api::WdfIoQueueStart &&
+      Name != api::WdfIoQueueStopSynchronously &&
+      Name != api::WdfIoQueueDrain && Name != api::WdfIoQueueStopAndPurge &&
+      Name != api::WdfIoQueueStopAndPurgeSynchronously &&
+      Name != api::WdfIoQueueDrainSynchronously &&
+      Name != api::WdfIoQueuePurge &&
+      Name != api::WdfIoQueuePurgeSynchronously &&
+      Name != api::WdfIoQueueReadyNotify &&
+      Name != api::WdfIoQueueRetrieveNextRequest &&
+      Name != api::WdfIoQueueFindRequest &&
+      Name != api::WdfIoQueueRetrieveFoundRequest)
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
   const auto Kind =
-      Name == "WdfIoQueueCreate" || Name == "WdfDeviceGetDefaultQueue"
+      Name == api::WdfIoQueueCreate || Name == api::WdfDeviceGetDefaultQueue
           ? ObjectKind::Device
           : ObjectKind::Queue;
   if (OI == Objects.end() || OI->second.Binding != B.Globals ||
       OI->second.Kind != Kind)
     return invalidQueue("invalid, foreign or wrong-kind object handle");
 
-  if (Name == "WdfIoQueueReadyNotify") {
+  if (Name == api::WdfIoQueueReadyNotify) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
@@ -71,23 +72,26 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return std::optional<uint64_t>{0};
   }
 
-  if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
-      Name == "WdfIoQueueStopSynchronously" || Name == "WdfIoQueueStart" ||
-      Name == "WdfIoQueueStopAndPurge" ||
-      Name == "WdfIoQueueStopAndPurgeSynchronously" ||
-      Name == "WdfIoQueueDrain" || Name == "WdfIoQueueDrainSynchronously" ||
-      Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously") {
+  if (Name == api::WdfIoQueueGetState || Name == api::WdfIoQueueStop ||
+      Name == api::WdfIoQueueStopSynchronously ||
+      Name == api::WdfIoQueueStart || Name == api::WdfIoQueueStopAndPurge ||
+      Name == api::WdfIoQueueStopAndPurgeSynchronously ||
+      Name == api::WdfIoQueueDrain ||
+      Name == api::WdfIoQueueDrainSynchronously ||
+      Name == api::WdfIoQueuePurge ||
+      Name == api::WdfIoQueuePurgeSynchronously) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
-    if (Name == "WdfIoQueueStop" || Name == "WdfIoQueueStopSynchronously") {
+    if (Name == api::WdfIoQueueStop ||
+        Name == api::WdfIoQueueStopSynchronously) {
       if (Q->second.DrainComplete)
         return invalidQueue("queue has a pending drain-completion callback");
-      if (Name == "WdfIoQueueStop" && A[2] && Q->second.StopComplete)
+      if (Name == api::WdfIoQueueStop && A[2] && Q->second.StopComplete)
         return invalidQueue("queue already has a stop-completion callback");
       Q->second.Accepting = true;
       Q->second.Dispatching = false;
-      if (Name == "WdfIoQueueStop" && A[2]) {
+      if (Name == api::WdfIoQueueStop && A[2]) {
         Q->second.StopComplete = A[2];
         Q->second.StopContext = A[3];
         auto Result = start({});
@@ -96,7 +100,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       }
       return std::optional<uint64_t>{0};
     }
-    if (Name == "WdfIoQueueStart") {
+    if (Name == api::WdfIoQueueStart) {
       if (Q->second.DrainComplete)
         return invalidQueue("queue has a pending drain-completion callback");
       Q->second.Accepting = true;
@@ -117,11 +121,12 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         return Result.takeError();
       return std::optional<uint64_t>{*Result};
     }
-    if (Name == "WdfIoQueueDrain" || Name == "WdfIoQueueDrainSynchronously") {
+    if (Name == api::WdfIoQueueDrain ||
+        Name == api::WdfIoQueueDrainSynchronously) {
       if (Q->second.DrainComplete || Q->second.StopComplete)
         return invalidQueue("queue already has a state-completion callback");
       Q->second.Accepting = false;
-      if (Name == "WdfIoQueueDrain" && A[2]) {
+      if (Name == api::WdfIoQueueDrain && A[2]) {
         Q->second.DrainComplete = A[2];
         Q->second.DrainContext = A[3];
         auto Result = start({});
@@ -130,13 +135,15 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       }
       return std::optional<uint64_t>{0};
     }
-    if (Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously" ||
-        Name == "WdfIoQueueStopAndPurge" ||
-        Name == "WdfIoQueueStopAndPurgeSynchronously") {
-      const bool StopAndPurge = Name == "WdfIoQueueStopAndPurge" ||
-                                Name == "WdfIoQueueStopAndPurgeSynchronously";
+    if (Name == api::WdfIoQueuePurge ||
+        Name == api::WdfIoQueuePurgeSynchronously ||
+        Name == api::WdfIoQueueStopAndPurge ||
+        Name == api::WdfIoQueueStopAndPurgeSynchronously) {
+      const bool StopAndPurge =
+          Name == api::WdfIoQueueStopAndPurge ||
+          Name == api::WdfIoQueueStopAndPurgeSynchronously;
       const bool Asynchronous =
-          Name == "WdfIoQueuePurge" || Name == "WdfIoQueueStopAndPurge";
+          Name == api::WdfIoQueuePurge || Name == api::WdfIoQueueStopAndPurge;
       if (Q->second.DrainComplete || Q->second.StopComplete)
         return invalidQueue("queue already has a state-completion callback");
       if (PendingCall)
@@ -249,18 +256,18 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       State |= QueueDriverNoRequests;
     return std::optional<uint64_t>{State};
   }
-  if (Name == "WdfIoQueueGetDevice") {
+  if (Name == api::WdfIoQueueGetDevice) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || !Devices.count(Q->second.Device))
       return invalidQueue("queue lost its owning control device");
     return std::optional<uint64_t>{Q->second.Device};
   }
-  if (Name == "WdfIoQueueFindRequest" ||
-      Name == "WdfIoQueueRetrieveFoundRequest") {
+  if (Name == api::WdfIoQueueFindRequest ||
+      Name == api::WdfIoQueueRetrieveFoundRequest) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
-    const bool Find = Name == "WdfIoQueueFindRequest";
+    const bool Find = Name == api::WdfIoQueueFindRequest;
     const uint64_t Output = A[Find ? 5 : 3];
     if (auto E = writable(Output, sizeof(uint64_t)))
       return E;
@@ -331,7 +338,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     R->second.QueuedCompletionStatus.reset();
     return std::optional<uint64_t>{0};
   }
-  if (Name == "WdfIoQueueRetrieveNextRequest") {
+  if (Name == api::WdfIoQueueRetrieveNextRequest) {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
@@ -367,7 +374,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (DI == Devices.end())
     return invalidQueue("handle has no control-device identity");
   auto &Device = DI->second;
-  if (Name == "WdfDeviceGetDefaultQueue") {
+  if (Name == api::WdfDeviceGetDefaultQueue) {
     if (Device.DefaultQueue && !Queues.count(Device.DefaultQueue))
       return invalidQueue("device lost its default-queue identity");
     return std::optional<uint64_t>{Device.DefaultQueue};
@@ -445,8 +452,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return std::optional<uint64_t>{InvalidParameter};
   if (Read32(QueueConfigPowerManaged) > QueuePowerUseDefault)
     return invalidQueue("invalid power-management tri-state");
-  // A control-device queue is never power managed, including WdfTrue and
-  // WdfUseDefault configurations. No PnP state is fabricated here.
+  if (Device.PDO && Read32(QueueConfigPowerManaged) != QueuePowerDisabled)
+    return invalidQueue(
+        "PnP power-managed queues require device power callbacks");
   if (Dispatch == QueueDispatchParallel &&
       !Read32(QueueConfigPresentedRequests))
     return std::optional<uint64_t>{InvalidParameter};

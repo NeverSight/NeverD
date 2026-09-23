@@ -15,6 +15,7 @@
 #include "WindowsKernelLayout.h"
 
 #include <algorithm>
+#include <array>
 
 namespace neverd::emulation {
 namespace {
@@ -84,10 +85,9 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
 #undef NEVERD_DRIVER_REQUEST_KIND
   }
   const uint64_t Callback = Result.MajorFunctions[Major];
-  if (*Top != PDO && !Callback)
+  const bool FrameworkPnp = Framework && FrameworkDevices.count(*Top);
+  if (*Top != PDO && !Callback && !FrameworkPnp)
     return pnpError("attached driver did not register a PnP dispatch callback");
-  if (FrameworkDevices.count(*Top))
-    return pnpError("framework PnP device dispatch is outside this profile");
   if (Minor == DevicePnpRequest::Start)
     if (auto E = Resources.canStart(PDO))
       return E;
@@ -138,6 +138,33 @@ KernelModel::beginPnpRequest(const DriverRequest &Input, size_t Index) {
     Call.IRP = *Packet;
     return Call;
   }
+  if (FrameworkPnp) {
+    if (Request.DeviceRoute.size() != 2 || Request.DeviceRoute.back() != PDO ||
+        Request.StackCount < 2)
+      return pnpError("framework PnP forwarding requires its FDO/PDO pair");
+    const uint64_t Lower = Request.Stack - StackSize;
+    std::array<uint8_t, StackSize> StackBytes{};
+    if (auto E = Memory.read(Request.Stack, StackBytes))
+      return E;
+    if (auto E = Memory.write(Lower, StackBytes))
+      return E;
+    if (auto E = Memory.writeInteger(Lower + StackDeviceOffset, PDO, 8))
+      return E;
+    if (auto E = Memory.writeInteger(*Packet + IRPLocationOffset,
+                                     Request.StackCount - 1, 1))
+      return E;
+    if (auto E = Memory.writeInteger(*Packet + IRPStackPointerOffset, Lower, 8))
+      return E;
+    Request.Forwarded = true;
+    auto Status = callProviderDriver(PDO, *Packet);
+    if (!Status)
+      return Status.takeError();
+    if (auto E = recordDispatchReturn(*Packet, uint32_t(*Status)))
+      return E;
+    Invocation Call;
+    Call.IRP = *Packet;
+    return Call;
+  }
   Invocation Call{Callback, *Top, *Packet};
   Call.IRP = *Packet;
   return Call;
@@ -159,8 +186,8 @@ llvm::Error KernelModel::finishRequestLifecycle(ActiveRequest &Request,
     Observation.DeviceStateAfter = State->DevicePower;
     Observation.SystemStateAfter = State->SystemPower;
   } else if (Request.PnpTicket) {
-    if (auto E = Resources.finishPnp(Request.PnpDevice, Request.PnpOperation->Minor,
-                                Status))
+    if (auto E = Resources.finishPnp(Request.PnpDevice,
+                                     Request.PnpOperation->Minor, Status))
       return E;
     if (auto E = Lifecycle.finishPnp(*Request.PnpTicket, Status))
       return E;
