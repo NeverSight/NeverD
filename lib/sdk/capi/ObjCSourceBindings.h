@@ -53,6 +53,7 @@ struct ObjCSourceBindingResult {
   std::map<va_t, uint64_t> LocalStorageExtents;
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
+  std::map<va_t, std::string> SwiftNominalDescriptors;
   /// Cache address -> exact accessor entry, revalidated when helpers render.
   std::map<va_t, va_t> SwiftWitnessCaches;
   /// Exact compiler-emitted Swift lazy global addressors used by this body.
@@ -924,14 +925,39 @@ swiftDirectTypeMetadataDescriptor(const BinaryImage &Image,
     return std::nullopt;
   size_t MatchingExports = 0;
   for (const auto &Export : Image.Exports) {
-    if (Export.Addr != DescriptorAddress)
+    if (Export.Addr != DescriptorAddress) {
+      if (Export.Name == Descriptor->Name)
+        return std::nullopt;
       continue;
+    }
     if (Export.Name != Descriptor->Name)
       return std::nullopt;
     ++MatchingExports;
   }
   return MatchingExports == 1 ? std::optional<std::string>(Descriptor->Name)
                               : std::nullopt;
+}
+
+inline std::optional<SourceCallTypeHint>
+swiftNominalDescriptorAddressHint(const BinaryImage &Image, va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.MachOTwoLevelNamespace || Image.MachOChainedFixupsAmbiguous)
+    return std::nullopt;
+  const auto Symbol = swiftDirectTypeMetadataDescriptor(Image, Address);
+  if (!Symbol || !swiftExportedNominalDescriptor(*Symbol))
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind =
+      SourceCallTypeHint::Kind::RuntimeSwiftNominalDescriptorAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = *Symbol;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
+    return std::nullopt;
+  return Hint;
 }
 
 struct SwiftTypeMetadataDescriptorReference {
@@ -3170,12 +3196,45 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           SwiftMetadataPair.reset();
       }
     }
+    std::optional<va_t> SingletonDescriptor;
+    if (Expression->Kind == ExprKind::Call && !Expression->IsIndirectCall &&
+        Image.isCodeAddress(Expression->CallAddr) &&
+        Expression->SourceCallHint &&
+        Expression->SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::SwiftRuntimeCall &&
+        Expression->SourceCallHint->TargetName ==
+            "swift_getSingletonMetadata" &&
+        Expression->Operands.size() == 2 && Expression->Operands[1]) {
+      const auto &Binding = *Expression->SourceCallHint;
+      const auto Expected =
+          swiftRuntimeSourceCallHint(Image, Binding.TargetAddress);
+      if (Expected && Expected->TargetAddress == Binding.TargetAddress &&
+          runtimeBindingMatches(Binding, *Expected) &&
+          Expected->Signature.Parameters.size() == 2 &&
+          Expected->Signature.Parameters[1].Type &&
+          Expected->Signature.Parameters[1].Type->Kind == NdTypeKind::Ptr)
+        SingletonDescriptor = constantAddress(*Expression->Operands[1]);
+    }
     const auto TaggedCString =
         !NumericOperand && !AddressContext && !MemoryAddress
             ? taggedCStringAddressOperand(*Original, Image)
             : std::nullopt;
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {
       auto &Operand = Expression->Operands[Index];
+      if (Index == 1 && Operand && SingletonDescriptor) {
+        auto Hint =
+            swiftNominalDescriptorAddressHint(Image, *SingletonDescriptor);
+        if (Hint) {
+          Result.SwiftNominalDescriptors[*SingletonDescriptor] =
+              Hint->TargetName;
+          auto Descriptor = HighExpr::makeCall({}, 0, {});
+          Descriptor->Type = Operand->Type;
+          Descriptor->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+          Operand = std::move(Descriptor);
+          continue;
+        }
+      }
       // The Swift outlined-destroy helper receives an exact cache/reference
       // pair. Private-linkage symbols may repeat in every compilation unit,
       // so the native call's uniquely matching typed pointer arguments provide
@@ -3958,6 +4017,19 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     return Expected && Binding.SwiftTypeMetadata &&
            Expected->SwiftTypeMetadata == Binding.SwiftTypeMetadata &&
            Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftNominalDescriptorAddress) {
+    const auto Expected =
+        swiftNominalDescriptorAddressHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
            Binding.BorrowedByteInputs.empty() &&
@@ -4866,6 +4938,28 @@ inline std::string renderObjCSwiftTypeMetadataHelpers(
               "();\n"
               "  return (uintptr_t)&" +
               StorageName + ".reference;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCSwiftNominalDescriptorHelpers(
+    const BinaryImage &Image, const std::map<va_t, std::string> &Descriptors,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto &[Address, Symbol] : Descriptors) {
+    const auto Expected =
+        objc_binding_detail::swiftNominalDescriptorAddressHint(Image, Address);
+    if (!Expected || Expected->TargetName != Symbol)
+      throw std::runtime_error("Swift nominal descriptor is no longer valid");
+    const std::string Stem =
+        "neverd_swift_nominal_descriptor_" + llvm::utohexstr(Address, true);
+    SharedFunctions.insert(Stem + "_address");
+    Source += "\nextern unsigned char " + Stem + "_bytes[] __asm__(\"" +
+              Symbol + "\");\n";
+    Source += "uintptr_t " + Stem +
+              "_address(void) {\n"
+              "  return (uintptr_t)" +
+              Stem + "_bytes;\n}\n";
   }
   return Source;
 }

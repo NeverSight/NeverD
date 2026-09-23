@@ -956,6 +956,97 @@ TEST(ObjCSourceBindings, SwiftWitnessAccessorRejectsIncompleteOrStaleEvidence) {
                std::runtime_error);
 }
 
+struct SwiftSingletonDescriptorFixture : SwiftTypeMetadataFixture {
+  static constexpr va_t RuntimeSlot = 0x3040;
+  static constexpr va_t CallAddress = 0x5010;
+
+  SwiftSingletonDescriptorFixture()
+      : SwiftTypeMetadataFixture(Arch::AArch64, false, false, false, true) {
+    Segment Text;
+    Text.VA = Text.FileOff = 0x5000;
+    Text.Size = Text.FileSz = 0x100;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(0x100);
+    Image.Segments.push_back(Text);
+    Section Code;
+    Code.VA = Code.FileOff = 0x5000;
+    Code.Size = Code.FileSz = 0x100;
+    Code.Flags = Text.Flags;
+    Code.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Image.Sections.push_back(Code);
+    Image.DynInfo.NeededLibs.push_back("/usr/lib/swift/libswiftCore.dylib");
+    EXPECT_TRUE(
+        Image.recordDyldBindSlot(RuntimeSlot, "_swift_getSingletonMetadata", 0,
+                                 "/usr/lib/swift/libswiftCore.dylib", false));
+    Image.ImportPtrSlots[RuntimeSlot] = "_swift_getSingletonMetadata";
+    auto Runtime = swiftRuntimeSourceCallHint(Image, RuntimeSlot);
+    EXPECT_TRUE(Runtime);
+    if (!Runtime)
+      return;
+    auto Call = HighExpr::makeCall(
+        "swift_getSingletonMetadata", CallAddress,
+        {HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar),
+         HighExpr::makeConst(LocalDescriptor, 8,
+                             ConstantAddressProvenance::DataAddress)});
+    Call->Type = Runtime->Signature.ReturnType;
+    Call->SourceCallHint =
+        std::make_shared<SourceCallTypeHint>(std::move(*Runtime));
+    Function = {};
+    Function.Entry = CallAddress;
+    Function.ReturnType = Call->Type;
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = std::move(Call);
+    Function.Body = {std::move(Return)};
+  }
+};
+
+TEST(ObjCSourceBindings,
+     SwiftSingletonMetadataBindsExportedNominalDescriptorAddress) {
+  SwiftSingletonDescriptorFixture F;
+  EXPECT_TRUE(F.Image.isCodeAddress(F.CallAddress));
+  EXPECT_TRUE(objc_binding_detail::swiftNominalDescriptorAddressHint(
+      F.Image, F.LocalDescriptor));
+  ASSERT_TRUE(F.Function.Body[0].RetVal->SourceCallHint);
+  EXPECT_EQ(F.Function.Body[0].RetVal->SourceCallHint->TargetName,
+            "swift_getSingletonMetadata");
+  EXPECT_EQ(objc_binding_detail::constantAddress(
+                *F.Function.Body[0].RetVal->Operands[1]),
+            F.LocalDescriptor);
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftNominalDescriptors.size(), 1U);
+  EXPECT_EQ(Result.SwiftNominalDescriptors.at(F.LocalDescriptor),
+            "_$s7WMFData24WMFFeatureConfigResponseVMn");
+  const auto Call = Result.Function.Body[0].RetVal;
+  ASSERT_EQ(Call->Operands.size(), 2U);
+  const auto Descriptor = Call->Operands[1];
+  ASSERT_TRUE(Descriptor->SourceCallHint);
+  EXPECT_EQ(Descriptor->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftNominalDescriptorAddress);
+  EXPECT_TRUE(objcSourceCallBound(*Descriptor, F.Image, {}));
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftNominalDescriptorHelpers(
+      F.Image, Result.SwiftNominalDescriptors, Helpers);
+  EXPECT_NE(
+      Source.find("__asm__(\"_$s7WMFData24WMFFeatureConfigResponseVMn\")"),
+      std::string::npos);
+  EXPECT_NE(Source.find("neverd_swift_nominal_descriptor_4020_address"),
+            std::string::npos);
+  F.Image.Exports.clear();
+  EXPECT_FALSE(objcSourceCallBound(*Descriptor, F.Image, {}));
+  EXPECT_THROW(renderObjCSwiftNominalDescriptorHelpers(
+                   F.Image, Result.SwiftNominalDescriptors, Helpers),
+               std::runtime_error);
+}
+
+TEST(ObjCSourceBindings, SwiftSingletonMetadataRejectsForgedProvider) {
+  SwiftSingletonDescriptorFixture F;
+  F.Image.DyldBindSlots[F.RuntimeSlot].Module = "/tmp/foreign.dylib";
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_TRUE(Result.SwiftNominalDescriptors.empty());
+}
+
 TEST(ObjCSourceBindings,
      SwiftConcreteTypeMetadataPairsRebuildFreshCacheAndRelativeReference) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})

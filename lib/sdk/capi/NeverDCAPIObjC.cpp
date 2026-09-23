@@ -633,6 +633,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       std::map<va_t, uint64_t> LocalStorageExtents;
       std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
           SwiftTypeMetadataPairs;
+      std::map<va_t, std::string> SwiftNominalDescriptors;
       std::map<va_t, va_t> SwiftWitnessCaches;
       std::set<va_t> SwiftOnceAccessors;
       std::set<va_t> ProfileSections;
@@ -662,6 +663,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           if (!Added && It->second != Pair)
             throw std::runtime_error(
                 "conflicting Swift type metadata source pairs");
+        }
+        for (const auto &[Address, Symbol] :
+             Projections.at(Entry).SwiftNominalDescriptors) {
+          const auto [It, Added] =
+              SwiftNominalDescriptors.emplace(Address, Symbol);
+          if (!Added && It->second != Symbol)
+            throw std::runtime_error(
+                "conflicting Swift nominal descriptor identities");
         }
         for (const auto &[Address, Accessor] :
              Projections.at(Entry).SwiftWitnessCaches) {
@@ -733,6 +742,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                         SharedStorageFunctions) +
           renderObjCSwiftTypeMetadataHelpers(S->Img, SwiftTypeMetadataPairs,
                                              SharedStorageFunctions) +
+          renderObjCSwiftNominalDescriptorHelpers(
+              S->Img, SwiftNominalDescriptors, SharedStorageFunctions) +
           renderObjCSwiftWitnessCacheHelpers(
               S->Img, SwiftWitnessCaches, Functions, SharedStorageFunctions) +
           renderSwiftOnceAddressorHelpers(S->Img, SwiftOnceAccessors, OncePlan,

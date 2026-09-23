@@ -115,6 +115,9 @@ struct SourceCallTypeHint {
     /// The pair is a fresh zero cache plus a rebuilt relative mangled-name
     /// record; no initialized metadata pointer from the loaded image is copied.
     RuntimeSwiftTypeMetadataAddress,
+    /// The address of one uniquely exported, read-only Swift nominal type
+    /// descriptor passed to an authenticated singleton-metadata runtime call.
+    RuntimeSwiftNominalDescriptorAddress,
     /// The zero-initialized pointer cache of a compiler-emitted Swift lazy
     /// witness-table accessor. The containing accessor proves the exact
     /// swift_getWitnessTable call, external descriptor/metadata identities,

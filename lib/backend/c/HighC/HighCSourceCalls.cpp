@@ -311,6 +311,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeMetaclassReferenceAddress ||
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftNominalDescriptorAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor ||
       Hint.CallKind == Kind::RuntimeSwiftOnceAccessor ||
@@ -443,8 +444,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
               (Hint.TargetAddress == Hint.SwiftTypeMetadata->CacheAddress
                    ? "_cache_address()"
                    : "_reference_address()");
-    } else if (Hint.CallKind ==
-               Kind::RuntimeSwiftWitnessCacheAddress) {
+    } else if (Hint.CallKind == Kind::RuntimeSwiftNominalDescriptorAddress) {
+      if (!Hint.TargetAddress || Hint.TargetName.empty() || Hint.ByteCount)
+        return bad("Swift nominal descriptor has no source identity");
+      Value = "neverd_swift_nominal_descriptor_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress) {
       if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
         return bad("Swift witness cache has no complete identity");
       Value = "neverd_swift_witness_cache_" +
