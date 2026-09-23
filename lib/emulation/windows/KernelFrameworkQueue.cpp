@@ -33,6 +33,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
       Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
       Name != "WdfIoQueueStopSynchronously" && Name != "WdfIoQueueDrain" &&
+      Name != "WdfIoQueueStopAndPurge" &&
+      Name != "WdfIoQueueStopAndPurgeSynchronously" &&
       Name != "WdfIoQueueDrainSynchronously" && Name != "WdfIoQueuePurge" &&
       Name != "WdfIoQueuePurgeSynchronously" &&
       Name != "WdfIoQueueRetrieveNextRequest")
@@ -49,6 +51,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
 
   if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
       Name == "WdfIoQueueStopSynchronously" || Name == "WdfIoQueueStart" ||
+      Name == "WdfIoQueueStopAndPurge" ||
+      Name == "WdfIoQueueStopAndPurgeSynchronously" ||
       Name == "WdfIoQueueDrain" || Name == "WdfIoQueueDrainSynchronously" ||
       Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously") {
     auto Q = Queues.find(A[1]);
@@ -59,6 +63,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         return invalidQueue("queue has a pending drain-completion callback");
       if (Name == "WdfIoQueueStop" && A[2] && Q->second.StopComplete)
         return invalidQueue("queue already has a stop-completion callback");
+      Q->second.Accepting = true;
       Q->second.Dispatching = false;
       if (Name == "WdfIoQueueStop" && A[2]) {
         Q->second.StopComplete = A[2];
@@ -97,7 +102,13 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       }
       return std::optional<uint64_t>{0};
     }
-    if (Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously") {
+    if (Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously" ||
+        Name == "WdfIoQueueStopAndPurge" ||
+        Name == "WdfIoQueueStopAndPurgeSynchronously") {
+      const bool StopAndPurge = Name == "WdfIoQueueStopAndPurge" ||
+                                Name == "WdfIoQueueStopAndPurgeSynchronously";
+      const bool Asynchronous =
+          Name == "WdfIoQueuePurge" || Name == "WdfIoQueueStopAndPurge";
       if (Q->second.DrainComplete || Q->second.StopComplete)
         return invalidQueue("queue already has a state-completion callback");
       if (PendingCall)
@@ -152,12 +163,19 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Q->second.Pending.clear();
       for (uint64_t Handle : Cancellable)
         Steps.push_back({StepKind::PurgeCancelRequest, Handle});
-      Q->second.Accepting = false;
-      if (Name == "WdfIoQueuePurge" && A[2]) {
-        Q->second.DrainComplete = A[2];
-        Q->second.DrainContext = A[3];
+      Q->second.Accepting = StopAndPurge;
+      if (StopAndPurge)
+        Q->second.Dispatching = false;
+      if (Asynchronous && A[2]) {
+        if (StopAndPurge) {
+          Q->second.StopComplete = A[2];
+          Q->second.StopContext = A[3];
+        } else {
+          Q->second.DrainComplete = A[2];
+          Q->second.DrainContext = A[3];
+        }
       }
-      if (!Steps.empty() || (Name == "WdfIoQueuePurge" && A[2])) {
+      if (!Steps.empty() || (Asynchronous && A[2])) {
         auto Result = start(std::move(Steps));
         if (!Result)
           return Result.takeError();

@@ -167,22 +167,25 @@ llvm::Expected<uint64_t> KernelModel::call(
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "cannot replace a pending WDM guest callback");
   const bool StopSync = Export.Name == "WdfIoQueueStopSynchronously";
+  const bool StopPurgeSync =
+      Export.Name == "WdfIoQueueStopAndPurgeSynchronously";
   const bool EmptySync = Export.Name == "WdfIoQueueDrainSynchronously" ||
                          Export.Name == "WdfIoQueuePurgeSynchronously";
-  if ((StopSync || EmptySync) && PendingWait)
+  if ((StopSync || StopPurgeSync || EmptySync) && PendingWait)
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "previous deferred wait was not consumed");
   auto Result = Framework->call(Export, Arguments, CurrentIRQL);
   if (!Result)
     return Result.takeError();
-  if (StopSync || EmptySync) {
+  if (StopSync || StopPurgeSync || EmptySync) {
     auto Ready = Framework->queueWaitReady(Arguments[1], EmptySync);
     if (!Ready)
       return Ready.takeError();
     if (!*Ready) {
       Wait Pending;
-      Pending.Type = StopSync ? Wait::Kind::FrameworkQueueStop
-                              : Wait::Kind::FrameworkQueueEmpty;
+      Pending.Type = StopSync || StopPurgeSync
+                         ? Wait::Kind::FrameworkQueueStop
+                         : Wait::Kind::FrameworkQueueEmpty;
       Pending.Object = Arguments[1];
       Pending.Execution = CurrentExecution;
       Pending.IRQL = CurrentIRQL;
