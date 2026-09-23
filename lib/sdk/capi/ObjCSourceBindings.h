@@ -3834,26 +3834,78 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
             Expected->SelectorReferenceAddress ||
         !objc_projection_detail::sameHint(Hint, Expected->Signature))
       return false;
-    const auto ObjectIdentity =
-        [&](const ExprPtr &Input) -> std::optional<va_t> {
-      auto Value = Input;
-      unsigned Depth = 0;
-      while (
-          Value && Depth++ < 64 && Value->Type && Value->Type->Size == 8 &&
-          (Value->Type->Kind == NdTypeKind::Int ||
-           Value->Type->Kind == NdTypeKind::Ptr) &&
-          Value->Operands.size() == 1 &&
-          (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast)) {
+    VarKeyMap<std::vector<ExprPtr>> Definitions;
+    if (ContainingFunction)
+      walkStmts(ContainingFunction->Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
+            Statement.Val &&
+            (Statement.Dst->Kind == ExprKind::Var ||
+             Statement.Dst->Kind == ExprKind::Phi))
+          Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+      });
+    size_t ObjectBudget = 4096;
+    std::set<VarKey> ActiveObjects;
+    const auto GlobalAddress = [&](auto &&Self, const ExprPtr &Value,
+                                   size_t &Budget, std::set<VarKey> &Active,
+                                   unsigned Depth = 0) -> std::optional<va_t> {
+      if (!Value || !Budget-- || Depth > 64 || !Value->Type ||
+          Value->Type->Size < 8 || Value->Type->Size > 16 ||
+          (Value->Type->Kind != NdTypeKind::Int &&
+           Value->Type->Kind != NdTypeKind::Ptr) ||
+          Value->IntrinsicId != Intrinsic::None ||
+          !Value->IntrinsicOutputs.empty() ||
+          Value->MemoryOrdering != NdMemoryOrdering::None ||
+          Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return std::nullopt;
+      if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
+          Value->SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress &&
+          darwinDeclaredSourceDataObject(
+              Image, Value->SourceCallHint->TargetAddress) &&
+          objcSourceCallBound(*Value, Image, Functions))
+        return Value->SourceCallHint->TargetAddress;
+      if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+          Value->Operands.size() == 1) {
         if ((Value->CastTo && !equalSourceTypes(Value->Type, Value->CastTo)) ||
             (Value->Kind == ExprKind::BitCast &&
              (!Value->Operands[0] || !Value->Operands[0]->Type ||
-              Value->Operands[0]->Type->Size != 8)))
+              Value->Operands[0]->Type->Size != Value->Type->Size)))
           return std::nullopt;
-        Value = Value->Operands.front();
+        return Self(Self, Value->Operands.front(), Budget, Active, Depth + 1);
       }
-      if (!Value || !Value->Type || Value->Type->Size != 8 ||
+      if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
+        return std::nullopt;
+      const auto Key = varKey(Value->Var);
+      if (!Active.insert(Key).second)
+        return std::nullopt;
+      const auto Found = Definitions.find(Key);
+      std::optional<va_t> Result;
+      bool Valid = Found != Definitions.end() && !Found->second.empty();
+      if (Valid)
+        for (const auto &Definition : Found->second) {
+          const auto Candidate =
+              Self(Self, Definition, Budget, Active, Depth + 1);
+          if (!Candidate || (Result && *Result != *Candidate)) {
+            Valid = false;
+            break;
+          }
+          Result = *Candidate;
+        }
+      Active.erase(Key);
+      if (Valid)
+        return Result;
+      return std::nullopt;
+    };
+    const auto ObjectIdentity = [&](auto &&Self, const ExprPtr &Value,
+                                    unsigned Depth = 0) -> std::optional<va_t> {
+      if (!Value || !ObjectBudget-- || Depth > 64 || !Value->Type ||
+          Value->Type->Size < 8 || Value->Type->Size > 16 ||
           (Value->Type->Kind != NdTypeKind::Int &&
-           Value->Type->Kind != NdTypeKind::Ptr))
+           Value->Type->Kind != NdTypeKind::Ptr) ||
+          Value->IntrinsicId != Intrinsic::None ||
+          !Value->IntrinsicOutputs.empty() ||
+          Value->MemoryOrdering != NdMemoryOrdering::None ||
+          Value->MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return std::nullopt;
       if (Value->Kind == ExprKind::Const &&
           (!Value->ConstVal || readObjCConstantString(Image, Value->ConstVal)))
@@ -3865,15 +3917,41 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
         return Value->SourceCallHint->TargetAddress;
       if (Value->Kind == ExprKind::Load && Value->Operands.size() == 1) {
         const auto &Address = Value->Operands.front();
-        if (Address && Address->Kind == ExprKind::Call &&
-            Address->SourceCallHint &&
-            Address->SourceCallHint->CallKind ==
-                SourceCallTypeHint::Kind::DarwinRuntimeGlobalAddress &&
-            darwinDeclaredSourceDataObject(
-                Image, Address->SourceCallHint->TargetAddress) &&
-            objcSourceCallBound(*Address, Image, Functions))
-          return Address->SourceCallHint->TargetAddress;
+        size_t AddressBudget = 4096;
+        std::set<VarKey> ActiveAddresses;
+        if (const auto Storage = GlobalAddress(GlobalAddress, Address,
+                                               AddressBudget, ActiveAddresses))
+          return Storage;
       }
+      if ((Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast) &&
+          Value->Operands.size() == 1) {
+        if ((Value->CastTo && !equalSourceTypes(Value->Type, Value->CastTo)) ||
+            (Value->Kind == ExprKind::BitCast &&
+             (!Value->Operands[0] || !Value->Operands[0]->Type ||
+              Value->Operands[0]->Type->Size != Value->Type->Size)))
+          return std::nullopt;
+        return Self(Self, Value->Operands.front(), Depth + 1);
+      }
+      if (Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Phi)
+        return std::nullopt;
+      const auto Key = varKey(Value->Var);
+      if (!ActiveObjects.insert(Key).second)
+        return std::nullopt;
+      const auto Found = Definitions.find(Key);
+      std::optional<va_t> Result;
+      bool Valid = Found != Definitions.end() && !Found->second.empty();
+      if (Valid)
+        for (const auto &Definition : Found->second) {
+          const auto Candidate = Self(Self, Definition, Depth + 1);
+          if (!Candidate || (Result && *Result != *Candidate)) {
+            Valid = false;
+            break;
+          }
+          Result = *Candidate;
+        }
+      ActiveObjects.erase(Key);
+      if (Valid)
+        return Result;
       return std::nullopt;
     };
     const auto Query = [&](const HighExpr &Value) {
@@ -3887,19 +3965,13 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
              objcSourceCallBound(Value, Image, Functions);
     };
     const auto StackLoads =
-        ContainingFunction
-            ? sentinelPrivateStackLoads(*ContainingFunction, Expression,
-                                        ObjectIdentity, Query)
-            : std::map<const HighExpr *, va_t>{};
-    VarKeyMap<std::vector<ExprPtr>> Definitions;
-    if (ContainingFunction)
-      walkStmts(ContainingFunction->Body, [&](const HighStmt &Statement) {
-        if (Statement.Kind == StmtKind::Assign && Statement.Dst &&
-            Statement.Val &&
-            (Statement.Dst->Kind == ExprKind::Var ||
-             Statement.Dst->Kind == ExprKind::Phi))
-          Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
-      });
+        ContainingFunction ? sentinelPrivateStackLoads(
+                                 *ContainingFunction, Expression,
+                                 [&](const ExprPtr &Value) {
+                                   return ObjectIdentity(ObjectIdentity, Value);
+                                 },
+                                 Query)
+                           : std::map<const HighExpr *, va_t>{};
     enum class Identity { Object, Class, Selector };
     size_t Budget = 4096;
     std::set<VarKey> Active;
@@ -3917,11 +3989,13 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
                 Value->Type->Kind == NdTypeKind::Ptr) &&
                (Value->Type->Size == 8 ||
                 (!Address && Value->Type->Size && Value->Type->Size < 8));
-      if (Value->Type->Size != 8 || (Value->Type->Kind != NdTypeKind::Int &&
-                                     Value->Type->Kind != NdTypeKind::Ptr))
+      if (Value->Type->Size < 8 || Value->Type->Size > 16 ||
+          (Value->Type->Kind != NdTypeKind::Int &&
+           Value->Type->Kind != NdTypeKind::Ptr))
         return false;
       if (Value->Kind == ExprKind::Load) {
-        if (Kind == Identity::Object && ObjectIdentity(Value) == Address)
+        if (Kind == Identity::Object &&
+            ObjectIdentity(ObjectIdentity, Value) == Address)
           return true;
         const auto Load = StackLoads.find(Value.get());
         return Kind == Identity::Object && Load != StackLoads.end() &&

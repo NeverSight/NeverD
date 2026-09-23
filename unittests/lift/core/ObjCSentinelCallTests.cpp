@@ -267,6 +267,100 @@ TEST(ObjCSentinelCalls, AcceptsCompilerDeclaredExternalObjectValues) {
                                         &Function));
 }
 
+TEST(ObjCSentinelCalls, RevalidatesWideLoadsAndPostCallFrameHomes) {
+  Fixture F;
+  F.addWebKitObjectImports();
+  const auto Hint = objcSelectorStubSentinelSourceCallHint(
+      F.Image, 0x1100, F.Receiver, {0x4a00, 0x4a08});
+  ASSERT_TRUE(Hint);
+  const auto Word = NdType::makeInt(8, false);
+  const auto Wide = NdType::makeInt(16, false);
+  const auto Storage = [&](va_t Address) {
+    const auto Source = darwinRuntimeGlobalAddressHint(F.Image, Address);
+    EXPECT_TRUE(Source);
+    auto Value = HighExpr::makeCall("", 0, {});
+    Value->Type = Source->Signature.ReturnType;
+    Value->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Source);
+    return Value;
+  };
+  const auto Variable = [&](unsigned Id, const TypeRef &Type) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = Id;
+    Value.Size = Type->Size;
+    return HighExpr::makeVar(Value, Type);
+  };
+  const auto Assign = [&](const ExprPtr &Destination, const ExprPtr &Value) {
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Assign;
+    Statement.Dst = Destination;
+    Statement.Val = Value;
+    return Statement;
+  };
+
+  HighFunc Function;
+  Function.FrameSize = 48;
+  MedVar Stack;
+  Stack.Kind = MedVar::Reg;
+  Stack.RegOff = a64reg::SP;
+  Stack.Id = 100;
+  Stack.Size = 8;
+  auto Frame = HighExpr::makeVar(Stack, Word);
+  const auto Address = [&](unsigned Offset) {
+    return HighExpr::makeBinop(NdOp::INT_SUB, Frame,
+                               HighExpr::makeConst(Offset, 8));
+  };
+  auto FirstAddress = Variable(101, Word);
+  auto FirstObject = Variable(102, Wide);
+  auto TailAddress = Variable(103, Word);
+  auto TailObject = Variable(104, Wide);
+  auto Tail = Variable(105, Wide);
+  auto Nil = Variable(106, Wide);
+
+  HighStmt Unrelated;
+  Unrelated.Kind = StmtKind::Call;
+  Unrelated.CallExpr =
+      HighExpr::makeCall("unrelated", 0x1180, {HighExpr::makeConst(1, 8)});
+  Unrelated.CallExpr->Type.reset();
+  HighStmt StoreTail;
+  StoreTail.Kind = StmtKind::Store;
+  StoreTail.StoreAddr = Address(32);
+  StoreTail.StoreVal = TailObject;
+  HighStmt StoreNil;
+  StoreNil.Kind = StmtKind::Store;
+  StoreNil.StoreAddr = Address(16);
+  StoreNil.StoreVal = HighExpr::makeConst(0, 8);
+
+  auto Call = expression(*Hint);
+  Call->Operands[2] = FirstObject;
+  Call->Operands[3] = Tail;
+  Call->Operands[4] = Nil;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  Function.Body = {
+      Unrelated,
+      Assign(FirstAddress, Storage(0x4a00)),
+      Assign(FirstObject, HighExpr::makeLoad(FirstAddress, Wide)),
+      Assign(TailAddress, Storage(0x4a08)),
+      Assign(TailObject, HighExpr::makeLoad(TailAddress, Wide)),
+      StoreTail,
+      StoreNil,
+      Assign(Tail, HighExpr::makeLoad(Address(32), Wide)),
+      Assign(Nil, HighExpr::makeLoad(Address(16), Wide)),
+      Return,
+  };
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Call, F.Image, {}, nullptr, nullptr,
+                                       &Function));
+
+  // Any call after the homes were written can reuse outgoing argument words.
+  // The validator must discard the old identities rather than carry them to
+  // the sentinel call.
+  Function.Body.insert(Function.Body.begin() + 7, Unrelated);
+  EXPECT_FALSE(sdk::objcSourceCallBound(*Call, F.Image, {}, nullptr, nullptr,
+                                        &Function));
+}
+
 TEST(ObjCSentinelCalls,
      FirstNilNeedsNoStackAndStopsBeforeUnknownTrailingSlots) {
   Fixture F;

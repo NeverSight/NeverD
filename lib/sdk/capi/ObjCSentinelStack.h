@@ -40,7 +40,7 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
   };
   const auto Read = [&](auto &&Self, const ExprPtr &Value,
                         unsigned Depth) -> bool {
-    if (!Value || !Budget || Depth > 64 || !Value->Type ||
+    if (!Value || !Budget || Depth > 64 ||
         Value->IntrinsicId != Intrinsic::None ||
         !Value->IntrinsicOutputs.empty() ||
         Value->MemoryOrdering != NdMemoryOrdering::None ||
@@ -48,13 +48,14 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
       return false;
     --Budget;
     if (Value->Kind == ExprKind::Load) {
-      if (Value->Type->Size != 8 || Value->Operands.size() != 1)
+      if (!Value->Type || Value->Type->Size < 8 || Value->Type->Size > 16 ||
+          Value->Operands.size() != 1)
         return false;
       // A compiler-declared external Objective-C object value is already a
       // complete object identity; only private-frame loads use the slot map.
       if (Identify(Value))
         return Self(Self, Value->Operands.front(), Depth + 1);
-      const auto Offset = Address(Value->Operands[0], 8);
+      const auto Offset = Address(Value->Operands[0], Value->Type->Size);
       if (!Offset)
         return false;
       const auto Slot = Slots.find(*Offset);
@@ -73,8 +74,13 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
       if (Value.get() == &Call) {
         if (++Calls != 1)
           return false;
-      } else {
-        return Value->Operands.empty() && Query(*Value);
+      } else if (!Value->Operands.empty() || !Query(*Value)) {
+        // A call that cannot receive a private-frame address cannot mutate
+        // that storage. It can still clobber outgoing argument words, so
+        // discard every earlier slot identity and continue validating its
+        // operands for an address escape. Stores after the call may establish
+        // fresh identities for the target sentinel call.
+        Slots.clear();
       }
     } else if (Value->Kind != ExprKind::Const &&
                Value->Kind != ExprKind::Cast &&
@@ -108,7 +114,7 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
           It = Slots.erase(It);
         else
           ++It;
-      if (Bytes == 8)
+      if (Bytes >= 8 && Bytes <= 16)
         if (const auto Object = Identify(Statement.StoreVal))
           Slots.emplace(*Offset, *Object);
     } else if (Statement.Kind == StmtKind::Assign) {
@@ -130,6 +136,12 @@ sentinelPrivateStackLoads(const HighFunc &Function, const HighExpr &Call,
       } else if (!Read(Read, Statement.Val, 0)) {
         return {};
       }
+    } else if (Statement.Kind == StmtKind::ExprStmt) {
+      if (!Read(Read, Statement.Val, 0))
+        return {};
+    } else if (Statement.Kind == StmtKind::Call) {
+      if (!Read(Read, Statement.CallExpr, 0))
+        return {};
     } else if (Statement.Kind == StmtKind::Return) {
       if (!Read(Read, Statement.RetVal, 0))
         return {};
