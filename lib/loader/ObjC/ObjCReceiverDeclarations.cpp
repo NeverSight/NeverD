@@ -65,13 +65,30 @@ Catalog buildCatalog(Arch Architecture) {
         .push_back({std::move(Signature), A64 ? ArmClass : X64Class,
                     A64 ? ArmSelf : X64Self});
   };
+  auto AddOutParameter = [&](const char *Provider, const char *Modules,
+                             const char *Kind, const char *Name,
+                             const char *Category, bool ClassMethod,
+                             const char *Selector, unsigned Parameter,
+                             const char *ArmClass, const char *X64Class) {
+    const char *Class = Architecture == Arch::AArch64 ? ArmClass : X64Class;
+    if (!Class || !*Class)
+      return;
+    auto &Framework = Result[Provider];
+    Framework.Modules = Modules;
+    auto &Members = Framework.Owners[{Kind, Name, Category}]
+                        .Members[{ClassMethod, Selector}];
+    for (auto &Member : Members)
+      Member.OutParameterClasses[Parameter] = Class;
+  };
   static constexpr struct {
     const char *Provider, *Modules, *Kind, *Name, *Category, *Arm, *X64;
   } Owners[] = {
 #define ND_OBJC_OWNER(...) {__VA_ARGS__},
 #define ND_OBJC_MEMBER(...)
+#define ND_OBJC_OUT_PARAMETER(...)
 #include "ObjCIOSReceiverDeclarations.inc"
 #include "ObjCReceiverDeclarations.inc"
+#undef ND_OBJC_OUT_PARAMETER
 #undef ND_OBJC_MEMBER
 #undef ND_OBJC_OWNER
   };
@@ -85,8 +102,26 @@ Catalog buildCatalog(Arch Architecture) {
   } Members[] = {
 #define ND_OBJC_OWNER(...)
 #define ND_OBJC_MEMBER(...) {__VA_ARGS__},
+#define ND_OBJC_OUT_PARAMETER(...)
 #include "ObjCIOSReceiverDeclarations.inc"
 #include "ObjCReceiverDeclarations.inc"
+#undef ND_OBJC_OUT_PARAMETER
+#undef ND_OBJC_MEMBER
+#undef ND_OBJC_OWNER
+  };
+  static constexpr struct {
+    const char *Provider, *Modules, *Kind, *Name, *Category;
+    bool ClassMethod;
+    const char *Selector;
+    unsigned Parameter;
+    const char *ArmClass, *X64Class;
+  } OutParameters[] = {
+#define ND_OBJC_OWNER(...)
+#define ND_OBJC_MEMBER(...)
+#define ND_OBJC_OUT_PARAMETER(...) {__VA_ARGS__},
+#include "ObjCIOSReceiverDeclarations.inc"
+#include "ObjCReceiverDeclarations.inc"
+#undef ND_OBJC_OUT_PARAMETER
 #undef ND_OBJC_MEMBER
 #undef ND_OBJC_OWNER
   };
@@ -96,6 +131,10 @@ Catalog buildCatalog(Arch Architecture) {
     AddMember(D.Provider, D.Modules, D.Kind, D.Name, D.Category, D.ClassMethod,
               D.Selector, D.Arm, D.ArmClass, D.ArmSelf, D.X64, D.X64Class,
               D.X64Self);
+  for (const auto &D : OutParameters)
+    AddOutParameter(D.Provider, D.Modules, D.Kind, D.Name, D.Category,
+                    D.ClassMethod, D.Selector, D.Parameter, D.ArmClass,
+                    D.X64Class);
   return Result;
 }
 
@@ -221,5 +260,33 @@ std::vector<std::string> sdkReceiverSubclasses(const BinaryImage &Image,
     }
   }
   return Result;
+}
+
+std::optional<std::string>
+sdkSelectorOutParameterClass(const BinaryImage &Image, llvm::StringRef Selector,
+                             unsigned Parameter) {
+  const auto *Catalog = catalog(Image.Arch);
+  if (!Catalog || Selector.empty())
+    return std::nullopt;
+  std::optional<std::string> Result;
+  bool Seen = false;
+  for (const auto &[Provider, Framework] : *Catalog) {
+    if (!active(Image, Framework.Modules))
+      continue;
+    for (const auto &[Key, Owner] : Framework.Owners)
+      for (const auto &[MemberKey, Members] : Owner.Members) {
+        if (MemberKey.second != Selector)
+          continue;
+        for (const auto &Member : Members) {
+          Seen = true;
+          const auto Found = Member.OutParameterClasses.find(Parameter);
+          if (!Member.Signature || Found == Member.OutParameterClasses.end() ||
+              Found->second.empty() || (Result && *Result != Found->second))
+            return std::nullopt;
+          Result = Found->second;
+        }
+      }
+  }
+  return Seen ? Result : std::nullopt;
 }
 } // namespace neverd::objc

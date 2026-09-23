@@ -38,10 +38,39 @@ class ReceiverDeclarations(FrameworkDeclarations):
         self.bind("clang_getCursorDefinition", CXCursor, CXCursor)
         self.bind("clang_isCursorDefinition", ctypes.c_uint, CXCursor)
         self.bind("clang_getCursorResultType", CXType, CXCursor)
+        self.bind("clang_Cursor_getNumArguments", ctypes.c_int, CXCursor)
+        self.bind("clang_Cursor_getArgument", CXCursor, CXCursor, ctypes.c_uint)
+        self.bind("clang_getCursorType", CXType, CXCursor)
         self.bind("clang_getCanonicalType", CXType, CXType)
         self.bind("clang_getPointeeType", CXType, CXType)
         self.bind("clang_getTypeDeclaration", CXCursor, CXType)
         self.bind("clang_getTypeSpelling", CXString, CXType)
+
+    def object_pointer_parameter_classes(self, cursor):
+        result = []
+        count = self.clang_Cursor_getNumArguments(cursor)
+        if count < 0:
+            return ()
+        for index in range(count):
+            argument = self.clang_Cursor_getArgument(cursor, index)
+            canonical = self.clang_getCanonicalType(
+                self.clang_getCursorType(argument))
+            if canonical.kind != 101:  # CXType_Pointer
+                continue
+            pointee = self.clang_getCanonicalType(
+                self.clang_getPointeeType(canonical))
+            if pointee.kind != 109:  # CXType_ObjCObjectPointer
+                continue
+            declaration = self.clang_getTypeDeclaration(
+                self.clang_getPointeeType(pointee))
+            if declaration.kind != 11:
+                continue
+            name = self.string(self.clang_getCursorSpelling(declaration))
+            if name:
+                # Source signatures include self and _cmd before explicit
+                # Objective-C method arguments.
+                result.append((index + 2, name))
+        return tuple(result)
 
     def eligible(self, cursor):
         if self.include_dependencies:
@@ -125,7 +154,8 @@ class ReceiverDeclarations(FrameworkDeclarations):
             if declaration.kind == 11:
                 return_class = self.string(self.clang_getCursorSpelling(declaration))
         self.methods.add((*owner[:3], cursor.kind == 17, selector, encoding,
-                          return_class, spelling == "instancetype"))
+                          return_class, spelling == "instancetype",
+                          self.object_pointer_parameter_classes(cursor)))
         return selector, encoding
 
     def extract_owned(self, source, sdk, target, extra_arguments=()):
@@ -148,9 +178,19 @@ def owner_profiles(profile):
 
 def method_profiles(profile):
     result = {}
-    for *identity, encoding, return_class, return_self in profile["methods"]:
+    for record in profile["methods"]:
+        *identity, encoding, return_class, return_self, parameters = record
         result.setdefault(tuple(identity), set()).add(
-            (encoding, return_class, return_self))
+            (encoding, return_class, return_self, tuple(parameters)))
+    return result
+
+
+def parameter_profiles(profile):
+    result = {}
+    for record in profile["methods"]:
+        *identity, encoding, return_class, return_self, parameters = record
+        for index, class_name in parameters:
+            result.setdefault((*identity, index), set()).add(class_name)
     return result
 
 
@@ -179,6 +219,13 @@ def common_methods(first, second, identity):
     return result
 
 
+def common_parameter(first, second, identity):
+    left, right = first.get(identity), second.get(identity)
+    if not left or not right or left != right or len(left) != 1:
+        return None
+    return next(iter(left))
+
+
 def literal(value):
     return "nullptr" if value is None else json.dumps(value)
 
@@ -197,6 +244,7 @@ def render(frameworks, version, compiler):
             raise ValueError("all four target profiles are required")
         owners = [owner_profiles(profile) for profile in profiles]
         methods = [method_profiles(profile) for profile in profiles]
+        parameters = [parameter_profiles(profile) for profile in profiles]
         for identity in sorted(set().union(*owners)):
             arm = common_owner(owners[0], owners[1], identity)
             x64 = common_owner(owners[2], owners[3], identity)
@@ -214,6 +262,14 @@ def render(frameworks, version, compiler):
                           *arm[min(index, len(arm) - 1)],
                           *x64[min(index, len(x64) - 1)])
                 lines.append("ND_OBJC_MEMBER(" + ", ".join(map(literal, values)) + ")")
+        for identity in sorted(set().union(*parameters)):
+            arm = common_parameter(parameters[0], parameters[1], identity)
+            x64 = common_parameter(parameters[2], parameters[3], identity)
+            if arm is None and x64 is None:
+                continue
+            values = (framework, modules, *identity, arm, x64)
+            lines.append("ND_OBJC_OUT_PARAMETER(" +
+                         ", ".join(map(literal, values)) + ")")
     return "\n".join(lines + ["// clang-format on", ""])
 
 

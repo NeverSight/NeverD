@@ -11,9 +11,11 @@ namespace neverd {
 
 /// Source receiver provenance carried through full-width machine copies.
 /// Method self has a declared base class; an exact class reference denotes
-/// that class object. Neither fact selects a dynamic method implementation.
+/// that class object. An out-parameter root records compiler-declared pointee
+/// classes from every reaching SDK call. No fact selects a dynamic method
+/// implementation.
 struct ObjCReceiverTypeHint {
-  enum class OriginKind { MethodEntry, ClassReference };
+  enum class OriginKind { MethodEntry, ClassReference, OutParameter };
   OriginKind Origin = OriginKind::MethodEntry;
   va_t Address = 0;
   /// Root receiver's declared class, before any type steps.
@@ -44,10 +46,28 @@ struct ObjCReceiverTypeHint {
   /// Neither supplies object identity or permission to remove operations.
   std::vector<TypeStep> Steps;
 
+  struct OutParameterRoot {
+    va_t Address = 0;
+    std::string Selector;
+    unsigned Parameter = 0;
+    bool operator==(const OutParameterRoot &Other) const {
+      return Address == Other.Address && Selector == Other.Selector &&
+             Parameter == Other.Parameter;
+    }
+    bool operator<(const OutParameterRoot &Other) const {
+      return std::tie(Address, Selector, Parameter) <
+             std::tie(Other.Address, Other.Selector, Other.Parameter);
+    }
+  };
+  /// For OutParameter roots, each item identifies one authenticated selector
+  /// reference and compiler-declared object-pointer argument reaching a join.
+  std::vector<OutParameterRoot> OutParameters;
+
   bool operator==(const ObjCReceiverTypeHint &Other) const {
     return Origin == Other.Origin && Address == Other.Address &&
            ClassName == Other.ClassName &&
-           IsClassMethod == Other.IsClassMethod && Steps == Other.Steps;
+           IsClassMethod == Other.IsClassMethod && Steps == Other.Steps &&
+           OutParameters == Other.OutParameters;
   }
 };
 

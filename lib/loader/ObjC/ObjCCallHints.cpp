@@ -464,6 +464,14 @@ struct CallFacts {
   // lower spills while ordinary FrameSlots retain the stricter whole-frame
   // escape rule.
   std::map<std::pair<int64_t, unsigned>, Value> TypedFrameSlots;
+  // A compiler-declared T ** argument initialized from nil gives the pointed
+  // frame word a stable Objective-C source type after the call. The value may
+  // change through the escaped pointer, but every conforming write retains T.
+  std::map<std::pair<int64_t, unsigned>, Value> DeclaredObjectFrameSlots;
+  // A direct nil store after the frame has escaped remains exact until the
+  // next call boundary. This lets a following typed out call re-establish its
+  // declared object class without reviving general escaped frame contents.
+  std::set<std::pair<int64_t, unsigned>> FreshNilFrameSlots;
   std::optional<int64_t> EscapedTypedFrameFloor;
   bool TypedFrameFullyEscaped = false;
   // Exact values are must facts. Pointer-derived bytes are may facts: a
@@ -513,12 +521,26 @@ struct CallFacts {
         It = TypedFrameSlots.erase(It);
       else
         ++It;
+    for (auto It = DeclaredObjectFrameSlots.begin();
+         It != DeclaredObjectFrameSlots.end();)
+      if (It->first.first < Offset + Size &&
+          Offset < It->first.first + It->first.second)
+        It = DeclaredObjectFrameSlots.erase(It);
+      else
+        ++It;
+    for (auto It = FreshNilFrameSlots.begin(); It != FreshNilFrameSlots.end();)
+      if (It->first < Offset + Size && Offset < It->first + It->second)
+        It = FreshNilFrameSlots.erase(It);
+      else
+        ++It;
   }
 
   void escapeTypedFrame() {
     TypedFrameFullyEscaped = true;
     EscapedTypedFrameFloor.reset();
     TypedFrameSlots.clear();
+    DeclaredObjectFrameSlots.clear();
+    FreshNilFrameSlots.clear();
   }
 
   void escapeTypedFrameFrom(const std::optional<Value> &Address) {
@@ -527,6 +549,13 @@ struct CallFacts {
       return;
     }
     const auto Offset = static_cast<int64_t>(Address->Number);
+    for (auto It = DeclaredObjectFrameSlots.begin();
+         It != DeclaredObjectFrameSlots.end();)
+      if (It->first.first > INT64_MAX - It->first.second ||
+          It->first.first + static_cast<int64_t>(It->first.second) > Offset)
+        It = DeclaredObjectFrameSlots.erase(It);
+      else
+        ++It;
     if (!EscapedTypedFrameFloor || Offset < *EscapedTypedFrameFloor)
       EscapedTypedFrameFloor = Offset;
     for (auto It = TypedFrameSlots.begin(); It != TypedFrameSlots.end();)
@@ -594,6 +623,45 @@ struct CallFacts {
         ++It;
     }
     FrameBytes.insert(Other.FrameBytes.begin(), Other.FrameBytes.end());
+    for (auto It = FreshNilFrameSlots.begin(); It != FreshNilFrameSlots.end();)
+      if (!Other.FreshNilFrameSlots.count(*It))
+        It = FreshNilFrameSlots.erase(It);
+      else
+        ++It;
+    auto MergeDeclaredObject = [](Value &Left, const Value &Right) {
+      if (Left == Right)
+        return true;
+      if (Left.TheKind != Value::Kind::Receiver ||
+          Right.TheKind != Value::Kind::Receiver || !Left.Object ||
+          !Right.Object ||
+          Left.Object->Origin !=
+              ObjCReceiverTypeHint::OriginKind::OutParameter ||
+          Right.Object->Origin !=
+              ObjCReceiverTypeHint::OriginKind::OutParameter ||
+          Left.Object->ClassName != Right.Object->ClassName ||
+          Left.Object->IsClassMethod != Right.Object->IsClassMethod ||
+          Left.Object->Steps != Right.Object->Steps)
+        return false;
+      auto Roots = Left.Object->OutParameters;
+      Roots.insert(Roots.end(), Right.Object->OutParameters.begin(),
+                   Right.Object->OutParameters.end());
+      llvm::sort(Roots);
+      Roots.erase(std::unique(Roots.begin(), Roots.end()), Roots.end());
+      if (Roots.empty() || Roots.size() > 8)
+        return false;
+      Left.Object->Address = Roots.front().Address;
+      Left.Object->OutParameters = std::move(Roots);
+      return true;
+    };
+    for (auto It = DeclaredObjectFrameSlots.begin();
+         It != DeclaredObjectFrameSlots.end();) {
+      const auto Found = Other.DeclaredObjectFrameSlots.find(It->first);
+      if (Found == Other.DeclaredObjectFrameSlots.end() ||
+          !MergeDeclaredObject(It->second, Found->second))
+        It = DeclaredObjectFrameSlots.erase(It);
+      else
+        ++It;
+    }
     TypedFrameFullyEscaped |= Other.TypedFrameFullyEscaped;
     if (Other.EscapedTypedFrameFloor &&
         (!EscapedTypedFrameFloor ||
@@ -976,7 +1044,9 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
     PreservedBytes.insert(TRI.StackPointer + I);
   using ReceiverKey =
       std::tuple<ObjCReceiverTypeHint::OriginKind, va_t, std::string, bool,
-                 std::vector<ObjCReceiverTypeHint::TypeStep>, std::string>;
+                 std::vector<ObjCReceiverTypeHint::TypeStep>,
+                 std::vector<ObjCReceiverTypeHint::OutParameterRoot>,
+                 std::string>;
   std::map<ReceiverKey, ObjCReceiverDeclaration> ReceiverDeclarations;
   auto Transfer = [&](size_t Index, Facts State,
                       Hints &BlockHints) -> std::optional<Facts> {
@@ -1050,6 +1120,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
     };
     auto Clobber = [&](const SourceFunctionTypeHint *Signature,
                        bool PreserveReceiverRegisters = false) {
+      State.FreshNilFrameSlots.clear();
       const bool KnownABI = Signature && Signature->HasExplicitABI;
       if (!KnownABI) {
         for (const auto &[K, V] : Values) {
@@ -1058,6 +1129,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               (Offset == TRI.StackPointer && Size == 8) ||
               V.TheKind != Value::Kind::Frame)
             continue;
+          State.DeclaredObjectFrameSlots.clear();
           State.escapeTypedFrameFrom(V);
         }
         for (const auto &[Space, Byte] : State.FrameBytes) {
@@ -1520,7 +1592,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
           if (Receiver && Target->Name == "objc_msgSend") {
             auto [It, Inserted] = ReceiverDeclarations.try_emplace(std::tuple{
                 Receiver->Origin, Receiver->Address, Receiver->ClassName,
-                Receiver->IsClassMethod, Receiver->Steps, Target->Selector});
+                Receiver->IsClassMethod, Receiver->Steps,
+                Receiver->OutParameters, Target->Selector});
             if (Inserted)
               It->second = objcReceiverSourceTypeHint(Image, Target->Selector,
                                                       *Receiver);
@@ -1818,6 +1891,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         // every frame address visible to an unknown convention remain private.
         const auto Bound = BlockHints.find(Op.Addr);
         std::optional<ObjCReceiverTypeHint> ReturnedReceiver;
+        std::vector<std::pair<std::pair<int64_t, unsigned>, Value>>
+            OutParameterReceivers;
         if (Bound != BlockHints.end() &&
             Bound->second.CallKind == SourceCallTypeHint::Kind::ObjCMessage &&
             Bound->second.Receiver)
@@ -1828,11 +1903,67 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             Bound->second.Signature.ReturnType &&
             Bound->second.Signature.ReturnType->Kind == NdTypeKind::Ptr)
           ReturnedReceiver = std::move(SuperInitReceiver);
+        if (Bound != BlockHints.end() &&
+            Bound->second.CallKind == SourceCallTypeHint::Kind::ObjCMessage &&
+            Bound->second.SelectorReferenceAddress) {
+          const auto Stack = Read(NdVar::reg(TRI.StackPointer, 8));
+          for (unsigned Parameter = 2;
+               Stack && Stack->TheKind == Value::Kind::Frame &&
+               Parameter < Bound->second.Signature.Parameters.size();
+               ++Parameter) {
+            const auto Class = objcSelectorOutParameterClass(
+                Image, Bound->second.Selector, Parameter);
+            const auto &Location =
+                Bound->second.Signature.Parameters[Parameter].Location;
+            if (!Class ||
+                Location.Kind != SourceABICarrierKind::IntegerRegister ||
+                Location.ValueBytes != 8)
+              continue;
+            const auto Address = Read(NdVar::reg(Location.RegisterOffset, 8));
+            if (!Address || Address->TheKind != Value::Kind::Frame)
+              continue;
+            const auto Offset = static_cast<int64_t>(Address->Number);
+            const auto Initial = State.FrameSlots.find({Offset, 8});
+            const auto Declared =
+                State.DeclaredObjectFrameSlots.find({Offset, 8});
+            const bool InitializedNil =
+                Initial != State.FrameSlots.end() &&
+                Initial->second.TheKind == Value::Kind::Number &&
+                !Initial->second.Number;
+            const bool FreshlyInitializedNil =
+                State.FreshNilFrameSlots.count({Offset, 8});
+            const bool AlreadyDeclared =
+                Declared != State.DeclaredObjectFrameSlots.end() &&
+                Declared->second.TheKind == Value::Kind::Receiver &&
+                Declared->second.Object &&
+                Declared->second.Object->Origin ==
+                    ObjCReceiverTypeHint::OriginKind::OutParameter &&
+                Declared->second.Object->ClassName == *Class;
+            if ((!InitializedNil && !FreshlyInitializedNil &&
+                 !AlreadyDeclared) ||
+                Offset < static_cast<int64_t>(Stack->Number) || Offset > -8)
+              continue;
+            ObjCReceiverTypeHint Receiver;
+            Receiver.Origin = ObjCReceiverTypeHint::OriginKind::OutParameter;
+            Receiver.Address = Bound->second.SelectorReferenceAddress;
+            Receiver.ClassName = *Class;
+            Receiver.OutParameters.push_back(
+                {Bound->second.SelectorReferenceAddress, Bound->second.Selector,
+                 Parameter});
+            OutParameterReceivers.push_back(
+                {{Offset, 8},
+                 Value{Value::Kind::Receiver, 0, {}, std::move(Receiver)}});
+          }
+        }
         const bool AuthenticatedMessageDispatch =
             Target && (Target->Name == "objc_msgSend" ||
                        Target->Name == "objc_msgSendSuper2");
         Clobber(Bound != BlockHints.end() ? &Bound->second.Signature : nullptr,
                 AuthenticatedMessageDispatch);
+        for (auto &[Slot, Fact] : OutParameterReceivers)
+          State.DeclaredObjectFrameSlots[Slot] = std::move(Fact);
+        if (State.DeclaredObjectFrameSlots.size() > 4096)
+          return std::nullopt;
         if (ReturnedReceiver) {
           const auto &Location = Bound->second.Signature.ReturnLocation;
           if (Location.Kind == SourceABICarrierKind::IntegerRegister &&
@@ -1893,8 +2024,23 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         } else {
           const auto Offset = static_cast<int64_t>(Address->Number);
           const auto Size = Op.Inputs[1].Size;
-          State.invalidateTypedFrameRange(Offset, Size);
           const auto Stored = Read(Op.Inputs[1]);
+          std::optional<Value> NilCompatibleDeclaration;
+          if (Stored && Size == 8 && Stored->TheKind == Value::Kind::Number &&
+              !Stored->Number) {
+            const auto Declared =
+                State.DeclaredObjectFrameSlots.find({Offset, Size});
+            if (Declared != State.DeclaredObjectFrameSlots.end())
+              NilCompatibleDeclaration = Declared->second;
+          }
+          State.invalidateTypedFrameRange(Offset, Size);
+          if (Stored && Size == 8 && Stored->TheKind == Value::Kind::Number &&
+              !Stored->Number &&
+              Offset >= static_cast<int64_t>(Stack->Number) && Offset <= -8)
+            State.FreshNilFrameSlots.emplace(Offset, Size);
+          if (NilCompatibleDeclaration)
+            State.DeclaredObjectFrameSlots[{Offset, Size}] =
+                std::move(*NilCompatibleDeclaration);
           if (Stored && Size == 8 &&
               (Stored->TheKind == Value::Kind::Receiver ||
                Stored->TheKind == Value::Kind::SourceParameter) &&
@@ -1902,7 +2048,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               Offset <= -static_cast<int64_t>(Size) &&
               State.typedFrameRangePrivate(Offset, Size))
             State.TypedFrameSlots[{Offset, Size}] = *Stored;
-          if (State.TypedFrameSlots.size() > 4096)
+          if (State.TypedFrameSlots.size() > 4096 ||
+              State.FreshNilFrameSlots.size() > 4096)
             return std::nullopt;
           if (State.FrameEscaped)
             continue;
@@ -1913,7 +2060,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             State.FrameSlots[{Offset, Size}] = *Stored;
         }
         if (State.FrameSlots.size() > 4096 ||
-            State.TypedFrameSlots.size() > 4096)
+            State.TypedFrameSlots.size() > 4096 ||
+            State.FreshNilFrameSlots.size() > 4096)
           return std::nullopt;
         continue;
       }
@@ -2018,9 +2166,12 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                    PlainMemory) {
           const auto Slot = std::pair{static_cast<int64_t>(Address->Number),
                                       unsigned(Op.Output.Size)};
+          const auto Declared = State.DeclaredObjectFrameSlots.find(Slot);
           const auto Typed = State.TypedFrameSlots.find(Slot);
-          if (Typed != State.TypedFrameSlots.end() &&
-              State.typedFrameRangePrivate(Slot.first, Slot.second))
+          if (Declared != State.DeclaredObjectFrameSlots.end())
+            Out = Declared->second;
+          else if (Typed != State.TypedFrameSlots.end() &&
+                   State.typedFrameRangePrivate(Slot.first, Slot.second))
             Out = Typed->second;
           else if (!State.FrameEscaped) {
             const auto Found = State.FrameSlots.find(Slot);
@@ -2125,6 +2276,18 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
                It != State.TypedFrameSlots.end();)
             if (It->first.first < Begin)
               It = State.TypedFrameSlots.erase(It);
+            else
+              ++It;
+          for (auto It = State.DeclaredObjectFrameSlots.begin();
+               It != State.DeclaredObjectFrameSlots.end();)
+            if (It->first.first < Begin)
+              It = State.DeclaredObjectFrameSlots.erase(It);
+            else
+              ++It;
+          for (auto It = State.FreshNilFrameSlots.begin();
+               It != State.FreshNilFrameSlots.end();)
+            if (It->first < Begin)
+              It = State.FreshNilFrameSlots.erase(It);
             else
               ++It;
         }

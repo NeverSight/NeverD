@@ -794,6 +794,176 @@ TEST(ObjCCallHints,
   EXPECT_TRUE(buildObjCSourceCallHints(Image, Function).empty());
 }
 
+TEST(ObjCCallHints,
+     SDKObjectPointerOutParameterQualifiesTheLoadedReceiverClass) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  Image.ObjCSourceReferences.at(0x2100).Name = "writeToFile:options:error:";
+
+  const auto Class =
+      objcSelectorOutParameterClass(Image, "writeToFile:options:error:", 4);
+  ASSERT_TRUE(Class);
+  EXPECT_EQ(*Class, "NSError");
+  EXPECT_FALSE(
+      objcSelectorOutParameterClass(Image, "writeToFile:options:error:", 3));
+
+  ObjCReceiverTypeHint Receiver;
+  Receiver.Origin = ObjCReceiverTypeHint::OriginKind::OutParameter;
+  Receiver.Address = 0x2100;
+  Receiver.ClassName = *Class;
+  Receiver.OutParameters.push_back({0x2100, "writeToFile:options:error:", 4});
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, Receiver));
+  const auto Code = objcReceiverSourceTypeHint(Image, "code", Receiver);
+  ASSERT_TRUE(Code.Signature);
+  EXPECT_EQ(Code.Signature->ReturnType->Kind, NdTypeKind::Int);
+  ObjCMethod ConflictingCode;
+  ConflictingCode.ClassName = "ApplicationEvent";
+  ConflictingCode.Selector = "code";
+  ConflictingCode.TypeHint =
+      parseObjCMethodEncoding(ConflictingCode.Selector, "@16@0:8");
+  ASSERT_TRUE(ConflictingCode.TypeHint);
+  Image.ObjCMethods.push_back(std::move(ConflictingCode));
+
+  ObjCSourceReference CodeReference;
+  CodeReference.Address = 0x2108;
+  CodeReference.Name = "code";
+  Image.ObjCSourceReferences.emplace(CodeReference.Address, CodeReference);
+  // ADRP x1,0x2000; LDR x1,[x1,#0x108]; ADRP x16,0x2000;
+  // LDR x16,[x16,#0x180]; BR x16.
+  const uint32_t CodeStub[] = {0xb0000001, 0xf9408421, 0xb0000010, 0xf940c210,
+                               0xd61f0200};
+  for (size_t I = 0; I < 5; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x120 + I * 4, CodeStub[I]);
+
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "error_out_parameter_caller";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1224;
+  Block.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(64, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(40, 4)}, 0x1204),
+      operation(NdOp::STORE, {}, {NdVar::reg(a64reg::X19, 8), NdVar::cst(0, 8)},
+                0x1208),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X4, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x120c),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1100, 8)},
+                0x1210),
+      operation(NdOp::LOAD, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x1214),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1120, 8)},
+                0x1218),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x121c)};
+  Function.Blocks.push_back(Block);
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1210));
+  ASSERT_TRUE(Hints.count(0x1218));
+  ASSERT_TRUE(Hints.at(0x1218).Receiver);
+  EXPECT_EQ(Hints.at(0x1218).Receiver->Origin,
+            ObjCReceiverTypeHint::OriginKind::OutParameter);
+  EXPECT_EQ(Hints.at(0x1218).Signature.ReturnType->Kind, NdTypeKind::Int);
+  auto Overwritten = Function;
+  Overwritten.Blocks[0].Ops.insert(
+      Overwritten.Blocks[0].Ops.begin() + 5,
+      operation(NdOp::STORE, {}, {NdVar::reg(a64reg::X19, 8), NdVar::cst(1, 8)},
+                0x1212));
+  const auto OverwrittenHints = buildObjCSourceCallHints(Image, Overwritten);
+  EXPECT_TRUE(OverwrittenHints.count(0x1210));
+  EXPECT_FALSE(OverwrittenHints.count(0x1218));
+  auto Cleared = Function;
+  Cleared.Blocks[0].Ops.insert(
+      Cleared.Blocks[0].Ops.begin() + 5,
+      operation(NdOp::STORE, {}, {NdVar::reg(a64reg::X19, 8), NdVar::cst(0, 8)},
+                0x1212));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Cleared).count(0x1218));
+  auto Escaped = Function;
+  Escaped.Blocks[0].Ops.insert(
+      Escaped.Blocks[0].Ops.begin() + 2,
+      operation(NdOp::STORE, {},
+                {NdVar::reg(a64reg::X10, 8), NdVar::reg(a64reg::X19, 8)},
+                0x1206));
+  EXPECT_TRUE(buildObjCSourceCallHints(Image, Escaped).count(0x1218));
+
+  ObjCSourceReference AttributesReference;
+  AttributesReference.Address = 0x2110;
+  AttributesReference.Name = "setAttributes:ofItemAtPath:error:";
+  Image.ObjCSourceReferences.emplace(AttributesReference.Address,
+                                     AttributesReference);
+  const uint32_t AttributesStub[] = {0xb0000001, 0xf9408821, 0xb0000010,
+                                     0xf940c210, 0xd61f0200};
+  for (size_t I = 0; I < 5; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, AttributesStub[I]);
+  LowFunc Joined;
+  Joined.Entry = 0x1200;
+  Joined.Name = "joined_error_out_parameter_caller";
+  LowBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = 0x1200;
+  Entry.EndAddr = 0x120c;
+  Entry.Succs = {1, 2};
+  Entry.Ops = {
+      operation(NdOp::INT_SUB, NdVar::reg(a64reg::SP, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(64, 4)}, 0x1200),
+      operation(NdOp::INT_ADD, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(a64reg::SP, 8), NdVar::cst(40, 4)}, 0x1204),
+      operation(NdOp::STORE, {}, {NdVar::reg(a64reg::X19, 8), NdVar::cst(0, 8)},
+                0x1208)};
+  LowBlock Write;
+  Write.Id = 1;
+  Write.StartAddr = 0x1210;
+  Write.EndAddr = 0x1218;
+  Write.Preds = {0};
+  Write.Succs = {3};
+  Write.Ops = {operation(NdOp::COPY, NdVar::reg(a64reg::X4, 8),
+                         {NdVar::reg(a64reg::X19, 8)}, 0x1210),
+               operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                         {NdVar::cst(0x1100, 8)}, 0x1214)};
+  LowBlock Attributes = Write;
+  Attributes.Id = 2;
+  Attributes.StartAddr = 0x1220;
+  Attributes.EndAddr = 0x1228;
+  Attributes.Ops[0].Addr = 0x1220;
+  Attributes.Ops[1] = operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                                {NdVar::cst(0x1140, 8)}, 0x1224);
+  LowBlock Join;
+  Join.Id = 3;
+  Join.StartAddr = 0x1230;
+  Join.EndAddr = 0x123c;
+  Join.Preds = {1, 2};
+  Join.Ops = {operation(NdOp::LOAD, NdVar::reg(a64reg::X0, 8),
+                        {NdVar::reg(a64reg::X19, 8)}, 0x1230),
+              operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8),
+                        {NdVar::cst(0x1120, 8)}, 0x1234),
+              operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x1238)};
+  Joined.Blocks = {Entry, Write, Attributes, Join};
+  const auto JoinedHints = buildObjCSourceCallHints(Image, Joined);
+  ASSERT_TRUE(JoinedHints.count(0x1234));
+  ASSERT_TRUE(JoinedHints.at(0x1234).Receiver);
+  EXPECT_EQ(JoinedHints.at(0x1234).Receiver->OutParameters.size(), 2U);
+  EXPECT_TRUE(
+      objcReceiverTypeHintValid(Image, *JoinedHints.at(0x1234).Receiver));
+
+  // Runtime metadata cannot preserve the NSError pointee spelling in ^@.
+  // A local declaration therefore vetoes the SDK-only source class fact.
+  ObjCMethod Local;
+  Local.ClassName = "LocalData";
+  Local.Selector = "writeToFile:options:error:";
+  Local.TypeHint = parseObjCMethodEncoding(Local.Selector, "B40@0:8@16Q24^@32");
+  ASSERT_TRUE(Local.TypeHint);
+  Image.ObjCMethods.push_back(std::move(Local));
+  EXPECT_FALSE(
+      objcSelectorOutParameterClass(Image, "writeToFile:options:error:", 4));
+  EXPECT_FALSE(objcReceiverTypeHintValid(Image, Receiver));
+}
+
 TEST(ObjCCallHints, ReceiverIdentitySurvivesOnlyLowerPrivateFrameSpills) {
   auto Image = image();
   Image.ObjCMethods.clear();

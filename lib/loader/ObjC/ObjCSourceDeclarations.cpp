@@ -7,6 +7,7 @@
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -457,6 +458,33 @@ objcSelectorSourceTypeHintForArgumentStorageUse(
   return Result;
 }
 
+std::optional<std::string>
+objcSelectorOutParameterClass(const BinaryImage &Image,
+                              llvm::StringRef Selector, unsigned Parameter) {
+  const auto Signature = objcSelectorSourceTypeHint(Image, Selector);
+  if (!Signature || Parameter < 2 || Parameter >= Signature->Parameters.size())
+    return std::nullopt;
+  const auto &Type = Signature->Parameters[Parameter].Type;
+  if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
+      !Type->Pointee || Type->Pointee->Kind != NdTypeKind::Ptr ||
+      Type->Pointee->Size != 8)
+    return std::nullopt;
+  // Runtime metadata preserves only @ inside ^@. A local method or protocol
+  // declaration can therefore agree on the physical ABI while naming a
+  // different pointee class in source; do not inherit an SDK class across it.
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.Selector == Selector)
+      return std::nullopt;
+  for (const auto &Protocol : Image.ObjCProtocols)
+    for (const auto &Method : Protocol.Methods)
+      if (Method.Selector == Selector)
+        return std::nullopt;
+  for (const auto &Property : Image.ObjCProperties)
+    if (Property.Getter == Selector || Property.Setter == Selector)
+      return std::nullopt;
+  return objc::sdkSelectorOutParameterClass(Image, Selector, Parameter);
+}
+
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry) {
   if (!Entry || Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
@@ -492,17 +520,46 @@ bool validReceiverRoot(const BinaryImage &Image,
     return false;
   switch (Receiver.Origin) {
   case ObjCReceiverTypeHint::OriginKind::MethodEntry: {
+    if (!Receiver.OutParameters.empty())
+      return false;
     const auto Expected = objcMethodReceiverTypeHint(Image, Receiver.Address);
     return Expected && Expected->ClassName == Receiver.ClassName &&
            Expected->IsClassMethod == Receiver.IsClassMethod;
   }
   case ObjCReceiverTypeHint::OriginKind::ClassReference: {
+    if (!Receiver.OutParameters.empty())
+      return false;
     const auto Found = Image.ObjCSourceReferences.find(Receiver.Address);
     return Receiver.IsClassMethod &&
            Found != Image.ObjCSourceReferences.end() &&
            Found->second.Address == Receiver.Address &&
            Found->second.TheKind == ObjCSourceReference::Kind::Class &&
            Found->second.Size == 8 && Found->second.Name == Receiver.ClassName;
+  }
+  case ObjCReceiverTypeHint::OriginKind::OutParameter: {
+    if (Receiver.IsClassMethod || Receiver.OutParameters.empty() ||
+        Receiver.OutParameters.size() > 8 ||
+        Receiver.Address != Receiver.OutParameters.front().Address ||
+        !std::is_sorted(Receiver.OutParameters.begin(),
+                        Receiver.OutParameters.end()) ||
+        std::adjacent_find(Receiver.OutParameters.begin(),
+                           Receiver.OutParameters.end()) !=
+            Receiver.OutParameters.end())
+      return false;
+    for (const auto &Root : Receiver.OutParameters) {
+      if (!Root.Address || Root.Selector.empty() || Root.Parameter < 2)
+        return false;
+      const auto Found = Image.ObjCSourceReferences.find(Root.Address);
+      const auto Class =
+          objcSelectorOutParameterClass(Image, Root.Selector, Root.Parameter);
+      if (Found == Image.ObjCSourceReferences.end() ||
+          Found->second.Address != Root.Address ||
+          Found->second.TheKind != ObjCSourceReference::Kind::Selector ||
+          Found->second.Size != 8 || Found->second.Name != Root.Selector ||
+          !Class || *Class != Receiver.ClassName)
+        return false;
+    }
+    return true;
   }
   }
   return false;
@@ -582,8 +639,8 @@ std::optional<ReceiverType> receiverType(const BinaryImage &Image,
   if (Receiver.Steps.size() > 8 || !validReceiverRoot(Image, Receiver))
     return std::nullopt;
   ReceiverType Result{Receiver.ClassName, Receiver.IsClassMethod,
-                      Receiver.Origin ==
-                          ObjCReceiverTypeHint::OriginKind::MethodEntry};
+                      Receiver.Origin !=
+                          ObjCReceiverTypeHint::OriginKind::ClassReference};
   for (const auto &Access : Receiver.Steps) {
     if (Access.TheKind == ObjCReceiverTypeHint::TypeStep::Kind::MessageResult) {
       if (Access.Selector.empty() || Access.OffsetSlot || Access.ByteOffset ||

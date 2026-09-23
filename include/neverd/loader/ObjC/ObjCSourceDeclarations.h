@@ -67,6 +67,13 @@ objcSelectorSourceTypeHintForArgumentStorageUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorArgumentStorageEvidence &Evidence);
 
+/// Resolve the compiler-declared object class written through one Objective-C
+/// object-pointer parameter. The selector-wide ABI and every active SDK owner
+/// must agree; runtime declarations without pointee class metadata veto it.
+std::optional<std::string>
+objcSelectorOutParameterClass(const BinaryImage &Image,
+                              llvm::StringRef Selector, unsigned Parameter);
+
 /// Unsupported or conflicting declarations veto a narrowed call contract.
 /// Missing external hierarchy instead requires selector-wide agreement: it
 /// cannot justify excluding other owners. Self includes known subclasses.

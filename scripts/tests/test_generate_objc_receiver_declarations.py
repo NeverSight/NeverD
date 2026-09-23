@@ -5,18 +5,18 @@ import tempfile
 import unittest
 
 from scripts.generate_objc_receiver_declarations import (
-    ReceiverDeclarations, common_methods, common_owner, method_profiles,
-    owner_profiles, render,
+    ReceiverDeclarations, common_methods, common_owner, common_parameter,
+    method_profiles, owner_profiles, parameter_profiles, render,
 )
 
 
 def profile(name="Receiver", kind="class", category="", class_method=False,
             encoding="i16@0:8", parents=("NSObject",), protocols=(),
-            return_class="", return_self=False):
+            return_class="", return_self=False, parameters=()):
     return {
         "owners": [(kind, name, category, parents, protocols)],
         "methods": [(kind, name, category, class_method, "value", encoding,
-                     return_class, return_self)],
+                     return_class, return_self, parameters)],
     }
 
 
@@ -121,11 +121,25 @@ __attribute__((objc_root_class))
                 self.assertNotIn(("class", "ForwardOnly", ""), owners)
                 methods = method_profiles(facts)
                 self.assertEqual(methods[("class", "Parent", "", False, "value")],
-                                 {("i16@0:8", "", False)})
+                                 {("i16@0:8", "", False, ())})
                 self.assertEqual(methods[("class", "Parent", "", True, "value")],
-                                 {("@16@0:8", "", False)})
+                                 {("@16@0:8", "", False, ())})
                 self.assertEqual(methods[("class", "Child", "", False, "peer")],
-                                 {("@16@0:8", "Child", False)})
+                                 {("@16@0:8", "Child", False, ())})
+
+    def test_object_pointer_parameters_require_cross_profile_agreement(self):
+        identity = ("class", "Receiver", "", False, "value", 2)
+        error = parameter_profiles(profile(parameters=((2, "NSError"),)))
+        other = parameter_profiles(profile(parameters=((2, "Other"),)))
+        self.assertEqual(common_parameter(error, error, identity), "NSError")
+        self.assertIsNone(common_parameter(error, other, identity))
+        self.assertIsNone(common_parameter(error, {}, identity))
+        rendered = render(
+            [("F", "module", [profile(parameters=((2, "NSError"),))] * 4)],
+            "test", "test")
+        self.assertIn(
+            'ND_OBJC_OUT_PARAMETER("F", "module", "class", "Receiver", "", false, "value", 2, "NSError", "NSError")',
+            rendered)
 
 
 if __name__ == "__main__":
