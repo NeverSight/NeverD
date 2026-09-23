@@ -1599,16 +1599,25 @@ inline std::map<const HighExpr *, SelectedStorageSeed>
 selectedStorageSeeds(const HighFunc &Function, const BinaryImage &Image,
                      const ObjCProfileStorage &Storage) {
   VarKeyMap<std::vector<ExprPtr>> Definitions;
+  VarKeySet Candidates, UnsupportedKinds;
   walkStmts(Function.Body, [&](const HighStmt &Statement) {
     if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
         (Statement.Dst->Kind == ExprKind::Var ||
-         Statement.Dst->Kind == ExprKind::Phi) &&
-        Statement.Dst->Var.Kind == MedVar::Temp)
-      Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
+         Statement.Dst->Kind == ExprKind::Phi)) {
+      const auto Key = varKey(Statement.Dst->Var);
+      Definitions[Key].push_back(Statement.Val);
+      if (Statement.Dst->Var.Kind == MedVar::Temp ||
+          Statement.Dst->Var.Kind == MedVar::Reg)
+        Candidates.insert(Key);
+      else
+        UnsupportedKinds.insert(Key);
+    }
   });
   std::map<const HighExpr *, SelectedStorageSeed> Seeds;
+  std::optional<bool> FlowValid;
   for (const auto &[Key, Values] : Definitions) {
-    if (Values.size() < 2 || Values.size() > 64)
+    if (!Candidates.count(Key) || UnsupportedKinds.count(Key) ||
+        Values.size() < 2 || Values.size() > 64)
       continue;
     std::vector<va_t> Addresses;
     std::optional<va_t> Base;
@@ -1640,6 +1649,12 @@ selectedStorageSeeds(const HighFunc &Function, const BinaryImage &Image,
       Addresses.push_back(Value->ConstVal);
     }
     if (!Valid || !Profile)
+      continue;
+    if (!FlowValid) {
+      const auto Flow = analyzeHighSourceFlow(Function, false);
+      FlowValid = Flow.Complete && Flow.Items.empty();
+    }
+    if (!*FlowValid)
       continue;
     std::set<const HighExpr *> SeedNodes;
     for (const auto &Value : Values)

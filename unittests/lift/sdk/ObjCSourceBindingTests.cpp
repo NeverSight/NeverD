@@ -2784,7 +2784,7 @@ TEST(ObjCSourceBindings,
       F.Image.Symbols.push_back({"_firstString", 0x3000, 8, false});
       F.Image.Symbols.push_back({"_secondString", 0x3008, 8, false});
       MedVar Pointer;
-      Pointer.Kind = MedVar::Temp;
+      Pointer.Kind = Architecture == Arch::AArch64 ? MedVar::Reg : MedVar::Temp;
       Pointer.Id = 41;
       Pointer.Size = 8;
       Pointer.TheArch = Architecture;
@@ -5106,12 +5106,12 @@ TEST(ObjCSourceBindings, ProfileCountersKeepOverlappingStorageAndAccessWidths) {
 
 TEST(ObjCSourceBindings,
      SelectedProfileCounterPointersNeedOnlyBoundedNumericUses) {
-  for (unsigned Mutation = 0; Mutation < 9; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
     SCOPED_TRACE(Mutation);
     ProfileFixture F;
     const ObjCProfileStorage Storage(F.Image);
     MedVar Pointer;
-    Pointer.Kind = Mutation == 8 ? MedVar::Param : MedVar::Temp;
+    Pointer.Kind = Mutation == 8 ? MedVar::Param : MedVar::Reg;
     Pointer.Id = 42;
     Pointer.Size = 8;
     Pointer.TheArch = F.Image.Arch;
@@ -5142,6 +5142,18 @@ TEST(ObjCSourceBindings,
     if (Mutation == 7)
       Return.RetVal = First;
     F.Function.Body = {A, B, Return};
+    if (Mutation == 9) {
+      MedVar Condition;
+      Condition.Kind = MedVar::Param;
+      Condition.Id = 0;
+      Condition.Size = 1;
+      Condition.TheArch = F.Image.Arch;
+      HighStmt Branch;
+      Branch.Kind = StmtKind::IfElse;
+      Branch.Cond = HighExpr::makeVar(Condition, NdType::makeInt(1, false));
+      Branch.Body = {A, B};
+      F.Function.Body = {Branch, Return};
+    }
     const auto Result = bindObjCSourceReferences(F.Function, F.Image, &Storage);
     if (Mutation == 0) {
       EXPECT_TRUE(Result.Limitation.empty()) << Result.Limitation;
