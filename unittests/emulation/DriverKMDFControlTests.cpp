@@ -817,6 +817,30 @@ TEST(DriverKMDFControl, ManualQueueReadyCallbackRetrievesForwardedRequest) {
     }
 }
 
+TEST(DriverKMDFControl, ManualQueueFindAndRetrievePreservesRequestOwnership) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('0');
+      Options.LoadAddress = Address;
+      Options.Requests.resize(2);
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+      checkCompletedLifecycle(*Result, 4);
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', '0', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueFindRequest"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueRetrieveFoundRequest"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfObjectDereferenceActual"), 1u);
+    }
+}
+
 TEST(DriverKMDFControl, ManualRequestRequeueReturnsSameRequestToWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

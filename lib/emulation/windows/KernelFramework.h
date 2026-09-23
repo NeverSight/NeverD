@@ -147,6 +147,7 @@ public:
   bool hasLiveBinding() const;
 
 private:
+  llvm::Error writeRequestParameters(uint64_t Address, const RequestView &View);
   GuestMemory &Memory;
   KernelExportRegistry &Exports;
   Allocate AllocateStorage;

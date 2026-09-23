@@ -27,6 +27,7 @@
 /// 8 enqueues from caller context into a manual default queue and returns a
 /// canceled request to its queue callback before any I/O delivery.
 /// 9 retrieves a forwarded request in the manual queue's ready notification.
+/// 0 finds and retrieves a forwarded request from that notification.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -118,6 +119,8 @@ ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfIoQueueCreate, 152);
 ABI_SLOT(WdfIoQueueStopSynchronously, 156);
 ABI_SLOT(WdfIoQueueRetrieveNextRequest, 158);
+ABI_SLOT(WdfIoQueueFindRequest, 160);
+ABI_SLOT(WdfIoQueueRetrieveFoundRequest, 161);
 ABI_SLOT(WdfIoQueueDrainSynchronously, 162);
 ABI_SLOT(WdfIoQueuePurgeSynchronously, 164);
 ABI_SLOT(WdfIoQueueStopAndPurge, 418);
@@ -318,13 +321,30 @@ static void CallerQueuedCanceledOnQueue(WDFQUEUE Queue, WDFREQUEST Request) {
 
 static void ManualReady(WDFQUEUE Queue, WDFCONTEXT Context) {
   WDFREQUEST Request = NULL;
+  WDFREQUEST Found = NULL;
+  WDF_REQUEST_PARAMETERS Parameters;
   PVOID Input = NULL, Output = NULL;
   size_t InputLength = 0, OutputLength = 0;
   NTSTATUS Status;
   UCHAR *Bytes;
   UCHAR Source[4];
   ULONG Queued = 0, Delivered = 0;
-  Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+  if (TransferMode == '0') {
+    WDF_REQUEST_PARAMETERS_INIT(&Parameters);
+    Status = WdfIoQueueFindRequest(Queue, NULL, NULL, &Parameters, &Found);
+    if (!Check(NT_SUCCESS(Status) && Found != NULL &&
+                   Parameters.Type == WdfRequestTypeDeviceControl &&
+                   Parameters.Parameters.DeviceIoControl.InputBufferLength ==
+                       4 &&
+                   Parameters.Parameters.DeviceIoControl.IoControlCode ==
+                       IOCTL_NEVERD_KMDF_TRANSFORM,
+               194))
+      return;
+    Status = WdfIoQueueRetrieveFoundRequest(Queue, Found, &Request);
+    WdfObjectDereference(Found);
+  } else {
+    Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+  }
   if (!Check(Queue == ManualQueue && Context == (WDFCONTEXT)(ULONG_PTR)0x99 &&
                  NT_SUCCESS(Status) && Request != NULL &&
                  WdfRequestGetIoQueue(Request) == Queue,
@@ -345,7 +365,7 @@ static void ManualReady(WDFQUEUE Queue, WDFCONTEXT Context) {
   Bytes[0] = 'K';
   Bytes[1] = 'M';
   Bytes[2] = 'D';
-  Bytes[3] = '9';
+  Bytes[3] = TransferMode;
   for (ULONG Index = 0; Index < 4; ++Index)
     Bytes[4 + Index] = Source[Index] ^ 0x5a;
   WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 8);
@@ -1158,7 +1178,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: forwarded automatic request\n");
     return;
   }
-  if (TransferMode == '9' && InputLength == 4) {
+  if ((TransferMode == '9' || TransferMode == '0') && InputLength == 4) {
     NTSTATUS Status = WdfRequestForwardToIoQueue(Request, ManualQueue);
     if (!NT_SUCCESS(Status))
       WdfRequestComplete(Request, Status);
@@ -1534,6 +1554,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'7' ? '7'
                  : Marker == L'8' ? '8'
                  : Marker == L'9' ? '9'
+                 : Marker == L'0' ? '0'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1609,7 +1630,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   }
 
   if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
-      TransferMode == '7' || TransferMode == '9') {
+      TransferMode == '7' || TransferMode == '9' || TransferMode == '0') {
     WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
     if (TransferMode == '7')
       QueueConfig.EvtIoCanceledOnQueue = ManualCanceledOnQueue;
@@ -1626,7 +1647,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
         Status = STATUS_UNSUCCESSFUL;
       goto Failure;
     }
-    if (TransferMode == '9') {
+    if (TransferMode == '9' || TransferMode == '0') {
       Status = WdfIoQueueReadyNotify(ManualQueue, ManualReady,
                                      (WDFCONTEXT)(ULONG_PTR)0x99);
       if (!NT_SUCCESS(Status))

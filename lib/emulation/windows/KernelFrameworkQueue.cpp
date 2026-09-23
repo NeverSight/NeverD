@@ -16,6 +16,8 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
+
 namespace neverd::emulation {
 namespace {
 using namespace framework;
@@ -38,7 +40,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Name != "WdfIoQueueDrainSynchronously" && Name != "WdfIoQueuePurge" &&
       Name != "WdfIoQueuePurgeSynchronously" &&
       Name != "WdfIoQueueReadyNotify" &&
-      Name != "WdfIoQueueRetrieveNextRequest")
+      Name != "WdfIoQueueRetrieveNextRequest" &&
+      Name != "WdfIoQueueFindRequest" &&
+      Name != "WdfIoQueueRetrieveFoundRequest")
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
@@ -250,6 +254,82 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (Q == Queues.end() || !Devices.count(Q->second.Device))
       return invalidQueue("queue lost its owning control device");
     return std::optional<uint64_t>{Q->second.Device};
+  }
+  if (Name == "WdfIoQueueFindRequest" ||
+      Name == "WdfIoQueueRetrieveFoundRequest") {
+    auto Q = Queues.find(A[1]);
+    if (Q == Queues.end() || OI->second.Deleting)
+      return invalidQueue("queue has no live framework identity");
+    const bool Find = Name == "WdfIoQueueFindRequest";
+    const uint64_t Output = A[Find ? 5 : 3];
+    if (auto E = writable(Output, sizeof(uint64_t)))
+      return E;
+    if (Q->second.Dispatch != QueueDispatchManual)
+      return std::optional<uint64_t>{QueueInvalidDeviceState};
+    if (!Q->second.Dispatching)
+      return std::optional<uint64_t>{QueuePaused};
+    if (Find && A[3])
+      return invalidQueue("framework file-object filtering is not modeled");
+    const uint64_t Previous = A[2];
+    if (!Find && !Previous)
+      return invalidQueue("retrieval requires a live request handle");
+    auto PreviousObject = Objects.find(Previous);
+    if (Previous && (PreviousObject == Objects.end() ||
+                     PreviousObject->second.Binding != B.Globals ||
+                     PreviousObject->second.Kind != ObjectKind::Request ||
+                     !Requests.count(Previous) ||
+                     (Find && !PreviousObject->second.References)))
+      return invalidQueue("invalid or unreferenced search request");
+    auto Position = Q->second.Pending.begin();
+    if (Previous) {
+      Position = std::find(Position, Q->second.Pending.end(), Previous);
+      if (Position == Q->second.Pending.end()) {
+        if (auto E = Memory.writeInteger(Output, 0, sizeof(uint64_t)))
+          return E;
+        return std::optional<uint64_t>{QueueNotFound};
+      }
+      if (Find)
+        ++Position;
+    }
+    if (Position == Q->second.Pending.end()) {
+      if (auto E = Memory.writeInteger(Output, 0, sizeof(uint64_t)))
+        return E;
+      return std::optional<uint64_t>{QueueNoMoreEntries};
+    }
+    const uint64_t Handle = *Position;
+    auto R = Requests.find(Handle);
+    auto O = Objects.find(Handle);
+    if (R == Requests.end() || O == Objects.end() || !R->second.Queued ||
+        R->second.Queue != A[1] || O->second.Binding != B.Globals)
+      return invalidQueue("queue lost a pending request");
+    if (Find) {
+      if (O->second.References == UINT64_MAX)
+        return invalidQueue("framework reference count overflow");
+      if (A[4]) {
+        if (!RequestsHost.View)
+          return invalidQueue("request inspection host is unavailable");
+        auto View = RequestsHost.View(R->second.IRP);
+        if (!View)
+          return View.takeError();
+        if (auto E = writeRequestParameters(A[4], *View))
+          return E;
+      }
+      if (auto E = Memory.writeInteger(Output, Handle, sizeof(uint64_t)))
+        return E;
+      ++O->second.References;
+      return std::optional<uint64_t>{0};
+    }
+    if (auto E = Memory.writeInteger(Output, Handle, sizeof(uint64_t)))
+      return E;
+    Q->second.Pending.erase(Position);
+    if (Q->second.Pending.empty())
+      Q->second.ReadyPending = false;
+    R->second.Queued = false;
+    R->second.DeliveredOnce = true;
+    R->second.QueuedCallback = 0;
+    R->second.QueuedArguments.clear();
+    R->second.QueuedCompletionStatus.reset();
+    return std::optional<uint64_t>{0};
   }
   if (Name == "WdfIoQueueRetrieveNextRequest") {
     auto Q = Queues.find(A[1]);

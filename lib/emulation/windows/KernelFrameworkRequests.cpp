@@ -456,6 +456,46 @@ KernelFramework::continueCallerContext(uint64_t IRP) {
   return std::move(**Routed);
 }
 
+llvm::Error KernelFramework::writeRequestParameters(uint64_t Address,
+                                                    const RequestView &View) {
+  auto Size = read(Address, 2);
+  if (!Size)
+    return Size.takeError();
+  if (*Size != RequestParametersSize)
+    return requestError("unsupported WDF_REQUEST_PARAMETERS size");
+  if (auto E = writable(Address, RequestParametersSize))
+    return E;
+  if (auto E =
+          Memory.write(Address, std::vector<uint8_t>(RequestParametersSize)))
+    return E;
+  if (auto E = Memory.writeInteger(Address, RequestParametersSize, 2))
+    return E;
+  if (auto E =
+          Memory.writeInteger(Address + RequestParametersType, View.Major, 4))
+    return E;
+  if (View.Major == RequestMajorDeviceControl) {
+    if (auto E = Memory.writeInteger(Address + RequestParametersLength,
+                                     View.OutputLength, 8))
+      return E;
+    if (auto E = Memory.writeInteger(Address + RequestParametersInputLength,
+                                     View.InputLength, 8))
+      return E;
+    if (auto E = Memory.writeInteger(Address + RequestParametersControlCode,
+                                     View.ControlCode, 4))
+      return E;
+  } else {
+    const auto Length =
+        View.Major == RequestMajorRead ? View.OutputLength : View.InputLength;
+    if (auto E =
+            Memory.writeInteger(Address + RequestParametersLength, Length, 8))
+      return E;
+    if (auto E = Memory.writeInteger(Address + RequestParametersOffset,
+                                     View.ByteOffset, 8))
+      return E;
+  }
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
@@ -798,41 +838,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return Result{0};
   }
   if (Name == "WdfRequestGetParameters") {
-    auto Size = read(A[2], 2);
-    if (!Size)
-      return Size.takeError();
-    if (*Size != RequestParametersSize)
-      return requestError("unsupported WDF_REQUEST_PARAMETERS size");
-    if (auto E = writable(A[2], RequestParametersSize))
+    if (auto E = writeRequestParameters(A[2], *View))
       return E;
-    if (auto E =
-            Memory.write(A[2], std::vector<uint8_t>(RequestParametersSize)))
-      return E;
-    if (auto E = Memory.writeInteger(A[2], RequestParametersSize, 2))
-      return E;
-    if (auto E =
-            Memory.writeInteger(A[2] + RequestParametersType, View->Major, 4))
-      return E;
-    if (View->Major == RequestMajorDeviceControl) {
-      if (auto E = Memory.writeInteger(A[2] + RequestParametersLength,
-                                       View->OutputLength, 8))
-        return E;
-      if (auto E = Memory.writeInteger(A[2] + RequestParametersInputLength,
-                                       View->InputLength, 8))
-        return E;
-      if (auto E = Memory.writeInteger(A[2] + RequestParametersControlCode,
-                                       View->ControlCode, 4))
-        return E;
-    } else {
-      const auto Length = View->Major == RequestMajorRead ? View->OutputLength
-                                                          : View->InputLength;
-      if (auto E =
-              Memory.writeInteger(A[2] + RequestParametersLength, Length, 8))
-        return E;
-      if (auto E = Memory.writeInteger(A[2] + RequestParametersOffset,
-                                       View->ByteOffset, 8))
-        return E;
-    }
     return Result{0};
   }
   if (auto E = writable(A[3], 8))
