@@ -821,6 +821,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
       Invocation Call;
       Call.PC = Dispatch.PC;
       Call.FrameworkDispatchStatus = Dispatch.Status;
+      Call.FrameworkCallerContext = Dispatch.CallerContext;
       Call.IRP = *Packet;
       if (auto E = processRequestCancellations())
         return E;
@@ -856,6 +857,27 @@ KernelModel::beginRequest(const DriverRequest &Input,
   }
   Invocation Call{Callback, *Top, Request->IRP};
   Call.IRP = *Packet;
+  return Call;
+}
+
+llvm::Expected<KernelModel::Invocation>
+KernelModel::continueFrameworkCallerContext(uint64_t IRP) {
+  if (!Framework)
+    return ioError("framework caller-context continuation is unavailable");
+  auto Routed = Framework->continueCallerContext(IRP);
+  if (!Routed)
+    return Routed.takeError();
+  Invocation Call;
+  Call.PC = Routed->PC;
+  Call.IRP = IRP;
+  Call.FrameworkDispatchStatus = Routed->Status;
+  uint64_t *Registers[] = {&Call.Argument0, &Call.Argument1, &Call.Argument2,
+                           &Call.Argument3};
+  for (size_t I = 0; I < Routed->Arguments.size(); ++I)
+    if (I < 4)
+      *Registers[I] = Routed->Arguments[I];
+    else
+      Call.StackArguments.push_back(Routed->Arguments[I]);
   return Call;
 }
 

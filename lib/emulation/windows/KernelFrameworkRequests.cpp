@@ -106,7 +106,8 @@ llvm::Error KernelFramework::beginCancelCallback(uint64_t Token) {
 }
 
 llvm::Expected<std::optional<KernelFramework::RequestDispatch>>
-KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
+KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
+                              bool AfterCaller) {
   auto D = std::find_if(Devices.begin(), Devices.end(), [&](const auto &Entry) {
     return Entry.second.Wdm == WdmDevice;
   });
@@ -138,9 +139,41 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
   if (Objects.at(Q->first).Deleting)
     return requestError("default queue is deleting");
   if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
-        return Entry.second.Queue == Q->first && !Entry.second.Completed;
+        return Entry.second.Queue == Q->first && !Entry.second.Completed &&
+               Entry.second.IRP != IRP;
       }))
     return requestError("sequential queue still owns a delivered request");
+  uint64_t ExistingHandle = 0;
+  if (AfterCaller) {
+    auto Caller = CallerRequests.find(IRP);
+    if (Caller == CallerRequests.end())
+      return requestError("caller-context continuation lost its request");
+    ExistingHandle = Caller->second;
+    auto R = Requests.find(ExistingHandle);
+    if (R == Requests.end() || !R->second.InCallerContext ||
+        !R->second.Enqueued || R->second.Device != D->first)
+      return requestError("caller-context request was not enqueued");
+    R->second.InCallerContext = false;
+    R->second.Queue = Q->first;
+    CallerRequests.erase(Caller);
+  } else if (D->second.CallerContext) {
+    if (auto E = RequestsHost.MarkPending(IRP))
+      return E;
+    Attributes Attrs;
+    Attrs.Parent = Q->first;
+    const uint64_t Globals = Objects.at(D->first).Binding;
+    auto Handle = createObject(Globals, Attrs, false);
+    if (!Handle)
+      return Handle.takeError();
+    Objects.at(*Handle).Kind = ObjectKind::Request;
+    Requests.emplace(*Handle, Request{IRP, 0, D->first, true});
+    CallerRequests.emplace(IRP, *Handle);
+    return std::optional<RequestDispatch>{
+        RequestDispatch{D->second.CallerContext,
+                        {D->first, *Handle},
+                        windows::StatusPending,
+                        true}};
+  }
   auto &Queue = Q->second;
   uint64_t Callback = 0;
   uint64_t Length = 0;
@@ -160,6 +193,11 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
     Specific = false;
     Callback = Queue.Default;
   }
+  if (AfterCaller && (!Callback || (!Queue.AllowZeroLength && !Length &&
+                                    (View->Major == RequestMajorRead ||
+                                     View->Major == RequestMajorWrite))))
+    return requestError("caller-context queue completion without a guest I/O "
+                        "callback is outside this profile");
   // FxIoQueue::QueueRequest marks accepted IRPs pending before dispatching.
   // That status persists even when delivery completes the IRP immediately.
   if (auto E = RequestsHost.MarkPending(IRP))
@@ -170,18 +208,22 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
   if (!Queue.AllowZeroLength && !Length &&
       (View->Major == RequestMajorRead || View->Major == RequestMajorWrite))
     return CompleteImmediately(0, windows::StatusPending);
-  Attributes Attrs;
-  Attrs.Parent = Q->first;
-  const uint64_t Globals = Objects.at(D->first).Binding;
-  auto Handle = createObject(Globals, Attrs, false);
-  if (!Handle)
-    return Handle.takeError();
-  Objects.at(*Handle).Kind = ObjectKind::Request;
-  Requests.emplace(*Handle, Request{IRP, Q->first, false});
+  uint64_t Handle = ExistingHandle;
+  if (!Handle) {
+    Attributes Attrs;
+    Attrs.Parent = Q->first;
+    const uint64_t Globals = Objects.at(D->first).Binding;
+    auto Created = createObject(Globals, Attrs, false);
+    if (!Created)
+      return Created.takeError();
+    Handle = *Created;
+    Objects.at(Handle).Kind = ObjectKind::Request;
+    Requests.emplace(Handle, Request{IRP, Q->first, D->first});
+  }
   RequestDispatch Dispatch;
   Dispatch.PC = Callback;
   Dispatch.Status = windows::StatusPending;
-  Dispatch.Arguments = {Q->first, *Handle};
+  Dispatch.Arguments = {Q->first, Handle};
   if (Specific) {
     if (View->Major == RequestMajorDeviceControl) {
       Dispatch.Arguments.push_back(View->OutputLength);
@@ -192,6 +234,30 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP) {
     }
   }
   return std::optional<RequestDispatch>{std::move(Dispatch)};
+}
+
+llvm::Expected<KernelFramework::RequestDispatch>
+KernelFramework::continueCallerContext(uint64_t IRP) {
+  auto Caller = CallerRequests.find(IRP);
+  if (Caller == CallerRequests.end())
+    return requestError("no caller-context callback owns this request");
+  auto R = Requests.find(Caller->second);
+  if (R == Requests.end() || R->second.Completed) {
+    CallerRequests.erase(Caller);
+    return RequestDispatch{0, {}, windows::StatusPending};
+  }
+  if (!R->second.Enqueued)
+    return requestError(
+        "caller-context callback returned without enqueue or completion");
+  auto D = Devices.find(R->second.Device);
+  if (D == Devices.end())
+    return requestError("caller-context request lost its device");
+  auto Routed = routeRequest(D->second.Wdm, IRP, true);
+  if (!Routed)
+    return Routed.takeError();
+  if (!*Routed)
+    return requestError("caller-context continuation lost framework routing");
+  return std::move(**Routed);
 }
 
 llvm::Expected<std::optional<uint64_t>>

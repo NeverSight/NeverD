@@ -79,7 +79,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     return Result{*Address};
   }
   if (Name == "WdfDeviceInitFree" || Name == "WdfDeviceInitAssignName" ||
-      Name == "WdfDeviceInitSetIoType") {
+      Name == "WdfDeviceInitSetIoType" ||
+      Name == "WdfDeviceInitSetIoInCallerContextCallback") {
     auto I = DeviceInits.find(A[1]);
     if (I == DeviceInits.end() || I->second.Binding != B.Globals)
       return controlError("invalid, consumed or foreign device initializer");
@@ -96,6 +97,10 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
           return Text.takeError();
         I->second.Name = std::move(*Text);
       }
+    } else if (Name == "WdfDeviceInitSetIoInCallerContextCallback") {
+      if (!A[2])
+        return controlError("caller-context callback must name guest code");
+      I->second.CallerContext = A[2];
     } else {
       if (A[2] != ControlIoBuffered && A[2] != ControlIoDirect)
         return controlError("only buffered or direct READ/WRITE is modeled");
@@ -138,6 +143,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
                               DevicesHost.Delete(Wdm->Address));
     Objects.at(*Handle).Kind = ObjectKind::Device;
     Devices.emplace(*Handle, Device{Wdm->Address});
+    Devices.at(*Handle).CallerContext = I->second.CallerContext;
     if (auto E = Memory.writeInteger(A[3], *Handle, 8))
       return E;
     if (auto E = Memory.writeInteger(A[1], 0, 8))
@@ -145,6 +151,27 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     if (auto E = retire(*InitAddress))
       return E;
     DeviceInits.erase(I);
+    return Result{0};
+  }
+  if (Name == "WdfDeviceEnqueueRequest") {
+    auto D = Devices.find(A[1]);
+    auto O = Objects.find(A[1]);
+    auto R = Requests.find(A[2]);
+    if (D == Devices.end() || O == Objects.end() ||
+        O->second.Kind != ObjectKind::Device ||
+        O->second.Binding != B.Globals || R == Requests.end() ||
+        R->second.Completed || R->second.Completing)
+      return controlError("enqueue requires a live device and request");
+    auto Caller = CallerRequests.find(R->second.IRP);
+    if (Caller == CallerRequests.end() || Caller->second != A[2] ||
+        !R->second.InCallerContext || R->second.Enqueued ||
+        R->second.Device != A[1] || !D->second.DefaultQueue ||
+        !Queues.count(D->second.DefaultQueue) ||
+        Queues.at(D->second.DefaultQueue).Device != A[1])
+      return controlError(
+          "request must be enqueued once from its caller-context callback");
+    R->second.Enqueued = true;
+    R->second.Queue = D->second.DefaultQueue;
     return Result{0};
   }
   if (Name != "WdfDeviceCreateSymbolicLink" &&

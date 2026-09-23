@@ -86,6 +86,7 @@ public:
     uint64_t Argument3 = 0;
     std::vector<uint64_t> StackArguments;
     std::optional<uint32_t> FrameworkDispatchStatus;
+    bool FrameworkCallerContext = false;
     uint64_t IRP = 0;
   };
   // PnP device enrollment: configuration identities never expose addresses.
@@ -96,6 +97,7 @@ public:
   llvm::Expected<Invocation>
   beginRequest(const DriverRequest &Request,
                std::optional<size_t> SourceIndex = std::nullopt);
+  llvm::Expected<Invocation> continueFrameworkCallerContext(uint64_t IRP);
   llvm::Error recordDispatchReturn(uint64_t IRP, uint32_t DispatchStatus);
   /// Finalization is idempotent only for an already finalized owned IRP.
   llvm::Error finalizeRequest(uint64_t IRP);

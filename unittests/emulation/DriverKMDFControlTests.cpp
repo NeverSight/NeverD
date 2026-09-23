@@ -169,6 +169,54 @@ TEST(DriverKMDFControl, DirectReadWriteRetainsBufferedIOCTL) {
   checkSuccessfulTransfers(*Result, 'D');
 }
 
+TEST(DriverKMDFControl, CallerContextPreprocessesBeforeDefaultQueue) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('I');
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 6);
+      checkSuccessfulTransfers(*Result, 'I');
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceInitSetIoInCallerContextCallback"),
+                1u);
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 3u);
+    }
+}
+
+TEST(DriverKMDFControl, CallerContextMustEnqueueOrComplete) {
+  for (const auto *Image : controlImages()) {
+    auto Options = controlOptions('J');
+    Options.Requests.resize(2);
+    Options.Unload = false;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("without enqueue or completion"),
+              std::string::npos);
+  }
+}
+
+TEST(DriverKMDFControl, CallerContextCanCompleteWithoutQueueDelivery) {
+  for (const auto *Image : controlImages()) {
+    auto Options = controlOptions('K');
+    Options.Requests.resize(2);
+    Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+    Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 4u);
+    EXPECT_EQ(Result->Requests[1].DispatchStatus, Pending);
+    EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+    EXPECT_TRUE(Result->Requests[1].Completed);
+    EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 0u);
+    EXPECT_TRUE(Result->UnloadCompleted);
+  }
+}
+
 TEST(DriverKMDFControl, RequestCleanupKeepsBuffersAndReferenceKeepsContext) {
   std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
 #ifdef NEVERD_KMDF_CONTROL_CFG_FIXTURE
