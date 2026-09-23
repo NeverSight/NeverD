@@ -52,15 +52,15 @@ establish compatibility with arbitrary third-party drivers.
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, serial buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
+| `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
-| READ/WRITE | Serial buffered/direct/neither I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs, WDM request cancellation or implicit file position |
-| WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults and driver-created user MDLs | One requesting-process context; no WDM cancellation or arbitrary user mappings |
+| READ/WRITE | Serial buffered/direct/neither I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or implicit file position |
+| WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs and bounded cancellation | One requesting-process context; no arbitrary user mappings |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
-| Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
+| Work items, timers, DPCs, events and waits | The current execution IRQL is `PASSIVE_LEVEL` for dispatch and workers, and `DISPATCH_LEVEL` for DPCs and WDM cancel callbacks | Only the API subset below; no concurrent scenario-submitted IRPs |
 | Driver using process/thread callbacks, handles, registry/file operations or kernel-module discovery | Configured registry supported; other behavior limited to the listed APIs | Object manager, system state and callback/event producers |
 | Hardware, DMA, PCI, interrupt or virtualization driver | Explicit register banks, MMIO, exclusive latched interrupts and bounded coherent common/SG/channel DMA | Other device models, host physical RAM, PCI, ports, shared/level/MSI interrupts, other DMA interfaces and privileged CPU state |
 | x86 or ARM64 Windows driver | Rejected | Architecture-specific loading, ABI and execution model |
@@ -109,7 +109,7 @@ pending request or infinite wait causes a stalled `model_error`. Shared
 instruction, memory, observation and wall-clock budgets still apply.
 
 This is a bounded scheduling model, not full Windows asynchronous support.
-Alertable or user-mode waits, system threads, APCs, WDM request cancellation,
+Alertable or user-mode waits, system threads, APCs,
 general spinlocks, concurrent scenario-submitted IRPs, general IRQL transitions,
 UMDF, KMDF PnP devices and general queue scheduling, full PnP/power, general hardware, other DMA interfaces and other interrupt modes remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
@@ -273,6 +273,7 @@ The initial API model deliberately has a finite contract:
 | `KeWaitForSingleObject` | One initialized event or timer; nonalertable `KernelMode`, reason `Executive`; zero polling, finite relative/absolute or infinite waits; nonzero/infinite waits require IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Nonalertable `KernelMode` relative/absolute delay at IRQL <= APC_LEVEL; resumes the saved guest frame after virtual time advances |
 | `IoMarkIrpPending` | Marks the live active IRP; the equivalent WDM macro's stack-control write is also modeled; dispatch must return `STATUS_PENDING` |
+| `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock`, `IoCancelIrp` | Live WDM IRP cancel-routine exchange, nonrecursive system cancel lock with saved IRQL, and synchronous driver-initiated cancellation; the WDK inline helper uses the same IRP field |
 | `IofCompleteRequest`, `IoCompleteRequest` | `IO_NO_INCREMENT`; executes completion unwinding, supports stopped/resumed completion and retires IRP/MDL/buffer storage only at its terminal boundary |
 | `memcpy`, `memmove`, `memset`, `memcmp`, `RtlCopyMemory`, `RtlMoveMemory`, `RtlFillMemory`, `RtlZeroMemory`, `RtlCompareMemory` | Bounded guest buffer operations, at most 1 MiB per call; non-overlapping copy APIs reject overlaps |
 
@@ -379,7 +380,7 @@ Unknown or duplicate fields are rejected.
 omission means empty input. `output_size` is an unsigned JSON integer; omission
 means zero. Numeric fractions and floating-point spellings are rejected.
 
-Only READ/WRITE/IOCTL requests accept optional `cancel_after_100ns`, a JSON integer from 0 through `INT64_MAX` (9223372036854775807). It schedules cancellation relative to request submission in virtual 100 ns units, not wall-clock time. Zero applies after framework routing and before the guest I/O callback; if routing already completed the request, completion wins. For positive delays, time advances to timer, wait or cancellation deadlines only when no callback/frame is ready. Configuring cancellation on a WDM request stops with `model_error`; general queue and PnP cancellation remain unsupported. Each request report includes `cancel_requested_at_100ns`, either the actual absolute virtual cancellation time or null if cancellation never occurred, including when completion won first. A cancellation request alone does not complete an IRP or prescribe its final status.
+Only READ/WRITE/IOCTL requests accept optional `cancel_after_100ns`, a JSON integer from 0 through `INT64_MAX` (9223372036854775807). It schedules cancellation relative to request submission in virtual 100 ns units, not wall-clock time. For KMDF, zero applies after framework routing and before the guest I/O callback; if routing already completed the request, completion wins. For WDM, zero applies after dispatch returns. When the live IRP has a registered cancel routine, the scheduler clears that field and invokes the routine at `DISPATCH_LEVEL` with the cancel spin lock held. The routine must release the lock using `Irp->CancelIrql` before completion or return. Without a registered routine, cancellation sets `Irp->Cancel` but does not complete the request. The WDK inline `IoSetCancelRoutine` exchange, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` and driver-initiated `IoCancelIrp` use the same IRP and lock state; `IoCancelIrp` calls a registered routine synchronously and returns whether it did so. For positive delays, time advances to timer, wait or cancellation deadlines only when no callback/frame is ready. General queue and PnP cancellation remain unsupported. Each request report includes `cancel_requested_at_100ns`, either the actual absolute virtual cancellation time or null if cancellation never occurred, including when completion won first. A cancellation request alone does not complete an IRP or prescribe its final status.
 
 For direct IOCTLs, `input` initializes the first system buffer, while
 `direct_input` initializes the separate MDL-described second buffer, padded
@@ -432,7 +433,9 @@ locking. `ProbeForRead` still performs only its range/alignment check, while
 neither READ/WRITE, `user_input_access` is valid only for WRITE and
 `user_output_access` only for READ. These fields are rejected for buffered or
 direct transfers and empty buffers. Arbitrary
-processes, dynamic user unmapping and WDM cancellation remain unmodeled.
+processes and dynamic user unmapping remain unmodeled. WDM cancellation is
+covered only for serial file READ/WRITE/IOCTL IRPs with a registered driver
+cancel routine; arbitrary concurrent queue races remain outside this profile.
 The report's `configuration.user_page_access` lists only explicit protection
 facts, keyed by zero-based `source_request_index`; omitted directions use
 `read_write`.
@@ -563,7 +566,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v19`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v20`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

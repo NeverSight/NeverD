@@ -263,7 +263,7 @@ TEST_F(DriverScenarioPublic,
 }
 
 TEST_F(DriverScenarioPublic,
-       CAPIAndCLIRejectScheduledWDMCancellationBeforeDispatch) {
+       CAPIAndCLICompleteWDMIoctlBeforeItsCancellationDeadline) {
   for (const char *Delay : {"0", "17"}) {
     SCOPED_TRACE(Delay);
     const std::string Scenario = std::string(R"({"requests":[
@@ -274,7 +274,7 @@ TEST_F(DriverScenarioPublic,
     for (bool CLI : {false, true}) {
       SCOPED_TRACE(CLI);
       auto Parsed = llvm::json::parse(
-          CLI ? runCLI(Scenario, 3, "success", NEVERD_DRIVER_IO_FIXTURE)
+          CLI ? runCLI(Scenario, 0, "success", NEVERD_DRIVER_IO_FIXTURE)
               : takeString(neverd_emulate_driver_scenario_json(
                     Session, NEVERD_DRIVER_IO_FIXTURE, Scenario.c_str(),
                     nullptr)));
@@ -282,25 +282,20 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("stop_reason"), "model_error");
-      EXPECT_NE(
-          Report->getString("diagnostic")
-              .value_or("")
-              .find("scheduled cancellation requires a KMDF control request"),
-          llvm::StringRef::npos);
+      EXPECT_EQ(Report->getString("stop_reason"), "returned");
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
       const auto *Requests = Report->getArray("requests");
       ASSERT_NE(Requests, nullptr);
       ASSERT_EQ(Requests->size(), 2u);
       const auto *IO = (*Requests)[1].getAsObject();
       ASSERT_NE(IO, nullptr);
-      EXPECT_EQ(IO->getBoolean("completed"), false);
-      EXPECT_EQ(IO->getString("irp"), "0x0");
+      EXPECT_EQ(IO->getBoolean("completed"), true);
+      EXPECT_EQ(IO->getInteger("io_status"), 0);
+      EXPECT_EQ(IO->getString("output_hex"), "5a4b7869");
       const auto *Time = IO->get("cancel_requested_at_100ns");
       ASSERT_NE(Time, nullptr);
       EXPECT_EQ(Time->kind(), llvm::json::Value::Null);
-      const auto *Dispatch = IO->get("dispatch_status");
-      ASSERT_NE(Dispatch, nullptr);
-      EXPECT_EQ(Dispatch->kind(), llvm::json::Value::Null);
+      EXPECT_EQ(IO->getInteger("dispatch_status"), 0);
     }
   }
 }
@@ -980,7 +975,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteDirectBuffersWithFileIdentity) {
         << llvm::toString(Parsed.takeError());
     const auto *Report = Parsed->getAsObject();
     ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+    EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
     EXPECT_EQ(Report->getBoolean("scenario_success"), true);
     const auto *Requests = Report->getArray("requests");
     ASSERT_NE(Requests, nullptr);
@@ -1345,7 +1340,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteStopRestartAndSurpriseLifecycle) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned");
       EXPECT_EQ(Report->getInteger("nt_status"), 0);
       EXPECT_EQ(Report->getBoolean("scenario_success"), false);
@@ -1471,7 +1466,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveIndependentPowerChildren) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1592,7 +1587,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteResumableRemoveLockDrain) {
             << llvm::toString(Parsed.takeError()) << error();
         const auto *Report = Parsed->getAsObject();
         ASSERT_NE(Report, nullptr);
-        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+        EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
         EXPECT_EQ(Report->getString("stop_reason"), "returned")
             << Report->getString("diagnostic").value_or("").str();
         EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1760,7 +1755,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -1926,7 +1921,7 @@ TEST_F(DriverScenarioPublic,
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2027,7 +2022,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIObserveDmaRamBeforeExplicitInterrupt) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2115,7 +2110,7 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIFlushChannelFragmentsBeforeCompletion) {
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
       ASSERT_NE(Report, nullptr);
-      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v19");
+      EXPECT_EQ(Report->getString("profile"), "wdm-x64-scheduled-v20");
       EXPECT_EQ(Report->getString("stop_reason"), "returned")
           << Report->getString("diagnostic").value_or("").str();
       EXPECT_EQ(Report->getBoolean("scenario_success"), true);
@@ -2483,6 +2478,52 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIRejectRawNeitherWorkerAddress) {
       ASSERT_NE(Request, nullptr);
       EXPECT_EQ(Request->getInteger("dispatch_status"), 0x103);
       EXPECT_EQ(Request->getBoolean("completed"), false);
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_NEITHER_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteWDMPendingCancellation) {
+#ifdef NEVERD_WDM_NEITHER_FIXTURE
+  const std::string Scenario = R"neither({
+    "load_address":"0x190000000", "unload":true,
+    "requests":[
+      {"kind":"create","device":"\\Device\\NeverDNeither"},
+      {"kind":"ioctl","code":"0x222023","input":"01020304",
+       "output_size":4,"cancel_after_100ns":0},
+      {"kind":"cleanup"},{"kind":"close"}
+    ]
+  })neither";
+  for (const char *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    SCOPED_TRACE(Image);
+    const std::string API = takeString(neverd_emulate_driver_scenario_json(
+        Session, Image, Scenario.c_str(), nullptr));
+    ASSERT_FALSE(API.empty()) << error();
+    for (const auto &JSON : {API, runCLI(Scenario, 2, nullptr, Image)}) {
+      auto Parsed = llvm::json::parse(JSON);
+      ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), false);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 4u);
+      const auto *Request = (*Requests)[1].getAsObject();
+      ASSERT_NE(Request, nullptr);
+      EXPECT_EQ(Request->getInteger("dispatch_status"), 0x103);
+      EXPECT_EQ(Request->getInteger("io_status"), 0xc0000120LL);
+      EXPECT_EQ(Request->getInteger("cancel_requested_at_100ns"), 0);
+      EXPECT_EQ(Request->getBoolean("completed"), true);
+      EXPECT_EQ(Request->getString("output_hex"), "");
     }
   }
 #else

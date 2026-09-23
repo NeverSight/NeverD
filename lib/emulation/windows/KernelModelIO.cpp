@@ -379,10 +379,6 @@ KernelModel::beginRequest(const DriverRequest &Input,
       return ioError("user page access requires a nonempty neither-I/O "
                      "buffer in the matching direction");
   }
-  if (IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither &&
-      Input.CancelAfter100ns)
-    return ioError("METHOD_NEITHER cancellation requires a locked-buffer "
-                   "ownership contract");
   if ((!IsIOCTL ||
        (Input.ControlCode & IoControlMethodMask) == MethodBuffered ||
        (Input.ControlCode & IoControlMethodMask) == MethodNeither) &&
@@ -469,8 +465,6 @@ KernelModel::beginRequest(const DriverRequest &Input,
     return ioError("device stack requires a positive bounded IRP stack count");
   if (PnpOwner && *Top == PnpOwner)
     return ioError("resource-free PDO has no attached guest file dispatch");
-  if (Input.CancelAfter100ns && !FrameworkDevices.count(Device))
-    return ioError("scheduled cancellation requires a KMDF control request");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
     if (Devices.at(Device).DeletePending || Devices.at(*Top).DeletePending)
@@ -963,6 +957,8 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
           if (IsWrite)
             return (Offset >= IRPStatusOffset &&
                     Offset < IRPRequestorModeOffset) ||
+                   (Offset >= IRPCancelRoutineOffset &&
+                    Offset < IRPCancelRoutineOffset + profile::PointerSize) ||
                    Offset == IRPPendingOffset || Offset == IRPLocationOffset ||
                    (Offset >= IRPStackPointerOffset &&
                     Offset < IRPStackPointerOffset + profile::PointerSize) ||

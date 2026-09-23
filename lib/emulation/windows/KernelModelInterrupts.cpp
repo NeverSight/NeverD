@@ -227,6 +227,14 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
     return apiError("return does not own the active execution identity");
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
+  if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {
+    if (!CancelLock.Callback || CancelLock.Held ||
+        CurrentIRQL != CancelLock.OldIRQL)
+      return apiError(
+          "WDM cancel callback must release the cancel spin lock and "
+          "restore its caller IRQL");
+    return llvm::Error::success();
+  }
   if (CurrentIRQL != EntryIRQL)
     return apiError("guest return did not restore entry IRQL");
   return llvm::Error::success();

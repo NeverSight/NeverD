@@ -488,7 +488,7 @@ TEST_F(KernelCancellation,
   }
 }
 
-TEST_F(KernelCancellation, WDMRouteRejectsCancellationBeforeAllocatingAnIRP) {
+TEST_F(KernelCancellation, WDMRouteChecksFileBeforeAllocatingAnIRP) {
   unicode(DeviceName, "\\Device\\PlainWdmCancellation");
   EXPECT_EQ(kernel("IoCreateDevice", {Model->driverObject(), 0, DeviceName,
                                       0x22, 0, 0, DeviceSlot}),
@@ -497,7 +497,8 @@ TEST_F(KernelCancellation, WDMRouteRejectsCancellationBeforeAllocatingAnIRP) {
   Request.Device = "\\Device\\PlainWdmCancellation";
   Request.ControlCode = 0x222000;
   Request.CancelAfter100ns = 0;
-  rejected(Model->beginRequest(Request), "KMDF control request");
+  rejected(Model->beginRequest(Request),
+           "request requires a successful CREATE on the same device and file");
   ASSERT_FALSE(Result.Requests.empty());
   EXPECT_EQ(Result.Requests.back().IRP, 0u);
   EXPECT_FALSE(Result.Requests.back().Completed);

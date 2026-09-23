@@ -617,6 +617,27 @@ llvm::Expected<uint64_t> KernelModel::call(
       return E;
     return 0;
   }
+  if (Kind == KernelAPIKind::IoSetCancelRoutine) {
+    const auto *Request = requestForIRP(A[0]);
+    if (!Request || Request->Completed ||
+        (Framework && Framework->ownsRequestIRP(A[0])))
+      return modelError("IoSetCancelRoutine requires a live WDM-owned IRP");
+    auto Previous = Memory.readInteger(A[0] + IRPCancelRoutineOffset, 8);
+    if (!Previous)
+      return Previous.takeError();
+    if (auto E = Memory.writeInteger(A[0] + IRPCancelRoutineOffset, A[1], 8))
+      return E;
+    return *Previous;
+  }
+  if (Kind == KernelAPIKind::IoAcquireCancelSpinLock)
+    return acquireCancelSpinLock(A[0]);
+  if (Kind == KernelAPIKind::IoReleaseCancelSpinLock) {
+    if (auto E = releaseCancelSpinLock(A[0]))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::IoCancelIrp)
+    return cancelIRP(A[0]);
   if (Kind == KernelAPIKind::IoGetDmaAdapter)
     return getDMAAdapter(A);
   if (Kind == KernelAPIKind::IoAllocateMdl)

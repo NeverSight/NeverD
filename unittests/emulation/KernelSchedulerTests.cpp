@@ -944,6 +944,28 @@ TEST(DriverKernelScheduler, DPCsPrecedeCancellationFIFOWhichPrecedesWorkers) {
   EXPECT_EQ(S.dispatchCount(), 4u);
 }
 
+TEST(DriverKernelScheduler, WDMCancellationRunsAtDispatchBeforeItsWorker) {
+  Scheduler S;
+  const auto Worker = take(S.enqueueWorkItem(work(10, 101)));
+  const auto Cancel = take(S.enqueueWDMCancellation(work(11, 101)));
+  EXPECT_TRUE(S.hasQueuedCancellation());
+  EXPECT_FALSE(S.hasQueuedFrameworkCancel());
+  expectError(S.canEnqueueWDMCancellations({work(11, 101)}),
+              "already queued");
+  auto Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, Cancel);
+  EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::WDMCancel);
+  EXPECT_EQ(Call->IRQL, 2u);
+  success(S.finish(Call->ID));
+  Call = take(S.next(false));
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Call->ID, Worker);
+  EXPECT_EQ(Call->IRQL, 0u);
+  success(S.finish(Call->ID));
+  EXPECT_FALSE(S.hasPending());
+}
+
 TEST(DriverKernelScheduler,
      DuplicateQueuedCancellationCannotReplaceItsDelivery) {
   Scheduler S;

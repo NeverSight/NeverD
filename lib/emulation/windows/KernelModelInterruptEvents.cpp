@@ -52,30 +52,40 @@ KernelModel::preflightScheduledBoundary(uint64_t Time) {
   }
 
   uint64_t Cancellations = 0;
+  std::vector<KernelScheduler::Callback> WDMCancellations;
   for (const auto &[IRP, Request] : Requests) {
     if (Request.Completed || !Request.CancelDeadline ||
         *Request.CancelDeadline > Time)
       continue;
-    if (!Framework || !FrameworkDevices.count(Request.Device))
-      return interruptEventError(
-          "scheduled cancellation requires a KMDF control request");
-    auto GeneratesCallback =
-        Framework->preflightRequestCancellation(IRP, Cancellations);
-    if (!GeneratesCallback)
-      return GeneratesCallback.takeError();
-    Cancellations += *GeneratesCallback;
+    if (Framework && FrameworkDevices.count(Request.Device)) {
+      auto GeneratesCallback =
+          Framework->preflightRequestCancellation(IRP, Cancellations);
+      if (!GeneratesCallback)
+        return GeneratesCallback.takeError();
+      Cancellations += *GeneratesCallback;
+    } else {
+      auto Callback = planWDMCancellation(IRP, Request);
+      if (!Callback)
+        return Callback.takeError();
+      if (*Callback)
+        WDMCancellations.push_back(std::move(**Callback));
+    }
   }
+  if (auto E = Scheduler.canEnqueueWDMCancellations(WDMCancellations))
+    return E;
   auto InterruptCount = Interrupts.dueCount(Time);
   if (!InterruptCount)
     return InterruptCount.takeError();
   const uint64_t Providers = ProviderCallbacks.size();
-  if (Cancellations > UINT64_MAX - Providers ||
-      *InterruptCount > UINT64_MAX - Providers - Cancellations)
+  if (WDMCancellations.size() > UINT64_MAX - Cancellations ||
+      Cancellations + WDMCancellations.size() > UINT64_MAX - Providers ||
+      *InterruptCount > UINT64_MAX - Providers - Cancellations -
+                            WDMCancellations.size())
     return interruptEventError("scheduled boundary callback count overflow");
   // The caller combines this exact count with timer-DPC coalescing in one
   // scheduler capacity/identity preflight before changing time or
   // observations.
-  return Providers + Cancellations + *InterruptCount;
+  return Providers + Cancellations + WDMCancellations.size() + *InterruptCount;
 }
 
 llvm::Error KernelModel::processInterruptEvents() {

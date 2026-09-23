@@ -128,13 +128,19 @@ public:
            (Transfer && *Transfer <= Scheduler.now100ns()) ||
            Scheduler.hasQueuedInterrupt() || hasQueuedDPC() ||
            Scheduler.hasQueuedDMACallback() ||
-           Scheduler.hasQueuedFrameworkCancel() ||
+           Scheduler.hasQueuedCancellation() ||
            Scheduler.hasQueuedWDMCompletion();
   }
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
   void enterForeground() { CurrentIRQL = 0; }
-  void enterExecution(uint64_t Identity) { CurrentExecution = Identity; }
+  void enterExecution(uint64_t Identity) {
+    CurrentExecution = Identity;
+    if (CancelLock.Held && CancelLock.Callback && !CancelLock.Owner) {
+      CancelLock.Owner = Identity;
+      CancelLock.CallbackExecution = Identity;
+    }
+  }
   void setUserRequestContext(bool Active) { UserRequestContext = Active; }
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
@@ -254,10 +260,21 @@ private:
   llvm::Error validateDispatcherStorage(uint64_t Address, uint32_t Size,
                                         bool IsWrite) const;
   uint8_t CurrentIRQL = 0;
+  struct CancelSpinLockState {
+    bool Held = false;
+    bool Callback = false;
+    uint64_t Owner = 0;
+    uint64_t CallbackExecution = 0;
+    uint64_t IRP = 0;
+    uint8_t OldIRQL = 0;
+  } CancelLock;
   std::map<uint64_t, uint64_t> WorkItems;
   std::map<uint64_t, uint64_t> WorkReferences;
   std::map<uint64_t, GuestCallToken> ScheduledModelContinuations;
   llvm::Error processRequestCancellations();
+  llvm::Expected<uint64_t> acquireCancelSpinLock(uint64_t OldIRQL);
+  llvm::Error releaseCancelSpinLock(uint64_t OldIRQL);
+  llvm::Expected<uint64_t> cancelIRP(uint64_t IRP);
   llvm::Expected<uint64_t> allocateWorkItem(uint64_t Device);
   llvm::Error queueWorkItem(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error freeWorkItem(uint64_t Address);
@@ -389,6 +406,8 @@ private:
     mutable std::array<bool, 16> IOStatusWritten{};
   };
   std::map<uint64_t, ActiveRequest> Requests;
+  llvm::Expected<std::optional<KernelScheduler::Callback>>
+  planWDMCancellation(uint64_t IRP, const ActiveRequest &Request) const;
   llvm::Error
   validatePnpRemovalFinalization(const ActiveRequest &Request) const;
   std::set<uint64_t> FinalizedRequests;
@@ -396,7 +415,8 @@ private:
     Dispatch,
     Completion,
     PowerDispatch,
-    PowerCompletion
+    PowerCompletion,
+    Cancel
   };
   struct IRPCall {
     IRPCallKind Kind;

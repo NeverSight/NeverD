@@ -39,15 +39,15 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驅動程式類別或需求 | 目前範圍 | 缺少的環境 |
 |--------------------|----------|------------|
 | 使用下列 API 的 x64 軟體 WDM 驅動程式 | 有界 x64 WDM 初始化、循序緩衝／直接請求、工作項目、計時器、DPC、事件與等待，以及行為報告和限制 | 每個額外執行到的 API 都必須有明確的模型 |
-| `METHOD_BUFFERED` IOCTL | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交 或 WDM 請求取消 |
+| `METHOD_BUFFERED` IOCTL | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL、系統對映及唯讀共用模型 PFN | 使用者對映及其他 DMA 介面 |
 | 驅動程式自行配置的 MDL | 描述非分頁集區或單一使用者配置的獨立描述元，共用實體頁面身分 | 不支援 IRP 關聯、MDL 鏈或任意程序 |
-| READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、WDM 請求取消或隱含檔案位置 |
-| WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁及可捕捉的記憶體故障 | 單一請求程序脈絡；不支援 WDM 取消或任意使用者對映 |
+| READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、一般 WDM 請求取消或隱含檔案位置 |
+| WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁及可捕捉的記憶體故障 | 單一請求程序脈絡；支援有限的 WDM 取消，不支援任意使用者對映 |
 | KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、循序預設佇列，以及實際執行回呼的緩衝／直接請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
 | PnP 匯流排／功能／篩選驅動程式 | 明確的無資源或暫存器組 PDO、客體 AddDevice 與八種常見 PnP 生命週期次要功能 | 其他 PnP 操作、一般電源管理、其他硬體／資源及 KMDF PnP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
-| 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行公開情境提交 或 WDM 請求取消 |
+| 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
 | 使用處理程序／執行緒回呼、控制代碼、登錄／檔案操作或核心模組探索的驅動程式 | 支援配置的登錄；其他行為限於下列 API | 物件管理員、系統狀態及回呼／事件產生機制 |
 | 硬體、DMA、PCI、中斷或虛擬化驅動程式 | 明確暫存器組、MMIO、獨佔 latched 中斷及一致性 common／SG／channel DMA | 其他裝置模型、任意實體 RAM、PCI、連接埠、共用／電位觸發／MSI 中斷、其他 DMA 介面及特權 CPU 狀態 |
 | x86 或 ARM64 Windows 驅動程式 | 拒絕 | 對應架構的載入、ABI 及執行模型 |
@@ -65,7 +65,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 排入佇列的 `DelayedWorkQueue` 工作項目在 `PASSIVE_LEVEL` 執行，客體 DPC 回呼在 `DISPATCH_LEVEL` 接收規定的四個參數。CPU0 在呼叫傳回及阻塞等待邊界進行確定性的合作排程。相對、絕對與週期計時器使用虛擬時間；沒有可執行的框架時，時間推進至下一計時器、等待或取消期限。通知型與同步型事件／計時器保留各自的訊號消耗語意。每個回呼擁有獨立的客體堆疊；多個阻塞框架保留區域變數及完整 CPU 內容，客體記憶體仍共用。Win64 回呼入口將前四個參數放入暫存器，其餘放入堆疊。請求仍循序處理：標記 IRP 為待處理的派送函式必須傳回 `STATUS_PENDING`，且完成後才能開始下一個請求。待處理請求或無限等待沒有可用來源時，以停滯的 `model_error` 停止。指令、記憶體、觀察記錄與實際時間預算仍共用。
 
-這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、WDM 請求取消、自旋鎖、並行公開情境提交、一般 IRQL 切換、KMDF 呼叫端脈絡及使用者緩衝區 API、UMDF、KMDF PnP 裝置及一般佇列排程、完整 PnP／電源、一般硬體、其他 DMA 介面與其他中斷模式仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
+這是有界排程模型，不代表完整 Windows 非同步支援。可警示或使用者模式等待、系統執行緒、APC、一般 WDM 請求取消、自旋鎖、並行公開情境提交、一般 IRQL 切換、KMDF 呼叫端脈絡及使用者緩衝區 API、UMDF、KMDF PnP 裝置及一般佇列排程、完整 PnP／電源、一般硬體、其他 DMA 介面與其他中斷模式仍不支援。僅初始化呼叫會執行明確排入佇列的回呼，不會隱含產生請求或卸載。
 
 工作項目在回呼開始前出佇列，因此回呼可釋放自身的工作項目。釋放仍在佇列中的項目、重複排入、使用失效物件或非客體可執行記憶體中的回呼位址都會明確失敗。裝置參考保留到回呼傳回。請求卸載要求釋放所有工作項目並完成佇列工作。CPU 內容保存與還原包含通用、SIMD、FPU 與控制狀態；客體記憶體始終共用，故障 CPU 不能藉還原內容繼續執行。
 刪除會延後到檔案物件及排隊／執行中的工作項目參考全部釋放。物件區耗盡時，工作項目配置傳回 NULL。
@@ -264,7 +264,8 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 根物件僅接受 `load_address`、`requests`、`unload`、`kernel_exports`、`registry` 和 `pnp_devices`。一般檔案要求接受 `kind`、選用且互斥的 `device` 或 `device_id`，以及選用的 `file`。IOCTL 必須提供 `code`，並接受 `input`、`output_size` 和 `direct_input`。`read` 接受 `output_size` 和 `byte_offset`；`write` 接受 `input` 和 `byte_offset`。位移預設為零，可使用整數或十六進位字串，且必須落在非負有號 64 位元值的範圍內。生命週期請求會拒絕傳輸欄位。未知或重複欄位會遭拒絕。`code` 接受無號 32 位元 JSON 整數或 `0x` 十六進位字串。`input` 是長度為偶數且不帶前綴或空格的十六進位位元組字串；省略表示空輸入。`output_size` 為無號 JSON 整數，省略表示零。不接受小數及浮點數寫法。
 
-僅 READ／WRITE／IOCTL 請求接受選用欄位 `cancel_after_100ns`，它必須是 0 到 `INT64_MAX`（9223372036854775807）之間的 JSON 整數。此值相對於請求提交時刻，以虛擬 100 ns 為單位，並非實際時間。零表示框架路由後、客體 I/O 回呼前觸發取消；若路由已直接完成請求，則完成優先。正數延遲僅在沒有就緒回呼或執行框架時，隨時間推進至計時器、等待或取消期限而觸發。為 WDM 請求設定取消會以 `model_error` 停止；仍不支援一般佇列與 PnP 取消。每個請求報告都包含 `cancel_requested_at_100ns`，值為取消實際發生時的絕對虛擬時間；若未發生取消，包括完成先發生的情況，則為 null。請求取消本身不會完成 IRP，也不規定最終狀態。
+僅 READ／WRITE／IOCTL 請求接受選用欄位 `cancel_after_100ns`，它必須是 0 到 `INT64_MAX`（9223372036854775807）之間的 JSON 整數。此值相對於請求提交時刻，以虛擬 100 ns 為單位，並非實際時間。對 KMDF，零表示框架路由後、客體 I/O 回呼前觸發取消；若路由已直接完成請求，則完成優先。對 WDM，零在派送傳回後生效。正數延遲僅在沒有就緒回呼或執行框架時，隨時間推進至計時器、等待或取消期限而觸發。掛起的 WDM IRP 會在持有取消自旋鎖的 `DISPATCH_LEVEL` 呼叫已註冊的取消常式；常式必須使用 `Irp->CancelIrql` 釋放鎖後再完成請求。一般佇列與 PnP 取消仍不支援。每個請求報告都包含 `cancel_requested_at_100ns`，值為取消實際發生時的絕對虛擬時間；若未發生取消，包括完成先發生的情況，則為 null。請求取消本身不會完成 IRP，也不規定最終狀態。
+`IoSetCancelRoutine`、`IoAcquireCancelSpinLock`、`IoReleaseCancelSpinLock` 與 `IoCancelIrp` 共用相同的 IRP 狀態及取消自旋鎖；`IoCancelIrp` 同步呼叫已註冊常式，並傳回是否實際呼叫。
 
 對於直接 IOCTL，`input` 初始化第一個系統緩衝區，`direct_input` 則初始化由 MDL 描述的獨立第二個緩衝區，並以零補齊至 `output_size`。`METHOD_IN_DIRECT` 要求可讀取，但不代表系統對映唯讀。兩種方法都使用可讀寫的情境緩衝區。`MdlMappingNoWrite` 移除對映的寫入權限，`MdlMappingNoExecute` 移除執行權限。解除對映會撤銷系統 VA；重新對映仍保留相同的鎖定資料。完成請求後，MDL 及對映皆失效。模型提供 WDM 巨集使用的公開 MDL 欄位；處理程序欄位與未建立 MDL 的 PFN、手工建立的 MDL、使用者對映，以及透過原始 UserBuffer 直接存取都會遭拒絕。長度為零的直接緩衝區使用空 MDL。
 
@@ -311,7 +312,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v19`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v20`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

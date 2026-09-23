@@ -114,7 +114,8 @@ KernelScheduler::Invocation KernelScheduler::makeInvocation(Callback Work,
   static_cast<Callback &>(Call) = std::move(Work);
   Call.ID = NextID++;
   Call.Kind = Kind;
-  Call.IRQL = Kind == CallbackKind::DPC || isDMACallbackKind(Kind)
+  Call.IRQL = Kind == CallbackKind::DPC || Kind == CallbackKind::WDMCancel ||
+                      isDMACallbackKind(Kind)
                   ? scheduler::DispatchLevel
                   : scheduler::PassiveLevel;
   Call.DueTime100ns = DueTime;
@@ -152,6 +153,36 @@ KernelScheduler::enqueueFrameworkCancel(Callback Cancellation) {
   Cancellations.push_back(makeInvocation(std::move(Cancellation),
                                          CallbackKind::FrameworkCancel, Now));
   return Cancellations.back().ID;
+}
+
+llvm::Error KernelScheduler::canEnqueueWDMCancellations(
+    llvm::ArrayRef<Callback> Batch) const {
+  if (auto E = validateTime())
+    return E;
+  std::set<uint64_t> Objects;
+  for (const auto &Cancellation : Batch) {
+    if (auto E = validateCallback(Cancellation))
+      return E;
+    if (containsObject(Cancellations, Cancellation.Object) ||
+        !Objects.insert(Cancellation.Object).second)
+      return schedulerError("request cancellation is already queued");
+  }
+  return checkCapacity(Batch.size());
+}
+
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueWDMCancellation(Callback Cancellation) {
+  if (auto E = canEnqueueWDMCancellations({Cancellation}))
+    return E;
+  Cancellations.push_back(
+      makeInvocation(std::move(Cancellation), CallbackKind::WDMCancel, Now));
+  return Cancellations.back().ID;
+}
+
+bool KernelScheduler::hasQueuedFrameworkCancel() const {
+  return llvm::any_of(Cancellations, [](const auto &Call) {
+    return Call.Kind == CallbackKind::FrameworkCancel;
+  });
 }
 
 llvm::Expected<bool> KernelScheduler::queueDPC(DpcCallback DPC) {

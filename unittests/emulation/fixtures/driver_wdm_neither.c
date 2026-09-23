@@ -18,6 +18,10 @@
 #define IO_HELPER_FAULT 0x222017u
 #define IO_WORKER_LOCKED 0x22201bu
 #define IO_WORKER_RAW 0x22201fu
+#define IO_CANCEL 0x222023u
+#define IO_CANCEL_BAD_RELEASE 0x222027u
+#define IO_SELF_CANCEL 0x22202bu
+#define IO_SELF_CANCEL_NO_ROUTINE 0x22202fu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -31,6 +35,9 @@ typedef struct _WORKER_STATE {
   PUCHAR OutAlias;
   volatile UCHAR *RawInput;
   BOOLEAN Raw;
+  BOOLEAN Cancelable;
+  BOOLEAN Cancelled;
+  BOOLEAN BadRelease;
 } WORKER_STATE;
 
 static WORKER_STATE WorkerState;
@@ -42,8 +49,46 @@ static NTSTATUS Complete(PIRP Irp, NTSTATUS Status, ULONG_PTR Length) {
   return Status;
 }
 
+static VOID NeitherCancel(PDEVICE_OBJECT Object, PIRP Irp) {
+  if (WorkerState.BadRelease) {
+    IoReleaseCancelSpinLock((KIRQL)(Irp->CancelIrql + 1));
+    return;
+  }
+  const BOOLEAN Valid = Object == Device && WorkerState.Irp == Irp &&
+                        Irp->Cancel && !Irp->CancelRoutine &&
+                        KeGetCurrentIrql() == DISPATCH_LEVEL;
+  WorkerState.Cancelled = TRUE;
+  WorkerState.Irp = NULL;
+  IoReleaseCancelSpinLock(Irp->CancelIrql);
+  MmUnlockPages(WorkerState.OutMdl);
+  MmUnlockPages(WorkerState.InMdl);
+  IoFreeMdl(WorkerState.OutMdl);
+  IoFreeMdl(WorkerState.InMdl);
+  WorkerState.OutMdl = NULL;
+  WorkerState.InMdl = NULL;
+  WorkerState.InAlias = NULL;
+  WorkerState.OutAlias = NULL;
+  Complete(Irp, Valid ? STATUS_CANCELLED : STATUS_INVALID_DEVICE_STATE, 0);
+}
+
+static VOID SelfCancel(PDEVICE_OBJECT Object, PIRP Irp) {
+  const BOOLEAN Valid = Object == Device && Irp->Cancel &&
+                        !Irp->CancelRoutine &&
+                        KeGetCurrentIrql() == DISPATCH_LEVEL;
+  IoReleaseCancelSpinLock(Irp->CancelIrql);
+  Complete(Irp, Valid ? STATUS_CANCELLED : STATUS_INVALID_DEVICE_STATE, 0);
+}
+
 static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
   WORKER_STATE *State = (WORKER_STATE *)Context;
+  if (State->Cancelled) {
+    IoFreeWorkItem(State->Work);
+    State->Work = NULL;
+    State->Cancelable = FALSE;
+    State->Cancelled = FALSE;
+    State->BadRelease = FALSE;
+    return;
+  }
   PIRP Irp = State->Irp;
   if (State->Raw) {
     Stage = State->RawInput[0];
@@ -51,10 +96,18 @@ static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
   }
   NTSTATUS Status = STATUS_SUCCESS;
   ULONG_PTR Length = 0;
+  if (State->Cancelable) {
+    KIRQL OldIRQL;
+    IoAcquireCancelSpinLock(&OldIRQL);
+    PDRIVER_CANCEL Old = IoSetCancelRoutine(Irp, NULL);
+    IoReleaseCancelSpinLock(OldIRQL);
+    if (Old != NeitherCancel)
+      Status = STATUS_INVALID_DEVICE_STATE;
+  }
   if (Object != Device || ExGetPreviousMode() != KernelMode ||
       !State->InAlias || !State->OutAlias)
     Status = STATUS_INVALID_PARAMETER;
-  else {
+  else if (NT_SUCCESS(Status)) {
     for (ULONG I = 0; I < 4; ++I)
       State->OutAlias[I] = State->InAlias[I] + 0x10;
     Length = 4;
@@ -71,6 +124,8 @@ static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
   State->InAlias = NULL;
   State->OutAlias = NULL;
   State->RawInput = NULL;
+  State->Cancelable = FALSE;
+  State->BadRelease = FALSE;
   Complete(Irp, Status, Length);
 }
 
@@ -127,6 +182,25 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   }
 
   switch (Code) {
+  case IO_SELF_CANCEL: {
+    KIRQL OldIRQL;
+    IoAcquireCancelSpinLock(&OldIRQL);
+    if (IoSetCancelRoutine(Irp, SelfCancel)) {
+      IoReleaseCancelSpinLock(OldIRQL);
+      return Complete(Irp, STATUS_INVALID_DEVICE_STATE, 0);
+    }
+    IoReleaseCancelSpinLock(OldIRQL);
+    IoMarkIrpPending(Irp);
+    if (!IoCancelIrp(Irp))
+      Status = STATUS_INVALID_DEVICE_STATE;
+    return STATUS_PENDING;
+  }
+  case IO_SELF_CANCEL_NO_ROUTINE:
+    if (IoCancelIrp(Irp))
+      Status = STATUS_INVALID_DEVICE_STATE;
+    else
+      Status = STATUS_CANCELLED;
+    return Complete(Irp, Status, 0);
   case IO_NORMAL:
     __try {
       ProbeForRead(Input, InputLength, 1);
@@ -244,13 +318,15 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     }
     break;
   case IO_WORKER_LOCKED:
-  case IO_WORKER_RAW: {
+  case IO_WORKER_RAW:
+  case IO_CANCEL:
+  case IO_CANCEL_BAD_RELEASE: {
     if (WorkerState.Irp)
       return Complete(Irp, STATUS_INVALID_DEVICE_STATE, 0);
     PMDL InMdl = NULL, OutMdl = NULL;
     BOOLEAN InLocked = FALSE, OutLocked = FALSE;
     PIO_WORKITEM Work = NULL;
-    if (Code == IO_WORKER_LOCKED) {
+    if (Code != IO_WORKER_RAW) {
       InMdl = IoAllocateMdl((PVOID)Input, InputLength, FALSE, FALSE, NULL);
       OutMdl = IoAllocateMdl((PVOID)Output, OutputLength, FALSE, FALSE, NULL);
       if (!InMdl || !OutMdl) {
@@ -287,6 +363,19 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     WorkerState.OutMdl = OutMdl;
     WorkerState.RawInput = Input;
     WorkerState.Raw = Code == IO_WORKER_RAW;
+    WorkerState.Cancelable = Code == IO_CANCEL || Code == IO_CANCEL_BAD_RELEASE;
+    WorkerState.Cancelled = FALSE;
+    WorkerState.BadRelease = Code == IO_CANCEL_BAD_RELEASE;
+    if (WorkerState.Cancelable) {
+      KIRQL OldIRQL;
+      IoAcquireCancelSpinLock(&OldIRQL);
+      if (IoSetCancelRoutine(Irp, NeitherCancel)) {
+        IoReleaseCancelSpinLock(OldIRQL);
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto WorkerFailure;
+      }
+      IoReleaseCancelSpinLock(OldIRQL);
+    }
     IoMarkIrpPending(Irp);
     IoQueueWorkItem(Work, NeitherWorker, DelayedWorkQueue, &WorkerState);
     return STATUS_PENDING;
@@ -303,6 +392,9 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       IoFreeMdl(InMdl);
     WorkerState.InAlias = NULL;
     WorkerState.OutAlias = NULL;
+    WorkerState.Cancelable = FALSE;
+    WorkerState.Cancelled = FALSE;
+    WorkerState.BadRelease = FALSE;
     break;
   }
   default:
