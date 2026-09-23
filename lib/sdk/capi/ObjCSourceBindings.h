@@ -1587,13 +1587,17 @@ inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
   return Hint;
 }
 
-/// Admit a selected counter pointer only when every definition is an exact
-/// address in one reconstructed section and every use is a bounded numeric
-/// memory access. An arbitrary pointer passed to a call or returned to the
-/// caller is not justified by the counter snapshot.
-inline std::map<const HighExpr *, va_t>
-selectedProfileCounterSeeds(const HighFunc &Function,
-                            const ObjCProfileStorage &Storage) {
+/// A selected storage pointer may be rebuilt only when every definition is an
+/// authenticated cell and every use remains a bounded access to that cell.
+/// The source helper is never allowed to escape through a call or return.
+struct SelectedStorageSeed {
+  SourceCallTypeHint Hint;
+  va_t Address = 0;
+  bool Profile = false;
+};
+inline std::map<const HighExpr *, SelectedStorageSeed>
+selectedStorageSeeds(const HighFunc &Function, const BinaryImage &Image,
+                     const ObjCProfileStorage &Storage) {
   VarKeyMap<std::vector<ExprPtr>> Definitions;
   walkStmts(Function.Body, [&](const HighStmt &Statement) {
     if (Statement.Kind == StmtKind::Assign && Statement.Dst && Statement.Val &&
@@ -1602,12 +1606,14 @@ selectedProfileCounterSeeds(const HighFunc &Function,
         Statement.Dst->Var.Kind == MedVar::Temp)
       Definitions[varKey(Statement.Dst->Var)].push_back(Statement.Val);
   });
-  std::map<const HighExpr *, va_t> Seeds;
+  std::map<const HighExpr *, SelectedStorageSeed> Seeds;
   for (const auto &[Key, Values] : Definitions) {
-    if (Values.empty() || Values.size() > 64)
+    if (Values.size() < 2 || Values.size() > 64)
       continue;
     std::vector<va_t> Addresses;
     std::optional<va_t> Base;
+    std::optional<bool> Profile;
+    std::vector<SourceCallTypeHint> Hints;
     bool Valid = true;
     for (const auto &Value : Values) {
       if (!Value || Value->Kind != ExprKind::Const || !Value->Type ||
@@ -1620,14 +1626,20 @@ selectedProfileCounterSeeds(const HighFunc &Function,
         break;
       }
       const auto Section = Storage.sectionFor(Value->ConstVal, 1);
-      if (!Section || (Base && *Base != *Section)) {
+      auto Hint = Section ? profileStorageHint(Image.Arch, *Section)
+                          : localStorageHint(Image, Value->ConstVal, 8);
+      if (!Hint || (Profile && *Profile != bool(Section)) ||
+          (Section && Base && *Base != *Section)) {
         Valid = false;
         break;
       }
-      Base = Section;
+      Profile = bool(Section);
+      if (Section)
+        Base = Section;
+      Hints.push_back(std::move(*Hint));
       Addresses.push_back(Value->ConstVal);
     }
-    if (!Valid || !Base)
+    if (!Valid || !Profile)
       continue;
     std::set<const HighExpr *> SeedNodes;
     for (const auto &Value : Values)
@@ -1672,12 +1684,16 @@ selectedProfileCounterSeeds(const HighFunc &Function,
     const auto SafeAccess = [&](const ExprPtr &Address, const TypeRef &Type,
                                 NdMemoryOrdering Ordering,
                                 NdMemoryAddressSpace Space) {
-      if (!Type || Type->Kind != NdTypeKind::Int || !Type->Size ||
-          Type->Size > 16 || Ordering != NdMemoryOrdering::None ||
+      if (!Type || !Type->Size || Ordering != NdMemoryOrdering::None ||
           Space != NdMemoryAddressSpace::Default)
         return false;
       const auto Delta = Offset(Offset, Address, 0);
       if (!Delta)
+        return false;
+      if (!*Profile)
+        return !*Delta && Type->Size == 8 &&
+               (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr);
+      if (Type->Kind != NdTypeKind::Int || Type->Size > 16)
         return false;
       for (va_t Candidate : Addresses)
         if (Candidate > UINT64_MAX - *Delta ||
@@ -1729,8 +1745,9 @@ selectedProfileCounterSeeds(const HighFunc &Function,
       });
     });
     if (Valid)
-      for (const auto &Value : Values)
-        Seeds.emplace(Value.get(), *Base);
+      for (size_t I = 0; I < Values.size(); ++I)
+        Seeds.emplace(Values[I].get(),
+                      SelectedStorageSeed{Hints[I], Addresses[I], *Profile});
   }
   return Seeds;
 }
@@ -2472,8 +2489,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       readOnlyObjectPointerLoadPlans(Function, Image);
   const auto ObjectPointerConsumers =
       readOnlyObjectPointerLoadConsumers(Function, ObjectPointerLoads);
-  const auto ProfileSeeds =
-      selectedProfileCounterSeeds(Function, *ProfileStorage);
+  const auto StorageSeeds =
+      selectedStorageSeeds(Function, Image, *ProfileStorage);
   const auto DirectLocalStorage =
       directLocalStorageAccessExtents(Function, Image);
   const auto KVOCallbackParameter =
@@ -2742,22 +2759,28 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           return Expression;
         }
       }
-      if (const auto Seed = ProfileSeeds.find(Original.get());
-          Seed != ProfileSeeds.end() && Address) {
-        auto Profile = profileStorageHint(Image.Arch, Seed->second);
-        if (Profile) {
+      if (const auto Seed = StorageSeeds.find(Original.get());
+          Seed != StorageSeeds.end() && Address) {
+        const auto &Proof = Seed->second;
+        if (Proof.Hint.TargetAddress && *Address == Proof.Address) {
           auto Storage = HighExpr::makeCall({}, 0, {});
           Storage->Type = NdType::makeInt(8, false);
           Storage->SourceCallHint =
-              std::make_shared<SourceCallTypeHint>(std::move(*Profile));
-          *Expression = *(*Address == Seed->second
+              std::make_shared<SourceCallTypeHint>(Proof.Hint);
+          *Expression = *(*Address == Proof.Hint.TargetAddress
                               ? Storage
                               : HighExpr::makeBinop(
                                     NdOp::INT_ADD, Storage,
                                     HighExpr::makeConst(
-                                        *Address - Seed->second, 8,
+                                        *Address - Proof.Hint.TargetAddress, 8,
                                         ConstantAddressProvenance::Scalar)));
-          Result.ProfileCounterSections.insert(Seed->second);
+          if (Proof.Profile)
+            Result.ProfileCounterSections.insert(Proof.Hint.TargetAddress);
+          else
+            Result.LocalStorageExtents[Proof.Hint.TargetAddress] =
+                std::max<uint64_t>(
+                    Result.LocalStorageExtents[Proof.Hint.TargetAddress],
+                    Proof.Hint.ByteCount);
           return Expression;
         }
       }

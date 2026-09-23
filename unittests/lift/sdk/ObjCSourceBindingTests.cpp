@@ -2773,6 +2773,61 @@ TEST(ObjCSourceBindings, MutableStringPointersKeepTheirSharedStorage) {
     }
 }
 
+TEST(ObjCSourceBindings,
+     SelectedMutableStringCellsKeepSeparateAuthenticatedInitializers) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Mutation);
+      auto F = immutablePointerFixture(Architecture, true);
+      F.Image.Segments[2].ReadOnlyAfterRelocations = false;
+      F.Image.Symbols.push_back({"_firstString", 0x3000, 8, false});
+      F.Image.Symbols.push_back({"_secondString", 0x3008, 8, false});
+      MedVar Pointer;
+      Pointer.Kind = MedVar::Temp;
+      Pointer.Id = 41;
+      Pointer.Size = 8;
+      Pointer.TheArch = Architecture;
+      auto Var = HighExpr::makeVar(Pointer, NdType::makeInt(8, false));
+      HighStmt First, Second, Return;
+      First.Kind = Second.Kind = StmtKind::Assign;
+      First.Dst = Second.Dst = Var;
+      First.Val = HighExpr::makeConst(0x3000, 8,
+                                      ConstantAddressProvenance::DataAddress);
+      Second.Val = HighExpr::makeConst(0x3008, 8,
+                                       ConstantAddressProvenance::DataAddress);
+      Return.Kind = StmtKind::Return;
+      Return.RetVal = HighExpr::makeLoad(Var, NdType::makeInt(8, false));
+      F.Function.ReturnType = NdType::makeInt(8, false);
+      if (Mutation == 1)
+        Return.RetVal = Var;
+      if (Mutation == 2)
+        F.Image.DataPtrRelocTargetOwners.erase(0x3008);
+      F.Function.Body = {First, Second, Return};
+      const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      if (Mutation) {
+        EXPECT_FALSE(Bound.Limitation.empty());
+        EXPECT_TRUE(Bound.LocalStorageExtents.empty());
+        continue;
+      }
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      EXPECT_EQ(Bound.LocalStorageExtents,
+                (std::map<va_t, uint64_t>{{0x3000, 8}, {0x3008, 8}}));
+      for (unsigned I = 0; I < 2; ++I) {
+        const auto Value = Bound.Function.Body[I].Val;
+        ASSERT_TRUE(Value->SourceCallHint);
+        EXPECT_EQ(Value->SourceCallHint->CallKind,
+                  SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+        EXPECT_TRUE(objcSourceCallBound(*Value, F.Image, {}));
+      }
+      std::set<std::string> Helpers;
+      const auto Source = renderObjCLocalStorageHelpers(
+          F.Image, Bound.LocalStorageExtents, Helpers);
+      EXPECT_NE(Source.find("neverd_objc_constant_string_2020_address()"),
+                std::string::npos);
+    }
+}
+
 TEST(ObjCSourceBindings, MutableStringPointersRejectUnprovedInitializers) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Case = 0; Case != 13; ++Case) {
