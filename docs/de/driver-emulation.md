@@ -56,7 +56,7 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 | `METHOD_BUFFERED`-IOCTL | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen öffentlichen Szenarioeinreichungen oder WDM-Anforderungsabbrüche |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs, Systemabbildungen, gemeinsame physische Seitenidentitäten und SG-DMA | Benutzerabbildungen und weitere DMA-Schnittstellen |
 | Treiberzugewiesene MDLs | Eigenständige Deskriptoren für Nonpaged Pool oder eine Benutzerzuweisung mit gemeinsamen physischen Seiten | Keine IRP-Zuordnung, MDL-Ketten oder beliebigen Prozesse |
-| READ/WRITE | Serielle buffered/direct E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen Szenario-IRPs, WDM-Anforderungsabbrüche oder implizite Dateiposition |
+| READ/WRITE | Serielle buffered/direct/neither E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen Szenario-IRPs, WDM-Anforderungsabbrüche oder implizite Dateiposition |
 | WDM `METHOD_NEITHER` | Getrennte Benutzerpuffer, Zugriffsprüfung, MDL-Sperren und abfangbare Speicherfehler | Ein Prozesskontext; keine WDM-Abbrüche oder beliebigen Benutzerabbildungen |
 | KMDF-1.33-Nicht-PnP-Treiber | Bindung, Objekte/Kontexte, benannte Steuergeräte, sequenzielle Standardwarteschlangen sowie gepufferte/direkte Anforderungen mit ausgeführten Callbacks | Keine PnP-Geräte, allgemeine Warteschlangenplanung, Klassenerweiterungen oder UMDF |
 | PnP-Bus-, Funktions- oder Filtertreiber | Explizite PDOs ohne Ressourcen oder mit fester Registerbank, Gast-AddDevice und acht übliche PnP-Lebenszyklusfunktionen | Weitere PnP-Vorgänge, allgemeine Power-Policy, weitere Hardware-/Ressourcenmodelle und KMDF-PnP |
@@ -377,9 +377,15 @@ ist. Ohne Ausgabepuffer darf `Information` ein IOCTL-spezifisches 64-Bit-Ergebni
 enthalten; es werden keine Ausgabebytes kopiert. Der Bericht erhält den exakten
 Wert in `information_hex`.
 
-Für READ/WRITE wählt `DO_BUFFERED_IO` oder `DO_DIRECT_IO` die Transfermethode.
-Neither-I/O oder widersprüchliche Flags stoppen. Information wird gegen die
-Transferlänge geprüft; Schreiboperationen liefern eine Anzahl, Leseoperationen Bytes.
+Für READ/WRITE wählt `DO_BUFFERED_IO` oder `DO_DIRECT_IO` den gepufferten oder
+direkten Transfer. Fehlen beide Flags, steht die ursprüngliche Benutzeradresse
+nur in `IRP.UserBuffer`: WRITE verwendet Eingabe, READ Ausgabe. SystemBuffer
+oder MDL entstehen nicht automatisch. Der Treiber muss die Adresse im
+Aufruferkontext prüfen und verwenden oder die Seiten vor verzögerter Arbeit
+sperren. `user_input_access` gilt für neither WRITE und `user_output_access`
+für neither READ. Explizite Rechte bei gepufferten/direkten READ/WRITE oder
+widersprüchliche Flags stoppen. Information wird gegen die Transferlänge
+geprüft; Schreiboperationen liefern eine Anzahl, Leseoperationen Bytes.
 
 `kernel_exports` ordnet Routinenamen explizite Verfügbarkeits-Boolesche Werte
 zu, etwa `"kernel_exports": {"OptionalRoutine": false}`. Modellierte Exporte und
@@ -511,7 +517,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v18`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v19`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -588,5 +594,5 @@ Gastspeicherschnittstelle. Windows-API-Verhalten gehört nicht in den Unicorn-Fo
 
 Beim WDM-`METHOD_NEITHER` zeigen `Type3InputBuffer` und `IRP.UserBuffer` auf getrennte Benutzerzuweisungen. `ProbeForRead` prüft Bereich und Ausrichtung ohne Seitenzugriff; `ProbeForWrite` berührt jede Seite. `ExGetPreviousMode` meldet den Anforderungsmodus. `MmProbeAndLockPages` sperrt Seiten einer Benutzerzuweisung, `MmGetSystemAddressForMdlSafe` liefert ein gemeinsames Alias und `MmUnlockPages` hebt Sperre und Alias auf. Beliebige Prozesskontexte sind nicht modelliert.
 
-Ein WDM-`METHOD_NEITHER`-Auftrag mit nichtleerem Puffer kann `user_input_access` und `user_output_access` unabhängig auf `read_write` (Standard), `read_only` oder `no_access` setzen. Für andere Methoden und leere Puffer werden die Felder abgewiesen; `no_access` behält den Zeiger, sperrt aber den Seitenzugriff.
+Ein WDM-`METHOD_NEITHER` IOCTL-Auftrag mit nichtleerem Puffer kann `user_input_access` und `user_output_access` unabhängig auf `read_write` (Standard), `read_only` oder `no_access` setzen. Für gepufferte/direkte Methoden und leere Puffer werden die Felder abgewiesen; `no_access` behält den Zeiger, sperrt aber den Seitenzugriff.
 Der Bericht `configuration.user_page_access` enthält nur explizite Zugriffsangaben mit einem bei null beginnenden `source_request_index`; ausgelassene Richtungen verwenden `read_write`.

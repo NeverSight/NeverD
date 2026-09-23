@@ -70,7 +70,9 @@ typedef struct {
   NTSTATUS Status;
   U32 StatusPadding;
   U64 Information;
-  U8 Middle[0x78];
+  U8 Middle0[0x30];
+  U8 *UserBuffer;
+  U8 Middle1[0x40];
   IO_STACK_LOCATION *Stack;
 } IRP;
 
@@ -78,6 +80,8 @@ _Static_assert(sizeof(MDL) == 0x30, "x64 MDL header");
 _Static_assert(__builtin_offsetof(MDL, MappedSystemVa) == 0x18,
                "x64 mapped VA");
 _Static_assert(__builtin_offsetof(IRP, Stack) == 0xb8, "x64 IRP stack");
+_Static_assert(__builtin_offsetof(IRP, UserBuffer) == 0x70,
+               "x64 IRP user buffer");
 _Static_assert(__builtin_offsetof(IO_STACK_LOCATION,
                                   Parameters.Stream.ByteOffset) == 0x18,
                "x64 stream offset");
@@ -122,7 +126,8 @@ static NTSTATUS Dispatch(DEVICE_OBJECT *Device, IRP *Request) {
     if (Length)
       Buffer = Device == DirectDevice
                    ? SystemAddress(Request->MdlAddress, 0x40000010U)
-                   : Request->SystemBuffer;
+               : Device == BufferedDevice ? Request->SystemBuffer
+                                          : Request->UserBuffer;
     if (Stack->Parameters.Stream.Key)
       Status = (NTSTATUS)0xc000000dU;
     else if (Stack->MajorFunction == 4) {

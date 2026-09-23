@@ -55,7 +55,7 @@ establish compatibility with arbitrary third-party drivers.
 | `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
-| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs, WDM request cancellation or implicit file position |
+| READ/WRITE | Serial buffered/direct/neither I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs, WDM request cancellation or implicit file position |
 | WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults and driver-created user MDLs | One requesting-process context; no WDM cancellation or arbitrary user mappings |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
@@ -428,8 +428,10 @@ buffer may set `user_input_access` or `user_output_access` to `read_write`
 (the default), `read_only` or `no_access`. The two protections are independent.
 `no_access` retains a non-NULL user pointer whose pages fail CPU access and
 locking. `ProbeForRead` still performs only its range/alignment check, while
-`ProbeForWrite` and `MmProbeAndLockPages` can raise an access violation. These
-fields are rejected for other transfer methods and empty buffers. Arbitrary
+`ProbeForWrite` and `MmProbeAndLockPages` can raise an access violation. For
+neither READ/WRITE, `user_input_access` is valid only for WRITE and
+`user_output_access` only for READ. These fields are rejected for buffered or
+direct transfers and empty buffers. Arbitrary
 processes, dynamic user unmapping and WDM cancellation remain unmodeled.
 The report's `configuration.user_page_access` lists only explicit protection
 facts, keyed by zero-based `source_request_index`; omitted directions use
@@ -440,9 +442,14 @@ size, even when the input buffer is larger. An IOCTL without an output buffer
 may return a driver-defined result in this field, and no output bytes are
 copied. `information_hex` preserves its exact raw64-bit value.
 
-For READ/WRITE, `DO_BUFFERED_IO` or `DO_DIRECT_IO` selects the transfer method.
-Neither or conflicting flags stop. Information is checked against the transfer
-length; writes return a count and reads return bytes.
+For READ/WRITE, `DO_BUFFERED_IO` or `DO_DIRECT_IO` selects buffered or direct
+transfer. With neither flag, the original user VA appears only in `IRP.UserBuffer`:
+WRITE holds the input and READ holds the output. No SystemBuffer or MDL is
+created implicitly. A driver must probe and access it in caller context or
+lock it before deferring work. `user_input_access` applies to neither WRITE and
+`user_output_access` to neither READ; explicit rights on buffered/direct
+READ/WRITE stop before dispatch. Conflicting flags stop. Information is checked
+against the transfer length; writes return a count and reads return bytes.
 
 `kernel_exports` maps routine names to explicit availability booleans, for
 example `"kernel_exports": {"OptionalRoutine": false}`. Modeled exports and
@@ -556,7 +563,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v18`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v19`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

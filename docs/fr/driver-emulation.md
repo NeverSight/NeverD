@@ -55,7 +55,7 @@ tiers arbitraires.
 | IOCTL `METHOD_BUFFERED` | E/S buffered/direct sérielles, achèvement par travail ou DPC | Sous-ensemble d’API ci-dessous seulement ; ni soumissions concurrentes de scénarios publics ni annulation de requête WDM |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes, mappages système, identités physiques partagées et SG DMA | mappages utilisateur et autres interfaces DMA |
 | MDL alloués par le pilote | Descripteurs indépendants pour pool non paginé ou une allocation utilisateur avec pages physiques partagées | Sans association IRP, chaînes MDL ni processus arbitraires |
-| READ/WRITE | E/S buffered/direct sérielles, achèvement par travail ou DPC | API répertoriées uniquement ; sans IRP simultanés, annulation WDM ni position implicite du fichier |
+| READ/WRITE | E/S buffered/direct/neither sérielles, achèvement par travail ou DPC | API répertoriées uniquement ; sans IRP simultanés, annulation WDM ni position implicite du fichier |
 | WDM `METHOD_NEITHER` | Tampons utilisateur distincts, sondes, verrouillage MDL et fautes mémoire récupérables | Un seul contexte de processus ; sans annulation WDM ni mappages utilisateur généraux |
 | Pilote KMDF 1.33 non-PnP | Liaison, objets/contextes, périphériques de contrôle nommés, files séquentielles par défaut et requêtes tamponnées/directes avec callbacks exécutés | Pas de périphériques PnP, ordonnancement général des files, extensions de classe ou UMDF |
 | Pilote PnP de bus, de fonction ou de filtre | PDO explicites sans ressources ou à banque de registres fixe, AddDevice invité et huit fonctions mineures courantes du cycle PnP | Autres opérations PnP, politique générale d’alimentation, autres modèles matériels/de ressources et KMDF PnP |
@@ -381,8 +381,14 @@ tampon de sortie, `Information` peut contenir un résultat propre à l’IOCTL s
 exacte dans `information_hex`.
 
 Pour READ/WRITE, `DO_BUFFERED_IO` ou `DO_DIRECT_IO` sélectionne la méthode
-de transfert. L’absence de ces indicateurs ou leur conflit provoque un arrêt.
-Information est vérifié par rapport à la longueur du transfert ; les écritures
+de transfert tamponnée ou directe. Si aucun indicateur n’est défini, l’adresse
+utilisateur originale n’apparaît que dans `IRP.UserBuffer` : WRITE utilise
+l’entrée et READ la sortie ; aucun SystemBuffer ni MDL n’est créé implicitement.
+Le pilote doit vérifier et utiliser l’adresse dans le contexte de l’appelant,
+ou verrouiller les pages avant de reporter le travail. `user_input_access`
+s’applique à neither WRITE et `user_output_access` à neither READ. Des droits
+explicites pour READ/WRITE tamponné/direct ou des indicateurs contradictoires
+provoquent un arrêt. Information est vérifié par rapport à la longueur ; les écritures
 renvoient un nombre d’octets et les lectures renvoient des octets.
 
 `kernel_exports` associe les noms de routines à des booléens de disponibilité
@@ -515,7 +521,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v18`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v19`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -591,5 +597,5 @@ invitée. Aucun comportement d’API Windows n’a sa place dans le fork Unicorn
 
 Pour WDM `METHOD_NEITHER`, `Type3InputBuffer` et `IRP.UserBuffer` désignent deux allocations utilisateur distinctes. `ProbeForRead` vérifie la plage et l’alignement sans toucher aux pages ; `ProbeForWrite` touche chaque page. `ExGetPreviousMode` indique le mode de la requête. `MmProbeAndLockPages` verrouille une allocation utilisateur, `MmGetSystemAddressForMdlSafe` fournit un alias partagé et `MmUnlockPages` retire cet alias et déverrouille les pages. Les processus arbitraires ne sont pas modélisés.
 
-Une requête WDM `METHOD_NEITHER` avec tampon non vide peut définir indépendamment `user_input_access` et `user_output_access` à `read_write` (défaut), `read_only` ou `no_access`. Ces champs sont refusés pour les autres méthodes et les tampons vides ; `no_access` conserve le pointeur mais interdit l’accès aux pages.
+Une requête WDM `METHOD_NEITHER` IOCTL avec tampon non vide peut définir indépendamment `user_input_access` et `user_output_access` à `read_write` (défaut), `read_only` ou `no_access`. Ces champs sont refusés pour les méthodes tamponnées ou directes et les tampons vides ; `no_access` conserve le pointeur mais interdit l’accès aux pages.
 Le rapport `configuration.user_page_access` conserve uniquement les protections explicites, avec un `source_request_index` commençant à zéro ; une direction omise reste `read_write`.

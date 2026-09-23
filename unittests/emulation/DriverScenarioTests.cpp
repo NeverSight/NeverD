@@ -280,10 +280,12 @@ TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
     {"kind":"ioctl","code":"0x222003","input":"0102","output_size":2,
      "user_input_access":"read_only","user_output_access":"no_access"},
     {"kind":"ioctl","code":"0x222003","input":"03","output_size":1,
-     "user_input_access":"read_write"}
+     "user_input_access":"read_write"},
+    {"kind":"read","output_size":4,"user_output_access":"read_only"},
+    {"kind":"write","input":"01020304","user_input_access":"no_access"}
   ]})");
   ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
-  ASSERT_EQ(Parsed->Requests.size(), 2u);
+  ASSERT_EQ(Parsed->Requests.size(), 4u);
   EXPECT_EQ(Parsed->Requests[0].UserInputAccess,
             DriverUserPageAccess::ReadOnly);
   EXPECT_EQ(Parsed->Requests[0].UserOutputAccess,
@@ -291,6 +293,10 @@ TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
   EXPECT_EQ(Parsed->Requests[1].UserInputAccess,
             DriverUserPageAccess::ReadWrite);
   EXPECT_FALSE(Parsed->Requests[1].UserOutputAccess);
+  EXPECT_EQ(Parsed->Requests[2].UserOutputAccess,
+            DriverUserPageAccess::ReadOnly);
+  EXPECT_EQ(Parsed->Requests[3].UserInputAccess,
+            DriverUserPageAccess::NoAccess);
   auto Native = driverOptionsFromScenarioJSON("{}", *Parsed);
   ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
 
@@ -299,7 +305,8 @@ TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
       {R"({"requests":[{"kind":"ioctl","code":"0x222000","input":"01","user_input_access":"read_only"}]})",
        R"({"requests":[{"kind":"ioctl","code":"0x222003","user_input_access":"no_access"}]})",
        R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_output_access":"read_only"}]})",
-       R"({"requests":[{"kind":"read","output_size":1,"user_output_access":"no_access"}]})",
+       R"({"requests":[{"kind":"read","output_size":1,"user_input_access":"no_access"}]})",
+       R"({"requests":[{"kind":"write","input":"01","user_output_access":"no_access"}]})",
        R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_input_access":"write_only"}]})",
        R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_input_access":1}]})"}) {
     SCOPED_TRACE(JSON);

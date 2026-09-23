@@ -311,18 +311,23 @@ TEST(DriverDirectIO, ZeroLengthStreamsCompleteWithoutAMapping) {
   }
 }
 
-TEST(DriverDirectIO, NeitherStreamAccessStopsBeforeDispatch) {
+TEST(DriverDirectIO, NeitherStreamUsesRawCallerUserBuffer) {
   DriverOptions Options;
   Options.Requests.push_back(create("\\Device\\NeverDNeither"));
+  auto Write = request(DriverRequestKind::Write);
+  Write.Input = {1, 2, 3, 4};
+  Options.Requests.push_back(Write);
   auto Read = request(DriverRequestKind::Read);
   Read.OutputSize = 4;
   Options.Requests.push_back(Read);
+  close(Options);
   auto Result = emulateDriver(directFixture(), Options);
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
-  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-  EXPECT_NE(Result->Diagnostic.find("DO_BUFFERED_IO"), std::string::npos);
-  ASSERT_EQ(Result->Requests.size(), 2u);
-  EXPECT_EQ(Result->Requests[1].IRP, 0u);
+  ASSERT_TRUE(completed(*Result));
+  ASSERT_EQ(Result->Requests.size(), 5u);
+  EXPECT_EQ(Result->Requests[1].Information, 4u);
+  EXPECT_EQ(Result->Requests[2].Information, 4u);
+  EXPECT_EQ(Result->Requests[2].Output, (std::vector<uint8_t>{10, 11, 12, 13}));
 }
 } // namespace
 } // namespace neverd::emulation

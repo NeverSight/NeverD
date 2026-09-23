@@ -42,7 +42,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_BUFFERED` IOCTL | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 부분집합만 지원하며 동시 공개 시나리오 제출와 WDM 요청 취소는 미지원 |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | 요청 소유 MDL, 시스템 매핑, 공유 물리 페이지 식별자와 SG DMA | 사용자 매핑과 기타 DMA 인터페이스 |
 | 드라이버 할당 MDL | 비페이지 풀 또는 하나의 사용자 할당을 설명하며 물리 페이지를 공유 | IRP 연결, MDL 체인 및 임의 프로세스는 미지원 |
-| READ/WRITE | 순차 buffered/direct I/O와 작업 항목 또는 DPC 완료 | 아래 API 범위만 지원; 동시 요청, WDM 요청 취소 및 암묵적 파일 위치는 미지원 |
+| READ/WRITE | 순차 buffered/direct/neither I/O와 작업 항목 또는 DPC 완료 | 아래 API 범위만 지원; 동시 요청, WDM 요청 취소 및 암묵적 파일 위치는 미지원 |
 | WDM `METHOD_NEITHER` | 별도 사용자 버퍼, 접근 검사, MDL 잠금, 처리 가능한 메모리 오류 | 단일 요청 프로세스 문맥; WDM 취소와 임의 사용자 매핑은 미지원 |
 | KMDF 1.33 비 PnP 드라이버 | 바인딩, 객체/컨텍스트, 이름 있는 제어 장치, 순차 기본 큐 및 콜백을 실제 실행하는 버퍼/직접 요청 | PnP 장치, 일반 큐 스케줄링, 클래스 확장 및 UMDF는 지원하지 않음 |
 | PnP 버스/기능/필터 드라이버 | 명시적 리소스 없는 PDO 또는 고정 레지스터 뱅크 PDO, 게스트 AddDevice, 여덟 가지 일반 PnP 수명 주기 부 기능 | 기타 PnP 작업, 일반 전원 관리, 기타 하드웨어/리소스 및 KMDF PnP |
@@ -269,7 +269,7 @@ Direct IOCTL에서 `input`은 첫 번째 시스템 버퍼를 초기화하고, `d
 
 IOCTL의 `output_size`가 0이 아니면 입력 버퍼가 더 커도 `Information`은 해당 크기를 넘을 수 없습니다. 출력 버퍼가 없는 IOCTL은 드라이버 정의 결과를 반환할 수 있으며 출력 바이트를 복사하지 않습니다. `information_hex`는 원래 64비트 값을 정확히 보존합니다.
 
-READ/WRITE에서는 `DO_BUFFERED_IO` 또는 `DO_DIRECT_IO`가 전송 방식을 선택합니다. Neither 방식이나 충돌하는 플래그는 중단됩니다. Information은 전송 길이에 대해 검사하며, 쓰기는 개수를 반환하고 읽기는 바이트를 반환합니다.
+READ/WRITE에서는 `DO_BUFFERED_IO` 또는 `DO_DIRECT_IO`가 버퍼 방식이나 직접 전송을 선택합니다. 둘 다 설정하지 않으면 원래 사용자 주소가 `IRP.UserBuffer`에만 들어가며 WRITE는 입력, READ는 출력을 뜻합니다. SystemBuffer나 MDL은 자동으로 생성되지 않습니다. 드라이버는 호출자 컨텍스트에서 검사하고 접근하거나 작업을 미루기 전에 페이지를 잠가야 합니다. `user_input_access`는 neither WRITE, `user_output_access`는 neither READ에 적용됩니다. 버퍼/직접 READ/WRITE에 권한을 지정하거나 두 플래그를 함께 설정하면 중단됩니다. Information은 전송 길이에 대해 검사하며 쓰기는 개수, 읽기는 바이트를 반환합니다.
 
 `kernel_exports`는 루틴 이름을 명시적인 가용성 불리언에 매핑합니다. 예를 들면 `"kernel_exports": {"OptionalRoutine": false}`입니다. 모델링된 export와 정적 import는 `MmGetSystemRoutineAddress`와 공유하는 안정적인 주소를 받습니다. 명시적으로 없는 export는 NULL로 해석되며 정적 import를 충족할 수 없습니다. 존재한다고 선언되었으나 API 모델이 없는 export는 지연 트랩으로 해석됩니다. 알 수 없는 동적 이름은 가용성이 지정되지 않았다는 진단과 함께 중단됩니다. 구현이 없다는 이유로 부재를 추론하지 않습니다. 이름은 길이가 제한된 출력 가능한 ASCII이며 해석 시 대소문자를 구분합니다. 이 목록은 구체적인 시나리오 속성이며 모든 Windows 릴리스와 일치한다는 의미는 아닙니다.
 `IoMarkIrpPending`, `IoGetCurrentIrpStackLocation`과 `MmGetSystemAddressForMdlSafe`는 모델링된 WDM 헤더 도우미 함수이며, 모델링되었다는 사실만으로 기본 export로 선언되지는 않으므로 export 가용성에는 정적 import 또는 명시적인 `kernel_exports` 선언이 필요합니다.
@@ -306,7 +306,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v18`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v19`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 
@@ -332,5 +332,5 @@ null이 가능한 `fault` 객체는 최초의 백엔드 오류를 보존합니�
 
 WDM `METHOD_NEITHER`에서 `Type3InputBuffer`와 `IRP.UserBuffer`는 별도의 사용자 할당을 가리킵니다. `ProbeForRead`는 페이지에 접근하지 않고 범위와 정렬을 검사하며, `ProbeForWrite`는 각 페이지에 접근합니다. `ExGetPreviousMode`는 요청 모드를 반환합니다. `MmProbeAndLockPages`는 단일 사용자 할당의 페이지를 잠그고, `MmGetSystemAddressForMdlSafe`는 공유 별칭을 제공하며, `MmUnlockPages`는 별칭과 잠금을 해제합니다. 임의의 프로세스는 모델링하지 않습니다.
 
-비어 있지 않은 WDM `METHOD_NEITHER` 요청에서는 `user_input_access`와 `user_output_access`를 각각 `read_write`(기본값), `read_only`, `no_access`로 설정할 수 있습니다. 다른 방식이나 빈 버퍼에서는 거부합니다. `no_access`는 포인터를 유지하면서 페이지 접근을 막습니다.
+비어 있지 않은 WDM `METHOD_NEITHER` IOCTL 요청에서는 `user_input_access`와 `user_output_access`를 각각 `read_write`(기본값), `read_only`, `no_access`로 설정할 수 있습니다. 버퍼/직접 방식이나 빈 버퍼에서는 거부합니다. `no_access`는 포인터를 유지하면서 페이지 접근을 막습니다.
 보고서의 `configuration.user_page_access`에는 명시한 설정만 0부터 시작하는 `source_request_index`와 함께 기록됩니다. 생략한 방향은 `read_write`입니다.

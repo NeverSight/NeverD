@@ -134,24 +134,32 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
     if (!Flags)
       return Flags.takeError();
     const uint64_t TransferFlags = *Flags & (DeviceBufferedIO | DeviceDirectIO);
-    if (TransferFlags != DeviceBufferedIO && TransferFlags != DeviceDirectIO)
-      return ioError("READ/WRITE requires exactly one of DO_BUFFERED_IO or "
-                     "DO_DIRECT_IO; neither I/O is not modeled");
+    if (TransferFlags == (DeviceBufferedIO | DeviceDirectIO))
+      return ioError("READ/WRITE device sets both DO_BUFFERED_IO and "
+                     "DO_DIRECT_IO");
+    Request->Neither = !TransferFlags;
     Request->Direct = TransferFlags == DeviceDirectIO;
+    if (!Request->Neither && (Input.UserInputAccess || Input.UserOutputAccess))
+      return ioError("user page access requires neither READ/WRITE I/O");
   }
   if (Request->Neither) {
-    auto InputBuffer = allocateUserBuffer(
-        Input.Input.size(), Input.Input,
-        Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite));
-    if (!InputBuffer)
-      return InputBuffer.takeError();
-    Request->UserInput = *InputBuffer;
-    auto OutputBuffer = allocateUserBuffer(
-        Input.OutputSize, {},
-        Input.UserOutputAccess.value_or(DriverUserPageAccess::ReadWrite));
-    if (!OutputBuffer)
-      return OutputBuffer.takeError();
-    Request->UserBuffer = *OutputBuffer;
+    if (IsIOCTL) {
+      auto InputBuffer = allocateUserBuffer(
+          Input.Input.size(), Input.Input,
+          Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite));
+      if (!InputBuffer)
+        return InputBuffer.takeError();
+      Request->UserInput = *InputBuffer;
+    }
+    auto UserBuffer = allocateUserBuffer(
+        IsWrite ? Input.Input.size() : Input.OutputSize,
+        IsWrite ? llvm::ArrayRef<uint8_t>(Input.Input)
+                : llvm::ArrayRef<uint8_t>(),
+        (IsWrite ? Input.UserInputAccess : Input.UserOutputAccess)
+            .value_or(DriverUserPageAccess::ReadWrite));
+    if (!UserBuffer)
+      return UserBuffer.takeError();
+    Request->UserBuffer = *UserBuffer;
     return llvm::Error::success();
   }
   Request->BufferSize = Request->Direct ? (IsIOCTL ? Input.Input.size() : 0)
@@ -361,11 +369,14 @@ KernelModel::beginRequest(const DriverRequest &Input,
       (!IsRead && !IsWrite && Input.ByteOffset))
     return ioError("request fields do not match its WDM major function");
   if (Input.UserInputAccess || Input.UserOutputAccess) {
-    if (!IsIOCTL ||
-        (Input.ControlCode & IoControlMethodMask) != MethodNeither ||
+    const bool NeitherIOCTL =
+        IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither;
+    if ((!NeitherIOCTL && !IsRead && !IsWrite) ||
+        (IsRead && Input.UserInputAccess) ||
+        (IsWrite && Input.UserOutputAccess) ||
         (Input.UserInputAccess && Input.Input.empty()) ||
         (Input.UserOutputAccess && !Input.OutputSize))
-      return ioError("user page access requires a nonempty METHOD_NEITHER "
+      return ioError("user page access requires a nonempty neither-I/O "
                      "buffer in the matching direction");
   }
   if (IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither &&

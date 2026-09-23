@@ -36,6 +36,33 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   NTSTATUS Status = STATUS_SUCCESS;
   ULONG_PTR Length = 0;
   UNREFERENCED_PARAMETER(Object);
+  if (Stack->MajorFunction == IRP_MJ_READ ||
+      Stack->MajorFunction == IRP_MJ_WRITE) {
+    const BOOLEAN Read = Stack->MajorFunction == IRP_MJ_READ;
+    const ULONG BufferLength =
+        Read ? Stack->Parameters.Read.Length : Stack->Parameters.Write.Length;
+    volatile UCHAR *Buffer = (volatile UCHAR *)Irp->UserBuffer;
+    if (BufferLength != 4 || !Buffer || Irp->RequestorMode != UserMode ||
+        Irp->AssociatedIrp.SystemBuffer || Irp->MdlAddress)
+      return Complete(Irp, STATUS_INVALID_PARAMETER, 0);
+    __try {
+      if (Read) {
+        ProbeForWrite((PVOID)Buffer, BufferLength, 1);
+        for (ULONG I = 0; I < BufferLength; ++I)
+          Buffer[I] = (UCHAR)(0x70 + I);
+      } else {
+        ProbeForRead((PVOID)Buffer, BufferLength, 1);
+        for (ULONG I = 0; I < BufferLength; ++I)
+          if (Buffer[I] != I + 1)
+            Status = STATUS_INVALID_PARAMETER;
+      }
+      if (NT_SUCCESS(Status))
+        Length = BufferLength;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      Status = GetExceptionCode();
+    }
+    return Complete(Irp, Status, Length);
+  }
   if (Stack->MajorFunction != IRP_MJ_DEVICE_CONTROL)
     return Complete(Irp, Status, 0);
 
@@ -197,6 +224,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT Driver, PUNICODE_STRING Path) {
   Driver->MajorFunction[IRP_MJ_CREATE] = Dispatch;
   Driver->MajorFunction[IRP_MJ_CLEANUP] = Dispatch;
   Driver->MajorFunction[IRP_MJ_CLOSE] = Dispatch;
+  Driver->MajorFunction[IRP_MJ_READ] = Dispatch;
+  Driver->MajorFunction[IRP_MJ_WRITE] = Dispatch;
   Driver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = Dispatch;
   return STATUS_SUCCESS;
 }

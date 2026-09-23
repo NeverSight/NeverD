@@ -413,6 +413,18 @@ TEST_F(KernelRequestOwnership,
 }
 
 TEST_F(KernelRequestOwnership,
+       BufferedReadRejectsCallerUserPageRightsBeforeGuestDispatch) {
+  ASSERT_NE(open(), 0u);
+  auto Read = fileRequest(DriverRequestKind::Read);
+  Read.OutputSize = 4;
+  Read.UserOutputAccess = DriverUserPageAccess::ReadOnly;
+  auto Attempt = Model->beginRequest(Read);
+  ASSERT_FALSE(bool(Attempt));
+  EXPECT_NE(llvm::toString(Attempt.takeError()).find("neither READ/WRITE"),
+            std::string::npos);
+}
+
+TEST_F(KernelRequestOwnership,
        AnotherFileCanCleanupAndCloseWhileTheFirstHasPendingIO) {
   const uint64_t FirstFile = open(1);
   ASSERT_NE(FirstFile, 0u);
