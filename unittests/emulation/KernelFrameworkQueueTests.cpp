@@ -70,7 +70,7 @@ TEST_F(DriverKernelFrameworkQueue, FailedConfigurationsLeaveNoDefaultQueue) {
 }
 
 TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
-  for (uint64_t Offset : {48, 56, 64, 72}) {
+  for (uint64_t Offset : {48, 56, 64}) {
     queueConfiguration();
     put(QueueConfig + Offset, IoControlPC);
     expectError(createQueue(), "not modeled");

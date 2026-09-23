@@ -626,7 +626,10 @@ KernelFramework::advance(uint64_t Token) {
                       [&](const auto &Entry) {
                         auto O = Objects.find(Entry.second);
                         return O != Objects.end() && O->second.Parent == Handle;
-                      }))
+                      }) ||
+          std::any_of(
+              CanceledQueueCallbacks.begin(), CanceledQueueCallbacks.end(),
+              [&](const auto &Entry) { return Entry.second == Handle; }))
         continue;
       if (Q.StopComplete) {
         PendingCall = GuestCall{Token, Q.StopComplete, {Handle, Q.StopContext}};
@@ -700,6 +703,32 @@ KernelFramework::advance(uint64_t Token) {
         return E;
       PendingCall = GuestCall{Token, Routine, {S.Object}};
       return std::optional<uint64_t>{};
+    }
+    if (S.Kind == StepKind::CanceledOnQueue) {
+      auto R = Requests.find(S.Object);
+      if (R == Requests.end() || !R->second.CanceledOnQueue ||
+          R->second.Queued || R->second.Completed || R->second.Completing)
+        return invalid("queued cancellation lost its driver-owned request");
+      auto Q = Queues.find(R->second.Queue);
+      if (Q == Queues.end() || !Q->second.CanceledOnQueue)
+        return invalid("queued cancellation lost its callback");
+      if (!CanceledQueueCallbacks.emplace(Token, R->second.Queue).second)
+        return invalid("queued cancellation callback already active");
+      C.Steps.insert(C.Steps.begin() + C.Index,
+                     {StepKind::CanceledOnQueueReturned, R->second.Queue});
+      PendingCall = GuestCall{
+          Token, Q->second.CanceledOnQueue, {R->second.Queue, S.Object}};
+      return std::optional<uint64_t>{};
+    }
+    if (S.Kind == StepKind::CanceledOnQueueReturned) {
+      auto Callback = CanceledQueueCallbacks.find(Token);
+      if (Callback == CanceledQueueCallbacks.end() ||
+          Callback->second != S.Object)
+        return invalid("queued cancellation callback return lost its queue");
+      CanceledQueueCallbacks.erase(Callback);
+      if (NotifyQueueState())
+        return std::optional<uint64_t>{};
+      continue;
     }
     if (S.Kind == StepKind::CompleteRequest) {
       auto R = Requests.find(S.Object);

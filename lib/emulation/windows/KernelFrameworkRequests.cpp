@@ -55,10 +55,13 @@ KernelFramework::preflightRequestCancellation(uint64_t IRP,
     if (PendingCall)
       return requestError(
           "cancellation cannot replace a pending guest callback");
-    if (!RequestsHost.IsCanceled || !RequestsHost.ValidateCompletion ||
-        !RequestsHost.SetInformation || !RequestsHost.Information ||
-        !RequestsHost.Complete)
-      return requestError("queued request completion host is unavailable");
+    const bool Notify = Q->second.CanceledOnQueue &&
+                        (R->second.DeliveredOnce || R->second.Enqueued);
+    if (!RequestsHost.IsCanceled ||
+        (!Notify &&
+         (!RequestsHost.ValidateCompletion || !RequestsHost.SetInformation ||
+          !RequestsHost.Information || !RequestsHost.Complete)))
+      return requestError("queued request cancellation host is unavailable");
     if (auto E = preflightCancellationToken(EarlierCallbacks))
       return E;
     // Even callback-free cancellation consumes a framework continuation.
@@ -104,6 +107,19 @@ KernelFramework::requestCancellation(uint64_t IRP) {
         std::find(Q->second.Pending.begin(), Q->second.Pending.end(), R->first);
     if (Pending == Q->second.Pending.end())
       return requestError("queued cancellation lost its pending request");
+    if (Q->second.CanceledOnQueue &&
+        (R->second.DeliveredOnce || R->second.Enqueued)) {
+      Q->second.Pending.erase(Pending);
+      R->second.Queued = false;
+      R->second.CanceledOnQueue = true;
+      R->second.QueuedCallback = 0;
+      R->second.QueuedArguments.clear();
+      R->second.QueuedCompletionStatus.reset();
+      auto Canceled = start({{StepKind::CanceledOnQueue, R->first}});
+      if (!Canceled)
+        return Canceled.takeError();
+      return takeGuestCall();
+    }
     if (auto E = RequestsHost.ValidateCompletion(IRP, RequestCancelled, 0))
       return E;
     if (auto E = RequestsHost.SetInformation(IRP, 0))
@@ -264,6 +280,7 @@ llvm::Expected<bool> KernelFramework::presentQueued(uint64_t QueueHandle,
   }
   Q->second.Pending.pop_front();
   R->second.Queued = false;
+  R->second.DeliveredOnce = true;
   PendingCall = GuestCall{Token, R->second.QueuedCallback,
                           std::move(R->second.QueuedArguments)};
   R->second.QueuedCallback = 0;
@@ -404,6 +421,7 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
   }
   RequestDispatch Dispatch = std::move(*Planned);
   Dispatch.Arguments[1] = Handle;
+  Requests.at(Handle).DeliveredOnce = true;
   return std::optional<RequestDispatch>{std::move(Dispatch)};
 }
 
@@ -485,7 +503,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return requestError("invalid, foreign or deleting destination queue");
     if (!Destination->second.Accepting)
       return Result{QueueBusy};
-    if (R->second.InCallerContext || R->second.Queued || !R->second.Queue ||
+    if (R->second.InCallerContext || R->second.Queued ||
+        R->second.CanceledOnQueue || !R->second.Queue ||
         (Requeue ? Destination->second.Dispatch != QueueDispatchManual
                  : R->second.Queue == Target) ||
         R->second.Device != Destination->second.Device ||

@@ -721,6 +721,75 @@ TEST(DriverKMDFControl, FrameworkCancelsManualQueueRequestBeforeRetrieval) {
   }
 }
 
+TEST(DriverKMDFControl, ManualQueueCancellationCallbackOwnsForwardedRequest) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (uint64_t CancelAt : {0ULL, 10ULL}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(CancelAt);
+        auto Options = controlOptions('7');
+        Options.LoadAddress = Address;
+        Options.Requests[0].AsynchronousFile = true;
+        auto Second = Options.Requests[1];
+        Second.Input = {1, 2};
+        Second.OutputSize = 6;
+        Options.Requests.insert(Options.Requests.begin() + 2, Second);
+        Options.Requests[1].DeferCallbackDrain = CancelAt != 0;
+        Options.Requests[1].CancelAfter100ns = CancelAt;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+        checkCompletedLifecycle(*Result, 7);
+        ASSERT_EQ(Result->Requests.size(), 7u);
+        EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+        EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, CancelAt);
+        EXPECT_TRUE(Result->Requests[1].Output.empty());
+        EXPECT_EQ(Result->Requests[2].Output,
+                  (std::vector<uint8_t>{'K', 'M', 'D', '7', 0x5b, 0x58}));
+        const auto Messages = controlMessages(*Result);
+        auto Position = [&](llvm::StringRef Needle) {
+          return std::find_if(
+              Messages.begin(), Messages.end(), [&](const auto &Message) {
+                return llvm::StringRef(Message).contains(Needle);
+              });
+        };
+        const auto Canceled = Position("canceled-on-queue callback");
+        const auto Retrieved =
+            Position("canceled-on-queue removed manual request");
+        ASSERT_NE(Canceled, Messages.end());
+        ASSERT_NE(Retrieved, Messages.end());
+        EXPECT_LT(Canceled, Retrieved);
+      }
+}
+
+TEST(DriverKMDFControl, CallerEnqueuedManualRequestUsesQueueCancelCallback) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('8');
+      Options.LoadAddress = Address;
+      Options.Requests.resize(2);
+      Options.Requests[1].CancelAfter100ns = 0;
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+      checkCompletedLifecycle(*Result, 4);
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+      EXPECT_EQ(Result->Requests[1].CancelRequestedAt100ns, 0u);
+      EXPECT_TRUE(Result->Requests[1].Output.empty());
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceEnqueueRequest"), 1u);
+      const auto Messages = controlMessages(*Result);
+      EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: caller-context queued cancellation\n"),
+                Messages.end());
+    }
+}
+
 TEST(DriverKMDFControl, ManualRequestRequeueReturnsSameRequestToWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

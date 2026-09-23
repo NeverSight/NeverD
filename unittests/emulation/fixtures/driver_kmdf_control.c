@@ -22,6 +22,10 @@
 /// and purge waits for a nested cancellation callback. 4 deliberately waits
 /// for its own delivered request with no completion producer. 5 and 6 stop
 /// and purge a nondefault queue with asynchronous and synchronous completion.
+/// 7 forwards a request to a manual queue whose cancellation callback takes
+/// ownership before the queued retrieval worker runs.
+/// 8 enqueues from caller context into a manual default queue and returns a
+/// canceled request to its queue callback before any I/O delivery.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -80,6 +84,7 @@ ABI_OFFSET(WDF_IO_QUEUE_CONFIG, DefaultQueue, 13);
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, EvtIoRead, 24);
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, EvtIoWrite, 32);
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, EvtIoDeviceControl, 40);
+ABI_OFFSET(WDF_IO_QUEUE_CONFIG, EvtIoCanceledOnQueue, 72);
 _Static_assert(sizeof(WDF_REQUEST_PARAMETERS) == 40, "request parameters ABI");
 ABI_OFFSET(WDF_REQUEST_PARAMETERS, Type, 4);
 ABI_OFFSET(WDF_REQUEST_PARAMETERS, Parameters.Read.Length, 8);
@@ -285,6 +290,28 @@ static void PurgeCancel(WDFREQUEST Request) {
         169);
   WdfRequestComplete(Request, STATUS_CANCELLED);
   DbgPrint("KMDF control: purge cancel callback\n");
+}
+
+static void ManualCanceledOnQueue(WDFQUEUE Queue, WDFREQUEST Request) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State = WdfIoQueueGetState(Queue, &Queued, &Delivered);
+  Check(Queue == ManualQueue && WdfRequestGetIoQueue(Request) == ManualQueue &&
+            WdfRequestIsCanceled(Request) && Queued == 0 && Delivered == 1 &&
+            (State & WdfIoQueueDriverNoRequests) == 0,
+        190);
+  WdfRequestComplete(Request, STATUS_CANCELLED);
+  DbgPrint("KMDF control: canceled-on-queue callback\n");
+}
+
+static void CallerQueuedCanceledOnQueue(WDFQUEUE Queue, WDFREQUEST Request) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State = WdfIoQueueGetState(Queue, &Queued, &Delivered);
+  Check(Queue == DefaultQueue && WdfRequestGetIoQueue(Request) == Queue &&
+            WdfRequestIsCanceled(Request) && Queued == 0 && Delivered == 1 &&
+            (State & WdfIoQueueDriverNoRequests) == 0,
+        191);
+  WdfRequestComplete(Request, STATUS_CANCELLED);
+  DbgPrint("KMDF control: caller-context queued cancellation\n");
 }
 
 static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
@@ -742,13 +769,14 @@ static void ManualWorker(PDEVICE_OBJECT Device, PVOID Context) {
   BOOLEAN Valid =
       Check(Queue == ManualQueue && ManualItem != NULL &&
                 (ManualFollowup == 1 ||
-                 (TransferMode == 'Z' && ManualFollowup == 0)) &&
+                 ((TransferMode == 'Z' || TransferMode == '7') &&
+                  ManualFollowup == 0)) &&
                 Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
                 KeGetCurrentIrql() == PASSIVE_LEVEL,
             140);
   IoFreeWorkItem(ManualItem);
   ManualItem = NULL;
-  if (TransferMode == 'Z') {
+  if (TransferMode == 'Z' || TransferMode == '7') {
     LARGE_INTEGER Delay;
     Delay.QuadPart = -20;
     if (!Check(KeDelayExecutionThread(KernelMode, FALSE, &Delay) ==
@@ -757,9 +785,11 @@ static void ManualWorker(PDEVICE_OBJECT Device, PVOID Context) {
       return;
   }
   Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
-  if (TransferMode == 'Z') {
+  if (TransferMode == 'Z' || TransferMode == '7') {
     Check(Valid && Status == STATUS_NO_MORE_ENTRIES && Request == NULL, 147);
-    DbgPrint("KMDF control: queued manual request cancelled\n");
+    DbgPrint(TransferMode == '7'
+                 ? "KMDF control: canceled-on-queue removed manual request\n"
+                 : "KMDF control: queued manual request cancelled\n");
     return;
   }
   if (!Check(NT_SUCCESS(Status) && Request != NULL, 141))
@@ -1090,7 +1120,8 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: forwarded automatic request\n");
     return;
   }
-  if ((TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R') &&
+  if ((TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
+       TransferMode == '7') &&
       InputLength == 4) {
     NTSTATUS Status;
     ManualItem = IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
@@ -1109,7 +1140,8 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: forwarded manual request\n");
     return;
   }
-  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R')
+  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
+      TransferMode == '7')
     ++ManualFollowup;
   if (TransferMode == 'S' || TransferMode == 'V' || TransferMode == 'E' ||
       TransferMode == 'O') {
@@ -1454,6 +1486,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'4' ? '4'
                  : Marker == L'5' ? '5'
                  : Marker == L'6' ? '6'
+                 : Marker == L'7' ? '7'
+                 : Marker == L'8' ? '8'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1476,7 +1510,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                                          ? WdfDeviceIoNeither
                                          : WdfDeviceIoBuffered);
   if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
-      TransferMode == 'T')
+      TransferMode == 'T' || TransferMode == '8')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
   RtlInitUnicodeString(&Name, L"\\Device\\NeverDKmdfControl");
   Status = WdfDeviceInitAssignName(DeviceInit, &Name);
@@ -1498,14 +1532,19 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     goto Failure;
 
   WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
-      &QueueConfig, (TransferMode == 'P' || TransferMode == 'F')
+      &QueueConfig, TransferMode == '8' ? WdfIoQueueDispatchManual
+                    : (TransferMode == 'P' || TransferMode == 'F')
                         ? WdfIoQueueDispatchParallel
                         : WdfIoQueueDispatchSequential);
   if (TransferMode == 'F')
     QueueConfig.Settings.Parallel.NumberOfPresentedRequests = 1;
-  QueueConfig.EvtIoDeviceControl = IoDeviceControl;
-  QueueConfig.EvtIoRead = IoRead;
-  QueueConfig.EvtIoWrite = IoWrite;
+  if (TransferMode == '8')
+    QueueConfig.EvtIoCanceledOnQueue = CallerQueuedCanceledOnQueue;
+  else {
+    QueueConfig.EvtIoDeviceControl = IoDeviceControl;
+    QueueConfig.EvtIoRead = IoRead;
+    QueueConfig.EvtIoWrite = IoWrite;
+  }
   if (Marker == L'Q')
     QueueConfig.Size = 0;
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
@@ -1523,8 +1562,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     goto Failure;
   }
 
-  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R') {
+  if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
+      TransferMode == '7') {
     WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
+    if (TransferMode == '7')
+      QueueConfig.EvtIoCanceledOnQueue = ManualCanceledOnQueue;
     WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
     Attributes.ExecutionLevel = WdfExecutionLevelPassive;
     Attributes.SynchronizationScope = WdfSynchronizationScopeNone;

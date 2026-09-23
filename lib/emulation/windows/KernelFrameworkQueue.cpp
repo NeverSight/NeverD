@@ -125,9 +125,11 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
             R->second.Queue != A[1] || R->second.Completed ||
             R->second.Completing)
           return invalidQueue("purge lost a queued request");
-        if (auto E = RequestsHost.ValidateCompletion(R->second.IRP,
-                                                     RequestCancelled, 0))
-          return E;
+        if (!(Q->second.CanceledOnQueue &&
+              (R->second.DeliveredOnce || R->second.Enqueued)))
+          if (auto E = RequestsHost.ValidateCompletion(R->second.IRP,
+                                                       RequestCancelled, 0))
+            return E;
       }
       for (const auto &[Handle, R] : Requests)
         if (R.Queue == A[1] && !R.Queued && !R.Completed && !R.Completing &&
@@ -142,6 +144,15 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         auto &R = Requests.at(Handle);
         if (auto E = RequestsHost.RecordCancel(R.IRP))
           return E;
+        if (Q->second.CanceledOnQueue && (R.DeliveredOnce || R.Enqueued)) {
+          R.Queued = false;
+          R.CanceledOnQueue = true;
+          R.QueuedCallback = 0;
+          R.QueuedArguments.clear();
+          R.QueuedCompletionStatus.reset();
+          Steps.push_back({StepKind::CanceledOnQueue, Handle});
+          continue;
+        }
         if (auto E = RequestsHost.SetInformation(R.IRP, 0))
           return E;
         R.Completing = true;
@@ -238,6 +249,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return E;
     Q->second.Pending.pop_front();
     R->second.Queued = false;
+    R->second.DeliveredOnce = true;
     R->second.QueuedCallback = 0;
     R->second.QueuedArguments.clear();
     R->second.QueuedCompletionStatus.reset();
@@ -331,10 +343,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (Dispatch == QueueDispatchParallel &&
       !Read32(QueueConfigPresentedRequests))
     return std::optional<uint64_t>{InvalidParameter};
-  if (Internal || Read64(QueueConfigStop) || Read64(QueueConfigResume) ||
-      Read64(QueueConfigCanceled))
-    return invalidQueue(
-        "internal, power and cancellation callbacks are not modeled");
+  if (Internal || Read64(QueueConfigStop) || Read64(QueueConfigResume))
+    return invalidQueue("internal and power callbacks are not modeled");
 
   // Effective inherited policies are not recorded by this object profile.
   // Require an explicit policy rather than claiming an inherited PASSIVE IRQL.
@@ -365,6 +375,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   Q.Read = Read;
   Q.Write = Write;
   Q.DeviceControl = DeviceControl;
+  Q.CanceledOnQueue = Read64(QueueConfigCanceled);
   Q.Dispatch = Dispatch;
   if (Dispatch == QueueDispatchParallel)
     Q.PresentedLimit = Read32(QueueConfigPresentedRequests);
@@ -396,6 +407,9 @@ KernelFramework::queueWaitReady(uint64_t Handle, bool IncludePending) const {
                     auto O = Objects.find(Entry.second);
                     return O != Objects.end() && O->second.Parent == Handle;
                   }))
+    return false;
+  if (std::any_of(CanceledQueueCallbacks.begin(), CanceledQueueCallbacks.end(),
+                  [&](const auto &Entry) { return Entry.second == Handle; }))
     return false;
   return true;
 }

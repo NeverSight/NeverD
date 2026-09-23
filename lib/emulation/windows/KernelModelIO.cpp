@@ -824,8 +824,13 @@ KernelModel::beginRequest(const DriverRequest &Input,
       Call.FrameworkDispatchStatus = Dispatch.Status;
       Call.FrameworkCallerContext = Dispatch.CallerContext;
       Call.IRP = *Packet;
-      if (auto E = processRequestCancellations())
-        return E;
+      // Caller-context preprocessing may enqueue a request without presenting
+      // it to an I/O callback. Apply an immediate cancellation after that
+      // routing decision so the queue can deliver its cancellation callback.
+      if (!Dispatch.CallerContext) {
+        if (auto E = processRequestCancellations())
+          return E;
+      }
       uint64_t *Registers[] = {&Call.Argument0, &Call.Argument1,
                                &Call.Argument2, &Call.Argument3};
       for (size_t I = 0; I < Dispatch.Arguments.size(); ++I)
@@ -868,6 +873,8 @@ KernelModel::continueFrameworkCallerContext(uint64_t IRP) {
   auto Routed = Framework->continueCallerContext(IRP);
   if (!Routed)
     return Routed.takeError();
+  if (auto E = processRequestCancellations())
+    return E;
   Invocation Call;
   Call.PC = Routed->PC;
   Call.IRP = IRP;

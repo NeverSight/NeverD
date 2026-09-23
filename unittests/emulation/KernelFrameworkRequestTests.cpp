@@ -147,11 +147,12 @@ protected:
     take(invoke("WdfControlFinishInitializing", {Globals, Device}));
   }
 
-  uint64_t manualQueue() {
+  uint64_t manualQueue(uint64_t CanceledOnQueue = 0) {
     queueConfiguration();
     put(QueueConfig + 4, framework::QueueDispatchManual, 4);
     put(QueueConfig + 13, 0, 1);
     put(QueueConfig + 40, 0);
+    put(QueueConfig + 72, CanceledOnQueue);
     EXPECT_EQ(take(createQueue()), 0u);
     return get(QueueSlot);
   }
@@ -1056,6 +1057,71 @@ TEST_F(DriverKernelFrameworkRequest,
               "unsupported framework request major");
   EXPECT_EQ(Packets.at(UnknownIRP).PendingCalls, 0u);
   EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CanceledOnQueueDoesNotRunForNeverDeliveredRequest) {
+  put(QueueConfig + 4, framework::QueueDispatchManual, 4);
+  put(QueueConfig + 24, 0);
+  put(QueueConfig + 32, 0);
+  put(QueueConfig + 40, 0);
+  put(QueueConfig + 72, CancelPC);
+  initializeQueue();
+  const auto IRP = packet();
+  EXPECT_EQ(route(IRP).PC, 0u);
+  Packets.at(IRP).Canceled = true;
+  EXPECT_FALSE(take(Model.requestCancellation(IRP)));
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CanceledOnQueueTransfersPreviouslyDeliveredRequestToDriver) {
+  initializeQueue();
+  const auto Manual = manualQueue(CancelPC);
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  auto Canceled = cancel(IRP);
+  EXPECT_EQ(Canceled.PC, CancelPC);
+  EXPECT_EQ(Canceled.Arguments, (std::vector<uint64_t>{Manual, Request}));
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  EXPECT_EQ(take(invoke("WdfRequestGetIoQueue", {Globals, Request})), Manual);
+  EXPECT_EQ(take(invoke("WdfRequestIsCanceled", {Globals, Request})), 1u);
+  EXPECT_EQ(take(invoke("WdfRequestRequeue", {Globals, Request})),
+            framework::ControlInvalidDeviceRequest);
+  finish(Canceled);
+  EXPECT_FALSE(Packets.at(IRP).Completed);
+  complete(Request, 0, framework::RequestCancelled);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       PurgeWaitsForCanceledOnQueueCallbackBeforeStateNotification) {
+  initializeQueue();
+  const auto Manual = manualQueue(CancelPC);
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  take(invoke("WdfIoQueuePurge", {Globals, Manual, DefaultPC, 0x1234}));
+  auto Canceled = callback();
+  EXPECT_EQ(Canceled.PC, CancelPC);
+  EXPECT_EQ(Canceled.Arguments, (std::vector<uint64_t>{Manual, Request}));
+  EXPECT_TRUE(Packets.at(IRP).Canceled);
+  complete(Request, 0, framework::RequestCancelled);
+  EXPECT_FALSE(Model.takeGuestCall());
+  finish(Canceled);
+  auto Purged = callback();
+  EXPECT_EQ(Purged.PC, DefaultPC);
+  EXPECT_EQ(Purged.Arguments, (std::vector<uint64_t>{Manual, 0x1234}));
+  finish(Purged);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
 }
 
 TEST_F(DriverKernelFrameworkRequest,

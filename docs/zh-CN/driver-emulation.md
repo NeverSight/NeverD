@@ -169,6 +169,8 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 
 96 字节的 `WDF_IO_QUEUE_CONFIG` 支持默认及非默认的手动、顺序、有限或无限并行队列，要求显式被动执行且不使用框架同步。控制设备队列不参与电源管理。专用 READ／WRITE／IOCTL 回调优先于默认回调。已接受的队列请求即使同步完成也返回 `STATUS_PENDING`；void 回调的返回寄存器不会使请求完成。延迟完成使用现有调度器。没有处理函数时，请求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未启用零长度递送时，零长度 READ／WRITE 直接完成。默认文件包以成功状态和 Information=0 完成 CREATE／CLEANUP／CLOSE。非默认手动队列通过 `WdfRequestForwardToIoQueue` 接收请求，`WdfIoQueueRetrieveNextRequest` 按 FIFO 顺序取回。取回前取消的请求由框架从队列移除并以 `STATUS_CANCELLED` 完成。非默认自动队列通过自身回调递送转发请求；手动默认队列保留传入请求，直到驱动取回。`WdfIoQueueRetrieveNextRequest` 可从手动和顺序队列取回等待中的请求；并行队列返回 `STATUS_INVALID_DEVICE_STATE`。若自动队列没有匹配回调，则在递送槽可用时以 `STATUS_INVALID_DEVICE_REQUEST` 完成该请求。文件回调、PnP 设备和完整 PnP／电源仍不支持。 `WdfRequestRequeue` 将已取回的请求重新放到同一手动队列队首。 `NumberOfPresentedRequests` 限制并行队列已递送请求的数量；超出上限的请求等待已递送请求完成或取消。 默认顺序队列在已有请求递送给驱动时仍接受后续请求；这些请求按 FIFO 等待空槽，并可在递送前取消。 `WdfIoQueueStop` 暂停递送但继续接收请求；`WdfIoQueueStart` 恢复等待请求的递送，`WdfIoQueueGetState` 报告排队和已递送请求数。停止期间取请求返回 `STATUS_WDF_PAUSED`；停止完成回调会在所有已递送请求完成或离开队列后带着指定上下文执行；仍在排队的请求不会阻碍回调。前一个回调待执行时再次注册会被拒绝。
 
+配置的 `EvtIoCanceledOnQueue` 仅接收先前交给驱动后又转发或重新入队的请求，或由调用方上下文回调显式入队的请求；参数为 `(WDFQUEUE, WDFREQUEST)`。从未交给驱动的排队请求由框架直接以 `STATUS_CANCELLED` 完成，不调用该回调。回调将请求所有权交还驱动；驱动必须在回调内或之后完成请求，不能再次入队。队列清除与状态完成会等待回调返回及该驱动拥有的请求完成。
+
 `WdfIoQueueDrain` 拒绝新请求（`STATUS_INVALID_DEVICE_STATE`），继续递送已排队请求；排队数和驱动持有数归零后调用完成回调。转发到已耗尽队列返回 `STATUS_WDF_BUSY`；`WdfIoQueueStart` 恢复接收。
 
 `WdfIoQueuePurge` 还会以 `STATUS_CANCELLED` 取消框架尚未递送的请求，并在原 IRP 上取消已标记为可取消的驱动持有请求。清理回调先于 IRP 释放执行；状态完成回调等待排队、驱动持有及取消回调结束。未标记可取消的请求仍由驱动完成。
@@ -334,7 +336,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v45`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v46`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

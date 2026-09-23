@@ -169,6 +169,8 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 
 96 位元組的 `WDF_IO_QUEUE_CONFIG` 支援預設及非預設的手動、循序、有限或無限並行佇列，要求明確被動執行且不使用框架同步。控制裝置佇列不參與電源管理。專用 READ／WRITE／IOCTL 回呼優先於預設回呼。已接受的佇列請求即使同步完成也傳回 `STATUS_PENDING`；void 回呼的傳回暫存器不會使請求完成。延後完成使用現有排程器。沒有處理函式時，請求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未啟用零長度遞送時，零長度 READ／WRITE 直接完成。預設檔案套件以成功狀態和 Information=0 完成 CREATE／CLEANUP／CLOSE。非預設手動佇列透過 `WdfRequestForwardToIoQueue` 接收請求，`WdfIoQueueRetrieveNextRequest` 依 FIFO 順序取回。取回前取消的請求由框架從佇列移除，並以 `STATUS_CANCELLED` 完成。非預設自動佇列透過自身回呼遞送轉送要求；手動預設佇列保留傳入要求，直到驅動程式取回。`WdfIoQueueRetrieveNextRequest` 可從手動和循序佇列取回等待中的要求；並行佇列傳回 `STATUS_INVALID_DEVICE_STATE`。若自動佇列沒有相符回呼，則在遞送位置可用時以 `STATUS_INVALID_DEVICE_REQUEST` 完成該要求。檔案回呼、PnP 裝置和完整 PnP／電源仍不支援。 `WdfRequestRequeue` 將已取回的請求重新放到同一手動佇列隊首。 `NumberOfPresentedRequests` 限制並行佇列已遞送請求的數量；超出上限的請求等待已遞送請求完成或取消。 預設循序佇列在已有請求遞送給驅動程式時仍接受後續請求；這些請求依 FIFO 等待空位，並可在遞送前取消。 `WdfIoQueueStop` 暫停遞送但繼續接收請求；`WdfIoQueueStart` 恢復等待請求的遞送，`WdfIoQueueGetState` 回報排隊和已遞送請求數。停止期間取回請求傳回 `STATUS_WDF_PAUSED`；停止完成回呼會在所有已遞送請求完成或離開佇列後帶著指定內容執行；仍在排隊的請求不會阻礙回呼。前一個回呼待執行時再次註冊會遭拒。
 
+設定的 `EvtIoCanceledOnQueue` 僅接收先前交給驅動程式後又轉送或重新排入佇列的要求，或由呼叫端內容回呼明確排入佇列的要求；參數為 `(WDFQUEUE, WDFREQUEST)`。從未交給驅動程式的排隊要求由框架直接以 `STATUS_CANCELLED` 完成，不呼叫此回呼。回呼將要求所有權交還驅動程式；驅動程式必須在回呼內或之後完成要求，且不能再次排入佇列。佇列清除及狀態完成會等待回呼返回與該驅動程式擁有的要求完成。
+
 `WdfIoQueueDrain` 拒絕新要求（`STATUS_INVALID_DEVICE_STATE`），繼續遞送已排隊要求；排隊數和驅動程式持有數歸零後呼叫完成回呼。轉送至已耗盡佇列傳回 `STATUS_WDF_BUSY`；`WdfIoQueueStart` 恢復接收。
 
 `WdfIoQueuePurge` 也會以 `STATUS_CANCELLED` 取消框架尚未遞送的要求，並在原 IRP 上取消已標記可取消的驅動程式持有要求。清理回呼先於 IRP 釋放執行；狀態完成回呼等待排隊、驅動程式持有及取消回呼結束。未標記可取消的要求仍由驅動程式完成。
@@ -334,7 +336,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v45`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v46`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

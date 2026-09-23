@@ -197,6 +197,7 @@ private:
     uint64_t StopContext = 0;
     uint64_t DrainComplete = 0;
     uint64_t DrainContext = 0;
+    uint64_t CanceledOnQueue = 0;
     std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;
@@ -208,6 +209,8 @@ private:
     bool InCallerContext = false;
     bool Enqueued = false;
     bool Queued = false;
+    bool DeliveredOnce = false;
+    bool CanceledOnQueue = false;
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;
@@ -252,6 +255,8 @@ private:
     PresentQueue,
     Cleaned,
     CompleteRequest,
+    CanceledOnQueue,
+    CanceledOnQueueReturned,
     PurgeCancelRequest,
     CancelReturned,
     TryDestroy,
@@ -272,6 +277,7 @@ private:
   uint64_t NextContinuation = 1;
   std::map<uint64_t, Continuation> Continuations;
   std::map<uint64_t, uint64_t> CancelCallbacks;
+  std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::optional<GuestCall> PendingCall;
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;
