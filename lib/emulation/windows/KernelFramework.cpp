@@ -622,8 +622,7 @@ KernelFramework::advance(uint64_t Token) {
           });
       if (DriverOwned)
         continue;
-      if (Q.DrainComplete &&
-          std::any_of(CancelCallbacks.begin(), CancelCallbacks.end(),
+      if (std::any_of(CancelCallbacks.begin(), CancelCallbacks.end(),
                       [&](const auto &Entry) {
                         auto O = Objects.find(Entry.second);
                         return O != Objects.end() && O->second.Parent == Handle;

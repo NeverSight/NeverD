@@ -155,6 +155,51 @@ TEST(DriverKMDFControl, SynchronousStopWithoutCompletionProducerStalls) {
   }
 }
 
+TEST(DriverKMDFControl, StopAndPurgeCancelsDeliveredRequestBeforeRestart) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'5', '6'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Mode);
+        auto Options = controlOptions(Mode);
+        Options.LoadAddress = Address;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+        checkCompletedLifecycle(*Result, 6);
+        ASSERT_EQ(Result->Requests.size(), 6u);
+        EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+        EXPECT_TRUE(Result->Requests[1].Output.empty());
+        EXPECT_EQ(apiCount(*Result,
+                           Mode == '5' ? "WdfIoQueueStopAndPurge"
+                                       : "WdfIoQueueStopAndPurgeSynchronously"),
+                  1u);
+        EXPECT_EQ(apiCount(*Result, "WdfIoQueueStart"), 1u);
+        const auto Messages = controlMessages(*Result);
+        auto Position = [&](llvm::StringRef Needle) {
+          return std::find_if(
+              Messages.begin(), Messages.end(), [&](const auto &Message) {
+                return llvm::StringRef(Message).contains(Needle);
+              });
+        };
+        const auto Entered = Position("sync queue entered");
+        const auto Canceled = Position("purge cancel callback");
+        const auto Returned = Position("sync queue returned");
+        ASSERT_NE(Entered, Messages.end());
+        ASSERT_NE(Canceled, Messages.end());
+        ASSERT_NE(Returned, Messages.end());
+        EXPECT_LT(Entered, Canceled);
+        EXPECT_LT(Canceled, Returned);
+        if (Mode == '5') {
+          const auto Notified = Position("stop-purge completion callback");
+          ASSERT_NE(Notified, Messages.end());
+          EXPECT_LT(Canceled, Notified);
+          EXPECT_LT(Notified, Returned);
+        }
+      }
+}
+
 TEST(DriverKMDFControl, SequentialQueuePresentsWaitingRequestAfterWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
