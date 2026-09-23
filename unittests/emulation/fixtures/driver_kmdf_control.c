@@ -196,6 +196,7 @@ static volatile ULONG ParallelQueued;
 static volatile ULONG ParallelCompleted;
 static volatile ULONG ManualFollowup;
 static volatile ULONG QueueStopCount;
+static volatile ULONG QueueStateCallbacks;
 static DEFERRED_IOCTL_CONTEXT Deferred;
 
 static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
@@ -207,6 +208,18 @@ static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
 static BOOLEAN CheckQueue(WDFQUEUE Queue, ULONG Code) {
   return Check(Queue == DefaultQueue && KeGetCurrentIrql() == PASSIVE_LEVEL,
                Code);
+}
+
+static void QueueStopped(WDFQUEUE Queue, WDFCONTEXT Context) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State = WdfIoQueueGetState(Queue, &Queued, &Delivered);
+  Check(Queue == DefaultQueue && Context == (WDFCONTEXT)&QueueStopCount &&
+            (State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
+                WdfIoQueueAcceptRequests &&
+            Queued == 1 && Delivered == 0,
+        165);
+  ++QueueStateCallbacks;
+  DbgPrint("KMDF control: stop completion callback\n");
 }
 
 static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
@@ -538,7 +551,7 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
     return;
   }
   DbgPrint("KMDF control: deferred worker\n");
-  if (TransferMode == 'S') {
+  if (TransferMode == 'S' || TransferMode == 'V') {
     ULONG Queued = 0, Delivered = 0;
     WDF_IO_QUEUE_STATE State =
         WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
@@ -548,7 +561,7 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
           160);
   }
   TransformRequest(Request, OutputLength, InputLength);
-  if (TransferMode == 'S') {
+  if (TransferMode == 'S' || TransferMode == 'V') {
     ULONG Queued = 0, Delivered = 0;
     WDF_IO_QUEUE_STATE State =
         WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
@@ -556,6 +569,7 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
                   WdfIoQueueAcceptRequests &&
               Queued == 1 && Delivered == 0,
           161);
+    Check(TransferMode != 'V' || QueueStateCallbacks == 1, 166);
     WdfIoQueueStart(DefaultQueue);
     State = WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
     Check((State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests |
@@ -945,7 +959,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
   }
   if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R')
     ++ManualFollowup;
-  if (TransferMode == 'S') {
+  if (TransferMode == 'S' || TransferMode == 'V') {
     if (QueueStopCount != 0) {
       ++QueueStopCount;
       DbgPrint("KMDF control: resumed queued request\n");
@@ -963,7 +977,8 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
       WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
       return;
     }
-    WdfIoQueueStop(DefaultQueue, NULL, NULL);
+    WdfIoQueueStop(DefaultQueue, TransferMode == 'V' ? QueueStopped : NULL,
+                   TransferMode == 'V' ? (WDFCONTEXT)&QueueStopCount : NULL);
     State = WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
     if (!Check(
             (State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
@@ -976,7 +991,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     ++QueueStopCount;
     DbgPrint("KMDF control: queue stopped with request owned\n");
   }
-  if (TransferMode != 'W' && TransferMode != 'S') {
+  if (TransferMode != 'W' && TransferMode != 'S' && TransferMode != 'V') {
     TransformRequest(Request, OutputLength, InputLength);
     return;
   }
@@ -1265,6 +1280,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'Z' ? 'Z'
                  : Marker == L'R' ? 'R'
                  : Marker == L'S' ? 'S'
+                 : Marker == L'V' ? 'V'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);

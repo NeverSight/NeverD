@@ -187,6 +187,8 @@ private:
     bool AllowZeroLength = false;
     bool IsDefault = false;
     bool Dispatching = true;
+    uint64_t StopComplete = 0;
+    uint64_t StopContext = 0;
     std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;

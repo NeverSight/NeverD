@@ -563,9 +563,6 @@ TEST_F(DriverKernelFrameworkRequest,
   const auto FirstIRP = packet();
   const auto First = request(route(FirstIRP));
   EXPECT_EQ(State(), (std::tuple<uint64_t, uint64_t, uint64_t>{7, 0, 1}));
-  expectError(invoke("WdfIoQueueStop", {Globals, Queue, CancelPC, 0}),
-              "stop-completion callbacks");
-  EXPECT_EQ(State(), (std::tuple<uint64_t, uint64_t, uint64_t>{7, 0, 1}));
   take(invoke("WdfIoQueueStop", {Globals, Queue, 0, 0}));
   const auto SecondIRP = packet();
   EXPECT_EQ(route(SecondIRP).PC, 0u);
@@ -637,6 +634,66 @@ TEST_F(DriverKernelFrameworkRequest,
   EXPECT_EQ(Delivered.Arguments[1], Request);
   complete(Request);
   finish(Delivered);
+  EXPECT_TRUE(Packets.at(IRP).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       StoppingIdleQueueCallsStateCallbackWithContext) {
+  initializeQueue();
+  take(invoke("WdfIoQueueStop", {Globals, Queue, CancelPC, 0x1234}));
+  auto Stopped = callback();
+  EXPECT_EQ(Stopped.PC, CancelPC);
+  EXPECT_EQ(Stopped.Arguments, (std::vector<uint64_t>{Queue, 0x1234}));
+  finish(Stopped);
+  EXPECT_EQ(take(invoke("WdfIoQueueGetState", {Globals, Queue, 0, 0})),
+            framework::QueueAcceptRequests | framework::QueueNoRequests |
+                framework::QueueDriverNoRequests);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       StopCompletionWaitsForDeliveredRequestButNotQueuedWaiter) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  take(invoke("WdfIoQueueStop", {Globals, Queue, CancelPC, 0x5678}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  expectError(invoke("WdfIoQueueStop", {Globals, Queue, CancelPC, 0x9999}),
+              "already has a stop-completion callback");
+  const auto SecondIRP = packet();
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  complete(First);
+  auto Stopped = callback();
+  EXPECT_EQ(Stopped.PC, CancelPC);
+  EXPECT_EQ(Stopped.Arguments, (std::vector<uint64_t>{Queue, 0x5678}));
+  EXPECT_FALSE(Packets.at(SecondIRP).Completed);
+  finish(Stopped);
+  EXPECT_FALSE(Model.takeGuestCall());
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  auto Delivered = callback();
+  EXPECT_EQ(Delivered.PC, IoControlPC);
+  complete(Delivered.Arguments[1]);
+  finish(Delivered);
+  EXPECT_TRUE(Packets.at(SecondIRP).Completed);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ForwardingLastDeliveredRequestReleasesStopCompletion) {
+  const auto Automatic = defaultAndAutomaticQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  take(invoke("WdfIoQueueStop", {Globals, Queue, CancelPC, 0x2468}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Automatic})),
+      0u);
+  auto Destination = callback();
+  EXPECT_EQ(Destination.PC, DefaultPC);
+  finish(Destination);
+  auto Stopped = callback();
+  EXPECT_EQ(Stopped.PC, CancelPC);
+  EXPECT_EQ(Stopped.Arguments, (std::vector<uint64_t>{Queue, 0x2468}));
+  finish(Stopped);
+  complete(Request);
   EXPECT_TRUE(Packets.at(IRP).Completed);
 }
 
