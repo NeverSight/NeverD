@@ -1678,6 +1678,64 @@ TEST(ObjCCallHints, FoundationNSKeyValueObservationInvalidateUsesSwiftSelf) {
   }
 }
 
+TEST(ObjCCallHints, SwiftUIBindingWrappedValueSetterKeepsGenericABI) {
+  constexpr llvm::StringLiteral Name = "$s7SwiftUI7BindingV12wrappedValuexvs";
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/SwiftUI.framework/SwiftUI";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const std::string Import = "_" + Name.str();
+    auto Image = runtimeImage(Import, Architecture);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &Signature = Hint->Signature;
+    EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(Signature.ReturnType);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Void);
+    ASSERT_EQ(Signature.Parameters.size(), 3U);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (size_t I = 0; I < 2; ++I) {
+      EXPECT_EQ(Signature.Parameters[I].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.Parameters[I].TheRole,
+                SourceParameterTypeHint::Role::Ordinary);
+      EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                TRI.IntParamRegs[I]);
+    }
+    EXPECT_EQ(Signature.Parameters[2].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Signature.Parameters[2].TheRole,
+              SourceParameterTypeHint::Role::SwiftContext);
+    EXPECT_EQ(Signature.Parameters[2].Location.RegisterOffset,
+              Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+
+    auto Call = HighExpr::makeCall("untrusted", 0x2180,
+                                   {HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8)});
+    Call->Type = Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+    for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+      auto Wrong = Image;
+      if (Mutation == 0)
+        Wrong.DyldBindSlots[0x2180].Module = "/tmp/SwiftUI.framework/SwiftUI";
+      else if (Mutation == 1)
+        Wrong.DyldBindSlots[0x2180].Addend = 1;
+      else if (Mutation == 2)
+        Wrong.DyldBindSlots[0x2180].WeakImport = true;
+      else
+        Wrong.DyldBindSlots.erase(0x2180);
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180)) << Mutation;
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Wrong, {})) << Mutation;
+    }
+  }
+}
+
 TEST(ObjCCallHints, FoundationNSNumberIntegerLiteralKeepsMetatypeABI) {
   constexpr llvm::StringLiteral Name =
       "$sSo8NSNumberC10FoundationE14integerLiteralABSi_tcfC";

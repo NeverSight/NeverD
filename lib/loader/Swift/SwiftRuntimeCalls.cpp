@@ -139,6 +139,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "vIp"},
+    // Binding.wrappedValue's generic setter receives the value address,
+    // Binding metadata, and the mutable Binding in swiftself.
+    {"$s7SwiftUI7BindingV12wrappedValuexvs",
+     "/System/Library/Frameworks/SwiftUI.framework/SwiftUI", "vppC"},
     {"$sSD10FoundationE19_bridgeToObjectiveCSo12NSDictionaryCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
