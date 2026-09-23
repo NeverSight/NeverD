@@ -203,9 +203,8 @@ bool MedLLVMEmitter::emitX86CacheOp(const MedOp &Op, Intrinsic IC,
   case I::Xsaveopt64:
   case I::Xrstor64:
   case I::Xrstors64:
-    llvm::report_fatal_error(
-        "x86 state save/restore requires an explicit architectural state "
-        "layout; host inline asm is not a sound lowering");
+    emitX86StateSnapshot(Op, IC, Builder);
+    return true;
   default:
     break;
   }
@@ -257,6 +256,118 @@ void MedLLVMEmitter::emitX86MemPtrAsm(const char *Mn, const MedOp &Op,
       AsmFnTy, std::string(Mn) + " " + Segment + "($0)", Constraints,
       /*hasSideEffects=*/true);
   Builder.CreateCall(IA, ParamVals);
+}
+
+// The processor's x87/SSE/AVX state, as the source's _xsave64/_fxrstor
+// intrinsics name it.  Lifted values live in SSA registers, not in that
+// state, so HighC marks the statement; here the LLVM intrinsic is the same
+// source operation.
+void MedLLVMEmitter::emitX86StateSnapshot(const MedOp &Op, Intrinsic IC,
+                                          llvm::IRBuilder<> &Builder) {
+  using I = Intrinsic;
+  llvm::Intrinsic::ID ID = llvm::Intrinsic::not_intrinsic;
+  bool TakesMask = true;
+  switch (IC) {
+  case I::Fxsave:
+    ID = llvm::Intrinsic::x86_fxsave;
+    TakesMask = false;
+    break;
+  case I::Fxrstor:
+    ID = llvm::Intrinsic::x86_fxrstor;
+    TakesMask = false;
+    break;
+  case I::Fxsave64Mem:
+    ID = llvm::Intrinsic::x86_fxsave64;
+    TakesMask = false;
+    break;
+  case I::Fxrstor64Mem:
+    ID = llvm::Intrinsic::x86_fxrstor64;
+    TakesMask = false;
+    break;
+  case I::Xsave:
+    ID = llvm::Intrinsic::x86_xsave;
+    break;
+  case I::Xsavec:
+    ID = llvm::Intrinsic::x86_xsavec;
+    break;
+  case I::Xsaves:
+    ID = llvm::Intrinsic::x86_xsaves;
+    break;
+  case I::Xsaveopt:
+    ID = llvm::Intrinsic::x86_xsaveopt;
+    break;
+  case I::Xrstor:
+    ID = llvm::Intrinsic::x86_xrstor;
+    break;
+  case I::Xrstors:
+    ID = llvm::Intrinsic::x86_xrstors;
+    break;
+  case I::Xsave64:
+    ID = llvm::Intrinsic::x86_xsave64;
+    break;
+  case I::Xsavec64:
+    ID = llvm::Intrinsic::x86_xsavec64;
+    break;
+  case I::Xsaves64:
+    ID = llvm::Intrinsic::x86_xsaves64;
+    break;
+  case I::Xsaveopt64:
+    ID = llvm::Intrinsic::x86_xsaveopt64;
+    break;
+  case I::Xrstor64:
+    ID = llvm::Intrinsic::x86_xrstor64;
+    break;
+  case I::Xrstors64:
+    ID = llvm::Intrinsic::x86_xrstors64;
+    break;
+  default:
+    // x87 environment forms have no LLVM intrinsic.
+    emitX86MemPtrAsm(intrinsicAsmMnemonic(IC), Op, Builder);
+    return;
+  }
+  if (Op.NumInputs < (TakesMask ? 4 : 2))
+    llvm::report_fatal_error(
+        "x86 state save/restore intrinsic is missing its operands");
+  if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+    if (!TakesMask) {
+      emitX86MemPtrAsm(intrinsicAsmMnemonic(IC), Op, Builder);
+      return;
+    }
+    // No intrinsic takes a segment-relative area; keep the override in asm.
+    auto *I32 = llvm::Type::getInt32Ty(*Ctx);
+    llvm::Value *Offset = getRawSegmentOffset(Op.Inputs[1], Builder);
+    auto *OffsetTy = llvm::Type::getInt64Ty(*Ctx);
+    if (Offset->getType()->isPointerTy())
+      Offset = Builder.CreatePtrToInt(Offset, OffsetTy, "state_offset");
+    Offset = Builder.CreateZExtOrTrunc(Offset, OffsetTy, "state_offset");
+    llvm::Value *Lo =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[2], Builder), I32, "lo");
+    llvm::Value *Hi =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[3], Builder), I32, "hi");
+    const char *Segment =
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS ? "%fs:" : "%gs:";
+    auto *AsmTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                          {OffsetTy, I32, I32}, false);
+    auto *IA = llvm::InlineAsm::get(
+        AsmTy, std::string(intrinsicAsmMnemonic(IC)) + " " + Segment + "($0)",
+        "r,{eax},{edx},~{memory}", /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {Offset, Lo, Hi});
+    return;
+  }
+  llvm::Value *Addr = getVar(Op.Inputs[1], Builder);
+  auto *PtrTy = llvm::PointerType::getUnqual(*Ctx);
+  if (!Addr->getType()->isPointerTy())
+    Addr = Builder.CreateIntToPtr(Addr, PtrTy, "state_area");
+  std::vector<llvm::Value *> Args{Addr};
+  if (TakesMask) {
+    auto *I32 = llvm::Type::getInt32Ty(*Ctx);
+    // LLVM's XSAVE intrinsics take the EDX half first, then EAX.
+    Args.push_back(
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[3], Builder), I32, "hi"));
+    Args.push_back(
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[2], Builder), I32, "lo"));
+  }
+  Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(Mod, ID), Args);
 }
 
 bool MedLLVMEmitter::emitX86SystemAsm(const MedOp &Op, Intrinsic IC,

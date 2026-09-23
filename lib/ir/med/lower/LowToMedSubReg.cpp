@@ -304,7 +304,7 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
             uint64_t RegOff = It->first.first;
             uint16_t Size = It->first.second;
             if (!TRI.isFrameOrLinkReg(RegOff) &&
-                !TRI.isCallPreserved(RegOff, Size))
+                !TRI.isCallPreserved(RegOff, Size, TargetFormat))
               It = Writes.erase(It);
             else
               ++It;

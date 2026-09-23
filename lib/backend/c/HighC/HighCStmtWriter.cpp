@@ -132,6 +132,16 @@ void writeCxxCatchType(llvm::raw_ostream &OS, const HighEHClause &Clause) {
 
 void HighCWriter::emitIndent(int Indent) { emitCIndent(OS, Indent); }
 
+void HighCWriter::emitRenderedStatement(int Indent, llvm::StringRef Text) {
+  while (!Text.empty()) {
+    auto [Line, Rest] = Text.split('\n');
+    if (!Line.empty())
+      emitIndent(Indent);
+    OS << Line << '\n';
+    Text = Rest;
+  }
+}
+
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
   if (Analysis.DeadStmts.count(&Stmt))
     return;
@@ -170,8 +180,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
             return !Analysis.DeadVars.count(varName(V));
           });
       if (!Rendered.empty()) {
-        emitIndent(Indent);
-        OS << Rendered;
+        emitRenderedStatement(Indent, Rendered);
         break;
       }
     }
@@ -185,8 +194,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
             return !Analysis.DeadVars.count(varName(V));
           });
       if (!Rendered.empty()) {
-        emitIndent(Indent);
-        OS << Rendered;
+        emitRenderedStatement(Indent, Rendered);
         HasCIntrinsics = true;
         break;
       }
@@ -375,8 +383,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
             return !Analysis.DeadVars.count(varName(V));
           });
       if (!Rendered.empty()) {
-        emitIndent(Indent);
-        OS << Rendered;
+        emitRenderedStatement(Indent, Rendered);
         break;
       }
     }
@@ -390,8 +397,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
             return !Analysis.DeadVars.count(varName(V));
           });
       if (!Rendered.empty()) {
-        emitIndent(Indent);
-        OS << Rendered;
+        emitRenderedStatement(Indent, Rendered);
         HasCIntrinsics = true;
         break;
       }
@@ -765,10 +771,16 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
         const HighStmt *ThenLiveAssign = nullptr;
         size_t ElseLive = 0;
         size_t ThenLive = 0;
+        // The join assignments are what this rewrite sinks into `return`, so
+        // they do not count as other live work whether or not a copy
+        // forward already hides them.
+        size_t ThenOther = 0;
         for (const HighStmt &E : S.Body) {
           if (stmtHiddenFromC(E))
             continue;
           ++ThenLive;
+          if (&E != ThenJoin)
+            ++ThenOther;
           if (E.Kind == StmtKind::Assign && E.Dst && E.Val &&
               E.Dst->Kind == ExprKind::Var)
             ThenLiveAssign = &E;
@@ -776,10 +788,12 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
         for (const HighStmt &E : S.ElseBody) {
           if (stmtHiddenFromC(E))
             continue;
-          ++ElseLive;
           if (E.Kind == StmtKind::Assign && E.Dst && E.Val &&
               E.Dst->Kind == ExprKind::Var && E.Val->Kind == ExprKind::Call)
             AssignCall = &E;
+          if (&E == ElseJoin && E.Val && E.Val->Kind == ExprKind::Var)
+            continue;
+          ++ElseLive;
         }
         bool MatchesCall = false;
         if (AssignCall) {
@@ -798,8 +812,10 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
                  ThenLiveAssign->Val->Kind != ExprKind::Call &&
                  ThenLiveAssign->Val->Kind != ExprKind::Undef)
           ThenVal = ThenLiveAssign->Val.get();
-        if ((ThenLive == 0 || (ThenLive == 1 && ThenVal)) && ElseLive == 1 &&
-            AssignCall && MatchesCall) {
+        const bool ThenSinks =
+            ThenJoin ? ThenOther == 0
+                     : (ThenLive == 0 || (ThenLive == 1 && ThenVal));
+        if (ThenSinks && ElseLive == 1 && AssignCall && MatchesCall) {
           emitIndent(Indent);
           OS << "if (" << invertCondStr(*S.Cond) << ")\n";
           emitIndent(Indent + 1);
@@ -937,6 +953,33 @@ bool HighCWriter::isCompilerEHConstant(const HighExpr &Val) const {
 }
 
 void HighCWriter::collectCopyForward(const HighFunc &Func) {
+  // Forwarding a copy renames every use of its destination.  That is only
+  // the same value when the destination is assigned once and its source is
+  // never reassigned; a loop-carried variable (`v = arg0; ... v = next;`)
+  // has several definitions and must keep its own name.
+  std::map<std::string, unsigned> Definitions;
+  std::function<void(const std::vector<HighStmt> &)> CountDefinitions =
+      [&](const std::vector<HighStmt> &Stmts) {
+        for (const HighStmt &Stmt : Stmts) {
+          if (Stmt.Kind == StmtKind::Assign && Stmt.Dst &&
+              (Stmt.Dst->Kind == ExprKind::Var ||
+               Stmt.Dst->Kind == ExprKind::Phi))
+            ++Definitions[varName(Stmt.Dst->Var)];
+          CountDefinitions(Stmt.Body);
+          CountDefinitions(Stmt.ElseBody);
+          for (const auto &C : Stmt.Cases)
+            CountDefinitions(C.Body);
+          CountDefinitions(Stmt.DefaultBody);
+          for (const auto &ClauseBody : Stmt.EHClauseBodies)
+            CountDefinitions(ClauseBody);
+        }
+      };
+  CountDefinitions(Func.Body);
+  auto DefinitionCount = [&](const std::string &Name) {
+    auto It = Definitions.find(Name);
+    return It == Definitions.end() ? 0u : It->second;
+  };
+
   std::set<std::string> SeenLoad;
   std::map<std::string, std::vector<TypeRef>> SlotLoadTypes;
   std::function<void(const std::vector<HighStmt> &, bool, bool)> Walk;
@@ -1000,6 +1043,9 @@ void HighCWriter::collectCopyForward(const HighFunc &Func) {
           if (Src && Stmt.Dst->Type && Stmt.Val->Type &&
               (Stmt.Dst->Type->Kind != Stmt.Val->Type->Kind ||
                Stmt.Dst->Type->Size != Stmt.Val->Type->Size))
+            Src.reset();
+          if (Src &&
+              (DefinitionCount(DstName) != 1 || DefinitionCount(*Src) > 1))
             Src.reset();
           if (Src) {
             CopyForward[DstName] = *Src;

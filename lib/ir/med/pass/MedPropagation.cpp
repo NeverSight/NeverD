@@ -91,6 +91,7 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           // conversion boundary and can make SUBBYTES or integer extensions
           // structurally invalid.
           if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1 &&
+              !Def->IntrinsicAuxResult &&
               Def->Inputs[0].Size == Op.Inputs[I].Size) {
             MedVar Replacement = Def->Inputs[0];
             // COPY is value transport, so an untagged immediate remains

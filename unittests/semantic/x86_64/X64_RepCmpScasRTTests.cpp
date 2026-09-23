@@ -55,6 +55,21 @@ static const std::vector<RoundTripTC> kX64 = {
    "+(long)n*2048;}\n",
    {0x11}, "RepCmpScas", 0},
 
+  // Two REP CMPS in one function each publish their own flag snapshot.
+  // LowIR reuses temp numbers per instruction, so SSA once merged both
+  // snapshots into one undefined function-entry value.
+  {"repe_cmpsb_twice_flags_per_site",
+   "long f(long a){unsigned char s[8],d[8];"
+   "for(int i=0;i<8;i++){s[i]=(unsigned char)(a+i);d[i]=(unsigned char)(a+i);}"
+   "d[6]=0x80;"
+   "unsigned char*ps=s,*pd=d;unsigned long n=4;unsigned char e1=0,e2=0,b2=0;"
+   "__asm__ volatile(\"cld; repe cmpsb; sete %0; mov $4, %%rcx;"
+   " repe cmpsb; sete %1; setb %2\""
+   ":\"=&q\"(e1),\"=&q\"(e2),\"=&q\"(b2),\"+S\"(ps),\"+D\"(pd),\"+c\"(n)"
+   "::\"memory\",\"cc\");"
+   "return (long)e1+(long)e2*2+(long)b2*4+(long)(ps-s)*8+(long)n*256;}\n",
+   {0x11}, "RepCmpScas", 0},
+
   // The mirrored mismatch (source byte above destination byte) so CF=0/ZF=0 is
   // distinguished from the CF=1 case above rather than both folding to "!=".
   {"repe_cmpsb_above",

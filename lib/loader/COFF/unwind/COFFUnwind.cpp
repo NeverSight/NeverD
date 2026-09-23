@@ -169,6 +169,14 @@ void parseX64Exceptions(const COFFObjectFile &Obj, BinaryImage &Img,
       Addr = ImageBase + RF.BeginAddress;
       End = ImageBase + RF.EndAddress;
       Img.KnownCodeRanges.emplace_back(Addr, End);
+      // UNWIND_INFO byte 0 is Version:3 | Flags:5.  Read the chain flag here
+      // too, because a restricted load decodes only the requested records.
+      constexpr uint8_t kChainInfoFlag = 0x4;
+      if (RF.UnwindInformation <= InvalidVA - ImageBase)
+        if (const uint8_t *Header =
+                Img.readVA(ImageBase + RF.UnwindInformation, 1);
+            Header && ((*Header >> 3) & kChainInfoFlag) != 0)
+          Img.ContinuationCodeStarts.insert(Addr);
     }
     if (Restrict) {
       Img.COFFPDataRecords.push_back(

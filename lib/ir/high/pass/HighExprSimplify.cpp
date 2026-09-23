@@ -81,6 +81,79 @@ static ExprPtr joinLocalSlices(const ExprPtr &E) {
   return Result;
 }
 
+/// Nothing in \p E can be observed except its value: no call, memory access
+/// or atomic.  Only such a subexpression may be dropped as irrelevant.
+static bool isEffectFree(const HighExpr &E, unsigned Depth = 0) {
+  if (Depth > 64)
+    return false;
+  switch (E.Kind) {
+  case ExprKind::Var:
+  case ExprKind::Const:
+  case ExprKind::Undef:
+  case ExprKind::Phi:
+    return true;
+  case ExprKind::BinOp:
+  case ExprKind::UnaryOp:
+  case ExprKind::Cast:
+  case ExprKind::BitCast:
+    if (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||
+        E.Op == NdOp::ATOMIC_CMPXCHG)
+      return false;
+    for (const ExprPtr &Op : E.Operands)
+      if (!Op || !isEffectFree(*Op, Depth + 1))
+        return false;
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isZeroConst(const ExprPtr &E) {
+  return E && E->Kind == ExprKind::Const && E->ConstVal == 0;
+}
+
+/// Rewrite \p X knowing only its low \p Bytes bytes are read (the operand
+/// of a low SUBBYTES).  A partial x86 register write keeps the stale upper
+/// bytes as `(old & ~0xFF) | new`; a byte read of that never sees `old`.
+/// Operand widths are unchanged; only subexpressions that cannot affect the
+/// demanded bytes and have no effect are removed.
+static ExprPtr demandLowBytes(const ExprPtr &X, unsigned Bytes) {
+  if (!X || !X->Type || Bytes == 0 || Bytes >= 8 || X->Type->Size > 8 ||
+      X->Kind != ExprKind::BinOp || X->Operands.size() != 2)
+    return X;
+  const uint64_t Mask = (uint64_t(1) << (Bytes * 8)) - 1;
+  const ExprPtr &L = X->Operands[0];
+  const ExprPtr &R = X->Operands[1];
+  auto Zero = [&] { return HighExpr::makeConst(0, X->Type->Size); };
+  switch (X->Op) {
+  case NdOp::INT_AND:
+    for (const auto &[C, Other] : {std::pair{R, L}, std::pair{L, R}})
+      if (C && C->Kind == ExprKind::Const) {
+        if ((C->ConstVal & Mask) == 0 && Other && isEffectFree(*Other))
+          return Zero();
+        if ((C->ConstVal & Mask) == Mask)
+          return demandLowBytes(Other, Bytes);
+      }
+    return X;
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR: {
+    ExprPtr NL = demandLowBytes(L, Bytes);
+    ExprPtr NR = demandLowBytes(R, Bytes);
+    if (isZeroConst(NL))
+      return NR;
+    if (isZeroConst(NR))
+      return NL;
+    if (NL == L && NR == R)
+      return X;
+    auto Copy = std::make_shared<HighExpr>(*X);
+    Copy->Operands = {NL, NR};
+    return Copy;
+  }
+  default:
+    return X;
+  }
+}
+
 static void simplifyExprRecursive(ExprPtr &E,
                                   std::unordered_set<const HighExpr *> &Seen) {
   if (!E || !Seen.insert(E.get()).second)
@@ -154,6 +227,19 @@ static void simplifyExprRecursive(ExprPtr &E,
     }
   }
 
+  if (E->Kind == ExprKind::Cast && E->Type &&
+      E->Type->Kind == NdTypeKind::Int && E->Operands.size() == 1 &&
+      E->Operands[0] && E->Operands[0]->Type &&
+      E->Operands[0]->Type->Size > E->Type->Size) {
+    if (ExprPtr Demanded = demandLowBytes(E->Operands[0], E->Type->Size);
+        Demanded != E->Operands[0]) {
+      auto Copy = std::make_shared<HighExpr>(*E);
+      Copy->Operands[0] = std::move(Demanded);
+      E = std::move(Copy);
+    }
+    return;
+  }
+
   if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2)
     return;
 
@@ -165,6 +251,14 @@ static void simplifyExprRecursive(ExprPtr &E,
   // the RDTSC hi/lo collapse.
   if (E->Op == NdOp::SUBBYTES && E->Operands[1]->Kind == ExprKind::Const &&
       E->Operands[1]->ConstVal == 0 && E->Type) {
+    if (ExprPtr Demanded = demandLowBytes(E->Operands[0], E->Type->Size);
+        Demanded != E->Operands[0]) {
+      // Rewrite a copy: HighIR shares nodes, and another parent may read
+      // the whole register value.
+      auto Copy = std::make_shared<HighExpr>(*E);
+      Copy->Operands[0] = std::move(Demanded);
+      E = std::move(Copy);
+    }
     const auto &Val = E->Operands[0];
     if (Val->Type && Val->Type->Size == E->Type->Size) {
       E = Val;
@@ -207,6 +301,16 @@ static void simplifyExprRecursive(ExprPtr &E,
           E->Operands[1]->Type ? E->Operands[1]->Type->Size : 8);
     }
   }
+
+  // `and [mem], 0` lifts as a read of the old value masked to zero.
+  if ((E->Op == NdOp::INT_AND || E->Op == NdOp::INT_MULT) && E->Type &&
+      E->Type->Size <= 8)
+    for (unsigned I = 0; I < 2; ++I)
+      if (isZeroConst(E->Operands[I]) && E->Operands[1 - I] &&
+          isEffectFree(*E->Operands[1 - I])) {
+        E = HighExpr::makeConst(0, E->Type->Size);
+        return;
+      }
 
   if (E->Op == NdOp::INT_SUB && E->Operands[1]->Kind == ExprKind::Const &&
       E->Operands[1]->ConstVal == 0)

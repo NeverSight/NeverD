@@ -1924,8 +1924,9 @@ TEST(LowInstructionBoundary,
 
   // State snapshots need an explicit bridge between the lifted XMM/x87/MXCSR
   // variables and the architectural memory layout.  Until that representation
-  // exists, every consumer fails closed instead of reading/writing incidental
-  // host registers through raw inline asm.
+  // exists, the emulator fails closed.  The C and LLVM emitters print the
+  // source's own _xsave/_fxrstor operation and HighC marks it as hardware
+  // state rather than the lifted locals.
   NdOpEmulator UnsupportedStateEmulator(SemanticImage);
   UnsupportedStateEmulator.setStrictMode(true);
   ASSERT_TRUE(UnsupportedStateEmulator.setMemoryAddressSpaceBase(

@@ -213,6 +213,8 @@ const char *neverd_bench_run(neverd_session_t Sess, const char *InputPath,
       Complete = false;
       break;
     case D::RemovedJumpTableTarget:
+    case D::AbsorbedFunctionChunk:
+    case D::RejectedUnwindlessNonLeaf:
       ++CandidateFunctions;
       ++RemovedFunctions;
       break;

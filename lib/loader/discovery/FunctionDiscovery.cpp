@@ -178,7 +178,9 @@ void scanPaddingBoundaries(BinaryImage &Img) {
       va_t Addr = Seg.VA + I;
       if (checkCodePrologueAtOffset(Img, Seg, I, Img.Arch) &&
           !insideInterval(Known, Addr) && Existing.insert(Addr).second) {
-        Img.Symbols.push_back(Symbol::makeFunc(Addr));
+        Symbol Guess = Symbol::makeFunc(Addr);
+        Guess.IsBoundaryGuess = true;
+        Img.Symbols.push_back(std::move(Guess));
         ++Added;
       }
     }

@@ -181,7 +181,7 @@ void MedToHighConverter::lowerIntrinsic(HighFunc &Func,
     for (size_t CI = OpIdx + 1;
          CI < CurBlock.Ops.size() && CoOutputs.size() < NumOut; ++CI) {
       auto &NextOp = CurBlock.Ops[CI];
-      if (NextOp.Opcode == NdOp::COPY && NextOp.NumInputs >= 1) {
+      if (NextOp.IntrinsicAuxResult) {
         CoOutputs.push_back(NextOp.Inputs[0]);
         // The pending-result convention binds the auxiliary value to the COPY
         // input.  Expression building also inlines uses of the COPY output back

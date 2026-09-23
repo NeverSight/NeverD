@@ -1167,8 +1167,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         for (size_t J = static_cast<size_t>(OpIdx) + 1;
              J < Blk.Ops.size() && CI < PendingIntrinsicCount; ++J) {
           auto &NOp = Blk.Ops[J];
-          if (NOp.Opcode == NdOp::COPY && NOp.NumInputs >= 1 &&
-              NOp.Inputs[0].Kind == MedVar::Temp) {
+          if (NOp.IntrinsicAuxResult) {
             setVar(NOp.Inputs[0], PendingIntrinsicOutputs[CI], Builder);
             ++CI;
             continue;

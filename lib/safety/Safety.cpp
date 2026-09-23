@@ -84,6 +84,7 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
   using Disposition = PipelineFunctionDisposition;
   std::set<va_t> AcceptedEntries;
   std::set<va_t> RemovedJumpTableEntries;
+  std::set<va_t> AbsorbedChunkEntries;
   for (const PipelineFunctionAudit &Audit : Result.FunctionAudits) {
     bool Incomplete = false;
     switch (Audit.Disposition) {
@@ -109,6 +110,15 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
     case Disposition::RemovedJumpTableTarget:
       if (!RemovedJumpTableEntries.insert(Audit.Entry).second)
         return "incomplete safety lift inventory";
+      break;
+    case Disposition::AbsorbedFunctionChunk:
+      if (!AbsorbedChunkEntries.insert(Audit.Entry).second)
+        return "incomplete safety lift inventory";
+      break;
+    case Disposition::RejectedUnwindlessNonLeaf:
+      if (Img && Img->hasAuthenticatedFunctionEntryAt(Audit.Entry))
+        return "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) +
+               " (rejected-unwindless-non-leaf)";
       break;
     }
     if (!Incomplete)
@@ -139,6 +149,24 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
   if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
       AcceptedEntries != MedEntries)
     return "incomplete safety lift inventory";
+  // An absorbed chunk must really be lifted inside an accepted function and
+  // must not be a function the image itself names.
+  for (va_t Chunk : AbsorbedChunkEntries) {
+    if (AcceptedEntries.count(Chunk) != 0)
+      return "incomplete safety lift inventory";
+    if (Img && Img->hasAuthenticatedFunctionEntryAt(Chunk))
+      return "incomplete safety lift at 0x" + llvm::utohexstr(Chunk) +
+             " (absorbed-function-chunk)";
+    const bool Lifted = std::any_of(
+        Result.LowFuncs.begin(), Result.LowFuncs.end(), [&](const LowFunc &F) {
+          return std::any_of(
+              F.Blocks.begin(), F.Blocks.end(),
+              [&](const LowBlock &Block) { return Block.StartAddr == Chunk; });
+        });
+    if (!Lifted)
+      return "incomplete safety lift at 0x" + llvm::utohexstr(Chunk) +
+             " (absorbed-function-chunk)";
+  }
   for (va_t RemovedEntry : RemovedJumpTableEntries) {
     if (AcceptedEntries.count(RemovedEntry) != 0)
       return "incomplete safety lift inventory";

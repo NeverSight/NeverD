@@ -248,6 +248,8 @@ private:
                         llvm::IRBuilder<> &Builder);
   /// Emit `Mn ($0)` inline asm with the captured address operand
   /// (Op.Inputs[1]) as a pointer, or bare `Mn` when no address was captured.
+  void emitX86StateSnapshot(const MedOp &Op, Intrinsic IC,
+                            llvm::IRBuilder<> &Builder);
   void emitX86MemPtrAsm(const char *Mn, const MedOp &Op,
                         llvm::IRBuilder<> &Builder);
   /// IN acc, port — read an I/O port into the accumulator (value-producing).

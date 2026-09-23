@@ -114,6 +114,8 @@ public:
   void writeTryBody(const std::vector<HighStmt> &Stmts, int Indent);
   bool isCompilerEHConstant(const HighExpr &Val) const;
   void emitIndent(int Indent);
+  /// Emit a possibly multi-line rendered statement, indenting every line.
+  void emitRenderedStatement(int Indent, llvm::StringRef Text);
   void collectGotoTargets(const std::vector<HighStmt> &Stmts);
 
   //--- Expression rendering (HighCExprWriter.cpp) ---
@@ -232,6 +234,8 @@ public:
   std::map<va_t, ImageObject> ImageObjects;
 
   std::vector<HiLoPair> HiLoPairs;
+  /// Assignments whose multi-output intrinsic renders its own outputs.
+  std::set<const HighStmt *> MultiOutputRenderedStmts;
 };
 
 } // namespace neverd

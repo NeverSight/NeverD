@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Debug.h"
@@ -146,9 +147,64 @@ void LowToMedConverter::neutralizeStackProbeCalls(MedFunc &Func) {
   }
 }
 
+namespace {
+/// Mark the COPYs that publish a multi-output INTRINSIC's auxiliary results.
+/// The lifter writes each auxiliary result through the input of a COPY that
+/// follows the intrinsic in the same instruction; sub-register normalization
+/// of the value just copied may sit between those COPYs.
+void markIntrinsicAuxResults(MedFunc &Func) {
+  for (MedBlock &Block : Func.Blocks)
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const MedOp &Intr = Block.Ops[I];
+      if (Intr.Opcode != NdOp::INTRINSIC || Intr.NumInputs == 0 ||
+          !Intr.Inputs[0].isConst())
+        continue;
+      const uint8_t Count =
+          intrinsicOutputCount(static_cast<Intrinsic>(Intr.Inputs[0].ConstVal));
+      uint8_t Marked = 0;
+      for (size_t J = I + 1; J < Block.Ops.size() && Marked < Count; ++J) {
+        MedOp &Next = Block.Ops[J];
+        if (Next.Addr != Intr.Addr)
+          break;
+        if (Next.Opcode == NdOp::COPY && Next.NumInputs >= 1 &&
+            Next.Inputs[0].Kind == MedVar::Temp) {
+          Next.IntrinsicAuxResult = true;
+          ++Marked;
+          continue;
+        }
+        if (Next.Opcode == NdOp::INT_ZEXT || Next.Opcode == NdOp::INT_SEXT ||
+            Next.Opcode == NdOp::SUBBYTES)
+          continue;
+        break;
+      }
+    }
+}
+} // namespace
+
+void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp,
+                                                const LowOp &LOp) const {
+  if (!CallMayWriteGPRs || LOp.Opcode != NdOp::CALL || LOp.NumInputs == 0 ||
+      !LOp.Inputs[0].isConst())
+    return;
+  auto It = CallMayWriteGPRs->find(LOp.Inputs[0].Offset);
+  if (It == CallMayWriteGPRs->end())
+    return;
+  MOp.CallPreservedGPRs = ~It->second;
+  // A callee that never writes the return register returns nothing: the
+  // register still holds the caller's value after the call.
+  if (MOp.Output.Kind == MedVar::Reg)
+    if (auto Family = gprFamilyOf(TargetArch, MOp.Output.RegOff);
+        Family && (MOp.CallPreservedGPRs >> *Family) & 1) {
+      MOp.Output = MedVar{};
+      MOp.Output.Id = -1;
+      MOp.Output.Size = 0;
+    }
+}
+
 MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
                                    BinaryFormat Fmt) {
   TargetArch = TheArch;
+  TargetFormat = Fmt;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
       if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
@@ -320,6 +376,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
 
       if (LOp.Output.Size > 0)
         MOp.Output = ndVarToMedVar(LOp.Output);
+      applyCallRegisterEffect(MOp, LOp);
 
       // A register/temp XOR with itself is a machine zero idiom, including
       // 128/256/512-bit vector containers. Eliminate the read before liveness
@@ -439,6 +496,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     neutralizeStackProbeCalls(Func);
     debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
 
+    markIntrinsicAuxResults(Func);
     buildSsa(Func);
     debugVerifyMedFunc(Func, "buildSsa");
 

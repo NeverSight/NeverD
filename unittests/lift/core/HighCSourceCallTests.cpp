@@ -1643,7 +1643,7 @@ int main(void) {
 }
 
 TEST(HighCSourceCalls, PartialIntegerAtomicsRejectWidenedMemoryAccess) {
-  EXPECT_THROW(typeToC(NdType::makeInt(17)), std::invalid_argument);
+  EXPECT_THROW(typeToC(NdType::makeInt(65)), std::invalid_argument);
   const auto Partial = NdType::makeInt(3, false);
   const auto Pointer = NdType::makePtr(NdType::makeInt(1, false));
   auto Load = HighExpr::makeLoad(parameter(0, Pointer), Partial);

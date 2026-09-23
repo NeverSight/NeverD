@@ -239,6 +239,24 @@ uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
   return VecIdx >= 8 && VecIdx <= 15 ? 8 : 0;
 }
 
+uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff, uint16_t Size,
+                                                BinaryFormat Format) const {
+  const uint16_t Base = callPreservedPrefixSize(RegOff, Size);
+  if (Base == Size || TheArch != Arch::X64 || Format != BinaryFormat::COFF)
+    return Base;
+  auto InsideSlot = [&](uint64_t Reg) {
+    return RegOff >= Reg && RegOff + Size <= Reg + FullRegWidth;
+  };
+  if (InsideSlot(x86reg::RSI) || InsideSlot(x86reg::RDI))
+    return Size;
+  if (isVectorReg(RegOff)) {
+    const uint64_t Index = (RegOff - VecRegBase) / VecRegStride;
+    if (Index >= 6 && Index <= 15)
+      return std::min<uint16_t>(Size, 16);
+  }
+  return Base;
+}
+
 std::vector<TargetRegisterRange>
 TargetRegInfo::callPreservedRanges(BinaryFormat Format) const {
   std::vector<TargetRegisterRange> Ranges;

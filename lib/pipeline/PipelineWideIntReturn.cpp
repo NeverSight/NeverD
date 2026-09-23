@@ -493,6 +493,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result) {
         LowToMedConverter Reconv;
         Reconv.setBinaryImage(&Img);
         Reconv.setCalleePopMap(&CalleePop);
+        Reconv.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
         Reconv.setStackProbeSlots(&StackProbeSlots);
         Reconv.setI64Callees(&I64RetCallees);
         if (HasIndI64)

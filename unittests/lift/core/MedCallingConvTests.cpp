@@ -310,6 +310,24 @@ TEST(TargetRegInfo, EnumeratesWin64CallPreservation) {
   EXPECT_FALSE(HasRange(Ranges, x86reg::XMM5, 16));
 }
 
+TEST(TargetRegInfo, Win64QueriesMatchItsEnumeratedPreservation) {
+  // Call liveness asks per register view; it must agree with the ranges.
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  EXPECT_TRUE(TRI.isCallPreserved(x86reg::RDI, 8, BinaryFormat::COFF));
+  EXPECT_TRUE(TRI.isCallPreserved(x86reg::RSI, 4, BinaryFormat::COFF));
+  EXPECT_TRUE(TRI.isCallPreserved(x86reg::RSI + 1, 1, BinaryFormat::COFF));
+  EXPECT_FALSE(TRI.isCallPreserved(x86reg::RDI, 8, BinaryFormat::ELF));
+  EXPECT_FALSE(TRI.isCallPreserved(x86reg::RDX, 8, BinaryFormat::COFF));
+  EXPECT_TRUE(TRI.isCallPreserved(x86reg::RBX, 8, BinaryFormat::ELF));
+  EXPECT_TRUE(TRI.isCallPreserved(x86reg::XMM6, 16, BinaryFormat::COFF));
+  EXPECT_EQ(TRI.callPreservedPrefixSize(x86reg::XMM15, 32, BinaryFormat::COFF),
+            16);
+  EXPECT_EQ(TRI.callPreservedPrefixSize(x86reg::XMM5, 16, BinaryFormat::COFF),
+            0);
+  EXPECT_EQ(TRI.callPreservedPrefixSize(x86reg::XMM6, 16, BinaryFormat::ELF),
+            0);
+}
+
 TEST(TargetRegInfo, SelectsIntegerArgumentRegistersFromImageFormat) {
   const TargetRegInfo &X64 = getTargetRegInfo(Arch::X64);
   const llvm::ArrayRef<uint64_t> Win64Args =

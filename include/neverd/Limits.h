@@ -326,6 +326,13 @@ constexpr int kMaxVerifyInsns = 64;
 /// with an already-detected function.
 constexpr uint64_t kMaxOverlapDistance = 0x10000;
 
+/// Callee register-effect summaries lift callees that the pipeline did not
+/// already lift (a single-function decompile lifts only its own body).  A
+/// callee deeper than this many calls, or past this many extra lifts, keeps
+/// the ABI clobber set.
+constexpr int kMaxCallEffectCalleeDepth = 4;
+constexpr size_t kMaxCallEffectExtraLifts = 256;
+
 //===----------------------------------------------------------------------===//
 // Expression tree / IR limits
 //===----------------------------------------------------------------------===//

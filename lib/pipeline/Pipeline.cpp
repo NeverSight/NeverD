@@ -17,6 +17,7 @@
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/evm/emit/EVMLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
@@ -44,6 +45,24 @@
 #define DEBUG_TYPE "neverd-pipeline"
 
 namespace neverd {
+
+namespace {
+/// True when \p LF adjusts the stack pointer or makes a call that returns,
+/// either of which needs x64 unwind data.  Tail calls and returns do not.
+bool movesStackOrCalls(const LowFunc &LF) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  for (const LowBlock &Block : LF.Blocks) {
+    for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
+      if (Boundary.Control == LowInstructionControl::Call ||
+          Boundary.Control == LowInstructionControl::ConditionalCall)
+        return true;
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Output.isReg() && TRI.isStackPointer(Op.Output.Offset))
+        return true;
+  }
+  return false;
+}
+} // namespace
 
 namespace {
 
@@ -323,6 +342,58 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         LLVM_DEBUG(llvm::dbgs()
                    << "pipeline: removed " << Removed
                    << " spurious functions (jump-table targets)\n");
+    }
+  }
+
+  // A padding-boundary guess that another function reaches by a direct jump
+  // is that function's split chunk, now lifted as part of it (see
+  // BinaryImage::boundaryGuessFunctionStarts).  Keep it as a separate
+  // function only when nothing absorbed it.
+  {
+    const std::set<va_t> Guesses = Img.boundaryGuessFunctionStarts();
+    std::set<va_t> Absorbed;
+    if (!Guesses.empty())
+      for (const auto &LF : Result.LowFuncs)
+        for (const auto &Block : LF.Blocks)
+          if (Block.StartAddr != LF.Entry && Guesses.count(Block.StartAddr))
+            Absorbed.insert(Block.StartAddr);
+    // Win64 requires unwind data for every function that moves RSP or calls
+    // (a tail jump needs neither).  In an image with an exception directory,
+    // a guess that does either without a RUNTIME_FUNCTION is not a function:
+    // usually data in a code section or the remnant of a split chunk.
+    // This holds for any start that neither a primary unwind record nor a
+    // real name (PDB, export) vouches for, however it was discovered.
+    std::set<va_t> NonLeaf;
+    if (Img.Arch == Arch::X64 && Img.Format == BinaryFormat::COFF &&
+        !Img.KnownCodeRanges.empty()) {
+      std::set<va_t> UnwindStarts;
+      for (const auto &[Start, End] : Img.KnownCodeRanges)
+        if (!Img.ContinuationCodeStarts.count(Start))
+          UnwindStarts.insert(Start);
+      for (const auto &LF : Result.LowFuncs)
+        if (!Absorbed.count(LF.Entry) && !UnwindStarts.count(LF.Entry) &&
+            isSynthesizedFuncName(LF.Name) && movesStackOrCalls(LF))
+          NonLeaf.insert(LF.Entry);
+    }
+    if (!Absorbed.empty() || !NonLeaf.empty()) {
+      for (auto &Audit : Result.FunctionAudits) {
+        if (Absorbed.count(Audit.Entry)) {
+          Audit.Disposition =
+              PipelineFunctionDisposition::AbsorbedFunctionChunk;
+          Audit.HasLowIR = false;
+        } else if (NonLeaf.count(Audit.Entry)) {
+          Audit.Disposition =
+              PipelineFunctionDisposition::RejectedUnwindlessNonLeaf;
+          Audit.HasLowIR = false;
+        }
+      }
+      Absorbed.insert(NonLeaf.begin(), NonLeaf.end());
+      Result.LowFuncs.erase(std::remove_if(Result.LowFuncs.begin(),
+                                           Result.LowFuncs.end(),
+                                           [&](const LowFunc &LF) {
+                                             return Absorbed.count(LF.Entry);
+                                           }),
+                            Result.LowFuncs.end());
     }
   }
 

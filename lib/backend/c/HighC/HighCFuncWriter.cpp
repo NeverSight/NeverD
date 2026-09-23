@@ -250,6 +250,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   InferredVoid = analyzeVoidReturn(Analysis, Func, VarFn, ExprFn);
 
   HiLoPairs.clear();
+  MultiOutputRenderedStmts.clear();
   auto RegisterHiLo = [this](const HighStmt &S, const HighExpr &CE) {
     if (CE.IntrinsicOutputs.size() < 2)
       return;
@@ -274,8 +275,10 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
           [this](const MedVar &V) {
             return !Analysis.DeadVars.count(varName(V));
           });
-      if (!Rendered.empty())
+      if (!Rendered.empty()) {
         Analysis.DeadVars.insert(varName(S.Dst->Var));
+        MultiOutputRenderedStmts.insert(&S);
+      }
       RegisterHiLo(S, *S.Val);
     }
     if (S.Kind == StmtKind::Call && S.CallExpr &&
@@ -352,9 +355,11 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
           collectUsedVarsExpr(*E, UsedVars, PrintedVarFn);
       });
     }
+    // A multi-output intrinsic statement prints its own outputs and never
+    // assigns the primary destination.
     if (S.Kind == StmtKind::Assign && S.Dst &&
         (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
-        !isHiddenCopyForwardAssign(S)) {
+        !isHiddenCopyForwardAssign(S) && !MultiOutputRenderedStmts.count(&S)) {
       const HighExpr *Val = S.Val.get();
       const bool ResultOmitted = Val && isNoreturnCallExpr(Analysis, *Val);
       if (!ResultOmitted) {

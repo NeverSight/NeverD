@@ -17,6 +17,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
@@ -2794,6 +2795,57 @@ WindowsEHContinuationRootTestResult collectWindowsEHContinuationRootsForTesting(
 // buildLowIR — Phase 1
 //===----------------------------------------------------------------------===//
 
+namespace {
+/// Summarize which GPRs each direct callee may write (CallRegisterEffects.h).
+/// Callees outside Result.LowFuncs are lifted here with the same CFG settings,
+/// up to the Limits.h depth and count; beyond those they stay unsummarized.
+void computeCallRegisterEffects(
+    const BinaryImage &Img, const std::set<va_t> &FuncEntries,
+    const libc::NoReturnTargetIndex &NoReturnTargets,
+    const detail::AbsoluteRelocationRootIndex &AbsoluteRelocationRoots,
+    const ExecutableCodeOwnerIndex *CodeOwnerIndex, PipelineResult &Result) {
+  if (Img.Arch != Arch::X64)
+    return;
+  std::map<va_t, LocalRegisterEffect> Effects;
+  std::map<va_t, int> Depth;
+  std::vector<va_t> Work;
+  for (const LowFunc &LF : Result.LowFuncs) {
+    Effects[LF.Entry] = localRegisterEffect(Img, LF);
+    Depth[LF.Entry] = 0;
+    Work.push_back(LF.Entry);
+  }
+  Decoder ExtraDec;
+  if (!ExtraDec.init(Img.Arch, Img.Mode))
+    return;
+  CFGBuilder ExtraCFG;
+  ExtraCFG.setKnownFuncEntries(&FuncEntries);
+  ExtraCFG.setNoReturnTargetIndex(&NoReturnTargets);
+  ExtraCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
+  ExtraCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
+  size_t ExtraLifts = 0;
+  while (!Work.empty()) {
+    const va_t Caller = Work.back();
+    Work.pop_back();
+    const int CalleeDepth = Depth[Caller] + 1;
+    const std::set<va_t> Callees = Effects[Caller].Callees;
+    for (va_t Callee : Callees) {
+      if (Effects.count(Callee) ||
+          CalleeDepth > limits::kMaxCallEffectCalleeDepth ||
+          ExtraLifts >= limits::kMaxCallEffectExtraLifts ||
+          !Img.hasExecutableCodeOwnerAt(Callee))
+        continue;
+      ++ExtraLifts;
+      LowFunc Body =
+          ExtraCFG.build(Img, ExtraDec, Callee, Img.getFunctionNameAt(Callee));
+      Effects[Callee] = localRegisterEffect(Img, Body);
+      Depth[Callee] = CalleeDepth;
+      Work.push_back(Callee);
+    }
+  }
+  Result.CallMayWriteGPRs = solveCallRegisterEffects(Effects);
+}
+} // namespace
+
 void Pipeline::buildLowIR(
     const BinaryImage &Img,
     const std::vector<std::pair<va_t, std::string>> &Candidates,
@@ -2812,19 +2864,26 @@ void Pipeline::buildLowIR(
   // The set of all detected function entries lets each CFG builder recognise an
   // unconditional `jmp` to *another* function as a tail call (call + ret)
   // rather than following it and fusing the callee into this function's CFG.
+  // A padding-boundary guess is not a tail-call target: MSVC separates
+  // hot/cold chunks of one function with the same int3 padding, and a jump
+  // into such a chunk must keep its code in the jumping function.
+  const std::set<va_t> BoundaryGuesses = Img.boundaryGuessFunctionStarts();
   std::set<va_t> FuncEntries;
   for (const auto &C : Candidates)
-    FuncEntries.insert(C.first);
+    if (!BoundaryGuesses.count(C.first))
+      FuncEntries.insert(C.first);
   for (const auto &Sym : Img.Symbols)
-    if (Sym.IsFunc)
+    if (Sym.IsFunc && !BoundaryGuesses.count(Sym.Addr))
       FuncEntries.insert(Sym.Addr);
   // `.pdata` exclusive-end ranges name every PE function start even when
   // `--func` skipped materializing those ExceptionFunction/Symbol records.
   // Without them, an unconditional jmp to the next RUNTIME_FUNCTION is
   // followed and the callee is fused into this CFG.
+  // A chained-unwind continuation is part of its parent function: a jump to
+  // it must be followed, not modeled as a tail call to a missing function.
   for (const auto &[Start, End] : Img.KnownCodeRanges) {
     (void)End;
-    if (Start != 0)
+    if (Start != 0 && !Img.ContinuationCodeStarts.count(Start))
       FuncEntries.insert(Start);
   }
 
@@ -3219,6 +3278,9 @@ void Pipeline::buildLowIR(
       AuditIt->HasLowIR = true;
     ++FuncCount;
   }
+
+  computeCallRegisterEffects(Img, FuncEntries, NoReturnTargets,
+                             AbsoluteRelocationRoots, CodeOwnerIndex, Result);
 }
 
 } // namespace neverd

@@ -211,9 +211,6 @@ renderSegmentedString(Arch TheArch, const HighExpr &Call,
       (!PrimaryDst || PrimaryDst->Kind != ExprKind::Var))
     llvm::report_fatal_error(
         "x86 REP string intrinsic is missing an architectural result");
-  if ((IsCmps || IsScas) && Call.IntrinsicOutputs.empty())
-    llvm::report_fatal_error(
-        "x86 REP string intrinsic is missing its flags result");
   if (*Segment != '\0' && (IsStos || IsScas || IsIns))
     llvm::report_fatal_error(
         "x86 REP string intrinsic has an invalid segment override");
@@ -321,10 +318,13 @@ renderSegmentedString(Arch TheArch, const HighExpr &Call,
     Result += assignPrimary(PrimaryDst, "neverd_ax", ExprFn, IsAlive);
   if (IsCmps || IsScas) {
     Result += assignPrimary(PrimaryDst, "neverd_cx", ExprFn, IsAlive);
-    const MedVar &Flags = Call.IntrinsicOutputs.front();
-    if (!IsAlive || IsAlive(Flags))
-      Result += "    " + VarFn(Flags) + " = (uint16_t)" +
-                (IsScas ? "neverd_ax" : "neverd_flags") + ";\n";
+    // No flag snapshot when no later instruction reads the flags.
+    if (!Call.IntrinsicOutputs.empty()) {
+      const MedVar &Flags = Call.IntrinsicOutputs.front();
+      if (!IsAlive || IsAlive(Flags))
+        Result += "    " + VarFn(Flags) + " = (uint16_t)" +
+                  (IsScas ? "neverd_ax" : "neverd_flags") + ";\n";
+    }
   }
   Result += "} while (0);\n";
   return Result;
@@ -642,13 +642,129 @@ bool isStateSnapshotMemoryIntrinsic(Intrinsic Id) {
   }
 }
 
+/// The <immintrin.h> spelling of a state save/restore instruction, or null
+/// for the x87 environment forms, which have no compiler intrinsic.
+const char *stateSnapshotCIntrinsic(Intrinsic Id) {
+  using I = Intrinsic;
+  switch (Id) {
+  case I::Fxsave:
+    return "_fxsave";
+  case I::Fxrstor:
+    return "_fxrstor";
+  case I::Fxsave64Mem:
+    return "_fxsave64";
+  case I::Fxrstor64Mem:
+    return "_fxrstor64";
+  case I::Xsave:
+    return "_xsave";
+  case I::Xsavec:
+    return "_xsavec";
+  case I::Xsaves:
+    return "_xsaves";
+  case I::Xsaveopt:
+    return "_xsaveopt";
+  case I::Xrstor:
+    return "_xrstor";
+  case I::Xrstors:
+    return "_xrstors";
+  case I::Xsave64:
+    return "_xsave64";
+  case I::Xsavec64:
+    return "_xsavec64";
+  case I::Xsaves64:
+    return "_xsaves64";
+  case I::Xsaveopt64:
+    return "_xsaveopt64";
+  case I::Xrstor64:
+    return "_xrstor64";
+  case I::Xrstors64:
+    return "_xrstors64";
+  default:
+    return nullptr;
+  }
+}
+
+/// XSAVE-family forms take the EDX:EAX requested-feature bitmap.
+bool stateSnapshotTakesMask(Intrinsic Id) {
+  using I = Intrinsic;
+  switch (Id) {
+  case I::Xsave:
+  case I::Xsavec:
+  case I::Xsaves:
+  case I::Xsaveopt:
+  case I::Xrstor:
+  case I::Xrstors:
+  case I::Xsave64:
+  case I::Xsavec64:
+  case I::Xsaves64:
+  case I::Xsaveopt64:
+  case I::Xrstor64:
+  case I::Xrstors64:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// These instructions move the processor's own x87/SSE/AVX state.  Lifted
+/// code keeps that state in C locals, so the emitted statement says which
+/// state it touches instead of pretending the locals are saved or restored.
+constexpr const char *kHardwareStateNote =
+    "/* neverd: hardware x87/SSE/AVX state, not the lifted locals */\n";
+
+std::string
+renderStateSnapshot(const HighExpr &Call,
+                    std::function<std::string(const HighExpr &)> ExprFn) {
+  const bool TakesMask = stateSnapshotTakesMask(Call.IntrinsicId);
+  const size_t Required = TakesMask ? 3 : 1;
+  if (Call.Operands.size() < Required)
+    llvm::report_fatal_error(
+        "x86 state save/restore intrinsic is missing its operands");
+  for (size_t I = 0; I < Required; ++I)
+    if (!Call.Operands[I])
+      llvm::report_fatal_error(
+          "x86 state save/restore intrinsic is missing its operands");
+  const char *Segment = segmentPrefix(Call.MemoryAddressSpace);
+  if (!Segment)
+    llvm::report_fatal_error(
+        "x86 state save/restore intrinsic has an unknown memory address space");
+  const std::string Address = ExprFn(*Call.Operands[0]);
+  const std::string Mask =
+      TakesMask ? "((uint64_t)(uint32_t)(" + ExprFn(*Call.Operands[2]) +
+                      ") << 32 | (uint32_t)(" + ExprFn(*Call.Operands[1]) + "))"
+                : std::string();
+
+  const char *CName = stateSnapshotCIntrinsic(Call.IntrinsicId);
+  if (CName && *Segment == '\0')
+    return std::string(kHardwareStateNote) + CName + "((void *)(uintptr_t)(" +
+           Address + ")" + (TakesMask ? ", " + Mask : std::string()) + ");\n";
+
+  const char *Mnemonic = intrinsicAsmMnemonic(Call.IntrinsicId);
+  if (!Mnemonic)
+    llvm::report_fatal_error(
+        "x86 state save/restore intrinsic has no assembler mnemonic");
+  const std::string MemoryOperand =
+      *Segment == '\0' ? "(%[address])"
+                       : "%%" + std::string(Segment) + ":(%[address])";
+  std::string Result = std::string(kHardwareStateNote) + "do {\n";
+  Result += "    uintptr_t neverd_address = (uintptr_t)(" + Address + ");\n";
+  if (TakesMask)
+    Result += "    uint64_t neverd_mask = " + Mask + ";\n";
+  Result += "    __asm__ volatile(\"" + std::string(Mnemonic) + " " +
+            MemoryOperand +
+            "\"\n        :\n        : [address] \"r\"(neverd_address)";
+  if (TakesMask)
+    Result += ", \"a\"((uint32_t)neverd_mask), "
+              "\"d\"((uint32_t)(neverd_mask >> 32))";
+  Result += "\n        : \"memory\");\n} while (0);\n";
+  return Result;
+}
+
 std::string
 renderMemoryIntrinsic(Arch TheArch, const HighExpr &Call,
                       std::function<std::string(const HighExpr &)> ExprFn) {
   if (isStateSnapshotMemoryIntrinsic(Call.IntrinsicId))
-    llvm::report_fatal_error(
-        "x86 state save/restore requires an explicit architectural state "
-        "layout; host inline asm is not a sound High-C lowering");
+    return renderStateSnapshot(Call, ExprFn);
 
   // Flat cache-maintenance operands already have portable C intrinsic
   // spellings.  Leave those to the ordinary call renderer; this path is only

@@ -56,6 +56,10 @@ public:
   /// pointer increment so the caller's later stack accesses use the corrected
   /// SP (the callee popped its hidden sret pointer).  Optional; null = no-op.
   void setCalleePopMap(const std::map<va_t, int> *M) { CalleePopMap = M; }
+  /// Direct-callee GPR write summaries (PipelineResult::CallMayWriteGPRs).
+  void setCallMayWriteGPRs(const std::map<va_t, uint32_t> *M) {
+    CallMayWriteGPRs = M;
+  }
 
   /// Provide the set of GOT/pointer-slot VAs that hold a stack-probe import
   /// (`____chkstk_darwin`), derived by the loader from the binary's import
@@ -188,6 +192,8 @@ private:
   /// Runs before buildSsa; no-op when StackProbeSlots is null/empty.  See
   /// setStackProbeSlots.
   void neutralizeStackProbeCalls(MedFunc &Func);
+  /// Record which GPRs a direct call's callee never writes.
+  void applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) const;
   void buildSsa(MedFunc &Func);
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
@@ -215,6 +221,8 @@ private:
   int NextTempId = 0;
   uint32_t NextCallSiteId = 1;
   Arch TargetArch = Arch::Unknown;
+  /// Selects the platform calling convention's preserved registers.
+  BinaryFormat TargetFormat = BinaryFormat::ELF;
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;
@@ -230,6 +238,7 @@ private:
 
   /// Per-callee callee-cleanup pop (entry VA -> bytes); see setCalleePopMap.
   const std::map<va_t, int> *CalleePopMap = nullptr;
+  const std::map<va_t, uint32_t> *CallMayWriteGPRs = nullptr;
 
   /// GOT/pointer-slot VAs holding a stack-probe import; see setStackProbeSlots.
   /// Null/empty until the pipeline (which has the loaded import tables)

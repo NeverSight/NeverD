@@ -178,6 +178,15 @@ struct MedOp {
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   bool Dead = false;
   bool PreservesCallerSaved = false;
+  /// GPR families (see CallRegisterEffects.h) the direct callee provably
+  /// never writes, so SSA keeps their pre-call values across this call.
+  uint32_t CallPreservedGPRs = 0;
+  /// This COPY publishes an auxiliary result of the INTRINSIC before it in the
+  /// same instruction: its input temp is defined by that INTRINSIC (for
+  /// example the flag snapshot of REP CMPS or RDTSC's EDX half), not read.
+  /// SSA versions the input at the COPY, and copy propagation keeps the COPY
+  /// so HighIR and LLVM emission can bind the result to the intrinsic.
+  bool IntrinsicAuxResult = false;
   /// The source instruction is a proven no-return call.  This is explicit MedIR
   /// control provenance: consumers must not infer it again from a mutable name.
   bool DoesNotReturn = false;

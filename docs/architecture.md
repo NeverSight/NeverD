@@ -100,6 +100,28 @@ physical alias writes, unknown calls and instruction-local temporaries cannot
 carry stale facts into a later block. Invalid edges or exhausted work budgets
 reject the proof.
 
+On x86-64, `CallRegisterEffects` owns which general-purpose registers a
+direct call may change. Whole-program register allocation (MSVC `/LTCG`) lets
+a caller keep a value in a volatile register across a call to a helper that
+never writes it, so the ABI clobber set would lose that value. After LowIR,
+the pipeline summarizes each lifted function's register writes together with
+those of its direct callees, lifting callees it did not already lift up to the
+`Limits.h` depth and count. A summary exists only when every function in the
+call tree lifted completely, resolved every indirect branch and made no
+indirect or import call. Calls that do not return are ignored. LowToMed marks
+direct calls with the GPR families their callee never writes. MedSSA keeps
+those values across the call and a call whose callee never writes the return
+register has no result. Vector registers, flags and unsummarized callees keep
+the ABI clobber set.
+
+Function starts follow the same evidence rule. An x64 `RUNTIME_FUNCTION` with
+chained unwind info continues its parent function (`BinaryImage::
+ContinuationCodeStarts`), and an entry guessed only from inter-function padding
+(`Symbol::IsBoundaryGuess`) may be a hot/cold split chunk. A direct jump to
+either stays inside the jumping function. A guessed entry that another function
+absorbed this way is audited as `AbsorbedFunctionChunk` rather than decompiled
+twice.
+
 Required Swift value-witness operations have a separate symbol-independent call
 proof. A bounded backward trace must show that the indirect target is loaded
 from the operation's required `metadata[-1][slot]` entry and that the same

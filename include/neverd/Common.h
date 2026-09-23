@@ -318,6 +318,11 @@ struct Symbol {
   va_t Addr = 0;
   uint64_t Size = 0;
   bool IsFunc = false;
+  /// The only evidence for this function start is a prologue-looking
+  /// instruction after inter-function padding.  Hot/cold split chunks look
+  /// the same, so a direct jump to such an address stays inside the jumping
+  /// function instead of becoming a tail call.
+  bool IsBoundaryGuess = false;
 
   static Symbol makeFunc(va_t Addr, uint64_t Size = 0) {
     Symbol S;

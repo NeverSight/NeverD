@@ -97,6 +97,8 @@ enum class PipelineFunctionDisposition {
   RejectedLowIR,
   RejectedIncomplete,
   RemovedJumpTableTarget,
+  AbsorbedFunctionChunk,
+  RejectedUnwindlessNonLeaf,
   MedIRFailed,
   Accepted,
 };
@@ -118,6 +120,10 @@ pipelineFunctionDispositionName(PipelineFunctionDisposition Value) {
     return "rejected-incomplete";
   case PipelineFunctionDisposition::RemovedJumpTableTarget:
     return "removed-jump-table-target";
+  case PipelineFunctionDisposition::AbsorbedFunctionChunk:
+    return "absorbed-function-chunk";
+  case PipelineFunctionDisposition::RejectedUnwindlessNonLeaf:
+    return "rejected-unwindless-non-leaf";
   case PipelineFunctionDisposition::MedIRFailed:
     return "med-ir-failed";
   case PipelineFunctionDisposition::Accepted:
@@ -149,6 +155,9 @@ struct PipelineResult {
   /// image's segment, symbol, and object metadata.
   const BinaryImage *SourceImage = nullptr;
   std::vector<LowFunc> LowFuncs;
+  /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
+  /// callee entry.  Absent entries keep the ABI clobber set.
+  std::map<va_t, uint32_t> CallMayWriteGPRs;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;

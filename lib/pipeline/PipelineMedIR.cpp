@@ -99,6 +99,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setSourceCallHintsEnabled(!Opts.PatchMode && !Opts.LiftMode);
     Local.setSourceCalleeTypeHints(&SourceCalleeHints);
     Local.setCalleePopMap(&CalleePop);
+    Local.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
     Local.setStackProbeSlots(&StackProbeSlots);
     for (size_t I; (I = Claim()) < N;) {
       try {

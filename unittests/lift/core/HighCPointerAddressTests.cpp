@@ -9,6 +9,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -41,6 +42,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -3468,3 +3470,178 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
 }
 
 } // namespace
+
+BinaryImage makeCodeFixture(va_t Entry, std::vector<uint8_t> Bytes) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Entry;
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Entry;
+  Seg.Size = Bytes.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = std::move(Bytes);
+  Img.Segments.push_back(std::move(Seg));
+  return Img;
+}
+
+TEST(HighCPointerAddresses, StateSnapshotPrintsSourceIntrinsics) {
+  // RtlXSave/RtlXRestore in ntoskrnl: the source used _xsave64/_xrstor64.
+  // Both routes print that operation instead of aborting the function.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x0f, 0xae, 0x21, // xsave64  [rcx]
+                                     0x48, 0x0f, 0xae, 0x29, // xrstor64 [rcx]
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("_xsave64((void *)"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("_xrstor64((void *)"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("hardware x87/SSE/AVX state"), std::string::npos)
+      << HighC;
+  EXPECT_EQ(HighC.find("__asm__"), std::string::npos) << HighC;
+
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(LLVMC.find("xsave64"), std::string::npos) << LLVMC;
+  EXPECT_NE(LLVMC.find("xrstor64"), std::string::npos) << LLVMC;
+}
+
+TEST(HighCPointerAddresses, OddWideIntegerSlicePrintsBitInt) {
+  // A YMM value shifted by one 32-bit lane leaves a 224-bit slice.
+  EXPECT_EQ(typeToC(NdType::makeInt(28, false)), "unsigned _BitInt(224)");
+  EXPECT_EQ(typeToC(NdType::makeInt(32, false)), "uint256_t");
+  EXPECT_THROW(typeToC(NdType::makeInt(65, false)), std::invalid_argument);
+}
+
+// Caller keeps RDX live across a direct call, as MSVC /LTCG does when the
+// callee provably leaves RDX alone (PsGetJobSilo -> PspGetJobSilo).
+std::vector<uint8_t> callerKeepsRdxAcrossCall(std::vector<uint8_t> Callee) {
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28, // sub  rsp, 28h
+                               0xe8, 0x17, 0x00, 0x00,
+                               0x00,             // call +0x17 -> 0x140001020
+                               0x48, 0x89, 0x02, // mov  [rdx], rax
+                               0x48, 0x83, 0xc4, 0x28, // add  rsp, 28h
+                               0xc3};                  // ret
+  Code.resize(0x20, 0xcc);
+  Code.insert(Code.end(), Callee.begin(), Callee.end());
+  return Code;
+}
+
+TEST(HighCPointerAddresses, CalleeThatLeavesRdxAloneKeepsCallerValue) {
+  constexpr va_t Entry = 0x140001000;
+  const auto Code = callerKeepsRdxAcrossCall({0x48, 0x8b, 0xc1, // mov rax, rcx
+                                              0xc3});
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("arg1"), std::string::npos) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(LLVMC.find("unknown"), std::string::npos) << LLVMC;
+  EXPECT_NE(LLVMC.find("arg1"), std::string::npos) << LLVMC;
+}
+
+TEST(HighCPointerAddresses, CalleeThatWritesRdxOrCallsIndirectlyClobbersIt) {
+  constexpr va_t Entry = 0x140001000;
+  for (const auto &Callee : std::vector<std::vector<uint8_t>>{
+           {0x33, 0xd2, 0x48, 0x8b, 0xc1, 0xc3}, // xor edx, edx; mov rax, rcx
+           {0xff, 0xd1, 0xc3}}) {                // call rcx
+    const std::string HighC = highcOnlyFunction(
+        makeCodeFixture(Entry, callerKeepsRdxAcrossCall(Callee)), Entry);
+    EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
+  }
+}
+
+TEST(HighCPointerAddresses, LoopCarriedCopyKeepsItsEntryAssignment) {
+  // `for (p = arg0; !check(p); p = p->next) ; return p;` with p in RCX across
+  // a callee that leaves RCX alone.  The variable has two definitions, so
+  // HighC must not rename its uses to the in-loop load temp.
+  constexpr va_t Entry = 0x140001000;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,       // sub  rsp, 28h
+                               0x48, 0x85, 0xc9,             // test rcx, rcx
+                               0x75, 0x08,                   // jne  0x140001011
+                               0x33, 0xc0,                   // xor  eax, eax
+                               0x48, 0x83, 0xc4, 0x28,       // add  rsp, 28h
+                               0xc3,                         // ret
+                               0xcc,                         // int3
+                               0xe8, 0x8a, 0x00, 0x00, 0x00, // call 0x1400010A0
+                               0x84, 0xc0,                   // test al, al
+                               0x75, 0x09,                   // jne  0x140001023
+                               0x48, 0x8b, 0x89, 0x78, 0x04,
+                               0x00, 0x00,       // mov  rcx, [rcx+478h]
+                               0xeb, 0xee,       // jmp  0x140001011
+                               0x48, 0x8b, 0xc1, // mov  rax, rcx
+                               0xeb, 0xe3};      // jmp  0x14000100B
+  Code.resize(0xA0, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x85, 0xc9, // test rcx, rcx
+                           0x0f, 0x94, 0xc0, // sete al
+                           0xc3});           // ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  std::smatch Call;
+  ASSERT_TRUE(
+      std::regex_search(HighC, Call, std::regex(R"(sub_1400010A0\((\w+)\))")))
+      << HighC;
+  const std::string Carried = Call[1].str();
+  EXPECT_NE(HighC.find(Carried + " = arg0;"), std::string::npos) << HighC;
+}
+
+TEST(HighCPointerAddresses, Win64RdiSurvivesAnUnsummarizedCall) {
+  // The callee makes an indirect call, so only the Win64 ABI speaks for it:
+  // RDI is nonvolatile there, unlike SysV.
+  constexpr va_t Entry = 0x140001000;
+  std::vector<uint8_t> Code = {0x57,                         // push rdi
+                               0x48, 0x83, 0xec, 0x20,       // sub  rsp, 20h
+                               0x48, 0x8b, 0xf9,             // mov  rdi, rcx
+                               0xe8, 0x13, 0x00, 0x00, 0x00, // call 0x140001020
+                               0x48, 0x8b, 0x07,             // mov  rax, [rdi]
+                               0x48, 0x83, 0xc4, 0x20,       // add  rsp, 20h
+                               0x5f,                         // pop  rdi
+                               0xc3};                        // ret
+  Code.resize(0x20, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x83, 0xec, 0x28, // sub  rsp, 28h
+                           0xff, 0xd2,             // call rdx
+                           0x48, 0x83, 0xc4, 0x28, // add  rsp, 28h
+                           0xc3});                 // ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("arg0"), std::string::npos) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(LLVMC.find("RDI"), std::string::npos) << LLVMC;
+}
+
+TEST(HighCPointerAddresses, UnwindlessNonLeafCandidateIsNotAFunction) {
+  // In an x64 PE with an exception directory every function that moves RSP
+  // or calls has a RUNTIME_FUNCTION.  An unnamed candidate without one is
+  // data or a chunk remnant; an unnamed leaf without one stays a function.
+  constexpr va_t Primary = 0x140001000;
+  constexpr va_t NonLeaf = 0x140001010;
+  constexpr va_t Leaf = 0x140001020;
+  std::vector<uint8_t> Code = {0xc3};
+  Code.resize(0x10, 0xcc);
+  Code.insert(Code.end(), {0x54, 0x5c, 0xc3}); // push rsp; pop rsp; ret
+  Code.resize(0x20, 0xcc);
+  Code.insert(Code.end(), {0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3}); // mov eax,1
+  BinaryImage Img = makeCodeFixture(Primary, Code);
+  Img.KnownCodeRanges.push_back({Primary, Primary + 1});
+
+  auto DispositionOf = [&](va_t Entry) {
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.OnlyFunctionEntries.insert(Entry);
+    auto Result = Pipeline().run(Img, Ctx, Opts);
+    for (const auto &Audit : Result.FunctionAudits)
+      if (Audit.Entry == Entry)
+        return Audit.Disposition;
+    return PipelineFunctionDisposition::Candidate;
+  };
+  EXPECT_EQ(DispositionOf(NonLeaf),
+            PipelineFunctionDisposition::RejectedUnwindlessNonLeaf);
+  EXPECT_EQ(DispositionOf(Leaf), PipelineFunctionDisposition::Accepted);
+}

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 
 #include "llvm/Support/Debug.h"
@@ -301,10 +302,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       if (TRI.isFrameOrLinkReg(RegOff) || TRI.isStackPointer(RegOff) ||
           (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff))
         continue;
+      if (Op.CallPreservedGPRs)
+        if (auto Family = gprFamilyOf(TRI.TheArch, RegOff);
+            Family && (Op.CallPreservedGPRs >> *Family) & 1)
+          continue;
       for (int Id : Ids) {
         auto It = RegVarOfId.find(Id);
         if (It == RegVarOfId.end() ||
-            TRI.callPreservedPrefixSize(RegOff, It->second.Size) <
+            TRI.callPreservedPrefixSize(RegOff, It->second.Size, TargetFormat) <
                 It->second.Size)
           Result.insert(Id);
       }
@@ -329,6 +334,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
     for (int B = 0; B < N; ++B) {
       std::set<int> &Kill = VarKill[B];
       for (auto &Op : Func.Blocks[B].Ops) {
+        // The intrinsic defines an auxiliary-result COPY's input.
+        if (Op.IntrinsicAuxResult && Op.Inputs[0].Id >= 0)
+          Kill.insert(Op.Inputs[0].Id);
         for (uint8_t I = 0; I < Op.NumInputs; ++I) {
           const auto &Inp = Op.Inputs[I];
           if (Inp.Id >= 0 && !Kill.count(Inp.Id)) {
@@ -344,8 +352,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           auto It = RegVarOfId.find(Id);
           if (It == RegVarOfId.end())
             continue;
-          uint16_t Prefix =
-              TRI.callPreservedPrefixSize(It->second.RegOff, It->second.Size);
+          uint16_t Prefix = TRI.callPreservedPrefixSize(
+              It->second.RegOff, It->second.Size, TargetFormat);
           if (Prefix > 0 && Prefix < It->second.Size && !Kill.count(Id)) {
             UEVar[B].insert(Id);
             VarOfId.emplace(Id, It->second);
@@ -537,7 +545,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       F.SavedSizes[Phi.Output.Id]++;
     }
     for (auto &Op : Blk.Ops) {
-      for (uint8_t I = 0; I < Op.NumInputs; ++I) {
+      if (Op.IntrinsicAuxResult && Op.Inputs[0].Id >= 0) {
+        // A fresh version per intrinsic: LowIR reuses temp numbers in every
+        // instruction, so reading the prior version would alias another
+        // intrinsic's result or an undefined function entry value.
+        Op.Inputs[0].SSAVer = NewVersion(Op.Inputs[0].Id);
+        F.SavedSizes[Op.Inputs[0].Id]++;
+      }
+      for (uint8_t I = Op.IntrinsicAuxResult ? 1 : 0; I < Op.NumInputs; ++I) {
         if (Op.Inputs[I].Id >= 0)
           Op.Inputs[I].SSAVer = GetVersion(Op.Inputs[I].Id);
       }
@@ -550,8 +565,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
         MedVar PreservedInput;
         uint16_t PreservedPrefixSize = 0;
         if (It != RegVarOfId.end()) {
-          PreservedPrefixSize =
-              TRI.callPreservedPrefixSize(It->second.RegOff, It->second.Size);
+          PreservedPrefixSize = TRI.callPreservedPrefixSize(
+              It->second.RegOff, It->second.Size, TargetFormat);
           if (PreservedPrefixSize > 0 &&
               PreservedPrefixSize < It->second.Size) {
             PreservedInput = It->second;
