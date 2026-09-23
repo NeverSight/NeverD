@@ -73,6 +73,12 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "vIp"},
+    // NSKeyValueObservation.invalidate() passes its receiver in swiftself.
+    {"$s10Foundation21NSKeyValueObservationC10invalidateyyFTj",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "vC"},
     {"$s10Foundation22_convertErrorToNSErrorySo0E0Cs0C0_pF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
