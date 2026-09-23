@@ -1805,6 +1805,9 @@ TEST(ObjCCallHints, SwiftLocalizationSDKCallsUseCompilerObservedABI) {
       {"$sSS5index5afterSS5IndexVAD_tF",
        "/usr/lib/swift/libswiftCore.dylib", NdTypeKind::Int, 8,
        {NdTypeKind::Int, NdTypeKind::Int, NdTypeKind::Ptr}},
+      {"$sSSySJSS5IndexVcig", "/usr/lib/swift/libswiftCore.dylib",
+       NdTypeKind::Int, 16,
+       {NdTypeKind::Int, NdTypeKind::Int, NdTypeKind::Ptr}},
   };
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &Case : Cases) {
