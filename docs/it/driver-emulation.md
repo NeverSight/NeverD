@@ -57,7 +57,7 @@ compatibilità con driver arbitrari di terze parti.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL delle richieste, mapping di sistema e identità PFN condivise in sola lettura | Mapping utente e altre interfacce DMA |
 | MDL allocati dal driver | Descrittori indipendenti per pool non paginato o una singola allocazione utente con pagine fisiche condivise | Nessuna associazione IRP, catena MDL o processo arbitrario |
 | READ/WRITE | I/O buffered/direct/neither seriale con completamento da lavoro o DPC | Solo le API elencate; senza IRP simultanei, annullamento WDM generale o posizione implicita del file |
-| WDM `METHOD_NEITHER` | Buffer utente separati, sonde, blocco MDL ed errori di memoria intercettabili | Un solo contesto di processo; cancellazione WDM limitata e nessuna mappatura utente generale |
+| WDM `METHOD_NEITHER` | Buffer utente separati, sonde, MDL bloccati, identità sintetiche, revoca VA o uscita dopo il dispatch e annullamento limitato | Nessun attachment generale dei processi né mappatura o rimappatura utente arbitraria |
 | Driver KMDF 1.33 non PnP | Binding, oggetti/contesti, dispositivi di controllo con nome, code sequenziali predefinite e richieste con buffer/dirette con callback eseguiti | Nessun dispositivo PnP, pianificazione generale delle code, estensione di classe o UMDF |
 | Driver PnP di bus, funzione o filtro | PDO espliciti senza risorse o con banchi di registri, AddDevice guest e otto funzioni minori comuni del ciclo PnP | Altre operazioni PnP, politica generale di alimentazione, hardware/risorse generali e KMDF PnP |
 | Driver di archiviazione, rete, visualizzazione, file system e minifilter | Contratti dei sottosistemi non supportati | Framework port/class/miniport, NDIS/WFP, servizi grafici o del file system |
@@ -361,7 +361,9 @@ sono rifiutate.
 Solo le richieste READ/WRITE/IOCTL accettano `cancel_after_100ns`, intero JSON facoltativo compreso tra 0 e `INT64_MAX` (9223372036854775807). Pianifica l’annullamento a partire dall’invio della richiesta, in unità virtuali di 100 ns e non in tempo reale. Per KMDF, zero applica l’annullamento dopo l’instradamento del framework e prima del callback I/O guest; se l’instradamento ha già completato la richiesta, prevale il completamento. Per WDM, zero si applica dopo il ritorno del dispatch. Per ritardi positivi, il tempo avanza alle scadenze di timer, attesa o annullamento solo se nessun callback o contesto è pronto. Un IRP WDM in sospeso chiama la routine di annullamento registrata a `DISPATCH_LEVEL` con lo spinlock di annullamento acquisito; la routine deve rilasciarlo con `Irp->CancelIrql` prima del completamento. L’annullamento generale di code e PnP rimane escluso. Ogni rapporto di richiesta include `cancel_requested_at_100ns`: l’istante virtuale assoluto dell’annullamento effettivo, oppure null se non è avvenuto, anche quando il completamento è arrivato prima. Richiedere l’annullamento non completa da solo un IRP né ne impone lo stato finale.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` e `IoCancelIrp` condividono lo stato dell’IRP e lo spinlock di annullamento; `IoCancelIrp` invoca sincronicamente la routine registrata e indica se è stata eseguita.
 
-Il booleano facoltativo `user_unmap_after_dispatch` revoca gli indirizzi utente originali di un trasferimento WDM neither non vuoto dopo il ritorno del dispatch e prima di lavoro o annullamento programmati. Le pagine bloccate dall’MDL e gli alias di sistema restano utilizzabili fino allo sblocco; i puntatori utente grezzi e nuovi blocchi falliscono. Se l’output è revocato, `output_hex` è vuoto. Riutilizzo, uscita del processo e tempi arbitrari di rimozione non sono modellati.
+Il booleano facoltativo `user_unmap_after_dispatch` revoca gli indirizzi utente originali di un trasferimento WDM neither non vuoto dopo il ritorno del dispatch e prima di lavoro o annullamento programmati. Le pagine bloccate dall’MDL e gli alias di sistema restano utilizzabili fino allo sblocco; i puntatori utente grezzi e nuovi blocchi falliscono. Se l’output è revocato, `output_hex` è vuoto. Riutilizzo e tempi arbitrari di rimozione non sono modellati.
+
+`requestor_process_id` identifica un processo richiedente sintetico (predefinito 4096; da 5 a `UINT32_MAX`). `IoGetRequestorProcessId` ne restituisce l’ID per un IRP attivo; `PsGetCurrentProcessId` restituisce tale ID nel dispatch diretto o 4 nel worker di sistema modellato. Il cambio di processo blocca gli indirizzi utente originali altrui, ma conserva gli alias di sistema degli MDL bloccati. `requestor_exit_after_dispatch` revoca dopo il dispatch tutti gli indirizzi utente originali di quel processo e rifiuta il suo nuovo I/O; CLEANUP/CLOSE espliciti restano disponibili senza dedurre annullamento o chiusura automatica degli handle.
 
 Per gli IOCTL diretti, `input` inizializza il primo buffer di sistema,
 mentre `direct_input` inizializza il secondo buffer separato descritto dall’MDL,
@@ -517,7 +519,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v21`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v22`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -525,7 +527,7 @@ anche la propria fase (`driver_entry`, `add_device:<ID>`, `request:N`, `callback
 riporta gli stati di dispatch e I/O, il completamento, la lunghezza delle
 informazioni e i byte restituiti in `output_hex`. `preferred_image_base` descrive
 la base PE originale. `security_cookie` è l’indirizzo guest del cookie inizializzato,
-oppure `"0x0"` se non era necessario. I campi delle richieste sono `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
+oppure `"0x0"` se non era necessario. I campi delle richieste sono `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
 `information`, `information_hex` e `output_hex`. Il campo numerico `information`
 resta un intero JSON decimale esatto; `information_hex` conserva gli stessi bit
 anche per i client che leggono i numeri JSON con precisione limitata a 53 bit.

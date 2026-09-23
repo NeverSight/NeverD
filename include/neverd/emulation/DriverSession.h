@@ -44,6 +44,7 @@ enum class DriverUserPageAccess {
 };
 
 struct DriverRequest {
+  static constexpr uint32_t DefaultRequestorProcessID = 0x1000;
   DriverRequestKind Kind = DriverRequestKind::DeviceControl;
   /// CREATE with an empty name selects the sole live device; ambiguity fails.
   /// Later requests use their file's device unless a matching name is given.
@@ -57,6 +58,11 @@ struct DriverRequest {
   /// Revoke the request's original neither-I/O user virtual addresses after
   /// dispatch returns. Locked MDL system aliases retain the underlying pages.
   std::optional<bool> UserUnmapAfterDispatch;
+  /// Terminate the synthetic requestor after dispatch returns, revoking all
+  /// of its original user VAs while locked MDLs retain their physical pages.
+  std::optional<bool> RequestorExitAfterDispatch;
+  /// Synthetic requestor identity for file IRPs; system-owned IRPs use zero.
+  uint32_t RequestorProcessID = DefaultRequestorProcessID;
   /// Initial contents of a direct IOCTL's second buffer, padded to OutputSize.
   std::vector<uint8_t> DirectInput;
   uint64_t ByteOffset = 0;
@@ -148,6 +154,7 @@ struct DriverRequestResult {
   uint64_t Information = 0;
   std::vector<uint8_t> Output;
   uint32_t File = 0;
+  uint32_t RequestorProcessID = 0;
   uint64_t ByteOffset = 0;
   /// Actual virtual time when cancellation was requested; absent when the
   /// request completed before its configured cancellation event could fire.

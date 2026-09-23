@@ -766,6 +766,10 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_REQUEST_KIND
   if (!KnownKind)
     return invalid("unsupported request kind '" + *Kind + "'");
+  if ((Result.Kind == DriverRequestKind::Pnp ||
+       Result.Kind == DriverRequestKind::Power) &&
+      Object->get(RequestorProcessIDField))
+    return invalid("requestor_process_id requires a file request");
   if (const auto *Events = Object->get(dmaField::DmaEvents)) {
     if (Result.Kind != DriverRequestKind::Read &&
         Result.Kind != DriverRequestKind::Write &&
@@ -827,6 +831,19 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     if (!Value)
       return invalid("user_unmap_after_dispatch must be a boolean");
     Result.UserUnmapAfterDispatch = *Value;
+  }
+  if (const auto *Exit = Object->get(RequestorExitAfterDispatchField)) {
+    auto Value = Exit->getAsBoolean();
+    if (!Value)
+      return invalid("requestor_exit_after_dispatch must be a boolean");
+    Result.RequestorExitAfterDispatch = *Value;
+  }
+  if (const auto *PID = Object->get(RequestorProcessIDField)) {
+    auto Number = PID->getAsUINT64();
+    if (!Number || *Number <= 4 || *Number > UINT32_MAX)
+      return invalid("requestor_process_id must be a user process identity "
+                     "from 5 through UINT32_MAX");
+    Result.RequestorProcessID = static_cast<uint32_t>(*Number);
   }
   if (Result.Kind == DriverRequestKind::Pnp) {
     auto Pnp = pnpOperation(*Object);
@@ -1339,6 +1356,26 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   uint64_t Total = 0;
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
+    if ((Request.Kind == DriverRequestKind::Pnp ||
+         Request.Kind == DriverRequestKind::Power) &&
+        Request.RequestorProcessID != DriverRequest::DefaultRequestorProcessID)
+      return invalid("requestor_process_id requires a file request");
+    if (Request.RequestorProcessID <= 4)
+      return invalid("requestor_process_id must identify a user process");
+    if (Request.RequestorExitAfterDispatch && Request.UserUnmapAfterDispatch)
+      return invalid("requestor_exit_after_dispatch and "
+                     "user_unmap_after_dispatch are mutually exclusive");
+    if (Request.RequestorExitAfterDispatch) {
+      const bool NeitherIOCTL =
+          Request.Kind == DriverRequestKind::DeviceControl &&
+          (Request.ControlCode & windows::IoControlMethodMask) ==
+              windows::MethodNeither;
+      if ((!NeitherIOCTL && Request.Kind != DriverRequestKind::Read &&
+           Request.Kind != DriverRequestKind::Write) ||
+          (Request.Input.empty() && !Request.OutputSize))
+        return invalid("requestor_exit_after_dispatch requires a nonempty "
+                       "neither-I/O transfer buffer");
+    }
     if (Request.UserUnmapAfterDispatch) {
       const bool NeitherIOCTL =
           Request.Kind == DriverRequestKind::DeviceControl &&

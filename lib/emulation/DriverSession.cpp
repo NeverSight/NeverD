@@ -1024,11 +1024,18 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         break;
       }
       if (Invocation->PC) {
-        Kernel.setUserRequestContext(
-            Options.Requests[Index].Kind != DriverRequestKind::Pnp &&
-            Options.Requests[Index].Kind != DriverRequestKind::Power);
+        if (auto E = Kernel.setUserRequestContext(
+                Options.Requests[Index].Kind != DriverRequestKind::Pnp &&
+                    Options.Requests[Index].Kind != DriverRequestKind::Power,
+                Options.Requests[Index].RequestorProcessID)) {
+          ModelFailure(std::move(E));
+          break;
+        }
         auto Invoked = Invoke(*Invocation, Result.Phase);
-        Kernel.setUserRequestContext(false);
+        if (auto E = Kernel.setUserRequestContext(false)) {
+          ModelFailure(std::move(E));
+          break;
+        }
         if (Invoked)
           return std::move(Invoked);
         if (Result.Stop != DriverStopReason::Returned)
@@ -1044,6 +1051,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (Options.Requests[Index].UserUnmapAfterDispatch.value_or(false))
         if (auto E = Kernel.revokeRequestUserBuffers(Invocation->IRP)) {
+          ModelFailure(std::move(E));
+          break;
+        }
+      if (Options.Requests[Index].RequestorExitAfterDispatch.value_or(false))
+        if (auto E = Kernel.exitRequestorProcess(Invocation->IRP)) {
           ModelFailure(std::move(E));
           break;
         }

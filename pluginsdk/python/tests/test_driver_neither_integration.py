@@ -243,35 +243,38 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
         )
         for fixture in self.fixtures:
             for code, status in (("0x22201b", 0), ("0x222023", 0xC0000120)):
-                with self.subTest(fixture=fixture, code=code):
-                    request = {
-                        "kind": "ioctl", "code": code, "input": "01020304",
-                        "output_size": 4, "user_unmap_after_dispatch": True,
-                    }
-                    if status:
-                        request["cancel_after_100ns"] = 0
-                    data = {
-                        "requests": [
-                            {"kind": "create", "device": "\\Device\\NeverDNeither"},
-                            request,
-                            {"kind": "cleanup"}, {"kind": "close"},
-                        ],
-                        "unload": True,
-                    }
-                    raw = self.host.owned_string(
-                        "neverd_emulate_driver_scenario_json", self.session,
-                        os.fsencode(fixture), json.dumps(data).encode("utf-8"),
-                        ctypes.byref(options),
-                    )
-                    self.assertIsNotNone(raw)
-                    result = json.loads(raw)
-                    self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
-                    self.assertEqual(result["scenario_success"], not bool(status))
-                    self.assertTrue(result["unload_completed"])
-                    observed = result["requests"][1]
-                    self.assertEqual(observed["io_status"], status)
-                    self.assertEqual(observed["output_hex"], "")
-                    self.assertEqual(observed["information"], 0 if status else 4)
+                for event in ("user_unmap_after_dispatch", "requestor_exit_after_dispatch"):
+                    with self.subTest(fixture=fixture, code=code, event=event):
+                        request = {
+                            "kind": "ioctl", "code": code, "input": "01020304",
+                            "output_size": 4, event: True,
+                        }
+                        if event == "requestor_exit_after_dispatch":
+                            request["requestor_process_id"] = 4112
+                        if status:
+                            request["cancel_after_100ns"] = 0
+                        data = {
+                            "requests": [
+                                {"kind": "create", "device": "\\Device\\NeverDNeither"},
+                                request,
+                                {"kind": "cleanup"}, {"kind": "close"},
+                            ],
+                            "unload": True,
+                        }
+                        raw = self.host.owned_string(
+                            "neverd_emulate_driver_scenario_json", self.session,
+                            os.fsencode(fixture), json.dumps(data).encode("utf-8"),
+                            ctypes.byref(options),
+                        )
+                        self.assertIsNotNone(raw)
+                        result = json.loads(raw)
+                        self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+                        self.assertEqual(result["scenario_success"], not bool(status))
+                        self.assertTrue(result["unload_completed"])
+                        observed = result["requests"][1]
+                        self.assertEqual(observed["io_status"], status)
+                        self.assertEqual(observed["output_hex"], "")
+                        self.assertEqual(observed["information"], 0 if status else 4)
 
 
 if __name__ == "__main__":

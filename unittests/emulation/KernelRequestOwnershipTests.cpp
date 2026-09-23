@@ -548,7 +548,7 @@ TEST_F(KernelRequestOwnership,
   const uint64_t IRP = begin(Input);
   ASSERT_NE(IRP, 0u);
   Model->enterExecution(profile::StackBase);
-  Model->setUserRequestContext(true);
+  success(Model->setUserRequestContext(true));
   const uint64_t Stack = integer(IRP + IRPStackPointerOffset);
   const uint64_t UserInput = integer(Stack + StackType3InputOffset);
   const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
@@ -625,12 +625,12 @@ TEST_F(KernelRequestOwnership,
   ASSERT_NE(OutAlias, 0u);
   guestWrite(OutAlias, 0x42, 1);
   EXPECT_EQ(integer(UserOutput, 1), 0x42u);
-  Model->setUserRequestContext(false);
+  success(Model->setUserRequestContext(false));
   rejected(Model->validateGuestAccess(UserInput, 1, false));
   rejected(Model->validateGuestAccess(UserOutput, 1, true));
   success(Model->validateGuestAccess(InAlias, 1, false));
   success(Model->validateGuestAccess(OutAlias, 1, true));
-  Model->setUserRequestContext(true);
+  success(Model->setUserRequestContext(true));
   rejected(Model->call("IoFreeMdl", {OutMdl}));
   call("MmUnlockPages", {OutMdl});
   call("MmUnlockPages", {InMdl});
@@ -648,7 +648,7 @@ TEST_F(KernelRequestOwnership,
   EXPECT_EQ(observation(IRP).Output, (std::vector<uint8_t>{0x42}));
   success(Model->recordDispatchReturn(IRP, 0));
   success(Model->finalizeRequest(IRP));
-  Model->setUserRequestContext(false);
+  success(Model->setUserRequestContext(false));
   close();
 }
 
@@ -664,7 +664,7 @@ TEST_F(KernelRequestOwnership,
   const uint64_t UserInput = integer(Stack + StackType3InputOffset);
   const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
   Model->enterExecution(profile::StackBase);
-  Model->setUserRequestContext(true);
+  success(Model->setUserRequestContext(true));
   const uint64_t InMdl = call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
   const uint64_t OutMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
   ASSERT_NE(InMdl, 0u);
@@ -676,7 +676,7 @@ TEST_F(KernelRequestOwnership,
   const uint64_t OutAlias =
       call("MmGetSystemAddressForMdlSafe", {OutMdl, NormalPagePriority});
   call("IoMarkIrpPending", {IRP});
-  Model->setUserRequestContext(false);
+  success(Model->setUserRequestContext(false));
   success(Model->recordDispatchReturn(IRP, Pending));
   success(Model->revokeRequestUserBuffers(IRP));
   rejected(Model->revokeRequestUserBuffers(IRP));
@@ -698,7 +698,7 @@ TEST_F(KernelRequestOwnership,
   std::array<uint8_t, 1> Backing{};
   success(Memory->readBacking(UserOutput, Backing));
   EXPECT_EQ(Backing[0], 0x42u);
-  Model->setUserRequestContext(true);
+  success(Model->setUserRequestContext(true));
   const uint64_t NewMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
   ASSERT_NE(NewMdl, 0u);
   auto Relock =
@@ -713,7 +713,7 @@ TEST_F(KernelRequestOwnership,
       });
   EXPECT_EQ(Exception, exceptions::StatusAccessViolation);
   call("IoFreeMdl", {NewMdl});
-  Model->setUserRequestContext(false);
+  success(Model->setUserRequestContext(false));
   call("MmUnlockPages", {OutMdl});
   call("MmUnlockPages", {InMdl});
   call("IoFreeMdl", {OutMdl});
@@ -721,6 +721,93 @@ TEST_F(KernelRequestOwnership,
   complete(IRP, 0, 1);
   EXPECT_TRUE(observation(IRP).Output.empty());
   success(Model->finalizeRequest(IRP));
+  close();
+}
+
+TEST_F(KernelRequestOwnership,
+       RequestorExitRevokesItsVAsButPreservesLockedPagesAndOtherProcesses) {
+  ASSERT_NE(open(), 0u);
+  ASSERT_NE(open(1), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  Input.RequestorProcessID = 0x1010;
+  Input.RequestorExitAfterDispatch = true;
+  const uint64_t IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  const uint64_t Stack = integer(IRP + IRPStackPointerOffset);
+  const uint64_t UserInput = integer(Stack + StackType3InputOffset);
+  const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), Input.RequestorProcessID);
+  EXPECT_EQ(call("IoGetRequestorProcessId", {IRP}), Input.RequestorProcessID);
+  const uint64_t InMdl = call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
+  const uint64_t OutMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
+  ASSERT_NE(InMdl, 0u);
+  ASSERT_NE(OutMdl, 0u);
+  call("MmProbeAndLockPages", {InMdl, UserMode, IoReadAccess});
+  call("MmProbeAndLockPages", {OutMdl, UserMode, IoWriteAccess});
+  const uint64_t InAlias =
+      call("MmGetSystemAddressForMdlSafe", {InMdl, NormalPagePriority});
+  const uint64_t OutAlias =
+      call("MmGetSystemAddressForMdlSafe", {OutMdl, NormalPagePriority});
+  call("IoMarkIrpPending", {IRP});
+  success(Model->setUserRequestContext(false));
+  success(Model->recordDispatchReturn(IRP, Pending));
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), 4u);
+  EXPECT_EQ(call("IoGetRequestorProcessId", {IRP}), Input.RequestorProcessID);
+  auto Other = ioRequest(1, MethodNeither);
+  Other.DirectInput.clear();
+  Other.RequestorProcessID = 0x2020;
+  const uint64_t OtherIRP = begin(Other);
+  ASSERT_NE(OtherIRP, 0u);
+  const uint64_t OtherOutput = integer(OtherIRP + IRPUserBufferOffset);
+  success(Model->setUserRequestContext(true, Other.RequestorProcessID));
+  auto OtherProcessRead = Memory->canAccess(UserInput, 1, Read);
+  auto OwnProcessWrite = Memory->canAccess(OtherOutput, 1, Read | Write);
+  ASSERT_TRUE(bool(OtherProcessRead));
+  ASSERT_TRUE(bool(OwnProcessWrite));
+  EXPECT_FALSE(*OtherProcessRead);
+  EXPECT_TRUE(*OwnProcessWrite);
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), 0x2020u);
+  EXPECT_EQ(call("IoGetRequestorProcessId", {OtherIRP}), 0x2020u);
+  call("IoMarkIrpPending", {OtherIRP});
+  success(Model->setUserRequestContext(false));
+  success(Model->recordDispatchReturn(OtherIRP, Pending));
+  success(Model->exitRequestorProcess(IRP));
+  rejected(Model->exitRequestorProcess(IRP));
+  success(Model->setUserRequestContext(true, Other.RequestorProcessID));
+  OwnProcessWrite = Memory->canAccess(OtherOutput, 1, Read | Write);
+  ASSERT_TRUE(bool(OwnProcessWrite));
+  EXPECT_TRUE(*OwnProcessWrite);
+  success(Model->setUserRequestContext(false));
+  success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+  auto ExitedRead = Memory->canAccess(UserInput, 1, Read);
+  ASSERT_TRUE(bool(ExitedRead));
+  EXPECT_FALSE(*ExitedRead);
+  success(Model->setUserRequestContext(false));
+  EXPECT_EQ(integer(InAlias, 2), 0x2211u);
+  guestWrite(OutAlias, 0x42, 1);
+  call("MmUnlockPages", {OutMdl});
+  call("MmUnlockPages", {InMdl});
+  call("IoFreeMdl", {OutMdl});
+  call("IoFreeMdl", {InMdl});
+  complete(IRP, 0, 1);
+  EXPECT_TRUE(observation(IRP).Output.empty());
+  success(Model->finalizeRequest(IRP));
+  complete(OtherIRP);
+  success(Model->finalizeRequest(OtherIRP));
+  rejected(Model->beginRequest(Input));
+  Other.File = 0;
+  const uint64_t AnotherIRP = begin(Other);
+  ASSERT_NE(AnotherIRP, 0u);
+  success(Model->setUserRequestContext(true, Other.RequestorProcessID));
+  EXPECT_EQ(call("IoGetRequestorProcessId", {AnotherIRP}), 0x2020u);
+  success(Model->setUserRequestContext(false));
+  complete(AnotherIRP);
+  success(Model->recordDispatchReturn(AnotherIRP, 0));
+  success(Model->finalizeRequest(AnotherIRP));
+  close(1);
   close();
 }
 
