@@ -576,7 +576,7 @@ Swift 6.1.2 클라이언트 IR은 정확한 libswiftCore `_DictionaryStorage.all
 
 Swift 6.1.2는 정확한 libswiftCore `_DictionaryStorage.copy(original:)` 및 `resize(original:capacity:move:)` 가져오기도 `swiftself`에 구체적인 사전 메타데이터를 받고 포인터를 반환하는 호출로 정의합니다. resize는 정수 용량과 1바이트 Bool도 받습니다. 증명은 호출과 할당 효과를 유지하고 제공자와 완전한 ABI를 검증하며 다른 미해결 의존성이 있는 호출자는 공개하지 않습니다.
 
-정확한 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 가져오기는 Swift 6.1.2 선언대로 형식 메타데이터 포인터 하나를 받고 반환하지 않습니다. 이 종료 계약은 검증된 제공자와 ABI에만 적용되며 원래 호출과 트랩은 소스 경로에 남습니다.
+정확한 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 가져오기는 Swift 6.1.2 선언대로 형식 메타데이터 포인터 하나를 받고 반환하지 않습니다. 이 종료 계약은 검증된 제공자와 ABI에만 적용되며 원래 호출과 트랩은 소스 경로에 남습니다. 정상적으로 반환하는 ARM64 함수에서도 이 정확한 호출은 후속 블록이 없는 예외 분기를 끝낼 수 있으며, 바로 뒤에 트랩이 있는 경우도 포함됩니다. 모든 정상 반환 경로에는 여전히 완전한 상태 증명이 필요합니다.
 
 8개 명령으로 구성된 ARM64 클래스 접근자 증명을 하나의 공통 구현으로 통합했습니다. 변경 불가능한 명령과 강한 `objc_opt_self` 가져오기를 확인하여 입력 인수가 사용되지 않고 결과의 8바이트 모두가 런타임 호출에서 나옴을 증명합니다. 이 사실만으로 클래스 객체의 동일성이나 소스 의존성 완결을 인정하지 않습니다. super getter와 메타데이터 팩토리는 클래스, 파이프라인, 프레임, 의존성 검사를 유지합니다. 구조적 언와인드 판단도 공유하며 부분 해석과 언어 예외 디스패치는 계속 거부합니다.
 

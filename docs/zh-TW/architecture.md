@@ -528,7 +528,7 @@ Swift 6.1.2 用戶端 IR 亦表明，精確的 libswiftCore `_DictionaryStorage.
 
 Swift 6.1.2 亦將精確的 libswiftCore `_DictionaryStorage.copy(original:)` 與 `resize(original:capacity:move:)` 匯入定義為回傳指標、透過 `swiftself` 接收具體字典中繼資料的呼叫。擴容還接收整數容量與一個布林位元組。證明保留呼叫及配置效果，驗證提供者與完整 ABI；仍有其他未解決相依項的呼叫者不會發布。
 
-精確的 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 匯入依 Swift 6.1.2 的宣告接收一個型別中繼資料指標且永不回傳。只有提供者與 ABI 均經驗證時才套用此終止契約；原始呼叫與陷阱仍保留在原始碼路徑中。
+精確的 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 匯入依 Swift 6.1.2 的宣告接收一個型別中繼資料指標且永不回傳。只有提供者與 ABI 均經驗證時才套用此終止契約；原始呼叫與陷阱仍保留在原始碼路徑中。 在通常會返回的 ARM64 函式中，只有這個精確呼叫可以結束沒有後繼的例外分支，包括緊接陷阱的情況。每條正常返回路徑仍須通過完整的狀態恢復證明。
 
 8 條指令的 ARM64 類別中繼資料存取器現在由同一處機器證明驗證。它檢查不可變指令與 `objc_opt_self` 的強匯入，證明入口參數未被使用，且回傳值的全部 8 位元組來自該執行階段呼叫。這些事實不會授予類別物件身分或原始碼閉包許可。super getter 與中繼資料工廠仍分別檢查類別身分、管線、堆疊框架與相依性。結構化展開中繼資料的接受規則也改為共用；部分解析與語言例外分派仍被拒絕。
 

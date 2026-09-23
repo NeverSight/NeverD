@@ -594,7 +594,7 @@ Swift 6.1.2 客户端 IR 还表明，精确的 libswiftCore `_DictionaryStorage.
 
 Swift 6.1.2 还将精确的 libswiftCore `_DictionaryStorage.copy(original:)` 与 `resize(original:capacity:move:)` 导入定义为返回指针、通过 `swiftself` 接收具体字典元数据的调用。扩容还接收整数容量和一个布尔字节。证明保留调用及分配效果，验证提供者和完整 ABI；仍有其他未解决依赖的调用者不会发布。
 
-精确的 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 导入按 Swift 6.1.2 的声明接收一个类型元数据指针且永不返回。只有提供者及 ABI 均经验证时才应用此终止契约；原始调用与陷阱仍保留在源码路径中。
+精确的 libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` 导入按 Swift 6.1.2 的声明接收一个类型元数据指针且永不返回。只有提供者及 ABI 均经验证时才应用此终止契约；原始调用与陷阱仍保留在源码路径中。 在通常会返回的 ARM64 函数中，只有这个精确调用可以结束无后继的异常分支，包括紧随陷阱的情况。每条正常返回路径仍须通过完整的状态恢复证明。
 
 8 条指令的 ARM64 类元数据访问器现在由同一处机器证明验证。它检查不可变指令和 `objc_opt_self` 的强导入，证明入口参数未被使用，且返回值的全部 8 字节来自该运行时调用。这些事实不会授予类对象身份或源码闭包许可。super getter 与元数据工厂仍分别检查类身份、流水线、栈帧和依赖。结构化展开元数据的接受规则也改为共享；部分解析和语言异常分派仍被拒绝。
 

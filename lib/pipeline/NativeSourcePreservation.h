@@ -21,9 +21,14 @@ struct NativeSourceCallContract {
   // Mutually exclusive with Signature. The caller must freshly authenticate
   // this exact occurrence against the original image and LowIR.
   const SourceRegisterCopy *RegisterCopy = nullptr;
-  // One authoritative effect/proof kind; an ordinary returning frame accepts
-  // only the exact stack-check failure contract authenticated by its caller.
-  enum class TerminationKind { None, RuntimeEntry, StackCheckFailure };
+  // One authoritative effect/proof kind. An ordinary returning frame accepts
+  // only exact exceptional exits authenticated by its caller.
+  enum class TerminationKind {
+    None,
+    RuntimeEntry,
+    StackCheckFailure,
+    SwiftDictionaryViolation
+  };
   TerminationKind Termination = TerminationKind::None;
   bool terminates() const { return Termination != TerminationKind::None; }
   // Parameter indexes whose exact private-frame address is borrowed
@@ -62,7 +67,7 @@ bool hasNativeScalarIntrinsicEvidence(const MedOp &Operation,
 /// An independently inferred ARM64 entry signature may additionally authorize
 /// exact eight-byte reads of its scalar incoming stack slots. Such values are
 /// unknown input bytes, never saved-register identities or private-frame facts.
-/// A separately authenticated ARM64 stack-check failure may end a successorless
+/// Separately authenticated ARM64 exceptional calls may end a successorless
 /// block after the same transfer checks. At least one reachable normal return
 /// is required, and every normal return still restores all incoming state.
 /// This does not prove a result type or authorize machine-code rewriting.

@@ -512,6 +512,25 @@ bool hasNativeSourceStateContract(
           return false;
         Contract.Termination =
             NativeSourceCallContract::TerminationKind::StackCheckFailure;
+      } else if (Binding.DoesNotReturn && StaticRuntime &&
+                 Binding.CallKind == Kind::SwiftRuntimeCall &&
+                 Binding.TargetName == "$ss53KEY_TYPE_OF_DICTIONARY_VIOLATES_"
+                                       "HASHABLE_REQUIREMENTSys5NeverOypXpF") {
+        const auto Import = Image.DyldBindSlots.find(Binding.TargetAddress);
+        const auto Expected =
+            swiftRuntimeSourceCallHint(Image, Binding.TargetAddress);
+        if (Image.Arch != Arch::AArch64 ||
+            Import == Image.DyldBindSlots.end() ||
+            Import->second.Module != "/usr/lib/swift/libswiftCore.dylib" ||
+            !Expected || !Expected->DoesNotReturn ||
+            Expected->CallKind != Binding.CallKind ||
+            Expected->TargetAddress != Binding.TargetAddress ||
+            Expected->TargetName != Binding.TargetName ||
+            !equalSourceABIs(Expected->Signature, Binding.Signature) ||
+            !Op.DoesNotReturn || Op.PreservesCallerSaved || Op.NumInputs != 2)
+          return false;
+        Contract.Termination =
+            NativeSourceCallContract::TerminationKind::SwiftDictionaryViolation;
       }
       if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
            !StaticBoolean && !StaticMessage && !DynamicWitness) ||

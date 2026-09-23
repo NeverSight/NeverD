@@ -1470,6 +1470,87 @@ struct NativeMixedTerminalFixture : NativeVoidFrameFixture {
   }
 };
 
+struct NativeMixedDictionaryViolationFixture : NativeMixedTerminalFixture {
+  NativeMixedDictionaryViolationFixture() {
+    constexpr auto Name = "$ss53KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_"
+                          "REQUIREMENTSys5NeverOypXpF";
+    constexpr auto Module = "/usr/lib/swift/libswiftCore.dylib";
+    Image.ImportPtrSlots[FailureSlot] = std::string("_") + Name;
+    Image.DyldBindSlots[FailureSlot] = {std::string("_") + Name, 0, Module,
+                                        false};
+    Image.DynInfo.NeededLibs = {Module};
+    auto Hint = swiftRuntimeSourceCallHint(Image, FailureSlot);
+    EXPECT_TRUE(Hint);
+    if (!Hint)
+      return;
+    auto &Call = Med.Blocks[2].Ops[0];
+    Call.SourceCallHint =
+        std::make_shared<const SourceCallTypeHint>(std::move(*Hint));
+    Call.addInput(MedVar::makeConst(0x4000, 8));
+  }
+
+  NativeSourceCalls contracts() const {
+    auto Calls = NativeMixedTerminalFixture::contracts();
+    const auto Key = nativeSourceCallKey(Low.Blocks[2].Ops[0]);
+    if (Key)
+      Calls.at(*Key).Termination =
+          NativeSourceCallContract::TerminationKind::SwiftDictionaryViolation;
+    return Calls;
+  }
+};
+
+TEST(NativeSourceHints, MixedSwiftDictionaryViolationPreservesNormalReturns) {
+  NativeMixedDictionaryViolationFixture F;
+  SourceFunctionTypeHint Expected;
+  Expected.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
+  Expected.ReturnType = NdType::makeVoid();
+  Expected.Parameters = {{"arg0", NdType::makePtr(NdType::makeVoid())}};
+  std::string ABIError;
+  EXPECT_TRUE(assignDarwinSwiftSourceABI(Expected, Arch::AArch64, ABIError))
+      << ABIError;
+  EXPECT_TRUE(equalSourceABIs(F.Med.Blocks[2].Ops[0].SourceCallHint->Signature,
+                              Expected));
+  EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.contracts()));
+  std::string Error;
+  const auto Hint = F.inferVoid(Error);
+  ASSERT_TRUE(Hint) << Error;
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+
+  F.Low.Blocks[1].Ops[1].Output = NdVar::reg(a64reg::X20, 8);
+  EXPECT_FALSE(F.inferVoid(Error));
+}
+
+TEST(NativeSourceHints, MixedSwiftDictionaryViolationAllowsImmediateTrap) {
+  NativeMixedDictionaryViolationFixture F;
+  auto Trap =
+      F.op(NdOp::INTRINSIC, {},
+           {NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2)}, 0x1044);
+  F.Low.Blocks[2].Ops.push_back(Trap);
+  EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.contracts()));
+  F.Low.Blocks[2].Ops.back().Opcode = NdOp::NOP;
+  EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, F.contracts()));
+}
+
+TEST(NativeSourceHints, MixedSwiftDictionaryViolationRevalidatesImport) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeMixedDictionaryViolationFixture F;
+    if (Mutation == 0)
+      F.Image.DyldBindSlots[F.FailureSlot].Module = "/tmp/foreign.dylib";
+    else if (Mutation == 1)
+      F.Image.DyldBindSlots[F.FailureSlot].Addend = 8;
+    else if (Mutation == 2)
+      F.Image.DyldBindSlots[F.FailureSlot].WeakImport = true;
+    else if (Mutation == 3)
+      F.changeFailureHint(
+          [](auto &Hint) { Hint.Signature.Parameters.clear(); });
+    else
+      F.Med.Blocks[2].Ops[0].DoesNotReturn = false;
+    std::string Error;
+    EXPECT_FALSE(F.inferVoid(Error));
+  }
+}
+
 TEST(NativeSourceHints, MixedStackFailureKeepsEveryNormalExitRestored) {
   NativeMixedTerminalFixture F;
   std::string Error;

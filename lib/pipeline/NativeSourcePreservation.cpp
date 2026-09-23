@@ -73,6 +73,31 @@ bool stackCheckTermination(const NativeSourceCallContract &Contract,
          equalSourceABIs(*Contract.Signature, Expected);
 }
 
+bool swiftDictionaryViolationTermination(
+    const NativeSourceCallContract &Contract, Arch Architecture) {
+  if (Contract.Termination !=
+          NativeSourceCallContract::TerminationKind::SwiftDictionaryViolation ||
+      Architecture != Arch::AArch64 || !Contract.Signature ||
+      Contract.Signature->Origin !=
+          SourceFunctionTypeHint::OriginKind::SwiftSDK ||
+      !Contract.ReadOnlyFrameParameters.empty() ||
+      !Contract.WritableFrameParameters.empty())
+    return false;
+  SourceFunctionTypeHint Expected;
+  Expected.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
+  Expected.ReturnType = NdType::makeVoid();
+  Expected.Parameters = {{"arg0", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Expected, Architecture, Error) &&
+         equalSourceABIs(*Contract.Signature, Expected);
+}
+
+bool ordinaryFrameTermination(const NativeSourceCallContract &Contract,
+                              Arch Architecture) {
+  return stackCheckTermination(Contract, Architecture) ||
+         swiftDictionaryViolationTermination(Contract, Architecture);
+}
+
 // Byte identities make partial writes and overlapping spills explicit. A
 // frame address needs all eight ordered bytes before it can name a stack slot.
 struct ByteFact {
@@ -312,12 +337,20 @@ public:
         if (!Found->second.Signature)
           return false;
         if (Found->second.terminates() && !TerminalOnly &&
-            !stackCheckTermination(Found->second, Architecture))
+            !ordinaryFrameTermination(Found->second, Architecture))
           return false;
         if (Found->second.Termination ==
                 NativeSourceCallContract::TerminationKind::StackCheckFailure &&
             (TerminalOnly || Index + 1 != Block.Ops.size() ||
              !Block.Succs.empty()))
+          return false;
+        if (Found->second.Termination ==
+                NativeSourceCallContract::TerminationKind::
+                    SwiftDictionaryViolation &&
+            (TerminalOnly || !Block.Succs.empty() ||
+             (Index + 1 != Block.Ops.size() &&
+              (Index + 2 != Block.Ops.size() ||
+               !isArchitecturalNoReturn(Block.Ops.back(), Architecture)))))
           return false;
         const auto &Signature = *Found->second.Signature;
         const bool Tail = Index + 1 < Block.Ops.size() &&
@@ -707,7 +740,7 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     // Hidden result storage needs its own bounded frame-write proof before
     // this analysis can treat it as preserving saved machine state.
     if ((Contract.terminates() &&
-         !stackCheckTermination(Contract, Architecture)) ||
+         !ordinaryFrameTermination(Contract, Architecture)) ||
         !Signature || Signature->Architecture != Architecture ||
         Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
@@ -782,14 +815,14 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     const bool Returns = Function.Blocks[I].Ops.back().Opcode == NdOp::RETURN;
     const auto LastCall = nativeSourceCallKey(Function.Blocks[I].Ops.back());
     const auto Terminal = LastCall ? Calls.find(*LastCall) : Calls.end();
-    const bool StackFailure =
+    const bool ExceptionalCall =
         Terminal != Calls.end() &&
-        stackCheckTermination(Terminal->second, Architecture);
+        ordinaryFrameTermination(Terminal->second, Architecture);
     const bool ArchitecturalTrap =
         isArchitecturalNoReturn(Function.Blocks[I].Ops.back(), Architecture);
-    if ((Succs[I].empty() && !Returns && !StackFailure &&
+    if ((Succs[I].empty() && !Returns && !ExceptionalCall &&
          !ArchitecturalTrap) ||
-        ((StackFailure || ArchitecturalTrap) && !Succs[I].empty()))
+        ((ExceptionalCall || ArchitecturalTrap) && !Succs[I].empty()))
       return false;
     HasReturn |= Returns;
   }
