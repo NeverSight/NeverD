@@ -380,9 +380,9 @@ KernelModel::createDeviceObjectForOwner(llvm::StringRef Name,
       (OwnerKind == DeviceOwnerKind::Guest && Owner != DriverObject) ||
       (OwnerKind == DeviceOwnerKind::Provider && Owner != PnpProviderDriver))
     return modelError("device creation requires a registered driver owner");
-  if (Type != UnknownDeviceType || (Characteristics & ~uint32_t(SecureOpen)))
-    return modelError("IoCreateDevice model supports FILE_DEVICE_UNKNOWN and "
-                      "FILE_DEVICE_SECURE_OPEN only");
+  if (Characteristics & ~uint32_t(SecureOpen))
+    return modelError(
+        "IoCreateDevice model supports FILE_DEVICE_SECURE_OPEN only");
   if (ExtensionSize > UINT16_MAX - DeviceObjectSize)
     return modelError(
         "device extension exceeds the bounded DEVICE_OBJECT size");

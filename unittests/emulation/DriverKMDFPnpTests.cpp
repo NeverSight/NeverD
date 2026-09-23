@@ -159,6 +159,30 @@ TEST(DriverKMDFPnp, AddStartIoRemoveAndUnloadFollowRealCallbacks) {
     }
 }
 
+TEST(DriverKMDFPnp, ConfiguredDeviceTypeReachesTheWdmDeviceObject) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Input = options('K');
+      Input.LoadAddress = Base;
+      auto IO = std::find_if(Input.Requests.begin(), Input.Requests.end(),
+                             [](const DriverRequest &Request) {
+                               return Request.Kind ==
+                                      DriverRequestKind::DeviceControl;
+                             });
+      ASSERT_NE(IO, Input.Requests.end());
+      Input.Requests.erase(IO);
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+      for (const auto &Request : Result->Requests)
+        EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+    }
+}
+
 TEST(DriverKMDFPnp, FailedAddDeletesFrameworkFdoBeforeProviderRetirement) {
   for (const char *Image : pnpImages()) {
     SCOPED_TRACE(Image);

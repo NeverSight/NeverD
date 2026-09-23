@@ -36,6 +36,7 @@ ABI_SLOT(WdfDeviceWdmGetAttachedDevice, 32);
 ABI_SLOT(WdfWdmDeviceGetWdfDeviceHandle, 30);
 ABI_SLOT(WdfDeviceGetDriver, 39);
 ABI_SLOT(WdfDeviceCreate, 75);
+ABI_SLOT(WdfDeviceInitSetDeviceType, 66);
 ABI_SLOT(WdfDeviceInitSetPnpPowerEventCallbacks, 55);
 ABI_SLOT(WdfCmResourceListGetCount, 304);
 ABI_SLOT(WdfCmResourceListGetDescriptor, 305);
@@ -289,6 +290,8 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   PDO = WdfFdoInitWdmGetPhysicalDevice(Init);
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
+  if (ServiceMode == L'K')
+    WdfDeviceInitSetDeviceType(Init, FILE_DEVICE_SERIAL_PORT);
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
       (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
@@ -314,6 +317,9 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (!NT_SUCCESS(Status))
     return Status;
   FDO = WdfDeviceWdmGetDeviceObject(Device);
+  if (FDO->DeviceType !=
+      (ServiceMode == L'K' ? FILE_DEVICE_SERIAL_PORT : FILE_DEVICE_UNKNOWN))
+    return STATUS_INVALID_DEVICE_STATE;
   if (WdfDeviceWdmGetPhysicalDevice(Device) != PDO ||
       WdfDeviceWdmGetAttachedDevice(Device) != PDO ||
       WdfWdmDeviceGetWdfDeviceHandle(FDO) != Device ||

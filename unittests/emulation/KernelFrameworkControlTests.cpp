@@ -56,9 +56,23 @@ TEST_F(DriverKernelFrameworkControl,
   expectError(Model.validateGuestAccess(Init, 1, false), "freed");
   expectError(invoke("WdfDeviceInitFree", {Globals, Init}), "consumed");
   expectError(invoke("WdfDeviceInitSetIoType", {Globals, Init, 2}), "consumed");
+  expectError(invoke("WdfDeviceInitSetDeviceType",
+                     {Globals, Init, windows::UnknownDeviceType}),
+              "consumed");
   take(invoke("WdfObjectDelete", {Globals, Handle}));
   EXPECT_EQ(HostDevices.size(), Published);
   EXPECT_FALSE(HostDevices.count(Wdm));
+}
+
+TEST_F(DriverKernelFrameworkControl,
+       DeviceTypeCannotBeConfiguredOnAControlInitializer) {
+  const auto Init = initializer();
+  expectError(invoke("WdfDeviceInitSetDeviceType",
+                     {Globals, Init, windows::UnknownDeviceType}),
+              "FDO initializer");
+  ASSERT_EQ(take(createControl()), 0u);
+  const auto Handle = get(DeviceSlot);
+  take(invoke("WdfObjectDelete", {Globals, Handle}));
 }
 
 TEST_F(DriverKernelFrameworkControl,

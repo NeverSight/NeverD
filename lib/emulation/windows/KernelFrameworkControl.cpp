@@ -15,6 +15,7 @@
 
 #include "KernelFramework.h"
 #include "KernelResources.h"
+#include "WindowsKernelLayout.h"
 
 namespace neverd::emulation {
 namespace {
@@ -101,6 +102,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     return Result{*Address};
   }
   if (Name == api::WdfDeviceInitFree || Name == api::WdfDeviceInitAssignName ||
+      Name == api::WdfDeviceInitSetDeviceType ||
       Name == api::WdfDeviceInitSetIoType ||
       Name == api::WdfDeviceInitSetIoInCallerContextCallback ||
       Name == api::WdfDeviceInitSetPnpPowerEventCallbacks) {
@@ -123,6 +125,10 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
           return Text.takeError();
         I->second.Name = std::move(*Text);
       }
+    } else if (Name == api::WdfDeviceInitSetDeviceType) {
+      if (I->second.Kind != DeviceInitKind::Pnp)
+        return controlError("device type requires an FDO initializer");
+      I->second.DeviceType = static_cast<uint32_t>(A[2]);
     } else if (Name == api::WdfDeviceInitSetIoInCallerContextCallback) {
       if (!A[2])
         return controlError("caller-context callback must name guest code");
@@ -206,10 +212,12 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     if (!DevicesHost.Create || !DevicesHost.Delete ||
         (I->second.Kind == DeviceInitKind::Pnp && !DevicesHost.CreatePnp))
       return controlError("underlying WDM device host is unavailable");
-    auto Wdm = I->second.Kind == DeviceInitKind::Control
-                   ? DevicesHost.Create(I->second.Name, I->second.IoType)
-                   : DevicesHost.CreatePnp(I->second.PDO, I->second.Name,
-                                           I->second.IoType);
+    auto Wdm =
+        I->second.Kind == DeviceInitKind::Control
+            ? DevicesHost.Create(I->second.Name, I->second.IoType)
+            : DevicesHost.CreatePnp(
+                  I->second.PDO, I->second.Name, I->second.IoType,
+                  I->second.DeviceType.value_or(windows::UnknownDeviceType));
     if (!Wdm)
       return Wdm.takeError();
     if (Wdm->Status)

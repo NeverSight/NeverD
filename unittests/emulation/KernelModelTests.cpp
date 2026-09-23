@@ -328,6 +328,17 @@ TEST_F(DriverKernelModel, DevicesLinkCollideAndDeleteWithoutLosingLiveState) {
   EXPECT_TRUE(Result.Devices.empty());
 }
 
+TEST_F(DriverKernelModel, DeviceTypeIsStoredAsGuestVisibleMetadata) {
+  constexpr uint32_t VendorDeviceType = 0x8000;
+  ASSERT_EQ(
+      invoke("IoCreateDevice", {Model->driverObject(), 0, 0, VendorDeviceType,
+                                windows::SecureOpen, 0, Scratch}),
+      windows::StatusSuccess);
+  const uint64_t Device = integer(Scratch);
+  EXPECT_EQ(integer(Device + windows::DeviceTypeOffset, 4), VendorDeviceType);
+  invoke("IoDeleteDevice", {Device});
+}
+
 TEST_F(DriverKernelModel, UnmappedDeviceOutputPreservesExistingListAndFault) {
   checkDeviceOutputFailure(0x50000000, BackendFaultKind::UnmappedMemory);
 }

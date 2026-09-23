@@ -56,16 +56,15 @@ void KernelModel::configureFrameworkDeviceHost() {
     FrameworkDevices.emplace(Device, std::vector<std::string>{});
     return KernelFramework::DeviceCreation{windows::StatusSuccess, Device};
   };
-  Host.CreatePnp =
-      [this, SetIoType](
-          uint64_t PDO, llvm::StringRef Name,
-          uint32_t IoType) -> llvm::Expected<KernelFramework::DeviceCreation> {
+  Host.CreatePnp = [this, SetIoType](uint64_t PDO, llvm::StringRef Name,
+                                     uint32_t IoType, uint32_t DeviceType)
+      -> llvm::Expected<KernelFramework::DeviceCreation> {
     auto *Configured = pnpDeviceForPDO(PDO);
     if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
       return frameworkDeviceError(
           "PnP framework creation requires the active physical device");
-    auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
-                                      windows::SecureOpen, false);
+    auto Created =
+        createDeviceObject(Name, 0, DeviceType, windows::SecureOpen, false);
     if (!Created)
       return Created.takeError();
     if (Created->Status != windows::StatusSuccess)

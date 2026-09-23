@@ -73,7 +73,7 @@ public:
     std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t)>
         Create;
     std::function<llvm::Expected<DeviceCreation>(uint64_t, llvm::StringRef,
-                                                 uint32_t)>
+                                                 uint32_t, uint32_t)>
         CreatePnp;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
@@ -215,6 +215,7 @@ private:
     DeviceInitKind Kind = DeviceInitKind::Control;
     uint64_t PDO = 0;
     std::string Name;
+    std::optional<uint32_t> DeviceType;
     uint32_t IoType = framework::ControlIoBuffered;
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
