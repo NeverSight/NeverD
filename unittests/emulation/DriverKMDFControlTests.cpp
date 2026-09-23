@@ -90,6 +90,71 @@ size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
 
 void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount);
 
+TEST(DriverKMDFControl, SynchronousQueueOperationsWaitForRequestRetirement) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'1', '2', '3'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Mode);
+        auto Options = controlOptions(Mode);
+        Options.LoadAddress = Address;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+        std::vector<std::string> CallNames;
+        for (size_t I = Result->Calls.size() > 15 ? Result->Calls.size() - 15
+                                                  : 0;
+             I < Result->Calls.size(); ++I)
+          CallNames.push_back(Result->Calls[I].Name);
+        SCOPED_TRACE(::testing::PrintToString(CallNames));
+        checkCompletedLifecycle(*Result, 6);
+        ASSERT_EQ(Result->Requests.size(), 6u);
+        if (Mode == '3') {
+          EXPECT_EQ(Result->Requests[1].IOStatus, Cancelled);
+          EXPECT_TRUE(Result->Requests[1].Output.empty());
+        } else {
+          EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+          EXPECT_EQ(Result->Requests[1].Output,
+                    (std::vector<uint8_t>{'K', 'M', 'D', uint8_t(Mode), 0x5a,
+                                          0x5b, 0, 0xa5}));
+        }
+        const char *API = Mode == '1'   ? "WdfIoQueueStopSynchronously"
+                          : Mode == '2' ? "WdfIoQueueDrainSynchronously"
+                                        : "WdfIoQueuePurgeSynchronously";
+        EXPECT_EQ(apiCount(*Result, API), 1u);
+        EXPECT_EQ(apiCount(*Result, "WdfIoQueueStart"), 1u);
+        const auto Messages = controlMessages(*Result);
+        auto Position = [&](llvm::StringRef Needle) {
+          return std::find_if(
+              Messages.begin(), Messages.end(), [&](const auto &Message) {
+                return llvm::StringRef(Message).contains(Needle);
+              });
+        };
+        const auto Entered = Position("sync queue entered");
+        const auto Retired =
+            Position(Mode == '3' ? "purge cancel callback" : "parallel worker");
+        const auto Returned = Position("sync queue returned");
+        ASSERT_NE(Entered, Messages.end());
+        ASSERT_NE(Retired, Messages.end());
+        ASSERT_NE(Returned, Messages.end());
+        EXPECT_LT(Entered, Retired);
+        EXPECT_LT(Retired, Returned);
+      }
+}
+
+TEST(DriverKMDFControl, SynchronousStopWithoutCompletionProducerStalls) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Result = emulateDriver(Image, controlOptions('4'));
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("stalled"), std::string::npos)
+        << Result->Diagnostic;
+    EXPECT_EQ(apiCount(*Result, "WdfIoQueueStopSynchronously"), 1u);
+  }
+}
+
 TEST(DriverKMDFControl, SequentialQueuePresentsWaitingRequestAfterWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

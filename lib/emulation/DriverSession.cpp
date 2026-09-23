@@ -727,6 +727,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (auto Call = Kernel.takeGuestCall()) {
         Frame.ChildCall = std::move(*Call);
+        // A framework call can publish both a nested cancellation callback
+        // and a synchronous queue wait. The wait belongs to this caller, not
+        // to the child callback's next imported function call.
+        Frame.Wait = Kernel.takeWait();
         Frame.WaitEvent = Result.Calls.size() - 1;
         Frame.PC = *ReturnPC;
         if (auto E = CPU.setReg(X64Register::SP, *SP + PointerSize))
@@ -819,8 +823,21 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
             }
             auto Parent = std::move(Current->Parent);
             if (*Completion) {
-              Parent->ResumeValue = **Completion;
-              Result.Calls[Parent->WaitEvent].Result = **Completion;
+              if (!Parent->Wait) {
+                Parent->ResumeValue = **Completion;
+                Result.Calls[Parent->WaitEvent].Result = **Completion;
+              } else {
+                Kernel.enterExecution(
+                    Parent->Base, Parent->ID ? Parent->ID : profile::StackBase);
+                if (Parent->ID)
+                  if (auto E = Kernel.suspendScheduled(Parent->ID)) {
+                    ModelFailure(std::move(E));
+                    return llvm::Error::success();
+                  }
+                Waiting.push_back(std::move(Parent));
+                Current.reset();
+                continue;
+              }
             } else {
               Parent->ChildCall = Kernel.takeGuestCall();
               if (!Parent->ChildCall) {

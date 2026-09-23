@@ -16,8 +16,13 @@
 /// nondefault automatic queues. Y forwards the first IOCTL from a sequential
 /// default queue to a manual queue, then retrieves it from a worker after a
 /// second IOCTL is delivered. Z verifies framework cancellation while the
-/// queued request waits for retrieval. C observes request cleanup, child
-/// destruction and retained context. X completes from a cancel callback; H
+/// queued request waits for retrieval.
+/// 1, 2 and 3 invoke synchronous stop, drain and purge from a work item while
+/// a nondefault queue owns a request; the first two wait for a second worker,
+/// and purge waits for a nested cancellation callback. 4 deliberately waits
+/// for its own delivered request with no completion producer.
+/// C observes request cleanup, child destruction and retained context. X
+/// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
 /// unmarks before a delayed worker; N deliberately completes a still-cancelable
 /// request. Buffered mode B polls cancellation before processing, including the
@@ -104,7 +109,10 @@ ABI_SLOT(WdfDeviceCreateSymbolicLink, 80);
 ABI_SLOT(WdfDeviceGetDefaultQueue, 92);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfIoQueueCreate, 152);
+ABI_SLOT(WdfIoQueueStopSynchronously, 156);
 ABI_SLOT(WdfIoQueueRetrieveNextRequest, 158);
+ABI_SLOT(WdfIoQueueDrainSynchronously, 162);
+ABI_SLOT(WdfIoQueuePurgeSynchronously, 164);
 ABI_SLOT(WdfDeviceEnqueueRequest, 91);
 ABI_SLOT(WdfObjectAllocateContext, 203);
 ABI_SLOT(WdfObjectReferenceActual, 205);
@@ -190,6 +198,7 @@ static WDFQUEUE DefaultQueue;
 static WDFQUEUE ManualQueue;
 static WDFQUEUE AutomaticQueue;
 static PIO_WORKITEM ManualItem;
+static PIO_WORKITEM SyncQueueItem;
 static UCHAR TransferMode;
 static volatile ULONG CallerRequestCount;
 static volatile ULONG ParallelQueued;
@@ -248,8 +257,8 @@ static void QueuePurged(WDFQUEUE Queue, WDFCONTEXT Context) {
 
 static void PurgeCancel(WDFREQUEST Request) {
   ULONG Queued = 0, Delivered = 0;
-  WDF_IO_QUEUE_STATE State =
-      WdfIoQueueGetState(DefaultQueue, &Queued, &Delivered);
+  WDF_IO_QUEUE_STATE State = WdfIoQueueGetState(
+      TransferMode == '3' ? AutomaticQueue : DefaultQueue, &Queued, &Delivered);
   Check((State & (WdfIoQueueAcceptRequests | WdfIoQueueDispatchRequests)) ==
                 WdfIoQueueDispatchRequests &&
             Queued == 0 && Delivered == 1,
@@ -647,7 +656,8 @@ static void ParallelWorker(PDEVICE_OBJECT Device, PVOID Context) {
   size_t InputLength = Work->InputLength;
   BOOLEAN Valid =
       Check(Item != NULL &&
-                ((TransferMode == 'F' || TransferMode == 'A')
+                ((TransferMode == 'F' || TransferMode == 'A' ||
+                  TransferMode == '1' || TransferMode == '2')
                      ? ParallelQueued >= 1
                      : ParallelQueued >= 2) &&
                 Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
@@ -662,6 +672,35 @@ static void ParallelWorker(PDEVICE_OBJECT Device, PVOID Context) {
   }
   DbgPrint("KMDF control: parallel worker\n");
   TransformRequest(Request, OutputLength, InputLength);
+}
+
+static void SynchronousQueueWorker(PDEVICE_OBJECT Device, PVOID Context) {
+  ULONG Queued = 0, Delivered = 0;
+  WDF_IO_QUEUE_STATE State;
+  Check(Context == AutomaticQueue && SyncQueueItem != NULL &&
+            Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
+            KeGetCurrentIrql() == PASSIVE_LEVEL,
+        180);
+  IoFreeWorkItem(SyncQueueItem);
+  SyncQueueItem = NULL;
+  State = WdfIoQueueGetState(AutomaticQueue, &Queued, &Delivered);
+  Check((State & WdfIoQueueAcceptRequests) != 0 && Queued == 0 &&
+            Delivered == 1,
+        181);
+  DbgPrint("KMDF control: sync queue entered\n");
+  if (TransferMode == '1')
+    WdfIoQueueStopSynchronously(AutomaticQueue);
+  else if (TransferMode == '2')
+    WdfIoQueueDrainSynchronously(AutomaticQueue);
+  else
+    WdfIoQueuePurgeSynchronously(AutomaticQueue);
+  State = WdfIoQueueGetState(AutomaticQueue, &Queued, &Delivered);
+  Check(((State & WdfIoQueueAcceptRequests) != 0) == (TransferMode == '1') &&
+            Queued == 0 && Delivered == 0 &&
+            ParallelCompleted == (TransferMode == '3' ? 0UL : 1UL),
+        182);
+  DbgPrint("KMDF control: sync queue returned\n");
+  WdfIoQueueStart(AutomaticQueue);
 }
 
 static void ManualWorker(PDEVICE_OBJECT Device, PVOID Context) {
@@ -948,6 +987,12 @@ static void AutomaticIoctl(WDFQUEUE Queue, WDFREQUEST Request,
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
   }
+  if (TransferMode == '3') {
+    NTSTATUS Status = WdfRequestMarkCancelableEx(Request, PurgeCancel);
+    if (!NT_SUCCESS(Status))
+      WdfRequestComplete(Request, Status);
+    return;
+  }
   QueueParallelWork(Request, OutputLength, InputLength);
 }
 
@@ -972,6 +1017,12 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     TransformNeitherRequest(Request, OutputLength, InputLength);
     return;
   }
+  if (TransferMode == '4') {
+    // There is no independent owner able to complete this request.
+    WdfIoQueueStopSynchronously(DefaultQueue);
+    WdfRequestComplete(Request, STATUS_SUCCESS);
+    return;
+  }
   if (TransferMode == 'X' || TransferMode == 'H' || TransferMode == 'U' ||
       TransferMode == 'N' || TransferMode == 'L') {
     CancelableIoctl(Request, OutputLength, InputLength);
@@ -986,7 +1037,19 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     QueueParallelWork(Request, OutputLength, InputLength);
     return;
   }
-  if ((TransferMode == 'A' || TransferMode == 'G') && InputLength == 4) {
+  if ((TransferMode == 'A' || TransferMode == 'G' || TransferMode == '1' ||
+       TransferMode == '2' || TransferMode == '3') &&
+      InputLength == 4) {
+    if (TransferMode == '1' || TransferMode == '2' || TransferMode == '3') {
+      SyncQueueItem =
+          IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
+      if (SyncQueueItem == NULL) {
+        WdfRequestComplete(Request, STATUS_INSUFFICIENT_RESOURCES);
+        return;
+      }
+      IoQueueWorkItem(SyncQueueItem, SynchronousQueueWorker, DelayedWorkQueue,
+                      AutomaticQueue);
+    }
     NTSTATUS Status = WdfRequestForwardToIoQueue(Request, AutomaticQueue);
     if (!NT_SUCCESS(Status)) {
       WdfRequestComplete(Request, Status);
@@ -1353,6 +1416,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'V' ? 'V'
                  : Marker == L'E' ? 'E'
                  : Marker == L'O' ? 'O'
+                 : Marker == L'1' ? '1'
+                 : Marker == L'2' ? '2'
+                 : Marker == L'3' ? '3'
+                 : Marker == L'4' ? '4'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1439,7 +1506,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     }
   }
 
-  if (TransferMode == 'A' || TransferMode == 'G') {
+  if (TransferMode == 'A' || TransferMode == 'G' || TransferMode == '1' ||
+      TransferMode == '2' || TransferMode == '3') {
     WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, TransferMode == 'A'
                                                ? WdfIoQueueDispatchSequential
                                                : WdfIoQueueDispatchParallel);
