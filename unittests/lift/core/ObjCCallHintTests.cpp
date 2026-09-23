@@ -5248,6 +5248,56 @@ TEST(ObjCCallHints, DarwinNotifyCancelKeepsGeneratedIntegerABIAndProviders) {
   }
 }
 
+TEST(ObjCCallHints, DarwinMallocSizePreservesPointerAndSizeTABI) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const char *Module : {"/usr/lib/libSystem.B.dylib",
+                               "/usr/lib/system/libsystem_malloc.dylib"}) {
+      auto Image = runtimeImage("_malloc_size", Architecture);
+      Image.DyldBindSlots[0x2180] = {"_malloc_size", 0, Module, false};
+      const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint) << Module;
+      EXPECT_EQ(Hint->TargetName, "malloc_size");
+      EXPECT_EQ(Hint->Signature.Origin,
+                SourceFunctionTypeHint::OriginKind::DarwinSDK);
+      ASSERT_TRUE(Hint->Signature.ReturnType);
+      EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Signature.ReturnType->Size, 8U);
+      EXPECT_FALSE(Hint->Signature.ReturnType->IsSigned);
+      ASSERT_EQ(Hint->Signature.Parameters.size(), 1U);
+      const auto &Pointer = Hint->Signature.Parameters.front();
+      ASSERT_TRUE(Pointer.Type);
+      EXPECT_EQ(Pointer.Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Pointer.Location.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Pointer.Location.RegisterOffset,
+                getTargetRegInfo(Architecture).IntParamRegs.front());
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Hint->Signature, Diagnostic)) << Diagnostic;
+    }
+
+    auto Image = runtimeImage("_malloc_size", Architecture);
+    Image.DyldBindSlots[0x2180] = {"_malloc_size", 0,
+                                   "/usr/lib/libSystem.B.dylib", false};
+    auto Weak = Image;
+    Weak.DyldBindSlots[0x2180].WeakImport = true;
+    const auto WeakHint = darwinRuntimeSourceCallHint(Weak, 0x2180);
+    ASSERT_TRUE(WeakHint);
+    EXPECT_TRUE(WeakHint->WeakImport);
+
+    for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+      auto Changed = Image;
+      if (Mutation == 0)
+        Changed.DyldBindSlots[0x2180].Module = "/tmp/libSystem.B.dylib";
+      if (Mutation == 1)
+        Changed.DyldBindSlots[0x2180].Addend = 1;
+      if (Mutation == 2)
+        Changed.ImportPtrSlots[0x2180] = "_malloc";
+      if (Mutation == 3)
+        Changed.ConflictingImportStorageSlots.insert(0x2180);
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Changed, 0x2180)) << Mutation;
+    }
+  }
+}
+
 TEST(ObjCCallHints, SDKCDeclarationsRequireExactExportsAndFixedPrototypes) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {

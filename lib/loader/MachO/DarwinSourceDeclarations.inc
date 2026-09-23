@@ -2651,6 +2651,9 @@
 {"macx_triggers", "i16i0i4i8I12", "i16i0i4i8I12", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_kernel.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_kernel.dylib"},
 {"madvise", "i20^v0Q8i16", "i20^v0Q8i16", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_kernel.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_kernel.dylib"},
 {"malloc", "^v8Q0", "^v8Q0", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib"},
+// Apple malloc(3) declares size_t malloc_size(const void *). Both Darwin
+// 64-bit targets pass the pointer in one register and return size_t in one.
+{"malloc_size", "Q8r^v0", "Q8r^v0", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib"},
 {"malloc_type_aligned_alloc", "^v24Q0Q8Q16", "^v24Q0Q8Q16", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib"},
 {"malloc_type_calloc", "^v24Q0Q8Q16", "^v24Q0Q8Q16", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib"},
 {"malloc_type_free", "v16^v0Q8", "v16^v0Q8", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_malloc.dylib"},
