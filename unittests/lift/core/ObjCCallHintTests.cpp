@@ -1584,6 +1584,43 @@ TEST(ObjCCallHints, FoundationValueBridgesKeepCompilerObservedSwiftABI) {
   }
 }
 
+TEST(ObjCCallHints, SwiftCocoaArrayEndIndexKeepsItsWordABI) {
+  constexpr llvm::StringLiteral Name = "$ss18_CocoaArrayWrapperV8endIndexSivg";
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage(("_" + Name).str(), Architecture);
+    Image.DyldBindSlots[0x2180] = {("_" + Name).str(), 0, Provider.str(),
+                                   false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &Signature = Hint->Signature;
+    EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(Signature.ReturnType);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Signature.ReturnType->Size, 8U);
+    ASSERT_EQ(Signature.Parameters.size(), 1U);
+    EXPECT_EQ(Signature.Parameters[0].Type->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Signature.Parameters[0].Type->Size, 8U);
+    EXPECT_EQ(Signature.Parameters[0].TheRole,
+              SourceParameterTypeHint::Role::Ordinary);
+    EXPECT_EQ(Signature.Parameters[0].Location.RegisterOffset,
+              getTargetRegInfo(Architecture).IntParamRegs[0]);
+
+    auto Call = HighExpr::makeCall("untrusted_name", 0x2180,
+                                   {HighExpr::makeConst(1, 8)});
+    Call->Type = Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+    Image.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Image, {}));
+  }
+}
+
 TEST(ObjCCallHints,
      FoundationStringContainsKeepsGenericWitnessAndSwiftSelfABI) {
   constexpr llvm::StringLiteral Name =
@@ -7619,6 +7656,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"isHighDynamicRange", NdTypeKind::Int, 2},
       {"interactivePopGestureRecognizer", NdTypeKind::Ptr, 2},
       {"parentViewController", NdTypeKind::Ptr, 2},
+      {"transitionCoordinator", NdTypeKind::Ptr, 2},
       {"flashScrollIndicators", NdTypeKind::Void, 2},
       {"endBackgroundTask:", NdTypeKind::Void, 3},
       {"initWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
@@ -8256,8 +8294,12 @@ TEST(ObjCCallHints, UIKitImageConstructionKeepsScalarRecordAndResultTypes) {
       {"UIImage", "isHighDynamicRange", false, NdTypeKind::Int, 2, ""},
       {"UINavigationController", "interactivePopGestureRecognizer", false,
        NdTypeKind::Ptr, 2, "UIGestureRecognizer"},
+      {"UINavigationController", "viewControllers", false, NdTypeKind::Ptr, 2,
+       "NSArray"},
       {"UIViewController", "parentViewController", false, NdTypeKind::Ptr, 2,
        "UIViewController"},
+      {"UIViewController", "transitionCoordinator", false, NdTypeKind::Ptr, 2,
+       ""},
       {"UIScrollView", "flashScrollIndicators", false, NdTypeKind::Void, 2, ""},
       {"UIApplication", "endBackgroundTask:", false, NdTypeKind::Void, 3, ""},
       {"UIActivityIndicatorView", "initWithActivityIndicatorStyle:", false,

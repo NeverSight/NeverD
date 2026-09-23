@@ -94,10 +94,11 @@
 // Apple Clang encodes these canonical declarations on both arm64 iOS targets.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "isHighDynamicRange", "B16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithActivityIndicatorStyle:", "@24@0:8q16", nullptr},
-// The same complete ASTs declare these four fixed selectors without conflicts.
+// The same complete ASTs declare these five fixed selectors without conflicts.
 // UIBackgroundTaskIdentifier is unsigned long on both arm64 iOS targets.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "interactivePopGestureRecognizer", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "parentViewController", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "transitionCoordinator", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "flashScrollIndicators", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "endBackgroundTask:", "v24@0:8Q16", nullptr},
 // clang-format on

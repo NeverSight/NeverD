@@ -169,6 +169,8 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "bpppppC"},
     {"$ss018_bridgeAnyObjectToB0yypyXlSgF",
      "/usr/lib/swift/libswiftCore.dylib", "vIp"},
+    {"$ss18_CocoaArrayWrapperV8endIndexSivg",
+     "/usr/lib/swift/libswiftCore.dylib", "zz"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
      "/usr/lib/swift/libswiftCore.dylib", "ppp"},
 };
