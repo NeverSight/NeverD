@@ -8117,6 +8117,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"colorWithAlphaComponent:", NdTypeKind::Ptr, 3},
       {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
+      {"imageByPreparingForDisplay", NdTypeKind::Ptr, 2},
       {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
       {"imageForState:", NdTypeKind::Ptr, 3},
       {"imageOrientation", NdTypeKind::Int, 2},
@@ -8146,6 +8147,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"setShowsCancelButton:animated:", NdTypeKind::Void, 4},
       {"setText:", NdTypeKind::Void, 3},
       {"setTranslatesAutoresizingMaskIntoConstraints:", NdTypeKind::Void, 3},
+      {"setView:", NdTypeKind::Void, 3},
       {"sizeToFit", NdTypeKind::Void, 2},
       {"superview", NdTypeKind::Ptr, 2},
       {"topViewController", NdTypeKind::Ptr, 2},
@@ -8182,6 +8184,10 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
         EXPECT_EQ(Hint->Parameters[I].Type->Size, 1U);
         EXPECT_EQ(Hint->Parameters[I].Location.RegisterOffset, I * 8);
       }
+    }
+    if (llvm::StringRef(Case.Selector) == "setView:") {
+      EXPECT_EQ(Hint->Parameters[2].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 16U);
     }
 
     auto Changed = Image;
