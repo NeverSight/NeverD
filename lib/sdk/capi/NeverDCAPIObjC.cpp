@@ -496,10 +496,16 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         Evidence.Complete = false;
         Evidence.add(SourceProjectionIssue::Signature, Reason);
       } else if (!Func || !Projections.count(Method.Implementation)) {
-        Reason = "method has no complete typed source body (possibly limited "
-                 "by max-func)";
         Evidence.Complete = false;
-        Evidence.add(SourceProjectionIssue::Body, Reason);
+        if (Func && !Func->SourceTypeHint) {
+          Reason = "runtime method source ABI was not bound to the lifted "
+                   "function";
+          Evidence.add(SourceProjectionIssue::Signature, Reason);
+        } else {
+          Reason = "method has no complete typed source body (possibly limited "
+                   "by max-func)";
+          Evidence.add(SourceProjectionIssue::Body, Reason);
+        }
       } else {
         auto It = Audits.find(Method.Implementation);
         const auto &Projection = Projections.at(Method.Implementation);
