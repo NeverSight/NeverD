@@ -12,7 +12,8 @@
 /// worker without/with EvtIoStop, Y does the same without hardware callbacks,
 /// E/Z leave one without a completion producer with/without EvtIoStop;
 /// R consumes one assigned memory resource, L leaves its mapping live,
-/// W attempts an invalid descriptor write, and F fails AddDevice.
+/// W attempts an invalid descriptor write, X marks only the FDO exclusive,
+/// and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -36,6 +37,7 @@ ABI_SLOT(WdfDeviceWdmGetAttachedDevice, 32);
 ABI_SLOT(WdfWdmDeviceGetWdfDeviceHandle, 30);
 ABI_SLOT(WdfDeviceGetDriver, 39);
 ABI_SLOT(WdfDeviceCreate, 75);
+ABI_SLOT(WdfDeviceInitSetExclusive, 62);
 ABI_SLOT(WdfDeviceInitSetDeviceType, 66);
 ABI_SLOT(WdfDeviceInitSetPnpPowerEventCallbacks, 55);
 ABI_SLOT(WdfCmResourceListGetCount, 304);
@@ -292,6 +294,8 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     return STATUS_INVALID_DEVICE_STATE;
   if (ServiceMode == L'K')
     WdfDeviceInitSetDeviceType(Init, FILE_DEVICE_SERIAL_PORT);
+  if (ServiceMode == L'X')
+    WdfDeviceInitSetExclusive(Init, TRUE);
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
       (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
@@ -317,8 +321,9 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (!NT_SUCCESS(Status))
     return Status;
   FDO = WdfDeviceWdmGetDeviceObject(Device);
-  if (FDO->DeviceType !=
-      (ServiceMode == L'K' ? FILE_DEVICE_SERIAL_PORT : FILE_DEVICE_UNKNOWN))
+  if (FDO->DeviceType != (ServiceMode == L'K' ? FILE_DEVICE_SERIAL_PORT
+                                              : FILE_DEVICE_UNKNOWN) ||
+      !!(FDO->Flags & DO_EXCLUSIVE) != (ServiceMode == L'X'))
     return STATUS_INVALID_DEVICE_STATE;
   if (WdfDeviceWdmGetPhysicalDevice(Device) != PDO ||
       WdfDeviceWdmGetAttachedDevice(Device) != PDO ||

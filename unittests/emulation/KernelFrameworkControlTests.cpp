@@ -16,6 +16,7 @@
 namespace neverd::emulation {
 namespace {
 using namespace framework_test;
+using DeviceResult = llvm::Expected<KernelFramework::DeviceCreation>;
 
 class DriverKernelFrameworkControl : public DriverKernelFrameworkQueue {
 protected:
@@ -59,6 +60,8 @@ TEST_F(DriverKernelFrameworkControl,
   expectError(invoke("WdfDeviceInitSetDeviceType",
                      {Globals, Init, windows::UnknownDeviceType}),
               "consumed");
+  expectError(invoke("WdfDeviceInitSetExclusive", {Globals, Init, 1}),
+              "consumed");
   take(invoke("WdfObjectDelete", {Globals, Handle}));
   EXPECT_EQ(HostDevices.size(), Published);
   EXPECT_FALSE(HostDevices.count(Wdm));
@@ -73,6 +76,35 @@ TEST_F(DriverKernelFrameworkControl,
   ASSERT_EQ(take(createControl()), 0u);
   const auto Handle = get(DeviceSlot);
   take(invoke("WdfObjectDelete", {Globals, Handle}));
+}
+
+TEST_F(DriverKernelFrameworkControl,
+       ExclusiveInitializerPassesFinalBooleanToDeviceHost) {
+  const auto Init = initializer();
+  std::optional<bool> HostExclusive;
+  KernelFramework::DeviceHost Host;
+  Host.Create = [this, &HostExclusive](llvm::StringRef, uint32_t,
+                                       bool Exclusive) -> DeviceResult {
+    HostExclusive = Exclusive;
+    const uint64_t Address = NextHostDevice;
+    NextHostDevice += 0x100;
+    HostDevices.insert(Address);
+    return KernelFramework::DeviceCreation{0, Address};
+  };
+  Host.Delete = [this](uint64_t Address) {
+    return HostDevices.erase(Address) == 1
+               ? llvm::Error::success()
+               : failure("unknown host device deletion");
+  };
+  Model.setDeviceHost(std::move(Host));
+  EXPECT_EQ(take(invoke("WdfDeviceInitSetExclusive", {Globals, Init, 1})), 0u);
+  EXPECT_EQ(take(invoke("WdfDeviceInitSetExclusive", {Globals, Init, 0})), 0u);
+  EXPECT_EQ(take(invoke("WdfDeviceInitSetExclusive", {Globals, Init, 0x101})),
+            0u);
+  EXPECT_EQ(take(createControl()), 0u);
+  ASSERT_TRUE(HostExclusive.has_value());
+  EXPECT_TRUE(*HostExclusive);
+  take(invoke("WdfObjectDelete", {Globals, get(DeviceSlot)}));
 }
 
 TEST_F(DriverKernelFrameworkControl,
@@ -225,8 +257,8 @@ TEST_F(DriverKernelFrameworkControl,
   const size_t Attempts = AllocationAttempts;
   unsigned HostAttempts = 0;
   KernelFramework::DeviceHost Host;
-  Host.Create = [this, &HostAttempts](llvm::StringRef, uint32_t)
-      -> llvm::Expected<KernelFramework::DeviceCreation> {
+  Host.Create = [this, &HostAttempts](llvm::StringRef, uint32_t,
+                                      bool) -> DeviceResult {
     if (++HostAttempts == 1)
       return KernelFramework::DeviceCreation{windows::StatusObjectNameCollision,
                                              0};

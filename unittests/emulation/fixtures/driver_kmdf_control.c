@@ -110,6 +110,7 @@ ABI_SLOT(WdfControlFinishInitializing, 27);
 ABI_SLOT(WdfDeviceWdmGetDeviceObject, 31);
 ABI_SLOT(WdfDeviceInitFree, 54);
 ABI_SLOT(WdfDeviceInitSetIoType, 61);
+ABI_SLOT(WdfDeviceInitSetExclusive, 62);
 ABI_SLOT(WdfDeviceInitSetIoInCallerContextCallback, 74);
 ABI_SLOT(WdfDeviceInitAssignName, 67);
 ABI_SLOT(WdfDeviceCreate, 75);
@@ -1545,6 +1546,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'V' ? 'V'
                  : Marker == L'E' ? 'E'
                  : Marker == L'O' ? 'O'
+                 : Marker == L'e' ? 'e'
                  : Marker == L'1' ? '1'
                  : Marker == L'2' ? '2'
                  : Marker == L'3' ? '3'
@@ -1572,6 +1574,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   DeviceInit = WdfControlDeviceInitAllocate(Driver, &Security);
   if (DeviceInit == NULL)
     return STATUS_INSUFFICIENT_RESOURCES;
+  if (TransferMode == 'e')
+    WdfDeviceInitSetExclusive(DeviceInit, TRUE);
   WdfDeviceInitSetIoType(DeviceInit, TransferMode == 'D' ? WdfDeviceIoDirect
                                      : TransferMode == 'T'
                                          ? WdfDeviceIoNeither
@@ -1685,7 +1689,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                      (TransferMode == 'D'   ? DO_DIRECT_IO
                       : TransferMode == 'T' ? 0
                                             : DO_BUFFERED_IO) &&
-                 (DeviceObject->Flags & DO_DEVICE_INITIALIZING) != 0,
+                 (DeviceObject->Flags & DO_DEVICE_INITIALIZING) != 0 &&
+                 !!(DeviceObject->Flags & DO_EXCLUSIVE) ==
+                     (TransferMode == 'e'),
              3)) {
     Status = STATUS_UNSUCCESSFUL;
     goto Failure;

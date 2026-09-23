@@ -183,6 +183,35 @@ TEST(DriverKMDFPnp, ConfiguredDeviceTypeReachesTheWdmDeviceObject) {
     }
 }
 
+TEST(DriverKMDFPnp, ExclusiveFdoDoesNotMakeTheNamedPdoExclusive) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Base);
+      auto Input = options('X');
+      Input.LoadAddress = Base;
+      Input.Requests = {
+          pnp(DevicePnpRequest::Start),
+          file(DriverRequestKind::Create, 1),
+          file(DriverRequestKind::Create, 2),
+          file(DriverRequestKind::Cleanup, 1),
+          file(DriverRequestKind::Close, 1),
+          file(DriverRequestKind::Cleanup, 2),
+          file(DriverRequestKind::Close, 2),
+          pnp(DevicePnpRequest::QueryRemove),
+          pnp(DevicePnpRequest::Remove),
+      };
+      auto Result = emulateDriver(Image, Input);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_EQ(callCount(*Result, "WdfDeviceInitSetExclusive"), 1u);
+      ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+      for (const auto &Request : Result->Requests)
+        EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+    }
+}
+
 TEST(DriverKMDFPnp, FailedAddDeletesFrameworkFdoBeforeProviderRetirement) {
   for (const char *Image : pnpImages()) {
     SCOPED_TRACE(Image);

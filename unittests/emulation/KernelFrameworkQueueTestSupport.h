@@ -34,10 +34,11 @@ protected:
   void SetUp() override {
     DriverKernelFramework::SetUp();
     KernelFramework::DeviceHost Host;
-    Host.Create = [this](llvm::StringRef Name, uint32_t IoType)
+    Host.Create = [this](llvm::StringRef Name, uint32_t IoType, bool Exclusive)
         -> llvm::Expected<KernelFramework::DeviceCreation> {
       EXPECT_TRUE(Name.starts_with("\\Device\\QueueTest"));
       EXPECT_EQ(IoType, framework::ControlIoBuffered);
+      EXPECT_FALSE(Exclusive);
       const uint64_t Address = NextHostDevice;
       NextHostDevice += 0x100;
       HostDevices.insert(Address);

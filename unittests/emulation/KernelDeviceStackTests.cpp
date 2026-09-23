@@ -88,7 +88,7 @@ protected:
     return take(Memory->readInteger(Address, Width));
   }
 
-  uint64_t device(std::string_view Name = {}) {
+  uint64_t device(std::string_view Name = {}, bool Exclusive = false) {
     uint64_t NameRecord = 0;
     if (!Name.empty()) {
       NameRecord = Scratch + 0x100;
@@ -100,18 +100,22 @@ protected:
       put(NameRecord + 2, Bytes.size(), 2);
       put(NameRecord + 8, NameRecord + 0x20);
     }
-    EXPECT_EQ(call("IoCreateDevice", {Model->driverObject(), 16, NameRecord,
-                                      UnknownDeviceType, 0, 0, Scratch}),
-              StatusSuccess);
+    EXPECT_EQ(
+        call("IoCreateDevice", {Model->driverObject(), 16, NameRecord,
+                                UnknownDeviceType, 0, Exclusive, Scratch}),
+        StatusSuccess);
     const auto Address = get(Scratch);
-    put(Address + DeviceFlagsOffset, DeviceBufferedIO, 4);
+    put(Address + DeviceFlagsOffset,
+        DeviceBufferedIO | (Exclusive ? DeviceExclusive : 0), 4);
     return Address;
   }
 
-  KernelModel::Invocation begin(DriverRequestKind Kind, std::string Name = {}) {
+  KernelModel::Invocation begin(DriverRequestKind Kind, std::string Name = {},
+                                uint64_t File = 0) {
     DriverRequest Input;
     Input.Kind = Kind;
     Input.Device = std::move(Name);
+    Input.File = File;
     if (Kind == DriverRequestKind::Read)
       Input.OutputSize = 4;
     return take(Model->beginRequest(Input));
@@ -336,6 +340,59 @@ TEST_F(KernelDeviceStack, NamedLowerKeepsFileIdentityAndUsesTopBufferingFlags) {
     finalize(Call.IRP);
   }
   EXPECT_EQ(call("IoAttachDeviceToDeviceStack", {Extra, Lower}), Upper);
+}
+
+TEST_F(KernelDeviceStack, ExclusiveOpenUsesTheNamedObjectInADeviceStack) {
+  const auto Lower = device("\\Device\\ExclusiveLower", true);
+  const auto Upper = device();
+  EXPECT_EQ(call("IoAttachDeviceToDeviceStack", {Upper, Lower}), Lower);
+  const auto First =
+      begin(DriverRequestKind::Create, "\\Device\\ExclusiveLower", 1);
+  EXPECT_EQ(First.Argument0, Upper);
+  complete(First.IRP);
+  finalize(First.IRP);
+
+  DriverRequest Second;
+  Second.Kind = DriverRequestKind::Create;
+  Second.Device = "\\Device\\ExclusiveLower";
+  Second.File = 2;
+  auto Rejected = Model->beginRequest(Second);
+  ASSERT_FALSE(bool(Rejected));
+  reject(Rejected.takeError(), "exclusive device already has a live file");
+
+  for (auto Kind : {DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+    const auto Request = begin(Kind, {}, 1);
+    complete(Request.IRP);
+    finalize(Request.IRP);
+  }
+  const auto Reopened =
+      begin(DriverRequestKind::Create, "\\Device\\ExclusiveLower", 2);
+  complete(Reopened.IRP);
+  finalize(Reopened.IRP);
+  for (auto Kind : {DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+    const auto Request = begin(Kind, {}, 2);
+    complete(Request.IRP);
+    finalize(Request.IRP);
+  }
+}
+
+TEST_F(KernelDeviceStack, ExclusiveUpperDoesNotRestrictItsNamedLower) {
+  const auto Lower = device("\\Device\\SharedLower");
+  const auto Upper = device({}, true);
+  EXPECT_EQ(call("IoAttachDeviceToDeviceStack", {Upper, Lower}), Lower);
+  for (uint64_t File : {1u, 2u}) {
+    const auto Create =
+        begin(DriverRequestKind::Create, "\\Device\\SharedLower", File);
+    EXPECT_EQ(Create.Argument0, Upper);
+    complete(Create.IRP);
+    finalize(Create.IRP);
+  }
+  for (uint64_t File : {1u, 2u})
+    for (auto Kind : {DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+      const auto Request = begin(Kind, {}, File);
+      complete(Request.IRP);
+      finalize(Request.IRP);
+    }
 }
 
 TEST_F(KernelDeviceStack,

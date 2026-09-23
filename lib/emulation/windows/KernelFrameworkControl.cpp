@@ -33,14 +33,16 @@ llvm::Error controlError(const llvm::Twine &Message) {
 
 llvm::Expected<std::string>
 KernelFramework::readControlString(uint64_t Address) {
-  auto Length = read(Address, 2);
-  auto Maximum = read(Address + 2, 2);
-  auto Buffer = read(Address + 8);
+  constexpr auto CodeUnitBytes = sizeof(char16_t);
+  auto Length = read(Address, CodeUnitBytes);
+  auto Maximum = read(Address + windows::UnicodeMaximumOffset, CodeUnitBytes);
+  auto Buffer = read(Address + windows::UnicodeBufferOffset);
   if (!Length || !Maximum || !Buffer)
     return llvm::joinErrors(
         Length.takeError(),
         llvm::joinErrors(Maximum.takeError(), Buffer.takeError()));
-  if (*Length % 2 || *Length > *Maximum || *Length > MaxRegistryPathBytes)
+  if (*Length % CodeUnitBytes || *Length > *Maximum ||
+      *Length > MaxRegistryPathBytes)
     return controlError("invalid counted Unicode string");
   if (!*Length)
     return std::string{};
@@ -50,7 +52,7 @@ KernelFramework::readControlString(uint64_t Address) {
   if (auto E = Memory.read(*Buffer, Bytes))
     return E;
   std::string Text;
-  for (size_t I = 0; I < Bytes.size(); I += 2) {
+  for (size_t I = 0; I < Bytes.size(); I += CodeUnitBytes) {
     if (Bytes[I + 1] || Bytes[I] < ' ' || Bytes[I] > '~')
       return controlError(
           "only printable ASCII namespace and SDDL text is modeled");
@@ -92,8 +94,10 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     if (!SDDL)
       return SDDL.takeError();
     if (*SDDL != FrameworkWorldFullAccess)
-      return controlError("this profile supports only D:P(A;;GA;;;WD); other "
-                          "DACLs require a caller security-token model");
+      return controlError(
+          llvm::Twine("this profile supports only ") +
+          FrameworkWorldFullAccess +
+          "; other DACLs require a caller security-token model");
     auto Address = allocate(HandleSize, false, true);
     if (!Address)
       return Address.takeError();
@@ -103,6 +107,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
   }
   if (Name == api::WdfDeviceInitFree || Name == api::WdfDeviceInitAssignName ||
       Name == api::WdfDeviceInitSetDeviceType ||
+      Name == api::WdfDeviceInitSetExclusive ||
       Name == api::WdfDeviceInitSetIoType ||
       Name == api::WdfDeviceInitSetIoInCallerContextCallback ||
       Name == api::WdfDeviceInitSetPnpPowerEventCallbacks) {
@@ -129,6 +134,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       if (I->second.Kind != DeviceInitKind::Pnp)
         return controlError("device type requires an FDO initializer");
       I->second.DeviceType = static_cast<uint32_t>(A[2]);
+    } else if (Name == api::WdfDeviceInitSetExclusive) {
+      I->second.Exclusive = static_cast<uint8_t>(A[2]) != 0;
     } else if (Name == api::WdfDeviceInitSetIoInCallerContextCallback) {
       if (!A[2])
         return controlError("caller-context callback must name guest code");
@@ -189,11 +196,11 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     return Result{0};
   }
   if (Name == api::WdfDeviceCreate) {
-    if (auto E = writable(A[3], 8))
+    if (auto E = writable(A[3], sizeof(uint64_t)))
       return E;
-    if (auto E = Memory.writeInteger(A[3], 0, 8))
+    if (auto E = Memory.writeInteger(A[3], 0, sizeof(uint64_t)))
       return E;
-    if (auto E = writable(A[1], 8))
+    if (auto E = writable(A[1], sizeof(uint64_t)))
       return E;
     auto InitAddress = read(A[1]);
     if (!InitAddress)
@@ -214,10 +221,12 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       return controlError("underlying WDM device host is unavailable");
     auto Wdm =
         I->second.Kind == DeviceInitKind::Control
-            ? DevicesHost.Create(I->second.Name, I->second.IoType)
+            ? DevicesHost.Create(I->second.Name, I->second.IoType,
+                                 I->second.Exclusive)
             : DevicesHost.CreatePnp(
                   I->second.PDO, I->second.Name, I->second.IoType,
-                  I->second.DeviceType.value_or(windows::UnknownDeviceType));
+                  I->second.DeviceType.value_or(windows::UnknownDeviceType),
+                  I->second.Exclusive);
     if (!Wdm)
       return Wdm.takeError();
     if (Wdm->Status)
@@ -236,9 +245,9 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     Devices.at(*Handle).ReleaseHardware = I->second.ReleaseHardware;
     if (I->second.Kind == DeviceInitKind::Pnp)
       PnpDeviceHandles.emplace(I->second.PDO, *Handle);
-    if (auto E = Memory.writeInteger(A[3], *Handle, 8))
+    if (auto E = Memory.writeInteger(A[3], *Handle, sizeof(uint64_t)))
       return E;
-    if (auto E = Memory.writeInteger(A[1], 0, 8))
+    if (auto E = Memory.writeInteger(A[1], 0, sizeof(uint64_t)))
       return E;
     if (auto E = retire(*InitAddress))
       return E;

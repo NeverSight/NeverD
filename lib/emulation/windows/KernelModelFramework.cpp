@@ -27,6 +27,7 @@ llvm::Error frameworkDeviceError(const llvm::Twine &Message) {
 } // namespace
 
 void KernelModel::configureFrameworkDeviceHost() {
+  using DeviceResult = llvm::Expected<KernelFramework::DeviceCreation>;
   KernelFramework::DeviceHost Host;
   auto SetIoType = [this](uint64_t Device, uint32_t IoType) -> llvm::Error {
     auto Flags = Memory.readInteger(Device + windows::DeviceFlagsOffset, 4);
@@ -42,10 +43,10 @@ void KernelModel::configureFrameworkDeviceHost() {
             TransferFlags,
         4);
   };
-  Host.Create = [this, SetIoType](llvm::StringRef Name, uint32_t IoType)
-      -> llvm::Expected<KernelFramework::DeviceCreation> {
+  Host.Create = [this, SetIoType](llvm::StringRef Name, uint32_t IoType,
+                                  bool Exclusive) -> DeviceResult {
     auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
-                                      windows::SecureOpen, false);
+                                      windows::SecureOpen, Exclusive);
     if (!Created)
       return Created.takeError();
     if (Created->Status != windows::StatusSuccess)
@@ -57,14 +58,14 @@ void KernelModel::configureFrameworkDeviceHost() {
     return KernelFramework::DeviceCreation{windows::StatusSuccess, Device};
   };
   Host.CreatePnp = [this, SetIoType](uint64_t PDO, llvm::StringRef Name,
-                                     uint32_t IoType, uint32_t DeviceType)
-      -> llvm::Expected<KernelFramework::DeviceCreation> {
+                                     uint32_t IoType, uint32_t DeviceType,
+                                     bool Exclusive) -> DeviceResult {
     auto *Configured = pnpDeviceForPDO(PDO);
     if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
       return frameworkDeviceError(
           "PnP framework creation requires the active physical device");
     auto Created =
-        createDeviceObject(Name, 0, DeviceType, windows::SecureOpen, false);
+        createDeviceObject(Name, 0, DeviceType, windows::SecureOpen, Exclusive);
     if (!Created)
       return Created.takeError();
     if (Created->Status != windows::StatusSuccess)

@@ -70,10 +70,11 @@ public:
   /// Typed bridge to the authoritative WDM device namespace and storage.
   /// Framework operations never fabricate a second DEVICE_OBJECT or API trace.
   struct DeviceHost {
-    std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t)>
+    std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t,
+                                                 bool)>
         Create;
     std::function<llvm::Expected<DeviceCreation>(uint64_t, llvm::StringRef,
-                                                 uint32_t, uint32_t)>
+                                                 uint32_t, uint32_t, bool)>
         CreatePnp;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
@@ -217,6 +218,7 @@ private:
     std::string Name;
     std::optional<uint32_t> DeviceType;
     uint32_t IoType = framework::ControlIoBuffered;
+    bool Exclusive = false;
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;

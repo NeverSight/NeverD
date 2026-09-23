@@ -975,6 +975,20 @@ TEST(DriverKMDFControl, BufferedLifecyclePreservesLogicalBufferLengths) {
                                 "KMDF control: driver unload\n"}));
 }
 
+TEST(DriverKMDFControl, ExclusiveControlDeviceSetsNamedObjectFlag) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('e');
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, Options.Requests.size());
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceInitSetExclusive"), 1u);
+    }
+}
+
 TEST(DriverKMDFControl, DirectReadWriteRetainsBufferedIOCTL) {
   auto Result = emulateDriver(NEVERD_KMDF_CONTROL_FIXTURE, controlOptions('D'));
   ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
