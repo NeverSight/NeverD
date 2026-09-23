@@ -36,7 +36,7 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
         if cfg:
             self.fixtures.append(Path(cfg).resolve(strict=True))
 
-    def test_executive_spin_lock_restores_irql(self) -> None:
+    def test_synchronization_primitives_restore_state(self) -> None:
         from neverd_plugin.abi import NeverDDriverOptionsV1
 
         options = NeverDDriverOptionsV1(
@@ -47,32 +47,33 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
             timeout_milliseconds=10_000,
             service_name=b"NeverDNeither",
         )
-        scenario = {
-            "requests": [
-                {"kind": "create", "device": "\\Device\\NeverDNeither"},
-                {"kind": "ioctl", "code": "0x222037", "input": "01020304",
-                 "output_size": 4},
-                {"kind": "cleanup"},
-                {"kind": "close"},
-            ],
-            "unload": True,
-        }
         for fixture in self.fixtures:
-            with self.subTest(fixture=fixture):
-                raw = self.host.owned_string(
-                    "neverd_emulate_driver_scenario_json",
-                    self.session,
-                    os.fsencode(fixture),
-                    json.dumps(scenario).encode("utf-8"),
-                    ctypes.byref(options),
-                )
-                self.assertIsNotNone(raw)
-                result = json.loads(raw)
-                self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
-                self.assertTrue(result["scenario_success"])
-                self.assertTrue(result["unload_completed"])
-                self.assertEqual(result["requests"][1]["io_status"], 0)
-                self.assertEqual(result["requests"][1]["output_hex"], "5a")
+            for code, output in (("0x222037", "5a"), ("0x22203b", "6b")):
+                with self.subTest(fixture=fixture, code=code):
+                    scenario = {
+                        "requests": [
+                            {"kind": "create", "device": "\\Device\\NeverDNeither"},
+                            {"kind": "ioctl", "code": code, "input": "01020304",
+                             "output_size": 4},
+                            {"kind": "cleanup"},
+                            {"kind": "close"},
+                        ],
+                        "unload": True,
+                    }
+                    raw = self.host.owned_string(
+                        "neverd_emulate_driver_scenario_json",
+                        self.session,
+                        os.fsencode(fixture),
+                        json.dumps(scenario).encode("utf-8"),
+                        ctypes.byref(options),
+                    )
+                    self.assertIsNotNone(raw)
+                    result = json.loads(raw)
+                    self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+                    self.assertTrue(result["scenario_success"])
+                    self.assertTrue(result["unload_completed"])
+                    self.assertEqual(result["requests"][1]["io_status"], 0)
+                    self.assertEqual(result["requests"][1]["output_hex"], output)
 
     def test_public_scenario_preserves_user_and_locked_alias_bytes(self) -> None:
         from neverd_plugin.abi import NeverDDriverOptionsV1

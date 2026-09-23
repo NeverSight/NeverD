@@ -263,6 +263,7 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | Opaker DPC, vier Gastargumente, `DISPATCH_LEVEL`, Duplikat-/Entfernungsregeln und Wichtigkeit; nur Ziel CPU0 |
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Benachrichtigungs-/Synchronisationstimer, relative/absolute 100-ns-Fristen, Millisekundenperioden, Neusetzen/Abbruch und Signalabfrage in virtueller Zeit |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Benachrichtigungs-/Synchronisationsereignisse mit unterschiedlichem Signalverbrauch; `KeSetEvent` nur mit Increment=0 und Wait=FALSE |
+| `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Residenter Zählsemaphor mit positiver Grenze; jedes erfolgreiche Warten verbraucht eine Einheit. Freigabe mit Increment=0 und Wait=FALSE; Überschreitung löst `STATUS_SEMAPHORE_LIMIT_EXCEEDED` aus. |
 | `KeWaitForSingleObject` | Ein initialisiertes Ereignis oder Timer; nicht alertable `KernelMode`, Grund `Executive`; Null-Polling, endliche relative/absolute oder unbegrenzte Wartezeit; Nichtnull-/unbegrenztes Warten erfordert IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Nicht alertable relative/absolute `KernelMode`-Verzögerung bei IRQL <= APC_LEVEL; Gastframe wird nach virtuellem Zeitfortschritt fortgesetzt |
 | `IoMarkIrpPending` | Markiert das aktive lebende IRP; der entsprechende Schreibzugriff des WDM-Makros auf das Stack-Control-Feld wird ebenfalls modelliert; Dispatch muss `STATUS_PENDING` zurückgeben |
@@ -525,7 +526,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v26`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v27`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten

@@ -87,6 +87,28 @@ TEST(DriverWDMNeither, ExecutiveSpinLockRestoresDispatchIrql) {
     }
 }
 
+TEST(DriverWDMNeither, SemaphoreCountsCrossRealWaitAndReleaseCalls) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Result = emulateDriver(Image, options(0x22203b, Address));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+          << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[1].Output, (std::vector<uint8_t>{0x6b}));
+      EXPECT_TRUE(Result->Requests[1].Completed);
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
+
 TEST(DriverWDMNeither, UserPageFactsReachActualProbeLockAndCpuFaultPaths) {
   struct Case {
     uint32_t Code;

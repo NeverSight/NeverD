@@ -561,6 +561,7 @@ llvm::Expected<uint64_t> KernelModel::call(
                       "operations before detach");
   if ((Kind == KernelAPIKind::KeInitializeDpc ||
        Kind == KernelAPIKind::KeInitializeEvent ||
+       Kind == KernelAPIKind::KeInitializeSemaphore ||
        Kind == KernelAPIKind::KeInitializeTimer ||
        Kind == KernelAPIKind::KeInitializeTimerEx) &&
       WaitReferences.count(A[0]))

@@ -11,6 +11,7 @@
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettimerex
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kecanceltimer
 /// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetevent
+/// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kereleasesemaphore
 /// https://learn.microsoft.com/windows-hardware/drivers/kernel/defining-and-using-an-event-object
 /// No host timers, execution of host function pointers, or native structure
 /// overlays are used. The scheduler chooses one explicit single-CPU schedule.
@@ -20,6 +21,7 @@
 #include "KernelDispatcher.h"
 
 #include "../GuestMemory.h"
+#include "KernelException.h"
 
 #include <limits>
 
@@ -31,6 +33,7 @@ enum class API {
 #include "KernelDispatcherAPIs.def"
 #undef NEVERD_KERNEL_DISPATCHER_API
 };
+constexpr uint32_t StatusSemaphoreLimitExceeded = 0xc0000047U;
 
 llvm::Error dispatcherError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
@@ -176,6 +179,8 @@ bool KernelDispatcher::isWaitable(uint64_t Address) const {
 
 llvm::Expected<bool> KernelDispatcher::signaled(uint64_t Address,
                                                 const Object &State) const {
+  if (State.Type == Kind::Semaphore)
+    return State.Count > 0;
   if (State.Type == Kind::Timer)
     return State.HasSchedule ? Scheduler.timerSignaled(Address)
                              : llvm::Expected<bool>(false);
@@ -191,6 +196,10 @@ llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address) {
   if (auto E = Scheduler.processDueTimers())
     return E;
   auto Signal = signaled(Address, State);
+  if (Signal && *Signal && State.Type == Kind::Semaphore) {
+    --State.Count;
+    return true;
+  }
   if (!Signal || !*Signal || !State.Synchronization)
     return Signal;
   if (State.Type == Kind::Timer)
@@ -218,7 +227,8 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
                        Function == API::KeRemoveQueueDpc ||
                        Function == API::KeSetImportanceDpc ||
                        Function == API::KeSetTargetProcessorDpc ||
-                       Function == API::KeInitializeEvent;
+                       Function == API::KeInitializeEvent ||
+                       Function == API::KeReadStateSemaphore;
   if (CurrentIRQL >
       (AnyIRQL ? dispatcher::HighLevel : dispatcher::DispatchLevel))
     return dispatcherError("dispatcher API called at unsupported IRQL");
@@ -251,6 +261,22 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
                                              : dispatcher::TimerSize)};
     State.Synchronization = Type == dispatcher::SynchronizationObject;
     State.Signaled = Event && static_cast<uint8_t>(Args[2]);
+    if (auto E = initialize(Args[0], std::move(State)))
+      return E;
+    return 0;
+  }
+  case API::KeInitializeSemaphore: {
+    const int32_t Count = static_cast<int32_t>(Args[1]);
+    const int32_t Limit = static_cast<int32_t>(Args[2]);
+    if (CurrentIRQL != scheduler::PassiveLevel)
+      return dispatcherError("semaphore initialization requires PASSIVE_LEVEL");
+    if (Count < 0 || Limit <= 0 || Count > Limit ||
+        Args[1] != static_cast<uint32_t>(Count) ||
+        Args[2] != static_cast<uint32_t>(Limit))
+      return dispatcherError("invalid initial semaphore count or limit");
+    Object State{Kind::Semaphore, dispatcher::SemaphoreSize};
+    State.Count = Count;
+    State.Limit = Limit;
     if (auto E = initialize(Args[0], std::move(State)))
       return E;
     return 0;
@@ -353,6 +379,29 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
       (*State)->Signaled = false;
     }
     return Function == API::KeClearEvent ? 0 : Previous;
+  }
+  case API::KeReadStateSemaphore:
+  case API::KeReleaseSemaphore: {
+    auto State = object(Args[0], Kind::Semaphore,
+                        Function == API::KeReleaseSemaphore);
+    if (!State)
+      return State.takeError();
+    const int32_t Count = (*State)->Count;
+    if (Function == API::KeReadStateSemaphore)
+      return Count;
+    if (static_cast<uint32_t>(Args[1]))
+      return dispatcherError("semaphore priority boosts are unsupported");
+    if (static_cast<uint8_t>(Args[3]))
+      return dispatcherError(
+          "KeReleaseSemaphore Wait=TRUE requires unsupported IRQL handoff");
+    const int32_t Adjustment = static_cast<int32_t>(Args[2]);
+    if (Adjustment <= 0 || Args[2] != static_cast<uint32_t>(Adjustment))
+      return dispatcherError("semaphore adjustment must be positive LONG");
+    if (Adjustment > (*State)->Limit - Count)
+      return llvm::make_error<KernelGuestException>(
+          StatusSemaphoreLimitExceeded);
+    (*State)->Count += Adjustment;
+    return static_cast<uint32_t>(Count);
   }
   case API::Unknown:
     break;

@@ -88,6 +88,7 @@ protected:
   static constexpr uint64_t Timer = Event + 64;
   static constexpr uint64_t DPC = Timer + 64;
   static constexpr uint64_t SecondDPC = DPC + 64;
+  static constexpr uint64_t Semaphore = SecondDPC + 64;
   static constexpr uint64_t Routine = 0x180001000;
   static constexpr uint64_t Owner = 0x50000000;
   static constexpr uint64_t Thread = 0x51000000;
@@ -142,6 +143,36 @@ TEST_F(DriverKernelDispatcher, DPCABIAndDuplicateQueueKeepOriginalArguments) {
   EXPECT_EQ(Invocation.Arguments[2], 3u);
   EXPECT_EQ(Invocation.Arguments[3], 4u);
   success(Scheduler.finish(Invocation.ID));
+}
+
+TEST_F(DriverKernelDispatcher, SemaphoreCountsConsumeAndRespectLimit) {
+  expectError(Dispatcher.call("KeInitializeSemaphore", {Semaphore, 0, 3}, 2),
+              "PASSIVE_LEVEL");
+  expectError(Dispatcher.call("KeInitializeSemaphore", {Semaphore, 4, 3}, 0),
+              "invalid initial semaphore");
+  call("KeInitializeSemaphore", {Semaphore, 0, 3});
+  EXPECT_TRUE(Dispatcher.isWaitable(Semaphore));
+  EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}, 15), 0u);
+  EXPECT_FALSE(take(Dispatcher.tryAcquire(Semaphore)));
+  expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 0, 1, 1}, 0),
+              "Wait=TRUE");
+  expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 1, 1, 0}, 0),
+              "priority boosts");
+  expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 0, 0, 0}, 0),
+              "positive LONG");
+  EXPECT_EQ(call("KeReleaseSemaphore", {Semaphore, 0, 2, 0}, 2), 0u);
+  EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}), 2u);
+  EXPECT_TRUE(take(Dispatcher.tryAcquire(Semaphore)));
+  EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}), 1u);
+  expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 0, 3, 0}, 0),
+              "raised guest exception 0xC0000047");
+  EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}), 1u);
+  EXPECT_TRUE(take(Dispatcher.tryAcquire(Semaphore)));
+  EXPECT_FALSE(take(Dispatcher.tryAcquire(Semaphore)));
+  EXPECT_EQ(call("KeReleaseSemaphore", {Semaphore, 0, 3, 0}), 0u);
+  EXPECT_EQ(call("KeReadStateSemaphore", {Semaphore}), 3u);
+  expectError(Dispatcher.call("KeReleaseSemaphore", {Semaphore, 0, 1, 0}, 3),
+              "unsupported IRQL");
 }
 
 TEST_F(DriverKernelDispatcher, ImportanceOnlyChangesFutureQueueInsertion) {
