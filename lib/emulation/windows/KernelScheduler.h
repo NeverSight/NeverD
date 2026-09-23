@@ -45,6 +45,7 @@ class KernelScheduler {
 public:
   enum class CallbackKind {
     WorkItem,
+    SystemThread,
     DPC,
     FrameworkCancel,
     WDMCancel,
@@ -99,6 +100,8 @@ public:
   /// Already-queued work items are a driver error. Once next() dequeues an
   /// item, that object may be freed or queued again by its callback.
   llvm::Expected<uint64_t> enqueueWorkItem(Callback Work);
+  llvm::Error canEnqueueSystemThread(const Callback &Thread) const;
+  llvm::Expected<uint64_t> enqueueSystemThread(Callback Thread);
   bool cancelWorkItem(uint64_t Object);
   bool isWorkItemQueued(uint64_t Object) const;
 
@@ -236,8 +239,9 @@ public:
   uint64_t dispatchCount() const { return Dispatches; }
   uint64_t timerExpirationCount() const { return TimerExpirations; }
   size_t queuedCallbackCount() const {
-    return Workers.size() + DPCs.size() + Cancellations.size() +
-           Completions.size() + Interrupts.size() + ReadyDMA.size();
+    return Workers.size() + SystemThreads.size() + DPCs.size() +
+           Cancellations.size() + Completions.size() + Interrupts.size() +
+           ReadyDMA.size();
   }
   size_t suspendedCallbackCount() const { return Suspended.size(); }
   const std::optional<Invocation> &active() const { return Active; }
@@ -260,6 +264,7 @@ private:
   uint64_t Dispatches = 0;
   uint64_t TimerExpirations = 0;
   std::deque<Invocation> Workers;
+  std::deque<Invocation> SystemThreads;
   std::deque<Invocation> DPCs;
   std::deque<Invocation> Cancellations;
   std::deque<Invocation> Completions;

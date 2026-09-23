@@ -365,6 +365,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     bool PrivateStack = false;
     GuestCallToken ReturnToken;
     std::optional<KernelGuestCall> ChildCall;
+    bool ThreadTerminated = false;
     std::unique_ptr<Execution> Parent;
   };
   std::vector<std::unique_ptr<Execution>> Waiting;
@@ -715,6 +716,15 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (auto E = RefreshWaiters())
         return E;
+      if (auto Status = Kernel.takeThreadTermination()) {
+        if (Frame.Parent)
+          return failure("nested system-thread termination is unsupported");
+        Frame.ThreadTerminated = true;
+        InvocationReturn = *Status;
+        Result.Calls.back().Detail = "system thread terminated";
+        Stop(DriverStopReason::Returned, "");
+        break;
+      }
       if (auto Call = Kernel.takeGuestCall()) {
         Frame.ChildCall = std::move(*Call);
         Frame.WaitEvent = Result.Calls.size() - 1;
@@ -842,7 +852,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           if (!Current->ID)
             return llvm::Error::success();
           auto Continuation =
-              Kernel.continueScheduled(Current->ID, *InvocationReturn);
+              Current->ThreadTerminated
+                  ? llvm::Expected<std::optional<KernelGuestCall>>(
+                        std::optional<KernelGuestCall>{})
+                  : Kernel.continueScheduled(Current->ID, *InvocationReturn);
           if (!Continuation) {
             ModelFailure(Continuation.takeError());
             return llvm::Error::success();

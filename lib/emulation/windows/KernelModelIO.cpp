@@ -140,16 +140,23 @@ llvm::Expected<uint64_t> KernelModel::currentProcess() {
   if (CurrentExecution == profile::StackBase)
     return processObject(UserRequestContext ? CurrentUserProcessID : 4);
   if (Scheduler.active() &&
-      Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem)
-    return processObject(UserRequestContext ? CurrentUserProcessID : 4);
-  return ioError("current process requires a modeled foreground or work-item "
+      (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
+       Scheduler.active()->Kind == KernelScheduler::CallbackKind::SystemThread))
+    return processObject(!ProcessAttachments.empty() &&
+                                 ProcessAttachments.back().Execution ==
+                                     CurrentExecution
+                             ? CurrentUserProcessID
+                             : 4);
+  return ioError("current process requires a modeled foreground or system "
                  "thread");
 }
 
 llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
                                             uint64_t ApcState) {
   if (!Scheduler.active() ||
-      Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem ||
+      (Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem &&
+       Scheduler.active()->Kind !=
+           KernelScheduler::CallbackKind::SystemThread) ||
       CurrentExecution == profile::StackBase)
     return ioError("process attachment requires a system work-item thread");
   auto Target = ProcessObjectIDs.find(Process);
@@ -193,7 +200,12 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
   const bool PreviousUserContext = UserRequestContext;
   const uint32_t PreviousProcessID =
       PreviousUserContext ? CurrentUserProcessID : 4;
-  auto PreviousProcess = processObject(PreviousProcessID);
+  const uint32_t LogicalPreviousProcessID =
+      !ProcessAttachments.empty() &&
+              ProcessAttachments.back().Execution == CurrentExecution
+          ? CurrentUserProcessID
+          : 4;
+  auto PreviousProcess = processObject(LogicalPreviousProcessID);
   if (!PreviousProcess)
     return PreviousProcess.takeError();
   std::array<uint8_t, KAPCStateSize> Saved{};
@@ -1148,6 +1160,10 @@ llvm::Error KernelModel::finishUnload() {
     return E;
   if (Registry.hasOpenHandles())
     return ioError("unload returned with live registry handles");
+  for (const auto &[Object, Thread] : SystemThreads)
+    if (!Thread.Exited || Thread.HandleOpen || Thread.PointerReferences ||
+        WaitReferences.contains(Object))
+      return ioError("unload returned with a live system thread object");
   if (Framework && Framework->hasLiveBinding())
     return ioError("unload returned with a live framework binding");
   if (!Devices.empty() || !SymbolicLinks.empty() || !Allocations.empty() ||

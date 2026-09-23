@@ -39,6 +39,14 @@ NEVERD_KERNEL_IRQL_API(IoGetRequestorProcess, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoGetCurrentProcess, Any)
 NEVERD_KERNEL_IRQL_API(PsGetCurrentProcessId, Any)
 NEVERD_KERNEL_IRQL_API(PsGetProcessId, Any)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obdereferenceobject
+NEVERD_KERNEL_IRQL_API(PsCreateSystemThread, Passive)
+NEVERD_KERNEL_IRQL_API(PsTerminateSystemThread, Passive)
+NEVERD_KERNEL_IRQL_API(ObReferenceObjectByHandle, Passive)
+NEVERD_KERNEL_IRQL_API(ObfDereferenceObject, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
 NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)

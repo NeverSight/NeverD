@@ -105,6 +105,7 @@ public:
   nextScheduled(bool AdvanceTime,
                 std::optional<uint64_t> Deadline = std::nullopt);
   llvm::Error finishScheduled(uint64_t ID);
+  std::optional<uint32_t> takeThreadTermination();
   /// Finish a scheduled framework callback, including any destruction callbacks
   /// required before releasing its scheduler ownership.
   llvm::Expected<std::optional<KernelGuestCall>>
@@ -112,7 +113,7 @@ public:
   llvm::Error suspendScheduled(uint64_t ID);
   llvm::Error resumeScheduled(uint64_t ID);
   struct Wait {
-    enum class Kind { Dispatcher, Delay, RemoveLock };
+    enum class Kind { Dispatcher, Thread, Delay, RemoveLock };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
     uint64_t Execution = 0;
@@ -279,6 +280,27 @@ private:
   llvm::Error canReleaseResources(uint64_t PDO) const;
   std::optional<Wait> PendingWait;
   std::map<uint64_t, size_t> WaitReferences;
+  struct SystemThread {
+    uint64_t Handle = 0;
+    uint64_t CallbackID = 0;
+    uint32_t ExitStatus = 0;
+    size_t PointerReferences = 0;
+    bool HandleOpen = true;
+    bool Exited = false;
+    bool Terminating = false;
+  };
+  std::map<uint64_t, SystemThread> SystemThreads;
+  std::map<uint64_t, uint64_t> ThreadHandles;
+  uint64_t NextThreadHandle = 0x60000000;
+  std::optional<uint32_t> PendingThreadTermination;
+  llvm::Expected<uint64_t>
+  createSystemThread(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> terminateSystemThread(uint32_t Status);
+  llvm::Expected<uint64_t>
+  referenceThreadByHandle(llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<uint64_t> dereferenceThread(uint64_t Object);
+  llvm::Expected<uint64_t> closeHandle(uint64_t Handle);
+  void retireThreadIfUnreferenced(uint64_t Object);
   std::map<uint64_t, size_t> RemoveLockWaitReferences;
   llvm::Expected<uint64_t>
   initializeRemoveLock(llvm::ArrayRef<uint64_t> Arguments);

@@ -134,6 +134,21 @@ llvm::Expected<uint64_t> KernelScheduler::enqueueWorkItem(Callback Work) {
   return Workers.back().ID;
 }
 
+llvm::Error
+KernelScheduler::canEnqueueSystemThread(const Callback &Thread) const {
+  if (auto E = validateCallback(Thread))
+    return E;
+  return checkCapacity(1);
+}
+
+llvm::Expected<uint64_t> KernelScheduler::enqueueSystemThread(Callback Thread) {
+  if (auto E = canEnqueueSystemThread(Thread))
+    return E;
+  SystemThreads.push_back(
+      makeInvocation(std::move(Thread), CallbackKind::SystemThread, Now));
+  return SystemThreads.back().ID;
+}
+
 bool KernelScheduler::cancelWorkItem(uint64_t Object) {
   return removeObject(Workers, Object);
 }
@@ -619,7 +634,8 @@ KernelScheduler::next(bool AdvanceTime,
                     : !ReadyDMA.empty()      ? ReadyDMA
                     : !Cancellations.empty() ? Cancellations
                     : !Completions.empty()   ? Completions
-                                             : Workers;
+                    : !Workers.empty()       ? Workers
+                                             : SystemThreads;
       Active = std::move(Queue.front());
       Queue.pop_front();
       ++Dispatches;
@@ -722,8 +738,8 @@ bool KernelScheduler::hasOutstanding(uint64_t Owner) const {
   if (Active && Active->Owner == Owner)
     return true;
   auto Matches = [Owner](const auto &Call) { return Call.Owner == Owner; };
-  if (llvm::any_of(Workers, Matches) || llvm::any_of(DPCs, Matches) ||
-      llvm::any_of(Cancellations, Matches) ||
+  if (llvm::any_of(Workers, Matches) || llvm::any_of(SystemThreads, Matches) ||
+      llvm::any_of(DPCs, Matches) || llvm::any_of(Cancellations, Matches) ||
       llvm::any_of(Completions, Matches) || llvm::any_of(Interrupts, Matches) ||
       llvm::any_of(ReadyDMA, Matches) || llvm::any_of(InlineDMA, Matches))
     return true;

@@ -36,7 +36,7 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
         if cfg:
             self.fixtures.append(Path(cfg).resolve(strict=True))
 
-    def test_synchronization_primitives_restore_state(self) -> None:
+    def test_synchronization_and_system_thread_restore_state(self) -> None:
         from neverd_plugin.abi import NeverDDriverOptionsV1
 
         options = NeverDDriverOptionsV1(
@@ -50,7 +50,8 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
         for fixture in self.fixtures:
             for code, output in (("0x222037", "5a"), ("0x22203b", "6b"),
                                  ("0x22203f", "7c"), ("0x222043", "8d"),
-                                 ("0x222047", "9e")):
+                                 ("0x222047", "9e"),
+                                 ("0x22204b", "af")):
                 with self.subTest(fixture=fixture, code=code):
                     scenario = {
                         "requests": [

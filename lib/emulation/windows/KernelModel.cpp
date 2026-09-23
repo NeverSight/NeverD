@@ -587,10 +587,20 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (CurrentExecution == profile::StackBase)
       return uint64_t(UserRequestContext ? CurrentUserProcessID : 4);
     if (Scheduler.active() &&
-        Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem)
+        (Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem ||
+         Scheduler.active()->Kind ==
+             KernelScheduler::CallbackKind::SystemThread))
       return uint64_t(4);
     return modelError("PsGetCurrentProcessId requires a modeled foreground "
-                      "or system work-item thread");
+                      "or system thread");
+  case KernelAPIKind::PsCreateSystemThread:
+    return createSystemThread(A);
+  case KernelAPIKind::PsTerminateSystemThread:
+    return terminateSystemThread(uint32_t(A[0]));
+  case KernelAPIKind::ObReferenceObjectByHandle:
+    return referenceThreadByHandle(A);
+  case KernelAPIKind::ObfDereferenceObject:
+    return dereferenceThread(A[0]);
   case KernelAPIKind::IoGetRequestorProcessId: {
     const auto *Request = requestForIRP(A[0]);
     if (!Request || Request->Completed)
@@ -651,6 +661,8 @@ llvm::Expected<uint64_t> KernelModel::call(
 #define NEVERD_KERNEL_REGISTRY_API(Name, Arity) case KernelAPIKind::Name:
 #include "KernelRegistryAPIs.def"
 #undef NEVERD_KERNEL_REGISTRY_API
+    if (Kind == KernelAPIKind::ZwClose)
+      return closeHandle(A[0]);
     return Registry.call(*this, Name, A);
   default:
     break;
@@ -1158,6 +1170,9 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   for (const auto &[ProcessID, Object] : ProcessObjects)
     if (Address < Object + profile::ProcessTokenSize && Object < End)
       return modelError("guest access to an opaque process object");
+  for (const auto &[Object, Thread] : SystemThreads)
+    if (Address < Object + profile::ProcessTokenSize && Object < End)
+      return modelError("guest access to an opaque thread object");
   for (const auto &Attachment : ProcessAttachments)
     if (Address < Attachment.ApcState + KAPCStateSize &&
         Attachment.ApcState < End)
