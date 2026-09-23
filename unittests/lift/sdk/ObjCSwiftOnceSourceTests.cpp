@@ -536,6 +536,79 @@ struct NestedCallbackFixture : OnceFixture {
   }
 };
 
+TEST(SwiftOnceSources, GenericNativeOnceCallsEraseIgnoredContexts) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    OnceFixture F(Architecture);
+    F.Pipeline.HighFuncs.resize(2);
+    F.Once->Operands[0] = HighExpr::makeConst(
+        0x2000, 8, ConstantAddressProvenance::DataAddress);
+    F.Once->Operands[1] = HighExpr::makeConst(
+        0x1080, 8, ConstantAddressProvenance::CodeAddress);
+
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.CallbackHints.count(0x1080), 1U);
+    const auto Functions = F.functions();
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs[0], F.Image, Plan, Functions);
+    EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+    EXPECT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{0x2000, 8}}));
+    const auto &Call = Bound.Function.Body[1].CallExpr;
+    ASSERT_TRUE(Call);
+    ASSERT_EQ(Call->Operands.size(), 3U);
+    ASSERT_TRUE(Call->Operands[0]->SourceCallHint);
+    EXPECT_EQ(Call->Operands[0]->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+    EXPECT_TRUE(swiftOnceCallbackBound(*Call->Operands[1], F.Image, Plan,
+                                       Functions));
+    EXPECT_EQ(Call->Operands[2]->Kind, ExprKind::Const);
+    EXPECT_EQ(Call->Operands[2]->ConstVal, 0U);
+    EXPECT_EQ(F.Once->Operands[2]->Kind, ExprKind::Var);
+  }
+}
+
+TEST(SwiftOnceSources, GenericNativeOnceCallsRequireIndependentLeafEvidence) {
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    OnceFixture F(Arch::AArch64);
+    F.Pipeline.HighFuncs.resize(2);
+    F.Once->Operands[0] = HighExpr::makeConst(
+        0x2000, 8, ConstantAddressProvenance::DataAddress);
+    F.Once->Operands[1] = HighExpr::makeConst(
+        0x1080, 8, ConstantAddressProvenance::CodeAddress);
+    if (Mutation == 0) {
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Id = 0;
+      Context.Size = 8;
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      Use.Val = HighExpr::makeVar(
+          Context, NdType::makePtr(NdType::makeVoid()));
+      F.Pipeline.HighFuncs[1].Body.insert(
+          F.Pipeline.HighFuncs[1].Body.begin(), std::move(Use));
+    } else if (Mutation == 1) {
+      F.Once->Operands[0] = HighExpr::makeConst(
+          0x1008, 8, ConstantAddressProvenance::CodeAddress);
+    } else if (Mutation == 2) {
+      LowFunc Direct;
+      LowBlock Block;
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(0x1080, 8));
+      Block.Ops.push_back(std::move(Call));
+      Direct.Blocks.push_back(std::move(Block));
+      F.Pipeline.LowFuncs.push_back(std::move(Direct));
+    } else {
+      auto Changed =
+          std::make_shared<SourceCallTypeHint>(*F.Once->SourceCallHint);
+      Changed->TargetName = "other_once";
+      F.Once->SourceCallHint = std::move(Changed);
+    }
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    EXPECT_EQ(Plan.CallbackHints.count(0x1080), 0U) << Mutation;
+  }
+}
+
 TEST(SwiftOnceSources,
      ProjectsSingleNestedCallbackWithoutDroppingOtherEffects) {
   NestedCallbackFixture F;

@@ -125,8 +125,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             Function.SourceTypeHint->Origin !=
                 SourceFunctionTypeHint::OriginKind::NativeAnalysis)
           continue;
+        auto OnceBinding = bindSwiftOnceSourceReferences(
+            Function, S->Img, OncePlan, RefinementInputs);
         auto Binding = bindObjCSourceReferences(
-            Function, S->Img, &RefinementStorage, &RefinementInputs);
+            OnceBinding.Function, S->Img, &RefinementStorage,
+            &RefinementInputs);
         elimUnreadPrivateFrameStores(Binding.Function, S->Img.Arch);
         SourceRefinements.emplace(Function.Entry, std::move(Binding.Function));
       }

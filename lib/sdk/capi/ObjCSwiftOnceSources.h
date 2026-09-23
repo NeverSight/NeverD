@@ -1692,6 +1692,22 @@ discoverSwiftOnceSources(const BinaryImage &Image,
           Pending.pop_back();
           if (!E)
             continue;
+          if (onceCall(*E, Image)) {
+            const auto Predicate =
+                objc_binding_detail::constantAddress(*E->Operands[0]);
+            const auto Initializer =
+                objc_binding_detail::constantAddress(*E->Operands[1]);
+            const auto Callback =
+                Initializer ? Functions.find(*Initializer) : Functions.end();
+            if (Predicate && Initializer && Callback != Functions.end() &&
+                Callback->second && Image.isCodeAddress(*Initializer) &&
+                !DirectTargets.count(*Initializer) &&
+                objc_binding_detail::oncePredicateStorageHint(Image,
+                                                              *Predicate) &&
+                ignoresContext(*Callback->second))
+              Plan.CallbackHints.emplace(*Initializer,
+                                         callbackHint(Image.Arch));
+          }
           if (dispatchOnceCall(*E, Image)) {
             const auto Predicate =
                 objc_binding_detail::constantAddress(*E->Operands[0]);
@@ -1992,6 +2008,43 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
                 Result.SwiftOnceObjCThunks.insert(Function.Entry);
               return E;
             }
+          }
+        }
+      }
+      const auto Predicate =
+          objc_binding_detail::constantAddress(*E->Operands[0]);
+      const auto Initializer =
+          objc_binding_detail::constantAddress(*E->Operands[1]);
+      auto PredicateHint =
+          Predicate ? objc_binding_detail::oncePredicateStorageHint(
+                          Image, *Predicate)
+                    : std::nullopt;
+      if (Predicate && Initializer && PredicateHint) {
+        auto Address = HighExpr::makeCall({}, 0, {});
+        auto AddressHint = std::make_shared<SourceCallTypeHint>();
+        AddressHint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
+        AddressHint->TargetAddress = *Initializer;
+        AddressHint->Signature.ReturnType =
+            NdType::makePtr(NdType::makeVoid());
+        std::string Error;
+        if (assignDarwinScalarSourceABI(AddressHint->Signature, Image.Arch,
+                                        Error)) {
+          Address->Type = AddressHint->Signature.ReturnType;
+          Address->SourceCallHint = std::move(AddressHint);
+          if (swiftOnceCallbackBound(*Address, Image, Plan, Functions)) {
+            auto Storage = HighExpr::makeCall({}, 0, {});
+            Storage->Type = E->Operands[0]->Type;
+            Storage->SourceCallHint = std::make_shared<SourceCallTypeHint>(
+                std::move(*PredicateHint));
+            auto Null =
+                HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar);
+            Null->Type = NdType::makePtr(NdType::makeVoid());
+            E->Operands[0] = std::move(Storage);
+            E->Operands[1] = std::move(Address);
+            E->Operands[2] = std::move(Null);
+            Result.LocalStorageExtents[*Predicate] = 8;
+            Result.Dependencies.insert(*Initializer);
+            return E;
           }
         }
       }
