@@ -273,6 +273,7 @@ The initial API model deliberately has a finite contract:
 | `IoGetCurrentIrpStackLocation` | Returns the stack location of the active modeled IRP; normal compiled WDM macros read the same guest field |
 | `KeGetCurrentIrql` | Reads current guest IRQL/CR8, including explicit raises and restores; dispatch and workers start at `PASSIVE_LEVEL`, DPCs at `DISPATCH_LEVEL` |
 | `KfRaiseIrql`, `KeLowerIrql` | Actual x64 WDK raise/lower imports, including inlined `KeRaiseIrqlToDpcLevel` and `KeRaiseIrqlToSynchLevel`; saved IRQL values must be restored in LIFO order on the same execution before return or suspension. CR8 reads observe each change. This does not simulate instruction-level interrupt preemption. |
+| `KeEnterCriticalRegion`, `KeLeaveCriticalRegion`, `KeEnterGuardedRegion`, `KeLeaveGuardedRegion`, `KeAreApcsDisabled`, `KeAreAllApcsDisabled` | Nested per-thread APC-disable state. Critical regions and held KMUTEX objects disable normal kernel APCs; guarded regions and IRQL >= APC_LEVEL disable all APCs. New system threads begin inside one critical region. Unmatched leaves and unbalanced callback returns fail; APC delivery is not modeled. |
 | `KeInitializeSpinLock`, `KeAcquireSpinLockRaiseToDpc`, `KeReleaseSpinLock`, `KeAcquireSpinLockAtDpcLevel`, `KeReleaseSpinLockFromDpcLevel`, `KeTryToAcquireSpinLockAtDpcLevel` | Resident, aligned executive locks on cooperative CPU0; exact owner and acquire/release pairing, saved IRQL restoration, and nonblocking try-acquire. Contended blocking acquisitions stop explicitly because the scheduler cannot make progress while spinning. |
 | `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem` | Device-owned opaque work items; `DelayedWorkQueue` only, callbacks receive the device and context at `PASSIVE_LEVEL`; queued items cannot be freed |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | Bounded system-process threads run at `PASSIVE_LEVEL` with a separate guest stack. Kernel handles and referenced opaque thread objects have independent lifetimes. Termination does not return to the guest, signals the thread object, and a normal start-routine return stops explicitly. NULL process/client IDs and NULL or kernel-handle-only object attributes are supported; APCs, thread priorities and typed object references are not. |
@@ -591,7 +592,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v30`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v31`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

@@ -267,6 +267,7 @@ Das anfängliche API-Modell besitzt bewusst einen begrenzten Vertrag:
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Residenter Zählsemaphor mit positiver Grenze; jedes erfolgreiche Warten verbraucht eine Einheit. Freigabe mit Increment=0 und Wait=FALSE; Überschreitung löst `STATUS_SEMAPHORE_LIMIT_EXCEEDED` aus. |
 | `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | Residenter KMUTEX mit rekursivem Besitz durch eine Ausführung; KeReleaseMutex liefert den vorherigen vorzeichenbehafteten Signalzustand zurück, verlangt Besitzer und passenden DISPATCH_LEVEL-Kontext und akzeptiert nur Wait=FALSE. Gehaltener Besitz verhindert Rückkehr, Neuinitialisierung und Freigabe des Speichers. Die Freigabe durch einen anderen Besitzer löst `STATUS_MUTANT_NOT_OWNED` aus. |
 | `PsCreateSystemThread`, `PsTerminateSystemThread`, `ObReferenceObjectByHandle`, `ObfDereferenceObject`, `ZwClose` | Begrenzte Systemprozess-Threads bei PASSIVE_LEVEL. Kernel-Handle und Referenz auf das opake Threadobjekt haben getrennte Lebensdauern; PsTerminateSystemThread beendet die Gastausführung ohne Rückkehr und signalisiert das wartbare Objekt. APCs, Prioritäten und typisierte Objektreferenzen sind nicht modelliert. |
+| `KeEnterCriticalRegion`, `KeLeaveCriticalRegion`, `KeEnterGuardedRegion`, `KeLeaveGuardedRegion`, `KeAreApcsDisabled`, `KeAreAllApcsDisabled` | Verschachtelter APC-Sperrzustand je Thread. Kritische Bereiche und ein gehaltener KMUTEX sperren normale APCs; geschützte Bereiche und IRQL >= APC_LEVEL sperren alle. Systemthreads starten in einem kritischen Bereich. Unpaariges Verlassen und Rückkehr mit offenem Bereich schlagen fehl; APC-Zustellung ist nicht modelliert. |
 | `KeWaitForSingleObject` | Ein initialisiertes Ereignis, Timer, Semaphor oder Mutex; nicht alertable `KernelMode`, Grund `Executive`; Null-Polling, endliche relative/absolute oder unbegrenzte Wartezeit; Nichtnull-/unbegrenztes Warten erfordert IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Nicht alertable relative/absolute `KernelMode`-Verzögerung bei IRQL <= APC_LEVEL; Gastframe wird nach virtuellem Zeitfortschritt fortgesetzt |
 | `IoMarkIrpPending` | Markiert das aktive lebende IRP; der entsprechende Schreibzugriff des WDM-Makros auf das Stack-Control-Feld wird ebenfalls modelliert; Dispatch muss `STATUS_PENDING` zurückgeben |
@@ -529,7 +530,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v30`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v31`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
