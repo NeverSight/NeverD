@@ -78,6 +78,10 @@ NEVERD_KERNEL_API(PsGetCurrentProcessId, 0, Export)
 NEVERD_KERNEL_API(PsGetProcessId, 1, Export)
 NEVERD_KERNEL_API(KeStackAttachProcess, 2, Export)
 NEVERD_KERNEL_API(KeUnstackDetachProcess, 1, Export)
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
+  NEVERD_KERNEL_API(Name, Arity, Export)
+#include "KernelSpinLockAPIs.def"
+#undef NEVERD_KERNEL_SPINLOCK_API
 NEVERD_KERNEL_API(KeGetCurrentIrql, 0, Export)
 NEVERD_KERNEL_API(IoAllocateWorkItem, 1, Export)
 NEVERD_KERNEL_API(IoQueueWorkItem, 4, Export)

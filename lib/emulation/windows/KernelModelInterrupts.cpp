@@ -228,6 +228,9 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
   if (!ProcessAttachments.empty() &&
       ProcessAttachments.back().Execution == Identity)
     return apiError("guest return has an unmatched process attachment");
+  for (const auto &[Address, Lock] : ExecutiveSpinLocks)
+    if (Lock.Execution == Identity)
+      return apiError("guest return retains an executive spin lock");
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
   if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {

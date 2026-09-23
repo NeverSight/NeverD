@@ -653,6 +653,50 @@ TEST_F(KernelRequestOwnership,
 }
 
 TEST_F(KernelRequestOwnership,
+       ExecutiveSpinLocksRequireResidentOwnershipAndMatchingRelease) {
+  Model->enterExecution(profile::StackBase);
+  constexpr uint32_t Tag = 0x4c4f434b;
+  const uint64_t Lock = call("ExAllocatePoolWithTag", {0, 8, Tag});
+  const uint64_t Other = call("ExAllocatePoolWithTag", {0, 8, Tag});
+  const uint64_t Paged = call("ExAllocatePoolWithTag", {1, 8, Tag});
+  ASSERT_NE(Lock, 0u);
+  ASSERT_NE(Other, 0u);
+  ASSERT_NE(Paged, 0u);
+  rejected(Model->call("KeInitializeSpinLock", {Paged}));
+  rejected(Model->call("KeInitializeSpinLock", {Lock + 1}));
+  call("KeInitializeSpinLock", {Lock});
+  call("KeInitializeSpinLock", {Other});
+  rejected(Model->call("KeAcquireSpinLockAtDpcLevel", {Lock}));
+  EXPECT_EQ(call("KeAcquireSpinLockRaiseToDpc", {Lock}), 0u);
+  EXPECT_EQ(Model->currentIRQL(), 2u);
+  EXPECT_EQ(integer(Lock), 1u);
+  rejected(Model->validateGuestAccess(Lock, 8, true));
+  rejected(Model->call("KeInitializeSpinLock", {Lock}));
+  EXPECT_EQ(call("KeTryToAcquireSpinLockAtDpcLevel", {Lock}), 0u);
+  rejected(Model->call("KeAcquireSpinLockAtDpcLevel", {Lock}));
+  rejected(Model->call("KeReleaseSpinLockFromDpcLevel", {Lock}));
+  rejected(Model->call("KeReleaseSpinLock", {Lock, 1}));
+  rejected(Model->call("ExFreePoolWithTag", {Lock, Tag}));
+  rejected(Model->validateExecutionReturn(profile::StackBase, 0));
+
+  call("KeAcquireSpinLockAtDpcLevel", {Other});
+  EXPECT_EQ(call("KeTryToAcquireSpinLockAtDpcLevel", {Other}), 0u);
+  rejected(Model->call("KeReleaseSpinLock", {Other, 2}));
+  call("KeReleaseSpinLockFromDpcLevel", {Other});
+  EXPECT_EQ(Model->currentIRQL(), 2u);
+  EXPECT_EQ(call("KeTryToAcquireSpinLockAtDpcLevel", {Other}), 1u);
+  call("KeReleaseSpinLockFromDpcLevel", {Other});
+  call("KeReleaseSpinLock", {Lock, 0});
+  EXPECT_EQ(Model->currentIRQL(), 0u);
+  EXPECT_EQ(integer(Lock), 0u);
+  success(Model->validateExecutionReturn(profile::StackBase, 0));
+  rejected(Model->call("KeReleaseSpinLock", {Lock, 0}));
+  call("ExFreePoolWithTag", {Paged, Tag});
+  call("ExFreePoolWithTag", {Other, Tag});
+  call("ExFreePoolWithTag", {Lock, Tag});
+}
+
+TEST_F(KernelRequestOwnership,
        RevokedUserAddressesLeaveLockedSystemAliasesUsable) {
   ASSERT_NE(open(), 0u);
   auto Input = ioRequest(0, MethodNeither);

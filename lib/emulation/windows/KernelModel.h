@@ -237,6 +237,14 @@ private:
     bool PreviousUserContext;
   };
   std::vector<ProcessAttachment> ProcessAttachments;
+  struct ExecutiveSpinLock {
+    uint64_t Execution;
+    uint8_t OldIRQL;
+    bool RaisedIRQL;
+  };
+  std::map<uint64_t, ExecutiveSpinLock> ExecutiveSpinLocks;
+  llvm::Expected<uint64_t> callSpinLockAPI(llvm::StringRef Name,
+                                           llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<uint64_t> processObject(uint32_t ProcessID);
   llvm::Expected<uint64_t> requestorProcess(uint64_t IRP);
   llvm::Expected<uint64_t> currentProcess();

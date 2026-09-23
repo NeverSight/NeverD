@@ -614,6 +614,11 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (auto E = unstackDetachProcess(A[0]))
       return E;
     return 0;
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                           \
+  case KernelAPIKind::Name:
+#include "KernelSpinLockAPIs.def"
+#undef NEVERD_KERNEL_SPINLOCK_API
+    return callSpinLockAPI(Name, A);
 #define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL)                       \
   case KernelAPIKind::Symbol:
 #include "KernelInterruptAPIs.def"
@@ -1153,6 +1158,10 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
     if (Address < Attachment.ApcState + KAPCStateSize &&
         Attachment.ApcState < End)
       return modelError("guest access to an active opaque APC state");
+  if (IsWrite)
+    for (const auto &[Lock, State] : ExecutiveSpinLocks)
+      if (Address < Lock + 8 && Lock < End)
+        return modelError("guest write to a held executive spin lock");
   if (auto E = validateIOAccess(Address, Size, IsWrite))
     return E;
   if (auto E = validateMDLAccess(Address, Size, IsWrite))

@@ -46,6 +46,7 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelRemoveLocks.cpp
   windows/KernelModelRuntime.cpp
   windows/KernelModelScheduling.cpp
+  windows/KernelModelSpinLocks.cpp
   windows/KernelModelCancellation.cpp
   windows/KernelScheduler.cpp
   windows/KernelDispatcher.cpp

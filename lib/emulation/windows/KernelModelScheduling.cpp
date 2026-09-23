@@ -214,6 +214,9 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
 }
 
 llvm::Error KernelModel::suspendScheduled(uint64_t ID) {
+  for (const auto &[Address, Lock] : ExecutiveSpinLocks)
+    if (Lock.Execution == CurrentExecution)
+      return schedulingError("cannot suspend with an executive spin lock");
   if (!ProcessAttachments.empty() && Scheduler.active() &&
       ProcessAttachments.back().Execution == CurrentExecution &&
       Scheduler.active()->ID == ID)
@@ -364,6 +367,9 @@ llvm::Error KernelModel::canRevokeVirtualRange(uint64_t Base,
     return E;
   if (auto E = Interrupts.canReleaseRange(Base, Size))
     return E;
+  for (const auto &[Address, Lock] : ExecutiveSpinLocks)
+    if (Address < Base + Size && Base < Address + sizeof(uint64_t))
+      return schedulingError("cannot release a held executive spin lock");
   for (const auto &[Object, References] : WaitReferences)
     if (References && Object >= Base && Object < Base + Size)
       return schedulingError("cannot release storage with outstanding waits");
