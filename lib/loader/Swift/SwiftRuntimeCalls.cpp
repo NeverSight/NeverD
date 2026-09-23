@@ -117,6 +117,12 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "vIp"},
+    // Locale.preferredLanguages returns the Array object in one register.
+    {"$s10Foundation6LocaleV18preferredLanguagesSaySSGvgZ",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "p"},
     {"$s10Foundation6LocaleV19_bridgeToObjectiveCSo8NSLocaleCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
@@ -154,6 +160,9 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "ppppp"},
+    {"$sSS10lowercasedSSyF", "/usr/lib/swift/libswiftCore.dylib", "(zz)zp"},
+    {"$sSS5index5afterSS5IndexVAD_tF", "/usr/lib/swift/libswiftCore.dylib",
+     "zzzp"},
     // Swift String is passed as its two scalar carriers; the mutable
     // destination is the swiftself pointer.
     {"$sSS6appendyySSF", "/usr/lib/swift/libswiftCore.dylib", "vzpC"},

@@ -1788,6 +1788,61 @@ TEST(ObjCCallHints, SwiftStringAppendKeepsTwoWordPayloadAndSwiftSelf) {
   }
 }
 
+TEST(ObjCCallHints, SwiftLocalizationSDKCallsUseCompilerObservedABI) {
+  struct Case {
+    const char *Name;
+    const char *Provider;
+    NdTypeKind ReturnKind;
+    unsigned ReturnSize;
+    std::vector<NdTypeKind> ParameterKinds;
+  };
+  const Case Cases[] = {
+      {"$s10Foundation6LocaleV18preferredLanguagesSaySSGvgZ",
+       "/System/Library/Frameworks/Foundation.framework/Foundation",
+       NdTypeKind::Ptr, 8, {}},
+      {"$sSS10lowercasedSSyF", "/usr/lib/swift/libswiftCore.dylib",
+       NdTypeKind::Int, 16, {NdTypeKind::Int, NdTypeKind::Ptr}},
+      {"$sSS5index5afterSS5IndexVAD_tF",
+       "/usr/lib/swift/libswiftCore.dylib", NdTypeKind::Int, 8,
+       {NdTypeKind::Int, NdTypeKind::Int, NdTypeKind::Ptr}},
+  };
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const auto &Case : Cases) {
+      const std::string Import = std::string("_") + Case.Name;
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Case.Provider, false};
+      const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint) << Case.Name;
+      const auto &Signature = Hint->Signature;
+      EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+      EXPECT_EQ(Signature.Convention,
+                SourceFunctionTypeHint::ConventionKind::Swift);
+      ASSERT_TRUE(Signature.ReturnType);
+      EXPECT_EQ(Signature.ReturnType->Kind, Case.ReturnKind);
+      EXPECT_EQ(Signature.ReturnType->Size, Case.ReturnSize);
+      ASSERT_EQ(Signature.Parameters.size(), Case.ParameterKinds.size());
+      for (size_t I = 0; I < Case.ParameterKinds.size(); ++I) {
+        EXPECT_EQ(Signature.Parameters[I].Type->Kind, Case.ParameterKinds[I]);
+        EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                  getTargetRegInfo(Architecture).IntParamRegs[I]);
+      }
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+      std::vector<ExprPtr> Args;
+      for (size_t I = 0; I < Case.ParameterKinds.size(); ++I)
+        Args.push_back(HighExpr::makeConst(0, 8));
+      auto Call = HighExpr::makeCall("untrusted", 0x2180, std::move(Args));
+      Call->Type = Signature.ReturnType;
+      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+      EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+      auto Wrong = Image;
+      Wrong.DyldBindSlots[0x2180].Module = "/tmp/untrusted.dylib";
+      EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+      EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Wrong, {}));
+    }
+  }
+}
+
 TEST(ObjCCallHints, SwiftStringGutsGrowKeepsCapacityAndSwiftSelfABI) {
   constexpr llvm::StringLiteral Name = "$ss11_StringGutsV4growyySiF";
   constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
