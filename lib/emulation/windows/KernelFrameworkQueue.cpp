@@ -56,8 +56,6 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return E;
     if (Q->second.Dispatch == QueueDispatchParallel)
       return std::optional<uint64_t>{QueueInvalidDeviceState};
-    if (Q->second.Dispatch != QueueDispatchManual)
-      return invalidQueue("sequential queue retrieval is not modeled");
     if (Q->second.Pending.empty()) {
       if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
         return E;
@@ -66,11 +64,14 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     const uint64_t Handle = Q->second.Pending.front();
     auto R = Requests.find(Handle);
     if (R == Requests.end() || !R->second.Queued || R->second.Queue != A[1])
-      return invalidQueue("manual queue lost a pending request");
+      return invalidQueue("queue lost a pending request");
     if (auto E = Memory.writeInteger(A[2], Handle, sizeof(uint64_t)))
       return E;
     Q->second.Pending.pop_front();
     R->second.Queued = false;
+    R->second.QueuedCallback = 0;
+    R->second.QueuedArguments.clear();
+    R->second.QueuedCompletionStatus.reset();
     return std::optional<uint64_t>{0};
   }
 
@@ -158,10 +159,6 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid power-management tri-state");
   // A control-device queue is never power managed, including WdfTrue and
   // WdfUseDefault configurations. No PnP state is fabricated here.
-  if (IsDefault && Dispatch == QueueDispatchManual)
-    return invalidQueue("manual default queue routing is not modeled");
-  if (!IsDefault && Dispatch != QueueDispatchManual)
-    return invalidQueue("nondefault automatic queue routing is not modeled");
   if (Dispatch == QueueDispatchParallel &&
       !Read32(QueueConfigPresentedRequests))
     return std::optional<uint64_t>{InvalidParameter};

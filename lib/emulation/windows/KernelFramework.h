@@ -202,6 +202,7 @@ private:
     uint32_t CompletionStatus = 0;
     uint64_t QueuedCallback = 0;
     std::vector<uint64_t> QueuedArguments;
+    std::optional<uint32_t> QueuedCompletionStatus;
     CancelState Cancellation = CancelState::Unmarked;
     uint64_t CancelRoutine = 0;
   };
@@ -237,6 +238,7 @@ private:
   std::map<uint64_t, Object> Objects;
   enum class StepKind {
     Callback,
+    PresentQueue,
     Cleaned,
     CompleteRequest,
     CancelReturned,
@@ -261,6 +263,10 @@ private:
   std::optional<GuestCall> PendingCall;
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;
+  llvm::Expected<RequestDispatch> queueDispatch(uint64_t QueueHandle,
+                                                uint64_t RequestHandle,
+                                                const RequestView &View) const;
+  llvm::Expected<bool> presentQueued(uint64_t QueueHandle, uint64_t Token);
 
   llvm::Expected<uint64_t> read(uint64_t Address, unsigned Width = 8);
   llvm::Expected<std::vector<uint8_t>> readRegistryPath(uint64_t Address);

@@ -44,7 +44,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驅動程式自行配置的 MDL | 描述非分頁集區或單一使用者配置的獨立描述元，共用實體頁面身分 | 不支援 IRP 關聯、MDL 鏈或任意程序 |
 | READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、一般 WDM 請求取消或隱含檔案位置 |
 | WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁、合成要求行程身分、派送後 VA 撤銷或行程結束及有限取消 | 不支援一般行程附加、任意使用者對映或重新對映 |
-| KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、循序或有限或無限並行預設佇列、非預設手動佇列，以及實際執行回呼的緩衝／直接／neither 請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
+| KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、手動、循序或有限或無限並行預設及非預設佇列，以及實際執行回呼的緩衝／直接／neither 請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
 | PnP 匯流排／功能／篩選驅動程式 | 明確的無資源或暫存器組 PDO、客體 AddDevice 與八種常見 PnP 生命週期次要功能 | 其他 PnP 操作、一般電源管理、其他硬體／資源及 KMDF PnP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
 | 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
@@ -167,7 +167,7 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 
 控制裝置要求複製可列印 ASCII 名稱，且 SDDL 必須精確為 `D:P(A;;GA;;;WD)`。這授予所有呼叫端存取權限，無需虛構呼叫端權杖；不支援其他安全描述元、未命名裝置和自動名稱。裝置初始化擁有一個 WDM 裝置。請求可透過現有工作階段命名空間中的符號連結別名 `\DosDevices\Name` 或 `\??\Name` 選擇裝置，報告仍保留正規裝置名稱。建立成功會消耗初始化物件並清空其指標；失敗則回復部分裝置擁有權。`WdfControlFinishInitializing` 決定何時可以遞送 I/O。僅在已建模的檔案、工作項目和請求允許時，刪除操作才移除裝置及其連結；不支援刪除過程中取消或排空請求。
 
-96 位元組的 `WDF_IO_QUEUE_CONFIG` 支援循序或無限並行預設佇列，要求明確被動執行且不使用框架同步。控制裝置佇列不參與電源管理。專用 READ／WRITE／IOCTL 回呼優先於預設回呼。已接受的佇列請求即使同步完成也傳回 `STATUS_PENDING`；void 回呼的傳回暫存器不會使請求完成。延後完成使用現有排程器。沒有處理函式時，請求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未啟用零長度遞送時，零長度 READ／WRITE 直接完成。預設檔案套件以成功狀態和 Information=0 完成 CREATE／CLEANUP／CLOSE。非預設手動佇列透過 `WdfRequestForwardToIoQueue` 接收請求，`WdfIoQueueRetrieveNextRequest` 依 FIFO 順序取回。取回前取消的請求由框架從佇列移除，並以 `STATUS_CANCELLED` 完成。非預設自動遞送佇列、檔案回呼、PnP 裝置和完整 PnP／電源仍不支援。 `WdfRequestRequeue` 將已取回的請求重新放到同一手動佇列隊首。 `NumberOfPresentedRequests` 限制並行佇列已遞送請求的數量；超出上限的請求等待已遞送請求完成或取消。
+96 位元組的 `WDF_IO_QUEUE_CONFIG` 支援預設及非預設的手動、循序、有限或無限並行佇列，要求明確被動執行且不使用框架同步。控制裝置佇列不參與電源管理。專用 READ／WRITE／IOCTL 回呼優先於預設回呼。已接受的佇列請求即使同步完成也傳回 `STATUS_PENDING`；void 回呼的傳回暫存器不會使請求完成。延後完成使用現有排程器。沒有處理函式時，請求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未啟用零長度遞送時，零長度 READ／WRITE 直接完成。預設檔案套件以成功狀態和 Information=0 完成 CREATE／CLEANUP／CLOSE。非預設手動佇列透過 `WdfRequestForwardToIoQueue` 接收請求，`WdfIoQueueRetrieveNextRequest` 依 FIFO 順序取回。取回前取消的請求由框架從佇列移除，並以 `STATUS_CANCELLED` 完成。非預設自動佇列透過自身回呼遞送轉送要求；手動預設佇列保留傳入要求，直到驅動程式取回。`WdfIoQueueRetrieveNextRequest` 可從手動和循序佇列取回等待中的要求；並行佇列傳回 `STATUS_INVALID_DEVICE_STATE`。若自動佇列沒有相符回呼，則在遞送位置可用時以 `STATUS_INVALID_DEVICE_REQUEST` 完成該要求。檔案回呼、PnP 裝置和完整 PnP／電源仍不支援。 `WdfRequestRequeue` 將已取回的請求重新放到同一手動佇列隊首。 `NumberOfPresentedRequests` 限制並行佇列已遞送請求的數量；超出上限的請求等待已遞送請求完成或取消。
 
 請求參數使用 40 位元組的 `WDF_REQUEST_PARAMETERS` 配置。輸入／輸出存取函式傳回邏輯長度，保留緩衝區別名及現有直接 I/O 的 MDL 對映；直接 IOCTL 的輸入仍使用緩衝區。方向錯誤或緩衝區不足會傳回文件規定的狀態。完成操作先在緩衝區仍有效時執行請求清理，再完成 IRP 並釋放請求所屬鎖頁；參考允許時才銷毀子物件和請求。一旦開始完成操作，就拒絕新的緩衝區與參數存取函式呼叫；已取得的緩衝區指標在清理期間仍可使用。外部物件參考保留內容，但不保留對已完成 IRP 的存取權。
 
@@ -326,7 +326,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v37`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v38`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

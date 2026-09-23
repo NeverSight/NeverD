@@ -47,7 +47,8 @@ KernelFramework::preflightRequestCancellation(uint64_t IRP,
     if (R->second.Completed || R->second.Completing ||
         R->second.Cancellation != CancelState::Unmarked || Q == Queues.end() ||
         (Q->second.Dispatch != QueueDispatchManual &&
-         Q->second.Dispatch != QueueDispatchParallel) ||
+         Q->second.Dispatch != QueueDispatchParallel &&
+         Q->second.Dispatch != QueueDispatchSequential) ||
         std::find(Q->second.Pending.begin(), Q->second.Pending.end(),
                   R->first) == Q->second.Pending.end())
       return requestError("queued request lost framework queue ownership");
@@ -158,6 +159,117 @@ llvm::Error KernelFramework::beginCancelCallback(uint64_t Token) {
   return llvm::Error::success();
 }
 
+llvm::Expected<KernelFramework::RequestDispatch>
+KernelFramework::queueDispatch(uint64_t QueueHandle, uint64_t RequestHandle,
+                               const RequestView &View) const {
+  auto Q = Queues.find(QueueHandle);
+  if (Q == Queues.end())
+    return requestError("request queue has no framework identity");
+  const auto &Queue = Q->second;
+  uint64_t Callback = 0;
+  uint64_t Length = 0;
+  bool Specific = true;
+  if (View.Major == RequestMajorRead) {
+    Callback = Queue.Read;
+    Length = View.OutputLength;
+  } else if (View.Major == RequestMajorWrite) {
+    Callback = Queue.Write;
+    Length = View.InputLength;
+  } else if (View.Major == RequestMajorDeviceControl) {
+    Callback = Queue.DeviceControl;
+  } else {
+    return requestError("unsupported framework request major function");
+  }
+  if (!Callback) {
+    Specific = false;
+    Callback = Queue.Default;
+  }
+  if (!Callback)
+    return RequestDispatch{0, {}, ControlInvalidDeviceRequest};
+  if (!Queue.AllowZeroLength && !Length &&
+      (View.Major == RequestMajorRead || View.Major == RequestMajorWrite))
+    return RequestDispatch{0, {}, 0};
+  RequestDispatch Dispatch;
+  Dispatch.PC = Callback;
+  Dispatch.Status = windows::StatusPending;
+  Dispatch.Arguments = {QueueHandle, RequestHandle};
+  if (Specific) {
+    if (View.Major == RequestMajorDeviceControl) {
+      Dispatch.Arguments.push_back(View.OutputLength);
+      Dispatch.Arguments.push_back(View.InputLength);
+      Dispatch.Arguments.push_back(View.ControlCode);
+    } else {
+      Dispatch.Arguments.push_back(Length);
+    }
+  }
+  return Dispatch;
+}
+
+llvm::Expected<bool> KernelFramework::presentQueued(uint64_t QueueHandle,
+                                                    uint64_t Token) {
+  auto Q = Queues.find(QueueHandle);
+  if (Q == Queues.end() || Q->second.Dispatch == QueueDispatchManual ||
+      Q->second.Pending.empty())
+    return false;
+  if (PendingCall || !Continuations.contains(Token))
+    return requestError("queued delivery lost its callback continuation");
+  const uint32_t Limit = Q->second.Dispatch == QueueDispatchSequential
+                             ? 1
+                             : Q->second.PresentedLimit;
+  const auto Presented =
+      std::count_if(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+        return Entry.second.Queue == QueueHandle && !Entry.second.Queued &&
+               !Entry.second.Completed;
+      });
+  // A sequential queue may also have driver-owned requests explicitly
+  // retrieved from its pending list. They do not create another automatic
+  // presentation slot until they complete or leave the queue.
+  if (Presented >= Limit)
+    return false;
+  const uint64_t Handle = Q->second.Pending.front();
+  auto R = Requests.find(Handle);
+  if (R == Requests.end() || !R->second.Queued ||
+      R->second.Queue != QueueHandle ||
+      (!R->second.QueuedCallback && !R->second.QueuedCompletionStatus) ||
+      (R->second.QueuedCallback && R->second.QueuedArguments.size() < 2))
+    return requestError("automatic queue lost its pending delivery");
+  if (R->second.QueuedCompletionStatus) {
+    const uint32_t Status = *R->second.QueuedCompletionStatus;
+    if (!RequestsHost.ValidateCompletion || !RequestsHost.SetInformation ||
+        !RequestsHost.Information || !RequestsHost.Complete)
+      return requestError("automatic queue completion host is unavailable");
+    if (auto E = RequestsHost.ValidateCompletion(R->second.IRP, Status, 0))
+      return E;
+    if (auto E = RequestsHost.SetInformation(R->second.IRP, 0))
+      return E;
+    R->second.Completing = true;
+    R->second.CompletionStatus = Status;
+    std::vector<Step> Steps;
+    if (auto E = planDelete(Handle, Steps)) {
+      R->second.Completing = false;
+      return E;
+    }
+    auto Destruction =
+        std::find_if(Steps.begin(), Steps.end(), [&](const Step &S) {
+          return S.Kind == StepKind::TryDestroy && S.Object == Handle;
+        });
+    Steps.insert(Destruction, {StepKind::CompleteRequest, Handle});
+    Q->second.Pending.pop_front();
+    R->second.Queued = false;
+    R->second.QueuedCompletionStatus.reset();
+    auto &Continuation = Continuations.at(Token);
+    Continuation.Steps.insert(Continuation.Steps.begin() + Continuation.Index,
+                              Steps.begin(), Steps.end());
+    return false;
+  }
+  Q->second.Pending.pop_front();
+  R->second.Queued = false;
+  PendingCall = GuestCall{Token, R->second.QueuedCallback,
+                          std::move(R->second.QueuedArguments)};
+  R->second.QueuedCallback = 0;
+  return true;
+}
+
 llvm::Expected<std::optional<KernelFramework::RequestDispatch>>
 KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
                               bool AfterCaller) {
@@ -228,40 +340,24 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
                         windows::StatusPending,
                         true}};
   }
-  auto &Queue = Q->second;
-  uint64_t Callback = 0;
-  uint64_t Length = 0;
-  bool Specific = true;
-  if (View->Major == RequestMajorRead) {
-    Callback = Queue.Read;
-    Length = View->OutputLength;
-  } else if (View->Major == RequestMajorWrite) {
-    Callback = Queue.Write;
-    Length = View->InputLength;
-  } else if (View->Major == RequestMajorDeviceControl) {
-    Callback = Queue.DeviceControl;
-  } else {
+  const bool Manual = Q->second.Dispatch == QueueDispatchManual;
+  if (Manual && View->Major != RequestMajorRead &&
+      View->Major != RequestMajorWrite &&
+      View->Major != RequestMajorDeviceControl)
     return requestError("unsupported framework request major function");
-  }
-  if (!Callback) {
-    Specific = false;
-    Callback = Queue.Default;
-  }
-  if (AfterCaller && (!Callback || (!Queue.AllowZeroLength && !Length &&
-                                    (View->Major == RequestMajorRead ||
-                                     View->Major == RequestMajorWrite))))
+  auto Planned = Manual ? llvm::Expected<RequestDispatch>(RequestDispatch{})
+                        : queueDispatch(Q->first, 0, *View);
+  if (!Planned)
+    return Planned.takeError();
+  if (AfterCaller && !Manual && !Planned->PC)
     return requestError("caller-context queue completion without a guest I/O "
                         "callback is outside this profile");
   // FxIoQueue::QueueRequest marks accepted IRPs pending before dispatching.
   // That status persists even when delivery completes the IRP immediately.
   if (auto E = RequestsHost.MarkPending(IRP))
     return E;
-  if (!Callback)
-    return CompleteImmediately(ControlInvalidDeviceRequest,
-                               windows::StatusPending);
-  if (!Queue.AllowZeroLength && !Length &&
-      (View->Major == RequestMajorRead || View->Major == RequestMajorWrite))
-    return CompleteImmediately(0, windows::StatusPending);
+  if (!Manual && !Planned->PC)
+    return CompleteImmediately(Planned->Status, windows::StatusPending);
   uint64_t Handle = ExistingHandle;
   if (!Handle) {
     Attributes Attrs;
@@ -274,19 +370,16 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
     Objects.at(Handle).Kind = ObjectKind::Request;
     Requests.emplace(Handle, Request{IRP, Q->first, D->first});
   }
-  RequestDispatch Dispatch;
-  Dispatch.PC = Callback;
-  Dispatch.Status = windows::StatusPending;
-  Dispatch.Arguments = {Q->first, Handle};
-  if (Specific) {
-    if (View->Major == RequestMajorDeviceControl) {
-      Dispatch.Arguments.push_back(View->OutputLength);
-      Dispatch.Arguments.push_back(View->InputLength);
-      Dispatch.Arguments.push_back(View->ControlCode);
-    } else {
-      Dispatch.Arguments.push_back(Length);
-    }
+  auto &Queue = Q->second;
+  if (Manual) {
+    auto &Pending = Requests.at(Handle);
+    Pending.Queued = true;
+    Queue.Pending.push_back(Handle);
+    return std::optional<RequestDispatch>{
+        RequestDispatch{0, {}, windows::StatusPending}};
   }
+  RequestDispatch Dispatch = std::move(*Planned);
+  Dispatch.Arguments[1] = Handle;
   if (Queue.Dispatch == QueueDispatchParallel &&
       Queue.PresentedLimit != UINT32_MAX) {
     const auto Presented =
@@ -391,8 +484,28 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         R->second.Device != Destination->second.Device ||
         R->second.Cancellation != CancelState::Unmarked)
       return Result{ControlInvalidDeviceRequest};
-    if (Destination->second.Dispatch != QueueDispatchManual)
-      return requestError("forwarding to an automatic queue is not modeled");
+    std::optional<RequestDispatch> ForwardDispatch;
+    if (!Requeue && Destination->second.Dispatch != QueueDispatchManual) {
+      if (!RequestsHost.View)
+        return requestError("request inspection host is unavailable");
+      auto View = RequestsHost.View(R->second.IRP);
+      if (!View)
+        return View.takeError();
+      auto Planned = queueDispatch(Target, A[1], *View);
+      if (!Planned)
+        return Planned.takeError();
+      if (!Planned->PC &&
+          (!RequestsHost.ValidateCompletion || !RequestsHost.SetInformation ||
+           !RequestsHost.Information || !RequestsHost.Complete))
+        return requestError("automatic queue completion host is unavailable");
+      ForwardDispatch = std::move(*Planned);
+    }
+    if (!Requeue) {
+      if (PendingCall)
+        return requestError("forwarding cannot replace a pending callback");
+      if (auto E = preflightCancellationToken(0))
+        return E;
+    }
     auto Source = Objects.find(R->second.Queue);
     if (Source == Objects.end() || Source->second.Kind != ObjectKind::Queue ||
         Source->second.Deleting || O->second.Parent != R->second.Queue)
@@ -401,6 +514,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                            Source->second.Children.end(), A[1]);
     if (Child == Source->second.Children.end())
       return requestError("source queue lost its request child");
+    const uint64_t SourceHandle = R->second.Queue;
     if (!RequestsHost.IsCanceled)
       return requestError("cancellation host is unavailable");
     auto AlreadyCanceled = RequestsHost.IsCanceled(R->second.IRP);
@@ -413,6 +527,12 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       R->second.Queue = Target;
     }
     R->second.Queued = true;
+    if (ForwardDispatch) {
+      R->second.QueuedCallback = ForwardDispatch->PC;
+      R->second.QueuedArguments = std::move(ForwardDispatch->Arguments);
+      if (!ForwardDispatch->PC)
+        R->second.QueuedCompletionStatus = ForwardDispatch->Status;
+    }
     if (Requeue)
       Destination->second.Pending.push_front(A[1]);
     else
@@ -423,8 +543,31 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       auto Call = requestCancellation(R->second.IRP);
       if (!Call)
         return Call.takeError();
-      if (*Call)
+      if (*Call) {
+        if (!Requeue)
+          Continuations.at((**Call).Token)
+              .Steps.push_back({StepKind::PresentQueue, SourceHandle});
         PendingCall = std::move(**Call);
+      } else if (!Requeue) {
+        const uint64_t Token = NextContinuation++;
+        Continuations.emplace(
+            Token, Continuation{{{StepKind::PresentQueue, SourceHandle}}});
+        auto Next = advance(Token);
+        if (!Next)
+          return Next.takeError();
+      }
+    } else if (!Requeue) {
+      const uint64_t Token = NextContinuation++;
+      Continuations.emplace(
+          Token, Continuation{{{StepKind::PresentQueue, SourceHandle}}});
+      auto Delivered = presentQueued(Target, Token);
+      if (!Delivered)
+        return Delivered.takeError();
+      if (!*Delivered) {
+        auto Next = advance(Token);
+        if (!Next)
+          return Next.takeError();
+      }
     }
     return Result{0};
   }
