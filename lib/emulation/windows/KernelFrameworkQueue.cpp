@@ -28,6 +28,10 @@ llvm::Error invalidQueue(const llvm::Twine &Message) {
 }
 } // namespace
 
+bool KernelFramework::queuePnpHeld(const Queue &Q) const {
+  return Q.PowerManaged && Devices.at(Q.Device).PowerQueuesHeld;
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
                            llvm::ArrayRef<uint64_t> A) {
@@ -65,8 +69,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return std::optional<uint64_t>{ControlInvalidDeviceRequest};
     Q->second.ReadyNotify = A[2];
     Q->second.ReadyContext = A[2] ? A[3] : 0;
-    Q->second.ReadyPending =
-        A[2] && Q->second.Dispatching && !Q->second.Pending.empty();
+    Q->second.ReadyPending = A[2] && Q->second.Dispatching &&
+                             !queuePnpHeld(Q->second) &&
+                             !Q->second.Pending.empty();
     if (auto E = flushReadyNotifications())
       return E;
     return std::optional<uint64_t>{0};
@@ -106,8 +111,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Q->second.Accepting = true;
       Q->second.Dispatching = true;
       if (Q->second.Dispatch == QueueDispatchManual) {
-        Q->second.ReadyPending =
-            Q->second.ReadyNotify && !Q->second.Pending.empty();
+        Q->second.ReadyPending = Q->second.ReadyNotify &&
+                                 !queuePnpHeld(Q->second) &&
+                                 !Q->second.Pending.empty();
         if (auto E = flushReadyNotifications())
           return E;
         return std::optional<uint64_t>{0};
@@ -250,6 +256,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     uint32_t State = Q->second.Accepting ? QueueAcceptRequests : 0;
     if (Q->second.Dispatching)
       State |= QueueDispatchRequests;
+    if (queuePnpHeld(Q->second))
+      State |= QueuePnpHeld;
     if (!Queued)
       State |= QueueNoRequests;
     if (!Delivered)
@@ -273,7 +281,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return E;
     if (Q->second.Dispatch != QueueDispatchManual)
       return std::optional<uint64_t>{QueueInvalidDeviceState};
-    if (!Q->second.Dispatching)
+    if (!Q->second.Dispatching || queuePnpHeld(Q->second))
       return std::optional<uint64_t>{QueuePaused};
     if (Find && A[3])
       return invalidQueue("framework file-object filtering is not modeled");
@@ -346,7 +354,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return E;
     if (Q->second.Dispatch == QueueDispatchParallel)
       return std::optional<uint64_t>{QueueInvalidDeviceState};
-    if (!Q->second.Dispatching)
+    if (!Q->second.Dispatching || queuePnpHeld(Q->second))
       return std::optional<uint64_t>{QueuePaused};
     if (Q->second.Pending.empty()) {
       if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
@@ -450,11 +458,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       (Dispatch != QueueDispatchParallel &&
        Read32(QueueConfigPresentedRequests)))
     return std::optional<uint64_t>{InvalidParameter};
-  if (Read32(QueueConfigPowerManaged) > QueuePowerUseDefault)
+  const uint32_t PowerManaged = Read32(QueueConfigPowerManaged);
+  if (PowerManaged > QueuePowerUseDefault)
     return invalidQueue("invalid power-management tri-state");
-  if (Device.PDO && Read32(QueueConfigPowerManaged) != QueuePowerDisabled)
-    return invalidQueue(
-        "PnP power-managed queues require device power callbacks");
   if (Dispatch == QueueDispatchParallel &&
       !Read32(QueueConfigPresentedRequests))
     return std::optional<uint64_t>{InvalidParameter};
@@ -496,6 +502,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     Q.PresentedLimit = Read32(QueueConfigPresentedRequests);
   Q.AllowZeroLength = Config[QueueConfigAllowZeroLength] != 0;
   Q.IsDefault = IsDefault;
+  Q.PowerManaged = Device.PDO && (PowerManaged == QueuePowerEnabled ||
+                                  PowerManaged == QueuePowerUseDefault);
   Queues.emplace(*Handle, Q);
   if (IsDefault)
     Device.DefaultQueue = *Handle;

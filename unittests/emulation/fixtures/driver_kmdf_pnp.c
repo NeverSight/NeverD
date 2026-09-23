@@ -5,9 +5,9 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// A resource-free KMDF FDO and explicit non-power-managed I/O queue, linked
-/// through the genuine WDK entry library. The service suffix F returns an
-/// AddDevice failure after creating the FDO to exercise framework cleanup.
+/// A resource-free KMDF FDO and default I/O queue, linked through the genuine
+/// WDK entry library. Service suffixes M and T use default and explicit power
+/// management; F returns an AddDevice failure after creating the FDO.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -33,11 +33,25 @@ ABI_SLOT(WdfCmResourceListGetDescriptor, 305);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
 ABI_SLOT(WdfIoQueueCreate, 152);
+ABI_SLOT(WdfIoQueueGetState, 153);
 ABI_SLOT(WdfRequestCompleteWithInformation, 265);
 ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
+static WDFQUEUE PowerQueue;
+
+static BOOLEAN UsesPowerQueue(VOID) {
+  return ServiceMode == L'M' || ServiceMode == L'T';
+}
+
+static BOOLEAN QueueIsPowerHeld(BOOLEAN Expected) {
+  WDF_IO_QUEUE_STATE State;
+  if (PowerQueue == NULL)
+    return FALSE;
+  State = WdfIoQueueGetState(PowerQueue, NULL, NULL);
+  return !!(State & WdfIoQueuePnpHeld) == !!Expected;
+}
 
 _Static_assert(sizeof(WDF_PNPPOWER_EVENT_CALLBACKS) == 144,
                "KMDF 1.33 PnP callback layout");
@@ -46,7 +60,8 @@ static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
                               WDF_POWER_DEVICE_STATE PreviousState) {
   UNREFERENCED_PARAMETER(Device);
   if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-      PreviousState != WdfPowerDeviceD3Final)
+      PreviousState != WdfPowerDeviceD3Final ||
+      (UsesPowerQueue() && !QueueIsPowerHeld(TRUE)))
     return STATUS_INVALID_DEVICE_STATE;
   DbgPrint("KMDF PnP: D0 entry\n");
   return ServiceMode == L'Q' || ServiceMode == L'J' ? STATUS_UNSUCCESSFUL
@@ -57,7 +72,8 @@ static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
                              WDF_POWER_DEVICE_STATE TargetState) {
   UNREFERENCED_PARAMETER(Device);
   if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-      TargetState != WdfPowerDeviceD3Final)
+      TargetState != WdfPowerDeviceD3Final ||
+      (UsesPowerQueue() && !QueueIsPowerHeld(TRUE)))
     return STATUS_INVALID_DEVICE_STATE;
   DbgPrint("KMDF PnP: D0 exit\n");
   return STATUS_SUCCESS;
@@ -114,7 +130,10 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
   UCHAR *Output;
   UCHAR Value;
   NTSTATUS Status;
-  UNREFERENCED_PARAMETER(Queue);
+  if (UsesPowerQueue() && (Queue != PowerQueue || !QueueIsPowerHeld(FALSE))) {
+    WdfRequestCompleteWithInformation(Request, STATUS_INVALID_DEVICE_STATE, 0);
+    return;
+  }
   if (Code != IOCTL_NEVERD_PNP || InputLength != 1 ||
       OutputLength < ResponseSize) {
     WdfRequestCompleteWithInformation(Request, STATUS_INVALID_PARAMETER, 0);
@@ -152,8 +171,9 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
-  if (ServiceMode == L'P' || ServiceMode == L'Q' || ServiceMode == L'H' ||
-      ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U') {
+  if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesPowerQueue() ||
+      ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J' ||
+      ServiceMode == L'U') {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
@@ -186,12 +206,20 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   }
   WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&QueueConfig,
                                          WdfIoQueueDispatchSequential);
-  QueueConfig.PowerManaged = WdfFalse;
+  if (ServiceMode == L'T')
+    QueueConfig.PowerManaged = WdfTrue;
+  else if (!UsesPowerQueue())
+    QueueConfig.PowerManaged = WdfFalse;
   QueueConfig.EvtIoDeviceControl = IoControl;
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
   Attributes.ExecutionLevel = WdfExecutionLevelPassive;
   Attributes.SynchronizationScope = WdfSynchronizationScopeNone;
   Status = WdfIoQueueCreate(Device, &QueueConfig, &Attributes, &Queue);
+  if (NT_SUCCESS(Status) && UsesPowerQueue()) {
+    PowerQueue = Queue;
+    if (!QueueIsPowerHeld(TRUE))
+      return STATUS_INVALID_DEVICE_STATE;
+  }
   if (NT_SUCCESS(Status) && Queue != NULL)
     DbgPrint("KMDF PnP: device ready\n");
   return Status;
@@ -205,6 +233,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
       RegistryPath->Length >= sizeof(WCHAR)
           ? RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1]
           : L'S';
+  PowerQueue = NULL;
   WDF_DRIVER_CONFIG_INIT(&Config, DeviceAdd);
   if (ServiceMode != L'N')
     Config.EvtDriverUnload = DriverUnload;

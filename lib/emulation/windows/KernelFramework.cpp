@@ -160,6 +160,18 @@ KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
     return invalid("PnP START reached an already prepared device");
   if (Leaving && !D.InD0 && !D.HardwarePrepared)
     return false;
+  for (const auto &[QueueHandle, Queue] : Queues) {
+    if (Queue.Device != Handle->second || !Queue.PowerManaged)
+      continue;
+    if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          const auto &Request = Entry.second;
+          return Request.Queue == QueueHandle && !Request.Completed;
+        }))
+      return invalid("power-managed queue transition with a live request "
+                     "requires I/O stop or resume semantics");
+  }
+  if (Leaving)
+    D.PowerQueuesHeld = true;
 
   PnpTransition Transition{IRP, Handle->second, Entering};
   if (Entering) {
@@ -192,6 +204,7 @@ KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
   if (Transition.Remaining.empty()) {
     D.HardwarePrepared = Entering;
     D.InD0 = Entering;
+    D.PowerQueuesHeld = !Entering;
     if (!Entering)
       D.ResourcesActive = false;
     return false;
@@ -943,7 +956,7 @@ KernelFramework::advance(uint64_t Token) {
       if (Q == Queues.end())
         return invalid("ready notification lost its manual queue");
       if (!Q->second.ReadyNotify || !Q->second.Dispatching ||
-          Q->second.Pending.empty()) {
+          queuePnpHeld(Q->second) || Q->second.Pending.empty()) {
         if (Q->second.Pending.empty() || !Q->second.ReadyNotify)
           Q->second.ReadyPending = false;
         continue;
@@ -1131,6 +1144,7 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
         State.Entering && !(State.Status & profile::NTStatusFailureMask);
     Device->second.HardwarePrepared = Ready;
     Device->second.InD0 = Ready;
+    Device->second.PowerQueuesHeld = !Ready;
     if (!Ready)
       Device->second.ResourcesActive = false;
     CompletedPnp = PnpCompletion{State.IRP, State.Status};
@@ -1158,7 +1172,7 @@ llvm::Error KernelFramework::flushReadyNotifications() {
   std::vector<Step> Steps;
   for (const auto &[Handle, Queue] : Queues) {
     if (!Queue.ReadyPending || !Queue.ReadyNotify || !Queue.Dispatching ||
-        Queue.Pending.empty())
+        queuePnpHeld(Queue) || Queue.Pending.empty())
       continue;
     const bool Active =
         std::any_of(ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),

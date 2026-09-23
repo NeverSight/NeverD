@@ -229,7 +229,8 @@ llvm::Expected<bool> KernelFramework::presentQueued(uint64_t QueueHandle,
                                                     uint64_t Token) {
   auto Q = Queues.find(QueueHandle);
   if (Q == Queues.end() || Q->second.Dispatch == QueueDispatchManual ||
-      !Q->second.Dispatching || Q->second.Pending.empty())
+      !Q->second.Dispatching || queuePnpHeld(Q->second) ||
+      Q->second.Pending.empty())
     return false;
   if (PendingCall || !Continuations.contains(Token))
     return requestError("queued delivery lost its callback continuation");
@@ -375,7 +376,7 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
     return requestError("caller-context queue completion without a guest I/O "
                         "callback is outside this profile");
   auto &Queue = Q->second;
-  bool WaitForSlot = !Queue.Dispatching;
+  bool WaitForSlot = !Queue.Dispatching || queuePnpHeld(Queue);
   if (Queue.Dispatch == QueueDispatchSequential ||
       (Queue.Dispatch == QueueDispatchParallel &&
        Queue.PresentedLimit != UINT32_MAX)) {

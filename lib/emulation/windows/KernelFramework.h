@@ -228,6 +228,7 @@ private:
     bool HardwarePrepared = false;
     bool ResourcesActive = false;
     bool InD0 = false;
+    bool PowerQueuesHeld = true;
   };
   std::map<uint64_t, Device> Devices;
   std::map<uint64_t, uint64_t> PnpDeviceHandles;
@@ -238,6 +239,7 @@ private:
     uint32_t PresentedLimit = UINT32_MAX;
     bool AllowZeroLength = false;
     bool IsDefault = false;
+    bool PowerManaged = false;
     bool Accepting = true;
     bool Dispatching = true;
     uint64_t StopComplete = 0;
@@ -251,6 +253,7 @@ private:
     std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;
+  bool queuePnpHeld(const Queue &Queue) const;
   RequestHost RequestsHost;
   enum class CancelState { Unmarked, Marked, Queued, Delivered };
   struct Request {
