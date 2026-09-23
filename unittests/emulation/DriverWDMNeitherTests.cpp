@@ -179,6 +179,31 @@ TEST(DriverWDMNeither, LockedUserAliasesRemainUsableInPendingWorker) {
     }
 }
 
+TEST(DriverWDMNeither, RevokedCallerAddressesKeepPendingMdlAliasesAlive) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options(0x22201b, Address);
+      Options.Requests[1].UserUnmapAfterDispatch = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[1].Information, 4u);
+      EXPECT_TRUE(Result->Requests[1].Output.empty());
+      EXPECT_TRUE(Result->Requests[1].Completed);
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
+
 TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
   for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
 #ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
@@ -202,6 +227,23 @@ TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
       EXPECT_FALSE(Result->Requests[1].Completed);
       EXPECT_FALSE(Result->Fault);
     }
+}
+
+TEST(DriverWDMNeither, RevokedRawCallerAddressStopsPendingWorker) {
+  auto Options = options(0x22201f, 0x180000000ULL);
+  Options.Requests[1].UserUnmapAfterDispatch = true;
+  Options.Requests.resize(2);
+  Options.Unload = false;
+  auto Result = emulateDriver(NEVERD_WDM_NEITHER_FIXTURE, Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("unmapped user virtual address"),
+            std::string::npos)
+      << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 2u);
+  EXPECT_FALSE(Result->Requests[1].Completed);
+  ASSERT_TRUE(Result->Fault);
+  EXPECT_EQ(Result->Fault->Kind, "protection");
 }
 
 TEST(DriverWDMNeither, CancelRoutineOwnsPendingLockedBufferCompletion) {
@@ -228,6 +270,27 @@ TEST(DriverWDMNeither, CancelRoutineOwnsPendingLockedBufferCompletion) {
       EXPECT_TRUE(Result->UnloadCompleted);
       EXPECT_FALSE(Result->Fault);
     }
+}
+
+TEST(DriverWDMNeither, RevokedCallerAddressesCanStillCancelLockedIRP) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    auto Options = options(0x222023, 0x180000000ULL);
+    Options.Requests[1].UserUnmapAfterDispatch = true;
+    Options.Requests[1].CancelAfter100ns = 0;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 4u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000120u);
+    EXPECT_TRUE(Result->Requests[1].CancelRequestedAt100ns);
+    EXPECT_TRUE(Result->Requests[1].Completed);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    EXPECT_FALSE(Result->Fault);
+  }
 }
 
 TEST(DriverWDMNeither, CompletionBeforeDeadlineDisarmsCancellation) {

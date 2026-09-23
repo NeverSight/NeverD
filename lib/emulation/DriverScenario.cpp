@@ -822,6 +822,12 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     return std::move(E);
   if (auto E = UserAccess(UserOutputAccessField, Result.UserOutputAccess))
     return std::move(E);
+  if (const auto *Unmap = Object->get(UserUnmapAfterDispatchField)) {
+    auto Value = Unmap->getAsBoolean();
+    if (!Value)
+      return invalid("user_unmap_after_dispatch must be a boolean");
+    Result.UserUnmapAfterDispatch = *Value;
+  }
   if (Result.Kind == DriverRequestKind::Pnp) {
     auto Pnp = pnpOperation(*Object);
     if (!Pnp)
@@ -1333,6 +1339,17 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   uint64_t Total = 0;
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
+    if (Request.UserUnmapAfterDispatch) {
+      const bool NeitherIOCTL =
+          Request.Kind == DriverRequestKind::DeviceControl &&
+          (Request.ControlCode & windows::IoControlMethodMask) ==
+              windows::MethodNeither;
+      if ((!NeitherIOCTL && Request.Kind != DriverRequestKind::Read &&
+           Request.Kind != DriverRequestKind::Write) ||
+          (Request.Input.empty() && !Request.OutputSize))
+        return invalid("user_unmap_after_dispatch requires a nonempty "
+                       "neither-I/O transfer buffer");
+    }
     if (Request.UserInputAccess || Request.UserOutputAccess) {
       const bool NeitherIOCTL =
           Request.Kind == DriverRequestKind::DeviceControl &&

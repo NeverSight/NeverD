@@ -361,6 +361,8 @@ sono rifiutate.
 Solo le richieste READ/WRITE/IOCTL accettano `cancel_after_100ns`, intero JSON facoltativo compreso tra 0 e `INT64_MAX` (9223372036854775807). Pianifica l’annullamento a partire dall’invio della richiesta, in unità virtuali di 100 ns e non in tempo reale. Per KMDF, zero applica l’annullamento dopo l’instradamento del framework e prima del callback I/O guest; se l’instradamento ha già completato la richiesta, prevale il completamento. Per WDM, zero si applica dopo il ritorno del dispatch. Per ritardi positivi, il tempo avanza alle scadenze di timer, attesa o annullamento solo se nessun callback o contesto è pronto. Un IRP WDM in sospeso chiama la routine di annullamento registrata a `DISPATCH_LEVEL` con lo spinlock di annullamento acquisito; la routine deve rilasciarlo con `Irp->CancelIrql` prima del completamento. L’annullamento generale di code e PnP rimane escluso. Ogni rapporto di richiesta include `cancel_requested_at_100ns`: l’istante virtuale assoluto dell’annullamento effettivo, oppure null se non è avvenuto, anche quando il completamento è arrivato prima. Richiedere l’annullamento non completa da solo un IRP né ne impone lo stato finale.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` e `IoCancelIrp` condividono lo stato dell’IRP e lo spinlock di annullamento; `IoCancelIrp` invoca sincronicamente la routine registrata e indica se è stata eseguita.
 
+Il booleano facoltativo `user_unmap_after_dispatch` revoca gli indirizzi utente originali di un trasferimento WDM neither non vuoto dopo il ritorno del dispatch e prima di lavoro o annullamento programmati. Le pagine bloccate dall’MDL e gli alias di sistema restano utilizzabili fino allo sblocco; i puntatori utente grezzi e nuovi blocchi falliscono. Se l’output è revocato, `output_hex` è vuoto. Riutilizzo, uscita del processo e tempi arbitrari di rimozione non sono modellati.
+
 Per gli IOCTL diretti, `input` inizializza il primo buffer di sistema,
 mentre `direct_input` inizializza il secondo buffer separato descritto dall’MDL,
 riempito con zeri fino a `output_size`. `METHOD_IN_DIRECT` richiede accesso in
@@ -515,7 +517,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v20`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v21`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra

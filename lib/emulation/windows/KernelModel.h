@@ -142,6 +142,7 @@ public:
     }
   }
   void setUserRequestContext(bool Active) { UserRequestContext = Active; }
+  llvm::Error revokeRequestUserBuffers(uint64_t IRP);
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
   bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
@@ -216,6 +217,7 @@ private:
   uint64_t NextUserAddress = profile::UserArenaBase;
   uint64_t NextUserAlias = profile::UserAliasBase;
   std::map<uint64_t, uint64_t> UserAllocations;
+  std::set<uint64_t> RevokedUserAllocations;
   llvm::Expected<uint64_t> allocateUserBuffer(uint32_t Size,
                                               llvm::ArrayRef<uint8_t> Initial,
                                               DriverUserPageAccess Access);
@@ -462,8 +464,7 @@ private:
   void configureFrameworkRequestHost();
   llvm::Error markRequestPending(uint64_t IRP);
   llvm::Error prepareRequestBuffers(ActiveRequest &Record,
-                                    const DriverRequest &Input,
-                                    uint64_t Device);
+                                    const DriverRequest &Input);
   llvm::Expected<Invocation> beginPnpRequest(const DriverRequest &Input,
                                              size_t ResultIndex);
   llvm::Expected<Invocation> beginPowerRequest(const DriverRequest &Input,

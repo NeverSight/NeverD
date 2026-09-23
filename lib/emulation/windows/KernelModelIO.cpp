@@ -111,8 +111,7 @@ bool KernelModel::requestPending(uint64_t IRP) const {
 }
 
 llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
-                                               const DriverRequest &Input,
-                                               uint64_t Device) {
+                                               const DriverRequest &Input) {
   auto *Request = &Record;
   const bool IsRead = Input.Kind == DriverRequestKind::Read;
   const bool IsWrite = Input.Kind == DriverRequestKind::Write;
@@ -125,23 +124,6 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
   Request->InputSize = Input.Input.size();
   Request->ByteOffset = Input.ByteOffset;
   Request->TransferSize = IsWrite ? Input.Input.size() : Input.OutputSize;
-  if (IsIOCTL) {
-    const auto Method = Input.ControlCode & IoControlMethodMask;
-    Request->Direct = Method == MethodInDirect || Method == MethodOutDirect;
-    Request->Neither = Method == MethodNeither;
-  } else if (IsRead || IsWrite) {
-    auto Flags = Memory.readInteger(Device + DeviceFlagsOffset, 4);
-    if (!Flags)
-      return Flags.takeError();
-    const uint64_t TransferFlags = *Flags & (DeviceBufferedIO | DeviceDirectIO);
-    if (TransferFlags == (DeviceBufferedIO | DeviceDirectIO))
-      return ioError("READ/WRITE device sets both DO_BUFFERED_IO and "
-                     "DO_DIRECT_IO");
-    Request->Neither = !TransferFlags;
-    Request->Direct = TransferFlags == DeviceDirectIO;
-    if (!Request->Neither && (Input.UserInputAccess || Input.UserOutputAccess))
-      return ioError("user page access requires neither READ/WRITE I/O");
-  }
   if (Request->Neither) {
     if (IsIOCTL) {
       auto InputBuffer = allocateUserBuffer(
@@ -200,6 +182,31 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
     if (!MDL)
       return MDL.takeError();
     Request->Mdl = *MDL;
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::revokeRequestUserBuffers(uint64_t IRP) {
+  auto *Request = requestForIRP(IRP);
+  if (!Request || !Request->Neither || !Request->DispatchReturned)
+    return ioError("user unmapping requires a dispatched neither-I/O IRP");
+  std::vector<std::pair<uint64_t, uint64_t>> Ranges;
+  for (uint64_t Address : {Request->UserInput, Request->UserBuffer}) {
+    if (!Address)
+      continue;
+    auto It = UserAllocations.find(Address);
+    if (It == UserAllocations.end() || RevokedUserAllocations.contains(Address))
+      return ioError("user unmapping requires a live original buffer");
+    const uint64_t Pages =
+        (It->second + profile::PageSize - 1) & ~(profile::PageSize - 1);
+    if (auto E = Memory.validateBacking(Address, Pages))
+      return E;
+    Ranges.emplace_back(Address, Pages);
+  }
+  for (const auto &[Address, Pages] : Ranges) {
+    if (auto E = Memory.protect(Address, Pages, 0))
+      return E;
+    RevokedUserAllocations.insert(Address);
   }
   return llvm::Error::success();
 }
@@ -465,6 +472,27 @@ KernelModel::beginRequest(const DriverRequest &Input,
     return ioError("device stack requires a positive bounded IRP stack count");
   if (PnpOwner && *Top == PnpOwner)
     return ioError("resource-free PDO has no attached guest file dispatch");
+  bool Direct = false, Neither = false;
+  if (IsIOCTL) {
+    const auto Method = Input.ControlCode & IoControlMethodMask;
+    Direct = Method == MethodInDirect || Method == MethodOutDirect;
+    Neither = Method == MethodNeither;
+  } else if (IsRead || IsWrite) {
+    auto Flags = Memory.readInteger(*Top + DeviceFlagsOffset, 4);
+    if (!Flags)
+      return Flags.takeError();
+    const uint64_t TransferFlags = *Flags & (DeviceBufferedIO | DeviceDirectIO);
+    if (TransferFlags == (DeviceBufferedIO | DeviceDirectIO))
+      return ioError("READ/WRITE device sets both DO_BUFFERED_IO and "
+                     "DO_DIRECT_IO");
+    Neither = !TransferFlags;
+    Direct = TransferFlags == DeviceDirectIO;
+  }
+  if (!Neither && (Input.UserInputAccess || Input.UserOutputAccess))
+    return ioError("user page access requires neither READ/WRITE I/O");
+  if (Input.UserUnmapAfterDispatch &&
+      (!Neither || (Input.Input.empty() && !Input.OutputSize)))
+    return ioError("user unmapping requires a nonempty neither-I/O transfer");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
     if (Devices.at(Device).DeletePending || Devices.at(*Top).DeletePending)
@@ -530,6 +558,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
   Record.Device = Device;
   Record.PnpDevice = PnpOwner;
   Record.LifecycleIo = LifecycleIo;
+  Record.Direct = Direct;
+  Record.Neither = Neither;
   if (LifecycleIo)
     if (auto E = Lifecycle.trackIo(PnpOwner, *Packet))
       return E;
@@ -547,7 +577,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
   for (uint64_t Owner : Request->DeviceRoute)
     if (auto E = retainDevice(Owner))
       return E;
-  if (auto E = prepareRequestBuffers(*Request, Input, *Top))
+  if (auto E = prepareRequestBuffers(*Request, Input))
     return E;
   if (auto E = initializeRequestPacket(*Request, Input))
     return E;
@@ -703,9 +733,12 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&
       !ntError(*Status) && *Information) {
     if (Request->Neither) {
-      Observation.Output.resize(*Information);
-      if (auto E = Memory.readBacking(Request->UserBuffer, Observation.Output))
-        return E;
+      if (!RevokedUserAllocations.contains(Request->UserBuffer)) {
+        Observation.Output.resize(*Information);
+        if (auto E =
+                Memory.readBacking(Request->UserBuffer, Observation.Output))
+          return E;
+      }
     } else if (Request->Direct) {
       auto Bytes = readMDLBytes(Request->Mdl, *Information);
       if (!Bytes)

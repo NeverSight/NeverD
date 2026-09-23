@@ -360,6 +360,8 @@ JSON non signé ; son omission signifie zéro. Les fractions et les notations
 Seules les requêtes READ/WRITE/IOCTL acceptent `cancel_after_100ns`, entier JSON facultatif compris entre 0 et `INT64_MAX` (9223372036854775807). Le délai est relatif à la soumission de la requête, en unités virtuelles de 100 ns, et non en temps réel. Pour KMDF, zéro applique l’annulation après le routage du framework et avant le callback d’E/S invité ; si le routage a déjà achevé la requête, l’achèvement l’emporte. Pour WDM, zéro s’applique après le retour du dispatch. Pour un délai positif, le temps n’avance vers une échéance de timer, d’attente ou d’annulation que si aucun callback ni contexte n’est prêt. Un IRP WDM en attente appelle sa routine d’annulation enregistrée à `DISPATCH_LEVEL`, verrou d’annulation détenu ; elle doit le libérer avec `Irp->CancelIrql` avant l’achèvement. L’annulation générale des files et du PnP reste exclue. Chaque rapport de requête contient `cancel_requested_at_100ns`, soit l’heure virtuelle absolue de l’annulation effective, soit null si elle n’a pas eu lieu, notamment si l’achèvement a précédé l’annulation. Demander l’annulation ne suffit pas à achever l’IRP ni à imposer son statut final.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` et `IoCancelIrp` partagent l’état de l’IRP et le verrou d’annulation ; `IoCancelIrp` appelle la routine enregistrée de façon synchrone et indique si elle a été exécutée.
 
+Le booléen facultatif `user_unmap_after_dispatch` retire l’accès aux adresses utilisateur originales d’un transfert WDM neither non vide après le retour du dispatch et avant le travail ou l’annulation planifiés. Les pages verrouillées par MDL et leurs alias système restent utilisables jusqu’au déverrouillage ; les pointeurs utilisateur bruts et les nouveaux verrouillages échouent. Si la sortie est révoquée, `output_hex` est vide. La réutilisation, la fin du processus et les instants arbitraires de retrait ne sont pas modélisés.
+
 Pour les IOCTL directs, `input` initialise le premier tampon système,
 tandis que `direct_input` initialise le second tampon distinct décrit par le MDL,
 complété par des zéros jusqu’à `output_size`. `METHOD_IN_DIRECT` exige un accès
@@ -522,7 +524,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v20`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v21`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique

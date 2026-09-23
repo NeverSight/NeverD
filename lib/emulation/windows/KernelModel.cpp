@@ -1039,8 +1039,10 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
       const uint64_t Mapped =
           (Length + profile::PageSize - 1) & ~(profile::PageSize - 1);
       if (Address < Base + Mapped && Base < End)
-        return modelError("user address access requires the requesting "
-                          "process at IRQL <= APC_LEVEL");
+        return RevokedUserAllocations.contains(Base)
+                   ? modelError("unmapped user virtual address")
+                   : modelError("user address access requires the requesting "
+                                "process at IRQL <= APC_LEVEL");
     }
     // Unmapped low addresses outside our synthetic process retain the ordinary
     // backend memory-fault observation used by other execution phases.

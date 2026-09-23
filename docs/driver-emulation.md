@@ -56,7 +56,7 @@ establish compatibility with arbitrary third-party drivers.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
 | READ/WRITE | Serial buffered/direct/neither I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or implicit file position |
-| WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs and bounded cancellation | One requesting-process context; no arbitrary user mappings |
+| WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs, post-dispatch VA revocation and bounded cancellation | One requesting-process context; no arbitrary user mappings or remapping |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
@@ -382,6 +382,8 @@ means zero. Numeric fractions and floating-point spellings are rejected.
 
 Only READ/WRITE/IOCTL requests accept optional `cancel_after_100ns`, a JSON integer from 0 through `INT64_MAX` (9223372036854775807). It schedules cancellation relative to request submission in virtual 100 ns units, not wall-clock time. For KMDF, zero applies after framework routing and before the guest I/O callback; if routing already completed the request, completion wins. For WDM, zero applies after dispatch returns. When the live IRP has a registered cancel routine, the scheduler clears that field and invokes the routine at `DISPATCH_LEVEL` with the cancel spin lock held. The routine must release the lock using `Irp->CancelIrql` before completion or return. Without a registered routine, cancellation sets `Irp->Cancel` but does not complete the request. The WDK inline `IoSetCancelRoutine` exchange, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` and driver-initiated `IoCancelIrp` use the same IRP and lock state; `IoCancelIrp` calls a registered routine synchronously and returns whether it did so. For positive delays, time advances to timer, wait or cancellation deadlines only when no callback/frame is ready. General queue and PnP cancellation remain unsupported. Each request report includes `cancel_requested_at_100ns`, either the actual absolute virtual cancellation time or null if cancellation never occurred, including when completion won first. A cancellation request alone does not complete an IRP or prescribe its final status.
 
+For a nonempty WDM neither-I/O READ/WRITE or `METHOD_NEITHER` IOCTL, optional Boolean `user_unmap_after_dispatch` revokes the original user virtual addresses after dispatch returns and before queued work or cancellation runs. A previously locked MDL and its system alias retain the same physical bytes until the driver unlocks them; raw user-pointer access and new locks fail. If the output user address is revoked, `output_hex` is empty because no caller-visible output buffer remains, even if the driver completes successfully with a nonzero Information value. The backing is retained for existing MDL pins and is never reused in this bounded scenario. Arbitrary process exit, remapping and unmap timing are not modeled.
+
 For direct IOCTLs, `input` initializes the first system buffer, while
 `direct_input` initializes the separate MDL-described second buffer, padded
 with zeros to `output_size`. `METHOD_IN_DIRECT` requires read access; it does
@@ -433,7 +435,7 @@ locking. `ProbeForRead` still performs only its range/alignment check, while
 neither READ/WRITE, `user_input_access` is valid only for WRITE and
 `user_output_access` only for READ. These fields are rejected for buffered or
 direct transfers and empty buffers. Arbitrary
-processes and dynamic user unmapping remain unmodeled. WDM cancellation is
+processes and arbitrary user unmap timing remain unmodeled. WDM cancellation is
 covered only for serial file READ/WRITE/IOCTL IRPs with a registered driver
 cancel routine; arbitrary concurrent queue races remain outside this profile.
 The report's `configuration.user_page_access` lists only explicit protection
@@ -566,7 +568,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v20`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v21`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

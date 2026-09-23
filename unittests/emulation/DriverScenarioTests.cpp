@@ -322,6 +322,33 @@ TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
             std::string::npos);
 }
 
+TEST(DriverScenario, ParsesAndRestrictsPostDispatchUserUnmapping) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"ioctl","code":"0x222003","input":"01","output_size":1,
+     "user_unmap_after_dispatch":true},
+    {"kind":"read","output_size":1,
+     "user_unmap_after_dispatch":false}
+  ]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 2u);
+  EXPECT_EQ(Parsed->Requests[0].UserUnmapAfterDispatch, true);
+  EXPECT_EQ(Parsed->Requests[1].UserUnmapAfterDispatch, false);
+  for (
+      const char *JSON :
+      {R"({"requests":[{"kind":"read","output_size":1,"user_unmap_after_dispatch":1}]})",
+       R"({"requests":[{"kind":"read","output_size":1,"user_unmap_after_dispatch":null}]})",
+       R"({"requests":[{"kind":"create","user_unmap_after_dispatch":true}]})",
+       R"({"requests":[{"kind":"read","user_unmap_after_dispatch":true}]})",
+       R"({"requests":[{"kind":"ioctl","code":"0x222000","input":"01","user_unmap_after_dispatch":true}]})"}) {
+    SCOPED_TRACE(JSON);
+    auto Invalid = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(
+        llvm::toString(Invalid.takeError()).find("user_unmap_after_dispatch"),
+        std::string::npos);
+  }
+}
+
 TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
   for (const char *Value :
        {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",
