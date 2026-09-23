@@ -515,8 +515,11 @@ struct BinaryImage {
   /// there.  See Symbol::IsBoundaryGuess.
   std::set<va_t> boundaryGuessFunctionStarts() const {
     std::set<va_t> Guesses, Confirmed;
+    // Debug info renames a guessed symbol in place; a real name confirms it.
     for (const auto &Sym : Symbols)
-      (Sym.IsBoundaryGuess ? Guesses : Confirmed).insert(Sym.Addr);
+      (Sym.IsBoundaryGuess && isSynthesizedFuncName(Sym.Name) ? Guesses
+                                                              : Confirmed)
+          .insert(Sym.Addr);
     for (const auto &[Start, End] : KnownCodeRanges)
       if (!ContinuationCodeStarts.count(Start))
         Confirmed.insert(Start);

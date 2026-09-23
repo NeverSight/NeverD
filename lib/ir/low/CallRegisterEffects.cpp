@@ -29,6 +29,9 @@ LocalRegisterEffect localRegisterEffect(const BinaryImage &Img,
     Effect.Unknown = true;
     return Effect;
   }
+  std::set<va_t> BlockStarts;
+  for (const LowBlock &Block : F.Blocks)
+    BlockStarts.insert(Block.StartAddr);
   for (const LowBlock &Block : F.Blocks) {
     // A call that never returns cannot change a register its caller reads.
     auto NoReturnCall = [&](size_t OpIndex) {
@@ -54,6 +57,15 @@ LocalRegisterEffect localRegisterEffect(const BinaryImage &Img,
         // for code this summary cannot see.
         if (Block.Succs.empty())
           Effect.Unknown = true;
+        break;
+      case NdOp::BRANCH:
+      case NdOp::COND_BR:
+        // A direct branch to another function's entry leaves this body the
+        // way a tail call does; the CFG keeps no block for it, so its writes
+        // are that function's.
+        if (Op.NumInputs > 0 && Op.Inputs[0].isConst() &&
+            !BlockStarts.count(Op.Inputs[0].Offset))
+          Effect.Callees.insert(Op.Inputs[0].Offset);
         break;
       case NdOp::CALL:
         if (NoReturnCall(I))

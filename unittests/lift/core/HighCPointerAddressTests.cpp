@@ -3548,7 +3548,8 @@ TEST(HighCPointerAddresses, CalleeThatWritesRdxOrCallsIndirectlyClobbersIt) {
   constexpr va_t Entry = 0x140001000;
   for (const auto &Callee : std::vector<std::vector<uint8_t>>{
            {0x33, 0xd2, 0x48, 0x8b, 0xc1, 0xc3}, // xor edx, edx; mov rax, rcx
-           {0xff, 0xd1, 0xc3}}) {                // call rcx
+           {0xff, 0xd1, 0xc3},                   // call rcx
+           {0x31, 0xc0, 0x0f, 0xa2, 0xc3}}) {    // xor eax, eax; cpuid
     const std::string HighC = highcOnlyFunction(
         makeCodeFixture(Entry, callerKeepsRdxAcrossCall(Callee)), Entry);
     EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
@@ -3644,4 +3645,24 @@ TEST(HighCPointerAddresses, UnwindlessNonLeafCandidateIsNotAFunction) {
   EXPECT_EQ(DispositionOf(NonLeaf),
             PipelineFunctionDisposition::RejectedUnwindlessNonLeaf);
   EXPECT_EQ(DispositionOf(Leaf), PipelineFunctionDisposition::Accepted);
+}
+
+TEST(HighCPointerAddresses, CalleeBranchToAnotherFunctionCountsItsWrites) {
+  // The callee leaves through `jz g` to a separate function that clears
+  // EDX.  The CFG keeps no block for g, so the summary must follow it.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001040;
+  std::vector<uint8_t> Code = callerKeepsRdxAcrossCall(
+      {0x48, 0x85, 0xc9,                   // test rcx, rcx
+       0x0f, 0x84, 0x17, 0x00, 0x00, 0x00, // jz   0x140001040
+       0x48, 0x8b, 0xc1,                   // mov  rax, rcx
+       0xc3});                             // ret
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x33, 0xd2, 0xc3}); // xor edx, edx; ret
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "clear_rdx";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
 }
