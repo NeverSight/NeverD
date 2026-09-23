@@ -519,7 +519,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v23`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v24`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -598,4 +598,8 @@ Il rapporto `configuration.user_page_access` registra solo le protezioni esplici
 
 ## Richieste WDM concorrenti limitate
 
-Una richiesta WDM READ/WRITE/IOCTL può impostare `defer_callback_drain: true`. Solo se il dispatch restituisce `STATUS_PENDING` e l’IRP resta in sospeso, la richiesta successiva viene inviata prima di eseguire i callback. Dopo la richiesta successiva senza questo campo, i callback vengono eseguiti e il gruppo viene finalizzato; se il campo è presente sull’ultima richiesta, ciò avviene alla fine dello scenario. Le richieste sovrapposte devono usare oggetti file distinti. Non sono supportate sovrapposizioni sullo stesso file, invii in gruppo KMDF, preemption arbitraria o arrivi esterni.
+Una richiesta WDM READ/WRITE/IOCTL può impostare `defer_callback_drain: true`. Solo se il dispatch restituisce `STATUS_PENDING` e l’IRP resta in sospeso, la richiesta successiva viene inviata prima di eseguire i callback. Dopo la richiesta successiva senza questo campo, i callback vengono eseguiti e il gruppo viene finalizzato; se il campo è presente sull’ultima richiesta, ciò avviene alla fine dello scenario. Le richieste sovrapposte possono usare oggetti file distinti oppure lo stesso oggetto aperto esplicitamente in modalità asincrona. Non sono supportate sovrapposizioni su file sincroni, invii in gruppo KMDF, preemption arbitraria o arrivi esterni.
+
+## Oggetto file asincrono
+
+Solo una richiesta CREATE può impostare il booleano `asynchronous_file: true`; omissione o false mantengono l’apertura sincrona. L’apertura asincrona cancella `FO_SYNCHRONOUS_IO` dal `FILE_OBJECT` guest e non imposta `IRP_SYNCHRONOUS_API` sugli IRP successivi. READ/WRITE/IOCTL sullo stesso file asincrono si sovrappongono solo se l’esecuzione dei callback viene esplicitamente rinviata. CLEANUP/CLOSE attendono il completamento e la finalizzazione di tutti i trasferimenti precedenti. Non si mantiene una posizione implicita: `byte_offset` è per richiesta e vale zero per impostazione predefinita. Le richieste diverse da CREATE rifiutano il campo anche se false.

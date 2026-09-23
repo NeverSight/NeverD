@@ -275,7 +275,7 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
   const bool IsPnp = Input.Kind == DriverRequestKind::Pnp;
   const bool IsPower = Input.Kind == DriverRequestKind::Power;
   const bool FileFree = IsPnp || IsPower;
-  uint32_t Flags = FileFree ? 0 : IRPSynchronous;
+  uint32_t Flags = FileFree || Request->AsynchronousFile ? 0 : IRPSynchronous;
   if (Input.Kind == DriverRequestKind::Create)
     Flags |= IRPCreate;
   if (Input.Kind == DriverRequestKind::Close)
@@ -427,6 +427,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
   const bool IsRead = Input.Kind == DriverRequestKind::Read;
   const bool IsWrite = Input.Kind == DriverRequestKind::Write;
   const bool IsIOCTL = Input.Kind == DriverRequestKind::DeviceControl;
+  if (Input.AsynchronousFile && Input.Kind != DriverRequestKind::Create)
+    return ioError("asynchronous_file requires a create request");
   if ((!IsIOCTL && Input.ControlCode) ||
       (!IsIOCTL && !IsWrite && !Input.Input.empty()) ||
       (!IsIOCTL && !IsRead && Input.OutputSize) ||
@@ -581,21 +583,25 @@ KernelModel::beginRequest(const DriverRequest &Input,
     State.Address = *File;
     State.Device = Device;
     State.PnpDevice = PnpOwner;
+    State.Asynchronous = Input.AsynchronousFile.value_or(false);
     State.State = FileState::Opening;
     FileIt = Files.emplace(Input.File, State).first;
     struct Field {
       uint64_t Offset, Value;
       unsigned Size;
     };
-    for (const Field &F : std::array<Field, 9>{{{0, FileType, 2},
-                                                {2, FileSize, 2},
-                                                {FileDeviceOffset, Device, 8},
-                                                {FileReadAccessOffset, 1, 1},
-                                                {FileWriteAccessOffset, 1, 1},
-                                                {FileSharedReadOffset, 1, 1},
-                                                {FileSharedWriteOffset, 1, 1},
-                                                {FileFlagsOffset, FileFlags, 4},
-                                                {FileNameBufferOffset, 0, 8}}})
+    for (const Field &F : std::array<Field, 9>{
+             {{0, FileType, 2},
+              {2, FileSize, 2},
+              {FileDeviceOffset, Device, 8},
+              {FileReadAccessOffset, 1, 1},
+              {FileWriteAccessOffset, 1, 1},
+              {FileSharedReadOffset, 1, 1},
+              {FileSharedWriteOffset, 1, 1},
+              {FileFlagsOffset,
+               State.Asynchronous ? FileFlags & ~FileSynchronousIO : FileFlags,
+               4},
+              {FileNameBufferOffset, 0, 8}}})
       if (auto E = Memory.writeInteger(*File + F.Offset, F.Value, F.Size))
         return E;
   } else {
@@ -610,10 +616,26 @@ KernelModel::beginRequest(const DriverRequest &Input,
           "file request order must be CREATE, READ/WRITE/DEVICE_CONTROL*, "
           "CLEANUP, CLOSE");
   }
-  if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+  const bool Transfer = IsRead || IsWrite || IsIOCTL;
+  const bool FileHasActiveRequest =
+      std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
         return Entry.second.FileAddress == FileIt->second.Address;
-      }))
-    return ioError("a synchronous file requires its prior request to finalize");
+      });
+  if (FileHasActiveRequest) {
+    if (!FileIt->second.Asynchronous)
+      return ioError(
+          "a synchronous file requires its prior request to finalize");
+    if (!Transfer ||
+        std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          const auto &Prior = Entry.second;
+          return Prior.FileAddress == FileIt->second.Address &&
+                 Prior.Kind != DriverRequestKind::Read &&
+                 Prior.Kind != DriverRequestKind::Write &&
+                 Prior.Kind != DriverRequestKind::DeviceControl;
+        }))
+      return ioError("asynchronous file lifecycle requires prior transfers "
+                     "to finalize");
+  }
   auto Packet = allocate(IRPSize + *StackCount * StackSize);
   if (!Packet)
     return Packet.takeError();
@@ -633,6 +655,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
       return E;
   Record.FileAddress = FileIt->second.Address;
   Record.FileId = Input.File;
+  Record.AsynchronousFile = FileIt->second.Asynchronous;
   Record.ProcessID = Input.RequestorProcessID;
   if (Input.CancelAfter100ns) {
     llvm::Expected<uint64_t> Deadline = Scheduler.now100ns();
@@ -956,15 +979,18 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
     }
   } else if (Request->Kind == DriverRequestKind::Cleanup) {
     File.State = FileState::Cleaned;
-    if (auto E = Memory.writeInteger(File.Address + FileFlagsOffset,
-                                     FileFlags | FileCleanupComplete, 4))
+    if (auto E = Memory.writeInteger(
+            File.Address + FileFlagsOffset,
+            (File.Asynchronous ? FileFlags & ~FileSynchronousIO : FileFlags) |
+                FileCleanupComplete,
+            4))
       return E;
   } else if (Request->Kind == DriverRequestKind::Close) {
     FreedRanges.emplace(File.Address, FileSize);
     Files.erase(FileIt);
   } else if ((Request->Kind == DriverRequestKind::Read ||
               Request->Kind == DriverRequestKind::Write) &&
-             !ntError(CompletionStatus)) {
+             !ntError(CompletionStatus) && !File.Asynchronous) {
     if (auto E =
             Memory.writeInteger(File.Address + FileCurrentByteOffset,
                                 Request->ByteOffset + Observation.Information,

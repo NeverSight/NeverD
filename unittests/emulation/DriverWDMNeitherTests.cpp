@@ -284,6 +284,38 @@ TEST(DriverWDMNeither, AnotherRequestorRunsBeforeExitedRequestorsWorker) {
     }
 }
 
+TEST(DriverWDMNeither, AsynchronousFileAllowsSecondTransferBeforeWorker) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options(0x22201b, Address);
+      Options.Requests[0].AsynchronousFile = true;
+      Options.Requests[1].DeferCallbackDrain = true;
+      DriverRequest SecondIO = Options.Requests[1];
+      SecondIO.ControlCode = 0x222003;
+      SecondIO.DeferCallbackDrain = false;
+      Options.Requests.insert(Options.Requests.begin() + 2, SecondIO);
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 5u);
+      EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[1].Output,
+                (std::vector<uint8_t>{0x11, 0x12, 0x13, 0x14}));
+      EXPECT_EQ(Result->Requests[2].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[2].Output,
+                (std::vector<uint8_t>{0x5b, 0x58, 0x59, 0x5e}));
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
+
 TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
   for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
 #ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE

@@ -360,6 +360,7 @@ private:
     uint64_t Device = 0;
     /// Stable lifecycle owner even after the opened FDO is detached.
     uint64_t PnpDevice = 0;
+    bool Asynchronous = false;
     FileState State = FileState::Opening;
   };
   std::map<uint32_t, OpenFile> Files;
@@ -409,6 +410,7 @@ private:
     bool CancelRequested = false;
     std::optional<uint64_t> CancelDeadline = std::nullopt;
     uint32_t FileId = 0;
+    bool AsynchronousFile = false;
     uint32_t ProcessID = 0;
     uint32_t InputSize = 0;
     uint32_t TransferSize = 0;

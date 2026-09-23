@@ -133,7 +133,16 @@ static void Worker(void *Target, void *Context) {
 static NTSTATUS AsyncDispatch(void *Target, IRP *Request) {
   (void)Target;
   if (Request->Stack->ControlCode == BatchDeferred ||
-      Request->Stack->ControlCode == BatchCancelable) {
+      Request->Stack->ControlCode == BatchCancelable ||
+      Request->Stack->ControlCode == BatchAsyncOnly) {
+    if (Request->Stack->ControlCode == BatchAsyncOnly &&
+        ((*(U32 *)((U8 *)Request->Stack->File + FileFlagsOffset) &
+          FileSynchronousIO) ||
+         (*(U32 *)((U8 *)Request + IRPFlagsOffset) & IRPSynchronous))) {
+      Request->Status = (NTSTATUS)0xc000000dU;
+      IofCompleteRequest(Request, 0);
+      return Request->Status;
+    }
     U32 Slot = 64;
     for (U32 I = 0; I < 64; ++I)
       if (!BatchStates[I]) {

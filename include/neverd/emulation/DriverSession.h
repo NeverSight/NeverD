@@ -68,12 +68,15 @@ struct DriverRequest {
   uint64_t ByteOffset = 0;
   /// Scenario identity of an independently opened FILE_OBJECT.
   uint32_t File = 0;
+  /// CREATE-only choice of an asynchronous FILE_OBJECT. Omission models a
+  /// synchronous open; later transfers inherit the opened object's mode.
+  std::optional<bool> AsynchronousFile;
   /// Optional cancellation event relative to submission in virtual 100 ns
   /// units. For WDM, zero acts after dispatch returns; for KMDF, it acts after
   /// framework routing and before a guest I/O callback unless routing wins.
   std::optional<uint64_t> CancelAfter100ns;
-  /// Admit the next independent file request before draining callbacks
-  /// for this request. The dispatch must actually return with a pending IRP.
+  /// Admit the next file request before draining callbacks for this request.
+  /// Same-file overlap requires an asynchronous open and a pending transfer.
   bool DeferCallbackDrain = false;
   /// Stable configured PDO identity; mutually exclusive with Device.
   std::string DeviceID;

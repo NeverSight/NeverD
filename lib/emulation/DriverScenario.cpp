@@ -766,6 +766,9 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
 #undef NEVERD_DRIVER_REQUEST_KIND
   if (!KnownKind)
     return invalid("unsupported request kind '" + *Kind + "'");
+  if (Object->get(AsynchronousFileField) &&
+      Result.Kind != DriverRequestKind::Create)
+    return invalid("asynchronous_file requires a create request");
   if ((Result.Kind == DriverRequestKind::Pnp ||
        Result.Kind == DriverRequestKind::Power) &&
       Object->get(RequestorProcessIDField))
@@ -876,6 +879,12 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     if (!Number || *Number > UINT32_MAX)
       return invalid("file must be an unsigned 32-bit scenario identity");
     Result.File = static_cast<uint32_t>(*Number);
+  }
+  if (const auto *Async = Object->get(AsynchronousFileField)) {
+    auto Value = Async->getAsBoolean();
+    if (!Value)
+      return invalid("asynchronous_file must be a boolean");
+    Result.AsynchronousFile = *Value;
   }
   if (const auto *Cancel = Object->get(CancelAfter100nsField)) {
     auto Number = Cancel->getAsUINT64();
@@ -1175,6 +1184,8 @@ llvm::Error validateDmaEvents(const DriverOptions &Options) {
   size_t Count = 0;
   uint64_t Bytes = 0;
   for (const auto &Request : Options.Requests) {
+    if (Request.AsynchronousFile && Request.Kind != DriverRequestKind::Create)
+      return invalid("asynchronous_file requires a create request");
     if (!Request.DmaEvents.empty() && Request.Kind != DriverRequestKind::Read &&
         Request.Kind != DriverRequestKind::Write &&
         Request.Kind != DriverRequestKind::DeviceControl)

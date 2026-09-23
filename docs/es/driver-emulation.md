@@ -529,7 +529,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v23`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v24`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -611,4 +611,8 @@ El informe `configuration.user_page_access` conserva solo las protecciones expl�
 
 ## Solicitudes WDM concurrentes acotadas
 
-Una solicitud WDM READ/WRITE/IOCTL puede establecer `defer_callback_drain: true`. Solo si el despacho devuelve `STATUS_PENDING` y el IRP sigue pendiente se envía la siguiente solicitud antes de ejecutar las devoluciones de llamada. Después de la siguiente solicitud sin este campo se ejecutan las devoluciones de llamada y se finaliza el lote; si la última solicitud lo establece, se hace al final del escenario. Las solicitudes superpuestas deben usar objetos de archivo distintos. No se admiten solicitudes superpuestas del mismo archivo, lotes KMDF, planificación preventiva arbitraria ni llegadas externas.
+Una solicitud WDM READ/WRITE/IOCTL puede establecer `defer_callback_drain: true`. Solo si el despacho devuelve `STATUS_PENDING` y el IRP sigue pendiente se envía la siguiente solicitud antes de ejecutar las devoluciones de llamada. Después de la siguiente solicitud sin este campo se ejecutan las devoluciones de llamada y se finaliza el lote; si la última solicitud lo establece, se hace al final del escenario. Las solicitudes superpuestas pueden usar objetos de archivo distintos o el mismo objeto abierto explícitamente en modo asíncrono. No se admiten superposiciones en un archivo síncrono, lotes KMDF, planificación preventiva arbitraria ni llegadas externas.
+
+## Objeto de archivo asíncrono
+
+Solo una solicitud CREATE puede establecer el booleano `asynchronous_file: true`; si se omite o es false, la apertura sigue siendo síncrona. La apertura asíncrona borra `FO_SYNCHRONOUS_IO` del `FILE_OBJECT` invitado y no establece `IRP_SYNCHRONOUS_API` en los IRP de archivo posteriores. Los READ/WRITE/IOCTL del mismo archivo asíncrono solo se superponen cuando se difiere explícitamente el procesamiento de las devoluciones de llamada. CLEANUP/CLOSE esperan a que todas las transferencias anteriores terminen y se finalicen. No se mantiene una posición implícita; `byte_offset` es propio de cada solicitud y vale cero por defecto. Los demás tipos rechazan el campo incluso con false.

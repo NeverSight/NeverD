@@ -316,7 +316,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v23` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v24` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 
@@ -347,4 +347,8 @@ WDM `METHOD_NEITHER` では `Type3InputBuffer` と `IRP.UserBuffer` は別々の
 
 ## 限定的な WDM 要求の並行実行
 
-WDM の READ/WRITE/IOCTL 要求には `defer_callback_drain: true` を指定できます。ディスパッチが `STATUS_PENDING` を返し、IRP が実際に保留中の場合だけ、コールバックを実行する前に次の要求を投入します。フラグのない次の要求の後でコールバックを処理し、バッチを完了します。最後の要求にフラグがある場合はシナリオ末尾で処理します。重複する要求には別々のファイルオブジェクトが必要です。同一ファイルでの重複、KMDF のバッチ投入、任意のプリエンプションや外部要求の到着には対応しません。
+WDM の READ/WRITE/IOCTL 要求には `defer_callback_drain: true` を指定できます。ディスパッチが `STATUS_PENDING` を返し、IRP が実際に保留中の場合だけ、コールバックを実行する前に次の要求を投入します。フラグのない次の要求の後でコールバックを処理し、バッチを完了します。最後の要求にフラグがある場合はシナリオ末尾で処理します。重複する要求には別々のファイルオブジェクト、または明示的に非同期で開いた同一ファイルオブジェクトを使えます。同期ファイル上の重複、KMDF のバッチ投入、任意のプリエンプションや外部要求の到着には対応しません。
+
+## 非同期ファイルオブジェクト
+
+CREATE 要求だけが真偽値 `asynchronous_file: true` を指定できます。省略または false は同期オープンです。非同期オープンではゲスト `FILE_OBJECT` の `FO_SYNCHRONOUS_IO` をクリアし、後続のファイル IRP に `IRP_SYNCHRONOUS_API` を設定しません。同一非同期ファイルの READ/WRITE/IOCTL はコールバック処理を明示的に遅延した場合のみ重複できます。CLEANUP/CLOSE は先行する全転送の完了と最終化を待ちます。暗黙のファイル位置は保持せず、`byte_offset` は要求ごとに指定され、省略時はゼロです。CREATE 以外では false も拒否します。
