@@ -328,7 +328,7 @@ TEST(DriverKMDFPnp, IoStopCompletesDriverOwnedRequestBeforeD0Exit) {
 TEST(DriverKMDFPnp, PowerTransitionWaitsForDriverOwnedWorkerCompletion) {
   for (const char *Image : pnpImages())
     for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
-      for (char Mode : {'B', 'D'}) {
+      for (char Mode : {'B', 'D', 'Y'}) {
         SCOPED_TRACE(Image);
         SCOPED_TRACE(Base);
         SCOPED_TRACE(Mode);

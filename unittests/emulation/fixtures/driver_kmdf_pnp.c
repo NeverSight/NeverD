@@ -9,10 +9,10 @@
 /// WDK entry library. Service suffixes M and T use default and explicit power
 /// management; C completes a held request from EvtIoStop, A requeues it,
 /// V resumes it, G purges it on surprise removal, B/D complete it from a
-/// worker without/with EvtIoStop, E/Z leave one without a completion producer
-/// with/without EvtIoStop, R consumes one assigned memory resource, L leaves
-/// its mapping live, W attempts an invalid descriptor write, and F fails
-/// AddDevice.
+/// worker without/with EvtIoStop, Y does the same without hardware callbacks,
+/// E/Z leave one without a completion producer with/without EvtIoStop;
+/// R consumes one assigned memory resource, L leaves its mapping live,
+/// W attempts an invalid descriptor write, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -58,7 +58,7 @@ static BOOLEAN UsesPowerQueue(VOID) {
   return ServiceMode == L'M' || ServiceMode == L'T' || ServiceMode == L'C' ||
          ServiceMode == L'A' || ServiceMode == L'V' || ServiceMode == L'G' ||
          ServiceMode == L'B' || ServiceMode == L'D' || ServiceMode == L'E' ||
-         ServiceMode == L'Z';
+         ServiceMode == L'Y' || ServiceMode == L'Z';
 }
 
 static BOOLEAN UsesAssignedMemory(VOID) {
@@ -241,7 +241,7 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
     WdfRequestCompleteWithInformation(Request, STATUS_INVALID_PARAMETER, 0);
     return;
   }
-  if (ServiceMode == L'B' || ServiceMode == L'D') {
+  if (ServiceMode == L'B' || ServiceMode == L'D' || ServiceMode == L'Y') {
     PendingWorkItem = IoAllocateWorkItem(
         WdfDeviceWdmGetDeviceObject(WdfIoQueueGetDevice(Queue)));
     if (PendingWorkItem == NULL) {
@@ -291,8 +291,8 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     return STATUS_INVALID_DEVICE_STATE;
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
-      UsesPowerQueue() || ServiceMode == L'H' || ServiceMode == L'I' ||
-      ServiceMode == L'J' || ServiceMode == L'U') {
+      (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
+      ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U') {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;

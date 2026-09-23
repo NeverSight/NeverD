@@ -741,6 +741,19 @@ constexpr llvm::StringLiteral KMDFPnpHeldRequestScenario = R"({
       {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
        "bus_completion":{"status":0}}],
     "unload":true})";
+
+constexpr llvm::StringLiteral KMDFPnpServicePrefix = "NeverDKmdfPnp";
+
+neverd_driver_options_v1 kmdfPnpOptions(const char *Service) {
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = Service;
+  return Options;
+}
 #endif
 
 TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFPnpLifecycle) {
@@ -754,13 +767,8 @@ TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFPnpLifecycle) {
     for (bool CLI : {false, true}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(CLI);
-      neverd_driver_options_v1 Options{};
-      Options.struct_size = sizeof(Options);
-      Options.instruction_limit = 100000;
-      Options.memory_limit = 64 * 1024 * 1024;
-      Options.event_limit = 10000;
-      Options.timeout_milliseconds = 5000;
-      Options.service_name = "NeverDKmdfPnpH";
+      const std::string Service = KMDFPnpServicePrefix.str() + 'H';
+      auto Options = kmdfPnpOptions(Service.c_str());
       auto Parsed = llvm::json::parse(
           CLI ? runCLI(KMDFPnpLifecycleScenario.str(), 0, "success", Image)
               : takeString(neverd_emulate_driver_scenario_json(
@@ -823,13 +831,8 @@ TEST_F(DriverScenarioPublic, CAPIPowerManagedKMDFPnpQueueEntersD0) {
 #endif
   for (const char *Image : Images) {
     SCOPED_TRACE(Image);
-    neverd_driver_options_v1 Options{};
-    Options.struct_size = sizeof(Options);
-    Options.instruction_limit = 100000;
-    Options.memory_limit = 64 * 1024 * 1024;
-    Options.event_limit = 10000;
-    Options.timeout_milliseconds = 5000;
-    Options.service_name = "NeverDKmdfPnpM";
+    const std::string Service = KMDFPnpServicePrefix.str() + 'M';
+    auto Options = kmdfPnpOptions(Service.c_str());
     auto Parsed =
         llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
             Session, Image, KMDFPnpLifecycleScenario.data(), &Options)));
@@ -873,14 +876,8 @@ TEST_F(DriverScenarioPublic, CAPIResumesStoppedKMDFRequests) {
     for (char Mode : {'A', 'V'}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(Mode);
-      neverd_driver_options_v1 Options{};
-      Options.struct_size = sizeof(Options);
-      Options.instruction_limit = 100000;
-      Options.memory_limit = 64 * 1024 * 1024;
-      Options.event_limit = 10000;
-      Options.timeout_milliseconds = 5000;
-      const std::string Service = std::string("NeverDKmdfPnp") + Mode;
-      Options.service_name = Service.c_str();
+      const std::string Service = KMDFPnpServicePrefix.str() + Mode;
+      auto Options = kmdfPnpOptions(Service.c_str());
       auto Parsed =
           llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
               Session, Image, KMDFPnpHeldRequestScenario.data(), &Options)));
@@ -922,17 +919,11 @@ TEST_F(DriverScenarioPublic, CAPIWaitsForKMDFWorkerBeforeStop) {
   Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
 #endif
   for (const char *Image : Images)
-    for (char Mode : {'B', 'D'}) {
+    for (char Mode : {'B', 'D', 'Y'}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(Mode);
-      neverd_driver_options_v1 Options{};
-      Options.struct_size = sizeof(Options);
-      Options.instruction_limit = 100000;
-      Options.memory_limit = 64 * 1024 * 1024;
-      Options.event_limit = 10000;
-      Options.timeout_milliseconds = 5000;
-      const std::string Service = std::string("NeverDKmdfPnp") + Mode;
-      Options.service_name = Service.c_str();
+      const std::string Service = KMDFPnpServicePrefix.str() + Mode;
+      auto Options = kmdfPnpOptions(Service.c_str());
       auto Parsed =
           llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
               Session, Image, KMDFPnpHeldRequestScenario.data(), &Options)));
@@ -996,13 +987,8 @@ TEST_F(DriverScenarioPublic, CAPIPreparesAssignedKMDFHardware) {
 #endif
   for (const char *Image : Images) {
     SCOPED_TRACE(Image);
-    neverd_driver_options_v1 Options{};
-    Options.struct_size = sizeof(Options);
-    Options.instruction_limit = 100000;
-    Options.memory_limit = 64 * 1024 * 1024;
-    Options.event_limit = 10000;
-    Options.timeout_milliseconds = 5000;
-    Options.service_name = "NeverDKmdfPnpR";
+    const std::string Service = KMDFPnpServicePrefix.str() + 'R';
+    auto Options = kmdfPnpOptions(Service.c_str());
     auto Parsed =
         llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
             Session, Image, Scenario.data(), &Options)));
