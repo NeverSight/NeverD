@@ -18,6 +18,7 @@
 #include "windows/WindowsKernelLayout.h"
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 
 namespace neverd::emulation {
@@ -422,6 +423,12 @@ TEST_F(KernelRequestOwnership,
   ASSERT_FALSE(bool(Attempt));
   EXPECT_NE(llvm::toString(Attempt.takeError()).find("neither READ/WRITE"),
             std::string::npos);
+  Read.UserOutputAccess.reset();
+  Read.UserUnmapAfterDispatch = false;
+  auto Unmap = Model->beginRequest(Read);
+  ASSERT_FALSE(bool(Unmap));
+  EXPECT_NE(llvm::toString(Unmap.takeError()).find("neither-I/O transfer"),
+            std::string::npos);
 }
 
 TEST_F(KernelRequestOwnership,
@@ -642,6 +649,78 @@ TEST_F(KernelRequestOwnership,
   success(Model->recordDispatchReturn(IRP, 0));
   success(Model->finalizeRequest(IRP));
   Model->setUserRequestContext(false);
+  close();
+}
+
+TEST_F(KernelRequestOwnership,
+       RevokedUserAddressesLeaveLockedSystemAliasesUsable) {
+  ASSERT_NE(open(), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  Input.UserUnmapAfterDispatch = true;
+  const uint64_t IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  const uint64_t Stack = integer(IRP + IRPStackPointerOffset);
+  const uint64_t UserInput = integer(Stack + StackType3InputOffset);
+  const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
+  Model->enterExecution(profile::StackBase);
+  Model->setUserRequestContext(true);
+  const uint64_t InMdl = call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
+  const uint64_t OutMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
+  ASSERT_NE(InMdl, 0u);
+  ASSERT_NE(OutMdl, 0u);
+  call("MmProbeAndLockPages", {InMdl, UserMode, IoReadAccess});
+  call("MmProbeAndLockPages", {OutMdl, UserMode, IoWriteAccess});
+  const uint64_t InAlias =
+      call("MmGetSystemAddressForMdlSafe", {InMdl, NormalPagePriority});
+  const uint64_t OutAlias =
+      call("MmGetSystemAddressForMdlSafe", {OutMdl, NormalPagePriority});
+  call("IoMarkIrpPending", {IRP});
+  Model->setUserRequestContext(false);
+  success(Model->recordDispatchReturn(IRP, Pending));
+  success(Model->revokeRequestUserBuffers(IRP));
+  rejected(Model->revokeRequestUserBuffers(IRP));
+  auto InputAccessible = Memory->canAccess(UserInput, 1, Read);
+  auto OutputAccessible = Memory->canAccess(UserOutput, 1, Read | Write);
+  ASSERT_TRUE(bool(InputAccessible));
+  ASSERT_TRUE(bool(OutputAccessible));
+  EXPECT_FALSE(*InputAccessible);
+  EXPECT_FALSE(*OutputAccessible);
+  auto RawAccess = Model->validateGuestAccess(UserInput, 1, false);
+  ASSERT_TRUE(bool(RawAccess));
+  EXPECT_NE(llvm::toString(std::move(RawAccess))
+                .find("unmapped user virtual address"),
+            std::string::npos);
+  success(Model->validateGuestAccess(InAlias, 2, false));
+  success(Model->validateGuestAccess(OutAlias, 1, true));
+  EXPECT_EQ(integer(InAlias, 2), 0x2211u);
+  guestWrite(OutAlias, 0x42, 1);
+  std::array<uint8_t, 1> Backing{};
+  success(Memory->readBacking(UserOutput, Backing));
+  EXPECT_EQ(Backing[0], 0x42u);
+  Model->setUserRequestContext(true);
+  const uint64_t NewMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
+  ASSERT_NE(NewMdl, 0u);
+  auto Relock =
+      Model->call("MmProbeAndLockPages", {NewMdl, UserMode, IoWriteAccess});
+  ASSERT_FALSE(bool(Relock));
+  uint32_t Exception = 0;
+  llvm::handleAllErrors(
+      Relock.takeError(),
+      [&](const KernelGuestException &E) { Exception = E.code(); },
+      [&](const llvm::ErrorInfoBase &E) {
+        ADD_FAILURE() << "unexpected model error: " << E.message();
+      });
+  EXPECT_EQ(Exception, exceptions::StatusAccessViolation);
+  call("IoFreeMdl", {NewMdl});
+  Model->setUserRequestContext(false);
+  call("MmUnlockPages", {OutMdl});
+  call("MmUnlockPages", {InMdl});
+  call("IoFreeMdl", {OutMdl});
+  call("IoFreeMdl", {InMdl});
+  complete(IRP, 0, 1);
+  EXPECT_TRUE(observation(IRP).Output.empty());
+  success(Model->finalizeRequest(IRP));
   close();
 }
 

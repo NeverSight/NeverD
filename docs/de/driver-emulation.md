@@ -357,6 +357,8 @@ Brüche und Gleitkommaschreibweisen werden abgewiesen.
 Nur READ-/WRITE-/IOCTL-Anforderungen akzeptieren das optionale Feld `cancel_after_100ns`, eine JSON-Ganzzahl zwischen 0 und `INT64_MAX` (9223372036854775807). Die Verzögerung zählt ab Anforderungsübergabe in virtuellen 100-ns-Einheiten, nicht in Echtzeit. Bei KMDF löst Null den Abbruch nach Framework-Routing und vor dem Gast-I/O-Callback aus; hat das Routing bereits abgeschlossen, gewinnt der Abschluss. Bei WDM gilt Null nach der Rückkehr aus dem Dispatch. Bei positiven Verzögerungen schreitet die Zeit nur dann zu Timer-, Warte- oder Abbruchfristen fort, wenn kein Callback oder Ausführungskontext bereit ist. Ein ausstehender WDM-IRP ruft seine registrierte Abbruchroutine auf `DISPATCH_LEVEL` mit gehaltenem Abbruch-Spinlock auf; vor Abschluss muss sie ihn mit `Irp->CancelIrql` freigeben. Allgemeiner Warteschlangen- und PnP-Abbruch bleibt unmodelliert. Jeder Anforderungsbericht enthält `cancel_requested_at_100ns`: die tatsächliche absolute virtuelle Abbruchzeit oder null, wenn kein Abbruch erfolgte, auch bei vorherigem Abschluss. Eine Abbruchanforderung allein schließt kein IRP ab und legt seinen Endstatus nicht fest.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` und `IoCancelIrp` verwenden denselben IRP-Zustand und dieselbe Abbruch-Sperre; `IoCancelIrp` ruft eine registrierte Routine synchron auf und meldet, ob sie ausgeführt wurde.
 
+Das optionale boolesche Feld `user_unmap_after_dispatch` entzieht bei einem nichtleeren WDM-Neither-Transfer den ursprünglichen Benutzeradressen nach der Dispatch-Rückkehr und vor geplanter Arbeit oder einem Abbruch den Zugriff. Gesperrte MDL-Seiten und ihre Systemaliase bleiben bis zum Entsperren nutzbar; rohe Benutzerzeiger und neue Sperren schlagen fehl. Bei entzogenem Ausgabezugriff bleibt `output_hex` leer. Wiederverwendung, Prozessende und beliebige Zeitpunkte der Freigabe sind nicht modelliert.
+
 Bei direkten IOCTLs initialisiert `input` den ersten Systempuffer, während
 `direct_input` den separaten, durch die MDL beschriebenen zweiten Puffer
 initialisiert und bis `output_size` mit Nullen ergänzt wird. `METHOD_IN_DIRECT`
@@ -518,7 +520,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v20`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v21`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten

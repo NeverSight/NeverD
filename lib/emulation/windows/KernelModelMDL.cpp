@@ -150,6 +150,9 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
         exceptions::StatusAccessViolation);
   --Region;
   const uint64_t Offset = State.Buffer - Region->first;
+  if (RevokedUserAllocations.contains(Region->first))
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
   if (Offset >= Region->second || State.ByteCount > Region->second - Offset)
     return llvm::make_error<KernelGuestException>(
         exceptions::StatusAccessViolation);

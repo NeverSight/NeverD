@@ -1042,6 +1042,11 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           break;
         }
       }
+      if (Options.Requests[Index].UserUnmapAfterDispatch.value_or(false))
+        if (auto E = Kernel.revokeRequestUserBuffers(Invocation->IRP)) {
+          ModelFailure(std::move(E));
+          break;
+        }
       // A completed REMOVE may still have callbacks that released their final
       // remove-lock acquisition and then waited. Keep its captured route until
       // those real execution frames return, even if the packet is already dead.

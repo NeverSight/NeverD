@@ -54,14 +54,17 @@ struct DriverRequest {
   /// Optional page rights for nonempty WDM neither-I/O input/output buffers.
   std::optional<DriverUserPageAccess> UserInputAccess;
   std::optional<DriverUserPageAccess> UserOutputAccess;
+  /// Revoke the request's original neither-I/O user virtual addresses after
+  /// dispatch returns. Locked MDL system aliases retain the underlying pages.
+  std::optional<bool> UserUnmapAfterDispatch;
   /// Initial contents of a direct IOCTL's second buffer, padded to OutputSize.
   std::vector<uint8_t> DirectInput;
   uint64_t ByteOffset = 0;
   /// Scenario identity of an independently opened FILE_OBJECT.
   uint32_t File = 0;
   /// Optional cancellation event relative to submission in virtual 100 ns
-  /// units. Zero requests cancellation before dispatch; only READ/WRITE/IOCTL
-  /// accept this field. Runtime cancellation requires a supported KMDF route.
+  /// units. For WDM, zero acts after dispatch returns; for KMDF, it acts after
+  /// framework routing and before a guest I/O callback unless routing wins.
   std::optional<uint64_t> CancelAfter100ns;
   /// Stable configured PDO identity; mutually exclusive with Device.
   std::string DeviceID;
