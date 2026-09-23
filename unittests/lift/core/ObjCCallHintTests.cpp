@@ -2073,6 +2073,43 @@ TEST(ObjCCallHints, FoundationURLPathAndStringComparisonKeepSwiftABI) {
   }
 }
 
+TEST(ObjCCallHints, SwiftStringHashIntoKeepsInoutAndStringCarriers) {
+  constexpr llvm::StringLiteral Name = "$sSS4hash4intoys6HasherVz_tF";
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    const std::string Import = "_" + Name.str();
+    auto Image = runtimeImage(Import, Architecture);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &Signature = Hint->Signature;
+    EXPECT_EQ(Signature.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(Signature.Convention,
+              SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(Signature.ReturnType);
+    EXPECT_EQ(Signature.ReturnType->Kind, NdTypeKind::Void);
+    ASSERT_EQ(Signature.Parameters.size(), 3U);
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (unsigned I = 0; I < 3; ++I) {
+      EXPECT_EQ(Signature.Parameters[I].Type->Kind,
+                I == 1 ? NdTypeKind::Int : NdTypeKind::Ptr);
+      EXPECT_EQ(Signature.Parameters[I].TheRole,
+                SourceParameterTypeHint::Role::Ordinary);
+      EXPECT_EQ(Signature.Parameters[I].Location.RegisterOffset,
+                TRI.IntParamRegs[I]);
+    }
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(Signature, Diagnostic)) << Diagnostic;
+    auto Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].Addend = 1;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, FoundationURLAppendingPathKeepsIndirectResultABI) {
   constexpr llvm::StringLiteral Name =
       "$s10Foundation3URLV22appendingPathComponentyACSSF";

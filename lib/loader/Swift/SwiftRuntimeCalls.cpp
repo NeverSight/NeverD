@@ -176,6 +176,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftFoundation.dylib",
      "ppppp"},
     {"$sSS10lowercasedSSyF", "/usr/lib/swift/libswiftCore.dylib", "(zz)zp"},
+    // Swift 6.1.2 arm64 client IR passes the inout Hasher address followed
+    // by the two String words to String.hash(into:).
+    {"$sSS4hash4intoys6HasherVz_tF", "/usr/lib/swift/libswiftCore.dylib",
+     "vpzp"},
     {"$sSS5index5afterSS5IndexVAD_tF", "/usr/lib/swift/libswiftCore.dylib",
      "zzzp"},
     // Swift String is passed as its two scalar carriers; the mutable
