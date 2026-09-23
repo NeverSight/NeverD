@@ -90,19 +90,63 @@ size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
 
 void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount);
 
-TEST(DriverKMDFControl, SequentialQueueCannotDeliverASecondPendingRequest) {
+TEST(DriverKMDFControl, SequentialQueuePresentsWaitingRequestAfterWorker) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('W');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {0x11, 0x22, 0x33, 0x44};
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      Options.Requests[1].DeferCallbackDrain = true;
+      Options.Requests[2].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 7);
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'W', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(
+          Result->Requests[2].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'W', 0x4b, 0x78, 0x69, 0x1e}));
+      std::vector<size_t> Queued;
+      std::vector<size_t> Freed;
+      for (size_t I = 0; I < Result->Calls.size(); ++I) {
+        if (Result->Calls[I].Name == "IoQueueWorkItem")
+          Queued.push_back(I);
+        if (Result->Calls[I].Name == "IoFreeWorkItem")
+          Freed.push_back(I);
+      }
+      ASSERT_EQ(Queued.size(), 2u);
+      ASSERT_EQ(Freed.size(), 2u);
+      EXPECT_LT(Queued[0], Freed[0]);
+      EXPECT_LT(Freed[0], Queued[1]);
+      EXPECT_LT(Queued[1], Freed[1]);
+    }
+}
+
+TEST(DriverKMDFControl, SequentialQueueCancelsWaitingRequestBeforeWorker) {
   for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
     auto Options = controlOptions('W');
     Options.Requests[0].AsynchronousFile = true;
-    Options.Requests.insert(Options.Requests.begin() + 2, Options.Requests[1]);
+    auto Second = Options.Requests[1];
+    Second.Input = {0x11, 0x22, 0x33, 0x44};
+    Second.CancelAfter100ns = 0;
+    Options.Requests.insert(Options.Requests.begin() + 2, Second);
     Options.Requests[1].DeferCallbackDrain = true;
-    Options.Requests.resize(3);
-    Options.Unload = false;
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-    EXPECT_NE(Result->Diagnostic.find("sequential queue still owns"),
-              std::string::npos);
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 7u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+    EXPECT_EQ(Result->Requests[2].IOStatus, Cancelled);
+    EXPECT_TRUE(Result->Requests[2].Output.empty());
+    EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), 1u);
   }
 }
 

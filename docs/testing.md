@@ -93,6 +93,15 @@ and relocated bases. Model-level queue tests verify parallel overlap and
 sequential exclusion; another native case batches two independent synchronous
 file objects. The C API test checks the asynchronous-file batch and output bytes.
 
+`DriverKMDFControl.SequentialQueuePresentsWaitingRequestAfterWorker` submits
+two IOCTLs to a default sequential queue while the first worker remains
+pending. The queue accepts the second request and presents it only after the
+first worker completes, in normal/active-CFG images at preferred and relocated
+bases. A companion genuine-driver case cancels an undelivered waiter. Model
+tests cover FIFO promotion, cancellation before delivery, and framework-only
+completion when a handler is absent or a zero-length transfer is disabled. The
+C API covers both successful waiting and cancellation.
+
 `DriverKMDFControl.BoundedParallelQueueWaitsForPresentedCompletion` uses
 `NumberOfPresentedRequests=1`; the second handler runs only after the first
 worker completes. Normal/active-CFG and preferred/rebased images are covered.
