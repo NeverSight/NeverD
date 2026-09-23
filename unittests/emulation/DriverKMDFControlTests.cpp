@@ -150,6 +150,44 @@ TEST(DriverKMDFControl, SequentialQueueCancelsWaitingRequestBeforeWorker) {
   }
 }
 
+TEST(DriverKMDFControl,
+     StoppedSequentialQueueResumesWaitingRequestAfterWorker) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('S');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {0x11, 0x22, 0x33, 0x44};
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      Options.Requests[1].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 7);
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'S', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(
+          Result->Requests[2].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'S', 0x4b, 0x78, 0x69, 0x1e}));
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueStop"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueStart"), 1u);
+      EXPECT_GE(apiCount(*Result, "WdfIoQueueGetState"), 4u);
+      const auto Messages = controlMessages(*Result);
+      EXPECT_TRUE(
+          std::any_of(Messages.begin(), Messages.end(), [](const auto &Text) {
+            return Text.find("resumed queued request") != std::string::npos;
+          }));
+      EXPECT_FALSE(
+          std::any_of(Messages.begin(), Messages.end(), [](const auto &Text) {
+            return Text.find("failure") != std::string::npos;
+          }));
+    }
+}
+
 TEST(DriverKMDFControl, ParallelQueueDeliversTwoPendingRequestsBeforeWorkers) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

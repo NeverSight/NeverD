@@ -172,7 +172,8 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
         original = i18n.RepositoryView(use_index=False).read_text(path)
         for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
                       "NEVERD_KMDF_CFG_FIXTURE", "NEVERD_KMDF_CONTROL_FIXTURE",
-                      "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG",
+                      "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG", "WdfIoQueueGetState",
+                      "WdfIoQueueStop", "WdfIoQueueStart",
                       "NEVERD_WDM_STACK_FIXTURE", "NEVERD_WDM_STACK_CFG_FIXTURE",
                       "IoCopyCurrentIrpStackLocationToNext",
                       "IoSkipCurrentIrpStackLocation", "IoSetCompletionRoutine",
@@ -180,7 +181,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v39",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v40",
                       "defer_callback_drain",
                       "asynchronous_file",
                       "IoSetCancelRoutine", "IoAcquireCancelSpinLock",

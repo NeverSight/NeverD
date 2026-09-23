@@ -186,6 +186,7 @@ private:
     uint32_t PresentedLimit = UINT32_MAX;
     bool AllowZeroLength = false;
     bool IsDefault = false;
+    bool Dispatching = true;
     std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;

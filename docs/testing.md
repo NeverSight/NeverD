@@ -102,6 +102,16 @@ tests cover FIFO promotion, cancellation before delivery, and framework-only
 completion when a handler is absent or a zero-length transfer is disabled. The
 C API covers both successful waiting and cancellation.
 
+`DriverKMDFControl.StoppedSequentialQueueResumesWaitingRequestAfterWorker`
+stops delivery from a genuine WDK default queue while its first request is
+driver-owned. The second request remains queued; after the worker completes
+the first, `WdfIoQueueStart` presents the second before returning. The driver
+checks queue state bits and queued/delivered counts at each boundary. Normal and
+active-CFG images run at preferred and relocated bases. Model tests also cover
+paused explicit retrieval, state counts, forwarding to a stopped nondefault
+automatic queue, and resuming all waiters on an unlimited parallel queue; a C
+API test covers the public sequential scenario.
+
 `DriverKMDFControl.BoundedParallelQueueWaitsForPresentedCompletion` uses
 `NumberOfPresentedRequests=1`; the second handler runs only after the first
 worker completes. Normal/active-CFG and preferred/rebased images are covered.

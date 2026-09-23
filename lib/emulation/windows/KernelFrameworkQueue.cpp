@@ -30,18 +30,70 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
                            llvm::ArrayRef<uint64_t> A) {
   if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
-      Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueRetrieveNextRequest")
+      Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
+      Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
+      Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
   const auto Kind =
-      Name == "WdfIoQueueGetDevice" || Name == "WdfIoQueueRetrieveNextRequest"
-          ? ObjectKind::Queue
-          : ObjectKind::Device;
+      Name == "WdfIoQueueCreate" || Name == "WdfDeviceGetDefaultQueue"
+          ? ObjectKind::Device
+          : ObjectKind::Queue;
   if (OI == Objects.end() || OI->second.Binding != B.Globals ||
       OI->second.Kind != Kind)
     return invalidQueue("invalid, foreign or wrong-kind object handle");
 
+  if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
+      Name == "WdfIoQueueStart") {
+    auto Q = Queues.find(A[1]);
+    if (Q == Queues.end() || OI->second.Deleting)
+      return invalidQueue("queue has no live framework identity");
+    if (Name == "WdfIoQueueStop") {
+      if (A[2])
+        return invalidQueue("stop-completion callbacks are not modeled");
+      Q->second.Dispatching = false;
+      return std::optional<uint64_t>{0};
+    }
+    if (Name == "WdfIoQueueStart") {
+      Q->second.Dispatching = true;
+      if (Q->second.Dispatch == QueueDispatchManual ||
+          Q->second.Pending.empty())
+        return std::optional<uint64_t>{0};
+      std::vector<Step> Steps(Q->second.Pending.size(),
+                              {StepKind::PresentQueue, A[1]});
+      auto Result = start(std::move(Steps));
+      if (!Result)
+        return Result.takeError();
+      return std::optional<uint64_t>{*Result};
+    }
+    if (A[2])
+      if (auto E = writable(A[2], 4))
+        return E;
+    if (A[3])
+      if (auto E = writable(A[3], 4))
+        return E;
+    const uint32_t Queued = Q->second.Pending.size();
+    const uint32_t Delivered =
+        std::count_if(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          return Entry.second.Queue == A[1] && !Entry.second.Queued &&
+                 !Entry.second.Completed;
+        });
+    if (A[2])
+      if (auto E = Memory.writeInteger(A[2], Queued, 4))
+        return E;
+    if (A[3])
+      if (auto E = Memory.writeInteger(A[3], Delivered, 4))
+        return E;
+    uint32_t State = QueueAcceptRequests;
+    if (Q->second.Dispatching)
+      State |= QueueDispatchRequests;
+    if (!Queued)
+      State |= QueueNoRequests;
+    if (!Delivered)
+      State |= QueueDriverNoRequests;
+    return std::optional<uint64_t>{State};
+  }
   if (Name == "WdfIoQueueGetDevice") {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || !Devices.count(Q->second.Device))
@@ -56,6 +108,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       return E;
     if (Q->second.Dispatch == QueueDispatchParallel)
       return std::optional<uint64_t>{QueueInvalidDeviceState};
+    if (!Q->second.Dispatching)
+      return std::optional<uint64_t>{QueuePaused};
     if (Q->second.Pending.empty()) {
       if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
         return E;
