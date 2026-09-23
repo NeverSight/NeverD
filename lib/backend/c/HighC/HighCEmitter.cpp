@@ -194,7 +194,10 @@ void HighCWriter::prepareFunctionIdentifiers(
         Name = Hint.TargetName;
       else if (Hint.CallKind == Kind::DarwinRuntimeCall) {
         if (Hint.Signature.Origin ==
-            SourceFunctionTypeHint::OriginKind::DarwinSDK)
+                SourceFunctionTypeHint::OriginKind::DarwinSDK ||
+            (Hint.Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::DarwinRuntime &&
+             Hint.TargetName == "__isPlatformVersionAtLeast"))
           Name = "neverd_darwin_" + Hint.TargetName;
         else
           Name = Hint.TargetName;
@@ -628,8 +631,11 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
         const auto &Hint = *Ex.SourceCallHint;
         const bool DeclaredC =
             Hint.CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall &&
-            Hint.Signature.Origin ==
-                SourceFunctionTypeHint::OriginKind::DarwinSDK;
+            (Hint.Signature.Origin ==
+                 SourceFunctionTypeHint::OriginKind::DarwinSDK ||
+             (Hint.Signature.Origin ==
+                  SourceFunctionTypeHint::OriginKind::DarwinRuntime &&
+              Hint.TargetName == "__isPlatformVersionAtLeast"));
         const bool ClassReferenceAddress =
             Hint.CallKind ==
                 SourceCallTypeHint::Kind::RuntimeClassReferenceAddress ||

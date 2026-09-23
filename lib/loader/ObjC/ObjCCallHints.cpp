@@ -261,6 +261,9 @@ std::optional<LocalResultUse> localResultUse(const LowFunc &Function,
     if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
         Op.Inputs[0].Space != VnodeSpace::CONST)
       return std::nullopt;
+    if (const auto CompilerRT =
+            darwinCompilerRTSourceCallHint(Image, Op.Inputs[0].Offset))
+      return CompilerRT->Signature;
     const auto Target = veneer(Image, Op.Inputs[0].Offset);
     if (!Target)
       return std::nullopt;
@@ -1316,6 +1319,16 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               Target = Dispatch{Name, {}, 0, V->Number};
           } else if (Op.Opcode == NdOp::CALL) {
             Target = veneer(Image, V->Number);
+          }
+        }
+        if (V && V->TheKind == Value::Kind::Number &&
+            Op.Opcode == NdOp::CALL) {
+          auto CompilerRT =
+              darwinCompilerRTSourceCallHint(Image, V->Number);
+          if (CompilerRT) {
+            Clobber(&CompilerRT->Signature);
+            BlockHints.emplace(Op.Addr, std::move(*CompilerRT));
+            continue;
           }
         }
         if (Target) {

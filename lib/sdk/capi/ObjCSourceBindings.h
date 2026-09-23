@@ -180,6 +180,9 @@ runtimeSourceCallHint(const BinaryImage &Image,
   case Kind::SwiftStringFromNSString:
     return swiftStringSourceCallHint(Image, Binding.TargetAddress);
   case Kind::DarwinRuntimeCall:
+    if (const auto CompilerRT =
+            darwinCompilerRTSourceCallHint(Image, Binding.TargetAddress))
+      return CompilerRT;
     return Binding.Format
                ? darwinFormattedSourceCallHint(Image, Binding.TargetAddress,
                                                Binding.Format->FormatAddress)

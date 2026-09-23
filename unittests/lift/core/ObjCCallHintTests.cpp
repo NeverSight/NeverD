@@ -4914,6 +4914,69 @@ TEST(ObjCCallHints, AvailabilityCheckPreservesExactWeakImportAndABI) {
   }
 }
 
+TEST(ObjCCallHints, CompilerRTPlatformCheckUsesItsLinkedPublicContract) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = image(Architecture);
+    Image.Symbols.push_back(
+        {"___isPlatformVersionAtLeast", 0x1500, 0x100, true});
+    const auto Hint = darwinCompilerRTSourceCallHint(Image, 0x1500);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, "__isPlatformVersionAtLeast");
+    EXPECT_EQ(Hint->Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::DarwinRuntime);
+    ASSERT_TRUE(Hint->Signature.ReturnType);
+    EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Hint->Signature.ReturnType->Size, 4U);
+    EXPECT_TRUE(Hint->Signature.ReturnType->IsSigned);
+    ASSERT_EQ(Hint->Signature.Parameters.size(), 4U);
+    for (const auto &Parameter : Hint->Signature.Parameters) {
+      ASSERT_TRUE(Parameter.Type);
+      EXPECT_EQ(Parameter.Type->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Parameter.Type->Size, 4U);
+      EXPECT_FALSE(Parameter.Type->IsSigned);
+    }
+
+    auto Function = caller(Architecture);
+    Function.Blocks.front().Ops.front().Inputs[0] = NdVar::cst(0x1500, 8);
+    const auto Calls = buildObjCSourceCallHints(Image, Function);
+    const auto Bound = Calls.find(0x1200);
+    ASSERT_NE(Bound, Calls.end());
+    EXPECT_EQ(Bound->second.CallKind,
+              SourceCallTypeHint::Kind::DarwinRuntimeCall);
+    EXPECT_EQ(Bound->second.TargetAddress, 0x1500U);
+
+    auto Call = HighExpr::makeCall(
+        Hint->TargetName, Hint->TargetAddress,
+        {HighExpr::makeConst(1, 4), HighExpr::makeConst(17, 4),
+         HighExpr::makeConst(6, 4), HighExpr::makeConst(0, 4)});
+    Call->Type = Hint->Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+
+    for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
+      auto Changed = Image;
+      if (Mutation == 0)
+        Changed.Symbols.front().Name = "___isOSVersionAtLeast";
+      if (Mutation == 1)
+        Changed.Symbols.front().Addr = 0x1510;
+      if (Mutation == 2)
+        Changed.Symbols.front().IsFunc = false;
+      if (Mutation == 3)
+        Changed.Symbols.push_back(Changed.Symbols.front());
+      if (Mutation == 4)
+        Changed.IsRelocatable = true;
+      if (Mutation == 5) {
+        Changed.Sections.front().Flags = SegmentFlags::Readable;
+        Changed.Sections.front().Type = 0;
+        Changed.Segments.front().Flags = SegmentFlags::Readable;
+      }
+      EXPECT_FALSE(darwinCompilerRTSourceCallHint(Changed, 0x1500))
+          << Mutation;
+    }
+  }
+}
+
 TEST(ObjCCallHints, SystemDeclarationsPreserveWidthsOpaquePointersAndExports) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &[Name, Widths] :

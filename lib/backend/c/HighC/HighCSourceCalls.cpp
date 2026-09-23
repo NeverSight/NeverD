@@ -659,7 +659,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     else if (Hint.CallKind == Kind::SwiftStringFromNSString)
       Name = "neverd_nsstring_to_swift_string";
     else if (Hint.CallKind == Kind::DarwinRuntimeCall &&
-             Signature.Origin == SourceFunctionTypeHint::OriginKind::DarwinSDK)
+             (Signature.Origin ==
+                  SourceFunctionTypeHint::OriginKind::DarwinSDK ||
+              (Signature.Origin ==
+                   SourceFunctionTypeHint::OriginKind::DarwinRuntime &&
+               Hint.TargetName == "__isPlatformVersionAtLeast")))
       Name = "neverd_darwin_" + Hint.TargetName;
     const auto *Definition =
         Runtime ? nullptr : sourceCallDefinition(Hint, Name);

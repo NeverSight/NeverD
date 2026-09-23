@@ -11,6 +11,45 @@
 namespace neverd {
 
 std::optional<SourceCallTypeHint>
+darwinCompilerRTSourceCallHint(const BinaryImage &Image, va_t TargetAddress) {
+  constexpr llvm::StringLiteral SymbolName =
+      "___isPlatformVersionAtLeast";
+  if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
+      Image.IsRelocatable ||
+      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
+      !Image.isCodeAddress(TargetAddress))
+    return std::nullopt;
+  size_t Matches = 0;
+  for (const auto &Symbol : Image.Symbols) {
+    if (Symbol.Name != SymbolName)
+      continue;
+    ++Matches;
+    if (Symbol.Addr != TargetAddress || !Symbol.IsFunc)
+      return std::nullopt;
+  }
+  if (Matches != 1)
+    return std::nullopt;
+
+  SourceCallTypeHint Result;
+  Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+  Result.TargetAddress = TargetAddress;
+  Result.TargetName = "__isPlatformVersionAtLeast";
+  auto &Signature = Result.Signature;
+  Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinRuntime;
+  Signature.ReturnType = NdType::makeInt(4, true);
+  Signature.Parameters = {
+      {"platform", NdType::makeInt(4, false)},
+      {"major", NdType::makeInt(4, false)},
+      {"minor", NdType::makeInt(4, false)},
+      {"subminor", NdType::makeInt(4, false)},
+  };
+  std::string Diagnostic;
+  if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))
+    return std::nullopt;
+  return Result;
+}
+
+std::optional<SourceCallTypeHint>
 darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   // compiler-rt probes this optional libSystem entry before calling it. Keep
   // the exact weak linkage and fixed ABI so the recovered guard remains valid.

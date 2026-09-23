@@ -1709,6 +1709,43 @@ TEST(HighCSourceCalls, DarwinWeakImportsRemainOptionalInDeclarations) {
       std::string::npos);
 }
 
+TEST(HighCSourceCalls, CompilerRTPlatformCheckKeepsItsExactLinkNameAndABI) {
+  const auto I32 = NdType::makeInt(4, true);
+  const auto U32 = NdType::makeInt(4, false);
+  auto Hint = native("__isPlatformVersionAtLeast", I32,
+                     {U32, U32, U32, U32});
+  Hint.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+  Hint.Signature.Origin =
+      SourceFunctionTypeHint::OriginKind::DarwinRuntime;
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Hint.Signature, Arch::X64, Error));
+  auto Function = returning(
+      "check_platform",
+      call(Hint, I32,
+           {parameter(0, U32), parameter(1, U32), parameter(2, U32),
+            parameter(3, U32)}),
+      {U32, U32, U32, U32});
+  const auto Source = emit({Function});
+  EXPECT_NE(Source.find(
+                "extern int32_t neverd_darwin___isPlatformVersionAtLeast("),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__asm__(\"___isPlatformVersionAtLeast\")"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("bad source call"), std::string::npos) << Source;
+  compileAndRun(Source + R"(
+int32_t platform_check(uint32_t platform, uint32_t major, uint32_t minor,
+                       uint32_t subminor)
+    __asm__("___isPlatformVersionAtLeast");
+int32_t platform_check(uint32_t platform, uint32_t major, uint32_t minor,
+                       uint32_t subminor) {
+  return (int32_t)(platform + major * 10 + minor * 100 + subminor * 1000);
+}
+int main(void) { return check_platform(2, 14, 6, 3) != 3742; }
+)");
+}
+
 TEST(HighCSourceCalls, SwiftConventionSurvivesDefinitionsAndRejectsConflicts) {
   const auto Word = NdType::makeInt(8, false);
   auto Hint = native("swift_identity", Word, {Word});

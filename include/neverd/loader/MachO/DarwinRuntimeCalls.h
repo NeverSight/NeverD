@@ -13,6 +13,13 @@ struct BinaryImage;
 std::optional<SourceCallTypeHint>
 darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot);
 
+/// A linked compiler-rt builtin with a stable public C contract. Unlike an
+/// imported runtime call, TargetAddress is the exact local function entry.
+/// The unique function symbol is required so ordinary native helpers never
+/// acquire a declaration from an inferred name.
+std::optional<SourceCallTypeHint>
+darwinCompilerRTSourceCallHint(const BinaryImage &Image, va_t TargetAddress);
+
 struct DarwinBlockParameterContract {
   enum class Lifetime { NonEscaping, Copied };
   SourceFunctionTypeHint Signature;
