@@ -321,7 +321,7 @@ private:
   };
   std::map<uint64_t, SystemThread> SystemThreads;
   std::map<uint64_t, uint64_t> ThreadHandles;
-  uint64_t NextThreadHandle = 0x60000000;
+  uint64_t NextThreadHandle = profile::SystemThreadHandleBase;
   std::optional<uint32_t> PendingThreadTermination;
   llvm::Expected<uint64_t>
   createSystemThread(llvm::ArrayRef<uint64_t> Arguments);

@@ -114,6 +114,9 @@ TEST(DriverKMDFPnp, AddStartIoRemoveAndUnloadFollowRealCallbacks) {
                 (std::vector<uint8_t>{'P', 'N', 'P', 0x7a}));
       EXPECT_EQ(callCount(*Result, "WdfFdoInitWdmGetPhysicalDevice"), 1u);
       EXPECT_EQ(callCount(*Result, "WdfDeviceWdmGetPhysicalDevice"), 1u);
+      EXPECT_EQ(callCount(*Result, "WdfDeviceWdmGetAttachedDevice"), 1u);
+      EXPECT_EQ(callCount(*Result, "WdfWdmDeviceGetWdfDeviceHandle"), 2u);
+      EXPECT_EQ(callCount(*Result, "WdfDeviceGetDriver"), 1u);
       EXPECT_EQ(callCount(*Result, "WdfDeviceCreate"), 1u);
       EXPECT_EQ(pnpMessages(*Result),
                 (std::vector<std::string>{"KMDF PnP: device ready\n",

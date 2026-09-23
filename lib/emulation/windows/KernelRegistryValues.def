@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Microsoft WDK public registry contracts and x64 structure offsets.
+/// Microsoft WDK public registry contracts and key-value structure offsets.
 /// HandleBase is a model-owned opaque identity, never a guest address.
 ///
 //===----------------------------------------------------------------------===//
@@ -29,7 +29,6 @@ NEVERD_REGISTRY_VALUE(CreateSubKeyAccess, 0x0004)
 NEVERD_REGISTRY_VALUE(DeleteAccess, 0x00010000)
 NEVERD_REGISTRY_VALUE(AllAccess, 0x000f003f)
 NEVERD_REGISTRY_VALUE(CaseInsensitive, 0x0040)
-NEVERD_REGISTRY_VALUE(KernelHandle, 0x0200)
 NEVERD_REGISTRY_VALUE(VolatileOption, 1)
 NEVERD_REGISTRY_VALUE(CreatedNewKey, 1)
 NEVERD_REGISTRY_VALUE(OpenedExistingKey, 2)
@@ -42,12 +41,6 @@ NEVERD_REGISTRY_VALUE(LayerInformation, 5)
 NEVERD_REGISTRY_VALUE(MaxInformationClass, 6)
 NEVERD_REGISTRY_VALUE(MaxValueType, 11)
 NEVERD_REGISTRY_VALUE(LinkValueType, 6)
-NEVERD_REGISTRY_VALUE(ObjectAttributesSize, 48)
-NEVERD_REGISTRY_VALUE(ObjectRootOffset, 8)
-NEVERD_REGISTRY_VALUE(ObjectNameOffset, 16)
-NEVERD_REGISTRY_VALUE(ObjectFlagsOffset, 24)
-NEVERD_REGISTRY_VALUE(ObjectSecurityOffset, 32)
-NEVERD_REGISTRY_VALUE(ObjectQualityOffset, 40)
 NEVERD_REGISTRY_VALUE(UnicodeSize, 16)
 NEVERD_REGISTRY_VALUE(UnicodeMaximumOffset, 2)
 NEVERD_REGISTRY_VALUE(UnicodeBufferOffset, 8)

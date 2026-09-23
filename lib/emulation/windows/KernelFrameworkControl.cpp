@@ -120,6 +120,15 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       return controlError("physical device requires a live FDO initializer");
     return Result{I->second.PDO};
   }
+  if (Name == api::WdfWdmDeviceGetWdfDeviceHandle) {
+    for (const auto &[Handle, Device] : Devices) {
+      auto Object = Objects.find(Handle);
+      if (Device.Wdm == A[1] && Object != Objects.end() &&
+          Object->second.Binding == B.Globals && !Object->second.Deleting)
+        return Result{Handle};
+    }
+    return Result{0};
+  }
   if (Name == api::WdfDeviceCreate) {
     if (auto E = writable(A[3], 8))
       return E;
@@ -197,7 +206,9 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
   if (Name != api::WdfDeviceCreateSymbolicLink &&
       Name != api::WdfControlFinishInitializing &&
       Name != api::WdfDeviceWdmGetDeviceObject &&
-      Name != api::WdfDeviceWdmGetPhysicalDevice)
+      Name != api::WdfDeviceWdmGetAttachedDevice &&
+      Name != api::WdfDeviceWdmGetPhysicalDevice &&
+      Name != api::WdfDeviceGetDriver)
     return Result{};
   auto O = Objects.find(A[1]);
   auto D = Devices.find(A[1]);
@@ -206,8 +217,12 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     return controlError("operation requires a live control-device handle");
   if (Name == api::WdfDeviceWdmGetDeviceObject)
     return Result{D->second.Wdm};
+  if (Name == api::WdfDeviceWdmGetAttachedDevice)
+    return Result{D->second.PDO};
   if (Name == api::WdfDeviceWdmGetPhysicalDevice)
     return Result{D->second.PDO};
+  if (Name == api::WdfDeviceGetDriver)
+    return Result{B.DriverHandle};
   if (O->second.Deleting)
     return controlError("cannot change a deleting control device");
   if (Name == api::WdfControlFinishInitializing) {

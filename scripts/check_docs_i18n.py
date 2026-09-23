@@ -2300,7 +2300,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v49", "defer_callback_drain",
+        "wdm-x64-scheduled-v50", "defer_callback_drain",
         "PsCreateSystemThread", "PsTerminateSystemThread",
         "ObReferenceObjectByHandle", "ObfDereferenceObject",
         "KeEnterCriticalRegion", "KeLeaveCriticalRegion",

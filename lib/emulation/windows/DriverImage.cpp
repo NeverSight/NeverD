@@ -313,8 +313,10 @@ llvm::Error preflightLoadConfiguration(llvm::ArrayRef<uint8_t> Raw) {
   if (!Copy(0, DOS) || DOS.Magic[0] != 'M' || DOS.Magic[1] != 'Z')
     return invalid("requires a complete DOS/PE image header");
   const uint64_t PEOffset = DOS.AddressOfNewExeHeader;
-  if (PEOffset > Raw.size() || Raw.size() - PEOffset < 4 ||
-      llvm::support::endian::read32le(Raw.data() + PEOffset) != 0x00004550)
+  if (PEOffset > Raw.size() ||
+      Raw.size() - PEOffset < sizeof(llvm::COFF::PEMagic) ||
+      std::memcmp(Raw.data() + PEOffset, llvm::COFF::PEMagic,
+                  sizeof(llvm::COFF::PEMagic)))
     return invalid("invalid PE signature offset");
   coff_file_header COFF;
   if (!Copy(PEOffset + 4, COFF))
@@ -732,9 +734,9 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   auto CanonicalImageRange = [&](uint64_t Address) {
     if (Address < 65536 || (Address & 65535) || Size > UINT64_MAX - Address)
       return false;
-    return (Address <= 0x00007fffffffffffULL &&
-            Address + Size - 1 <= 0x00007fffffffffffULL) ||
-           Address >= 0xffff800000000000ULL;
+    return (Address <= profile::CanonicalUserMax &&
+            Address + Size - 1 <= profile::CanonicalUserMax) ||
+           Address >= profile::CanonicalKernelMin;
   };
   if (!CanonicalImageRange(Base) || !CanonicalImageRange(ActualBase))
     return invalid(

@@ -44,41 +44,40 @@ llvm::Expected<uint64_t> KernelModel::allocateWorkItem(uint64_t Device) {
 
 llvm::Expected<uint64_t>
 KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
-  constexpr uint32_t ThreadAllAccess = 0x001fffff;
-  constexpr uint32_t StatusInvalidParameter = 0xc000000d;
-  constexpr uint32_t StatusInsufficientResources = 0xc000009a;
   if (!A[0] || !A[5])
-    return StatusInvalidParameter;
+    return windows::StatusInvalidParameter;
   if (A[3] || A[4])
     return schedulingError("non-system process handles and client IDs are "
                            "unsupported for system threads");
-  if (uint32_t(A[1]) & ~ThreadAllAccess)
+  if (uint32_t(A[1]) & ~windows::ThreadAllAccess)
     return schedulingError("unsupported system-thread access mask");
   uint32_t Attributes = 0;
   if (A[2]) {
-    if (auto E = validateGuestAccess(A[2], 48, false))
+    if (auto E =
+            validateGuestAccess(A[2], windows::ObjectAttributesSize, false))
       return E;
     auto Size = Memory.readInteger(A[2], 4);
     if (!Size)
       return Size.takeError();
-    auto Root = Memory.readInteger(A[2] + 8, 8);
+    auto Root = Memory.readInteger(A[2] + windows::ObjectRootOffset, 8);
     if (!Root)
       return Root.takeError();
-    auto Name = Memory.readInteger(A[2] + 16, 8);
+    auto Name = Memory.readInteger(A[2] + windows::ObjectNameOffset, 8);
     if (!Name)
       return Name.takeError();
-    auto Flags = Memory.readInteger(A[2] + 24, 4);
+    auto Flags = Memory.readInteger(A[2] + windows::ObjectFlagsOffset, 4);
     if (!Flags)
       return Flags.takeError();
-    auto Security = Memory.readInteger(A[2] + 32, 8);
+    auto Security = Memory.readInteger(A[2] + windows::ObjectSecurityOffset, 8);
     if (!Security)
       return Security.takeError();
-    auto Quality = Memory.readInteger(A[2] + 40, 8);
+    auto Quality = Memory.readInteger(A[2] + windows::ObjectQualityOffset, 8);
     if (!Quality)
       return Quality.takeError();
-    if (*Size != 48)
-      return StatusInvalidParameter;
-    if (*Root || *Name || *Security || *Quality || (*Flags & ~0x200u))
+    if (*Size != windows::ObjectAttributesSize)
+      return windows::StatusInvalidParameter;
+    if (*Root || *Name || *Security || *Quality ||
+        (*Flags & ~windows::ObjectKernelHandle))
       return schedulingError("unsupported system-thread object attributes");
     Attributes = uint32_t(*Flags);
   }
@@ -86,18 +85,19 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
       (CurrentExecution == profile::StackBase && UserRequestContext) ||
       (!ProcessAttachments.empty() &&
        ProcessAttachments.back().Execution == CurrentExecution);
-  if (CallerInUserProcess && !(Attributes & 0x200u))
+  if (CallerInUserProcess && !(Attributes & windows::ObjectKernelHandle))
     return schedulingError("system-thread creation outside the system process "
                            "requires OBJ_KERNEL_HANDLE");
   if (auto E = validateGuestAccess(A[0], 8, true))
     return E;
   if (SystemThreads.size() >= profile::MaxConcurrentCallbacks ||
-      NextThreadHandle > 0x6ffffffc)
-    return StatusInsufficientResources;
-  const uint64_t Aligned = (NextAllocation + 15) & ~uint64_t(15);
+      NextThreadHandle > profile::SystemThreadHandleLimit)
+    return windows::StatusInsufficientResources;
+  const uint64_t Aligned = (NextAllocation + windows::PoolAlignment - 1) &
+                           ~uint64_t(windows::PoolAlignment - 1);
   if (Aligned > AllocationEnd ||
       profile::ProcessTokenSize > AllocationEnd - Aligned)
-    return StatusInsufficientResources;
+    return windows::StatusInsufficientResources;
   KernelScheduler::Callback Callback;
   Callback.Object = 1;
   Callback.Owner = DriverObject;
@@ -120,7 +120,7 @@ KernelModel::createSystemThread(llvm::ArrayRef<uint64_t> A) {
     return ID.takeError();
   ThreadHandles.emplace(NextThreadHandle, *Object);
   SystemThreads.emplace(*Object, SystemThread{NextThreadHandle, *ID});
-  NextThreadHandle += 4;
+  NextThreadHandle += profile::SystemThreadHandleStride;
   return uint64_t(0);
 }
 
@@ -147,24 +147,22 @@ std::optional<uint32_t> KernelModel::takeThreadTermination() {
 
 llvm::Expected<uint64_t>
 KernelModel::referenceThreadByHandle(llvm::ArrayRef<uint64_t> A) {
-  constexpr uint32_t StatusInvalidHandle = 0xc0000008;
-  constexpr uint32_t StatusInvalidParameter = 0xc000000d;
   auto Handle = ThreadHandles.find(A[0]);
   if (Handle == ThreadHandles.end()) {
     if (Registry.ownsHandle(A[0]))
       return schedulingError("registry-key object references are unsupported");
-    return StatusInvalidHandle;
+    return windows::StatusInvalidHandle;
   }
   auto Thread = SystemThreads.find(Handle->second);
   if (Thread == SystemThreads.end())
     return schedulingError("thread handle lost its object");
   // Only the modeled thread object type and kernel caller mode are available.
   if (!A[4])
-    return StatusInvalidParameter;
+    return windows::StatusInvalidParameter;
   if (A[2] || A[3] != windows::KernelMode || A[5])
     return schedulingError(
         "unsupported object type, access mode or handle-information output");
-  if (uint32_t(A[1]) & ~0x001fffffu)
+  if (uint32_t(A[1]) & ~windows::ThreadAllAccess)
     return schedulingError("unsupported system-thread reference access mask");
   if (auto E = validateGuestAccess(A[4], 8, true))
     return E;
@@ -190,7 +188,7 @@ llvm::Expected<uint64_t> KernelModel::closeHandle(uint64_t Handle) {
   if (It == ThreadHandles.end()) {
     if (Registry.ownsHandle(Handle))
       return Registry.call(*this, kernel_api::ZwClose, {Handle});
-    return uint64_t(0xc0000008);
+    return windows::StatusInvalidHandle;
   }
   const uint64_t Object = It->second;
   auto Thread = SystemThreads.find(Object);

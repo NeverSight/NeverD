@@ -14,6 +14,8 @@
 
 #include "DriverImage.h"
 
+#include "neverd/emulation/DriverProfile.h"
+
 #include "llvm/ADT/StringExtras.h"
 
 namespace neverd::emulation {
@@ -22,8 +24,8 @@ GuardControlFlow::GuardControlFlow(const DriverImage &Image)
                                             Image.Guard.ValidTargets.end()) {}
 
 llvm::Error GuardControlFlow::registerExportTarget(uint64_t Address) {
-  if (!Address ||
-      (Address > 0x00007fffffffffffULL && Address < 0xffff800000000000ULL))
+  if (!Address || (Address > profile::CanonicalUserMax &&
+                   Address < profile::CanonicalKernelMin))
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "CFG: noncanonical export target");
   Targets.insert(Address);

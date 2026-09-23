@@ -241,7 +241,8 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
   if (PriorityBoost)
     return stackError("modeled completion supports IO_NO_INCREMENT only");
   if (CancelLock.Held)
-    return stackError("IoCompleteRequest cannot run with the cancel spin lock held");
+    return stackError(
+        "IoCompleteRequest cannot run with the cancel spin lock held");
   auto CancelRoutine = Memory.readInteger(IRP + IRPCancelRoutineOffset, 8);
   if (!CancelRoutine)
     return CancelRoutine.takeError();
@@ -309,7 +310,8 @@ KernelModel::planIRPCompletion(uint64_t IRP,
       return stackError("completion invocation flags require a callback");
     const bool Pending = PropagatePending || (*Control & StackPendingReturned);
     Plan.Steps.push_back({Slot, Pending});
-    const bool Success = (uint32_t(*Status) & 0x80000000U) == 0;
+    const bool Success =
+        (uint32_t(*Status) & profile::NTStatusFailureMask) == 0;
     const bool Invoke = (Success && (*Control & StackInvokeOnSuccess)) ||
                         (!Success && (*Control & StackInvokeOnError)) ||
                         (*Cancel && (*Control & StackInvokeOnCancel));
@@ -453,8 +455,7 @@ KernelModel::finishWdmGuestCall(uint64_t Token, uint64_t ResultValue) {
     return finishPowerCompletion(Token);
   if (Call->second.Kind == IRPCallKind::Cancel) {
     if (!CancelLock.Callback || CancelLock.Held ||
-        CancelLock.IRP != Call->second.IRP ||
-        CurrentIRQL != CancelLock.OldIRQL)
+        CancelLock.IRP != Call->second.IRP || CurrentIRQL != CancelLock.OldIRQL)
       return stackError("IoCancelIrp callback did not release its cancel lock");
     CancelLock = {};
     IRPCalls.erase(Call);

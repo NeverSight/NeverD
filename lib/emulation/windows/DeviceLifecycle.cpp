@@ -20,6 +20,10 @@
 
 #include "DeviceLifecycle.h"
 
+#include "WindowsKernelLayout.h"
+
+#include "neverd/emulation/DriverProfile.h"
+
 #include <limits>
 
 namespace neverd::emulation {
@@ -83,10 +87,12 @@ bool absent(DevicePnpState State) {
          State == DevicePnpState::Removing || State == DevicePnpState::Removed;
 }
 
-bool succeeded(uint32_t Status) { return (Status & 0x80000000u) == 0; }
+bool succeeded(uint32_t Status) {
+  return (Status & profile::NTStatusFailureMask) == 0;
+}
 
 llvm::Error finalStatus(uint32_t Status) {
-  if (Status == 0x103)
+  if (Status == windows::StatusPending)
     return lifecycleError("STATUS_PENDING is not a final completion status");
   return llvm::Error::success();
 }

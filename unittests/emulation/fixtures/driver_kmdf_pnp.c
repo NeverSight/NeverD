@@ -23,6 +23,9 @@
 enum { ResponseSize = 4 };
 
 ABI_SLOT(WdfDeviceWdmGetPhysicalDevice, 33);
+ABI_SLOT(WdfDeviceWdmGetAttachedDevice, 32);
+ABI_SLOT(WdfWdmDeviceGetWdfDeviceHandle, 30);
+ABI_SLOT(WdfDeviceGetDriver, 39);
 ABI_SLOT(WdfDeviceCreate, 75);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
@@ -85,8 +88,8 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   WDFDEVICE Device = NULL;
   WDFQUEUE Queue = NULL;
   PDEVICE_OBJECT PDO;
+  PDEVICE_OBJECT FDO;
   NTSTATUS Status;
-  UNREFERENCED_PARAMETER(Driver);
   PDO = WdfFdoInitWdmGetPhysicalDevice(Init);
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
@@ -99,7 +102,12 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   Status = WdfDeviceCreate(&Init, &Attributes, &Device);
   if (!NT_SUCCESS(Status))
     return Status;
-  if (WdfDeviceWdmGetPhysicalDevice(Device) != PDO)
+  FDO = WdfDeviceWdmGetDeviceObject(Device);
+  if (WdfDeviceWdmGetPhysicalDevice(Device) != PDO ||
+      WdfDeviceWdmGetAttachedDevice(Device) != PDO ||
+      WdfWdmDeviceGetWdfDeviceHandle(FDO) != Device ||
+      WdfWdmDeviceGetWdfDeviceHandle(PDO) != NULL ||
+      WdfDeviceGetDriver(Device) != Driver)
     return STATUS_INVALID_DEVICE_STATE;
   if (ServiceMode == L'F') {
     DbgPrint("KMDF PnP: failing AddDevice\n");

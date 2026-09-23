@@ -41,11 +41,16 @@ unsigned majorFunction(DriverRequestKind Kind) {
 #include "neverd/emulation/DriverRequestKinds.def"
 #undef NEVERD_DRIVER_REQUEST_KIND
   }
-  return 28;
+  return profile::MajorFunctionCount;
 }
 
-bool ntSuccess(uint32_t Status) { return !(Status & 0x80000000U); }
-bool ntError(uint32_t Status) { return (Status >> 30) == 3; }
+bool ntSuccess(uint32_t Status) {
+  return !(Status & profile::NTStatusFailureMask);
+}
+bool ntError(uint32_t Status) {
+  return (Status >> profile::NTStatusSeverityShift) ==
+         profile::NTStatusErrorSeverity;
+}
 unsigned userPermissions(DriverUserPageAccess Access) {
   switch (Access) {
   case DriverUserPageAccess::ReadWrite:
@@ -176,14 +181,12 @@ llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
       ApcState - CurrentExecution <= profile::CallbackStackSize &&
       KAPCStateSize <=
           profile::CallbackStackSize - (ApcState - CurrentExecution);
-  const bool NonPagedPool =
-      std::any_of(Allocations.begin(), Allocations.end(),
-                  [&](const auto &Entry) {
-                    return Entry.second.NonPaged && ApcState >= Entry.first &&
-                           ApcState - Entry.first <= Entry.second.Size &&
-                           KAPCStateSize <=
-                               Entry.second.Size - (ApcState - Entry.first);
-                  });
+  const bool NonPagedPool = std::any_of(
+      Allocations.begin(), Allocations.end(), [&](const auto &Entry) {
+        return Entry.second.NonPaged && ApcState >= Entry.first &&
+               ApcState - Entry.first <= Entry.second.Size &&
+               KAPCStateSize <= Entry.second.Size - (ApcState - Entry.first);
+      });
   if (!CurrentStack && !NonPagedPool)
     return ioError("APC storage must be on the current thread stack or in "
                    "nonpaged pool");
@@ -467,8 +470,8 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
               Memory.writeInteger(Request->Stack + F.Offset, F.Value, F.Size))
         return E;
     if (Request->Neither)
-      if (auto E = Memory.writeInteger(
-              Request->Stack + StackType3InputOffset, Request->UserInput, 8))
+      if (auto E = Memory.writeInteger(Request->Stack + StackType3InputOffset,
+                                       Request->UserInput, 8))
         return E;
   } else if (Input.Kind == DriverRequestKind::Read ||
              Input.Kind == DriverRequestKind::Write) {
@@ -502,7 +505,7 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
 
 llvm::Expected<KernelModel::Invocation>
 KernelModel::beginRequest(const DriverRequest &Input,
-                            std::optional<size_t> SourceIndex) {
+                          std::optional<size_t> SourceIndex) {
   DriverRequestResult Observation;
   Observation.Kind = Input.Kind;
   Observation.Device = Input.Device;
@@ -524,8 +527,9 @@ KernelModel::beginRequest(const DriverRequest &Input,
       Input.Kind != DriverRequestKind::Write &&
       Input.Kind != DriverRequestKind::DeviceControl)
     return ioError("interrupt events require a transfer request");
-  if (auto E = Interrupts.canArm(Input.InterruptEvents, SourceIndex.value_or(Index),
-                                 Scheduler.now100ns()))
+  if (auto E =
+          Interrupts.canArm(Input.InterruptEvents, SourceIndex.value_or(Index),
+                            Scheduler.now100ns()))
     return E;
   if (auto E = DMA.canArm(Input.DmaEvents, SourceIndex.value_or(Index),
                           Scheduler.now100ns()))
@@ -794,8 +798,9 @@ KernelModel::beginRequest(const DriverRequest &Input,
   if (auto E = initializeRequestPacket(*Request, Input))
     return E;
   Result.Requests[Index].IRP = *Packet;
-  if (auto E = Interrupts.arm(Input.InterruptEvents, SourceIndex.value_or(Index),
-                              Scheduler.now100ns()))
+  if (auto E =
+          Interrupts.arm(Input.InterruptEvents, SourceIndex.value_or(Index),
+                         Scheduler.now100ns()))
     return E;
   if (auto E = DMA.arm(Input.DmaEvents, SourceIndex.value_or(Index),
                        Scheduler.now100ns()))
@@ -1288,10 +1293,10 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
     // Raw user pointers are outside this kernel-only profile. Buffered requests
     // use SystemBuffer; direct requests access the locked system mapping.
     if (!Request->Neither)
-      if (auto E =
-            Check(Request->UserBuffer,
-                  Request->Direct ? Request->TransferSize : Request->OutputSize,
-                  [](uint64_t) { return false; }))
+      if (auto E = Check(Request->UserBuffer,
+                         Request->Direct ? Request->TransferSize
+                                         : Request->OutputSize,
+                         [](uint64_t) { return false; }))
         return E;
   }
   if (IsWrite)
