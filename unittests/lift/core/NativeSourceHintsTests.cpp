@@ -1,5 +1,6 @@
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
 #include "../../../lib/sdk/capi/ObjCSourceProjection.h"
+#include "../../../lib/sdk/capi/SwiftMangledSourceABI.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/SourceABI.h"
@@ -25,6 +26,45 @@
 #include <functional>
 
 using namespace neverd;
+
+TEST(NativeSourceHints, ExactMangledStringBundleFunctionKeepsPairResult) {
+  constexpr llvm::StringLiteral Name =
+      "_$s4main9localized_12languageCode6bundle5value7commentS2S_SSSgSo8"
+      "NSBundleCSgS2StF";
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    BinaryImage Image;
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Architecture;
+    Image.Bits = Bitness::Bits64;
+    Segment Text;
+    Text.VA = 0x1000;
+    Text.Size = Text.FileSz = 0x100;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(0x100);
+    Image.Segments.push_back(std::move(Text));
+    Image.Symbols.push_back({Name.str(), 0x1000, 0, true});
+    const auto Hint =
+        sdk::swiftMangledStringBundleSourceABI(Image, 0x1000, true);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
+    EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    EXPECT_EQ(Hint->ReturnType->Size, 16U);
+    ASSERT_EQ(Hint->ReturnComponents.size(), 2U);
+    ASSERT_EQ(Hint->Parameters.size(), 9U);
+    EXPECT_EQ(Hint->Parameters[8].Location.Kind, SourceABICarrierKind::Stack);
+    std::string Error;
+    EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+    EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Image, 0x1000, false));
+    auto Wrong = Image;
+    Wrong.Symbols[0].Name =
+        "_$s4main9localized_12languageCode6bundle5value7commentS2S_SSSgSo8"
+        "NSObjectCSgS2StF";
+    EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Wrong, 0x1000, true));
+    Wrong = Image;
+    Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+    EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Wrong, 0x1000, true));
+  }
+}
 
 namespace {
 struct NativeFixture {

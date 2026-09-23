@@ -1,6 +1,8 @@
 #ifndef NEVERD_SDK_CAPI_OBJCNATIVEDEPENDENCIES_H
 #define NEVERD_SDK_CAPI_OBJCNATIVEDEPENDENCIES_H
 
+#include "SwiftMangledSourceABI.h"
+
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -169,6 +171,23 @@ inline size_t inferObjCNativeDependencies(
     }
     if (M->second->SourceTypeHint || H->second->SourceTypeHint)
       continue;
+    // A closed, compiler-observed Swift function shape supplies its own
+    // source ABI. Native scalar inference must not erase its second return
+    // word or reinterpret its stack and swiftcc argument carriers.
+    if (A->second->Entry == Target &&
+        A->second->Disposition == PipelineFunctionDisposition::Accepted &&
+        A->second->HasLowIR && A->second->HasMedIR &&
+        A->second->MedIRVerified && A->second->DecodedInstructions &&
+        A->second->DecodedInstructions == A->second->LiftedInstructions &&
+        A->second->DecodeFailures.empty() &&
+        A->second->UnsupportedInstructions.empty() &&
+        A->second->TruncatedPaths.empty())
+      if (auto Mangled = swiftMangledStringBundleSourceABI(
+              Image, Target, IntegerPairReturns.count(Target))) {
+        Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
+        ++Added;
+        continue;
+      }
     auto Hint = inferNativeSourceTypeHint(
         Image, *M->second, *H->second, *A->second, Diagnostics[Target],
         L->second, IntegerPairReturns.count(Target), CalleeContracts);
