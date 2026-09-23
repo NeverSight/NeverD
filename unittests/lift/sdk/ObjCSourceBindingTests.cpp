@@ -5061,8 +5061,8 @@ TEST(ObjCSourceBindings,
     Pointer.Size = 8;
     Pointer.TheArch = F.Image.Arch;
     auto Var = HighExpr::makeVar(Pointer, NdType::makeInt(8, false));
-    auto First = HighExpr::makeConst(
-        0x1020, 8, ConstantAddressProvenance::DataAddress);
+    auto First =
+        HighExpr::makeConst(0x1020, 8, ConstantAddressProvenance::DataAddress);
     auto Second = HighExpr::makeConst(
         Mutation == 1 ? 0x10f8 : 0x1040, 8,
         Mutation == 2 ? ConstantAddressProvenance::Scalar
@@ -5073,8 +5073,8 @@ TEST(ObjCSourceBindings,
     A.Val = First;
     B.Val = Second;
     Return.Kind = StmtKind::Return;
-    auto Address = HighExpr::makeBinop(
-        NdOp::INT_ADD, Var, HighExpr::makeConst(16, 8));
+    auto Address =
+        HighExpr::makeBinop(NdOp::INT_ADD, Var, HighExpr::makeConst(16, 8));
     Return.RetVal = HighExpr::makeLoad(
         Address, Mutation == 3 ? NdType::makePtr(NdType::makeVoid())
                                : NdType::makeInt(8, false));
@@ -5095,8 +5095,8 @@ TEST(ObjCSourceBindings,
         auto Bound = Result.Function.Body[I].Val;
         ASSERT_EQ(Bound->Kind, ExprKind::BinOp);
         ASSERT_TRUE(Bound->Operands[0]->SourceCallHint);
-        EXPECT_TRUE(objcSourceCallBound(*Bound->Operands[0], F.Image, {},
-                                        &Storage));
+        EXPECT_TRUE(
+            objcSourceCallBound(*Bound->Operands[0], F.Image, {}, &Storage));
       }
     } else {
       EXPECT_FALSE(Result.Limitation.empty());

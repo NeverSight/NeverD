@@ -1660,8 +1660,7 @@ selectedProfileCounterSeeds(const HighFunc &Function,
           const auto Inner = Self(Self, E->Operands[I], Depth + 1);
           const auto &Constant = E->Operands[1 - I];
           if (Inner && Constant && Constant->Kind == ExprKind::Const &&
-              (Constant->ConstProvenance ==
-                   ConstantAddressProvenance::Scalar ||
+              (Constant->ConstProvenance == ConstantAddressProvenance::Scalar ||
                Constant->ConstProvenance ==
                    ConstantAddressProvenance::Unknown) &&
               Constant->ConstVal <= 4096 &&
@@ -1714,8 +1713,8 @@ selectedProfileCounterSeeds(const HighFunc &Function,
                       Statement.MemoryOrdering, Statement.MemoryAddressSpace))
         Valid = false;
       forEachExpr(Statement, [&](const ExprPtr &Root) {
-        if ((Root == Statement.Dst &&
-             Statement.Kind == StmtKind::Assign && Statement.Dst &&
+        if ((Root == Statement.Dst && Statement.Kind == StmtKind::Assign &&
+             Statement.Dst &&
              (Statement.Dst->Kind == ExprKind::Var ||
               Statement.Dst->Kind == ExprKind::Phi)) ||
             (Root == Statement.StoreAddr &&

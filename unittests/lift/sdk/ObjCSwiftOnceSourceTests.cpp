@@ -1572,12 +1572,9 @@ TEST(SwiftOnceSources,
       return HighExpr::makeVar(V, Type);
     };
     auto &Getter = F.Pipeline.HighFuncs[0];
-    Getter.Params = {{"objc_self", Pointer},
-                     {"objc_cmd", Pointer},
-                     {"predicate", Pointer},
-                     {"string_word", Integer},
-                     {"string_storage", Integer},
-                     {"initializer", Pointer}};
+    Getter.Params = {{"objc_self", Pointer},      {"objc_cmd", Pointer},
+                     {"predicate", Pointer},      {"string_word", Integer},
+                     {"string_storage", Integer}, {"initializer", Pointer}};
     SourceFunctionTypeHint Signature;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
     Signature.ReturnType = Pointer;
@@ -1591,13 +1588,11 @@ TEST(SwiftOnceSources,
         HighExpr::makeLoad(Param(2, Pointer), NdType::makeInt(8));
     F.Once->Operands = {Param(2, Pointer), Param(5, Pointer),
                         Param(2, Pointer)};
-    F.Bridge->Operands = {
-        HighExpr::makeLoad(Param(3, Integer), Integer),
-        HighExpr::makeLoad(Param(4, Integer), Integer)};
+    F.Bridge->Operands = {HighExpr::makeLoad(Param(3, Integer), Integer),
+                          HighExpr::makeLoad(Param(4, Integer), Integer)};
     auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
-    Call->Operands.insert(Call->Operands.begin(),
-                          {HighExpr::makeConst(0, 8),
-                           HighExpr::makeConst(0, 8)});
+    Call->Operands.insert(Call->Operands.begin(), {HighExpr::makeConst(0, 8),
+                                                   HighExpr::makeConst(0, 8)});
     auto Hint = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
     Hint->Signature = Signature;
     Call->SourceCallHint = Hint;
@@ -1611,8 +1606,8 @@ TEST(SwiftOnceSources,
     EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
     EXPECT_EQ(Bound.LocalStorageExtents,
               (std::map<va_t, uint64_t>{{0x2000, 8}, {0x2020, 16}}));
-    EXPECT_TRUE(bindObjCSourceReferences(Bound.Function, F.Image)
-                    .Limitation.empty());
+    EXPECT_TRUE(
+        bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
 
     HighStmt Escape;
     Escape.Kind = StmtKind::ExprStmt;

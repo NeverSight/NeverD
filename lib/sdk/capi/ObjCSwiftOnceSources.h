@@ -366,8 +366,7 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
           SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
       F.SourceTypeHint->Convention !=
           SourceFunctionTypeHint::ConventionKind::C ||
-      (F.Params.size() != 3 && F.Params.size() != 4 &&
-       F.Params.size() != 6) ||
+      (F.Params.size() != 3 && F.Params.size() != 4 && F.Params.size() != 6) ||
       F.SourceTypeHint->Parameters.size() != F.Params.size())
     return std::nullopt;
   for (const auto &P : F.Params)
@@ -529,8 +528,8 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
       const auto First = LoadedFrom(E->Operands[0]);
       const auto Second = LoadedFrom(E->Operands[1]);
       if ((F.Params.size() != 4 && F.Params.size() != 6) ||
-          StringStorageParameters || !First ||
-          !Second || *First >= F.Params.size() || *Second >= F.Params.size() ||
+          StringStorageParameters || !First || !Second ||
+          *First >= F.Params.size() || *Second >= F.Params.size() ||
           *First == *Second) {
         Valid = false;
         return;
@@ -588,12 +587,11 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
   // the four real getter inputs. They are admissible only when the complete
   // flow above proves both leading parameters unused and the suffix retains
   // the canonical predicate/storage/initializer order.
-  if (F.Params.size() == 6 &&
-      (Predicate != 2 || Storage != 3 || SecondStorage != 4 ||
-       Initializer != 5))
+  if (F.Params.size() == 6 && (Predicate != 2 || Storage != 3 ||
+                               SecondStorage != 4 || Initializer != 5))
     return std::nullopt;
-  return SwiftOnceGetterContract{Predicate, Storage, SecondStorage,
-                                 Initializer, F.Params.size()};
+  return SwiftOnceGetterContract{Predicate, Storage, SecondStorage, Initializer,
+                                 F.Params.size()};
 }
 
 /// Prove the canonical Swift lazy-global addressor after HighIR structuring.
