@@ -75,6 +75,7 @@ struct SwiftObjCClassMetadataAccessorContract {
 
 struct SwiftOnceSourcePlan {
   std::map<va_t, SwiftOnceGetterContract> Getters;
+  std::map<va_t, SourceFunctionTypeHint> GetterHints;
   std::map<va_t, SwiftOnceCopyContract> Copies;
   std::map<va_t, SwiftOnceAddressorContract> Addressors;
   std::map<va_t, SwiftOnceObjCThunkContract> ObjCThunks;
@@ -592,6 +593,42 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
     return std::nullopt;
   return SwiftOnceGetterContract{Predicate, Storage, SecondStorage, Initializer,
                                  F.Params.size()};
+}
+
+// A shared ObjC getter can retain two unused incoming registers before its
+// four Swift inputs. Its native source hint may be absent on the first pass,
+// because ordinary entry-demand inference cannot establish those carriers.
+// Admit an ABI candidate only after the complete getter use contract proves
+// that the leading registers have no observable use.
+inline std::optional<std::pair<SwiftOnceGetterContract, SourceFunctionTypeHint>>
+untypedSixParameterGetter(const HighFunc &F, const BinaryImage &Image) {
+  if (Image.Arch != Arch::AArch64 || F.SourceTypeHint || F.Params.size() != 6 ||
+      F.DoesNotReturn || F.StructuredExceptionRegions ||
+      F.UnstructuredExceptionRegions || !F.ReturnType ||
+      F.ReturnType->Size != 8 ||
+      (F.ReturnType->Kind != NdTypeKind::Ptr &&
+       F.ReturnType->Kind != NdTypeKind::Int))
+    return std::nullopt;
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Hint.ReturnType = F.ReturnType;
+  for (const auto &Parameter : F.Params) {
+    if (!Parameter.Type || Parameter.Type->Size != 8 ||
+        (Parameter.Type->Kind != NdTypeKind::Ptr &&
+         Parameter.Type->Kind != NdTypeKind::Int))
+      return std::nullopt;
+    Hint.Parameters.push_back({Parameter.Name, Parameter.Type});
+  }
+  std::string Error;
+  if (!assignDarwinScalarSourceABI(Hint, Image.Arch, Error))
+    return std::nullopt;
+  HighFunc Typed = F;
+  Typed.SourceTypeHint = Hint;
+  const auto Contract = getterContract(Typed, Image);
+  if (!Contract || Contract->Predicate != 2 || Contract->Storage != 3 ||
+      Contract->SecondStorage != 4 || Contract->Initializer != 5)
+    return std::nullopt;
+  return std::pair{*Contract, std::move(Hint)};
 }
 
 /// Prove the canonical Swift lazy-global addressor after HighIR structuring.
@@ -1723,7 +1760,10 @@ discoverSwiftOnceSources(const BinaryImage &Image,
       Plan.ObjCClassMetadataAccessors.emplace(F.Entry, *Contract);
     else if (auto Contract = getterContract(F, Image))
       Plan.Getters.emplace(F.Entry, *Contract);
-    else if (auto Contract = copyContract(F, Image))
+    else if (auto Candidate = untypedSixParameterGetter(F, Image)) {
+      Plan.Getters.emplace(F.Entry, Candidate->first);
+      Plan.GetterHints.emplace(F.Entry, std::move(Candidate->second));
+    } else if (auto Contract = copyContract(F, Image))
       Plan.Copies.emplace(F.Entry, *Contract);
     else if (auto Contract = addressorContract(F, Image)) {
       Plan.Addressors.emplace(F.Entry, *Contract);
@@ -1845,6 +1885,8 @@ discoverSwiftOnceSources(const BinaryImage &Image,
 inline size_t applySwiftOnceSourceHints(const SwiftOnceSourcePlan &Plan,
                                         PipelineOptions &Options) {
   size_t Added = 0;
+  for (const auto &[Address, Hint] : Plan.GetterHints)
+    Added += Options.SourceTypeHints.emplace(Address, Hint).second;
   for (const auto &[Address, Hint] : Plan.AddressorHints)
     Added += Options.SourceCalleeTypeHints.emplace(Address, Hint).second;
   for (const auto &[Address, Hint] : Plan.CallbackHints)

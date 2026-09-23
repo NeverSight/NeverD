@@ -1617,6 +1617,69 @@ TEST(SwiftOnceSources,
   }
 }
 
+TEST(SwiftOnceSources,
+     UntypedSharedStringGetterRequiresCompleteSixParameterUseProof) {
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    const auto Architecture = Mutation == 4 ? Arch::X64 : Arch::AArch64;
+    StringOnceFixture F(Architecture);
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto Integer = NdType::makeInt(8, false);
+    auto Param = [&](unsigned Id, const TypeRef &Type) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      return HighExpr::makeVar(V, Type);
+    };
+    auto &Getter = F.Pipeline.HighFuncs[0];
+    Getter.Params = {{"objc_self", Pointer},      {"objc_cmd", Pointer},
+                     {"predicate", Pointer},      {"string_word", Integer},
+                     {"string_storage", Integer}, {"initializer", Pointer}};
+    Getter.SourceTypeHint.reset();
+    Getter.Body[0].Val =
+        HighExpr::makeLoad(Param(2, Pointer), NdType::makeInt(8));
+    F.Once->Operands = {Param(2, Pointer), Param(5, Pointer),
+                        Param(2, Pointer)};
+    F.Bridge->Operands = {HighExpr::makeLoad(Param(3, Integer), Integer),
+                          HighExpr::makeLoad(Param(4, Integer), Integer)};
+    if (Mutation == 1) {
+      HighStmt Escape;
+      Escape.Kind = StmtKind::ExprStmt;
+      Escape.Val = Param(0, Pointer);
+      Getter.Body.insert(Getter.Body.begin(), Escape);
+    } else if (Mutation == 2) {
+      Getter.ReturnType = NdType::makeVoid();
+    } else if (Mutation == 3) {
+      F.Once->Operands[1] = Param(0, Pointer);
+    }
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    if (Mutation == 0) {
+      ASSERT_EQ(Plan.Getters.size(), 1U);
+      ASSERT_EQ(Plan.GetterHints.size(), 1U);
+      PipelineOptions Options;
+      EXPECT_GE(applySwiftOnceSourceHints(Plan, Options), 1U);
+      ASSERT_EQ(Options.SourceTypeHints.size(), 1U);
+      EXPECT_EQ(Options.SourceTypeHints.begin()->first, Getter.Entry);
+      Getter.SourceTypeHint = Options.SourceTypeHints.at(Getter.Entry);
+      auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
+      Call->Operands.insert(
+          Call->Operands.begin(),
+          {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8)});
+      auto Hint = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+      Hint->Signature = *Getter.SourceTypeHint;
+      Call->SourceCallHint = std::move(Hint);
+      const auto TypedPlan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      EXPECT_EQ(TypedPlan.Getters.size(), 1U);
+      EXPECT_EQ(TypedPlan.CallbackHints.size(), 1U);
+      EXPECT_TRUE(TypedPlan.GetterHints.empty());
+    } else {
+      EXPECT_TRUE(Plan.Getters.empty());
+      EXPECT_TRUE(Plan.GetterHints.empty());
+    }
+  }
+}
+
 TEST(SwiftOnceSources, RejectsUnprovedSwiftStringOnceContractsAndStorage) {
   for (unsigned Case = 0; Case < 10; ++Case) {
     SCOPED_TRACE(Case);
