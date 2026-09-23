@@ -455,6 +455,25 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       ParallelQueueDeliversIndependentRequestsBeforeEitherCompletes) {
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, UINT32_MAX, 4);
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto First = request(route(FirstIRP));
+  const auto Second = request(route(SecondIRP));
+  EXPECT_NE(First, Second);
+  EXPECT_EQ(Packets.at(FirstIRP).PendingCalls, 1u);
+  EXPECT_EQ(Packets.at(SecondIRP).PendingCalls, 1u);
+  complete(Second, 2);
+  EXPECT_FALSE(Packets.at(FirstIRP).Completed);
+  complete(First, 1);
+  EXPECT_EQ(Packets.at(FirstIRP).Information, 1u);
+  EXPECT_EQ(Packets.at(SecondIRP).Information, 2u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        CleanupPrecedesIRPRetirementButReferenceKeepsOnlyContext) {
   initializeQueue();
   const auto IRP = packet();

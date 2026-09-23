@@ -83,23 +83,115 @@ std::vector<std::string> controlMessages(const DriverResult &Result) {
   return Messages;
 }
 
-TEST(DriverKMDFControl, RejectsWdmOnlyDeferredCallbackDrain) {
+size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
+  return std::count_if(Result.Calls.begin(), Result.Calls.end(),
+                       [Name](const auto &Call) { return Call.Name == Name; });
+}
+
+void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount);
+
+TEST(DriverKMDFControl, SequentialQueueCannotDeliverASecondPendingRequest) {
   for (const auto *Image : controlImages()) {
-    auto Options = controlOptions();
+    auto Options = controlOptions('W');
+    Options.Requests[0].AsynchronousFile = true;
+    Options.Requests.insert(Options.Requests.begin() + 2, Options.Requests[1]);
     Options.Requests[1].DeferCallbackDrain = true;
-    Options.Requests.resize(2);
+    Options.Requests.resize(3);
     Options.Unload = false;
     auto Result = emulateDriver(Image, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-    EXPECT_NE(Result->Diagnostic.find("requires a WDM request"),
+    EXPECT_NE(Result->Diagnostic.find("sequential queue still owns"),
               std::string::npos);
   }
 }
 
-size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
-  return std::count_if(Result.Calls.begin(), Result.Calls.end(),
-                       [Name](const auto &Call) { return Call.Name == Name; });
+TEST(DriverKMDFControl, ParallelQueueDeliversTwoPendingRequestsBeforeWorkers) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('P');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {0x11, 0x22, 0x33, 0x44};
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      auto Third = Options.Requests[1];
+      Third.Input = {1, 2};
+      Third.OutputSize = 6;
+      Options.Requests.insert(Options.Requests.begin() + 3, Third);
+      Options.Requests[1].DeferCallbackDrain = true;
+      Options.Requests[2].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 8);
+      ASSERT_EQ(Result->Requests.size(), 8u);
+      EXPECT_EQ(Result->Requests[1].Information, 8u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'P', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(Result->Requests[2].Information, 8u);
+      EXPECT_EQ(
+          Result->Requests[2].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'P', 0x4b, 0x78, 0x69, 0x1e}));
+      EXPECT_EQ(Result->Requests[3].Information, 6u);
+      EXPECT_EQ(Result->Requests[3].Output,
+                (std::vector<uint8_t>{'K', 'M', 'D', 'P', 0x5b, 0x58}));
+      size_t SecondQueued = Result->Calls.size();
+      size_t FirstWorker = Result->Calls.size();
+      for (size_t I = 0; I < Result->Calls.size(); ++I) {
+        const auto &Call = Result->Calls[I];
+        if (Call.Name == "IoQueueWorkItem" && Call.Phase == "request:2")
+          SecondQueued = I;
+        if (Call.Name == "IoFreeWorkItem" &&
+            Call.Phase.starts_with("callback:"))
+          FirstWorker = std::min(FirstWorker, I);
+      }
+      EXPECT_LT(SecondQueued, FirstWorker);
+      EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), 2u);
+      EXPECT_EQ(apiCount(*Result, "IoFreeWorkItem"), 2u);
+      const auto Messages = controlMessages(*Result);
+      ASSERT_FALSE(Messages.empty());
+      EXPECT_EQ(Messages.front(), "KMDF control: ready in mode P\n");
+    }
+}
+
+TEST(DriverKMDFControl, ParallelQueueBatchesTwoIndependentFileObjects) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    DriverOptions Options;
+    Options.ServiceName = "NeverDKmdfControlP";
+    for (uint32_t File : {0u, 1u}) {
+      auto Create = controlRequest(DriverRequestKind::Create);
+      Create.File = File;
+      Create.Device = "\\DosDevices\\NeverDKmdfControl";
+      Options.Requests.push_back(std::move(Create));
+    }
+    for (uint32_t File : {0u, 1u}) {
+      auto IO = controlRequest(DriverRequestKind::DeviceControl);
+      IO.File = File;
+      IO.ControlCode = 0x222000;
+      IO.Input = File ? std::vector<uint8_t>{0x11, 0x22, 0x33, 0x44}
+                      : std::vector<uint8_t>{0, 1, 0x5a, 0xff};
+      IO.OutputSize = 8;
+      IO.DeferCallbackDrain = true;
+      Options.Requests.push_back(std::move(IO));
+    }
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 4u);
+    EXPECT_TRUE(Result->Requests[2].Completed);
+    EXPECT_TRUE(Result->Requests[3].Completed);
+    EXPECT_EQ(Result->Requests[2].Output,
+              (std::vector<uint8_t>{'K', 'M', 'D', 'P', 0x5a, 0x5b, 0, 0xa5}));
+    EXPECT_EQ(
+        Result->Requests[3].Output,
+        (std::vector<uint8_t>{'K', 'M', 'D', 'P', 0x4b, 0x78, 0x69, 0x1e}));
+    EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), 2u);
+    EXPECT_EQ(apiCount(*Result, "IoFreeWorkItem"), 2u);
+  }
 }
 
 void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount) {

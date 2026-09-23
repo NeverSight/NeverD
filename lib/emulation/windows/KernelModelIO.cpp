@@ -671,8 +671,6 @@ KernelModel::beginRequest(const DriverRequest &Input,
   }
   if (!Neither && (Input.UserInputAccess || Input.UserOutputAccess))
     return ioError("user page access requires neither READ/WRITE I/O");
-  if (Input.DeferCallbackDrain && FrameworkDevices.count(*Top))
-    return ioError("defer_callback_drain requires a WDM request");
   if (Input.UserUnmapAfterDispatch &&
       (!Neither || (Input.Input.empty() && !Input.OutputSize)))
     return ioError("user unmapping requires a nonempty neither-I/O transfer");

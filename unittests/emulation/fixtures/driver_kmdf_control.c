@@ -11,20 +11,21 @@
 ///
 /// The final service-name character selects buffered READ/WRITE (B, default),
 /// direct READ/WRITE (D), or buffered READ/WRITE with deferred IOCTL completion
-/// (W). C observes request cleanup, child destruction and retained context.
-/// X completes from a cancel callback; H delegates cancel completion to a
-/// worker while the cancel callback waits; U unmarks before a delayed worker;
-/// N deliberately completes a still-cancelable request. Buffered mode B polls
-/// cancellation before processing, including the CLI's default service name.
-/// L uses legacy MarkCancelable, including synchronous cancellation before the
-/// API returns. M checks request metadata and buffered WDM MDL aliases.
-/// I preprocesses each transfer in EvtIoInCallerContext before enqueueing it.
-/// J deliberately returns from that callback without enqueue or completion.
-/// K completes the transfer in the caller-context callback without enqueueing.
-/// T probes and locks neither-I/O user buffers in caller context, then uses
-/// request-owned WDFMEMORY system aliases in the default queue.
-/// Q deliberately supplies an invalid queue configuration size. CREATE,
-/// CLEANUP and CLOSE use the default framework file package without callbacks.
+/// (W). P uses an unlimited parallel default queue with independent deferred
+/// IOCTL work items. C observes request cleanup, child destruction and retained
+/// context. X completes from a cancel callback; H delegates cancel completion
+/// to a worker while the cancel callback waits; U unmarks before a delayed
+/// worker; N deliberately completes a still-cancelable request. Buffered mode B
+/// polls cancellation before processing, including the CLI's default service
+/// name. L uses legacy MarkCancelable, including synchronous cancellation
+/// before the API returns. M checks request metadata and buffered WDM MDL
+/// aliases. I preprocesses each transfer in EvtIoInCallerContext before
+/// enqueueing it. J deliberately returns from that callback without enqueue or
+/// completion. K completes the transfer in the caller-context callback without
+/// enqueueing. T probes and locks neither-I/O user buffers in caller context,
+/// then uses request-owned WDFMEMORY system aliases in the default queue. Q
+/// deliberately supplies an invalid queue configuration size. CREATE, CLEANUP
+/// and CLOSE use the default framework file package without callbacks.
 ///
 /// READ returns byte 0x60 + (offset & 0x1f). WRITE accepts bytes matching
 /// 0x40 + (offset & 0x1f), completing STATUS_DATA_ERROR on a mismatch. Buffered
@@ -82,6 +83,7 @@ _Static_assert(WdfDeviceIoNeither == 1 && WdfDeviceIoBuffered == 2 &&
                    WdfDeviceIoDirect == 3,
                "I/O type ABI");
 _Static_assert(WdfIoQueueDispatchSequential == 1, "queue dispatch ABI");
+_Static_assert(WdfIoQueueDispatchParallel == 2, "parallel queue dispatch ABI");
 _Static_assert(WdfExecutionLevelPassive == 2, "passive execution ABI");
 _Static_assert(WdfSynchronizationScopeNone == 4, "synchronization ABI");
 ABI_SLOT(WdfControlDeviceInitAllocate, 25);
@@ -132,6 +134,13 @@ typedef struct {
 } DEFERRED_IOCTL_CONTEXT;
 
 typedef struct {
+  PIO_WORKITEM Item;
+  size_t OutputLength;
+  size_t InputLength;
+} PARALLEL_IOCTL_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PARALLEL_IOCTL_CONTEXT, ParallelContext);
+
+typedef struct {
   PUCHAR Buffer;
   PIRP Irp;
   size_t Length;
@@ -171,6 +180,8 @@ static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
 static UCHAR TransferMode;
 static volatile ULONG CallerRequestCount;
+static volatile ULONG ParallelQueued;
+static volatile ULONG ParallelCompleted;
 static DEFERRED_IOCTL_CONTEXT Deferred;
 
 static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
@@ -516,6 +527,28 @@ static void CompleteWorker(PDEVICE_OBJECT Device, PVOID Context) {
   TransformRequest(Request, OutputLength, InputLength);
 }
 
+static void ParallelWorker(PDEVICE_OBJECT Device, PVOID Context) {
+  WDFREQUEST Request = Context;
+  PARALLEL_IOCTL_CONTEXT *Work = ParallelContext(Request);
+  PIO_WORKITEM Item = Work->Item;
+  size_t OutputLength = Work->OutputLength;
+  size_t InputLength = Work->InputLength;
+  BOOLEAN Valid =
+      Check(Item != NULL && ParallelQueued >= 2 &&
+                Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
+                KeGetCurrentIrql() == PASSIVE_LEVEL,
+            130);
+  IoFreeWorkItem(Item);
+  Work->Item = NULL;
+  ++ParallelCompleted;
+  if (!Valid) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  DbgPrint("KMDF control: parallel worker\n");
+  TransformRequest(Request, OutputLength, InputLength);
+}
+
 static void CancelCleanup(WDFOBJECT Object) {
   CANCEL_REQUEST_CONTEXT *Context = CancelContext(Object);
   if (Check(Context->Cookie == 0xca1ce133 && Context->Phase == 1 &&
@@ -731,6 +764,29 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     WdfRequestComplete(Request, STATUS_CANCELLED);
     return;
   }
+  if (TransferMode == 'P' && InputLength == 4) {
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    PARALLEL_IOCTL_CONTEXT *Work = NULL;
+    NTSTATUS Status;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes,
+                                            PARALLEL_IOCTL_CONTEXT);
+    Status = WdfObjectAllocateContext(Request, &Attributes, (PVOID *)&Work);
+    if (!NT_SUCCESS(Status)) {
+      WdfRequestComplete(Request, Status);
+      return;
+    }
+    Work->Item = IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(CreatedDevice));
+    if (Work->Item == NULL) {
+      WdfRequestComplete(Request, STATUS_INSUFFICIENT_RESOURCES);
+      return;
+    }
+    Work->InputLength = InputLength;
+    Work->OutputLength = OutputLength;
+    ++ParallelQueued;
+    IoQueueWorkItem(Work->Item, ParallelWorker, DelayedWorkQueue, Request);
+    DbgPrint("KMDF control: queued parallel request\n");
+    return;
+  }
   if (TransferMode != 'W') {
     TransformRequest(Request, OutputLength, InputLength);
     return;
@@ -876,6 +932,7 @@ static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
 static void DriverUnload(WDFDRIVER Driver) {
   (void)Driver;
   Check(Deferred.Item == NULL && Deferred.Request == NULL &&
+            ParallelQueued == ParallelCompleted &&
             KeGetCurrentIrql() == PASSIVE_LEVEL,
         60);
   WdfObjectDelete(CreatedDevice);
@@ -1009,6 +1066,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'J' ? 'J'
                  : Marker == L'K' ? 'K'
                  : Marker == L'T' ? 'T'
+                 : Marker == L'P' ? 'P'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1052,8 +1110,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   if (!NT_SUCCESS(Status))
     goto Failure;
 
-  WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&QueueConfig,
-                                         WdfIoQueueDispatchSequential);
+  WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
+      &QueueConfig, TransferMode == 'P' ? WdfIoQueueDispatchParallel
+                                        : WdfIoQueueDispatchSequential);
   QueueConfig.EvtIoDeviceControl = IoDeviceControl;
   QueueConfig.EvtIoRead = IoRead;
   QueueConfig.EvtIoWrite = IoWrite;
