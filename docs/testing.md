@@ -73,6 +73,17 @@ IRQL/lifetimes. Worker tests retain pending/completion, queue, stall and
 shared-budget coverage. These cases establish the documented subset, not full
 Windows asynchronous support.
 
+`DriverAsyncTests.cpp` submits two pending WDM IOCTLs on independent file
+objects with `defer_callback_drain`, then checks that both dispatches precede
+either worker and that each IRP completes with its own output. A second batch
+cancels one IRP while the other completes and releases each work item and
+request independently. C API/CLI tests run both eight-request scenarios.
+Synchronous dispatch and same-file overlap are rejected explicitly; arbitrary
+thread races are not covered by this deterministic batch boundary. The genuine
+WDK neither-I/O fixture also verifies that another requestor can complete a
+synchronous request before the first exited requestor's locked-MDL worker runs,
+in normal/active-CFG images at preferred and relocated bases.
+
 `driver_context_limits.c`: API IRQL ceilings come from `KernelAPIIRQL.def`,
 with argument-dependent checks in the owning model. DPCs cannot call registry
 APIs or allocate, free or access paged pool; Unicode `DbgPrint` conversions

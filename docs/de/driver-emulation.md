@@ -522,7 +522,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v22`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v23`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -601,3 +601,7 @@ Beim WDM-`METHOD_NEITHER` zeigen `Type3InputBuffer` und `IRP.UserBuffer` auf get
 
 Ein WDM-`METHOD_NEITHER` IOCTL-Auftrag mit nichtleerem Puffer kann `user_input_access` und `user_output_access` unabhängig auf `read_write` (Standard), `read_only` oder `no_access` setzen. Für gepufferte/direkte Methoden und leere Puffer werden die Felder abgewiesen; `no_access` behält den Zeiger, sperrt aber den Seitenzugriff.
 Der Bericht `configuration.user_page_access` enthält nur explizite Zugriffsangaben mit einem bei null beginnenden `source_request_index`; ausgelassene Richtungen verwenden `read_write`.
+
+## Begrenzte parallele WDM-Anforderungen
+
+Eine WDM-READ/WRITE/IOCTL-Anforderung kann `defer_callback_drain: true` setzen. Nur wenn der Dispatch `STATUS_PENDING` zurückgibt und die IRP weiter aussteht, wird die nächste Anforderung vor den Rückrufen eingereicht. Nach der nächsten Anforderung ohne dieses Feld werden die Rückrufe ausgeführt und der Stapel abgeschlossen; beim letzten markierten Eintrag geschieht dies am Szenarioende. Überlappende Anforderungen benötigen verschiedene Dateiobjekte. Überlappungen auf derselben Datei, KMDF-Stapel, beliebige Präemption und externe Anforderungen werden nicht unterstützt.

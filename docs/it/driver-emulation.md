@@ -519,7 +519,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v22`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v23`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -595,3 +595,7 @@ Per WDM `METHOD_NEITHER`, `Type3InputBuffer` e `IRP.UserBuffer` indicano allocaz
 
 Una richiesta WDM `METHOD_NEITHER` IOCTL con buffer non vuoto può impostare separatamente `user_input_access` e `user_output_access` su `read_write` (predefinito), `read_only` o `no_access`. I campi sono rifiutati per metodi con buffer o diretti e buffer vuoti; `no_access` conserva il puntatore ma impedisce l’accesso alle pagine.
 Il rapporto `configuration.user_page_access` registra solo le protezioni esplicite, con `source_request_index` a partire da zero; una direzione omessa usa `read_write`.
+
+## Richieste WDM concorrenti limitate
+
+Una richiesta WDM READ/WRITE/IOCTL può impostare `defer_callback_drain: true`. Solo se il dispatch restituisce `STATUS_PENDING` e l’IRP resta in sospeso, la richiesta successiva viene inviata prima di eseguire i callback. Dopo la richiesta successiva senza questo campo, i callback vengono eseguiti e il gruppo viene finalizzato; se il campo è presente sull’ultima richiesta, ciò avviene alla fine dello scenario. Le richieste sovrapposte devono usare oggetti file distinti. Non sono supportate sovrapposizioni sullo stesso file, invii in gruppo KMDF, preemption arbitraria o arrivi esterni.

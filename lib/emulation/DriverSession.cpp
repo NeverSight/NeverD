@@ -1012,6 +1012,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (auto E = DrainCallbacks())
         return std::move(E);
     }
+    std::vector<uint64_t> BatchedIRPs;
+    auto FinalizeBatch = [&]() -> llvm::Error {
+      for (uint64_t IRP : BatchedIRPs)
+        if (auto E = Kernel.finalizeRequest(IRP))
+          return E;
+      BatchedIRPs.clear();
+      return llvm::Error::success();
+    };
     for (size_t Index = 0; Index < Options.Requests.size(); ++Index) {
       if (Result.Stop != DriverStopReason::Returned)
         break;
@@ -1066,6 +1074,15 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       const bool Removing =
           Input.Pnp && Input.Pnp->Minor == DevicePnpRequest::Remove;
       const bool Deferred = Removing || Kernel.requestPending(Invocation->IRP);
+      if (Input.DeferCallbackDrain) {
+        if (!Kernel.requestPending(Invocation->IRP) || Removing) {
+          ModelFailure(failure("defer_callback_drain requires an IRP that "
+                               "remains pending after dispatch"));
+          break;
+        }
+        BatchedIRPs.push_back(Invocation->IRP);
+        continue;
+      }
       if (!Deferred) {
         if (auto E = Kernel.finalizeRequest(Invocation->IRP)) {
           ModelFailure(std::move(E));
@@ -1082,6 +1099,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           break;
         }
       }
+      if (auto E = FinalizeBatch()) {
+        ModelFailure(std::move(E));
+        break;
+      }
+    }
+    if (Result.Stop == DriverStopReason::Returned && !BatchedIRPs.empty()) {
+      if (auto E = DrainCallbacks())
+        return std::move(E);
+      if (Result.Stop == DriverStopReason::Returned)
+        if (auto E = FinalizeBatch())
+          ModelFailure(std::move(E));
     }
     if (Result.Stop == DriverStopReason::Returned && Options.Unload &&
         !DeadlineExceeded()) {

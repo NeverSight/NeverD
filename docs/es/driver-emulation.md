@@ -529,7 +529,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v22`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v23`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -608,3 +608,7 @@ En WDM `METHOD_NEITHER`, `Type3InputBuffer` e `IRP.UserBuffer` apuntan a asignac
 
 Una solicitud WDM `METHOD_NEITHER` IOCTL con búfer no vacío puede establecer `user_input_access` y `user_output_access` por separado en `read_write` (predeterminado), `read_only` o `no_access`. Estos campos se rechazan para métodos con búfer o directos y búferes vacíos; `no_access` conserva el puntero pero impide acceder a las páginas.
 El informe `configuration.user_page_access` conserva solo las protecciones explícitas, con `source_request_index` desde cero; una dirección omitida usa `read_write`.
+
+## Solicitudes WDM concurrentes acotadas
+
+Una solicitud WDM READ/WRITE/IOCTL puede establecer `defer_callback_drain: true`. Solo si el despacho devuelve `STATUS_PENDING` y el IRP sigue pendiente se envía la siguiente solicitud antes de ejecutar las devoluciones de llamada. Después de la siguiente solicitud sin este campo se ejecutan las devoluciones de llamada y se finaliza el lote; si la última solicitud lo establece, se hace al final del escenario. Las solicitudes superpuestas deben usar objetos de archivo distintos. No se admiten solicitudes superpuestas del mismo archivo, lotes KMDF, planificación preventiva arbitraria ni llegadas externas.

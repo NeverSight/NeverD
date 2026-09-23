@@ -526,7 +526,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v22`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v23`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -604,3 +604,7 @@ Pour WDM `METHOD_NEITHER`, `Type3InputBuffer` et `IRP.UserBuffer` désignent deu
 
 Une requête WDM `METHOD_NEITHER` IOCTL avec tampon non vide peut définir indépendamment `user_input_access` et `user_output_access` à `read_write` (défaut), `read_only` ou `no_access`. Ces champs sont refusés pour les méthodes tamponnées ou directes et les tampons vides ; `no_access` conserve le pointeur mais interdit l’accès aux pages.
 Le rapport `configuration.user_page_access` conserve uniquement les protections explicites, avec un `source_request_index` commençant à zéro ; une direction omise reste `read_write`.
+
+## Requêtes WDM concurrentes limitées
+
+Une requête WDM READ/WRITE/IOCTL peut définir `defer_callback_drain: true`. Le répartiteur doit renvoyer `STATUS_PENDING` et laisser l’IRP en attente pour que la requête suivante soit soumise avant les rappels. Après la prochaine requête sans ce champ, les rappels sont exécutés et le lot est finalisé ; si la dernière requête porte ce champ, le traitement se fait en fin de scénario. Les requêtes qui se chevauchent doivent utiliser des objets fichier distincts. Le chevauchement sur un même fichier, les lots KMDF, la préemption arbitraire et les arrivées externes ne sont pas pris en charge.

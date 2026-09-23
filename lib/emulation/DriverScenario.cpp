@@ -883,6 +883,12 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
       return invalid("cancel_after_100ns must be a nonnegative integer");
     Result.CancelAfter100ns = *Number;
   }
+  if (const auto *Defer = Object->get(DeferCallbackDrainField)) {
+    auto Value = Defer->getAsBoolean();
+    if (!Value)
+      return invalid("defer_callback_drain must be a boolean");
+    Result.DeferCallbackDrain = *Value;
+  }
   if (const auto *Offset = Object->get(ByteOffsetField)) {
     if (auto Text = Offset->getAsString()) {
       auto Number = hexNumber(*Text, ByteOffsetField);
@@ -1356,6 +1362,10 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   uint64_t Total = 0;
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
+    if (Request.DeferCallbackDrain && Request.Kind != DriverRequestKind::Read &&
+        Request.Kind != DriverRequestKind::Write &&
+        Request.Kind != DriverRequestKind::DeviceControl)
+      return invalid("defer_callback_drain requires a file transfer request");
     if ((Request.Kind == DriverRequestKind::Pnp ||
          Request.Kind == DriverRequestKind::Power) &&
         Request.RequestorProcessID != DriverRequest::DefaultRequestorProcessID)

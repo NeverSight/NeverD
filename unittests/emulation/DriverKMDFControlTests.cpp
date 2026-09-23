@@ -82,6 +82,20 @@ std::vector<std::string> controlMessages(const DriverResult &Result) {
   return Messages;
 }
 
+TEST(DriverKMDFControl, RejectsWdmOnlyDeferredCallbackDrain) {
+  for (const auto *Image : controlImages()) {
+    auto Options = controlOptions();
+    Options.Requests[1].DeferCallbackDrain = true;
+    Options.Requests.resize(2);
+    Options.Unload = false;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("requires a WDM request"),
+              std::string::npos);
+  }
+}
+
 size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
   return std::count_if(Result.Calls.begin(), Result.Calls.end(),
                        [Name](const auto &Call) { return Call.Name == Name; });
