@@ -142,15 +142,19 @@ inline size_t inferObjCNativeDependencies(
           M != Med.end() && A != Audits.end())
         if (auto Pair = refineNativeIntegerPairReturnHint(
                 *M->second, *Found->second, *A->second)) {
-          Existing->second = std::move(*Pair);
-          ++Added;
+          if (!equalSourceABIs(Existing->second, *Pair)) {
+            Existing->second = std::move(*Pair);
+            ++Added;
+          }
           continue;
         }
       if (RefinementFunction && A != Audits.end())
         if (auto Refined =
                 refineNativeSourceTypeHint(*RefinementFunction, *A->second)) {
-          Existing->second = std::move(*Refined);
-          ++Added;
+          if (!equalSourceABIs(Existing->second, *Refined)) {
+            Existing->second = std::move(*Refined);
+            ++Added;
+          }
         }
       continue;
     }

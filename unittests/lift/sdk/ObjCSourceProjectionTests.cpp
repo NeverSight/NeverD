@@ -1181,6 +1181,9 @@ TEST(ObjCSourceProjection, NativeInferenceUsesSourceBoundRefinementBodies) {
   ASSERT_EQ(Options.SourceTypeHints.at(Function.Entry).Parameters.size(), 2U);
   EXPECT_EQ(Options.SourceTypeHints.at(Function.Entry).Parameters[1].Type->Size,
             4U);
+  EXPECT_EQ(inferObjCNativeDependencies(F.Image, F.Result, Options, Diagnostics,
+                                        {}, {}, &Refinements),
+            0U);
 }
 
 TEST(ObjCSourceProjection, NativeDependencyGraphTracksMissingAndFinalEvidence) {
