@@ -3666,3 +3666,38 @@ TEST(HighCPointerAddresses, CalleeBranchToAnotherFunctionCountsItsWrites) {
   const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
   EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
+  // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
+  // functions while these MOVs had no lift.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x44, 0x0f, 0x20, 0xc0, // mov rax, cr8
+                                     0x44, 0x0f, 0x22, 0xc1, // mov cr8, rcx
+                                     0x0f, 0x21, 0xfa,       // mov rdx, dr7
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__readcr8()"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__writecr8("), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__readdr(7)"), std::string::npos) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(LLVMC.find("cr8"), std::string::npos) << LLVMC;
+}
+
+TEST(HighCPointerAddresses, DisplacedInvpcidDescriptorPrintsSourceIntrinsic) {
+  // ntoskrnl builds the INVPCID descriptor on the stack: [rsp+20h].  The
+  // address is computed, never loaded, and the source spelling is printed.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x38, // sub rsp, 38h
+                                     0x66, 0x0f, 0x38, 0x82,
+                                     0x44, 0x24, 0x20, // invpcid rax, [rsp+20h]
+                                     0x48, 0x83, 0xc4, 0x38, // add rsp, 38h
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("_invpcid("), std::string::npos) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(LLVMC.find("invpcid"), std::string::npos) << LLVMC;
+}

@@ -1069,9 +1069,6 @@ const char *x86HighCIntrinsicFatalReason(Intrinsic Id) {
   case I::X86MsrAccess:
     return "x86 MSR access requires an authenticated architectural execution "
            "environment";
-  case I::X86Invalidate:
-    return "x86 address-translation invalidation requires an authenticated "
-           "architectural execution environment";
   case I::X86RequireDivPrecondition:
     return "x86 division precondition requires an architectural fault "
            "environment";
@@ -1091,6 +1088,16 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
 
   using I = Intrinsic;
   switch (Id) {
+  case I::X86Invalidate: {
+    // Operands: descriptor address, invalidation kind, type register.  The
+    // source spells INVPCID as the MSVC intrinsic _invpcid(type, descriptor).
+    if (Ops.size() != 3 || Ops[1] != std::to_string(static_cast<unsigned>(
+                                         X86InvalidateKind::Invpcid)))
+      llvm::report_fatal_error("x86 invalidation has an unknown kind");
+    HasCIntrinsics = true;
+    return "_invpcid((unsigned int)(" + Ops[2] + "), (void *)(uintptr_t)(" +
+           Ops[0] + "))";
+  }
   case I::Cpuid: {
     std::string Leaf = Ops.empty() ? "0" : Ops[0];
     HasCIntrinsics = true;

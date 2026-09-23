@@ -197,11 +197,25 @@ namespace {
 /// it recorded one (for example a rejected or absorbed candidate).
 std::string missingHighFunctionReason(const PipelineResult &Result,
                                       neverd_va_t Entry) {
-  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
-    if (Audit.Entry == Entry &&
-        Audit.Disposition != PipelineFunctionDisposition::Accepted)
-      return std::string("function not found in HighIR (") +
-             pipelineFunctionDispositionName(Audit.Disposition) + ")";
+  for (const PipelineFunctionAudit &Audit : Result.FunctionAudits) {
+    if (Audit.Entry != Entry ||
+        Audit.Disposition == PipelineFunctionDisposition::Accepted)
+      continue;
+    std::string Reason = std::string("function not found in HighIR (") +
+                         pipelineFunctionDispositionName(Audit.Disposition);
+    auto Name = [&](const char *What, const std::vector<va_t> &Addrs) {
+      if (Addrs.empty())
+        return;
+      Reason += std::string("; ") + What + " at";
+      for (size_t I = 0; I < Addrs.size() && I < 4; ++I)
+        Reason += " 0x" + llvm::utohexstr(Addrs[I]);
+      if (Addrs.size() > 4)
+        Reason += " ...";
+    };
+    Name("unsupported instruction", Audit.UnsupportedInstructions);
+    Name("decode failure", Audit.DecodeFailures);
+    return Reason + ")";
+  }
   return "function not found in HighIR";
 }
 } // namespace

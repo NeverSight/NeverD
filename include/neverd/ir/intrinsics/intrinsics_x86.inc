@@ -335,3 +335,11 @@ X86RequireDivPrecondition,
 // selector and optional write value are retained for an authenticated
 // architectural execution environment; ordinary backends fail closed.
 X86MsrAccess,
+
+// Append-only: MOV to/from control and debug registers.  Each control
+// register has its own MSVC intrinsic (__readcr8/__writecr8); debug-register
+// moves carry the register number as their first operand
+// (__readdr(n)/__writedr(n, value)).
+ReadCr0, ReadCr2, ReadCr3, ReadCr4, ReadCr8,
+WriteCr0, WriteCr2, WriteCr3, WriteCr4, WriteCr8,
+ReadDr, WriteDr,

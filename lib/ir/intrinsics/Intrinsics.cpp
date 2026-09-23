@@ -162,6 +162,34 @@ uint8_t intrinsicOutputCount(Intrinsic Id) {
   return Idx < kCount ? Table.Counts[Idx] : 0;
 }
 
+std::optional<std::string> x86SystemRegisterName(Intrinsic Id,
+                                                 uint64_t DebugIndex) {
+  switch (Id) {
+  case Intrinsic::ReadCr0:
+  case Intrinsic::WriteCr0:
+    return "%cr0";
+  case Intrinsic::ReadCr2:
+  case Intrinsic::WriteCr2:
+    return "%cr2";
+  case Intrinsic::ReadCr3:
+  case Intrinsic::WriteCr3:
+    return "%cr3";
+  case Intrinsic::ReadCr4:
+  case Intrinsic::WriteCr4:
+    return "%cr4";
+  case Intrinsic::ReadCr8:
+  case Intrinsic::WriteCr8:
+    return "%cr8";
+  case Intrinsic::ReadDr:
+  case Intrinsic::WriteDr:
+    if (DebugIndex > 15)
+      return std::nullopt;
+    return "%dr" + std::to_string(DebugIndex);
+  default:
+    return std::nullopt;
+  }
+}
+
 Intrinsic intrinsicFromName(const char *Name) {
   if (!Name)
     return Intrinsic::None;

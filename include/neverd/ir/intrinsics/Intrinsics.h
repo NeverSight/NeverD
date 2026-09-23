@@ -16,6 +16,9 @@
 #include "neverd/Common.h"
 #include "neverd/ir/NdOps.h"
 
+#include <optional>
+#include <string>
+
 namespace neverd {
 
 enum class AMXTileComputeKind : uint8_t {
@@ -984,6 +987,12 @@ const char *llvmIntrinsicToCName(const char *LLVMName);
 Intrinsic intrinsicFromName(const char *Name);
 bool isSideeffectIntrinsic(Intrinsic Id);
 uint8_t intrinsicOutputCount(Intrinsic Id);
+
+/// The control or debug register (`%cr8`, `%dr7`) that a ReadCr*/WriteCr*
+/// intrinsic names, or that ReadDr/WriteDr names by its constant first
+/// operand \p DebugIndex; nullopt for any other intrinsic.
+std::optional<std::string> x86SystemRegisterName(Intrinsic Id,
+                                                 uint64_t DebugIndex);
 
 } // namespace neverd
 

@@ -16,9 +16,95 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86Lifter.h"
 
+#include <optional>
+
 #define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
+
+namespace {
+/// MOV to or from a control (CRn) or debug (DRn) register.  These name
+/// processor state, not general registers, so they lift to the MSVC
+/// intrinsics __readcr8/__writecr8 and __readdr/__writedr.  Returns nullopt
+/// when neither operand is such a register, and false for a control register
+/// no intrinsic models, so the instruction stays unlifted.
+std::optional<bool> liftSystemRegisterMove(X86Lifter::LiftState &S,
+                                           const cs_x86 &X86) {
+  const cs_x86_op &Dst = X86.operands[0];
+  const cs_x86_op &Src = X86.operands[1];
+  auto CrIndex = [](const cs_x86_op &Op) -> int {
+    if (Op.type != X86_OP_REG || Op.reg < X86_REG_CR0 || Op.reg > X86_REG_CR15)
+      return -1;
+    return static_cast<int>(Op.reg - X86_REG_CR0);
+  };
+  auto DrIndex = [](const cs_x86_op &Op) -> int {
+    if (Op.type != X86_OP_REG || Op.reg < X86_REG_DR0 || Op.reg > X86_REG_DR15)
+      return -1;
+    return static_cast<int>(Op.reg - X86_REG_DR0);
+  };
+  auto GPR = [](const cs_x86_op &Op) {
+    RegInfo RI = mapCapstoneReg(static_cast<x86_reg>(Op.reg));
+    return NdVar::reg(RI.Offset, RI.Size);
+  };
+  auto ReadCr = [](int Index) -> std::optional<Intrinsic> {
+    switch (Index) {
+    case 0:
+      return Intrinsic::ReadCr0;
+    case 2:
+      return Intrinsic::ReadCr2;
+    case 3:
+      return Intrinsic::ReadCr3;
+    case 4:
+      return Intrinsic::ReadCr4;
+    case 8:
+      return Intrinsic::ReadCr8;
+    default:
+      return std::nullopt;
+    }
+  };
+  auto WriteCr = [](int Index) -> std::optional<Intrinsic> {
+    switch (Index) {
+    case 0:
+      return Intrinsic::WriteCr0;
+    case 2:
+      return Intrinsic::WriteCr2;
+    case 3:
+      return Intrinsic::WriteCr3;
+    case 4:
+      return Intrinsic::WriteCr4;
+    case 8:
+      return Intrinsic::WriteCr8;
+    default:
+      return std::nullopt;
+    }
+  };
+  if (int Cr = CrIndex(Src); Cr >= 0) {
+    if (auto Id = ReadCr(Cr); Id && Dst.type == X86_OP_REG) {
+      S.emitIntrinsic(*Id, GPR(Dst));
+      return true;
+    }
+    return false;
+  }
+  if (int Cr = CrIndex(Dst); Cr >= 0) {
+    if (auto Id = WriteCr(Cr); Id && Src.type == X86_OP_REG) {
+      S.emitIntrinsic(*Id, NdVar(), {GPR(Src)});
+      return true;
+    }
+    return false;
+  }
+  if (int Dr = DrIndex(Src); Dr >= 0 && Dst.type == X86_OP_REG) {
+    S.emitIntrinsic(Intrinsic::ReadDr, GPR(Dst),
+                    {NdVar::scalar(static_cast<uint64_t>(Dr), 4)});
+    return true;
+  }
+  if (int Dr = DrIndex(Dst); Dr >= 0 && Src.type == X86_OP_REG) {
+    S.emitIntrinsic(Intrinsic::WriteDr, NdVar(),
+                    {NdVar::scalar(static_cast<uint64_t>(Dr), 4), GPR(Src)});
+    return true;
+  }
+  return std::nullopt;
+}
+} // namespace
 
 namespace {
 
@@ -250,6 +336,12 @@ bool liftCoreMove(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_MOVSS: {
     if (X86.op_count < 2)
       break;
+    if (InsnId == X86_INS_MOV)
+      if (std::optional<bool> Lifted = liftSystemRegisterMove(S, X86)) {
+        if (!*Lifted)
+          return false;
+        break;
+      }
     NdVar Src = L.operandRead(S, X86.operands[1]);
     NdVar DstV = L.operandWrite(X86.operands[0]);
 

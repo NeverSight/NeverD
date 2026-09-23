@@ -626,6 +626,16 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   if (IC == I::In)
     return emitX86PortIn(Op, Builder);
 
+  if (auto Reg = x86SystemRegisterName(
+          IC, Op.NumInputs > 1 && Op.Inputs[1].isConst() ? Op.Inputs[1].ConstVal
+                                                         : UINT64_MAX);
+      Reg && Op.Output.Size > 0) {
+    auto *FnTy = llvm::FunctionType::get(sizeToType(Op.Output.Size), false);
+    auto *IA = llvm::InlineAsm::get(FnTy, "mov " + *Reg + ", $0",
+                                    "=r,~{memory}", /*hasSideEffects=*/true);
+    return Builder.CreateCall(IA, {}, "sysreg");
+  }
+
   // SLDT/STR/SMSW with a register destination (no memory operand captured).
   if ((IC == I::Sldt || IC == I::Str || IC == I::Smsw) && Op.NumInputs <= 1)
     return emitX86SysRegStore(Op, IC, Builder);

@@ -157,3 +157,16 @@ SIDEEFFECT(Intrinsic::X86FPScale);
 SIDEEFFECT(Intrinsic::X86VP4DPWSSD);
 SIDEEFFECT(Intrinsic::X86VP4DPWSSDS);
 SIDEEFFECT(Intrinsic::X86FPCompare);
+// Control/debug register moves are ordered processor-state accesses.
+SIDEEFFECT(Intrinsic::ReadCr0);
+SIDEEFFECT(Intrinsic::ReadCr2);
+SIDEEFFECT(Intrinsic::ReadCr3);
+SIDEEFFECT(Intrinsic::ReadCr4);
+SIDEEFFECT(Intrinsic::ReadCr8);
+SIDEEFFECT(Intrinsic::WriteCr0);
+SIDEEFFECT(Intrinsic::WriteCr2);
+SIDEEFFECT(Intrinsic::WriteCr3);
+SIDEEFFECT(Intrinsic::WriteCr4);
+SIDEEFFECT(Intrinsic::WriteCr8);
+SIDEEFFECT(Intrinsic::ReadDr);
+SIDEEFFECT(Intrinsic::WriteDr);

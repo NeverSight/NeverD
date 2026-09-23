@@ -586,6 +586,28 @@ static bool isX86MpxOrTransactional(Intrinsic IC) {
 
 bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
                                        llvm::IRBuilder<> &Builder) {
+  const bool SystemRegisterWrite =
+      IC == Intrinsic::WriteCr0 || IC == Intrinsic::WriteCr2 ||
+      IC == Intrinsic::WriteCr3 || IC == Intrinsic::WriteCr4 ||
+      IC == Intrinsic::WriteCr8 || IC == Intrinsic::WriteDr;
+  if (auto Reg = !SystemRegisterWrite
+                     ? std::nullopt
+                     : x86SystemRegisterName(IC, Op.NumInputs > 1 &&
+                                                         Op.Inputs[1].isConst()
+                                                     ? Op.Inputs[1].ConstVal
+                                                     : UINT64_MAX)) {
+    // WriteDr carries the register number before the value.
+    const uint16_t ValueInput = IC == Intrinsic::WriteDr ? 2 : 1;
+    if (Op.NumInputs <= ValueInput)
+      llvm::report_fatal_error("x86 system register write has no value");
+    llvm::Value *Value = getVar(Op.Inputs[ValueInput], Builder);
+    auto *FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                         {Value->getType()}, false);
+    auto *IA = llvm::InlineAsm::get(FnTy, "mov $0, " + *Reg, "r,~{memory}",
+                                    /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {Value});
+    return true;
+  }
   using I = Intrinsic;
   if (IC == I::Insb || IC == I::Insw || IC == I::Insd) {
     if (Op.NumInputs < 5 || Op.Output.Size != 0 ||
@@ -812,10 +834,21 @@ bool MedLLVMEmitter::emitX86Sideeffect(const MedOp &Op, Intrinsic IC,
     Builder.SetInsertPoint(Continue);
     return true;
   }
-  if (IC == Intrinsic::X86Invalidate)
-    llvm::report_fatal_error(
-        "x86 address-translation invalidation requires an authenticated "
-        "architectural execution environment");
+  if (IC == Intrinsic::X86Invalidate) {
+    if (!intrinsicX86InvalidateShapeIsValid(IC, x86InvalidateMedShape(Op)))
+      llvm::report_fatal_error(
+          "x86 invalidation intrinsic has an invalid operand contract");
+    // INVPCID, as the source's _invpcid(type, descriptor) compiles to.
+    llvm::Value *Descriptor = getVar(Op.Inputs[1], Builder);
+    llvm::Value *Type = getVar(Op.Inputs[3], Builder);
+    auto *FnTy = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(*Ctx), {Type->getType(), Descriptor->getType()},
+        false);
+    auto *IA = llvm::InlineAsm::get(FnTy, "invpcid ($1), $0", "r,r,~{memory}",
+                                    /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {Type, Descriptor});
+    return true;
+  }
   if (IC == Intrinsic::X86MsrAccess) {
     if (!intrinsicX86MsrAccessShapeIsValid(IC, x86MsrAccessMedShape(Op)))
       llvm::report_fatal_error(

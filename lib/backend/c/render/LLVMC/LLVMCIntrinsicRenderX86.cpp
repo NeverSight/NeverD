@@ -65,6 +65,38 @@ renderX86InlineAsm(const std::string &AsmStr, const std::string &Mnemonic,
     return {Result, true};
   }
 
+  // MOV to/from a control or debug register, as MedLLVM emits it
+  // (`mov %cr8, $0` / `mov $0, %cr8`): print the MSVC intrinsic.
+  {
+    llvm::StringRef Text(AsmStr);
+    if (Text.consume_front("mov ")) {
+      auto [First, Second] = Text.split(',');
+      First = First.trim();
+      Second = Second.trim();
+      const bool Read = Second == "$0";
+      const llvm::StringRef Reg = Read ? First : Second;
+      const bool IsCr = Reg.starts_with("%cr");
+      const bool IsDr = Reg.starts_with("%dr");
+      unsigned N = 0;
+      if ((IsCr || IsDr) && !Reg.drop_front(3).getAsInteger(10, N) && N <= 15 &&
+          (Read || First == "$0")) {
+        const std::string Index = std::to_string(N);
+        std::string Result;
+        if (Read) {
+          if (ResultLive && !ResultName.empty())
+            Result = ResultName + " = ";
+          Result +=
+              IsCr ? "__readcr" + Index + "()" : "__readdr(" + Index + ")";
+        } else {
+          const std::string Value = Args.empty() ? "0" : Args[0];
+          Result = IsCr ? "__writecr" + Index + "(" + Value + ")"
+                        : "__writedr(" + Index + ", " + Value + ")";
+        }
+        return {Result + ";\n", true};
+      }
+    }
+  }
+
   const char *X86C = lookupX86AsmToC(AsmStr.c_str());
   if (!X86C)
     X86C = lookupX86AsmToC(Mnemonic.c_str());
