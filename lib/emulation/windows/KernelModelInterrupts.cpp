@@ -234,6 +234,8 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
   for (const RaisedIRQL &Raise : RaisedIRQLs)
     if (Raise.Execution == Identity)
       return apiError("guest return retains a raised IRQL");
+  if (Dispatcher.ownsMutex(Identity))
+    return apiError("guest return retains an owned mutex");
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
   if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {

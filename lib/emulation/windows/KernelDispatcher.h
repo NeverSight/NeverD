@@ -50,7 +50,7 @@ public:
   static std::optional<unsigned> argumentCount(llvm::StringRef Name);
   llvm::Expected<uint64_t> call(llvm::StringRef Name,
                                 llvm::ArrayRef<uint64_t> Arguments,
-                                uint8_t CurrentIRQL);
+                                uint8_t CurrentIRQL, uint64_t Execution = 0);
 
   /// API operations use model state; direct guest structure access is denied.
   llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size,
@@ -63,10 +63,12 @@ public:
   bool isWaitable(uint64_t Object) const;
   /// Process timers due now, without advancing time or dispatching callbacks.
   /// Successful synchronization-object acquisition consumes its signal.
-  llvm::Expected<bool> tryAcquire(uint64_t Object);
+  llvm::Expected<bool> tryAcquire(uint64_t Object, uint64_t Execution = 0,
+                                  uint8_t CurrentIRQL = 0);
+  bool ownsMutex(uint64_t Execution) const;
 
 private:
-  enum class Kind { DPC, Timer, Event, Semaphore };
+  enum class Kind { DPC, Timer, Event, Semaphore, Mutex };
   struct Object {
     Object(Kind Type, uint32_t Size) : Type(Type), Size(Size) {}
     Kind Type;
@@ -75,6 +77,9 @@ private:
     bool Signaled = false;
     int32_t Count = 0;
     int32_t Limit = 0;
+    uint64_t MutexOwner = 0;
+    uint32_t MutexDepth = 0;
+    bool MutexAcquiredAtDispatch = false;
     bool HasSchedule = false;
     uint64_t TimerDPC = 0;
     KernelScheduler::DpcCallback DPC;

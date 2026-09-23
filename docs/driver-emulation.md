@@ -279,7 +279,8 @@ The initial API model deliberately has a finite contract:
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Notification/synchronization timers; relative/absolute 100 ns deadlines, periodic milliseconds, rearm/cancel and signal queries in virtual time |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Notification/synchronization events with distinct signal consumption; `KeSetEvent` accepts Increment=0 and Wait=FALSE only |
 | `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Resident counting semaphore with a positive limit, nonnegative initial count, and one count consumed per successful wait; release accepts Increment=0 and Wait=FALSE, and an excess adjustment raises `STATUS_SEMAPHORE_LIMIT_EXCEEDED` |
-| `KeWaitForSingleObject` | One initialized event or timer; nonalertable `KernelMode`, reason `Executive`; zero polling, finite relative/absolute or infinite waits; nonzero/infinite waits require IRQL <= APC_LEVEL |
+| `KeInitializeMutex`, `KeReleaseMutex`, `KeReadStateMutex` | Resident KMUTEX with execution-owned recursive acquisition; KeReleaseMutex returns the previous signed signal state, requires the owner and matching DISPATCH_LEVEL acquisition context, and accepts Wait=FALSE only. Held mutexes block return, reinitialization and storage release. A non-owner release raises `STATUS_MUTANT_NOT_OWNED`. |
+| `KeWaitForSingleObject` | One initialized event, timer, semaphore or mutex; nonalertable `KernelMode`, reason `Executive`; zero polling, finite relative/absolute or infinite waits; nonzero/infinite waits require IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Nonalertable `KernelMode` relative/absolute delay at IRQL <= APC_LEVEL; resumes the saved guest frame after virtual time advances |
 | `IoMarkIrpPending` | Marks the live active IRP; the equivalent WDM macro's stack-control write is also modeled; dispatch must return `STATUS_PENDING` |
 | `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock`, `IoCancelIrp` | Live WDM IRP cancel-routine exchange, nonrecursive system cancel lock with saved IRQL, and synchronous driver-initiated cancellation; the WDK inline helper uses the same IRP field |
@@ -589,7 +590,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v28`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v29`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

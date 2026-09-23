@@ -711,6 +711,62 @@ TEST_F(KernelRequestOwnership, SemaphoreStorageMustBeResident) {
   call("ExFreePoolWithTag", {Paged, Tag});
 }
 
+TEST_F(KernelRequestOwnership, MutexWaitOwnershipTracksExecutionReturn) {
+  constexpr uint32_t Tag = 0x4d555458;
+  const uint64_t Paged = call("ExAllocatePoolWithTag", {1, 56, Tag});
+  const uint64_t Mutex = call("ExAllocatePoolWithTag", {0, 56, Tag});
+  ASSERT_NE(Paged, 0u);
+  ASSERT_NE(Mutex, 0u);
+  rejected(Model->call("KeInitializeMutex", {Paged, 0}));
+  Model->enterExecution(profile::StackBase);
+  call("KeInitializeMutex", {Mutex, 0});
+  EXPECT_EQ(call("KeWaitForSingleObject", {Mutex, 0, 0, 0, 0}), 0u);
+  EXPECT_EQ(call("KeReadStateMutex", {Mutex}), 0u);
+  rejected(Model->validateExecutionReturn(profile::StackBase, 0));
+  rejected(Model->call("ExFreePoolWithTag", {Mutex, Tag}));
+  Model->enterExecution(profile::CallbackStackBase);
+  rejected(Model->call("KeReleaseMutex", {Mutex, 0}));
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(call("KeWaitForSingleObject", {Mutex, 0, 0, 0, 0}), 0u);
+  EXPECT_EQ(static_cast<uint32_t>(call("KeReadStateMutex", {Mutex})),
+            UINT32_MAX);
+  EXPECT_EQ(static_cast<uint32_t>(call("KeReleaseMutex", {Mutex, 0})),
+            UINT32_MAX);
+  EXPECT_EQ(call("KeReleaseMutex", {Mutex, 0}), 0u);
+  success(Model->validateExecutionReturn(profile::StackBase, 0));
+  call("ExFreePoolWithTag", {Mutex, Tag});
+  call("ExFreePoolWithTag", {Paged, Tag});
+}
+
+TEST_F(KernelRequestOwnership, MutexWaiterAcquiresOnItsOwnSavedFrame) {
+  constexpr uint32_t Tag = 0x4d555457;
+  const uint64_t Mutex = call("ExAllocatePoolWithTag", {0, 56, Tag});
+  ASSERT_NE(Mutex, 0u);
+  Model->enterExecution(profile::StackBase);
+  call("KeInitializeMutex", {Mutex, 0});
+  EXPECT_EQ(call("KeWaitForSingleObject", {Mutex, 0, 0, 0, 0}), 0u);
+  Model->enterExecution(profile::CallbackStackBase);
+  EXPECT_EQ(call("KeWaitForSingleObject", {Mutex, 0, 0, 0, 0}), 0u);
+  auto Pending = Model->takeWait();
+  ASSERT_TRUE(Pending);
+  EXPECT_EQ(Pending->Execution, profile::CallbackStackBase);
+  auto Blocked = Model->pollWait(*Pending);
+  ASSERT_TRUE(bool(Blocked)) << llvm::toString(Blocked.takeError());
+  EXPECT_FALSE(*Blocked);
+  Model->enterExecution(profile::StackBase);
+  EXPECT_EQ(call("KeReleaseMutex", {Mutex, 0}), 0u);
+  auto Ready = Model->pollWait(*Pending);
+  ASSERT_TRUE(bool(Ready)) << llvm::toString(Ready.takeError());
+  ASSERT_TRUE(*Ready);
+  EXPECT_EQ(**Ready, 0u);
+  success(Model->validateExecutionReturn(profile::StackBase, 0));
+  rejected(Model->call("ExFreePoolWithTag", {Mutex, Tag}));
+  Model->enterExecution(profile::CallbackStackBase);
+  EXPECT_EQ(call("KeReleaseMutex", {Mutex, 0}), 0u);
+  success(Model->validateExecutionReturn(profile::CallbackStackBase, 0));
+  call("ExFreePoolWithTag", {Mutex, Tag});
+}
+
 TEST_F(KernelRequestOwnership, ExplicitIrqlRaisesRequireSameExecutionLifo) {
   Model->enterExecution(profile::StackBase);
   rejected(Model->call("KeLowerIrql", {0}));

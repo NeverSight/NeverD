@@ -115,6 +115,8 @@ public:
     enum class Kind { Dispatcher, Delay, RemoveLock };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
+    uint64_t Execution = 0;
+    uint8_t IRQL = 0;
     std::optional<uint64_t> Deadline;
   };
   std::optional<Wait> takeWait();

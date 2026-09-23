@@ -10,6 +10,8 @@
 
 #include <ntifs.h>
 
+_Static_assert(sizeof(KMUTEX) == 56, "x64 KMUTEX ABI size");
+
 #define IO_NORMAL 0x222003u
 #define IO_LATE_FAULT 0x222007u
 #define IO_PROBE_ERRORS 0x22200bu
@@ -26,6 +28,8 @@
 #define IO_SPIN_LOCK 0x222037u
 #define IO_SEMAPHORE 0x22203bu
 #define IO_IRQL 0x22203fu
+#define IO_MUTEX 0x222043u
+#define IO_MUTEX_INVALID 0x222047u
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -438,6 +442,43 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     KeLowerIrql(OldIRQL);
     if (NT_SUCCESS(Status)) {
       Output[0] = 0x7c;
+      Length = 1;
+    }
+    break;
+  }
+  case IO_MUTEX: {
+    KMUTEX Mutex;
+    LARGE_INTEGER Zero = {0};
+    KeInitializeMutex(&Mutex, 0);
+    if (KeReadStateMutex(&Mutex) != 1 ||
+        KeWaitForMutexObject(&Mutex, Executive, KernelMode, FALSE, &Zero) !=
+            STATUS_SUCCESS ||
+        KeReadStateMutex(&Mutex) != 0 ||
+        KeWaitForSingleObject(&Mutex, Executive, KernelMode, FALSE, &Zero) !=
+            STATUS_SUCCESS ||
+        KeReadStateMutex(&Mutex) != -1 || KeReleaseMutex(&Mutex, FALSE) != -1 ||
+        KeReadStateMutex(&Mutex) != 0 || KeReleaseMutex(&Mutex, FALSE) != 0 ||
+        KeReadStateMutex(&Mutex) != 1)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0x8d;
+      Length = 1;
+    }
+    break;
+  }
+  case IO_MUTEX_INVALID: {
+    KMUTEX Mutex;
+    KeInitializeMutex(&Mutex, 0);
+    __try {
+      KeReleaseMutex(&Mutex, FALSE);
+      Status = STATUS_INVALID_DEVICE_STATE;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      Status = GetExceptionCode() == STATUS_MUTANT_NOT_OWNED
+                   ? STATUS_SUCCESS
+                   : STATUS_INVALID_DEVICE_STATE;
+    }
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0x9e;
       Length = 1;
     }
     break;
