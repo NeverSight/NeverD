@@ -231,6 +231,42 @@ TEST(DriverKMDFControl, FrameworkCancelsManualQueueRequestBeforeRetrieval) {
   }
 }
 
+TEST(DriverKMDFControl, ManualRequestRequeueReturnsSameRequestToWorker) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('R');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {1, 2};
+      Second.OutputSize = 6;
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      Options.Requests[1].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 7);
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'R', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(Result->Requests[2].Output,
+                (std::vector<uint8_t>{'K', 'M', 'D', 'R', 0x5b, 0x58}));
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRequeue"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueRetrieveNextRequest"), 3u);
+      const auto Messages = controlMessages(*Result);
+      auto Requeued =
+          std::find(Messages.begin(), Messages.end(),
+                    "KMDF control: manual request requeued at head\n");
+      auto Retrieved =
+          std::find(Messages.begin(), Messages.end(),
+                    "KMDF control: manual worker retrieved request\n");
+      EXPECT_LT(std::distance(Messages.begin(), Requeued),
+                std::distance(Messages.begin(), Retrieved));
+    }
+}
+
 TEST(DriverKMDFControl, ParallelQueueBatchesTwoIndependentFileObjects) {
   for (const auto *Image : controlImages()) {
     SCOPED_TRACE(Image);

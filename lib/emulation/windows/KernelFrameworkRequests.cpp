@@ -345,7 +345,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       Name != "WdfRequestMarkCancelable" &&
       Name != "WdfRequestMarkCancelableEx" &&
       Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled" &&
-      Name != "WdfRequestForwardToIoQueue")
+      Name != "WdfRequestForwardToIoQueue" && Name != "WdfRequestRequeue")
     return Result{};
   auto O = Objects.find(A[1]);
   auto R = Requests.find(A[1]);
@@ -355,16 +355,19 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     return requestError("invalid, foreign or completed framework request");
   if (R->second.Completing)
     return requestError("request completion in progress");
-  if (Name == "WdfRequestForwardToIoQueue") {
-    auto DestinationObject = Objects.find(A[2]);
-    auto Destination = Queues.find(A[2]);
+  if (Name == "WdfRequestForwardToIoQueue" || Name == "WdfRequestRequeue") {
+    const bool Requeue = Name == "WdfRequestRequeue";
+    const uint64_t Target = Requeue ? R->second.Queue : A[2];
+    auto DestinationObject = Objects.find(Target);
+    auto Destination = Queues.find(Target);
     if (DestinationObject == Objects.end() ||
         DestinationObject->second.Kind != ObjectKind::Queue ||
         DestinationObject->second.Binding != B.Globals ||
         Destination == Queues.end() || DestinationObject->second.Deleting)
       return requestError("invalid, foreign or deleting destination queue");
     if (R->second.InCallerContext || R->second.Queued || !R->second.Queue ||
-        R->second.Queue == A[2] ||
+        (Requeue ? Destination->second.Dispatch != QueueDispatchManual
+                 : R->second.Queue == Target) ||
         R->second.Device != Destination->second.Device ||
         R->second.Cancellation != CancelState::Unmarked)
       return Result{ControlInvalidDeviceRequest};
@@ -383,12 +386,17 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     auto AlreadyCanceled = RequestsHost.IsCanceled(R->second.IRP);
     if (!AlreadyCanceled)
       return AlreadyCanceled.takeError();
-    DestinationObject->second.Children.push_back(A[1]);
-    Source->second.Children.erase(Child);
-    O->second.Parent = A[2];
-    R->second.Queue = A[2];
+    if (!Requeue) {
+      DestinationObject->second.Children.push_back(A[1]);
+      Source->second.Children.erase(Child);
+      O->second.Parent = Target;
+      R->second.Queue = Target;
+    }
     R->second.Queued = true;
-    Destination->second.Pending.push_back(A[1]);
+    if (Requeue)
+      Destination->second.Pending.push_front(A[1]);
+    else
+      Destination->second.Pending.push_back(A[1]);
     if (*AlreadyCanceled) {
       // A request canceled before forwarding is subject to framework queue
       // cancellation as soon as the new queue takes ownership.

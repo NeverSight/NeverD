@@ -102,6 +102,10 @@ tests cover FIFO retrieval, ownership transfer, invalid forwards and deletion
 of a queue with live requests; a C API case checks the public scenario. A
 second genuine mode checks queued cancellation at virtual time zero or while
 the worker waits, with model cases for request cleanup ordering.
+`DriverKMDFControl.ManualRequestRequeueReturnsSameRequestToWorker` exercises
+`WdfRequestRequeue` against both WDK images and load bases. Model cases verify
+head insertion, ownership transfer, cancelable-request rejection and cleanup
+when cancellation precedes requeue; the C API runs the same request flow.
 
 An `asynchronous_file` CREATE case checks that the guest FILE_OBJECT and IRP
 omit synchronous flags, two pending IOCTLs on the same file complete with
