@@ -1306,6 +1306,35 @@ TEST(ObjCSourceBindings, SwiftDictionaryStorageMetadataUsesExactStrongImport) {
   EXPECT_FALSE(Result.Limitation.empty());
 }
 
+TEST(ObjCSourceBindings, SwiftMetadataPairInFourArgumentValueHelper) {
+  auto F = swiftStdlibTypeMetadataFixture();
+  auto Call = F.Function.Body.front().Val;
+  ASSERT_TRUE(Call && Call->SourceCallHint);
+  auto Native = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+  Native->Signature.Parameters.insert(
+      Native->Signature.Parameters.begin(),
+      {{"destination", NdType::makePtr(NdType::makeVoid())},
+       {"source", NdType::makePtr(NdType::makeVoid())}});
+  std::string Diagnostic;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Native->Signature, F.Image.Arch, Diagnostic))
+      << Diagnostic;
+  Call->SourceCallHint = Native;
+  Call->Operands.insert(
+      Call->Operands.begin(),
+      {HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar),
+       HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar)});
+
+  auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+
+  std::swap(Call->Operands[0], Call->Operands[2]);
+  std::swap(Call->Operands[1], Call->Operands[3]);
+  Result = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_TRUE(Result.SwiftTypeMetadataPairs.empty());
+}
+
 TEST(ObjCSourceBindings,
      SwiftSystemFrameworkDescriptorsRequireMatchingInstallNames) {
   constexpr llvm::StringLiteral Descriptor = "_$s7Combine9PublishedVMn";

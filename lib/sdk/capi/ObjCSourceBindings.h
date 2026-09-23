@@ -3157,7 +3157,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
         Expression->SourceCallHint->CallKind ==
             SourceCallTypeHint::Kind::Native &&
-        Expression->Operands.size() >= 2 && Expression->Operands.size() <= 3 &&
+        Expression->Operands.size() >= 2 && Expression->Operands.size() <= 4 &&
         Expression->SourceCallHint->Signature.Parameters.size() ==
             Expression->Operands.size()) {
       const auto &Signature = Expression->SourceCallHint->Signature;
@@ -3178,6 +3178,11 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
             continue;
           for (size_t SecondIndex = FirstIndex + 1;
                SecondIndex < Expression->Operands.size(); ++SecondIndex) {
+            // Four-argument value helpers pass destination and source first;
+            // only their trailing cache/reference pair is a metadata recipe.
+            if (Expression->Operands.size() == 4 &&
+                (FirstIndex != 2 || SecondIndex != 3))
+              continue;
             if (!Expression->Operands[SecondIndex])
               continue;
             const auto Second =
