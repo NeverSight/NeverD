@@ -377,6 +377,27 @@ TEST(DriverScenario, ParsesRequestorIdentityAndExit) {
   }
 }
 
+TEST(DriverScenario, DeferredCallbackDrainRequiresTransferAndBoolean) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"ioctl","code":"0x222000","defer_callback_drain":true},
+    {"kind":"read","output_size":1,"defer_callback_drain":false}
+  ]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 2u);
+  EXPECT_TRUE(Parsed->Requests[0].DeferCallbackDrain);
+  EXPECT_FALSE(Parsed->Requests[1].DeferCallbackDrain);
+  for (
+      const char *JSON : {
+          R"({"requests":[{"kind":"ioctl","code":"0x222000","defer_callback_drain":1}]})",
+          R"({"requests":[{"kind":"create","defer_callback_drain":true}]})",
+      }) {
+    auto Invalid = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(llvm::toString(Invalid.takeError()).find("defer_callback_drain"),
+              std::string::npos);
+  }
+}
+
 TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
   for (const char *Value :
        {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",

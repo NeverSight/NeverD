@@ -14,6 +14,7 @@
 #include "neverd/emulation/DriverSession.h"
 
 #include <algorithm>
+#include <vector>
 
 namespace neverd::emulation {
 namespace {
@@ -40,6 +41,127 @@ DriverOptions scenario(uint32_t Code) {
   Options.Requests.push_back(Close);
   Options.Unload = true;
   return Options;
+}
+
+DriverOptions concurrentScenario() {
+  DriverOptions Options;
+  for (uint32_t File : {0u, 1u}) {
+    DriverRequest Create;
+    Create.Kind = DriverRequestKind::Create;
+    Create.File = File;
+    Options.Requests.push_back(Create);
+  }
+  for (uint32_t File : {0u, 1u}) {
+    DriverRequest IO;
+    IO.Kind = DriverRequestKind::DeviceControl;
+    IO.ControlCode = BatchDeferred;
+    IO.File = File;
+    IO.Input = File ? std::vector<uint8_t>{0x11, 0x22, 0x33, 0x44}
+                    : std::vector<uint8_t>{0, 1, 0x5a, 0xff};
+    IO.OutputSize = 4;
+    IO.DeferCallbackDrain = File == 0;
+    Options.Requests.push_back(IO);
+  }
+  for (uint32_t File : {0u, 1u})
+    for (DriverRequestKind Kind :
+         {DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+      DriverRequest Request;
+      Request.Kind = Kind;
+      Request.File = File;
+      Options.Requests.push_back(Request);
+    }
+  Options.Unload = true;
+  return Options;
+}
+
+TEST(DriverAsync, BatchSubmitsIndependentPendingIRPsBeforeEitherWorkerRuns) {
+  auto Result = emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys",
+                              concurrentScenario());
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 8u);
+  EXPECT_EQ(Result->Requests[2].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[3].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[2].Output,
+            (std::vector<uint8_t>{0x5a, 0x5b, 0, 0xa5}));
+  EXPECT_EQ(Result->Requests[3].Output,
+            (std::vector<uint8_t>{0x4b, 0x78, 0x69, 0x1e}));
+  EXPECT_TRUE(Result->UnloadCompleted);
+  std::vector<uint64_t> CompletedIRPs;
+  size_t SecondQueue = Result->Calls.size(), FirstWorker = Result->Calls.size();
+  for (size_t I = 0; I < Result->Calls.size(); ++I) {
+    const auto &Call = Result->Calls[I];
+    if (Call.Name == "IoQueueWorkItem" && Call.Phase == "request:3")
+      SecondQueue = I;
+    if (Call.Name == "IoFreeWorkItem" && Call.Phase.starts_with("callback:"))
+      FirstWorker = std::min(FirstWorker, I);
+    if (Call.Name == "IofCompleteRequest" &&
+        Call.Phase.starts_with("callback:") && !Call.Arguments.empty())
+      CompletedIRPs.push_back(Call.Arguments[0]);
+  }
+  EXPECT_LT(SecondQueue, FirstWorker);
+  EXPECT_EQ(CompletedIRPs, (std::vector<uint64_t>{Result->Requests[2].IRP,
+                                                  Result->Requests[3].IRP}));
+}
+
+TEST(DriverAsync, FinalDeferredRequestDrainsAtScenarioEnd) {
+  auto Options = concurrentScenario();
+  Options.Requests.resize(4);
+  Options.Requests[3].DeferCallbackDrain = true;
+  Options.Unload = false;
+  auto Result =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys", Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 4u);
+  for (size_t I : {2u, 3u}) {
+    EXPECT_EQ(Result->Requests[I].DispatchStatus, 0x103u);
+    EXPECT_TRUE(Result->Requests[I].Completed);
+    EXPECT_EQ(Result->Requests[I].IOStatus, 0u);
+  }
+}
+
+TEST(DriverAsync, BatchedCancellationRetiresOnlyItsOwnIRP) {
+  auto Options = concurrentScenario();
+  Options.Requests[2].ControlCode = BatchCancelable;
+  Options.Requests[2].CancelAfter100ns = 0;
+  Options.Requests[3].ControlCode = BatchCancelable;
+  auto Result =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys", Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 8u);
+  EXPECT_EQ(Result->Requests[2].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[2].IOStatus, 0xc0000120u);
+  EXPECT_TRUE(Result->Requests[2].CancelRequestedAt100ns);
+  EXPECT_EQ(Result->Requests[3].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[3].IOStatus, 0u);
+  EXPECT_FALSE(Result->Requests[3].CancelRequestedAt100ns);
+  EXPECT_EQ(Result->Requests[3].Output,
+            (std::vector<uint8_t>{0x4b, 0x78, 0x69, 0x1e}));
+  EXPECT_TRUE(Result->UnloadCompleted);
+}
+
+TEST(DriverAsync, DeferredDrainRequiresPendingAndIndependentFile) {
+  auto Synchronous = scenario(DeferredSuccess);
+  Synchronous.Requests[1].ControlCode = 0x222000;
+  Synchronous.Requests[1].DeferCallbackDrain = true;
+  // The ordinary software I/O fixture completes this IOCTL synchronously.
+  auto SyncResult =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_io.sys", Synchronous);
+  ASSERT_TRUE(bool(SyncResult)) << llvm::toString(SyncResult.takeError());
+  EXPECT_EQ(SyncResult->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(SyncResult->Diagnostic.find("remains pending"), std::string::npos);
+
+  auto SameFile = concurrentScenario();
+  SameFile.Requests[3].File = 0;
+  auto SameFileResult =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys", SameFile);
+  ASSERT_TRUE(bool(SameFileResult))
+      << llvm::toString(SameFileResult.takeError());
+  EXPECT_EQ(SameFileResult->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(SameFileResult->Diagnostic.find("prior request to finalize"),
+            std::string::npos);
 }
 
 TEST(DriverAsync, WorkerCompletesPendingIrpAndUnloads) {

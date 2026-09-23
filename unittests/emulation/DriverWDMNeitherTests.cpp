@@ -236,6 +236,54 @@ TEST(DriverWDMNeither, ExitedRequestorKeepsLockedWorkerAndCancelAlive) {
       }
 }
 
+TEST(DriverWDMNeither, AnotherRequestorRunsBeforeExitedRequestorsWorker) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options(0x22201b, Address);
+      for (auto &Request : Options.Requests)
+        Request.RequestorProcessID = 0x1010;
+      auto &FirstIO = Options.Requests[1];
+      FirstIO.DeferCallbackDrain = true;
+      FirstIO.RequestorExitAfterDispatch = true;
+      DriverRequest SecondCreate = Options.Requests[0];
+      SecondCreate.File = 1;
+      SecondCreate.RequestorProcessID = 0x2020;
+      Options.Requests.insert(Options.Requests.begin() + 1, SecondCreate);
+      DriverRequest SecondIO = Options.Requests[2];
+      SecondIO.File = 1;
+      SecondIO.RequestorProcessID = 0x2020;
+      SecondIO.ControlCode = 0x222003;
+      SecondIO.DeferCallbackDrain = false;
+      SecondIO.RequestorExitAfterDispatch = false;
+      Options.Requests.insert(Options.Requests.begin() + 3, SecondIO);
+      for (size_t I : {4u, 5u}) {
+        DriverRequest Request = Options.Requests[I];
+        Request.File = 1;
+        Request.RequestorProcessID = 0x2020;
+        Options.Requests.push_back(Request);
+      }
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 8u);
+      EXPECT_EQ(Result->Requests[2].DispatchStatus, 0x103u);
+      EXPECT_EQ(Result->Requests[2].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[2].Information, 4u);
+      EXPECT_TRUE(Result->Requests[2].Output.empty());
+      EXPECT_EQ(Result->Requests[3].IOStatus, 0u);
+      EXPECT_EQ(Result->Requests[3].Output,
+                (std::vector<uint8_t>{0x5b, 0x58, 0x59, 0x5e}));
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
+
 TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
   for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
 #ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE

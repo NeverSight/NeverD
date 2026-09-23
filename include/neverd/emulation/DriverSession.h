@@ -72,6 +72,9 @@ struct DriverRequest {
   /// units. For WDM, zero acts after dispatch returns; for KMDF, it acts after
   /// framework routing and before a guest I/O callback unless routing wins.
   std::optional<uint64_t> CancelAfter100ns;
+  /// Admit the next independent file request before draining callbacks
+  /// for this request. The dispatch must actually return with a pending IRP.
+  bool DeferCallbackDrain = false;
   /// Stable configured PDO identity; mutually exclusive with Device.
   std::string DeviceID;
   /// Present exactly when Kind is Pnp; those packets have no FILE_OBJECT.

@@ -17,6 +17,8 @@ EXPORTS
   IoQueueWorkItem
   IoFreeWorkItem
   IoMarkIrpPending
+  IoAcquireCancelSpinLock
+  IoReleaseCancelSpinLock
   KeGetCurrentIrql
   KeInitializeDpc
   KeInsertQueueDpc
