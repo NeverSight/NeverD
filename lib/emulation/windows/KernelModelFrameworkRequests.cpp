@@ -102,12 +102,21 @@ void KernelModel::configureFrameworkRequestHost() {
     if (!Major)
       return Major.takeError();
     const auto &Observation = Result.Requests[Request->ResultIndex];
-    return KernelFramework::RequestView{IRP,
-                                        Request->ByteOffset,
-                                        *Major,
-                                        Observation.ControlCode,
-                                        Request->InputSize,
-                                        Request->OutputSize};
+    return KernelFramework::RequestView{
+        IRP,
+        Request->ByteOffset,
+        *Major,
+        Observation.ControlCode,
+        Request->InputSize,
+        Request->OutputSize,
+        Request->Neither,
+        Request->Kind == DriverRequestKind::DeviceControl ? Request->UserInput
+        : Request->Kind == DriverRequestKind::Write       ? Request->UserBuffer
+                                                          : 0,
+        Request->Kind == DriverRequestKind::Read ||
+                Request->Kind == DriverRequestKind::DeviceControl
+            ? Request->UserBuffer
+            : 0};
   };
   Host.Buffer = [this](uint64_t IRP, bool Output) -> llvm::Expected<uint64_t> {
     const auto *Request = requestForIRP(IRP);
@@ -171,6 +180,13 @@ void KernelModel::configureFrameworkRequestHost() {
   };
   Host.Mdl = [this](uint64_t IRP, bool Output) {
     return frameworkRequestMDL(IRP, Output);
+  };
+  Host.ProbeAndLock = [this](uint64_t IRP, uint64_t Buffer, uint64_t Length,
+                             bool Write) {
+    return frameworkProbeAndLockUserBuffer(IRP, Buffer, Length, Write);
+  };
+  Host.ReleaseUserBuffer = [this](uint64_t MDL) {
+    return releaseFrameworkUserBuffer(MDL);
   };
   Host.ValidateCompletion = [this](uint64_t IRP, uint32_t Status,
                                    uint64_t Information) -> llvm::Error {

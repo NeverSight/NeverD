@@ -54,7 +54,8 @@ public:
   /// Typed bridge to the authoritative WDM device namespace and storage.
   /// Framework operations never fabricate a second DEVICE_OBJECT or API trace.
   struct DeviceHost {
-    std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, bool)> Create;
+    std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t)>
+        Create;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
     std::function<llvm::Expected<uint32_t>(uint64_t, llvm::StringRef)> Link;
@@ -63,6 +64,12 @@ public:
   struct RequestView {
     uint64_t IRP = 0, ByteOffset = 0;
     uint32_t Major = 0, ControlCode = 0, InputLength = 0, OutputLength = 0;
+    bool Neither = false;
+    uint64_t UserInput = 0, UserOutput = 0;
+  };
+  struct LockedUserBuffer {
+    uint32_t Status = 0;
+    uint64_t MDL = 0, Buffer = 0;
   };
   struct RequestHost {
     std::function<llvm::Expected<RequestView>(uint64_t)> View;
@@ -73,6 +80,10 @@ public:
     std::function<llvm::Error(uint64_t, uint64_t)> SetInformation;
     /// Return the request-owned descriptor, or zero on allocation failure.
     std::function<llvm::Expected<uint64_t>(uint64_t, bool)> Mdl;
+    std::function<llvm::Expected<LockedUserBuffer>(uint64_t, uint64_t, uint64_t,
+                                                   bool)>
+        ProbeAndLock;
+    std::function<llvm::Error(uint64_t)> ReleaseUserBuffer;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> ValidateCompletion;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
   };
@@ -152,7 +163,7 @@ private:
   struct DeviceInit {
     uint64_t Binding = 0;
     std::string Name;
-    bool Direct = false;
+    uint32_t IoType = framework::ControlIoBuffered;
     uint64_t CallerContext = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
@@ -186,6 +197,11 @@ private:
   };
   std::map<uint64_t, Request> Requests;
   std::map<uint64_t, uint64_t> CallerRequests;
+  struct UserMemory {
+    uint64_t Request = 0, MDL = 0, Buffer = 0, Length = 0;
+    bool Active = true;
+  };
+  std::map<uint64_t, UserMemory> UserMemories;
   struct Context {
     uint64_t Address = 0, Size = 0;
     uint64_t Cleanup = 0, Destroy = 0;
@@ -196,7 +212,7 @@ private:
   };
   enum class AttributesUse { Driver, Object, AdditionalContext, Device };
   using AttributeResult = std::variant<Attributes, uint32_t>;
-  enum class ObjectKind { Driver, Generic, Device, Queue, Request };
+  enum class ObjectKind { Driver, Generic, Device, Queue, Request, Memory };
   struct Object {
     uint64_t Binding = 0, Parent = 0;
     ObjectKind Kind = ObjectKind::Generic;

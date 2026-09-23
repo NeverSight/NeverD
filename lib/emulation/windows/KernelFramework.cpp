@@ -643,6 +643,14 @@ KernelFramework::advance(uint64_t Token) {
       if (auto E = RequestsHost.Complete(
               R->second.IRP, R->second.CompletionStatus, *Information))
         return E;
+      for (auto &[Handle, M] : UserMemories)
+        if (M.Request == S.Object && M.Active) {
+          if (!RequestsHost.ReleaseUserBuffer)
+            return invalid("framework user-memory release host is unavailable");
+          if (auto E = RequestsHost.ReleaseUserBuffer(M.MDL))
+            return E;
+          M.Active = false;
+        }
       R->second.Completed = true;
       R->second.Completing = false;
       R->second.Queue = 0;
@@ -705,6 +713,18 @@ KernelFramework::advance(uint64_t Token) {
       Queues.erase(S.Object);
     if (O.Kind == ObjectKind::Request)
       Requests.erase(S.Object);
+    if (O.Kind == ObjectKind::Memory) {
+      auto M = UserMemories.find(S.Object);
+      if (M == UserMemories.end())
+        return invalid("framework memory lost its object state");
+      if (M->second.Active) {
+        if (!RequestsHost.ReleaseUserBuffer)
+          return invalid("framework user-memory release host is unavailable");
+        if (auto E = RequestsHost.ReleaseUserBuffer(M->second.MDL))
+          return E;
+      }
+      UserMemories.erase(M);
+    }
     for (const auto &[Type, Context] : O.Contexts)
       if (auto E = retire(Context.Address))
         return E;

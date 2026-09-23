@@ -264,11 +264,31 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
   using Result = std::optional<uint64_t>;
+  if (Name == "WdfMemoryGetBuffer") {
+    auto O = Objects.find(A[1]);
+    auto M = UserMemories.find(A[1]);
+    if (O == Objects.end() || O->second.Kind != ObjectKind::Memory ||
+        O->second.Binding != B.Globals || M == UserMemories.end() ||
+        !M->second.Active)
+      return requestError("invalid or completed framework user memory");
+    if (A[2]) {
+      if (auto E = writable(A[2], sizeof(uint64_t)))
+        return E;
+      if (auto E =
+              Memory.writeInteger(A[2], M->second.Length, sizeof(uint64_t)))
+        return E;
+    }
+    return Result{M->second.Buffer};
+  }
   if (Name != "WdfRequestComplete" &&
       Name != "WdfRequestCompleteWithInformation" &&
       Name != "WdfRequestGetParameters" &&
       Name != "WdfRequestRetrieveInputBuffer" &&
       Name != "WdfRequestRetrieveOutputBuffer" &&
+      Name != "WdfRequestRetrieveUnsafeUserInputBuffer" &&
+      Name != "WdfRequestRetrieveUnsafeUserOutputBuffer" &&
+      Name != "WdfRequestProbeAndLockUserBufferForRead" &&
+      Name != "WdfRequestProbeAndLockUserBufferForWrite" &&
       Name != "WdfRequestMarkCancelable" &&
       Name != "WdfRequestMarkCancelableEx" &&
       Name != "WdfRequestUnmarkCancelable" && Name != "WdfRequestIsCanceled")
@@ -407,6 +427,65 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   auto View = RequestsHost.View(R->second.IRP);
   if (!View)
     return View.takeError();
+  const bool UnsafeInput = Name == "WdfRequestRetrieveUnsafeUserInputBuffer";
+  const bool UnsafeOutput = Name == "WdfRequestRetrieveUnsafeUserOutputBuffer";
+  if (UnsafeInput || UnsafeOutput) {
+    if (auto E = writable(A[3], sizeof(uint64_t)))
+      return E;
+    if (A[4])
+      if (auto E = writable(A[4], sizeof(uint64_t)))
+        return E;
+    if (auto E = Memory.writeInteger(A[3], 0, sizeof(uint64_t)))
+      return E;
+    if (A[4])
+      if (auto E = Memory.writeInteger(A[4], 0, sizeof(uint64_t)))
+        return E;
+    if (!R->second.InCallerContext || !View->Neither ||
+        (UnsafeInput && View->Major == RequestMajorRead) ||
+        (UnsafeOutput && View->Major == RequestMajorWrite))
+      return Result{ControlInvalidDeviceRequest};
+    const uint32_t Length =
+        UnsafeOutput ? View->OutputLength : View->InputLength;
+    const uint64_t Buffer = UnsafeOutput ? View->UserOutput : View->UserInput;
+    if (!Buffer || !Length || Length < A[2])
+      return Result{RequestBufferTooSmall};
+    if (auto E = Memory.writeInteger(A[3], Buffer, sizeof(uint64_t)))
+      return E;
+    if (A[4])
+      if (auto E = Memory.writeInteger(A[4], Length, sizeof(uint64_t)))
+        return E;
+    return Result{0};
+  }
+  const bool ProbeRead = Name == "WdfRequestProbeAndLockUserBufferForRead";
+  const bool ProbeWrite = Name == "WdfRequestProbeAndLockUserBufferForWrite";
+  if (ProbeRead || ProbeWrite) {
+    if (auto E = writable(A[4], sizeof(uint64_t)))
+      return E;
+    if (auto E = Memory.writeInteger(A[4], 0, sizeof(uint64_t)))
+      return E;
+    if (!R->second.InCallerContext)
+      return Result{RequestAccessViolation};
+    if (!RequestsHost.ProbeAndLock || !RequestsHost.ReleaseUserBuffer)
+      return requestError("user-buffer lock host is unavailable");
+    auto Locked =
+        RequestsHost.ProbeAndLock(R->second.IRP, A[2], A[3], ProbeWrite);
+    if (!Locked)
+      return Locked.takeError();
+    if (Locked->Status)
+      return Result{Locked->Status};
+    Attributes Attrs;
+    Attrs.Parent = A[1];
+    auto Handle = createObject(B.Globals, Attrs, false);
+    if (!Handle)
+      return llvm::joinErrors(Handle.takeError(),
+                              RequestsHost.ReleaseUserBuffer(Locked->MDL));
+    Objects.at(*Handle).Kind = ObjectKind::Memory;
+    UserMemories.emplace(*Handle,
+                         UserMemory{A[1], Locked->MDL, Locked->Buffer, A[3]});
+    if (auto E = Memory.writeInteger(A[4], *Handle, sizeof(uint64_t)))
+      return E;
+    return Result{0};
+  }
   if (Name == "WdfRequestGetParameters") {
     auto Size = read(A[2], 2);
     if (!Size)
@@ -456,6 +535,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (auto E = Memory.writeInteger(A[4], 0, 8))
       return E;
   const bool Output = Name == "WdfRequestRetrieveOutputBuffer";
+  if (View->Neither)
+    return Result{ControlInvalidDeviceRequest};
   if ((!Output && View->Major == RequestMajorRead) ||
       (Output && View->Major == RequestMajorWrite))
     return Result{ControlInvalidDeviceRequest};
