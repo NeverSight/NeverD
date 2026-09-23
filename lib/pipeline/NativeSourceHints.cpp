@@ -656,7 +656,10 @@ integerPairReturn(const MedFunc &Med, const SourceFunctionTypeHint &Scalar) {
     if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
       return std::nullopt;
     for (const auto &Op : Block.Ops) {
-      if (!Remaining-- || Op.Opcode == NdOp::INTRINSIC)
+      if (!Remaining-- ||
+          (Op.Opcode == NdOp::INTRINSIC &&
+           !isArchitecturalNoReturn(Op, Architecture) &&
+           !hasNativeScalarIntrinsicEvidence(Op, Architecture)))
         return std::nullopt;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
         if (!Op.SourceCallHint ||

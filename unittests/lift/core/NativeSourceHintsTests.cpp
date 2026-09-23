@@ -188,6 +188,56 @@ TEST(NativeSourceHints, IntegerPairsRequireBothCompleteReturnCarriers) {
 }
 
 TEST(NativeSourceHints,
+     IntegerPairReturnsAllowScalarBitReverseAndSeparateTrapPaths) {
+  auto Fixture = nativePairFixture(Arch::AArch64);
+  auto &Entry = Fixture.Med.Blocks[0];
+  Entry.Ops.pop_back();
+  Entry.Succs = {1, 2};
+
+  MedOp Reverse;
+  Reverse.Opcode = NdOp::INTRINSIC;
+  Reverse.Output.Kind = MedVar::Temp;
+  Reverse.Output.Id = 300;
+  Reverse.Output.Size = 8;
+  Reverse.addInput(
+      MedVar::makeConst(static_cast<uint64_t>(Intrinsic::A64_Rbit), 2));
+  Reverse.addInput(MedVar::makeConst(1, 8));
+  Entry.Ops.push_back(Reverse);
+
+  MedBlock Returning;
+  Returning.Id = 1;
+  Returning.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Returning.Ops.push_back(Return);
+  Fixture.Med.Blocks.push_back(Returning);
+
+  MedBlock Trapping;
+  Trapping.Id = 2;
+  Trapping.Preds = {0};
+  MedOp Trap;
+  Trap.Opcode = NdOp::INTRINSIC;
+  Trap.addInput(
+      MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Brk), 2));
+  Trapping.Ops.push_back(Trap);
+  Fixture.Med.Blocks.push_back(Trapping);
+
+  std::string Error;
+  const auto Pair = inferNativeSourceTypeHint(
+      Fixture.Image, Fixture.Med, Fixture.High, Fixture.Audit, Error, nullptr,
+      true);
+  ASSERT_TRUE(Pair) << Error;
+  EXPECT_EQ(Pair->ReturnType->Kind, NdTypeKind::Struct);
+  ASSERT_EQ(Pair->ReturnComponents.size(), 2U);
+
+  Fixture.Med.Blocks[0].Ops.back().Inputs[0].ConstVal =
+      static_cast<uint64_t>(Intrinsic::A64_Rev64);
+  EXPECT_FALSE(inferNativeSourceTypeHint(Fixture.Image, Fixture.Med,
+                                         Fixture.High, Fixture.Audit, Error,
+                                         nullptr, true));
+}
+
+TEST(NativeSourceHints,
      IntegerPairRefinementRequiresTheInferredNativeIdentity) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
