@@ -696,6 +696,21 @@ TEST_F(KernelRequestOwnership,
   call("ExFreePoolWithTag", {Lock, Tag});
 }
 
+TEST_F(KernelRequestOwnership, SemaphoreStorageMustBeResident) {
+  constexpr uint32_t Tag = 0x53454d41;
+  const uint64_t Paged = call("ExAllocatePoolWithTag", {1, 32, Tag});
+  const uint64_t NonPaged = call("ExAllocatePoolWithTag", {0, 32, Tag});
+  ASSERT_NE(Paged, 0u);
+  ASSERT_NE(NonPaged, 0u);
+  rejected(Model->call("KeInitializeSemaphore", {Paged, 0, 2}));
+  call("KeInitializeSemaphore", {NonPaged, 0, 2});
+  EXPECT_EQ(call("KeReadStateSemaphore", {NonPaged}), 0u);
+  EXPECT_EQ(call("KeReleaseSemaphore", {NonPaged, 0, 1, 0}), 0u);
+  EXPECT_EQ(call("KeReadStateSemaphore", {NonPaged}), 1u);
+  call("ExFreePoolWithTag", {NonPaged, Tag});
+  call("ExFreePoolWithTag", {Paged, Tag});
+}
+
 TEST_F(KernelRequestOwnership,
        RevokedUserAddressesLeaveLockedSystemAliasesUsable) {
   ASSERT_NE(open(), 0u);

@@ -264,6 +264,7 @@ Il modello API iniziale ha intenzionalmente un contratto limitato:
 | `KeInitializeDpc`, `KeInsertQueueDpc`, `KeRemoveQueueDpc`, `KeSetImportanceDpc`, `KeSetTargetProcessorDpc` | DPC opaco, quattro argomenti guest, `DISPATCH_LEVEL`, duplicati/rimozione e importanza; solo destinazione CPU0 |
 | `KeInitializeTimer`, `KeInitializeTimerEx`, `KeSetTimer`, `KeSetTimerEx`, `KeCancelTimer`, `KeReadStateTimer` | Timer di notifica/sincronizzazione; scadenze relative/assolute in 100 ns, periodi in millisecondi, riarmo/annullamento e segnali nel tempo virtuale |
 | `KeInitializeEvent`, `KeSetEvent`, `KeResetEvent`, `KeClearEvent`, `KeReadStateEvent` | Eventi di notifica/sincronizzazione con consumo distinto; `KeSetEvent` accetta solo Increment=0 e Wait=FALSE |
+| `KeInitializeSemaphore`, `KeReleaseSemaphore`, `KeReadStateSemaphore` | Semaforo di conteggio residente con limite positiva; ogni attesa riuscita consuma un’unità. Il rilascio accetta Increment=0 e Wait=FALSE; oltre il limite solleva `STATUS_SEMAPHORE_LIMIT_EXCEEDED`. |
 | `KeWaitForSingleObject` | Un evento o timer inizializzato; `KernelMode` non alertable, motivo `Executive`; polling zero, attesa finita relativa/assoluta o infinita; attesa non nulla/infinita richiede IRQL <= APC_LEVEL |
 | `KeDelayExecutionThread` | Ritardo relativo/assoluto `KernelMode` non alertable con IRQL <= APC_LEVEL; riprende il frame guest dopo l’avanzamento del tempo virtuale |
 | `IoMarkIrpPending` | Marca l’IRP attivo; è modellata anche la scrittura equivalente della macro WDM nel controllo dello stack; il dispatch deve restituire `STATUS_PENDING` |
@@ -522,7 +523,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v26`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v27`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra

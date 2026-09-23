@@ -66,13 +66,15 @@ public:
   llvm::Expected<bool> tryAcquire(uint64_t Object);
 
 private:
-  enum class Kind { DPC, Timer, Event };
+  enum class Kind { DPC, Timer, Event, Semaphore };
   struct Object {
     Object(Kind Type, uint32_t Size) : Type(Type), Size(Size) {}
     Kind Type;
     uint32_t Size;
     bool Synchronization = false;
     bool Signaled = false;
+    int32_t Count = 0;
+    int32_t Limit = 0;
     bool HasSchedule = false;
     uint64_t TimerDPC = 0;
     KernelScheduler::DpcCallback DPC;

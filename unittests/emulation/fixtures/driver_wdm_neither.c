@@ -24,6 +24,7 @@
 #define IO_SELF_CANCEL_NO_ROUTINE 0x22202fu
 #define IO_WORKER_ATTACH 0x222033u
 #define IO_SPIN_LOCK 0x222037u
+#define IO_SEMAPHORE 0x22203bu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -388,6 +389,29 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       Status = STATUS_INVALID_DEVICE_STATE;
     if (NT_SUCCESS(Status)) {
       Output[0] = 0x5a;
+      Length = 1;
+    }
+    break;
+  }
+  case IO_SEMAPHORE: {
+    KSEMAPHORE Semaphore;
+    LARGE_INTEGER Zero = {0};
+    KeInitializeSemaphore(&Semaphore, 0, 3);
+    if (KeReadStateSemaphore(&Semaphore) != 0 ||
+        KeReleaseSemaphore(&Semaphore, 0, 2, FALSE) != 0 ||
+        KeReadStateSemaphore(&Semaphore) != 2 ||
+        KeWaitForSingleObject(&Semaphore, Executive, KernelMode, FALSE,
+                              &Zero) != STATUS_SUCCESS ||
+        KeReadStateSemaphore(&Semaphore) != 1 ||
+        KeWaitForSingleObject(&Semaphore, Executive, KernelMode, FALSE,
+                              &Zero) != STATUS_SUCCESS ||
+        KeWaitForSingleObject(&Semaphore, Executive, KernelMode, FALSE,
+                              &Zero) != STATUS_TIMEOUT ||
+        KeReleaseSemaphore(&Semaphore, 0, 3, FALSE) != 0 ||
+        KeReadStateSemaphore(&Semaphore) != 3)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0x6b;
       Length = 1;
     }
     break;
