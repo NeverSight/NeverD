@@ -113,6 +113,116 @@ llvm::Error KernelModel::setUserRequestContext(bool Active,
   return llvm::Error::success();
 }
 
+llvm::Expected<uint64_t> KernelModel::processObject(uint32_t ProcessID) {
+  if (!ProcessID)
+    return ioError("process object requires a modeled process identity");
+  if (auto It = ProcessObjects.find(ProcessID); It != ProcessObjects.end())
+    return It->second;
+  auto Object = allocate(profile::ProcessTokenSize);
+  if (!Object)
+    return Object.takeError();
+  ProcessObjects.emplace(ProcessID, *Object);
+  ProcessObjectIDs.emplace(*Object, ProcessID);
+  return *Object;
+}
+
+llvm::Expected<uint64_t> KernelModel::requestorProcess(uint64_t IRP) {
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
+    return ioError("IoGetRequestorProcess requires a live IRP");
+  // Bus-originated packets have no modeled requesting user thread.
+  if (!Request->ProcessID)
+    return 0;
+  return processObject(Request->ProcessID);
+}
+
+llvm::Expected<uint64_t> KernelModel::currentProcess() {
+  if (CurrentExecution == profile::StackBase)
+    return processObject(UserRequestContext ? CurrentUserProcessID : 4);
+  if (Scheduler.active() &&
+      Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem)
+    return processObject(UserRequestContext ? CurrentUserProcessID : 4);
+  return ioError("current process requires a modeled foreground or work-item "
+                 "thread");
+}
+
+llvm::Error KernelModel::stackAttachProcess(uint64_t Process,
+                                            uint64_t ApcState) {
+  if (!Scheduler.active() ||
+      Scheduler.active()->Kind != KernelScheduler::CallbackKind::WorkItem ||
+      CurrentExecution == profile::StackBase)
+    return ioError("process attachment requires a system work-item thread");
+  auto Target = ProcessObjectIDs.find(Process);
+  if (Target == ProcessObjectIDs.end() || Target->second == 4)
+    return ioError("process attachment requires a known user process object");
+  const uint32_t ProcessID = Target->second;
+  if (ExitedUserProcesses.contains(ProcessID))
+    return ioError("cannot attach to an exited requesting process");
+  if (std::none_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+        return Entry.second.ProcessID == ProcessID && !Entry.second.Completed;
+      }))
+    return ioError("process attachment requires a live requesting IRP");
+  if (!ApcState || (ApcState & 7) || ApcState < profile::UserProbeLimit)
+    return ioError("process attachment requires aligned kernel APC storage");
+  const bool CurrentStack =
+      ApcState >= CurrentExecution &&
+      ApcState - CurrentExecution <= profile::CallbackStackSize &&
+      KAPCStateSize <=
+          profile::CallbackStackSize - (ApcState - CurrentExecution);
+  const bool NonPagedPool =
+      std::any_of(Allocations.begin(), Allocations.end(),
+                  [&](const auto &Entry) {
+                    return Entry.second.NonPaged && ApcState >= Entry.first &&
+                           ApcState - Entry.first <= Entry.second.Size &&
+                           KAPCStateSize <=
+                               Entry.second.Size - (ApcState - Entry.first);
+                  });
+  if (!CurrentStack && !NonPagedPool)
+    return ioError("APC storage must be on the current thread stack or in "
+                   "nonpaged pool");
+  for (const auto &Attachment : ProcessAttachments)
+    if (Attachment.ApcState == ApcState)
+      return ioError("APC storage is already owned by an attachment");
+  if (auto E = validateGuestAccess(ApcState, KAPCStateSize, true))
+    return E;
+  auto Writable = Memory.canAccess(ApcState, KAPCStateSize, Read | Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return ioError("process attachment requires writable APC storage");
+  const bool PreviousUserContext = UserRequestContext;
+  const uint32_t PreviousProcessID =
+      PreviousUserContext ? CurrentUserProcessID : 4;
+  auto PreviousProcess = processObject(PreviousProcessID);
+  if (!PreviousProcess)
+    return PreviousProcess.takeError();
+  std::array<uint8_t, KAPCStateSize> Saved{};
+  if (auto E = Memory.write(ApcState, Saved))
+    return E;
+  if (auto E = Memory.writeInteger(ApcState + KAPCStateProcessOffset,
+                                   *PreviousProcess, 8))
+    return E;
+  if (auto E = setUserRequestContext(true, ProcessID))
+    return E;
+  ProcessAttachments.push_back(
+      {CurrentExecution, ApcState, PreviousProcessID, PreviousUserContext});
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::unstackDetachProcess(uint64_t ApcState) {
+  if (ProcessAttachments.empty() ||
+      ProcessAttachments.back().Execution != CurrentExecution ||
+      ProcessAttachments.back().ApcState != ApcState)
+    return ioError("process detach requires the current thread's most recent "
+                   "APC state");
+  const auto Attachment = ProcessAttachments.back();
+  if (auto E = setUserRequestContext(Attachment.PreviousUserContext,
+                                     Attachment.PreviousProcessID))
+    return E;
+  ProcessAttachments.pop_back();
+  return llvm::Error::success();
+}
+
 KernelModel::ActiveRequest *KernelModel::requestForIRP(uint64_t IRP) {
   auto I = Requests.find(IRP);
   return I == Requests.end() ? nullptr : &I->second;

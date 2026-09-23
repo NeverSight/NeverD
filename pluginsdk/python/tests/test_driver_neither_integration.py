@@ -189,6 +189,53 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
                     self.assertEqual(result["requests"][1]["dispatch_status"], 0x103)
                     self.assertEqual(result["requests"][1]["output_hex"], "11121314")
 
+    def test_work_item_attaches_live_requestor_for_raw_user_bytes(self) -> None:
+        from neverd_plugin.abi import NeverDDriverOptionsV1
+
+        options = NeverDDriverOptionsV1(
+            struct_size=ctypes.sizeof(NeverDDriverOptionsV1),
+            instruction_limit=1_000_000,
+            memory_limit=64 * 1024 * 1024,
+            event_limit=100_000,
+            timeout_milliseconds=10_000,
+            service_name=b"NeverDNeither",
+        )
+        for fixture in self.fixtures:
+            for inaccessible in (False, True):
+                with self.subTest(fixture=fixture, inaccessible=inaccessible):
+                    request = {
+                        "kind": "ioctl", "code": "0x222033", "input": "01020304",
+                        "output_size": 4, "requestor_process_id": 12336,
+                    }
+                    if inaccessible:
+                        request["user_input_access"] = "no_access"
+                    scenario = {
+                        "requests": [
+                            {"kind": "create", "device": "\\Device\\NeverDNeither"},
+                            request,
+                            {"kind": "cleanup"},
+                            {"kind": "close"},
+                        ],
+                        "unload": True,
+                    }
+                    raw = self.host.owned_string(
+                        "neverd_emulate_driver_scenario_json",
+                        self.session,
+                        os.fsencode(fixture),
+                        json.dumps(scenario).encode("utf-8"),
+                        ctypes.byref(options),
+                    )
+                    self.assertIsNotNone(raw)
+                    result = json.loads(raw)
+                    self.assertEqual(result["stop_reason"], "returned", result["diagnostic"])
+                    self.assertIsNone(result["fault"])
+                    self.assertTrue(result["unload_completed"])
+                    self.assertEqual(result["requests"][1]["dispatch_status"], 0x103)
+                    self.assertEqual(result["requests"][1]["io_status"],
+                                     0xC0000005 if inaccessible else 0)
+                    self.assertEqual(result["requests"][1]["output_hex"],
+                                     "" if inaccessible else "21222324")
+
     def test_pending_neither_request_completes_through_cancel_routine(self) -> None:
         from neverd_plugin.abi import NeverDDriverOptionsV1
 

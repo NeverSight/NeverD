@@ -271,6 +271,8 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 `requestor_process_id` 指定合成要求行程 ID（預設 4096，範圍 5 到 `UINT32_MAX`）。`IoGetRequestorProcessId` 回傳作用中 IRP 的要求行程 ID；`PsGetCurrentProcessId` 在前景派送時回傳該 ID，在模型化的系統工作項中回傳 4。切換行程後，其他行程的原始使用者 VA 無法存取，但已鎖定 MDL 的系統別名仍有效。`requestor_exit_after_dispatch` 在派送返回後撤銷該行程所有原始使用者 VA，並拒絕該 ID 的新 I/O；明確的 CLEANUP/CLOSE 仍可執行，不自動推斷取消或控制代碼清理。
 
+系統工作項可透過 `IoGetRequestorProcess` 取得作用中 IRP 的不透明要求行程物件，使用 `KeStackAttachProcess` 與可寫的核心 `KAPC_STATE` 暫時附加、存取原始使用者 VA，然後以相同狀態呼叫 `KeUnstackDetachProcess`。`IoGetCurrentProcess` 與 `PsGetProcessId` 反映附加行程；`PsGetCurrentProcessId` 仍回傳建立工作執行緒的系統行程 ID 4。行程已結束、IRP 已完成、狀態不配對，以及附加期間等待或完成 IRP 均明確報錯。
+
 對於直接 IOCTL，`input` 初始化第一個系統緩衝區，`direct_input` 則初始化由 MDL 描述的獨立第二個緩衝區，並以零補齊至 `output_size`。`METHOD_IN_DIRECT` 要求可讀取，但不代表系統對映唯讀。兩種方法都使用可讀寫的情境緩衝區。`MdlMappingNoWrite` 移除對映的寫入權限，`MdlMappingNoExecute` 移除執行權限。解除對映會撤銷系統 VA；重新對映仍保留相同的鎖定資料。完成請求後，MDL 及對映皆失效。模型提供 WDM 巨集使用的公開 MDL 欄位；處理程序欄位與未建立 MDL 的 PFN、手工建立的 MDL、使用者對映，以及透過原始 UserBuffer 直接存取都會遭拒絕。長度為零的直接緩衝區使用空 MDL。
 
 `IoAllocateMdl` 為非空、不溢位且不超過 1 MiB 的緩衝區配置獨立中繼資料，不探查或鎖定緩衝區。`Irp` 必須為 NULL，`SecondaryBuffer` 與 `ChargeQuota` 必須為 FALSE；物件區耗盡時傳回 NULL。`MmBuildMdlForNonPagedPool` 要求完整描述範圍位於同一個有效非分頁集區配置內。安全輔助函式及一般 WDM 巨集重複使用原始位址，保留別名關係與既有權限，即使再次傳入禁止寫入／執行旗標也不改變權限。額外系統對映與解除對映會遭拒絕。`IoFreeMdl` 僅使描述元失效，集區緩衝區有獨立生命週期；只要不再使用已釋放的儲存空間，兩種釋放順序皆受支援。所有模型 MDL 欄位皆為唯讀；處理程序及未建立 MDL 的 PFN 存取、描述元鏈及手動修改欄位仍不受支援。卸載前必須釋放所有驅動程式擁有的描述元。
@@ -316,7 +318,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v24`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v25`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 

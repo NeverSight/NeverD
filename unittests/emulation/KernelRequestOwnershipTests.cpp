@@ -811,5 +811,103 @@ TEST_F(KernelRequestOwnership,
   close();
 }
 
+TEST_F(KernelRequestOwnership,
+       WorkItemAttachmentRestoresUserAddressSpaceAndRequiresExactDetach) {
+  ASSERT_NE(open(), 0u);
+  ASSERT_NE(open(1), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  Input.RequestorProcessID = 0x3030;
+  const uint64_t IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  const uint64_t Stack = integer(IRP + IRPStackPointerOffset);
+  const uint64_t UserInput = integer(Stack + StackType3InputOffset);
+  const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true, Input.RequestorProcessID));
+  const uint64_t Process = call("IoGetRequestorProcess", {IRP});
+  ASSERT_NE(Process, 0u);
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), Process);
+  EXPECT_EQ(call("PsGetProcessId", {Process}), Input.RequestorProcessID);
+  rejected(Model->validateGuestAccess(Process, 1, false));
+  call("IoMarkIrpPending", {IRP});
+  success(Model->setUserRequestContext(false));
+  success(Model->recordDispatchReturn(IRP, Pending));
+  auto Other = ioRequest(1, MethodNeither);
+  Other.DirectInput.clear();
+  Other.RequestorProcessID = 0x4040;
+  const uint64_t OtherIRP = begin(Other);
+  ASSERT_NE(OtherIRP, 0u);
+  const uint64_t OtherStack = integer(OtherIRP + IRPStackPointerOffset);
+  const uint64_t OtherInput = integer(OtherStack + StackType3InputOffset);
+  success(Model->setUserRequestContext(true, Other.RequestorProcessID));
+  const uint64_t OtherProcess = call("IoGetRequestorProcess", {OtherIRP});
+  ASSERT_NE(OtherProcess, 0u);
+  call("IoMarkIrpPending", {OtherIRP});
+  success(Model->setUserRequestContext(false));
+  success(Model->recordDispatchReturn(OtherIRP, Pending));
+
+  const uint64_t Work = call("IoAllocateWorkItem", {Device});
+  ASSERT_NE(Work, 0u);
+  const uint64_t ApcState =
+      call("ExAllocatePoolWithTag", {0, KAPCStateSize, 0x41504353});
+  ASSERT_NE(ApcState, 0u);
+  const uint64_t OtherApcState =
+      call("ExAllocatePoolWithTag", {0, KAPCStateSize, 0x41504354});
+  ASSERT_NE(OtherApcState, 0u);
+  call("IoQueueWorkItem", {Work, Entry, profile::DelayedWorkQueue, 0});
+  auto Scheduled = Model->nextScheduled(false);
+  ASSERT_TRUE(bool(Scheduled)) << llvm::toString(Scheduled.takeError());
+  ASSERT_TRUE(bool(*Scheduled));
+  const uint64_t ID = (**Scheduled).ID;
+  Model->enterExecution(profile::CallbackStackBase);
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), 4u);
+  EXPECT_EQ(call("PsGetProcessId", {call("IoGetCurrentProcess", {})}), 4u);
+  rejected(Model->validateGuestAccess(UserInput, 1, false));
+  rejected(Model->call("KeUnstackDetachProcess", {ApcState}));
+  rejected(Model->call("KeStackAttachProcess", {Process + 1, ApcState}));
+  rejected(Model->call("KeStackAttachProcess", {Process, Scratch}));
+  call("KeStackAttachProcess", {Process, ApcState});
+  rejected(Model->validateGuestAccess(ApcState, 1, false));
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), Process);
+  EXPECT_EQ(call("PsGetProcessId", {call("IoGetCurrentProcess", {})}),
+            Input.RequestorProcessID);
+  EXPECT_EQ(call("PsGetCurrentProcessId", {}), 4u);
+  success(Model->validateGuestAccess(UserInput, 1, false));
+  EXPECT_EQ(bytes(UserInput, 1), (std::vector<uint8_t>{0x11}));
+  auto CanReadOther = Memory->canAccess(OtherInput, 1, Read);
+  ASSERT_TRUE(bool(CanReadOther));
+  EXPECT_FALSE(*CanReadOther);
+  call("KeStackAttachProcess", {OtherProcess, OtherApcState});
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), OtherProcess);
+  auto CanReadFirst = Memory->canAccess(UserInput, 1, Read);
+  ASSERT_TRUE(bool(CanReadFirst));
+  EXPECT_FALSE(*CanReadFirst);
+  EXPECT_EQ(bytes(OtherInput, 1), (std::vector<uint8_t>{0x11}));
+  rejected(Model->call("KeUnstackDetachProcess", {ApcState}));
+  call("KeUnstackDetachProcess", {OtherApcState});
+  EXPECT_EQ(call("IoGetCurrentProcess", {}), Process);
+  EXPECT_EQ(bytes(UserInput, 1), (std::vector<uint8_t>{0x11}));
+  guestWrite(UserOutput, 0x41, 1);
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}));
+  rejected(Model->suspendScheduled(ID));
+  rejected(Model->validateExecutionReturn(profile::CallbackStackBase, 0));
+  rejected(Model->call("KeUnstackDetachProcess", {ApcState + 8}));
+  call("KeUnstackDetachProcess", {ApcState});
+  rejected(Model->validateGuestAccess(UserInput, 1, false));
+  EXPECT_EQ(call("PsGetProcessId", {call("IoGetCurrentProcess", {})}), 4u);
+  success(Model->validateExecutionReturn(profile::CallbackStackBase, 0));
+  success(Model->finishScheduled(ID));
+  call("ExFreePoolWithTag", {OtherApcState, 0x41504354});
+  call("ExFreePoolWithTag", {ApcState, 0x41504353});
+  call("IoFreeWorkItem", {Work});
+  complete(IRP, 0, 1);
+  success(Model->finalizeRequest(IRP));
+  complete(OtherIRP);
+  success(Model->finalizeRequest(OtherIRP));
+  close(1);
+  close();
+}
+
 } // namespace
 } // namespace neverd::emulation

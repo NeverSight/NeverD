@@ -367,6 +367,8 @@ El booleano opcional `user_unmap_after_dispatch` revoca las direcciones de usuar
 
 `requestor_process_id` identifica un proceso solicitante sintético (predeterminado 4096; entre 5 y `UINT32_MAX`). `IoGetRequestorProcessId` devuelve su ID para un IRP activo; `PsGetCurrentProcessId` devuelve ese ID durante el despacho directo o 4 en el trabajador del sistema modelado. Un cambio de proceso bloquea las direcciones de usuario originales ajenas, pero conserva los alias de sistema de MDL bloqueados. `requestor_exit_after_dispatch` revoca tras el despacho todas las direcciones de usuario originales de ese proceso y rechaza su nuevo I/O; CLEANUP/CLOSE explícitos siguen disponibles, sin inferir cancelación ni cierre automático de identificadores.
 
+Un trabajador del sistema puede obtener el proceso opaco de un IRP activo con `IoGetRequestorProcess`, usar `KeStackAttachProcess` con un `KAPC_STATE` de kernel escribible para acceder temporalmente a las direcciones de usuario originales y llamar a `KeUnstackDetachProcess` con el mismo estado. `IoGetCurrentProcess` y `PsGetProcessId` reflejan el proceso adjunto; `PsGetCurrentProcessId` sigue siendo 4, el proceso que creó el trabajador. Un proceso finalizado, un IRP completado, un estado que no coincide, o esperar o completar un IRP durante la asociación produce un error explícito.
+
 Para IOCTL directos, `input` inicializa el primer búfer del sistema y
 `direct_input` inicializa el segundo búfer independiente descrito por el MDL,
 rellenado con ceros hasta `output_size`. `METHOD_IN_DIRECT` requiere acceso de
@@ -529,7 +531,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v24`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v25`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y

@@ -10,6 +10,9 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_WDM_VALUE(DriverObjectSize, 0x150)
+// x64 ntifs.h KAPC_STATE: two LIST_ENTRYs, Process, and three UCHAR flags.
+NEVERD_WDM_VALUE(KAPCStateSize, 0x30)
+NEVERD_WDM_VALUE(KAPCStateProcessOffset, 0x20)
 NEVERD_WDM_VALUE(DriverDeviceHead, 0x08)
 NEVERD_WDM_VALUE(DriverFlagsOffset, 0x10)
 NEVERD_WDM_VALUE(DriverStartOffset, 0x18)

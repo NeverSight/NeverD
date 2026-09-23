@@ -35,7 +35,14 @@ NEVERD_KERNEL_IRQL_API(ExGetPreviousMode, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetrequestorprocessid
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid
 NEVERD_KERNEL_IRQL_API(IoGetRequestorProcessId, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoGetRequestorProcess, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoGetCurrentProcess, Any)
 NEVERD_KERNEL_IRQL_API(PsGetCurrentProcessId, Any)
+NEVERD_KERNEL_IRQL_API(PsGetProcessId, Any)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
+NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)
+NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
 
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioconnectinterrupt
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kesynchronizeexecution

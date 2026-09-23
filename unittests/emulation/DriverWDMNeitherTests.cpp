@@ -486,6 +486,68 @@ TEST(DriverWDMNeither, DriverInitiatedCancelReturnsAfterSynchronousCallback) {
         EXPECT_EQ(CancelCalls, 1u);
       }
 }
+
+TEST(DriverWDMNeither, WorkItemCanAttachToLiveRequestorForRawUserBytes) {
+  struct Case {
+    bool Input;
+    std::optional<DriverUserPageAccess> Access;
+    uint32_t Status;
+    std::vector<uint8_t> Output;
+  };
+  const Case Cases[]{{true, std::nullopt, 0, {0x21, 0x22, 0x23, 0x24}},
+                     {true, DriverUserPageAccess::NoAccess, 0xc0000005u, {}},
+                     {false, DriverUserPageAccess::ReadOnly, 0xc0000005u, {}}};
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (const Case &Case : Cases) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Case.Status);
+        auto Options = options(0x222033, Address);
+        Options.Requests[1].RequestorProcessID = 0x3030;
+        if (Case.Access)
+          (Case.Input ? Options.Requests[1].UserInputAccess
+                      : Options.Requests[1].UserOutputAccess) = *Case.Access;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_GE(Result->Requests.size(), 2u);
+        EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+        EXPECT_EQ(Result->Requests[1].IOStatus, Case.Status);
+        EXPECT_EQ(Result->Requests[1].Output, Case.Output);
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
+}
+
+TEST(DriverWDMNeither, ExitedRequestorCannotBeReattachedByWorkItem) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    auto Options = options(0x222033, 0x190000000ULL);
+    Options.Requests[1].RequestorExitAfterDispatch = true;
+    Options.Requests.resize(2);
+    Options.Unload = false;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("exited requesting process"),
+              std::string::npos)
+        << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+    EXPECT_FALSE(Result->Requests[1].Completed);
+    EXPECT_FALSE(Result->Fault);
+  }
+}
 #endif
 } // namespace
 } // namespace neverd::emulation
