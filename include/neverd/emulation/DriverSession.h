@@ -37,6 +37,12 @@ enum class DriverRequestKind {
 #undef NEVERD_DRIVER_REQUEST_KIND
 };
 
+enum class DriverUserPageAccess {
+#define NEVERD_DRIVER_USER_PAGE_ACCESS(Name, Spelling) Name,
+#include "neverd/emulation/DriverUserPageAccess.def"
+#undef NEVERD_DRIVER_USER_PAGE_ACCESS
+};
+
 struct DriverRequest {
   DriverRequestKind Kind = DriverRequestKind::DeviceControl;
   /// CREATE with an empty name selects the sole live device; ambiguity fails.
@@ -45,6 +51,9 @@ struct DriverRequest {
   uint32_t ControlCode = 0;
   std::vector<uint8_t> Input;
   uint32_t OutputSize = 0;
+  /// Optional page protection facts for nonempty WDM METHOD_NEITHER buffers.
+  std::optional<DriverUserPageAccess> UserInputAccess;
+  std::optional<DriverUserPageAccess> UserOutputAccess;
   /// Initial contents of a direct IOCTL's second buffer, padded to OutputSize.
   std::vector<uint8_t> DirectInput;
   uint64_t ByteOffset = 0;

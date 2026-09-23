@@ -64,6 +64,43 @@ TEST(DriverWDMNeither, OriginalWDKHandlersObserveRealUserBytesAndFaultSites) {
         EXPECT_FALSE(Result->Fault);
       }
 }
+
+TEST(DriverWDMNeither, UserPageFactsReachActualProbeLockAndCpuFaultPaths) {
+  struct Case {
+    uint32_t Code;
+    bool Input;
+    DriverUserPageAccess Access;
+  };
+  const Case Cases[]{
+      {0x222003, true, DriverUserPageAccess::NoAccess},
+      {0x222003, false, DriverUserPageAccess::ReadOnly},
+      {0x222013, true, DriverUserPageAccess::NoAccess},
+      {0x222013, false, DriverUserPageAccess::ReadOnly},
+  };
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (const Case &Case : Cases) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Case.Code);
+        auto Options = options(Case.Code, Address);
+        auto &Request = Options.Requests[1];
+        (Case.Input ? Request.UserInputAccess : Request.UserOutputAccess) =
+            Case.Access;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_GE(Result->Requests.size(), 2u);
+        EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000005u);
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_FALSE(Result->Fault);
+      }
+}
 #endif
 } // namespace
 } // namespace neverd::emulation

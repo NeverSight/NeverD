@@ -606,6 +606,12 @@ TEST_F(KernelRequestOwnership,
   ASSERT_NE(OutAlias, 0u);
   guestWrite(OutAlias, 0x42, 1);
   EXPECT_EQ(integer(UserOutput, 1), 0x42u);
+  Model->setUserRequestContext(false);
+  rejected(Model->validateGuestAccess(UserInput, 1, false));
+  rejected(Model->validateGuestAccess(UserOutput, 1, true));
+  success(Model->validateGuestAccess(InAlias, 1, false));
+  success(Model->validateGuestAccess(OutAlias, 1, true));
+  Model->setUserRequestContext(true);
   rejected(Model->call("IoFreeMdl", {OutMdl}));
   call("MmUnlockPages", {OutMdl});
   call("MmUnlockPages", {InMdl});
