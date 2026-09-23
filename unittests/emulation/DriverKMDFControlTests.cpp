@@ -27,6 +27,7 @@ constexpr uint32_t InvalidDeviceRequest = 0xc0000010;
 constexpr uint32_t DataError = 0xc000003e;
 constexpr uint32_t Cancelled = 0xc0000120;
 constexpr uint32_t AccessViolation = 0xc0000005;
+constexpr uint32_t AccessDenied = 0xc0000022;
 
 std::vector<const char *> controlImages() {
   std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
@@ -88,7 +89,8 @@ size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
                        [Name](const auto &Call) { return Call.Name == Name; });
 }
 
-void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount);
+void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount,
+                             bool FileCallbacks = false);
 
 TEST(DriverKMDFControl, SynchronousQueueOperationsWaitForRequestRetirement) {
   for (const auto *Image : controlImages())
@@ -914,7 +916,8 @@ TEST(DriverKMDFControl, ParallelQueueBatchesTwoIndependentFileObjects) {
   }
 }
 
-void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount) {
+void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount,
+                             bool FileCallbacks) {
   ASSERT_EQ(Result.Stop, DriverStopReason::Returned) << Result.Diagnostic;
   EXPECT_EQ(Result.NTStatus, 0u);
   EXPECT_TRUE(Result.UnloadCompleted);
@@ -927,9 +930,9 @@ void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount) {
     const bool Queued = Request.Kind == DriverRequestKind::DeviceControl ||
                         Request.Kind == DriverRequestKind::Read ||
                         Request.Kind == DriverRequestKind::Write;
-    // FxIoQueue marks every request pending before calling the driver, even
-    // when its callback completes synchronously.
-    EXPECT_EQ(Request.DispatchStatus, Queued ? Pending : 0u);
+    // Queue and file callbacks own a pending IRP until their distinct
+    // completion paths return, even when a callback completes synchronously.
+    EXPECT_EQ(Request.DispatchStatus, Queued || FileCallbacks ? Pending : 0u);
     if (!Queued) {
       EXPECT_EQ(Request.IOStatus, 0u);
       EXPECT_EQ(Request.Information, 0u);
@@ -986,6 +989,77 @@ TEST(DriverKMDFControl, ExclusiveControlDeviceSetsNamedObjectFlag) {
       ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
       checkCompletedLifecycle(*Result, Options.Requests.size());
       EXPECT_EQ(apiCount(*Result, "WdfDeviceInitSetExclusive"), 1u);
+    }
+}
+
+TEST(DriverKMDFControl, FileCallbacksPreserveIdentityAndCloseOrder) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('f');
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(Result->Diagnostic);
+      checkCompletedLifecycle(*Result, Options.Requests.size(), true);
+      checkSuccessfulTransfers(*Result, 'f');
+      EXPECT_EQ(apiCount(*Result, "WdfDeviceInitSetFileObjectConfig"), 1u);
+      const auto Messages = controlMessages(*Result);
+      auto Position = [&](llvm::StringRef Text) {
+        return std::find_if(Messages.begin(), Messages.end(),
+                            [&](const auto &Message) {
+                              return llvm::StringRef(Message).contains(Text);
+                            });
+      };
+      const auto Create = Position("file create");
+      const auto Cleanup = Position("file cleanup");
+      const auto Close = Position("file close");
+      const auto ContextCleanup = Position("file context cleanup");
+      const auto ContextDestroy = Position("file context destroy");
+      ASSERT_NE(Create, Messages.end());
+      ASSERT_NE(Cleanup, Messages.end());
+      ASSERT_NE(Close, Messages.end());
+      ASSERT_NE(ContextCleanup, Messages.end());
+      ASSERT_NE(ContextDestroy, Messages.end());
+      EXPECT_LT(Create, Cleanup);
+      EXPECT_LT(Cleanup, Close);
+      EXPECT_LT(Close, ContextCleanup);
+      EXPECT_LT(ContextCleanup, ContextDestroy);
+      EXPECT_EQ(Position("failure"), Messages.end());
+    }
+}
+
+TEST(DriverKMDFControl, RejectedCreateDeletesOnlyTheFileObject) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('g');
+      Options.LoadAddress = Address;
+      Options.Requests.resize(1);
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(Result->Diagnostic);
+      EXPECT_EQ(Result->Stop, DriverStopReason::Returned);
+      ASSERT_EQ(Result->Requests.size(), 1u);
+      EXPECT_EQ(Result->Requests[0].IOStatus, AccessDenied);
+      const auto Messages = controlMessages(*Result);
+      EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: file create\n"),
+                Messages.end());
+      EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: file context cleanup\n"),
+                Messages.end());
+      EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: file context destroy\n"),
+                Messages.end());
+      EXPECT_EQ(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: file cleanup\n"),
+                Messages.end());
+      EXPECT_EQ(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: file close\n"),
+                Messages.end());
     }
 }
 

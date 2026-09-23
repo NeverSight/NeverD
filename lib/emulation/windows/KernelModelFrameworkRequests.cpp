@@ -116,7 +116,8 @@ void KernelModel::configureFrameworkRequestHost() {
         Request->Kind == DriverRequestKind::Read ||
                 Request->Kind == DriverRequestKind::DeviceControl
             ? Request->UserBuffer
-            : 0};
+            : 0,
+        Request->FileAddress};
   };
   Host.Buffer = [this](uint64_t IRP, bool Output) -> llvm::Expected<uint64_t> {
     const auto *Request = requestForIRP(IRP);

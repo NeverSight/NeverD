@@ -307,6 +307,14 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
   auto View = RequestsHost.View(IRP);
   if (!View)
     return View.takeError();
+  auto FileRoute = routeFileRequest(D->first, IRP, *View);
+  if (!FileRoute)
+    return FileRoute.takeError();
+  if (*FileRoute)
+    return *FileRoute;
+  auto File = requestFileObject(D->first, View->File);
+  if (!File)
+    return File.takeError();
   auto CompleteImmediately =
       [&](uint32_t Status,
           uint32_t Dispatch) -> llvm::Expected<std::optional<RequestDispatch>> {
@@ -314,11 +322,6 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
       return E;
     return std::optional<RequestDispatch>{RequestDispatch{0, {}, Dispatch}};
   };
-  // The no-file-callback nonfilter package completes these synchronously with
-  // Information=0. File identity/order remains owned by the WDM request model.
-  if (View->Major == RequestMajorCreate || View->Major == RequestMajorCleanup ||
-      View->Major == RequestMajorClose)
-    return CompleteImmediately(0, 0);
   auto Q = Queues.find(D->second.DefaultQueue);
   if (Q == Queues.end())
     return CompleteImmediately(ControlInvalidDeviceRequest,
@@ -356,6 +359,7 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
       return Handle.takeError();
     Objects.at(*Handle).Kind = ObjectKind::Request;
     Requests.emplace(*Handle, Request{IRP, 0, D->first, true});
+    Requests.at(*Handle).File = *File;
     CallerRequests.emplace(IRP, *Handle);
     return std::optional<RequestDispatch>{
         RequestDispatch{D->second.CallerContext,
@@ -407,6 +411,7 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
     Handle = *Created;
     Objects.at(Handle).Kind = ObjectKind::Request;
     Requests.emplace(Handle, Request{IRP, Q->first, D->first});
+    Requests.at(Handle).File = *File;
   }
   if (Manual || WaitForSlot) {
     auto &Pending = Requests.at(Handle);

@@ -125,10 +125,7 @@ KernelFramework::callRequestAccessors(llvm::StringRef Name, Binding &B,
     return Result{0};
   }
   if (Name == api::WdfRequestGetFileObject) {
-    // Current devices use the no-file-callback configuration, whose file
-    // class is WdfFileObjectNotRequired. A WDM FILE_OBJECT is not this handle.
-    // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdfrequest/nf-wdfrequest-wdfrequestgetfileobject
-    return Result{0};
+    return Result{R->second.File};
   }
   if (!RequestsHost.View)
     return accessorError("request inspection host is unavailable");

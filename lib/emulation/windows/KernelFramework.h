@@ -86,6 +86,7 @@ public:
     uint32_t Major = 0, ControlCode = 0, InputLength = 0, OutputLength = 0;
     bool Neither = false;
     uint64_t UserInput = 0, UserOutput = 0;
+    uint64_t File = 0;
   };
   struct LockedUserBuffer {
     uint32_t Status = 0;
@@ -210,6 +211,16 @@ private:
   };
   std::map<uint64_t, Binding> Bindings;
   DeviceHost DevicesHost;
+  struct Attributes {
+    uint64_t Parent = 0, Cleanup = 0, Destroy = 0;
+    uint64_t Type = 0, ContextSize = 0;
+  };
+  struct FileConfig {
+    bool Enabled = false;
+    uint64_t Create = 0, Cleanup = 0, Close = 0;
+    uint32_t Class = framework::FileObjectNotRequired;
+    Attributes ObjectAttributes;
+  };
   enum class DeviceInitKind { Control, Pnp };
   struct DeviceInit {
     uint64_t Binding = 0;
@@ -219,6 +230,7 @@ private:
     std::optional<uint32_t> DeviceType;
     uint32_t IoType = framework::ControlIoBuffered;
     bool Exclusive = false;
+    FileConfig Files;
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
     uint64_t PrepareHardware = 0, ReleaseHardware = 0;
@@ -233,6 +245,7 @@ private:
     uint64_t Wdm = 0, PDO = 0;
     uint64_t DefaultQueue = 0;
     uint64_t CallerContext = 0;
+    FileConfig Files;
     bool Initialized = false;
     bool HasLink = false;
     uint64_t D0Entry = 0, D0Exit = 0;
@@ -244,6 +257,11 @@ private:
     bool PowerQueuesHeld = true;
   };
   std::map<uint64_t, Device> Devices;
+  struct FileObject {
+    uint64_t Device = 0, Wdm = 0;
+  };
+  std::map<uint64_t, FileObject> FileObjects;
+  std::map<uint64_t, uint64_t> FileHandles;
   llvm::Expected<ResourceList> createResourceList(uint64_t Source,
                                                   uint64_t Size);
   llvm::Error retireResourceList(ResourceList &List);
@@ -293,6 +311,8 @@ private:
     std::optional<uint32_t> QueuedCompletionStatus;
     CancelState Cancellation = CancelState::Unmarked;
     uint64_t CancelRoutine = 0;
+    uint64_t File = 0;
+    bool FileCreate = false;
   };
   std::map<uint64_t, Request> Requests;
   std::map<uint64_t, uint64_t> CallerRequests;
@@ -305,13 +325,17 @@ private:
     uint64_t Address = 0, Size = 0;
     uint64_t Cleanup = 0, Destroy = 0;
   };
-  struct Attributes {
-    uint64_t Parent = 0, Cleanup = 0, Destroy = 0;
-    uint64_t Type = 0, ContextSize = 0;
-  };
   enum class AttributesUse { Driver, Object, AdditionalContext, Device };
   using AttributeResult = std::variant<Attributes, uint32_t>;
-  enum class ObjectKind { Driver, Generic, Device, Queue, Request, Memory };
+  enum class ObjectKind {
+    Driver,
+    Generic,
+    Device,
+    File,
+    Queue,
+    Request,
+    Memory
+  };
   struct Object {
     uint64_t Binding = 0, Parent = 0;
     ObjectKind Kind = ObjectKind::Generic;
@@ -329,6 +353,8 @@ private:
     PresentQueue,
     Cleaned,
     CompleteRequest,
+    CompleteFileIRP,
+    DeleteFileObject,
     CanceledOnQueue,
     CanceledOnQueueReturned,
     ReadyNotify,
@@ -394,6 +420,10 @@ private:
                                                 uint64_t RequestHandle,
                                                 const RequestView &View) const;
   llvm::Expected<bool> presentQueued(uint64_t QueueHandle, uint64_t Token);
+  llvm::Expected<std::optional<RequestDispatch>>
+  routeFileRequest(uint64_t Device, uint64_t IRP, const RequestView &View);
+  llvm::Expected<uint64_t> requestFileObject(uint64_t Device,
+                                             uint64_t WdmFile) const;
 
   llvm::Expected<uint64_t> read(uint64_t Address, unsigned Width = 8);
   llvm::Expected<std::vector<uint8_t>> readRegistryPath(uint64_t Address);
@@ -413,6 +443,9 @@ private:
   llvm::Expected<std::optional<uint64_t>>
   callControl(llvm::StringRef Name, Binding &B,
               llvm::ArrayRef<uint64_t> Arguments);
+  llvm::Expected<std::optional<uint64_t>>
+  callFile(llvm::StringRef Name, Binding &B,
+           llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<std::optional<uint64_t>>
   callQueue(llvm::StringRef Name, Binding &B,
             llvm::ArrayRef<uint64_t> Arguments);

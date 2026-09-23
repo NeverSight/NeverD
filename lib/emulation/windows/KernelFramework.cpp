@@ -982,6 +982,13 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
             "deletion with an outstanding cancellation callback requires "
             "asynchronous draining, which is not modeled");
     }
+    if (I->second.Kind == ObjectKind::File) {
+      auto File = FileObjects.find(Current);
+      if (File == FileObjects.end())
+        return invalid("framework file object lost its WDM identity");
+      if (FileHandles.contains(File->second.Wdm))
+        return invalid("deletion with an open file requires CLOSE");
+    }
     if (I->second.Kind == ObjectKind::Queue &&
         (std::any_of(
              ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
@@ -1204,6 +1211,19 @@ KernelFramework::advance(uint64_t Token) {
       R->second.Completed = true;
       R->second.Completing = false;
       R->second.Queue = 0;
+      if (R->second.FileCreate &&
+          (R->second.CompletionStatus & profile::NTStatusFailureMask) &&
+          R->second.File) {
+        const uint64_t File = R->second.File;
+        auto F = FileObjects.find(File);
+        if (F == FileObjects.end())
+          return invalid("failed CREATE lost its framework file object");
+        FileHandles.erase(F->second.Wdm);
+        std::vector<Step> Delete;
+        if (auto E = planDelete(File, Delete))
+          return E;
+        C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
+      }
       for (auto &Entry : PnpTransitions)
         Entry.second.WaitingRequests.erase(S.Object);
       if (NotifyQueueState()) {
@@ -1216,6 +1236,24 @@ KernelFramework::advance(uint64_t Token) {
         return Presented.takeError();
       if (*Presented)
         return std::optional<uint64_t>{};
+      continue;
+    }
+    if (S.Kind == StepKind::DeleteFileObject) {
+      auto F = FileObjects.find(S.Object);
+      if (F == FileObjects.end())
+        return invalid("CLOSE lost its framework file object");
+      FileHandles.erase(F->second.Wdm);
+      std::vector<Step> Delete;
+      if (auto E = planDelete(S.Object, Delete))
+        return E;
+      C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
+      continue;
+    }
+    if (S.Kind == StepKind::CompleteFileIRP) {
+      if (!RequestsHost.Complete)
+        return invalid("file request completion host is unavailable");
+      if (auto E = RequestsHost.Complete(S.Object, windows::StatusSuccess, 0))
+        return E;
       continue;
     }
     if (S.Kind == StepKind::CancelReturned) {
@@ -1279,6 +1317,8 @@ KernelFramework::advance(uint64_t Token) {
     }
     if (O.Kind == ObjectKind::Queue)
       Queues.erase(S.Object);
+    if (O.Kind == ObjectKind::File)
+      FileObjects.erase(S.Object);
     if (O.Kind == ObjectKind::Request)
       Requests.erase(S.Object);
     if (O.Kind == ObjectKind::Memory) {
@@ -1463,6 +1503,11 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
     return Control.takeError();
   if (*Control)
     return **Control;
+  auto File = callFile(Export.Name, B, A);
+  if (!File)
+    return File.takeError();
+  if (*File)
+    return **File;
   auto Queue = callQueue(Export.Name, B, A);
   if (!Queue)
     return Queue.takeError();
@@ -1577,6 +1622,8 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
       return invalid("the default queue cannot be deleted by the driver");
     if (O.Kind == ObjectKind::Request)
       return invalid("an incoming framework request is released by completion");
+    if (O.Kind == ObjectKind::File)
+      return invalid("a framework file object is released by CLOSE");
     if (O.Kind == ObjectKind::Device && Devices.at(A[1]).PDO)
       return invalid("a PnP framework device is deleted by removal");
     std::vector<Step> Steps;

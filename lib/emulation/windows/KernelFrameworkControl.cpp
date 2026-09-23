@@ -239,6 +239,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     Objects.at(*Handle).Kind = ObjectKind::Device;
     Devices.emplace(*Handle, Device{Wdm->Address, I->second.PDO});
     Devices.at(*Handle).CallerContext = I->second.CallerContext;
+    Devices.at(*Handle).Files = I->second.Files;
     Devices.at(*Handle).D0Entry = I->second.D0Entry;
     Devices.at(*Handle).D0Exit = I->second.D0Exit;
     Devices.at(*Handle).PrepareHardware = I->second.PrepareHardware;

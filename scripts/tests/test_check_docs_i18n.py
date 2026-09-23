@@ -169,7 +169,8 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
 
     def test_driver_guide_requires_framework_and_guard_limits(self) -> None:
         path = Path("docs/zh-TW/driver-emulation.md")
-        original = i18n.RepositoryView(use_index=False).read_text(path)
+        view = i18n.RepositoryView(use_index=False)
+        original = view.read_text(path)
         for token in ("KMDF 1.33", "CFG", "XFG", "NEVERD_KMDF_FIXTURE",
                       "NEVERD_KMDF_CFG_FIXTURE", "NEVERD_KMDF_CONTROL_FIXTURE",
                       "NEVERD_KMDF_CONTROL_CFG_FIXTURE", "WDF_IO_QUEUE_CONFIG", "WdfIoQueueGetState",
@@ -185,7 +186,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v58",
+                      "STATUS_CANCELLED", i18n.driver_report_profile(view),
                       "WdfIoQueuePnpHeld", "WdfUseDefault",
                       "EvtIoStop", "EvtIoResume", "WdfRequestStopAcknowledge",
                       "CM_PARTIAL_RESOURCE_DESCRIPTOR", "MmMapIoSpace",

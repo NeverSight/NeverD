@@ -28,6 +28,8 @@
 /// canceled request to its queue callback before any I/O delivery.
 /// 9 retrieves a forwarded request in the manual queue's ready notification.
 /// 0 finds and retrieves a forwarded request from that notification.
+/// f registers file callbacks and context lifetime; g rejects CREATE and
+/// verifies framework file deletion without CLEANUP or CLOSE callbacks.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -111,6 +113,9 @@ ABI_SLOT(WdfDeviceWdmGetDeviceObject, 31);
 ABI_SLOT(WdfDeviceInitFree, 54);
 ABI_SLOT(WdfDeviceInitSetIoType, 61);
 ABI_SLOT(WdfDeviceInitSetExclusive, 62);
+ABI_SLOT(WdfDeviceInitSetFileObjectConfig, 71);
+ABI_SLOT(WdfFileObjectGetDevice, 139);
+ABI_SLOT(WdfFileObjectWdmGetFileObject, 140);
 ABI_SLOT(WdfDeviceInitSetIoInCallerContextCallback, 74);
 ABI_SLOT(WdfDeviceInitAssignName, 67);
 ABI_SLOT(WdfDeviceCreate, 75);
@@ -156,6 +161,12 @@ ABI_SLOT(WdfRequestForwardToIoQueue, 281);
 ABI_SLOT(WdfRequestRequeue, 283);
 ABI_SLOT(WdfRequestWdmGetIrp, 285);
 ABI_SLOT(WdfRequestMarkCancelableEx, 393);
+_Static_assert(sizeof(WDF_FILEOBJECT_CONFIG) == 40, "file config ABI");
+ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtDeviceFileCreate, 8);
+ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileClose, 16);
+ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileCleanup, 24);
+ABI_OFFSET(WDF_FILEOBJECT_CONFIG, AutoForwardCleanupClose, 32);
+ABI_OFFSET(WDF_FILEOBJECT_CONFIG, FileObjectClass, 36);
 
 typedef struct {
   WDFREQUEST Request;
@@ -207,6 +218,11 @@ typedef struct {
 } NEITHER_REQUEST_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NEITHER_REQUEST_CONTEXT, NeitherContext);
 
+typedef struct {
+  ULONG Phase;
+} FILE_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(FILE_CONTEXT, FileContext);
+
 static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
 static WDFQUEUE ManualQueue;
@@ -226,6 +242,57 @@ static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
   if (!Condition)
     DbgPrint("KMDF control: failure %lu\n", Code);
   return Condition;
+}
+
+static void FileCreate(WDFDEVICE Device, WDFREQUEST Request,
+                       WDFFILEOBJECT File) {
+  PIRP Irp = WdfRequestWdmGetIrp(Request);
+  FILE_CONTEXT *Context = FileContext(File);
+  if (!Check(Device == CreatedDevice && File != NULL && Context != NULL &&
+                 WdfRequestGetFileObject(Request) == File &&
+                 WdfFileObjectGetDevice(File) == Device &&
+                 WdfFileObjectWdmGetFileObject(File) ==
+                     IoGetCurrentIrpStackLocation(Irp)->FileObject &&
+                 Context->Phase == 0,
+             300)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  Context->Phase = 1;
+  DbgPrint("KMDF control: file create\n");
+  WdfRequestComplete(Request, TransferMode == 'g' ? STATUS_ACCESS_DENIED
+                                                  : STATUS_SUCCESS);
+}
+
+static void FileCleanup(WDFFILEOBJECT File) {
+  FILE_CONTEXT *Context = FileContext(File);
+  Check(Context->Phase == 1 && WdfFileObjectGetDevice(File) == CreatedDevice,
+        301);
+  Context->Phase = 2;
+  DbgPrint("KMDF control: file cleanup\n");
+}
+
+static void FileClose(WDFFILEOBJECT File) {
+  FILE_CONTEXT *Context = FileContext(File);
+  Check(Context->Phase == 2 && WdfFileObjectGetDevice(File) == CreatedDevice,
+        302);
+  Context->Phase = 3;
+  DbgPrint("KMDF control: file close\n");
+}
+
+static void FileContextCleanup(WDFOBJECT Object) {
+  WDFFILEOBJECT File = (WDFFILEOBJECT)Object;
+  FILE_CONTEXT *Context = FileContext(File);
+  Check(Context->Phase == (TransferMode == 'g' ? 1u : 3u), 303);
+  Context->Phase = 4;
+  DbgPrint("KMDF control: file context cleanup\n");
+}
+
+static void FileContextDestroy(WDFOBJECT Object) {
+  WDFFILEOBJECT File = (WDFFILEOBJECT)Object;
+  FILE_CONTEXT *Context = FileContext(File);
+  Check(Context->Phase == 4, 304);
+  DbgPrint("KMDF control: file context destroy\n");
 }
 
 static BOOLEAN CheckQueue(WDFQUEUE Queue, ULONG Code) {
@@ -387,8 +454,14 @@ static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
 
 static PIRP CheckedRequestIrp(WDFREQUEST Request, UCHAR Major) {
   PIRP Irp = WdfRequestWdmGetIrp(Request);
+  WDFFILEOBJECT File = WdfRequestGetFileObject(Request);
   if (!Check(Irp != NULL && WdfRequestGetIoQueue(Request) == DefaultQueue &&
-                 WdfRequestGetFileObject(Request) == NULL &&
+                 (TransferMode == 'f'
+                      ? File != NULL &&
+                            WdfFileObjectGetDevice(File) == CreatedDevice &&
+                            WdfFileObjectWdmGetFileObject(File) ==
+                                IoGetCurrentIrpStackLocation(Irp)->FileObject
+                      : File == NULL) &&
                  IoGetCurrentIrpStackLocation(Irp)->MajorFunction == Major &&
                  IoGetCurrentIrpStackLocation(Irp)->FileObject != NULL,
              100))
@@ -1510,6 +1583,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                      PUNICODE_STRING RegistryPath) {
   WDF_DRIVER_CONFIG DriverConfig;
   WDF_OBJECT_ATTRIBUTES Attributes;
+  WDF_OBJECT_ATTRIBUTES FileAttributes;
+  WDF_FILEOBJECT_CONFIG FileConfiguration;
   WDF_IO_QUEUE_CONFIG QueueConfig;
   WDFDRIVER Driver = NULL;
   PWDFDEVICE_INIT DeviceInit = NULL;
@@ -1547,6 +1622,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'E' ? 'E'
                  : Marker == L'O' ? 'O'
                  : Marker == L'e' ? 'e'
+                 : Marker == L'f' ? 'f'
+                 : Marker == L'g' ? 'g'
                  : Marker == L'1' ? '1'
                  : Marker == L'2' ? '2'
                  : Marker == L'3' ? '3'
@@ -1583,6 +1660,17 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
       TransferMode == 'T' || TransferMode == '8')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
+  if (TransferMode == 'f' || TransferMode == 'g') {
+    WDF_FILEOBJECT_CONFIG_INIT(&FileConfiguration, FileCreate, FileClose,
+                               FileCleanup);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&FileAttributes, FILE_CONTEXT);
+    FileAttributes.ExecutionLevel = WdfExecutionLevelPassive;
+    FileAttributes.SynchronizationScope = WdfSynchronizationScopeNone;
+    FileAttributes.EvtCleanupCallback = FileContextCleanup;
+    FileAttributes.EvtDestroyCallback = FileContextDestroy;
+    WdfDeviceInitSetFileObjectConfig(DeviceInit, &FileConfiguration,
+                                     &FileAttributes);
+  }
   RtlInitUnicodeString(&Name, L"\\Device\\NeverDKmdfControl");
   Status = WdfDeviceInitAssignName(DeviceInit, &Name);
   if (!NT_SUCCESS(Status))
