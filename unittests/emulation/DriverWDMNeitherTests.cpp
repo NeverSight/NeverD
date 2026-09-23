@@ -203,6 +203,114 @@ TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
       EXPECT_FALSE(Result->Fault);
     }
 }
+
+TEST(DriverWDMNeither, CancelRoutineOwnsPendingLockedBufferCompletion) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = options(0x222023, Address);
+      Options.Requests[1].CancelAfter100ns = 0;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000120u);
+      EXPECT_EQ(Result->Requests[1].Information, 0u);
+      EXPECT_TRUE(Result->Requests[1].Output.empty());
+      EXPECT_TRUE(Result->Requests[1].CancelRequestedAt100ns);
+      EXPECT_TRUE(Result->Requests[1].Completed);
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+    }
+}
+
+TEST(DriverWDMNeither, CompletionBeforeDeadlineDisarmsCancellation) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    auto Options = options(0x222023, 0x180000000ULL);
+    Options.Requests[1].CancelAfter100ns = 100;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 4u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+    EXPECT_EQ(Result->Requests[1].Output,
+              (std::vector<uint8_t>{0x11, 0x12, 0x13, 0x14}));
+    EXPECT_FALSE(Result->Requests[1].CancelRequestedAt100ns);
+    EXPECT_TRUE(Result->UnloadCompleted);
+  }
+}
+
+TEST(DriverWDMNeither, CancelSpinLockRequiresItsSavedIRQL) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    auto Options = options(0x222027, 0x180000000ULL);
+    Options.Requests[1].CancelAfter100ns = 0;
+    Options.Requests.resize(2);
+    Options.Unload = false;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("restore the saved IRQL"),
+              std::string::npos)
+        << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 2u);
+    EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+    EXPECT_FALSE(Result->Requests[1].Completed);
+    EXPECT_FALSE(Result->Fault);
+  }
+}
+
+TEST(DriverWDMNeither, DriverInitiatedCancelReturnsAfterSynchronousCallback) {
+  struct Case {
+    uint32_t Code;
+    uint32_t DispatchStatus;
+  };
+  const Case Cases[]{{0x22202b, 0x103}, {0x22202f, 0xc0000120u}};
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (const Case &Case : Cases) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Case.Code);
+        auto Result = emulateDriver(Image, options(Case.Code, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        EXPECT_EQ(Result->Requests[1].DispatchStatus, Case.DispatchStatus);
+        EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000120u);
+        EXPECT_EQ(Result->Requests[1].Information, 0u);
+        EXPECT_TRUE(Result->Requests[1].CancelRequestedAt100ns);
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+        unsigned CancelCalls = 0;
+        for (const auto &Call : Result->Calls)
+          if (Call.Name == "IoCancelIrp") {
+            ++CancelCalls;
+            ASSERT_TRUE(Call.Result);
+            EXPECT_EQ(*Call.Result, Case.Code == 0x22202b ? 1u : 0u);
+          }
+        EXPECT_EQ(CancelCalls, 1u);
+      }
+}
 #endif
 } // namespace
 } // namespace neverd::emulation

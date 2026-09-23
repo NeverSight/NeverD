@@ -154,6 +154,16 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
         return schedulingError("interrupt entry disagrees with its IRQL");
     } else {
       CurrentIRQL = (**Next).IRQL;
+      if ((**Next).Kind == KernelScheduler::CallbackKind::WDMCancel) {
+        if (CancelLock.Held || CancelLock.Callback)
+          return schedulingError(
+              "WDM cancel callback encountered an owned cancel spin lock");
+        CancelLock.Held = true;
+        CancelLock.Callback = true;
+        CancelLock.Owner = 0;
+        CancelLock.IRP = (**Next).Object;
+        CancelLock.OldIRQL = scheduler::PassiveLevel;
+      }
       if (KernelScheduler::isDMACallbackKind((**Next).Kind)) {
         auto Token = ScheduledModelContinuations.find((**Next).ID);
         if (Token == ScheduledModelContinuations.end() ||
@@ -174,6 +184,14 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
     return schedulingError(
         "scheduled callback still owns a model continuation");
   const auto Invocation = *Scheduler.active();
+  if (Invocation.Kind == KernelScheduler::CallbackKind::WDMCancel) {
+    if (!CancelLock.Callback || CancelLock.Held ||
+        CancelLock.IRP != Invocation.Object ||
+        CurrentIRQL != CancelLock.OldIRQL)
+      return schedulingError(
+          "WDM cancel callback did not release its cancel spin lock");
+    CancelLock = {};
+  }
   if (auto E = Scheduler.finish(ID))
     return E;
   CurrentIRQL = scheduler::PassiveLevel;
@@ -187,6 +205,7 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
     return retireDeviceIfUnreferenced(Invocation.Owner);
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
+      Invocation.Kind == KernelScheduler::CallbackKind::WDMCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
       Invocation.Kind == KernelScheduler::CallbackKind::Interrupt ||
       KernelScheduler::isDMACallbackKind(Invocation.Kind))

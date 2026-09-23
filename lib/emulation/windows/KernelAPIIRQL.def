@@ -184,6 +184,16 @@ NEVERD_KERNEL_IRQL_API(RtlZeroMemory, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetcurrentirql
 NEVERD_KERNEL_IRQL_API(IoGetCurrentIrpStackLocation, Any)
 NEVERD_KERNEL_IRQL_API(IoMarkIrpPending, Any)
+// The WDK IoSetCancelRoutine helper is an inline interlocked exchange of the
+// IRP field. Guest writes to that field obey the same live-packet boundary.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcancelroutine
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioacquirecancelspinlock
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleasecancelspinlock
+NEVERD_KERNEL_IRQL_API(IoSetCancelRoutine, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoAcquireCancelSpinLock, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoReleaseCancelSpinLock, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-iocancelirp
+NEVERD_KERNEL_IRQL_API(IoCancelIrp, Dispatch)
 NEVERD_KERNEL_IRQL_API(KeGetCurrentIrql, Any)
 
 // Dispatcher-owned checks remain authoritative for each routine's narrower

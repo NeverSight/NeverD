@@ -35,7 +35,7 @@ namespace scheduler {
 
 /// A concrete single-processor schedule, not an assertion of Windows timing or
 /// interleaving equivalence. Interrupts precede DPCs, DMA callbacks,
-/// framework cancellation, provider completions and workers at dispatch
+/// request cancellation, provider completions and workers at dispatch
 /// boundaries. Interrupts use descending assigned priority and FIFO ties;
 /// high-importance DPCs insert at the head. No callback executes here: next()
 /// returns guest metadata.
@@ -47,6 +47,7 @@ public:
     WorkItem,
     DPC,
     FrameworkCancel,
+    WDMCancel,
     WDMCompletion,
     Interrupt,
     DMAListControl,
@@ -106,7 +107,11 @@ public:
   /// eligibility and the request lifetime; the scheduler only orders delivery.
   /// An already-queued cancellation object is an explicit error.
   llvm::Expected<uint64_t> enqueueFrameworkCancel(Callback Cancellation);
-  bool hasQueuedFrameworkCancel() const { return !Cancellations.empty(); }
+  llvm::Error canEnqueueWDMCancellations(
+      llvm::ArrayRef<Callback> Cancellations) const;
+  llvm::Expected<uint64_t> enqueueWDMCancellation(Callback Cancellation);
+  bool hasQueuedCancellation() const { return !Cancellations.empty(); }
+  bool hasQueuedFrameworkCancel() const;
 
   /// Preflight a whole provider-completion batch without reserving identities
   /// or mutating queues. The model commits without intervening guest execution.

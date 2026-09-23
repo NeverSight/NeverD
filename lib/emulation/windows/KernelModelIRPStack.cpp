@@ -240,6 +240,14 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
     return stackError("provider still owns the pending IRP");
   if (PriorityBoost)
     return stackError("modeled completion supports IO_NO_INCREMENT only");
+  if (CancelLock.Held)
+    return stackError("IoCompleteRequest cannot run with the cancel spin lock held");
+  auto CancelRoutine = Memory.readInteger(IRP + IRPCancelRoutineOffset, 8);
+  if (!CancelRoutine)
+    return CancelRoutine.takeError();
+  if (*CancelRoutine)
+    return stackError(
+        "IoCompleteRequest requires the cancel routine to be unregistered");
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return stackError("cannot replace a pending guest callback");
   for (unsigned I = 0; I < Request->IOStatusWritten.size(); ++I)
@@ -443,6 +451,15 @@ KernelModel::finishWdmGuestCall(uint64_t Token, uint64_t ResultValue) {
     return stackError("unknown or inactive guest continuation");
   if (Call->second.Kind == IRPCallKind::PowerCompletion)
     return finishPowerCompletion(Token);
+  if (Call->second.Kind == IRPCallKind::Cancel) {
+    if (!CancelLock.Callback || CancelLock.Held ||
+        CancelLock.IRP != Call->second.IRP ||
+        CurrentIRQL != CancelLock.OldIRQL)
+      return stackError("IoCancelIrp callback did not release its cancel lock");
+    CancelLock = {};
+    IRPCalls.erase(Call);
+    return std::optional<uint64_t>{1};
+  }
   if (Call->second.Kind == IRPCallKind::PowerDispatch) {
     const uint64_t IRP = Call->second.IRP;
     if (auto E = recordDispatchReturn(IRP, uint32_t(ResultValue)))
