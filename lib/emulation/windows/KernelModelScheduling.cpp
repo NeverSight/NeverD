@@ -512,6 +512,17 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<std::optional<uint32_t>>
 KernelModel::pollWait(const Wait &Pending) {
+  if (Pending.Type == Wait::Kind::FrameworkQueueStop ||
+      Pending.Type == Wait::Kind::FrameworkQueueEmpty) {
+    if (!Framework)
+      return schedulingError("framework queue wait lost its binding");
+    auto Ready = Framework->queueWaitReady(
+        Pending.Object, Pending.Type == Wait::Kind::FrameworkQueueEmpty);
+    if (!Ready)
+      return Ready.takeError();
+    return *Ready ? std::optional<uint32_t>{windows::StatusSuccess}
+                  : std::optional<uint32_t>{};
+  }
   if (Pending.Type == Wait::Kind::RemoveLock) {
     auto Drained = RemoveLocks.drained(Pending.Object);
     if (!Drained)

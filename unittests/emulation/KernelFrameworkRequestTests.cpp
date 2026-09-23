@@ -685,6 +685,25 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       SynchronousStopWaitsForDeliveredButAllowsQueuedRequests) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  EXPECT_EQ(take(invoke("WdfIoQueueStopSynchronously", {Globals, Queue})), 0u);
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, false)));
+  const auto WaitingIRP = packet();
+  EXPECT_EQ(route(WaitingIRP).PC, 0u);
+  complete(First);
+  EXPECT_TRUE(take(Model.queueWaitReady(Queue, false)));
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, true)));
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  auto Delivered = callback();
+  complete(Delivered.Arguments[1]);
+  finish(Delivered);
+  EXPECT_TRUE(take(Model.queueWaitReady(Queue, true)));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        ForwardingLastDeliveredRequestReleasesStopCompletion) {
   const auto Automatic = defaultAndAutomaticQueue();
   const auto IRP = packet();
@@ -762,6 +781,25 @@ TEST_F(DriverKernelFrameworkRequest, DrainWaitsForQueuedAndDeliveredRequests) {
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       SynchronousDrainWaitsForQueuedAndDeliveredRequests) {
+  initializeQueue();
+  const auto First = request(route(packet()));
+  const auto SecondIRP = packet();
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  EXPECT_EQ(take(invoke("WdfIoQueueDrainSynchronously", {Globals, Queue})), 0u);
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, true)));
+  complete(First);
+  auto Second = callback();
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, true)));
+  complete(Second.Arguments[1]);
+  finish(Second);
+  EXPECT_TRUE(take(Model.queueWaitReady(Queue, true)));
+  EXPECT_EQ(route(packet()).Status, framework::QueueInvalidDeviceState);
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  complete(request(route(packet())));
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        ForwardingToDrainedQueueLeavesSourceRequestOwned) {
   const auto Automatic = defaultAndAutomaticQueue();
   take(invoke("WdfIoQueueDrain", {Globals, Automatic, 0, 0}));
@@ -827,6 +865,25 @@ TEST_F(DriverKernelFrameworkRequest,
   finish(Purged);
   EXPECT_TRUE(Packets.at(IRP).Completed);
   EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       SynchronousPurgeWaitsForCancelableCallbackReturn) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  markCancelable(Request);
+  EXPECT_EQ(take(invoke("WdfIoQueuePurgeSynchronously", {Globals, Queue})), 0u);
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, true)));
+  auto Cancel = callback();
+  EXPECT_EQ(Cancel.PC, CancelPC);
+  complete(Request, 0, framework::RequestCancelled);
+  EXPECT_FALSE(take(Model.queueWaitReady(Queue, true)));
+  finish(Cancel);
+  EXPECT_TRUE(take(Model.queueWaitReady(Queue, true)));
+  EXPECT_EQ(Packets.at(IRP).Status, framework::RequestCancelled);
+  take(invoke("WdfIoQueueStart", {Globals, Queue}));
+  complete(request(route(packet())));
 }
 
 TEST_F(DriverKernelFrameworkRequest,

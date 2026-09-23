@@ -134,6 +134,10 @@ public:
                                 uint8_t IRQL);
   std::optional<GuestCall> takeGuestCall();
   bool hasPendingGuestCall() const { return PendingCall.has_value(); }
+  /// Synchronous queue APIs wait for driver-owned requests; drain/purge also
+  /// wait for requests still held by the framework queue.
+  llvm::Expected<bool> queueWaitReady(uint64_t Queue,
+                                      bool IncludePending) const;
   /// Resume one suspended framework operation after its actual guest callback.
   llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
                                                           uint64_t Result);

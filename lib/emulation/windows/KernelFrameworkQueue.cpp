@@ -32,7 +32,9 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
       Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
       Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
-      Name != "WdfIoQueueDrain" && Name != "WdfIoQueuePurge" &&
+      Name != "WdfIoQueueStopSynchronously" && Name != "WdfIoQueueDrain" &&
+      Name != "WdfIoQueueDrainSynchronously" && Name != "WdfIoQueuePurge" &&
+      Name != "WdfIoQueuePurgeSynchronously" &&
       Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
@@ -46,18 +48,19 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid, foreign or wrong-kind object handle");
 
   if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
-      Name == "WdfIoQueueStart" || Name == "WdfIoQueueDrain" ||
-      Name == "WdfIoQueuePurge") {
+      Name == "WdfIoQueueStopSynchronously" || Name == "WdfIoQueueStart" ||
+      Name == "WdfIoQueueDrain" || Name == "WdfIoQueueDrainSynchronously" ||
+      Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously") {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
-    if (Name == "WdfIoQueueStop") {
+    if (Name == "WdfIoQueueStop" || Name == "WdfIoQueueStopSynchronously") {
       if (Q->second.DrainComplete)
         return invalidQueue("queue has a pending drain-completion callback");
-      if (A[2] && Q->second.StopComplete)
+      if (Name == "WdfIoQueueStop" && A[2] && Q->second.StopComplete)
         return invalidQueue("queue already has a stop-completion callback");
       Q->second.Dispatching = false;
-      if (A[2]) {
+      if (Name == "WdfIoQueueStop" && A[2]) {
         Q->second.StopComplete = A[2];
         Q->second.StopContext = A[3];
         auto Result = start({});
@@ -81,11 +84,11 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         return Result.takeError();
       return std::optional<uint64_t>{*Result};
     }
-    if (Name == "WdfIoQueueDrain") {
+    if (Name == "WdfIoQueueDrain" || Name == "WdfIoQueueDrainSynchronously") {
       if (Q->second.DrainComplete || Q->second.StopComplete)
         return invalidQueue("queue already has a state-completion callback");
       Q->second.Accepting = false;
-      if (A[2]) {
+      if (Name == "WdfIoQueueDrain" && A[2]) {
         Q->second.DrainComplete = A[2];
         Q->second.DrainContext = A[3];
         auto Result = start({});
@@ -94,7 +97,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       }
       return std::optional<uint64_t>{0};
     }
-    if (Name == "WdfIoQueuePurge") {
+    if (Name == "WdfIoQueuePurge" || Name == "WdfIoQueuePurgeSynchronously") {
       if (Q->second.DrainComplete || Q->second.StopComplete)
         return invalidQueue("queue already has a state-completion callback");
       if (PendingCall)
@@ -150,11 +153,11 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       for (uint64_t Handle : Cancellable)
         Steps.push_back({StepKind::PurgeCancelRequest, Handle});
       Q->second.Accepting = false;
-      if (A[2]) {
+      if (Name == "WdfIoQueuePurge" && A[2]) {
         Q->second.DrainComplete = A[2];
         Q->second.DrainContext = A[3];
       }
-      if (!Steps.empty() || A[2]) {
+      if (!Steps.empty() || (Name == "WdfIoQueuePurge" && A[2])) {
         auto Result = start(std::move(Steps));
         if (!Result)
           return Result.takeError();
@@ -356,5 +359,26 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (auto E = Memory.writeInteger(A[4], *Handle, 8))
       return E;
   return std::optional<uint64_t>{0};
+}
+
+llvm::Expected<bool>
+KernelFramework::queueWaitReady(uint64_t Handle, bool IncludePending) const {
+  auto Q = Queues.find(Handle);
+  if (Q == Queues.end())
+    return invalidQueue("synchronous wait lost its queue");
+  if (IncludePending && !Q->second.Pending.empty())
+    return false;
+  if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+        return Entry.second.Queue == Handle && !Entry.second.Queued &&
+               !Entry.second.Completed;
+      }))
+    return false;
+  if (std::any_of(CancelCallbacks.begin(), CancelCallbacks.end(),
+                  [&](const auto &Entry) {
+                    auto O = Objects.find(Entry.second);
+                    return O != Objects.end() && O->second.Parent == Handle;
+                  }))
+    return false;
+  return true;
 }
 } // namespace neverd::emulation

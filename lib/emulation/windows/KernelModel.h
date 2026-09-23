@@ -115,7 +115,14 @@ public:
   llvm::Error suspendScheduled(uint64_t ID);
   llvm::Error resumeScheduled(uint64_t ID);
   struct Wait {
-    enum class Kind { Dispatcher, Thread, Delay, RemoveLock };
+    enum class Kind {
+      Dispatcher,
+      Thread,
+      Delay,
+      RemoveLock,
+      FrameworkQueueStop,
+      FrameworkQueueEmpty
+    };
     Kind Type = Kind::Dispatcher;
     uint64_t Object = 0;
     uint64_t Execution = 0;
