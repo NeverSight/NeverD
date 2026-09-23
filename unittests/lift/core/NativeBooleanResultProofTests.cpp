@@ -681,6 +681,41 @@ TEST(NativeBooleanResultProof, ConstantShiftsAndTruncatedMasksTrackExactBits) {
   }
 }
 
+TEST(NativeBooleanResultProof, VariableShiftsRequireIdenticalInputs) {
+  for (const auto Opcode : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    Fixture F;
+    const auto DynamicShift =
+        operation(Opcode, NdVar::reg(a64reg::X8, 8),
+                  {NdVar::reg(a64reg::X1, 8), NdVar::reg(a64reg::X2, 8)});
+    F.linear(
+        {DynamicShift, call(), copy(a64reg::X8, a64reg::X0), mask(), ret()});
+    EXPECT_TRUE(F.prove());
+
+    F.linear({call(),
+              operation(Opcode, NdVar::reg(a64reg::X8, 8),
+                        {NdVar::reg(a64reg::X0, 8), NdVar::reg(a64reg::X2, 8)}),
+              mask(), ret()});
+    EXPECT_FALSE(F.prove());
+  }
+}
+
+TEST(NativeBooleanResultProof, SelectRequiresIdenticalInputs) {
+  Fixture F;
+  const auto Select =
+      operation(NdOp::SELECT, NdVar::reg(a64reg::X8, 1),
+                {NdVar::reg(a64reg::X3, 1), NdVar::reg(a64reg::X4, 1),
+                 NdVar::reg(a64reg::X5, 1)});
+  F.linear({Select, call(), copy(a64reg::X8, a64reg::X0), mask(), ret()});
+  EXPECT_TRUE(F.prove());
+
+  F.linear({call(),
+            operation(NdOp::SELECT, NdVar::reg(a64reg::X8, 8),
+                      {NdVar::reg(a64reg::X0, 1), NdVar::reg(a64reg::X1, 8),
+                       NdVar::reg(a64reg::X2, 8)}),
+            constant(a64reg::X0, 0), ret()});
+  EXPECT_FALSE(F.prove());
+}
+
 TEST(NativeBooleanResultProof, ConstantLeftShiftMovesTheDifferenceMask) {
   Fixture F;
   F.linear({call(),

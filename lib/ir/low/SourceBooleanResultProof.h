@@ -292,25 +292,35 @@ struct Transfer {
       } else if (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
                  Op.Opcode == NdOp::INT_ASHR) {
         if (Op.NumInputs != 2 || !Op.Output.Size ||
-            Op.Inputs[0].Size != Op.Output.Size || !Op.Inputs[1].isConst() ||
-            Op.Inputs[1].Size > 8 ||
-            Op.Inputs[1].Offset >= uint64_t(Op.Output.Size) * 8)
+            Op.Inputs[0].Size != Op.Output.Size || Op.Inputs[1].Size > 8 ||
+            (Op.Inputs[1].isConst() &&
+             Op.Inputs[1].Offset >= uint64_t(Op.Output.Size) * 8))
           return false;
-        const unsigned Bits = Op.Output.Size * 8;
-        const unsigned Shift = Op.Inputs[1].Offset;
-        std::fill(Value.begin(), Value.end(), 0);
-        for (unsigned Bit = 0; Bit < Bits; ++Bit) {
-          if (Op.Opcode == NdOp::INT_LEFT && Bit < Shift)
-            continue;
-          unsigned Source =
-              Op.Opcode == NdOp::INT_LEFT ? Bit - Shift : Bit + Shift;
-          if (Source >= Bits) {
-            if (Op.Opcode != NdOp::INT_ASHR)
+        // A variable shift before the selected call has identical operands
+        // in both executions, so its output is identical without knowing the
+        // shift amount. Once any input differs, keep requiring an exact
+        // constant shift to track each result bit.
+        if (!Op.Inputs[1].isConst()) {
+          if (InputDiffers)
+            return false;
+          std::fill(Value.begin(), Value.end(), 0);
+        } else {
+          const unsigned Bits = Op.Output.Size * 8;
+          const unsigned Shift = Op.Inputs[1].Offset;
+          std::fill(Value.begin(), Value.end(), 0);
+          for (unsigned Bit = 0; Bit < Bits; ++Bit) {
+            if (Op.Opcode == NdOp::INT_LEFT && Bit < Shift)
               continue;
-            Source = Bits - 1;
+            unsigned Source =
+                Op.Opcode == NdOp::INT_LEFT ? Bit - Shift : Bit + Shift;
+            if (Source >= Bits) {
+              if (Op.Opcode != NdOp::INT_ASHR)
+                continue;
+              Source = Bits - 1;
+            }
+            if (Read(Op.Inputs[0], Source / 8) & (1U << (Source % 8)))
+              Value[Bit / 8] |= 1U << (Bit % 8);
           }
-          if (Read(Op.Inputs[0], Source / 8) & (1U << (Source % 8)))
-            Value[Bit / 8] |= 1U << (Bit % 8);
         }
       } else if (Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR ||
                  Op.Opcode == NdOp::INT_XOR) {
@@ -358,6 +368,14 @@ struct Transfer {
         } else if (Op.Output.Size != 1 ||
                    Op.Inputs[0].Size != Op.Inputs[1].Size)
           return false;
+      } else if (Op.Opcode == NdOp::SELECT) {
+        if (Op.NumInputs != 3 || !Op.Output.Size || Op.Inputs[0].Size != 1 ||
+            Op.Inputs[1].Size != Op.Output.Size ||
+            Op.Inputs[2].Size != Op.Output.Size || InputDiffers)
+          return false;
+        // An identical condition and identical arms select the same bits.
+        // A differing input needs a separate bit-level SELECT transfer.
+        std::fill(Value.begin(), Value.end(), 0);
       } else if (Op.Opcode == NdOp::BOOL_NOT || Op.Opcode == NdOp::INT_NOT ||
                  Op.Opcode == NdOp::INT_NEGATE) {
         if (Op.NumInputs != 1 || !Op.Output.Size ||
