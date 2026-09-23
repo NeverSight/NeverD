@@ -3568,7 +3568,8 @@
         "The original genuine-WDK /GS- driver_wdm_seh.c uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, unhandled exceptions and explicit filter/finally/CPU-fault rejection. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
         "The original genuine-WDK driver_wdm_neither.c uses optional NEVERD_WDM_NEITHER_FIXTURE and NEVERD_WDM_NEITHER_CFG_FIXTURE. Native normal/active-CFG and preferred/rebased runs verify six packet/probe/CPU-fault/locked-MDL paths. Backend and request-owner tests verify shared alias bytes, independent pins, write protection, completion output and terminal kernel faults. C API/CLI and Python execute docs/examples/driver-neither-scenario.json and verify plain and locked-alias output bytes. Missing external images skip explicitly; Linux evidence does not establish arbitrary Windows process memory.",
         "A nonempty WDM METHOD_NEITHER IOCTL may independently set user_input_access and user_output_access to read_write (default), read_only or no_access. These explicit page facts are applied after buffer initialization and before guest dispatch. No-access still retains a non-NULL caller pointer and RAM backing, so ProbeForRead can pass its numerical check before a CPU read faults, while ProbeForWrite and MmProbeAndLockPages raise access violations according to page rights. Strict JSON/native validation rejects rights on buffered/direct IOCTLs, wrong directions, empty buffers, unknown values and wrong types. The original WDK fixture runs CPU/probe/MDL negative paths through normal/CFG and preferred/rebased images; C/CLI/Python observe completed failing statuses without terminal backend faults. Caller-context restrictions keep raw user pointers unavailable in workers while separately locked kernel aliases remain usable. Dynamic user unmapping, arbitrary processes and WDM cancellation remain unsupported.",
-        "READ/WRITE on a WDM device with neither DO_BUFFERED_IO nor DO_DIRECT_IO uses the original caller address only through IRP.UserBuffer. WRITE carries initialized user input and READ a separate user output; neither creates a SystemBuffer or implicit MDL. User page rights apply to WRITE input or READ output only, and explicit rights on a buffered/direct device stop before guest dispatch. A genuine WDK normal/CFG fixture probes and accesses both directions under x64 SEH, including read-only/no-access failures, at preferred and rebased image addresses. C API, CLI and Python observe the same report bytes and request statuses. Deferred raw access still requires locking; general process address spaces and WDM cancellation remain unsupported."
+        "READ/WRITE on a WDM device with neither DO_BUFFERED_IO nor DO_DIRECT_IO uses the original caller address only through IRP.UserBuffer. WRITE carries initialized user input and READ a separate user output; neither creates a SystemBuffer or implicit MDL. User page rights apply to WRITE input or READ output only, and explicit rights on a buffered/direct device stop before guest dispatch. A genuine WDK normal/CFG fixture probes and accesses both directions under x64 SEH, including read-only/no-access failures, at preferred and rebased image addresses. C API, CLI and Python observe the same report bytes and request statuses. Deferred raw access still requires locking; general process address spaces and WDM cancellation remain unsupported.",
+        "The genuine WDK neither fixture marks an IOCTL pending after user MDLs are locked in caller context. Its PASSIVE_LEVEL work item reads/writes only through the shared kernel aliases, unlocks and frees the MDLs and work item, then completes the original IRP. The separate raw-user-pointer worker path stops explicitly because queued work does not inherit the requesting process context. Native normal/CFG preferred/rebased, C API/CLI and Python paths distinguish these outcomes; no arbitrary process attachment or WDM cancellation is implied."
       ],
       "tests": [
         {
@@ -6528,6 +6529,51 @@
           "target": "NeverDPythonSDKUnitTests",
           "source": "pluginsdk/python/tests/test_driver_neither_integration.py",
           "filter": "DriverNeitherIntegrationTests.test_neither_read_write_uses_caller_buffer",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
+          "filter": "DriverWDMNeither.LockedUserAliasesRemainUsableInPendingWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
+          "filter": "DriverWDMNeither.RawCallerAddressInPendingWorkerStopsExplicitly",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIKeepLockedNeitherPagesInWorker",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIRejectRawNeitherWorkerAddress",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_driver_neither_integration.py",
+          "filter": "DriverNeitherIntegrationTests.test_locked_neither_buffers_survive_pending_worker",
           "platforms": [
             "linux"
           ]

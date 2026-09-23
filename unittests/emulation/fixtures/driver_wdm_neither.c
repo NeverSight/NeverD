@@ -16,15 +16,62 @@
 #define IO_WRITE_PROBE 0x22200fu
 #define IO_LOCKED 0x222013u
 #define IO_HELPER_FAULT 0x222017u
+#define IO_WORKER_LOCKED 0x22201bu
+#define IO_WORKER_RAW 0x22201fu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
+
+typedef struct _WORKER_STATE {
+  PIRP Irp;
+  PIO_WORKITEM Work;
+  PMDL InMdl;
+  PMDL OutMdl;
+  PUCHAR InAlias;
+  PUCHAR OutAlias;
+  volatile UCHAR *RawInput;
+  BOOLEAN Raw;
+} WORKER_STATE;
+
+static WORKER_STATE WorkerState;
 
 static NTSTATUS Complete(PIRP Irp, NTSTATUS Status, ULONG_PTR Length) {
   Irp->IoStatus.Status = Status;
   Irp->IoStatus.Information = Length;
   IoCompleteRequest(Irp, IO_NO_INCREMENT);
   return Status;
+}
+
+static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
+  WORKER_STATE *State = (WORKER_STATE *)Context;
+  PIRP Irp = State->Irp;
+  if (State->Raw) {
+    Stage = State->RawInput[0];
+    return;
+  }
+  NTSTATUS Status = STATUS_SUCCESS;
+  ULONG_PTR Length = 0;
+  if (Object != Device || ExGetPreviousMode() != KernelMode ||
+      !State->InAlias || !State->OutAlias)
+    Status = STATUS_INVALID_PARAMETER;
+  else {
+    for (ULONG I = 0; I < 4; ++I)
+      State->OutAlias[I] = State->InAlias[I] + 0x10;
+    Length = 4;
+  }
+  MmUnlockPages(State->OutMdl);
+  MmUnlockPages(State->InMdl);
+  IoFreeMdl(State->OutMdl);
+  IoFreeMdl(State->InMdl);
+  IoFreeWorkItem(State->Work);
+  State->Irp = NULL;
+  State->Work = NULL;
+  State->InMdl = NULL;
+  State->OutMdl = NULL;
+  State->InAlias = NULL;
+  State->OutAlias = NULL;
+  State->RawInput = NULL;
+  Complete(Irp, Status, Length);
 }
 
 __declspec(noinline) static UCHAR FaultInHelper(VOID) {
@@ -196,6 +243,68 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       }
     }
     break;
+  case IO_WORKER_LOCKED:
+  case IO_WORKER_RAW: {
+    if (WorkerState.Irp)
+      return Complete(Irp, STATUS_INVALID_DEVICE_STATE, 0);
+    PMDL InMdl = NULL, OutMdl = NULL;
+    BOOLEAN InLocked = FALSE, OutLocked = FALSE;
+    PIO_WORKITEM Work = NULL;
+    if (Code == IO_WORKER_LOCKED) {
+      InMdl = IoAllocateMdl((PVOID)Input, InputLength, FALSE, FALSE, NULL);
+      OutMdl = IoAllocateMdl((PVOID)Output, OutputLength, FALSE, FALSE, NULL);
+      if (!InMdl || !OutMdl) {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto WorkerFailure;
+      }
+      __try {
+        MmProbeAndLockPages(InMdl, UserMode, IoReadAccess);
+        InLocked = TRUE;
+        MmProbeAndLockPages(OutMdl, UserMode, IoWriteAccess);
+        OutLocked = TRUE;
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Status = GetExceptionCode();
+      }
+      if (!NT_SUCCESS(Status))
+        goto WorkerFailure;
+      WorkerState.InAlias =
+          MmGetSystemAddressForMdlSafe(InMdl, NormalPagePriority);
+      WorkerState.OutAlias =
+          MmGetSystemAddressForMdlSafe(OutMdl, NormalPagePriority);
+      if (!WorkerState.InAlias || !WorkerState.OutAlias) {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto WorkerFailure;
+      }
+    }
+    Work = IoAllocateWorkItem(Device);
+    if (!Work) {
+      Status = STATUS_INSUFFICIENT_RESOURCES;
+      goto WorkerFailure;
+    }
+    WorkerState.Irp = Irp;
+    WorkerState.Work = Work;
+    WorkerState.InMdl = InMdl;
+    WorkerState.OutMdl = OutMdl;
+    WorkerState.RawInput = Input;
+    WorkerState.Raw = Code == IO_WORKER_RAW;
+    IoMarkIrpPending(Irp);
+    IoQueueWorkItem(Work, NeitherWorker, DelayedWorkQueue, &WorkerState);
+    return STATUS_PENDING;
+  WorkerFailure:
+    if (Work)
+      IoFreeWorkItem(Work);
+    if (OutLocked)
+      MmUnlockPages(OutMdl);
+    if (InLocked)
+      MmUnlockPages(InMdl);
+    if (OutMdl)
+      IoFreeMdl(OutMdl);
+    if (InMdl)
+      IoFreeMdl(InMdl);
+    WorkerState.InAlias = NULL;
+    WorkerState.OutAlias = NULL;
+    break;
+  }
   default:
     Status = STATUS_INVALID_DEVICE_REQUEST;
     break;

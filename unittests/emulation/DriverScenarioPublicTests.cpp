@@ -2404,4 +2404,90 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIExecuteNeitherReadWrite) {
 #endif
 }
 
+TEST_F(DriverScenarioPublic, CAPIAndCLIKeepLockedNeitherPagesInWorker) {
+#ifdef NEVERD_WDM_NEITHER_FIXTURE
+  const std::string Scenario = R"neither({
+    "load_address":"0x190000000", "unload":true,
+    "requests":[
+      {"kind":"create","device":"\\Device\\NeverDNeither"},
+      {"kind":"ioctl","code":"0x22201b","input":"01020304","output_size":4},
+      {"kind":"cleanup"},{"kind":"close"}
+    ]
+  })neither";
+  for (const char *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    SCOPED_TRACE(Image);
+    const std::string API = takeString(neverd_emulate_driver_scenario_json(
+        Session, Image, Scenario.c_str(), nullptr));
+    ASSERT_FALSE(API.empty()) << error();
+    for (const auto &JSON : {API, runCLI(Scenario, 0, nullptr, Image)}) {
+      auto Parsed = llvm::json::parse(JSON);
+      ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 4u);
+      const auto *Request = (*Requests)[1].getAsObject();
+      ASSERT_NE(Request, nullptr);
+      EXPECT_EQ(Request->getInteger("dispatch_status"), 0x103);
+      EXPECT_EQ(Request->getInteger("io_status"), 0);
+      EXPECT_EQ(Request->getString("output_hex"), "11121314");
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_NEITHER_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIAndCLIRejectRawNeitherWorkerAddress) {
+#ifdef NEVERD_WDM_NEITHER_FIXTURE
+  const std::string Scenario = R"neither({
+    "load_address":"0x190000000",
+    "requests":[
+      {"kind":"create","device":"\\Device\\NeverDNeither"},
+      {"kind":"ioctl","code":"0x22201f","input":"01020304","output_size":4}
+    ]
+  })neither";
+  for (const char *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       }) {
+    SCOPED_TRACE(Image);
+    const std::string API = takeString(neverd_emulate_driver_scenario_json(
+        Session, Image, Scenario.c_str(), nullptr));
+    ASSERT_FALSE(API.empty()) << error();
+    for (const auto &JSON : {API, runCLI(Scenario, 3, nullptr, Image)}) {
+      auto Parsed = llvm::json::parse(JSON);
+      ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "model_error");
+      EXPECT_NE(Report->getString("diagnostic")
+                    .value_or("")
+                    .find("user address access requires the requesting "
+                          "process"),
+                llvm::StringRef::npos);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 2u);
+      const auto *Request = (*Requests)[1].getAsObject();
+      ASSERT_NE(Request, nullptr);
+      EXPECT_EQ(Request->getInteger("dispatch_status"), 0x103);
+      EXPECT_EQ(Request->getBoolean("completed"), false);
+    }
+  }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_NEITHER_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
 } // namespace
