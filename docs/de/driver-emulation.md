@@ -57,7 +57,7 @@ Sie belegen keine Kompatibilität mit beliebigen Treibern Dritter.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Anforderungseigene MDLs, Systemabbildungen, gemeinsame physische Seitenidentitäten und SG-DMA | Benutzerabbildungen und weitere DMA-Schnittstellen |
 | Treiberzugewiesene MDLs | Eigenständige Deskriptoren für Nonpaged Pool oder eine Benutzerzuweisung mit gemeinsamen physischen Seiten | Keine IRP-Zuordnung, MDL-Ketten oder beliebigen Prozesse |
 | READ/WRITE | Serielle buffered/direct/neither E/A mit Abschluss durch Work Item oder DPC | Nur die unten genannten APIs; keine gleichzeitigen Szenario-IRPs, allgemeine WDM-Anforderungsabbrüche oder implizite Dateiposition |
-| WDM `METHOD_NEITHER` | Getrennte Benutzerpuffer, Zugriffsprüfung, MDL-Sperren und abfangbare Speicherfehler | Ein Prozesskontext; begrenzte WDM-Abbrüche, keine beliebigen Benutzerabbildungen |
+| WDM `METHOD_NEITHER` | Getrennte Benutzerpuffer, Zugriffsprüfung, MDL-Sperren, synthetische Prozesskennungen, Entzug von VA oder Prozessende nach Dispatch und begrenzter Abbruch | Kein allgemeines Prozess-Attachment und keine beliebigen Benutzerabbildungen oder Wiederabbildungen |
 | KMDF-1.33-Nicht-PnP-Treiber | Bindung, Objekte/Kontexte, benannte Steuergeräte, sequenzielle Standardwarteschlangen sowie gepufferte/direkte Anforderungen mit ausgeführten Callbacks | Keine PnP-Geräte, allgemeine Warteschlangenplanung, Klassenerweiterungen oder UMDF |
 | PnP-Bus-, Funktions- oder Filtertreiber | Explizite PDOs ohne Ressourcen oder mit fester Registerbank, Gast-AddDevice und acht übliche PnP-Lebenszyklusfunktionen | Weitere PnP-Vorgänge, allgemeine Power-Policy, weitere Hardware-/Ressourcenmodelle und KMDF-PnP |
 | Speicher-, Netzwerk-, Anzeige-, Dateisystem- und Minifiltertreiber | Subsystemverträge nicht unterstützt | Port-/Klassen-/Miniport-Frameworks, NDIS/WFP, Grafik- oder Dateisystemdienste |
@@ -357,7 +357,9 @@ Brüche und Gleitkommaschreibweisen werden abgewiesen.
 Nur READ-/WRITE-/IOCTL-Anforderungen akzeptieren das optionale Feld `cancel_after_100ns`, eine JSON-Ganzzahl zwischen 0 und `INT64_MAX` (9223372036854775807). Die Verzögerung zählt ab Anforderungsübergabe in virtuellen 100-ns-Einheiten, nicht in Echtzeit. Bei KMDF löst Null den Abbruch nach Framework-Routing und vor dem Gast-I/O-Callback aus; hat das Routing bereits abgeschlossen, gewinnt der Abschluss. Bei WDM gilt Null nach der Rückkehr aus dem Dispatch. Bei positiven Verzögerungen schreitet die Zeit nur dann zu Timer-, Warte- oder Abbruchfristen fort, wenn kein Callback oder Ausführungskontext bereit ist. Ein ausstehender WDM-IRP ruft seine registrierte Abbruchroutine auf `DISPATCH_LEVEL` mit gehaltenem Abbruch-Spinlock auf; vor Abschluss muss sie ihn mit `Irp->CancelIrql` freigeben. Allgemeiner Warteschlangen- und PnP-Abbruch bleibt unmodelliert. Jeder Anforderungsbericht enthält `cancel_requested_at_100ns`: die tatsächliche absolute virtuelle Abbruchzeit oder null, wenn kein Abbruch erfolgte, auch bei vorherigem Abschluss. Eine Abbruchanforderung allein schließt kein IRP ab und legt seinen Endstatus nicht fest.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` und `IoCancelIrp` verwenden denselben IRP-Zustand und dieselbe Abbruch-Sperre; `IoCancelIrp` ruft eine registrierte Routine synchron auf und meldet, ob sie ausgeführt wurde.
 
-Das optionale boolesche Feld `user_unmap_after_dispatch` entzieht bei einem nichtleeren WDM-Neither-Transfer den ursprünglichen Benutzeradressen nach der Dispatch-Rückkehr und vor geplanter Arbeit oder einem Abbruch den Zugriff. Gesperrte MDL-Seiten und ihre Systemaliase bleiben bis zum Entsperren nutzbar; rohe Benutzerzeiger und neue Sperren schlagen fehl. Bei entzogenem Ausgabezugriff bleibt `output_hex` leer. Wiederverwendung, Prozessende und beliebige Zeitpunkte der Freigabe sind nicht modelliert.
+Das optionale boolesche Feld `user_unmap_after_dispatch` entzieht bei einem nichtleeren WDM-Neither-Transfer den ursprünglichen Benutzeradressen nach der Dispatch-Rückkehr und vor geplanter Arbeit oder einem Abbruch den Zugriff. Gesperrte MDL-Seiten und ihre Systemaliase bleiben bis zum Entsperren nutzbar; rohe Benutzerzeiger und neue Sperren schlagen fehl. Bei entzogenem Ausgabezugriff bleibt `output_hex` leer. Wiederverwendung und beliebige Zeitpunkte der Freigabe sind nicht modelliert.
+
+`requestor_process_id` bezeichnet einen synthetischen Anforderungsprozess (Standard 4096, Bereich 5 bis `UINT32_MAX`). `IoGetRequestorProcessId` liefert seine Kennung für eine aktive IRP; `PsGetCurrentProcessId` liefert sie beim direkten Dispatch oder 4 im modellierten System-Worker. Ein Prozesswechsel sperrt fremde ursprüngliche Benutzeradressen, nicht aber gesperrte MDL-Systemaliasse. `requestor_exit_after_dispatch` sperrt nach der Dispatch-Rückkehr alle ursprünglichen Benutzeradressen dieses Prozesses und lehnt neue I/O ab; explizite CLEANUP/CLOSE bleiben möglich, ohne automatischen Abbruch oder Handle-Rundown.
 
 Bei direkten IOCTLs initialisiert `input` den ersten Systempuffer, während
 `direct_input` den separaten, durch die MDL beschriebenen zweiten Puffer
@@ -520,7 +522,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v21`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v22`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -529,7 +531,7 @@ Phase (`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N` oder `unload
 Dispatch- und I/O-Status, Abschluss, den Information-Wert und zurückgegebene Bytes
 in `output_hex`. `preferred_image_base` beschreibt die ursprüngliche PE-Basis.
 `security_cookie` ist die Gastadresse des initialisierten Cookies oder `"0x0"`,
-wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`,
+wenn keiner erforderlich war. Anforderungsfelder sind `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`,
 `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`,
 `information_hex` und `output_hex`. `information` behält seine Zahlenform;
 `information_hex` ist eine Hexadezimalzeichenfolge mit dem Präfix `0x`, die jedes

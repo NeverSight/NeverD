@@ -204,6 +204,38 @@ TEST(DriverWDMNeither, RevokedCallerAddressesKeepPendingMdlAliasesAlive) {
     }
 }
 
+TEST(DriverWDMNeither, ExitedRequestorKeepsLockedWorkerAndCancelAlive) {
+  for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
+#ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE
+                            NEVERD_WDM_NEITHER_CFG_FIXTURE
+#endif
+       })
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (uint32_t Code : {0x22201bu, 0x222023u}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Code);
+        auto Options = options(Code, Address);
+        for (auto &Request : Options.Requests)
+          Request.RequestorProcessID = 0x1010;
+        Options.Requests[1].RequestorExitAfterDispatch = true;
+        if (Code == 0x222023)
+          Options.Requests[1].CancelAfter100ns = 0;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), 4u);
+        EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+        EXPECT_EQ(Result->Requests[1].IOStatus,
+                  Code == 0x222023 ? 0xc0000120u : 0u);
+        EXPECT_TRUE(Result->Requests[1].Output.empty());
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_FALSE(Result->Fault);
+      }
+}
+
 TEST(DriverWDMNeither, RawCallerAddressInPendingWorkerStopsExplicitly) {
   for (const auto *Image : {NEVERD_WDM_NEITHER_FIXTURE,
 #ifdef NEVERD_WDM_NEITHER_CFG_FIXTURE

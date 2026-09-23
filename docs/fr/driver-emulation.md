@@ -56,7 +56,7 @@ tiers arbitraires.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL propres aux requêtes, mappages système, identités physiques partagées et SG DMA | mappages utilisateur et autres interfaces DMA |
 | MDL alloués par le pilote | Descripteurs indépendants pour pool non paginé ou une allocation utilisateur avec pages physiques partagées | Sans association IRP, chaînes MDL ni processus arbitraires |
 | READ/WRITE | E/S buffered/direct/neither sérielles, achèvement par travail ou DPC | API répertoriées uniquement ; sans IRP simultanés, annulation WDM générale ni position implicite du fichier |
-| WDM `METHOD_NEITHER` | Tampons utilisateur distincts, sondes, verrouillage MDL et fautes mémoire récupérables | Un seul contexte de processus ; annulation WDM limitée, sans mappages utilisateur généraux |
+| WDM `METHOD_NEITHER` | Tampons utilisateur distincts, sondes, MDL verrouillés, identités synthétiques, révocation de VA ou sortie après distribution et annulation limitée | Pas d’attachement général de processus ni de mappages ou remappages arbitraires |
 | Pilote KMDF 1.33 non-PnP | Liaison, objets/contextes, périphériques de contrôle nommés, files séquentielles par défaut et requêtes tamponnées/directes avec callbacks exécutés | Pas de périphériques PnP, ordonnancement général des files, extensions de classe ou UMDF |
 | Pilote PnP de bus, de fonction ou de filtre | PDO explicites sans ressources ou à banque de registres fixe, AddDevice invité et huit fonctions mineures courantes du cycle PnP | Autres opérations PnP, politique générale d’alimentation, autres modèles matériels/de ressources et KMDF PnP |
 | Pilotes de stockage, réseau, affichage, système de fichiers et minifiltres | Contrats de sous-systèmes non pris en charge | Frameworks de port/classe/miniport, NDIS/WFP, services graphiques ou de système de fichiers |
@@ -360,7 +360,9 @@ JSON non signé ; son omission signifie zéro. Les fractions et les notations
 Seules les requêtes READ/WRITE/IOCTL acceptent `cancel_after_100ns`, entier JSON facultatif compris entre 0 et `INT64_MAX` (9223372036854775807). Le délai est relatif à la soumission de la requête, en unités virtuelles de 100 ns, et non en temps réel. Pour KMDF, zéro applique l’annulation après le routage du framework et avant le callback d’E/S invité ; si le routage a déjà achevé la requête, l’achèvement l’emporte. Pour WDM, zéro s’applique après le retour du dispatch. Pour un délai positif, le temps n’avance vers une échéance de timer, d’attente ou d’annulation que si aucun callback ni contexte n’est prêt. Un IRP WDM en attente appelle sa routine d’annulation enregistrée à `DISPATCH_LEVEL`, verrou d’annulation détenu ; elle doit le libérer avec `Irp->CancelIrql` avant l’achèvement. L’annulation générale des files et du PnP reste exclue. Chaque rapport de requête contient `cancel_requested_at_100ns`, soit l’heure virtuelle absolue de l’annulation effective, soit null si elle n’a pas eu lieu, notamment si l’achèvement a précédé l’annulation. Demander l’annulation ne suffit pas à achever l’IRP ni à imposer son statut final.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` et `IoCancelIrp` partagent l’état de l’IRP et le verrou d’annulation ; `IoCancelIrp` appelle la routine enregistrée de façon synchrone et indique si elle a été exécutée.
 
-Le booléen facultatif `user_unmap_after_dispatch` retire l’accès aux adresses utilisateur originales d’un transfert WDM neither non vide après le retour du dispatch et avant le travail ou l’annulation planifiés. Les pages verrouillées par MDL et leurs alias système restent utilisables jusqu’au déverrouillage ; les pointeurs utilisateur bruts et les nouveaux verrouillages échouent. Si la sortie est révoquée, `output_hex` est vide. La réutilisation, la fin du processus et les instants arbitraires de retrait ne sont pas modélisés.
+Le booléen facultatif `user_unmap_after_dispatch` retire l’accès aux adresses utilisateur originales d’un transfert WDM neither non vide après le retour du dispatch et avant le travail ou l’annulation planifiés. Les pages verrouillées par MDL et leurs alias système restent utilisables jusqu’au déverrouillage ; les pointeurs utilisateur bruts et les nouveaux verrouillages échouent. Si la sortie est révoquée, `output_hex` est vide. La réutilisation et les instants arbitraires de retrait ne sont pas modélisés.
+
+`requestor_process_id` identifie un processus demandeur synthétique (4096 par défaut, de 5 à `UINT32_MAX`). `IoGetRequestorProcessId` donne son ID pour un IRP actif ; `PsGetCurrentProcessId` donne cet ID pendant la distribution directe ou 4 dans le worker système modélisé. Changer de processus bloque les adresses utilisateur d’origine d’un autre processus, mais conserve les alias système des MDL verrouillés. `requestor_exit_after_dispatch` révoque après la distribution toutes les adresses utilisateur d’origine de ce processus et refuse ses nouvelles E/S ; CLEANUP/CLOSE explicites restent possibles, sans déduire l’annulation ni la fermeture automatique des handles.
 
 Pour les IOCTL directs, `input` initialise le premier tampon système,
 tandis que `direct_input` initialise le second tampon distinct décrit par le MDL,
@@ -524,7 +526,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v21`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v22`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -532,7 +534,7 @@ aussi sa phase (`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N` ou 
 les statuts de dispatch et d’E/S, l’achèvement, la valeur Information et
 les octets renvoyés dans `output_hex`. `preferred_image_base` décrit la base
 PE d’origine. `security_cookie` est l’adresse invitée du cookie initialisé,
-ou `"0x0"` si aucun n’était nécessaire. Les champs des requêtes sont `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
+ou `"0x0"` si aucun n’était nécessaire. Les champs des requêtes sont `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
 `information`, `information_hex` et `output_hex`. `information` conserve sa
 forme numérique ; `information_hex` est une chaîne hexadécimale préfixée par
 `0x` qui conserve exactement tous les bits du résultat non signé sur 64 bits.

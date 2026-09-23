@@ -564,6 +564,20 @@ llvm::Expected<uint64_t> KernelModel::call(
     return UserRequestContext && CurrentExecution == profile::StackBase
                ? uint64_t(UserMode)
                : uint64_t(KernelMode);
+  case KernelAPIKind::PsGetCurrentProcessId:
+    if (CurrentExecution == profile::StackBase)
+      return uint64_t(UserRequestContext ? CurrentUserProcessID : 4);
+    if (Scheduler.active() &&
+        Scheduler.active()->Kind == KernelScheduler::CallbackKind::WorkItem)
+      return uint64_t(4);
+    return modelError("PsGetCurrentProcessId requires a modeled foreground "
+                      "or system work-item thread");
+  case KernelAPIKind::IoGetRequestorProcessId: {
+    const auto *Request = requestForIRP(A[0]);
+    if (!Request || Request->Completed)
+      return modelError("IoGetRequestorProcessId requires a live IRP");
+    return uint64_t(Request->ProcessID);
+  }
 #define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL) case KernelAPIKind::Symbol:
 #include "KernelInterruptAPIs.def"
 #undef NEVERD_KERNEL_INTERRUPT_API
@@ -1035,9 +1049,9 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   if (Address < profile::UserProbeLimit) {
     if (canCatchUserAccess(Address, Size))
       return llvm::Error::success();
-    for (const auto &[Base, Length] : UserAllocations) {
+    for (const auto &[Base, Allocation] : UserAllocations) {
       const uint64_t Mapped =
-          (Length + profile::PageSize - 1) & ~(profile::PageSize - 1);
+          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
       if (Address < Base + Mapped && Base < End)
         return RevokedUserAllocations.contains(Base)
                    ? modelError("unmapped user virtual address")

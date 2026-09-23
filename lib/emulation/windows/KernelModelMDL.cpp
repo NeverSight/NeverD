@@ -153,7 +153,9 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
   if (RevokedUserAllocations.contains(Region->first))
     return llvm::make_error<KernelGuestException>(
         exceptions::StatusAccessViolation);
-  if (Offset >= Region->second || State.ByteCount > Region->second - Offset)
+  if (Region->second.ProcessID != CurrentUserProcessID ||
+      Offset >= Region->second.Size ||
+      State.ByteCount > Region->second.Size - Offset)
     return llvm::make_error<KernelGuestException>(
         exceptions::StatusAccessViolation);
   auto Allowed = Memory.canAccess(State.Buffer, State.ByteCount,

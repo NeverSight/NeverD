@@ -655,6 +655,7 @@ std::string driverResultJSON(const DriverResult &Result) {
         {field::Origin, requestOriginName(Request.Origin)},
         {field::ResponseIndex, nullptr},
         {field::File, Request.File},
+        {field::RequestorProcessID, nullptr},
         {field::ByteOffset, Address(Request.ByteOffset)},
         {field::ControlCode, Request.ControlCode},
         {field::IRP, Address(Request.IRP)},
@@ -668,6 +669,8 @@ std::string driverResultJSON(const DriverResult &Result) {
          llvm::toHex(llvm::ArrayRef<uint8_t>(Request.Output), true)}};
     if (!Request.DeviceID.empty())
       Item[field::DeviceID] = Request.DeviceID;
+    if (Request.RequestorProcessID)
+      Item[field::RequestorProcessID] = Request.RequestorProcessID;
     if (Request.ResponseIndex)
       Item[field::ResponseIndex] = *Request.ResponseIndex;
     if (Request.Kind == DriverRequestKind::Pnp ||

@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | 요청 소유 MDL, 시스템 매핑, 공유 물리 페이지 식별자와 SG DMA | 사용자 매핑과 기타 DMA 인터페이스 |
 | 드라이버 할당 MDL | 비페이지 풀 또는 하나의 사용자 할당을 설명하며 물리 페이지를 공유 | IRP 연결, MDL 체인 및 임의 프로세스는 미지원 |
 | READ/WRITE | 순차 buffered/direct/neither I/O와 작업 항목 또는 DPC 완료 | 아래 API 범위만 지원; 동시 요청, 일반적인 WDM 요청 취소 및 암묵적 파일 위치는 미지원 |
-| WDM `METHOD_NEITHER` | 별도 사용자 버퍼, 접근 검사, MDL 잠금, 처리 가능한 메모리 오류 | 단일 요청 프로세스 문맥; 제한된 WDM 취소를 지원하며 임의 사용자 매핑은 미지원 |
+| WDM `METHOD_NEITHER` | 별도 사용자 버퍼, 접근 검사, MDL 잠금, 합성 요청자 ID, 디스패치 후 VA 철회 또는 프로세스 종료, 제한된 취소 | 일반적인 프로세스 연결 및 임의 사용자 매핑·재매핑은 미지원 |
 | KMDF 1.33 비 PnP 드라이버 | 바인딩, 객체/컨텍스트, 이름 있는 제어 장치, 순차 기본 큐 및 콜백을 실제 실행하는 버퍼/직접 요청 | PnP 장치, 일반 큐 스케줄링, 클래스 확장 및 UMDF는 지원하지 않음 |
 | PnP 버스/기능/필터 드라이버 | 명시적 리소스 없는 PDO 또는 고정 레지스터 뱅크 PDO, 게스트 AddDevice, 여덟 가지 일반 PnP 수명 주기 부 기능 | 기타 PnP 작업, 일반 전원 관리, 기타 하드웨어/리소스 및 KMDF PnP |
 | 저장 장치, 네트워크, 디스플레이, 파일 시스템 및 미니필터 드라이버 | 서브시스템 계약을 지원하지 않음 | 포트/클래스/미니포트 프레임워크, NDIS/WFP, 그래픽 또는 파일 시스템 서비스 |
@@ -264,7 +264,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 READ/WRITE/IOCTL 요청만 선택적 `cancel_after_100ns` 필드를 허용합니다. 값은 0부터 `INT64_MAX`(9223372036854775807)까지의 JSON 정수입니다. 실제 시간이 아니라 요청 제출 시점을 기준으로 한 가상 100 ns 단위로 취소를 예약합니다. KMDF에서 0은 프레임워크 라우팅 후 게스트 I/O 콜백 전에 적용하며, 라우팅이 이미 요청을 완료했다면 완료가 우선합니다. WDM에서는 디스패치 반환 후 0을 적용합니다. 양수 지연에서는 준비된 콜백이나 실행 프레임이 없을 때만 타이머, 대기 또는 취소 기한으로 시간을 진행합니다. 보류 중인 WDM IRP는 등록된 취소 루틴을 취소 스핀락을 잡은 `DISPATCH_LEVEL`에서 호출합니다. 완료 전에 `Irp->CancelIrql`로 잠금을 해제해야 합니다. 일반 큐와 PnP 취소는 여전히 지원하지 않습니다. 각 요청 보고서의 `cancel_requested_at_100ns`는 취소가 실제 발생한 절대 가상 시간이거나, 완료가 먼저 발생하는 경우를 포함해 취소가 발생하지 않았다면 null입니다. 취소 요청만으로 IRP가 완료되거나 최종 상태가 정해지지는 않습니다.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock`, `IoCancelIrp`는 같은 IRP 상태와 취소 스핀락을 사용합니다. `IoCancelIrp`는 등록된 루틴을 동기적으로 호출하고 호출 여부를 반환합니다.
 
-선택적 불리언 `user_unmap_after_dispatch`는 비어 있지 않은 WDM neither 전송에서 디스패치 반환 후, 예약된 작업 또는 취소 전에 원래 사용자 주소의 접근을 취소합니다. MDL로 잠근 페이지와 시스템 별칭은 잠금 해제 전까지 사용할 수 있지만 원시 사용자 포인터와 새 잠금은 실패합니다. 출력 주소가 취소되면 `output_hex`는 비어 있습니다. 주소 재사용, 프로세스 종료, 임의 시점의 매핑 해제는 모델링하지 않습니다.
+선택적 불리언 `user_unmap_after_dispatch`는 비어 있지 않은 WDM neither 전송에서 디스패치 반환 후, 예약된 작업 또는 취소 전에 원래 사용자 주소의 접근을 취소합니다. MDL로 잠근 페이지와 시스템 별칭은 잠금 해제 전까지 사용할 수 있지만 원시 사용자 포인터와 새 잠금은 실패합니다. 출력 주소가 취소되면 `output_hex`는 비어 있습니다. 주소 재사용과 임의 시점의 매핑 해제는 모델링하지 않습니다.
+
+`requestor_process_id`는 합성 요청 프로세스 ID입니다(기본값 4096, 범위 5~`UINT32_MAX`). `IoGetRequestorProcessId`는 활성 IRP의 ID를 반환하고 `PsGetCurrentProcessId`는 직접 디스패치에서는 그 ID, 모델링된 시스템 작업 항목에서는 4를 반환합니다. 프로세스를 바꾸면 다른 프로세스의 원래 사용자 VA에는 접근할 수 없지만 잠긴 MDL의 시스템 별칭은 유효합니다. `requestor_exit_after_dispatch`는 디스패치 반환 뒤 그 프로세스의 원래 사용자 VA를 모두 철회하고 새 I/O를 거부합니다. 명시적인 CLEANUP/CLOSE는 허용되며 취소나 핸들 정리를 자동으로 추론하지 않습니다.
 
 Direct IOCTL에서 `input`은 첫 번째 시스템 버퍼를 초기화하고, `direct_input`은 MDL이 설명하는 별도의 두 번째 버퍼를 초기화하며 `output_size`까지 0으로 채웁니다. `METHOD_IN_DIRECT`는 읽기 접근을 요구하지만 읽기 전용 시스템 매핑을 뜻하지는 않습니다. 두 방식 모두 읽기/쓰기가 가능한 시나리오 버퍼를 사용합니다. `MdlMappingNoWrite`는 매핑의 쓰기 권한을, `MdlMappingNoExecute`는 실행 권한을 제거합니다. 매핑 해제는 시스템 VA를 무효화하며, 다시 매핑해도 같은 잠긴 데이터가 유지됩니다. 완료되면 MDL과 매핑의 수명이 끝납니다. WDM 매크로가 사용하는 공개 MDL 필드는 모델링하지만, 프로세스 필드, 미구성 설명자의 PFN, 직접 만든 MDL, 사용자 매핑 및 원시 UserBuffer를 통한 직접 접근은 거부합니다. 길이가 0인 direct 버퍼의 MDL은 null입니다.
 
@@ -309,7 +311,7 @@ MinGW-w64 include 디렉터리가 기본 위치가 아니면 `--headers`를 사�
 
 ## 보고서 및 SDK
 
-JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v21`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
+JSON 보고서는 `stop_reason`, null이 가능한 `nt_status`와 `nt_success`, 중단 PC, 명령어 수를 구분합니다. 장치 객체와 드라이버 콜백 주소를 포함하여 중단 전에 수집한 API 호출 및 관찰 가능한 상태를 보존합니다. JSON 소비자가 64비트 정밀도를 잃지 않도록 게스트 주소는 16진 문자열로 표현합니다. `configuration` 객체는 실행 한도, 서비스 이름과 `kernel_exports` 재정의를 기록합니다. 프로필은 `wdm-x64-scheduled-v22`입니다. `nt_status`는 계속 DriverEntry 결과를 나타내고, `scenario_success`는 초기화와 완료된 요청을 함께 나타냅니다. `phase`, `requests`, `unload_completed`는 요청한 수명 주기의 어느 부분이 실행되었는지 식별합니다. 각 API 호출과 CPU 쓰기에도 단계(`driver_entry`, `add_device:<ID>`, `request:N`, `callback:N`, `unload`)가 기록됩니다. 각 요청은 디스패치 및 I/O 상태, 완료 여부, 정보 길이와 반환된 `output_hex` 바이트를 보고합니다. `preferred_image_base`는 원래 PE 베이스를 나타냅니다. `security_cookie`는 초기화된 cookie의 게스트 주소이며, 필요하지 않았다면 `"0x0"`입니다. 요청 필드는 `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`, `information`、`information_hex`, `output_hex`입니다. `configuration.registry`는 원래 레지스트리 구성을 보존합니다. `information_hex`는 원래 64비트 `IoStatus.Information`을 16진수 문자열로 정확히 보존합니다. 기존 숫자 필드 `information`도 유지합니다.
 
 작업 항목 관찰에는 `callback:N` 단계가 기록됩니다. 보류 요청의 `dispatch_status`는 `STATUS_PENDING`을 유지하며 최종 완료 상태는 별도의 `io_status`에 기록되어 `scenario_success` 판정에 사용됩니다.
 

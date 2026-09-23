@@ -349,6 +349,34 @@ TEST(DriverScenario, ParsesAndRestrictsPostDispatchUserUnmapping) {
   }
 }
 
+TEST(DriverScenario, ParsesRequestorIdentityAndExit) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"ioctl","code":"0x222003","input":"01","output_size":1,
+     "requestor_process_id":4112,"requestor_exit_after_dispatch":true}
+  ]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 1u);
+  EXPECT_EQ(Parsed->Requests[0].RequestorProcessID, 4112u);
+  EXPECT_EQ(Parsed->Requests[0].RequestorExitAfterDispatch, true);
+  for (
+      const char *JSON : {
+          R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","requestor_process_id":4}]})",
+          R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","requestor_process_id":1.0}]})",
+          R"({"requests":[{"kind":"pnp","device_id":"p","minor":"start","requestor_process_id":4096}]})",
+          R"({"requests":[{"kind":"read","output_size":1,"requestor_exit_after_dispatch":1}]})",
+          R"({"requests":[{"kind":"create","requestor_exit_after_dispatch":true}]})",
+          R"({"requests":[{"kind":"read","output_size":1,"requestor_exit_after_dispatch":true,"user_unmap_after_dispatch":true}]})",
+      }) {
+    SCOPED_TRACE(JSON);
+    auto Invalid = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Invalid));
+    const std::string Error = llvm::toString(Invalid.takeError());
+    EXPECT_TRUE(Error.find("requestor_") != std::string::npos ||
+                Error.find("user_unmap_after_dispatch") != std::string::npos)
+        << Error;
+  }
+}
+
 TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
   for (const char *Value :
        {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",

@@ -141,8 +141,11 @@ public:
       CancelLock.CallbackExecution = Identity;
     }
   }
-  void setUserRequestContext(bool Active) { UserRequestContext = Active; }
+  llvm::Error setUserRequestContext(
+      bool Active,
+      uint32_t ProcessID = DriverRequest::DefaultRequestorProcessID);
   llvm::Error revokeRequestUserBuffers(uint64_t IRP);
+  llvm::Error exitRequestorProcess(uint64_t IRP);
   bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
   bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
@@ -214,13 +217,21 @@ private:
 
   uint64_t CurrentExecution = 0;
   bool UserRequestContext = false;
+  uint32_t CurrentUserProcessID = 0;
   uint64_t NextUserAddress = profile::UserArenaBase;
   uint64_t NextUserAlias = profile::UserAliasBase;
-  std::map<uint64_t, uint64_t> UserAllocations;
+  struct UserAllocation {
+    uint64_t Size;
+    uint32_t ProcessID;
+    DriverUserPageAccess Access;
+  };
+  std::map<uint64_t, UserAllocation> UserAllocations;
   std::set<uint64_t> RevokedUserAllocations;
+  std::set<uint32_t> ExitedUserProcesses;
   llvm::Expected<uint64_t> allocateUserBuffer(uint32_t Size,
                                               llvm::ArrayRef<uint8_t> Initial,
-                                              DriverUserPageAccess Access);
+                                              DriverUserPageAccess Access,
+                                              uint32_t ProcessID);
   llvm::Expected<uint64_t> probeUserBuffer(uint64_t Address, uint64_t Size,
                                             uint32_t Alignment, bool ForWrite);
   std::optional<KernelGuestCall> PendingInterruptCall;
@@ -398,6 +409,7 @@ private:
     bool CancelRequested = false;
     std::optional<uint64_t> CancelDeadline = std::nullopt;
     uint32_t FileId = 0;
+    uint32_t ProcessID = 0;
     uint32_t InputSize = 0;
     uint32_t TransferSize = 0;
     uint64_t ByteOffset = 0;

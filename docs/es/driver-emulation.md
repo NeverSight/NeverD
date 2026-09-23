@@ -58,7 +58,7 @@ arbitrarios de terceros.
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | MDL de cada solicitud, mappings de sistema e identidades PFN compartidas de solo lectura | Mappings de usuario y otras interfaces DMA |
 | MDL asignados por el controlador | Descriptores independientes para pool no paginado o una asignación de usuario con páginas físicas compartidas | Sin asociación IRP, cadenas MDL ni procesos arbitrarios |
 | READ/WRITE | E/S buffered/direct/neither serial con finalización por trabajo o DPC | Solo las API siguientes; sin IRP simultáneos, cancelación WDM general ni posición implícita del archivo |
-| WDM `METHOD_NEITHER` | Búferes de usuario separados, sondeo, bloqueo MDL y fallos de memoria recuperables | Un contexto de proceso; cancelación WDM limitada y sin mapeos de usuario generales |
+| WDM `METHOD_NEITHER` | Búferes de usuario separados, sondeo, bloqueo MDL, identidades sintéticas, revocación de VA o salida tras el despacho y cancelación limitada | Sin asociación general de procesos ni mapeos o remapeos arbitrarios |
 | Controlador KMDF 1.33 no PnP | Vinculación, objetos/contextos, dispositivos de control con nombre, colas secuenciales predeterminadas y solicitudes con búfer/directas con callbacks ejecutados | Sin dispositivos PnP, planificación general de colas, extensiones de clase ni UMDF |
 | Controlador PnP de bus, función o filtro | PDO explícitos sin recursos o con bancos de registros, AddDevice invitado y ocho menores comunes del ciclo PnP | Otras operaciones PnP, política general de energía, hardware/recursos generales y KMDF PnP |
 | Controladores de almacenamiento, red, pantalla, sistema de archivos y minifiltros | Contratos de subsistemas no compatibles | Frameworks de puerto/clase/miniport, NDIS/WFP, servicios gráficos o del sistema de archivos |
@@ -363,7 +363,9 @@ notaciones de coma flotante.
 Solo las solicitudes READ/WRITE/IOCTL admiten `cancel_after_100ns`, un entero JSON opcional entre 0 e `INT64_MAX` (9223372036854775807). Programa la cancelación desde el envío de la solicitud, en unidades virtuales de 100 ns, no en tiempo real. En KMDF, cero aplica la cancelación después del enrutamiento del framework y antes del callback de E/S invitado; si el enrutamiento ya completó la solicitud, gana la finalización. En WDM, cero se aplica después de que regresa el despacho. Para retrasos positivos, el tiempo avanza hasta un vencimiento de temporizador, espera o cancelación solo si no hay callbacks ni contextos listos. Un IRP WDM pendiente llama a su rutina de cancelación registrada a `DISPATCH_LEVEL` con el bloqueo de cancelación adquirido; la rutina debe liberarlo con `Irp->CancelIrql` antes de completar. No se admite la cancelación general de colas ni PnP. Cada informe de solicitud incluye `cancel_requested_at_100ns`: el instante virtual absoluto en que ocurrió la cancelación, o null si no ocurrió, también cuando la finalización ganó primero. Solicitar cancelación no completa por sí solo un IRP ni determina su estado final.
 `IoSetCancelRoutine`, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` e `IoCancelIrp` comparten el estado del IRP y el bloqueo de cancelación; `IoCancelIrp` llama de forma síncrona a una rutina registrada e indica si se ejecutó.
 
-El booleano opcional `user_unmap_after_dispatch` revoca las direcciones de usuario originales de una transferencia WDM neither no vacía después del retorno del despacho y antes del trabajo o la cancelación programados. Las páginas bloqueadas por MDL y sus alias del sistema siguen disponibles hasta desbloquearlas; fallan los punteros de usuario sin bloquear y los bloqueos nuevos. Si se revoca la salida, `output_hex` queda vacío. No se modelan reutilización, salida del proceso ni tiempos arbitrarios de desasignación.
+El booleano opcional `user_unmap_after_dispatch` revoca las direcciones de usuario originales de una transferencia WDM neither no vacía después del retorno del despacho y antes del trabajo o la cancelación programados. Las páginas bloqueadas por MDL y sus alias del sistema siguen disponibles hasta desbloquearlas; fallan los punteros de usuario sin bloquear y los bloqueos nuevos. Si se revoca la salida, `output_hex` queda vacío. No se modelan reutilización ni tiempos arbitrarios de desasignación.
+
+`requestor_process_id` identifica un proceso solicitante sintético (predeterminado 4096; entre 5 y `UINT32_MAX`). `IoGetRequestorProcessId` devuelve su ID para un IRP activo; `PsGetCurrentProcessId` devuelve ese ID durante el despacho directo o 4 en el trabajador del sistema modelado. Un cambio de proceso bloquea las direcciones de usuario originales ajenas, pero conserva los alias de sistema de MDL bloqueados. `requestor_exit_after_dispatch` revoca tras el despacho todas las direcciones de usuario originales de ese proceso y rechaza su nuevo I/O; CLEANUP/CLOSE explícitos siguen disponibles, sin inferir cancelación ni cierre automático de identificadores.
 
 Para IOCTL directos, `input` inicializa el primer búfer del sistema y
 `direct_input` inicializa el segundo búfer independiente descrito por el MDL,
@@ -527,7 +529,7 @@ Las direcciones del invitado son cadenas hexadecimales para que los consumidores
 de JSON no pierdan precisión de 64 bits. El objeto `configuration` registra los
 límites, el nombre de servicio, las sustituciones de `kernel_exports` y la
 entrada `registry` de la ejecución. El perfil es
-`wdm-x64-scheduled-v21`. `nt_status` sigue siendo el resultado de DriverEntry,
+`wdm-x64-scheduled-v22`. `nt_status` sigue siendo el resultado de DriverEntry,
 mientras que `scenario_success` describe conjuntamente la inicialización y las
 solicitudes completadas. `phase`, `requests` y `unload_completed` identifican
 las partes ejecutadas del ciclo de vida solicitado. Cada llamada de API y
@@ -536,7 +538,7 @@ escritura de CPU también registra su fase (`driver_entry`, `add_device:<ID>`, `
 el valor Information y los bytes devueltos en `output_hex`. `preferred_image_base`
 describe la base PE original. `security_cookie` es la dirección del invitado
 de la cookie inicializada, o `"0x0"` si no se requería. Los campos de solicitud
-son `kind`, `device`, `device_id`, `pnp`, `file`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
+son `kind`, `device`, `device_id`, `pnp`, `file`, `requestor_process_id`, `byte_offset`, `code`, `irp`, `completed`, `cancel_requested_at_100ns`, `dispatch_status`, `io_status`,
 `information`, `information_hex` y `output_hex`. `information` conserva su forma
 numérica; `information_hex` es una cadena hexadecimal con prefijo `0x` que
 conserva exactamente todos los bits del resultado sin signo de 64 bits. Use

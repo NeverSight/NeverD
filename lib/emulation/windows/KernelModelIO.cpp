@@ -61,7 +61,8 @@ unsigned userPermissions(DriverUserPageAccess Access) {
 
 llvm::Expected<uint64_t>
 KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
-                                DriverUserPageAccess Access) {
+                                DriverUserPageAccess Access,
+                                uint32_t ProcessID) {
   if (!Size)
     return 0;
   if (Initial.size() > Size || Size > profile::KernelArenaSize)
@@ -80,9 +81,36 @@ KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
     return std::move(E);
   if (auto E = Memory.protect(Address, Pages, userPermissions(Access)))
     return std::move(E);
-  UserAllocations.emplace(Address, Size);
+  UserAllocations.emplace(Address, UserAllocation{Size, ProcessID, Access});
   NextUserAddress += Pages;
   return Address;
+}
+
+llvm::Error KernelModel::setUserRequestContext(bool Active,
+                                               uint32_t ProcessID) {
+  if (Active) {
+    for (const auto &[Address, Allocation] : UserAllocations) {
+      const uint64_t Pages =
+          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
+      if (auto E = Memory.validateBacking(Address, Pages))
+        return E;
+    }
+    for (const auto &[Address, Allocation] : UserAllocations) {
+      const uint64_t Pages =
+          (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
+      const unsigned Permissions =
+          Allocation.ProcessID == ProcessID &&
+                  !ExitedUserProcesses.contains(ProcessID) &&
+                  !RevokedUserAllocations.contains(Address)
+              ? userPermissions(Allocation.Access)
+              : 0;
+      if (auto E = Memory.protect(Address, Pages, Permissions))
+        return E;
+    }
+  }
+  UserRequestContext = Active;
+  CurrentUserProcessID = Active ? ProcessID : 0;
+  return llvm::Error::success();
 }
 
 KernelModel::ActiveRequest *KernelModel::requestForIRP(uint64_t IRP) {
@@ -128,7 +156,8 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
     if (IsIOCTL) {
       auto InputBuffer = allocateUserBuffer(
           Input.Input.size(), Input.Input,
-          Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite));
+          Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite),
+          Request->ProcessID);
       if (!InputBuffer)
         return InputBuffer.takeError();
       Request->UserInput = *InputBuffer;
@@ -138,7 +167,8 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
         IsWrite ? llvm::ArrayRef<uint8_t>(Input.Input)
                 : llvm::ArrayRef<uint8_t>(),
         (IsWrite ? Input.UserInputAccess : Input.UserOutputAccess)
-            .value_or(DriverUserPageAccess::ReadWrite));
+            .value_or(DriverUserPageAccess::ReadWrite),
+        Request->ProcessID);
     if (!UserBuffer)
       return UserBuffer.takeError();
     Request->UserBuffer = *UserBuffer;
@@ -198,7 +228,7 @@ llvm::Error KernelModel::revokeRequestUserBuffers(uint64_t IRP) {
     if (It == UserAllocations.end() || RevokedUserAllocations.contains(Address))
       return ioError("user unmapping requires a live original buffer");
     const uint64_t Pages =
-        (It->second + profile::PageSize - 1) & ~(profile::PageSize - 1);
+        (It->second.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
     if (auto E = Memory.validateBacking(Address, Pages))
       return E;
     Ranges.emplace_back(Address, Pages);
@@ -208,6 +238,32 @@ llvm::Error KernelModel::revokeRequestUserBuffers(uint64_t IRP) {
       return E;
     RevokedUserAllocations.insert(Address);
   }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || !Request->Neither || !Request->DispatchReturned ||
+      !Request->ProcessID || ExitedUserProcesses.contains(Request->ProcessID))
+    return ioError("requestor exit requires a live dispatched neither-I/O "
+                   "request and process");
+  std::vector<std::pair<uint64_t, uint64_t>> Ranges;
+  for (const auto &[Address, Allocation] : UserAllocations) {
+    if (Allocation.ProcessID != Request->ProcessID ||
+        RevokedUserAllocations.contains(Address))
+      continue;
+    const uint64_t Pages =
+        (Allocation.Size + profile::PageSize - 1) & ~(profile::PageSize - 1);
+    if (auto E = Memory.validateBacking(Address, Pages))
+      return E;
+    Ranges.emplace_back(Address, Pages);
+  }
+  for (const auto &[Address, Pages] : Ranges) {
+    if (auto E = Memory.protect(Address, Pages, 0))
+      return E;
+    RevokedUserAllocations.insert(Address);
+  }
+  ExitedUserProcesses.insert(Request->ProcessID);
   return llvm::Error::success();
 }
 
@@ -331,6 +387,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
   Observation.DeviceID = Input.DeviceID;
   Observation.ControlCode = Input.ControlCode;
   Observation.File = Input.File;
+  Observation.RequestorProcessID = Input.RequestorProcessID;
   Observation.ByteOffset = Input.ByteOffset;
   Result.Requests.push_back(std::move(Observation));
   const size_t Index = Result.Requests.size() - 1;
@@ -493,6 +550,15 @@ KernelModel::beginRequest(const DriverRequest &Input,
   if (Input.UserUnmapAfterDispatch &&
       (!Neither || (Input.Input.empty() && !Input.OutputSize)))
     return ioError("user unmapping requires a nonempty neither-I/O transfer");
+  if (Input.RequestorProcessID <= 4)
+    return ioError("requestor process identity must be above the system PID");
+  if (ExitedUserProcesses.contains(Input.RequestorProcessID) &&
+      Input.Kind != DriverRequestKind::Cleanup &&
+      Input.Kind != DriverRequestKind::Close)
+    return ioError("requesting process has exited");
+  if (Input.RequestorExitAfterDispatch &&
+      (!Neither || (Input.Input.empty() && !Input.OutputSize)))
+    return ioError("requestor exit requires a nonempty neither-I/O transfer");
   auto FileIt = Files.find(Input.File);
   if (Input.Kind == DriverRequestKind::Create) {
     if (Devices.at(Device).DeletePending || Devices.at(*Top).DeletePending)
@@ -565,6 +631,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
       return E;
   Record.FileAddress = FileIt->second.Address;
   Record.FileId = Input.File;
+  Record.ProcessID = Input.RequestorProcessID;
   if (Input.CancelAfter100ns) {
     llvm::Expected<uint64_t> Deadline = Scheduler.now100ns();
     if (*Input.CancelAfter100ns)

@@ -43,7 +43,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 要求所有 MDL、システムマッピング、共有物理ページ識別子、SG DMA | ユーザーマッピング、その他の DMA インターフェース |
 | ドライバー割り当て MDL | 非ページプールまたは一つのユーザー割り当てを記述し、物理ページを共有 | IRP への関連付け、MDL チェーン、任意のプロセスは未対応 |
 | READ/WRITE | 逐次 buffered/direct/neither I/O、ワーク項目または DPC による完了 | 以下の API 部分集合のみ。公開シナリオの並行送信、一般的な WDM 要求キャンセル、暗黙のファイル位置は未対応 |
-| WDM `METHOD_NEITHER` | 独立したユーザーバッファー、プローブ、MDL ロック、捕捉可能なメモリ障害 | 単一の要求元プロセス。限定的な WDM キャンセルに対応し、任意のユーザーマッピングは未対応 |
+| WDM `METHOD_NEITHER` | 独立ユーザーバッファー、プローブ、MDL ロック、合成要求元 ID、ディスパッチ後の VA 取り消しまたはプロセス終了、限定的なキャンセル | 一般的なプロセスアタッチや任意のユーザーマッピング・再マッピングは未対応 |
 | KMDF 1.33 非 PnP ドライバー | バインド、オブジェクト／コンテキスト、名前付き制御デバイス、順次処理の既定キュー、実際にコールバックを実行するバッファー／直接要求 | PnP デバイス、一般のキュースケジューリング、クラス拡張、UMDF は未対応 |
 | PnP バス／ファンクション／フィルタードライバー | 明示的なリソースなし／固定レジスターバンク PDO、ゲスト AddDevice、8 種の一般的な PnP ライフサイクル機能 | その他の PnP、一般的な電源管理、その他のハードウェア／リソース、KMDF PnP |
 | ストレージ、ネットワーク、ディスプレイ、ファイルシステム、ミニフィルタードライバー | 各サブシステムの契約に未対応 | ポート／クラス／ミニポートのフレームワーク、NDIS/WFP、グラフィックスまたはファイルシステムのサービス |
@@ -267,7 +267,9 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 READ／WRITE／IOCTL 要求だけが省略可能な `cancel_after_100ns` を受け付けます。値は 0 から `INT64_MAX`（9223372036854775807）までの JSON 整数です。要求の提出時点を基準に、実時間ではなく仮想時間の 100 ns 単位でキャンセルを予約します。KMDF ではゼロをフレームワークのルーティング後、ゲスト I/O コールバックの前に適用します。ルーティングが既に要求を完了していれば、完了が優先されます。WDM ではディスパッチの復帰後にゼロを適用します。正の遅延では、実行可能なコールバックやフレームがないときだけ、タイマー、待機、キャンセルの期限へ時間を進めます。保留中の WDM IRP は、登録されたキャンセルルーチンをキャンセルスピンロック保持下の `DISPATCH_LEVEL` で呼び出します。完了前に `Irp->CancelIrql` を使ってロックを解放する必要があります。一般のキューや PnP のキャンセルは未対応です。各要求レポートの `cancel_requested_at_100ns` は、キャンセルが実際に発生した絶対仮想時刻、または発生しなかった場合の null です。先に完了した場合も null のままです。キャンセル要求だけでは IRP は完了せず、最終ステータスも決まりません。
 `IoSetCancelRoutine`、`IoAcquireCancelSpinLock`、`IoReleaseCancelSpinLock`、`IoCancelIrp` は同じ IRP 状態とキャンセルスピンロックを使います。`IoCancelIrp` は登録済みルーチンを同期的に呼び出し、呼び出したかどうかを返します。
 
-省略可能な真偽値 `user_unmap_after_dispatch` は、空でない WDM neither 転送について、ディスパッチ復帰後かつ予定されたワークやキャンセルの前に元のユーザーアドレスのアクセス権を取り消します。MDL でロック済みのページとシステムエイリアスは解除まで使えますが、生のユーザーポインターと新たなロックは失敗します。出力アドレスを取り消した場合、`output_hex` は空です。アドレス再利用、プロセス終了、任意時刻の解除はモデル化しません。
+省略可能な真偽値 `user_unmap_after_dispatch` は、空でない WDM neither 転送について、ディスパッチ復帰後かつ予定されたワークやキャンセルの前に元のユーザーアドレスのアクセス権を取り消します。MDL でロック済みのページとシステムエイリアスは解除まで使えますが、生のユーザーポインターと新たなロックは失敗します。出力アドレスを取り消した場合、`output_hex` は空です。アドレス再利用と任意時刻の解除はモデル化しません。
+
+`requestor_process_id` は合成要求元プロセス ID です（既定値 4096、範囲 5～`UINT32_MAX`）。`IoGetRequestorProcessId` は有効な IRP の ID を返し、`PsGetCurrentProcessId` は直接ディスパッチではその ID、モデル化されたシステムワーカーでは 4 を返します。プロセスを切り替えると別プロセスの元のユーザー VA は使えなくなりますが、ロック済み MDL のシステム別名は有効です。`requestor_exit_after_dispatch` はディスパッチ復帰後にそのプロセスの元のユーザー VA をすべて取り消して新しい I/O を拒否します。明示的な CLEANUP/CLOSE は可能で、キャンセルやハンドル解放は自動推定しません。
 
 ダイレクト IOCTL では、`input` が最初のシステムバッファーを初期化し、`direct_input` が MDL で記述される別の第 2 バッファーを初期化して、`output_size` までゼロで埋めます。`METHOD_IN_DIRECT` は読み取りアクセスを要求しますが、システムマッピングが読み取り専用であることを意味しません。両方式とも読み書き可能なシナリオバッファーを使います。`MdlMappingNoWrite` はマッピングの書き込み権限を、`MdlMappingNoExecute` は実行権限を除去します。アンマップはシステム VA を無効にしますが、再マップしても同じロック済みデータを保持します。完了時に MDL とマッピングの寿命が終了します。WDM マクロが使う公開 MDL フィールドはモデル化しますが、プロセスフィールド、未構築記述子の PFN、手作りの MDL、ユーザーマッピング、生の UserBuffer を介した直接アクセスは拒否します。構築済み PFN 配列は読み取り専用です。長さがゼロのダイレクトバッファーは null MDL を持ちます。
 
@@ -314,7 +316,7 @@ MinGW-w64 の include ディレクトリがデフォルトと異なる場合は 
 
 JSON レポートは `stop_reason`、null を取り得る `nt_status` と `nt_success`、停止時の PC、命令数を区別します。デバイスオブジェクトやドライバーのコールバックアドレスなど、停止前に収集した API 呼び出しと観測可能な状態を保持します。ゲストアドレスは 16 進文字列として表現するため、JSON の利用側で 64 ビットの精度が失われません。
 
-`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v21` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
+`configuration` オブジェクトには、実行の上限、サービス名、`kernel_exports` の上書き設定を記録します。プロファイルは `wdm-x64-scheduled-v22` です。`nt_status` は引き続き DriverEntry の結果を示し、`scenario_success` は初期化と完了済みリクエストを合わせた結果を示します。`phase`、`requests`、`unload_completed` は、要求されたライフサイクルのどの部分が実行されたかを示します。API 呼び出しと CPU 書き込みにも、そのフェーズ（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N`、`unload`）を記録します。各リクエストはディスパッチと I/O のステータス、完了の有無、information 長、返された `output_hex` バイト列を報告します。`preferred_image_base` は元の PE ベースアドレスを示します。`security_cookie` は初期化した Cookie のゲストアドレスで、不要だった場合は `"0x0"` です。リクエストのレポートフィールドは `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex`、`output_hex` です。 `configuration.registry` は元のレジストリ設定を保持します。 `information_hex` は元の 64 ビット `IoStatus.Information` を 16 進文字列で正確に保持します。従来の数値フィールド `information` も保持します。
 
 ワーク項目の観測フェーズは `callback:N` です。保留リクエストの `dispatch_status` は `STATUS_PENDING` を保持し、最終完了状態は別の `io_status` に記録され、`scenario_success` の判定に使われます。
 

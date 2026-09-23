@@ -8,7 +8,7 @@
 /// driver-created locked user MDLs with genuine WDK declarations.
 //===----------------------------------------------------------------------===//
 
-#include <ntddk.h>
+#include <ntifs.h>
 
 #define IO_NORMAL 0x222003u
 #define IO_LATE_FAULT 0x222007u
@@ -38,6 +38,7 @@ typedef struct _WORKER_STATE {
   BOOLEAN Cancelable;
   BOOLEAN Cancelled;
   BOOLEAN BadRelease;
+  ULONG RequestorPID;
 } WORKER_STATE;
 
 static WORKER_STATE WorkerState;
@@ -54,9 +55,10 @@ static VOID NeitherCancel(PDEVICE_OBJECT Object, PIRP Irp) {
     IoReleaseCancelSpinLock((KIRQL)(Irp->CancelIrql + 1));
     return;
   }
-  const BOOLEAN Valid = Object == Device && WorkerState.Irp == Irp &&
-                        Irp->Cancel && !Irp->CancelRoutine &&
-                        KeGetCurrentIrql() == DISPATCH_LEVEL;
+  const BOOLEAN Valid =
+      Object == Device && WorkerState.Irp == Irp && Irp->Cancel &&
+      !Irp->CancelRoutine && KeGetCurrentIrql() == DISPATCH_LEVEL &&
+      IoGetRequestorProcessId(Irp) == WorkerState.RequestorPID;
   WorkerState.Cancelled = TRUE;
   WorkerState.Irp = NULL;
   IoReleaseCancelSpinLock(Irp->CancelIrql);
@@ -105,7 +107,9 @@ static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
       Status = STATUS_INVALID_DEVICE_STATE;
   }
   if (Object != Device || ExGetPreviousMode() != KernelMode ||
-      !State->InAlias || !State->OutAlias)
+      !State->InAlias || !State->OutAlias ||
+      IoGetRequestorProcessId(Irp) != State->RequestorPID ||
+      (ULONG)(ULONG_PTR)PsGetCurrentProcessId() == State->RequestorPID)
     Status = STATUS_INVALID_PARAMETER;
   else if (NT_SUCCESS(Status)) {
     for (ULONG I = 0; I < 4; ++I)
@@ -323,6 +327,10 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   case IO_CANCEL_BAD_RELEASE: {
     if (WorkerState.Irp)
       return Complete(Irp, STATUS_INVALID_DEVICE_STATE, 0);
+    const ULONG RequestorPID = IoGetRequestorProcessId(Irp);
+    if (!RequestorPID ||
+        RequestorPID != (ULONG)(ULONG_PTR)PsGetCurrentProcessId())
+      return Complete(Irp, STATUS_INVALID_DEVICE_STATE, 0);
     PMDL InMdl = NULL, OutMdl = NULL;
     BOOLEAN InLocked = FALSE, OutLocked = FALSE;
     PIO_WORKITEM Work = NULL;
@@ -366,6 +374,7 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     WorkerState.Cancelable = Code == IO_CANCEL || Code == IO_CANCEL_BAD_RELEASE;
     WorkerState.Cancelled = FALSE;
     WorkerState.BadRelease = Code == IO_CANCEL_BAD_RELEASE;
+    WorkerState.RequestorPID = RequestorPID;
     if (WorkerState.Cancelable) {
       KIRQL OldIRQL;
       IoAcquireCancelSpinLock(&OldIRQL);
