@@ -5,6 +5,8 @@
 #include "../../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "ObjCSourceProjection.h"
 
+#include "neverd/pipeline/NativeSourceHints.h"
+
 namespace neverd::sdk {
 inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
                                             const BinaryImage &Image,
@@ -38,6 +40,7 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
       return false;
   }
   const LowFunc *Low = nullptr;
+  const MedFunc *Med = nullptr;
   const PipelineFunctionAudit *Audit = nullptr;
   for (const auto &Candidate : Result.LowFuncs)
     if (Candidate.Entry == Function.Entry) {
@@ -50,6 +53,12 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
       if (Audit)
         return false;
       Audit = &Candidate;
+    }
+  for (const auto &Candidate : Result.MedFuncs)
+    if (Candidate.Entry == Function.Entry) {
+      if (Med)
+        return false;
+      Med = &Candidate;
     }
   if (!Low || !Audit ||
       Audit->Disposition != PipelineFunctionDisposition::Accepted ||
@@ -64,6 +73,21 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
   if (Instructions.size() != Audit->DecodedInstructions ||
       Instructions.size() != Audit->LiftedInstructions)
     return false;
+  if (Function.SourceTypeHint->Origin ==
+      SourceFunctionTypeHint::OriginKind::NativeAnalysis) {
+    if (!Med)
+      return false;
+    auto UnboundMed = *Med;
+    auto UnboundHigh = Function;
+    UnboundMed.SourceTypeHint.reset();
+    UnboundMed.SourceParametersBound = false;
+    UnboundHigh.SourceTypeHint.reset();
+    std::string Diagnostic;
+    const auto Inferred = inferNativeSourceTypeHint(
+        Image, UnboundMed, UnboundHigh, *Audit, Diagnostic, Low);
+    if (!Inferred || !equalSourceABIs(*Inferred, *Function.SourceTypeHint))
+      return false;
+  }
   const auto Current =
       qualifySwiftBooleanProjections(Image, *Low, *Function.SourceTypeHint);
   std::map<SourceCallOccurrenceKey, std::pair<va_t, std::string>> Sites;

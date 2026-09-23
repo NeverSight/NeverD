@@ -75,9 +75,31 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     auto BlockHints = buildObjCBlockCallHints(*Image, Low, EntrySignature);
     Hints.insert(BlockHints.begin(), BlockHints.end());
   }
-  if (Image && EntrySignature) {
-    const auto Booleans =
-        qualifySwiftBooleanProjections(*Image, Low, *EntrySignature);
+  std::optional<SourceFunctionTypeHint> ProvisionalBooleanEntry;
+  if (Image && !EntrySignature) {
+    bool HasBooleanCandidate = false;
+    for (const auto &Block : Low.Blocks) {
+      for (const auto &Op : Block.Ops) {
+        if (Op.Opcode != NdOp::CALL)
+          continue;
+        const auto Site = sourceCallOccurrenceKey(Op);
+        if (Site && Site->StaticTarget &&
+            swiftBooleanRuntimeVeneerCandidate(*Image, *Site->StaticTarget)) {
+          HasBooleanCandidate = true;
+          break;
+        }
+      }
+      if (HasBooleanCandidate)
+        break;
+    }
+    if (HasBooleanCandidate)
+      ProvisionalBooleanEntry =
+          provisionalNativeSwiftBooleanEntry(*Image, Low.Entry);
+  }
+  if (Image && (EntrySignature || ProvisionalBooleanEntry)) {
+    const auto Booleans = qualifySwiftBooleanProjections(
+        *Image, Low,
+        EntrySignature ? *EntrySignature : *ProvisionalBooleanEntry);
     for (const auto &Boolean : Booleans) {
       const auto Signature =
           swiftBooleanNormalizedSignature(Boolean.Runtime.ImportName);

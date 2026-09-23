@@ -22,6 +22,32 @@ struct SwiftBooleanProjection {
 };
 
 namespace swift_boolean_projection_detail {
+inline bool nativeEntry(const BinaryImage &Image, va_t Address,
+                        const SourceFunctionTypeHint &Signature) {
+  if (Signature.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      !Image.isCodeAddress(Address) || !Signature.ReturnType ||
+      Signature.ReturnType->Kind != NdTypeKind::Int ||
+      Signature.ReturnType->Size != 8 ||
+      Signature.ReturnLocation.Kind != SourceABICarrierKind::IntegerRegister ||
+      Signature.ReturnLocation.RegisterOffset !=
+          getTargetRegInfo(Arch::AArch64).IntReturnReg ||
+      Signature.ReturnLocation.ValueBytes != 8 ||
+      !Signature.ReturnComponents.empty())
+    return false;
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.Implementation == Address)
+      return false;
+  bool HasFunction = false;
+  for (const auto &Symbol : Image.Symbols) {
+    if (Symbol.Addr != Address)
+      continue;
+    if (!Symbol.IsFunc || Symbol.Name.empty())
+      return false;
+    HasFunction = true;
+  }
+  return HasFunction;
+}
+
 inline bool directCall(const BinaryImage &Image,
                        const SourceCallOccurrenceKey &Site) {
   if (Site.Opcode != NdOp::CALL || !Site.StaticTarget || Site.Instruction % 4 ||
@@ -149,11 +175,11 @@ inline bool superInit(const BinaryImage &Image,
 }
 } // namespace swift_boolean_projection_detail
 
-/// Deliberately bounded to an Objective-C entry, at most eight comparison
-/// occurrences, and other direct calls with freshly catalogued runtime ABIs,
-/// exact super init dispatch or complete eight-instruction class-accessor
-/// machine proofs. Other direct calls require identical physical state and
-/// supply no ABI or binding facts. Indirect calls remain unsupported.
+/// Deliberately bounded to a verified Objective-C or native entry, at most
+/// eight comparison occurrences, and other direct calls with freshly catalogued
+/// runtime ABIs, exact super init dispatch or complete eight-instruction
+/// class-accessor machine proofs. Other direct calls require identical physical
+/// state and supply no ABI or binding facts. Indirect calls remain unsupported.
 inline std::vector<SwiftBooleanProjection>
 qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
                                const SourceFunctionTypeHint &EntrySignature) {
@@ -162,7 +188,9 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       Low.Blocks.empty() || Low.Blocks.size() > 256)
     return {};
   const auto Entry = objcMethodSourceTypeHint(Image, Low.Entry);
-  if (!Entry || !equalSourceABIs(*Entry, EntrySignature))
+  if (Entry ? !equalSourceABIs(*Entry, EntrySignature)
+            : !swift_boolean_projection_detail::nativeEntry(Image, Low.Entry,
+                                                            EntrySignature))
     return {};
   for (const auto &Method : Image.ObjCMethods)
     if (Method.Implementation == Low.Entry && Method.Status != "supported")
@@ -257,6 +285,21 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       return {};
   }
   return Selected;
+}
+
+/// A provisional native entry claims only a full x0 word as observable. The
+/// native source inference must later establish the actual complete entry ABI;
+/// publication reruns the LowIR proof against that bound ABI.
+inline std::optional<SourceFunctionTypeHint>
+provisionalNativeSwiftBooleanEntry(const BinaryImage &Image, va_t Entry) {
+  SourceFunctionTypeHint Signature;
+  Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Signature.ReturnType = NdType::makeInt(8, false);
+  std::string Error;
+  if (!assignDarwinScalarSourceABI(Signature, Arch::AArch64, Error) ||
+      !swift_boolean_projection_detail::nativeEntry(Image, Entry, Signature))
+    return std::nullopt;
+  return Signature;
 }
 
 inline std::optional<SwiftBooleanProjection>

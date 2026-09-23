@@ -500,6 +500,39 @@ TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
 }
 
+TEST(SwiftBooleanProjection, NativeEntryUsesConservativeWordUntilBound) {
+  ProjectionFixture F;
+  F.Image.ObjCMethods.clear();
+  auto Native = Symbol::makeFunc(F.Low.Entry, 12);
+  Native.Name = "_$s4Test10lookupHashSiyF";
+  F.Image.Symbols.push_back(Native);
+  const auto Provisional =
+      provisionalNativeSwiftBooleanEntry(F.Image, F.Low.Entry);
+  ASSERT_TRUE(Provisional);
+  EXPECT_EQ(Provisional->Origin,
+            SourceFunctionTypeHint::OriginKind::NativeAnalysis);
+  EXPECT_EQ(Provisional->ReturnType->Size, 8U);
+  EXPECT_TRUE(qualifySwiftBooleanProjection(F.Image, F.Low, *Provisional));
+  EXPECT_FALSE(qualifySwiftBooleanProjection(F.Image, F.Low, F.Entry));
+
+  auto Duplicate = F.Image;
+  Duplicate.Symbols.push_back(Native);
+  EXPECT_TRUE(provisionalNativeSwiftBooleanEntry(Duplicate, F.Low.Entry));
+  auto Conflicting = F.Image;
+  auto Data = Native;
+  Data.IsFunc = false;
+  Conflicting.Symbols.push_back(Data);
+  EXPECT_FALSE(provisionalNativeSwiftBooleanEntry(Conflicting, F.Low.Entry));
+  auto Missing = F.Image;
+  Missing.Symbols.clear();
+  EXPECT_FALSE(provisionalNativeSwiftBooleanEntry(Missing, F.Low.Entry));
+  auto Method = F.Image;
+  ObjCMethod ObjC;
+  ObjC.Implementation = F.Low.Entry;
+  Method.ObjCMethods.push_back(ObjC);
+  EXPECT_FALSE(provisionalNativeSwiftBooleanEntry(Method, F.Low.Entry));
+}
+
 TEST(SwiftBooleanProjection,
      OpaqueGetterRequiresCurrentStubImportSelectorAndFixedABI) {
   ProjectionFixture F;

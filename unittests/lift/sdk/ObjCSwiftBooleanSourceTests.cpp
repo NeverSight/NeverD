@@ -15,7 +15,8 @@ struct BooleanFixture {
   PipelineResult Result;
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
                  bool Prefix = false, bool OpaquePrefix = false,
-                 bool ObjectEquality = false, bool Suffix = false) {
+                 bool ObjectEquality = false, bool Suffix = false,
+                 bool Native = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -79,14 +80,16 @@ struct BooleanFixture {
     Method.TypeHint =
         parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
     Method.Status = "supported";
-    Image.ObjCMethods.push_back(Method);
+    if (!Native)
+      Image.ObjCMethods.push_back(Method);
     Image.Symbols.push_back({"bool_method", 0x1000, Body.size() * 4, true});
     PipelineOptions Options;
     Options.EmitDumpOutput = false;
     Options.OnlyFunctionEntries = {0x1000};
     if (Source)
-      Options.SourceTypeHints.emplace(0x1000,
-                                      *objcMethodSourceTypeHint(Image, 0x1000));
+      Options.SourceTypeHints.emplace(
+          0x1000, Native ? *provisionalNativeSwiftBooleanEntry(Image, 0x1000)
+                         : *objcMethodSourceTypeHint(Image, 0x1000));
     else {
       Options.LiftMode = !Patch;
       Options.PatchMode = Patch;
@@ -141,6 +144,20 @@ TEST(ObjCSwiftBooleanSources, RealLoweringAndPublicationRepeatCallerProof) {
       for (const auto &Op : B.Ops)
         Normalizations += Op.Opcode == NdOp::INT_AND;
   EXPECT_EQ(Normalizations, 1U);
+}
+
+TEST(ObjCSwiftBooleanSources, NativePublicationReinfersCompleteEntryABI) {
+  BooleanFixture F(true, false, false, false, false, false, false, true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  EXPECT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  auto Forged = *F.high().SourceTypeHint;
+  Forged.Parameters.push_back({"extra", NdType::makeInt(8)});
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Forged, Arch::AArch64, Error));
+  F.high().SourceTypeHint = Forged;
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }
 
 TEST(ObjCSwiftBooleanSources,
