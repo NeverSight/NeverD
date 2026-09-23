@@ -361,6 +361,8 @@ Das optionale boolesche Feld `user_unmap_after_dispatch` entzieht bei einem nich
 
 `requestor_process_id` bezeichnet einen synthetischen Anforderungsprozess (Standard 4096, Bereich 5 bis `UINT32_MAX`). `IoGetRequestorProcessId` liefert seine Kennung für eine aktive IRP; `PsGetCurrentProcessId` liefert sie beim direkten Dispatch oder 4 im modellierten System-Worker. Ein Prozesswechsel sperrt fremde ursprüngliche Benutzeradressen, nicht aber gesperrte MDL-Systemaliasse. `requestor_exit_after_dispatch` sperrt nach der Dispatch-Rückkehr alle ursprünglichen Benutzeradressen dieses Prozesses und lehnt neue I/O ab; explizite CLEANUP/CLOSE bleiben möglich, ohne automatischen Abbruch oder Handle-Rundown.
 
+Ein System-Worker kann mit `IoGetRequestorProcess` das opake Prozessobjekt einer aktiven IRP erhalten, mit `KeStackAttachProcess` und beschreibbarem Kernel-`KAPC_STATE` vorübergehend auf deren ursprüngliche Benutzeradressen zugreifen und mit demselben Zustand `KeUnstackDetachProcess` aufrufen. `IoGetCurrentProcess` und `PsGetProcessId` zeigen den angehängten Prozess; `PsGetCurrentProcessId` bleibt 4, die Kennung des Worker-Erzeugers. Beendete Prozesse, abgeschlossene IRPs, ein falscher Zustand sowie Warten oder IRP-Abschluss während des Anhängens schlagen ausdrücklich fehl.
+
 Bei direkten IOCTLs initialisiert `input` den ersten Systempuffer, während
 `direct_input` den separaten, durch die MDL beschriebenen zweiten Puffer
 initialisiert und bis `output_size` mit Nullen ergänzt wird. `METHOD_IN_DIRECT`
@@ -522,7 +524,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v24`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v25`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten

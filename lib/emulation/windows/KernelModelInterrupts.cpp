@@ -225,6 +225,9 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
                                                  uint8_t EntryIRQL) const {
   if (Identity != CurrentExecution)
     return apiError("return does not own the active execution identity");
+  if (!ProcessAttachments.empty() &&
+      ProcessAttachments.back().Execution == Identity)
+    return apiError("guest return has an unmatched process attachment");
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
   if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {

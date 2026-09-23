@@ -214,6 +214,10 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
 }
 
 llvm::Error KernelModel::suspendScheduled(uint64_t ID) {
+  if (!ProcessAttachments.empty() && Scheduler.active() &&
+      ProcessAttachments.back().Execution == CurrentExecution &&
+      Scheduler.active()->ID == ID)
+    return schedulingError("cannot suspend a process-attached work item");
   if (auto E = Scheduler.suspend(ID))
     return E;
   CurrentIRQL = scheduler::PassiveLevel;

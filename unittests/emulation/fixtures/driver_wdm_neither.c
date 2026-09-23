@@ -22,6 +22,7 @@
 #define IO_CANCEL_BAD_RELEASE 0x222027u
 #define IO_SELF_CANCEL 0x22202bu
 #define IO_SELF_CANCEL_NO_ROUTINE 0x22202fu
+#define IO_WORKER_ATTACH 0x222033u
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -34,7 +35,10 @@ typedef struct _WORKER_STATE {
   PUCHAR InAlias;
   PUCHAR OutAlias;
   volatile UCHAR *RawInput;
+  volatile UCHAR *RawOutput;
+  PEPROCESS RequestorProcess;
   BOOLEAN Raw;
+  BOOLEAN Attach;
   BOOLEAN Cancelable;
   BOOLEAN Cancelled;
   BOOLEAN BadRelease;
@@ -94,6 +98,46 @@ static VOID NeitherWorker(PDEVICE_OBJECT Object, PVOID Context) {
   PIRP Irp = State->Irp;
   if (State->Raw) {
     Stage = State->RawInput[0];
+    return;
+  }
+  if (State->Attach) {
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG_PTR Length = 0;
+    if (Object != Device || !State->RequestorProcess ||
+        ExGetPreviousMode() != KernelMode ||
+        (ULONG)(ULONG_PTR)PsGetCurrentProcessId() != 4 ||
+        IoGetCurrentProcess() == State->RequestorProcess)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    if (NT_SUCCESS(Status)) {
+      KAPC_STATE ApcState;
+      KeStackAttachProcess(State->RequestorProcess, &ApcState);
+      if (IoGetCurrentProcess() != State->RequestorProcess ||
+          (ULONG)(ULONG_PTR)PsGetProcessId(IoGetCurrentProcess()) !=
+              State->RequestorPID ||
+          (ULONG)(ULONG_PTR)PsGetCurrentProcessId() != 4 ||
+          ExGetPreviousMode() != KernelMode)
+        Status = STATUS_INVALID_DEVICE_STATE;
+      else {
+        __try {
+          ProbeForRead((PVOID)State->RawInput, 4, 1);
+          ProbeForWrite((PVOID)State->RawOutput, 4, 1);
+          for (ULONG I = 0; I < 4; ++I)
+            State->RawOutput[I] = State->RawInput[I] + 0x20;
+          Length = 4;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+          Status = GetExceptionCode();
+        }
+      }
+      KeUnstackDetachProcess(&ApcState);
+      if (IoGetCurrentProcess() == State->RequestorProcess)
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    IoFreeWorkItem(State->Work);
+    State->Irp = NULL;
+    State->Work = NULL;
+    State->RequestorProcess = NULL;
+    State->Attach = FALSE;
+    Complete(Irp, Status, NT_SUCCESS(Status) ? Length : 0);
     return;
   }
   NTSTATUS Status = STATUS_SUCCESS;
@@ -323,6 +367,7 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     break;
   case IO_WORKER_LOCKED:
   case IO_WORKER_RAW:
+  case IO_WORKER_ATTACH:
   case IO_CANCEL:
   case IO_CANCEL_BAD_RELEASE: {
     if (WorkerState.Irp)
@@ -334,7 +379,7 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     PMDL InMdl = NULL, OutMdl = NULL;
     BOOLEAN InLocked = FALSE, OutLocked = FALSE;
     PIO_WORKITEM Work = NULL;
-    if (Code != IO_WORKER_RAW) {
+    if (Code != IO_WORKER_RAW && Code != IO_WORKER_ATTACH) {
       InMdl = IoAllocateMdl((PVOID)Input, InputLength, FALSE, FALSE, NULL);
       OutMdl = IoAllocateMdl((PVOID)Output, OutputLength, FALSE, FALSE, NULL);
       if (!InMdl || !OutMdl) {
@@ -370,7 +415,11 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     WorkerState.InMdl = InMdl;
     WorkerState.OutMdl = OutMdl;
     WorkerState.RawInput = Input;
+    WorkerState.RawOutput = Output;
     WorkerState.Raw = Code == IO_WORKER_RAW;
+    WorkerState.Attach = Code == IO_WORKER_ATTACH;
+    WorkerState.RequestorProcess =
+        WorkerState.Attach ? IoGetRequestorProcess(Irp) : NULL;
     WorkerState.Cancelable = Code == IO_CANCEL || Code == IO_CANCEL_BAD_RELEASE;
     WorkerState.Cancelled = FALSE;
     WorkerState.BadRelease = Code == IO_CANCEL_BAD_RELEASE;
@@ -404,6 +453,8 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
     WorkerState.Cancelable = FALSE;
     WorkerState.Cancelled = FALSE;
     WorkerState.BadRelease = FALSE;
+    WorkerState.Attach = FALSE;
+    WorkerState.RequestorProcess = NULL;
     break;
   }
   default:

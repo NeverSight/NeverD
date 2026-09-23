@@ -364,6 +364,8 @@ Le booléen facultatif `user_unmap_after_dispatch` retire l’accès aux adresse
 
 `requestor_process_id` identifie un processus demandeur synthétique (4096 par défaut, de 5 à `UINT32_MAX`). `IoGetRequestorProcessId` donne son ID pour un IRP actif ; `PsGetCurrentProcessId` donne cet ID pendant la distribution directe ou 4 dans le worker système modélisé. Changer de processus bloque les adresses utilisateur d’origine d’un autre processus, mais conserve les alias système des MDL verrouillés. `requestor_exit_after_dispatch` révoque après la distribution toutes les adresses utilisateur d’origine de ce processus et refuse ses nouvelles E/S ; CLEANUP/CLOSE explicites restent possibles, sans déduire l’annulation ni la fermeture automatique des handles.
 
+Un travailleur système peut obtenir le processus opaque d’un IRP actif avec `IoGetRequestorProcess`, puis utiliser `KeStackAttachProcess` avec un `KAPC_STATE` noyau inscriptible pour accéder temporairement aux adresses utilisateur initiales. Il doit appeler `KeUnstackDetachProcess` avec le même état. `IoGetCurrentProcess` et `PsGetProcessId` indiquent le processus attaché, tandis que `PsGetCurrentProcessId` reste 4, le créateur du travailleur. Un processus quitté, un IRP terminé, un état non apparié, ou une attente ou complétion d’IRP pendant l’attachement échoue explicitement.
+
 Pour les IOCTL directs, `input` initialise le premier tampon système,
 tandis que `direct_input` initialise le second tampon distinct décrit par le MDL,
 complété par des zéros jusqu’à `output_size`. `METHOD_IN_DIRECT` exige un accès
@@ -526,7 +528,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v24`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v25`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique

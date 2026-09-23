@@ -541,6 +541,24 @@ llvm::Expected<uint64_t> KernelModel::call(
     return modelError(Name +
                       " requires IRQL <= " + std::to_string(*MaximumIRQL));
   }
+  if (!ProcessAttachments.empty() &&
+      ProcessAttachments.back().Execution == CurrentExecution &&
+      Kind != KernelAPIKind::KeStackAttachProcess &&
+      Kind != KernelAPIKind::KeUnstackDetachProcess &&
+      Kind != KernelAPIKind::IoGetCurrentProcess &&
+      Kind != KernelAPIKind::IoGetRequestorProcess &&
+      Kind != KernelAPIKind::PsGetCurrentProcessId &&
+      Kind != KernelAPIKind::PsGetProcessId &&
+      Kind != KernelAPIKind::IoGetRequestorProcessId &&
+      Kind != KernelAPIKind::ExGetPreviousMode &&
+      Kind != KernelAPIKind::KeGetCurrentIrql &&
+      Kind != KernelAPIKind::ProbeForRead &&
+      Kind != KernelAPIKind::ProbeForWrite &&
+      Kind != KernelAPIKind::MmProbeAndLockPages &&
+      Kind != KernelAPIKind::RtlCopyMemory &&
+      Kind != KernelAPIKind::RtlMoveMemory)
+    return modelError("process attachment permits only bounded user-memory "
+                      "operations before detach");
   if ((Kind == KernelAPIKind::KeInitializeDpc ||
        Kind == KernelAPIKind::KeInitializeEvent ||
        Kind == KernelAPIKind::KeInitializeTimer ||
@@ -578,7 +596,26 @@ llvm::Expected<uint64_t> KernelModel::call(
       return modelError("IoGetRequestorProcessId requires a live IRP");
     return uint64_t(Request->ProcessID);
   }
-#define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL) case KernelAPIKind::Symbol:
+  case KernelAPIKind::IoGetRequestorProcess:
+    return requestorProcess(A[0]);
+  case KernelAPIKind::IoGetCurrentProcess:
+    return currentProcess();
+  case KernelAPIKind::PsGetProcessId: {
+    auto Process = ProcessObjectIDs.find(A[0]);
+    if (Process == ProcessObjectIDs.end())
+      return modelError("PsGetProcessId requires a known process object");
+    return uint64_t(Process->second);
+  }
+  case KernelAPIKind::KeStackAttachProcess:
+    if (auto E = stackAttachProcess(A[0], A[1]))
+      return E;
+    return 0;
+  case KernelAPIKind::KeUnstackDetachProcess:
+    if (auto E = unstackDetachProcess(A[0]))
+      return E;
+    return 0;
+#define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL)                       \
+  case KernelAPIKind::Symbol:
 #include "KernelInterruptAPIs.def"
 #undef NEVERD_KERNEL_INTERRUPT_API
     return callInterruptAPI(Name, A);
@@ -1109,6 +1146,13 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   for (const auto &[Item, Device] : WorkItems)
     if (Address < Item + profile::WorkItemTokenSize && Item < End)
       return modelError("guest access to an opaque IO_WORKITEM");
+  for (const auto &[ProcessID, Object] : ProcessObjects)
+    if (Address < Object + profile::ProcessTokenSize && Object < End)
+      return modelError("guest access to an opaque process object");
+  for (const auto &Attachment : ProcessAttachments)
+    if (Address < Attachment.ApcState + KAPCStateSize &&
+        Attachment.ApcState < End)
+      return modelError("guest access to an active opaque APC state");
   if (auto E = validateIOAccess(Address, Size, IsWrite))
     return E;
   if (auto E = validateMDLAccess(Address, Size, IsWrite))
@@ -1198,7 +1242,10 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
 bool KernelModel::canCatchUserAccess(uint64_t Address, uint64_t Size) const {
   return Size && Address < profile::UserProbeLimit &&
          Size <= profile::UserProbeLimit - Address && UserRequestContext &&
-         CurrentExecution == profile::StackBase && CurrentIRQL <= APCLevel;
+         (CurrentExecution == profile::StackBase ||
+          (!ProcessAttachments.empty() &&
+           ProcessAttachments.back().Execution == CurrentExecution)) &&
+         CurrentIRQL <= APCLevel;
 }
 
 llvm::Expected<uint64_t>

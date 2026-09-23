@@ -228,6 +228,20 @@ private:
   std::map<uint64_t, UserAllocation> UserAllocations;
   std::set<uint64_t> RevokedUserAllocations;
   std::set<uint32_t> ExitedUserProcesses;
+  std::map<uint32_t, uint64_t> ProcessObjects;
+  std::map<uint64_t, uint32_t> ProcessObjectIDs;
+  struct ProcessAttachment {
+    uint64_t Execution;
+    uint64_t ApcState;
+    uint32_t PreviousProcessID;
+    bool PreviousUserContext;
+  };
+  std::vector<ProcessAttachment> ProcessAttachments;
+  llvm::Expected<uint64_t> processObject(uint32_t ProcessID);
+  llvm::Expected<uint64_t> requestorProcess(uint64_t IRP);
+  llvm::Expected<uint64_t> currentProcess();
+  llvm::Error stackAttachProcess(uint64_t Process, uint64_t ApcState);
+  llvm::Error unstackDetachProcess(uint64_t ApcState);
   llvm::Expected<uint64_t> allocateUserBuffer(uint32_t Size,
                                               llvm::ArrayRef<uint8_t> Initial,
                                               DriverUserPageAccess Access,
