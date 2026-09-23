@@ -735,6 +735,95 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       BoundedParallelQueuePresentsNextRequestAfterCompletion) {
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, 1, 4);
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto ThirdIRP = packet();
+  const auto First = request(route(FirstIRP));
+  auto Second = route(SecondIRP);
+  auto Third = route(ThirdIRP);
+  EXPECT_EQ(Second.PC, 0u);
+  EXPECT_EQ(Second.Status, 0x103u);
+  EXPECT_EQ(Third.PC, 0u);
+  EXPECT_EQ(Packets.at(SecondIRP).PendingCalls, 1u);
+  EXPECT_EQ(Packets.at(ThirdIRP).PendingCalls, 1u);
+  complete(First, 1);
+  auto SecondCall = callback();
+  EXPECT_EQ(SecondCall.PC, IoControlPC);
+  ASSERT_GE(SecondCall.Arguments.size(), 2u);
+  EXPECT_EQ(SecondCall.Arguments[0], Queue);
+  const auto SecondHandle = SecondCall.Arguments[1];
+  EXPECT_NE(SecondHandle, First);
+  EXPECT_FALSE(Packets.at(SecondIRP).Completed);
+  finish(SecondCall);
+  complete(SecondHandle, 2);
+  auto ThirdCall = callback();
+  EXPECT_EQ(ThirdCall.PC, IoControlPC);
+  ASSERT_GE(ThirdCall.Arguments.size(), 2u);
+  const auto ThirdHandle = ThirdCall.Arguments[1];
+  EXPECT_NE(ThirdHandle, SecondHandle);
+  finish(ThirdCall);
+  complete(ThirdHandle, 3);
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(Packets.at(FirstIRP).Information, 1u);
+  EXPECT_EQ(Packets.at(SecondIRP).Information, 2u);
+  EXPECT_EQ(Packets.at(ThirdIRP).Information, 3u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       CanceledBoundedParallelWaiterNeverReachesDriver) {
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, 1, 4);
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto ThirdIRP = packet();
+  const auto First = request(route(FirstIRP));
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  EXPECT_EQ(route(ThirdIRP).PC, 0u);
+  Packets.at(SecondIRP).Canceled = true;
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(SecondIRP)));
+  EXPECT_FALSE(take(Model.requestCancellation(SecondIRP)));
+  EXPECT_TRUE(Packets.at(SecondIRP).Completed);
+  EXPECT_EQ(Packets.at(SecondIRP).Status, framework::RequestCancelled);
+  complete(First);
+  auto ThirdCall = callback();
+  EXPECT_EQ(ThirdCall.PC, IoControlPC);
+  ASSERT_GE(ThirdCall.Arguments.size(), 2u);
+  finish(ThirdCall);
+  complete(ThirdCall.Arguments[1]);
+  EXPECT_TRUE(Packets.at(ThirdIRP).Completed);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       BoundedParallelLimitTwoPreservesAnotherPresentedRequest) {
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, 2, 4);
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto ThirdIRP = packet();
+  const auto First = request(route(FirstIRP));
+  const auto Second = request(route(SecondIRP));
+  EXPECT_EQ(route(ThirdIRP).PC, 0u);
+  complete(Second, 2);
+  auto Third = callback();
+  EXPECT_EQ(Third.PC, IoControlPC);
+  ASSERT_GE(Third.Arguments.size(), 2u);
+  EXPECT_FALSE(Packets.at(FirstIRP).Completed);
+  finish(Third);
+  complete(Third.Arguments[1], 3);
+  complete(First, 1);
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(Packets.at(FirstIRP).Information, 1u);
+  EXPECT_EQ(Packets.at(ThirdIRP).Information, 3u);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        CleanupPrecedesIRPRetirementButReferenceKeepsOnlyContext) {
   initializeQueue();
   const auto IRP = packet();

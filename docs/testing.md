@@ -93,6 +93,13 @@ and relocated bases. Model-level queue tests verify parallel overlap and
 sequential exclusion; another native case batches two independent synchronous
 file objects. The C API test checks the asynchronous-file batch and output bytes.
 
+`DriverKMDFControl.BoundedParallelQueueWaitsForPresentedCompletion` uses
+`NumberOfPresentedRequests=1`; the second handler runs only after the first
+worker completes. Normal/active-CFG and preferred/rebased images are covered.
+Another genuine-driver case cancels a request before presentation. Model tests
+exercise limits of one and two, FIFO handoff and queued cancellation; the C API
+runs both unlimited and finite modes.
+
 `DriverKMDFControl.ManualQueueReleasesSequentialSourceAndRetrievesInWorker`
 uses a genuine WDK control driver with a nondefault manual queue. Its first
 IOCTL is forwarded from a sequential default queue; a second IOCTL on the

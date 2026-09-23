@@ -46,10 +46,11 @@ KernelFramework::preflightRequestCancellation(uint64_t IRP,
     auto Q = Queues.find(R->second.Queue);
     if (R->second.Completed || R->second.Completing ||
         R->second.Cancellation != CancelState::Unmarked || Q == Queues.end() ||
-        Q->second.Dispatch != QueueDispatchManual ||
+        (Q->second.Dispatch != QueueDispatchManual &&
+         Q->second.Dispatch != QueueDispatchParallel) ||
         std::find(Q->second.Pending.begin(), Q->second.Pending.end(),
                   R->first) == Q->second.Pending.end())
-      return requestError("queued request lost manual queue ownership");
+      return requestError("queued request lost framework queue ownership");
     if (PendingCall)
       return requestError(
           "cancellation cannot replace a pending guest callback");
@@ -97,7 +98,7 @@ KernelFramework::requestCancellation(uint64_t IRP) {
   if (R->second.Queued) {
     auto Q = Queues.find(R->second.Queue);
     if (Q == Queues.end())
-      return requestError("queued cancellation lost its manual queue");
+      return requestError("queued cancellation lost its framework queue");
     auto Pending =
         std::find(Q->second.Pending.begin(), Q->second.Pending.end(), R->first);
     if (Pending == Q->second.Pending.end())
@@ -284,6 +285,25 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
       Dispatch.Arguments.push_back(View->ControlCode);
     } else {
       Dispatch.Arguments.push_back(Length);
+    }
+  }
+  if (Queue.Dispatch == QueueDispatchParallel &&
+      Queue.PresentedLimit != UINT32_MAX) {
+    const auto Presented =
+        std::count_if(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          return Entry.first != Handle && Entry.second.Queue == Q->first &&
+                 !Entry.second.Queued && !Entry.second.Completed;
+        });
+    if (Presented > Queue.PresentedLimit)
+      return requestError("parallel queue exceeded its presentation limit");
+    if (Presented == Queue.PresentedLimit) {
+      auto &Pending = Requests.at(Handle);
+      Pending.Queued = true;
+      Pending.QueuedCallback = Dispatch.PC;
+      Pending.QueuedArguments = std::move(Dispatch.Arguments);
+      Queue.Pending.push_back(Handle);
+      return std::optional<RequestDispatch>{
+          RequestDispatch{0, {}, windows::StatusPending}};
     }
   }
   return std::optional<RequestDispatch>{std::move(Dispatch)};

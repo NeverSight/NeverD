@@ -183,6 +183,7 @@ private:
     uint64_t Device = 0;
     uint64_t Default = 0, Read = 0, Write = 0, DeviceControl = 0;
     uint32_t Dispatch = framework::QueueDispatchSequential;
+    uint32_t PresentedLimit = UINT32_MAX;
     bool AllowZeroLength = false;
     bool IsDefault = false;
     std::deque<uint64_t> Pending;
@@ -199,6 +200,8 @@ private:
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;
+    uint64_t QueuedCallback = 0;
+    std::vector<uint64_t> QueuedArguments;
     CancelState Cancellation = CancelState::Unmarked;
     uint64_t CancelRoutine = 0;
   };

@@ -77,11 +77,7 @@ TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
   }
   queueConfiguration();
   put(QueueConfig + 4, 2, 4);
-  expectError(createQueue(), "bounded parallel queue delivery");
-  queueConfiguration();
-  put(QueueConfig + 4, 2, 4);
-  put(QueueConfig + 80, 1, 4);
-  expectError(createQueue(), "bounded parallel queue delivery");
+  EXPECT_EQ(take(createQueue()), uint64_t(framework::InvalidParameter));
   queueConfiguration();
   put(QueueConfig + 4, 3, 4);
   put(QueueConfig + 40, 0);
@@ -95,6 +91,16 @@ TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
     expectError(createQueue(), "legacy");
   }
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+}
+
+TEST_F(DriverKernelFrameworkQueue,
+       BoundedParallelDefaultQueueAcceptsPositiveLimit) {
+  queueConfiguration();
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, 1, 4);
+  EXPECT_EQ(take(createQueue()), 0u);
+  EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})),
+            get(QueueSlot));
 }
 
 TEST_F(DriverKernelFrameworkQueue,
