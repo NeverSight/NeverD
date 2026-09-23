@@ -189,6 +189,9 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "bpppppC"},
     {"$ss018_bridgeAnyObjectToB0yypyXlSgF",
      "/usr/lib/swift/libswiftCore.dylib", "vIp"},
+    // The mutating _StringGuts.grow(Int) entry takes the capacity in the
+    // first integer register and the two-word guts address in swiftself.
+    {"$ss11_StringGutsV4growyySiF", "/usr/lib/swift/libswiftCore.dylib", "vzC"},
     {"$ss18_CocoaArrayWrapperV8endIndexSivg",
      "/usr/lib/swift/libswiftCore.dylib", "zz"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
