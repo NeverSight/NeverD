@@ -586,6 +586,13 @@ Exception delivery uses the image's decoded x64 version-one unwind tables and `_
 
 The original `driver_wdm_seh.c` fixture uses genuine WDK headers and `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. The separate genuine-WDK `driver_wdm_neither.c` fixture exercises request pointers, probes, in-context CPU exceptions and locked user MDLs in normal/active-CFG and preferred/rebased images through `NEVERD_WDM_NEITHER_FIXTURE` and `NEVERD_WDM_NEITHER_CFG_FIXTURE`. The [driver-neither-scenario.json](examples/driver-neither-scenario.json) example checks both plain and locked-alias output bytes through the public scenario interface.
 
+The same fixture can mark a neither IOCTL pending after locking input and
+output pages in caller context. A work item at `PASSIVE_LEVEL` uses the kernel
+aliases, unlocks and frees both MDLs, frees its work item and completes the
+IRP. A separate work item that dereferences the raw user VA stops with an
+explicit requesting-process diagnostic; queued work does not inherit the
+caller's address context.
+
 The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,
 nullable `address`, `size`, `access` and `interrupt` distinguish unmapped or
 protected memory, invalid ranges, invalid instructions and CPU exceptions.
