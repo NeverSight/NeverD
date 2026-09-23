@@ -96,6 +96,14 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "pC"},
+    // Swift 6.1.2 arm64 client IR shows URL.appendingPathComponent(String)
+    // constructing its URL result through the Swift indirect-result pointer
+    // and reading the receiver through swiftself.
+    {"$s10Foundation3URLV22appendingPathComponentyACSSF",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "vIzpC"},
     {"$s10Foundation3URLV36_"
      "unconditionallyBridgeFromObjectiveCyACSo5NSURLCSgFZ",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
