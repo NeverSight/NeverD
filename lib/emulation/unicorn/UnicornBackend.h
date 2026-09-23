@@ -46,6 +46,10 @@ struct BackendHooks {
   std::function<void(uint64_t, uint32_t)> Read;
   std::function<void(uint64_t, uint32_t, uint64_t)> Write;
   std::function<void(uint64_t, uint32_t, const char *)> Fault;
+  /// Admit only a modeled, synchronous guest memory exception. The faulting
+  /// instruction is abandoned; the caller must consume the fault and install
+  /// a validated guest exception transfer before running again.
+  std::function<bool(const BackendFault &)> RecoverableFault;
   std::function<void(uint32_t)> Interrupt;
   std::function<void()> InvalidInstruction;
 };
@@ -75,6 +79,8 @@ public:
   ~UnicornBackend() override;
   llvm::Error map(uint64_t Address, uint64_t Size,
                   unsigned Permissions) override;
+  llvm::Error mapAlias(uint64_t Address, uint64_t Source, uint64_t Size,
+                       unsigned Permissions) override;
   llvm::Error protect(uint64_t Address, uint64_t Size,
                       unsigned Permissions) override;
   llvm::Error mapMMIO(uint64_t Address, uint64_t Size,
@@ -84,6 +90,8 @@ public:
                    llvm::MutableArrayRef<uint8_t> Bytes) override;
   llvm::Error write(uint64_t Address, llvm::ArrayRef<uint8_t> Bytes) override;
   llvm::Error validateBacking(uint64_t Address, uint64_t Size) const override;
+  llvm::Expected<bool> canAccess(uint64_t Address, uint64_t Size,
+                                  unsigned Permissions) const override;
   llvm::Error readBacking(uint64_t Address,
                           llvm::MutableArrayRef<uint8_t> Bytes) override;
   llvm::Error writeBacking(uint64_t Address,
@@ -108,6 +116,7 @@ public:
   bool hasDeviceError() const;
   /// The first CPU or checked GuestMemory fault survives later observations.
   std::optional<BackendFault> fault() const;
+  std::optional<BackendFault> takeRecoverableFault();
   bool executable(uint64_t Address) const;
 
 private:

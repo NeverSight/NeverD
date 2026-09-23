@@ -3505,11 +3505,11 @@
         "Legacy void WdfRequestMarkCancelable invokes a real synchronous guest cancellation callback before returning for an already canceled IRP. Its nested API continuation supports waits, cleanup and final destruction; cancellation after registration remains scheduled. This matches the public source at PASSIVE_LEVEL with SynchronizationNone, while Microsoft directs drivers without automatic synchronization to use Ex; compatibility execution does not recommend this usage.",
         "WdfRequestGetInformation/SetInformation share the original 64-bit IRP.IoStatus.Information with guest writes; Set only assigns and completion validates transfer length. CompleteWithInformation writes the authoritative field before cleanup, and cleanup edits through the saved raw IRP determine final Information even though its WDF getter returns zero then. GetIoQueue returns the source queue, default GetFileObject returns NULL without inventing a WDF file object, and WdmGetIrp returns the original packet. Guest IoCompleteRequest/IofCompleteRequest cannot bypass framework completion.",
         "Valid retained request handles during/after completion return zero from GetInformation/GetIoQueue; WdmMdl retrieval clears a valid output slot to NULL then returns STATUS_INTERNAL_ERROR. SetInformation/GetFileObject/WdmGetIrp and existing buffer/parameter access remain rejected. Framework references preserve context, not completed IRP, MDL or buffer storage.",
-        "Input/output WdmMdl retrieval lazily describes existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each direction is validated as nonempty before reuse; one cache per request preserves the first successful direction's ByteCount. The safe mapping helper returns the original VA; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output preserve IRP.MdlAddress without mapping on retrieval; direct IOCTL input uses the SystemBuffer cache. Completion retires descriptors with packet/buffers. Built physical PFNs are read-only; METHOD_NEITHER remains unsupported.",
+        "Input/output WdmMdl retrieval lazily describes existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each direction is validated as nonempty before reuse; one cache per request preserves the first successful direction's ByteCount. The safe mapping helper returns the original VA; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output preserve IRP.MdlAddress without mapping on retrieval; direct IOCTL input uses the SystemBuffer cache. Completion retires descriptors with packet/buffers. Built physical PFNs are read-only; WDF MDL retrieval for METHOD_NEITHER remains unsupported.",
         "active CFG validates packed sorted GFIDS metadata and enforces exact declared entry addresses plus known export thunks at check/dispatch helpers while preserving Win64 arguments; inactive instrumentation keeps guest fallback code; Windows CFG bitmap address rounding, XFG, export suppression and long-jump tables remain unsupported",
         "Genuine KMDF lifecycle/control integration tests require separately acquired WDK 1.33 headers and unmodified entry/import libraries plus explicit NEVERD_KMDF_FIXTURE, NEVERD_KMDF_CFG_FIXTURE, NEVERD_KMDF_CONTROL_FIXTURE and NEVERD_KMDF_CONTROL_CFG_FIXTURE paths; missing fixtures skip visibly, SDK files are not distributed, and execution evidence remains Linux-only.",
-        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, general spinlocks, general IRQL transitions, METHOD_NEITHER, KMDF PnP devices/general queues, UMDF, full PnP/power, other interrupt modes, general hardware and other DMA interfaces remain unsupported",
-        "wdm-x64-scheduled-v16 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
+        "instruction, guest-memory, observation and wall-clock budgets apply across one concrete scenario; serial buffered/direct requests may complete synchronously or through executed work-item and DPC callbacks after marked STATUS_PENDING; concurrent public scenario submissions, WDM/PnP request cancellation, system threads, APCs, general spinlocks, general IRQL transitions, KMDF METHOD_NEITHER caller-context APIs, KMDF PnP devices/general queues, UMDF, full PnP/power, other interrupt modes, general hardware and other DMA interfaces remain unsupported",
+        "wdm-x64-scheduled-v17 uses deterministic cooperative scheduling on CPU0 at returned-call and blocking-wait boundaries; DelayedWorkQueue workers execute at PASSIVE_LEVEL and DPC callbacks execute at DISPATCH_LEVEL with four guest arguments; no available producer for an incomplete pending request or infinite wait is a stalled model_error; work-item objects and device references retain separate lifetimes",
         "IoDeleteDevice defers physical retirement while attachment neighbors, retained request routes, live file objects or queued/running work-item references remain; deletion cannot create a new device lifetime or make stale work-item handles usable",
         "full CPU contexts include SIMD/FPU/control state and each callback owns a separate guest stack, preserving multiple blocked frames while guest memory stays shared; Win64 callback entry passes the first four arguments in registers and additional arguments on the stack; foreign, expired and faulted contexts cannot resume execution",
         "guest timers support relative/absolute deadlines, periodic expiration, rearm/cancel and notification/synchronization signals; virtual time advances to timer, wait and cancellation boundaries only while no callback/frame is ready; initialized event/timer single-object waits support only nonalertable KernelMode with reason Executive, zero polling, finite relative/absolute and infinite waits; KernelMode nonalertable delay is modeled, while alertable and user-mode waits stop explicitly",
@@ -3564,8 +3564,9 @@
         "KeFlushIoBuffers validates a live locked/nonpaged MDL. The modeled platform is coherent, so either ReadOperation or DmaOperation value needs no separate cache copy; this call does not release DMA ownership or replace FlushAdapterBuffers. The channel scenario runs original driver_wdm_dma_channel.c through two MapTransfer calls, one cross-page device transaction, a separately declared IRQ/DPC, aggregate flush and exact register release. Genuine normal/CFG images use NEVERD_WDM_DMA_CHANNEL_FIXTURE and NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE.",
         "The original genuine-WDK driver_wdm_dma_channel.c and optional NEVERD_WDM_DMA_CHANNEL_FIXTURE/NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE exercise real translated bus-master channel calls, aggregate fragments, retained-register reuse and shared common/SG/channel admission. Native normal/CFG/rebased runs and the seven-request C API/CLI example validate the bounded profile; Python uses the same scenario_json interface. Missing fixtures skip explicitly and evidence remains Linux-only.",
         "ExRaiseStatus, ExRaiseAccessViolation and ExRaiseDatatypeMisalignment produce typed guest exceptions without a normal API return. ExRaiseStatus uses only the low NTSTATUS dword; the wrappers use STATUS_ACCESS_VIOLATION and STATUS_DATATYPE_MISALIGNMENT. The selected profile follows the individual Microsoft DDI ceilings APC_LEVEL for ExRaiseStatus and PASSIVE_LEVEL for the wrappers, while acknowledging that some WDK SAL annotations permit APC_LEVEL for the wrappers. API traces retain a null result and record the raised code in detail.",
-        "KernelSEH plans bounded x64 version-one C catch-all transfers over the loader's existing preferred-base metadata. It selects constant EXCEPTION_EXECUTE_HANDLER scopes in table order, translates checked rebased addresses and restores supported nonvolatile GPR saves across ordinary helpers. DriverSession commits only a fully validated plan at a healthy API boundary, within the current execution stack. Actual guest handler bodies and enclosing-handler reraises execute; GetExceptionCode observes the raised code. Encountered filters/finally, GS/C++ personalities, chained or incomplete records, prologue unwinding and XMM restoration stop explicitly. Uncaught API exceptions are model_error; backend memory, interrupt and invalid-instruction faults remain terminal. ProbeForRead/Write, user-buffer locking and METHOD_NEITHER remain unsupported.",
-        "The original genuine-WDK /GS- driver_wdm_seh.c uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, unhandled exceptions and explicit filter/finally/CPU-fault rejection. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH or user-memory recovery."
+        "KernelSEH plans bounded x64 version-one C catch-all transfers over the loader's existing preferred-base metadata. It selects constant EXCEPTION_EXECUTE_HANDLER scopes in table order, translates checked rebased addresses and restores supported nonvolatile GPR saves across ordinary helpers. DriverSession commits only a fully validated plan at a healthy API boundary, within the current execution stack. Actual guest handler bodies and enclosing-handler reraises execute; GetExceptionCode observes the raised code. Encountered filters/finally, GS/C++ personalities, chained or incomplete records, prologue unwinding and XMM restoration stop explicitly. Uncaught API or supported user-memory exceptions are model_error; other backend memory, interrupt and invalid-instruction faults remain terminal. WDM METHOD_NEITHER has separate user input/output allocations, ProbeForRead/Write, in-context catchable CPU faults, independent user MDL locks and shared kernel aliases. KMDF caller-context and user-buffer APIs, arbitrary processes and WDM cancellation remain unsupported.",
+        "The original genuine-WDK /GS- driver_wdm_seh.c uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, unhandled exceptions and explicit filter/finally/CPU-fault rejection. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
+        "The original genuine-WDK driver_wdm_neither.c uses optional NEVERD_WDM_NEITHER_FIXTURE and NEVERD_WDM_NEITHER_CFG_FIXTURE. Native normal/active-CFG and preferred/rebased runs verify six packet/probe/CPU-fault/locked-MDL paths. Backend and request-owner tests verify shared alias bytes, independent pins, write protection, completion output and terminal kernel faults. C API/CLI and Python execute docs/examples/driver-neither-scenario.json and verify plain and locked-alias output bytes. Missing external images skip explicitly; Linux evidence does not establish arbitrary Windows process memory."
       ],
       "tests": [
         {
@@ -6408,6 +6409,42 @@
           "target": "NeverDPythonSDKUnitTests",
           "source": "pluginsdk/python/tests/test_driver_seh_integration.py",
           "filter": "DriverSEHIntegrationTests.test_unhandled_api_raise_and_cpu_fault_remain_distinct_stops",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMNeitherTests.cpp",
+          "filter": "DriverWDMNeither.OriginalWDKHandlersObserveRealUserBytesAndFaultSites",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelRequestOwnershipTests.cpp",
+          "filter": "KernelRequestOwnership.NeitherProbesAndUserLocksKeepSeparatePacketAndRAMOwnership",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIAndCLIExecuteGenuineNeitherUserBuffers",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_driver_neither_integration.py",
+          "filter": "DriverNeitherIntegrationTests.test_public_scenario_preserves_user_and_locked_alias_bytes",
           "platforms": [
             "linux"
           ]

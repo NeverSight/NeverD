@@ -13,6 +13,7 @@
 #include "gtest/gtest.h"
 #include "unicorn/UnicornBackend.h"
 #include "windows/DriverImage.h"
+#include "windows/KernelException.h"
 #include "windows/KernelModel.h"
 #include "windows/WindowsKernelLayout.h"
 
@@ -517,6 +518,112 @@ TEST_F(KernelRequestOwnership,
   complete(Second);
   success(Model->finalizeRequest(Second));
   rejected(Model->finalizeRequest(Scratch + 0x900));
+  close();
+}
+
+TEST_F(KernelRequestOwnership,
+       NeitherProbesAndUserLocksKeepSeparatePacketAndRAMOwnership) {
+  ASSERT_NE(open(), 0u);
+  auto Input = ioRequest(0, MethodNeither);
+  Input.DirectInput.clear();
+  const uint64_t IRP = begin(Input);
+  ASSERT_NE(IRP, 0u);
+  Model->enterExecution(profile::StackBase);
+  Model->setUserRequestContext(true);
+  const uint64_t Stack = integer(IRP + IRPStackPointerOffset);
+  const uint64_t UserInput = integer(Stack + StackType3InputOffset);
+  const uint64_t UserOutput = integer(IRP + IRPUserBufferOffset);
+  ASSERT_NE(UserInput, 0u);
+  ASSERT_NE(UserOutput, 0u);
+  EXPECT_LT(UserInput, profile::UserProbeLimit);
+  EXPECT_LT(UserOutput, profile::UserProbeLimit);
+  EXPECT_EQ(integer(IRP + IRPMdlOffset), 0u);
+  EXPECT_EQ(integer(IRP + IRPSystemBufferOffset), 0u);
+  EXPECT_EQ(integer(IRP + IRPRequestorModeOffset, 1), UserMode);
+  EXPECT_EQ(integer(IRP + IRPFlagsOffset, 4) &
+                (IRPBufferedAllocation | IRPCopyOutput),
+            0u);
+  EXPECT_EQ(integer(UserInput, 2), 0x2211u);
+
+  auto raised = [&](llvm::Expected<uint64_t> Value) {
+    EXPECT_FALSE(bool(Value));
+    if (Value)
+      return uint32_t(0);
+    uint32_t Code = 0;
+    llvm::handleAllErrors(
+        Value.takeError(),
+        [&](const KernelGuestException &E) { Code = E.code(); },
+        [&](const llvm::ErrorInfoBase &E) {
+          ADD_FAILURE() << "unexpected model error: " << E.message();
+        });
+    return Code;
+  };
+  EXPECT_EQ(call("ProbeForRead", {0x20000000, 1, 1}), 0u);
+  EXPECT_EQ(call("ProbeForRead", {0x70000001, 0, 0}), 0u);
+  EXPECT_EQ(raised(Model->call("ProbeForRead", {0x20000001, 1, 2})),
+            exceptions::StatusDatatypeMisalignment);
+  EXPECT_EQ(raised(Model->call("ProbeForRead", {0x70000000, 1, 1})),
+            exceptions::StatusAccessViolation);
+  EXPECT_EQ(raised(Model->call("ProbeForWrite", {0x20000000, 1, 1})),
+            exceptions::StatusAccessViolation);
+  EXPECT_EQ(raised(Model->call("memcpy", {Scratch, 0x20000000, 1})),
+            exceptions::StatusAccessViolation);
+  success(Memory->protect(UserOutput, profile::PageSize, Read));
+  EXPECT_EQ(raised(Model->call("ProbeForWrite", {UserOutput, 1, 1})),
+            exceptions::StatusAccessViolation);
+  const uint64_t ReadOnlyMdl =
+      call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
+  ASSERT_NE(ReadOnlyMdl, 0u);
+  EXPECT_EQ(raised(Model->call("MmProbeAndLockPages",
+                               {ReadOnlyMdl, UserMode, IoWriteAccess})),
+            exceptions::StatusAccessViolation);
+  call("IoFreeMdl", {ReadOnlyMdl});
+  success(Memory->protect(UserOutput, profile::PageSize, Read | Write));
+  EXPECT_FALSE(Memory->fault());
+
+  const uint64_t InMdl = call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
+  ASSERT_NE(InMdl, 0u);
+  call("MmProbeAndLockPages", {InMdl, UserMode, IoReadAccess});
+  rejected(Model->call("MmProbeAndLockPages",
+                       {InMdl, UserMode, IoReadAccess}));
+  const uint64_t InAlias =
+      call("MmGetSystemAddressForMdlSafe", {InMdl, NormalPagePriority});
+  ASSERT_NE(InAlias, 0u);
+  EXPECT_NE(InAlias, UserInput);
+  EXPECT_EQ(integer(InAlias, 2), 0x2211u);
+  EXPECT_EQ(call("MmGetSystemAddressForMdlSafe", {InMdl, NormalPagePriority}),
+            InAlias);
+  const uint64_t SecondInMdl =
+      call("IoAllocateMdl", {UserInput, 2, 0, 0, 0});
+  ASSERT_NE(SecondInMdl, 0u);
+  call("MmProbeAndLockPages", {SecondInMdl, UserMode, IoReadAccess});
+
+  const uint64_t OutMdl = call("IoAllocateMdl", {UserOutput, 1, 0, 0, 0});
+  ASSERT_NE(OutMdl, 0u);
+  call("MmProbeAndLockPages", {OutMdl, UserMode, IoWriteAccess});
+  const uint64_t OutAlias =
+      call("MmGetSystemAddressForMdlSafe", {OutMdl, NormalPagePriority});
+  ASSERT_NE(OutAlias, 0u);
+  guestWrite(OutAlias, 0x42, 1);
+  EXPECT_EQ(integer(UserOutput, 1), 0x42u);
+  rejected(Model->call("IoFreeMdl", {OutMdl}));
+  call("MmUnlockPages", {OutMdl});
+  call("MmUnlockPages", {InMdl});
+  call("MmUnlockPages", {SecondInMdl});
+  auto OutReadable = Memory->canAccess(OutAlias, 1, Read);
+  auto InReadable = Memory->canAccess(InAlias, 1, Read);
+  ASSERT_TRUE(bool(OutReadable)) << llvm::toString(OutReadable.takeError());
+  ASSERT_TRUE(bool(InReadable)) << llvm::toString(InReadable.takeError());
+  EXPECT_FALSE(*OutReadable);
+  EXPECT_FALSE(*InReadable);
+  call("IoFreeMdl", {OutMdl});
+  call("IoFreeMdl", {InMdl});
+  call("IoFreeMdl", {SecondInMdl});
+  complete(IRP, 0, 1);
+  EXPECT_EQ(observation(IRP).Output, (std::vector<uint8_t>{0x42}));
+  success(Model->recordDispatchReturn(IRP, 0));
+  success(Model->finalizeRequest(IRP));
+  Model->setUserRequestContext(false);
   close();
 }
 

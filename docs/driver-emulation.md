@@ -54,9 +54,9 @@ establish compatibility with arbitrary third-party drivers.
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, serial buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
 | `METHOD_BUFFERED` IOCTL | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
-| Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool, with shared original buffer addresses and physical page identities | IRP association, MDL chains, probing/locking and user mappings |
-| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs or WDM request cancellation; `METHOD_NEITHER` and implicit file position |
-| `METHOD_NEITHER` | Rejected | User address-space context, access probing, lock/unlock and recovery from user-memory faults |
+| Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
+| READ/WRITE | Serial buffered/direct I/O with work-item or DPC completion | Only the API subset below; no concurrent scenario-submitted IRPs, WDM request cancellation or implicit file position |
+| WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults and driver-created user MDLs | One requesting-process context; no WDM cancellation or arbitrary user mappings |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
 | Storage, network, display, filesystem and minifilter drivers | Unsupported subsystem contracts | Port/class/miniport frameworks, NDIS/WFP, graphics or filesystem services |
@@ -110,7 +110,7 @@ instruction, memory, observation and wall-clock budgets still apply.
 
 This is a bounded scheduling model, not full Windows asynchronous support.
 Alertable or user-mode waits, system threads, APCs, WDM request cancellation,
-general spinlocks, concurrent scenario-submitted IRPs, general IRQL transitions, `METHOD_NEITHER`,
+general spinlocks, concurrent scenario-submitted IRPs, general IRQL transitions,
 UMDF, KMDF PnP devices and general queue scheduling, full PnP/power, general hardware, other DMA interfaces and other interrupt modes remain unsupported.
 Initialization-only calls execute explicitly queued callbacks without
 inventing requests or unload.
@@ -219,7 +219,7 @@ Control devices require a copied printable-ASCII name and the exact SDDL `D:P(A;
 
 The 96-byte `WDF_IO_QUEUE_CONFIG` supports a sequential default queue with explicit passive execution and no framework synchronization. Control-device queues are not power managed. Specific READ/WRITE/IOCTL callbacks take precedence over the default callback. Accepted queued requests return `STATUS_PENDING` even when completed synchronously; a void callback's return register does not complete its request. Deferred completion uses the existing scheduler. Without a handler the request completes with `STATUS_INVALID_DEVICE_REQUEST`; zero-length READ/WRITE completes without delivery unless enabled. The default file package completes CREATE/CLEANUP/CLOSE successfully with Information=0. Parallel/manual queues, file callbacks, PnP devices and full PnP/power remain unsupported.
 
-Request parameters use the 40-byte `WDF_REQUEST_PARAMETERS` layout. Input/output accessors return the logical lengths, preserving buffered aliases and existing direct-I/O MDL mappings; direct IOCTL input remains buffered. Wrong directions and insufficient buffers return documented statuses. Completion runs request cleanup and child destruction before retiring the IRP/buffers, then destroys the request when references permit. New buffer and parameter accessors are rejected once completion begins; already obtained buffer pointers remain usable during cleanup. An external object reference preserves context, not completed IRP access. User-mode `METHOD_NEITHER` still requires unimplemented caller-context/probe/lock support.
+Request parameters use the 40-byte `WDF_REQUEST_PARAMETERS` layout. Input/output accessors return the logical lengths, preserving buffered aliases and existing direct-I/O MDL mappings; direct IOCTL input remains buffered. Wrong directions and insufficient buffers return documented statuses. Completion runs request cleanup and child destruction before retiring the IRP/buffers, then destroys the request when references permit. New buffer and parameter accessors are rejected once completion begins; already obtained buffer pointers remain usable during cleanup. An external object reference preserves context, not completed IRP access. KMDF caller-context callbacks and its user-buffer retrieval/locking APIs remain unmodeled.
 
 Cancellation is modeled for requests on the control-device queues described above. `WdfRequestMarkCancelableEx` returns `STATUS_CANCELLED` without invoking a callback if cancellation already occurred. Successful `WdfRequestUnmarkCancelable` removes the callback; a later cancellation records the canceled state without delivering that callback. `WdfRequestIsCanceled` observes that state on an unmarked live request. After successful marking, completion requires successful unmarking or delivery of the cancellation callback: a merely queued callback does not authorize completion. Once delivery begins, the callback and a worker may coordinate completion, including when the callback waits. A separate internal reference retains the request through cancellation-callback return; completion still retires the IRP first, and the final request-destroy continuation may itself wait. DPCs take priority, followed by cancellation callbacks in FIFO order, then ordinary workers; queued cancellation callbacks also precede resuming ready passive waiters.
 
@@ -227,7 +227,7 @@ For an already canceled request, legacy void `WdfRequestMarkCancelable` executes
 
 `WdfRequestGetInformation` and `WdfRequestSetInformation` share the original 64-bit `IRP.IoStatus.Information`, including direct guest writes. Set assigns the value; transfer-length validation occurs at completion. `WdfRequestCompleteWithInformation` writes the same field before cleanup; changes through a previously saved IRP during cleanup determine the final Information even though GetInformation already returns zero in that phase. `WdfRequestGetIoQueue` returns the originating queue. With the default file configuration, `WdfRequestGetFileObject` returns NULL: no WDF file object is invented from the WDM FILE_OBJECT. `WdfRequestWdmGetIrp` returns the same IRP; guest `IoCompleteRequest`/`IofCompleteRequest` cannot bypass WDF completion. While a request handle remains valid during or after completion, GetInformation/GetIoQueue return zero, and MDL retrieval first clears a valid output slot to NULL then returns `STATUS_INTERNAL_ERROR`. SetInformation/GetFileObject/WdmGetIrp remain rejected then. Existing buffer and parameter accessor restrictions are unchanged.
 
-`WdfRequestRetrieveInputWdmMdl` and `WdfRequestRetrieveOutputWdmMdl` lazily describe the existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each requested direction must be valid and nonempty before using the request’s single cached descriptor; the first successful retrieval fixes its ByteCount even when the other direction has a different logical length. `MmGetSystemAddressForMdlSafe` returns the original VA for this descriptor; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output instead return the existing `IRP.MdlAddress` without mapping it merely by retrieval; direct IOCTL input uses the SystemBuffer cache. Descriptors, IRP and buffers retire at completion. Cancellation-internal or external references retain only WDF context, not completed I/O storage. Built physical PFNs are read-only; `METHOD_NEITHER` remains unsupported.
+`WdfRequestRetrieveInputWdmMdl` and `WdfRequestRetrieveOutputWdmMdl` lazily describe the existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each requested direction must be valid and nonempty before using the request’s single cached descriptor; the first successful retrieval fixes its ByteCount even when the other direction has a different logical length. `MmGetSystemAddressForMdlSafe` returns the original VA for this descriptor; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output instead return the existing `IRP.MdlAddress` without mapping it merely by retrieval; direct IOCTL input uses the SystemBuffer cache. Descriptors, IRP and buffers retire at completion. Cancellation-internal or external references retain only WDF context, not completed I/O storage. Built physical PFNs are read-only; WDF MDL retrieval for `METHOD_NEITHER` remains unsupported.
 
 Modeled KMDF APIs: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceCreate`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestRetrieveInputWdmMdl`, `WdfRequestRetrieveOutputWdmMdl`, `WdfRequestSetInformation`, `WdfRequestGetInformation`, `WdfRequestGetFileObject`, `WdfRequestGetIoQueue`, `WdfRequestWdmGetIrp`, `WdfRequestMarkCancelable`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`.
 
@@ -239,11 +239,12 @@ The initial API model deliberately has a finite contract:
 |------|-----------------------------------|
 | `RtlInitUnicodeString` | Builds a guest `UNICODE_STRING` for a bounded NUL-terminated source |
 | `RtlCopyUnicodeString`, `RtlCompareUnicodeString`, `RtlEqualUnicodeString` | Counted UTF-16 copy and case-sensitive comparison; case-insensitive comparison requires a Windows case table and stops |
-| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Raise a guest exception for supported constant C `__except` handlers; no normal API return, filters/finally and CPU-fault recovery remain unsupported |
+| `ExRaiseStatus`, `ExRaiseAccessViolation`, `ExRaiseDatatypeMisalignment` | Raise a guest exception for supported constant C `__except` handlers; no normal API return, filters and finally remain unsupported |
+| `ProbeForRead`, `ProbeForWrite`, `ExGetPreviousMode` | User-mode request context with numerical read probing, page-touching write probing and explicit access/misalignment exceptions |
 | `ExAllocatePool2` | Paged/nonpaged NX allocations, zeroed by default; uninitialized and cache-aligned flags modeled; invalid required flags return NULL, quota/executable pools and raised allocation exceptions stop |
 | `MmGetSystemRoutineAddress` | Resolves a counted guest name through the shared export inventory |
 | `MmMapLockedPagesSpecifyCache`, `MmGetSystemAddressForMdlSafe`, `MmUnmapLockedPages` | Request-owned MDLs with cached KernelMode mappings and permissions; nonpaged pool MDLs reuse the original pool mapping through the safe helper |
-| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `IoFreeMdl` | Standalone descriptors, complete ranges in one live nonpaged pool allocation, independent descriptor/buffer lifetimes; no IRP association, MDL chains or quota |
+| `IoAllocateMdl`, `MmBuildMdlForNonPagedPool`, `MmProbeAndLockPages`, `MmUnlockPages`, `IoFreeMdl` | Standalone nonpaged-pool descriptors or driver-created user MDLs with independent locks and shared system aliases; no IRP association, chains or quota |
 | `ZwOpenKey`, `ZwCreateKey`, `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, `ZwDeleteKey`, `ZwClose` | Explicit session registry, per-handle rights and lifetime, query buffer sizing and mutations; no host registry access |
 | `ExAllocatePoolWithTag`, `ExFreePoolWithTag`, `ExFreePool` | Data allocations for pool types `0`, `1`, and `512`; positive size/tag, matching tagged frees, no address reuse |
 | `IoCreateDevice`, `IoDeleteDevice` | Device type `0x22`, characteristics `0` or `0x100`, bounded extensions, ASCII `\Device\Name` names |
@@ -404,6 +405,27 @@ supported when freed storage is not used afterward. All modeled MDL fields are
 read-only, including built PFNs; process fields, unbuilt PFN access, descriptor
 chains and manual field changes remain unsupported. Unload must release every driver-owned descriptor.
 
+For a WDM `METHOD_NEITHER` IOCTL, the input pointer in
+`Type3InputBuffer` and the output pointer in `IRP.UserBuffer` refer to separate
+user allocations. Neither pointer creates `SystemBuffer` or `IRP.MdlAddress`.
+The request runs in its modeled requesting-process context. `ProbeForRead`
+checks the user range and alignment but does not touch pages; a later CPU read
+can still raise a catchable `STATUS_ACCESS_VIOLATION`. `ProbeForWrite` checks
+the range and alignment and touches each page. Zero-length probes return
+without inspecting the pointer or alignment. A supported constant C `__except`
+handler can catch these exceptions and in-context user CPU read/write faults;
+kernel-address, interrupt and invalid-instruction faults stay terminal.
+
+A driver can describe one live user allocation with `IoAllocateMdl`, then
+call `MmProbeAndLockPages` in `UserMode` at or below `APC_LEVEL` for read or
+write access. This pins the allocation's modeled physical pages independently
+of the request packet. `MmGetSystemAddressForMdlSafe` returns a shared kernel
+alias; writes through it change the user buffer. `MmUnlockPages` revokes that
+alias and unpins the pages, and `IoFreeMdl` requires the MDL to be unlocked.
+The modeled user VA arena, process context, one-allocation locking rule and
+mapping budget are explicit limits. Scenario-defined user page protections,
+arbitrary processes and WDM cancellation are not yet modeled.
+
 When an IOCTL has a nonzero `output_size`, `Information` must not exceed that
 size, even when the input buffer is larger. An IOCTL without an output buffer
 may return a driver-defined result in this field, and no output bytes are
@@ -525,7 +547,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v16`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v17`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -544,9 +566,9 @@ hexadecimal string; the existing numeric `information` field remains available.
 
 `ExRaiseStatus` passes the low 32-bit NTSTATUS to the guest exception handler; `ExRaiseAccessViolation` and `ExRaiseDatatypeMisalignment` raise `STATUS_ACCESS_VIOLATION` and `STATUS_DATATYPE_MISALIGNMENT`. The profile follows the individual Microsoft DDI pages: ExRaiseStatus permits `APC_LEVEL`, while the two no-argument routines require `PASSIVE_LEVEL`. Some WDK SAL annotations permit APC_LEVEL for the wrappers; this profile retains the documented stricter limit. A raised call keeps `result: null` and records the code in `detail`; it never reports a successful API return.
 
-Exception delivery uses the image's decoded x64 version-one unwind tables and `__C_specific_handler` constant `EXCEPTION_EXECUTE_HANDLER` scopes. It executes the actual guest handler body, supports ordinary helper-frame unwinding, restores saved nonvolatile general registers and preserves the current execution's stack boundary. `GetExceptionCode()` observes the raised code. A handler may raise another exception into an enclosing supported scope. Encountered filter functions, `__finally`, GS/C++ personalities, chained or incomplete metadata, prologue unwinding and XMM restore operations fail explicitly. An uncaught API exception stops with `model_error`; CPU memory/interrupt/invalid-instruction faults remain terminal.
+Exception delivery uses the image's decoded x64 version-one unwind tables and `__C_specific_handler` constant `EXCEPTION_EXECUTE_HANDLER` scopes. It executes the actual guest handler body, supports ordinary helper-frame unwinding, restores saved nonvolatile general registers and preserves the current execution's stack boundary. `GetExceptionCode()` observes the raised code. A handler may raise another exception into an enclosing supported scope. Encountered filter functions, `__finally`, GS/C++ personalities, chained or incomplete metadata, prologue unwinding and XMM restore operations fail explicitly. An uncaught API or supported user-memory exception stops with `model_error`; other CPU memory, interrupt and invalid-instruction faults remain terminal.
 
-The original `driver_wdm_seh.c` fixture uses genuine WDK headers and `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. This API exception support does not enable `ProbeForRead`, `ProbeForWrite`, user MDL locking or `METHOD_NEITHER`.
+The original `driver_wdm_seh.c` fixture uses genuine WDK headers and `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. The separate genuine-WDK `driver_wdm_neither.c` fixture exercises request pointers, probes, in-context CPU exceptions and locked user MDLs in normal/active-CFG and preferred/rebased images through `NEVERD_WDM_NEITHER_FIXTURE` and `NEVERD_WDM_NEITHER_CFG_FIXTURE`. The [driver-neither-scenario.json](examples/driver-neither-scenario.json) example checks both plain and locked-alias output bytes through the public scenario interface.
 
 The nullable `fault` object preserves the first backend fault. Its `kind`, `pc`,
 nullable `address`, `size`, `access` and `interrupt` distinguish unmapped or

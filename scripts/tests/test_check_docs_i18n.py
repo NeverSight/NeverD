@@ -175,7 +175,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
                       "ReferenceCount",
                       "WDF_REQUEST_PARAMETERS", "D:P(A;;GA;;;WD)",
                       "cancel_after_100ns", "cancel_requested_at_100ns",
-                      "STATUS_CANCELLED", "wdm-x64-scheduled-v16",
+                      "STATUS_CANCELLED", "wdm-x64-scheduled-v17",
                       "STATUS_INTERNAL_ERROR", "WdfSynchronizationScopeNone",
                       "ByteCount"):
             with self.subTest(token=token):

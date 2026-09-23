@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "KernelModel.h"
+#include "KernelException.h"
 #include "WindowsKernelLayout.h"
 
 #include "neverd/emulation/DriverProfile.h"
@@ -129,6 +130,80 @@ llvm::Error KernelModel::buildNonPagedMDL(uint64_t MDL) {
   return llvm::Error::success();
 }
 
+llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
+                                           uint32_t Operation) {
+  auto It = MDLs.find(MDL);
+  if (It == MDLs.end() || It->second.Owner != LockedMdl::Ownership::Driver)
+    return mdlError("MmProbeAndLockPages requires an unbuilt driver MDL");
+  if (Mode != UserMode ||
+      (Operation != IoReadAccess && Operation != IoWriteAccess &&
+       Operation != IoModifyAccess))
+    return mdlError("MmProbeAndLockPages supports UserMode read/write locks");
+  if (CurrentIRQL > APCLevel ||
+      !canCatchUserAccess(It->second.Buffer, It->second.ByteCount))
+    return mdlError("user page locking requires the requesting process at "
+                    "IRQL <= APC_LEVEL");
+  auto &State = It->second;
+  auto Region = UserAllocations.upper_bound(State.Buffer);
+  if (Region == UserAllocations.begin())
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
+  --Region;
+  const uint64_t Offset = State.Buffer - Region->first;
+  if (Offset >= Region->second || State.ByteCount > Region->second - Offset)
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
+  auto Allowed = Memory.canAccess(State.Buffer, State.ByteCount,
+                                   Operation == IoReadAccess ? Read
+                                                             : Read | Write);
+  if (!Allowed)
+    return Allowed.takeError();
+  if (!*Allowed)
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
+  if (auto E = Physical.canPin(Region->first, Offset, State.ByteCount))
+    return E;
+  if (auto E = initializeMDLPhysicalPages(State))
+    return E;
+  auto Pin = Physical.pin(Region->first, Offset, State.ByteCount);
+  if (!Pin)
+    return Pin.takeError();
+  if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, MDLPagesLocked, 2)) {
+    llvm::consumeError(Physical.unpin(*Pin));
+    return E;
+  }
+  State.Owner = LockedMdl::Ownership::UserLocked;
+  State.Pool = Region->first;
+  State.Pin = *Pin;
+  State.UserAddress = State.Buffer;
+  State.Writable = Operation != IoReadAccess;
+  State.DmaWritable = State.Writable;
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::unlockPages(uint64_t MDL) {
+  auto It = MDLs.find(MDL);
+  if (It == MDLs.end() || It->second.Owner != LockedMdl::Ownership::UserLocked)
+    return mdlError("MmUnlockPages requires a locked user MDL");
+  auto &State = It->second;
+  if (auto E = DMA.canReleaseRange(MDL, State.Size))
+    return E;
+  if (State.Mapped) {
+    if (auto E = unmapLockedPages(State.Buffer, MDL))
+      return E;
+  }
+  if (auto E = Physical.unpin(State.Pin))
+    return E;
+  if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, 0, 2))
+    return E;
+  State.Owner = LockedMdl::Ownership::Driver;
+  State.Pin = 0;
+  State.Pool = 0;
+  State.Writable = false;
+  State.DmaWritable = false;
+  return llvm::Error::success();
+}
+
 llvm::Error KernelModel::freeMDL(uint64_t MDL) {
   auto It = MDLs.find(MDL);
   if (It == MDLs.end())
@@ -138,6 +213,8 @@ llvm::Error KernelModel::freeMDL(uint64_t MDL) {
   if (It->second.Owner == LockedMdl::Ownership::RequestSystemBuffer)
     return mdlError(
         "IoFreeMdl cannot release a request-owned system-buffer MDL");
+  if (It->second.Owner == LockedMdl::Ownership::UserLocked)
+    return mdlError("IoFreeMdl requires MmUnlockPages for a user MDL");
   if (auto E = prepareReleaseRange(It->second.Address, It->second.Size))
     return E;
   // A nonpaged pool MDL owns only its descriptor. Its original buffer and
@@ -299,6 +376,44 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
     // request no-write/no-execute. No page protections are changed here.
     return State.Buffer;
   }
+  if (State.Owner == LockedMdl::Ownership::UserLocked) {
+    if (State.Mapped) {
+      if (!ReuseExisting)
+        return mdlError("an MDL cannot have a second system-space mapping");
+      return State.Buffer;
+    }
+    const uint64_t Offset = State.UserAddress & (profile::PageSize - 1);
+    const uint64_t AllocationSize =
+        (Offset + State.ByteCount + profile::PageSize - 1) &
+        ~(profile::PageSize - 1);
+    const uint64_t End = profile::UserAliasBase + profile::UserAliasSize;
+    if (NextUserAlias > End || AllocationSize > End - NextUserAlias)
+      return 0;
+    const uint64_t Alias = NextUserAlias + Offset;
+    const bool Writable = State.Writable && !(Priority & MdlMappingNoWrite);
+    const unsigned Permissions = Read | (Writable ? Write : 0) |
+                                 ((Priority & MdlMappingNoExecute) ? 0
+                                                                   : Execute);
+    if (auto E = Memory.mapAlias(NextUserAlias, pageBase(State.UserAddress),
+                                  AllocationSize, Permissions)) {
+      if (E.isA<GuestMemoryLimitError>()) {
+        llvm::consumeError(std::move(E));
+        return 0;
+      }
+      return std::move(E);
+    }
+    if (auto E = Memory.writeInteger(MDL + MDLMappedSystemVAOffset, Alias, 8))
+      return E;
+    if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset,
+                                     MDLPagesLocked | MDLMappedToSystemVA, 2))
+      return E;
+    State.Buffer = Alias;
+    State.AllocationSize = AllocationSize;
+    State.MappingWritable = Writable;
+    State.Mapped = true;
+    NextUserAlias += AllocationSize;
+    return Alias;
+  }
   const auto *Owner = requestForIRP(State.OwnerIRP);
   if (!Owner || Owner->Completed || Owner->Mdl != MDL)
     return mdlError("mapping requires the active request's locked MDL");
@@ -334,12 +449,16 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
       It->second.Owner == LockedMdl::Ownership::NonPagedPool)
     return mdlError("a nonpaged pool MDL cannot release its existing "
                     "system-space mapping");
-  if (It == MDLs.end() || It->second.Owner != LockedMdl::Ownership::Request)
+  if (It == MDLs.end() ||
+      (It->second.Owner != LockedMdl::Ownership::Request &&
+       It->second.Owner != LockedMdl::Ownership::UserLocked))
     return mdlError("unmapping requires the active request's locked MDL");
   auto &State = It->second;
-  const auto *Owner = requestForIRP(State.OwnerIRP);
-  if (!Owner || Owner->Completed || Owner->Mdl != MDL)
-    return mdlError("unmapping requires the active request's locked MDL");
+  if (State.Owner == LockedMdl::Ownership::Request) {
+    const auto *Owner = requestForIRP(State.OwnerIRP);
+    if (!Owner || Owner->Completed || Owner->Mdl != MDL)
+      return mdlError("unmapping requires the active request's locked MDL");
+  }
   if (!State.Mapped || State.Buffer != Address)
     return mdlError("MDL unmapping requires its live system mapping address");
   if (auto E = prepareRevokeVirtualRange(pageBase(State.Buffer),
@@ -354,6 +473,10 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
     return E;
   State.Mapped = false;
   State.MappingWritable = false;
+  if (State.Owner == LockedMdl::Ownership::UserLocked) {
+    State.Buffer = State.UserAddress;
+    State.AllocationSize = 0;
+  }
   return llvm::Error::success();
 }
 
@@ -426,7 +549,10 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
     }
     // Driver MDLs describe an existing allocation; neither their byte range
     // nor their lifetime restricts otherwise valid accesses to that pool.
-    if (State.Owner != LockedMdl::Ownership::Request)
+    if (State.Owner != LockedMdl::Ownership::Request &&
+        State.Owner != LockedMdl::Ownership::UserLocked)
+      continue;
+    if (State.Owner == LockedMdl::Ownership::UserLocked && !State.Mapped)
       continue;
     const uint64_t Base = pageBase(State.Buffer);
     if (Address >= Base + State.AllocationSize || End <= Base)

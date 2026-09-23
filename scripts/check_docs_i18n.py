@@ -2300,7 +2300,7 @@ def validate_driver_documents(errors: list[str], view: RepositoryView) -> None:
         "output_hex",
         "information_hex",
         "configuration.registry",
-        "wdm-x64-scheduled-v16",
+        "wdm-x64-scheduled-v17",
         "ExRaiseStatus", "ExRaiseAccessViolation", "ExRaiseDatatypeMisalignment",
         "__C_specific_handler", "EXCEPTION_EXECUTE_HANDLER", "GetExceptionCode",
         "STATUS_ACCESS_VIOLATION", "STATUS_DATATYPE_MISALIGNMENT", "APC_LEVEL",

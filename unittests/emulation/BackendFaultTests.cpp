@@ -122,6 +122,40 @@ INSTANTIATE_TEST_SUITE_P(
                       MemoryCase{BackendAccessKind::Write, true},
                       MemoryCase{BackendAccessKind::Execute, true}));
 
+TEST_F(DriverBackendFault, AdmittedUserReadFaultCanEnterGuestHandler) {
+  // MOV rcx, [rax]; MOV eax, 42; NOP. The modeled exception transfer enters
+  // the handler at the MOV immediate, without reexecuting the failed load.
+  code({0x48, 0x8b, 0x08, 0xb8, 42, 0, 0, 0, 0x90});
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::AX, DataAddress)), "");
+  ASSERT_EQ(llvm::toString(CPU->setReg(X64Register::CX, 17)), "");
+  unsigned Accepted = 0;
+  BackendHooks Hooks;
+  Hooks.RecoverableFault = [&](const BackendFault &Fault) {
+    ++Accepted;
+    return Fault.PC == CodeAddress && Fault.Address == DataAddress &&
+           Fault.Access == BackendAccessKind::Read;
+  };
+  Hooks.Instruction = [&](uint64_t PC, uint32_t) {
+    if (PC == CodeAddress + 8)
+      CPU->stop();
+  };
+  ASSERT_EQ(llvm::toString(CPU->installHooks(std::move(Hooks))), "");
+  ASSERT_EQ(llvm::toString(CPU->run(CodeAddress, RunTimeout)), "");
+  EXPECT_EQ(Accepted, 1u);
+  EXPECT_FALSE(CPU->fault());
+  EXPECT_EQ(reg(X64Register::CX), 17u);
+  EXPECT_NE(llvm::toString(CPU->run(CodeAddress + 3, RunTimeout))
+                .find("resume"),
+            std::string::npos);
+  auto Fault = CPU->takeRecoverableFault();
+  ASSERT_TRUE(Fault);
+  EXPECT_EQ(Fault->PC, CodeAddress);
+  EXPECT_EQ(Fault->Address, DataAddress);
+  ASSERT_EQ(llvm::toString(CPU->run(CodeAddress + 3, RunTimeout)), "");
+  EXPECT_EQ(reg(X64Register::AX), 42u);
+  EXPECT_FALSE(CPU->fault());
+}
+
 TEST_F(DriverBackendFault, CheckedWritesValidateTheWholeRangeBeforeMutation) {
   ASSERT_EQ(
       llvm::toString(CPU->map(DataAddress, profile::PageSize, Read | Write)),

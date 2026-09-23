@@ -135,6 +135,8 @@ public:
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
   void enterForeground() { CurrentIRQL = 0; }
   void enterExecution(uint64_t Identity) { CurrentExecution = Identity; }
+  void setUserRequestContext(bool Active) { UserRequestContext = Active; }
+  bool canCatchUserAccess(uint64_t Address, uint64_t Size) const;
   llvm::Error validateExecutionReturn(uint64_t Identity, uint8_t EntryIRQL) const;
   bool hasPendingInterruptEvents() const { return Interrupts.hasPendingEvents(); }
   bool hasPendingHardwareWork() const {
@@ -204,6 +206,14 @@ private:
                                                         uint64_t Result);
 
   uint64_t CurrentExecution = 0;
+  bool UserRequestContext = false;
+  uint64_t NextUserAddress = profile::UserArenaBase;
+  uint64_t NextUserAlias = profile::UserAliasBase;
+  std::map<uint64_t, uint64_t> UserAllocations;
+  llvm::Expected<uint64_t> allocateUserBuffer(uint32_t Size,
+                                               llvm::ArrayRef<uint8_t> Initial);
+  llvm::Expected<uint64_t> probeUserBuffer(uint64_t Address, uint64_t Size,
+                                            uint32_t Alignment, bool ForWrite);
   std::optional<KernelGuestCall> PendingInterruptCall;
   llvm::Expected<uint64_t> callInterruptAPI(llvm::StringRef Name,
                                             llvm::ArrayRef<uint64_t> Arguments);
@@ -358,6 +368,7 @@ private:
     bool Forwarded = false;
     uint64_t SystemBuffer = 0;
     uint64_t UserBuffer = 0;
+    uint64_t UserInput = 0;
     uint64_t BufferSize = 0;
     uint64_t SecurityContext = 0;
     uint32_t OutputSize = 0;
@@ -371,6 +382,7 @@ private:
     uint32_t TransferSize = 0;
     uint64_t ByteOffset = 0;
     bool Direct = false;
+    bool Neither = false;
     uint64_t Mdl = 0;
     uint64_t SystemMdl = 0;
     mutable std::array<bool, 16> IOStatusWritten{};
@@ -456,7 +468,13 @@ private:
   llvm::Error initializeRequestPacket(ActiveRequest &Record,
                                       const DriverRequest &Input);
   struct LockedMdl {
-    enum class Ownership { Request, RequestSystemBuffer, Driver, NonPagedPool };
+    enum class Ownership {
+      Request,
+      RequestSystemBuffer,
+      Driver,
+      NonPagedPool,
+      UserLocked
+    };
     Ownership Owner = Ownership::Request;
     uint64_t OwnerIRP = 0;
     uint64_t Address = 0;
@@ -466,6 +484,7 @@ private:
     uint64_t UserAddress = 0;
     uint32_t ByteCount = 0;
     uint64_t Pool = 0;
+    uint64_t Pin = 0;
     bool Writable = false;
     bool DmaWritable = false;
     bool Mapped = false;
@@ -475,6 +494,9 @@ private:
   llvm::Error initializeMDLPhysicalPages(const LockedMdl &State);
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error buildNonPagedMDL(uint64_t MDL);
+  llvm::Error probeAndLockPages(uint64_t MDL, uint32_t Mode,
+                                 uint32_t Operation);
+  llvm::Error unlockPages(uint64_t MDL);
   llvm::Error freeMDL(uint64_t MDL);
   llvm::Expected<uint64_t> createMDLRecord(uint64_t Address, uint32_t Size,
                                            uint16_t Flags);

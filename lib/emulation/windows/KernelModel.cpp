@@ -556,6 +556,14 @@ llvm::Expected<uint64_t> KernelModel::call(
   case KernelAPIKind::ExRaiseDatatypeMisalignment:
     return llvm::make_error<KernelGuestException>(
         exceptions::StatusDatatypeMisalignment);
+  case KernelAPIKind::ProbeForRead:
+  case KernelAPIKind::ProbeForWrite:
+    return probeUserBuffer(A[0], A[1], uint32_t(A[2]),
+                           Kind == KernelAPIKind::ProbeForWrite);
+  case KernelAPIKind::ExGetPreviousMode:
+    return UserRequestContext && CurrentExecution == profile::StackBase
+               ? uint64_t(UserMode)
+               : uint64_t(KernelMode);
 #define NEVERD_KERNEL_INTERRUPT_API(Symbol, Arity, IRQL) case KernelAPIKind::Symbol:
 #include "KernelInterruptAPIs.def"
 #undef NEVERD_KERNEL_INTERRUPT_API
@@ -620,6 +628,16 @@ llvm::Expected<uint64_t> KernelModel::call(
   }
   if (Kind == KernelAPIKind::MmBuildMdlForNonPagedPool) {
     if (auto E = buildNonPagedMDL(A[0]))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::MmProbeAndLockPages) {
+    if (auto E = probeAndLockPages(A[0], uint32_t(A[1]), uint32_t(A[2])))
+      return E;
+    return 0;
+  }
+  if (Kind == KernelAPIKind::MmUnlockPages) {
+    if (auto E = unlockPages(A[0]))
       return E;
     return 0;
   }
@@ -866,11 +884,25 @@ llvm::Expected<uint64_t> KernelModel::call(
   const bool Zero = Kind == KernelAPIKind::RtlZeroMemory;
   const bool Fill = Kind == KernelAPIKind::RtlFillMemory;
   const uint64_t Size = Zero || Fill ? A[1] : A[2];
+  auto PreflightUser = [&](uint64_t Address, bool IsWrite) -> llvm::Error {
+    if (!Size || Address >= profile::UserProbeLimit)
+      return llvm::Error::success();
+    auto Allowed = Memory.canAccess(Address, Size,
+                                     IsWrite ? Write : Read);
+    if (!Allowed)
+      return Allowed.takeError();
+    if (!*Allowed)
+      return llvm::make_error<KernelGuestException>(
+          exceptions::StatusAccessViolation);
+    return llvm::Error::success();
+  };
   if (auto E = checkRange(A[0], Size))
     return E;
   if (Zero || Fill || Kind == KernelAPIKind::memset) {
     const uint8_t Value = Zero ? 0 : static_cast<uint8_t>(Fill ? A[2] : A[1]);
     if (auto E = validateGuestAccess(A[0], Size, true))
+      return E;
+    if (auto E = PreflightUser(A[0], true))
       return E;
     if (auto E = writeBytes(Memory, A[0], Size, Value))
       return E;
@@ -885,6 +917,8 @@ llvm::Expected<uint64_t> KernelModel::call(
   std::vector<uint8_t> Source(Size);
   if (auto E = validateGuestAccess(A[1], Size, false))
     return E;
+  if (auto E = PreflightUser(A[1], false))
+    return E;
   if (Size)
     if (auto E = Memory.read(A[1], Source))
       return E;
@@ -892,6 +926,8 @@ llvm::Expected<uint64_t> KernelModel::call(
       Kind == KernelAPIKind::RtlCompareMemory) {
     std::vector<uint8_t> Other(Size);
     if (auto E = validateGuestAccess(A[0], Size, false))
+      return E;
+    if (auto E = PreflightUser(A[0], false))
       return E;
     if (Size)
       if (auto E = Memory.read(A[0], Other))
@@ -904,6 +940,8 @@ llvm::Expected<uint64_t> KernelModel::call(
     return Kind == KernelAPIKind::RtlCompareMemory ? Size : 0;
   }
   if (auto E = validateGuestAccess(A[0], Size, true))
+    return E;
+  if (auto E = PreflightUser(A[0], true))
     return E;
   if (Size)
     if (auto E = Memory.write(A[0], Source))
@@ -973,6 +1011,19 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
   if (Size > UINT64_MAX - Address)
     return modelError("overflowing guest access in Windows model");
   const uint64_t End = Address + Size;
+  if (Address < profile::UserProbeLimit) {
+    if (canCatchUserAccess(Address, Size))
+      return llvm::Error::success();
+    for (const auto &[Base, Length] : UserAllocations) {
+      const uint64_t Mapped =
+          (Length + profile::PageSize - 1) & ~(profile::PageSize - 1);
+      if (Address < Base + Mapped && Base < End)
+        return modelError("user address access requires the requesting "
+                          "process at IRQL <= APC_LEVEL");
+    }
+    // Unmapped low addresses outside our synthetic process retain the ordinary
+    // backend memory-fault observation used by other execution phases.
+  }
   if (Address < profile::GuardThunkBase + profile::PageSize &&
       profile::GuardThunkBase < End)
     return modelError("guest access to an opaque CFG helper");
@@ -1105,6 +1156,54 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
       DispatchBytesWritten[Byte - Start] = true;
   }
   return llvm::Error::success();
+}
+
+bool KernelModel::canCatchUserAccess(uint64_t Address, uint64_t Size) const {
+  return Size && Address < profile::UserProbeLimit &&
+         Size <= profile::UserProbeLimit - Address && UserRequestContext &&
+         CurrentExecution == profile::StackBase && CurrentIRQL <= APCLevel;
+}
+
+llvm::Expected<uint64_t>
+KernelModel::probeUserBuffer(uint64_t Address, uint64_t Size,
+                             uint32_t Alignment, bool ForWrite) {
+  // A zero-length probe does not inspect even an invalid pointer/alignment.
+  if (!Size)
+    return 0;
+  if (!Alignment || (Alignment & (Alignment - 1)))
+    return modelError("user buffer probe requires a power-of-two alignment");
+  if (Address >= profile::UserProbeLimit ||
+      Size > profile::UserProbeLimit - Address)
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusAccessViolation);
+  if (Address & (Alignment - 1))
+    return llvm::make_error<KernelGuestException>(
+        exceptions::StatusDatatypeMisalignment);
+  if (!ForWrite)
+    return 0;
+  if (!canCatchUserAccess(Address, Size))
+    return modelError("ProbeForWrite requires the requesting process context");
+  // This historical API actually writes on every covered page. Preflight a
+  // single byte before each touch so an expected access violation never
+  // latches the backend's terminal checked-memory fault.
+  for (uint64_t Byte = Address;;) {
+    auto Allowed = Memory.canAccess(Byte, 1, Read | Write);
+    if (!Allowed)
+      return Allowed.takeError();
+    if (!*Allowed)
+      return llvm::make_error<KernelGuestException>(
+          exceptions::StatusAccessViolation);
+    auto Value = Memory.readInteger(Byte, 1);
+    if (!Value)
+      return Value.takeError();
+    if (auto E = Memory.writeInteger(Byte, *Value, 1))
+      return std::move(E);
+    const uint64_t Next =
+        (Byte & ~(profile::PageSize - 1)) + profile::PageSize;
+    if (Next >= Address + Size)
+      return 0;
+    Byte = Next;
+  }
 }
 
 } // namespace neverd::emulation

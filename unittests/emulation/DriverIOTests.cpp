@@ -225,18 +225,15 @@ TEST(DriverIO, UnloadRequiresClosedFilesAndExactDeviceSelection) {
   EXPECT_NE(Result->Diagnostic.find("device name"), std::string::npos);
 }
 
-TEST(DriverIO, NeitherTransfersStopBeforeCallingDispatch) {
-  for (uint32_t Method = 3; Method != 4; ++Method) {
-    auto Result =
-        emulateDriver(NEVERD_DRIVER_IO_FIXTURE, lifecycle(0x222000 | Method));
-    ASSERT_TRUE(static_cast<bool>(Result))
-        << llvm::toString(Result.takeError());
-    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-    ASSERT_EQ(Result->Requests.size(), 2u);
-    EXPECT_FALSE(Result->Requests[1].Completed);
-    EXPECT_EQ(Result->Requests[1].IRP, 0u);
-    EXPECT_NE(Result->Diagnostic.find("METHOD_NEITHER"), std::string::npos);
-  }
+TEST(DriverIO, NeitherRequestReachesTheDriversOwnStatusPath) {
+  auto Result = emulateDriver(NEVERD_DRIVER_IO_FIXTURE, lifecycle(0x222003));
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 4u);
+  EXPECT_TRUE(Result->Requests[1].Completed);
+  EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000010u);
+  EXPECT_TRUE(Result->Requests[1].Output.empty());
+  EXPECT_TRUE(Result->UnloadCompleted);
 }
 
 } // namespace

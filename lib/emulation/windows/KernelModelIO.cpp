@@ -46,6 +46,30 @@ bool ntSuccess(uint32_t Status) { return !(Status & 0x80000000U); }
 bool ntError(uint32_t Status) { return (Status >> 30) == 3; }
 } // namespace
 
+llvm::Expected<uint64_t>
+KernelModel::allocateUserBuffer(uint32_t Size,
+                                llvm::ArrayRef<uint8_t> Initial) {
+  if (!Size)
+    return 0;
+  if (Initial.size() > Size || Size > profile::KernelArenaSize)
+    return ioError("invalid synthetic user buffer extent");
+  const uint64_t Pages =
+      (uint64_t(Size) + profile::PageSize - 1) & ~(profile::PageSize - 1);
+  const uint64_t End = profile::UserArenaBase + profile::UserArenaSize;
+  if (NextUserAddress > End || Pages > End - NextUserAddress)
+    return ioError("synthetic user address space exhausted");
+  const uint64_t Address = NextUserAddress;
+  if (auto E = Memory.map(Address, Pages, Read | Write))
+    return std::move(E);
+  if (auto E = Physical.registerRegion(Address, Address, Size))
+    return std::move(E);
+  if (auto E = Memory.write(Address, Initial))
+    return std::move(E);
+  UserAllocations.emplace(Address, Size);
+  NextUserAddress += Pages;
+  return Address;
+}
+
 KernelModel::ActiveRequest *KernelModel::requestForIRP(uint64_t IRP) {
   auto I = Requests.find(IRP);
   return I == Requests.end() ? nullptr : &I->second;
@@ -87,8 +111,9 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
   Request->ByteOffset = Input.ByteOffset;
   Request->TransferSize = IsWrite ? Input.Input.size() : Input.OutputSize;
   if (IsIOCTL) {
-    Request->Direct =
-        (Input.ControlCode & IoControlMethodMask) != MethodBuffered;
+    const auto Method = Input.ControlCode & IoControlMethodMask;
+    Request->Direct = Method == MethodInDirect || Method == MethodOutDirect;
+    Request->Neither = Method == MethodNeither;
   } else if (IsRead || IsWrite) {
     auto Flags = Memory.readInteger(Device + DeviceFlagsOffset, 4);
     if (!Flags)
@@ -98,6 +123,17 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
       return ioError("READ/WRITE requires exactly one of DO_BUFFERED_IO or "
                      "DO_DIRECT_IO; neither I/O is not modeled");
     Request->Direct = TransferFlags == DeviceDirectIO;
+  }
+  if (Request->Neither) {
+    auto InputBuffer = allocateUserBuffer(Input.Input.size(), Input.Input);
+    if (!InputBuffer)
+      return InputBuffer.takeError();
+    Request->UserInput = *InputBuffer;
+    auto OutputBuffer = allocateUserBuffer(Input.OutputSize, {});
+    if (!OutputBuffer)
+      return OutputBuffer.takeError();
+    Request->UserBuffer = *OutputBuffer;
+    return llvm::Error::success();
   }
   Request->BufferSize = Request->Direct ? (IsIOCTL ? Input.Input.size() : 0)
                                         : std::max<uint64_t>(Input.Input.size(),
@@ -160,7 +196,7 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
     Flags |= IRPWriteOperation;
   if (Request->SystemBuffer)
     Flags |= IRPBufferedAllocation;
-  if (Input.OutputSize && !Request->Direct)
+  if (Input.OutputSize && !Request->Direct && !Request->Neither)
     Flags |= IRPCopyOutput;
   struct Field {
     uint64_t Offset, Value;
@@ -217,6 +253,10 @@ llvm::Error KernelModel::initializeRequestPacket(ActiveRequest &Record,
                                {StackIOControlOffset, Input.ControlCode, 4}}})
       if (auto E =
               Memory.writeInteger(Request->Stack + F.Offset, F.Value, F.Size))
+        return E;
+    if (Request->Neither)
+      if (auto E = Memory.writeInteger(
+              Request->Stack + StackType3InputOffset, Request->UserInput, 8))
         return E;
   } else if (Input.Kind == DriverRequestKind::Read ||
              Input.Kind == DriverRequestKind::Write) {
@@ -301,10 +341,13 @@ KernelModel::beginRequest(const DriverRequest &Input,
       (!IsIOCTL && !IsRead && Input.OutputSize) ||
       (!IsRead && !IsWrite && Input.ByteOffset))
     return ioError("request fields do not match its WDM major function");
-  if (IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither)
-    return ioError("METHOD_NEITHER requires an unsupported user address model");
+  if (IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither &&
+      Input.CancelAfter100ns)
+    return ioError("METHOD_NEITHER cancellation requires a locked-buffer "
+                   "ownership contract");
   if ((!IsIOCTL ||
-       (Input.ControlCode & IoControlMethodMask) == MethodBuffered) &&
+       (Input.ControlCode & IoControlMethodMask) == MethodBuffered ||
+       (Input.ControlCode & IoControlMethodMask) == MethodNeither) &&
       !Input.DirectInput.empty())
     return ioError("direct_input is valid only for direct IOCTLs");
   if (Input.DirectInput.size() > Input.OutputSize)
@@ -584,7 +627,7 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   }
   if (Request->SystemBuffer)
     Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
-  if (Request->UserBuffer)
+  if (Request->UserBuffer && !Request->Neither)
     Retiring.emplace_back(Request->UserBuffer, Request->Direct
                                                    ? Request->TransferSize
                                                    : Request->OutputSize);
@@ -627,7 +670,11 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   }
   if ((HasIOCTLOutput || Request->Kind == DriverRequestKind::Read) &&
       !ntError(*Status) && *Information) {
-    if (Request->Direct) {
+    if (Request->Neither) {
+      Observation.Output.resize(*Information);
+      if (auto E = Memory.readBacking(Request->UserBuffer, Observation.Output))
+        return E;
+    } else if (Request->Direct) {
       auto Bytes = readMDLBytes(Request->Mdl, *Information);
       if (!Bytes)
         return Bytes.takeError();
@@ -647,7 +694,7 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   if (Request->SystemBuffer)
     if (auto E = Physical.retire(Request->SystemBuffer))
       return E;
-  if (Request->UserBuffer)
+  if (Request->UserBuffer && !Request->Neither)
     if (auto E = Physical.retire(Request->UserBuffer))
       return E;
   // Completion consumes the IRP. Preserve observations now; subsequent guest
@@ -664,7 +711,7 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
   }
   if (Request->SystemBuffer)
     FreedRanges.emplace(Request->SystemBuffer, Request->BufferSize);
-  if (Request->UserBuffer)
+  if (Request->UserBuffer && !Request->Neither)
     FreedRanges.emplace(Request->UserBuffer, Request->Direct
                                                  ? Request->TransferSize
                                                  : Request->OutputSize);
@@ -916,11 +963,12 @@ llvm::Error KernelModel::validateIOAccess(uint64_t Address, uint32_t Size,
         return E;
     // Raw user pointers are outside this kernel-only profile. Buffered requests
     // use SystemBuffer; direct requests access the locked system mapping.
-    if (auto E =
+    if (!Request->Neither)
+      if (auto E =
             Check(Request->UserBuffer,
                   Request->Direct ? Request->TransferSize : Request->OutputSize,
                   [](uint64_t) { return false; }))
-      return E;
+        return E;
   }
   if (IsWrite)
     for (const auto &[IRP, Record] : Requests) {

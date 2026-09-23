@@ -19,6 +19,7 @@
 
 #include <exception>
 #include <map>
+#include <new>
 #include <unicorn/unicorn.h>
 #include <unicorn/x86.h>
 #include <utility>
@@ -81,10 +82,13 @@ struct UnicornBackend::Impl {
   // The adapter owns permissions for API accesses as uc_mem_read/write bypass
   // guest permissions. CPU accesses use Unicorn's corresponding page metadata.
   std::map<uint64_t, unsigned> Pages;
+  std::map<uint64_t, uint8_t *> PageBacking;
+  std::vector<std::unique_ptr<uint8_t[]>> OwnedRAM;
   std::map<uint64_t, std::unique_ptr<MMIORegion>> MMIO;
   BackendHooks Hooks;
   std::vector<uc_hook> HookHandles;
   std::optional<BackendFault> FirstFault;
+  std::optional<BackendFault> RecoverableFault;
   uint64_t InstructionPC = 0;
   bool Timeout = false;
   bool CallbackFailed = false;
@@ -300,9 +304,19 @@ struct UnicornBackend::Impl {
       uc_emu_stop(S.Engine);
       return false;
     }
-    S.retain({Kind, S.currentPC(), Address,
-              Size > 0 ? std::optional<uint64_t>(Size) : std::nullopt, Access,
-              std::nullopt});
+    BackendFault Fault{Kind, S.currentPC(), Address,
+                       Size > 0 ? std::optional<uint64_t>(Size) : std::nullopt,
+                       Access, std::nullopt};
+    S.invoke([&] {
+      if (!S.effectsStopped() && S.Hooks.RecoverableFault &&
+          S.Hooks.RecoverableFault(Fault)) {
+        S.RecoverableFault = Fault;
+        uc_emu_stop(S.Engine);
+      }
+    });
+    if (S.RecoverableFault)
+      return false;
+    S.retain(Fault);
     S.invoke([&] {
       if (S.Hooks.Fault)
         S.Hooks.Fault(Address, Size > 0 ? uint32_t(Size) : 0,
@@ -397,11 +411,55 @@ llvm::Error UnicornBackend::map(uint64_t Address, uint64_t Size,
   for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize)
     if (State->Pages.count(Address + Offset))
       return failure("overlapping guest mapping");
-  if (auto E = check(uc_mem_map(State->Engine, Address, Size, Permissions),
+  auto Allocation = std::unique_ptr<uint8_t[]>(
+      new (std::nothrow) uint8_t[Size + profile::PageSize - 1]());
+  if (!Allocation)
+    return llvm::make_error<GuestMemoryLimitError>();
+  auto *Raw = reinterpret_cast<uint8_t *>(
+      (reinterpret_cast<uintptr_t>(Allocation.get()) + profile::PageSize - 1) &
+      ~(uintptr_t(profile::PageSize) - 1));
+  if (auto E = check(uc_mem_map_ptr(State->Engine, Address, Size, Permissions,
+                                    Raw),
                      "map guest memory"))
     return E;
-  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize)
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
     State->Pages.emplace(Address + Offset, Permissions);
+    State->PageBacking.emplace(Address + Offset, Raw + Offset);
+  }
+  State->OwnedRAM.push_back(std::move(Allocation));
+  State->Mapped += Size;
+  return llvm::Error::success();
+}
+
+llvm::Error UnicornBackend::mapAlias(uint64_t Address, uint64_t Source,
+                                     uint64_t Size, unsigned Permissions) {
+  if (!Size || (Address & (profile::PageSize - 1)) ||
+      (Source & (profile::PageSize - 1)) ||
+      (Size & (profile::PageSize - 1)) ||
+      Size - 1 > UINT64_MAX - Address || Size - 1 > UINT64_MAX - Source ||
+      (Permissions & ~(Read | Write | Execute)) ||
+      State->Running || State->effectsStopped())
+    return failure("invalid shared RAM alias");
+  if (Size > State->Limit - State->Mapped)
+    return llvm::make_error<GuestMemoryLimitError>();
+  auto First = State->PageBacking.find(Source);
+  if (First == State->PageBacking.end())
+    return failure("shared RAM alias has no source backing");
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
+    auto Page = State->PageBacking.find(Source + Offset);
+    if (State->Pages.count(Address + Offset) ||
+        Page == State->PageBacking.end() ||
+        Page->second != First->second + Offset)
+      return failure("shared RAM alias overlaps or crosses source backing");
+  }
+  if (auto E = check(uc_mem_map_ptr(State->Engine, Address, Size, Permissions,
+                                    First->second),
+                     "map shared guest memory"))
+    return E;
+  for (uint64_t Offset = 0; Offset < Size; Offset += profile::PageSize) {
+    State->Pages.emplace(Address + Offset, Permissions);
+    State->PageBacking.emplace(Address + Offset, First->second + Offset);
+  }
   State->Mapped += Size;
   return llvm::Error::success();
 }
@@ -535,6 +593,15 @@ llvm::Error UnicornBackend::validateBacking(uint64_t Address,
   return llvm::Error::success();
 }
 
+llvm::Expected<bool> UnicornBackend::canAccess(uint64_t Address, uint64_t Size,
+                                                unsigned Permissions) const {
+  if ((Permissions & ~(Read | Write | Execute)) || State->Running ||
+      State->DeviceCallbackActive || State->effectsStopped())
+    return failure("CPU access preflight requires a healthy stopped CPU");
+  return !State->accessFault(Address, Size, Permissions) &&
+         !State->overlappingMMIO(Address, Size);
+}
+
 llvm::Error UnicornBackend::readBacking(uint64_t Address,
                                         llvm::MutableArrayRef<uint8_t> Bytes) {
   if (auto E = validateBacking(Address, Bytes.size()))
@@ -645,7 +712,7 @@ llvm::Error UnicornBackend::installHooks(BackendHooks Hooks) {
 llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
   if (auto E = State->deviceError())
     return E;
-  if (State->FirstFault || State->CallbackFailed)
+  if (State->FirstFault || State->CallbackFailed || State->RecoverableFault)
     return failure("cannot resume a faulted CPU instance");
   if (State->Running)
     return failure("cannot recursively execute a CPU instance");
@@ -658,6 +725,20 @@ llvm::Error UnicornBackend::run(uint64_t PC, uint64_t TimeoutMicroseconds) {
   State->Running = false;
   if (auto E = State->deviceError())
     return E;
+  if (State->RecoverableFault) {
+    // Unicorn reports the original memory error even after the hook stops the
+    // instruction. Only that exact hook-admitted event may be resumed by a
+    // caller-supplied exception transfer; all other errors remain terminal.
+    if (State->CallbackFailed || State->FirstFault ||
+        (Status != UC_ERR_OK && Status != UC_ERR_READ_UNMAPPED &&
+         Status != UC_ERR_WRITE_UNMAPPED && Status != UC_ERR_READ_PROT &&
+         Status != UC_ERR_WRITE_PROT)) {
+      State->retain(*State->RecoverableFault);
+      State->RecoverableFault.reset();
+      return check(Status, "execute guest after memory exception");
+    }
+    return llvm::Error::success();
+  }
   if (Status == UC_ERR_INSN_INVALID || Status == UC_ERR_EXCEPTION)
     State->retain({Status == UC_ERR_INSN_INVALID
                        ? BackendFaultKind::InvalidInstruction
@@ -685,6 +766,11 @@ bool UnicornBackend::hasMemoryFault() const {
 bool UnicornBackend::hasDeviceError() const { return State->MMIOFailed; }
 std::optional<BackendFault> UnicornBackend::fault() const {
   return State->FirstFault;
+}
+std::optional<BackendFault> UnicornBackend::takeRecoverableFault() {
+  auto Fault = State->RecoverableFault;
+  State->RecoverableFault.reset();
+  return Fault;
 }
 bool UnicornBackend::executable(uint64_t Address) const {
   return State->accessible(Address, 1, Execute);
