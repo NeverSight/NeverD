@@ -75,6 +75,10 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgress:animated:", "v24@0:8f16B20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setProgressViewStyle:", "v24@0:8q16", nullptr},
+// The complete device/simulator ASTs cited above each have exactly one
+// setShowsCancelButton:animated: owner (UISearchBar), with two BOOL parameters.
+// Apple Clang independently encodes this signature as v24@0:8B16B20.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setShowsCancelButton:animated:", "v24@0:8B16B20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setText:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTitleColor:forState:", "v32@0:8@16Q24", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTranslatesAutoresizingMaskIntoConstraints:", "v20@0:8B16", nullptr},

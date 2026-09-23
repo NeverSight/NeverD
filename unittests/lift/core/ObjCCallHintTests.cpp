@@ -8085,6 +8085,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"setCenter:", NdTypeKind::Void, 3},
       {"setLayoutMargins:", NdTypeKind::Void, 3},
       {"setProgressViewStyle:", NdTypeKind::Void, 3},
+      {"setShowsCancelButton:animated:", NdTypeKind::Void, 4},
       {"setText:", NdTypeKind::Void, 3},
       {"setTranslatesAutoresizingMaskIntoConstraints:", NdTypeKind::Void, 3},
       {"sizeToFit", NdTypeKind::Void, 2},
@@ -8116,6 +8117,13 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       EXPECT_EQ(Hint->Parameters[2].Type->Size, 8U);
       EXPECT_TRUE(Hint->Parameters[2].Type->IsSigned);
       EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
+    }
+    if (llvm::StringRef(Case.Selector) == "setShowsCancelButton:animated:") {
+      for (size_t I : {2U, 3U}) {
+        EXPECT_EQ(Hint->Parameters[I].Type->Kind, NdTypeKind::Int);
+        EXPECT_EQ(Hint->Parameters[I].Type->Size, 1U);
+        EXPECT_EQ(Hint->Parameters[I].Location.RegisterOffset, I * 8);
+      }
     }
 
     auto Changed = Image;
