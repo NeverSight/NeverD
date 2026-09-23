@@ -275,6 +275,46 @@ TEST(DriverScenario, ParsesCancellationDelayBoundariesForDataRequests) {
   EXPECT_EQ(Native->Requests[2].CancelAfter100ns, uint64_t(INT64_MAX));
 }
 
+TEST(DriverScenario, ParsesAndRestrictsNeitherUserPageAccessFacts) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"ioctl","code":"0x222003","input":"0102","output_size":2,
+     "user_input_access":"read_only","user_output_access":"no_access"},
+    {"kind":"ioctl","code":"0x222003","input":"03","output_size":1,
+     "user_input_access":"read_write"}
+  ]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 2u);
+  EXPECT_EQ(Parsed->Requests[0].UserInputAccess,
+            DriverUserPageAccess::ReadOnly);
+  EXPECT_EQ(Parsed->Requests[0].UserOutputAccess,
+            DriverUserPageAccess::NoAccess);
+  EXPECT_EQ(Parsed->Requests[1].UserInputAccess,
+            DriverUserPageAccess::ReadWrite);
+  EXPECT_FALSE(Parsed->Requests[1].UserOutputAccess);
+  auto Native = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+
+  for (
+      const char *JSON :
+      {R"({"requests":[{"kind":"ioctl","code":"0x222000","input":"01","user_input_access":"read_only"}]})",
+       R"({"requests":[{"kind":"ioctl","code":"0x222003","user_input_access":"no_access"}]})",
+       R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_output_access":"read_only"}]})",
+       R"({"requests":[{"kind":"read","output_size":1,"user_output_access":"no_access"}]})",
+       R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_input_access":"write_only"}]})",
+       R"({"requests":[{"kind":"ioctl","code":"0x222003","input":"01","user_input_access":1}]})"}) {
+    SCOPED_TRACE(JSON);
+    auto Invalid = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(llvm::toString(Invalid.takeError()).find("user"),
+              std::string::npos);
+  }
+  Parsed->Requests[0].ControlCode = 0x222000;
+  auto InvalidNative = driverOptionsFromScenarioJSON("{}", *Parsed);
+  ASSERT_FALSE(bool(InvalidNative));
+  EXPECT_NE(llvm::toString(InvalidNative.takeError()).find("user"),
+            std::string::npos);
+}
+
 TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
   for (const char *Value :
        {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",

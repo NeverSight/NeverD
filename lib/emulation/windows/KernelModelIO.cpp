@@ -14,6 +14,8 @@
 
 #include "neverd/emulation/DriverProfile.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #include <algorithm>
 #include <array>
 
@@ -44,11 +46,22 @@ unsigned majorFunction(DriverRequestKind Kind) {
 
 bool ntSuccess(uint32_t Status) { return !(Status & 0x80000000U); }
 bool ntError(uint32_t Status) { return (Status >> 30) == 3; }
+unsigned userPermissions(DriverUserPageAccess Access) {
+  switch (Access) {
+  case DriverUserPageAccess::ReadWrite:
+    return Read | Write;
+  case DriverUserPageAccess::ReadOnly:
+    return Read;
+  case DriverUserPageAccess::NoAccess:
+    return 0;
+  }
+  llvm_unreachable("invalid driver user page access");
+}
 } // namespace
 
 llvm::Expected<uint64_t>
-KernelModel::allocateUserBuffer(uint32_t Size,
-                                llvm::ArrayRef<uint8_t> Initial) {
+KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
+                                DriverUserPageAccess Access) {
   if (!Size)
     return 0;
   if (Initial.size() > Size || Size > profile::KernelArenaSize)
@@ -64,6 +77,8 @@ KernelModel::allocateUserBuffer(uint32_t Size,
   if (auto E = Physical.registerRegion(Address, Address, Size))
     return std::move(E);
   if (auto E = Memory.write(Address, Initial))
+    return std::move(E);
+  if (auto E = Memory.protect(Address, Pages, userPermissions(Access)))
     return std::move(E);
   UserAllocations.emplace(Address, Size);
   NextUserAddress += Pages;
@@ -125,11 +140,15 @@ llvm::Error KernelModel::prepareRequestBuffers(ActiveRequest &Record,
     Request->Direct = TransferFlags == DeviceDirectIO;
   }
   if (Request->Neither) {
-    auto InputBuffer = allocateUserBuffer(Input.Input.size(), Input.Input);
+    auto InputBuffer = allocateUserBuffer(
+        Input.Input.size(), Input.Input,
+        Input.UserInputAccess.value_or(DriverUserPageAccess::ReadWrite));
     if (!InputBuffer)
       return InputBuffer.takeError();
     Request->UserInput = *InputBuffer;
-    auto OutputBuffer = allocateUserBuffer(Input.OutputSize, {});
+    auto OutputBuffer = allocateUserBuffer(
+        Input.OutputSize, {},
+        Input.UserOutputAccess.value_or(DriverUserPageAccess::ReadWrite));
     if (!OutputBuffer)
       return OutputBuffer.takeError();
     Request->UserBuffer = *OutputBuffer;
@@ -341,6 +360,14 @@ KernelModel::beginRequest(const DriverRequest &Input,
       (!IsIOCTL && !IsRead && Input.OutputSize) ||
       (!IsRead && !IsWrite && Input.ByteOffset))
     return ioError("request fields do not match its WDM major function");
+  if (Input.UserInputAccess || Input.UserOutputAccess) {
+    if (!IsIOCTL ||
+        (Input.ControlCode & IoControlMethodMask) != MethodNeither ||
+        (Input.UserInputAccess && Input.Input.empty()) ||
+        (Input.UserOutputAccess && !Input.OutputSize))
+      return ioError("user page access requires a nonempty METHOD_NEITHER "
+                     "buffer in the matching direction");
+  }
   if (IsIOCTL && (Input.ControlCode & IoControlMethodMask) == MethodNeither &&
       Input.CancelAfter100ns)
     return ioError("METHOD_NEITHER cancellation requires a locked-buffer "

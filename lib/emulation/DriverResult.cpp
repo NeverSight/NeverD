@@ -375,6 +375,37 @@ llvm::json::Array dmaEventConfigurationJSON(const DriverOptions &Options) {
   return Result;
 }
 
+const char *userPageAccessName(DriverUserPageAccess Access) {
+  switch (Access) {
+#define NEVERD_DRIVER_USER_PAGE_ACCESS(Name, Spelling)                         \
+  case DriverUserPageAccess::Name:                                             \
+    return Spelling;
+#include "neverd/emulation/DriverUserPageAccess.def"
+#undef NEVERD_DRIVER_USER_PAGE_ACCESS
+  }
+  llvm_unreachable("invalid driver user page access");
+}
+
+llvm::json::Array
+userPageAccessConfigurationJSON(const DriverOptions &Options) {
+  llvm::json::Array Result;
+  for (size_t I = 0; I < Options.Requests.size(); ++I) {
+    const auto &Request = Options.Requests[I];
+    if (!Request.UserInputAccess && !Request.UserOutputAccess)
+      continue;
+    llvm::json::Object Item{
+        {field::SourceRequestIndex, static_cast<uint64_t>(I)}};
+    if (Request.UserInputAccess)
+      Item[field::UserInputAccess] =
+          userPageAccessName(*Request.UserInputAccess);
+    if (Request.UserOutputAccess)
+      Item[field::UserOutputAccess] =
+          userPageAccessName(*Request.UserOutputAccess);
+    Result.push_back(std::move(Item));
+  }
+  return Result;
+}
+
 llvm::json::Array pnpConfigurationJSON(const DriverOptions &Options) {
   llvm::json::Array Devices;
   for (const auto &Device : Options.PnpDevices) {
@@ -460,6 +491,8 @@ std::string driverResultJSON(const DriverResult &Result) {
       {interruptField::InterruptEvents,
        interruptEventConfigurationJSON(Result.Configuration)},
       {dmaField::DmaEvents, dmaEventConfigurationJSON(Result.Configuration)},
+      {field::UserPageAccess,
+       userPageAccessConfigurationJSON(Result.Configuration)},
       {field::KernelExports, std::move(Exports)}};
   if (Result.Fault) {
     const auto &Fault = *Result.Fault;

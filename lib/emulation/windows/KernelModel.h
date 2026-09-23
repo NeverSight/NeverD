@@ -211,7 +211,8 @@ private:
   uint64_t NextUserAlias = profile::UserAliasBase;
   std::map<uint64_t, uint64_t> UserAllocations;
   llvm::Expected<uint64_t> allocateUserBuffer(uint32_t Size,
-                                               llvm::ArrayRef<uint8_t> Initial);
+                                              llvm::ArrayRef<uint8_t> Initial,
+                                              DriverUserPageAccess Access);
   llvm::Expected<uint64_t> probeUserBuffer(uint64_t Address, uint64_t Size,
                                             uint32_t Alignment, bool ForWrite);
   std::optional<KernelGuestCall> PendingInterruptCall;

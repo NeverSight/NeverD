@@ -423,8 +423,17 @@ of the request packet. `MmGetSystemAddressForMdlSafe` returns a shared kernel
 alias; writes through it change the user buffer. `MmUnlockPages` revokes that
 alias and unpins the pages, and `IoFreeMdl` requires the MDL to be unlocked.
 The modeled user VA arena, process context, one-allocation locking rule and
-mapping budget are explicit limits. Scenario-defined user page protections,
-arbitrary processes and WDM cancellation are not yet modeled.
+mapping budget are explicit limits. A `METHOD_NEITHER` IOCTL with a nonempty
+buffer may set `user_input_access` or `user_output_access` to `read_write`
+(the default), `read_only` or `no_access`. The two protections are independent.
+`no_access` retains a non-NULL user pointer whose pages fail CPU access and
+locking. `ProbeForRead` still performs only its range/alignment check, while
+`ProbeForWrite` and `MmProbeAndLockPages` can raise an access violation. These
+fields are rejected for other transfer methods and empty buffers. Arbitrary
+processes, dynamic user unmapping and WDM cancellation remain unmodeled.
+The report's `configuration.user_page_access` lists only explicit protection
+facts, keyed by zero-based `source_request_index`; omitted directions use
+`read_write`.
 
 When an IOCTL has a nonzero `output_size`, `Information` must not exceed that
 size, even when the input buffer is larger. An IOCTL without an output buffer
@@ -547,7 +556,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v17`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v18`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

@@ -511,7 +511,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v17`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v18`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -587,3 +587,6 @@ und Ausführung zum Unicorn-Adapter. Adapter und Modell verwenden dieselbe
 Gastspeicherschnittstelle. Windows-API-Verhalten gehört nicht in den Unicorn-Fork.
 
 Beim WDM-`METHOD_NEITHER` zeigen `Type3InputBuffer` und `IRP.UserBuffer` auf getrennte Benutzerzuweisungen. `ProbeForRead` prüft Bereich und Ausrichtung ohne Seitenzugriff; `ProbeForWrite` berührt jede Seite. `ExGetPreviousMode` meldet den Anforderungsmodus. `MmProbeAndLockPages` sperrt Seiten einer Benutzerzuweisung, `MmGetSystemAddressForMdlSafe` liefert ein gemeinsames Alias und `MmUnlockPages` hebt Sperre und Alias auf. Beliebige Prozesskontexte sind nicht modelliert.
+
+Ein WDM-`METHOD_NEITHER`-Auftrag mit nichtleerem Puffer kann `user_input_access` und `user_output_access` unabhängig auf `read_write` (Standard), `read_only` oder `no_access` setzen. Für andere Methoden und leere Puffer werden die Felder abgewiesen; `no_access` behält den Zeiger, sperrt aber den Seitenzugriff.
+Der Bericht `configuration.user_page_access` enthält nur explizite Zugriffsangaben mit einem bei null beginnenden `source_request_index`; ausgelassene Richtungen verwenden `read_write`.

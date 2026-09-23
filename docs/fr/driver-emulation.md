@@ -515,7 +515,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v17`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v18`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -590,3 +590,6 @@ Unicorn. L’adaptateur et le modèle utilisent la même interface de mémoire
 invitée. Aucun comportement d’API Windows n’a sa place dans le fork Unicorn.
 
 Pour WDM `METHOD_NEITHER`, `Type3InputBuffer` et `IRP.UserBuffer` désignent deux allocations utilisateur distinctes. `ProbeForRead` vérifie la plage et l’alignement sans toucher aux pages ; `ProbeForWrite` touche chaque page. `ExGetPreviousMode` indique le mode de la requête. `MmProbeAndLockPages` verrouille une allocation utilisateur, `MmGetSystemAddressForMdlSafe` fournit un alias partagé et `MmUnlockPages` retire cet alias et déverrouille les pages. Les processus arbitraires ne sont pas modélisés.
+
+Une requête WDM `METHOD_NEITHER` avec tampon non vide peut définir indépendamment `user_input_access` et `user_output_access` à `read_write` (défaut), `read_only` ou `no_access`. Ces champs sont refusés pour les autres méthodes et les tampons vides ; `no_access` conserve le pointeur mais interdit l’accès aux pages.
+Le rapport `configuration.user_page_access` conserve uniquement les protections explicites, avec un `source_request_index` commençant à zéro ; une direction omise reste `read_write`.

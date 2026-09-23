@@ -1,0 +1,12 @@
+//===- DriverUserPageAccess.def - Scenario user-page access --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Explicit protection states for synthetic METHOD_NEITHER user buffers.
+//===----------------------------------------------------------------------===//
+
+NEVERD_DRIVER_USER_PAGE_ACCESS(ReadWrite, "read_write")
+NEVERD_DRIVER_USER_PAGE_ACCESS(ReadOnly, "read_only")
+NEVERD_DRIVER_USER_PAGE_ACCESS(NoAccess, "no_access")

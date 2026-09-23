@@ -800,6 +800,28 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
       return invalid("device_id must be a bounded ASCII identifier");
     Result.DeviceID = ID->str();
   }
+  auto UserAccess =
+      [&](llvm::StringRef Field,
+          std::optional<DriverUserPageAccess> &Output) -> llvm::Error {
+    const auto *Value = Object->get(Field);
+    if (!Value)
+      return llvm::Error::success();
+    auto Text = Value->getAsString();
+    if (!Text)
+      return invalid(Field + " must be a user-page access string");
+#define NEVERD_DRIVER_USER_PAGE_ACCESS(Name, Spelling)                         \
+  if (*Text == Spelling) {                                                     \
+    Output = DriverUserPageAccess::Name;                                       \
+    return llvm::Error::success();                                             \
+  }
+#include "neverd/emulation/DriverUserPageAccess.def"
+#undef NEVERD_DRIVER_USER_PAGE_ACCESS
+    return invalid(Field + " has an unsupported user-page access value");
+  };
+  if (auto E = UserAccess(UserInputAccessField, Result.UserInputAccess))
+    return std::move(E);
+  if (auto E = UserAccess(UserOutputAccessField, Result.UserOutputAccess))
+    return std::move(E);
   if (Result.Kind == DriverRequestKind::Pnp) {
     auto Pnp = pnpOperation(*Object);
     if (!Pnp)
@@ -1311,6 +1333,17 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
   uint64_t Total = 0;
   size_t InterruptEventCount = 0;
   for (const auto &Request : Options.Requests) {
+    if (Request.UserInputAccess || Request.UserOutputAccess) {
+      if (Request.Kind != DriverRequestKind::DeviceControl ||
+          (Request.ControlCode & windows::IoControlMethodMask) !=
+              windows::MethodNeither)
+        return invalid("user page access fields require a METHOD_NEITHER "
+                       "ioctl request");
+      if ((Request.UserInputAccess && Request.Input.empty()) ||
+          (Request.UserOutputAccess && !Request.OutputSize))
+        return invalid("user page access requires a nonempty corresponding "
+                       "METHOD_NEITHER buffer");
+    }
     if (!Request.InterruptEvents.empty() &&
         Request.Kind != DriverRequestKind::Read &&
         Request.Kind != DriverRequestKind::Write &&
