@@ -91,6 +91,7 @@ public:
                                   uint8_t CurrentIRQL);
   llvm::Expected<uint8_t> release(uint64_t Object, uint64_t Execution,
                                   uint8_t OldIRQL, uint8_t CurrentIRQL);
+  std::optional<uint8_t> manualHoldIRQL(uint64_t Execution) const;
   llvm::Error validateExecutionReturn(uint64_t Execution) const;
 
 private:

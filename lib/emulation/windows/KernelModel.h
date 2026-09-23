@@ -245,6 +245,14 @@ private:
   std::map<uint64_t, ExecutiveSpinLock> ExecutiveSpinLocks;
   llvm::Expected<uint64_t> callSpinLockAPI(llvm::StringRef Name,
                                            llvm::ArrayRef<uint64_t> Arguments);
+  struct RaisedIRQL {
+    uint64_t Execution;
+    uint8_t OldIRQL;
+    uint8_t NewIRQL;
+  };
+  std::vector<RaisedIRQL> RaisedIRQLs;
+  llvm::Expected<uint64_t> callIRQLAPI(llvm::StringRef Name,
+                                       llvm::ArrayRef<uint64_t> Arguments);
   llvm::Expected<uint64_t> processObject(uint32_t ProcessID);
   llvm::Expected<uint64_t> requestorProcess(uint64_t IRP);
   llvm::Expected<uint64_t> currentProcess();

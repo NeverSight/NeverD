@@ -214,6 +214,9 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
 }
 
 llvm::Error KernelModel::suspendScheduled(uint64_t ID) {
+  for (const RaisedIRQL &Raise : RaisedIRQLs)
+    if (Raise.Execution == CurrentExecution)
+      return schedulingError("cannot suspend with an unmatched IRQL raise");
   for (const auto &[Address, Lock] : ExecutiveSpinLocks)
     if (Lock.Execution == CurrentExecution)
       return schedulingError("cannot suspend with an executive spin lock");

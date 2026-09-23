@@ -615,6 +615,9 @@ llvm::Expected<uint64_t> KernelModel::call(
     if (auto E = unstackDetachProcess(A[0]))
       return E;
     return 0;
+  case KernelAPIKind::KfRaiseIrql:
+  case KernelAPIKind::KeLowerIrql:
+    return callIRQLAPI(Name, A);
 #define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                           \
   case KernelAPIKind::Name:
 #include "KernelSpinLockAPIs.def"

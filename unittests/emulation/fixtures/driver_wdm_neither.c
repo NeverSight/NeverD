@@ -25,6 +25,7 @@
 #define IO_WORKER_ATTACH 0x222033u
 #define IO_SPIN_LOCK 0x222037u
 #define IO_SEMAPHORE 0x22203bu
+#define IO_IRQL 0x22203fu
 
 static PDEVICE_OBJECT Device;
 static volatile ULONG Stage;
@@ -412,6 +413,31 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
       Status = STATUS_INVALID_DEVICE_STATE;
     if (NT_SUCCESS(Status)) {
       Output[0] = 0x6b;
+      Length = 1;
+    }
+    break;
+  }
+  case IO_IRQL: {
+    KIRQL OldIRQL = KeRaiseIrqlToDpcLevel();
+    KIRQL NestedIRQL;
+    KeRaiseIrql(DISPATCH_LEVEL, &NestedIRQL);
+    if (OldIRQL != PASSIVE_LEVEL || NestedIRQL != DISPATCH_LEVEL ||
+        KeGetCurrentIrql() != DISPATCH_LEVEL)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLowerIrql(NestedIRQL);
+    KeLowerIrql(OldIRQL);
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeRaiseIrql(APC_LEVEL, &OldIRQL);
+    if (OldIRQL != PASSIVE_LEVEL || KeGetCurrentIrql() != APC_LEVEL)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLowerIrql(OldIRQL);
+    OldIRQL = KeRaiseIrqlToSynchLevel();
+    if (OldIRQL != PASSIVE_LEVEL || KeGetCurrentIrql() != 12)
+      Status = STATUS_INVALID_DEVICE_STATE;
+    KeLowerIrql(OldIRQL);
+    if (NT_SUCCESS(Status)) {
+      Output[0] = 0x7c;
       Length = 1;
     }
     break;
