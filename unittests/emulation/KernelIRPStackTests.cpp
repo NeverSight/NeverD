@@ -234,6 +234,47 @@ protected:
   }
 };
 
+TEST_F(KernelIRPStack, AsynchronousFileOverlapsReadsWithoutImplicitPosition) {
+  DriverRequest Create;
+  Create.Kind = DriverRequestKind::Create;
+  Create.Device = "\\Device\\StackLower";
+  Create.AsynchronousFile = true;
+  const auto Open = take(Model->beginRequest(Create));
+  const uint64_t File =
+      get(get(Open.IRP + IRPStackPointerOffset) + StackFileOffset);
+  EXPECT_EQ(get(File + FileFlagsOffset, 4) & FileSynchronousIO, 0u);
+  EXPECT_EQ(get(Open.IRP + IRPFlagsOffset, 4) & IRPSynchronous, 0u);
+  status(Open.IRP);
+  call("IofCompleteRequest", {Open.IRP, 0});
+  archive(Open.IRP);
+
+  DriverRequest ReadRequest;
+  ReadRequest.Kind = DriverRequestKind::Read;
+  ReadRequest.Device = "\\Device\\StackLower";
+  ReadRequest.OutputSize = 4;
+  ReadRequest.ByteOffset = 5;
+  const auto First = take(Model->beginRequest(ReadRequest));
+  EXPECT_EQ(get(First.IRP + IRPFlagsOffset, 4) & IRPSynchronous, 0u);
+  call("IoMarkIrpPending", {First.IRP});
+  success(Model->recordDispatchReturn(First.IRP, Pending));
+
+  ReadRequest.ByteOffset = 7;
+  const auto Second = take(Model->beginRequest(ReadRequest));
+  EXPECT_NE(First.IRP, Second.IRP);
+  EXPECT_EQ(get(Second.IRP + IRPFlagsOffset, 4) & IRPSynchronous, 0u);
+  call("IoMarkIrpPending", {Second.IRP});
+  success(Model->recordDispatchReturn(Second.IRP, Pending));
+
+  status(Second.IRP, 0, 4);
+  call("IofCompleteRequest", {Second.IRP, 0});
+  success(Model->finalizeRequest(Second.IRP));
+  EXPECT_EQ(get(File + FileCurrentByteOffset), 0u);
+  status(First.IRP, 0, 4);
+  call("IofCompleteRequest", {First.IRP, 0});
+  success(Model->finalizeRequest(First.IRP));
+  EXPECT_EQ(get(File + FileCurrentByteOffset), 0u);
+}
+
 TEST_F(KernelIRPStack, CopyUsesCountedSlotsAndPreservesTheOriginalOperation) {
   const uint64_t IRP = io();
   const uint64_t Top = IRP + IRPSize + StackSize;

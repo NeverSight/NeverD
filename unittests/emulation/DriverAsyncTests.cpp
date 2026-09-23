@@ -74,6 +74,76 @@ DriverOptions concurrentScenario() {
   return Options;
 }
 
+DriverOptions sameFileScenario() {
+  DriverOptions Options;
+  DriverRequest Create;
+  Create.Kind = DriverRequestKind::Create;
+  Create.AsynchronousFile = true;
+  Options.Requests.push_back(Create);
+  for (unsigned I = 0; I < 2; ++I) {
+    DriverRequest IO;
+    IO.Kind = DriverRequestKind::DeviceControl;
+    IO.ControlCode = BatchAsyncOnly;
+    IO.Input = I ? std::vector<uint8_t>{0x11, 0x22, 0x33, 0x44}
+                 : std::vector<uint8_t>{0, 1, 0x5a, 0xff};
+    IO.OutputSize = 4;
+    IO.DeferCallbackDrain = I == 0;
+    Options.Requests.push_back(IO);
+  }
+  for (DriverRequestKind Kind :
+       {DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+    DriverRequest Request;
+    Request.Kind = Kind;
+    Options.Requests.push_back(Request);
+  }
+  Options.Unload = true;
+  return Options;
+}
+
+TEST(DriverAsync, AsynchronousFileAllowsOverlappingPendingIOCTLs) {
+  auto Result = emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys",
+                              sameFileScenario());
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 5u);
+  EXPECT_EQ(Result->Requests[1].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[2].DispatchStatus, 0x103u);
+  EXPECT_EQ(Result->Requests[1].Output,
+            (std::vector<uint8_t>{0x5a, 0x5b, 0, 0xa5}));
+  EXPECT_EQ(Result->Requests[2].Output,
+            (std::vector<uint8_t>{0x4b, 0x78, 0x69, 0x1e}));
+  EXPECT_TRUE(Result->UnloadCompleted);
+}
+
+TEST(DriverAsync, AsynchronousFileCannotCleanupBeforePendingIRPFinalizes) {
+  auto Options = sameFileScenario();
+  Options.Requests.erase(Options.Requests.begin() + 2);
+  auto Result =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys", Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("lifecycle requires prior transfers"),
+            std::string::npos);
+}
+
+TEST(DriverAsync, AsynchronousFileCancelKeepsSecondIRPLive) {
+  auto Options = sameFileScenario();
+  Options.Requests[1].ControlCode = BatchCancelable;
+  Options.Requests[1].CancelAfter100ns = 0;
+  Options.Requests[2].ControlCode = BatchCancelable;
+  auto Result =
+      emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys", Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+  ASSERT_EQ(Result->Requests.size(), 5u);
+  EXPECT_EQ(Result->Requests[1].IOStatus, 0xc0000120u);
+  EXPECT_TRUE(Result->Requests[1].CancelRequestedAt100ns);
+  EXPECT_EQ(Result->Requests[2].IOStatus, 0u);
+  EXPECT_EQ(Result->Requests[2].Output,
+            (std::vector<uint8_t>{0x4b, 0x78, 0x69, 0x1e}));
+  EXPECT_TRUE(Result->UnloadCompleted);
+}
+
 TEST(DriverAsync, BatchSubmitsIndependentPendingIRPsBeforeEitherWorkerRuns) {
   auto Result = emulateDriver(NEVERD_DRIVER_FIXTURES "/driver_async.sys",
                               concurrentScenario());

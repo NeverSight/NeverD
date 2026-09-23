@@ -316,7 +316,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v23`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v24`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
@@ -347,4 +347,8 @@ WDM `METHOD_NEITHER` 的 `Type3InputBuffer` 與 `IRP.UserBuffer` 分別指向獨
 
 ## 有界並行 WDM 要求
 
-WDM READ/WRITE/IOCTL 要求可設定 `defer_callback_drain: true`。只有派送傳回 `STATUS_PENDING` 且 IRP 仍待完成時，執行器才會先提交下一項要求；下一項未設定此欄位的要求之後，會排空回呼並完成整批要求。重疊要求必須使用不同的檔案物件；若最後一項要求設定此欄位，場景結尾會排空回呼。不支援相同檔案物件上的重疊要求、KMDF 批次提交、任意執行緒搶佔或外部要求到達。
+WDM READ/WRITE/IOCTL 要求可設定 `defer_callback_drain: true`。只有派送傳回 `STATUS_PENDING` 且 IRP 仍待完成時，執行器才會先提交下一項要求；下一項未設定此欄位的要求之後，會排空回呼並完成整批要求。重疊要求可使用不同的檔案物件，或使用明確非同步開啟的相同檔案物件；若最後一項要求設定此欄位，場景結尾會排空回呼。同步檔案物件的重疊要求、KMDF 批次提交、任意執行緒搶佔及外部要求到達仍不支援。
+
+## 非同步檔案物件
+
+只有 CREATE 要求可設定布林欄位 `asynchronous_file: true`；省略或 false 維持同步開啟。非同步開啟會清除來賓 `FILE_OBJECT` 的 `FO_SYNCHRONOUS_IO`，後續檔案 IRP 不設定 `IRP_SYNCHRONOUS_API`。同一非同步檔案的 READ/WRITE/IOCTL 只有在明確延後回呼排空時才能重疊；CLEANUP/CLOSE 仍須等待所有先前傳輸完成並最終化。非同步檔案不維護隱含檔案位置；`byte_offset` 仍逐要求指定，預設為零。非 CREATE 要求即使設為 false 也拒絕此欄位。

@@ -489,8 +489,11 @@ is ready. DPCs run at `DISPATCH_LEVEL`; framework cancellation callbacks and
 workers run at `PASSIVE_LEVEL`, on CPU0 with deterministic cooperative
 scheduling. DPCs precede FIFO cancellation callbacks, which precede workers
 and resuming ready passive waiters. `DriverSession` may defer callback draining
-across pending WDM requests on independent files; `KernelModel` still owns each
-IRP's completion and finalization. This does not provide general
+across pending WDM requests on independent files or on one explicitly
+asynchronous file; `KernelModel` still owns each IRP's completion and
+finalization. The FILE_OBJECT open mode controls synchronous flags and
+same-file admission, while CLEANUP/CLOSE require all earlier transfers to
+finalize. This does not provide general
 thread/APC/spinlock scheduling, arbitrary concurrent request arrival, PnP
 cancellation, full PnP/power or general hardware. API IRQL ceilings come from `KernelAPIIRQL.def`, with
 argument-dependent checks in the owning model.

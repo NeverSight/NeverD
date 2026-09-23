@@ -52,10 +52,10 @@ establish compatibility with arbitrary third-party drivers.
 | Driver class or requirement | Current scope | Missing environment |
 |-----------------------------|---------------|---------------------|
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, buffered/direct requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
-| `METHOD_BUFFERED` IOCTL | Buffered/direct I/O with work-item or DPC completion; pending WDM requests may overlap across independent files | Only the API subset below; no arbitrary same-file overlap |
+| `METHOD_BUFFERED` IOCTL | Buffered/direct I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
 | Driver-allocated MDLs | Standalone descriptors over modeled nonpaged pool or one live user allocation, with shared physical page identities | IRP association, MDL chains and other user address spaces |
-| READ/WRITE | Buffered/direct/neither I/O with work-item or DPC completion; pending WDM requests may overlap across independent files | Only the API subset below; no arbitrary same-file overlap or implicit file position |
+| READ/WRITE | Buffered/direct/neither I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial and no implicit file position is modeled |
 | WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs, synthetic requestor identities, post-dispatch VA revocation or process exit and bounded cancellation | No arbitrary user mappings, process attachment or remapping |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, sequential default queues and buffered/direct requests with executed callbacks | No PnP devices, general queue scheduling, class extensions or UMDF |
 | PnP bus/function/filter driver | Explicit resource-free/register-bank PDOs, guest AddDevice and eight common PnP lifecycle minors | Other PnP operations, general power policy, other hardware/resources and KMDF PnP |
@@ -106,10 +106,10 @@ arguments in registers and additional arguments on the stack. A dispatch that
 marks an IRP pending must return `STATUS_PENDING`. By default it completes
 before the next request starts. A WDM READ/WRITE/IOCTL request may set
 `defer_callback_drain: true` to submit another request on an independent file
-before queued callbacks run. The next request without this flag drains all
+or the same asynchronously opened file before queued callbacks run. The next request without this flag drains all
 queued callbacks and finalizes the batch; a final flagged request drains at
 the end of the scenario. The flagged dispatch must actually leave its IRP
-pending. Same-file overlap, KMDF batching, arbitrary preemption and external
+pending. Synchronous-file overlap, KMDF batching, arbitrary preemption and external
 request arrival remain unsupported. No available producer for a
 pending request or infinite wait causes a stalled `model_error`. Shared
 instruction, memory, observation and wall-clock budgets still apply.
@@ -165,7 +165,7 @@ After successful DriverEntry, `AddDevice` runs once per configured PDO with a se
 
 Reports retain the initial inventory in `configuration.pnp_devices`. Observed `pnp_devices` entries contain `id`, `pdo`, nullable `add_device_status`, current `attached`, `pnp_state` and `provider_present`; removal leaves `attached` false. AddDevice phases are `add_device:<ID>`, and failures contribute to `scenario_success` without replacing DriverEntry `nt_status`. Each request adds nullable `device_id` and `pnp`; PnP requests have `file: null`. The `pnp` object records `minor`, `state_before`, `state_after`, nullable `bus_status`, `bus_received_at_100ns` and `bus_completed_at_100ns`. Configured status becomes an observation only at actual bus completion; receipt time is independent. Existing request field types are unchanged.
 
-Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE requests reach real guest dispatch while the device exists outside Removing/Removed. The model does not synthesize a failure from Stopped, StopPending, RemovePending or power state: a driver can complete software I/O, reject a request or hold it according to its own code. Pending WDM transfers can overlap only through explicit batching on independent files; a held IRP with no available producer still cannot be released by a later scenario start or cleanup request, and stops as stalled `model_error`. The closed-file and drained-request requirements before Remove are profile restrictions. `query_stop` with final `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) is rejected in both scenario preflight and final guest completion because it requests unmodeled resource requery; see [Microsoft’s QUERY_STOP contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device). Stop/restart and surprise-removal do not implement resource rebalance or KMDF PnP.
+Ordinary CREATE/READ/WRITE/IOCTL/CLEANUP/CLOSE requests reach real guest dispatch while the device exists outside Removing/Removed. The model does not synthesize a failure from Stopped, StopPending, RemovePending or power state: a driver can complete software I/O, reject a request or hold it according to its own code. Pending WDM transfers can overlap only through explicit batching across files or on one asynchronous file; a held IRP with no available producer still cannot be released by a later scenario start or cleanup request, and stops as stalled `model_error`. The closed-file and drained-request requirements before Remove are profile restrictions. `query_stop` with final `STATUS_RESOURCE_REQUIREMENTS_CHANGED` (0x119) is rejected in both scenario preflight and final guest completion because it requests unmodeled resource requery; see [Microsoft’s QUERY_STOP contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/irp-mn-query-stop-device). Stop/restart and surprise-removal do not implement resource rebalance or KMDF PnP.
 
 Resource-free PnP uses the original genuine-WDK `driver_wdm_pnp.c`, optional `NEVERD_WDM_PNP_FIXTURE` / `NEVERD_WDM_PNP_CFG_FIXTURE`, and native plus C API/CLI tests. Missing artifacts skip explicitly; execution evidence remains Linux-only.
 
@@ -386,6 +386,17 @@ Unknown or duplicate fields are rejected.
 omission means empty input. `output_size` is an unsigned JSON integer; omission
 means zero. Numeric fractions and floating-point spellings are rejected.
 
+A CREATE request may set Boolean `asynchronous_file: true`; omission or false
+keeps the existing synchronous file object. The asynchronous open clears
+`FO_SYNCHRONOUS_IO` on its guest `FILE_OBJECT` and does not set
+`IRP_SYNCHRONOUS_API` on subsequent file IRPs. It allows overlapping
+READ/WRITE/IOCTL requests on that file when an earlier transfer explicitly
+defers callback draining. CLEANUP and CLOSE still wait for every earlier IRP
+on the file to complete and finalize. The model does not maintain an implicit
+current byte offset for an asynchronous file; READ/WRITE `byte_offset` remains
+an explicit per-request fact with a default of zero. Non-CREATE requests reject
+`asynchronous_file`, even when false.
+
 Only READ/WRITE/IOCTL requests accept optional `cancel_after_100ns`, a JSON integer from 0 through `INT64_MAX` (9223372036854775807). It schedules cancellation relative to request submission in virtual 100 ns units, not wall-clock time. For KMDF, zero applies after framework routing and before the guest I/O callback; if routing already completed the request, completion wins. For WDM, zero applies after dispatch returns. When the live IRP has a registered cancel routine, the scheduler clears that field and invokes the routine at `DISPATCH_LEVEL` with the cancel spin lock held. The routine must release the lock using `Irp->CancelIrql` before completion or return. Without a registered routine, cancellation sets `Irp->Cancel` but does not complete the request. The WDK inline `IoSetCancelRoutine` exchange, `IoAcquireCancelSpinLock`, `IoReleaseCancelSpinLock` and driver-initiated `IoCancelIrp` use the same IRP and lock state; `IoCancelIrp` calls a registered routine synchronously and returns whether it did so. For positive delays, time advances to timer, wait or cancellation deadlines only when no callback/frame is ready. General queue and PnP cancellation remain unsupported. Each request report includes `cancel_requested_at_100ns`, either the actual absolute virtual cancellation time or null if cancellation never occurred, including when completion won first. A cancellation request alone does not complete an IRP or prescribe its final status.
 
 For a nonempty WDM neither-I/O READ/WRITE or `METHOD_NEITHER` IOCTL, optional Boolean `user_unmap_after_dispatch` revokes the original user virtual addresses after dispatch returns and before queued work or cancellation runs. A previously locked MDL and its system alias retain the same physical bytes until the driver unlocks them; raw user-pointer access and new locks fail. If the output user address is revoked, `output_hex` is empty because no caller-visible output buffer remains, even if the driver completes successfully with a nonzero Information value. The backing is retained for existing MDL pins and is never reused in this bounded scenario. Remapping and arbitrary unmap timing are not modeled.
@@ -576,7 +587,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v23`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v24`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records

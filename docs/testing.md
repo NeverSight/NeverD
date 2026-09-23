@@ -84,6 +84,16 @@ WDK neither-I/O fixture also verifies that another requestor can complete a
 synchronous request before the first exited requestor's locked-MDL worker runs,
 in normal/active-CFG images at preferred and relocated bases.
 
+An `asynchronous_file` CREATE case checks that the guest FILE_OBJECT and IRP
+omit synchronous flags, two pending IOCTLs on the same file complete with
+distinct output, canceling one overlapping IRP leaves the other live, and
+CLEANUP cannot overtake an active transfer. A model-level
+READ test completes two same-file IRPs out of order without advancing an
+implicit current byte offset. Genuine WDK
+neither-I/O runs a second same-file transfer before its first worker across
+normal/active-CFG and relocated images. The C API/CLI use the same public
+schema. These cases do not model completion ports or implicit file position.
+
 `driver_context_limits.c`: API IRQL ceilings come from `KernelAPIIRQL.def`,
 with argument-dependent checks in the owning model. DPCs cannot call registry
 APIs or allocate, free or access paged pool; Unicode `DbgPrint` conversions

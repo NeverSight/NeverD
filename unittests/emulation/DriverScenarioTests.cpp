@@ -398,6 +398,28 @@ TEST(DriverScenario, DeferredCallbackDrainRequiresTransferAndBoolean) {
   }
 }
 
+TEST(DriverScenario, AsynchronousFileRequiresCreateAndBoolean) {
+  auto Parsed = driverOptionsFromScenarioJSON(R"({"requests":[
+    {"kind":"create","asynchronous_file":true},
+    {"kind":"create","file":1,"asynchronous_file":false}
+  ]})");
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 2u);
+  EXPECT_EQ(Parsed->Requests[0].AsynchronousFile, true);
+  EXPECT_EQ(Parsed->Requests[1].AsynchronousFile, false);
+  for (
+      const char *JSON : {
+          R"({"requests":[{"kind":"create","asynchronous_file":1}]})",
+          R"({"requests":[{"kind":"ioctl","code":"0x222000","asynchronous_file":false}]})",
+          R"({"requests":[{"kind":"pnp","asynchronous_file":true}]})",
+      }) {
+    auto Invalid = driverOptionsFromScenarioJSON(JSON);
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(llvm::toString(Invalid.takeError()).find("asynchronous_file"),
+              std::string::npos);
+  }
+}
+
 TEST(DriverScenario, RejectsCancellationDelayTypesAndOverflow) {
   for (const char *Value :
        {"-1", "0.0", "1.0", "1e0", "true", "false", "null", R"("0")",

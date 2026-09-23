@@ -526,7 +526,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v23`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v24`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique
@@ -607,4 +607,8 @@ Le rapport `configuration.user_page_access` conserve uniquement les protections 
 
 ## Requêtes WDM concurrentes limitées
 
-Une requête WDM READ/WRITE/IOCTL peut définir `defer_callback_drain: true`. Le répartiteur doit renvoyer `STATUS_PENDING` et laisser l’IRP en attente pour que la requête suivante soit soumise avant les rappels. Après la prochaine requête sans ce champ, les rappels sont exécutés et le lot est finalisé ; si la dernière requête porte ce champ, le traitement se fait en fin de scénario. Les requêtes qui se chevauchent doivent utiliser des objets fichier distincts. Le chevauchement sur un même fichier, les lots KMDF, la préemption arbitraire et les arrivées externes ne sont pas pris en charge.
+Une requête WDM READ/WRITE/IOCTL peut définir `defer_callback_drain: true`. Le répartiteur doit renvoyer `STATUS_PENDING` et laisser l’IRP en attente pour que la requête suivante soit soumise avant les rappels. Après la prochaine requête sans ce champ, les rappels sont exécutés et le lot est finalisé ; si la dernière requête porte ce champ, le traitement se fait en fin de scénario. Les requêtes qui se chevauchent peuvent utiliser des objets fichier distincts ou un même objet explicitement ouvert en mode asynchrone. Le chevauchement sur un fichier synchrone, les lots KMDF, la préemption arbitraire et les arrivées externes ne sont pas pris en charge.
+
+## Objet fichier asynchrone
+
+Seule une requête CREATE peut définir le booléen `asynchronous_file: true` ; l’omission ou false conserve le mode synchrone. L’ouverture asynchrone efface `FO_SYNCHRONOUS_IO` du `FILE_OBJECT` invité et ne définit pas `IRP_SYNCHRONOUS_API` sur les IRP suivants. Les READ/WRITE/IOCTL d’un même fichier asynchrone ne se chevauchent que si le traitement des rappels est explicitement différé. CLEANUP/CLOSE attendent la fin et la finalisation de tous les transferts antérieurs. Aucune position de fichier implicite n’est maintenue ; `byte_offset` est propre à chaque requête et vaut zéro par défaut. Les autres types de requêtes rejettent ce champ, même avec false.

@@ -522,7 +522,7 @@ einschließlich Geräteobjekten und Callback-Adressen des Treibers. Gastadressen
 sind Hexadezimalzeichenfolgen, damit JSON-Verbraucher keine 64-Bit-Präzision
 verlieren. Das Objekt `configuration` protokolliert Limits, Dienstnamen und
 `kernel_exports`-Überschreibungen sowie die `registry`-Eingabe des Laufs. Das
-Profil lautet `wdm-x64-scheduled-v23`. `nt_status` bleibt das
+Profil lautet `wdm-x64-scheduled-v24`. `nt_status` bleibt das
 DriverEntry-Ergebnis, während `scenario_success` Initialisierung und
 abgeschlossene Anforderungen gemeinsam beschreibt. `phase`, `requests` und
 `unload_completed` kennzeichnen die ausgeführten Teile des angeforderten
@@ -604,4 +604,8 @@ Der Bericht `configuration.user_page_access` enthält nur explizite Zugriffsanga
 
 ## Begrenzte parallele WDM-Anforderungen
 
-Eine WDM-READ/WRITE/IOCTL-Anforderung kann `defer_callback_drain: true` setzen. Nur wenn der Dispatch `STATUS_PENDING` zurückgibt und die IRP weiter aussteht, wird die nächste Anforderung vor den Rückrufen eingereicht. Nach der nächsten Anforderung ohne dieses Feld werden die Rückrufe ausgeführt und der Stapel abgeschlossen; beim letzten markierten Eintrag geschieht dies am Szenarioende. Überlappende Anforderungen benötigen verschiedene Dateiobjekte. Überlappungen auf derselben Datei, KMDF-Stapel, beliebige Präemption und externe Anforderungen werden nicht unterstützt.
+Eine WDM-READ/WRITE/IOCTL-Anforderung kann `defer_callback_drain: true` setzen. Nur wenn der Dispatch `STATUS_PENDING` zurückgibt und die IRP weiter aussteht, wird die nächste Anforderung vor den Rückrufen eingereicht. Nach der nächsten Anforderung ohne dieses Feld werden die Rückrufe ausgeführt und der Stapel abgeschlossen; beim letzten markierten Eintrag geschieht dies am Szenarioende. Überlappende Anforderungen können verschiedene Dateiobjekte oder dasselbe ausdrücklich asynchron geöffnete Dateiobjekt verwenden. Überlappungen auf synchronen Dateien, KMDF-Stapel, beliebige Präemption und externe Anforderungen werden nicht unterstützt.
+
+## Asynchrones Dateiobjekt
+
+Nur eine CREATE-Anforderung darf das boolesche Feld `asynchronous_file: true` setzen; fehlend oder false bedeutet synchrones Öffnen. Beim asynchronen Öffnen wird `FO_SYNCHRONOUS_IO` im Gast-`FILE_OBJECT` gelöscht und für spätere Datei-IRPs kein `IRP_SYNCHRONOUS_API` gesetzt. READ/WRITE/IOCTL auf derselben asynchronen Datei dürfen sich nur bei ausdrücklich verzögerter Rückrufverarbeitung überlappen. CLEANUP/CLOSE warten auf Abschluss und Finalisierung aller früheren Übertragungen. Eine implizite Dateiposition wird nicht geführt; `byte_offset` gilt je Anforderung und ist standardmäßig null. Andere Anforderungstypen lehnen das Feld auch mit false ab.
