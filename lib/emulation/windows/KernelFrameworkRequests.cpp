@@ -303,12 +303,6 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
                                ControlInvalidDeviceRequest);
   if (Objects.at(Q->first).Deleting)
     return requestError("default queue is deleting");
-  if (Q->second.Dispatch == QueueDispatchSequential &&
-      std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
-        return Entry.second.Queue == Q->first && !Entry.second.Completed &&
-               Entry.second.IRP != IRP;
-      }))
-    return requestError("sequential queue still owns a delivered request");
   uint64_t ExistingHandle = 0;
   if (AfterCaller) {
     auto Caller = CallerRequests.find(IRP);
@@ -352,11 +346,26 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
   if (AfterCaller && !Manual && !Planned->PC)
     return requestError("caller-context queue completion without a guest I/O "
                         "callback is outside this profile");
+  auto &Queue = Q->second;
+  bool WaitForSlot = false;
+  if (Queue.Dispatch == QueueDispatchSequential ||
+      (Queue.Dispatch == QueueDispatchParallel &&
+       Queue.PresentedLimit != UINT32_MAX)) {
+    const uint32_t Limit =
+        Queue.Dispatch == QueueDispatchSequential ? 1 : Queue.PresentedLimit;
+    const auto Presented =
+        std::count_if(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+          return Entry.first != ExistingHandle &&
+                 Entry.second.Queue == Q->first && !Entry.second.Queued &&
+                 !Entry.second.Completed;
+        });
+    WaitForSlot = Presented >= Limit || !Queue.Pending.empty();
+  }
   // FxIoQueue::QueueRequest marks accepted IRPs pending before dispatching.
   // That status persists even when delivery completes the IRP immediately.
   if (auto E = RequestsHost.MarkPending(IRP))
     return E;
-  if (!Manual && !Planned->PC)
+  if (!Manual && !Planned->PC && !WaitForSlot)
     return CompleteImmediately(Planned->Status, windows::StatusPending);
   uint64_t Handle = ExistingHandle;
   if (!Handle) {
@@ -370,35 +379,24 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
     Objects.at(Handle).Kind = ObjectKind::Request;
     Requests.emplace(Handle, Request{IRP, Q->first, D->first});
   }
-  auto &Queue = Q->second;
-  if (Manual) {
+  if (Manual || WaitForSlot) {
     auto &Pending = Requests.at(Handle);
     Pending.Queued = true;
+    if (!Manual) {
+      if (Planned->PC) {
+        Planned->Arguments[1] = Handle;
+        Pending.QueuedCallback = Planned->PC;
+        Pending.QueuedArguments = std::move(Planned->Arguments);
+      } else {
+        Pending.QueuedCompletionStatus = Planned->Status;
+      }
+    }
     Queue.Pending.push_back(Handle);
     return std::optional<RequestDispatch>{
         RequestDispatch{0, {}, windows::StatusPending}};
   }
   RequestDispatch Dispatch = std::move(*Planned);
   Dispatch.Arguments[1] = Handle;
-  if (Queue.Dispatch == QueueDispatchParallel &&
-      Queue.PresentedLimit != UINT32_MAX) {
-    const auto Presented =
-        std::count_if(Requests.begin(), Requests.end(), [&](const auto &Entry) {
-          return Entry.first != Handle && Entry.second.Queue == Q->first &&
-                 !Entry.second.Queued && !Entry.second.Completed;
-        });
-    if (Presented > Queue.PresentedLimit)
-      return requestError("parallel queue exceeded its presentation limit");
-    if (Presented == Queue.PresentedLimit) {
-      auto &Pending = Requests.at(Handle);
-      Pending.Queued = true;
-      Pending.QueuedCallback = Dispatch.PC;
-      Pending.QueuedArguments = std::move(Dispatch.Arguments);
-      Queue.Pending.push_back(Handle);
-      return std::optional<RequestDispatch>{
-          RequestDispatch{0, {}, windows::StatusPending}};
-    }
-  }
   return std::optional<RequestDispatch>{std::move(Dispatch)};
 }
 

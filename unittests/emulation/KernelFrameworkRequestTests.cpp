@@ -472,18 +472,81 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
-       SequentialQueueDoesNotDeliverOverAnOwnedRequest) {
+       SequentialQueueAcceptsAndPresentsSecondRequestAfterCompletion) {
   initializeQueue();
   const auto FirstIRP = packet();
   const auto SecondIRP = packet();
   const auto First = request(route(FirstIRP));
-  expectError(Model.routeRequest(WdmDevice, SecondIRP), "still owns");
-  EXPECT_EQ(Packets.at(SecondIRP).PendingCalls, 0u);
-  complete(First);
-  const auto Second = request(route(SecondIRP));
-  EXPECT_NE(Second, First);
+  auto Waiting = route(SecondIRP);
+  EXPECT_EQ(Waiting.PC, 0u);
+  EXPECT_EQ(Waiting.Status, 0x103u);
   EXPECT_EQ(Packets.at(SecondIRP).PendingCalls, 1u);
+  complete(First);
+  auto Delivered = callback();
+  EXPECT_EQ(Delivered.PC, IoControlPC);
+  EXPECT_EQ(Delivered.Arguments[0], Queue);
+  const auto Second = Delivered.Arguments[1];
+  EXPECT_NE(Second, First);
   complete(Second);
+  finish(Delivered);
+  EXPECT_TRUE(Packets.at(SecondIRP).Completed);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       SequentialQueueCancelsUndeliveredRequestWithoutInvokingHandler) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto First = request(route(FirstIRP));
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  Packets.at(SecondIRP).Canceled = true;
+  EXPECT_TRUE(take(Model.preflightRequestCancellation(SecondIRP)));
+  EXPECT_FALSE(take(Model.requestCancellation(SecondIRP)));
+  EXPECT_EQ(Packets.at(SecondIRP).Status, framework::RequestCancelled);
+  complete(First);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       SequentialQueueSkipsCanceledWaiterInFifoOrder) {
+  initializeQueue();
+  const auto FirstIRP = packet();
+  const auto SecondIRP = packet();
+  const auto ThirdIRP = packet();
+  const auto First = request(route(FirstIRP));
+  EXPECT_EQ(route(SecondIRP).PC, 0u);
+  EXPECT_EQ(route(ThirdIRP).PC, 0u);
+  Packets.at(SecondIRP).Canceled = true;
+  EXPECT_FALSE(take(Model.requestCancellation(SecondIRP)));
+  complete(First);
+  auto Third = callback();
+  EXPECT_EQ(Third.PC, IoControlPC);
+  EXPECT_EQ(Third.Arguments[0], Queue);
+  complete(Third.Arguments[1]);
+  finish(Third);
+  EXPECT_TRUE(Packets.at(ThirdIRP).Completed);
+  EXPECT_FALSE(Model.takeGuestCall());
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       SequentialQueueDefersAutomaticNoHandlerAndZeroLengthCompletions) {
+  put(QueueConfig + 24, 0);
+  initializeQueue();
+  const auto First = request(route(packet()));
+  const auto MissingHandlerIRP = packet(3, 0, 9);
+  const auto ZeroLengthIRP = packet(4, 0, 0);
+  EXPECT_EQ(route(MissingHandlerIRP).PC, 0u);
+  EXPECT_EQ(route(ZeroLengthIRP).PC, 0u);
+  EXPECT_FALSE(Packets.at(MissingHandlerIRP).Completed);
+  EXPECT_FALSE(Packets.at(ZeroLengthIRP).Completed);
+  complete(First);
+  EXPECT_TRUE(Packets.at(MissingHandlerIRP).Completed);
+  EXPECT_EQ(Packets.at(MissingHandlerIRP).Status,
+            framework::ControlInvalidDeviceRequest);
+  EXPECT_TRUE(Packets.at(ZeroLengthIRP).Completed);
+  EXPECT_EQ(Packets.at(ZeroLengthIRP).Status, 0u);
+  EXPECT_FALSE(Model.takeGuestCall());
 }
 
 TEST_F(DriverKernelFrameworkRequest,
