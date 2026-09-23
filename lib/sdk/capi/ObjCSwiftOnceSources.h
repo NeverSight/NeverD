@@ -609,6 +609,11 @@ untypedSixParameterGetter(const HighFunc &F, const BinaryImage &Image) {
       (F.ReturnType->Kind != NdTypeKind::Ptr &&
        F.ReturnType->Kind != NdTypeKind::Int))
     return std::nullopt;
+  if (std::any_of(Image.ObjCMethods.begin(), Image.ObjCMethods.end(),
+                  [&](const ObjCMethod &Method) {
+                    return Method.Implementation == F.Entry;
+                  }))
+    return std::nullopt;
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   Hint.ReturnType = F.ReturnType;

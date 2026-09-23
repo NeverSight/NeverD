@@ -1619,7 +1619,7 @@ TEST(SwiftOnceSources,
 
 TEST(SwiftOnceSources,
      UntypedSharedStringGetterRequiresCompleteSixParameterUseProof) {
-  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation < 6; ++Mutation) {
     SCOPED_TRACE(Mutation);
     const auto Architecture = Mutation == 4 ? Arch::X64 : Arch::AArch64;
     StringOnceFixture F(Architecture);
@@ -1652,6 +1652,10 @@ TEST(SwiftOnceSources,
       Getter.ReturnType = NdType::makeVoid();
     } else if (Mutation == 3) {
       F.Once->Operands[1] = Param(0, Pointer);
+    } else if (Mutation == 5) {
+      ObjCMethod Method;
+      Method.Implementation = Getter.Entry;
+      F.Image.ObjCMethods.push_back(Method);
     }
     const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
     if (Mutation == 0) {
