@@ -427,13 +427,17 @@ bool hasNativeSourceStateContract(
       Contract.Signature = &Binding.Signature;
       if (StaticMessage && Binding.CallKind == Kind::ObjCSuper2)
         Contract.ReadOnlyFrameParameters.emplace(0, 16);
-      // RuntimeFunctions.def declares swift_beginAccess's second argument as
-      // a ValueBuffer scratch pointer. The Swift ABI fixes ValueBuffer at
-      // three pointer words. Authenticate the exact libswiftCore import and
-      // invalidate those private-frame bytes after the call; the scratch
-      // cannot escape or preserve an overlapping saved register.
+      // These exact libswiftCore imports may borrow bounded private-frame
+      // storage. swift_beginAccess writes its three-word ValueBuffer;
+      // Hasher's 72-byte value is written through x8, then passed inout to
+      // String.hash and _finalize. Independently authenticate the current
+      // import and ABI before invalidating those frame bytes. A borrow may
+      // neither escape nor overlap a saved register.
       if (StaticRuntime && Binding.CallKind == Kind::SwiftRuntimeCall &&
-          Binding.TargetName == "swift_beginAccess" &&
+          (Binding.TargetName == "swift_beginAccess" ||
+           Binding.TargetName == "$ss6HasherV5_seedABSi_tcfC" ||
+           Binding.TargetName == "$sSS4hash4intoys6HasherVz_tF" ||
+           Binding.TargetName == "$ss6HasherV9_finalizeSiyF") &&
           Binding.TargetAddress && Image.Bits == Bitness::Bits64) {
         const auto Import = Image.DyldBindSlots.find(Binding.TargetAddress);
         const auto Expected =
@@ -444,8 +448,33 @@ bool hasNativeSourceStateContract(
             Expected->TargetAddress == Binding.TargetAddress &&
             Expected->TargetName == Binding.TargetName &&
             Expected->DoesNotReturn == Binding.DoesNotReturn &&
-            equalSourceABIs(Expected->Signature, Binding.Signature))
-          Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
+            equalSourceABIs(Expected->Signature, Binding.Signature)) {
+          if (Binding.TargetName == "swift_beginAccess")
+            Contract.WritableFrameParameters.emplace(1, 3 * sizeof(uint64_t));
+          else if (Image.Arch == Arch::AArch64 &&
+                   !Binding.Signature.Parameters.empty()) {
+            const auto &Buffer = Binding.Signature.Parameters[0];
+            if (Binding.TargetName == "$ss6HasherV5_seedABSi_tcfC" &&
+                Binding.Signature.Parameters.size() == 2 &&
+                Buffer.TheRole ==
+                    SourceParameterTypeHint::Role::SwiftIndirectResult &&
+                Buffer.Location.RegisterOffset ==
+                    getTargetRegInfo(Image.Arch).indirectResultReg())
+              Contract.WritableFrameParameters.emplace(0, 72);
+            else if (Binding.TargetName == "$sSS4hash4intoys6HasherVz_tF" &&
+                     Binding.Signature.Parameters.size() == 3 &&
+                     Buffer.TheRole ==
+                         SourceParameterTypeHint::Role::Ordinary &&
+                     Buffer.Location.RegisterOffset == 0)
+              Contract.WritableFrameParameters.emplace(0, 72);
+            else if (Binding.TargetName == "$ss6HasherV9_finalizeSiyF" &&
+                     Binding.Signature.Parameters.size() == 1 &&
+                     Buffer.TheRole ==
+                         SourceParameterTypeHint::Role::SwiftContext &&
+                     Buffer.Location.RegisterOffset == a64reg::X20)
+              Contract.WritableFrameParameters.emplace(0, 72);
+          }
+        }
       }
       if (TerminalContext) {
         // The binding's import slot and the call's code veneer are distinct

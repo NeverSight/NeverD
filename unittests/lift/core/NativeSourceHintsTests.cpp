@@ -2636,6 +2636,58 @@ TEST(NativeSourceHints,
   EXPECT_FALSE(Forged.inferVoid(Error));
 }
 
+TEST(NativeSourceHints, SwiftHasherBorrowsOnlyItsBoundedPrivateFrame) {
+  for (const auto &Import :
+       {"_$ss6HasherV5_seedABSi_tcfC", "_$sSS4hash4intoys6HasherVz_tF"}) {
+    SCOPED_TRACE(Import);
+    NativeVoidFrameFixture Fixture(Arch::AArch64);
+    constexpr va_t ImportSlot = 0x2000;
+    Segment Data;
+    Data.VA = ImportSlot;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Fixture.Image.Segments.push_back(std::move(Data));
+    Fixture.Image.ImportPtrSlots[ImportSlot] = Import;
+    ASSERT_TRUE(Fixture.Image.recordDyldBindSlot(
+        ImportSlot, Import, 0, "/usr/lib/swift/libswiftCore.dylib", false));
+    const auto Runtime = swiftRuntimeSourceCallHint(Fixture.Image, ImportSlot);
+    ASSERT_TRUE(Runtime);
+    ASSERT_FALSE(Runtime->Signature.Parameters.empty());
+    const auto BufferReg =
+        Runtime->Signature.Parameters[0].Location.RegisterOffset;
+    ASSERT_EQ(BufferReg, Import == std::string("_$ss6HasherV5_seedABSi_tcfC")
+                             ? a64reg::X8
+                             : a64reg::X0);
+
+    auto &Ops = Fixture.Low.Blocks[0].Ops;
+    const auto SP = NdVar::reg(a64reg::SP, 8);
+    Ops.front().Inputs[1] = NdVar::cst(112, 8);
+    Ops[Fixture.RestoreIndex + Fixture.Saved.size() * 2].Inputs[1] =
+        NdVar::cst(112, 8);
+    Ops.insert(Ops.begin() + Fixture.CallIndex,
+               NativeVoidFrameFixture::op(NdOp::INT_ADD,
+                                          NdVar::reg(BufferReg, 8),
+                                          {SP, NdVar::cst(32, 8)}));
+    ++Fixture.CallIndex;
+    const auto Key = nativeSourceCallKey(Ops[Fixture.CallIndex]);
+    ASSERT_TRUE(Key);
+    NativeSourceCallContract Contract;
+    Contract.Signature = &Runtime->Signature;
+    Contract.WritableFrameParameters.emplace(0, 72);
+    NativeSourceCalls Calls{{*Key, Contract}};
+    EXPECT_TRUE(restoresNativeSourceState(Fixture.Low, Arch::AArch64, Calls));
+
+    auto Overlap = Fixture;
+    Overlap.Low.Blocks[0].Ops[Fixture.CallIndex - 1].Inputs[1] =
+        NdVar::cst(24, 8);
+    EXPECT_FALSE(restoresNativeSourceState(Overlap.Low, Arch::AArch64, Calls));
+
+    Calls.at(*Key).WritableFrameParameters.clear();
+    EXPECT_FALSE(restoresNativeSourceState(Fixture.Low, Arch::AArch64, Calls));
+  }
+}
+
 TEST(NativeSourceHints, VoidFramesRejectClobbersEscapesAndStaleSpills) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 19; ++Mutation) {
