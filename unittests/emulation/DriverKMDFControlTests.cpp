@@ -284,6 +284,49 @@ TEST(DriverKMDFControl, DrainDeliversQueuedRequestBeforeCompletionCallback) {
     }
 }
 
+TEST(DriverKMDFControl, PurgeCancelsQueuedAndCancelableDriverRequests) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('O');
+      Options.LoadAddress = Address;
+      Options.Requests[0].AsynchronousFile = true;
+      auto Second = Options.Requests[1];
+      Second.Input = {0x11, 0x22, 0x33, 0x44};
+      Options.Requests.insert(Options.Requests.begin() + 2, Second);
+      Options.Requests[1].DeferCallbackDrain = true;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      for (const auto &Message : Result->Messages)
+        SCOPED_TRACE(Message);
+      checkCompletedLifecycle(*Result, 7);
+      ASSERT_EQ(Result->Requests.size(), 7u);
+      for (size_t Index : {1u, 2u}) {
+        EXPECT_EQ(Result->Requests[Index].IOStatus, Cancelled);
+        EXPECT_TRUE(Result->Requests[Index].Output.empty());
+        EXPECT_TRUE(Result->Requests[Index].CancelRequestedAt100ns.has_value());
+      }
+      const auto Messages = controlMessages(*Result);
+      auto Position = [&](llvm::StringRef Needle) {
+        return std::find_if(Messages.begin(), Messages.end(),
+                            [&](const auto &Text) {
+                              return llvm::StringRef(Text).contains(Needle);
+                            });
+      };
+      const auto Cancel = Position("purge cancel callback");
+      const auto Purged = Position("purge completion callback");
+      const auto Restarted = Position("queue restarted after purge");
+      ASSERT_NE(Cancel, Messages.end());
+      ASSERT_NE(Purged, Messages.end());
+      ASSERT_NE(Restarted, Messages.end());
+      EXPECT_LT(Cancel, Purged);
+      EXPECT_LT(Purged, Restarted);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueuePurge"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueStart"), 1u);
+    }
+}
+
 TEST(DriverKMDFControl, ParallelQueueDeliversTwoPendingRequestsBeforeWorkers) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

@@ -32,7 +32,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (Name != "WdfIoQueueCreate" && Name != "WdfDeviceGetDefaultQueue" &&
       Name != "WdfIoQueueGetDevice" && Name != "WdfIoQueueGetState" &&
       Name != "WdfIoQueueStop" && Name != "WdfIoQueueStart" &&
-      Name != "WdfIoQueueDrain" && Name != "WdfIoQueueRetrieveNextRequest")
+      Name != "WdfIoQueueDrain" && Name != "WdfIoQueuePurge" &&
+      Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
   const auto OI = Objects.find(A[1]);
@@ -45,7 +46,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid, foreign or wrong-kind object handle");
 
   if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
-      Name == "WdfIoQueueStart" || Name == "WdfIoQueueDrain") {
+      Name == "WdfIoQueueStart" || Name == "WdfIoQueueDrain" ||
+      Name == "WdfIoQueuePurge") {
     auto Q = Queues.find(A[1]);
     if (Q == Queues.end() || OI->second.Deleting)
       return invalidQueue("queue has no live framework identity");
@@ -87,6 +89,73 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         Q->second.DrainComplete = A[2];
         Q->second.DrainContext = A[3];
         auto Result = start({});
+        if (!Result)
+          return Result.takeError();
+      }
+      return std::optional<uint64_t>{0};
+    }
+    if (Name == "WdfIoQueuePurge") {
+      if (Q->second.DrainComplete || Q->second.StopComplete)
+        return invalidQueue("queue already has a state-completion callback");
+      if (PendingCall)
+        return invalidQueue("purge cannot replace a pending guest callback");
+      if (!RequestsHost.RecordCancel || !RequestsHost.ValidateCompletion ||
+          !RequestsHost.SetInformation || !RequestsHost.Information ||
+          !RequestsHost.Complete)
+        return invalidQueue("purge cancellation host is unavailable");
+      std::vector<Step> Steps;
+      std::vector<uint64_t> Cancellable;
+      for (uint64_t Handle : Q->second.Pending) {
+        auto R = Requests.find(Handle);
+        if (R == Requests.end() || !R->second.Queued ||
+            R->second.Queue != A[1] || R->second.Completed ||
+            R->second.Completing)
+          return invalidQueue("purge lost a queued request");
+        if (auto E = RequestsHost.ValidateCompletion(R->second.IRP,
+                                                     RequestCancelled, 0))
+          return E;
+      }
+      for (const auto &[Handle, R] : Requests)
+        if (R.Queue == A[1] && !R.Queued && !R.Completed && !R.Completing &&
+            R.Cancellation == CancelState::Marked) {
+          auto O = Objects.find(Handle);
+          if (O == Objects.end() || !O->second.InternalReferences ||
+              !R.CancelRoutine)
+            return invalidQueue("purge lost a cancelable driver request");
+          Cancellable.push_back(Handle);
+        }
+      for (uint64_t Handle : Q->second.Pending) {
+        auto &R = Requests.at(Handle);
+        if (auto E = RequestsHost.RecordCancel(R.IRP))
+          return E;
+        if (auto E = RequestsHost.SetInformation(R.IRP, 0))
+          return E;
+        R.Completing = true;
+        R.CompletionStatus = RequestCancelled;
+        std::vector<Step> Delete;
+        if (auto E = planDelete(Handle, Delete))
+          return E;
+        auto Destruction =
+            std::find_if(Delete.begin(), Delete.end(), [&](const Step &S) {
+              return S.Kind == StepKind::TryDestroy && S.Object == Handle;
+            });
+        Delete.insert(Destruction, {StepKind::CompleteRequest, Handle});
+        Steps.insert(Steps.end(), Delete.begin(), Delete.end());
+        R.Queued = false;
+        R.QueuedCallback = 0;
+        R.QueuedArguments.clear();
+        R.QueuedCompletionStatus.reset();
+      }
+      Q->second.Pending.clear();
+      for (uint64_t Handle : Cancellable)
+        Steps.push_back({StepKind::PurgeCancelRequest, Handle});
+      Q->second.Accepting = false;
+      if (A[2]) {
+        Q->second.DrainComplete = A[2];
+        Q->second.DrainContext = A[3];
+      }
+      if (!Steps.empty() || A[2]) {
+        auto Result = start(std::move(Steps));
         if (!Result)
           return Result.takeError();
       }
