@@ -34,7 +34,7 @@ llvm::Error invalid(const llvm::Twine &Message) {
 bool validName(llvm::StringRef Name) {
   return !Name.empty() && Name.size() <= profile::MaxKernelExportNameSize &&
          std::all_of(Name.begin(), Name.end(),
-                     [](unsigned char C) { return C >= 0x21 && C <= 0x7e; });
+                     [](unsigned char C) { return C >= '!' && C <= '~'; });
 }
 } // namespace
 

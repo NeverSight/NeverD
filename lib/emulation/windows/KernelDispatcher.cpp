@@ -36,10 +36,6 @@ enum class API {
 #include "KernelDispatcherAPIs.def"
 #undef NEVERD_KERNEL_DISPATCHER_API
 };
-constexpr uint32_t StatusSemaphoreLimitExceeded = 0xc0000047U;
-constexpr uint32_t StatusMutantNotOwned = 0xc0000046U;
-constexpr uint32_t StatusMutantLimitExceeded = 0xc0000191U;
-
 llvm::Error dispatcherError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
 }
@@ -222,7 +218,8 @@ llvm::Expected<bool> KernelDispatcher::tryAcquire(uint64_t Address,
     if (State.MutexDepth && State.MutexOwner != Execution)
       return false;
     if (State.MutexDepth == uint32_t(std::numeric_limits<int32_t>::max()) + 1)
-      return llvm::make_error<KernelGuestException>(StatusMutantLimitExceeded);
+      return llvm::make_error<KernelGuestException>(
+          dispatcher::StatusMutantLimitExceeded);
     if (!State.MutexDepth) {
       State.MutexOwner = Execution;
       State.MutexAcquiredAtDispatch = CurrentIRQL == dispatcher::DispatchLevel;
@@ -447,7 +444,7 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
       return dispatcherError("semaphore adjustment must be positive LONG");
     if (Adjustment > (*State)->Limit - Count)
       return llvm::make_error<KernelGuestException>(
-          StatusSemaphoreLimitExceeded);
+          dispatcher::StatusSemaphoreLimitExceeded);
     (*State)->Count += Adjustment;
     return static_cast<uint32_t>(Count);
   }
@@ -465,7 +462,8 @@ llvm::Expected<uint64_t> KernelDispatcher::call(llvm::StringRef Name,
           "KeReleaseMutex Wait=TRUE requires unsupported IRQL handoff");
     if (!Execution || !(*State)->MutexDepth ||
         (*State)->MutexOwner != Execution)
-      return llvm::make_error<KernelGuestException>(StatusMutantNotOwned);
+      return llvm::make_error<KernelGuestException>(
+          dispatcher::StatusMutantNotOwned);
     if ((*State)->MutexAcquiredAtDispatch !=
         (CurrentIRQL == dispatcher::DispatchLevel))
       return dispatcherError("mutex release changed DISPATCH_LEVEL");

@@ -156,6 +156,8 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
     return E;
   if (auto E = completeRequest(IRP, 0))
     return E;
+  if (Request->FrameworkPnpAwaiting)
+    return StatusPending;
   if (PendingWdmCall)
     IRPCalls.at(PendingWdmCall->Token.ID).ReturnValue = Status;
   return Status;

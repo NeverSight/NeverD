@@ -45,7 +45,7 @@ llvm::Expected<uint64_t> KernelModel::resolveRoutine(uint64_t Address) {
       return E;
   std::string Name;
   for (size_t I = 0; I < Bytes.size(); I += 2) {
-    if (Bytes[I + 1] || Bytes[I] < 0x21 || Bytes[I] > 0x7e)
+    if (Bytes[I + 1] || Bytes[I] < '!' || Bytes[I] > '~')
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "unsupported kernel export name encoding");
     Name.push_back(static_cast<char>(Bytes[I]));

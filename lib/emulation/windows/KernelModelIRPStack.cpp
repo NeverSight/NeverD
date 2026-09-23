@@ -261,6 +261,24 @@ llvm::Error KernelModel::completeRequest(uint64_t IRP, uint8_t PriorityBoost) {
     return llvm::joinErrors(Status.takeError(), Information.takeError());
   if (uint32_t(*Status) == StatusPending)
     return stackError("IoCompleteRequest cannot complete with STATUS_PENDING");
+  if (Request->FrameworkPnpAwaiting)
+    return stackError("framework PnP callback still owns this completion");
+  if (Framework && Request->PnpOperation && !Request->FrameworkPnpHandled &&
+      !(uint32_t(*Status) & profile::NTStatusFailureMask) &&
+      !Request->DeviceRoute.empty() &&
+      FrameworkDevices.count(Request->DeviceRoute.front())) {
+    auto Deferred = Framework->beginPnpPowerTransition(
+        Request->PnpDevice, IRP, Request->PnpOperation->Minor);
+    if (!Deferred)
+      return Deferred.takeError();
+    Request->FrameworkPnpHandled = !*Deferred;
+    Request->FrameworkPnpAwaiting = *Deferred;
+    if (*Deferred) {
+      if (auto E = markRequestPending(IRP))
+        return E;
+      return llvm::Error::success();
+    }
+  }
   auto Cursor = requestStackCursor(IRP);
   if (!Cursor)
     return Cursor.takeError();

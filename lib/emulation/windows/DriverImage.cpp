@@ -34,6 +34,14 @@ namespace {
 using namespace llvm::object;
 constexpr uint64_t PageSize = profile::PageSize;
 constexpr unsigned MaxImports = profile::MaxImports;
+constexpr unsigned MaxImportNameLength = 512;
+constexpr unsigned MaxPESections = 96;
+// LLVM names the 15 defined directory indices; PE32+ also has one reserved
+// directory slot, so the header permits 16 entries.
+constexpr unsigned MaxPEDirectoryEntries = llvm::COFF::NUM_DATA_DIRECTORIES + 1;
+constexpr uint64_t MinPEFileAlignment = 512;
+constexpr uint64_t PEImageBaseAlignment = 64 * 1024;
+constexpr uint64_t MaxPEFileAlignment = PEImageBaseAlignment;
 
 llvm::Error invalid(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -82,7 +90,7 @@ llvm::Expected<std::string> nameAt(const COFFObjectFile &Object,
                                    const std::vector<SectionPlan> &Sections,
                                    uint64_t RVA) {
   std::string Name;
-  for (unsigned I = 0; I != 512; ++I) {
+  for (unsigned I = 0; I != MaxImportNameLength; ++I) {
     auto Byte = fileBytes(Object, Sections, RVA + I, 1);
     if (!Byte)
       return Byte.takeError();
@@ -92,7 +100,7 @@ llvm::Expected<std::string> nameAt(const COFFObjectFile &Object,
         return invalid("empty import name");
       return Name;
     }
-    if (Ch < 0x21 || Ch > 0x7e)
+    if (Ch < '!' || Ch > '~')
       return invalid("unsupported import name encoding");
     Name += static_cast<char>(Ch);
   }
@@ -200,7 +208,7 @@ validateBaseRelocations(llvm::ArrayRef<uint8_t> Bytes,
         continue;
       if (Type != llvm::COFF::IMAGE_REL_BASED_DIR64)
         return invalid("unsupported x64 base relocation type");
-      const uint64_t RVA = uint64_t(Block.PageRVA) + (Entry & 0xfff);
+      const uint64_t RVA = uint64_t(Block.PageRVA) + (Entry & (PageSize - 1));
       bool Mapped = false;
       for (const auto &Section : Sections) {
         const uint64_t Start = Section.Header->VirtualAddress;
@@ -327,13 +335,13 @@ llvm::Error preflightLoadConfiguration(llvm::ArrayRef<uint8_t> Raw) {
       COFF.SizeOfOptionalHeader < sizeof(Header) ||
       Header.Magic != llvm::COFF::PE32Header::PE32_PLUS)
     return invalid("requires a complete PE32+ optional header");
-  if (Header.NumberOfRvaAndSize > 16 ||
+  if (Header.NumberOfRvaAndSize > MaxPEDirectoryEntries ||
       sizeof(Header) +
               uint64_t(Header.NumberOfRvaAndSize) * sizeof(data_directory) >
           COFF.SizeOfOptionalHeader)
     return invalid("truncated optional-header data directories");
   const uint64_t SectionsOffset = OptionalOffset + COFF.SizeOfOptionalHeader;
-  if (!COFF.NumberOfSections || COFF.NumberOfSections > 96 ||
+  if (!COFF.NumberOfSections || COFF.NumberOfSections > MaxPESections ||
       SectionsOffset > Raw.size() ||
       uint64_t(COFF.NumberOfSections) * sizeof(coff_section) >
           Raw.size() - SectionsOffset)
@@ -714,8 +722,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
         llvm::COFF::IMAGE_FILE_EXECUTABLE_IMAGE) ||
       Header->Subsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE)
     return invalid("requires an executable x64 PE32+ native-subsystem image");
-  if (Header->NumberOfRvaAndSize > 16 || Header->LoaderFlags ||
-      Header->Win32VersionValue)
+  if (Header->NumberOfRvaAndSize > MaxPEDirectoryEntries ||
+      Header->LoaderFlags || Header->Win32VersionValue)
     return invalid("unsupported optional-header fields");
   const uint64_t Base = Header->ImageBase;
   const uint64_t ActualBase = LoadAddress ? LoadAddress : Base;
@@ -724,15 +732,16 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
   const uint64_t SectionAlignment = Header->SectionAlignment;
   const uint64_t FileAlignment = Header->FileAlignment;
   if (!powerOfTwo(SectionAlignment) || SectionAlignment < PageSize ||
-      !powerOfTwo(FileAlignment) || FileAlignment < 512 ||
-      FileAlignment > 65536 || SectionAlignment < FileAlignment ||
-      Base < 65536 || (Base & 65535) || !Size || (Size % SectionAlignment) ||
-      Size > MemoryLimit || Size > UINT64_MAX - Base || !HeadersSize ||
-      HeadersSize % FileAlignment || HeadersSize > (*Buffer)->getBufferSize() ||
-      pages(HeadersSize) > Size)
+      !powerOfTwo(FileAlignment) || FileAlignment < MinPEFileAlignment ||
+      FileAlignment > MaxPEFileAlignment || SectionAlignment < FileAlignment ||
+      Base < PEImageBaseAlignment || (Base % PEImageBaseAlignment) || !Size ||
+      (Size % SectionAlignment) || Size > MemoryLimit ||
+      Size > UINT64_MAX - Base || !HeadersSize || HeadersSize % FileAlignment ||
+      HeadersSize > (*Buffer)->getBufferSize() || pages(HeadersSize) > Size)
     return invalid("invalid image size, alignment, base, or memory limit");
   auto CanonicalImageRange = [&](uint64_t Address) {
-    if (Address < 65536 || (Address & 65535) || Size > UINT64_MAX - Address)
+    if (Address < PEImageBaseAlignment || (Address % PEImageBaseAlignment) ||
+        Size > UINT64_MAX - Address)
       return false;
     return (Address <= profile::CanonicalUserMax &&
             Address + Size - 1 <= profile::CanonicalUserMax) ||

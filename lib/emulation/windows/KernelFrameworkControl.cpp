@@ -49,7 +49,7 @@ KernelFramework::readControlString(uint64_t Address) {
     return E;
   std::string Text;
   for (size_t I = 0; I < Bytes.size(); I += 2) {
-    if (Bytes[I + 1] || Bytes[I] < 0x20 || Bytes[I] > 0x7e)
+    if (Bytes[I + 1] || Bytes[I] < ' ' || Bytes[I] > '~')
       return controlError(
           "only printable ASCII namespace and SDDL text is modeled");
     Text.push_back(char(Bytes[I]));
@@ -81,7 +81,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
   }
   if (Name == api::WdfDeviceInitFree || Name == api::WdfDeviceInitAssignName ||
       Name == api::WdfDeviceInitSetIoType ||
-      Name == api::WdfDeviceInitSetIoInCallerContextCallback) {
+      Name == api::WdfDeviceInitSetIoInCallerContextCallback ||
+      Name == api::WdfDeviceInitSetPnpPowerEventCallbacks) {
     auto I = DeviceInits.find(A[1]);
     if (I == DeviceInits.end() || I->second.Binding != B.Globals)
       return controlError("invalid, consumed or foreign device initializer");
@@ -105,6 +106,31 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
       if (!A[2])
         return controlError("caller-context callback must name guest code");
       I->second.CallerContext = A[2];
+    } else if (Name == api::WdfDeviceInitSetPnpPowerEventCallbacks) {
+      if (I->second.Kind != DeviceInitKind::Pnp)
+        return controlError("PnP power callbacks require an FDO initializer");
+      if (auto E = ValidateAccess(A[2], PnpPowerCallbacksSize, false))
+        return E;
+      auto Size = read(A[2], 4);
+      if (!Size)
+        return Size.takeError();
+      if (*Size != PnpPowerCallbacksSize)
+        return controlError("unsupported PnP power callback structure size");
+      uint64_t Entry = 0, Exit = 0;
+      for (unsigned Index = 0; Index < PnpPowerCallbacksCount; ++Index) {
+        auto Callback = read(A[2] + PnpPowerCallbacksFirstOffset +
+                             Index * sizeof(uint64_t));
+        if (!Callback)
+          return Callback.takeError();
+        if (Index == PnpPowerD0EntryIndex)
+          Entry = *Callback;
+        else if (Index == PnpPowerD0ExitIndex)
+          Exit = *Callback;
+        else if (*Callback)
+          return controlError("unsupported PnP power event callback");
+      }
+      I->second.D0Entry = Entry;
+      I->second.D0Exit = Exit;
     } else {
       if (A[2] != ControlIoNeither && A[2] != ControlIoBuffered &&
           A[2] != ControlIoDirect)
@@ -169,6 +195,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     Objects.at(*Handle).Kind = ObjectKind::Device;
     Devices.emplace(*Handle, Device{Wdm->Address, I->second.PDO});
     Devices.at(*Handle).CallerContext = I->second.CallerContext;
+    Devices.at(*Handle).D0Entry = I->second.D0Entry;
+    Devices.at(*Handle).D0Exit = I->second.D0Exit;
     if (I->second.Kind == DeviceInitKind::Pnp)
       PnpDeviceHandles.emplace(I->second.PDO, *Handle);
     if (auto E = Memory.writeInteger(A[3], *Handle, 8))

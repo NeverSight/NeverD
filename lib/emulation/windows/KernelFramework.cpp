@@ -18,6 +18,8 @@
 
 #include "WindowsKernelLayout.h"
 
+#include "neverd/emulation/DriverProfile.h"
+
 #include <algorithm>
 #include <limits>
 #include <tuple>
@@ -131,6 +133,51 @@ llvm::Error KernelFramework::removePnpDevice(uint64_t PDO) {
   if (!Started)
     return Started.takeError();
   return llvm::Error::success();
+}
+
+llvm::Expected<bool>
+KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
+                                         DevicePnpRequest Minor) {
+  auto Handle = PnpDeviceHandles.find(PDO);
+  if (Handle == PnpDeviceHandles.end())
+    return invalid("PnP power transition lost its framework device");
+  auto Object = Objects.find(Handle->second);
+  auto Device = Devices.find(Handle->second);
+  if (Object == Objects.end() || Device == Devices.end() ||
+      Object->second.Deleting || !Device->second.Initialized)
+    return invalid("PnP power transition requires a live initialized device");
+  if (PendingCall || !PnpTransitions.empty() || CompletedPnp)
+    return invalid("another framework callback is still pending");
+
+  const bool Entering = Minor == DevicePnpRequest::Start;
+  const bool Leaving = Minor == DevicePnpRequest::Stop ||
+                       Minor == DevicePnpRequest::Remove ||
+                       Minor == DevicePnpRequest::SurpriseRemoval;
+  if (!Entering && !Leaving)
+    return false;
+  auto &D = Device->second;
+  if (Entering && D.InD0)
+    return invalid("PnP START reached a device already in D0");
+  if (Leaving && !D.InD0)
+    return false;
+  const uint64_t Callback = Entering ? D.D0Entry : D.D0Exit;
+  if (!Callback) {
+    D.InD0 = Entering;
+    return false;
+  }
+  if (NextContinuation == UINT64_MAX)
+    return invalid("framework callback identity exhausted");
+  const uint64_t Token = NextContinuation++;
+  Continuations.emplace(Token, Continuation{});
+  PnpTransitions.emplace(Token, PnpTransition{IRP, Handle->second, Entering});
+  PendingCall =
+      GuestCall{Token, Callback, {Handle->second, PowerDeviceD3Final}};
+  return true;
+}
+
+std::optional<KernelFramework::PnpCompletion>
+KernelFramework::takePnpCompletion() {
+  return std::exchange(CompletedPnp, std::nullopt);
 }
 
 std::optional<unsigned>
@@ -988,7 +1035,20 @@ std::optional<KernelFramework::GuestCall> KernelFramework::takeGuestCall() {
 }
 
 llvm::Expected<std::optional<uint64_t>>
-KernelFramework::finishGuestCall(uint64_t Token, uint64_t) {
+KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
+  auto Transition = PnpTransitions.find(Token);
+  if (Transition != PnpTransitions.end()) {
+    const uint32_t Status = uint32_t(Result);
+    if (Status == windows::StatusPending)
+      return invalid("PnP power callback returned STATUS_PENDING");
+    auto Device = Devices.find(Transition->second.Device);
+    if (Device == Devices.end() || CompletedPnp)
+      return invalid("PnP power callback lost its device or completion");
+    if (!(Status & profile::NTStatusFailureMask))
+      Device->second.InD0 = Transition->second.Entering;
+    CompletedPnp = PnpCompletion{Transition->second.IRP, Status};
+    PnpTransitions.erase(Transition);
+  }
   auto Cancel = CancelCallbacks.find(Token);
   if (Cancel != CancelCallbacks.end() &&
       Requests.at(Cancel->second).Cancellation != CancelState::Delivered)

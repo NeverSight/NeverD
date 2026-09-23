@@ -15,6 +15,8 @@
 #include "../GuestMemory.h"
 #include "KernelExportRegistry.h"
 
+#include "neverd/emulation/DriverPnp.h"
+
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
@@ -149,6 +151,15 @@ public:
   llvm::Expected<PnpAddDevice> beginPnpAddDevice(uint64_t PDO);
   llvm::Error finishPnpAddDevice(uint64_t PDO, uint64_t Init, uint32_t Status);
   llvm::Error removePnpDevice(uint64_t PDO);
+  struct PnpCompletion {
+    uint64_t IRP = 0;
+    uint32_t Status = 0;
+  };
+  /// The provider has completed successfully, but the framework may still
+  /// need to run a guest D0 callback before the original IRP can unwind.
+  llvm::Expected<bool> beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
+                                               DevicePnpRequest Minor);
+  std::optional<PnpCompletion> takePnpCompletion();
   static std::optional<unsigned>
   argumentCount(const KernelExportRegistry::Export &Export);
   llvm::Expected<uint64_t> call(const KernelExportRegistry::Export &Export,
@@ -201,6 +212,7 @@ private:
     std::string Name;
     uint32_t IoType = framework::ControlIoBuffered;
     uint64_t CallerContext = 0;
+    uint64_t D0Entry = 0, D0Exit = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct Device {
@@ -209,6 +221,8 @@ private:
     uint64_t CallerContext = 0;
     bool Initialized = false;
     bool HasLink = false;
+    uint64_t D0Entry = 0, D0Exit = 0;
+    bool InD0 = false;
   };
   std::map<uint64_t, Device> Devices;
   std::map<uint64_t, uint64_t> PnpDeviceHandles;
@@ -312,6 +326,12 @@ private:
   std::map<uint64_t, uint64_t> CancelCallbacks;
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
+  struct PnpTransition {
+    uint64_t IRP = 0, Device = 0;
+    bool Entering = false;
+  };
+  std::map<uint64_t, PnpTransition> PnpTransitions;
+  std::optional<PnpCompletion> CompletedPnp;
   std::optional<GuestCall> PendingCall;
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;

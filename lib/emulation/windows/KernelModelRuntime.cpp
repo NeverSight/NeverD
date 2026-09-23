@@ -26,6 +26,7 @@
 namespace neverd::emulation::runtime {
 namespace {
 using namespace windows;
+constexpr uint64_t MaxASCII = 0x7f;
 
 #define NEVERD_KERNEL_RUNTIME_STRING(Name, Value)                              \
   constexpr llvm::StringLiteral Name(Value);
@@ -270,7 +271,7 @@ class Formatter {
         return Unit.takeError();
       if (!*Unit)
         return Text;
-      if (*Unit > 0x7f)
+      if (*Unit > MaxASCII)
         return runtimeError(
             "DbgPrint non-ASCII text requires an unmodeled code page");
       Text.push_back(static_cast<char>(*Unit));
@@ -311,7 +312,7 @@ class Formatter {
     std::string Text;
     for (unsigned I = 0; I < Units; ++I) {
       uint16_t Unit = codeUnit(*Bytes, I * 2);
-      if (Unit > 0x7f)
+      if (Unit > MaxASCII)
         return runtimeError(
             "DbgPrint non-ASCII text requires an unmodeled code page");
       Text.push_back(static_cast<char>(Unit));
@@ -386,7 +387,7 @@ class Formatter {
         Text = std::move(*Result);
       } else {
         const uint64_t Unit = Value & (Wide ? 0xffff : 0xff);
-        if (Unit > 0x7f)
+        if (Unit > MaxASCII)
           return runtimeError(
               "DbgPrint non-ASCII character requires an unmodeled code page");
         Text.push_back(static_cast<char>(Unit));
@@ -431,7 +432,7 @@ public:
         return Byte.takeError();
       if (!*Byte)
         break;
-      if (*Byte > 0x7f)
+      if (*Byte > MaxASCII)
         return runtimeError("DbgPrint format must contain ASCII text");
       Format.push_back(static_cast<char>(*Byte));
     }

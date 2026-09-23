@@ -17,6 +17,13 @@
 
 namespace neverd::emulation {
 namespace {
+namespace dma_api {
+#define NEVERD_DMA_OPERATION(Name, Index, Arity, Minimum, Maximum, Modeled)    \
+  constexpr llvm::StringLiteral Name = #Name;
+#include "KernelDMAOperations.def"
+#undef NEVERD_DMA_OPERATION
+} // namespace dma_api
+
 llvm::Error dmaAPIError(const llvm::Twine &Text) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "DMA API: " + Text);
@@ -59,37 +66,37 @@ KernelModel::callDMAExport(const KernelExportRegistry::Export &Export,
     return dmaAPIError(Export.Name + " called at an invalid IRQL");
   if (!Selected->Modeled)
     return dmaAPIError(Export.Name + " is outside the modeled DMA interface");
-  if (Export.Name == "PutDmaAdapter") {
+  if (Export.Name == dma_api::PutDmaAdapter) {
     if (auto E = DMA.putAdapter(A[0]))
       return E;
     return 0;
   }
-  if (Export.Name == "AllocateCommonBuffer")
+  if (Export.Name == dma_api::AllocateCommonBuffer)
     return allocateCommonBuffer(A);
-  if (Export.Name == "FreeCommonBuffer") {
+  if (Export.Name == dma_api::FreeCommonBuffer) {
     if (auto E = freeCommonBuffer(A))
       return E;
     return 0;
   }
-  if (Export.Name == "GetDmaAlignment")
+  if (Export.Name == dma_api::GetDmaAlignment)
     return DMA.adapter(A[0])->Alignment;
-  if (Export.Name == "GetScatterGatherList")
+  if (Export.Name == dma_api::GetScatterGatherList)
     return getScatterGatherList(A);
-  if (Export.Name == "AllocateAdapterChannel")
+  if (Export.Name == dma_api::AllocateAdapterChannel)
     return allocateAdapterChannel(A);
-  if (Export.Name == "MapTransfer")
+  if (Export.Name == dma_api::MapTransfer)
     return mapTransfer(A);
-  if (Export.Name == "FlushAdapterBuffers") {
+  if (Export.Name == dma_api::FlushAdapterBuffers) {
     if (auto E = flushAdapterBuffers(A))
       return E;
     return 1;
   }
-  if (Export.Name == "FreeMapRegisters") {
+  if (Export.Name == dma_api::FreeMapRegisters) {
     if (auto E = freeMapRegisters(A))
       return E;
     return 0;
   }
-  if (Export.Name == "PutScatterGatherList") {
+  if (Export.Name == dma_api::PutScatterGatherList) {
     if (auto E = putScatterGatherList(A))
       return E;
     return 0;

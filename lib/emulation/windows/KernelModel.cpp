@@ -19,6 +19,7 @@
 
 #include "neverd/emulation/DriverProfile.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
@@ -104,7 +105,7 @@ llvm::Error validateObjectNameText(llvm::StringRef Name) {
   if (Name.size() > profile::MaxDeviceNameSize)
     return modelError("object name exceeds the bounded namespace size");
   for (unsigned char C : Name)
-    if (C < 0x20 || C > 0x7e)
+    if (C < ' ' || C > '~')
       return modelError("object-name model supports printable ASCII only; "
                         "Unicode namespace case folding is unsupported");
   return llvm::Error::success();
@@ -171,7 +172,7 @@ KernelModel::makeUnicodeString(const std::string &Text) {
     return Record.takeError();
   std::vector<uint8_t> Bytes((Text.size() + 1) * 2);
   for (size_t I = 0; I < Text.size(); ++I) {
-    if (static_cast<unsigned char>(Text[I]) > 0x7f || !Text[I])
+    if (!llvm::isASCII(Text[I]) || !Text[I])
       return modelError("initialization strings must be non-null ASCII");
     Bytes[I * 2] = static_cast<uint8_t>(Text[I]);
   }

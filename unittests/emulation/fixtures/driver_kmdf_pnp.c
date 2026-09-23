@@ -27,6 +27,7 @@ ABI_SLOT(WdfDeviceWdmGetAttachedDevice, 32);
 ABI_SLOT(WdfWdmDeviceGetWdfDeviceHandle, 30);
 ABI_SLOT(WdfDeviceGetDriver, 39);
 ABI_SLOT(WdfDeviceCreate, 75);
+ABI_SLOT(WdfDeviceInitSetPnpPowerEventCallbacks, 55);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
 ABI_SLOT(WdfIoQueueCreate, 152);
@@ -35,6 +36,37 @@ ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
+
+_Static_assert(sizeof(WDF_PNPPOWER_EVENT_CALLBACKS) == 144,
+               "KMDF 1.33 PnP callback layout");
+
+static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
+                              WDF_POWER_DEVICE_STATE PreviousState) {
+  UNREFERENCED_PARAMETER(Device);
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+      PreviousState != WdfPowerDeviceD3Final)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: D0 entry\n");
+  return ServiceMode == L'Q' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
+                             WDF_POWER_DEVICE_STATE TargetState) {
+  UNREFERENCED_PARAMETER(Device);
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+      TargetState != WdfPowerDeviceD3Final)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: D0 exit\n");
+  return STATUS_SUCCESS;
+}
+
+static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
+                                      WDFCMRESLIST Translated) {
+  UNREFERENCED_PARAMETER(Device);
+  UNREFERENCED_PARAMETER(Raw);
+  UNREFERENCED_PARAMETER(Translated);
+  return STATUS_SUCCESS;
+}
 
 static VOID DeviceCleanup(WDFOBJECT Object) {
   UNREFERENCED_PARAMETER(Object);
@@ -85,6 +117,7 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
 static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   WDF_OBJECT_ATTRIBUTES Attributes;
   WDF_IO_QUEUE_CONFIG QueueConfig;
+  WDF_PNPPOWER_EVENT_CALLBACKS PnpCallbacks;
   WDFDEVICE Device = NULL;
   WDFQUEUE Queue = NULL;
   PDEVICE_OBJECT PDO;
@@ -94,6 +127,14 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
+  if (ServiceMode == L'P' || ServiceMode == L'Q' || ServiceMode == L'U') {
+    WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
+    PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
+    PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
+    if (ServiceMode == L'U')
+      PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
+    WdfDeviceInitSetPnpPowerEventCallbacks(Init, &PnpCallbacks);
+  }
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
   Attributes.ExecutionLevel = WdfExecutionLevelPassive;
   Attributes.SynchronizationScope = WdfSynchronizationScopeNone;

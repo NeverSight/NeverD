@@ -26,10 +26,10 @@ KernelModel::callIRQLAPI(llvm::StringRef Name,
   const uint8_t RequestedIRQL = static_cast<uint8_t>(Arguments[0]);
   if (!CurrentExecution)
     return irqlError("IRQL change requires an active guest execution");
-  if (Name == "KfRaiseIrql") {
+  if (Name == kernel_api::KfRaiseIrql) {
     if (RequestedIRQL > dispatcher::HighLevel || RequestedIRQL < CurrentIRQL)
       return irqlError("KfRaiseIrql must raise to a valid IRQL");
-    if (RaisedIRQLs.size() >= 64)
+    if (RaisedIRQLs.size() >= profile::MaxNestedIRQLRaises)
       return irqlError("nested IRQL raise limit exceeded");
     const uint8_t PreviousIRQL = CurrentIRQL;
     RaisedIRQLs.push_back(
@@ -76,7 +76,7 @@ llvm::Expected<uint64_t> KernelModel::callApcStateAPI(llvm::StringRef Name) {
   if (Name == kernel_api::KeAreAllApcsDisabled)
     return uint64_t(State.GuardedDepth || CurrentIRQL >= windows::APCLevel);
   if (Name == kernel_api::KeEnterCriticalRegion) {
-    if (State.CriticalDepth == 64)
+    if (State.CriticalDepth == profile::MaxAPCRegionNesting)
       return irqlError("critical-region nesting limit exceeded");
     ++State.CriticalDepth;
     return 0;
@@ -88,7 +88,7 @@ llvm::Expected<uint64_t> KernelModel::callApcStateAPI(llvm::StringRef Name) {
     return 0;
   }
   if (Name == kernel_api::KeEnterGuardedRegion) {
-    if (State.GuardedDepth == 64)
+    if (State.GuardedDepth == profile::MaxAPCRegionNesting)
       return irqlError("guarded-region nesting limit exceeded");
     ++State.GuardedDepth;
     return 0;

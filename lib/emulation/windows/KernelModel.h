@@ -493,6 +493,8 @@ private:
     bool Completed = false;
     bool DispatchReturned = false;
     bool FrameworkRemoveStarted = false;
+    bool FrameworkPnpAwaiting = false;
+    bool FrameworkPnpHandled = false;
     bool PendingMarked = false;
     bool CancelRequested = false;
     std::optional<uint64_t> CancelDeadline = std::nullopt;

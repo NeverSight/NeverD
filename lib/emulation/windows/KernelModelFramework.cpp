@@ -262,11 +262,30 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "guest callback has no continuation token");
   switch (Token.Owner) {
-  case GuestCallOwner::Framework:
+  case GuestCallOwner::Framework: {
     if (!Framework)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                      "framework callback has no owning model");
-    return Framework->finishGuestCall(Token.ID, Result);
+    auto Continued = Framework->finishGuestCall(Token.ID, Result);
+    if (!Continued)
+      return Continued.takeError();
+    if (auto Pnp = Framework->takePnpCompletion()) {
+      auto *Request = requestForIRP(Pnp->IRP);
+      if (!Request || !Request->FrameworkPnpAwaiting ||
+          Request->FrameworkPnpHandled)
+        return frameworkDeviceError("PnP callback return lost its pending IRP");
+      Request->FrameworkPnpAwaiting = false;
+      Request->FrameworkPnpHandled = true;
+      if (Pnp->Status & profile::NTStatusFailureMask) {
+        if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPStatusOffset,
+                                         Pnp->Status, 4))
+          return E;
+      }
+      if (auto E = completeRequest(Pnp->IRP, 0))
+        return E;
+    }
+    return Continued;
+  }
   case GuestCallOwner::WDM:
     return finishWdmGuestCall(Token.ID, Result);
   case GuestCallOwner::Interrupt:

@@ -22,6 +22,7 @@
 #include "WindowsKernelLayout.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
@@ -57,7 +58,7 @@ std::string folded(llvm::StringRef Text) {
 }
 
 bool asciiName(llvm::StringRef Text) {
-  return llvm::all_of(Text, [](unsigned char C) { return C && C < 128; });
+  return llvm::all_of(Text, [](char C) { return C && llvm::isASCII(C); });
 }
 
 bool atOrBelow(llvm::StringRef Path, llvm::StringRef Parent) {
@@ -127,7 +128,7 @@ llvm::Expected<std::string> readName(const KernelModel &Model,
     return Bytes.takeError();
   std::string Result;
   for (size_t I = 0; I < Bytes->size(); I += 2) {
-    if ((*Bytes)[I + 1] || !(*Bytes)[I] || (*Bytes)[I] >= 128)
+    if ((*Bytes)[I + 1] || !(*Bytes)[I] || !llvm::isASCII(char((*Bytes)[I])))
       return registryError(
           "registry names require ASCII; Unicode case folding is unsupported");
     Result.push_back((*Bytes)[I]);
