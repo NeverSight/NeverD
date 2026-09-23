@@ -8817,6 +8817,9 @@ TEST(ObjCCallHints, DynamicFormatInteger64TailRequiresDeclaredCompleteValues) {
         Bad->Signature.Parameters[3].Location.ValueBytes = 4;
       Call->SourceCallHint = Bad;
     }
+    // The exact selector stub, complete operand carriers, and the declared
+    // integer producer together remain sufficient without a duplicate native
+    // callee hint.
     if (Mutation == 11)
       Call->SourceCallHint.reset();
     if (Mutation == 12) {
@@ -8831,12 +8834,7 @@ TEST(ObjCCallHints, DynamicFormatInteger64TailRequiresDeclaredCompleteValues) {
       Define.Val = Other;
       F.Body.insert(F.Body.begin(), Define);
     }
-    if (Mutation == 11) {
-      const auto Bound = sdk::bindObjCSourceReferences(F, Image);
-      EXPECT_FALSE(Bound.Function.Body.back().RetVal->SourceCallHint);
-    } else {
-      Check(F, false);
-    }
+    Check(F, Mutation == 11);
   }
 
   const auto Bound = sdk::bindObjCSourceReferences(Make(), Image);

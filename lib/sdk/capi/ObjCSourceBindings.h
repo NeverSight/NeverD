@@ -2811,7 +2811,11 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Expected = objcDynamicFormatPointerArgumentsSourceCallHint(
               Image, Stub->Selector,
               unsigned(Expression->Operands.size() - Fixed));
-        } else if (Expression->SourceCallHint &&
+        // The authenticated selector stub fixes the callee and selector. A
+        // redundant native hint is unnecessary when every integer tail value
+        // has an independently declared source result and the complete call's
+        // scalar carriers agree with the format declaration below.
+        } else if (!Expression->SourceCallHint ||
                    plainNativeBinding(*Expression->SourceCallHint)) {
           size_t IntegerBudget = 4096;
           std::set<VarKey> ActiveIntegers;
@@ -2844,7 +2848,6 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         PhysicalCall = samePhysicalSourceCall(
             Expression->SourceCallHint->Signature, Expected->Signature);
       else if (Expected && Expected->Format && !Expression->SourceCallHint &&
-               !Expected->Format->DynamicInteger64Arguments &&
                (!Expression->Type ||
                 sameScalarCarrier(Expression->Type,
                                   Expected->Signature.ReturnType)) &&
