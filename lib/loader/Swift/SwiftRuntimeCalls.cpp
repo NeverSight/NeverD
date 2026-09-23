@@ -238,6 +238,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
     {"$ss11_StringGutsV4growyySiF", "/usr/lib/swift/libswiftCore.dylib", "vzC"},
     {"$ss18_CocoaArrayWrapperV8endIndexSivg",
      "/usr/lib/swift/libswiftCore.dylib", "zz"},
+    // Swift 6.1.2 optimized arm64 and x86_64 client IR passes capacity as
+    // an Int and concrete dictionary metadata through swiftself.
+    {"$ss18_DictionaryStorageC8allocate8capacityAByxq_GSi_tFZ",
+     "/usr/lib/swift/libswiftCore.dylib", "pzC"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
      "/usr/lib/swift/libswiftCore.dylib", "ppp"},
     // The Hasher's 72-byte value is returned through x8; the dictionary
