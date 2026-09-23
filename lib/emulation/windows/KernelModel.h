@@ -197,6 +197,7 @@ private:
   llvm::Expected<std::optional<uint64_t>> finishWdmGuestCall(uint64_t Token,
                                                              uint64_t Result);
   void configureFrameworkDeviceHost();
+  llvm::Error completeFrameworkPnpIfReady();
   llvm::Error detachFrameworkPnpDevice(uint64_t Device, uint64_t PDO);
   /// Framework-owned WDM devices and their canonical symbolic-link keys.
   std::map<uint64_t, std::vector<std::string>> FrameworkDevices;

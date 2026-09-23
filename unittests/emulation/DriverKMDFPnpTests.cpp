@@ -325,14 +325,42 @@ TEST(DriverKMDFPnp, IoStopCompletesDriverOwnedRequestBeforeD0Exit) {
     }
 }
 
-TEST(DriverKMDFPnp, IoStopMustCompleteOrAcknowledgeItsRequest) {
-  auto Input = pendingStopOptions('E');
-  Input.Requests.resize(5);
-  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
-  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-  EXPECT_NE(Result->Diagnostic.find("EvtIoStop returned without completing or"),
-            std::string::npos);
+TEST(DriverKMDFPnp, PowerTransitionWaitsForDriverOwnedWorkerCompletion) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'B', 'D'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Mode);
+        auto Input = pendingStopOptions(Mode);
+        Input.LoadAddress = Base;
+        auto Result = emulateDriver(Image, Input);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        EXPECT_TRUE(Result->UnloadCompleted);
+        ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+        for (const auto &Request : Result->Requests)
+          EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+        EXPECT_EQ(callCount(*Result, "IoFreeWorkItem"), 1u);
+        const auto Messages = pnpMessages(*Result);
+        EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                             "KMDF PnP: I/O stop\n"),
+                  Mode == 'D' ? 1 : 0);
+      }
+}
+
+TEST(DriverKMDFPnp, PowerTransitionWithoutCompletionProducerStalls) {
+  for (char Mode : {'E', 'Z'}) {
+    SCOPED_TRACE(Mode);
+    auto Input = pendingStopOptions(Mode);
+    Input.Requests.resize(5);
+    auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+    EXPECT_NE(Result->Diagnostic.find("STATUS_PENDING request or blocked wait"),
+              std::string::npos);
+  }
 }
 
 TEST(DriverKMDFPnp, IoStopCanRequeueOrResumeAfterRestart) {

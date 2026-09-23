@@ -223,6 +223,8 @@ llvm::Expected<uint64_t> KernelModel::call(
   auto Result = Framework->call(Export, Arguments, CurrentIRQL);
   if (!Result)
     return Result.takeError();
+  if (auto E = completeFrameworkPnpIfReady())
+    return E;
   if (StopSync || StopPurgeSync || EmptySync) {
     auto Ready = Framework->queueWaitReady(Arguments[1], EmptySync);
     if (!Ready)
@@ -239,6 +241,25 @@ llvm::Expected<uint64_t> KernelModel::call(
     }
   }
   return *Result;
+}
+
+llvm::Error KernelModel::completeFrameworkPnpIfReady() {
+  if (!Framework)
+    return llvm::Error::success();
+  auto Pnp = Framework->takePnpCompletion();
+  if (!Pnp)
+    return llvm::Error::success();
+  auto *Request = requestForIRP(Pnp->IRP);
+  if (!Request || !Request->FrameworkPnpAwaiting ||
+      Request->FrameworkPnpHandled)
+    return frameworkDeviceError("PnP callback return lost its pending IRP");
+  Request->FrameworkPnpAwaiting = false;
+  Request->FrameworkPnpHandled = true;
+  if (Pnp->Status & profile::NTStatusFailureMask)
+    if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPStatusOffset,
+                                     Pnp->Status, 4))
+      return E;
+  return completeRequest(Pnp->IRP, 0);
 }
 
 std::optional<KernelGuestCall> KernelModel::takeGuestCall() {
@@ -269,21 +290,8 @@ KernelModel::finishGuestCall(GuestCallToken Token, uint64_t Result) {
     auto Continued = Framework->finishGuestCall(Token.ID, Result);
     if (!Continued)
       return Continued.takeError();
-    if (auto Pnp = Framework->takePnpCompletion()) {
-      auto *Request = requestForIRP(Pnp->IRP);
-      if (!Request || !Request->FrameworkPnpAwaiting ||
-          Request->FrameworkPnpHandled)
-        return frameworkDeviceError("PnP callback return lost its pending IRP");
-      Request->FrameworkPnpAwaiting = false;
-      Request->FrameworkPnpHandled = true;
-      if (Pnp->Status & profile::NTStatusFailureMask) {
-        if (auto E = Memory.writeInteger(Pnp->IRP + windows::IRPStatusOffset,
-                                         Pnp->Status, 4))
-          return E;
-      }
-      if (auto E = completeRequest(Pnp->IRP, 0))
-        return E;
-    }
+    if (auto E = completeFrameworkPnpIfReady())
+      return E;
     return Continued;
   }
   case GuestCallOwner::WDM:

@@ -548,7 +548,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     const auto Active = std::find_if(
         PnpTransitions.begin(), PnpTransitions.end(), [&](const auto &Entry) {
           return Entry.second.Current.Phase == PnpPhase::IoStop &&
-                 Entry.second.Current.Request == A[1];
+                 Entry.second.Current.Request == A[1] &&
+                 !Entry.second.WaitingForRequests;
         });
     if (Active == PnpTransitions.end() || R->second.StopAcknowledged ||
         R->second.InCallerContext || R->second.Queued)

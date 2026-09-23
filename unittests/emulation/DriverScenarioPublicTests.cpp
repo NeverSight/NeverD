@@ -717,6 +717,30 @@ constexpr llvm::StringLiteral KMDFPnpLifecycleScenario = R"({
       {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
        "bus_completion":{"status":0,"delay_100ns":7}}],
     "unload":true})";
+
+constexpr llvm::StringLiteral KMDFPnpHeldRequestScenario = R"({
+    "pnp_devices":[{"id":"kmdf-pdo","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"create","device_id":"kmdf-pdo","file":7},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_stop",
+       "bus_completion":{"status":0}},
+      {"kind":"ioctl","device_id":"kmdf-pdo","file":7,
+       "code":"0x222000","input":"7a","output_size":4,
+       "defer_callback_drain":true},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"stop",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"cleanup","device_id":"kmdf-pdo","file":7},
+      {"kind":"close","device_id":"kmdf-pdo","file":7},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
+       "bus_completion":{"status":0}}],
+    "unload":true})";
 #endif
 
 TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFPnpLifecycle) {
@@ -840,29 +864,7 @@ TEST_F(DriverScenarioPublic, CAPIPowerManagedKMDFPnpQueueEntersD0) {
 
 TEST_F(DriverScenarioPublic, CAPIResumesStoppedKMDFRequests) {
 #ifdef NEVERD_KMDF_PNP_FIXTURE
-  constexpr llvm::StringLiteral Scenario = R"({
-    "pnp_devices":[{"id":"kmdf-pdo","bus":"resource_free",
-      "initial_device_power":"D0","initial_system_power":"working"}],
-    "requests":[
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
-       "bus_completion":{"status":0}},
-      {"kind":"create","device_id":"kmdf-pdo","file":7},
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_stop",
-       "bus_completion":{"status":0}},
-      {"kind":"ioctl","device_id":"kmdf-pdo","file":7,
-       "code":"0x222000","input":"7a","output_size":4,
-       "defer_callback_drain":true},
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"stop",
-       "bus_completion":{"status":0}},
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
-       "bus_completion":{"status":0}},
-      {"kind":"cleanup","device_id":"kmdf-pdo","file":7},
-      {"kind":"close","device_id":"kmdf-pdo","file":7},
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_remove",
-       "bus_completion":{"status":0}},
-      {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
-       "bus_completion":{"status":0}}],
-    "unload":true})";
+
   std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
 #ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
   Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
@@ -881,7 +883,7 @@ TEST_F(DriverScenarioPublic, CAPIResumesStoppedKMDFRequests) {
       Options.service_name = Service.c_str();
       auto Parsed =
           llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
-              Session, Image, Scenario.data(), &Options)));
+              Session, Image, KMDFPnpHeldRequestScenario.data(), &Options)));
       ASSERT_TRUE(bool(Parsed))
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
@@ -905,6 +907,58 @@ TEST_F(DriverScenarioPublic, CAPIResumesStoppedKMDFRequests) {
                                 return Object &&
                                        Object->getString("name") ==
                                            "WdfRequestStopAcknowledge";
+                              }),
+                1);
+    }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIWaitsForKMDFWorkerBeforeStop) {
+#ifdef NEVERD_KMDF_PNP_FIXTURE
+  std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
+#ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images)
+    for (char Mode : {'B', 'D'}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Mode);
+      neverd_driver_options_v1 Options{};
+      Options.struct_size = sizeof(Options);
+      Options.instruction_limit = 100000;
+      Options.memory_limit = 64 * 1024 * 1024;
+      Options.event_limit = 10000;
+      Options.timeout_milliseconds = 5000;
+      const std::string Service = std::string("NeverDKmdfPnp") + Mode;
+      Options.service_name = Service.c_str();
+      auto Parsed =
+          llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+              Session, Image, KMDFPnpHeldRequestScenario.data(), &Options)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      ASSERT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 10u);
+      const auto *IO = (*Requests)[3].getAsObject();
+      ASSERT_NE(IO, nullptr);
+      EXPECT_EQ(IO->getBoolean("completed"), true);
+      EXPECT_EQ(IO->getInteger("io_status"), 0);
+      EXPECT_EQ(IO->getString("output_hex"), "");
+      const auto *Calls = Report->getArray("calls");
+      ASSERT_NE(Calls, nullptr);
+      EXPECT_EQ(std::count_if(Calls->begin(), Calls->end(),
+                              [](const auto &Call) {
+                                const auto *Object = Call.getAsObject();
+                                return Object && Object->getString("name") ==
+                                                     "IoFreeWorkItem";
                               }),
                 1);
     }

@@ -8,9 +8,11 @@
 /// A KMDF FDO and default I/O queue, linked through the genuine
 /// WDK entry library. Service suffixes M and T use default and explicit power
 /// management; C completes a held request from EvtIoStop, A requeues it,
-/// V resumes it, G purges it on surprise removal, E leaves one
-/// unacknowledged, R consumes one assigned memory resource, L leaves its
-/// mapping live, W attempts an invalid descriptor write, and F fails AddDevice.
+/// V resumes it, G purges it on surprise removal, B/D complete it from a
+/// worker without/with EvtIoStop, E/Z leave one without a completion producer
+/// with/without EvtIoStop, R consumes one assigned memory resource, L leaves
+/// its mapping live, W attempts an invalid descriptor write, and F fails
+/// AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -50,11 +52,13 @@ static WCHAR ServiceMode;
 static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
 static ULONG DeliveryCount;
+static PIO_WORKITEM PendingWorkItem;
 
 static BOOLEAN UsesPowerQueue(VOID) {
   return ServiceMode == L'M' || ServiceMode == L'T' || ServiceMode == L'C' ||
          ServiceMode == L'A' || ServiceMode == L'V' || ServiceMode == L'G' ||
-         ServiceMode == L'E';
+         ServiceMode == L'B' || ServiceMode == L'D' || ServiceMode == L'E' ||
+         ServiceMode == L'Z';
 }
 
 static BOOLEAN UsesAssignedMemory(VOID) {
@@ -213,6 +217,15 @@ static VOID DeviceIoResume(WDFQUEUE Queue, WDFREQUEST Request) {
                                     0);
 }
 
+static VOID CompletePendingIo(PDEVICE_OBJECT Device, PVOID Context) {
+  WDFREQUEST Request = (WDFREQUEST)Context;
+  PIO_WORKITEM Item = PendingWorkItem;
+  (void)Device;
+  PendingWorkItem = NULL;
+  IoFreeWorkItem(Item);
+  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 0);
+}
+
 static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
                       size_t InputLength, ULONG Code) {
   UCHAR *Input;
@@ -228,7 +241,20 @@ static VOID IoControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputLength,
     WdfRequestCompleteWithInformation(Request, STATUS_INVALID_PARAMETER, 0);
     return;
   }
-  if (ServiceMode == L'C' || ServiceMode == L'G' || ServiceMode == L'E')
+  if (ServiceMode == L'B' || ServiceMode == L'D') {
+    PendingWorkItem = IoAllocateWorkItem(
+        WdfDeviceWdmGetDeviceObject(WdfIoQueueGetDevice(Queue)));
+    if (PendingWorkItem == NULL) {
+      WdfRequestCompleteWithInformation(Request, STATUS_INSUFFICIENT_RESOURCES,
+                                        0);
+      return;
+    }
+    IoQueueWorkItem(PendingWorkItem, CompletePendingIo, DelayedWorkQueue,
+                    Request);
+    return;
+  }
+  if (ServiceMode == L'C' || ServiceMode == L'G' || ServiceMode == L'E' ||
+      ServiceMode == L'Z')
     return;
   if ((ServiceMode == L'A' || ServiceMode == L'V') && DeliveryCount++ == 0)
     return;
@@ -306,7 +332,7 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     QueueConfig.PowerManaged = WdfFalse;
   QueueConfig.EvtIoDeviceControl = IoControl;
   if (ServiceMode == L'C' || ServiceMode == L'E' || ServiceMode == L'A' ||
-      ServiceMode == L'V' || ServiceMode == L'G')
+      ServiceMode == L'V' || ServiceMode == L'G' || ServiceMode == L'D')
     QueueConfig.EvtIoStop = DeviceIoStop;
   if (ServiceMode == L'V')
     QueueConfig.EvtIoResume = DeviceIoResume;
@@ -335,6 +361,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   PowerQueue = NULL;
   MappedResource = NULL;
   DeliveryCount = 0;
+  PendingWorkItem = NULL;
   WDF_DRIVER_CONFIG_INIT(&Config, DeviceAdd);
   if (ServiceMode != L'N')
     Config.EvtDriverUnload = DriverUnload;

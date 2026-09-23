@@ -24,6 +24,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <variant>
@@ -369,15 +370,19 @@ private:
     bool Entering = false;
     bool Removing = false;
     bool CallbacksComplete = false;
+    bool WaitingForRequests = false;
     uint32_t Status = 0;
     PnpStep Current{PnpPhase::PrepareHardware};
     std::deque<PnpStep> Remaining;
+    std::set<uint64_t> WaitingRequests;
   };
   std::map<uint64_t, PnpTransition> PnpTransitions;
   std::optional<PnpCompletion> CompletedPnp;
   std::optional<GuestCall> PendingCall;
 
   llvm::Error schedulePnpCallback(uint64_t Token);
+  llvm::Error finalizePnpCallbacks(uint64_t Token);
+  llvm::Error resumePausedPnp();
   void appendPowerQueuePresentations(uint64_t Device,
                                      std::vector<Step> &Steps) const;
 
