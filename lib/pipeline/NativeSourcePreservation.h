@@ -5,6 +5,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/low/SourceRegisterCopy.h"
+#include "neverd/ir/med/MedIR.h"
 
 #include <map>
 #include <optional>
@@ -41,6 +42,13 @@ using NativeSourceCalls =
 /// Identify one exact LowIR call occurrence. Direct calls require a static
 /// target; indirect calls retain it only when the machine operand is constant.
 std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation);
+
+/// True only for a pure intrinsic whose complete scalar input/output shape is
+/// sufficient for native source ABI inference and preservation transfer.
+bool hasNativeScalarIntrinsicEvidence(const LowOp &Operation,
+                                      Arch Architecture);
+bool hasNativeScalarIntrinsicEvidence(const MedOp &Operation,
+                                      Arch Architecture);
 
 /// Prove that every exit restores the incoming Darwin preserved registers,
 /// stack pointer and link register. Calls must already have validated source

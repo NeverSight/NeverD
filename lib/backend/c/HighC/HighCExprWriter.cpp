@@ -211,8 +211,9 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         OpStrs.push_back(GPRBytes == 8 ? "1" : "0");
     }
 
-    auto Rendered = renderIntrinsicCall(E.IntrinsicId, Opts.TheArch, OpStrs,
-                                        HasCIntrinsics);
+    auto Rendered = renderIntrinsicCall(
+        E.IntrinsicId, Opts.TheArch, OpStrs, E.Type ? E.Type->Size : 0,
+        HasCIntrinsics);
     if (!Rendered.empty())
       return Rendered;
   }

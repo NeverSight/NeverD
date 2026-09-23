@@ -115,9 +115,22 @@ renderARMMultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
 
 std::string renderARMIntrinsicCall(Intrinsic Id,
                                    const std::vector<std::string> &Ops,
+                                   uint16_t ResultBytes,
                                    bool &HasCIntrinsics) {
   using I = Intrinsic;
   switch (Id) {
+  case I::A64_Rbit: {
+    if (Ops.size() != 1)
+      return {};
+    const char *Builtin = ResultBytes == 1   ? "__builtin_bitreverse8"
+                          : ResultBytes == 2 ? "__builtin_bitreverse16"
+                          : ResultBytes == 4 ? "__builtin_bitreverse32"
+                          : ResultBytes == 8 ? "__builtin_bitreverse64"
+                                             : nullptr;
+    if (!Builtin)
+      return {};
+    return std::string(Builtin) + "(" + Ops[0] + ")";
+  }
   case I::A64_SvePtrue: {
     if (Ops.size() < 2)
       return {};

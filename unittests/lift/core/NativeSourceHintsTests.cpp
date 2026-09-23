@@ -3775,6 +3775,13 @@ TEST(NativeSourceHints,
   Read.Output = NdVar::tmp(TmpBase, 8);
   Read.addInput(NdVar::reg(Context, 8));
   Function.Blocks[0].Ops.push_back(Read);
+  LowOp Reverse;
+  Reverse.Opcode = NdOp::INTRINSIC;
+  Reverse.Output = NdVar::tmp(TmpBase + 8, 8);
+  Reverse.addInput(
+      NdVar::cst(static_cast<uint64_t>(Intrinsic::A64_Rbit), 2));
+  Reverse.addInput(Read.Output);
+  Function.Blocks[0].Ops.push_back(Reverse);
 
   LowOp Return;
   Return.Opcode = NdOp::RETURN;
@@ -3813,6 +3820,41 @@ TEST(NativeSourceHints,
         restoresNativeSourceState(Invalid, Arch::AArch64, {}, nullptr));
   }
   EXPECT_FALSE(restoresNativeSourceState(Function, Arch::X64, {}, nullptr));
+}
+
+TEST(NativeSourceHints, ScalarBitReverseHasExactNativeABIEvidence) {
+  NativeFixture Fixture(Arch::AArch64);
+  Fixture.Med.Params[0].Size = 8;
+  Fixture.Med.TypedParams[0].Type = Fixture.High.Params[0].Type =
+      NdType::makeInt(8, false);
+  Fixture.Med.Blocks[0].Ops[0].Inputs[0] = Fixture.Med.Params[0];
+  MedOp Reverse;
+  Reverse.Opcode = NdOp::INTRINSIC;
+  Reverse.Output.Kind = MedVar::Temp;
+  Reverse.Output.Id = 300;
+  Reverse.Output.Size = 8;
+  Reverse.addInput(
+      MedVar::makeConst(static_cast<uint64_t>(Intrinsic::A64_Rbit), 2));
+  Reverse.addInput(Fixture.Med.Params[0]);
+  Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin(), Reverse);
+
+  std::string Error;
+  EXPECT_TRUE(Fixture.infer(Error)) << Error;
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    auto Invalid = Fixture;
+    auto &Op = Invalid.Med.Blocks[0].Ops[0];
+    if (Mutation == 0)
+      Op.Inputs[0].ConstVal = static_cast<uint64_t>(Intrinsic::A64_Rev64);
+    else if (Mutation == 1)
+      Op.Inputs[0].Size = 4;
+    else if (Mutation == 2)
+      Op.Inputs[1].Size = 4;
+    else if (Mutation == 3)
+      Op.Output.Size = 16;
+    else
+      Op.addInput(MedVar::makeConst(0, 8));
+    EXPECT_FALSE(Invalid.infer(Error)) << Mutation;
+  }
 }
 
 TEST(NativeSourceHints, AuxiliaryInputsAllowLaterCallerSavedWrites) {

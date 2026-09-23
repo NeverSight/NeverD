@@ -16,6 +16,41 @@ std::optional<NativeSourceCallKey> nativeSourceCallKey(const LowOp &Operation) {
   return sourceCallOccurrenceKey(Operation);
 }
 
+bool hasNativeScalarIntrinsicEvidence(const LowOp &Operation,
+                                      Arch Architecture) {
+  if (Architecture != Arch::AArch64 || Operation.Opcode != NdOp::INTRINSIC ||
+      Operation.NumInputs != 2 || !Operation.Inputs[0].isConst() ||
+      Operation.Inputs[0].Size != 2 ||
+      Operation.Inputs[0].Offset !=
+          static_cast<uint64_t>(Intrinsic::A64_Rbit) ||
+      (!Operation.Output.isReg() && !Operation.Output.isTemp()) ||
+      Operation.Output.Size != Operation.Inputs[1].Size ||
+      (Operation.Output.Size != 1 && Operation.Output.Size != 2 &&
+       Operation.Output.Size != 4 && Operation.Output.Size != 8) ||
+      (!Operation.Inputs[1].isConst() && !Operation.Inputs[1].isReg() &&
+       !Operation.Inputs[1].isTemp()) ||
+      Operation.MemoryOrdering != NdMemoryOrdering::None ||
+      Operation.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  return true;
+}
+
+bool hasNativeScalarIntrinsicEvidence(const MedOp &Operation,
+                                      Arch Architecture) {
+  if (Architecture != Arch::AArch64 || Operation.Opcode != NdOp::INTRINSIC ||
+      Operation.NumInputs != 2 || !Operation.Inputs[0].isConst() ||
+      Operation.Inputs[0].Size != 2 ||
+      Operation.Inputs[0].ConstVal !=
+          static_cast<uint64_t>(Intrinsic::A64_Rbit) ||
+      (Operation.Output.Kind != MedVar::Reg &&
+       Operation.Output.Kind != MedVar::Temp) ||
+      Operation.Output.Size != Operation.Inputs[1].Size ||
+      (Operation.Output.Size != 1 && Operation.Output.Size != 2 &&
+       Operation.Output.Size != 4 && Operation.Output.Size != 8))
+    return false;
+  return true;
+}
+
 namespace {
 constexpr int64_t MaxFrame = 1 << 20;
 constexpr size_t MaxFacts = 4096;
@@ -186,7 +221,8 @@ public:
         return true;
       }
       if (Op.NumInputs > 6 || Op.Output.Size > 64 ||
-          Op.Opcode == NdOp::INTRINSIC ||
+          (Op.Opcode == NdOp::INTRINSIC &&
+           !hasNativeScalarIntrinsicEvidence(Op, Architecture)) ||
           Op.MemoryOrdering != NdMemoryOrdering::None ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return false;

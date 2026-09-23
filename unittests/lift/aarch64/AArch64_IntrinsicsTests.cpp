@@ -89,6 +89,52 @@ TEST_F(AArch64_Intrinsics, FixedFP16ConversionsUseArmCompilerBuiltins) {
     EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << c;
 }
 
+TEST_F(AArch64_Intrinsics, ScalarBitReverseUsesWidthMatchedBuiltins) {
+    using namespace neverd;
+    std::vector<HighFunc> funcs;
+    for (uint16_t bytes : {uint16_t{1}, uint16_t{2}, uint16_t{4},
+                           uint16_t{8}}) {
+        HighFunc func;
+        func.Name = "rbit" + std::to_string(bytes * 8);
+        func.ReturnType = NdType::makeInt(bytes, false);
+        func.Params.push_back({"arg0", NdType::makeInt(bytes, false)});
+        MedVar input;
+        input.Kind = MedVar::Param;
+        input.Id = 0;
+        input.Size = bytes;
+        input.TheArch = Arch::AArch64;
+        auto call = HighExpr::makeCall("", 0, {HighExpr::makeVar(input)});
+        call->IntrinsicId = Intrinsic::A64_Rbit;
+        call->Type = func.ReturnType;
+        HighStmt ret;
+        ret.Kind = StmtKind::Return;
+        ret.RetVal = std::move(call);
+        func.Body.push_back(std::move(ret));
+        funcs.push_back(std::move(func));
+    }
+
+    std::string c;
+    llvm::raw_string_ostream os(c);
+    CEmitterOptions opts;
+    opts.TheArch = Arch::AArch64;
+    ASSERT_TRUE(HighCEmitter().emit(funcs, os, opts));
+    os.flush();
+    for (unsigned bits : {8U, 16U, 32U, 64U})
+        EXPECT_NE(c.find("__builtin_bitreverse" + std::to_string(bits) +
+                         "(arg0)"), std::string::npos) << c;
+    EXPECT_EQ(c.find("vrbitq"), std::string::npos) << c;
+
+    auto cFile = tmpFile("scalar_rbit_high.c");
+    std::ofstream output(cFile);
+    ASSERT_TRUE(output.good());
+    output << c;
+    output.close();
+    auto syntax = checkHighCClangSyntax(
+        cFile, {"-target", "aarch64-none-elf", "-ffreestanding",
+                "-std=gnu11"});
+    EXPECT_EQ(syntax.exitCode, 0) << syntax.err << "\n" << c;
+}
+
 TEST(AArch64_HighCIntrinsics, FPSRUsesClangSystemRegisterBuiltins) {
     using namespace neverd;
 

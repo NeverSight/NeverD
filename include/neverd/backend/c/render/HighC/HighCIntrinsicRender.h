@@ -43,6 +43,7 @@ struct MultiOutputRender {
 //--- Dispatchers (HighCIntrinsicRender.cpp) ---
 std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
                                 const std::vector<std::string> &Ops,
+                                uint16_t ResultBytes,
                                 bool &HasCIntrinsics);
 
 //--- Arch-specific (HighCIntrinsicRenderX86.cpp) ---
@@ -105,6 +106,7 @@ renderARMMultiOutput(Intrinsic IID, const std::vector<MedVar> &Outputs,
 
 std::string renderARMIntrinsicCall(Intrinsic Id,
                                    const std::vector<std::string> &Ops,
+                                   uint16_t ResultBytes,
                                    bool &HasCIntrinsics);
 
 /// Format a raw mnemonic + operands as a GCC-style `__asm__ volatile(...)`

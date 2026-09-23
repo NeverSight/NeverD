@@ -1079,7 +1079,8 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
       // It is never a result carrier: the shared termination proof cuts the
       // path and HighIR lowers the intrinsic as a terminal statement.
       if (Op.Opcode == NdOp::INTRINSIC &&
-          !isArchitecturalNoReturn(Op, Image.Arch))
+          !isArchitecturalNoReturn(Op, Image.Arch) &&
+          !hasNativeScalarIntrinsicEvidence(Op, Image.Arch))
         return Reject("native intrinsic requires explicit scalar ABI evidence");
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         std::string Error;
