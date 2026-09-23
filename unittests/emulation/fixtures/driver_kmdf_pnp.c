@@ -28,6 +28,8 @@ ABI_SLOT(WdfWdmDeviceGetWdfDeviceHandle, 30);
 ABI_SLOT(WdfDeviceGetDriver, 39);
 ABI_SLOT(WdfDeviceCreate, 75);
 ABI_SLOT(WdfDeviceInitSetPnpPowerEventCallbacks, 55);
+ABI_SLOT(WdfCmResourceListGetCount, 304);
+ABI_SLOT(WdfCmResourceListGetDescriptor, 305);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
 ABI_SLOT(WdfIoQueueCreate, 152);
@@ -47,7 +49,8 @@ static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
       PreviousState != WdfPowerDeviceD3Final)
     return STATUS_INVALID_DEVICE_STATE;
   DbgPrint("KMDF PnP: D0 entry\n");
-  return ServiceMode == L'Q' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+  return ServiceMode == L'Q' || ServiceMode == L'J' ? STATUS_UNSUCCESSFUL
+                                                    : STATUS_SUCCESS;
 }
 
 static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
@@ -63,8 +66,30 @@ static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
 static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
-  UNREFERENCED_PARAMETER(Raw);
-  UNREFERENCED_PARAMETER(Translated);
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || Raw == NULL ||
+      Translated == NULL || Raw == Translated ||
+      WdfCmResourceListGetCount(Raw) != 0 ||
+      WdfCmResourceListGetCount(Translated) != 0 ||
+      WdfCmResourceListGetDescriptor(Raw, 0) != NULL ||
+      WdfCmResourceListGetDescriptor(Translated, 0) != NULL)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: prepare hardware\n");
+  return ServiceMode == L'I' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS DeviceReleaseHardware(WDFDEVICE Device,
+                                      WDFCMRESLIST Translated) {
+  UNREFERENCED_PARAMETER(Device);
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || Translated == NULL ||
+      WdfCmResourceListGetCount(Translated) != 0 ||
+      WdfCmResourceListGetDescriptor(Translated, 0) != NULL)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: release hardware\n");
+  return STATUS_SUCCESS;
+}
+
+static NTSTATUS DeviceSelfManagedIoInit(WDFDEVICE Device) {
+  UNREFERENCED_PARAMETER(Device);
   return STATUS_SUCCESS;
 }
 
@@ -127,12 +152,17 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (PDO == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
     return STATUS_INVALID_DEVICE_STATE;
   WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
-  if (ServiceMode == L'P' || ServiceMode == L'Q' || ServiceMode == L'U') {
+  if (ServiceMode == L'P' || ServiceMode == L'Q' || ServiceMode == L'H' ||
+      ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U') {
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpCallbacks);
     PnpCallbacks.EvtDeviceD0Entry = DeviceD0Entry;
     PnpCallbacks.EvtDeviceD0Exit = DeviceD0Exit;
-    if (ServiceMode == L'U')
+    if (ServiceMode == L'H' || ServiceMode == L'I' || ServiceMode == L'J') {
       PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
+      PnpCallbacks.EvtDeviceReleaseHardware = DeviceReleaseHardware;
+    }
+    if (ServiceMode == L'U')
+      PnpCallbacks.EvtDeviceSelfManagedIoInit = DeviceSelfManagedIoInit;
     WdfDeviceInitSetPnpPowerEventCallbacks(Init, &PnpCallbacks);
   }
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);

@@ -64,6 +64,9 @@ void KernelModel::configureFrameworkDeviceHost() {
     if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
       return frameworkDeviceError(
           "PnP framework creation requires the active physical device");
+    if (Resources.hasResources(PDO))
+      return frameworkDeviceError(
+          "resource-bearing KMDF devices are outside this profile");
     auto Created = createDeviceObject(Name, 0, windows::UnknownDeviceType,
                                       windows::SecureOpen, false);
     if (!Created)

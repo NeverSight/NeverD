@@ -156,23 +156,86 @@ KernelFramework::beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
   if (!Entering && !Leaving)
     return false;
   auto &D = Device->second;
-  if (Entering && D.InD0)
-    return invalid("PnP START reached a device already in D0");
-  if (Leaving && !D.InD0)
+  if (Entering && (D.InD0 || D.HardwarePrepared))
+    return invalid("PnP START reached an already prepared device");
+  if (Leaving && !D.InD0 && !D.HardwarePrepared)
     return false;
-  const uint64_t Callback = Entering ? D.D0Entry : D.D0Exit;
-  if (!Callback) {
+
+  PnpTransition Transition{IRP, Handle->second, Entering};
+  if (Entering) {
+    if (D.PrepareHardware)
+      Transition.Remaining.push_back(PnpPhase::PrepareHardware);
+    if (D.D0Entry)
+      Transition.Remaining.push_back(PnpPhase::D0Entry);
+  } else {
+    if (D.InD0 && D.D0Exit)
+      Transition.Remaining.push_back(PnpPhase::D0Exit);
+    if (D.HardwarePrepared && D.ReleaseHardware)
+      Transition.Remaining.push_back(PnpPhase::ReleaseHardware);
+  }
+  if (!Transition.Remaining.empty() && NextContinuation == UINT64_MAX)
+    return invalid("framework callback identity exhausted");
+
+  if (Entering && (D.PrepareHardware || D.ReleaseHardware)) {
+    if (!D.RawResourceList) {
+      auto Raw = allocate(HandleSize, false, true);
+      if (!Raw)
+        return Raw.takeError();
+      auto Translated = allocate(HandleSize, false, true);
+      if (!Translated)
+        return llvm::joinErrors(Translated.takeError(), retire(*Raw));
+      D.RawResourceList = *Raw;
+      D.TranslatedResourceList = *Translated;
+    }
+    D.ResourcesActive = true;
+  }
+  if (Transition.Remaining.empty()) {
+    D.HardwarePrepared = Entering;
     D.InD0 = Entering;
+    if (!Entering)
+      D.ResourcesActive = false;
     return false;
   }
-  if (NextContinuation == UINT64_MAX)
-    return invalid("framework callback identity exhausted");
   const uint64_t Token = NextContinuation++;
   Continuations.emplace(Token, Continuation{});
-  PnpTransitions.emplace(Token, PnpTransition{IRP, Handle->second, Entering});
-  PendingCall =
-      GuestCall{Token, Callback, {Handle->second, PowerDeviceD3Final}};
+  PnpTransitions.emplace(Token, std::move(Transition));
+  if (auto E = schedulePnpCallback(Token))
+    return E;
   return true;
+}
+
+llvm::Error KernelFramework::schedulePnpCallback(uint64_t Token) {
+  auto &Transition = PnpTransitions.at(Token);
+  if (Transition.Remaining.empty())
+    return invalid("PnP transition has no remaining callback");
+  auto &D = Devices.at(Transition.Device);
+  Transition.Current = Transition.Remaining.front();
+  Transition.Remaining.pop_front();
+  uint64_t Callback = 0;
+  std::vector<uint64_t> Arguments{Transition.Device};
+  switch (Transition.Current) {
+  case PnpPhase::PrepareHardware:
+    Callback = D.PrepareHardware;
+    Arguments.push_back(D.RawResourceList);
+    Arguments.push_back(D.TranslatedResourceList);
+    break;
+  case PnpPhase::D0Entry:
+    Callback = D.D0Entry;
+    Arguments.push_back(PowerDeviceD3Final);
+    break;
+  case PnpPhase::D0Exit:
+    Callback = D.D0Exit;
+    Arguments.push_back(PowerDeviceD3Final);
+    break;
+  case PnpPhase::ReleaseHardware:
+    Callback = D.ReleaseHardware;
+    Arguments.push_back(D.TranslatedResourceList);
+    break;
+  }
+  if (!Callback)
+    return invalid("PnP transition lost its registered callback");
+  PendingCall = GuestCall{Token, Callback, std::move(Arguments)};
+  return llvm::Error::success();
 }
 
 std::optional<KernelFramework::PnpCompletion>
@@ -990,6 +1053,10 @@ KernelFramework::advance(uint64_t Token) {
         return invalid("framework device host is not configured");
       if (auto E = DevicesHost.Delete(Devices.at(S.Object).Wdm))
         return E;
+      if (auto E = retire(Devices.at(S.Object).RawResourceList))
+        return E;
+      if (auto E = retire(Devices.at(S.Object).TranslatedResourceList))
+        return E;
       if (Devices.at(S.Object).PDO)
         PnpDeviceHandles.erase(Devices.at(S.Object).PDO);
       Devices.erase(S.Object);
@@ -1044,9 +1111,29 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
     auto Device = Devices.find(Transition->second.Device);
     if (Device == Devices.end() || CompletedPnp)
       return invalid("PnP power callback lost its device or completion");
-    if (!(Status & profile::NTStatusFailureMask))
-      Device->second.InD0 = Transition->second.Entering;
-    CompletedPnp = PnpCompletion{Transition->second.IRP, Status};
+    auto &State = Transition->second;
+    const bool Failed = Status & profile::NTStatusFailureMask;
+    if (Failed && !(State.Status & profile::NTStatusFailureMask))
+      State.Status = Status;
+    if (State.Entering && Failed &&
+        (State.Current == PnpPhase::PrepareHardware ||
+         State.Current == PnpPhase::D0Entry)) {
+      State.Remaining.clear();
+      if (Device->second.ReleaseHardware)
+        State.Remaining.push_back(PnpPhase::ReleaseHardware);
+    }
+    if (!State.Remaining.empty()) {
+      if (auto E = schedulePnpCallback(Token))
+        return E;
+      return std::optional<uint64_t>{};
+    }
+    const bool Ready =
+        State.Entering && !(State.Status & profile::NTStatusFailureMask);
+    Device->second.HardwarePrepared = Ready;
+    Device->second.InD0 = Ready;
+    if (!Ready)
+      Device->second.ResourcesActive = false;
+    CompletedPnp = PnpCompletion{State.IRP, State.Status};
     PnpTransitions.erase(Transition);
   }
   auto Cancel = CancelCallbacks.find(Token);

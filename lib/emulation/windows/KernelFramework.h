@@ -156,7 +156,7 @@ public:
     uint32_t Status = 0;
   };
   /// The provider has completed successfully, but the framework may still
-  /// need to run a guest D0 callback before the original IRP can unwind.
+  /// need to run guest hardware and D0 callbacks before the IRP can unwind.
   llvm::Expected<bool> beginPnpPowerTransition(uint64_t PDO, uint64_t IRP,
                                                DevicePnpRequest Minor);
   std::optional<PnpCompletion> takePnpCompletion();
@@ -213,6 +213,7 @@ private:
     uint32_t IoType = framework::ControlIoBuffered;
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
+    uint64_t PrepareHardware = 0, ReleaseHardware = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct Device {
@@ -222,6 +223,10 @@ private:
     bool Initialized = false;
     bool HasLink = false;
     uint64_t D0Entry = 0, D0Exit = 0;
+    uint64_t PrepareHardware = 0, ReleaseHardware = 0;
+    uint64_t RawResourceList = 0, TranslatedResourceList = 0;
+    bool HardwarePrepared = false;
+    bool ResourcesActive = false;
     bool InD0 = false;
   };
   std::map<uint64_t, Device> Devices;
@@ -326,13 +331,19 @@ private:
   std::map<uint64_t, uint64_t> CancelCallbacks;
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
   std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
+  enum class PnpPhase { PrepareHardware, D0Entry, D0Exit, ReleaseHardware };
   struct PnpTransition {
     uint64_t IRP = 0, Device = 0;
     bool Entering = false;
+    uint32_t Status = 0;
+    PnpPhase Current = PnpPhase::PrepareHardware;
+    std::deque<PnpPhase> Remaining;
   };
   std::map<uint64_t, PnpTransition> PnpTransitions;
   std::optional<PnpCompletion> CompletedPnp;
   std::optional<GuestCall> PendingCall;
+
+  llvm::Error schedulePnpCallback(uint64_t Token);
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;
   llvm::Expected<RequestDispatch> queueDispatch(uint64_t QueueHandle,

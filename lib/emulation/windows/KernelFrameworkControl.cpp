@@ -61,6 +61,19 @@ llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callControl(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
   using Result = std::optional<uint64_t>;
+  if (Name == api::WdfCmResourceListGetCount ||
+      Name == api::WdfCmResourceListGetDescriptor) {
+    for (const auto &[Handle, Device] : Devices) {
+      const auto &Object = Objects.at(Handle);
+      if (Object.Binding != B.Globals || Object.Deleting ||
+          !Device.ResourcesActive)
+        continue;
+      if (A[1] == Device.RawResourceList ||
+          A[1] == Device.TranslatedResourceList)
+        return Result{0};
+    }
+    return controlError("resource-list query requires a live assigned list");
+  }
   if (Name == api::WdfControlDeviceInitAllocate) {
     auto Driver = Objects.find(A[1]);
     if (Driver == Objects.end() || Driver->second.Kind != ObjectKind::Driver ||
@@ -116,7 +129,7 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
         return Size.takeError();
       if (*Size != PnpPowerCallbacksSize)
         return controlError("unsupported PnP power callback structure size");
-      uint64_t Entry = 0, Exit = 0;
+      uint64_t Entry = 0, Exit = 0, Prepare = 0, Release = 0;
       for (unsigned Index = 0; Index < PnpPowerCallbacksCount; ++Index) {
         auto Callback = read(A[2] + PnpPowerCallbacksFirstOffset +
                              Index * sizeof(uint64_t));
@@ -126,11 +139,17 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
           Entry = *Callback;
         else if (Index == PnpPowerD0ExitIndex)
           Exit = *Callback;
+        else if (Index == PnpPowerPrepareHardwareIndex)
+          Prepare = *Callback;
+        else if (Index == PnpPowerReleaseHardwareIndex)
+          Release = *Callback;
         else if (*Callback)
           return controlError("unsupported PnP power event callback");
       }
       I->second.D0Entry = Entry;
       I->second.D0Exit = Exit;
+      I->second.PrepareHardware = Prepare;
+      I->second.ReleaseHardware = Release;
     } else {
       if (A[2] != ControlIoNeither && A[2] != ControlIoBuffered &&
           A[2] != ControlIoDirect)
@@ -197,6 +216,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
     Devices.at(*Handle).CallerContext = I->second.CallerContext;
     Devices.at(*Handle).D0Entry = I->second.D0Entry;
     Devices.at(*Handle).D0Exit = I->second.D0Exit;
+    Devices.at(*Handle).PrepareHardware = I->second.PrepareHardware;
+    Devices.at(*Handle).ReleaseHardware = I->second.ReleaseHardware;
     if (I->second.Kind == DeviceInitKind::Pnp)
       PnpDeviceHandles.emplace(I->second.PDO, *Handle);
     if (auto E = Memory.writeInteger(A[3], *Handle, 8))
