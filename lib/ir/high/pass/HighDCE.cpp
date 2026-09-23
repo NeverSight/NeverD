@@ -278,9 +278,9 @@ static bool removeUnreachableCode(std::vector<HighStmt> &Stmts,
       continue;
     FallsThrough = S.Kind != StmtKind::Return && S.Kind != StmtKind::Break &&
                    S.Kind != StmtKind::Continue && !switchAlwaysReturns(S);
-    if ((S.Kind == StmtKind::Call && isNonReturningSourceCall(S.CallExpr)) ||
+    if ((S.Kind == StmtKind::Call && isTerminatingHighCall(S.CallExpr)) ||
         ((S.Kind == StmtKind::Assign || S.Kind == StmtKind::ExprStmt) &&
-         isNonReturningSourceCall(S.Val)))
+         isTerminatingHighCall(S.Val)))
       FallsThrough = false;
     if (Kept != I)
       Stmts[Kept] = std::move(S);

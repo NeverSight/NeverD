@@ -148,6 +148,9 @@ using ExprPtr = std::shared_ptr<HighExpr>;
 /// Termination promised by the bound source routine, independently of a
 /// native CFG flag or call spelling. Source admission revalidates the binding.
 bool isNonReturningSourceCall(const ExprPtr &Expression);
+/// A bound noreturn call or an exact unconditional source trap. Resumable
+/// debugger traps and unbound call spellings do not terminate source flow.
+bool isTerminatingHighCall(const ExprPtr &Expression);
 
 //===----------------------------------------------------------------------===//
 // Statements (structured control flow)

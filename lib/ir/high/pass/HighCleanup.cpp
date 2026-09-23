@@ -256,10 +256,9 @@ void MedToHighConverter::ensureTrailingReturn(HighFunc &Func,
   if (Func.Body.empty())
     return;
   const auto &Last = Func.Body.back();
-  if ((Last.Kind == StmtKind::Call &&
-       isNonReturningSourceCall(Last.CallExpr)) ||
+  if ((Last.Kind == StmtKind::Call && isTerminatingHighCall(Last.CallExpr)) ||
       ((Last.Kind == StmtKind::Assign || Last.Kind == StmtKind::ExprStmt) &&
-       isNonReturningSourceCall(Last.Val)))
+       isTerminatingHighCall(Last.Val)))
     return;
 
   // A verified void source ABI owns the return contract even when imperfect

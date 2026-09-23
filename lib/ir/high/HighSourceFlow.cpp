@@ -196,18 +196,7 @@ class SourceFlow {
     }
   }
   static bool terminates(const ExprPtr &Expression) {
-    if (isNonReturningSourceCall(Expression))
-      return true;
-    if (!Expression || Expression->Kind != ExprKind::Call ||
-        Expression->IsIndirectCall || Expression->SourceCallHint ||
-        !Expression->Operands.empty() ||
-        !Expression->IntrinsicOutputs.empty() ||
-        Expression->MemoryAddressSpace != NdMemoryAddressSpace::Default)
-      return false;
-    // These actual source intrinsics unconditionally trap. A native function
-    // flag, an arbitrary call spelling, and resumable debug traps do not prove
-    // source termination. Arguments are still checked as ordinary reads.
-    return isUnconditionalTrapIntrinsic(Expression->IntrinsicId);
+    return isTerminatingHighCall(Expression);
   }
   static std::optional<bool> truth(const ExprPtr &Expression) {
     if (!Expression)

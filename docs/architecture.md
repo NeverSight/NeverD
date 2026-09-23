@@ -68,6 +68,14 @@ construct the same scalar prefix and all reads explicitly select that prefix.
 Only effect-free upper expressions are discarded; lower expressions and their
 control-flow positions remain unchanged. Unknown lanes are never filled in.
 
+When an unrelated unresolved value prevents a complete entry-demand graph,
+native helper inference may retain an independent full-word, call-preserved
+entry register used directly by an effect. LowIR must confirm the same read and
+the existing preserved-state proof still applies. A prologue spill value alone
+does not establish a source parameter. MedIR keeps narrow physical-register
+views for source-flow validation when the entry binder cannot insert a byte
+slice into their consuming operation.
+
 HighIR may also discard undefined upper bytes from a reconstructed integer only
 when a following constant mask cannot observe any bit above the complete low
 operand. A direct `CONCAT`, a bounded integer cast, or a zero-offset `SUBBYTES`
@@ -123,6 +131,10 @@ effects on a later run. HighIR therefore sees the same termination boundary.
 Publication revalidates the typed callee's complete source flow and requires
 its dependency closure; a function flag alone never authorizes a terminating
 source call. Reports, writes and traps before termination remain observable.
+HighIR cleanup, trailing-return insertion, and source-flow validation share
+the same exact source-termination predicate. An unconditional architectural
+trap removes an otherwise synthetic unknown return only when no branch enters
+that return; resumable debugger traps preserve fallthrough.
 
 At source-bound runtime calls, Low-to-Med lowering carries the authenticated
 external no-return declaration into the MedIR call effect.
@@ -466,6 +478,13 @@ value cell; no predicate, value, or initializer address from the loaded image
 is retained. Its zero-argument source callee ABI applies only at call sites;
 the native entry ABI remains separate so incidental context carriers stay
 available to the contract proof.
+
+An ordinary native `swift_once` call can similarly bind a writable predicate
+and exact initializer when that callback ignores its context. The native
+entry ABI remains intact. Only after the projected callee body and its
+dependencies close, and the erased context parameter has no other source use,
+may a direct caller replace an effect-free unknown argument at that exact
+position with zero. Other arguments and computations remain observable.
 
 An authenticated `dispatch_once_f` call may likewise rebuild its predicate and
 local callback address. The loader must prove the exact libdispatch export,

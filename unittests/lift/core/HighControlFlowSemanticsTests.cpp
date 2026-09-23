@@ -1988,6 +1988,38 @@ TEST(HighControlFlowSemantics, SwitchCleanupPreservesContinuationPaths) {
 }
 
 TEST(HighControlFlowSemantics,
+     UnreachableCleanupDropsOnlyUnreferencedReturnsAfterSourceTraps) {
+  for (const auto Id : {Intrinsic::Ud2, Intrinsic::ArmHlt, Intrinsic::Brk,
+                        Intrinsic::Hlt_A64}) {
+    HighStmt Trap;
+    Trap.Kind = StmtKind::Call;
+    Trap.Addr = 0x1000;
+    Trap.CallExpr = HighExpr::makeCall("trap", 0, {});
+    Trap.CallExpr->IntrinsicId = Id;
+    auto UnknownReturn = result(0x1004, HighExpr::makeUndef(8));
+    std::vector<HighStmt> Body{Trap, UnknownReturn};
+    removeUnreachableCode(Body);
+    ASSERT_EQ(Body.size(), 1u);
+    EXPECT_EQ(Body.front().Kind, StmtKind::Call);
+
+    Body = {conditional(0xffc, 0x1004), Trap, UnknownReturn};
+    removeUnreachableCode(Body);
+    ASSERT_EQ(Body.size(), 3u)
+        << "a branch may enter the return after the trap";
+  }
+
+  HighStmt DebugTrap;
+  DebugTrap.Kind = StmtKind::Call;
+  DebugTrap.Addr = 0x1000;
+  DebugTrap.CallExpr = HighExpr::makeCall("debug_trap", 0, {});
+  DebugTrap.CallExpr->IntrinsicId = Intrinsic::Int3;
+  std::vector<HighStmt> Body{DebugTrap, result(0x1004, HighExpr::makeUndef(8))};
+  removeUnreachableCode(Body);
+  EXPECT_EQ(Body.size(), 2u)
+      << "a resumable debugger trap must retain its following return";
+}
+
+TEST(HighControlFlowSemantics,
      UnreachableCleanupPreservesIncomingTailBranches) {
   HighFunc F;
   auto First = conditional(0x1000, 0x1100);
