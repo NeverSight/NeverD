@@ -390,4 +390,14 @@ KernelInterrupts::validateExecutionReturn(uint64_t Execution) const {
     return interruptError("guest return retains a manual interrupt spin lock");
   return llvm::Error::success();
 }
+
+std::optional<uint8_t>
+KernelInterrupts::manualHoldIRQL(uint64_t Execution) const {
+  std::optional<uint8_t> Required;
+  for (const Hold &Hold : Holds)
+    if (Hold.Kind == HoldKind::Manual && Hold.Owner == Execution)
+      if (const auto *Connection = connection(Hold.Object))
+        Required = std::max(Required.value_or(0), Connection->IRQL);
+  return Required;
+}
 } // namespace neverd::emulation

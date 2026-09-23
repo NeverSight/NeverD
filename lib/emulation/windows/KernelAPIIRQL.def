@@ -43,6 +43,13 @@ NEVERD_KERNEL_IRQL_API(PsGetProcessId, Any)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess
 NEVERD_KERNEL_IRQL_API(KeStackAttachProcess, APC)
 NEVERD_KERNEL_IRQL_API(KeUnstackDetachProcess, APC)
+// x64 WDK KeRaiseIrql/KeRaiseIrqlToDpcLevel call KfRaiseIrql; their saved
+// return value is restored by KeLowerIrql. Direction and pairing are checked
+// by the model against the current execution, not by this outer ceiling.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keraiseirqltodpclevel
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kelowerirql
+NEVERD_KERNEL_IRQL_API(KfRaiseIrql, Any)
+NEVERD_KERNEL_IRQL_API(KeLowerIrql, Any)
 #define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelSpinLockAPIs.def"

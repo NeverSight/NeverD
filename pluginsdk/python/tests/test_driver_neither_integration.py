@@ -48,7 +48,8 @@ class DriverNeitherIntegrationTests(unittest.TestCase):
             service_name=b"NeverDNeither",
         )
         for fixture in self.fixtures:
-            for code, output in (("0x222037", "5a"), ("0x22203b", "6b")):
+            for code, output in (("0x222037", "5a"), ("0x22203b", "6b"),
+                                 ("0x22203f", "7c")):
                 with self.subTest(fixture=fixture, code=code):
                     scenario = {
                         "requests": [

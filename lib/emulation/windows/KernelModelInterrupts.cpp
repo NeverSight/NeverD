@@ -231,6 +231,9 @@ llvm::Error KernelModel::validateExecutionReturn(uint64_t Identity,
   for (const auto &[Address, Lock] : ExecutiveSpinLocks)
     if (Lock.Execution == Identity)
       return apiError("guest return retains an executive spin lock");
+  for (const RaisedIRQL &Raise : RaisedIRQLs)
+    if (Raise.Execution == Identity)
+      return apiError("guest return retains a raised IRQL");
   if (auto E = Interrupts.validateExecutionReturn(Identity))
     return E;
   if (CancelLock.Callback && CancelLock.CallbackExecution == Identity) {

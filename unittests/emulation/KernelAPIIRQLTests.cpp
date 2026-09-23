@@ -109,6 +109,11 @@ TEST(DriverKernelAPIIRQL, ExecutiveSpinLockInitializationHasAnyLevelCeiling) {
     expectLimit(Name, 2);
 }
 
+TEST(DriverKernelAPIIRQL, IrqlRaiseAndLowerHaveRuntimeDirectionChecks) {
+  expectLimit("KfRaiseIrql", 15);
+  expectLimit("KeLowerIrql", 15);
+}
+
 TEST(DriverKernelAPIIRQL, DebugOutputStopsBelowClockAndIpiLevels) {
   expectLimit("DbgPrint", 12);
   expectLimit("DbgPrintEx", 12);

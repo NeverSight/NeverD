@@ -711,6 +711,40 @@ TEST_F(KernelRequestOwnership, SemaphoreStorageMustBeResident) {
   call("ExFreePoolWithTag", {Paged, Tag});
 }
 
+TEST_F(KernelRequestOwnership, ExplicitIrqlRaisesRequireSameExecutionLifo) {
+  Model->enterExecution(profile::StackBase);
+  rejected(Model->call("KeLowerIrql", {0}));
+  rejected(Model->call("KfRaiseIrql", {16}));
+  EXPECT_EQ(call("KfRaiseIrql", {1}), 0u);
+  EXPECT_EQ(call("KeGetCurrentIrql", {}), 1u);
+  rejected(Model->call("KfRaiseIrql", {0}));
+  EXPECT_EQ(call("KfRaiseIrql", {2}), 1u);
+  rejected(Model->call("KeLowerIrql", {0}));
+  rejected(Model->validateExecutionReturn(profile::StackBase, 0));
+  Model->enterExecution(profile::CallbackStackBase);
+  rejected(Model->call("KeLowerIrql", {1}));
+  Model->enterExecution(profile::StackBase);
+  call("KeLowerIrql", {1});
+  EXPECT_EQ(call("KeGetCurrentIrql", {}), 1u);
+  call("KeLowerIrql", {0});
+  success(Model->validateExecutionReturn(profile::StackBase, 0));
+
+  const uint64_t Lock = call("ExAllocatePoolWithTag", {0, 8, 0x4952514c});
+  ASSERT_NE(Lock, 0u);
+  call("KeInitializeSpinLock", {Lock});
+  EXPECT_EQ(call("KfRaiseIrql", {2}), 0u);
+  call("KeAcquireSpinLockAtDpcLevel", {Lock});
+  rejected(Model->call("KeLowerIrql", {0}));
+  call("KeReleaseSpinLockFromDpcLevel", {Lock});
+  call("KeLowerIrql", {0});
+  call("ExFreePoolWithTag", {Lock, 0x4952514c});
+
+  EXPECT_EQ(call("KfRaiseIrql", {12}), 0u);
+  EXPECT_EQ(call("KeGetCurrentIrql", {}), 12u);
+  call("KeLowerIrql", {0});
+  EXPECT_EQ(Model->currentIRQL(), 0u);
+}
+
 TEST_F(KernelRequestOwnership,
        RevokedUserAddressesLeaveLockedSystemAliasesUsable) {
   ASSERT_NE(open(), 0u);
