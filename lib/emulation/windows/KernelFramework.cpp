@@ -611,9 +611,9 @@ KernelFramework::advance(uint64_t Token) {
   if (I == Continuations.end() || PendingCall)
     return invalid("invalid framework callback continuation");
   auto &C = I->second;
-  auto NotifyStoppedQueue = [&]() {
+  auto NotifyQueueState = [&]() {
     for (auto &[Handle, Q] : Queues) {
-      if (!Q.StopComplete)
+      if (!Q.StopComplete && !Q.DrainComplete)
         continue;
       const bool DriverOwned =
           std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
@@ -622,14 +622,23 @@ KernelFramework::advance(uint64_t Token) {
           });
       if (DriverOwned)
         continue;
-      PendingCall = GuestCall{Token, Q.StopComplete, {Handle, Q.StopContext}};
-      Q.StopComplete = 0;
-      Q.StopContext = 0;
+      if (Q.StopComplete) {
+        PendingCall = GuestCall{Token, Q.StopComplete, {Handle, Q.StopContext}};
+        Q.StopComplete = 0;
+        Q.StopContext = 0;
+      } else {
+        if (!Q.Pending.empty())
+          continue;
+        PendingCall =
+            GuestCall{Token, Q.DrainComplete, {Handle, Q.DrainContext}};
+        Q.DrainComplete = 0;
+        Q.DrainContext = 0;
+      }
       return true;
     }
     return false;
   };
-  if (NotifyStoppedQueue())
+  if (NotifyQueueState())
     return std::optional<uint64_t>{};
   while (C.Index < C.Steps.size()) {
     const Step S = C.Steps[C.Index++];
@@ -683,7 +692,7 @@ KernelFramework::advance(uint64_t Token) {
       R->second.Completed = true;
       R->second.Completing = false;
       R->second.Queue = 0;
-      if (NotifyStoppedQueue()) {
+      if (NotifyQueueState()) {
         C.Steps.insert(C.Steps.begin() + C.Index,
                        {StepKind::PresentQueue, QueueHandle});
         return std::optional<uint64_t>{};

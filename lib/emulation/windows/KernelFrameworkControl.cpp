@@ -171,6 +171,8 @@ KernelFramework::callControl(llvm::StringRef Name, Binding &B,
         Queues.at(D->second.DefaultQueue).Device != A[1])
       return controlError(
           "request must be enqueued once from its caller-context callback");
+    if (!Queues.at(D->second.DefaultQueue).Accepting)
+      return Result{QueueBusy};
     R->second.Enqueued = true;
     R->second.Queue = D->second.DefaultQueue;
     return Result{0};

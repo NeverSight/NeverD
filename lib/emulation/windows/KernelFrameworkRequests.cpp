@@ -303,6 +303,13 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
                                ControlInvalidDeviceRequest);
   if (Objects.at(Q->first).Deleting)
     return requestError("default queue is deleting");
+  if (!Q->second.Accepting) {
+    if (AfterCaller)
+      return requestError(
+          "caller-context queue drained during request routing");
+    return CompleteImmediately(QueueInvalidDeviceState,
+                               QueueInvalidDeviceState);
+  }
   uint64_t ExistingHandle = 0;
   if (AfterCaller) {
     auto Caller = CallerRequests.find(IRP);
@@ -476,6 +483,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         DestinationObject->second.Binding != B.Globals ||
         Destination == Queues.end() || DestinationObject->second.Deleting)
       return requestError("invalid, foreign or deleting destination queue");
+    if (!Destination->second.Accepting)
+      return Result{QueueBusy};
     if (R->second.InCallerContext || R->second.Queued || !R->second.Queue ||
         (Requeue ? Destination->second.Dispatch != QueueDispatchManual
                  : R->second.Queue == Target) ||
