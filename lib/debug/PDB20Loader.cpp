@@ -93,23 +93,14 @@ parseSectionHeaders(const std::vector<uint8_t> &Bytes) {
 
 llvm::Error validateSections(const BinaryImage &Image,
                              llvm::ArrayRef<SectionHdr> PDBSections) {
-  if (PDBSections.size() != Image.Sections.size())
+  std::vector<pdb_loader_detail::RecordedSection> Recorded;
+  Recorded.reserve(PDBSections.size());
+  for (const SectionHdr &Header : PDBSections)
+    Recorded.push_back({Header.Name, Header.VirtualAddress, Header.VirtualSize,
+                        Header.PointerToRawData, Header.SizeOfRawData,
+                        Header.Characteristics});
+  if (!pdb_loader_detail::recordedSectionsMatch(Image, Recorded))
     return pdb20Error("section table does not match loaded PE image");
-  for (size_t I = 0; I < Image.Sections.size(); ++I) {
-    const Section &Loaded = Image.Sections[I];
-    const SectionHdr &Recorded = PDBSections[I];
-    constexpr uint64_t MaxCOFFField = std::numeric_limits<uint32_t>::max();
-    if (Loaded.VA < Image.Base || Loaded.Size > MaxCOFFField ||
-        Loaded.FileOff > MaxCOFFField || Loaded.FileSz > MaxCOFFField ||
-        Recorded.Name != Loaded.Name ||
-        static_cast<uint64_t>(Recorded.VirtualAddress) !=
-            Loaded.VA - Image.Base ||
-        static_cast<uint64_t>(Recorded.VirtualSize) != Loaded.Size ||
-        static_cast<uint64_t>(Recorded.PointerToRawData) != Loaded.FileOff ||
-        static_cast<uint64_t>(Recorded.SizeOfRawData) != Loaded.FileSz ||
-        Recorded.Characteristics != Loaded.Type)
-      return pdb20Error("section table does not match loaded PE image");
-  }
   return llvm::Error::success();
 }
 

@@ -87,6 +87,41 @@ const llvm::codeview::CVSymbol *pdb_loader_detail::findSymbolAtExactOffset(
   return It != Records.end() && It->Offset == Offset ? &It->Symbol : nullptr;
 }
 
+namespace {
+bool isPostLinkRewrittenSection(llvm::StringRef Name) {
+  return Name == ".rsrc" || Name == ".reloc";
+}
+} // namespace
+
+bool pdb_loader_detail::recordedSectionsMatch(
+    const BinaryImage &Image, llvm::ArrayRef<RecordedSection> Recorded) {
+  if (Recorded.size() != Image.Sections.size())
+    return false;
+  // Sections from FirstMovable on may be re-laid out; see the declaration.
+  size_t FirstMovable = Image.Sections.size();
+  while (FirstMovable > 0 &&
+         isPostLinkRewrittenSection(Image.Sections[FirstMovable - 1].Name))
+    --FirstMovable;
+  constexpr uint64_t MaxCOFFField = std::numeric_limits<uint32_t>::max();
+  for (size_t I = 0; I < Image.Sections.size(); ++I) {
+    const Section &Loaded = Image.Sections[I];
+    const RecordedSection &Header = Recorded[I];
+    if (Loaded.VA < Image.Base || Loaded.Size > MaxCOFFField ||
+        Loaded.FileOff > MaxCOFFField || Loaded.FileSz > MaxCOFFField ||
+        Header.Name != Loaded.Name || Header.Characteristics != Loaded.Type)
+      return false;
+    if (I >= FirstMovable)
+      continue;
+    if (static_cast<uint64_t>(Header.VirtualAddress) !=
+            Loaded.VA - Image.Base ||
+        static_cast<uint64_t>(Header.VirtualSize) != Loaded.Size ||
+        static_cast<uint64_t>(Header.PointerToRawData) != Loaded.FileOff ||
+        static_cast<uint64_t>(Header.SizeOfRawData) != Loaded.FileSz)
+      return false;
+  }
+  return true;
+}
+
 llvm::Error pdb_loader_detail::parsePublicSym32At(llvm::ArrayRef<uint8_t> Stream,
                                                   uint32_t Offset,
                                                   ParsedPublicSym32 &Out) {
@@ -203,12 +238,18 @@ llvm::Error pdbLoadError(const llvm::Twine &Message) {
                                  "pdb: " + Message);
 }
 
-PDBBuildIdentity pdbIdentity(const llvm::pdb::InfoStream &Info) {
+// The PE's RSDS age names the link that wrote the DBI stream.  The Info
+// stream age is a PDB write counter: pdbcopy, pdbstr, and symbol-server
+// publishing bump it without relinking, so a public Windows PDB may carry an
+// Info age above the DBI and RSDS ages.  Match on the DBI age when the DBI
+// header records one, as the MSVC debugger and Ghidra do.
+PDBBuildIdentity pdbIdentity(const llvm::pdb::InfoStream &Info,
+                             const llvm::pdb::DbiStream &DBI) {
   PDBBuildIdentity Identity;
   Identity.Kind = PDBIdentityKind::RSDS;
   const llvm::codeview::GUID Guid = Info.getGuid();
   std::copy(std::begin(Guid.Guid), std::end(Guid.Guid), Identity.Guid.begin());
-  Identity.Age = Info.getAge();
+  Identity.Age = DBI.getAge() != 0 ? DBI.getAge() : Info.getAge();
   return Identity;
 }
 
@@ -243,24 +284,14 @@ llvm::StringRef shortSectionName(const llvm::object::coff_section &Section) {
 llvm::Error validateSectionTable(
     const BinaryImage &Image,
     llvm::FixedStreamArray<llvm::object::coff_section> PDBSections) {
-  if (PDBSections.size() != Image.Sections.size())
+  std::vector<pdb_loader_detail::RecordedSection> Recorded;
+  Recorded.reserve(PDBSections.size());
+  for (const llvm::object::coff_section &Header : PDBSections)
+    Recorded.push_back({shortSectionName(Header), Header.VirtualAddress,
+                        Header.VirtualSize, Header.PointerToRawData,
+                        Header.SizeOfRawData, Header.Characteristics});
+  if (!pdb_loader_detail::recordedSectionsMatch(Image, Recorded))
     return pdbLoadError("section table does not match loaded PE image");
-
-  for (size_t I = 0; I < Image.Sections.size(); ++I) {
-    const Section &Loaded = Image.Sections[I];
-    const llvm::object::coff_section &Recorded = PDBSections[I];
-    constexpr uint64_t MaxCOFFField = std::numeric_limits<uint32_t>::max();
-    if (Loaded.VA < Image.Base || Loaded.Size > MaxCOFFField ||
-        Loaded.FileOff > MaxCOFFField || Loaded.FileSz > MaxCOFFField ||
-        shortSectionName(Recorded) != Loaded.Name ||
-        static_cast<uint64_t>(Recorded.VirtualAddress) !=
-            Loaded.VA - Image.Base ||
-        static_cast<uint64_t>(Recorded.VirtualSize) != Loaded.Size ||
-        static_cast<uint64_t>(Recorded.PointerToRawData) != Loaded.FileOff ||
-        static_cast<uint64_t>(Recorded.SizeOfRawData) != Loaded.FileSz ||
-        static_cast<uint32_t>(Recorded.Characteristics) != Loaded.Type)
-      return pdbLoadError("section table does not match loaded PE image");
-  }
   return llvm::Error::success();
 }
 
@@ -393,11 +424,6 @@ PDBDebugContext::load(const std::filesystem::path &PdbPath,
     return pdbLoadError("cannot read PDB Info stream: " + Detail);
   }
   auto &Info = *InfoOr;
-  const PDBBuildIdentity ActualIdentity = pdbIdentity(Info);
-  if (!ActualIdentity.isValid())
-    return pdbLoadError("PDB Info stream has an invalid GUID/age");
-  if (ActualIdentity != *Image.DynInfo.CodeViewPDBIdentity)
-    return pdbLoadError("PDB Info GUID/age does not match PE CodeView RSDS");
 
   auto DbiOr = PDB.getPDBDbiStream();
   if (!DbiOr) {
@@ -405,8 +431,13 @@ PDBDebugContext::load(const std::filesystem::path &PdbPath,
     return pdbLoadError("cannot read DBI stream: " + Detail);
   }
   auto &DBI = *DbiOr;
-  if (DBI.getAge() != Info.getAge())
-    return pdbLoadError("DBI age does not match PDB Info age");
+  const PDBBuildIdentity ActualIdentity = pdbIdentity(Info, DBI);
+  if (!ActualIdentity.isValid())
+    return pdbLoadError("PDB Info stream has an invalid GUID/age");
+  if (ActualIdentity != *Image.DynInfo.CodeViewPDBIdentity)
+    return pdbLoadError("PDB Info GUID/age does not match PE CodeView RSDS");
+  if (DBI.getAge() > Info.getAge())
+    return pdbLoadError("DBI age is newer than PDB Info age");
   if (!machineMatches(DBI.getMachineType(), Image.Arch))
     return pdbLoadError("DBI machine does not match loaded PE image");
 

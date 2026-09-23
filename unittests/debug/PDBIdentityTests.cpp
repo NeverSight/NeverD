@@ -23,6 +23,7 @@
 #include "llvm/Support/BinaryStreamRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -531,6 +532,162 @@ TEST(PDBIdentityIntegration, EitherGuidOrAgeMismatchRejectsTheCompanion) {
     EXPECT_NE(Error.find("GUID/age does not match"), std::string::npos)
         << Error;
   }
+}
+
+// Copies a fixture PDB and overwrites the little-endian u32 at byte
+// \p Offset of MSF stream \p Stream.  Both the Info and DBI headers keep
+// their age at offset 8, inside the stream's first block.
+std::filesystem::path copyPDBWithStreamU32(const ScratchDir &Dir,
+                                           llvm::StringRef Fixture,
+                                           uint32_t Stream, uint32_t Offset,
+                                           uint32_t Value) {
+  auto BufferOr = llvm::MemoryBuffer::getFile(safetyFixture(Fixture).string());
+  EXPECT_TRUE(static_cast<bool>(BufferOr));
+  if (!BufferOr)
+    return {};
+  std::vector<uint8_t> Bytes((*BufferOr)->getBufferStart(),
+                             (*BufferOr)->getBufferEnd());
+  llvm::msf::SuperBlock Super;
+  std::memcpy(&Super, Bytes.data(), sizeof(Super));
+  const uint32_t BlockSize = Super.BlockSize;
+  const uint32_t DirBlocks =
+      (Super.NumDirectoryBytes + BlockSize - 1) / BlockSize;
+  std::vector<uint8_t> Directory;
+  for (uint32_t I = 0; I < DirBlocks; ++I) {
+    const uint32_t Block = llvm::support::endian::read32le(
+        Bytes.data() + uint64_t(Super.BlockMapAddr) * BlockSize + 4 * I);
+    const uint8_t *Begin = Bytes.data() + uint64_t(Block) * BlockSize;
+    Directory.insert(Directory.end(), Begin, Begin + BlockSize);
+  }
+  const uint32_t NumStreams = llvm::support::endian::read32le(Directory.data());
+  EXPECT_LT(Stream, NumStreams);
+  uint64_t BlockListOffset = 4 + 4ull * NumStreams;
+  for (uint32_t I = 0; I < Stream; ++I) {
+    const uint32_t Size =
+        llvm::support::endian::read32le(Directory.data() + 4 + 4 * I);
+    if (Size != UINT32_MAX)
+      BlockListOffset += 4ull * ((Size + BlockSize - 1) / BlockSize);
+  }
+  const uint32_t FirstBlock =
+      llvm::support::endian::read32le(Directory.data() + BlockListOffset);
+  llvm::support::endian::write32le(
+      Bytes.data() + uint64_t(FirstBlock) * BlockSize + Offset, Value);
+
+  const std::filesystem::path Out = Dir.path(Fixture);
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(Out.string(), EC);
+  EXPECT_FALSE(EC) << EC.message();
+  OS.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  return Out;
+}
+
+constexpr uint32_t kInfoStream = 1;
+constexpr uint32_t kDbiStream = 3;
+constexpr uint32_t kHeaderAgeOffset = 8;
+
+TEST(PDBIdentityIntegration, RepublishedInfoAgeStillMatchesOnDbiAge) {
+  // Public Windows PDBs (for example ntkrnlmp.pdb) keep RSDS age == DBI age
+  // while the Info stream age has been bumped by symbol publishing.
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+  ASSERT_TRUE(ImageOr->DynInfo.CodeViewPDBIdentity.has_value());
+  const uint32_t ImageAge = ImageOr->DynInfo.CodeViewPDBIdentity->Age;
+
+  ScratchDir Dir;
+  const std::filesystem::path Republished =
+      copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb", kInfoStream,
+                           kHeaderAgeOffset, ImageAge + 4);
+  auto ContextOr = PDBDebugContext::load(Republished, *ImageOr);
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+  EXPECT_FALSE((*ContextOr)->allFunctions().empty());
+}
+
+TEST(PDBIdentityIntegration, DbiAgeMismatchStillRejectsTheCompanion) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+  ASSERT_TRUE(ImageOr->DynInfo.CodeViewPDBIdentity.has_value());
+  const uint32_t ImageAge = ImageOr->DynInfo.CodeViewPDBIdentity->Age;
+
+  ScratchDir Dir;
+  // Both Info and DBI say ImageAge + 1: a later link, not a republish.
+  const std::filesystem::path Relinked =
+      copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb", kDbiStream,
+                           kHeaderAgeOffset, ImageAge + 1);
+  auto ContextOr = PDBDebugContext::load(Relinked, *ImageOr);
+  ASSERT_FALSE(static_cast<bool>(ContextOr));
+  const std::string Error = llvm::toString(ContextOr.takeError());
+  EXPECT_NE(Error.find("GUID/age does not match"), std::string::npos) << Error;
+}
+
+BinaryImage imageWithSections(
+    std::initializer_list<pdb_loader_detail::RecordedSection> Headers) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::COFF;
+  Image.Arch = Arch::X64;
+  Image.Base = 0x140000000;
+  for (const auto &Header : Headers) {
+    Section S;
+    S.Name = Header.Name.str();
+    S.VA = Image.Base + Header.VirtualAddress;
+    S.Size = Header.VirtualSize;
+    S.FileOff = Header.PointerToRawData;
+    S.FileSz = Header.SizeOfRawData;
+    S.Type = Header.Characteristics;
+    Image.Sections.push_back(S);
+  }
+  return Image;
+}
+
+TEST(PDBSectionTable, TrailingResourceRelayoutStillMatches) {
+  // ntoskrnl 19041.6456: .rsrc grew after link and .reloc moved behind it.
+  const BinaryImage Image = imageWithSections({
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x7E20, 0x3400, 0x8000, 0x40000040},
+      {".reloc", 0xD000, 0x100, 0xB400, 0x200, 0x42000040},
+  });
+  const pdb_loader_detail::RecordedSection AtLink[] = {
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
+      {".reloc", 0xB000, 0x100, 0x9400, 0x200, 0x42000040},
+  };
+  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, AtLink));
+}
+
+TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
+  const BinaryImage Image = imageWithSections({
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
+      {".data", 0xB000, 0x100, 0x9400, 0x200, 0xC0000040},
+  });
+  // .rsrc is followed by .data, so a changed .rsrc is not a post-link edit.
+  const pdb_loader_detail::RecordedSection ResourceMoved[] = {
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x5000, 0x3400, 0x5000, 0x40000040},
+      {".data", 0xB000, 0x100, 0x9400, 0x200, 0xC0000040},
+  };
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, ResourceMoved));
+
+  const pdb_loader_detail::RecordedSection CodeGrew[] = {
+      {".text", 0x1000, 0x3001, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
+      {".data", 0xB000, 0x100, 0x9400, 0x200, 0xC0000040},
+  };
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, CodeGrew));
+
+  // A trailing .rsrc may move but must keep its name and characteristics.
+  const BinaryImage Trailing = imageWithSections({
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
+  });
+  const pdb_loader_detail::RecordedSection Recharacterized[] = {
+      {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
+      {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0xC0000040},
+  };
+  EXPECT_FALSE(
+      pdb_loader_detail::recordedSectionsMatch(Trailing, Recharacterized));
 }
 
 TEST(PDBIdentityIntegration, ImageWithoutUniqueRSDSCannotUsePDBNames) {

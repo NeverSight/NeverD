@@ -90,6 +90,24 @@ private:
   std::map<va_t, Record> Records;
 };
 
+/// One section header as a PDB recorded it at link time.
+struct RecordedSection {
+  llvm::StringRef Name;
+  uint32_t VirtualAddress = 0;
+  uint32_t VirtualSize = 0;
+  uint32_t PointerToRawData = 0;
+  uint32_t SizeOfRawData = 0;
+  uint32_t Characteristics = 0;
+};
+
+/// True when a PDB's link-time section table still describes \p Image.
+/// Every section must keep its name and characteristics.  Trailing .rsrc and
+/// .reloc sections may be re-laid out, because post-link resource stamping
+/// rewrites them without relinking and neither holds a code or data symbol;
+/// every other section must match exactly.
+bool recordedSectionsMatch(const BinaryImage &Image,
+                           llvm::ArrayRef<RecordedSection> Recorded);
+
 } // namespace pdb_loader_detail
 
 llvm::Expected<std::unique_ptr<class PDBDebugContext>>
