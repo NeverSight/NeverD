@@ -24,15 +24,38 @@ struct SwiftBooleanProjection {
 namespace swift_boolean_projection_detail {
 inline bool nativeEntry(const BinaryImage &Image, va_t Address,
                         const SourceFunctionTypeHint &Signature) {
+  const auto &Returns = getTargetRegInfo(Arch::AArch64).IntReturnRegs;
+  const bool ScalarReturn =
+      Signature.ReturnType && Signature.ReturnType->Kind == NdTypeKind::Int &&
+      Signature.ReturnType->Size == 8 &&
+      Signature.ReturnLocation.Kind == SourceABICarrierKind::IntegerRegister &&
+      Signature.ReturnLocation.RegisterOffset == Returns[0] &&
+      Signature.ReturnLocation.ValueBytes == 8 &&
+      Signature.ReturnComponents.empty();
+  const bool PairReturn =
+      Signature.ReturnType &&
+      Signature.ReturnType->Kind == NdTypeKind::Struct &&
+      Signature.ReturnType->Size == 16 &&
+      Signature.ReturnType->Fields.size() == 2 &&
+      Signature.ReturnType->FieldOffsets == std::vector<uint16_t>{0, 8} &&
+      std::all_of(Signature.ReturnType->Fields.begin(),
+                  Signature.ReturnType->Fields.end(),
+                  [](const TypeRef &Field) {
+                    return Field && Field->Kind == NdTypeKind::Int &&
+                           Field->Size == 8;
+                  }) &&
+      Signature.ReturnLocation.Kind == SourceABICarrierKind::None &&
+      Signature.ReturnComponents.size() == 2 &&
+      Signature.ReturnComponents[0].Kind ==
+          SourceABICarrierKind::IntegerRegister &&
+      Signature.ReturnComponents[0].RegisterOffset == Returns[0] &&
+      Signature.ReturnComponents[0].ValueBytes == 8 &&
+      Signature.ReturnComponents[1].Kind ==
+          SourceABICarrierKind::IntegerRegister &&
+      Signature.ReturnComponents[1].RegisterOffset == Returns[1] &&
+      Signature.ReturnComponents[1].ValueBytes == 8;
   if (Signature.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
-      !Image.isCodeAddress(Address) || !Signature.ReturnType ||
-      Signature.ReturnType->Kind != NdTypeKind::Int ||
-      Signature.ReturnType->Size != 8 ||
-      Signature.ReturnLocation.Kind != SourceABICarrierKind::IntegerRegister ||
-      Signature.ReturnLocation.RegisterOffset !=
-          getTargetRegInfo(Arch::AArch64).IntReturnReg ||
-      Signature.ReturnLocation.ValueBytes != 8 ||
-      !Signature.ReturnComponents.empty())
+      !Image.isCodeAddress(Address) || (!ScalarReturn && !PairReturn))
     return false;
   for (const auto &Method : Image.ObjCMethods)
     if (Method.Implementation == Address)

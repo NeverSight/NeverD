@@ -82,9 +82,26 @@ inline bool objCSwiftBooleanSourceCallBound(const HighExpr &Expression,
     UnboundMed.SourceTypeHint.reset();
     UnboundMed.SourceParametersBound = false;
     UnboundHigh.SourceTypeHint.reset();
+    const bool PairReturn =
+        Function.SourceTypeHint->ReturnComponents.size() == 2;
+    if (PairReturn) {
+      // The bound record supplies only a scalar type seed. Native inference
+      // must still prove both complete physical return carriers again.
+      const auto &Type = Function.SourceTypeHint->ReturnType;
+      if (!Type || Type->Kind != NdTypeKind::Struct || Type->Size != 16 ||
+          Type->Fields.size() != 2 ||
+          Type->FieldOffsets != std::vector<uint16_t>{0, 8} ||
+          !Type->Fields[0] || Type->Fields[0]->Kind != NdTypeKind::Int ||
+          Type->Fields[0]->Size != 8 || !Type->Fields[1] ||
+          Type->Fields[1]->Kind != NdTypeKind::Int ||
+          Type->Fields[1]->Size != 8)
+        return false;
+      UnboundMed.ReturnType = Type->Fields[0];
+      UnboundHigh.ReturnType = Type->Fields[0];
+    }
     std::string Diagnostic;
     const auto Inferred = inferNativeSourceTypeHint(
-        Image, UnboundMed, UnboundHigh, *Audit, Diagnostic, Low);
+        Image, UnboundMed, UnboundHigh, *Audit, Diagnostic, Low, PairReturn);
     if (!Inferred || !equalSourceABIs(*Inferred, *Function.SourceTypeHint))
       return false;
   }

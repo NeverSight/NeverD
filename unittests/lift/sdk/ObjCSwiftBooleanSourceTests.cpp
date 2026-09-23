@@ -16,7 +16,7 @@ struct BooleanFixture {
   BooleanFixture(bool Source = true, bool Patch = false, bool Twice = false,
                  bool Prefix = false, bool OpaquePrefix = false,
                  bool ObjectEquality = false, bool Suffix = false,
-                 bool Native = false) {
+                 bool Native = false, bool Pair = false) {
     Image.Arch = Arch::AArch64;
     Image.Format = BinaryFormat::MachO;
     Image.Bits = Bitness::Bits64;
@@ -59,6 +59,8 @@ struct BooleanFixture {
     }
     if (Twice)
       Body.insert(Body.end() - 2, {0x94000037, 0x12000000});
+    if (Pair)
+      Body.insert(Body.end() - 2, 0xd2800021); // MOV X1,#1 before return.
     if (OpaquePrefix)
       Body[2] = 0x9400005e; // BL 0x1180 before any selected result exists.
     for (unsigned I = 0; I != std::size(Body); ++I)
@@ -86,11 +88,18 @@ struct BooleanFixture {
     PipelineOptions Options;
     Options.EmitDumpOutput = false;
     Options.OnlyFunctionEntries = {0x1000};
-    if (Source)
-      Options.SourceTypeHints.emplace(
-          0x1000, Native ? *provisionalNativeSwiftBooleanEntry(Image, 0x1000)
-                         : *objcMethodSourceTypeHint(Image, 0x1000));
-    else {
+    if (Source) {
+      auto Entry = Native ? *provisionalNativeSwiftBooleanEntry(Image, 0x1000)
+                          : *objcMethodSourceTypeHint(Image, 0x1000);
+      if (Pair) {
+        Entry.ReturnType = NdType::makeStruct(
+            {NdType::makeInt(8, false), NdType::makeInt(8, false)});
+        std::string Error;
+        EXPECT_TRUE(assignDarwinFixedSourceABI(Entry, Arch::AArch64, Error))
+            << Error;
+      }
+      Options.SourceTypeHints.emplace(0x1000, std::move(Entry));
+    } else {
       Options.LiftMode = !Patch;
       Options.PatchMode = Patch;
     }
@@ -156,6 +165,20 @@ TEST(ObjCSwiftBooleanSources, NativePublicationReinfersCompleteEntryABI) {
   std::string Error;
   ASSERT_TRUE(assignDarwinScalarSourceABI(Forged, Arch::AArch64, Error));
   F.high().SourceTypeHint = Forged;
+  EXPECT_FALSE(
+      objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+}
+
+TEST(ObjCSwiftBooleanSources, NativePairReturnRechecksBothCarriers) {
+  BooleanFixture F(true, false, false, false, false, false, false, true, true);
+  const auto E = F.expression();
+  ASSERT_TRUE(E);
+  ASSERT_EQ(F.high().SourceTypeHint->ReturnComponents.size(), 2U);
+  EXPECT_TRUE(objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
+  auto Forged = *F.high().SourceTypeHint;
+  Forged.ReturnType = NdType::makeStruct(
+      {NdType::makeInt(8, false), NdType::makePtr(NdType::makeVoid())});
+  F.high().SourceTypeHint = std::move(Forged);
   EXPECT_FALSE(
       objCSwiftBooleanSourceCallBound(*E, F.Image, F.Result, F.high()));
 }
