@@ -1061,6 +1061,22 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           return std::move(Invoked);
         if (Result.Stop != DriverStopReason::Returned)
           break;
+        if (Invocation->FrameworkCallerContext) {
+          auto Continued =
+              Kernel.continueFrameworkCallerContext(Invocation->IRP);
+          if (!Continued) {
+            ModelFailure(Continued.takeError());
+            break;
+          }
+          Invocation->FrameworkDispatchStatus =
+              Continued->FrameworkDispatchStatus;
+          if (Continued->PC) {
+            if (auto E = Invoke(*Continued, Result.Phase))
+              return std::move(E);
+            if (Result.Stop != DriverStopReason::Returned)
+              break;
+          }
+        }
         const uint32_t DispatchStatus =
             Invocation->FrameworkDispatchStatus.value_or(
                 uint32_t(*InvocationReturn));

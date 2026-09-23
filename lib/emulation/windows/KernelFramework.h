@@ -81,11 +81,13 @@ public:
     uint64_t PC = 0;
     std::vector<uint64_t> Arguments;
     uint32_t Status = 0;
+    bool CallerContext = false;
   };
   /// Nullopt selects ordinary WDM dispatch; an engaged result owns the exact
   /// framework dispatch status independently from a void callback's RAX.
   llvm::Expected<std::optional<RequestDispatch>>
-  routeRequest(uint64_t WdmDevice, uint64_t IRP);
+  routeRequest(uint64_t WdmDevice, uint64_t IRP, bool AfterCaller = false);
+  llvm::Expected<RequestDispatch> continueCallerContext(uint64_t IRP);
   /// The WDM host first records cancellation, then asks for the one guest
   /// notification owned by this request. Ordinary WDM requests return nullopt.
   llvm::Expected<std::optional<GuestCall>> requestCancellation(uint64_t IRP);
@@ -151,11 +153,13 @@ private:
     uint64_t Binding = 0;
     std::string Name;
     bool Direct = false;
+    uint64_t CallerContext = 0;
   };
   std::map<uint64_t, DeviceInit> DeviceInits;
   struct Device {
     uint64_t Wdm = 0;
     uint64_t DefaultQueue = 0;
+    uint64_t CallerContext = 0;
     bool Initialized = false;
     bool HasLink = false;
   };
@@ -171,6 +175,9 @@ private:
   enum class CancelState { Unmarked, Marked, Queued, Delivered };
   struct Request {
     uint64_t IRP = 0, Queue = 0;
+    uint64_t Device = 0;
+    bool InCallerContext = false;
+    bool Enqueued = false;
     bool Completed = false;
     bool Completing = false;
     uint32_t CompletionStatus = 0;
@@ -178,6 +185,7 @@ private:
     uint64_t CancelRoutine = 0;
   };
   std::map<uint64_t, Request> Requests;
+  std::map<uint64_t, uint64_t> CallerRequests;
   struct Context {
     uint64_t Address = 0, Size = 0;
     uint64_t Cleanup = 0, Destroy = 0;

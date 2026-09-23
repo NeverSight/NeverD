@@ -18,6 +18,9 @@
 /// cancellation before processing, including the CLI's default service name.
 /// L uses legacy MarkCancelable, including synchronous cancellation before the
 /// API returns. M checks request metadata and buffered WDM MDL aliases.
+/// I preprocesses each transfer in EvtIoInCallerContext before enqueueing it.
+/// J deliberately returns from that callback without enqueue or completion.
+/// K completes the transfer in the caller-context callback without enqueueing.
 /// Q deliberately supplies an invalid queue configuration size. CREATE,
 /// CLEANUP and CLOSE use the default framework file package without callbacks.
 ///
@@ -30,7 +33,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include <ntddk.h>
+#include <ntifs.h>
 #include <wdf.h>
 
 #define ABI_OFFSET(Type, Member, Offset)                                       \
@@ -80,12 +83,14 @@ ABI_SLOT(WdfControlFinishInitializing, 27);
 ABI_SLOT(WdfDeviceWdmGetDeviceObject, 31);
 ABI_SLOT(WdfDeviceInitFree, 54);
 ABI_SLOT(WdfDeviceInitSetIoType, 61);
+ABI_SLOT(WdfDeviceInitSetIoInCallerContextCallback, 74);
 ABI_SLOT(WdfDeviceInitAssignName, 67);
 ABI_SLOT(WdfDeviceCreate, 75);
 ABI_SLOT(WdfDeviceCreateSymbolicLink, 80);
 ABI_SLOT(WdfDeviceGetDefaultQueue, 92);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfIoQueueCreate, 152);
+ABI_SLOT(WdfDeviceEnqueueRequest, 91);
 ABI_SLOT(WdfObjectAllocateContext, 203);
 ABI_SLOT(WdfObjectReferenceActual, 205);
 ABI_SLOT(WdfObjectDereferenceActual, 206);
@@ -144,6 +149,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CANCEL_REQUEST_CONTEXT, CancelContext);
 static WDFDEVICE CreatedDevice;
 static WDFQUEUE DefaultQueue;
 static UCHAR TransferMode;
+static volatile ULONG CallerRequestCount;
 static DEFERRED_IOCTL_CONTEXT Deferred;
 
 static BOOLEAN Check(BOOLEAN Condition, ULONG Code) {
@@ -639,6 +645,10 @@ static void CancelableIoctl(WDFREQUEST Request, size_t OutputLength,
 static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
                             size_t OutputLength, size_t InputLength,
                             ULONG IoControlCode) {
+  if (TransferMode == 'I' && !Check(CallerRequestCount == 1, 111)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
   if (!CheckQueue(Queue, 30)) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
     return;
@@ -680,6 +690,10 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
 }
 
 static void IoRead(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
+  if (TransferMode == 'I' && !Check(CallerRequestCount == 2, 112)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
   WDF_REQUEST_PARAMETERS Parameters;
   PUCHAR Buffer = NULL;
   size_t RetrievedLength = 0;
@@ -720,6 +734,10 @@ static void IoRead(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
 }
 
 static void IoWrite(WDFQUEUE Queue, WDFREQUEST Request, size_t Length) {
+  if (TransferMode == 'I' && !Check(CallerRequestCount == 3, 113)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
   WDF_REQUEST_PARAMETERS Parameters;
   PUCHAR Buffer = NULL;
   size_t RetrievedLength = 0;
@@ -775,6 +793,33 @@ static void DriverUnload(WDFDRIVER Driver) {
   DbgPrint("KMDF control: driver unload\n");
 }
 
+static void IoInCallerContext(WDFDEVICE Device, WDFREQUEST Request) {
+  WDF_REQUEST_PARAMETERS Parameters;
+  WDF_REQUEST_PARAMETERS_INIT(&Parameters);
+  WdfRequestGetParameters(Request, &Parameters);
+  if (!Check(Device == CreatedDevice && WdfRequestGetIoQueue(Request) == NULL &&
+                 KeGetCurrentIrql() == PASSIVE_LEVEL &&
+                 (ULONG)(ULONG_PTR)PsGetCurrentProcessId() ==
+                     IoGetRequestorProcessId(WdfRequestWdmGetIrp(Request)) &&
+                 (Parameters.Type == WdfRequestTypeRead ||
+                  Parameters.Type == WdfRequestTypeWrite ||
+                  Parameters.Type == WdfRequestTypeDeviceControl),
+             110)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  ++CallerRequestCount;
+  if (TransferMode == 'J')
+    return;
+  if (TransferMode == 'K') {
+    WdfRequestComplete(Request, STATUS_SUCCESS);
+    return;
+  }
+  NTSTATUS Status = WdfDeviceEnqueueRequest(Device, Request);
+  if (!NT_SUCCESS(Status))
+    WdfRequestComplete(Request, Status);
+}
+
 DRIVER_INITIALIZE DriverEntry;
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                      PUNICODE_STRING RegistryPath) {
@@ -801,6 +846,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'N' ? 'N'
                  : Marker == L'L' ? 'L'
                  : Marker == L'M' ? 'M'
+                 : Marker == L'I' ? 'I'
+                 : Marker == L'J' ? 'J'
+                 : Marker == L'K' ? 'K'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -820,6 +868,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     return STATUS_INSUFFICIENT_RESOURCES;
   WdfDeviceInitSetIoType(DeviceInit, TransferMode == 'D' ? WdfDeviceIoDirect
                                                          : WdfDeviceIoBuffered);
+  if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K')
+    WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
   RtlInitUnicodeString(&Name, L"\\Device\\NeverDKmdfControl");
   Status = WdfDeviceInitAssignName(DeviceInit, &Name);
   if (!NT_SUCCESS(Status))
