@@ -41,6 +41,21 @@ bool isArchitecturalNoReturn(const MedOp &Op, Arch TheArch) {
   return false;
 }
 
+bool isArchitecturalNoReturn(const LowOp &Op, Arch TheArch) {
+  if (Op.Opcode != NdOp::INTRINSIC || Op.NumInputs < 1 ||
+      !Op.Inputs[0].isConst())
+    return false;
+
+  const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (TheArch == Arch::AArch64)
+    return Id == Intrinsic::Brk || Id == Intrinsic::Hlt_A64;
+  if ((TheArch == Arch::X86 || TheArch == Arch::X64) &&
+      Id == Intrinsic::IntN && Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+      (Op.Inputs[1].Offset & 0xFF) == 0x29)
+    return true;
+  return false;
+}
+
 namespace {
 bool isDirectCallTo(const MedOp &Op, const std::set<va_t> &Targets) {
   return Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&

@@ -3756,6 +3756,65 @@ TEST(NativeSourceHints, ReadOnlyContextsRetainObservedPreservedRegisters) {
   }
 }
 
+TEST(NativeSourceHints,
+     PreservedContextsAllowASeparateArchitecturalTrapPath) {
+  const auto Context = a64reg::X20;
+  LowFunc Function;
+  Function.Entry = 0x1000;
+  Function.Blocks.resize(3);
+  Function.Blocks[0].Id = 0;
+  Function.Blocks[0].StartAddr = Function.Entry;
+  Function.Blocks[0].Succs = {1, 2};
+  Function.Blocks[1].Id = 1;
+  Function.Blocks[1].Preds = {0};
+  Function.Blocks[2].Id = 2;
+  Function.Blocks[2].Preds = {0};
+
+  LowOp Read;
+  Read.Opcode = NdOp::LOAD;
+  Read.Output = NdVar::tmp(TmpBase, 8);
+  Read.addInput(NdVar::reg(Context, 8));
+  Function.Blocks[0].Ops.push_back(Read);
+
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(NdVar::reg(a64reg::X30, 8));
+  Function.Blocks[1].Ops.push_back(Return);
+
+  LowOp Clobber;
+  Clobber.Opcode = NdOp::COPY;
+  Clobber.Output = NdVar::reg(Context, 8);
+  Clobber.addInput(NdVar::cst(0, 8));
+  Function.Blocks[2].Ops.push_back(Clobber);
+  LowOp Trap;
+  Trap.Opcode = NdOp::INTRINSIC;
+  Trap.Output = NdVar::reg(a64reg::X0, 8);
+  Trap.addInput(NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2));
+  Function.Blocks[2].Ops.push_back(Trap);
+
+  std::set<uint64_t> Used;
+  EXPECT_TRUE(restoresNativeSourceState(Function, Arch::AArch64, {}, &Used));
+  EXPECT_EQ(Used, std::set<uint64_t>{Context});
+
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    auto Invalid = Function;
+    auto &InvalidTrap = Invalid.Blocks[2].Ops.back();
+    if (Mutation == 0)
+      InvalidTrap.Inputs[0].Offset = static_cast<uint64_t>(Intrinsic::Svc);
+    else if (Mutation == 1)
+      InvalidTrap.NumInputs = 0;
+    else if (Mutation == 2)
+      InvalidTrap.addInput(NdVar::cst(0, 2));
+    else if (Mutation == 3)
+      Invalid.Blocks[2].Succs = {1};
+    else
+      Invalid.Blocks[2].Ops.push_back(Clobber);
+    EXPECT_FALSE(
+        restoresNativeSourceState(Invalid, Arch::AArch64, {}, nullptr));
+  }
+  EXPECT_FALSE(restoresNativeSourceState(Function, Arch::X64, {}, nullptr));
+}
+
 TEST(NativeSourceHints, AuxiliaryInputsAllowLaterCallerSavedWrites) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     const auto Register =

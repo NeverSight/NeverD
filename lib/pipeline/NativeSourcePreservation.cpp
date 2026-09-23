@@ -2,6 +2,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedNoReturn.h"
 
 #include <algorithm>
 #include <array>
@@ -173,6 +174,16 @@ public:
       if (Op.Addr != Instruction) {
         Temps.clear();
         Instruction = Op.Addr;
+      }
+      if (isArchitecturalNoReturn(Op, Architecture)) {
+        const unsigned ExpectedInputs = Architecture == Arch::AArch64 ? 1 : 2;
+        if (Op.NumInputs != ExpectedInputs ||
+            Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+            Index + 1 != Block.Ops.size() || !Block.Succs.empty())
+          return false;
+        DidTerminate = true;
+        return true;
       }
       if (Op.NumInputs > 6 || Op.Output.Size > 64 ||
           Op.Opcode == NdOp::INTRINSIC ||
@@ -738,8 +749,11 @@ bool restoresNativeSourceState(const LowFunc &Function, Arch Architecture,
     const bool StackFailure =
         Terminal != Calls.end() &&
         stackCheckTermination(Terminal->second, Architecture);
-    if ((Succs[I].empty() && !Returns && !StackFailure) ||
-        (StackFailure && !Succs[I].empty()))
+    const bool ArchitecturalTrap =
+        isArchitecturalNoReturn(Function.Blocks[I].Ops.back(), Architecture);
+    if ((Succs[I].empty() && !Returns && !StackFailure &&
+         !ArchitecturalTrap) ||
+        ((StackFailure || ArchitecturalTrap) && !Succs[I].empty()))
       return false;
     HasReturn |= Returns;
   }
