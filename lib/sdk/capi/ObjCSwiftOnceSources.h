@@ -16,8 +16,9 @@ struct SwiftOnceGetterContract {
   size_t Storage = 0;
   std::optional<size_t> SecondStorage;
   size_t Initializer = 0;
+  size_t ParameterCount = 0;
 
-  size_t parameterCount() const { return SecondStorage ? 4 : 3; }
+  size_t parameterCount() const { return ParameterCount; }
   uint64_t storageWidth() const { return SecondStorage ? 16 : 8; }
 };
 
@@ -365,7 +366,8 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
           SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
       F.SourceTypeHint->Convention !=
           SourceFunctionTypeHint::ConventionKind::C ||
-      (F.Params.size() != 3 && F.Params.size() != 4) ||
+      (F.Params.size() != 3 && F.Params.size() != 4 &&
+       F.Params.size() != 6) ||
       F.SourceTypeHint->Parameters.size() != F.Params.size())
     return std::nullopt;
   for (const auto &P : F.Params)
@@ -526,7 +528,8 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
     if (swiftStringBridgeCall(*E, Image)) {
       const auto First = LoadedFrom(E->Operands[0]);
       const auto Second = LoadedFrom(E->Operands[1]);
-      if (F.Params.size() != 4 || StringStorageParameters || !First ||
+      if ((F.Params.size() != 4 && F.Params.size() != 6) ||
+          StringStorageParameters || !First ||
           !Second || *First >= F.Params.size() || *Second >= F.Params.size() ||
           *First == *Second) {
         Valid = false;
@@ -572,7 +575,7 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
     if (Reads != std::set<size_t>{Predicate, Storage})
       return std::nullopt;
     return SwiftOnceGetterContract{Predicate, Storage, std::nullopt,
-                                   Initializer};
+                                   Initializer, F.Params.size()};
   }
   if (!StringStorageParameters)
     return std::nullopt;
@@ -581,8 +584,16 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
       Initializer == Storage || Initializer == SecondStorage ||
       Reads != std::set<size_t>{Predicate, Storage, SecondStorage})
     return std::nullopt;
+  // Some shared Swift thunks preserve two incoming ObjC registers ahead of
+  // the four real getter inputs. They are admissible only when the complete
+  // flow above proves both leading parameters unused and the suffix retains
+  // the canonical predicate/storage/initializer order.
+  if (F.Params.size() == 6 &&
+      (Predicate != 2 || Storage != 3 || SecondStorage != 4 ||
+       Initializer != 5))
+    return std::nullopt;
   return SwiftOnceGetterContract{Predicate, Storage, SecondStorage,
-                                 Initializer};
+                                 Initializer, F.Params.size()};
 }
 
 /// Prove the canonical Swift lazy-global addressor after HighIR structuring.
