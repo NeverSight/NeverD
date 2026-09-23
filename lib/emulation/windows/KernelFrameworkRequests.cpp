@@ -110,6 +110,8 @@ KernelFramework::requestCancellation(uint64_t IRP) {
     if (Q->second.CanceledOnQueue &&
         (R->second.DeliveredOnce || R->second.Enqueued)) {
       Q->second.Pending.erase(Pending);
+      if (Q->second.Pending.empty())
+        Q->second.ReadyPending = false;
       R->second.Queued = false;
       R->second.CanceledOnQueue = true;
       R->second.QueuedCallback = 0;
@@ -137,6 +139,8 @@ KernelFramework::requestCancellation(uint64_t IRP) {
         });
     Steps.insert(Destruction, {StepKind::CompleteRequest, R->first});
     Q->second.Pending.erase(Pending);
+    if (Q->second.Pending.empty())
+      Q->second.ReadyPending = false;
     R->second.Queued = false;
     auto Completed = start(std::move(Steps));
     if (!Completed)
@@ -415,7 +419,10 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
         Pending.QueuedCompletionStatus = Planned->Status;
       }
     }
+    const bool WasEmpty = Queue.Pending.empty();
     Queue.Pending.push_back(Handle);
+    if (Manual && WasEmpty && Queue.ReadyNotify)
+      Queue.ReadyPending = true;
     return std::optional<RequestDispatch>{
         RequestDispatch{0, {}, windows::StatusPending}};
   }
@@ -559,10 +566,14 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       if (!ForwardDispatch->PC)
         R->second.QueuedCompletionStatus = ForwardDispatch->Status;
     }
+    const bool WasEmpty = Destination->second.Pending.empty();
     if (Requeue)
       Destination->second.Pending.push_front(A[1]);
     else
       Destination->second.Pending.push_back(A[1]);
+    if (WasEmpty && Destination->second.Dispatch == QueueDispatchManual &&
+        Destination->second.ReadyNotify)
+      Destination->second.ReadyPending = true;
     if (*AlreadyCanceled) {
       // A request canceled before forwarding is subject to framework queue
       // cancellation as soon as the new queue takes ownership.
@@ -595,6 +606,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
           return Next.takeError();
       }
     }
+    if (auto E = flushReadyNotifications())
+      return E;
     return Result{0};
   }
   if (R->second.Queued)

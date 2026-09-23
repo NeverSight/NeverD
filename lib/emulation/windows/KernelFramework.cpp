@@ -570,6 +570,15 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
             "deletion with an outstanding cancellation callback requires "
             "asynchronous draining, which is not modeled");
     }
+    if (I->second.Kind == ObjectKind::Queue &&
+        (std::any_of(
+             ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
+             [&](const auto &Entry) { return Entry.second == Current; }) ||
+         std::any_of(
+             CanceledQueueCallbacks.begin(), CanceledQueueCallbacks.end(),
+             [&](const auto &Entry) { return Entry.second == Current; })))
+      return invalid("deletion with an active queue callback requires "
+                     "asynchronous draining, which is not modeled");
     for (uint64_t Child : I->second.Children)
       if (Objects.count(Child))
         if (auto E = Self(Self, Child))
@@ -629,6 +638,9 @@ KernelFramework::advance(uint64_t Token) {
                       }) ||
           std::any_of(
               CanceledQueueCallbacks.begin(), CanceledQueueCallbacks.end(),
+              [&](const auto &Entry) { return Entry.second == Handle; }) ||
+          std::any_of(
+              ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
               [&](const auto &Entry) { return Entry.second == Handle; }))
         continue;
       if (Q.StopComplete) {
@@ -726,6 +738,34 @@ KernelFramework::advance(uint64_t Token) {
           Callback->second != S.Object)
         return invalid("queued cancellation callback return lost its queue");
       CanceledQueueCallbacks.erase(Callback);
+      if (NotifyQueueState())
+        return std::optional<uint64_t>{};
+      continue;
+    }
+    if (S.Kind == StepKind::ReadyNotify) {
+      auto Q = Queues.find(S.Object);
+      if (Q == Queues.end())
+        return invalid("ready notification lost its manual queue");
+      if (!Q->second.ReadyNotify || !Q->second.Dispatching ||
+          Q->second.Pending.empty()) {
+        if (Q->second.Pending.empty() || !Q->second.ReadyNotify)
+          Q->second.ReadyPending = false;
+        continue;
+      }
+      Q->second.ReadyPending = false;
+      if (!ReadyQueueCallbacks.emplace(Token, S.Object).second)
+        return invalid("ready notification callback already active");
+      C.Steps.insert(C.Steps.begin() + C.Index,
+                     {StepKind::ReadyNotifyReturned, S.Object});
+      PendingCall = GuestCall{
+          Token, Q->second.ReadyNotify, {S.Object, Q->second.ReadyContext}};
+      return std::optional<uint64_t>{};
+    }
+    if (S.Kind == StepKind::ReadyNotifyReturned) {
+      auto Callback = ReadyQueueCallbacks.find(Token);
+      if (Callback == ReadyQueueCallbacks.end() || Callback->second != S.Object)
+        return invalid("ready notification callback return lost its queue");
+      ReadyQueueCallbacks.erase(Callback);
       if (NotifyQueueState())
         return std::optional<uint64_t>{};
       continue;
@@ -865,7 +905,40 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t) {
   if (Cancel != CancelCallbacks.end() &&
       Requests.at(Cancel->second).Cancellation != CancelState::Delivered)
     return invalid("cancellation callback has not entered guest execution");
-  return advance(Token);
+  auto Next = advance(Token);
+  if (!Next)
+    return Next.takeError();
+  if (*Next) {
+    if (auto E = flushReadyNotifications())
+      return std::move(E);
+    if (PendingCall)
+      return std::optional<uint64_t>{};
+  }
+  return Next;
+}
+
+llvm::Error KernelFramework::flushReadyNotifications() {
+  if (PendingCall)
+    return llvm::Error::success();
+  std::vector<Step> Steps;
+  for (const auto &[Handle, Queue] : Queues) {
+    if (!Queue.ReadyPending || !Queue.ReadyNotify || !Queue.Dispatching ||
+        Queue.Pending.empty())
+      continue;
+    const bool Active =
+        std::any_of(ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
+                    [&](const auto &Entry) { return Entry.second == Handle; });
+    if (!Active)
+      Steps.push_back({StepKind::ReadyNotify, Handle});
+  }
+  if (Steps.empty())
+    return llvm::Error::success();
+  if (auto E = preflightCancellationToken(0))
+    return E;
+  auto Started = start(std::move(Steps));
+  if (!Started)
+    return Started.takeError();
+  return llvm::Error::success();
 }
 
 bool KernelFramework::hasLiveBinding() const {

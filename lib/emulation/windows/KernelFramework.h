@@ -138,6 +138,7 @@ public:
   /// wait for requests still held by the framework queue.
   llvm::Expected<bool> queueWaitReady(uint64_t Queue,
                                       bool IncludePending) const;
+  llvm::Error flushReadyNotifications();
   /// Resume one suspended framework operation after its actual guest callback.
   llvm::Expected<std::optional<uint64_t>> finishGuestCall(uint64_t Token,
                                                           uint64_t Result);
@@ -198,6 +199,9 @@ private:
     uint64_t DrainComplete = 0;
     uint64_t DrainContext = 0;
     uint64_t CanceledOnQueue = 0;
+    uint64_t ReadyNotify = 0;
+    uint64_t ReadyContext = 0;
+    bool ReadyPending = false;
     std::deque<uint64_t> Pending;
   };
   std::map<uint64_t, Queue> Queues;
@@ -257,6 +261,8 @@ private:
     CompleteRequest,
     CanceledOnQueue,
     CanceledOnQueueReturned,
+    ReadyNotify,
+    ReadyNotifyReturned,
     PurgeCancelRequest,
     CancelReturned,
     TryDestroy,
@@ -278,6 +284,7 @@ private:
   std::map<uint64_t, Continuation> Continuations;
   std::map<uint64_t, uint64_t> CancelCallbacks;
   std::map<uint64_t, uint64_t> CanceledQueueCallbacks;
+  std::map<uint64_t, uint64_t> ReadyQueueCallbacks;
   std::optional<GuestCall> PendingCall;
 
   llvm::Error preflightCancellationToken(uint64_t EarlierCallbacks) const;

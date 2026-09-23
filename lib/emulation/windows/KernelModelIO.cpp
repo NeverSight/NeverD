@@ -815,6 +815,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
             return E;
         if (auto E = processRequestCancellations())
           return E;
+        if (auto E = Framework->flushReadyNotifications())
+          return E;
         Invocation Call;
         Call.IRP = *Packet;
         return Call;
@@ -829,6 +831,8 @@ KernelModel::beginRequest(const DriverRequest &Input,
       // routing decision so the queue can deliver its cancellation callback.
       if (!Dispatch.CallerContext) {
         if (auto E = processRequestCancellations())
+          return E;
+        if (auto E = Framework->flushReadyNotifications())
           return E;
       }
       uint64_t *Registers[] = {&Call.Argument0, &Call.Argument1,
@@ -874,6 +878,8 @@ KernelModel::continueFrameworkCallerContext(uint64_t IRP) {
   if (!Routed)
     return Routed.takeError();
   if (auto E = processRequestCancellations())
+    return E;
+  if (auto E = Framework->flushReadyNotifications())
     return E;
   Invocation Call;
   Call.PC = Routed->PC;

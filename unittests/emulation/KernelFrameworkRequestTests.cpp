@@ -1077,6 +1077,167 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       ManualReadyNotificationRetrievesEachEmptyToNonemptyTransition) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  EXPECT_EQ(take(invoke("WdfIoQueueReadyNotify",
+                        {Globals, Manual, DefaultPC, 0x1234})),
+            0u);
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto IRP = packet();
+    const auto Request = request(route(IRP));
+    EXPECT_EQ(
+        take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+        0u);
+    auto Ready = callback();
+    EXPECT_EQ(Ready.PC, DefaultPC);
+    EXPECT_EQ(Ready.Arguments, (std::vector<uint64_t>{Manual, 0x1234}));
+    EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                          {Globals, Manual, BufferSlot})),
+              0u);
+    EXPECT_EQ(get(BufferSlot), Request);
+    complete(Request, I + 1);
+    finish(Ready);
+    EXPECT_TRUE(Packets.at(IRP).Completed);
+    EXPECT_FALSE(Model.takeGuestCall());
+  }
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ManualReadyNotificationWaitsForStartAndRequiresStopToDeregister) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto Automatic = automaticQueue();
+  EXPECT_EQ(
+      take(invoke("WdfIoQueueReadyNotify", {Globals, Automatic, DefaultPC, 0})),
+      framework::ControlInvalidDeviceRequest);
+  EXPECT_EQ(take(invoke("WdfIoQueueReadyNotify",
+                        {Globals, Manual, DefaultPC, 0x1234})),
+            0u);
+  EXPECT_EQ(
+      take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, DefaultPC, 0})),
+      framework::ControlInvalidDeviceRequest);
+  EXPECT_EQ(take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, 0, 0})),
+            framework::ControlInvalidDeviceRequest);
+  take(invoke("WdfIoQueueStop", {Globals, Manual, 0, 0}));
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_FALSE(Model.takeGuestCall());
+  take(invoke("WdfIoQueueStart", {Globals, Manual}));
+  auto Ready = callback();
+  EXPECT_EQ(Ready.PC, DefaultPC);
+  EXPECT_EQ(Ready.Arguments, (std::vector<uint64_t>{Manual, 0x1234}));
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            0u);
+  EXPECT_EQ(get(BufferSlot), Request);
+  complete(Request);
+  finish(Ready);
+  take(invoke("WdfIoQueueStop", {Globals, Manual, 0, 0}));
+  EXPECT_EQ(take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, 0, 0})), 0u);
+  EXPECT_EQ(take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, 0, 0})),
+            framework::ControlInvalidDeviceRequest);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ManualReadyNotificationCanRegisterWithPendingRequest) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  EXPECT_EQ(
+      take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual})),
+      0u);
+  EXPECT_FALSE(Model.takeGuestCall());
+  EXPECT_EQ(
+      take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, DefaultPC, 0x55})),
+      0u);
+  auto Ready = callback();
+  EXPECT_EQ(Ready.PC, DefaultPC);
+  EXPECT_EQ(Ready.Arguments, (std::vector<uint64_t>{Manual, 0x55}));
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Manual, BufferSlot})),
+            0u);
+  EXPECT_EQ(get(BufferSlot), Request);
+  complete(Request);
+  finish(Ready);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ManualReadyNotificationDoesNotWaitForEarlierDeliveredRequest) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, DefaultPC, 0}));
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  take(invoke("WdfRequestForwardToIoQueue", {Globals, First, Manual}));
+  auto FirstReady = callback();
+  take(invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}));
+  EXPECT_EQ(get(BufferSlot), First);
+  finish(FirstReady);
+  EXPECT_FALSE(Packets.at(FirstIRP).Completed);
+
+  const auto SecondIRP = packet();
+  const auto Second = request(route(SecondIRP));
+  take(invoke("WdfRequestForwardToIoQueue", {Globals, Second, Manual}));
+  auto SecondReady = callback();
+  EXPECT_EQ(SecondReady.PC, DefaultPC);
+  take(invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}));
+  EXPECT_EQ(get(BufferSlot), Second);
+  complete(First);
+  complete(Second);
+  finish(SecondReady);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       ManualReadyNotificationDefersAnotherTransitionUntilCallbackReturns) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, DefaultPC, 0}));
+  const auto FirstIRP = packet();
+  const auto First = request(route(FirstIRP));
+  take(invoke("WdfRequestForwardToIoQueue", {Globals, First, Manual}));
+  auto FirstReady = callback();
+  take(invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}));
+  EXPECT_EQ(get(BufferSlot), First);
+  const auto SecondIRP = packet();
+  const auto Second = request(route(SecondIRP));
+  take(invoke("WdfRequestForwardToIoQueue", {Globals, Second, Manual}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  complete(First);
+  finish(FirstReady);
+  auto SecondReady = callback();
+  EXPECT_EQ(SecondReady.PC, DefaultPC);
+  take(invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}));
+  EXPECT_EQ(get(BufferSlot), Second);
+  complete(Second);
+  finish(SecondReady);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       StopStateNotificationWaitsForActiveManualReadyCallback) {
+  initializeQueue();
+  const auto Manual = manualQueue();
+  take(invoke("WdfIoQueueReadyNotify", {Globals, Manual, DefaultPC, 0}));
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  take(invoke("WdfRequestForwardToIoQueue", {Globals, Request, Manual}));
+  auto Ready = callback();
+  take(invoke("WdfIoQueueRetrieveNextRequest", {Globals, Manual, BufferSlot}));
+  complete(Request);
+  take(invoke("WdfIoQueueStop", {Globals, Manual, ReadPC, 0x99}));
+  EXPECT_FALSE(Model.takeGuestCall());
+  finish(Ready);
+  auto Stopped = callback();
+  EXPECT_EQ(Stopped.PC, ReadPC);
+  EXPECT_EQ(Stopped.Arguments, (std::vector<uint64_t>{Manual, 0x99}));
+  finish(Stopped);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        CanceledOnQueueTransfersPreviouslyDeliveredRequestToDriver) {
   initializeQueue();
   const auto Manual = manualQueue(CancelPC);

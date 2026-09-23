@@ -37,6 +37,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
       Name != "WdfIoQueueStopAndPurgeSynchronously" &&
       Name != "WdfIoQueueDrainSynchronously" && Name != "WdfIoQueuePurge" &&
       Name != "WdfIoQueuePurgeSynchronously" &&
+      Name != "WdfIoQueueReadyNotify" &&
       Name != "WdfIoQueueRetrieveNextRequest")
     return std::optional<uint64_t>{};
 
@@ -48,6 +49,23 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (OI == Objects.end() || OI->second.Binding != B.Globals ||
       OI->second.Kind != Kind)
     return invalidQueue("invalid, foreign or wrong-kind object handle");
+
+  if (Name == "WdfIoQueueReadyNotify") {
+    auto Q = Queues.find(A[1]);
+    if (Q == Queues.end() || OI->second.Deleting)
+      return invalidQueue("queue has no live framework identity");
+    if (Q->second.Dispatch != QueueDispatchManual ||
+        (A[2] && Q->second.ReadyNotify) ||
+        (!A[2] && (!Q->second.ReadyNotify || Q->second.Dispatching)))
+      return std::optional<uint64_t>{ControlInvalidDeviceRequest};
+    Q->second.ReadyNotify = A[2];
+    Q->second.ReadyContext = A[2] ? A[3] : 0;
+    Q->second.ReadyPending =
+        A[2] && Q->second.Dispatching && !Q->second.Pending.empty();
+    if (auto E = flushReadyNotifications())
+      return E;
+    return std::optional<uint64_t>{0};
+  }
 
   if (Name == "WdfIoQueueGetState" || Name == "WdfIoQueueStop" ||
       Name == "WdfIoQueueStopSynchronously" || Name == "WdfIoQueueStart" ||
@@ -79,8 +97,14 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         return invalidQueue("queue has a pending drain-completion callback");
       Q->second.Accepting = true;
       Q->second.Dispatching = true;
-      if (Q->second.Dispatch == QueueDispatchManual ||
-          Q->second.Pending.empty())
+      if (Q->second.Dispatch == QueueDispatchManual) {
+        Q->second.ReadyPending =
+            Q->second.ReadyNotify && !Q->second.Pending.empty();
+        if (auto E = flushReadyNotifications())
+          return E;
+        return std::optional<uint64_t>{0};
+      }
+      if (Q->second.Pending.empty())
         return std::optional<uint64_t>{0};
       std::vector<Step> Steps(Q->second.Pending.size(),
                               {StepKind::PresentQueue, A[1]});
@@ -172,6 +196,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
         R.QueuedCompletionStatus.reset();
       }
       Q->second.Pending.clear();
+      Q->second.ReadyPending = false;
       for (uint64_t Handle : Cancellable)
         Steps.push_back({StepKind::PurgeCancelRequest, Handle});
       Q->second.Accepting = StopAndPurge;
@@ -248,6 +273,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     if (auto E = Memory.writeInteger(A[2], Handle, sizeof(uint64_t)))
       return E;
     Q->second.Pending.pop_front();
+    if (Q->second.Pending.empty())
+      Q->second.ReadyPending = false;
     R->second.Queued = false;
     R->second.DeliveredOnce = true;
     R->second.QueuedCallback = 0;
@@ -409,6 +436,9 @@ KernelFramework::queueWaitReady(uint64_t Handle, bool IncludePending) const {
                   }))
     return false;
   if (std::any_of(CanceledQueueCallbacks.begin(), CanceledQueueCallbacks.end(),
+                  [&](const auto &Entry) { return Entry.second == Handle; }))
+    return false;
+  if (std::any_of(ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
                   [&](const auto &Entry) { return Entry.second == Handle; }))
     return false;
   return true;

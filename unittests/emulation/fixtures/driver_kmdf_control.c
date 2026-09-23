@@ -26,6 +26,7 @@
 /// ownership before the queued retrieval worker runs.
 /// 8 enqueues from caller context into a manual default queue and returns a
 /// canceled request to its queue callback before any I/O delivery.
+/// 9 retrieves a forwarded request in the manual queue's ready notification.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -122,6 +123,7 @@ ABI_SLOT(WdfIoQueuePurgeSynchronously, 164);
 ABI_SLOT(WdfIoQueueStopAndPurge, 418);
 ABI_SLOT(WdfIoQueueStopAndPurgeSynchronously, 419);
 ABI_SLOT(WdfDeviceEnqueueRequest, 91);
+ABI_SLOT(WdfIoQueueReadyNotify, 166);
 ABI_SLOT(WdfObjectAllocateContext, 203);
 ABI_SLOT(WdfObjectReferenceActual, 205);
 ABI_SLOT(WdfObjectDereferenceActual, 206);
@@ -312,6 +314,42 @@ static void CallerQueuedCanceledOnQueue(WDFQUEUE Queue, WDFREQUEST Request) {
         191);
   WdfRequestComplete(Request, STATUS_CANCELLED);
   DbgPrint("KMDF control: caller-context queued cancellation\n");
+}
+
+static void ManualReady(WDFQUEUE Queue, WDFCONTEXT Context) {
+  WDFREQUEST Request = NULL;
+  PVOID Input = NULL, Output = NULL;
+  size_t InputLength = 0, OutputLength = 0;
+  NTSTATUS Status;
+  UCHAR *Bytes;
+  UCHAR Source[4];
+  ULONG Queued = 0, Delivered = 0;
+  Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+  if (!Check(Queue == ManualQueue && Context == (WDFCONTEXT)(ULONG_PTR)0x99 &&
+                 NT_SUCCESS(Status) && Request != NULL &&
+                 WdfRequestGetIoQueue(Request) == Queue,
+             192))
+    return;
+  WdfIoQueueGetState(Queue, &Queued, &Delivered);
+  Status = WdfRequestRetrieveInputBuffer(Request, 4, &Input, &InputLength);
+  if (NT_SUCCESS(Status))
+    Status = WdfRequestRetrieveOutputBuffer(Request, 8, &Output, &OutputLength);
+  if (!Check(NT_SUCCESS(Status) && InputLength == 4 && OutputLength >= 8 &&
+                 Queued == 0 && Delivered == 1,
+             193)) {
+    WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+    return;
+  }
+  RtlCopyMemory(Source, Input, sizeof(Source));
+  Bytes = Output;
+  Bytes[0] = 'K';
+  Bytes[1] = 'M';
+  Bytes[2] = 'D';
+  Bytes[3] = '9';
+  for (ULONG Index = 0; Index < 4; ++Index)
+    Bytes[4 + Index] = Source[Index] ^ 0x5a;
+  WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 8);
+  DbgPrint("KMDF control: manual ready callback retrieved request\n");
 }
 
 static BOOLEAN CheckRetiredRequestAccessors(WDFREQUEST Request, ULONG Code) {
@@ -1120,6 +1158,13 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     DbgPrint("KMDF control: forwarded automatic request\n");
     return;
   }
+  if (TransferMode == '9' && InputLength == 4) {
+    NTSTATUS Status = WdfRequestForwardToIoQueue(Request, ManualQueue);
+    if (!NT_SUCCESS(Status))
+      WdfRequestComplete(Request, Status);
+    DbgPrint("KMDF control: forwarded ready-notify request\n");
+    return;
+  }
   if ((TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
        TransferMode == '7') &&
       InputLength == 4) {
@@ -1488,6 +1533,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'6' ? '6'
                  : Marker == L'7' ? '7'
                  : Marker == L'8' ? '8'
+                 : Marker == L'9' ? '9'
                                   : 'B';
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
@@ -1563,7 +1609,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   }
 
   if (TransferMode == 'Y' || TransferMode == 'Z' || TransferMode == 'R' ||
-      TransferMode == '7') {
+      TransferMode == '7' || TransferMode == '9') {
     WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
     if (TransferMode == '7')
       QueueConfig.EvtIoCanceledOnQueue = ManualCanceledOnQueue;
@@ -1579,6 +1625,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
       if (NT_SUCCESS(Status))
         Status = STATUS_UNSUCCESSFUL;
       goto Failure;
+    }
+    if (TransferMode == '9') {
+      Status = WdfIoQueueReadyNotify(ManualQueue, ManualReady,
+                                     (WDFCONTEXT)(ULONG_PTR)0x99);
+      if (!NT_SUCCESS(Status))
+        goto Failure;
     }
   }
 

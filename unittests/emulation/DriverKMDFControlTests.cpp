@@ -790,6 +790,33 @@ TEST(DriverKMDFControl, CallerEnqueuedManualRequestUsesQueueCancelCallback) {
     }
 }
 
+TEST(DriverKMDFControl, ManualQueueReadyCallbackRetrievesForwardedRequest) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('9');
+      Options.LoadAddress = Address;
+      Options.Requests.resize(2);
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Cleanup));
+      Options.Requests.push_back(controlRequest(DriverRequestKind::Close));
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+      checkCompletedLifecycle(*Result, 4);
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', '9', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(apiCount(*Result, "WdfIoQueueReadyNotify"), 1u);
+      const auto Messages = controlMessages(*Result);
+      EXPECT_NE(std::find(Messages.begin(), Messages.end(),
+                          "KMDF control: manual ready callback retrieved "
+                          "request\n"),
+                Messages.end());
+    }
+}
+
 TEST(DriverKMDFControl, ManualRequestRequeueReturnsSameRequestToWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
