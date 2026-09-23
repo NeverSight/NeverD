@@ -131,8 +131,13 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
     return invalidQueue("invalid power-management tri-state");
   // A control-device queue is never power managed, including WdfTrue and
   // WdfUseDefault configurations. No PnP state is fabricated here.
-  if (Dispatch != QueueDispatchSequential || !IsDefault)
-    return invalidQueue("only sequential default queues are currently modeled");
+  if (!IsDefault)
+    return invalidQueue("only default queues are currently modeled");
+  if (Dispatch == QueueDispatchManual)
+    return invalidQueue("manual queue retrieval is not modeled");
+  if (Dispatch == QueueDispatchParallel &&
+      Read32(QueueConfigPresentedRequests) != UINT32_MAX)
+    return invalidQueue("bounded parallel queue delivery is not modeled");
   if (Internal || Read64(QueueConfigStop) || Read64(QueueConfigResume) ||
       Read64(QueueConfigCanceled))
     return invalidQueue(
@@ -167,6 +172,7 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   Q.Read = Read;
   Q.Write = Write;
   Q.DeviceControl = DeviceControl;
+  Q.Dispatch = Dispatch;
   Q.AllowZeroLength = Config[QueueConfigAllowZeroLength] != 0;
   Q.IsDefault = true;
   Queues.emplace(*Handle, Q);

@@ -178,6 +178,7 @@ private:
   struct Queue {
     uint64_t Device = 0;
     uint64_t Default = 0, Read = 0, Write = 0, DeviceControl = 0;
+    uint32_t Dispatch = framework::QueueDispatchSequential;
     bool AllowZeroLength = false;
     bool IsDefault = false;
   };

@@ -44,7 +44,7 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 | 驅動程式自行配置的 MDL | 描述非分頁集區或單一使用者配置的獨立描述元，共用實體頁面身分 | 不支援 IRP 關聯、MDL 鏈或任意程序 |
 | READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、一般 WDM 請求取消或隱含檔案位置 |
 | WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁、合成要求行程身分、派送後 VA 撤銷或行程結束及有限取消 | 不支援一般行程附加、任意使用者對映或重新對映 |
-| KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、循序預設佇列，以及實際執行回呼的緩衝／直接請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
+| KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、循序或無限並行預設佇列，以及實際執行回呼的緩衝／直接請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
 | PnP 匯流排／功能／篩選驅動程式 | 明確的無資源或暫存器組 PDO、客體 AddDevice 與八種常見 PnP 生命週期次要功能 | 其他 PnP 操作、一般電源管理、其他硬體／資源及 KMDF PnP |
 | 儲存、網路、顯示、檔案系統及迷你篩選驅動程式 | 不支援相關子系統契約 | 連接埠／類別／迷你連接埠框架、NDIS/WFP、圖形或檔案系統服務 |
 | 工作項目、計時器、DPC、事件與等待 | 目前執行 IRQL 在派送與工作項目中為 `PASSIVE_LEVEL`，在 DPC 中為 `DISPATCH_LEVEL` | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
@@ -167,7 +167,7 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 
 控制裝置要求複製可列印 ASCII 名稱，且 SDDL 必須精確為 `D:P(A;;GA;;;WD)`。這授予所有呼叫端存取權限，無需虛構呼叫端權杖；不支援其他安全描述元、未命名裝置和自動名稱。裝置初始化擁有一個 WDM 裝置。請求可透過現有工作階段命名空間中的符號連結別名 `\DosDevices\Name` 或 `\??\Name` 選擇裝置，報告仍保留正規裝置名稱。建立成功會消耗初始化物件並清空其指標；失敗則回復部分裝置擁有權。`WdfControlFinishInitializing` 決定何時可以遞送 I/O。僅在已建模的檔案、工作項目和請求允許時，刪除操作才移除裝置及其連結；不支援刪除過程中取消或排空請求。
 
-96 位元組的 `WDF_IO_QUEUE_CONFIG` 支援循序預設佇列，要求明確被動執行且不使用框架同步。控制裝置佇列不參與電源管理。專用 READ／WRITE／IOCTL 回呼優先於預設回呼。已接受的佇列請求即使同步完成也傳回 `STATUS_PENDING`；void 回呼的傳回暫存器不會使請求完成。延後完成使用現有排程器。沒有處理函式時，請求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未啟用零長度遞送時，零長度 READ／WRITE 直接完成。預設檔案套件以成功狀態和 Information=0 完成 CREATE／CLEANUP／CLOSE。不支援並行／手動佇列、檔案回呼、PnP 裝置和完整 PnP／電源。
+96 位元組的 `WDF_IO_QUEUE_CONFIG` 支援循序或無限並行預設佇列，要求明確被動執行且不使用框架同步。控制裝置佇列不參與電源管理。專用 READ／WRITE／IOCTL 回呼優先於預設回呼。已接受的佇列請求即使同步完成也傳回 `STATUS_PENDING`；void 回呼的傳回暫存器不會使請求完成。延後完成使用現有排程器。沒有處理函式時，請求以 `STATUS_INVALID_DEVICE_REQUEST` 完成；未啟用零長度遞送時，零長度 READ／WRITE 直接完成。預設檔案套件以成功狀態和 Information=0 完成 CREATE／CLEANUP／CLOSE。不支援有限並行佇列和手動佇列、檔案回呼、PnP 裝置和完整 PnP／電源。
 
 請求參數使用 40 位元組的 `WDF_REQUEST_PARAMETERS` 配置。輸入／輸出存取函式傳回邏輯長度，保留緩衝區別名及現有直接 I/O 的 MDL 對映；直接 IOCTL 的輸入仍使用緩衝區。方向錯誤或緩衝區不足會傳回文件規定的狀態。完成操作先在緩衝區仍有效時執行請求清理，再完成 IRP 並釋放請求所屬鎖頁；參考允許時才銷毀子物件和請求。一旦開始完成操作，就拒絕新的緩衝區與參數存取函式呼叫；已取得的緩衝區指標在清理期間仍可使用。外部物件參考保留內容，但不保留對已完成 IRP 的存取權。
 
@@ -179,7 +179,7 @@ KMDF 1.33 支援使用精確的 1.33.0 ABI：458 個函式槽具有穩定的客�
 
 `WdfRequestRetrieveInputWdmMdl` 與 `WdfRequestRetrieveOutputWdmMdl` 視需要為緩衝 WRITE 輸入、READ 輸出及 IOCTL 輸入／輸出描述現有 SystemBuffer。每次擷取均先驗證方向有效且長度非零，再使用該請求唯一的快取描述元；首次成功擷取決定 ByteCount，即使另一方向的邏輯長度不同也保留此值。對此描述元，`MmGetSystemAddressForMdlSafe` 傳回原 VA；額外對映、解除對映及驅動程式釋放均遭拒絕。直接 READ 輸出、WRITE 輸入及 IOCTL 輸出傳回現有 `IRP.MdlAddress`，擷取本身不建立對映；直接 IOCTL 輸入使用 SystemBuffer 快取。描述元、IRP 和緩衝區在完成時一同失效。取消內部參考或外部參考只保留 WDF 內容，不保留已完成的 I/O 儲存空間。WDF 對 `METHOD_NEITHER` 的 MDL 擷取仍不支援；未建立 MDL 的 PFN 存取也會拒絕。請求所屬的 WDFMEMORY 使用獨立的鎖頁對映。
 
-對緩衝、直接與 neither KMDF 要求，`WdfDeviceInitSetIoInCallerContextCallback` 在要求端處理序的 `PASSIVE_LEVEL` 執行預佇列回呼。回呼必須完成要求，或恰好呼叫一次 `WdfDeviceEnqueueRequest` 後進入循序預設佇列。對 `METHOD_NEITHER` IOCTL 與 neither READ／WRITE，`WdfRequestRetrieveUnsafeUserInputBuffer` 和 `WdfRequestRetrieveUnsafeUserOutputBuffer` 僅在此回呼傳回原始使用者位址。`WdfRequestProbeAndLockUserBufferForRead` 和 `WdfRequestProbeAndLockUserBufferForWrite` 檢查頁面權限並鎖定要求所屬頁面；`WdfMemoryGetBuffer` 傳回系統別名，在離開要求端內容後的佇列回呼仍可使用。完成要求時釋放鎖頁與別名。僅支援情境原始緩衝區，不支援嵌入式使用者指標或任意使用者對映。
+對緩衝、直接與 neither KMDF 要求，`WdfDeviceInitSetIoInCallerContextCallback` 在要求端處理序的 `PASSIVE_LEVEL` 執行預佇列回呼。回呼必須完成要求，或恰好呼叫一次 `WdfDeviceEnqueueRequest` 後進入預設佇列。對 `METHOD_NEITHER` IOCTL 與 neither READ／WRITE，`WdfRequestRetrieveUnsafeUserInputBuffer` 和 `WdfRequestRetrieveUnsafeUserOutputBuffer` 僅在此回呼傳回原始使用者位址。`WdfRequestProbeAndLockUserBufferForRead` 和 `WdfRequestProbeAndLockUserBufferForWrite` 檢查頁面權限並鎖定要求所屬頁面；`WdfMemoryGetBuffer` 傳回系統別名，在離開要求端內容後的佇列回呼仍可使用。完成要求時釋放鎖頁與別名。僅支援情境原始緩衝區，不支援嵌入式使用者指標或任意使用者對映。
 
 已建模的 KMDF API: `WdfDriverCreate`, `WdfDriverGetRegistryPath`, `WdfDriverWdmGetDriverObject`, `WdfWdmDriverGetWdfDriverHandle`, `WdfObjectGetTypedContextWorker`, `WdfObjectAllocateContext`, `WdfObjectContextGetObject`, `WdfObjectReferenceActual`, `WdfObjectDereferenceActual`, `WdfObjectCreate`, `WdfObjectDelete`, `WdfControlDeviceInitAllocate`, `WdfDeviceInitFree`, `WdfDeviceInitAssignName`, `WdfDeviceInitSetIoType`, `WdfDeviceInitSetIoInCallerContextCallback`, `WdfDeviceCreate`, `WdfDeviceEnqueueRequest`, `WdfDeviceCreateSymbolicLink`, `WdfControlFinishInitializing`, `WdfDeviceWdmGetDeviceObject`, `WdfIoQueueCreate`, `WdfDeviceGetDefaultQueue`, `WdfIoQueueGetDevice`, `WdfRequestComplete`, `WdfRequestCompleteWithInformation`, `WdfRequestGetParameters`, `WdfRequestRetrieveInputBuffer`, `WdfRequestRetrieveOutputBuffer`, `WdfRequestRetrieveUnsafeUserInputBuffer`, `WdfRequestRetrieveUnsafeUserOutputBuffer`, `WdfRequestProbeAndLockUserBufferForRead`, `WdfRequestProbeAndLockUserBufferForWrite`, `WdfMemoryGetBuffer`, `WdfRequestRetrieveInputWdmMdl`, `WdfRequestRetrieveOutputWdmMdl`, `WdfRequestSetInformation`, `WdfRequestGetInformation`, `WdfRequestGetFileObject`, `WdfRequestGetIoQueue`, `WdfRequestWdmGetIrp`, `WdfRequestMarkCancelable`, `WdfRequestMarkCancelableEx`, `WdfRequestUnmarkCancelable`, `WdfRequestIsCanceled`.
 
@@ -326,7 +326,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 報告區分 `stop_reason`、可為空值的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令計數。它保留停止前收集的 API 呼叫及可觀察狀態，包括裝置物件與驅動程式回呼位址。客體位址以十六進位字串表示，避免 JSON 使用端遺失 64 位元精確度。
 
-`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v33`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
+`configuration` 物件記錄本次執行的限制、服務名稱與 `kernel_exports` 覆寫值。設定識別為 `wdm-x64-scheduled-v34`。`nt_status` 始終是 DriverEntry 的結果，而 `scenario_success` 綜合描述初始化及已完成請求的結果。`phase`、`requests` 和 `unload_completed` 表明請求生命週期的哪些部分已執行。每次 API 呼叫及 CPU 寫入也會記錄階段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每個請求報告派送狀態與 I/O 狀態、是否完成、information 長度及傳回的 `output_hex` 位元組。`preferred_image_base` 描述原始 PE 基底位址。`security_cookie` 是已初始化 cookie 的客體位址；若不需要 cookie，則為 `"0x0"`。請求報告欄位為 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始登錄配置。 `information_hex` 以十六進位字串精確保留原始 64 位元 `IoStatus.Information`；原有數值欄位 `information` 仍然保留。
 
 工作項目觀察記錄使用 `callback:N` 階段。待處理請求的 `dispatch_status` 保留 `STATUS_PENDING`，最終完成狀態分別記錄於 `io_status`，並據此計算該請求對 `scenario_success` 的影響。
 
@@ -357,7 +357,7 @@ WDM `METHOD_NEITHER` 的 `Type3InputBuffer` 與 `IRP.UserBuffer` 分別指向獨
 
 ## 有界並行 WDM 要求
 
-WDM READ/WRITE/IOCTL 要求可設定 `defer_callback_drain: true`。只有派送傳回 `STATUS_PENDING` 且 IRP 仍待完成時，執行器才會先提交下一項要求；下一項未設定此欄位的要求之後，會排空回呼並完成整批要求。重疊要求可使用不同的檔案物件，或使用明確非同步開啟的相同檔案物件；若最後一項要求設定此欄位，場景結尾會排空回呼。同步檔案物件的重疊要求、KMDF 批次提交、任意執行緒搶佔及外部要求到達仍不支援。
+WDM READ/WRITE/IOCTL 要求或無限並行 KMDF 預設佇列中的要求可設定 `defer_callback_drain: true`。只有派送傳回 `STATUS_PENDING` 且 IRP 仍待完成時，執行器才會先提交下一項要求；下一項未設定此欄位的要求之後，會排空回呼並完成整批要求。重疊要求可使用不同的檔案物件，或使用明確非同步開啟的相同檔案物件；若最後一項要求設定此欄位，場景結尾會排空回呼。同步檔案物件的重疊要求、任意執行緒搶佔及外部要求到達仍不支援。
 
 ## 非同步檔案物件
 

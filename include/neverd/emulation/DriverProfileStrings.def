@@ -9,7 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v33")
+NEVERD_DRIVER_PROFILE_STRING(ReportProfile, "wdm-x64-scheduled-v34")
 NEVERD_DRIVER_PROFILE_STRING(DefaultServiceName, "NeverDDriver")
 NEVERD_DRIVER_PROFILE_STRING(EntryPhase, "driver_entry")
 NEVERD_DRIVER_PROFILE_STRING(AddDevicePhase, "add_device:")

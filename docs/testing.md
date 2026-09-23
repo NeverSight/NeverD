@@ -84,6 +84,15 @@ WDK neither-I/O fixture also verifies that another requestor can complete a
 synchronous request before the first exited requestor's locked-MDL worker runs,
 in normal/active-CFG images at preferred and relocated bases.
 
+`DriverKMDFControl.ParallelQueueDeliversTwoPendingRequestsBeforeWorkers`
+uses a genuine WDK control driver with an unlimited parallel default queue.
+Two IOCTLs on an asynchronous file enter separate work items before either
+worker runs; a third request completes synchronously, then both workers
+complete their own IRPs. The case runs normal/active-CFG images at preferred
+and relocated bases. Model-level queue tests verify parallel overlap and
+sequential exclusion; another native case batches two independent synchronous
+file objects. The C API test checks the asynchronous-file batch and output bytes.
+
 An `asynchronous_file` CREATE case checks that the guest FILE_OBJECT and IRP
 omit synchronous flags, two pending IOCTLs on the same file complete with
 distinct output, canceling one overlapping IRP leaves the other live, and

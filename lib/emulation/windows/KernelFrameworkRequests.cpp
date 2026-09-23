@@ -138,7 +138,8 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
                                ControlInvalidDeviceRequest);
   if (Objects.at(Q->first).Deleting)
     return requestError("default queue is deleting");
-  if (std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
+  if (Q->second.Dispatch == QueueDispatchSequential &&
+      std::any_of(Requests.begin(), Requests.end(), [&](const auto &Entry) {
         return Entry.second.Queue == Q->first && !Entry.second.Completed &&
                Entry.second.IRP != IRP;
       }))

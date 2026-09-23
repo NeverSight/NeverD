@@ -77,20 +77,35 @@ TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
   }
   queueConfiguration();
   put(QueueConfig + 4, 2, 4);
-  expectError(createQueue(), "only sequential default");
+  expectError(createQueue(), "bounded parallel queue delivery");
+  queueConfiguration();
+  put(QueueConfig + 4, 2, 4);
+  put(QueueConfig + 80, 1, 4);
+  expectError(createQueue(), "bounded parallel queue delivery");
   queueConfiguration();
   put(QueueConfig + 4, 3, 4);
   put(QueueConfig + 40, 0);
-  expectError(createQueue(), "only sequential default");
+  expectError(createQueue(), "manual queue retrieval");
   queueConfiguration();
   put(QueueConfig + 13, 0, 1);
-  expectError(createQueue(), "only sequential default");
+  expectError(createQueue(), "only default queues");
   for (uint64_t Size : {80, 88}) {
     queueConfiguration();
     put(QueueConfig, Size, 4);
     expectError(createQueue(), "legacy");
   }
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+}
+
+TEST_F(DriverKernelFrameworkQueue,
+       UnlimitedParallelDefaultQueueAcceptsThePublicConfiguration) {
+  queueConfiguration();
+  put(QueueConfig + 4, framework::QueueDispatchParallel, 4);
+  put(QueueConfig + 80, UINT32_MAX, 4);
+  EXPECT_EQ(take(createQueue()), 0u);
+  const auto Queue = get(QueueSlot);
+  EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), Queue);
+  EXPECT_EQ(take(invoke("WdfIoQueueGetDevice", {Globals, Queue})), Device);
 }
 
 TEST_F(DriverKernelFrameworkQueue, PassivePolicyMustBeExplicitlyConfigured) {
