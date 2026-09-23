@@ -567,6 +567,71 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsEraseIgnoredContexts) {
   }
 }
 
+TEST(SwiftOnceSources, ClosedIgnoredContextMayFillOnlyUnknownCallerInput) {
+  OnceFixture F(Arch::AArch64);
+  F.Pipeline.HighFuncs.resize(2);
+  F.Once->Operands[0] =
+      HighExpr::makeConst(0x2000, 8, ConstantAddressProvenance::DataAddress);
+  F.Once->Operands[1] =
+      HighExpr::makeConst(0x1080, 8, ConstantAddressProvenance::CodeAddress);
+  auto &Callee = F.Pipeline.HighFuncs[0];
+  Callee.Body.erase(Callee.Body.begin());
+  const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+  const auto Functions = F.functions();
+  const auto BoundCallee =
+      bindSwiftOnceSourceReferences(Callee, F.Image, Plan, Functions);
+  ASSERT_EQ(BoundCallee.ErasedSwiftOnceContextParameters,
+            (std::set<size_t>{0}));
+  EXPECT_TRUE(swift_once_source_detail::projectedOnceContextUnused(
+      BoundCallee.Function, 0));
+  EXPECT_FALSE(swift_once_source_detail::projectedOnceContextUnused(
+      BoundCallee.Function, 1));
+
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  auto Unknown = HighExpr::makeUndef(8);
+  Unknown->Type = Pointer;
+  auto Other = HighExpr::makeConst(0, 8);
+  Other->Type = Pointer;
+  auto Call =
+      HighExpr::makeCall(Callee.Name, Callee.Entry, {Unknown, Other, Other});
+  Call->Type = Callee.ReturnType;
+  auto Hint = std::make_shared<SourceCallTypeHint>();
+  Hint->CallKind = SourceCallTypeHint::Kind::Native;
+  Hint->TargetAddress = Callee.Entry;
+  Hint->TargetName = Callee.Name;
+  Hint->Signature = *Callee.SourceTypeHint;
+  Call->SourceCallHint = std::move(Hint);
+  HighFunc Caller;
+  Caller.Entry = 0x10c0;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  Caller.Body = {Return};
+  const std::map<va_t, std::set<size_t>> Proof{{Callee.Entry, {0}}};
+  const auto BoundCaller =
+      bindSwiftOnceSourceReferences(Caller, F.Image, Plan, Functions, &Proof);
+  ASSERT_TRUE(BoundCaller.Function.Body.front().RetVal);
+  ASSERT_EQ(BoundCaller.Function.Body.front().RetVal->Operands.size(), 3U);
+  EXPECT_EQ(BoundCaller.Function.Body.front().RetVal->Operands[0]->Kind,
+            ExprKind::Const);
+  EXPECT_EQ(BoundCaller.Function.Body.front().RetVal->Operands[0]->ConstVal,
+            0U);
+  EXPECT_EQ(Call->Operands[0]->Kind, ExprKind::Undef);
+  EXPECT_EQ(bindSwiftOnceSourceReferences(Caller, F.Image, Plan, Functions)
+                .Function.Body.front()
+                .RetVal->Operands[0]
+                ->Kind,
+            ExprKind::Undef);
+
+  Caller.Body.front().RetVal->Operands[0] = HighExpr::makeCall("effect", 0, {});
+  EXPECT_EQ(
+      bindSwiftOnceSourceReferences(Caller, F.Image, Plan, Functions, &Proof)
+          .Function.Body.front()
+          .RetVal->Operands[0]
+          ->Kind,
+      ExprKind::Call);
+}
+
 TEST(SwiftOnceSources, GenericNativeOnceCallsRequireIndependentLeafEvidence) {
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     OnceFixture F(Arch::AArch64);

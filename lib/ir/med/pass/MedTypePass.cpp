@@ -758,7 +758,13 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
     for (auto &Op : Block.Ops) {
       for (uint8_t K = 0; K < Op.NumInputs; ++K) {
         const auto &Old = Op.Inputs[K];
-        if (Old.Kind != MedVar::Param)
+        const bool EntryRegister =
+            Old.Kind == MedVar::Reg && Old.SSAVer == 0 &&
+            Old.RegOff != kNoParamReg &&
+            IntegerLayout.registerIndex(Old.RegOff) < 0 &&
+            std::find(TRI.FPParamRegs.begin(), TRI.FPParamRegs.end(),
+                      Old.RegOff) == TRI.FPParamRegs.end();
+        if (Old.Kind != MedVar::Param && !EntryRegister)
           continue;
         if (Func.SourceParametersBound) {
           Valid &=
@@ -783,11 +789,17 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
           Index = StackParameter(Offset, Bytes);
         }
         if (Index < 0 || !Bytes) {
-          Valid = false;
+          // Generic SSA retains non-ABI live-ins as physical registers. They
+          // are unrelated locals unless the explicit source declaration owns
+          // this exact carrier; leave them for the ordinary source-flow proof
+          // instead of mistaking every preserved register for a parameter.
+          if (!EntryRegister)
+            Valid = false;
           continue;
         }
         const auto &L = Parameters[Index].Location;
         MedVar Parameter = Old;
+        Parameter.Kind = MedVar::Param;
         Parameter.Id = Index;
         Parameter.RegOff = L.Kind == SourceABICarrierKind::Stack
                                ? kNoParamReg
@@ -797,9 +809,15 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
         if (Slice)
           SliceOffset = static_cast<uint64_t>(Offset - L.EntryStackOffset);
         else if (Bytes != L.ValueBytes) {
+          // A narrow physical-register view may be a separate low-word SSA
+          // live-in. Preserve that view for the existing source-flow proof;
+          // this pass has no operation in which to insert its byte slice.
+          if (EntryRegister && Bytes < L.ValueBytes)
+            continue;
           // A simple COPY can preserve a narrower low slice; a wider read or
           // a whole-slot arithmetic use cannot manufacture padding bytes.
-          if (K != 0 || Op.Opcode != NdOp::COPY || Op.NumInputs != 1)
+          if (EntryRegister || K != 0 || Op.Opcode != NdOp::COPY ||
+              Op.NumInputs != 1)
             Valid = false;
           else
             SliceOffset = 0;
@@ -860,15 +878,6 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
     Func.SourceTypeHint.reset();
     return;
   }
-  for (const auto &R : Rewrites) {
-    R.Op->Inputs[R.Input] = R.Parameter;
-    if (R.SliceOffset) {
-      R.Op->Opcode = NdOp::SUBBYTES;
-      R.Op->Inputs[1] = MedVar::makeConst(*R.SliceOffset, 4);
-      R.Op->NumInputs = 2;
-    }
-  }
-
   std::vector<MedVar> BoundParams;
   std::vector<MedTypedParam> BoundTypes;
   for (size_t I = 0; I < Parameters.size(); ++I) {
@@ -895,6 +904,17 @@ void inferMedTypes(MedFunc &Func, Arch TheArch) {
       }
     BoundParams.push_back(Param);
     BoundTypes.push_back({Declared.Name, Declared.Type});
+  }
+  // Discover entry seeds before rewriting their input into a parameter.
+  // Otherwise COPY X20 = X20 becomes COPY X20 = param and the declaration
+  // loses the physical entry identity needed by HighIR.
+  for (const auto &R : Rewrites) {
+    R.Op->Inputs[R.Input] = R.Parameter;
+    if (R.SliceOffset) {
+      R.Op->Opcode = NdOp::SUBBYTES;
+      R.Op->Inputs[1] = MedVar::makeConst(*R.SliceOffset, 4);
+      R.Op->NumInputs = 2;
+    }
   }
   Func.Params = std::move(BoundParams);
   Func.TypedParams = std::move(BoundTypes);

@@ -108,6 +108,36 @@ bool hasNativeSourceStateContract(
     const NativeSourceCalleeContracts *Callees = nullptr,
     const SourceFunctionTypeHint *EntrySignature = nullptr);
 
+std::set<uint64_t> directMedSourceEntryEffects(const MedFunc &Med) {
+  std::set<uint64_t> Registers;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops) {
+      const bool Effect =
+          Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+          Op.Opcode == NdOp::ATOMIC_XCHG || Op.Opcode == NdOp::ATOMIC_ADD ||
+          Op.Opcode == NdOp::ATOMIC_CMPXCHG || Op.Opcode == NdOp::CALL ||
+          Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
+          Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+          Op.Opcode == NdOp::INDIR_BR ||
+          Op.MemoryOrdering != NdMemoryOrdering::None ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+      if (!Effect)
+        continue;
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        // A plain store observes its address directly, but its value may only
+        // be a callee-save prologue spill. Do not turn saved X19-X28/RBX-R15
+        // bytes into source parameters when the complete demand graph is
+        // unavailable.
+        if (Op.Opcode == NdOp::STORE && I != 0)
+          continue;
+        const auto &Input = Op.Inputs[I];
+        if (Input.Kind == MedVar::Reg && Input.SSAVer == 0 && Input.Size == 8)
+          Registers.insert(Input.RegOff);
+      }
+    }
+  return Registers;
+}
+
 // These are internal source parameters, not a guessed external convention.
 // Use MedIR's observable entry-byte analysis and independent full-width native
 // reads. Caller-saved input registers may subsequently become scratch values.
@@ -129,6 +159,7 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
     return {};
   if (!validateSourceRegisterCopies(Image, *Low, Med.RegisterCopyProjections))
     return {};
+  const auto &TRI = getTargetRegInfo(Hint.Architecture);
   auto Observed = observedMedSourceEntryRegisters(Med, Hint);
   // An earlier, narrow call result can leave an unobserved high word in a
   // return register. It cannot invalidate independent evidence that an entry
@@ -137,9 +168,19 @@ nativeEntryRegisters(const BinaryImage &Image, const LowFunc *Low,
   if (!Observed)
     Observed = observedMedSourceEntryRegisters(Med, Hint,
                                                SourceEntryDemand::EffectsOnly);
-  if (!Observed)
-    return {};
-  const auto &TRI = getTargetRegInfo(Hint.Architecture);
+  if (!Observed) {
+    // One unrelated, call-defined value can make the complete backward graph
+    // unavailable. Retain only independent positive evidence where a complete
+    // entry word itself is an operand of an effect. LowIR must still confirm
+    // the same native read and the full preservation contract below.
+    auto Direct = directMedSourceEntryEffects(Med);
+    std::erase_if(Direct, [&](uint64_t Register) {
+      return !TRI.isCallPreserved(Register, 8);
+    });
+    if (Direct.empty())
+      return {};
+    Observed = std::move(Direct);
+  }
   auto IntegerRegister = [&](uint64_t Register) {
     return !TRI.isFrameOrLinkReg(Register) &&
            (Hint.Architecture == Arch::AArch64

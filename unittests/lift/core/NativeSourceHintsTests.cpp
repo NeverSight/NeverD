@@ -3778,6 +3778,66 @@ struct NativeContextFixture : NativeFixture {
   }
 };
 
+TEST(NativeSourceHints, BoundPreservedEntryRetainsItsPhysicalSeed) {
+  NativeContextFixture Fixture(Arch::AArch64, a64reg::X20);
+  MedOp Seed;
+  Seed.Opcode = NdOp::COPY;
+  Seed.Output = Fixture.Context;
+  Seed.addInput(Fixture.Context);
+  Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin(), Seed);
+  std::string Error;
+  const auto Hint = Fixture.inferContext(Error);
+  ASSERT_TRUE(Hint) << Error;
+  ASSERT_EQ(Hint->Parameters.size(), 2U);
+  MedVar Narrow = Fixture.Context;
+  Narrow.Size = 4;
+  MedOp Mask;
+  Mask.Opcode = NdOp::INT_AND;
+  Mask.Output.Kind = MedVar::Temp;
+  Mask.Output.Id = 302;
+  Mask.Output.Size = 4;
+  Mask.addInput(Narrow);
+  Mask.addInput(MedVar::makeConst(1, 4));
+  Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin() + 1, Mask);
+  Fixture.Med.SourceTypeHint = *Hint;
+  inferMedTypes(Fixture.Med, Arch::AArch64);
+  ASSERT_TRUE(Fixture.Med.SourceTypeHint);
+  ASSERT_EQ(Fixture.Med.Params.size(), 2U);
+  EXPECT_GE(Fixture.Med.Params[1].Id, 0);
+  Fixture.High = MedToHighConverter().convert(Fixture.Med, Arch::AArch64);
+  EXPECT_TRUE(sdk::sourceBodyLimitation(
+                  Fixture.High, *Fixture.High.SourceTypeHint, &Fixture.Audit,
+                  [](const HighExpr &) { return true; })
+                  .empty());
+}
+
+TEST(NativeSourceHints, DirectContextUseSurvivesUnrelatedIncompleteDemand) {
+  NativeContextFixture Fixture(Arch::AArch64, a64reg::X20);
+  MedVar Unrelated;
+  Unrelated.Kind = MedVar::Reg;
+  Unrelated.Id = 900;
+  Unrelated.SSAVer = 1;
+  Unrelated.RegOff = a64reg::X2;
+  Unrelated.Size = 8;
+  Unrelated.TheArch = Arch::AArch64;
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.addInput(Unrelated);
+  Store.addInput(MedVar::makeConst(0, 8));
+  Fixture.Med.Blocks[0].Ops.insert(Fixture.Med.Blocks[0].Ops.begin(), Store);
+
+  std::string Error;
+  const auto Hint = Fixture.inferContext(Error);
+  ASSERT_TRUE(Hint) << Error;
+  ASSERT_EQ(Hint->Parameters.size(), 2U);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+
+  Fixture.Med.Blocks[0].Ops[1].Inputs[0].SSAVer = 1;
+  const auto WithoutEntry = Fixture.inferContext(Error);
+  ASSERT_TRUE(WithoutEntry) << Error;
+  EXPECT_EQ(WithoutEntry->Parameters.size(), 1U);
+}
+
 TEST(NativeSourceHints, ReadOnlyContextsRetainObservedPreservedRegisters) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     const auto &TRI = getTargetRegInfo(Architecture);

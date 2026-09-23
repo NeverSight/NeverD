@@ -59,6 +59,8 @@ struct ObjCSourceBindingResult {
   std::set<va_t> SwiftOnceAccessors;
   /// Exact Objective-C entry thunks for Swift lazy static object properties.
   std::set<va_t> SwiftOnceObjCThunks;
+  /// Parameters whose only proven use was an ignored swift_once context.
+  std::set<size_t> ErasedSwiftOnceContextParameters;
   std::set<va_t> ProfileCounterSections;
   std::set<va_t> ConstantStrings;
   std::set<va_t> ConstantObjects;

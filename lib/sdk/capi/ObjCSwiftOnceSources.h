@@ -105,6 +105,60 @@ inline std::optional<size_t> parameter(const ExprPtr &Value) {
   return static_cast<size_t>(E->Var.Id);
 }
 
+inline bool unknownScalarView(const ExprPtr &Value) {
+  auto E = Value;
+  for (unsigned Depth = 0; E && Depth < 16; ++Depth) {
+    if (E->IntrinsicId != Intrinsic::None || !E->IntrinsicOutputs.empty() ||
+        E->MemoryOrdering != NdMemoryOrdering::None ||
+        E->MemoryAddressSpace != NdMemoryAddressSpace::Default || !E->Type ||
+        !E->Type->Size || E->Type->Size > 8)
+      return false;
+    if (E->Kind == ExprKind::Undef)
+      return E->Operands.empty();
+    if (E->Kind != ExprKind::Cast || E->Operands.size() != 1)
+      return false;
+    E = E->Operands.front();
+  }
+  return false;
+}
+
+inline bool projectedOnceContextUnused(const HighFunc &Function,
+                                       size_t Parameter) {
+  if (!Function.SourceTypeHint || Parameter >= Function.Params.size() ||
+      Parameter >= Function.SourceTypeHint->Parameters.size())
+    return false;
+  bool Unused = true;
+  size_t Budget = 100000;
+  std::set<const HighExpr *> Seen;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, [&](const ExprPtr &Root) {
+      std::vector<const HighExpr *> Pending{Root.get()};
+      while (Unused && !Pending.empty() && Budget) {
+        --Budget;
+        const auto *E = Pending.back();
+        Pending.pop_back();
+        if (!E || !Seen.insert(E).second)
+          continue;
+        if (((E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) &&
+             E->Var.Kind == MedVar::Param && E->Var.Id >= 0 &&
+             static_cast<size_t>(E->Var.Id) == Parameter) ||
+            std::any_of(E->IntrinsicOutputs.begin(), E->IntrinsicOutputs.end(),
+                        [&](const MedVar &Output) {
+                          return Output.Kind == MedVar::Param &&
+                                 Output.Id >= 0 &&
+                                 static_cast<size_t>(Output.Id) == Parameter;
+                        }))
+          Unused = false;
+        for (const auto &Operand : E->Operands)
+          Pending.push_back(Operand.get());
+      }
+      if (!Pending.empty())
+        Unused = false;
+    });
+  });
+  return Unused && Budget;
+}
+
 inline bool onceCall(const HighExpr &E, const BinaryImage &Image) {
   if (E.Kind != ExprKind::Call || E.IsIndirectCall || !E.SourceCallHint ||
       E.Operands.size() != 3 || E.IntrinsicId != Intrinsic::None ||
@@ -1940,7 +1994,8 @@ swiftOnceCallbackBound(const HighExpr &E, const BinaryImage &Image,
 inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     const HighFunc &Function, const BinaryImage &Image,
     const SwiftOnceSourcePlan &Plan,
-    const std::map<va_t, const HighFunc *> &Functions) {
+    const std::map<va_t, const HighFunc *> &Functions,
+    const std::map<va_t, std::set<size_t>> *IgnoredNativeContexts = nullptr) {
   ObjCSourceBindingResult Result{Function};
   size_t Budget = 100000;
   std::map<const HighExpr *, ExprPtr> Copies;
@@ -1955,6 +2010,35 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
     Copies.emplace(Original.get(), E);
     for (auto &Op : E->Operands)
       Op = Copy(Op, Depth + 1);
+    if (IgnoredNativeContexts && E->Kind == ExprKind::Call &&
+        !E->IsIndirectCall && E->SourceCallHint &&
+        E->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
+        objcSourceCallBound(*E, Image, Functions)) {
+      const auto Proof =
+          IgnoredNativeContexts->find(E->SourceCallHint->TargetAddress);
+      if (Proof != IgnoredNativeContexts->end()) {
+        const auto Parameters =
+            sourceABIParameters(E->SourceCallHint->Signature);
+        if (Parameters.size() != E->Operands.size())
+          return E;
+        for (const auto Index : Proof->second) {
+          if (Index >= Parameters.size() || Index >= E->Operands.size() ||
+              !E->Operands[Index] || !Parameters[Index].Type ||
+              Parameters[Index].ParameterIndex != Index ||
+              Parameters[Index].ByteOffset != 0 ||
+              (Parameters[Index].Type->Kind != NdTypeKind::Int &&
+               Parameters[Index].Type->Kind != NdTypeKind::Ptr) ||
+              Parameters[Index].Type->Size !=
+                  Parameters[Index].Location.ValueBytes ||
+              !swift_once_source_detail::unknownScalarView(E->Operands[Index]))
+            continue;
+          auto Zero = HighExpr::makeConst(0, Parameters[Index].Type->Size,
+                                          ConstantAddressProvenance::Scalar);
+          Zero->Type = Parameters[Index].Type;
+          E->Operands[Index] = std::move(Zero);
+        }
+      }
+    }
     if (swift_once_source_detail::onceCall(*E, Image)) {
       const bool Nested = Plan.NestedCallbacks.count(Function.Entry) != 0;
       const auto &Contracts = Nested ? Plan.NestedCallbacks : Plan.ObjCThunks;
@@ -2032,6 +2116,8 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
           Address->Type = AddressHint->Signature.ReturnType;
           Address->SourceCallHint = std::move(AddressHint);
           if (swiftOnceCallbackBound(*Address, Image, Plan, Functions)) {
+            const auto Context =
+                swift_once_source_detail::parameter(E->Operands[2]);
             auto Storage = HighExpr::makeCall({}, 0, {});
             Storage->Type = E->Operands[0]->Type;
             Storage->SourceCallHint = std::make_shared<SourceCallTypeHint>(
@@ -2044,6 +2130,8 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
             E->Operands[2] = std::move(Null);
             Result.LocalStorageExtents[*Predicate] = 8;
             Result.Dependencies.insert(*Initializer);
+            if (Context)
+              Result.ErasedSwiftOnceContextParameters.insert(*Context);
             return E;
           }
         }

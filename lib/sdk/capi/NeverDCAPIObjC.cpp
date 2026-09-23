@@ -28,6 +28,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 
+#include <algorithm>
 #include <exception>
 #include <map>
 
@@ -236,6 +237,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     std::set<va_t> MetadataFactoryProjections;
     std::map<va_t, std::string> ProjectionReasons;
     std::set<va_t> Closed;
+    std::set<va_t> StableClosed;
+    std::map<va_t, std::set<size_t>> IgnoredNativeContexts;
     for (const auto &[Entry, Func] : Functions) {
       const bool ObjCOnceThunk = OncePlan.ObjCThunks.count(Entry) != 0;
       if (!Func->SourceTypeHint && !ObjCOnceThunk)
@@ -244,8 +247,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                                         BlockPlan, Functions);
       auto Inputs =
           snapshotObjCEntryInputs(BlockBinding.Function, S->Img, Functions);
-      auto OnceBinding =
-          bindSwiftOnceSourceReferences(Inputs, S->Img, OncePlan, Functions);
+      auto OnceBinding = bindSwiftOnceSourceReferences(
+          Inputs, S->Img, OncePlan, Functions, &IgnoredNativeContexts);
       if (ObjCOnceThunk && (!OnceBinding.SwiftOnceObjCThunks.count(Entry) ||
                             !finalizeSwiftOnceObjCThunkProjection(
                                 OnceBinding.Function, OncePlan)))
@@ -339,8 +342,26 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
                                               BlockPlan, Functions);
             });
       }
-      if (Reason.empty())
+      if (Reason.empty()) {
         Closed.insert(Entry);
+        // Only earlier, already transitively proved callees may justify a
+        // caller rewrite during this ordered projection pass. A dependency
+        // that is merely locally closed can still fail the final fixed point.
+        if (std::all_of(Binding.Dependencies.begin(), Binding.Dependencies.end(),
+                        [&](va_t Dependency) {
+                          return StableClosed.count(Dependency) != 0;
+                        })) {
+          StableClosed.insert(Entry);
+          if (Binding.Function.SourceTypeHint &&
+              Binding.Function.SourceTypeHint->Origin ==
+                  SourceFunctionTypeHint::OriginKind::NativeAnalysis)
+            for (size_t Parameter :
+                 OnceBinding.ErasedSwiftOnceContextParameters)
+              if (swift_once_source_detail::projectedOnceContextUnused(
+                      Binding.Function, Parameter))
+                IgnoredNativeContexts[Entry].insert(Parameter);
+        }
+      }
       ProjectionReasons.emplace(Entry, std::move(Reason));
       Projections.emplace(Entry, std::move(Binding));
       BlockProjections.emplace(Entry, std::move(BlockBinding));
