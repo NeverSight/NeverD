@@ -810,7 +810,10 @@ KernelModel::beginRequest(const DriverRequest &Input,
       if (!Dispatch.PC) {
         if (auto E = recordDispatchReturn(*Packet, Dispatch.Status))
           return E;
-        if (auto E = finalizeRequest(*Packet))
+        if (Dispatch.Status != windows::StatusPending)
+          if (auto E = finalizeRequest(*Packet))
+            return E;
+        if (auto E = processRequestCancellations())
           return E;
         Invocation Call;
         Call.IRP = *Packet;

@@ -543,11 +543,12 @@ static void ParallelWorker(PDEVICE_OBJECT Device, PVOID Context) {
   PIO_WORKITEM Item = Work->Item;
   size_t OutputLength = Work->OutputLength;
   size_t InputLength = Work->InputLength;
-  BOOLEAN Valid =
-      Check(Item != NULL && ParallelQueued >= 2 &&
-                Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
-                KeGetCurrentIrql() == PASSIVE_LEVEL,
-            130);
+  BOOLEAN Valid = Check(
+      Item != NULL &&
+          (TransferMode == 'F' ? ParallelQueued >= 1 : ParallelQueued >= 2) &&
+          Device == WdfDeviceWdmGetDeviceObject(CreatedDevice) &&
+          KeGetCurrentIrql() == PASSIVE_LEVEL,
+      130);
   IoFreeWorkItem(Item);
   Work->Item = NULL;
   ++ParallelCompleted;
@@ -840,7 +841,7 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     WdfRequestComplete(Request, STATUS_CANCELLED);
     return;
   }
-  if (TransferMode == 'P' && InputLength == 4) {
+  if ((TransferMode == 'P' || TransferMode == 'F') && InputLength == 4) {
     WDF_OBJECT_ATTRIBUTES Attributes;
     PARALLEL_IOCTL_CONTEXT *Work = NULL;
     NTSTATUS Status;
@@ -1165,6 +1166,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
                  : Marker == L'K' ? 'K'
                  : Marker == L'T' ? 'T'
                  : Marker == L'P' ? 'P'
+                 : Marker == L'F' ? 'F'
                  : Marker == L'Y' ? 'Y'
                  : Marker == L'Z' ? 'Z'
                  : Marker == L'R' ? 'R'
@@ -1212,8 +1214,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     goto Failure;
 
   WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
-      &QueueConfig, TransferMode == 'P' ? WdfIoQueueDispatchParallel
-                                        : WdfIoQueueDispatchSequential);
+      &QueueConfig, (TransferMode == 'P' || TransferMode == 'F')
+                        ? WdfIoQueueDispatchParallel
+                        : WdfIoQueueDispatchSequential);
+  if (TransferMode == 'F')
+    QueueConfig.Settings.Parallel.NumberOfPresentedRequests = 1;
   QueueConfig.EvtIoDeviceControl = IoDeviceControl;
   QueueConfig.EvtIoRead = IoRead;
   QueueConfig.EvtIoWrite = IoWrite;

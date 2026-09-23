@@ -163,8 +163,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   if (!IsDefault && Dispatch != QueueDispatchManual)
     return invalidQueue("nondefault automatic queue routing is not modeled");
   if (Dispatch == QueueDispatchParallel &&
-      Read32(QueueConfigPresentedRequests) != UINT32_MAX)
-    return invalidQueue("bounded parallel queue delivery is not modeled");
+      !Read32(QueueConfigPresentedRequests))
+    return std::optional<uint64_t>{InvalidParameter};
   if (Internal || Read64(QueueConfigStop) || Read64(QueueConfigResume) ||
       Read64(QueueConfigCanceled))
     return invalidQueue(
@@ -200,6 +200,8 @@ KernelFramework::callQueue(llvm::StringRef Name, Binding &B,
   Q.Write = Write;
   Q.DeviceControl = DeviceControl;
   Q.Dispatch = Dispatch;
+  if (Dispatch == QueueDispatchParallel)
+    Q.PresentedLimit = Read32(QueueConfigPresentedRequests);
   Q.AllowZeroLength = Config[QueueConfigAllowZeroLength] != 0;
   Q.IsDefault = IsDefault;
   Queues.emplace(*Handle, Q);
