@@ -183,6 +183,12 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftDispatch.dylib", "vC"},
     {"$sSo21OS_dispatch_semaphoreC8DispatchE6signalSiyF",
      "/usr/lib/swift/libswiftDispatch.dylib", "zC"},
+    // The concrete UIImage initializer consumes the two String words in x0/x1
+    // and returns an object in x0. WMF's arm64 call uses those carriers and
+    // links the exact Swift overlay symbol from UIKit.
+    // https://developer.apple.com/documentation/uikit/uiimage/init(imageliteralresourcename:)
+    {"$sSo7UIImageC5UIKitE24imageLiteralResourceNameABSS_tcfC",
+     "/System/Library/Frameworks/UIKit.framework/UIKit", "pzp"},
     // NSNumber(integerLiteral:) takes the integer in the first argument
     // register and the NSNumber metatype in swiftself.
     {"$sSo8NSNumberC10FoundationE14integerLiteralABSi_tcfC",

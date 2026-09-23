@@ -1808,6 +1808,9 @@ TEST(ObjCCallHints, SwiftLocalizationSDKCallsUseCompilerObservedABI) {
       {"$sSSySJSS5IndexVcig", "/usr/lib/swift/libswiftCore.dylib",
        NdTypeKind::Int, 16,
        {NdTypeKind::Int, NdTypeKind::Int, NdTypeKind::Ptr}},
+      {"$sSo7UIImageC5UIKitE24imageLiteralResourceNameABSS_tcfC",
+       "/System/Library/Frameworks/UIKit.framework/UIKit", NdTypeKind::Ptr,
+       8, {NdTypeKind::Int, NdTypeKind::Ptr}},
   };
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (const auto &Case : Cases) {
