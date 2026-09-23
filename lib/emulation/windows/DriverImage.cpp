@@ -740,6 +740,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
     return invalid(
         "image base has invalid alignment or noncanonical x64 range");
   const uint64_t End = ActualBase + Size;
+  if (ActualBase < profile::UserProbeLimit)
+    return invalid("driver image overlaps the modeled user address space");
   for (auto [Start, Limit] :
        {std::pair{profile::KernelArenaBase,
                   profile::KernelArenaBase + profile::KernelArenaSize},
@@ -751,6 +753,8 @@ llvm::Expected<DriverImage> loadDriverImage(const std::filesystem::path &Path,
                           profile::CallbackStackStride},
         std::pair{profile::GuardThunkBase,
                   profile::GuardThunkBase + profile::PageSize},
+        std::pair{profile::UserAliasBase,
+                  profile::UserAliasBase + profile::UserAliasSize},
         std::pair{profile::MMIOBase, profile::MMIOBase + profile::MMIOSize}})
     if (ActualBase < Limit && End > Start)
       return invalid("image overlaps reserved emulation memory");

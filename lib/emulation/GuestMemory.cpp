@@ -20,6 +20,11 @@ void GuestMemoryLimitError::log(llvm::raw_ostream &OS) const {
 std::error_code GuestMemoryLimitError::convertToErrorCode() const {
   return llvm::inconvertibleErrorCode();
 }
+llvm::Error GuestMemory::mapAlias(uint64_t, uint64_t, uint64_t, unsigned) {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support shared RAM aliases");
+}
 llvm::Error GuestMemory::mapMMIO(uint64_t, uint64_t, GuestMMIOCallbacks) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "guest memory does not support MMIO mappings");
@@ -33,6 +38,12 @@ llvm::Error GuestMemory::validateBacking(uint64_t, uint64_t) const {
   return llvm::createStringError(
       llvm::inconvertibleErrorCode(),
       "guest memory does not support RAM backing access");
+}
+llvm::Expected<bool> GuestMemory::canAccess(uint64_t, uint64_t,
+                                             unsigned) const {
+  return llvm::createStringError(
+      llvm::inconvertibleErrorCode(),
+      "guest memory does not support pure CPU access preflight");
 }
 llvm::Error GuestMemory::readBacking(uint64_t, llvm::MutableArrayRef<uint8_t>) {
   return llvm::createStringError(

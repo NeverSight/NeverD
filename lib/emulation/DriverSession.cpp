@@ -313,6 +313,12 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
                                             llvm::utohexstr(Address) + " (" +
                                             std::to_string(Size) + " bytes)");
   };
+  Hooks.RecoverableFault = [&](const BackendFault &Fault) {
+    return !Stopped && Fault.Address && Fault.Size && Fault.Access &&
+           (*Fault.Access == BackendAccessKind::Read ||
+            *Fault.Access == BackendAccessKind::Write) &&
+           Kernel.canCatchUserAccess(*Fault.Address, *Fault.Size);
+  };
   Hooks.Interrupt = [&](uint32_t Number) {
     Stop(DriverStopReason::UnsupportedInstruction,
          "unmodeled CPU exception/interrupt " + std::to_string(Number));
@@ -489,6 +495,34 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       }
       if (Stopped)
         break;
+      if (auto Fault = CPU.takeRecoverableFault()) {
+        if (!Fault->Address || !Fault->Access || CPU.fault())
+          return failure("recoverable user fault lost its CPU context");
+        KernelSEH::Context Faulting;
+        for (size_t I = 0; I < Faulting.GPR.size(); ++I) {
+          auto Register = CPU.reg(static_cast<X64Register>(I));
+          if (!Register)
+            return Register.takeError();
+          Faulting.GPR[I] = *Register;
+        }
+        Faulting.PC = Fault->PC;
+        auto Transfer = Exceptions.plan(exceptions::StatusAccessViolation,
+                                        Faulting, {Frame.Base, Frame.Size});
+        if (!Transfer)
+          return Transfer.takeError();
+        if (!*Transfer) {
+          Stop(DriverStopReason::ModelError,
+               "unhandled user access violation at 0x" +
+                   llvm::utohexstr(*Fault->Address));
+          break;
+        }
+        for (size_t I = 0; I < Faulting.GPR.size(); ++I)
+          if (auto E = CPU.setReg(static_cast<X64Register>(I),
+                                  (**Transfer).Registers.GPR[I]))
+            return E;
+        NextPC = (**Transfer).HandlerPC;
+        continue;
+      }
       if (CPU.timedOut()) {
         Stop(DriverStopReason::Timeout, "execution time limit reached");
         break;
@@ -990,8 +1024,13 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         break;
       }
       if (Invocation->PC) {
-        if (auto E = Invoke(*Invocation, Result.Phase))
-          return std::move(E);
+        Kernel.setUserRequestContext(
+            Options.Requests[Index].Kind != DriverRequestKind::Pnp &&
+            Options.Requests[Index].Kind != DriverRequestKind::Power);
+        auto Invoked = Invoke(*Invocation, Result.Phase);
+        Kernel.setUserRequestContext(false);
+        if (Invoked)
+          return std::move(Invoked);
         if (Result.Stop != DriverStopReason::Returned)
           break;
         const uint32_t DispatchStatus =

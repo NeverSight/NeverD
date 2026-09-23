@@ -30,15 +30,20 @@ KernelModel::dmaMdlView(uint64_t MDL, uint64_t CurrentVA, uint32_t Length,
   if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver)
     return channelError("DMA requires a locked or nonpaged MDL");
   const auto &View = I->second;
-  const uint64_t Virtual = View.Owner == LockedMdl::Ownership::Request
-                               ? View.UserAddress
-                               : View.Buffer;
+  const uint64_t Virtual =
+      View.Owner == LockedMdl::Ownership::Request ||
+              View.Owner == LockedMdl::Ownership::UserLocked
+          ? View.UserAddress
+          : View.Buffer;
   if (!Length || CurrentVA < Virtual || CurrentVA - Virtual >= View.ByteCount ||
       Length > View.ByteCount - (CurrentVA - Virtual))
     return channelError("CurrentVa and Length exceed the MDL");
   if (!ToDevice && !View.DmaWritable)
     return channelError("device writes require a write-locked MDL");
-  const uint64_t Backing = View.Buffer + (CurrentVA - Virtual);
+  const uint64_t Backing =
+      (View.Owner == LockedMdl::Ownership::UserLocked ? View.UserAddress
+                                                      : View.Buffer) +
+      (CurrentVA - Virtual);
   auto Owner = Physical.ownerForRange(Backing, Length);
   if (!Owner)
     return Owner.takeError();
@@ -51,13 +56,16 @@ llvm::Error KernelModel::flushIoBuffers(uint64_t MDL) {
   if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver)
     return channelError("KeFlushIoBuffers requires a locked or nonpaged MDL");
   const auto &View = I->second;
-  auto Owner = Physical.ownerForRange(View.Buffer, View.ByteCount);
+  const uint64_t Backing = View.Owner == LockedMdl::Ownership::UserLocked
+                               ? View.UserAddress
+                               : View.Buffer;
+  auto Owner = Physical.ownerForRange(Backing, View.ByteCount);
   if (!Owner)
     return Owner.takeError();
   // This coherent platform has no separate CPU cache contents, for either
   // ReadOperation or DmaOperation. A cache flush does not end DMA ownership or
   // replace the operation-specific FlushAdapterBuffers contract.
-  return Memory.validateBacking(View.Buffer, View.ByteCount);
+  return Memory.validateBacking(Backing, View.ByteCount);
 }
 
 llvm::Expected<uint64_t>

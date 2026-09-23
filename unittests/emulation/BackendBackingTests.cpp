@@ -74,6 +74,18 @@ TEST_F(DriverBackendBacking, SharesBytesWithCPUAndAcrossProtectedPages) {
   EXPECT_EQ(Bytes, Original);
 }
 
+TEST_F(DriverBackendBacking, SharedVirtualAliasHasOneRAMAuthority) {
+  constexpr uint64_t Alias = 0x8000;
+  ASSERT_EQ(llvm::toString(CPU->protect(Data, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read | Write)), "");
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Data + 5, 0x11223344, 4)), "");
+  EXPECT_EQ(*CPU->readInteger(Alias + 5, 4), 0x11223344u);
+  ASSERT_EQ(llvm::toString(CPU->writeInteger(Alias + 5, 0xaabbccdd, 4)), "");
+  EXPECT_EQ(*CPU->readInteger(Data + 5, 4), 0xaabbccddu);
+  EXPECT_NE(llvm::toString(CPU->mapAlias(Alias, Data, Page, Read)), "");
+  EXPECT_FALSE(CPU->fault());
+}
+
 TEST_F(DriverBackendBacking, RejectsWholeUnmappedRangeWithoutPrefixEffects) {
   const std::array<uint8_t, 2> Original{0x12, 0x34};
   const std::array<uint8_t, 4> Replacement{9, 8, 7, 6};

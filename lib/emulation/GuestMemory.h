@@ -42,6 +42,10 @@ public:
   virtual ~GuestMemory() = default;
   virtual llvm::Error map(uint64_t Address, uint64_t Size,
                           unsigned Permissions) = 0;
+  /// Map a second virtual range onto the same RAM pages. The source and alias
+  /// are page aligned; the owner must separately govern their lifetimes.
+  virtual llvm::Error mapAlias(uint64_t Address, uint64_t Source,
+                               uint64_t Size, unsigned Permissions);
   virtual llvm::Error protect(uint64_t Address, uint64_t Size,
                               unsigned Permissions) = 0;
   /// Optional device access support; unrelated memory implementations reject
@@ -58,6 +62,10 @@ public:
   /// This bypasses CPU permissions, never MMIO or mapping/lifetime checks.
   /// The model must separately authorize the exact live allocation and pins.
   virtual llvm::Error validateBacking(uint64_t Address, uint64_t Size) const;
+  /// Pure CPU-permission preflight. False means an access would fault; no
+  /// first-fault state may be latched by this query.
+  virtual llvm::Expected<bool> canAccess(uint64_t Address, uint64_t Size,
+                                          unsigned Permissions) const;
   /// Access the same RAM bytes without changing CPU permissions.
   /// Implementations validate the complete span before effects and reject
   /// running/faulted CPUs. Unexpected engine failures must prevent further
