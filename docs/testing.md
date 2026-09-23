@@ -100,6 +100,18 @@ Another genuine-driver case cancels a request before presentation. Model tests
 exercise limits of one and two, FIFO handoff and queued cancellation; the C API
 runs both unlimited and finite modes.
 
+`DriverKMDFControl.NondefaultAutomaticQueuesForwardAndRespectPresentationLimits`
+uses genuine WDK sequential and two-presented nondefault queues. Requests
+forwarded from a sequential default queue enter the destination callbacks in
+FIFO order, while excess requests wait until a worker completes. Normal and
+active-CFG images run at preferred and relocated bases; the C API runs both
+modes. Model tests cover destination ownership, cancellation before delivery,
+completion when no destination callback matches, explicit retrieval from a
+sequential queue, bounded parallel presentation and release of a bounded source
+queue. A genuine-driver case cancels an automatic waiter before delivery. A
+separate model test covers incoming
+requests in a manual default queue, FIFO retrieval and queued cancellation.
+
 `DriverKMDFControl.ManualQueueReleasesSequentialSourceAndRetrievesInWorker`
 uses a genuine WDK control driver with a nondefault manual queue. Its first
 IOCTL is forwarded from a sequential default queue; a second IOCTL on the

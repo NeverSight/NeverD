@@ -617,6 +617,14 @@ KernelFramework::advance(uint64_t Token) {
       PendingCall = GuestCall{Token, S.PC, {S.Object}};
       return std::optional<uint64_t>{};
     }
+    if (S.Kind == StepKind::PresentQueue) {
+      auto Presented = presentQueued(S.Object, Token);
+      if (!Presented)
+        return Presented.takeError();
+      if (*Presented)
+        return std::optional<uint64_t>{};
+      continue;
+    }
     if (S.Kind == StepKind::DriverUnloaded) {
       Bindings.at(S.Object).Unloaded = true;
       continue;
@@ -655,33 +663,11 @@ KernelFramework::advance(uint64_t Token) {
       R->second.Completed = true;
       R->second.Completing = false;
       R->second.Queue = 0;
-      auto Q = Queues.find(QueueHandle);
-      if (Q != Queues.end() &&
-          Q->second.Dispatch == framework::QueueDispatchParallel &&
-          Q->second.PresentedLimit != UINT32_MAX &&
-          !Q->second.Pending.empty()) {
-        const auto Presented = std::count_if(
-            Requests.begin(), Requests.end(), [&](const auto &Entry) {
-              return Entry.second.Queue == QueueHandle &&
-                     !Entry.second.Queued && !Entry.second.Completed;
-            });
-        if (Presented > Q->second.PresentedLimit)
-          return invalid("bounded queue exceeded its presentation limit");
-        if (Presented == Q->second.PresentedLimit)
-          continue;
-        const uint64_t NextHandle = Q->second.Pending.front();
-        auto Next = Requests.find(NextHandle);
-        if (Next == Requests.end() || !Next->second.Queued ||
-            Next->second.Queue != QueueHandle || !Next->second.QueuedCallback ||
-            Next->second.QueuedArguments.size() < 2)
-          return invalid("bounded queue lost its pending callback");
-        Q->second.Pending.pop_front();
-        Next->second.Queued = false;
-        PendingCall = GuestCall{Token, Next->second.QueuedCallback,
-                                std::move(Next->second.QueuedArguments)};
-        Next->second.QueuedCallback = 0;
+      auto Presented = presentQueued(QueueHandle, Token);
+      if (!Presented)
+        return Presented.takeError();
+      if (*Presented)
         return std::optional<uint64_t>{};
-      }
       continue;
     }
     if (S.Kind == StepKind::CancelReturned) {

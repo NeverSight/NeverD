@@ -232,6 +232,91 @@ TEST(DriverKMDFControl, BoundedParallelQueueCancelsUndeliveredRequest) {
 }
 
 TEST(DriverKMDFControl,
+     NondefaultAutomaticQueuesForwardAndRespectPresentationLimits) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {'A', 'G'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Address);
+        SCOPED_TRACE(Mode);
+        auto Options = controlOptions(Mode);
+        Options.LoadAddress = Address;
+        Options.Requests[0].AsynchronousFile = true;
+        const unsigned ForwardCount = Mode == 'A' ? 2 : 3;
+        for (unsigned I = 1; I < ForwardCount; ++I) {
+          auto Next = Options.Requests[1];
+          Next.Input = {uint8_t(I), uint8_t(I + 1), uint8_t(I + 2),
+                        uint8_t(I + 3)};
+          Options.Requests.insert(Options.Requests.begin() + 1 + I,
+                                  std::move(Next));
+        }
+        auto Followup = Options.Requests[1];
+        Followup.Input = {1, 2};
+        Followup.OutputSize = 6;
+        Options.Requests.insert(Options.Requests.begin() + 1 + ForwardCount,
+                                std::move(Followup));
+        for (unsigned I = 1; I <= ForwardCount; ++I)
+          Options.Requests[I].DeferCallbackDrain = true;
+        auto Result = emulateDriver(Image, Options);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        checkCompletedLifecycle(*Result, 6 + ForwardCount);
+        ASSERT_EQ(Result->Requests.size(), 6u + ForwardCount);
+        for (unsigned I = 1; I <= ForwardCount; ++I) {
+          EXPECT_EQ(Result->Requests[I].Information, 8u);
+          ASSERT_EQ(Result->Requests[I].Output.size(), 8u);
+          EXPECT_EQ(Result->Requests[I].Output[3], uint8_t(Mode));
+        }
+        EXPECT_EQ(
+            Result->Requests[1 + ForwardCount].Output,
+            (std::vector<uint8_t>{'K', 'M', 'D', uint8_t(Mode), 0x5b, 0x58}));
+        EXPECT_EQ(apiCount(*Result, "WdfRequestForwardToIoQueue"),
+                  ForwardCount);
+        EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), ForwardCount);
+        std::vector<size_t> Queued;
+        std::vector<size_t> Freed;
+        for (size_t I = 0; I < Result->Calls.size(); ++I) {
+          if (Result->Calls[I].Name == "IoQueueWorkItem")
+            Queued.push_back(I);
+          if (Result->Calls[I].Name == "IoFreeWorkItem")
+            Freed.push_back(I);
+        }
+        ASSERT_EQ(Queued.size(), ForwardCount);
+        ASSERT_EQ(Freed.size(), ForwardCount);
+        const size_t Limit = Mode == 'A' ? 1 : 2;
+        EXPECT_LT(Queued[Limit - 1], Freed[0]);
+        EXPECT_LT(Freed[0], Queued[Limit]);
+      }
+}
+
+TEST(DriverKMDFControl,
+     SequentialAutomaticDestinationCancelsBeforeCallbackDelivery) {
+  for (const auto *Image : controlImages()) {
+    SCOPED_TRACE(Image);
+    auto Options = controlOptions('A');
+    Options.Requests[0].AsynchronousFile = true;
+    auto Canceled = Options.Requests[1];
+    Canceled.Input = {0x11, 0x22, 0x33, 0x44};
+    Canceled.CancelAfter100ns = 0;
+    Options.Requests.insert(Options.Requests.begin() + 2, Canceled);
+    auto Followup = Options.Requests[1];
+    Followup.Input = {1, 2};
+    Followup.OutputSize = 6;
+    Options.Requests.insert(Options.Requests.begin() + 3, Followup);
+    Options.Requests[1].DeferCallbackDrain = true;
+    auto Result = emulateDriver(Image, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), 8u);
+    EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+    EXPECT_EQ(Result->Requests[2].IOStatus, Cancelled);
+    EXPECT_TRUE(Result->Requests[2].Output.empty());
+    EXPECT_EQ(Result->Requests[3].Output,
+              (std::vector<uint8_t>{'K', 'M', 'D', 'A', 0x5b, 0x58}));
+    EXPECT_EQ(apiCount(*Result, "IoQueueWorkItem"), 1u);
+  }
+}
+
+TEST(DriverKMDFControl,
      ManualQueueReleasesSequentialSourceAndRetrievesInWorker) {
   for (const auto *Image : controlImages())
     for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {

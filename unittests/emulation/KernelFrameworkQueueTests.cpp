@@ -78,19 +78,31 @@ TEST_F(DriverKernelFrameworkQueue, UnsupportedValidConfigurationsAreExplicit) {
   queueConfiguration();
   put(QueueConfig + 4, 2, 4);
   EXPECT_EQ(take(createQueue()), uint64_t(framework::InvalidParameter));
-  queueConfiguration();
-  put(QueueConfig + 4, 3, 4);
-  put(QueueConfig + 40, 0);
-  expectError(createQueue(), "manual default queue");
-  queueConfiguration();
-  put(QueueConfig + 13, 0, 1);
-  expectError(createQueue(), "nondefault automatic queue");
   for (uint64_t Size : {80, 88}) {
     queueConfiguration();
     put(QueueConfig, Size, 4);
     expectError(createQueue(), "legacy");
   }
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+}
+
+TEST_F(DriverKernelFrameworkQueue,
+       NondefaultAutomaticQueuesHaveIndependentDeviceOwnership) {
+  for (uint32_t Dispatch :
+       {framework::QueueDispatchSequential, framework::QueueDispatchParallel}) {
+    queueConfiguration();
+    put(QueueConfig + 13, 0, 1);
+    put(QueueConfig + 4, Dispatch, 4);
+    if (Dispatch == framework::QueueDispatchParallel)
+      put(QueueConfig + 80, 2, 4);
+    EXPECT_EQ(take(createQueue()), 0u);
+    const auto Automatic = get(QueueSlot);
+    EXPECT_EQ(take(invoke("WdfIoQueueGetDevice", {Globals, Automatic})),
+              Device);
+    EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})), 0u);
+    take(invoke("WdfObjectDelete", {Globals, Automatic}));
+    EXPECT_TRUE(Released.count(Automatic));
+  }
 }
 
 TEST_F(DriverKernelFrameworkQueue,
@@ -123,9 +135,11 @@ TEST_F(DriverKernelFrameworkQueue,
   EXPECT_NE(Default, Manual);
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})),
             Default);
-  expectError(
-      invoke("WdfIoQueueRetrieveNextRequest", {Globals, Default, QueueSlot}),
-      "sequential queue retrieval");
+  put(QueueSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfIoQueueRetrieveNextRequest",
+                        {Globals, Default, QueueSlot})),
+            framework::QueueNoMoreEntries);
+  EXPECT_EQ(get(QueueSlot), 0u);
   take(invoke("WdfObjectDelete", {Globals, Manual}));
   EXPECT_TRUE(Released.count(Manual));
   EXPECT_EQ(take(invoke("WdfDeviceGetDefaultQueue", {Globals, Device})),
