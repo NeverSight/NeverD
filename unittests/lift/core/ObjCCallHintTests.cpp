@@ -1355,6 +1355,35 @@ BinaryImage runtimeImage(llvm::StringRef Name,
 }
 } // namespace
 
+TEST(ObjCCallHints, FoundationNSNotFoundGetterRequiresExactStrongImport) {
+  constexpr llvm::StringLiteral Name = "$s10Foundation10NSNotFoundSivg";
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/Foundation.framework/Foundation";
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage("_" + Name.str(), Architecture);
+    Image.DyldBindSlots[0x2180] = {"_" + Name.str(), 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->TargetName, Name.str());
+    EXPECT_EQ(Hint->Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    ASSERT_TRUE(Hint->Signature.ReturnType);
+    EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(Hint->Signature.ReturnType->Size, 8U);
+    EXPECT_TRUE(Hint->Signature.Parameters.empty());
+    auto Call = HighExpr::makeCall(Name.str(), 0x2180, {});
+    Call->Type = Hint->Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+    Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Image, {}));
+    Image.DyldBindSlots[0x2180].Module = Provider.str();
+    Image.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, FoundationValueBridgesKeepCompilerObservedSwiftABI) {
   enum class Shape {
     IndirectFromObjC,

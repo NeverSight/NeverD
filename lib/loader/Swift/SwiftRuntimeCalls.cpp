@@ -42,6 +42,13 @@ struct SwiftSDKDeclaration {
 // and C is swift_context.
 // A parenthesized pair is returned in the two integer result registers.
 constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
+    // Foundation's NSNotFound getter has no arguments and returns one Int
+    // carrier. The exact strong import is required by darwinRuntimeImport.
+    {"$s10Foundation10NSNotFoundSivg",
+     "/System/Library/Frameworks/Foundation.framework/Foundation|"
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
+     "/usr/lib/swift/libswiftFoundation.dylib",
+     "z"},
     {"$s10Foundation10URLRequestV19_bridgeToObjectiveCSo12NSURLRequestCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
@@ -64,7 +71,8 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "vIp"},
-    {"$s10Foundation13URLComponentsV19_bridgeToObjectiveCSo15NSURLComponentsCyF",
+    {"$s10Foundation13URLComponentsV19_"
+     "bridgeToObjectiveCSo15NSURLComponentsCyF",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
@@ -145,7 +153,8 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "pC"},
-    {"$s10Foundation6LocaleV36_unconditionallyBridgeFromObjectiveCyACSo8NSLocale"
+    {"$s10Foundation6LocaleV36_"
+     "unconditionallyBridgeFromObjectiveCyACSo8NSLocale"
      "CSgFZ",
      "/System/Library/Frameworks/Foundation.framework/Foundation|"
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
@@ -233,8 +242,8 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation|"
      "/usr/lib/swift/libswiftFoundation.dylib",
      "bpppppC"},
-    {"$ss018_bridgeAnyObjectToB0yypyXlSgF",
-     "/usr/lib/swift/libswiftCore.dylib", "vIp"},
+    {"$ss018_bridgeAnyObjectToB0yypyXlSgF", "/usr/lib/swift/libswiftCore.dylib",
+     "vIp"},
     // The mutating _StringGuts.grow(Int) entry takes the capacity in the
     // first integer register and the two-word guts address in swiftself.
     {"$ss11_StringGutsV4growyySiF", "/usr/lib/swift/libswiftCore.dylib", "vzC"},
@@ -259,10 +268,8 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftCore.dylib", "vp", true},
     // The Hasher's 72-byte value is returned through x8; the dictionary
     // caller passes its seed in x0, then _finalize reads the value in x20.
-    {"$ss6HasherV5_seedABSi_tcfC", "/usr/lib/swift/libswiftCore.dylib",
-     "vIz"},
-    {"$ss6HasherV9_finalizeSiyF", "/usr/lib/swift/libswiftCore.dylib",
-     "zC"},
+    {"$ss6HasherV5_seedABSi_tcfC", "/usr/lib/swift/libswiftCore.dylib", "vIz"},
+    {"$ss6HasherV9_finalizeSiyF", "/usr/lib/swift/libswiftCore.dylib", "zC"},
 };
 
 bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
