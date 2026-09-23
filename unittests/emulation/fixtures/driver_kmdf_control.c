@@ -30,6 +30,7 @@
 /// 0 finds and retrieves a forwarded request from that notification.
 /// f registers file callbacks and context lifetime; g rejects CREATE and
 /// verifies framework file deletion without CLEANUP or CLOSE callbacks.
+/// h and i store the framework file handle in FsContext and FsContext2.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -165,6 +166,9 @@ ABI_SLOT(WdfRequestRequeue, 283);
 ABI_SLOT(WdfRequestWdmGetIrp, 285);
 ABI_SLOT(WdfRequestMarkCancelableEx, 393);
 _Static_assert(sizeof(WDF_FILEOBJECT_CONFIG) == 40, "file config ABI");
+_Static_assert(WdfFileObjectWdfCanUseFsContext == 2 &&
+                   WdfFileObjectWdfCanUseFsContext2 == 3,
+               "file context class ABI");
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtDeviceFileCreate, 8);
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileClose, 16);
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileCleanup, 24);
@@ -259,6 +263,8 @@ static void FileCreate(WDFDEVICE Device, WDFREQUEST Request,
                  WdfFileObjectWdmGetFileObject(File) == WdmFile &&
                  FileName != NULL && FileName->Length == 0 &&
                  WdfFileObjectGetFlags(File) == WdmFile->Flags &&
+                 (TransferMode != 'h' || WdmFile->FsContext == File) &&
+                 (TransferMode != 'i' || WdmFile->FsContext2 == File) &&
                  Context->Phase == 0,
              300)) {
     WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
@@ -1603,44 +1609,52 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
       RegistryPath->Length >= sizeof(WCHAR)
           ? RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1]
           : L'B';
-  TransferMode = Marker == L'D'   ? 'D'
-                 : Marker == L'W' ? 'W'
-                 : Marker == L'C' ? 'C'
-                 : Marker == L'X' ? 'X'
-                 : Marker == L'H' ? 'H'
-                 : Marker == L'U' ? 'U'
-                 : Marker == L'N' ? 'N'
-                 : Marker == L'L' ? 'L'
-                 : Marker == L'M' ? 'M'
-                 : Marker == L'I' ? 'I'
-                 : Marker == L'J' ? 'J'
-                 : Marker == L'K' ? 'K'
-                 : Marker == L'T' ? 'T'
-                 : Marker == L'P' ? 'P'
-                 : Marker == L'F' ? 'F'
-                 : Marker == L'A' ? 'A'
-                 : Marker == L'G' ? 'G'
-                 : Marker == L'Y' ? 'Y'
-                 : Marker == L'Z' ? 'Z'
-                 : Marker == L'R' ? 'R'
-                 : Marker == L'S' ? 'S'
-                 : Marker == L'V' ? 'V'
-                 : Marker == L'E' ? 'E'
-                 : Marker == L'O' ? 'O'
-                 : Marker == L'e' ? 'e'
-                 : Marker == L'f' ? 'f'
-                 : Marker == L'g' ? 'g'
-                 : Marker == L'1' ? '1'
-                 : Marker == L'2' ? '2'
-                 : Marker == L'3' ? '3'
-                 : Marker == L'4' ? '4'
-                 : Marker == L'5' ? '5'
-                 : Marker == L'6' ? '6'
-                 : Marker == L'7' ? '7'
-                 : Marker == L'8' ? '8'
-                 : Marker == L'9' ? '9'
-                 : Marker == L'0' ? '0'
-                                  : 'B';
+  switch (Marker) {
+  case L'D':
+  case L'W':
+  case L'C':
+  case L'X':
+  case L'H':
+  case L'U':
+  case L'N':
+  case L'L':
+  case L'M':
+  case L'I':
+  case L'J':
+  case L'K':
+  case L'T':
+  case L'P':
+  case L'F':
+  case L'A':
+  case L'G':
+  case L'Y':
+  case L'Z':
+  case L'R':
+  case L'S':
+  case L'V':
+  case L'E':
+  case L'O':
+  case L'e':
+  case L'f':
+  case L'g':
+  case L'h':
+  case L'i':
+  case L'1':
+  case L'2':
+  case L'3':
+  case L'4':
+  case L'5':
+  case L'6':
+  case L'7':
+  case L'8':
+  case L'9':
+  case L'0':
+    TransferMode = (UCHAR)Marker;
+    break;
+  default:
+    TransferMode = 'B';
+    break;
+  }
 
   WDF_DRIVER_CONFIG_INIT(&DriverConfig, WDF_NO_EVENT_CALLBACK);
   DriverConfig.DriverInitFlags = WdfDriverInitNonPnpDriver;
@@ -1666,9 +1680,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
       TransferMode == 'T' || TransferMode == '8')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
-  if (TransferMode == 'f' || TransferMode == 'g') {
+  if (TransferMode == 'f' || TransferMode == 'g' || TransferMode == 'h' ||
+      TransferMode == 'i') {
     WDF_FILEOBJECT_CONFIG_INIT(&FileConfiguration, FileCreate, FileClose,
                                FileCleanup);
+    if (TransferMode == 'h')
+      FileConfiguration.FileObjectClass = WdfFileObjectWdfCanUseFsContext;
+    if (TransferMode == 'i')
+      FileConfiguration.FileObjectClass = WdfFileObjectWdfCanUseFsContext2;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&FileAttributes, FILE_CONTEXT);
     FileAttributes.ExecutionLevel = WdfExecutionLevelPassive;
     FileAttributes.SynchronizationScope = WdfSynchronizationScopeNone;

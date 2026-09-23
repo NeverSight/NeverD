@@ -1215,10 +1215,8 @@ KernelFramework::advance(uint64_t Token) {
           (R->second.CompletionStatus & profile::NTStatusFailureMask) &&
           R->second.File) {
         const uint64_t File = R->second.File;
-        auto F = FileObjects.find(File);
-        if (F == FileObjects.end())
-          return invalid("failed CREATE lost its framework file object");
-        FileHandles.erase(F->second.Wdm);
+        if (auto E = unlinkFileObject(File))
+          return E;
         std::vector<Step> Delete;
         if (auto E = planDelete(File, Delete))
           return E;
@@ -1239,10 +1237,8 @@ KernelFramework::advance(uint64_t Token) {
       continue;
     }
     if (S.Kind == StepKind::DeleteFileObject) {
-      auto F = FileObjects.find(S.Object);
-      if (F == FileObjects.end())
-        return invalid("CLOSE lost its framework file object");
-      FileHandles.erase(F->second.Wdm);
+      if (auto E = unlinkFileObject(S.Object))
+        return E;
       std::vector<Step> Delete;
       if (auto E = planDelete(S.Object, Delete))
         return E;

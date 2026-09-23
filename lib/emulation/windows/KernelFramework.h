@@ -424,6 +424,7 @@ private:
   routeFileRequest(uint64_t Device, uint64_t IRP, const RequestView &View);
   llvm::Expected<uint64_t> requestFileObject(uint64_t Device,
                                              uint64_t WdmFile) const;
+  llvm::Error unlinkFileObject(uint64_t File);
 
   llvm::Expected<uint64_t> read(uint64_t Address, unsigned Width = 8);
   llvm::Expected<std::vector<uint8_t>> readRegistryPath(uint64_t Address);

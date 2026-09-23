@@ -13,6 +13,8 @@
 #include "KernelFramework.h"
 #include "WindowsKernelLayout.h"
 
+#include <optional>
+
 namespace neverd::emulation {
 namespace {
 using namespace framework;
@@ -20,6 +22,17 @@ using namespace framework;
 llvm::Error fileError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "KMDF file object: " + Message);
+}
+
+std::optional<uint64_t> fileContextOffset(uint32_t Class) {
+  switch (Class) {
+  case FileObjectCanUseFsContext:
+    return windows::FileContextOffset;
+  case FileObjectCanUseFsContext2:
+    return windows::FileContext2Offset;
+  default:
+    return std::nullopt;
+  }
 }
 
 } // namespace
@@ -58,6 +71,8 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
         *AutoForward != FileAutoForwardDefault)
       return fileError("forwarded file lifecycle requires a lower target");
     if (*Class != FileObjectNotRequired &&
+        *Class != FileObjectCanUseFsContext &&
+        *Class != FileObjectCanUseFsContext2 &&
         *Class != FileObjectCannotUseFsContexts)
       return fileError("unsupported framework file-object class");
     auto Validation = attributes(A[3], AttributesUse::Device);
@@ -114,7 +129,38 @@ KernelFramework::requestFileObject(uint64_t Device, uint64_t WdmFile) const {
   auto Object = FileObjects.find(File->second);
   if (Object == FileObjects.end() || Object->second.Device != Device)
     return fileError("request has no matching framework file object");
+  if (auto Offset = fileContextOffset(Config.Class)) {
+    auto Stored = Memory.readInteger(WdmFile + *Offset, sizeof(uint64_t));
+    if (!Stored)
+      return Stored.takeError();
+    if (*Stored != File->second)
+      return fileError("WDM file context slot lost its framework handle");
+  }
   return File->second;
+}
+
+llvm::Error KernelFramework::unlinkFileObject(uint64_t File) {
+  auto State = FileObjects.find(File);
+  if (State == FileObjects.end())
+    return fileError("file object lost its WDM identity");
+  auto Handle = FileHandles.find(State->second.Wdm);
+  if (Handle == FileHandles.end() || Handle->second != File)
+    return fileError("file object lost its WDM handle mapping");
+  auto Device = Devices.find(State->second.Device);
+  if (Device == Devices.end())
+    return fileError("file object lost its owning device");
+  if (auto Offset = fileContextOffset(Device->second.Files.Class)) {
+    const uint64_t Slot = State->second.Wdm + *Offset;
+    auto Stored = read(Slot);
+    if (!Stored)
+      return Stored.takeError();
+    if (*Stored != File)
+      return fileError("WDM file context slot lost its framework handle");
+    if (auto E = Memory.writeInteger(Slot, 0, sizeof(uint64_t)))
+      return E;
+  }
+  FileHandles.erase(Handle);
+  return llvm::Error::success();
 }
 
 llvm::Expected<std::optional<KernelFramework::RequestDispatch>>
@@ -135,6 +181,17 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
   if (View.Major == RequestMajorCreate) {
     if (FileHandles.contains(View.File))
       return fileError("CREATE reused a live WDM FILE_OBJECT");
+    const auto ContextOffset = fileContextOffset(Config.Class);
+    if (ContextOffset) {
+      const uint64_t Slot = View.File + *ContextOffset;
+      if (auto E = ValidateAccess(Slot, sizeof(uint64_t), true))
+        return E;
+      auto Stored = read(Slot);
+      if (!Stored)
+        return Stored.takeError();
+      if (*Stored)
+        return fileError("WDM file context slot is already occupied");
+    }
     uint64_t File = 0;
     if (Config.Class != FileObjectNotRequired) {
       Attributes Attrs = Config.ObjectAttributes;
@@ -144,6 +201,11 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
         return Created.takeError();
       File = *Created;
       Objects.at(File).Kind = ObjectKind::File;
+      if (ContextOffset) {
+        if (auto E = Memory.writeInteger(View.File + *ContextOffset, File,
+                                         sizeof(uint64_t)))
+          return E;
+      }
       FileObjects.emplace(File, FileObject{Device, View.File});
       FileHandles.emplace(View.File, File);
     }

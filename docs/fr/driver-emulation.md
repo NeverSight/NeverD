@@ -246,7 +246,7 @@ Pour un FDO PnP, `WdfDeviceInitSetDeviceType` enregistre le type 32 bits fourni 
 
 `WdfDeviceInitSetExclusive` définit `DO_EXCLUSIVE` sur le périphérique WDM créé à partir de l’initialiseur. Un périphérique de contrôle nommé refuse une seconde ouverture indépendante tant que le premier fichier n’est pas fermé. Sur un FDO PnP, cet indicateur seul ne rend exclusifs ni le PDO nommé ni toute la pile ; l’exclusivité du PDO définie par INF reste hors de ce profil.
 
-`WdfDeviceInitSetFileObjectConfig` enregistre `EvtDeviceFileCreate`, `EvtFileCleanup` et `EvtFileClose` avant la création du périphérique et copie les attributs de contexte facultatifs. Ce profil accepte `WdfFileObjectWdfCannotUseFsContexts` et `WdfFileObjectNotRequired` ; le transfert vers une cible inférieure et les classes utilisant FsContext échouent explicitement. La poignée WDF et le `FILE_OBJECT` WDM gardent des identités distinctes, consultables avec `WdfRequestGetFileObject`, `WdfFileObjectGetDevice` et `WdfFileObjectWdmGetFileObject`. Un CREATE en échec supprime l’objet WDF sans rappels de nettoyage ou de fermeture ; après une ouverture réussie, CLEANUP et CLOSE précèdent le nettoyage et la destruction du contexte.
+`WdfDeviceInitSetFileObjectConfig` enregistre `EvtDeviceFileCreate`, `EvtFileCleanup` et `EvtFileClose` avant la création du périphérique et copie les attributs de contexte facultatifs. Ce profil accepte `WdfFileObjectNotRequired`, `WdfFileObjectWdfCanUseFsContext`, `WdfFileObjectWdfCanUseFsContext2` et `WdfFileObjectWdfCannotUseFsContexts`. Le champ de contexte WDM choisi contient la poignée WDF jusqu’à l’échec de CREATE ou à CLOSE et doit être initialement vide. Le transfert vers une cible inférieure et les objets fichier facultatifs restent exclus. La poignée WDF et le `FILE_OBJECT` WDM gardent des identités distinctes, consultables avec `WdfRequestGetFileObject`, `WdfFileObjectGetDevice` et `WdfFileObjectWdmGetFileObject`. Un CREATE en échec supprime l’objet WDF sans rappels de nettoyage ou de fermeture ; après une ouverture réussie, CLEANUP et CLOSE précèdent le nettoyage et la destruction du contexte.
 
 La validation WDK facultative compile séparément `driver_kmdf_lifecycle.c` et `driver_kmdf_control.c` avec la véritable bibliothèque d’entrée KMDF. `NEVERD_KMDF_FIXTURE` / `NEVERD_KMDF_CFG_FIXTURE` sélectionnent les images de cycle de vie ; `NEVERD_KMDF_CONTROL_FIXTURE` / `NEVERD_KMDF_CONTROL_CFG_FIXTURE` sélectionnent les images de périphérique de contrôle normale/CFG actif. Les artefacts externes absents entraînent un saut explicite. Voir les [tests](testing.md) pour la couverture native et C API/CLI. Les preuves d’exécution actuelles se limitent aux hôtes Linux.
 
@@ -558,7 +558,7 @@ invitées sont des chaînes hexadécimales afin que les consommateurs JSON ne
 perdent pas de précision sur 64 bits. L’objet `configuration` enregistre les
 limites, le nom du service, les substitutions `kernel_exports` et l’entrée
 `registry` de l’exécution. Le profil est
-`wdm-x64-scheduled-v60`. `nt_status` reste le résultat de DriverEntry, tandis
+`wdm-x64-scheduled-v61`. `nt_status` reste le résultat de DriverEntry, tandis
 que `scenario_success` décrit conjointement l’initialisation et les requêtes
 terminées. `phase`, `requests` et `unload_completed` identifient les parties du
 cycle demandé qui ont été exécutées. Chaque appel d’API et écriture CPU indique

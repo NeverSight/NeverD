@@ -203,7 +203,7 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 
 `WdfDeviceInitSetExclusive` 将 `DO_EXCLUSIVE` 设置在初始化器创建的 WDM 设备上。具名控制设备在首个文件关闭前拒绝第二次独立打开。PnP FDO 上的该标志本身不会使具名 PDO 或整个设备栈独占；此配置尚不模拟 INF 指定的 PDO 独占属性。
 
-`WdfDeviceInitSetFileObjectConfig` 在创建设备前注册 `EvtDeviceFileCreate`、`EvtFileCleanup`、`EvtFileClose`，并复制可选的文件对象上下文属性。当前支持 `WdfFileObjectWdfCannotUseFsContexts` 和 `WdfFileObjectNotRequired`；向下层转发及占用 FsContext 的类别会明确停止。WDF 文件句柄与 WDM `FILE_OBJECT` 保持不同身份，存活期间可由 `WdfRequestGetFileObject`、`WdfFileObjectGetDevice` 和 `WdfFileObjectWdmGetFileObject` 查询。CREATE 失败只删除 WDF 文件对象，不调用文件清理或关闭回调；成功打开后的 CLEANUP、CLOSE 回调先于上下文清理和销毁执行。
+`WdfDeviceInitSetFileObjectConfig` 在创建设备前注册 `EvtDeviceFileCreate`、`EvtFileCleanup`、`EvtFileClose`，并复制可选的文件对象上下文属性。当前支持 `WdfFileObjectNotRequired`、`WdfFileObjectWdfCanUseFsContext`、`WdfFileObjectWdfCanUseFsContext2` 和 `WdfFileObjectWdfCannotUseFsContexts`。选定的 WDM 上下文槽在 CREATE 失败或 CLOSE 前保存 WDF 句柄，创建前必须为空。向下层转发和可选文件对象仍不支持。WDF 文件句柄与 WDM `FILE_OBJECT` 保持不同身份，存活期间可由 `WdfRequestGetFileObject`、`WdfFileObjectGetDevice` 和 `WdfFileObjectWdmGetFileObject` 查询。CREATE 失败只删除 WDF 文件对象，不调用文件清理或关闭回调；成功打开后的 CLEANUP、CLOSE 回调先于上下文清理和销毁执行。
 
 可选的真实 WDK 验证以真正的 KMDF 入口库分别编译 `driver_kmdf_lifecycle.c` 和 `driver_kmdf_control.c`。`NEVERD_KMDF_FIXTURE`／`NEVERD_KMDF_CFG_FIXTURE` 选择生命周期映像；`NEVERD_KMDF_CONTROL_FIXTURE`／`NEVERD_KMDF_CONTROL_CFG_FIXTURE` 选择普通／启用 CFG 的控制设备映像。缺少外部产物时会明确跳过。原生及 C API／CLI 覆盖见[测试指南](testing.md)。当前执行证据仅来自 Linux 主机。
 
@@ -348,7 +348,7 @@ python3 scripts/validate_windows_driver_sample.py \
 
 JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、停止位置 PC，以及指令计数。它保留停止前收集的 API 调用和可观察状态，包括设备对象与驱动回调地址。来宾地址以十六进制字符串表示，避免 JSON 使用方丢失 64 位精度。
 
-`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v60`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
+`configuration` 对象记录本次执行的限制、服务名及 `kernel_exports` 覆盖配置。配置标识为 `wdm-x64-scheduled-v61`。`nt_status` 始终是 DriverEntry 的结果，而 `scenario_success` 综合描述初始化及已完成请求的结果。`phase`、`requests` 和 `unload_completed` 表明请求生命周期的哪些部分已运行。每次 API 调用及 CPU 写入也会记录阶段（`driver_entry`、`add_device:<ID>`、`request:N`, `callback:N` 或 `unload`）。每个请求报告派发状态与 I/O 状态、是否完成、information 长度以及返回的 `output_hex` 字节。`preferred_image_base` 描述原始 PE 基址。`security_cookie` 为已初始化 cookie 的来宾地址；若无需 cookie，则为 `"0x0"`。请求报告字段为 `kind`、`device`、`device_id`、`pnp`、`file`, `requestor_process_id`、`byte_offset`、`code`、`irp`、`completed`、`cancel_requested_at_100ns`、`dispatch_status`、`io_status`、`information`、`information_hex` 和 `output_hex`。 `configuration.registry` 保留原始注册表配置。 `information_hex` 以十六进制字符串精确保留原始 64 位 `IoStatus.Information`；原有数值字段 `information` 仍保留。
 
 工作项观察记录使用 `callback:N` 阶段。待处理请求的 `dispatch_status` 保留 `STATUS_PENDING`，最终完成状态单独记录在 `io_status`，并据此计算该请求对 `scenario_success` 的影响。
 

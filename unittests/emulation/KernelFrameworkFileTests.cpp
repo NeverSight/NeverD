@@ -296,6 +296,72 @@ TEST_F(DriverKernelFrameworkFile,
 }
 
 TEST_F(DriverKernelFrameworkFile,
+       FsContextStoresHandleUntilCloseAndLeavesSecondSlotUntouched) {
+  configure(framework::FileObjectCanUseFsContext);
+  put(WdmFile + windows::FileContext2Offset, Sentinel);
+  const auto Create = route(CreateIRP, framework::RequestMajorCreate);
+  const uint64_t File = Create.Arguments[2];
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), File);
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), Sentinel);
+  take(invoke(api::WdfRequestComplete, {Globals, Create.Arguments[1], 0}));
+
+  route(CleanupIRP, framework::RequestMajorCleanup);
+  finish(callback());
+  route(CloseIRP, framework::RequestMajorClose);
+  auto Close = callback();
+  EXPECT_EQ(Close.PC, ClosePC);
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), File);
+  finish(Close);
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), 0u);
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), Sentinel);
+  EXPECT_EQ(Completions.at(CloseIRP), 0u);
+}
+
+TEST_F(DriverKernelFrameworkFile,
+       FsContext2StoresHandleAndFailedCreateReleasesIt) {
+  configure(framework::FileObjectCanUseFsContext2);
+  put(WdmFile + windows::FileContextOffset, Sentinel);
+  const auto Create = route(CreateIRP, framework::RequestMajorCreate);
+  const uint64_t File = Create.Arguments[2];
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), Sentinel);
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), File);
+  take(invoke(api::WdfRequestComplete,
+              {Globals, Create.Arguments[1], framework::InvalidParameter}));
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), Sentinel);
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), 0u);
+  EXPECT_EQ(Completions.at(CreateIRP), framework::InvalidParameter);
+  expectError(invoke(api::WdfFileObjectGetDevice, {Globals, File}),
+              "live framework file object");
+}
+
+TEST_F(DriverKernelFrameworkFile,
+       OccupiedOrReplacedFsContextFailsWithoutGuessingIdentity) {
+  configure(framework::FileObjectCanUseFsContext);
+  Views.emplace(CreateIRP, KernelFramework::RequestView{
+                               CreateIRP, 0, framework::RequestMajorCreate, 0,
+                               0, 0, false, 0, 0, WdmFile});
+  put(WdmFile + windows::FileContextOffset, Sentinel);
+  expectError(Model.routeRequest(WdmDevice, CreateIRP), "already occupied");
+  EXPECT_EQ(get(WdmFile + windows::FileContextOffset), Sentinel);
+  put(WdmFile + windows::FileContextOffset, 0);
+  const auto Create = route(SecondCreateIRP, framework::RequestMajorCreate);
+  const uint64_t File = Create.Arguments[2];
+  take(invoke(api::WdfRequestComplete, {Globals, Create.Arguments[1], 0}));
+  put(WdmFile + windows::FileContextOffset, Sentinel);
+  Views.emplace(FirstControlIRP,
+                KernelFramework::RequestView{
+                    FirstControlIRP, 0, framework::RequestMajorDeviceControl, 0,
+                    0, 0, false, 0, 0, WdmFile});
+  expectError(Model.routeRequest(WdmDevice, FirstControlIRP),
+              "lost its framework handle");
+  put(WdmFile + windows::FileContextOffset, File);
+  route(CleanupIRP, framework::RequestMajorCleanup);
+  finish(callback());
+  route(CloseIRP, framework::RequestMajorClose);
+  finish(callback());
+}
+
+TEST_F(DriverKernelFrameworkFile,
        FailedCreateDeletesFileWithoutCleanupOrCloseCallbacks) {
   configure(framework::FileObjectCannotUseFsContexts, true);
   const auto Create = route(CreateIRP, framework::RequestMajorCreate);
@@ -378,8 +444,8 @@ TEST_F(DriverKernelFrameworkFile,
   put(FileConfig, framework::FileConfigSize, sizeof(uint32_t));
   put(FileConfig + framework::FileAutoForwardOffset,
       framework::FileAutoForwardDefault, sizeof(uint32_t));
-  put(FileConfig + framework::FileClassOffset,
-      framework::FileObjectCanUseFsContext, sizeof(uint32_t));
+  put(FileConfig + framework::FileClassOffset, framework::FileObjectInvalid,
+      sizeof(uint32_t));
   expectError(invoke(api::WdfDeviceInitSetFileObjectConfig,
                      {Globals, Init, FileConfig, 0}),
               "unsupported framework file-object class");
