@@ -616,6 +616,18 @@ swiftRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   } else if (Name == "swift_endAccess") {
     Signature.ReturnType = NdType::makeVoid();
     Signature.Parameters = {{"scratch", Pointer}};
+  } else if (Name == "swift_defaultActor_initialize" ||
+             Name == "swift_defaultActor_destroy") {
+    // Swift 6.1.2 arm64 client IR calls both actor lifecycle entries with
+    // swiftcc void(ptr). The actor's storage is passed, not returned.
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Image.Arch != Arch::AArch64 || Bind == Image.DyldBindSlots.end() ||
+        Bind->second.Module !=
+            "/usr/lib/swift/libswift_Concurrency.dylib")
+      return std::nullopt;
+    Signature.Convention = SourceFunctionTypeHint::ConventionKind::Swift;
+    Signature.ReturnType = NdType::makeVoid();
+    Signature.Parameters = {{"actor", Pointer}};
   } else if (!declaredFixedABI(Image, ImportSlot, Name, Result)) {
     return std::nullopt;
   }

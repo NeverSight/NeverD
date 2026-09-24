@@ -1207,6 +1207,11 @@ subscript as four ordinary input words (two `String.Index` bounds, then both
 the strong import and this complete ABI; the last result word remains a
 pointer, and x86-64 has no ABI declaration from this probe.
 
+Swift 6.1.2 arm64 client IR calls the exact libswift_Concurrency
+`swift_defaultActor_initialize` and `swift_defaultActor_destroy` entries as
+`swiftcc void(ptr)`. Their bindings retain the actor storage argument and
+require a strong import from that provider.
+
 The SystemConfiguration SDK declares `SCNetworkReachabilityCreateWithName`
 with allocator and C-string inputs and a reference result. It declares
 `SCNetworkReachabilitySetCallback` and

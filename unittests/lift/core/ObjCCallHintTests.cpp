@@ -1458,6 +1458,42 @@ TEST(ObjCCallHints, SwiftStringRangeSubscriptKeepsFourWordResultABI) {
   EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
 }
 
+TEST(ObjCCallHints, SwiftDefaultActorLifecycleKeepsSwiftConvention) {
+  constexpr llvm::StringLiteral Provider =
+      "/usr/lib/swift/libswift_Concurrency.dylib";
+  for (const char *Name : {"swift_defaultActor_initialize",
+                           "swift_defaultActor_destroy"}) {
+    const std::string Import = std::string("_") + Name;
+    auto Image = runtimeImage(Import);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint) << Name;
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    EXPECT_EQ(Hint->TargetName, Name);
+    const auto &ABI = Hint->Signature;
+    EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftRuntime);
+    EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(ABI.ReturnType);
+    EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Void);
+    ASSERT_EQ(ABI.Parameters.size(), 1U);
+    EXPECT_EQ(ABI.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(ABI.Parameters[0].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.Parameters[0].Location.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntParamRegs[0]);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+    Image.DyldBindSlots[0x2180].Module = "/usr/lib/swift/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    Image.DyldBindSlots[0x2180].Module = Provider.str();
+    Image.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    auto X64 = runtimeImage(Import, Arch::X64);
+    X64.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, FoundationValueBridgesKeepCompilerObservedSwiftABI) {
   enum class Shape {
     IndirectFromObjC,
