@@ -1243,8 +1243,11 @@ TEST(COFFExceptionIR, SharedHandlerAndColdEntryKeepTheirPaths) {
   EXPECT_LT(Label, Try) << Source;
   EXPECT_EQ(Source.find("L_140001010:", Label + 1), std::string::npos)
       << Source;
-  // The shared block is printed once, outside the __except body.
-  const size_t Marker = Source.find("sub_140009000();");
+  // The shared block is printed once, outside the __except body.  Search the
+  // body only; the file also declares the callee.
+  const size_t Body = Source.find("neverd.entry");
+  ASSERT_NE(Body, std::string::npos) << Source;
+  const size_t Marker = Source.find("sub_140009000();", Body);
   ASSERT_NE(Marker, std::string::npos) << Source;
   EXPECT_EQ(Source.find("sub_140009000();", Marker + 1), std::string::npos)
       << Source;

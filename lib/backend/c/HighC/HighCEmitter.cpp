@@ -882,11 +882,10 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     Headers.insert("string.h");
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs) {
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
-      continue;
+  // An analysis-only function prints as ordinary C too, so its callees need
+  // the same headers and prototypes.
+  for (auto &F : Funcs)
     collectCallTargets(F.Body, CallTargets);
-  }
 
   for (auto &Name : CallTargets) {
     if (const char *Hdr = libc::headerFor(Name))
@@ -934,11 +933,10 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   }
 
   std::set<std::string> CallTargets;
-  for (auto &F : Funcs) {
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(F))
-      continue;
+  // An analysis-only function prints as ordinary C too, so its callees need
+  // the same headers and prototypes.
+  for (auto &F : Funcs)
     collectCallTargets(F.Body, CallTargets);
-  }
 
   for (const auto &[Name, Identifier] : SourceRuntimeDataIdentifiers) {
     OS << "extern unsigned char " << Identifier << "[] __asm__(\"";
@@ -979,8 +977,6 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         !Prototyped.insert(Definition->second).second)
       continue;
     const auto &Function = *Definition->second;
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Function))
-      continue;
     CurrentFunc = &Function;
     Analysis = {};
     runAnalysisPasses(Function);
@@ -1010,8 +1006,6 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   Analysis = {};
   for (const auto *Function : SourceAddressDefinitions) {
     if (!Prototyped.insert(Function).second)
-      continue;
-    if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(*Function))
       continue;
     std::string Declarator = functionIdentifier(*Function) + "(";
     const size_t ParamCount = emittedParamCount(*Function);
