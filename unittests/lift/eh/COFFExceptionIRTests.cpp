@@ -30,7 +30,9 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <algorithm>
 #include <optional>
+#include <regex>
 
 #ifndef NEVERD_RUNTIME_FIXTURE_COMPILER
 #define NEVERD_RUNTIME_FIXTURE_COMPILER ""
@@ -1739,3 +1741,81 @@ TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsUnrequestedFunctions) {
 }
 
 } // namespace
+
+TEST(COFFExceptionIR, LoneJumpAtTryExitKeepsItsLabel) {
+  // DbgkpSuppressDbgMsg: two paths in a __try jump to a block that holds only
+  // `jmp done`, where the protected range ends.  Removing that jump as
+  // redundant must keep the label the other gotos name.
+  constexpr va_t F = 0x140001000;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = F;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x18,                   // sub rsp, 18h
+      0xc7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00, // mov dword [rsp], 0
+      0x85, 0xc9,                               // try: test ecx, ecx
+      0x79, 0x09,                               // jns checks
+      0xc7, 0x04, 0x24, 0x01, 0x00, 0x00, 0x00, // mov dword [rsp], 1
+      0xeb, 0x10,                               // jmp exit
+      0x85, 0xd2,                               // checks: test edx, edx
+      0x74, 0x0c,                               // je exit
+      0x45, 0x85, 0xc0,                         // test r8d, r8d
+      0x74, 0x07,                               // je exit
+      0xc7, 0x04, 0x24, 0x02, 0x00, 0x00, 0x00, // mov dword [rsp], 2
+      0xeb, 0x00,                               // exit: jmp done
+      0x8b, 0x04, 0x24,                         // done: mov eax, [rsp]
+      0x48, 0x83, 0xc4, 0x18,                   // add rsp, 18h
+      0xc3};                                    // ret
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = F;
+  Text.Size = 0x40;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  std::copy(Code.begin(), Code.end(), Text.Data.begin());
+  Img.Segments.push_back(std::move(Text));
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = F;
+  TextSection.Size = 0x40;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(F, F + Code.size());
+  Img.Symbols.push_back(Symbol::makeFunc(F, Code.size()));
+  ExceptionFunction EH;
+  EH.CodeRange = {F, F + Code.size()};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  SEHExceptionInfo SEH;
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {F + 0x0b, F + 0x2a};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = F + 0x2a;
+  SEH.Scopes.push_back(Scope);
+  EH.SEH = std::move(SEH);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(F);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  std::smatch Goto;
+  for (auto It = Source.cbegin(); std::regex_search(
+           It, Source.cend(), Goto, std::regex(R"(goto (L_\w+);)"));
+       It = Goto.suffix().first)
+    EXPECT_NE(Source.find(Goto[1].str() + ":"), std::string::npos)
+        << Goto[1] << " has no label\n"
+        << Source;
+}

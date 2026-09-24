@@ -30,6 +30,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 
 namespace neverd {
@@ -38,7 +39,8 @@ namespace neverd {
 // Trivial goto removal (goto to next statement)
 //===----------------------------------------------------------------------===//
 
-static void removeTrivialGotos(std::vector<HighStmt> &Stmts) {
+static void removeTrivialGotos(std::vector<HighStmt> &Stmts,
+                               const std::set<va_t> &Targets) {
   for (int I = static_cast<int>(Stmts.size()) - 2; I >= 0; --I) {
     if (Stmts[I].Kind != StmtKind::Goto)
       continue;
@@ -48,14 +50,25 @@ static void removeTrivialGotos(std::vector<HighStmt> &Stmts) {
     va_t NextAddr = Stmts[static_cast<size_t>(I) + 1].Addr;
     if (NextAddr == 0)
       continue;
-    if (Target == NextAddr || (Target < NextAddr && NextAddr - Target <= 16))
+    if (!(Target == NextAddr || (Target < NextAddr && NextAddr - Target <= 16)))
+      continue;
+    // A goto that is itself a branch target (a lone `jmp` block) keeps its
+    // address as an empty anchor, so gotos to it still have a label.
+    const va_t Own = Stmts[I].Addr;
+    if (Own != 0 && Own != InvalidVA && Targets.count(Own)) {
+      HighStmt Anchor;
+      Anchor.Kind = StmtKind::Block;
+      Anchor.Addr = Own;
+      Stmts[I] = std::move(Anchor);
+    } else {
       Stmts.erase(Stmts.begin() + I);
+    }
   }
   for (auto &S : Stmts) {
     if (!S.Body.empty())
-      removeTrivialGotos(S.Body);
+      removeTrivialGotos(S.Body, Targets);
     if (!S.ElseBody.empty())
-      removeTrivialGotos(S.ElseBody);
+      removeTrivialGotos(S.ElseBody, Targets);
   }
 }
 
@@ -532,7 +545,7 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
                    : limits::kIfElseStructuringPasses;
   structureIfElse(Func, IfElseMaxPasses, &Med);
 
-  removeTrivialGotos(Func.Body);
+  removeTrivialGotos(Func.Body, gotoTargets(Func.Body));
   simplifyNestedGotos(Func.Body);
   seedIfThenJoinInits(Func.Body);
 
