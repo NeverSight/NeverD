@@ -1322,9 +1322,20 @@ resolverSlice(const ResolverValue &Input, uint16_t Offset, uint16_t Size,
           return {};
         Inputs.push_back(std::move(Sliced));
       }
+      // A named Merge identifies a byte lane, not every slice of its
+      // container.  Preserve the root for a low slice (needed to match the
+      // zero-extended operand), but give each nonzero offset its own identity.
+      ResolverRootKey SliceRootKey;
+      std::string_view SliceRoot = Node->Root;
+      if (CurrentOffset != 0 && !SliceRoot.empty()) {
+        if (!makeResolverRootKey(SliceRootKey, SliceRoot, {CurrentOffset},
+                                 consume, AnalysisIncomplete))
+          return {};
+        SliceRoot = SliceRootKey.view();
+      }
       return remember(
           Node, CurrentOffset,
-          budgetedResolverMerge(Size, Node->Root, std::move(Inputs), consume));
+          budgetedResolverMerge(Size, SliceRoot, std::move(Inputs), consume));
     }
     if (CurrentOffset == 0 && Node->Input &&
         (Node->K == ResolverValueExpr::Kind::ZeroExtend ||
@@ -1977,6 +1988,61 @@ static bool provesExactUnsignedModuloRecipe(
       return false;
   }
 
+  // Clang can divide a zero-extended 32-bit value by N with the high half of
+  // a 64 x 64 multiply, using a 64-bit reciprocal coarser than the ordinary
+  // 32-bit magic recipe.  Authenticate the *observed* constant rather than
+  // borrowing a compiler-version-specific magic choice.  For
+  //   q = floor(x * M / 2^64), 0 <= x < 2^32,
+  // write N*M = 2^64 + E.  E >= 0 and (2^32-1)*E < 2^64 imply that the
+  // quotient is exactly floor(x/N), including the largest possible remainder
+  // N-1.  Here N < 2^32 and M < 2^64, so both N*M and E*(2^32-1) fit in the
+  // 128-bit APInt used below without wraparound.  Rebuild the entire selector
+  // with the same dividend and observed reciprocal; a matching constant in
+  // an unrelated expression grants nothing.
+  auto matchesObservedHighHalf = [&]() -> bool {
+    const llvm::APInt Scale = llvm::APInt::getOneBitSet(128, 64);
+    const llvm::APInt MaxDividend = llvm::APInt::getLowBitsSet(128, Width);
+    for (size_t NodeIndex = 0; NodeIndex < ExpressionNodeCount; ++NodeIndex) {
+      if (!consume())
+        return false;
+      if (!SelectorDependencies[NodeIndex])
+        continue;
+      const SymRef MagicRef(static_cast<uint32_t>(NodeIndex));
+      if (!Ctx.isConst(MagicRef) || Ctx.width(MagicRef) != 128)
+        continue;
+      const llvm::APInt MagicValue = Ctx.constValue(MagicRef);
+      if (MagicValue.isZero() || MagicValue.getActiveBits() > 64)
+        continue;
+      const llvm::APInt Product =
+          MagicValue * llvm::APInt(128, Divisor);
+      if (Product.ult(Scale))
+        continue;
+      const llvm::APInt Excess = Product - Scale;
+      if ((Excess * MaxDividend).uge(Scale))
+        continue;
+
+      for (SymRef Dividend : DividendCandidates) {
+        if (!consume(4))
+          return false;
+        const SymRef WideDividend = Ctx.mkZExt(Dividend, 128);
+        const SymRef FullProduct =
+            WideDividend ? mkMul2Budgeted(WideDividend, MagicRef) : SymRef{};
+        if (!FullProduct || !consumeExtractBuilder(FullProduct))
+          return false;
+        const SymRef Quotient = Ctx.mkExtract(FullProduct, 64, Width);
+        const SymRef BackMultiply =
+            mkMul2Budgeted(Quotient, Ctx.mkConst(Width, Divisor));
+        const SymRef Expected =
+            BackMultiply ? mkSubBudgeted(Dividend, BackMultiply) : SymRef{};
+        if (!Expected)
+          return false;
+        if (Expected == Remainder)
+          return true;
+      }
+    }
+    return false;
+  };
+
   for (const DividendRecipe &Recipe : DividendRecipes) {
     const SymRef Dividend = Recipe.RemainderDividend;
     if (!consume())
@@ -2181,7 +2247,7 @@ static bool provesExactUnsignedModuloRecipe(
         }
     }
   }
-  return false;
+  return Width == 32 && matchesObservedHighHalf();
 }
 
 enum class ResolverResultKind : uint8_t { Invalid, Cycle, Value };
@@ -6750,8 +6816,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         break;
       }
       case ResolverValueExpr::Kind::Slice: {
-        // x86 MULHU of two 64-bit values is lifted as a 128-bit INT_MULT
-        // followed by SUBBYTES of the high half.  Exact unsigned-modulo
+        // A high-half product of two 64-bit values is lifted as a 128-bit
+        // INT_MULT followed by SUBBYTES of the high half.  Exact unsigned-modulo
         // recipes need that high half as a 64-bit extract; 16-byte nodes are
         // otherwise rejected so SAT never sees a 128-bit value.
         if (ExactModuloRecipeOnly && Node->Input && Node->Input->Size == 16 &&
@@ -6759,8 +6825,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             Node->Input->K == ResolverValueExpr::Kind::Transform &&
             Node->Input->HasOpcode && Node->Input->Opcode == NdOp::INT_MULT &&
             Node->Input->Inputs.size() == 2) {
-          auto peelMulhuOperand =
-              [&](const ResolverValue &Wide) -> ResolverValue {
+          auto symbolizeMulhuOperand =
+              [&](const ResolverValue &Wide) -> symbolic::SymRef {
             if (!Wide || Wide->Size != 16)
               return {};
             // Consecutive zexts collapse, so zext128(zext64(x32)) is stored
@@ -6769,21 +6835,46 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             auto accept = [](uint16_t Size) { return Size == 4 || Size == 8; };
             if (Wide->K == ResolverValueExpr::Kind::ZeroExtend && Wide->Input &&
                 accept(Wide->Input->Size))
-              return Wide->Input;
+              return Symbolize(Wide->Input, Depth + 1);
             if (Wide->K == ResolverValueExpr::Kind::Transform &&
                 Wide->HasOpcode &&
                 (Wide->Opcode == NdOp::INT_ZEXT ||
                  Wide->Opcode == NdOp::COPY) &&
                 Wide->Inputs.size() == 1 && Wide->Inputs[0] &&
                 accept(Wide->Inputs[0]->Size))
-              return Wide->Inputs[0];
+              return Symbolize(Wide->Inputs[0], Depth + 1);
+            // A graph-growth replay can turn zext128(x) into a named merge
+            // of zext128(x_i).  The low lane of that merge has the same
+            // identity as the named narrow merge used by the back-subtract.
+            // Every incoming arm must certify the same zero-extended width;
+            // a mixed/sign-extended/opaque 128-bit merge cannot be narrowed.
+            if (Depth < MaxResolverDepth &&
+                Wide->K == ResolverValueExpr::Kind::Merge &&
+                !Wide->Root.empty() && !Wide->Inputs.empty() &&
+                consumeSymbolWork(Wide->Inputs.size())) {
+              const ResolverValue &First = Wide->Inputs.front();
+              if (!First || First->K != ResolverValueExpr::Kind::ZeroExtend ||
+                  First->Size != 16 || !First->Input ||
+                  !accept(First->Input->Size))
+                return {};
+              const uint16_t LowSize = First->Input->Size;
+              if (!std::all_of(Wide->Inputs.begin(), Wide->Inputs.end(),
+                               [LowSize](const ResolverValue &Arm) {
+                                 return Arm &&
+                                        Arm->K ==
+                                            ResolverValueExpr::Kind::ZeroExtend &&
+                                        Arm->Size == 16 && Arm->Input &&
+                                        Arm->Input->Size == LowSize;
+                               }))
+                return {};
+              return unknownNamed(Wide->Root, uint32_t(LowSize) * 8u);
+            }
             return {};
           };
-          const ResolverValue Lo0 = peelMulhuOperand(Node->Input->Inputs[0]);
-          const ResolverValue Lo1 = peelMulhuOperand(Node->Input->Inputs[1]);
-          if (Lo0 && Lo1) {
-            symbolic::SymRef A = Symbolize(Lo0, Depth + 1);
-            symbolic::SymRef B = Symbolize(Lo1, Depth + 1);
+          if (symbolic::SymRef A =
+                  symbolizeMulhuOperand(Node->Input->Inputs[0])) {
+            symbolic::SymRef B =
+                symbolizeMulhuOperand(Node->Input->Inputs[1]);
             const bool WidthOk = A && B &&
                                  (Ctx.width(A) == 32 || Ctx.width(A) == 64) &&
                                  (Ctx.width(B) == 32 || Ctx.width(B) == 64);

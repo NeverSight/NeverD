@@ -4322,6 +4322,97 @@ TEST_F(JTE_X86_64, ModuloBoundRecoversClangO0U140FrameReload) {
   EXPECT_EQ(PhysicalSlots, 140u);
 }
 
+TEST_F(JTE_X86_64, ModuloBoundProvesObservedHighHalfReciprocal) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+
+  const neverd::Symbol *Exact = Image.findSymbol("jt_modulo_high64_u7");
+  ASSERT_NE(Exact, nullptr);
+  neverd::CFGBuilder ExactBuilder;
+  const neverd::LowFunc Recovered =
+      ExactBuilder.build(Image, Decoder, Exact->Addr, Exact->Name);
+  ASSERT_EQ(Recovered.JumpTables.size(), 1u);
+  EXPECT_EQ(Recovered.JumpTables.front().Targets.size(), 7u);
+  EXPECT_TRUE(Recovered.UnsafeIndirectBranchAddresses.empty());
+
+  const neverd::Symbol *Underestimate =
+      Image.findSymbol("jt_modulo_high64_u7_underestimate");
+  ASSERT_NE(Underestimate, nullptr);
+  neverd::CFGBuilder UnsafeBuilder;
+  const neverd::LowFunc Unsafe = UnsafeBuilder.build(
+      Image, Decoder, Underestimate->Addr, Underestimate->Name);
+  EXPECT_TRUE(Unsafe.JumpTables.empty())
+      << "an underestimating reciprocal cannot prove an unsigned domain";
+  EXPECT_TRUE(lowFunctionHasOpcode(Unsafe, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Unsafe.EverPublishedJumpTableBranchAddresses.empty());
+
+  const neverd::Symbol *Overestimate =
+      Image.findSymbol("jt_modulo_high64_u7_overestimate");
+  ASSERT_NE(Overestimate, nullptr);
+  neverd::CFGBuilder OverestimateBuilder;
+  const neverd::LowFunc Overestimated = OverestimateBuilder.build(
+      Image, Decoder, Overestimate->Addr, Overestimate->Name);
+  EXPECT_TRUE(Overestimated.JumpTables.empty())
+      << "a reciprocal with too much accumulated error cannot prove a domain";
+  EXPECT_TRUE(lowFunctionHasOpcode(Overestimated, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Overestimated.EverPublishedJumpTableBranchAddresses.empty());
+
+  auto BuildWithBudget = [&](size_t Budget) {
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    return Builder.build(Image, Decoder, Exact->Addr, Exact->Name);
+  };
+  auto RecoveredWithBudget = [&](size_t Budget) {
+    const neverd::LowFunc Low = BuildWithBudget(Budget);
+    return Low.JumpTables.size() == 1u &&
+           Low.JumpTables.front().Targets.size() == 7u;
+  };
+  size_t Lo = 1;
+  size_t Hi = neverd::limits::kMaxJumpTableMaskFixedPointEvidenceWork;
+  while (Lo < Hi) {
+    const size_t Mid = Lo + (Hi - Lo) / 2;
+    if (RecoveredWithBudget(Mid))
+      Hi = Mid;
+    else
+      Lo = Mid + 1;
+  }
+  ASSERT_GT(Lo, 1u);
+  EXPECT_TRUE(RecoveredWithBudget(Lo));
+  const neverd::LowFunc Exhausted = BuildWithBudget(Lo - 1);
+  EXPECT_TRUE(Exhausted.JumpTables.empty())
+      << "exhausted evidence cannot publish reciprocal-derived edges";
+  EXPECT_TRUE(lowFunctionHasOpcode(Exhausted, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Exhausted.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_TRUE(Exhausted.EverPublishedJumpTableBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_64, ModuloBoundRejectsHighHalfMergeUpperSlice) {
+  auto ImageOrErr = neverd::loadBinary(moduloDomainObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_modulo_high64_merge_upper_slice");
+  ASSERT_NE(Function, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X64));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  // The upper dword is zero on both paths.  With x=7, subtracting 7q yields
+  // 0xfffffff9, so no table target can be certified or published.
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_64, ModuloBoundRejectsDeadExactProducer) {
   auto ImageOrErr = neverd::loadBinary(moduloDeadProducerObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))

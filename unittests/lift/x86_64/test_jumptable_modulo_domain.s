@@ -1380,6 +1380,148 @@ jt_modulo_add_after_scaled_difference_wrong_capacity:
         .quad .Ladd_after_scaled_wrong_capacity_case3
         .quad .Ladd_after_scaled_wrong_capacity_case4
 
+// A zero-extended 32-bit dividend can use a rounded 40-bit reciprocal in a
+// 64-bit high-half multiply.  For M=0x2492492493000000 and N=7,
+// 0 <= N*M-2^64 and (2^32-1)*(N*M-2^64) < 2^64, so the high half is exactly
+// floor(x/7) for every 32-bit x.  The siblings perturb M by 2^32 in either
+// direction: one falls below 2^64/7, and the other makes the accumulated
+// reciprocal error too large for all 32-bit dividends.
+        .text
+        .globl  jt_modulo_high64_u7
+        .type   jt_modulo_high64_u7,@function
+jt_modulo_high64_u7:
+        movl    %edi, %eax
+        movabs  $0x2492492493000000, %rcx
+        mulq    %rcx
+        imull   $7, %edx, %edx
+        subl    %edx, %edi
+        leaq    .Lhigh64_u7_table(%rip), %rax
+        movslq  (%rax,%rdi,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lhigh64_u7_case0: movl $4900, %eax; retq
+.Lhigh64_u7_case1: movl $4901, %eax; retq
+.Lhigh64_u7_case2: movl $4902, %eax; retq
+.Lhigh64_u7_case3: movl $4903, %eax; retq
+.Lhigh64_u7_case4: movl $4904, %eax; retq
+.Lhigh64_u7_case5: movl $4905, %eax; retq
+.Lhigh64_u7_case6: movl $4906, %eax; retq
+        .size   jt_modulo_high64_u7, .-jt_modulo_high64_u7
+
+        .globl  jt_modulo_high64_u7_underestimate
+        .type   jt_modulo_high64_u7_underestimate,@function
+jt_modulo_high64_u7_underestimate:
+        movl    %edi, %eax
+        movabs  $0x2492492492000000, %rcx
+        mulq    %rcx
+        imull   $7, %edx, %edx
+        subl    %edx, %edi
+        leaq    .Lhigh64_u7_underestimate_table(%rip), %rax
+        movslq  (%rax,%rdi,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lhigh64_u7_underestimate_case0: movl $4910, %eax; retq
+.Lhigh64_u7_underestimate_case1: movl $4911, %eax; retq
+.Lhigh64_u7_underestimate_case2: movl $4912, %eax; retq
+.Lhigh64_u7_underestimate_case3: movl $4913, %eax; retq
+.Lhigh64_u7_underestimate_case4: movl $4914, %eax; retq
+.Lhigh64_u7_underestimate_case5: movl $4915, %eax; retq
+.Lhigh64_u7_underestimate_case6: movl $4916, %eax; retq
+        .size   jt_modulo_high64_u7_underestimate, .-jt_modulo_high64_u7_underestimate
+
+        .globl  jt_modulo_high64_u7_overestimate
+        .type   jt_modulo_high64_u7_overestimate,@function
+jt_modulo_high64_u7_overestimate:
+        movl    %edi, %eax
+        movabs  $0x2492492593000000, %rcx
+        mulq    %rcx
+        imull   $7, %edx, %edx
+        subl    %edx, %edi
+        leaq    .Lhigh64_u7_overestimate_table(%rip), %rax
+        movslq  (%rax,%rdi,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lhigh64_u7_overestimate_case0: movl $4920, %eax; retq
+.Lhigh64_u7_overestimate_case1: movl $4921, %eax; retq
+.Lhigh64_u7_overestimate_case2: movl $4922, %eax; retq
+.Lhigh64_u7_overestimate_case3: movl $4923, %eax; retq
+.Lhigh64_u7_overestimate_case4: movl $4924, %eax; retq
+.Lhigh64_u7_overestimate_case5: movl $4925, %eax; retq
+.Lhigh64_u7_overestimate_case6: movl $4926, %eax; retq
+        .size   jt_modulo_high64_u7_overestimate, .-jt_modulo_high64_u7_overestimate
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+.Lhigh64_u7_table:
+        .long .Lhigh64_u7_case0-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case1-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case2-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case3-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case4-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case5-.Lhigh64_u7_table
+        .long .Lhigh64_u7_case6-.Lhigh64_u7_table
+.Lhigh64_u7_underestimate_table:
+        .long .Lhigh64_u7_underestimate_case0-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case1-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case2-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case3-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case4-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case5-.Lhigh64_u7_underestimate_table
+        .long .Lhigh64_u7_underestimate_case6-.Lhigh64_u7_underestimate_table
+.Lhigh64_u7_overestimate_table:
+        .long .Lhigh64_u7_overestimate_case0-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case1-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case2-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case3-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case4-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case5-.Lhigh64_u7_overestimate_table
+        .long .Lhigh64_u7_overestimate_case6-.Lhigh64_u7_overestimate_table
+
+// Each path zero-extends a 32-bit value into RAX.  PEXTRD reads bits 63:32,
+// which are always zero, while MULQ uses the low bits.  Reusing the low Merge
+// root for the high slice would falsely prove a 0..6 index: for x=7, the
+// actual index is 0 - 7*floor(7/7) = 0xfffffff9, outside the table.
+        .text
+        .globl  jt_modulo_high64_merge_upper_slice
+        .type   jt_modulo_high64_merge_upper_slice,@function
+jt_modulo_high64_merge_upper_slice:
+        testl   %esi, %esi
+        je      .Lhigh64_merge_upper_left
+        movl    %edi, %eax
+        jmp     .Lhigh64_merge_upper_join
+.Lhigh64_merge_upper_left:
+        leal    7(%rdi), %eax
+.Lhigh64_merge_upper_join:
+        movq    %rax, %xmm0
+        pextrd  $1, %xmm0, %r9d
+        movabs  $0x2492492493000000, %rcx
+        mulq    %rcx
+        imull   $7, %edx, %edx
+        subl    %edx, %r9d
+        leaq    .Lhigh64_merge_upper_table(%rip), %rax
+        movslq  (%rax,%r9,4), %rdx
+        addq    %rax, %rdx
+        jmpq    *%rdx
+.Lhigh64_merge_upper_case0: movl $4930, %eax; retq
+.Lhigh64_merge_upper_case1: movl $4931, %eax; retq
+.Lhigh64_merge_upper_case2: movl $4932, %eax; retq
+.Lhigh64_merge_upper_case3: movl $4933, %eax; retq
+.Lhigh64_merge_upper_case4: movl $4934, %eax; retq
+.Lhigh64_merge_upper_case5: movl $4935, %eax; retq
+.Lhigh64_merge_upper_case6: movl $4936, %eax; retq
+        .size   jt_modulo_high64_merge_upper_slice, .-jt_modulo_high64_merge_upper_slice
+
+        .section .rodata,"a",@progbits
+        .p2align 2
+.Lhigh64_merge_upper_table:
+        .long .Lhigh64_merge_upper_case0-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case1-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case2-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case3-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case4-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case5-.Lhigh64_merge_upper_table
+        .long .Lhigh64_merge_upper_case6-.Lhigh64_merge_upper_table
+
 // clang 21 x86-64 `x % 7u` uses LLVM's AllowWidenOptimization MULHU:
 // mulq of zext(x) by ((2^32+Magic)<<k), then `lea (,%rdx,8); sub; add` for
 // x + (q - 8q).  The 128-bit product is outside the 2W-bit non-widen theorem.

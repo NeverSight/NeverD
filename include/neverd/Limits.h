@@ -142,11 +142,11 @@ constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 262144;
 /// Target/address roles, modulo/mask domains, every candidate-graph snapshot,
 /// recursive core proof, and precise-before-upper-bound replay all debit this
 /// one balance.  Exact ordered-container and lifetime accounting for the
-/// largest supported O0 large-switch/jump-table transaction consumes about 101
-/// million units after exact target-role certificate reuse; the next
-/// power-of-two ceiling preserves bounded headroom without granting fresh
-/// per-phase or per-round allowances.
-constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 134217728;
+/// largest supported O0 large-switch/jump-table transaction consumes
+/// 143,404,495 units through final consumer-audited address-role replay.  The
+/// 160 Mi-unit ceiling leaves 24,367,665 units of bounded headroom without
+/// granting fresh per-phase or per-round allowances.
+constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 167772160;
 
 /// Aggregate allowance for one transactional multi-candidate resolver stage.
 /// A real function can contain several exact branch occurrences that consume
@@ -155,7 +155,7 @@ constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 134217728;
 /// kMaxJumpTableMaskFixedPointEvidenceWork; this larger, still finite account
 /// retains four-candidate headroom so the stage can validate a complete
 /// sibling batch before committing it.
-constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 536870912;
+constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 671088640;
 static_assert(uint64_t{kMaxJumpTableProposalStageEvidenceWork} >=
               uint64_t{kMaxJumpTableMaskFixedPointEvidenceWork} * 4);
 
