@@ -245,9 +245,9 @@ void KernelModel::configureFrameworkRequestHost() {
                          uint64_t IRP, ForwardingOwner Owner,
                          std::optional<int64_t> SendTimeout =
                              std::nullopt) -> llvm::Expected<uint32_t> {
-    const bool Asynchronous =
-        Owner == ForwardingOwner::FrameworkFileAsynchronous;
-    if (auto E = Validate(IRP, Asynchronous))
+    const bool AllowsDelayed =
+        Owner != ForwardingOwner::FrameworkFileSynchronous;
+    if (auto E = Validate(IRP, AllowsDelayed))
       return E;
     auto *Request = requestForIRP(IRP);
     auto Stack = currentRequestStack(IRP);
@@ -268,14 +268,19 @@ void KernelModel::configureFrameworkRequestHost() {
         callDriver(Request->DeviceRoute.back(), IRP, Owner, SendTimeout);
     if (!Status)
       return Status.takeError();
+    const bool LowerOwnsPendingFile = Owner == ForwardingOwner::FrameworkFile &&
+                                      *Status == windows::StatusPending;
     if (PendingWdmCall ||
-        Request->Completed != (Owner == ForwardingOwner::FrameworkFile))
+        Request->Completed !=
+            (Owner == ForwardingOwner::FrameworkFile && !LowerOwnsPendingFile))
       return frameworkRequestError(
           "framework file target did not honor its completion ownership");
-    if (*Status == windows::StatusPending && !Asynchronous)
+    if (*Status == windows::StatusPending &&
+        Owner == ForwardingOwner::FrameworkFileSynchronous)
       return frameworkRequestError("file send unexpectedly remained pending");
     if (Owner == ForwardingOwner::FrameworkFileSynchronous ||
-        (Asynchronous && *Status != windows::StatusPending)) {
+        (Owner == ForwardingOwner::FrameworkFileAsynchronous &&
+         *Status != windows::StatusPending)) {
       if (!Request->FileBusReceived)
         return frameworkRequestError("file send lost its lower response");
       if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1))

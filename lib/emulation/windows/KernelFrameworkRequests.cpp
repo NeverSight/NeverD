@@ -956,7 +956,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
          : Synchronous ? !RequestsHost.SendFileSynchronously
                        : !RequestsHost.SendFileAsynchronously))
       return requestError("lower file-request host is unavailable");
-    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP, Asynchronous))
+    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP, !Synchronous))
       return E;
     uint64_t CompletionParams = 0;
     if (Asynchronous) {
@@ -985,7 +985,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       }
       return E;
     }
-    if (*Status == windows::StatusPending && !Asynchronous)
+    if (*Status == windows::StatusPending && Synchronous)
       return requestError("asynchronous lower file completion is unsupported");
     if (!SendAndForget) {
       if (Asynchronous) {

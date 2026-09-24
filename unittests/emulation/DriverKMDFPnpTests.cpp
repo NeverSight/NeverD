@@ -261,6 +261,7 @@ TEST(DriverKMDFPnp, AsyncCreateWaitsForDelayedLowerCompletion) {
         ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
         ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
             << Result->Diagnostic;
+        EXPECT_EQ(Result->Requests[1].DispatchStatus, windows::StatusPending);
         EXPECT_EQ(Result->Requests[1].IOStatus, Status);
         EXPECT_TRUE(Result->Requests[1].Completed);
         EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
@@ -328,8 +329,56 @@ TEST(DriverKMDFPnp, AsyncCreateTimeoutCompetesWithLowerCompletion) {
       }
 }
 
-TEST(DriverKMDFPnp, DelayedCreateRejectsNoncallbackSendModes) {
-  for (char Mode : {'O', 'p', 's'}) {
+TEST(DriverKMDFPnp, SendAndForgetCreateAllowsDelayedLowerCompletion) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL})
+      for (uint32_t Status :
+           {windows::StatusSuccess, windows::StatusUnsuccessful}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Status);
+        auto Input = forwardedFileOptions('p');
+        Input.LoadAddress = Base;
+        Input.Requests[1].FileBusCompletion =
+            DriverBusCompletion{Status, DelayedFileCompletion100ns};
+        if (Status != windows::StatusSuccess)
+          Input.Requests.erase(
+              std::remove_if(Input.Requests.begin(), Input.Requests.end(),
+                             [](const DriverRequest &Request) {
+                               return Request.Kind ==
+                                          DriverRequestKind::Cleanup ||
+                                      Request.Kind == DriverRequestKind::Close;
+                             }),
+              Input.Requests.end());
+        auto Result = emulateDriver(Image, Input);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        EXPECT_EQ(Result->Requests[1].DispatchStatus, windows::StatusPending);
+        EXPECT_EQ(Result->Requests[1].IOStatus, Status);
+        EXPECT_TRUE(Result->Requests[1].Completed);
+        EXPECT_EQ(callCount(*Result, "WdfRequestSend"), 1u);
+        EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"), 0u);
+        EXPECT_EQ(callCount(*Result, "WdfRequestGetCompletionParams"), 0u);
+        ASSERT_TRUE(Result->Requests.front().Pnp);
+        ASSERT_TRUE(Result->Requests.front().Pnp->BusCompletedAt100ns);
+        const auto QueryRemove = std::find_if(
+            Result->Requests.begin(), Result->Requests.end(),
+            [](const DriverRequestResult &Request) {
+              return Request.Pnp &&
+                     Request.Pnp->Minor == DevicePnpRequest::QueryRemove;
+            });
+        ASSERT_NE(QueryRemove, Result->Requests.end());
+        ASSERT_TRUE(QueryRemove->Pnp->BusReceivedAt100ns);
+        EXPECT_GE(*QueryRemove->Pnp->BusReceivedAt100ns,
+                  *Result->Requests.front().Pnp->BusCompletedAt100ns +
+                      DelayedFileCompletion100ns);
+        EXPECT_TRUE(Result->UnloadCompleted);
+      }
+}
+
+TEST(DriverKMDFPnp, DelayedCreateRejectsImplicitAndSynchronousForwarding) {
+  for (char Mode : {'O', 's'}) {
     SCOPED_TRACE(Mode);
     auto Input = forwardedFileOptions(Mode);
     Input.Requests[1].FileBusCompletion =

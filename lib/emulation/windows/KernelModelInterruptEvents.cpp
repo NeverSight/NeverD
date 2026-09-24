@@ -32,7 +32,7 @@ KernelModel::preflightScheduledBoundary(uint64_t Time) {
     if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return interruptEventError(
           "PnP provider: deadline lost its live request or PDO identity");
-    if (Provider.FrameworkFile) {
+    if (Provider.FrameworkCallback) {
       if (!Framework)
         return interruptEventError("file completion lost its framework model");
       auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,

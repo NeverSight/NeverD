@@ -887,7 +887,7 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
       auto Options = kmdfPnpOptions(Service.c_str());
       auto Scenario = llvm::json::parse(KMDFPnpFileForwardScenario);
       ASSERT_TRUE(bool(Scenario)) << llvm::toString(Scenario.takeError());
-      if (Mode == 'a') {
+      if (Mode == 'a' || Mode == 'p') {
         auto *Requests = Scenario->getAsObject()->getArray("requests");
         ASSERT_NE(Requests, nullptr);
         auto *Create = (*Requests)[1].getAsObject();
@@ -916,7 +916,7 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
         EXPECT_EQ(Request->getInteger("io_status"), 0);
         EXPECT_EQ(Request->getBoolean("completed"), true);
       }
-      if (Mode == 'a') {
+      if (Mode == 'a' || Mode == 'p') {
         const auto *Start = (*Requests)[0].getAsObject()->getObject("pnp");
         const auto *Remove = (*Requests)[4].getAsObject()->getObject("pnp");
         ASSERT_NE(Start, nullptr);

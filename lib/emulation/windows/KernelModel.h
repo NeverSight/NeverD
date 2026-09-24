@@ -570,7 +570,7 @@ private:
   struct ProviderCompletion {
     uint64_t Device = 0, Deadline = 0, Sequence = 0;
     uint32_t Status = 0;
-    bool FrameworkFile = false;
+    bool FrameworkCallback = false;
   };
   uint64_t NextProviderSequence = 1;
   std::map<uint64_t, ProviderCompletion> ProviderCompletions;

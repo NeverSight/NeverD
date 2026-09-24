@@ -66,10 +66,17 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
     if (RetainRequest && Request->Kind != DriverRequestKind::Create)
       return providerError("framework file send requires CREATE");
     if (Request->FileBusCompletion->Delay100ns) {
-      if (Owner != ForwardingOwner::FrameworkFileAsynchronous ||
+      const bool SendAndForget = Owner == ForwardingOwner::FrameworkFile;
+      if ((!SendAndForget &&
+           Owner != ForwardingOwner::FrameworkFileAsynchronous) ||
           ProviderCompletions.count(IRP))
         return providerError(
             "delayed file response requires one asynchronous CREATE send");
+      if (SendAndForget) {
+        auto Plan = planIRPCompletion(IRP, Status);
+        if (!Plan)
+          return Plan.takeError();
+      }
       const uint64_t LowerDelay = Request->FileBusCompletion->Delay100ns;
       uint32_t CompletionStatus = Status;
       int64_t Delay = -int64_t(LowerDelay);
@@ -89,7 +96,7 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
         return E;
       ProviderCompletions.emplace(
           IRP, ProviderCompletion{Device, *Deadline, NextProviderSequence++,
-                                  CompletionStatus, true});
+                                  CompletionStatus, !SendAndForget});
       Request->FileBusReceived = true;
       return StatusPending;
     }
@@ -251,7 +258,7 @@ llvm::Error KernelModel::processProviderCompletions() {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return providerError("deadline lost its live request or PDO identity");
-    if (Provider.FrameworkFile) {
+    if (Provider.FrameworkCallback) {
       if (!Framework || !Request->FileBusReceived)
         return providerError("file completion lost its framework request");
       auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,
@@ -296,7 +303,7 @@ llvm::Error KernelModel::processProviderCompletions() {
     if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
       return E;
     Request.IOStatusWritten.fill(true);
-    if (Completion.Provider.FrameworkFile) {
+    if (Completion.Provider.FrameworkCallback) {
       auto Cursor = requestStackCursor(IRP);
       if (!Cursor)
         return Cursor.takeError();
@@ -319,25 +326,27 @@ llvm::Error KernelModel::processProviderCompletions() {
           *ID, GuestCallToken{GuestCallOwner::Framework, Call->Token});
       continue;
     }
-    auto &Observation = Result.Requests[Request.ResultIndex];
-    auto Publish = [&](auto &Bus) {
-      Bus.BusStatus = Completion.Provider.Status;
-      Bus.BusCompletedAt100ns = Scheduler.now100ns();
-    };
-    if (Observation.Pnp)
-      Publish(*Observation.Pnp);
-    else if (Observation.Power)
-      Publish(*Observation.Power);
-    else
-      return providerError("completed request lost its bus observation");
-    if (Request.PowerOperation &&
-        Request.PowerOperation->Type == DriverPowerType::Device &&
-        Request.PowerOperation->Minor == DevicePowerRequest::Set &&
-        !(Completion.Provider.Status & profile::NTStatusFailureMask))
-      Devices.at(Completion.Provider.Device).ReportedDevicePower =
-          static_cast<DevicePowerState>(Request.PowerOperation->State);
-    if (auto E = publishProviderHardware(Request, Completion.Provider.Status))
-      return E;
+    if (!Request.FileBusCompletion) {
+      auto &Observation = Result.Requests[Request.ResultIndex];
+      auto Publish = [&](auto &Bus) {
+        Bus.BusStatus = Completion.Provider.Status;
+        Bus.BusCompletedAt100ns = Scheduler.now100ns();
+      };
+      if (Observation.Pnp)
+        Publish(*Observation.Pnp);
+      else if (Observation.Power)
+        Publish(*Observation.Power);
+      else
+        return providerError("completed request lost its bus observation");
+      if (Request.PowerOperation &&
+          Request.PowerOperation->Type == DriverPowerType::Device &&
+          Request.PowerOperation->Minor == DevicePowerRequest::Set &&
+          !(Completion.Provider.Status & profile::NTStatusFailureMask))
+        Devices.at(Completion.Provider.Device).ReportedDevicePower =
+            static_cast<DevicePowerState>(Request.PowerOperation->State);
+      if (auto E = publishProviderHardware(Request, Completion.Provider.Status))
+        return E;
+    }
     ProviderCompletions.erase(IRP);
     if (auto E = completeRequest(IRP, 0)) {
       ProviderCompletions.emplace(IRP, Completion.Provider);

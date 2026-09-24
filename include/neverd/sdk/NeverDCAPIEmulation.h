@@ -73,8 +73,9 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// zero, accept integers or 0x strings, and the entire transfer must fit
 /// nonnegative signed 64-bit file offsets. Forwarded CREATE/CLEANUP/CLOSE
 /// requests require an explicit bus_completion with a final status. A positive
-/// delay_100ns is accepted only for a default asynchronous CREATE send with a
-/// completion routine; other file sends require an immediate response.
+/// delay_100ns is accepted for a default asynchronous CREATE send with a
+/// completion routine or a SEND_AND_FORGET CREATE send; other file sends
+/// require an immediate response.
 /// Configured pnp_devices require a
 /// unique case-sensitive ASCII id, bus="resource_free" or "register_bank",
 /// initial_device_power=
