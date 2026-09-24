@@ -2576,6 +2576,37 @@ TEST(ObjCSourceBindings, SwiftLiteralStoragePreservesBytesAndConsumerIdentity) {
 }
 
 TEST(ObjCSourceBindings,
+     UIKitImageLiteralInitializerRebuildsExactSwiftStringStorage) {
+  SwiftLiteralFixture F(Arch::AArch64);
+  const std::string Name =
+      "_$sSo7UIImageC5UIKitE24imageLiteralResourceNameABSS_tcfC";
+  F.Image.ImportPtrSlots[F.ImportSlot] = Name;
+  F.Image.ImportStorageSlots[F.ImportSlot].Name = Name;
+  F.Image.DyldBindSlots[F.ImportSlot].Name = Name;
+  F.Image.DyldBindSlots[F.ImportSlot].Module =
+      "/System/Library/Frameworks/UIKit.framework/UIKit";
+  const auto Hint = swiftRuntimeSourceCallHint(F.Image, F.ImportSlot);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->SwiftStringInputs,
+            (std::vector<std::pair<uint32_t, uint32_t>>{{0, 1}}));
+  F.Call->CallTarget = Name;
+  F.Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+  const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_EQ(Bound.BorrowedBytes,
+            (std::set<BorrowedByteRange>{{F.Contents, F.Text.size() + 1}}));
+  ASSERT_TRUE(objc_binding_detail::swiftLiteralStorageHelper(
+      Bound.Function.Body[0].RetVal->Operands[1]));
+  EXPECT_TRUE(objcSourceCallBound(*Bound.Function.Body[0].RetVal, F.Image, {}));
+
+  F.Image.DyldBindSlots[F.ImportSlot].Module = "/tmp/UIKit";
+  EXPECT_FALSE(
+      objcSourceCallBound(*Bound.Function.Body[0].RetVal, F.Image, {}));
+  EXPECT_TRUE(
+      bindObjCSourceReferences(F.Function, F.Image).BorrowedBytes.empty());
+}
+
+TEST(ObjCSourceBindings,
      SwiftLiteralStorageRejectsChangedWordsStorageAndImports) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     for (unsigned Mutation = 0; Mutation < 17; ++Mutation) {

@@ -306,6 +306,12 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
   if (Found->DoesNotReturn && Signature.ReturnType->Kind != NdTypeKind::Void)
     return false;
   Hint.DoesNotReturn = Found->DoesNotReturn;
+  // UIKit's image-literal initializer receives the opaque String words in
+  // x0/x1. Authenticate that exact SDK import before allowing its immutable
+  // literal storage to be copied into the generated source.
+  if (Hint.TargetName ==
+      "$sSo7UIImageC5UIKitE24imageLiteralResourceNameABSS_tcfC")
+    Hint.SwiftStringInputs = {{0, 1}};
   for (char Code : Encoding) {
     SourceParameterTypeHint Parameter;
     Parameter.Name = "arg" + std::to_string(Signature.Parameters.size());
