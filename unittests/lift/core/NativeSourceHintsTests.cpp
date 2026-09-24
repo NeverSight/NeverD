@@ -223,7 +223,7 @@ TEST(NativeSourceHints, UIColorIntAlphaAllocatorUsesMixedSwiftRegisters) {
       sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong, 0x1000));
 }
 
-TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
+TEST(NativeSourceHints, ZeroArgClassVoidAndBoolMethodsUseSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
   Image.Arch = Arch::AArch64;
@@ -237,7 +237,7 @@ TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
   Image.Symbols.push_back(
       {"_$s3WMF15LocationManagerC014stopMonitoringB0yyF", 0x1000, 0, true});
   const auto Hint =
-      sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Image, 0x1000);
+      sdk::swiftMangledZeroArgClassMethodSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
   EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
   EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
@@ -253,24 +253,36 @@ TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
   Private.Symbols[0].Name = "_$s3WMF18AlignedImageButtonC12adjustInsets33_"
                             "2AE2377B0A7FC7A2DEBED24238BE2C37LLyyF";
   const auto PrivateHint =
-      sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Private, 0x1000);
+      sdk::swiftMangledZeroArgClassMethodSourceABI(Private, 0x1000);
   ASSERT_TRUE(PrivateHint);
   ASSERT_EQ(PrivateHint->Parameters.size(), 1U);
   EXPECT_EQ(PrivateHint->Parameters[0].Location.RegisterOffset, a64reg::X20);
   EXPECT_TRUE(validateSourceABI(*PrivateHint, Error)) << Error;
 
+  auto Boolean = Image;
+  Boolean.Symbols[0].Name =
+      "_$s7WMFData21WMFHomeDataControllerC28communityFeaturedArticleIsOnSbyF";
+  const auto BooleanHint =
+      sdk::swiftMangledZeroArgClassMethodSourceABI(Boolean, 0x1000);
+  ASSERT_TRUE(BooleanHint);
+  EXPECT_EQ(BooleanHint->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(BooleanHint->ReturnType->Size, 1U);
+  ASSERT_EQ(BooleanHint->Parameters.size(), 1U);
+  EXPECT_EQ(BooleanHint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*BooleanHint, Error)) << Error;
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name = "_$s3WMF15LocationManagerC014stopMonitoringB0SiyF";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name += "Z";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name = "_$sSo15LocationManagerC3WMFE014stopMonitoringB0yyF";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassMethodSourceABI(Wrong, 0x1000));
 }
 
 TEST(NativeSourceHints, ZeroArgClassInitializerUsesSwiftSelf) {

@@ -248,7 +248,7 @@ inline size_t inferObjCNativeDependencies(
         continue;
       }
       if (auto Mangled =
-              swiftMangledZeroArgClassVoidMethodSourceABI(Image, Target)) {
+              swiftMangledZeroArgClassMethodSourceABI(Image, Target)) {
         Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
         ++Added;
         continue;

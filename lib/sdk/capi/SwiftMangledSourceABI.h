@@ -420,12 +420,12 @@ swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
              : std::nullopt;
 }
 
-// A zero-argument Swift class instance method returning Void receives only
-// its object in swiftself. Reject static, generic, extension, and ObjC thunk
-// wrappers: their root mangling shapes are distinct from this direct body.
+// A zero-argument Swift class instance method returning Void or Bool receives
+// only its object in swiftself. Reject static, generic, extension, and ObjC
+// thunk wrappers: their root mangling shapes are distinct from this body.
 inline std::optional<SourceFunctionTypeHint>
-swiftMangledZeroArgClassVoidMethodSourceABI(const BinaryImage &Image,
-                                            va_t Entry) {
+swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image,
+                                       va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
       !Image.isCodeAddress(Entry))
@@ -455,6 +455,11 @@ swiftMangledZeroArgClassVoidMethodSourceABI(const BinaryImage &Image,
     return N.Kind == Kind && !N.Text && !N.Index &&
            N.Children.size() == Children;
   };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
   if (!Parsed.Root || !Parsed.Error.empty() ||
       !Shape(*Parsed.Root, "Global", 1) ||
       !Shape(Parsed.Root->Children[0], "Function", 3))
@@ -483,13 +488,20 @@ swiftMangledZeroArgClassVoidMethodSourceABI(const BinaryImage &Image,
       !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
              0) ||
       !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
-      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
-      !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Tuple", 0))
+      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1))
+    return std::nullopt;
+  const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
+  const bool VoidResult = Shape(Result, "Tuple", 0);
+  const bool BoolResult =
+      Shape(Result, "Structure", 2) &&
+      Text(Result.Children[0], "Module", "Swift") &&
+      Text(Result.Children[1], "Identifier", "Bool");
+  if (!VoidResult && !BoolResult)
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
-  Hint.ReturnType = NdType::makeVoid();
+  Hint.ReturnType = VoidResult ? NdType::makeVoid() : NdType::makeInt(1, false);
   Hint.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())}};
   Hint.Parameters[0].TheRole = SourceParameterTypeHint::Role::SwiftContext;
   std::string Error;
