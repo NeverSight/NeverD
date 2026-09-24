@@ -22,7 +22,7 @@ bool scalar(const TypeRef &T) {
           (T->Kind == NdTypeKind::Ptr && T->Size == 8));
 }
 struct Value {
-  enum class Kind { Scalar, Frame, Number, Invoke };
+  enum class Kind { Scalar, CallInteger, Frame, Number, Invoke };
   Kind K = Kind::Scalar;
   // A base identifies one original incoming value; copies preserve identity.
   uint64_t Base = 0;
@@ -56,6 +56,33 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
         Op.Opcode == NdOp::INTRINSIC)
       return Width;
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      // objc_release has one pointer argument and no result. Once the block
+      // return GPR has already been overwritten, this call also clobbers the
+      // volatile FP return bank. The preceding invoke result is unobserved,
+      // so its source projection can use a void block prototype.
+      if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL && BoundCalls) {
+        const auto It = BoundCalls->find(Op.Addr);
+        if (It != BoundCalls->end()) {
+          const auto &Hint = It->second;
+          std::string Error;
+          if (Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+              Hint.TargetName == "objc_release" &&
+              Hint.Signature.Architecture == Architecture &&
+              Hint.Signature.HasExplicitABI &&
+              validateSourceABI(Hint.Signature, Error) &&
+              Hint.Signature.ReturnType &&
+              Hint.Signature.ReturnType->Kind == NdTypeKind::Void &&
+              Hint.Signature.Parameters.size() == 1 &&
+              Hint.Signature.Parameters[0].Type &&
+              Hint.Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
+              Hint.Signature.Parameters[0].Location.Kind ==
+                  SourceABICarrierKind::IntegerRegister &&
+              Hint.Signature.Parameters[0].Location.RegisterOffset ==
+                  TRI.IntParamRegs[0] &&
+              Hint.Signature.Parameters[0].Location.ValueBytes == 8)
+            return 0U;
+        }
+      }
       if (IntegerLive && BoundCalls) {
         const auto It = BoundCalls->find(Op.Addr);
         if (It != BoundCalls->end()) {
@@ -146,7 +173,7 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         continue;
       auto Value = Stored;
       if (V.Size < 8 && Value.K != Value::Kind::Scalar &&
-          Value.K != Value::Kind::Number)
+          Value.K != Value::Kind::CallInteger && Value.K != Value::Kind::Number)
         return std::nullopt;
       if (Value.Type && V.Size < Value.Type->Size)
         Value.Type = NdType::makeInt(V.Size, false);
@@ -199,7 +226,9 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
             SourceFunctionTypeHint Inferred;
             Inferred.Origin =
                 SourceFunctionTypeHint::OriginKind::NativeAnalysis;
-            Inferred.ReturnType = NdType::makeInt(*ReturnBytes, false);
+            Inferred.ReturnType = *ReturnBytes
+                                      ? NdType::makeInt(*ReturnBytes, false)
+                                      : NdType::makeVoid();
             bool Gap = false, Valid = true;
             for (size_t I = 0; I < TRI.IntParamRegs.size(); ++I) {
               const auto Reg = TRI.IntParamRegs[I];
@@ -308,6 +337,23 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         Values.emplace(key(Op.Output), Value{Value::Kind::Scalar,
                                              NextCallResultBase++, 0, Pointer});
         WrittenArguments.insert(TRI.IntParamRegs[0]);
+      } else if (Op.Opcode == NdOp::CALL && Bound &&
+                 Bound->CallKind == SourceCallTypeHint::Kind::ObjCMessage &&
+                 Bound->Signature.HasExplicitABI &&
+                 scalar(Bound->Signature.ReturnType) &&
+                 Bound->Signature.ReturnType->Kind == NdTypeKind::Int &&
+                 Bound->Signature.ReturnLocation.Kind ==
+                     SourceABICarrierKind::IntegerRegister &&
+                 Bound->Signature.ReturnLocation.RegisterOffset ==
+                     TRI.IntReturnReg &&
+                 Op.Output.isReg() && Op.Output.Offset == TRI.IntReturnReg &&
+                 Op.Output.Size >= Bound->Signature.ReturnType->Size) {
+        // An authenticated scalar message result can be a later block
+        // argument. Keep its value identity, but never treat this integer as
+        // a new block receiver merely because code reads at offset 16.
+        Values.emplace(key(Op.Output),
+                       Value{Value::Kind::CallInteger, NextCallResultBase++, 0,
+                             Bound->Signature.ReturnType});
       }
       continue;
     }
