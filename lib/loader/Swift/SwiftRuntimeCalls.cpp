@@ -360,17 +360,32 @@ bool declaredStdlibABI(const BinaryImage &Image, va_t Slot,
       "SSAHSus6UInt32VtF";
   constexpr llvm::StringLiteral StringRangeSubscript =
       "$sSSySsSnySS5IndexVGcig";
+  constexpr llvm::StringLiteral AllocError = "swift_allocError";
   const auto Bind = Image.DyldBindSlots.find(Slot);
   if (Bind == Image.DyldBindSlots.end() ||
       Bind->second.Module != "/usr/lib/swift/libswiftCore.dylib" ||
-      (Name != AssertionFailure && Name != StringRangeSubscript) ||
-      (Name == StringRangeSubscript && Image.Arch != Arch::AArch64))
+      (Name != AssertionFailure && Name != StringRangeSubscript &&
+       Name != AllocError) ||
+      ((Name == StringRangeSubscript || Name == AllocError) &&
+       Image.Arch != Arch::AArch64))
     return false;
 
   auto &Signature = Hint.Signature;
   Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
   const auto Word = NdType::makeInt(8, false);
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  if (Name == AllocError) {
+    // Swift 6.1.2 arm64 client IR: swiftcc { ptr, ptr }
+    // (ptr metadata, ptr witness, ptr initialValue, i1 isTake). Its generated
+    // assembly stores the error payload through the second result in x1.
+    Signature.ReturnType = NdType::makeStruct({Pointer, Pointer});
+    Signature.Parameters = {{"type", Pointer},
+                            {"conformance", Pointer},
+                            {"initial_value", Pointer},
+                            {"is_take", NdType::makeInt(1, false)}};
+    std::string Diagnostic;
+    return assignDarwinSwiftSourceABI(Signature, Image.Arch, Diagnostic);
+  }
   if (Name == StringRangeSubscript) {
     // Swift 6.1.2 arm64 client IR: swiftcc { i64, i64, i64, ptr }
     // (i64, i64, i64, ptr). The range precedes the String value; neither

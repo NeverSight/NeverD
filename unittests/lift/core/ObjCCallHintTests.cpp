@@ -1458,6 +1458,45 @@ TEST(ObjCCallHints, SwiftStringRangeSubscriptKeepsFourWordResultABI) {
   EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
 }
 
+TEST(ObjCCallHints, SwiftAllocErrorKeepsObjectAndPayloadResults) {
+  auto Image = runtimeImage("_swift_allocError");
+  Image.DyldBindSlots[0x2180] = {
+      "_swift_allocError", 0, "/usr/lib/swift/libswiftCore.dylib", false};
+  const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+  const auto &ABI = Hint->Signature;
+  EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+  EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  ASSERT_TRUE(ABI.ReturnType);
+  EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Struct);
+  ASSERT_EQ(ABI.ReturnType->Fields.size(), 2U);
+  ASSERT_EQ(ABI.ReturnComponents.size(), 2U);
+  ASSERT_EQ(ABI.Parameters.size(), 4U);
+  for (size_t I = 0; I < 2; ++I) {
+    EXPECT_EQ(ABI.ReturnType->Fields[I]->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(ABI.ReturnComponents[I].Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.ReturnComponents[I].RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntReturnReg + I * 8);
+  }
+  for (size_t I = 0; I < 4; ++I) {
+    EXPECT_EQ(ABI.Parameters[I].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+  }
+  EXPECT_EQ(ABI.Parameters[3].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(ABI.Parameters[3].Type->Size, 1U);
+  std::string Diagnostic;
+  EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+  Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  Image.DyldBindSlots[0x2180].Module = "/usr/lib/swift/libswiftCore.dylib";
+  Image.DyldBindSlots[0x2180].Name += "_suffix";
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+}
+
 TEST(ObjCCallHints, SwiftDefaultActorLifecycleKeepsSwiftConvention) {
   constexpr llvm::StringLiteral Provider =
       "/usr/lib/swift/libswift_Concurrency.dylib";
@@ -3237,7 +3276,7 @@ TEST(ObjCCallHints, SwiftFixedRuntimeImportsRequireExactStrongProvider) {
 TEST(ObjCCallHints, SwiftFixedRuntimeDeclarationsExcludeCustomParameterABIs) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (const char *Name :
-         {"_swift_willThrow", "_swift_allocError", "_swift_allocBoxTyped",
+         {"_swift_willThrow", "_swift_allocBoxTyped",
           "_swift_retainDirect", "_swift_task_getCurrent",
           "_swift_getTypeByMangledNameInContext2_suffix"}) {
       auto Image = runtimeImage(Name, Architecture);
@@ -3245,6 +3284,10 @@ TEST(ObjCCallHints, SwiftFixedRuntimeDeclarationsExcludeCustomParameterABIs) {
       Image.DyldBindSlots[0x2180].Module = "/usr/lib/swift/libswiftCore.dylib";
       EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180)) << Name;
     }
+  auto X64 = runtimeImage("_swift_allocError", Arch::X64);
+  X64.DyldBindSlots[0x2180] = {
+      "_swift_allocError", 0, "/usr/lib/swift/libswiftCore.dylib", false};
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
 }
 
 TEST(ObjCCallHints, SwiftOnceKeepsCallbackContextAndVoidResult) {
