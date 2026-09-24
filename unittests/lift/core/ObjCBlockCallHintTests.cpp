@@ -8,6 +8,7 @@
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 
 using namespace neverd;
 
@@ -84,6 +85,39 @@ TEST(ObjCBlockCallHints, ProvesSameReceiverAndKeepsOnlyWrittenScalarArguments) {
     EXPECT_EQ(Hint.Signature.ReturnType->Size, 4U);
     EXPECT_EQ(Hint.TargetAddress, 0U);
   }
+}
+
+TEST(ObjCBlockCallHints, RetainBlockResultKeepsBlockIdentity) {
+  Fixture F(Arch::AArch64);
+  constexpr va_t ImportSlot = 0x2180;
+  F.Image.ImportPtrSlots[ImportSlot] = "_objc_retainBlock";
+  F.Image.DyldBindSlots[ImportSlot] = {"_objc_retainBlock", 0,
+                                       "/usr/lib/libobjc.A.dylib", false};
+  const auto Retain = objcRuntimeSourceCallHint(F.Image, ImportSlot);
+  ASSERT_TRUE(Retain);
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1004, *Retain}};
+  F.Low.Blocks[0].Ops = {
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(a64reg::SP, 8)}, 0x1000),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x2000, 8)}, 0x1004),
+      op(NdOp::COPY, NdVar::reg(a64reg::X19, 8), {NdVar::reg(F.R0, 8)}, 0x1008),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(a64reg::X19, 8), NdVar::cst(16, 8)}, 0x100c),
+      op(NdOp::LOAD, NdVar::reg(F.Target, 8), {NdVar::tmp(0, 8)}, 0x100c),
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(a64reg::X19, 8)}, 0x1010),
+      op(NdOp::INDIR_CALL, NdVar::reg(F.R0, 8), {NdVar::reg(F.Target, 8)},
+         0x1014),
+      op(NdOp::RETURN, {}, {NdVar::reg(F.R0, 4)}, 0x1018)};
+  const auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_TRUE(Hints.count(0x1014));
+
+  F.Image.DyldBindSlots[ImportSlot].Module = "/usr/lib/libSystem.B.dylib";
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  F.Image.DyldBindSlots[ImportSlot].Module = "/usr/lib/libobjc.A.dylib";
+  F.Image.DyldBindSlots[ImportSlot].WeakImport = true;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
 TEST(ObjCBlockCallHints, ProvesInvokeInMultiBlockEntryPrefixOnly) {

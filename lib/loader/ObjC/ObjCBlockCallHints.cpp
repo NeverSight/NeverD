@@ -6,6 +6,7 @@
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
+#include "neverd/loader/ObjC/ObjCCallHints.h"
 
 #include <algorithm>
 #include <optional>
@@ -171,6 +172,20 @@ bool boundVoidObjCMessage(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
         !Parameter.Components.empty())
       return false;
   return true;
+}
+
+bool boundRetainBlock(const BinaryImage &Image,
+                      const SourceCallTypeHint &Bound) {
+  if (Bound.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+      Bound.TargetName != "objc_retainBlock")
+    return false;
+  const auto Bind = Image.DyldBindSlots.find(Bound.TargetAddress);
+  if (Bind == Image.DyldBindSlots.end() ||
+      Bind->second.Module != "/usr/lib/libobjc.A.dylib")
+    return false;
+  const auto Runtime = objcRuntimeSourceCallHint(Image, Bound.TargetAddress);
+  return Runtime && Runtime->CallKind == Bound.CallKind &&
+         Runtime->TargetName == Bound.TargetName;
 }
 
 std::optional<unsigned>
@@ -581,7 +596,8 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
       FloatingArgumentWrite = false;
       if (Op.Opcode == NdOp::CALL && Bound &&
           Bound->CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
-          Bound->TargetName == "objc_retainAutoreleasedReturnValue" &&
+          (Bound->TargetName == "objc_retainAutoreleasedReturnValue" ||
+           boundRetainBlock(Image, *Bound)) &&
           Bound->Signature.HasExplicitABI && Bound->Signature.ReturnType &&
           Bound->Signature.ReturnType->Kind == NdTypeKind::Ptr &&
           Bound->Signature.ReturnLocation.Kind ==
