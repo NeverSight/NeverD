@@ -66,6 +66,71 @@ TEST(NativeSourceHints, ExactMangledStringBundleFunctionKeepsPairResult) {
   }
 }
 
+TEST(NativeSourceHints, ArrayStringValueInitializerRequiresExactPassThrough) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s6Lottie16AnimationKeypathV4keysACSaySSG_tcfC", 0x1000, 0, true});
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Blocks.emplace_back();
+  Low.Blocks[0].StartAddr = 0x1000;
+  LowOp Counter;
+  Counter.Opcode = NdOp::INT_ADD;
+  Counter.Output = NdVar::reg(a64reg::X8, 8);
+  Counter.addInput(NdVar::reg(a64reg::X8, 8));
+  Counter.addInput(NdVar::cst(1, 8));
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(NdVar::reg(a64reg::X30, 8));
+  Low.Blocks[0].Ops = {Counter, Return};
+  const auto Hint =
+      sdk::swiftMangledArrayStringValueInitializerSourceABI(Image, 0x1000, Low);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Clobber = Low;
+  Clobber.Blocks[0].Ops[0].Output = NdVar::reg(a64reg::X0, 4);
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Image, 0x1000, Clobber));
+  auto Call = Low;
+  Call.Blocks[0].Ops[0].Opcode = NdOp::CALL;
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Image, 0x1000, Call));
+  Call.Blocks[0].Ops[0].Opcode = NdOp::BRANCH;
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Image, 0x1000, Call));
+  auto BadReturn = Low;
+  BadReturn.Blocks[0].Ops.back().Inputs[0] = NdVar::reg(a64reg::X0, 8);
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Image, 0x1000, BadReturn));
+  auto Split = Low;
+  Split.Blocks.emplace_back();
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Image, 0x1000, Split));
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name = "_$s6Lottie16AnimationKeypathV4keysACSaySiG_tcfC";
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Wrong, 0x1000, Low));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledArrayStringValueInitializerSourceABI(
+      Wrong, 0x1000, Low));
+}
+
 TEST(NativeSourceHints, ObjCExtensionBoolGetterUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;

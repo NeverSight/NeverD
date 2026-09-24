@@ -2,11 +2,141 @@
 #define NEVERD_SDK_CAPI_SWIFTMANGLEDSOURCEABI_H
 
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Demangle/SwiftDemangle.h"
 
 namespace neverd::sdk {
+
+// A Swift value initializer may return its Array<String> argument unchanged
+// in x0 while still performing observable side effects. The mangled type
+// gives the nominal and argument shape; the complete single-block
+// LowIR proves that the incoming word reaches the return without a write or
+// call clobber. This is deliberately limited to the one-word array carrier.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledArrayStringValueInitializerSourceABI(const BinaryImage &Image,
+                                                 va_t Entry,
+                                                 const LowFunc &Low) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry) || Low.Entry != Entry ||
+      Low.Blocks.size() != 1 || Low.Blocks[0].StartAddr != Entry ||
+      !Low.Blocks[0].Preds.empty() || !Low.Blocks[0].Succs.empty() ||
+      Low.Blocks[0].Ops.empty() || Low.Blocks[0].Ops.size() > 4096)
+    return std::nullopt;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto Register = TRI.IntReturnReg;
+  const auto &Ops = Low.Blocks[0].Ops;
+  const auto &Return = Ops.back();
+  if (Return.Opcode != NdOp::RETURN || Return.NumInputs != 1 ||
+      !Return.Inputs[0].isReg() ||
+      Return.Inputs[0].Offset != TRI.LinkRegister || Return.Inputs[0].Size != 8)
+    return std::nullopt;
+  for (size_t I = 0; I + 1 < Ops.size(); ++I) {
+    const auto &Op = Ops[I];
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+        Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+        Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INTRINSIC ||
+        Op.Opcode == NdOp::RETURN ||
+        (Op.Output.isReg() && Op.Output.Size &&
+         (Op.Output.Offset <= Register
+              ? Register - Op.Output.Offset < Op.Output.Size
+              : Op.Output.Offset - Register < 8)))
+      return std::nullopt;
+  }
+
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Allocator", 3))
+    return std::nullopt;
+  const auto &Allocator = Parsed.Root->Children[0];
+  const auto &Nominal = Allocator.Children[0];
+  const auto &Labels = Allocator.Children[1];
+  const auto &Type = Allocator.Children[2];
+  if (!Shape(Nominal, "Structure", 2) || Nominal.Children[0].Kind != "Module" ||
+      !Nominal.Children[0].Text || Nominal.Children[0].Text->empty() ||
+      Nominal.Children[0].Index || !Nominal.Children[0].Children.empty() ||
+      Nominal.Children[1].Kind != "Identifier" || !Nominal.Children[1].Text ||
+      Nominal.Children[1].Text->empty() || Nominal.Children[1].Index ||
+      !Nominal.Children[1].Children.empty() || !Shape(Labels, "LabelList", 1) ||
+      Labels.Children[0].Kind != "Identifier" || !Labels.Children[0].Text ||
+      Labels.Children[0].Text->empty() || Labels.Children[0].Index ||
+      !Labels.Children[0].Children.empty() || !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             1) ||
+      !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Structure",
+             2))
+    return std::nullopt;
+  const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
+  if (!Text(Result.Children[0], "Module", *Nominal.Children[0].Text) ||
+      !Text(Result.Children[1], "Identifier", *Nominal.Children[1].Text))
+    return std::nullopt;
+  const auto &Element =
+      Type.Children[0].Children[0].Children[0].Children[0].Children[0];
+  if (!Shape(Element, "TupleElement", 1) ||
+      !Shape(Element.Children[0], "Type", 1) ||
+      !Shape(Element.Children[0].Children[0], "BoundGenericStructure", 2))
+    return std::nullopt;
+  const auto &Array = Element.Children[0].Children[0];
+  if (!Shape(Array.Children[0], "Type", 1) ||
+      !Shape(Array.Children[0].Children[0], "Structure", 2) ||
+      !Text(Array.Children[0].Children[0].Children[0], "Module", "Swift") ||
+      !Text(Array.Children[0].Children[0].Children[1], "Identifier", "Array") ||
+      !Shape(Array.Children[1], "TypeList", 1) ||
+      !Shape(Array.Children[1].Children[0], "Type", 1) ||
+      !Shape(Array.Children[1].Children[0].Children[0], "Structure", 2) ||
+      !Text(Array.Children[1].Children[0].Children[0].Children[0], "Module",
+            "Swift") ||
+      !Text(Array.Children[1].Children[0].Children[0].Children[1], "Identifier",
+            "String"))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"array", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
 
 // A deliberately closed Swift type shape. The compiler lowers this five-value
 // global function as nine scalar inputs and a two-word String result. The
