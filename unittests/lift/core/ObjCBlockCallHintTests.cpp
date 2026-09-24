@@ -10,6 +10,11 @@
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 
+#include "llvm/BinaryFormat/MachO.h"
+#include "llvm/Support/Endian.h"
+
+#include <algorithm>
+
 using namespace neverd;
 
 namespace {
@@ -116,6 +121,108 @@ TEST(ObjCBlockCallHints, RetainBlockResultKeepsBlockIdentity) {
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
   F.Image.DyldBindSlots[ImportSlot].Module = "/usr/lib/libobjc.A.dylib";
   F.Image.DyldBindSlots[ImportSlot].WeakImport = true;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+}
+
+TEST(ObjCBlockCallHints,
+     CopiedStackBlockDescriptorSurvivesUnboundSelectorStub) {
+  Fixture F(Arch::AArch64);
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x1000;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x1000);
+  F.Image.Segments.push_back(std::move(Text));
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Size = Data.FileSz = 0x1000;
+  Data.FileOff = 0x1000;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(0x1000);
+  F.Image.Segments.push_back(std::move(Data));
+  Section Stub;
+  Stub.VA = 0x1100;
+  Stub.Size = Stub.FileSz = 0x100;
+  Stub.FileOff = 0x100;
+  Stub.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Stub.Name = "__objc_stubs";
+  Stub.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+  F.Image.Sections.push_back(Stub);
+  Section Invoke;
+  Invoke.VA = 0x1200;
+  Invoke.Size = Invoke.FileSz = 0x100;
+  Invoke.FileOff = 0x200;
+  Invoke.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Invoke.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+  F.Image.Sections.push_back(Invoke);
+  Section DataSection;
+  DataSection.VA = 0x2000;
+  DataSection.Size = DataSection.FileSz = 0x1000;
+  DataSection.FileOff = 0x1000;
+  DataSection.Flags = SegmentFlags::Readable;
+  F.Image.Sections.push_back(DataSection);
+  const uint32_t StubCode[] = {0xb0000001, 0xf9408021, 0xb0000010, 0xf940c210,
+                               0xd61f0200};
+  for (size_t I = 0; I < 5; ++I)
+    llvm::support::endian::write32le(
+        F.Image.Segments[0].Data.data() + 0x100 + I * 4, StubCode[I]);
+  auto *Bytes = F.Image.Segments[1].Data.data();
+  llvm::support::endian::write64le(Bytes + 0x208, 32);
+  llvm::support::endian::write64le(Bytes + 0x210, 0x2300);
+  std::copy_n("v8@?0", 6, Bytes + 0x300);
+  llvm::support::endian::write64le(Bytes + 0x400, 0x40000000);
+  F.Image.ObjCSourceReferences[0x2100].Address = 0x2100;
+  F.Image.ObjCSourceReferences[0x2100].Name = "unknownSelector";
+  F.Image.ImportPtrSlots[0x2180] = "_objc_msgSend";
+  F.Image.DyldBindSlots[0x2180] = {"_objc_msgSend", 0,
+                                   "/usr/lib/libobjc.A.dylib", false};
+  F.Image.ImportPtrSlots[0x2500] = "_objc_retainBlock";
+  F.Image.DyldBindSlots[0x2500] = {"_objc_retainBlock", 0,
+                                   "/usr/lib/libobjc.A.dylib", false};
+  F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+  const auto Retain = objcRuntimeSourceCallHint(F.Image, 0x2500);
+  ASSERT_TRUE(Retain);
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1020, *Retain}};
+  F.Low.Blocks[0].Ops = {
+      op(NdOp::INT_ADD, NdVar::reg(F.R0, 8),
+         {NdVar::reg(a64reg::SP, 8), NdVar::cst(8, 8)}, 0x1000),
+      op(NdOp::LOAD, NdVar::reg(a64reg::V0, 8), {NdVar::cst(0x2400, 8)},
+         0x1004),
+      op(NdOp::INT_ZEXT, NdVar::reg(a64reg::V0, 16),
+         {NdVar::reg(a64reg::V0, 8)}, 0x1008),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(8, 8)}, 0x100c),
+      op(NdOp::STORE, {}, {NdVar::tmp(0, 8), NdVar::reg(a64reg::V0, 8)},
+         0x100c),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(16, 8)}, 0x1010),
+      op(NdOp::STORE, {}, {NdVar::tmp(0, 8), NdVar::cst(0x1200, 8)}, 0x1010),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(24, 8)}, 0x1014),
+      op(NdOp::STORE, {}, {NdVar::tmp(0, 8), NdVar::cst(0x2200, 8)}, 0x1014),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x1500, 8)}, 0x1020),
+      op(NdOp::COPY, NdVar::reg(a64reg::X19, 8), {NdVar::reg(F.R0, 8)}, 0x1024),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x1100, 8)}, 0x1028),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(a64reg::X19, 8), NdVar::cst(16, 8)}, 0x102c),
+      op(NdOp::LOAD, NdVar::reg(F.Target, 8), {NdVar::tmp(0, 8)}, 0x102c),
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(a64reg::X19, 8)}, 0x1030),
+      op(NdOp::INDIR_CALL, NdVar::reg(F.R0, 8), {NdVar::reg(F.Target, 8)},
+         0x1034),
+      op(NdOp::CALL, {}, {NdVar::cst(0x1700, 8)}, 0x1038),
+      op(NdOp::RETURN, {}, {}, 0x103c)};
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x1034).Signature.Origin,
+            SourceFunctionTypeHint::OriginKind::BlockRuntime);
+  EXPECT_EQ(Hints.at(0x1034).Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  F.Image.DyldBindSlots[0x2180].WeakImport = true;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  F.Image.DyldBindSlots[0x2180].WeakImport = false;
+  llvm::support::endian::write64le(Bytes + 0x400, 0);
   EXPECT_TRUE(
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }

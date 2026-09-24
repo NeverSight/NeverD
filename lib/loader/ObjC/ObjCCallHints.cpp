@@ -705,6 +705,17 @@ bool isObjCInitFamily(llvm::StringRef Selector) {
     return false;
   return Selector.empty() || Selector.front() < 'a' || Selector.front() > 'z';
 }
+
+bool strongObjCMessageImport(const BinaryImage &Image, va_t Slot) {
+  const auto Bind = Image.DyldBindSlots.find(Slot);
+  return Bind != Image.DyldBindSlots.end() &&
+         Bind->second.Name == "_objc_msgSend" && !Bind->second.Addend &&
+         !Bind->second.WeakImport &&
+         Bind->second.Module == "/usr/lib/libobjc.A.dylib" &&
+         std::find(Image.DynInfo.NeededLibs.begin(),
+                   Image.DynInfo.NeededLibs.end(),
+                   Bind->second.Module) != Image.DynInfo.NeededLibs.end();
+}
 } // namespace
 
 std::optional<va_t> darwinImportVeneerSlot(const BinaryImage &Image,
@@ -876,6 +887,14 @@ bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address) {
          Target->SelectorSlot != 0 && !Target->Selector.empty();
 }
 
+bool objcSelectorStubPreservesNonvolatileRegisters(const BinaryImage &Image,
+                                                   va_t Address) {
+  if (!objcSelectorStubOverwritesCommand(Image, Address))
+    return false;
+  const auto Target = veneer(Image, Address);
+  return Target && strongObjCMessageImport(Image, Target->ImportSlot);
+}
+
 bool objcSelectorStubMatches(const BinaryImage &Image, va_t Address,
                              va_t SelectorReferenceAddress,
                              llvm::StringRef Selector) {
@@ -894,14 +913,7 @@ objcSelectorStubSentinelSourceCallHint(const BinaryImage &Image, va_t Address,
   const auto Target = veneer(Image, Address);
   if (!Target || Target->Name != "objc_msgSend" || !Target->SelectorSlot)
     return std::nullopt;
-  const auto Import = Image.DyldBindSlots.find(Target->ImportSlot);
-  if (Import == Image.DyldBindSlots.end() ||
-      Import->second.Name != "_objc_msgSend" || Import->second.Addend ||
-      Import->second.WeakImport ||
-      Import->second.Module != "/usr/lib/libobjc.A.dylib" ||
-      std::find(Image.DynInfo.NeededLibs.begin(),
-                Image.DynInfo.NeededLibs.end(),
-                Import->second.Module) == Image.DynInfo.NeededLibs.end())
+  if (!strongObjCMessageImport(Image, Target->ImportSlot))
     return std::nullopt;
   auto Hint =
       objcSentinelSourceCallHint(Image, Target->Selector, Receiver, Objects);

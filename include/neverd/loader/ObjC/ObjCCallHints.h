@@ -14,6 +14,12 @@ struct LowFunc;
 /// before dispatch. This machine fact does not establish a method signature.
 bool objcSelectorStubOverwritesCommand(const BinaryImage &Image, va_t Address);
 
+/// Prove that an exact, strong libobjc selector stub dispatches through
+/// objc_msgSend. Its machine call preserves Darwin nonvolatile registers even
+/// when the selector's source-level return and parameter types are unknown.
+bool objcSelectorStubPreservesNonvolatileRegisters(const BinaryImage &Image,
+                                                   va_t Address);
+
 /// Reuse the same selector-stub machine owner while also requiring its decoded
 /// selector slot and name to match current metadata. This authenticates only
 /// dispatch identity, not a method signature or call effects.

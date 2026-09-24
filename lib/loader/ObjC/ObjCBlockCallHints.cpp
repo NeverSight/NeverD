@@ -7,6 +7,9 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ReadOnlyBytes.h"
+
+#include "llvm/Support/Endian.h"
 
 #include <algorithm>
 #include <optional>
@@ -25,13 +28,14 @@ bool scalar(const TypeRef &T) {
           (T->Kind == NdTypeKind::Ptr && T->Size == 8));
 }
 struct Value {
-  enum class Kind { Scalar, CallInteger, Frame, Number, Invoke };
+  enum class Kind { Scalar, CallInteger, Frame, Number, ImageBits, Invoke };
   Kind K = Kind::Scalar;
   // A base identifies one original incoming value; copies preserve identity.
   uint64_t Base = 0;
   int64_t Offset = 0;
   TypeRef Type;
   bool NumericBase = false;
+  std::optional<SourceFunctionTypeHint> BlockSignature;
 };
 bool sameBase(const Value &A, const Value &B) {
   return A.Base == B.Base && A.Offset == B.Offset &&
@@ -62,8 +66,10 @@ bool mergeInferredBlockABI(SourceCallTypeHint &A, const SourceCallTypeHint &B,
                            const std::set<size_t> &BNullArguments) {
   if (A.CallKind != SourceCallTypeHint::Kind::BlockInvoke ||
       B.CallKind != A.CallKind ||
-      A.Signature.Origin !=
-          SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      (A.Signature.Origin !=
+           SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+       A.Signature.Origin !=
+           SourceFunctionTypeHint::OriginKind::BlockRuntime) ||
       B.Signature.Origin != A.Signature.Origin ||
       A.Signature.Convention != B.Signature.Convention ||
       A.Signature.Architecture != B.Signature.Architecture ||
@@ -186,6 +192,42 @@ bool boundRetainBlock(const BinaryImage &Image,
   const auto Runtime = objcRuntimeSourceCallHint(Image, Bound.TargetAddress);
   return Runtime && Runtime->CallKind == Bound.CallKind &&
          Runtime->TargetName == Bound.TargetName;
+}
+
+std::optional<SourceFunctionTypeHint>
+stackBlockSignature(const BinaryImage &Image,
+                    const std::map<std::pair<int64_t, unsigned>, Value> &Slots,
+                    const Value &Argument) {
+  // The descriptor provides only a call ABI here. Source projection proves
+  // the stack isa, capture ownership, and consumer lifetime independently.
+  if (Argument.K != Value::Kind::Frame || Argument.Offset < -1048576 ||
+      Argument.Offset > 1048576)
+    return std::nullopt;
+  const auto Field = [&](int64_t Offset) -> const Value * {
+    const auto It = Slots.find({Argument.Offset + Offset, 8});
+    return It == Slots.end() ? nullptr : &It->second;
+  };
+  const auto *Flags = Field(8), *Invoke = Field(16), *Descriptor = Field(24);
+  if (!Flags || !Invoke || !Descriptor || Invoke->K != Value::Kind::Number ||
+      !Image.isCodeAddress(uint64_t(Invoke->Base + Invoke->Offset)) ||
+      Descriptor->K != Value::Kind::Number)
+    return std::nullopt;
+  std::optional<uint64_t> FlagBits;
+  if (Flags->K == Value::Kind::Number)
+    FlagBits = uint64_t(Flags->Base + Flags->Offset);
+  else if (Flags->K == Value::Kind::ImageBits && !Flags->Offset) {
+    if (auto Bytes = readImmutableImageBytes(Image, Flags->Base, 8))
+      FlagBits = llvm::support::endian::read64le(Bytes->data());
+  }
+  if (!FlagBits || *FlagBits >> 32)
+    return std::nullopt;
+  std::string Error;
+  auto Block = readObjCBlockDescriptor(
+      Image, uint64_t(Descriptor->Base + Descriptor->Offset),
+      static_cast<uint32_t>(*FlagBits), Error);
+  if (!Block || !Block->InvokeTypeHint || !Block->Limitations.empty())
+    return std::nullopt;
+  return Block->InvokeTypeHint;
 }
 
 std::optional<unsigned>
@@ -467,6 +509,8 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
           WrittenArguments.count(TRI.IntParamRegs[0])) {
         std::optional<SourceFunctionTypeHint> Signature;
         std::set<size_t> NullIndices;
+        if (Receiver->BlockSignature)
+          Signature = *Receiver->BlockSignature;
         if (Receiver->K == Value::Kind::Number) {
           std::string Error;
           if (auto Literal = readObjCBlockLiteral(Image, Receiver->Base, Error))
@@ -571,6 +615,22 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
                (std::get<1>(K) == TRI.StackPointer &&
                 V.K == Value::Kind::Frame)))
             Preserved.emplace(K, V);
+      if (!Bound && Op.Opcode == NdOp::CALL && Target &&
+          Target->K == Value::Kind::Number &&
+          objcSelectorStubPreservesNonvolatileRegisters(
+              Image, uint64_t(Target->Base + Target->Offset)))
+        // Keep machine callee-save values without inventing a source ABI.
+        for (const auto &[K, V] : Values)
+          if (std::get<0>(K) == VnodeSpace::REG && V.K != Value::Kind::Invoke &&
+              (TRI.isCallPreserved(std::get<1>(K), std::get<2>(K)) ||
+               (std::get<1>(K) == TRI.StackPointer &&
+                V.K == Value::Kind::Frame)))
+            Preserved.emplace(K, V);
+      std::optional<SourceFunctionTypeHint> CopiedBlockSignature;
+      if (Op.Opcode == NdOp::CALL && Bound && boundRetainBlock(Image, *Bound) &&
+          Receiver && !FrameEscaped)
+        CopiedBlockSignature =
+            stackBlockSignature(Image, FrameSlots, *Receiver);
       for (auto Register : TRI.IntParamRegs) {
         const auto Argument = Read(NdVar::reg(Register, 8));
         if (Argument && Argument->K == Value::Kind::Frame)
@@ -614,8 +674,9 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
           Bound->Signature.Parameters[0].Location.ValueBytes == 8 &&
           Op.Output.isReg() && Op.Output.Offset == TRI.IntReturnReg &&
           Op.Output.Size == 8) {
-        Values.emplace(key(Op.Output), Value{Value::Kind::Scalar,
-                                             NextCallResultBase++, 0, Pointer});
+        Value Returned{Value::Kind::Scalar, NextCallResultBase++, 0, Pointer};
+        Returned.BlockSignature = std::move(CopiedBlockSignature);
+        Values.emplace(key(Op.Output), std::move(Returned));
         WrittenArguments.insert(TRI.IntParamRegs[0]);
       } else if (Op.Opcode == NdOp::CALL && Bound &&
                  Bound->CallKind == SourceCallTypeHint::Kind::ObjCMessage &&
@@ -688,6 +749,13 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
       }
     } else if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && PlainMemory) {
       auto Address = Read(Op.Inputs[0]);
+      if (Address && Address->K == Value::Kind::Number && Op.Output.Size == 8 &&
+          readImmutableImageBytes(Image,
+                                  uint64_t(Address->Base + Address->Offset), 8))
+        // Immutable scalar bytes carry no pointer identity.
+        Out = Value{Value::Kind::ImageBits,
+                    uint64_t(Address->Base + Address->Offset), 0,
+                    NdType::makeInt(8, false)};
       if (Address && Address->K == Value::Kind::Number &&
           Address->Offset == 0 && Address->Base >= 16 && Op.Output.Size == 8) {
         std::string Error;
@@ -719,7 +787,9 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         It = Values.erase(It);
       else
         ++It;
-    if (Out && width(Op.Output.Size))
+    if (Out && (width(Op.Output.Size) ||
+                (Op.Opcode == NdOp::INT_ZEXT && Op.Output.Size == 16 &&
+                 Out->K == Value::Kind::ImageBits)))
       Values.emplace(key(Op.Output), std::move(*Out));
     if (Op.Output.isReg()) {
       for (auto Reg : TRI.IntParamRegs)
