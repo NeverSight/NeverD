@@ -56,8 +56,9 @@ bool sameLocation(const SourceABIValueLocation &A,
          A.EntryStackOffset == B.EntryStackOffset &&
          A.ValueBytes == B.ValueBytes && A.ExtendTo32Bits == B.ExtendTo32Bits;
 }
-bool sameInferredBlockABI(const SourceCallTypeHint &A,
-                          const SourceCallTypeHint &B) {
+bool mergeInferredBlockABI(SourceCallTypeHint &A, const SourceCallTypeHint &B,
+                           const std::set<size_t> &ANullArguments,
+                           const std::set<size_t> &BNullArguments) {
   if (A.CallKind != SourceCallTypeHint::Kind::BlockInvoke ||
       B.CallKind != A.CallKind ||
       A.Signature.Origin !=
@@ -73,15 +74,33 @@ bool sameInferredBlockABI(const SourceCallTypeHint &A,
       A.Signature.Parameters.size() != B.Signature.Parameters.size())
     return false;
   for (size_t I = 0; I < A.Signature.Parameters.size(); ++I) {
-    const auto &Left = A.Signature.Parameters[I];
+    auto &Left = A.Signature.Parameters[I];
     const auto &Right = B.Signature.Parameters[I];
     if (Left.Name != Right.Name || Left.TheRole != Right.TheRole ||
-        !sameScalarType(Left.Type, Right.Type) ||
         !sameLocation(Left.Location, Right.Location) ||
         !Left.Components.empty() || !Right.Components.empty())
       return false;
+    if (sameScalarType(Left.Type, Right.Type))
+      continue;
+    // A literal zero is a null pointer at the same Darwin integer carrier.
+    // This only joins an already proven pointer path with an exact zero path.
+    if (I == 0 || !Left.Type || !Right.Type || Left.Type->Size != 8 ||
+        Right.Type->Size != 8 ||
+        Left.Location.Kind != SourceABICarrierKind::IntegerRegister)
+      return false;
+    if (Left.Type->Kind == NdTypeKind::Ptr &&
+        Right.Type->Kind == NdTypeKind::Int && !Right.Type->IsSigned &&
+        BNullArguments.count(I))
+      continue;
+    if (Left.Type->Kind == NdTypeKind::Int && !Left.Type->IsSigned &&
+        ANullArguments.count(I) && Right.Type->Kind == NdTypeKind::Ptr) {
+      Left.Type = Right.Type;
+      continue;
+    }
+    return false;
   }
-  return true;
+  std::string Error;
+  return validateSourceABI(A.Signature, Error);
 }
 bool noIndirectResultPointer(const LowOp &Op, Arch Architecture) {
   // Darwin arm64 passes an indirect aggregate result in X8. The observed
@@ -292,7 +311,8 @@ std::map<va_t, SourceCallTypeHint>
 analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
              const SourceFunctionTypeHint *EntrySignature,
              const std::map<va_t, SourceCallTypeHint> *BoundCalls,
-             const LowFunc *WholeFunction, bool FollowValidatedBranches) {
+             const LowFunc *WholeFunction, bool FollowValidatedBranches,
+             std::map<va_t, std::set<size_t>> *NullArguments = nullptr) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Block.Ops.size() > 65536)
     return Result;
@@ -372,6 +392,7 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
           sameBase(*Target, *Receiver) && !FloatingArgumentWrite &&
           WrittenArguments.count(TRI.IntParamRegs[0])) {
         std::optional<SourceFunctionTypeHint> Signature;
+        std::set<size_t> NullIndices;
         if (Receiver->K == Value::Kind::Number) {
           std::string Error;
           if (auto Literal = readObjCBlockLiteral(Image, Receiver->Base, Error))
@@ -413,6 +434,9 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
               Inferred.Parameters.push_back(
                   {I ? "arg" + std::to_string(I - 1) : "block",
                    I ? Argument->Type : Pointer});
+              if (Argument->K == Value::Kind::Number && Argument->Base == 0 &&
+                  Argument->Offset == 0)
+                NullIndices.insert(I);
             }
             std::string Error;
             if (Valid &&
@@ -440,6 +464,8 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
             Hint.CallKind = SourceCallTypeHint::Kind::BlockInvoke;
             Hint.Signature = std::move(*Signature);
             Result.emplace(Op.Addr, std::move(Hint));
+            if (NullArguments)
+              NullArguments->emplace(Op.Addr, std::move(NullIndices));
           }
         }
       }
@@ -795,6 +821,7 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
     if (!Complete || Incoming.size() < 2)
       continue;
     std::map<va_t, SourceCallTypeHint> Common;
+    std::map<va_t, std::set<size_t>> CommonNullArguments;
     bool FirstPath = true;
     for (const auto &Path : Incoming) {
       LowBlock Linear;
@@ -814,21 +841,26 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
       }
       if (!Complete)
         break;
+      std::map<va_t, std::set<size_t>> NullArguments;
       const auto Hints = analyzeBlock(Image, Linear, EntrySignature, BoundCalls,
-                                      &Function, true);
+                                      &Function, true, &NullArguments);
       if (FirstPath) {
         for (const auto &Op : Candidate.Ops) {
           const auto Found = Hints.find(Op.Addr);
           if (Op.Opcode == NdOp::INDIR_CALL && Found != Hints.end() &&
-              !Result.count(Op.Addr))
+              !Result.count(Op.Addr)) {
             Common.emplace(*Found);
+            CommonNullArguments.emplace(Op.Addr, NullArguments[Op.Addr]);
+          }
         }
         FirstPath = false;
       } else {
         for (auto It = Common.begin(); It != Common.end();) {
           const auto Found = Hints.find(It->first);
           if (Found == Hints.end() ||
-              !sameInferredBlockABI(It->second, Found->second))
+              !mergeInferredBlockABI(It->second, Found->second,
+                                     CommonNullArguments[It->first],
+                                     NullArguments[It->first]))
             It = Common.erase(It);
           else
             ++It;

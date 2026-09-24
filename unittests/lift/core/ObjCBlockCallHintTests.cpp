@@ -227,6 +227,24 @@ TEST(ObjCBlockCallHints, ProvesInvokeAcrossConvergingOrdinaryPaths) {
   Exceptional.BlockId = 2;
   Join.ExceptionalPreds = {Exceptional};
   EXPECT_TRUE(F.hints().empty());
+
+  Join.ExceptionalPreds.clear();
+  F.Entry.Parameters[3].Type = NdType::makePtr(NdType::makeVoid());
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(F.Entry, F.Image.Arch, Error)) << Error;
+  Join.Ops.erase(Join.Ops.begin());
+  Left.Ops.insert(Left.Ops.begin(), op(NdOp::COPY, NdVar::reg(F.R1, 8),
+                                       {NdVar::reg(F.R3, 8)}, 0x1010));
+  Right.Ops.insert(Right.Ops.begin(), op(NdOp::COPY, NdVar::reg(F.R1, 8),
+                                         {NdVar::cst(0, 8)}, 0x1020));
+  const auto JoinedNull = F.hints();
+  ASSERT_EQ(JoinedNull.size(), 1U);
+  ASSERT_EQ(JoinedNull.at(0x104c).Signature.Parameters.size(), 2U);
+  EXPECT_EQ(JoinedNull.at(0x104c).Signature.Parameters[1].Type->Kind,
+            NdTypeKind::Ptr);
+
+  Right.Ops[0].Inputs[0] = NdVar::cst(1, 8);
+  EXPECT_TRUE(F.hints().empty());
 }
 
 TEST(ObjCBlockCallHints, FollowsUniquePredecessorToBlockInvoke) {
