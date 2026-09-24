@@ -936,10 +936,20 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
             (!Binding || Binding->CallKind != CallKind::Native ||
              E.IsIndirectCall ||
              !noEscape(Source, Functions, Binding->TargetAddress, I, nullptr,
-                       Active, Error)))
+                       Active, Error))) {
+          if (Error.empty() && Binding) {
+            if (Binding->CallKind == CallKind::ObjCMessage &&
+                !Binding->Selector.empty())
+              Error = "Objective-C selector " + Binding->Selector;
+            else if (!Binding->TargetName.empty())
+              Error = "consumer " + Binding->TargetName;
+          }
+          if (Error.empty())
+            Error = "unbound or indirect call";
           throw Invalid(
               "stack block flows to a consumer without a lifetime proof: " +
               Error);
+        }
         if (DeclaredConsumer)
           InvalidatedBlocks.emplace(Block.FrameOffset,
                                     Block.Descriptor.LiteralSize);
