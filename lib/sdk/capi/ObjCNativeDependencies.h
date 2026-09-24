@@ -3,10 +3,12 @@
 
 #include "SwiftMangledSourceABI.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/pipeline/NativeSourceHints.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -94,6 +96,32 @@ walkObjCNativeDependencies(const BinaryImage &Image,
   return Targets;
 }
 
+// Propagate demand only across an exact direct tail forwarder. This selects a
+// callee for a later full two-register definition proof; it does not declare
+// either function's ABI or certify its body.
+inline std::optional<va_t>
+forwardedNativeIntegerPairTarget(const BinaryImage &Image,
+                                 const LowFunc &Function) {
+  if ((Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64) ||
+      Function.Blocks.size() != 1 || Function.Blocks[0].Ops.size() < 2)
+    return std::nullopt;
+  const auto &Ops = Function.Blocks[0].Ops;
+  const auto &Call = Ops[Ops.size() - 2];
+  const auto &Return = Ops.back();
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  if (Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
+      !Call.Inputs[0].isConst() || Call.Inputs[0].Size != 8 ||
+      !Image.isCodeAddress(Call.Inputs[0].Offset) ||
+      Call.Inputs[0].Offset == Function.Entry || !Call.Output.isReg() ||
+      Call.Output.Offset != TRI.IntReturnReg || Call.Output.Size != 8 ||
+      Return.Opcode != NdOp::RETURN || Return.NumInputs != 1 ||
+      !Return.Inputs[0].isReg() ||
+      Return.Inputs[0].Offset != TRI.IntReturnReg ||
+      Return.Inputs[0].Size != 8 || Return.Addr != Call.Addr)
+    return std::nullopt;
+  return Call.Inputs[0].Offset;
+}
+
 /// Symbols never create a callee or an ABI declaration. Accepted candidates
 /// must be re-lifted with their explicit ABI before they can become evidence.
 inline size_t inferObjCNativeDependencies(
@@ -115,6 +143,18 @@ inline size_t inferObjCNativeDependencies(
     const auto Observed =
         observedNativeIntegerPairReturns(Function, Image.Arch);
     IntegerPairReturns.insert(Observed.begin(), Observed.end());
+  }
+  std::vector<va_t> PairDemand(IntegerPairReturns.begin(),
+                               IntegerPairReturns.end());
+  for (size_t Index = 0; Index < PairDemand.size(); ++Index) {
+    const auto Found = Low.find(PairDemand[Index]);
+    if (Found == Low.end())
+      continue;
+    const auto Forward =
+        forwardedNativeIntegerPairTarget(Image, *Found->second);
+    if (Forward && Low.count(*Forward) &&
+        IntegerPairReturns.insert(*Forward).second)
+      PairDemand.push_back(*Forward);
   }
   for (const auto &Function : Result.MedFuncs)
     Med.emplace(Function.Entry, &Function);

@@ -1066,6 +1066,31 @@ struct NativeDependencyFixture {
   }
 };
 
+TEST(ObjCSourceProjection, IntegerPairDemandOnlyFollowsExactDirectTail) {
+  NativeDependencyFixture F;
+  F.Image.Arch = Arch::AArch64;
+  F.call(0, 0x3000);
+  auto &Function = F.Result.LowFuncs[0];
+  auto &Ops = Function.Blocks[0].Ops;
+  const auto ReturnRegister = getTargetRegInfo(F.Image.Arch).IntReturnReg;
+  Ops[0].Output = NdVar::reg(ReturnRegister, 8);
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Ops[0].Addr;
+  Return.addInput(NdVar::reg(ReturnRegister, 8));
+  Ops.push_back(Return);
+  EXPECT_EQ(forwardedNativeIntegerPairTarget(F.Image, Function), 0x3000U);
+
+  Ops.back().Addr += 4;
+  EXPECT_FALSE(forwardedNativeIntegerPairTarget(F.Image, Function));
+  Ops.back().Addr = Ops[0].Addr;
+  Ops[0].Opcode = NdOp::INDIR_CALL;
+  EXPECT_FALSE(forwardedNativeIntegerPairTarget(F.Image, Function));
+  Ops[0].Opcode = NdOp::CALL;
+  Function.Blocks.emplace_back();
+  EXPECT_FALSE(forwardedNativeIntegerPairTarget(F.Image, Function));
+}
+
 TEST(ObjCSourceProjection, NativeDependencyGraphKeepsSharedCallsAndCycles) {
   NativeDependencyFixture F;
   F.call(0, 0x3000);

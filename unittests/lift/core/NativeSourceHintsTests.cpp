@@ -151,7 +151,8 @@ NativeFixture nativePairFixture(Arch Architecture) {
   return F;
 }
 
-TEST(NativeSourceHints, IntegerPairDemandStopsAtClobbersAndPartialReads) {
+TEST(NativeSourceHints,
+     IntegerPairDemandIncludesNarrowReadsButStopsAtClobbers) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
       SCOPED_TRACE(Mutation);
@@ -187,7 +188,7 @@ TEST(NativeSourceHints, IntegerPairDemandStopsAtClobbersAndPartialReads) {
         F.Blocks.back().Ops.push_back(Read);
       }
       EXPECT_EQ(observedNativeIntegerPairReturns(F, Architecture),
-                Mutation == 0 ? std::set<va_t>{0x1080} : std::set<va_t>{});
+                Mutation <= 1 ? std::set<va_t>{0x1080} : std::set<va_t>{});
     }
 }
 

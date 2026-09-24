@@ -997,8 +997,12 @@ std::set<va_t> observedNativeIntegerPairReturns(const LowFunc &Function,
           Op.NumInputs == 2 && Op.Inputs[0] == Op.Inputs[1];
       if (!SelfZero)
         for (unsigned I = 0; I < Op.NumInputs; ++I)
+          // A caller may only inspect the low Boolean bits of a second
+          // result. This is still demand for that register's ABI component;
+          // integerPairReturn independently proves the complete word before
+          // it can change a callee signature.
           if (Op.Inputs[I].isReg() && Op.Inputs[I].Offset == Register &&
-              Op.Inputs[I].Size == 8)
+              Op.Inputs[I].Size && Op.Inputs[I].Size <= 8)
             Targets.insert(*Pending);
       if (Op.Output.isReg() && Op.Output.Size &&
           (Op.Output.Offset <= Register
