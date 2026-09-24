@@ -87,17 +87,26 @@ TEST(WindowsEHCorpus, DeclaresCompleteMultiToolchainMatrix) {
   auto ExpectationsOrErr = loadExpectations();
   ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
       << toString(ExpectationsOrErr.takeError());
-  EXPECT_EQ(ExpectationsOrErr->size(), 264u);
+  EXPECT_EQ(ExpectationsOrErr->size(), 384u);
 
   std::set<std::string> Toolchains;
   std::set<Arch> Architectures;
+  std::map<std::pair<std::string, int>, size_t> ArtifactsByToolset;
   for (const WindowsEHArtifactExpectation &Expectation : *ExpectationsOrErr) {
     Toolchains.insert(Expectation.Toolchain);
     Architectures.insert(Expectation.ExpectedArch);
+    ++ArtifactsByToolset[{Expectation.Toolchain, Expectation.VisualStudioYear}];
   }
   EXPECT_EQ(Toolchains, (std::set<std::string>{"msvc", "clang-cl"}));
   EXPECT_EQ(Architectures,
             (std::set<Arch>{Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}));
+  EXPECT_EQ(ArtifactsByToolset,
+            (std::map<std::pair<std::string, int>, size_t>{
+                {{"clang-cl", 2022}, 48},
+                {{"msvc", 2019}, 120},
+                {{"msvc", 2022}, 120},
+                {{"msvc", 2026}, 96},
+            }));
 }
 
 TEST(WindowsEHCorpus, RecordsLoadConfigRuntimeCallableSlots) {
@@ -452,7 +461,8 @@ TEST(WindowsEHCorpus, MasksThumbBitInARM32LanguageTables) {
     }
   }
 
-  EXPECT_EQ(Images, 24u);
+  // VS 2019 v142 and VS 2022 each contribute 24 ARM32 images.
+  EXPECT_EQ(Images, 48u);
   EXPECT_GE(CxxRecords, 30u);
   EXPECT_GE(TryBlocks, 70u);
   EXPECT_GE(Scopes, 700u);
@@ -603,8 +613,8 @@ TEST(WindowsEHCorpus, RecoversX86RegistrationChains) {
           << " runs into the one at 0x" << llvm::utohexstr(TableSpans[I].first);
   }
 
-  // VS2022 x86 (36) plus VS2026 MSVC x86 (24). clang-cl stays 2022-only.
-  EXPECT_EQ(Images, 60u);
+  // VS 2019 v142 adds 24 MSVC x86 images to the VS 2022 and VS 2026 cells.
+  EXPECT_EQ(Images, 84u);
   EXPECT_GE(Records, 200u);
   EXPECT_GE(ScopeEntries, 900u);
   EXPECT_GE(CxxRecords, 12u);
@@ -702,9 +712,9 @@ TEST(WindowsEHCorpus, DecodesARMUnwindOperations) {
     }
   }
 
-  // VS2022 ARM+AArch64 (72) plus VS2026 MSVC AArch64 (24). VS2026 ARM32 is
-  // skipped.
-  EXPECT_EQ(Images, 96u);
+  // VS 2019 v142 adds 48 ARM images to the VS 2022 (72) and VS 2026 (24)
+  // cells. VS 2026 ARM32 is skipped.
+  EXPECT_EQ(Images, 144u);
   EXPECT_GT(Frames, 0u);
   // Both forms are present across the corpus: a leaf function that only
   // allocates gets packed data, while anything with an exception handler or an

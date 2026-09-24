@@ -92,7 +92,7 @@ Fixture проверяют гостевую инициализацию, успе
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | Метаданные v0-v4 и компоновки ELF, строгая работа verifier/loader, 23 закреплённых ELF-артефакта, независимый официальный oracle, полный охват opcode, враждебные входы, CFG/восстановление и исполняемые различия LLVM/C/Rust |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Эквивалентность переписывания/обфускации для четырёх ISA и трёх объектных форматов |
 | Целевые файлы преобразований в `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Быстро перелинковываемые проверки отдельно от большого семантического бинарника |
-| `unittests/corpus` (подмодуль) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | Метаданные исключений и рантайма, прочитанные из 317 зафиксированных настоящих бинарников; для каждого манифест объявляет нижние границы, которые восстановление обязано преодолеть |
+| `unittests/corpus` (подмодуль) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests`, `NeverDAdaDEHCorpusTests` | Метаданные исключений и рантайма, прочитанные из 545 зафиксированных настоящих бинарников; для каждого манифест объявляет нижние границы, которые восстановление обязано преодолеть |
 
 Источники регистрации:
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt),
@@ -124,12 +124,12 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus` запускает все линии; `check-neverd-windows-eh-corpus`,
 `check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
-`check-neverd-cxx-itanium-eh-corpus` и `check-neverd-objc-eh-corpus` — по одной.
-Все три хоста CI выполняют configure с этим флагом и прогоняют все пять линий:
+`check-neverd-cxx-itanium-eh-corpus`, `check-neverd-objc-eh-corpus` и `check-neverd-ada-d-eh-corpus` — по одной.
+Все три хоста CI выполняют configure с этим флагом и прогоняют все шесть линий:
 байты везде одинаковы, а то, что их читает, — нет, и прогон corpus на одном
 хосте ничего не доказывает про два других.
 `scripts/audit_ci_test_inventory.py` отклоняет инвентарь, в котором не хватает
-хотя бы одной из пяти меток, потому что сборка, тихо переставшая читать
+хотя бы одной из шести меток, потому что сборка, тихо переставшая читать
 corpus, — это регрессия, которую не поймает ни один тест: пропало как раз то,
 что проверяло.
 

@@ -32,6 +32,12 @@ std::string singleArtifactManifest(StringRef Path, StringRef Toolchain,
                                    int VisualStudioYear = 2022) {
   const StringRef Compiler = Toolchain == "msvc" ? "cl.exe" : "clang-cl.exe";
   const StringRef Linker = Toolchain == "msvc" ? "link.exe" : "lld-link.exe";
+  const StringRef CompilerFileVersion =
+      VisualStudioYear == 2019 ? "19.29.30159.0 built by: cloudtest" : "test";
+  const StringRef ToolProductVersion =
+      VisualStudioYear == 2019 ? "14.29.30159.0" : "test";
+  const StringRef LinkerFileVersion =
+      VisualStudioYear == 2019 ? "14.29.30159.0 built by: cloudtest" : "test";
   std::string YearField;
   if (VisualStudioYear != 2022)
     YearField = ",\"visual_studio_year\":" + std::to_string(VisualStudioYear);
@@ -42,10 +48,12 @@ std::string singleArtifactManifest(StringRef Path, StringRef Toolchain,
           "\"suite\":\"abi-probe\",\"name\":\"cxx_eh_probe\","
           "\"kind\":\"cxx\",\"build\":{\"toolchain\":\"" +
           Toolchain + "\",\"compiler\":{\"name\":\"" + Compiler +
-          "\",\"product_version\":\"test\",\"file_version\":\"test\"},"
+          "\",\"product_version\":\"" + ToolProductVersion +
+          "\",\"file_version\":\"" + CompilerFileVersion + "\"},"
           "\"linker\":{\"name\":\"" +
           Linker +
-          "\",\"product_version\":\"test\",\"file_version\":\"test\"},"
+          "\",\"product_version\":\"" + ToolProductVersion +
+          "\",\"file_version\":\"" + LinkerFileVersion + "\"},"
           "\"target_triple\":\"x86_64-pc-windows-msvc\","
           "\"optimization\":\"o0\",\"security_cookie\":false,"
           "\"cxx_format\":\"" +
@@ -84,6 +92,66 @@ TEST(WindowsEHCorpusManifest, AcceptsVs2026MsvcLayout) {
   ASSERT_EQ(Parsed->size(), 1u);
   EXPECT_EQ((*Parsed)[0].VisualStudioYear, 2026);
   EXPECT_EQ((*Parsed)[0].Path, Path);
+}
+
+TEST(WindowsEHCorpusManifest, AcceptsVs2019V142MsvcLayout) {
+  const std::string Path =
+      "corpus/windows-eh/msvc/vs2019/x86_64/fh3/no-gs/o0/abi-probe/"
+      "cxx_eh_probe-msvc-x86_64-fh3-no-gs-o0.exe";
+  auto Parsed = parseWindowsEHCorpusManifest(
+      singleArtifactManifest(Path, "msvc", "fh3", "passed", 2019), false);
+
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->size(), 1u);
+  EXPECT_EQ((*Parsed)[0].VisualStudioYear, 2019);
+  EXPECT_EQ((*Parsed)[0].Path, Path);
+}
+
+TEST(WindowsEHCorpusManifest, RejectsVs2019ClaimWithNewerCompiler) {
+  const std::string Path =
+      "corpus/windows-eh/msvc/vs2019/x86_64/fh3/no-gs/o0/abi-probe/"
+      "cxx_eh_probe-msvc-x86_64-fh3-no-gs-o0.exe";
+  std::string Contents =
+      singleArtifactManifest(Path, "msvc", "fh3", "passed", 2019);
+  const size_t Version = Contents.find("19.29.30159.0");
+  ASSERT_NE(Version, std::string::npos);
+  Contents.replace(Version, std::string("19.29.30159.0").size(),
+                   "19.44.30159.0");
+  auto Parsed = parseWindowsEHCorpusManifest(Contents, false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("must identify v142 14.29"),
+            std::string::npos);
+}
+
+TEST(WindowsEHCorpusManifest, RejectsVs2019YearOnClangCl) {
+  const std::string Path =
+      "corpus/windows-eh/clang-cl/x86_64/fh3/no-gs/o0/abi-probe/"
+      "cxx_eh_probe-clang-cl-x86_64-fh3-no-gs-o0.exe";
+  auto Parsed = parseWindowsEHCorpusManifest(
+      singleArtifactManifest(Path, "clang-cl", "fh3", "passed", 2019), false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("only to MSVC cells"),
+            std::string::npos);
+}
+
+TEST(WindowsEHCorpusManifest, RejectsVs2026Arm32Cell) {
+  const std::string Path =
+      "corpus/windows-eh/msvc/vs2026/x86_64/fh3/no-gs/o0/abi-probe/"
+      "cxx_eh_probe-msvc-x86_64-fh3-no-gs-o0.exe";
+  std::string Contents =
+      singleArtifactManifest(Path, "msvc", "fh3", "passed", 2026);
+  const std::string OldArchitecture = "\"architecture\":\"x86_64\"";
+  const size_t Architecture = Contents.find(OldArchitecture);
+  ASSERT_NE(Architecture, std::string::npos);
+  Contents.replace(Architecture, OldArchitecture.size(),
+                   "\"architecture\":\"arm\"");
+  auto Parsed = parseWindowsEHCorpusManifest(Contents, false);
+
+  ASSERT_FALSE(static_cast<bool>(Parsed));
+  EXPECT_NE(toString(Parsed.takeError()).find("does not provide an ARM32 cell"),
+            std::string::npos);
 }
 
 TEST(WindowsEHCorpusManifest, RejectsVs2026YearOnHistoricalMsvcPath) {

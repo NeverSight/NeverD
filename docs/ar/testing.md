@@ -91,7 +91,7 @@ ctest --test-dir build-release -L '^NeverDDriverEmulation' --output-on-failure
 | `unittests/sbf` | `NeverDSBFMetadataTests`، `NeverDSBFProgramImageTests`، `NeverDSBFLoaderTests`، `NeverDSBFAnalyzerTests`، `NeverDSBFVerifierTests`، `NeverDSBFISAConformanceTests`، `NeverDSBFAgaveConformanceTests`، `NeverDSBFSemanticTests`، `NeverDSBFEmitterTests`، `NeverDSBFLLVMEmitterTests`، `NeverDSBFLLVMDifferentialTests`، `NeverDSBFSourceDifferentialTests`، `NeverDSBFMalformedCorpusTests`، `NeverDSBFUpstreamConformanceTests`، `NeverDSBFExternalOracleTests`، `NeverDSBFSolanaModelTests`، `NeverDSBFIntegrationTests` | بيانات v0-v4 الوصفية وتخطيطات ELF، وسلوك التحقق والتحميل الصارم، و23 من عناصر ELF المثبتة، وoracle الرسمي المنفصل، وتغطية opcode الشاملة، والمدخلات العدائية، وCFG/الاستعادة، وفروق LLVM/C/Rust المنفّذة |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | تكافؤ إعادة الكتابة/التشويش عبر أربع ISA وثلاث صيغ كائنات |
 | ملفات التحويل المحددة في `unittests/semantic` | `NeverDSwitchXformTests` و`NeverDIndCallXformTests` و`NeverDCFGLoopXformTests` و`NeverDTwoTableXformTests` و`NeverDAvxUpperXformTests` | مجسات سريعة الربط منفصلة عن الثنائي الدلالي الكبير |
-| `unittests/corpus` (وحدة فرعية) | `NeverDWindowsEHCorpusTests` و`NeverDRustEHCorpusTests` و`NeverDGoEHCorpusTests` و`NeverDCxxItaniumEHCorpusTests` و`NeverDObjCEHCorpusTests` | metadata الاستثناءات ووقت التشغيل المقروءة من 317 ثنائيًا حقيقيًا مثبّتًا، كل واحد منها معلن في manifest يذكر الحدود الدنيا التي يجب أن يتجاوزها استرجاعه |
+| `unittests/corpus` (وحدة فرعية) | `NeverDWindowsEHCorpusTests` و`NeverDRustEHCorpusTests` و`NeverDGoEHCorpusTests` و`NeverDCxxItaniumEHCorpusTests` و`NeverDObjCEHCorpusTests` و`NeverDAdaDEHCorpusTests` | metadata الاستثناءات ووقت التشغيل المقروءة من 545 ثنائيًا حقيقيًا مثبّتًا، كل واحد منها معلن في manifest يذكر الحدود الدنيا التي يجب أن يتجاوزها استرجاعه |
 
 مصادر التسجيل الموثوقة هي
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt) و
@@ -124,10 +124,10 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 يشغّل `check-neverd-corpus` كل الخطوط، بينما يشغّل
 `check-neverd-windows-eh-corpus` و`check-neverd-rust-eh-corpus` و
 `check-neverd-go-eh-corpus` و`check-neverd-cxx-itanium-eh-corpus` و
-`check-neverd-objc-eh-corpus` خطًا واحدًا لكل منها. تُعدّ مضيفات الـCI الثلاثة جميعها
-بهذا الخيار وتشغّل الخطوط الخمسة: البايتات واحدة في كل مكان، أما ما يقرؤها فليس
+`check-neverd-objc-eh-corpus` و`check-neverd-ada-d-eh-corpus` خطًا واحدًا لكل منها. تُعدّ مضيفات الـCI الثلاثة جميعها
+بهذا الخيار وتشغّل الخطوط الستة: البايتات واحدة في كل مكان، أما ما يقرؤها فليس
 كذلك، وتشغيل الـcorpus على مضيف واحد لا يثبت شيئًا عن المضيفين الآخرين. يرفض
-`scripts/audit_ci_test_inventory.py` أي inventory ينقصه أحد الـlabels الخمسة، لأن
+`scripts/audit_ci_test_inventory.py` أي inventory ينقصه أحد الـlabels الستة، لأن
 بناءً توقف بصمت عن قراءة الـcorpus هو انحدار لا يستطيع أي اختبار التقاطه —
 فالاختبار نفسه هو ما اختفى.
 

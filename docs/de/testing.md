@@ -104,7 +104,7 @@ gefundenen Fall ein CTest-Label mit dem Namen dieses Executable-Targets zu.
 | `unittests/sbf` | `NeverDSBFMetadataTests`, `NeverDSBFProgramImageTests`, `NeverDSBFLoaderTests`, `NeverDSBFAnalyzerTests`, `NeverDSBFVerifierTests`, `NeverDSBFISAConformanceTests`, `NeverDSBFAgaveConformanceTests`, `NeverDSBFSemanticTests`, `NeverDSBFEmitterTests`, `NeverDSBFLLVMEmitterTests`, `NeverDSBFLLVMDifferentialTests`, `NeverDSBFSourceDifferentialTests`, `NeverDSBFMalformedCorpusTests`, `NeverDSBFUpstreamConformanceTests`, `NeverDSBFExternalOracleTests`, `NeverDSBFSolanaModelTests`, `NeverDSBFIntegrationTests` | v0-v4-Metadaten und ELF-Layouts, striktes Verifier-/Loader-Verhalten, 23 gepinnte ELF-Artefakte, unabhängiges offizielles Oracle, vollständige Opcode-Verfügbarkeit, feindliche Eingaben, CFG/Recovery sowie ausgeführte LLVM-/C-/Rust-Differenzen |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | Rewrite-/Obfuskationsäquivalenz über vier ISAs und drei Objektformate |
 | Fokussierte Transformationsdateien in `unittests/semantic` | `NeverDSwitchXformTests`, `NeverDIndCallXformTests`, `NeverDCFGLoopXformTests`, `NeverDTwoTableXformTests`, `NeverDAvxUpperXformTests` | Schnell relinkbare Sonden außerhalb des großen Semantikprogramms |
-| `unittests/corpus` (Submodul) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests` | Exception- und Runtime-Metadaten aus 317 per Digest fixierten echten Binärdateien, jede mit einem Manifest, das die Untergrenzen ihrer Wiederherstellung nennt |
+| `unittests/corpus` (Submodul) | `NeverDWindowsEHCorpusTests`, `NeverDRustEHCorpusTests`, `NeverDGoEHCorpusTests`, `NeverDCxxItaniumEHCorpusTests`, `NeverDObjCEHCorpusTests`, `NeverDAdaDEHCorpusTests` | Exception- und Runtime-Metadaten aus 545 per Digest fixierten echten Binärdateien, jede mit einem Manifest, das die Untergrenzen ihrer Wiederherstellung nennt |
 
 Die Registrierungsquellen sind
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt),
@@ -137,12 +137,12 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus` führt jede Linie aus; `check-neverd-windows-eh-corpus`,
 `check-neverd-rust-eh-corpus`, `check-neverd-go-eh-corpus`,
-`check-neverd-cxx-itanium-eh-corpus` und `check-neverd-objc-eh-corpus` jeweils
-eine. Alle drei CI-Hosts konfigurieren mit dem Flag und fahren alle fünf Linien:
+`check-neverd-cxx-itanium-eh-corpus`, `check-neverd-objc-eh-corpus` und `check-neverd-ada-d-eh-corpus` jeweils
+eine. Alle drei CI-Hosts konfigurieren mit dem Flag und fahren alle sechs Linien:
 Die Bytes sind überall identisch, was sie liest jedoch nicht, und ein
 Corpus-Lauf auf einem Host beweist nichts über die anderen beiden.
 `scripts/audit_ci_test_inventory.py` weist ein Inventar zurück, dem eines der
-fünf Labels fehlt, denn ein Build, der das Corpus stillschweigend nicht mehr
+sechs Labels fehlt, denn ein Build, der das Corpus stillschweigend nicht mehr
 liest, ist eine Regression, die kein Test fangen kann — der Test ist ja das, was
 abhandenkam.
 

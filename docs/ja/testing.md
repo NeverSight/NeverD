@@ -92,7 +92,7 @@ V9 の schema テストは 8 種の名前の往復と共有最終状態検証を
 | `unittests/sbf` | `NeverDSBFMetadataTests`、`NeverDSBFProgramImageTests`、`NeverDSBFLoaderTests`、`NeverDSBFAnalyzerTests`、`NeverDSBFVerifierTests`、`NeverDSBFISAConformanceTests`、`NeverDSBFAgaveConformanceTests`、`NeverDSBFSemanticTests`、`NeverDSBFEmitterTests`、`NeverDSBFLLVMEmitterTests`、`NeverDSBFLLVMDifferentialTests`、`NeverDSBFSourceDifferentialTests`、`NeverDSBFMalformedCorpusTests`、`NeverDSBFUpstreamConformanceTests`、`NeverDSBFExternalOracleTests`、`NeverDSBFSolanaModelTests`、`NeverDSBFIntegrationTests` | v0-v4 メタデータと ELF レイアウト、厳格な verifier/loader 動作、固定済み ELF 成果物 23 個、独立 official oracle、全 opcode の可用性、敵対的入力、CFG/復元、実行済み LLVM/C/Rust 差分 |
 | `PatchFullSubstRTTests.cpp` | `NeverDPatchFullTests` | 4 ISA×3 オブジェクト形式の書き換え/難読化等価性 |
 | `unittests/semantic` の重点変換ファイル | `NeverDSwitchXformTests`、`NeverDIndCallXformTests`、`NeverDCFGLoopXformTests`、`NeverDTwoTableXformTests`、`NeverDAvxUpperXformTests` | 大きなセマンティック実行形式から分離した高速再リンク用プローブ |
-| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests` | pin された 317 個の実バイナリから読み取る例外とランタイム metadata。各バイナリは manifest で復元が満たすべき下限を宣言している |
+| `unittests/corpus`（submodule） | `NeverDWindowsEHCorpusTests`、`NeverDRustEHCorpusTests`、`NeverDGoEHCorpusTests`、`NeverDCxxItaniumEHCorpusTests`、`NeverDObjCEHCorpusTests`、`NeverDAdaDEHCorpusTests` | pin された 545 個の実バイナリから読み取る例外とランタイム metadata。各バイナリは manifest で復元が満たすべき下限を宣言している |
 
 登録の信頼できる情報源は
 [`unittests/CMakeLists.txt`](../../unittests/CMakeLists.txt)、
@@ -124,11 +124,11 @@ cmake --build build-corpus --target check-neverd-corpus --parallel 4
 
 `check-neverd-corpus` は全ラインを、`check-neverd-windows-eh-corpus`、
 `check-neverd-rust-eh-corpus`、`check-neverd-go-eh-corpus`、
-`check-neverd-cxx-itanium-eh-corpus`、`check-neverd-objc-eh-corpus` はそれぞれ 1 ライン
-を実行します。CI の 3 ホストすべてがこのフラグ付きで configure し、5 ライン全部を
+`check-neverd-cxx-itanium-eh-corpus`、`check-neverd-objc-eh-corpus`、`check-neverd-ada-d-eh-corpus` はそれぞれ 1 ライン
+を実行します。CI の 3 ホストすべてがこのフラグ付きで configure し、6 ライン全部を
 実行します。バイトはどこでも同一ですが、それを読むものは同一ではなく、1 ホストでの
 corpus 実行は他の 2 ホストについて何も証明しません。
-`scripts/audit_ci_test_inventory.py` は 5 つの label のどれかを欠く inventory を拒否
+`scripts/audit_ci_test_inventory.py` は 6 つの label のどれかを欠く inventory を拒否
 します。corpus を静かに読まなくなったビルドは、どのテストにも捕捉できない回帰だから
 です。消えたものがテストそのものなのです。
 

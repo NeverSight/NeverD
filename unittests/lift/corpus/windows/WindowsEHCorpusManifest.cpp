@@ -112,6 +112,30 @@ bool isLowerSHA256(StringRef Hash) {
          });
 }
 
+bool hasMsvcVersionFamily(StringRef Version, StringRef Family) {
+  const size_t SuffixStart = Version.find(" built by: ");
+  if (SuffixStart != StringRef::npos) {
+    StringRef Suffix =
+        Version.substr(SuffixStart + StringRef(" built by: ").size());
+    if (Suffix.empty() || Suffix.contains('\r') || Suffix.contains('\n'))
+      return false;
+    Version = Version.take_front(SuffixStart);
+  }
+  if (!Version.consume_front(Family) || !Version.consume_front("."))
+    return false;
+  bool NeedDigit = true;
+  for (char C : Version) {
+    if (C >= '0' && C <= '9') {
+      NeedDigit = false;
+    } else if (C == '.' && !NeedDigit) {
+      NeedDigit = true;
+    } else {
+      return false;
+    }
+  }
+  return !NeedDigit;
+}
+
 std::string cellKey(StringRef Toolchain, StringRef Architecture,
                     StringRef CxxFormat, bool SecurityCookie,
                     StringRef Optimization, int VisualStudioYear = 2022) {
@@ -183,7 +207,7 @@ Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
     return manifestError(Context + ": unsupported toolchain");
   if (const json::Value *YearValue = Build->get("visual_studio_year")) {
     std::optional<int64_t> Year = YearValue->getAsInteger();
-    if (!Year || (*Year != 2022 && *Year != 2026))
+    if (!Year || (*Year != 2019 && *Year != 2022 && *Year != 2026))
       return manifestError(Context + ": unsupported visual_studio_year");
     Result.VisualStudioYear = static_cast<int>(*Year);
   } else {
@@ -192,6 +216,9 @@ Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
   if (Result.Toolchain != "msvc" && Result.VisualStudioYear != 2022)
     return manifestError(Context +
                          ": visual_studio_year applies only to MSVC cells");
+  if (Result.Toolchain == "msvc" && Result.VisualStudioYear == 2026 &&
+      Result.Architecture == "arm")
+    return manifestError(Context + ": VS 2026 does not provide an ARM32 cell");
   auto Optimization = requireString(*Build, "optimization", Context + ".build");
   if (!Optimization)
     return Optimization.takeError();
@@ -269,6 +296,12 @@ Expected<WindowsEHArtifactExpectation> parseArtifact(const json::Object &Object,
       requireString(*Linker, "file_version", Context + ".build.linker");
   if (!LinkerFileVersion)
     return LinkerFileVersion.takeError();
+  if (Result.Toolchain == "msvc" && Result.VisualStudioYear == 2019 &&
+      (!hasMsvcVersionFamily(*CompilerFileVersion, "19.29") ||
+       !hasMsvcVersionFamily(*CompilerProductVersion, "14.29") ||
+       !hasMsvcVersionFamily(*LinkerFileVersion, "14.29") ||
+       !hasMsvcVersionFamily(*LinkerProductVersion, "14.29")))
+    return manifestError(Context + ": VS 2019 cell must identify v142 14.29");
 
   const std::string CookieLabel = Result.SecurityCookie ? "gs" : "no-gs";
   const std::string ExpectedFilename =
@@ -362,7 +395,7 @@ std::map<std::string, std::set<std::string>> expectedInventory() {
   };
   const std::set<std::string> NativeClangNames{"nested_collided", "seh_probe",
                                                "cxx_eh_probe"};
-  for (int VsYear : {2022, 2026}) {
+  for (int VsYear : {2019, 2022, 2026}) {
     for (StringRef Toolchain : {"msvc", "clang-cl"}) {
       if (Toolchain == "clang-cl" && VsYear != 2022)
         continue;
