@@ -132,9 +132,9 @@ TEST(NativeSourceHints, ObjCObjectPairVoidMethodUsesSwiftSelf) {
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.resize(0x100);
   Image.Segments.push_back(std::move(Text));
-  Image.Symbols.push_back(
-      {"_$s3WMF18CollectionViewCellC19setBackgroundColors_8selectedySo7UIColorC_AGtF",
-       0x1000, 0, true});
+  Image.Symbols.push_back({"_$s3WMF18CollectionViewCellC19setBackgroundColors_"
+                           "8selectedySo7UIColorC_AGtF",
+                           0x1000, 0, true});
   const auto Hint =
       sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
@@ -153,25 +153,25 @@ TEST(NativeSourceHints, ObjCObjectPairVoidMethodUsesSwiftSelf) {
   auto Wrong = Image;
   Wrong.Symbols[0].Name =
       "_$s3WMF18CollectionViewCellC19setBackgroundColors_8selectedySS_SStF";
-  EXPECT_FALSE(sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
-  Wrong.Symbols[0].Name =
-      "_$s3WMF18CollectionViewCellC19setBackgroundColors_8selectedSbSo7UIColorC_AGtF";
-  EXPECT_FALSE(sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong,
-                                                                  0x1000));
+  Wrong.Symbols[0].Name = "_$s3WMF18CollectionViewCellC19setBackgroundColors_"
+                          "8selectedSbSo7UIColorC_AGtF";
+  EXPECT_FALSE(
+      sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name += "Z";
-  EXPECT_FALSE(sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Arch = Arch::X64;
-  EXPECT_FALSE(sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledObjCObjectPairVoidMethodSourceABI(Wrong, 0x1000));
 }
 
 TEST(NativeSourceHints, UIColorIntAlphaAllocatorUsesMixedSwiftRegisters) {
@@ -204,24 +204,23 @@ TEST(NativeSourceHints, UIColorIntAlphaAllocatorUsesMixedSwiftRegisters) {
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
   auto Wrong = Image;
-  Wrong.Symbols[0].Name =
-      "_$sSo7UIColorC13WMFComponentsE_5alphaABSi_SitcfC";
-  EXPECT_FALSE(sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong,
-                                                                  0x1000));
+  Wrong.Symbols[0].Name = "_$sSo7UIColorC13WMFComponentsE_5alphaABSi_SitcfC";
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name =
       "_$sSo7NSColorC13WMFComponentsE_5alphaABSi_12CoreGraphics7CGFloatVtcfC";
-  EXPECT_FALSE(sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name =
       "_$sSo7UIColorC13WMFComponentsE_5alphaABSi_12CoreGraphics7CGFloatVtcfc";
-  EXPECT_FALSE(sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong,
-                                                                  0x1000));
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorIntAlphaAllocatorSourceABI(Wrong, 0x1000));
 }
 
 TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
@@ -236,8 +235,7 @@ TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
   Text.Data.resize(0x100);
   Image.Segments.push_back(std::move(Text));
   Image.Symbols.push_back(
-      {"_$s3WMF15LocationManagerC014stopMonitoringB0yyF", 0x1000, 0,
-       true});
+      {"_$s3WMF15LocationManagerC014stopMonitoringB0yyF", 0x1000, 0, true});
   const auto Hint =
       sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
@@ -252,23 +250,17 @@ TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
   auto Wrong = Image;
-  Wrong.Symbols[0].Name =
-      "_$s3WMF15LocationManagerC014stopMonitoringB0SiyF";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
-                                                                0x1000));
+  Wrong.Symbols[0].Name = "_$s3WMF15LocationManagerC014stopMonitoringB0SiyF";
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name += "Z";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
-                                                                0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
-  Wrong.Symbols[0].Name =
-      "_$sSo15LocationManagerC3WMFE014stopMonitoringB0yyF";
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
-                                                                0x1000));
+  Wrong.Symbols[0].Name = "_$sSo15LocationManagerC3WMFE014stopMonitoringB0yyF";
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
-                                                                0x1000));
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
 }
 
 TEST(NativeSourceHints, ZeroArgClassInitializerUsesSwiftSelf) {

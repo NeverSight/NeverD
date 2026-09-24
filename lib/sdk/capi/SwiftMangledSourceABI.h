@@ -278,22 +278,22 @@ swiftMangledObjCObjectPairVoidMethodSourceABI(const BinaryImage &Image,
   if (!Shape(Owner, "Class", 2) || Owner.Children[0].Kind != "Module" ||
       !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
       Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
-      Owner.Children[1].Kind != "Identifier" ||
-      !Owner.Children[1].Text || Owner.Children[1].Text->empty() ||
-      Owner.Children[1].Index || !Owner.Children[1].Children.empty() ||
-      Function.Children[1].Kind != "Identifier" ||
-      !Function.Children[1].Text || Function.Children[1].Text->empty() ||
-      Function.Children[1].Index || !Function.Children[1].Children.empty() ||
+      Owner.Children[1].Kind != "Identifier" || !Owner.Children[1].Text ||
+      Owner.Children[1].Text->empty() || Owner.Children[1].Index ||
+      !Owner.Children[1].Children.empty() ||
+      Function.Children[1].Kind != "Identifier" || !Function.Children[1].Text ||
+      Function.Children[1].Text->empty() || Function.Children[1].Index ||
+      !Function.Children[1].Children.empty() ||
       !Shape(Labels, "LabelList", 2) ||
       !Shape(Labels.Children[0], "FirstElementMarker", 0) ||
-      Labels.Children[1].Kind != "Identifier" ||
-      !Labels.Children[1].Text || Labels.Children[1].Text->empty() ||
-      Labels.Children[1].Index || !Labels.Children[1].Children.empty() ||
-      !Shape(Type, "Type", 1) ||
+      Labels.Children[1].Kind != "Identifier" || !Labels.Children[1].Text ||
+      Labels.Children[1].Text->empty() || Labels.Children[1].Index ||
+      !Labels.Children[1].Children.empty() || !Shape(Type, "Type", 1) ||
       !Shape(Type.Children[0], "FunctionType", 2) ||
       !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
-      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple", 2) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             2) ||
       !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Tuple", 0))
@@ -330,7 +330,7 @@ swiftMangledObjCObjectPairVoidMethodSourceABI(const BinaryImage &Image,
 // for the corresponding NSColor extension confirms the mixed register layout.
 inline std::optional<SourceFunctionTypeHint>
 swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
-                                               va_t Entry) {
+                                              va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
       !Image.isCodeAddress(Entry))
@@ -366,14 +366,12 @@ swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
            N.Children.empty();
   };
   const auto UIColor = [&](const Node &N) {
-    return Shape(N, "Class", 2) &&
-           Text(N.Children[0], "Module", "__C") &&
+    return Shape(N, "Class", 2) && Text(N.Children[0], "Module", "__C") &&
            Text(N.Children[1], "Identifier", "UIColor");
   };
   const auto Nominal = [&](const Node &N, llvm::StringRef Module,
                            llvm::StringRef Identifier) {
-    return Shape(N, "Structure", 2) &&
-           Text(N.Children[0], "Module", Module) &&
+    return Shape(N, "Structure", 2) && Text(N.Children[0], "Module", Module) &&
            Text(N.Children[1], "Identifier", Identifier);
   };
   if (!Parsed.Root || !Parsed.Error.empty() ||
@@ -384,19 +382,17 @@ swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
   const auto &Owner = Allocator.Children[0];
   const auto &Labels = Allocator.Children[1];
   const auto &Type = Allocator.Children[2];
-  if (!Shape(Owner, "Extension", 2) ||
-      Owner.Children[0].Kind != "Module" ||
+  if (!Shape(Owner, "Extension", 2) || Owner.Children[0].Kind != "Module" ||
       !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
       Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
-      !UIColor(Owner.Children[1]) ||
-      !Shape(Labels, "LabelList", 2) ||
+      !UIColor(Owner.Children[1]) || !Shape(Labels, "LabelList", 2) ||
       !Shape(Labels.Children[0], "FirstElementMarker", 0) ||
       !Text(Labels.Children[1], "Identifier", "alpha") ||
-      !Shape(Type, "Type", 1) ||
-      !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Shape(Type, "Type", 1) || !Shape(Type.Children[0], "FunctionType", 2) ||
       !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
-      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple", 2) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             2) ||
       !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
       !UIColor(Type.Children[0].Children[1].Children[0].Children[0]))
@@ -408,8 +404,7 @@ swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
         !Shape(Argument.Children[0], "Type", 1))
       return std::nullopt;
   if (!Nominal(Arguments[0].Children[0].Children[0], "Swift", "Int") ||
-      !Nominal(Arguments[1].Children[0].Children[0], "CoreGraphics",
-               "CGFloat"))
+      !Nominal(Arguments[1].Children[0].Children[0], "CoreGraphics", "CGFloat"))
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
@@ -470,17 +465,17 @@ swiftMangledZeroArgClassVoidMethodSourceABI(const BinaryImage &Image,
   if (!Shape(Owner, "Class", 2) || Owner.Children[0].Kind != "Module" ||
       !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
       Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
-      Owner.Children[1].Kind != "Identifier" ||
-      !Owner.Children[1].Text || Owner.Children[1].Text->empty() ||
-      Owner.Children[1].Index || !Owner.Children[1].Children.empty() ||
-      Function.Children[1].Kind != "Identifier" ||
-      !Function.Children[1].Text || Function.Children[1].Text->empty() ||
-      Function.Children[1].Index || !Function.Children[1].Children.empty() ||
-      !Shape(Type, "Type", 1) ||
+      Owner.Children[1].Kind != "Identifier" || !Owner.Children[1].Text ||
+      Owner.Children[1].Text->empty() || Owner.Children[1].Index ||
+      !Owner.Children[1].Children.empty() ||
+      Function.Children[1].Kind != "Identifier" || !Function.Children[1].Text ||
+      Function.Children[1].Text->empty() || Function.Children[1].Index ||
+      !Function.Children[1].Children.empty() || !Shape(Type, "Type", 1) ||
       !Shape(Type.Children[0], "FunctionType", 2) ||
       !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
-      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple", 0) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             0) ||
       !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Tuple", 0))
