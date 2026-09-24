@@ -236,6 +236,12 @@ inline size_t inferObjCNativeDependencies(
         continue;
       }
       if (auto Mangled =
+              swiftMangledObjCObjectVoidMethodSourceABI(Image, Target)) {
+        Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
+        ++Added;
+        continue;
+      }
+      if (auto Mangled =
               swiftMangledObjCObjectPairVoidMethodSourceABI(Image, Target)) {
         Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
         ++Added;
