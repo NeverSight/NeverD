@@ -502,8 +502,22 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         if (Argument && Argument->K == Value::Kind::Frame)
           FrameEscaped = true;
       }
+      bool PrivateFrameSurvivesCall =
+          Bound && !FrameEscaped &&
+          Bound->Signature.Convention ==
+              SourceFunctionTypeHint::ConventionKind::C &&
+          Bound->Signature.ReturnLocation.Kind !=
+              SourceABICarrierKind::IndirectResultPointer;
+      if (PrivateFrameSurvivesCall)
+        for (const auto &Parameter : Bound->Signature.Parameters)
+          if (Parameter.Location.Kind == SourceABICarrierKind::Stack ||
+              Parameter.Location.Kind ==
+                  SourceABICarrierKind::IndirectResultPointer ||
+              !Parameter.Components.empty())
+            PrivateFrameSurvivesCall = false;
       Values = std::move(Preserved);
-      FrameSlots.clear();
+      if (!PrivateFrameSurvivesCall)
+        FrameSlots.clear();
       WrittenArguments.clear();
       FloatingArgumentWrite = false;
       if (Op.Opcode == NdOp::CALL && Bound &&

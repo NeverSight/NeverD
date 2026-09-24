@@ -695,6 +695,44 @@ TEST(ObjCBlockCallHints, ExactPrivateSpillsPreserveHiddenObjectAndNarrowValue) {
   }
 }
 
+TEST(ObjCBlockCallHints, PrivateBlockSpillSurvivesValidatedCall) {
+  Fixture F(Arch::AArch64);
+  const auto &TRI = getTargetRegInfo(F.Image.Arch);
+  SourceCallTypeHint Retain;
+  Retain.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
+  Retain.TargetName = "objc_retain";
+  Retain.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Retain.Signature.Parameters = {{"object", Retain.Signature.ReturnType}};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Retain.Signature, F.Image.Arch, Error))
+      << Error;
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1008, Retain}};
+  auto &Ops = F.Low.Blocks[0].Ops;
+  Ops = {op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+            {NdVar::reg(TRI.StackPointer, 8), NdVar::cst(-16, 8)}, 0x1000),
+         op(NdOp::STORE, {}, {NdVar::tmp(0, 8), NdVar::reg(F.R2, 8)}, 0x1000),
+         op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x2000, 8)}, 0x1008),
+         op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+            {NdVar::reg(TRI.StackPointer, 8), NdVar::cst(-16, 8)}, 0x100c),
+         op(NdOp::LOAD, NdVar::reg(F.R0, 8), {NdVar::tmp(0, 8)}, 0x100c),
+         op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+            {NdVar::reg(F.R0, 8), NdVar::cst(16, 8)}, 0x1010),
+         op(NdOp::LOAD, NdVar::reg(F.Target, 8), {NdVar::tmp(0, 8)}, 0x1010),
+         op(NdOp::INDIR_CALL, NdVar::reg(TRI.IntReturnReg, 8),
+            {NdVar::reg(F.Target, 8)}, 0x1014),
+         op(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 4)}, 0x1018)};
+
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_TRUE(Hints.count(0x1014));
+  EXPECT_TRUE(buildObjCBlockCallHints(F.Image, F.Low, &F.Entry).empty());
+  Ops.insert(Ops.begin() + 2, op(NdOp::COPY, NdVar::reg(F.R0, 8),
+                                 {NdVar::reg(TRI.StackPointer, 8)}, 0x1004));
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+}
+
 TEST(ObjCBlockCallHints, ForwardedA64ReturnKeepsFullMachineCarrier) {
   Fixture F(Arch::AArch64);
   F.Low.Blocks[0].Ops.back().Inputs[0] =
