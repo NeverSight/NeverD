@@ -259,7 +259,8 @@ void KernelModel::configureFrameworkRequestHost() {
     std::fill(Location.begin() + StackCompletionOffset, Location.end(), 0);
     if (auto E = Memory.write(*Stack - StackSize, Location))
       return E;
-    auto Status = callDriver(Request->DeviceRoute.back(), IRP);
+    auto Status = callDriver(Request->DeviceRoute.back(), IRP,
+                             ForwardingOwner::FrameworkFile);
     if (!Status)
       return Status.takeError();
     if (!Request->Completed || PendingWdmCall)

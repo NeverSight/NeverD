@@ -253,6 +253,7 @@ private:
   };
   struct Device {
     uint64_t Wdm = 0, PDO = 0;
+    uint64_t LocalTarget = 0;
     uint64_t DefaultQueue = 0;
     uint64_t CallerContext = 0;
     FileConfig Files;
@@ -345,6 +346,7 @@ private:
     Driver,
     Generic,
     Device,
+    IoTarget,
     File,
     Queue,
     Request,

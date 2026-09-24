@@ -875,29 +875,32 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
 #ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
   Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
 #endif
-  for (const char *Image : Images) {
-    SCOPED_TRACE(Image);
-    const std::string Service = KMDFPnpServicePrefix.str() + 'O';
-    auto Options = kmdfPnpOptions(Service.c_str());
-    auto Parsed =
-        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
-            Session, Image, KMDFPnpFileForwardScenario.data(), &Options)));
-    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
-    const auto *Report = Parsed->getAsObject();
-    ASSERT_NE(Report, nullptr);
-    EXPECT_EQ(Report->getString("stop_reason"), "returned")
-        << Report->getString("diagnostic").value_or("").str();
-    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
-    const auto *Requests = Report->getArray("requests");
-    ASSERT_NE(Requests, nullptr);
-    ASSERT_EQ(Requests->size(), 6u);
-    for (size_t Index : {1u, 2u, 3u}) {
-      const auto *Request = (*Requests)[Index].getAsObject();
-      ASSERT_NE(Request, nullptr);
-      EXPECT_EQ(Request->getInteger("io_status"), 0);
-      EXPECT_EQ(Request->getBoolean("completed"), true);
+  for (const char *Image : Images)
+    for (char Mode : {'O', 'p'}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Mode);
+      const std::string Service = KMDFPnpServicePrefix.str() + Mode;
+      auto Options = kmdfPnpOptions(Service.c_str());
+      auto Parsed =
+          llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+              Session, Image, KMDFPnpFileForwardScenario.data(), &Options)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"), "returned")
+          << Report->getString("diagnostic").value_or("").str();
+      EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+      const auto *Requests = Report->getArray("requests");
+      ASSERT_NE(Requests, nullptr);
+      ASSERT_EQ(Requests->size(), 6u);
+      for (size_t Index : {1u, 2u, 3u}) {
+        const auto *Request = (*Requests)[Index].getAsObject();
+        ASSERT_NE(Request, nullptr);
+        EXPECT_EQ(Request->getInteger("io_status"), 0);
+        EXPECT_EQ(Request->getBoolean("completed"), true);
+      }
     }
-  }
 #else
   GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
 #endif

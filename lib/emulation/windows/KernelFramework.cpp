@@ -980,6 +980,9 @@ llvm::Error KernelFramework::planDelete(uint64_t Handle,
       if (FileHandles.contains(File->second.Wdm))
         return invalid("deletion with an open file requires CLOSE");
     }
+    if (I->second.Kind == ObjectKind::IoTarget && I->second.References)
+      return invalid("device deletion with a referenced local target "
+                     "requires the driver to release it first");
     if (I->second.Kind == ObjectKind::Queue &&
         (std::any_of(
              ReadyQueueCallbacks.begin(), ReadyQueueCallbacks.end(),
@@ -1634,6 +1637,8 @@ KernelFramework::call(const KernelExportRegistry::Export &Export,
       return invalid("the default queue cannot be deleted by the driver");
     if (O.Kind == ObjectKind::Request)
       return invalid("an incoming framework request is released by completion");
+    if (O.Kind == ObjectKind::IoTarget)
+      return invalid("the local I/O target is owned by its device");
     if (O.Kind == ObjectKind::File)
       return invalid("a framework file object is released by CLOSE");
     if (O.Kind == ObjectKind::Device && Devices.at(A[1]).PDO)

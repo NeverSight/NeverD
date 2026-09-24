@@ -542,7 +542,12 @@ private:
   std::optional<KernelGuestCall> PendingWdmCall;
   llvm::Expected<uint32_t> requestStackCursor(uint64_t IRP) const;
   llvm::Expected<uint64_t> currentRequestStack(uint64_t IRP) const;
-  llvm::Expected<uint64_t> callDriver(uint64_t Device, uint64_t IRP);
+  /// Only the framework host may forward a framework-owned file IRP. Guest
+  /// WDM dispatch still requires independent ownership of the packet.
+  enum class ForwardingOwner { WDM, FrameworkFile };
+  llvm::Expected<uint64_t>
+  callDriver(uint64_t Device, uint64_t IRP,
+             ForwardingOwner Owner = ForwardingOwner::WDM);
   struct IRPCompletionStep {
     uint32_t Slot;
     bool Pending;

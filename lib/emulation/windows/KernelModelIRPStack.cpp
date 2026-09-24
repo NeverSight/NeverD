@@ -85,8 +85,8 @@ llvm::Expected<bool> KernelModel::dispatchPending(const ActiveRequest &Request,
   return (*Control & StackPendingReturned) != 0;
 }
 
-llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
-                                                 uint64_t IRP) {
+llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
+                                                 ForwardingOwner Owner) {
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return stackError("IoCallDriver requires a live owned IRP");
@@ -98,7 +98,8 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device,
     return stackError("pageable power forwarding requires PASSIVE_LEVEL");
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return stackError("cannot replace a pending guest callback");
-  if (Framework && Framework->ownsRequestIRP(IRP))
+  if (Owner == ForwardingOwner::WDM && Framework &&
+      Framework->ownsRequestIRP(IRP))
     return stackError("framework-owned requests cannot use WDM forwarding");
   if (!Devices.count(Device) ||
       std::find(Request->DeviceRoute.begin(), Request->DeviceRoute.end(),

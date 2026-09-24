@@ -527,7 +527,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name != api::WdfRequestComplete &&
       Name != api::WdfRequestCompleteWithInformation &&
-      Name != api::WdfRequestStopAcknowledge &&
+      Name != api::WdfRequestSend && Name != api::WdfRequestStopAcknowledge &&
       Name != api::WdfRequestGetParameters &&
       Name != api::WdfRequestRetrieveInputBuffer &&
       Name != api::WdfRequestRetrieveOutputBuffer &&
@@ -793,6 +793,51 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (!Canceled)
       return Canceled.takeError();
     return Result{*Canceled ? 1 : 0};
+  }
+  if (Name == api::WdfRequestSend) {
+    auto Target = Objects.find(A[2]);
+    auto Device = Devices.find(R->second.Device);
+    if (Target == Objects.end() ||
+        Target->second.Kind != ObjectKind::IoTarget ||
+        Target->second.Binding != B.Globals || Target->second.Deleting ||
+        Device == Devices.end() || Device->second.LocalTarget != A[2] ||
+        Target->second.Parent != R->second.Device)
+      return requestError("send requires the request device's local target");
+    if (!A[3])
+      return requestError(
+          "local file forwarding requires send-and-forget options");
+    if (auto E = ValidateAccess(A[3], RequestSendOptionsSize, false))
+      return E;
+    auto Size = read(A[3], sizeof(uint32_t));
+    auto Flags = read(A[3] + RequestSendFlagsOffset, sizeof(uint32_t));
+    if (!Size || !Flags)
+      return llvm::joinErrors(Size.takeError(), Flags.takeError());
+    if (*Size != RequestSendOptionsSize || *Flags != RequestSendAndForget)
+      return requestError("only send-and-forget file forwarding is modeled");
+    if (!R->second.FileCreate || R->second.File || R->second.Queue ||
+        R->second.Cancellation != CancelState::Unmarked ||
+        !Device->second.Files.forwards(Device->second.Filter))
+      return requestError(
+          "send-and-forget requires a forwardable CREATE without a "
+          "framework file object");
+    if (!RequestsHost.ValidateFileForward || !RequestsHost.ForwardFile)
+      return requestError("lower file-request host is unavailable");
+    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP))
+      return E;
+    auto Status = RequestsHost.ForwardFile(R->second.IRP);
+    if (!Status)
+      return Status.takeError();
+    if (*Status == windows::StatusPending)
+      return requestError("asynchronous lower file completion is unsupported");
+    R->second.Completed = true;
+    R->second.CompletionStatus = *Status;
+    std::vector<Step> Steps;
+    if (auto E = planDelete(A[1], Steps))
+      return E;
+    auto Retired = start(std::move(Steps));
+    if (!Retired)
+      return Retired.takeError();
+    return Result{1};
   }
   if (Name == api::WdfRequestComplete ||
       Name == api::WdfRequestCompleteWithInformation) {
