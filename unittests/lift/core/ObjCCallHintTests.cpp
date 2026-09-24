@@ -1544,6 +1544,49 @@ TEST(ObjCCallHints, SwiftGenericSinglePayloadEnumKeepsCallbackABI) {
   }
 }
 
+TEST(ObjCCallHints, SwiftClassMetadataDependencyKeepsTwoWordSwiftResult) {
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  for (const char *Name :
+       {"swift_initClassMetadata2", "swift_updateClassMetadata2"}) {
+    const std::string Import = std::string("_") + Name;
+    auto Image = runtimeImage(Import);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint) << Name;
+    const auto &ABI = Hint->Signature;
+    EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftRuntime);
+    EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_EQ(ABI.ReturnComponents.size(), 2U);
+    ASSERT_EQ(ABI.ReturnType->Fields.size(), 2U);
+    EXPECT_EQ(ABI.ReturnType->Fields[0]->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(ABI.ReturnType->Fields[1]->Kind, NdTypeKind::Int);
+    EXPECT_EQ(ABI.ReturnType->Fields[1]->Size, 8U);
+    for (size_t I = 0; I < 2; ++I) {
+      EXPECT_EQ(ABI.ReturnComponents[I].Kind,
+                SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(ABI.ReturnComponents[I].RegisterOffset,
+                getTargetRegInfo(Arch::AArch64).IntReturnReg + I * 8);
+    }
+    ASSERT_EQ(ABI.Parameters.size(), 5U);
+    for (size_t I = 0; I < 5; ++I) {
+      EXPECT_EQ(ABI.Parameters[I].Type->Kind,
+                I == 1 || I == 2 ? NdTypeKind::Int : NdTypeKind::Ptr);
+      EXPECT_EQ(ABI.Parameters[I].Type->Size, 8U);
+      EXPECT_EQ(ABI.Parameters[I].Location.Kind,
+                SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+                getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+    }
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+    Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    Image.DyldBindSlots[0x2180].Module = Provider.str();
+    Image.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, SwiftOpaqueConformance2KeepsSignedDescriptorABI) {
   auto Image = runtimeImage("_swift_getOpaqueTypeConformance2");
   Image.DyldBindSlots[0x2180] = {"_swift_getOpaqueTypeConformance2", 0,

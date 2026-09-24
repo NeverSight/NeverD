@@ -344,3 +344,5 @@ ARM64 Objective-C 源码恢复支持由调用方证明的最多八个 Swift 字�
 逐次调用的布尔值证明现已支持精确的 `String.hasPrefix` 导入。Xcode 26.5 的设备与模拟器探针确认其为四参数 `swiftcc i1` 调用，前缀 String 的两个值位于接收者 String 之前。生成的 `_Bool swiftcall` 声明与五参数比较助手分别匹配，发布时同时复核当前导入种类及每次调用。连续两次前缀判断保留原有分支顺序和副作用。
 
 强绑定的 Swift 泛型单载荷枚举标签函数现在使用其声明的 `swiftcall` ABI：分支和标签值为 32 位，元数据和回调为指针，读取函数返回 32 位标签，写入函数无返回值。弱导入或其他模块的同名函数不适用；这项绑定不会推断未定义的返回高位或回调函数体。
+
+固定版本的 Swift 声明还为 `swift_initClassMetadata2` 和 `swift_updateClassMetadata2` 绑定五个指针宽度参数，以及双字的 `swiftcall` 元数据依赖返回值（元数据指针、状态字）。仅精确匹配的 libswiftCore 强导入适用。生成器现在也能从固定版本源码重现这些条目和泛型枚举标签条目。

@@ -119,7 +119,8 @@ class SwiftRuntimeDeclarationTests(unittest.TestCase):
                                   ('RETURNS(PtrTy, SizeTy)', '(pz)'),
                                   ('RETURNS(SizeTy, PtrTy)', '(zp)'),
                                   ('RETURNS(SizeTy, SizeTy)', '(zz)'),
-                                  ('RETURNS(TypeMetadataResponseTy)', '(pz)')]:
+                                  ('RETURNS(TypeMetadataResponseTy)', '(pz)'),
+                                  ('RETURNS(TypeMetadataDependencyTy)', '(pz)')]:
             source = record(cc='SwiftCC', returns=returns)
             self.assertEqual(declarations(source),
                              {'swift_allocate': (encoding + 'pz', False, True)})
@@ -129,7 +130,9 @@ class SwiftRuntimeDeclarationTests(unittest.TestCase):
 
     def test_named_result_layout_cannot_become_an_argument_or_c_result(self):
         for change in [dict(args='ARGS(TypeMetadataResponseTy)'),
+                       dict(args='ARGS(TypeMetadataDependencyTy)'),
                        dict(returns='RETURNS(TypeMetadataResponseTy, PtrTy)'),
+                       dict(returns='RETURNS(TypeMetadataDependencyTy, PtrTy)'),
                        dict(returns='RETURNS(UnknownResponseTy)'),
                        dict(returns='RETURNS(PtrTy, Int32Ty)'),
                        dict(returns='RETURNS(VoidTy, PtrTy)'),
@@ -139,6 +142,32 @@ class SwiftRuntimeDeclarationTests(unittest.TestCase):
                 with self.subTest(cc=cc, change=change):
                     self.assertEqual(declarations(record(cc=cc, **change)), {})
         self.assertEqual(declarations(record(returns='RETURNS(TypeMetadataResponseTy)')), {})
+        self.assertEqual(declarations(record(returns='RETURNS(TypeMetadataDependencyTy)')), {})
+
+    def test_swift_generic_enum_callbacks_use_only_exact_int32_abis(self):
+        getter = record(name='swift_getEnumTagSinglePayloadGeneric', cc='SwiftCC',
+                        returns='RETURNS(Int32Ty)',
+                        args='ARGS(OpaquePtrTy, Int32Ty, TypeMetadataPtrTy, '
+                             'PtrTy)')
+        setter = record(name='swift_storeEnumTagSinglePayloadGeneric', cc='SwiftCC',
+                        returns='RETURNS(VoidTy)',
+                        args='ARGS(OpaquePtrTy, Int32Ty, Int32Ty, '
+                             'TypeMetadataPtrTy, PtrTy)')
+        self.assertEqual(declarations(getter + setter), {
+            'swift_getEnumTagSinglePayloadGeneric': ('upupp', False, True),
+            'swift_storeEnumTagSinglePayloadGeneric': ('vpuupp', False, True),
+        })
+        for invalid in [
+            getter.replace('Int32Ty, TypeMetadataPtrTy', 'SizeTy, TypeMetadataPtrTy'),
+            getter.replace('TypeMetadataPtrTy, PtrTy', 'TypeMetadataPtrTy, Int8PtrTy'),
+            getter.replace('SwiftCC', 'C_CC'),
+            getter.replace('swift_getEnumTagSinglePayloadGeneric', 'swift_other'),
+            setter.replace('RETURNS(VoidTy)', 'RETURNS(Int32Ty)'),
+            setter.replace('Int32Ty, Int32Ty, TypeMetadataPtrTy',
+                           'Int32Ty, SizeTy, TypeMetadataPtrTy'),
+        ]:
+            with self.subTest(invalid=invalid[:100]):
+                self.assertEqual(declarations(invalid), {})
 
     def test_incomplete_or_exhausted_input_cannot_publish_partial_facts(self):
         for source in ('FUNCTION(', record() + '\n#if A', '#endif',
