@@ -1243,6 +1243,28 @@ KernelFramework::advance(uint64_t Token) {
         return E;
       continue;
     }
+    if (S.Kind == StepKind::ForwardFileIRP) {
+      if (!RequestsHost.ForwardFile || !RequestsHost.View)
+        return invalid("lower file-request host is unavailable");
+      auto View = RequestsHost.View(S.Object);
+      if (!View)
+        return View.takeError();
+      auto Status = RequestsHost.ForwardFile(S.Object);
+      if (!Status)
+        return Status.takeError();
+      if (*Status == windows::StatusPending)
+        return invalid("asynchronous lower file completion is unsupported");
+      if (View->Major == RequestMajorCreate &&
+          (*Status & profile::NTStatusFailureMask) && S.File) {
+        if (auto E = unlinkFileObject(S.File))
+          return E;
+        std::vector<Step> Delete;
+        if (auto E = planDelete(S.File, Delete))
+          return E;
+        C.Steps.insert(C.Steps.begin() + C.Index, Delete.begin(), Delete.end());
+      }
+      continue;
+    }
     if (S.Kind == StepKind::CancelReturned) {
       auto Callback = CancelCallbacks.find(Token);
       auto R = Requests.find(S.Object);

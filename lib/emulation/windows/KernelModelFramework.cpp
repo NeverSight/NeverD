@@ -59,11 +59,29 @@ void KernelModel::configureFrameworkDeviceHost() {
   };
   Host.CreatePnp = [this, SetIoType](uint64_t PDO, llvm::StringRef Name,
                                      uint32_t IoType, uint32_t DeviceType,
-                                     bool Exclusive) -> DeviceResult {
+                                     bool Exclusive,
+                                     bool Filter) -> DeviceResult {
     auto *Configured = pnpDeviceForPDO(PDO);
     if (!Configured || !Configured->AddDeviceActive || !isProviderDevice(PDO))
       return frameworkDeviceError(
           "PnP framework creation requires the active physical device");
+    if (Filter) {
+      auto Lower = topAttachedDevice(PDO);
+      if (!Lower)
+        return Lower.takeError();
+      auto Flags = Memory.readInteger(*Lower + windows::DeviceFlagsOffset, 4);
+      if (!Flags)
+        return Flags.takeError();
+      const uint32_t Transfer =
+          *Flags & (windows::DeviceBufferedIO | windows::DeviceDirectIO);
+      if (Transfer == (windows::DeviceBufferedIO | windows::DeviceDirectIO))
+        return frameworkDeviceError(
+            "filter target sets conflicting READ/WRITE transfer flags");
+      IoType = Transfer == windows::DeviceDirectIO ? framework::ControlIoDirect
+               : Transfer == windows::DeviceBufferedIO
+                   ? framework::ControlIoBuffered
+                   : framework::ControlIoNeither;
+    }
     auto Created =
         createDeviceObject(Name, 0, DeviceType, windows::SecureOpen, Exclusive);
     if (!Created)

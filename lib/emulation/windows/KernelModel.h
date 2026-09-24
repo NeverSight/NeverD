@@ -480,6 +480,8 @@ private:
     uint64_t ResourceListSize = 0;
     std::optional<DeviceLifecycleTicket> PowerTicket;
     std::optional<DriverPowerOperation> PowerOperation;
+    std::optional<DriverBusCompletion> FileBusCompletion;
+    bool FileBusReceived = false;
     std::optional<RequestedPower> ChildPower;
     bool LifecycleIo = false;
     uint64_t Stack = 0;

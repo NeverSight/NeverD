@@ -862,7 +862,17 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     Result.Power = *Power;
     return Result;
   }
-  if (Object->get(MinorField) || Object->get(BusCompletionField) ||
+  const bool FileLifecycle = Result.Kind == DriverRequestKind::Create ||
+                             Result.Kind == DriverRequestKind::Cleanup ||
+                             Result.Kind == DriverRequestKind::Close;
+  if (FileLifecycle && Object->get(BusCompletionField)) {
+    auto Bus = busCompletion(*Object);
+    if (!Bus)
+      return Bus.takeError();
+    Result.FileBusCompletion = *Bus;
+  }
+  if (Object->get(MinorField) ||
+      (!FileLifecycle && Object->get(BusCompletionField)) ||
       Object->get(PowerTypeField) || Object->get(PowerStateField) ||
       Object->get(PowerActionField) || Object->get(SystemContextField))
     return invalid("power or pnp fields require the matching request kind");
@@ -1494,6 +1504,17 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
       return invalid("PnP operation requires request kind pnp");
     if (Request.Power)
       return invalid("power operation requires request kind power");
+    if (Request.FileBusCompletion) {
+      if (Request.Kind != DriverRequestKind::Create &&
+          Request.Kind != DriverRequestKind::Cleanup &&
+          Request.Kind != DriverRequestKind::Close)
+        return invalid("bus_completion requires a file lifecycle request");
+      if (Request.DeviceID.empty() || !Request.FileBusCompletion->Status ||
+          Request.FileBusCompletion->Delay100ns ||
+          *Request.FileBusCompletion->Status == windows::StatusPending)
+        return invalid("file bus_completion requires device_id and a "
+                       "synchronous explicit final status");
+    }
     if (Request.CancelAfter100ns) {
       if (*Request.CancelAfter100ns > INT64_MAX)
         return invalid(

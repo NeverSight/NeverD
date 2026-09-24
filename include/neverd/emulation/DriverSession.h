@@ -84,6 +84,9 @@ struct DriverRequest {
   std::optional<DriverPnpOperation> Pnp;
   /// Present exactly when Kind is Power; those packets have no FILE_OBJECT.
   std::optional<DriverPowerOperation> Power;
+  /// Explicit synchronous PDO response when a framework file lifecycle IRP
+  /// reaches the configured lower provider.
+  std::optional<DriverBusCompletion> FileBusCompletion;
   /// Explicit external pulses for READ/WRITE/IOCTL. These events survive the
   /// source IRP's completion and do not imply device enable/ack semantics.
   std::vector<DriverInterruptEvent> InterruptEvents{};

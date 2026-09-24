@@ -742,6 +742,24 @@ constexpr llvm::StringLiteral KMDFPnpHeldRequestScenario = R"({
        "bus_completion":{"status":0}}],
     "unload":true})";
 
+constexpr llvm::StringLiteral KMDFPnpFileForwardScenario = R"({
+    "pnp_devices":[{"id":"kmdf-pdo","bus":"resource_free",
+      "initial_device_power":"D0","initial_system_power":"working"}],
+    "requests":[
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"start",
+       "bus_completion":{"status":0}},
+      {"kind":"create","device_id":"kmdf-pdo","file":7,
+       "bus_completion":{"status":0}},
+      {"kind":"cleanup","device_id":"kmdf-pdo","file":7,
+       "bus_completion":{"status":0}},
+      {"kind":"close","device_id":"kmdf-pdo","file":7,
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"query_remove",
+       "bus_completion":{"status":0}},
+      {"kind":"pnp","device_id":"kmdf-pdo","minor":"remove",
+       "bus_completion":{"status":0}}],
+    "unload":true})";
+
 constexpr llvm::StringLiteral KMDFPnpServicePrefix = "NeverDKmdfPnp";
 
 neverd_driver_options_v1 kmdfPnpOptions(const char *Service) {
@@ -817,6 +835,40 @@ TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFPnpLifecycle) {
                 "KMDF PnP: device destroy\n", "KMDF PnP: driver unload\n"}));
       }
     }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
+#ifdef NEVERD_KMDF_PNP_FIXTURE
+  std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
+#ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images) {
+    SCOPED_TRACE(Image);
+    const std::string Service = KMDFPnpServicePrefix.str() + 'O';
+    auto Options = kmdfPnpOptions(Service.c_str());
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, Image, KMDFPnpFileForwardScenario.data(), &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned")
+        << Report->getString("diagnostic").value_or("").str();
+    EXPECT_EQ(Report->getBoolean("scenario_success"), true);
+    const auto *Requests = Report->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    ASSERT_EQ(Requests->size(), 6u);
+    for (size_t Index : {1u, 2u, 3u}) {
+      const auto *Request = (*Requests)[Index].getAsObject();
+      ASSERT_NE(Request, nullptr);
+      EXPECT_EQ(Request->getInteger("io_status"), 0);
+      EXPECT_EQ(Request->getBoolean("completed"), true);
+    }
+  }
 #else
   GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
 #endif

@@ -178,6 +178,31 @@ TEST(DriverPnpScenario, PnpFieldsCannotMixWithFilesOrTransfersEvenWhenZero) {
     invalidJSON(scenario(Request));
 }
 
+TEST(DriverPnpScenario, FileBusResponsesRequireAnExplicitSynchronousTarget) {
+  auto Parsed = driverOptionsFromScenarioJSON(scenario(R"(
+    {"kind":"create","device_id":"port-0",
+     "bus_completion":{"status":0}},
+    {"kind":"cleanup","device_id":"port-0",
+     "bus_completion":{"status":0}},
+    {"kind":"close","device_id":"port-0",
+     "bus_completion":{"status":0}}
+  )"));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  ASSERT_EQ(Parsed->Requests.size(), 3u);
+  for (const auto &Request : Parsed->Requests) {
+    ASSERT_TRUE(Request.FileBusCompletion);
+    EXPECT_EQ(Request.FileBusCompletion->Status, 0u);
+    EXPECT_EQ(Request.FileBusCompletion->Delay100ns, 0u);
+  }
+  for (
+      llvm::StringRef Request :
+      {R"({"kind":"create","bus_completion":{"status":0}})",
+       R"({"kind":"create","device_id":"port-0","bus_completion":{"status":259}})",
+       R"({"kind":"cleanup","device_id":"port-0","bus_completion":{"status":0,"delay_100ns":1}})",
+       R"({"kind":"read","device_id":"port-0","bus_completion":{"status":0}})"})
+    invalidJSON(scenario(Request));
+}
+
 TEST(DriverPnpScenario, BusCompletionHasExplicitFinalStatusAndBoundedDelay) {
   for (const char *Completion :
        {"null", "[]", R"({})", R"({"status":null})", R"({"status":true})",

@@ -95,6 +95,22 @@ DriverOptions resourceOptions(char Mode) {
   return Input;
 }
 
+DriverOptions forwardedFileOptions(char Mode) {
+  auto Input = options(Mode);
+  Input.Requests.erase(
+      std::remove_if(Input.Requests.begin(), Input.Requests.end(),
+                     [](const DriverRequest &Request) {
+                       return Request.Kind == DriverRequestKind::DeviceControl;
+                     }),
+      Input.Requests.end());
+  for (auto &Request : Input.Requests)
+    if (Mode != 'n' && (Request.Kind == DriverRequestKind::Create ||
+                        Request.Kind == DriverRequestKind::Cleanup ||
+                        Request.Kind == DriverRequestKind::Close))
+      Request.FileBusCompletion = DriverBusCompletion{windows::StatusSuccess};
+  return Input;
+}
+
 DriverOptions pendingStopOptions(char Mode) {
   auto Input = options(Mode);
   auto IO = file(DriverRequestKind::DeviceControl);
@@ -157,6 +173,92 @@ TEST(DriverKMDFPnp, AddStartIoRemoveAndUnloadFollowRealCallbacks) {
                                           "KMDF PnP: device destroy\n",
                                           "KMDF PnP: driver unload\n"}));
     }
+}
+
+TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
+  for (const char *Image : pnpImages())
+    for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
+      for (char Mode : {'O', 'o', 'n'}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Mode);
+        auto Input = forwardedFileOptions(Mode);
+        Input.LoadAddress = Base;
+        auto Result = emulateDriver(Image, Input);
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Stop, DriverStopReason::Returned)
+            << Result->Diagnostic;
+        ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+        for (const auto &Request : Result->Requests) {
+          EXPECT_TRUE(Request.Completed);
+          EXPECT_EQ(Request.IOStatus, windows::StatusSuccess);
+        }
+        EXPECT_TRUE(Result->UnloadCompleted);
+        EXPECT_EQ(callCount(*Result, "WdfFdoInitSetFilter"),
+                  Mode == 'o' ? 0u : 1u);
+        EXPECT_EQ(callCount(*Result, "WdfDeviceInitSetFileObjectConfig"), 1u);
+        EXPECT_EQ(callCount(*Result, "WdfIoQueueCreate"), 0u);
+        const auto Messages = pnpMessages(*Result);
+        EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                             "KMDF PnP: file order invalid\n"),
+                  0);
+        auto Cleanup = std::find(Messages.begin(), Messages.end(),
+                                 "KMDF PnP: file cleanup\n");
+        auto Close = std::find(Messages.begin(), Messages.end(),
+                               "KMDF PnP: file close\n");
+        ASSERT_NE(Cleanup, Messages.end());
+        ASSERT_NE(Close, Messages.end());
+        EXPECT_LT(Cleanup, Close);
+      }
+    }
+}
+
+TEST(DriverKMDFPnp, FailedLowerCreateRetiresFrameworkFileObject) {
+  for (const char *Image : pnpImages()) {
+    auto Input = forwardedFileOptions('O');
+    Input.Requests.erase(
+        std::remove_if(Input.Requests.begin(), Input.Requests.end(),
+                       [](const DriverRequest &Request) {
+                         return Request.Kind == DriverRequestKind::Cleanup ||
+                                Request.Kind == DriverRequestKind::Close;
+                       }),
+        Input.Requests.end());
+    Input.Requests[1].FileBusCompletion =
+        DriverBusCompletion{windows::StatusUnsuccessful};
+    auto Result = emulateDriver(Image, Input);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+    ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
+    EXPECT_EQ(Result->Requests[1].IOStatus, windows::StatusUnsuccessful);
+    EXPECT_TRUE(Result->Requests[1].Completed);
+    EXPECT_TRUE(Result->UnloadCompleted);
+    const auto Messages = pnpMessages(*Result);
+    EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
+                         "KMDF PnP: file cleanup\n"),
+              0);
+    EXPECT_EQ(
+        std::count(Messages.begin(), Messages.end(), "KMDF PnP: file close\n"),
+        0);
+  }
+}
+
+TEST(DriverKMDFPnp, ForwardingRequiresItsConfiguredLowerResponse) {
+  auto Input = forwardedFileOptions('O');
+  Input.Requests[1].FileBusCompletion.reset();
+  auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("synchronous configured bus response"),
+            std::string::npos);
+
+  Input = options();
+  Input.Requests[1].FileBusCompletion =
+      DriverBusCompletion{windows::StatusSuccess};
+  Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
+  EXPECT_NE(Result->Diagnostic.find("lower file response was not consumed"),
+            std::string::npos);
 }
 
 TEST(DriverKMDFPnp, ConfiguredDeviceTypeReachesTheWdmDeviceObject) {

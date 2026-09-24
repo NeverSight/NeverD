@@ -73,8 +73,8 @@ public:
     std::function<llvm::Expected<DeviceCreation>(llvm::StringRef, uint32_t,
                                                  bool)>
         Create;
-    std::function<llvm::Expected<DeviceCreation>(uint64_t, llvm::StringRef,
-                                                 uint32_t, uint32_t, bool)>
+    std::function<llvm::Expected<DeviceCreation>(
+        uint64_t, llvm::StringRef, uint32_t, uint32_t, bool, bool)>
         CreatePnp;
     std::function<llvm::Error(uint64_t)> Delete;
     std::function<llvm::Error(uint64_t)> FinishInitializing;
@@ -108,6 +108,10 @@ public:
     std::function<llvm::Error(uint64_t)> ReleaseUserBuffer;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> ValidateCompletion;
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
+    /// Forward a file lifecycle IRP on its retained lower-device route. The
+    /// WDM host owns the original packet and its terminal completion.
+    std::function<llvm::Error(uint64_t)> ValidateFileForward;
+    std::function<llvm::Expected<uint32_t>(uint64_t)> ForwardFile;
   };
   void setRequestHost(RequestHost Host) { RequestsHost = std::move(Host); }
   struct RequestDispatch {
@@ -218,8 +222,13 @@ private:
   struct FileConfig {
     bool Enabled = false;
     uint64_t Create = 0, Cleanup = 0, Close = 0;
+    uint32_t AutoForward = framework::FileAutoForwardDefault;
     uint32_t Class = framework::FileObjectNotRequired;
     Attributes ObjectAttributes;
+    bool forwards(bool Filter) const {
+      return AutoForward == framework::FileAutoForwardTrue ||
+             (AutoForward == framework::FileAutoForwardDefault && Filter);
+    }
   };
   enum class DeviceInitKind { Control, Pnp };
   struct DeviceInit {
@@ -230,6 +239,7 @@ private:
     std::optional<uint32_t> DeviceType;
     uint32_t IoType = framework::ControlIoBuffered;
     bool Exclusive = false;
+    bool Filter = false;
     FileConfig Files;
     uint64_t CallerContext = 0;
     uint64_t D0Entry = 0, D0Exit = 0;
@@ -246,6 +256,7 @@ private:
     uint64_t DefaultQueue = 0;
     uint64_t CallerContext = 0;
     FileConfig Files;
+    bool Filter = false;
     bool Initialized = false;
     bool HasLink = false;
     uint64_t D0Entry = 0, D0Exit = 0;
@@ -354,6 +365,7 @@ private:
     Cleaned,
     CompleteRequest,
     CompleteFileIRP,
+    ForwardFileIRP,
     DeleteFileObject,
     CanceledOnQueue,
     CanceledOnQueueReturned,
@@ -371,6 +383,7 @@ private:
     StepKind Kind;
     uint64_t Object;
     uint64_t PC = 0;
+    uint64_t File = 0;
   };
   struct Continuation {
     std::vector<Step> Steps;

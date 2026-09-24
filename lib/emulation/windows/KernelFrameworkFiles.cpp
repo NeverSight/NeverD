@@ -72,7 +72,11 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
     if (*Size != FileConfigSize)
       return fileError("unsupported file-object configuration size");
     if (*AutoForward != FileAutoForwardFalse &&
+        *AutoForward != FileAutoForwardTrue &&
         *AutoForward != FileAutoForwardDefault)
+      return fileError("unsupported file auto-forward choice");
+    if (*AutoForward == FileAutoForwardTrue &&
+        Init->second.Kind != DeviceInitKind::Pnp)
       return fileError("forwarded file lifecycle requires a lower target");
     const uint32_t FileClass = static_cast<uint32_t>(*Class);
     const uint32_t BaseClass = baseFileClass(FileClass);
@@ -102,6 +106,7 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
     Config.Create = *Create;
     Config.Close = *Close;
     Config.Cleanup = *Cleanup;
+    Config.AutoForward = static_cast<uint32_t>(*AutoForward);
     Config.Class = FileClass;
     Config.ObjectAttributes = Attrs;
     Init->second.Files = Config;
@@ -193,13 +198,20 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
       View.Major != RequestMajorClose)
     return Result{};
   const auto &Config = Devices.at(Device).Files;
-  if (!Config.Enabled) {
+  const bool Forward = Config.forwards(Devices.at(Device).Filter);
+  if (!Config.Enabled && !Forward) {
     if (auto E = RequestsHost.Complete(IRP, windows::StatusSuccess, 0))
       return E;
     return Result{RequestDispatch{0, {}, 0}};
   }
   if (!View.File)
     return fileError("file lifecycle request has no WDM FILE_OBJECT");
+  if (Forward) {
+    if (!RequestsHost.ValidateFileForward || !RequestsHost.ForwardFile)
+      return fileError("lower file-request host is unavailable");
+    if (auto E = RequestsHost.ValidateFileForward(IRP))
+      return E;
+  }
   if (View.Major == RequestMajorCreate) {
     if (FileHandles.contains(View.File))
       return fileError("CREATE reused a live WDM FILE_OBJECT");
@@ -232,9 +244,17 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
       FileHandles.emplace(View.File, File);
     }
     if (!Config.Create) {
-      if (auto E = RequestsHost.Complete(IRP, windows::StatusSuccess, 0))
+      if (!Forward) {
+        if (auto E = RequestsHost.Complete(IRP, windows::StatusSuccess, 0))
+          return E;
+        return Result{RequestDispatch{0, {}, 0}};
+      }
+      if (auto E = RequestsHost.MarkPending(IRP))
         return E;
-      return Result{RequestDispatch{0, {}, 0}};
+      auto Started = start({{StepKind::ForwardFileIRP, IRP, 0, File}});
+      if (!Started)
+        return Started.takeError();
+      return Result{RequestDispatch{0, {}, windows::StatusPending}};
     }
     Attributes Attrs;
     Attrs.Parent = Device;
@@ -259,9 +279,15 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
       View.Major == RequestMajorCleanup ? Config.Cleanup : Config.Close;
   if (Callback)
     Steps.push_back({StepKind::Callback, *File, Callback});
-  if (View.Major == RequestMajorClose && *File)
+  if (Forward) {
+    Steps.push_back({StepKind::ForwardFileIRP, IRP, 0, *File});
+  } else {
+    if (View.Major == RequestMajorClose && *File)
+      Steps.push_back({StepKind::DeleteFileObject, *File});
+    Steps.push_back({StepKind::CompleteFileIRP, IRP});
+  }
+  if (Forward && View.Major == RequestMajorClose && *File)
     Steps.push_back({StepKind::DeleteFileObject, *File});
-  Steps.push_back({StepKind::CompleteFileIRP, IRP});
   if (auto E = RequestsHost.MarkPending(IRP))
     return E;
   auto Started = start(std::move(Steps));

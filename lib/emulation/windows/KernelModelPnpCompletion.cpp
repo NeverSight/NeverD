@@ -34,8 +34,44 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
   if (!Request || Request->Completed || !isProviderDevice(Device) ||
       !Provider || Request->PnpDevice != Device)
     return providerError("dispatch requires its configured provider IRP");
+  if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
+    return providerError("cannot replace a pending guest callback");
   const DriverBusCompletion *Response = nullptr;
   uint8_t ExpectedMinor = 0;
+  const bool FileLifecycle = Request->Kind == DriverRequestKind::Create ||
+                             Request->Kind == DriverRequestKind::Cleanup ||
+                             Request->Kind == DriverRequestKind::Close;
+  if (FileLifecycle) {
+    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status ||
+        Request->FileBusCompletion->Delay100ns)
+      return providerError(
+          "file forwarding requires a synchronous configured bus response");
+    if (Request->FileBusReceived)
+      return providerError("file request was already dispatched to the bus");
+    auto Stack = currentRequestStack(IRP);
+    if (!Stack)
+      return Stack.takeError();
+    auto File = Memory.readInteger(*Stack + StackFileOffset, sizeof(uint64_t));
+    if (!File)
+      return File.takeError();
+    if (*File != Request->FileAddress)
+      return providerError("forwarded file identity changed");
+    const uint32_t Status = *Request->FileBusCompletion->Status;
+    if (Status == StatusPending)
+      return providerError("synchronous file response cannot be pending");
+    auto Plan = planIRPCompletion(IRP, Status);
+    if (!Plan)
+      return Plan.takeError();
+    if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, Status, 4))
+      return E;
+    if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
+      return E;
+    Request->IOStatusWritten.fill(true);
+    Request->FileBusReceived = true;
+    if (auto E = completeRequest(IRP, 0))
+      return E;
+    return Status;
+  }
   if (Request->Kind == DriverRequestKind::Pnp && Request->PnpOperation) {
     if (CurrentIRQL >= scheduler::DispatchLevel)
       return providerError("PnP forwarding requires IRQL below DISPATCH_LEVEL");
@@ -55,8 +91,6 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
     return providerError(
         "dispatch requires a configured PnP or power operation");
   }
-  if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
-    return providerError("cannot replace a pending guest callback");
   auto Stack = currentRequestStack(IRP);
   if (!Stack)
     return Stack.takeError();

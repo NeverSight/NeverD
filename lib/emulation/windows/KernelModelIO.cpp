@@ -775,6 +775,7 @@ KernelModel::beginRequest(const DriverRequest &Input,
   Record.Device = Device;
   Record.PnpDevice = PnpOwner;
   Record.LifecycleIo = LifecycleIo;
+  Record.FileBusCompletion = Input.FileBusCompletion;
   Record.Direct = Direct;
   Record.Neither = Neither;
   if (LifecycleIo)
@@ -1086,6 +1087,8 @@ llvm::Error KernelModel::finalizeRequest(uint64_t IRP) {
   if (!Request->DispatchReturned || !Request->Completed)
     return ioError(
         "request finalization requires completion and dispatch return");
+  if (Request->FileBusCompletion && !Request->FileBusReceived)
+    return ioError("configured lower file response was not consumed");
   if (std::any_of(IRPCalls.begin(), IRPCalls.end(),
                   [&](const auto &Entry) { return Entry.second.IRP == IRP; }))
     return ioError(

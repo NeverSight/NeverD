@@ -13,7 +13,8 @@
 /// E/Z leave one without a completion producer with/without EvtIoStop;
 /// R consumes one assigned memory resource, L leaves its mapping live,
 /// W attempts an invalid descriptor write, X marks only the FDO exclusive,
-/// and F fails AddDevice.
+/// O uses filter-default file forwarding, o requests it explicitly, n disables
+/// it on a filter, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -44,6 +45,8 @@ ABI_SLOT(WdfCmResourceListGetCount, 304);
 ABI_SLOT(WdfCmResourceListGetDescriptor, 305);
 ABI_SLOT(WdfDriverCreate, 116);
 ABI_SLOT(WdfFdoInitWdmGetPhysicalDevice, 124);
+ABI_SLOT(WdfFdoInitSetFilter, 129);
+ABI_SLOT(WdfDeviceInitSetFileObjectConfig, 71);
 ABI_SLOT(WdfIoQueueCreate, 152);
 ABI_SLOT(WdfIoQueueGetState, 153);
 ABI_SLOT(WdfRequestCompleteWithInformation, 265);
@@ -56,6 +59,21 @@ static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
 static ULONG DeliveryCount;
 static PIO_WORKITEM PendingWorkItem;
+static ULONG FilePhase;
+
+static VOID FilterFileCleanup(WDFFILEOBJECT File) {
+  if (File == NULL || FilePhase != 0)
+    DbgPrint("KMDF PnP: file order invalid\n");
+  FilePhase = 1;
+  DbgPrint("KMDF PnP: file cleanup\n");
+}
+
+static VOID FilterFileClose(WDFFILEOBJECT File) {
+  if (File == NULL || FilePhase != 1)
+    DbgPrint("KMDF PnP: file order invalid\n");
+  FilePhase = 2;
+  DbgPrint("KMDF PnP: file close\n");
+}
 
 static BOOLEAN UsesPowerQueue(VOID) {
   return ServiceMode == L'M' || ServiceMode == L'T' || ServiceMode == L'C' ||
@@ -284,6 +302,7 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   WDF_OBJECT_ATTRIBUTES Attributes;
   WDF_IO_QUEUE_CONFIG QueueConfig;
   WDF_PNPPOWER_EVENT_CALLBACKS PnpCallbacks;
+  WDF_FILEOBJECT_CONFIG FileConfig;
   WDFDEVICE Device = NULL;
   WDFQUEUE Queue = NULL;
   PDEVICE_OBJECT PDO;
@@ -296,7 +315,20 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     WdfDeviceInitSetDeviceType(Init, FILE_DEVICE_SERIAL_PORT);
   if (ServiceMode == L'X')
     WdfDeviceInitSetExclusive(Init, TRUE);
-  WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
+  if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n') {
+    if (ServiceMode != L'o')
+      WdfFdoInitSetFilter(Init);
+    WDF_FILEOBJECT_CONFIG_INIT(&FileConfig, NULL, FilterFileClose,
+                               FilterFileCleanup);
+    if (ServiceMode == L'o')
+      FileConfig.AutoForwardCleanupClose = WdfTrue;
+    if (ServiceMode == L'n')
+      FileConfig.AutoForwardCleanupClose = WdfFalse;
+    WdfDeviceInitSetFileObjectConfig(Init, &FileConfig,
+                                     WDF_NO_OBJECT_ATTRIBUTES);
+  } else {
+    WdfDeviceInitSetIoType(Init, WdfDeviceIoBuffered);
+  }
   if (ServiceMode == L'P' || ServiceMode == L'Q' || UsesAssignedMemory() ||
       (UsesPowerQueue() && ServiceMode != L'Y') || ServiceMode == L'H' ||
       ServiceMode == L'I' || ServiceMode == L'J' || ServiceMode == L'U') {
@@ -334,6 +366,10 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   if (ServiceMode == L'F') {
     DbgPrint("KMDF PnP: failing AddDevice\n");
     return STATUS_UNSUCCESSFUL;
+  }
+  if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n') {
+    DbgPrint("KMDF PnP: filter ready\n");
+    return STATUS_SUCCESS;
   }
   WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&QueueConfig,
                                          WdfIoQueueDispatchSequential);
@@ -373,6 +409,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   MappedResource = NULL;
   DeliveryCount = 0;
   PendingWorkItem = NULL;
+  FilePhase = 0;
   WDF_DRIVER_CONFIG_INIT(&Config, DeviceAdd);
   if (ServiceMode != L'N')
     Config.EvtDriverUnload = DriverUnload;

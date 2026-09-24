@@ -323,6 +323,9 @@ KernelFramework::routeRequest(uint64_t WdmDevice, uint64_t IRP,
     return std::optional<RequestDispatch>{RequestDispatch{0, {}, Dispatch}};
   };
   auto Q = Queues.find(D->second.DefaultQueue);
+  if (Q == Queues.end() && D->second.Filter)
+    return requestError(
+        "automatic non-file filter forwarding is outside this profile");
   if (Q == Queues.end())
     return CompleteImmediately(ControlInvalidDeviceRequest,
                                ControlInvalidDeviceRequest);

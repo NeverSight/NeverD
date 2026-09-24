@@ -13,9 +13,13 @@
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
+#include <algorithm>
+#include <array>
+
 namespace neverd::emulation {
 namespace {
 using namespace windows;
+constexpr size_t DirectPnpRouteSize = 2;
 
 llvm::Error frameworkRequestError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::inconvertibleErrorCode(), Message);
@@ -219,6 +223,49 @@ void KernelModel::configureFrameworkRequestHost() {
       return E;
     Request->IOStatusWritten.fill(true);
     return completeRequest(IRP, 0);
+  };
+  Host.ValidateFileForward = [this](uint64_t IRP) -> llvm::Error {
+    const auto *Request = requestForIRP(IRP);
+    if (!Request || Request->Completed ||
+        Request->DeviceRoute.size() != DirectPnpRouteSize ||
+        !FrameworkDevices.count(Request->DeviceRoute.front()) ||
+        !isProviderDevice(Request->DeviceRoute.back()) ||
+        Request->PnpDevice != Request->DeviceRoute.back())
+      return frameworkRequestError(
+          "framework file forwarding requires a direct live PDO target");
+    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status ||
+        Request->FileBusCompletion->Delay100ns)
+      return frameworkRequestError(
+          "framework file forwarding requires a synchronous configured "
+          "bus response");
+    return llvm::Error::success();
+  };
+  Host.ForwardFile = [this, Validate = Host.ValidateFileForward](
+                         uint64_t IRP) -> llvm::Expected<uint32_t> {
+    if (auto E = Validate(IRP))
+      return E;
+    auto *Request = requestForIRP(IRP);
+    auto Stack = currentRequestStack(IRP);
+    auto Cursor = requestStackCursor(IRP);
+    if (!Stack || !Cursor)
+      return llvm::joinErrors(Stack.takeError(), Cursor.takeError());
+    if (!*Cursor)
+      return frameworkRequestError(
+          "framework file IRP has no lower stack slot");
+    std::array<uint8_t, StackSize> Location{};
+    if (auto E = Memory.read(*Stack, Location))
+      return E;
+    Location[StackControlOffset] = 0;
+    std::fill(Location.begin() + StackCompletionOffset, Location.end(), 0);
+    if (auto E = Memory.write(*Stack - StackSize, Location))
+      return E;
+    auto Status = callDriver(Request->DeviceRoute.back(), IRP);
+    if (!Status)
+      return Status.takeError();
+    if (!Request->Completed || PendingWdmCall)
+      return frameworkRequestError(
+          "framework file target did not complete synchronously");
+    return static_cast<uint32_t>(*Status);
   };
   Framework->setRequestHost(std::move(Host));
 }
