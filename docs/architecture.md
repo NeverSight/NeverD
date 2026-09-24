@@ -200,10 +200,12 @@ identity across methods.
 
 Darwin block consumers have one loader-owned callback and lifetime contract.
 The generated catalog distinguishes compiler-declared `noescape` parameters
-from audited runtime copying consumers. The latter currently includes only
-`dispatch_async` and `dispatch_barrier_async`, whose SDK contract specifies
-copying and releasing the block. Both require exact import/provider identity,
-four-profile compiler agreement, and a matching complete callback ABI.
+from audited runtime copying consumers. The latter covers `dispatch_after`,
+`dispatch_async`, `dispatch_barrier_async`, `dispatch_group_async`,
+`dispatch_group_notify`, and `dispatch_source_set_event_handler`, whose API
+contracts specify copying the block. Every contract requires exact
+import/provider identity, four-profile compiler agreement, and a matching
+complete callback ABI.
 Source publication still proves the stack header, initialized captures,
 copy/dispose helpers, and invoke dependency. Either kind of consumer invalidates
 the caller's construction facts after use; a copied consumer is never reported
