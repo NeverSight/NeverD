@@ -558,7 +558,7 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // PT — Processor Trace.
   case X86_INS_PTWRITE:
-    S.emitIntrinsic(Intrinsic::Ptwrite);
+    S.emitIntrinsic(Intrinsic::Ptwrite, NdVar());
     break;
 
   // ========================================================================
@@ -700,7 +700,7 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // LWP — Lightweight Profiling (AMD).
   // ========================================================================
   case X86_INS_LLWPCB:
-    S.emitIntrinsic(Intrinsic::Llwpcb);
+    S.emitIntrinsic(Intrinsic::Llwpcb, NdVar());
     break;
   case X86_INS_SLWPCB:
     S.emitIntrinsic(Intrinsic::Slwpcb);
@@ -714,15 +714,15 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
 
   // CLAC / STAC — supervisor mode access control.
   case X86_INS_CLAC:
-    S.emitIntrinsic(Intrinsic::Clac);
+    S.emitIntrinsic(Intrinsic::Clac, NdVar());
     break;
   case X86_INS_STAC:
-    S.emitIntrinsic(Intrinsic::Stac);
+    S.emitIntrinsic(Intrinsic::Stac, NdVar());
     break;
 
   // CLZERO — zero cache line (AMD Zen).
   case X86_INS_CLZERO:
-    S.emitIntrinsic(Intrinsic::Clzero);
+    S.emitIntrinsic(Intrinsic::Clzero, NdVar());
     break;
 
   // XTEST already handled in TSX block.
@@ -793,10 +793,10 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   // System instructions.
   // ========================================================================
   case X86_INS_CLDEMOTE:
-    S.emitIntrinsic(Intrinsic::Cldemote);
+    S.emitIntrinsic(Intrinsic::Cldemote, NdVar());
     break;
   case X86_INS_INVLPGA:
-    S.emitIntrinsic(Intrinsic::Invlpga);
+    S.emitIntrinsic(Intrinsic::Invlpga, NdVar());
     break;
   case X86_INS_PCONFIG:
     S.emitIntrinsic(Intrinsic::Pconfig);
@@ -806,7 +806,7 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 4), {S.makeTemp(4)});
     break;
   case X86_INS_WRPKRU:
-    S.emitIntrinsic(Intrinsic::Wrpkru);
+    S.emitIntrinsic(Intrinsic::Wrpkru, NdVar());
     break;
   case X86_INS_SYSEXITQ:
     S.emitIntrinsic(Intrinsic::Sysexitq);
@@ -815,7 +815,7 @@ bool liftLegacyExt(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     S.emitIntrinsic(Intrinsic::Sysretq);
     break;
   case X86_INS_WBNOINVD:
-    S.emitIntrinsic(Intrinsic::Wbnoinvd);
+    S.emitIntrinsic(Intrinsic::Wbnoinvd, NdVar());
     break;
 
   // ========================================================================

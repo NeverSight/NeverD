@@ -3838,3 +3838,31 @@ TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
   Effectful[3].Val = HighExpr::makeCall("f", 0x2000, {});
   EXPECT_FALSE(duplicateSmallReturnTails(Effectful));
 }
+
+TEST(HighCPointerAddresses, InterruptFlagChangesDoNotClobberRax) {
+  // Zw* stubs save RSP in RAX and then execute CLI.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x8b, 0xc1, // mov rax, rcx
+                                     0xfa,             // cli
+                                     0xfb,             // sti
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("_disable();"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("= _disable()"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("return arg0;"), std::string::npos) << HighC;
+}
+
+TEST(HighCPointerAddresses, DirectionFlagIsClearOnEntry) {
+  // Both x86 ABIs enter with DF clear, so REP MOVSB copies forward only.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x8b, 0xf9, // mov rdi, rcx
+                                     0x48, 0x8b, 0xf2, // mov rsi, rdx
+                                     0x49, 0x8b, 0xc8, // mov rcx, r8
+                                     0xf3, 0xa4,       // rep movsb
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("rep movsb"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("std"), std::string::npos) << HighC;
+}

@@ -336,13 +336,15 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
 
   // --- INT1 (ICEBP) ---
   case X86_INS_INT1:
-    S.emitIntrinsic(Intrinsic::Int1);
+    S.emitIntrinsic(Intrinsic::Int1, NdVar());
     break;
 
   // --- CLI / STI ---
   case X86_INS_CLI:
   case X86_INS_STI:
-    S.emitIntrinsic(InsnId == X86_INS_CLI ? Intrinsic::Cli : Intrinsic::Sti);
+    // CLI/STI only change IF; the default intrinsic output would clobber RAX.
+    S.emitIntrinsic(InsnId == X86_INS_CLI ? Intrinsic::Cli : Intrinsic::Sti,
+                    NdVar());
     break;
 
   // --- UD0 / UD1 ---

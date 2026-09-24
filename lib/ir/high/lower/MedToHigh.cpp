@@ -435,16 +435,17 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
           return HighExpr::makeVar(Param, TypeRef{});
         }
         // SSA-bumped callee-saves with no new def (`rdi.2` after `mov rdi, r9`)
-        // still hold the parameter.  A later computed def (INT_AND of r10 on
-        // the GS_HANDLER_DATA bit-2 edge) does not.
+        // still hold the parameter.  Any def of this exact version (a copy of
+        // an advanced pointer after REP CMPS, a cmov result, INT_AND of r10 on
+        // the GS_HANDLER_DATA bit-2 edge) is a new value; a copy of the
+        // parameter itself already matched above.
         if (Fallback < 0 && regToArgIdx(V.RegOff) < 0) {
           bool Computed = PhiOutputVars.count(varKey(V));
           for (const auto &B2 : CurMed->Blocks) {
             if (Computed)
               break;
             for (const auto &O2 : B2.Ops) {
-              if (O2.Output.Id == V.Id && O2.Output.SSAVer == V.SSAVer &&
-                  O2.Opcode != NdOp::COPY) {
+              if (O2.Output.Id == V.Id && O2.Output.SSAVer == V.SSAVer) {
                 Computed = true;
                 break;
               }

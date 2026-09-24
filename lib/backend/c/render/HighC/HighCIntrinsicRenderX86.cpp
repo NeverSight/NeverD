@@ -292,27 +292,38 @@ renderSegmentedString(Arch TheArch, const HighExpr &Call,
     Result += "            : \"memory\", \"cc\");\n";
   };
 
-  Result += "    if (" + ExprFn(*Call.Operands[3]) + ") {\n";
-  if (IsCmps || IsScas) {
+  // A constant direction (DF is clear on entry) or repeat condition selects
+  // one form; print only that one.
+  auto ConstOperand = [&](size_t I) -> std::optional<bool> {
+    if (I < Call.Operands.size() && Call.Operands[I] &&
+        Call.Operands[I]->Kind == ExprKind::Const)
+      return Call.Operands[I]->ConstVal != 0;
+    return std::nullopt;
+  };
+  auto EmitDirection = [&](bool Backward) {
+    if (!(IsCmps || IsScas)) {
+      EmitAsm("rep", Backward);
+      return;
+    }
+    if (auto Repne = ConstOperand(4)) {
+      EmitAsm(*Repne ? "repnz" : "repz", Backward);
+      return;
+    }
     Result += "        if (" + ExprFn(*Call.Operands[4]) + ") {\n";
-    EmitAsm("repnz", true);
+    EmitAsm("repnz", Backward);
     Result += "        } else {\n";
-    EmitAsm("repz", true);
+    EmitAsm("repz", Backward);
     Result += "        }\n";
+  };
+  if (auto Backward = ConstOperand(3)) {
+    EmitDirection(*Backward);
   } else {
-    EmitAsm("rep", true);
+    Result += "    if (" + ExprFn(*Call.Operands[3]) + ") {\n";
+    EmitDirection(true);
+    Result += "    } else {\n";
+    EmitDirection(false);
+    Result += "    }\n";
   }
-  Result += "    } else {\n";
-  if (IsCmps || IsScas) {
-    Result += "        if (" + ExprFn(*Call.Operands[4]) + ") {\n";
-    EmitAsm("repnz", false);
-    Result += "        } else {\n";
-    EmitAsm("repz", false);
-    Result += "        }\n";
-  } else {
-    EmitAsm("rep", false);
-  }
-  Result += "    }\n";
 
   if (IsLods)
     Result += assignPrimary(PrimaryDst, "neverd_ax", ExprFn, IsAlive);

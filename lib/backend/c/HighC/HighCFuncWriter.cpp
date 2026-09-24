@@ -22,6 +22,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <limits>
 #include <map>
@@ -871,18 +872,88 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         VisitFrameUses(VisitFrameUses, *Expr);
     });
   });
+  // The structural scan above only sees stack addresses.  A value computed
+  // from the entry stack pointer itself (for example the flags PUSHFQ saves
+  // after `sub rsp, 10h`) still prints `frame_base`; declare it as the
+  // entry stack pointer instead of giving up the named frame slots.
+  // Statement-only intrinsics (division preconditions, string operations)
+  // cannot be printed as expressions; scan their operands instead.
+  auto ScanText = [&](auto &&Self, const HighExpr &Expr) -> std::string {
+    if (Expr.Kind != ExprKind::Call || Expr.IntrinsicId == Intrinsic::None)
+      return exprStr(Expr);
+    std::string Text;
+    for (const ExprPtr &Operand : Expr.Operands)
+      if (Operand)
+        Text += Self(Self, *Operand) + " ";
+    return Text;
+  };
+  bool NeedsEntryStackPointer = false;
+  if (!NeedsFrameStorage)
+    walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+      if (NeedsEntryStackPointer || Analysis.DeadStmts.count(&Stmt) ||
+          stmtHiddenFromC(Stmt) ||
+          (InferredVoid && Stmt.Kind == StmtKind::Return))
+        return;
+      forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+        if (Expr &&
+            ScanText(ScanText, *Expr).find("frame_base") != std::string::npos)
+          NeedsEntryStackPointer = true;
+      });
+    });
   if (NeedsFrameStorage) {
     FrameSlots.clear();
     FrameAliases.clear();
   } else {
+    std::map<std::string, std::vector<const HighStmt *>> Displacements;
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
       if (Stmt.Kind != StmtKind::Assign || !Stmt.Dst || !Stmt.Val ||
           Stmt.Dst->Kind != ExprKind::Var ||
           Stmt.Dst->Var.Kind == MedVar::Param || !frameDisplacement(*Stmt.Val))
         return;
+      const std::string Name = varName(Stmt.Dst->Var);
       Analysis.DeadStmts.insert(&Stmt);
-      Analysis.DeadVars.insert(varName(Stmt.Dst->Var));
+      Analysis.DeadVars.insert(Name);
+      Displacements[Name].push_back(&Stmt);
     });
+    // A frame address is normally printed as `&var_mN` wherever it is used.
+    // One still printed by name (arithmetic on the address, such as the
+    // flags of `sub rsp, 10h`) needs its assignment.
+    if (!Displacements.empty())
+      walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+        if (Analysis.DeadStmts.count(&Stmt) || stmtHiddenFromC(Stmt))
+          return;
+        forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+          // A whole-value use is a copy of the address, which the frame
+          // alias printing already handles; only arithmetic needs the name.
+          if (!Expr || Displacements.empty() || Expr->Kind == ExprKind::Var)
+            return;
+          const std::string Text = ScanText(ScanText, *Expr);
+          for (auto It = Displacements.begin(); It != Displacements.end();) {
+            const std::string &Name = It->first;
+            bool Used = false;
+            for (size_t Pos = Text.find(Name); Pos != std::string::npos;
+                 Pos = Text.find(Name, Pos + 1)) {
+              auto Ident = [](char C) {
+                return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
+              };
+              if ((Pos == 0 || !Ident(Text[Pos - 1])) &&
+                  (Pos + Name.size() >= Text.size() ||
+                   !Ident(Text[Pos + Name.size()]))) {
+                Used = true;
+                break;
+              }
+            }
+            if (!Used) {
+              ++It;
+              continue;
+            }
+            for (const HighStmt *Def : It->second)
+              Analysis.DeadStmts.erase(Def);
+            Analysis.DeadVars.erase(Name);
+            It = Displacements.erase(It);
+          }
+        });
+      });
   }
 
   const auto ReturnType = InferredVoid ? NdType::makeVoid() : FuncReturnType;
@@ -959,7 +1030,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   std::set<std::string> ParamNames;
   for (auto &P : Func.Params)
     ParamNames.insert(P.Name);
-  if (Func.FrameSize > 0 || Func.FrameHeadroom > 0)
+  if (Func.FrameSize > 0 || Func.FrameHeadroom > 0 || NeedsEntryStackPointer)
     ParamNames.insert("frame_base");
   if (NeedsFrameStorage && (Func.FrameSize > 0 || Func.FrameHeadroom > 0)) {
     uint64_t LowerSize = checkedStackAlign(
@@ -976,6 +1047,10 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     emitIndent(1);
     OS << "const uintptr_t frame_base = (uintptr_t)(stack_storage + "
        << FrameBaseOffset << ");\n";
+  } else if (NeedsEntryStackPointer) {
+    emitIndent(1);
+    OS << "const uintptr_t frame_base = "
+          "(uintptr_t)_AddressOfReturnAddress();\n";
   }
   std::set<std::string> PrintedAddrSlots;
   walkStmts(Func.Body, [&](const HighStmt &S) {

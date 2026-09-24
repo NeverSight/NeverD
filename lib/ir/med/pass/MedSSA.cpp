@@ -14,6 +14,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/X86Regs.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -424,6 +425,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           Input.SSAVer = 0;
           Input.Size = 4;
         }
+        // Both x86 calling conventions enter a function with DF clear, so
+        // its incoming value is known rather than a parameter.  Only the
+        // function entry has that guarantee; an exception landing pad does
+        // not.
+        if ((TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
+            (Input.Kind == MedVar::Reg || Input.Kind == MedVar::Flag) &&
+            Input.RegOff == x86reg::DF &&
+            Func.Blocks[Root].ExceptionalPreds.empty() && Root == 0)
+          Input = MedVar::makeConst(0, Input.Size,
+                                    ConstantAddressProvenance::Scalar);
         Init.addInput(Input);
         Init.Addr = Func.Blocks[Root].StartAddr;
         InitOps.push_back(Init);
