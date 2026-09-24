@@ -123,6 +123,193 @@ struct ImmutableCallbackFixture {
   }
 };
 
+struct AddressorCallbackFixture : ImmutableCallbackFixture {
+  static constexpr va_t Initializer = 0x1400, Predicate = 0x2010;
+  static constexpr va_t Storage = 0x2020, OnceSlot = 0x2080;
+  static constexpr const char *AccessorName = "_$s4Test5valueSSvau";
+  static constexpr const char *InitializerName = "_$s4Test5value_WZ";
+  static constexpr const char *PredicateName = "_$s4Test5value_Wz";
+  static constexpr const char *StorageName = "_$s4Test5valueSSvpZ";
+
+  AddressorCallbackFixture() {
+    word(Provider + 8, 0xd503201f);
+    Image.Symbols.push_back({AccessorName, Provider, 0, true});
+    Image.Symbols.push_back({InitializerName, Initializer, 0, true});
+    Image.Symbols.push_back({PredicateName, Predicate, 8, false});
+    Image.Symbols.push_back({StorageName, Storage, 16, false});
+    Image.ImportPtrSlots[OnceSlot] = "_swift_once";
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    const auto Integer = NdType::makeInt(8);
+    auto Param = [&](unsigned Id) {
+      MedVar V;
+      V.Kind = MedVar::Param;
+      V.Id = Id;
+      V.Size = 8;
+      return HighExpr::makeVar(V, Pointer);
+    };
+    HighFunc Accessor;
+    Accessor.Entry = Provider;
+    Accessor.Name = AccessorName;
+    Accessor.ReturnType = Pointer;
+    for (unsigned I = 0; I < 3; ++I)
+      Accessor.Params.push_back({"arg" + std::to_string(I), Pointer});
+    MedVar LoadedVar;
+    LoadedVar.Kind = MedVar::Temp;
+    LoadedVar.Id = 1;
+    LoadedVar.Size = 8;
+    HighStmt Load;
+    Load.Kind = StmtKind::Assign;
+    Load.Dst = HighExpr::makeVar(LoadedVar, Integer);
+    Load.Val = HighExpr::makeLoad(
+        HighExpr::makeConst(Predicate, 8,
+                            ConstantAddressProvenance::DataAddress),
+        Integer);
+    const auto Runtime = swiftRuntimeSourceCallHint(Image, OnceSlot);
+    EXPECT_TRUE(Runtime);
+    if (!Runtime)
+      return;
+    HighStmt Invoke;
+    Invoke.Kind = StmtKind::Call;
+    Invoke.CallExpr = HighExpr::makeCall(
+        "swift_once", OnceSlot,
+        {HighExpr::makeConst(Predicate, 8,
+                             ConstantAddressProvenance::DataAddress),
+         HighExpr::makeConst(Initializer, 8,
+                             ConstantAddressProvenance::CodeAddress),
+         Param(2)});
+    Invoke.CallExpr->Type = NdType::makeVoid();
+    Invoke.CallExpr->SourceCallHint =
+        std::make_shared<SourceCallTypeHint>(*Runtime);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeConst(
+        Storage, 8, ConstantAddressProvenance::DataAddress);
+    HighStmt Initialize;
+    Initialize.Kind = StmtKind::If;
+    Initialize.Cond = HighExpr::makeBinop(
+        NdOp::INT_NOTEQUAL,
+        HighExpr::makeBinop(NdOp::INT_ADD,
+                            HighExpr::makeVar(LoadedVar, Integer),
+                            HighExpr::makeConst(1, 8)),
+        HighExpr::makeConst(0, 8));
+    Initialize.Body = {Invoke, Return};
+    Accessor.Body = {Load, Initialize, Return};
+    HighFunc Callback;
+    Callback.Entry = Initializer;
+    Callback.Name = InitializerName;
+    Callback.ReturnType = NdType::makeVoid();
+    Callback.SourceTypeHint =
+        swift_once_source_detail::callbackHint(Image.Arch);
+    Callback.Params = {{"once_context", Pointer}};
+    HighStmt CallbackReturn;
+    CallbackReturn.Kind = StmtKind::Return;
+    Callback.Body = {CallbackReturn};
+    for (auto &F : Result.HighFuncs)
+      if (F.Entry == Provider)
+        F = Accessor;
+    Result.HighFuncs.push_back(Callback);
+    Once.CallbackHints.emplace(Initializer,
+                               swift_once_source_detail::callbackHint(
+                                   Image.Arch));
+    const auto Contract =
+        swift_once_source_detail::addressorContract(Accessor, Image);
+    EXPECT_TRUE(Contract);
+    if (Contract)
+      Once.Addressors.emplace(Provider, *Contract);
+  }
+
+  auto addressorProof() const {
+    return objc_immutable_string_callback_detail::proveAddressor(
+        Image, Result, Once, Root);
+  }
+};
+
+TEST(ObjCImmutableStringCallbackSources,
+     AddressorCopiesPairOnceAndRetainsSecondWord) {
+  AddressorCallbackFixture F;
+  ASSERT_TRUE(F.addressorProof());
+  auto P =
+      projectObjCImmutableStringCallback(F.high(), F.Image, F.Result, F.Once);
+  ASSERT_TRUE(P);
+  EXPECT_EQ(P->Dependencies, std::set<va_t>{F.Initializer});
+  EXPECT_EQ(P->SwiftOnceAccessors, std::set<va_t>{F.Provider});
+  EXPECT_EQ(P->LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{F.Destination, 16}, {F.Predicate, 8},
+                                      {F.Storage, 16}}));
+  ASSERT_EQ(P->Function.Body.size(), 5U);
+  EXPECT_EQ(P->Function.Body[0].Kind, StmtKind::Assign);
+  EXPECT_EQ(P->Function.Body[0].Val->CallAddr, F.Provider);
+  EXPECT_EQ(P->Function.Body[0].Val->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftOnceAccessor);
+  EXPECT_EQ(P->Function.Body[1].Kind, StmtKind::Store);
+  EXPECT_EQ(P->Function.Body[2].Kind, StmtKind::Store);
+  EXPECT_EQ(P->Function.Body[3].Kind, StmtKind::Call);
+  EXPECT_TRUE(
+      objCImmutableStringCallbackValid(P->Function, F.Image, F.Result, F.Once));
+  auto Bound = bindObjCSourceReferences(P->Function, F.Image);
+  EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_TRUE(objCImmutableStringCallbackValid(Bound.Function, F.Image,
+                                               F.Result, F.Once));
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &H : F.Result.HighFuncs)
+    Functions.emplace(H.Entry, &H);
+  const auto *Audit =
+      objc_super_getter_detail::uniqueEntry(F.Result.FunctionAudits, F.Root);
+  const auto Limitation = sourceBodyLimitation(
+      Bound.Function, *Bound.Function.SourceTypeHint, Audit,
+      [&](const HighExpr &E) {
+        return objcSourceCallBound(E, F.Image, Functions) ||
+               swiftOnceAddressorBound(E, F.Image, F.Once, Functions);
+      });
+  EXPECT_TRUE(Limitation.empty()) << Limitation;
+}
+
+TEST(ObjCImmutableStringCallbackSources,
+     AddressorRejectsChangedContractAndProjectedBody) {
+  for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    AddressorCallbackFixture F;
+    auto P = projectObjCImmutableStringCallback(F.high(), F.Image, F.Result,
+                                                F.Once);
+    ASSERT_TRUE(P);
+    switch (Mutation) {
+    case 0:
+      F.Once.Addressors.at(F.Provider).Initializer = F.Root;
+      break;
+    case 1:
+      F.Once.CallbackHints.erase(F.Initializer);
+      break;
+    case 2:
+      F.Image.Symbols.back().Size = 8;
+      break;
+    case 3:
+      F.word(F.Shared + 20, 0xd63f0040);
+      break;
+    case 4:
+      P->Function.Body[0].Val->CallAddr = F.Root;
+      break;
+    case 5:
+      P->Function.Body[1].StoreVal->Operands[0]->Var.Id++;
+      break;
+    case 6:
+      P->Function.Body[3]
+          .CallExpr->Operands[0]->Operands[0]->Operands[0]->Operands[1]
+          ->ConstVal = 16;
+      break;
+    case 7: {
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Size = 8;
+      F.Result.HighFuncs.back().Body[0].RetVal =
+          HighExpr::makeVar(Context, NdType::makePtr(NdType::makeVoid()));
+      break;
+    }
+    }
+    EXPECT_FALSE(objCImmutableStringCallbackValid(P->Function, F.Image,
+                                                  F.Result, F.Once));
+  }
+}
+
 TEST(ObjCImmutableStringCallbackSources,
      PreservesStoresRetainAndSharedIdentity) {
   ImmutableCallbackFixture F;

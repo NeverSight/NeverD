@@ -491,6 +491,16 @@ is retained. Its zero-argument source callee ABI applies only at call sites;
 the native entry ABI remains separate so incidental context carriers stay
 available to the contract proof.
 
+A Swift once callback that initializes a writable two-word `String` through a
+merged tail helper may call an independently proven zero-argument addressor.
+The caller-specific projection requires the exact callback and helper bytes,
+the addressor's current initializer and storage contract, disjoint complete
+16-byte source and destination cells, and an authenticated
+`swift_bridgeObjectRetain` import. It calls the addressor once, copies both
+words in order, retains the second word, and keeps the initializer as a source
+dependency. Revalidation repeats the machine, call, storage and projected-body
+proofs; a helper address or saved callback hint alone cannot authorize it.
+
 An ordinary native `swift_once` call can similarly bind a writable predicate
 and exact initializer when that callback ignores its context. The native
 entry ABI remains intact. Only after the projected callee body and its

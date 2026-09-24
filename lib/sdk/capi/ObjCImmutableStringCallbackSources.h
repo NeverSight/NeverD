@@ -18,6 +18,13 @@ struct Contract {
   SourceCallTypeHint Storage, Pool, Retain;
 };
 
+struct AddressorContract {
+  va_t Root = 0, Shared = 0, Provider = 0, Destination = 0;
+  va_t RetainTarget = 0;
+  SwiftOnceAddressorContract Addressor;
+  SourceCallTypeHint Storage, ProviderCall, Retain;
+};
+
 // This is a caller-specific specialization of one complete machine path. The
 // shared helper and addressor acquire no general native source declaration.
 inline std::optional<Contract> prove(const BinaryImage &Image,
@@ -145,6 +152,132 @@ inline std::optional<Contract> prove(const BinaryImage &Image,
                   Word, *Literal, *Storage,  *Pool, *Retain};
 }
 
+// The same merged helper can call a zero-argument Swift String addressor
+// instead of a literal provider. Its function pointer is accepted only at
+// this exact caller, after the addressor and its own once initializer have
+// independently passed their current source contracts.
+inline std::optional<AddressorContract>
+proveAddressor(const BinaryImage &Image, const PipelineResult &Result,
+               const SwiftOnceSourcePlan &Once, va_t Root) {
+  if (Result.SourceImage != &Image || Image.Format != BinaryFormat::MachO ||
+      Image.Arch != Arch::AArch64 || Image.Bits != Bitness::Bits64 ||
+      Image.IsRelocatable || Root % 4 || Image.MachOChainedFixupsAmbiguous)
+    return std::nullopt;
+  const auto Callback = Once.CallbackHints.find(Root);
+  const auto *High = uniqueEntry(Result.HighFuncs, Root);
+  const auto Bytes = readImmutableCodeBytes(Image, Root, 24);
+  if (Callback == Once.CallbackHints.end() || !High || !High->SourceTypeHint ||
+      !equalSourceABIs(Callback->second,
+                       swift_once_source_detail::callbackHint(Image.Arch)) ||
+      !equalSourceABIs(*High->SourceTypeHint, Callback->second) || !Bytes ||
+      !completeLow(Result, Root, 6))
+    return std::nullopt;
+  const auto WordAt = [&](unsigned I) {
+    return llvm::support::endian::read32le(Bytes->data() + I * 4);
+  };
+  const auto Destination = pageAddress(WordAt(0), WordAt(1), Root, 2);
+  const auto Provider = pageAddress(WordAt(2), WordAt(3), Root + 8, 1);
+  const auto Shared = branch(WordAt(5), Root + 20, false);
+  if (!Destination || !Provider || !Shared || WordAt(4) != 0x91002043u ||
+      *Destination % 8 || *Provider % 4 || *Shared % 4)
+    return std::nullopt;
+  const auto Storage =
+      objc_binding_detail::localStorageHint(Image, *Destination, 16);
+  const auto SharedBytes = readImmutableCodeBytes(Image, *Shared, 48);
+  const auto *Low = completeLow(Result, *Shared, 12);
+  if (!Storage || !SharedBytes || !Low)
+    return std::nullopt;
+  for (const auto Entry : {Root, *Shared, *Provider}) {
+    const auto *F = uniqueEntry(Result.HighFuncs, Entry);
+    if (!F || F->DoesNotReturn ||
+        (F->ExceptionMetadata &&
+         !objc_projection_detail::isPlainUnwind(*F->ExceptionMetadata)) ||
+        F->StructuredExceptionRegions || F->UnstructuredExceptionRegions)
+      return std::nullopt;
+  }
+  const auto SharedWord = [&](unsigned I) {
+    return llvm::support::endian::read32le(SharedBytes->data() + I * 4);
+  };
+  constexpr uint32_t Fixed[] = {0xa9be4ff4, 0xa9017bfd, 0x910043fd,
+                                0xaa0303f3, 0xaa0203f4, 0xd63f0020,
+                                0xa9400008, 0xf9000288, 0xf9000260,
+                                0xa9417bfd, 0xa8c24ff4};
+  for (unsigned I = 0; I < std::size(Fixed); ++I)
+    if (SharedWord(I) != Fixed[I])
+      return std::nullopt;
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &F : Result.HighFuncs)
+    if (!Functions.emplace(F.Entry, &F).second)
+      return std::nullopt;
+  const auto Planned = Once.Addressors.find(*Provider);
+  const auto ProviderCall =
+      validatedSwiftOnceAddressorCallee(*Provider, Image, Once, Functions);
+  const auto Disjoint = [](va_t A, uint64_t ASize, va_t B,
+                           uint64_t BSize) {
+    return A <= InvalidVA - ASize && B <= InvalidVA - BSize &&
+           (A + ASize <= B || B + BSize <= A);
+  };
+  if (Planned == Once.Addressors.end() || !ProviderCall ||
+      !objc_binding_detail::localStorageHint(Image, Planned->second.Storage,
+                                             16) ||
+      !Disjoint(*Destination, 16, Planned->second.Storage, 16) ||
+      !Disjoint(*Destination, 16, Planned->second.Predicate, 8) ||
+      !Disjoint(Planned->second.Storage, 16, Planned->second.Predicate, 8))
+    return std::nullopt;
+  const auto RetainTarget = branch(SharedWord(11), *Shared + 44, false);
+  const auto Slot = RetainTarget ? darwinImportVeneerSlot(Image, *RetainTarget)
+                                 : std::nullopt;
+  const auto Import = Slot ? darwinRuntimeImport(Image, *Slot) : std::nullopt;
+  const auto Retain =
+      Slot ? swiftRuntimeSourceCallHint(Image, *Slot) : std::nullopt;
+  const auto Bind =
+      Slot ? Image.DyldBindSlots.find(*Slot) : Image.DyldBindSlots.end();
+  constexpr auto ProviderName = "/usr/lib/swift/libswiftCore.dylib";
+  if (!Import || *Import != "_swift_bridgeObjectRetain" || !Retain ||
+      Retain->DoesNotReturn || Bind == Image.DyldBindSlots.end() ||
+      Bind->second.Module != ProviderName ||
+      std::count(Image.DynInfo.NeededLibs.begin(),
+                 Image.DynInfo.NeededLibs.end(), ProviderName) != 1 ||
+      !Image.isValidImportStorageSlot(*Slot, *Import))
+    return std::nullopt;
+  const auto Imports = Image.collectImportStorageSlots();
+  const auto CurrentSlot = Imports.Slots.find(*Slot);
+  if (Imports.Conflicts.count(*Slot) || CurrentSlot == Imports.Slots.end() ||
+      CurrentSlot->second.Name != *Import || CurrentSlot->second.Addend)
+    return std::nullopt;
+  NativeSourceCalls Calls;
+  for (const auto &Op : Low->Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+      continue;
+    const auto Key = nativeSourceCallKey(Op);
+    if (!Key)
+      return std::nullopt;
+    NativeSourceCallContract Call;
+    if (Op.Addr == *Shared + 20 && Op.Opcode == NdOp::INDIR_CALL &&
+        Op.Inputs[0] == NdVar::reg(8, 8))
+      Call.Signature = &ProviderCall->Signature;
+    else if (Op.Addr == *Shared + 44 && Op.Opcode == NdOp::CALL &&
+             Op.Inputs[0] == NdVar::cst(*RetainTarget, 8))
+      Call.Signature = &Retain->Signature;
+    else
+      return std::nullopt;
+    if (!Calls.emplace(*Key, Call).second)
+      return std::nullopt;
+  }
+  if (Calls.size() != 2 ||
+      !restoresNativeSourceState(*Low, Image.Arch, Calls))
+    return std::nullopt;
+  for (const auto &F : Result.LowFuncs)
+    for (const auto &B : F.Blocks)
+      for (const auto &Op : B.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset == Root)
+          return std::nullopt;
+  return AddressorContract{Root, *Shared, *Provider, *Destination,
+                           *RetainTarget, Planned->second, *Storage,
+                           *ProviderCall, *Retain};
+}
+
 inline ExprPtr scalar(uint64_t Value) {
   return HighExpr::makeConst(Value, 8, ConstantAddressProvenance::Scalar);
 }
@@ -202,10 +335,75 @@ inline ObjCSourceBindingResult project(const HighFunc &Function,
   return P;
 }
 
+inline ObjCSourceBindingResult projectAddressor(const HighFunc &Function,
+                                                const AddressorContract &C) {
+  ObjCSourceBindingResult P;
+  P.Function = Function;
+  P.Function.Locals.clear();
+  P.Function.Body.clear();
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  const auto Word = NdType::makeInt(8, false);
+  MedVar Temporary;
+  Temporary.Kind = MedVar::Temp;
+  Temporary.TheArch = Arch::AArch64;
+  Temporary.Id = 9000000;
+  Temporary.Size = 8;
+  const auto Value = [&] { return HighExpr::makeVar(Temporary, Pointer); };
+  const auto StoredWord = [&] {
+    return HighExpr::makeLoad(
+        HighExpr::makeBinop(NdOp::INT_ADD, Value(), scalar(8)), Word);
+  };
+  HighStmt Acquire;
+  Acquire.Kind = StmtKind::Assign;
+  Acquire.Addr = C.Shared + 20;
+  Acquire.Dst = Value();
+  Acquire.Val = HighExpr::makeCall({}, C.Provider, {});
+  Acquire.Val->Type = Pointer;
+  Acquire.Val->SourceCallHint =
+      std::make_shared<SourceCallTypeHint>(C.ProviderCall);
+  P.Function.Body.push_back(std::move(Acquire));
+  for (unsigned I = 0; I < 2; ++I) {
+    HighStmt Store;
+    Store.Kind = StmtKind::Store;
+    Store.Addr = C.Shared + 28 + I * 4;
+    Store.StoreAddr =
+        I ? HighExpr::makeBinop(NdOp::INT_ADD, address(C.Storage), scalar(8))
+          : address(C.Storage);
+    Store.StoreVal = I ? StoredWord() : HighExpr::makeLoad(Value(), Word);
+    P.Function.Body.push_back(std::move(Store));
+  }
+  HighStmt Retain;
+  Retain.Kind = StmtKind::Call;
+  Retain.Addr = C.Shared + 44;
+  Retain.CallExpr = HighExpr::makeCall({}, C.RetainTarget, {StoredWord()});
+  Retain.CallExpr->Type = C.Retain.Signature.ReturnType;
+  Retain.CallExpr->SourceCallHint =
+      std::make_shared<SourceCallTypeHint>(C.Retain);
+  auto Discard = std::make_shared<HighExpr>();
+  Discard->Kind = ExprKind::Cast;
+  Discard->Type = Discard->CastTo = NdType::makeVoid();
+  Discard->Operands = {Retain.CallExpr};
+  Retain.CallExpr = std::move(Discard);
+  P.Function.Body.push_back(std::move(Retain));
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.Addr = C.Root + 20;
+  P.Function.Body.push_back(std::move(Return));
+  P.Dependencies.insert(C.Addressor.Initializer);
+  P.SwiftOnceAccessors.insert(C.Provider);
+  P.LocalStorageExtents[C.Addressor.Predicate] = 8;
+  P.LocalStorageExtents[C.Addressor.Storage] = 16;
+  P.LocalStorageExtents[C.Destination] = 16;
+  return P;
+}
+
 // Compare only the small admitted tree language, including current bindings.
 // A saved projection, name or matching scalar bits never replace prove().
 inline bool sameExpression(const ExprPtr &A, const ExprPtr &B,
-                           const BinaryImage &Image, unsigned Depth = 0) {
+                           const BinaryImage &Image,
+                           const SwiftOnceSourcePlan &Once,
+                           const std::map<va_t, const HighFunc *> &Functions,
+                           unsigned Depth = 0) {
   if (!A || !B)
     return !A && !B;
   if (Depth > 12 || A->Kind != B->Kind || A->Op != B->Op ||
@@ -225,7 +423,10 @@ inline bool sameExpression(const ExprPtr &A, const ExprPtr &B,
         A->SourceCallHint->TargetAddress != B->SourceCallHint->TargetAddress ||
         A->SourceCallHint->ByteCount != B->SourceCallHint->ByteCount ||
         A->SourceCallHint->TargetName != B->SourceCallHint->TargetName ||
-        !objcSourceCallBound(*A, Image, {}))
+        !(A->SourceCallHint->CallKind ==
+                  SourceCallTypeHint::Kind::RuntimeSwiftOnceAccessor
+              ? swiftOnceAddressorBound(*A, Image, Once, Functions)
+              : objcSourceCallBound(*A, Image, {})))
       return false;
   } else if (A->SourceCallHint || A->CallAddr || !A->CallTarget.empty()) {
     return false;
@@ -235,12 +436,17 @@ inline bool sameExpression(const ExprPtr &A, const ExprPtr &B,
         A->ConstProvenance != B->ConstProvenance ||
         A->AddressOwnerVA != B->AddressOwnerVA)
       return false;
+  } else if (A->Kind == ExprKind::Var) {
+    if (A->Var != B->Var || A->Var.Size != B->Var.Size ||
+        A->Var.TheArch != B->Var.TheArch)
+      return false;
   } else if (A->Kind != ExprKind::BinOp && A->Kind != ExprKind::Call &&
-             A->Kind != ExprKind::Cast) {
+             A->Kind != ExprKind::Cast && A->Kind != ExprKind::Load) {
     return false;
   }
   for (size_t I = 0; I < A->Operands.size(); ++I)
-    if (!sameExpression(A->Operands[I], B->Operands[I], Image, Depth + 1))
+    if (!sameExpression(A->Operands[I], B->Operands[I], Image, Once, Functions,
+                        Depth + 1))
       return false;
   return true;
 }
@@ -251,13 +457,20 @@ projectObjCImmutableStringCallback(const HighFunc &Function,
                                    const BinaryImage &Image,
                                    const PipelineResult &Result,
                                    const SwiftOnceSourcePlan &Once) {
-  const auto C = objc_immutable_string_callback_detail::prove(
-      Image, Result, Once, Function.Entry);
-  if (!C || !Function.SourceTypeHint ||
+  if (!Function.SourceTypeHint ||
+      Once.CallbackHints.find(Function.Entry) == Once.CallbackHints.end() ||
       !equalSourceABIs(*Function.SourceTypeHint,
                        Once.CallbackHints.at(Function.Entry)))
     return std::nullopt;
-  return objc_immutable_string_callback_detail::project(Function, *C);
+  if (const auto Literal = objc_immutable_string_callback_detail::prove(
+          Image, Result, Once, Function.Entry))
+    return objc_immutable_string_callback_detail::project(Function, *Literal);
+  if (const auto Addressor =
+          objc_immutable_string_callback_detail::proveAddressor(
+              Image, Result, Once, Function.Entry))
+    return objc_immutable_string_callback_detail::projectAddressor(Function,
+                                                                   *Addressor);
+  return std::nullopt;
 }
 
 inline bool objCImmutableStringCallbackValid(const HighFunc &Function,
@@ -274,24 +487,33 @@ inline bool objCImmutableStringCallbackValid(const HighFunc &Function,
       (Function.ExceptionMetadata &&
        !objc_projection_detail::isPlainUnwind(*Function.ExceptionMetadata)) ||
       Function.StructuredExceptionRegions ||
-      Function.UnstructuredExceptionRegions || Function.Body.size() != 4)
+      Function.UnstructuredExceptionRegions ||
+      Function.Body.size() != Expected->Function.Body.size())
     return false;
-  for (size_t I = 0; I < 4; ++I) {
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &F : Result.HighFuncs)
+    if (!Functions.emplace(F.Entry, &F).second)
+      return false;
+  for (size_t I = 0; I < Function.Body.size(); ++I) {
     const auto &A = Function.Body[I];
     const auto &B = Expected->Function.Body[I];
-    if (A.Kind != B.Kind || A.Addr != B.Addr || A.Dst || A.Val || A.Cond ||
-        A.RetVal || A.SwitchExpr || A.GotoTarget || A.LoopHeaderAddr ||
+    if (A.Kind != B.Kind || A.Addr != B.Addr || A.Cond || A.RetVal ||
+        A.SwitchExpr || A.GotoTarget || A.LoopHeaderAddr ||
         !A.Body.empty() || !A.ElseBody.empty() || !A.Cases.empty() ||
         !A.DefaultBody.empty() || !A.EHClauses.empty() ||
         !A.EHClauseBodies.empty() || A.EHIsReducible || A.IsPhiCopy ||
         A.MemoryOrdering != NdMemoryOrdering::None ||
         A.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         !objc_immutable_string_callback_detail::sameExpression(
-            A.StoreAddr, B.StoreAddr, Image) ||
+            A.Dst, B.Dst, Image, Once, Functions) ||
         !objc_immutable_string_callback_detail::sameExpression(
-            A.StoreVal, B.StoreVal, Image) ||
+            A.Val, B.Val, Image, Once, Functions) ||
         !objc_immutable_string_callback_detail::sameExpression(
-            A.CallExpr, B.CallExpr, Image))
+            A.StoreAddr, B.StoreAddr, Image, Once, Functions) ||
+        !objc_immutable_string_callback_detail::sameExpression(
+            A.StoreVal, B.StoreVal, Image, Once, Functions) ||
+        !objc_immutable_string_callback_detail::sameExpression(
+            A.CallExpr, B.CallExpr, Image, Once, Functions))
       return false;
   }
   return true;
