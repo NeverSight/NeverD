@@ -24,6 +24,13 @@ class DarwinBlockDeclarationTests(unittest.TestCase):
         self.assertNotIn('{"consume",', render(profiles, [{}, exports[0]], 'test', 'test'))
 
     def test_copy_lifetime_requires_an_exact_audited_contract(self):
+        self.assertEqual(block_lifetime('dispatch_after', 'v24Q0@8@?16', 2,
+                                        'v8@?0', ''), 'Copied')
+        for parent, index, callback in [('v24Q0@8@?16', 1, 'v8@?0'),
+                                        ('v24Q0@8@?16', 2, 'i8@?0'),
+                                        ('v16@0@?8', 1, 'v8@?0')]:
+            self.assertIsNone(block_lifetime('dispatch_after', parent, index,
+                                              callback, ''))
         for name in ('dispatch_async', 'dispatch_barrier_async'):
             self.assertEqual(block_lifetime(name, 'v16@0@?8', 1, 'v8@?0', ''), 'Copied')
             for parent, index, callback in [('v16@0@?8', 0, 'v8@?0'),

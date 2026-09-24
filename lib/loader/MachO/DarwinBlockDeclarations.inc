@@ -6,6 +6,7 @@
 // Target profiles: arm64-apple-macos15.0, arm64-apple-ios18.0, x86_64-apple-macos15.0, x86_64-apple-ios18.0-simulator
 // No SDK implementation is included.
 {"bsearch_b", "^v40r^v0r^v8Q16Q24@?32", "^v40r^v0r^v8Q16Q24@?32", 4, "i24@?0^v8^v16", "i24@?0^v8^v16", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_c.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libsystem_c.dylib", DarwinBlockParameterContract::Lifetime::NonEscaping},
+{"dispatch_after", "v24Q0@8@?16", "v24Q0@8@?16", 2, "v8@?0", "v8@?0", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", DarwinBlockParameterContract::Lifetime::Copied},
 {"dispatch_apply", "v24Q0@8@?16", "v24Q0@8@?16", 2, "v16@?0Q8", "v16@?0Q8", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", DarwinBlockParameterContract::Lifetime::NonEscaping},
 {"dispatch_async", "v16@0@?8", "v16@0@?8", 1, "v8@?0", "v8@?0", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", DarwinBlockParameterContract::Lifetime::Copied},
 {"dispatch_async_and_wait", "v16@0@?8", "v16@0@?8", 1, "v8@?0", "v8@?0", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", "/usr/lib/libSystem.B.dylib|/usr/lib/system/libdispatch.dylib", DarwinBlockParameterContract::Lifetime::NonEscaping},

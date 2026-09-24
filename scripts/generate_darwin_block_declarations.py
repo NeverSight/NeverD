@@ -20,12 +20,14 @@ def noescape_attribute(pretty):
     return bool(re.search(r'__attribute__\(\(noescape\)\)', pretty))
 
 
-# The SDK queue.h contract explicitly specifies Block_copy/Block_release for
-# these two functions. This is audited semantic evidence, not an inference
+# Apple's dispatch API contract explicitly specifies Block_copy/Block_release
+# for these functions. This is audited semantic evidence, not an inference
 # from an unannotated block type. Require the complete parent and callback
 # encodings as well as compiler/export agreement across every profile.
 # https://github.com/apple-oss-distributions/libdispatch/blob/main/dispatch/queue.h
+# https://developer.apple.com/documentation/dispatch/dispatch_after
 COPYING_CONSUMERS = {
+    'dispatch_after': ('v24Q0@8@?16', 2, 'v8@?0'),
     'dispatch_async': ('v16@0@?8', 1, 'v8@?0'),
     'dispatch_barrier_async': ('v16@0@?8', 1, 'v8@?0'),
 }

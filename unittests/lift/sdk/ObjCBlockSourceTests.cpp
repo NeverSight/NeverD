@@ -1128,6 +1128,23 @@ TEST(ObjCBlockSources, DeclaredConsumerRequiresExactImportAndCallbackABI) {
       }
 }
 
+TEST(ObjCBlockSources, DispatchAfterCopiesOnlyAnAuthenticatedBlockArgument) {
+  SourceFixture F(true);
+  constexpr va_t Slot = 0x2800;
+  F.Image.ImportPtrSlots[Slot] = "_dispatch_after";
+  F.Image.DyldBindSlots[Slot] = {"_dispatch_after", 0,
+                                 "/usr/lib/system/libdispatch.dylib", false};
+  const auto Contract = darwinBlockParameterContract(F.Image, Slot, 2);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage, DarwinBlockParameterContract::Lifetime::Copied);
+  EXPECT_EQ(Contract->Signature.Parameters.size(), 1U);
+  EXPECT_FALSE(darwinBlockParameterContract(F.Image, Slot, 1));
+  EXPECT_FALSE(darwinNonEscapingBlockSignature(F.Image, Slot, 2));
+
+  F.Image.DyldBindSlots[Slot].Module = "/usr/lib/unrelated.dylib";
+  EXPECT_FALSE(darwinBlockParameterContract(F.Image, Slot, 2));
+}
+
 TEST(ObjCBlockSources, ConstructionRejectsLateUnsafeEdgesTransactionally) {
   for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
     SCOPED_TRACE(Mutation);
