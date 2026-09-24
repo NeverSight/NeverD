@@ -39,6 +39,29 @@ namespace neverd {
 /// HighCFuncWriter.cpp (function rendering), HighCStmtWriter.cpp (statement
 /// rendering), HighCExprWriter.cpp (general expression rendering), and
 /// HighCExprBinOp.cpp (binary operator rendering).
+/// An unbuffered stream that forwards to a replaceable target.  HighCWriter
+/// renders a function body into a buffer first, so the declarations it prints
+/// before the body can follow what the body actually names.
+class RedirectableStream : public llvm::raw_ostream {
+public:
+  explicit RedirectableStream(llvm::raw_ostream &Target) : Target(&Target) {
+    SetUnbuffered();
+  }
+  /// Send output to \p Next; returns the previous target.
+  llvm::raw_ostream *redirect(llvm::raw_ostream *Next) {
+    flush();
+    std::swap(Target, Next);
+    return Next;
+  }
+
+private:
+  void write_impl(const char *Ptr, size_t Size) override {
+    Target->write(Ptr, Size);
+  }
+  uint64_t current_pos() const override { return Target->tell(); }
+  llvm::raw_ostream *Target;
+};
+
 class HighCWriter {
 public:
   static llvm::StringRef
@@ -47,7 +70,7 @@ public:
   sourceParameterType(const SourceParameterTypeHint &Parameter);
   HighCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
               DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true)
-      : OS(OS), Opts(Opts), Dbg(Dbg),
+      : Out(OS), OS(Out), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
@@ -160,7 +183,11 @@ public:
   std::string renderBinOp(const HighExpr &E, int ParentPrec);
 
   //--- State ---
+  RedirectableStream Out;
   llvm::raw_ostream &OS;
+  /// Declarations skipped because copy forwarding or liveness predicted the
+  /// name would not be printed.  Emitted if the rendered body names it anyway.
+  std::map<std::string, std::string> DeferredDecls;
   CEmitterOptions Opts;
   DebugContext *Dbg;
   bool GuardAnalysisOnlyFunctions;

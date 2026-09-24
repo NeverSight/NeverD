@@ -392,6 +392,23 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     });
   }
 
+  // Every variable the IR mentions, under its own and its forwarded name, is
+  // a candidate for a late declaration if the rendered body names it.
+  {
+    std::map<std::string, TypeRef> AllVars;
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      forEachExpr(S, [&](const ExprPtr &E) {
+        if (!E)
+          return;
+        collectUsedVarsExpr(*E, AllVars, VarFn);
+        collectUsedVarsExpr(*E, AllVars, PrintedVarFn);
+      });
+    });
+    for (const auto &[Name, Ty] : AllVars)
+      if (!Name.empty() && !UsedVars.count(Name))
+        DeferredDecls.emplace(Name, declarationToC(Ty, Name));
+  }
+
   std::set<std::string> DeclaredNames(ParamNames);
   for (auto &Local : Func.Locals) {
     MedVar StackVar;
@@ -405,8 +422,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
         UsedVars.find(Local.Name) == UsedVars.end())
       continue;
     if ((CopyForward.count(Name) || CopyForward.count(Local.Name)) &&
-        !VisibleAssigned.count(Name) && !VisibleAssigned.count(Local.Name))
+        !VisibleAssigned.count(Name) && !VisibleAssigned.count(Local.Name)) {
+      DeferredDecls.emplace(Name, declarationToC(Local.Type, Name));
       continue;
+    }
     DeclaredNames.insert(Name);
     emitIndent(1);
     TypeRef Ty = Local.Type;
@@ -426,8 +445,13 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   for (auto &[Name, Ty] : UsedVars) {
     if (Name.empty() || DeclaredNames.count(Name))
       continue;
-    if (CopyForward.count(Name) && !VisibleAssigned.count(Name))
+    if (CopyForward.count(Name) && !VisibleAssigned.count(Name)) {
+      auto ExplicitTy = ExplicitDeclarations.find(Name);
+      DeferredDecls.emplace(Name, ExplicitTy == ExplicitDeclarations.end()
+                                      ? declarationToC(Ty, Name)
+                                      : ExplicitTy->second);
       continue;
+    }
     DeclaredNames.insert(Name);
     emitIndent(1);
     auto ExplicitTy = ExplicitDeclarations.find(Name);
@@ -1168,21 +1192,50 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       continue;
     if (ParamNames.count(Slot.Name))
       continue;
-    if (!PrintedAddrSlots.count(Slot.Name))
+    const std::string Decl = Slot.RegionBytes
+                                 ? "uint8_t " + Slot.Name + "[" +
+                                       std::to_string(Slot.RegionBytes) + "]"
+                                 : declarationToC(Slot.Type, Slot.Name);
+    if (!PrintedAddrSlots.count(Slot.Name) ||
+        (!Slot.AddressTaken && (CopyForward.count(Slot.Name) ||
+                                Analysis.DeadVars.count(Slot.Name)))) {
+      DeferredDecls.emplace(Slot.Name, Decl);
       continue;
-    if (!Slot.AddressTaken &&
-        (CopyForward.count(Slot.Name) || Analysis.DeadVars.count(Slot.Name)))
-      continue;
+    }
     ParamNames.insert(Slot.Name);
     emitIndent(1);
-    if (Slot.RegionBytes)
-      OS << "uint8_t " << Slot.Name << "[" << Slot.RegionBytes << "];\n";
-    else
-      OS << declarationToC(Slot.Type, Slot.Name) << ";\n";
+    OS << Decl << ";\n";
   }
   emitLocalDecls(Func, ParamNames);
 
-  writeStmts(Func.Body, 1);
+  // Render the body first: a name the declaration pass expected to be
+  // forwarded or dead may still be printed, and it must be declared.
+  std::string Body;
+  {
+    llvm::raw_string_ostream BodyOS(Body);
+    llvm::raw_ostream *Saved = Out.redirect(&BodyOS);
+    writeStmts(Func.Body, 1);
+    Out.redirect(Saved);
+  }
+  for (const auto &[Name, Decl] : DeferredDecls) {
+    if (ParamNames.count(Name))
+      continue;
+    for (size_t Pos = Body.find(Name); Pos != std::string::npos;
+         Pos = Body.find(Name, Pos + 1)) {
+      auto IsIdent = [](char C) {
+        return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
+      };
+      if ((Pos && IsIdent(Body[Pos - 1])) ||
+          (Pos + Name.size() < Body.size() && IsIdent(Body[Pos + Name.size()])))
+        continue;
+      ParamNames.insert(Name);
+      emitIndent(1);
+      OS << Decl << ";\n";
+      break;
+    }
+  }
+  DeferredDecls.clear();
+  OS << Body;
   if (EmitFunctionWrapper)
     OS << "}\n";
 }
