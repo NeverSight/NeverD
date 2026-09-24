@@ -233,7 +233,7 @@ public:
     int64_t OuterOffset = 0;
     std::string Interior;
     /// When no single slot covers an overlapping group, the group's first
-    /// slot declares the storage as this many aligned bytes.
+    /// slot declares the storage as this many bytes.
     int64_t RegionBytes = 0;
     /// Width of the narrowest store at this displacement, 0 if none.
     unsigned MinStoreSize = 0;

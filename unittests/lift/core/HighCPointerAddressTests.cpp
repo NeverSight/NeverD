@@ -4305,7 +4305,7 @@ TEST(HighCPointerAddresses, PartlyOverlappingSlotsShareOneStorage) {
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   EXPECT_TRUE(std::regex_search(
-      HighC, std::regex(R"(_Alignas\(16\) uint8_t var_\w+\[10\];)")))
+      HighC, std::regex(R"(\buint8_t var_\w+\[10\];)")))
       << HighC;
   EXPECT_TRUE(std::regex_search(
       HighC,

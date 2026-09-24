@@ -759,7 +759,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   // stored at -0x82 changes what a later read of the eight bytes at -0x84
   // sees.  Each group of overlapping slots lives in one storage, the group's
   // first slot; when that slot does not cover the whole group it is declared
-  // as a byte array.  The other slots are accessed through it.
+  // as a byte array (the binary guarantees no alignment for it).  The other slots are accessed through it.
   SharedFrameStorage.clear();
   auto SlotEnd = [](const std::pair<const int64_t, NamedFrameSlot> &Entry) {
     return Entry.first +
@@ -1176,8 +1176,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     ParamNames.insert(Slot.Name);
     emitIndent(1);
     if (Slot.RegionBytes)
-      OS << "_Alignas(16) uint8_t " << Slot.Name << "[" << Slot.RegionBytes
-         << "];\n";
+      OS << "uint8_t " << Slot.Name << "[" << Slot.RegionBytes << "];\n";
     else
       OS << declarationToC(Slot.Type, Slot.Name) << ";\n";
   }
