@@ -84,6 +84,36 @@ TEST(SourceABI, EmptyBoundCallDoesNotAcquireUnrelatedRegisterArguments) {
   }
 }
 
+TEST(SourceABI, SwiftArm64HomogeneousFloatRecordUsesFourFPLanes) {
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  auto Double = NdType::makeFloat(8);
+  Hint.Parameters = {
+      {"rect", NdType::makeStruct({Double, Double, Double, Double})},
+      {"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error)) << Error;
+  ASSERT_EQ(Hint.Parameters[0].Components.size(), 4U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (unsigned I = 0; I < 4; ++I) {
+    EXPECT_EQ(Hint.Parameters[0].Components[I].Kind,
+              SourceABICarrierKind::FloatingRegister);
+    EXPECT_EQ(Hint.Parameters[0].Components[I].RegisterOffset,
+              TRI.FPParamRegs[I]);
+  }
+  EXPECT_EQ(Hint.Parameters[1].Location.RegisterOffset, a64reg::X20);
+  EXPECT_EQ(sourceABIParameters(Hint).size(), 5U);
+  EXPECT_TRUE(validateSourceABI(Hint, Error)) << Error;
+  Hint.Parameters[0].Components[2].RegisterOffset = TRI.FPParamRegs[4];
+  EXPECT_FALSE(validateSourceABI(Hint, Error));
+  Hint.Parameters[0].Components[2].RegisterOffset = TRI.FPParamRegs[2];
+  Hint.Parameters[0].Type = NdType::makeStruct(
+      {Double, NdType::makeInt(8), Double, Double});
+  EXPECT_FALSE(validateSourceABI(Hint, Error));
+}
+
 TEST(SourceABI, BoundRecordCallAbiRetainsEveryRenamedComponent) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (bool Floating : {false, true}) {
