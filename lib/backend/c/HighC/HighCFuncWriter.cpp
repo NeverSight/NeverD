@@ -345,6 +345,16 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
 
 void HighCWriter::emitLocalDecls(const HighFunc &Func,
                                  const std::set<std::string> &ParamNames) {
+  auto IsStorageSlotName = [this](llvm::StringRef Name) {
+    if (!ProjectFrameAliasesIntoStorage)
+      return false;
+    for (const auto &[Disp, Slot] : FrameStorageSlots) {
+      (void)Disp;
+      if (Slot.Name == Name && !isCxxCatchObjectName(Name))
+        return true;
+    }
+    return false;
+  };
   auto VarFn = [this](const MedVar &V) {
     if (isCatchFuncletParentFrame(V))
       return std::string();
@@ -352,7 +362,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   };
   // Copy-forwarded temps print as their source (`arg0`), so collecting the
   // IR destination would declare a name that never appears in the body.
-  auto PrintedVarFn = [this, &VarFn](const MedVar &V) {
+  auto PrintedVarFn = [this, &VarFn, &IsStorageSlotName](const MedVar &V) {
     if (isCatchFuncletParentFrame(V))
       return std::string();
     const std::string Name = copyForwardName(VarFn(V));
@@ -362,7 +372,8 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     for (const auto &[Disp, Slot] : FrameSlots)
       if (Slot.Name == Name)
         return std::string();
-    if (FrameAliases.count(Name) || FieldForward.count(Name) ||
+    if (FrameAliases.count(Name) || IsStorageSlotName(Name) ||
+        FieldForward.count(Name) ||
         ValueForward.count(Name) || CtorThisForward.count(Name) ||
         CatchAliasTemps.count(Name) || UnknownOnlyNames.count(Name))
       return std::string();
@@ -478,7 +489,10 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
                   return std::isalnum(static_cast<unsigned char>(C)) ||
                          C == '_';
                 });
-            if (Identifier && !ParamNames.count(Name)) {
+            if (Identifier && !ParamNames.count(Name) &&
+                !IsStorageSlotName(Name) &&
+                !(ProjectFrameAliasesIntoStorage &&
+                  FrameAliases.count(varName(S.Dst->Var)))) {
               UsedVars.try_emplace(Name, S.Dst->Type);
               VisibleAssigned.insert(Name);
             }
@@ -523,7 +537,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
     StackVar.StackOff = Local.StackOff;
     StackVar.Size = Local.Type ? Local.Type->Size : 0;
     const std::string Name = varName(StackVar);
-    if (DeclaredNames.count(Name))
+    if (DeclaredNames.count(Name) || IsStorageSlotName(Name))
       continue;
     if (UsedVars.find(Name) == UsedVars.end() &&
         UsedVars.find(Local.Name) == UsedVars.end())
@@ -579,7 +593,9 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
              Ty->Pointee->SourceName.empty()))))
         Ty = Fwd;
     }
-    if (Name.empty() || DeclaredNames.count(Name))
+    if (Name.empty() || DeclaredNames.count(Name) ||
+        IsStorageSlotName(Name) ||
+        (ProjectFrameAliasesIntoStorage && FrameAliases.count(Name)))
       continue;
     if (CopyForward.count(Name) && !VisibleAssigned.count(Name))
       continue;
@@ -2284,6 +2300,12 @@ HighCWriter::cxxCatchPointerName(const HighExpr &E) const {
     return std::nullopt;
   }
   if (Cur->Kind == ExprKind::Load && !Cur->Operands.empty() && Cur->Operands[0]) {
+    if (ProjectFrameAliasesIntoStorage)
+      if (const auto Disp = frameDisplacement(*Cur->Operands[0]))
+        if (auto It = FrameStorageSlots.find(*Disp);
+            It != FrameStorageSlots.end() &&
+            isCxxCatchObjectName(It->second.Name))
+          return It->second.Name;
     if (auto Slot = namedFrameSlot(*Cur->Operands[0]);
         Slot && isCxxCatchObjectName(*Slot))
       return *Slot;
@@ -4236,6 +4258,8 @@ void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
 
 void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CurrentFunc = &Func;
+  ProjectFrameAliasesIntoStorage = false;
+  FrameStorageSlots.clear();
   CopyForward.clear();
   JoinPhiNames.clear();
   FieldForward.clear();
@@ -4264,9 +4288,40 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   Analysis = {};
   runAnalysisPasses(Func);
   collectNamedFrameSlots(Func);
+  // A fixed slot write can be read later through an indexed address even if
+  // no named slot load mentions it. Preserve those writes before the
+  // local-only dead-store pass runs; the backing store is selected below.
+  bool HasDynamicFrameIndex = false;
+  auto CheckDynamicFrameIndex = [&](auto &&Self, const HighExpr &Expr) -> void {
+    if (HasDynamicFrameIndex)
+      return;
+    if (Expr.Kind == ExprKind::BinOp &&
+        (Expr.Op == NdOp::INT_ADD || Expr.Op == NdOp::INT_SUB) &&
+        Expr.Operands.size() == 2 && Expr.Operands[0] && Expr.Operands[1] &&
+        !certifiedFrameStorageDisplacement(Expr) &&
+        (certifiedFrameStorageDisplacement(*Expr.Operands[0]) ||
+         certifiedFrameStorageDisplacement(*Expr.Operands[1]))) {
+      HasDynamicFrameIndex = true;
+      return;
+    }
+    for (const ExprPtr &Operand : Expr.Operands)
+      if (Operand)
+        Self(Self, *Operand);
+  };
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    if (Stmt.Dst)
+      CheckDynamicFrameIndex(CheckDynamicFrameIndex, *Stmt.Dst);
+    if (Stmt.StoreAddr)
+      CheckDynamicFrameIndex(CheckDynamicFrameIndex, *Stmt.StoreAddr);
+    forEachRhsExpr(Stmt, [&](const ExprPtr &Expr) {
+      if (Expr)
+        CheckDynamicFrameIndex(CheckDynamicFrameIndex, *Expr);
+    });
+  });
   collectCopyForward(Func);
   hideX86SehRegistration(Func);
-  hideUnusedFrameSlotWrites(Func);
+  if (!HasDynamicFrameIndex)
+    hideUnusedFrameSlotWrites(Func);
   {
     auto VarFn = [this](const MedVar &V) { return varName(V); };
     auto ArgLimit = [this](const HighExpr &E) { return debugCallArgLimit(E); };
@@ -4277,7 +4332,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
   // Epilogue reloads of callee-save / param homes become DeadStmts above.
   // Re-hide those stores so unused `var_m10 = this` / `var_m18 = 0` drop.
-  hideUnusedFrameSlotWrites(Func);
+  if (!HasDynamicFrameIndex)
+    hideUnusedFrameSlotWrites(Func);
   hideBitClearSlotCopies(Func);
   hideX86CallPushSetup(Func);
   collectNamedFrameSlots(Func);
@@ -4315,8 +4371,21 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
 
   bool NeedsFrameStorage = false;
   auto VisitFrameUses = [&](auto &&Self, const HighExpr &Expr) -> void {
-    if (NeedsFrameStorage)
+    if (NeedsFrameStorage && ProjectFrameAliasesIntoStorage)
       return;
+    // A frame alias plus a run-time index cannot be a standalone C local.
+    // Fixed slot accesses must share its backing bytes, including across a
+    // catch funclet where Param 1 is the parent's establisher frame.
+    if (Expr.Kind == ExprKind::BinOp &&
+        (Expr.Op == NdOp::INT_ADD || Expr.Op == NdOp::INT_SUB) &&
+        Expr.Operands.size() == 2 && Expr.Operands[0] && Expr.Operands[1] &&
+        !certifiedFrameStorageDisplacement(Expr) &&
+        (certifiedFrameStorageDisplacement(*Expr.Operands[0]) ||
+         certifiedFrameStorageDisplacement(*Expr.Operands[1]))) {
+      NeedsFrameStorage = true;
+      ProjectFrameAliasesIntoStorage = true;
+      return;
+    }
     if (isNamedFrameMemory(Expr) || namedFrameSlot(Expr) ||
         frameDisplacement(Expr))
       return;
@@ -4342,7 +4411,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         Self(Self, *Operand);
   };
   auto ConsiderFrameUse = [&](const HighStmt &Stmt) {
-    if (NeedsFrameStorage || Analysis.DeadStmts.count(&Stmt) ||
+    if ((NeedsFrameStorage && ProjectFrameAliasesIntoStorage) ||
+        Analysis.DeadStmts.count(&Stmt) ||
         (InferredVoid && Stmt.Kind == StmtKind::Return))
       return;
     if (Stmt.Kind == StmtKind::Assign && Stmt.Dst && Stmt.Val &&
@@ -4369,31 +4439,37 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         VisitFrameUses(VisitFrameUses, *Expr);
     });
   };
-  std::function<void(const std::vector<HighStmt> &)> WalkFrameUses;
-  WalkFrameUses = [&](const std::vector<HighStmt> &Stmts) {
+  std::function<void(const std::vector<HighStmt> &, bool)> WalkFrameUses;
+  WalkFrameUses = [&](const std::vector<HighStmt> &Stmts, bool InHandler) {
+    const bool Saved = InEHClauseBody;
+    InEHClauseBody = InHandler;
     for (const HighStmt &Stmt : Stmts) {
       ConsiderFrameUse(Stmt);
-      WalkFrameUses(Stmt.Body);
-      WalkFrameUses(Stmt.ElseBody);
-      WalkFrameUses(Stmt.DefaultBody);
+      WalkFrameUses(Stmt.Body, InHandler);
+      WalkFrameUses(Stmt.ElseBody, InHandler);
+      WalkFrameUses(Stmt.DefaultBody, InHandler);
       for (const auto &C : Stmt.Cases)
-        WalkFrameUses(C.Body);
+        WalkFrameUses(C.Body, InHandler);
       for (size_t I = 0; I < Stmt.EHClauseBodies.size(); ++I) {
         const bool Cleanup =
             I < Stmt.EHClauses.size() &&
             Stmt.EHClauses[I].Kind == HighEHClauseKind::CxxCleanup;
         if (!Cleanup)
-          WalkFrameUses(Stmt.EHClauseBodies[I]);
+          WalkFrameUses(Stmt.EHClauseBodies[I], true);
       }
     }
+    InEHClauseBody = Saved;
   };
-  WalkFrameUses(Func.Body);
+  WalkFrameUses(Func.Body, false);
   if (NeedsFrameStorage || !Analysis.StoreFwd.empty()) {
     // Integer store-to-load forwarding and named C locals are exclusive.
     // Mixing them leaves later loads on `frame_base` after the seed `arg0`
     // store has already been deleted.
+    if (ProjectFrameAliasesIntoStorage)
+      FrameStorageSlots = FrameSlots;
     FrameSlots.clear();
-    FrameAliases.clear();
+    if (!ProjectFrameAliasesIntoStorage)
+      FrameAliases.clear();
   } else {
     walkStmts(Func.Body, [&](const HighStmt &Stmt) {
       if (Stmt.Kind != StmtKind::Assign || !Stmt.Dst || !Stmt.Val ||

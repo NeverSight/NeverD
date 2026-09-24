@@ -28,6 +28,18 @@
 
 namespace neverd {
 
+namespace {
+std::string frameStorageAddress(int64_t Displacement) {
+  if (Displacement == 0)
+    return "frame_base";
+  const uint64_t Magnitude =
+      Displacement < 0 ? uint64_t{0} - static_cast<uint64_t>(Displacement)
+                       : static_cast<uint64_t>(Displacement);
+  return "(frame_base " + std::string(Displacement < 0 ? "- " : "+ ") +
+         std::to_string(Magnitude) + ")";
+}
+} // namespace
+
 std::string HighCWriter::debugNameForDisplacement(va_t Entry,
                                                   int64_t Disp) const {
   if (!Dbg)
@@ -750,6 +762,9 @@ const HighExpr *HighCWriter::peelIntegerViewOps(const HighExpr *E) const {
 }
 
 std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec) {
+  if (ProjectFrameAliasesIntoStorage)
+    if (const auto Disp = certifiedFrameStorageDisplacement(E))
+      return frameStorageAddress(*Disp);
   const HighExpr *Inner = peelIntegerViewOps(&E);
   if (!Inner)
     Inner = &E;
@@ -2230,6 +2245,8 @@ const HighExpr *HighCWriter::unwrapIntegerView(const HighExpr *E) const {
 std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
   if (!CurrentFunc)
     return std::nullopt;
+  const auto &Slots = ProjectFrameAliasesIntoStorage ? FrameStorageSlots
+                                                      : FrameSlots;
   const HighExpr *Cur = unwrapIntegerView(&E);
   int64_t Acc = 0;
   unsigned Depth = 0;
@@ -2253,8 +2270,8 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
           const int64_t Rebased = Acc - CurrentFunc->FrameSize;
           if (InEHClauseBody)
             return Rebased;
-          if (CurrentFunc->ExceptionMetadata && FrameSlots.count(Rebased) &&
-              !FrameSlots.count(Acc))
+          if (CurrentFunc->ExceptionMetadata && Slots.count(Rebased) &&
+              !Slots.count(Acc))
             return Rebased;
         }
         return Acc;
@@ -2278,7 +2295,7 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
           return Acc - Slot;
         const int64_t Order[3] = {Acc - Slot, Acc, Acc + Slot};
         for (int64_t Adj : Order)
-          if (FrameSlots.count(Adj))
+          if (Slots.count(Adj))
             return Adj;
         return Acc;
       }
@@ -2313,6 +2330,45 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       Delta = static_cast<int32_t>(Imm->ConstVal);
     Acc += Subtract ? -Delta : Delta;
     Cur = Base;
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> HighCWriter::certifiedFrameStorageDisplacement(
+    const HighExpr &E) const {
+  if (!CurrentFunc)
+    return std::nullopt;
+  // frameDisplacement also has a display-only heuristic for an unassigned
+  // SSA-0 value. That is insufficient to redirect a real memory address into
+  // stack_storage: require a known frame root along a constant-offset chain.
+  const HighExpr *Cur = &E;
+  unsigned Depth = 0;
+  while (Cur && Depth++ < limits::kMaxFrameDisplacementDepth) {
+    Cur = unwrapIntegerView(Cur);
+    if (!Cur)
+      return std::nullopt;
+    if (Cur->Kind == ExprKind::Var) {
+      if (!isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc,
+                                        Opts.TheArch) &&
+          !isCatchFuncletParentFrame(Cur->Var) &&
+          !FrameAliases.count(varName(Cur->Var)))
+        return std::nullopt;
+      return frameDisplacement(E);
+    }
+    if (Cur->Kind != ExprKind::BinOp || Cur->Operands.size() != 2 ||
+        !Cur->Operands[0] || !Cur->Operands[1] ||
+        (Cur->Op != NdOp::INT_ADD && Cur->Op != NdOp::INT_SUB))
+      return std::nullopt;
+    const HighExpr *LHS = unwrapIntegerView(Cur->Operands[0].get());
+    const HighExpr *RHS = unwrapIntegerView(Cur->Operands[1].get());
+    if (!LHS || !RHS)
+      return std::nullopt;
+    if (RHS->Kind == ExprKind::Const)
+      Cur = LHS;
+    else if (Cur->Op == NdOp::INT_ADD && LHS->Kind == ExprKind::Const)
+      Cur = RHS;
+    else
+      return std::nullopt;
   }
   return std::nullopt;
 }
@@ -2368,6 +2424,27 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     if (auto Reach = ReachingCatchPtrs.find(Name);
         Reach != ReachingCatchPtrs.end())
       return Reach->second;
+    if (ProjectFrameAliasesIntoStorage) {
+      if (CurrentFunc && isSyntheticEntryStackPointer(E.Var, *CurrentFunc,
+                                                      Opts.TheArch))
+        return "frame_base";
+      // A frame pointer may be assigned only on a normal try path. Project
+      // its certified displacement at each use so the exceptional edge also
+      // addresses the single byte backing store, rather than reading that
+      // potentially skipped C assignment.
+      if (auto Alias = FrameAliases.find(RawName);
+          Alias != FrameAliases.end())
+        return frameStorageAddress(Alias->second);
+      if (InEHClauseBody && isCatchFuncletParentFrame(E.Var))
+        return frameStorageAddress(CurrentFunc->FrameSize > 0
+                                       ? -CurrentFunc->FrameSize
+                                       : 0);
+      for (const auto &[Disp, Slot] : FrameStorageSlots)
+        if (Slot.Name == Name && E.Var.Kind != MedVar::Param &&
+            !isEmittedParamName(Name) && !isCxxCatchObjectName(Name))
+          return memoryLoadExpr(Slot.Type ? Slot.Type : E.Type,
+                                frameStorageAddress(Disp));
+    }
     if (auto Printed = printedForwardedVar(Name, ParentPrec);
         Printed != Name)
       return Printed;
@@ -2407,6 +2484,9 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     // marker so ABI tests can still see that high bits were not invented.
     return "0 /* unknown */";
   case ExprKind::BinOp:
+    if (ProjectFrameAliasesIntoStorage)
+      if (const auto Disp = certifiedFrameStorageDisplacement(E))
+        return frameStorageAddress(*Disp);
     if (auto Slot = namedFrameSlot(E))
       return "&" + *Slot;
     if (auto Member = typedMemberAddress(E))

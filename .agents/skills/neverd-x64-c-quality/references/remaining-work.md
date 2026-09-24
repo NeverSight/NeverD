@@ -15,6 +15,10 @@ analysis and comparison output belong outside the repository.
 
 ## Closed in the public SEH corpus
 
+- HighC now keeps fixed slots and indexed accesses to the same frame in one
+  byte backing store, including C++ catch funclets and SEH handlers. Public
+  buffered C++/SEH cases and a fixed-write/indexed-read regression cover the
+  shared bytes; a real second argument remains a parameter.
 - LLVMC's fallback projection now lets the final normal try block fall into a
   `seh.try.end` marker when intervening handler blocks are printed later in
   `__except` and the edge needs no PHI copy. The public `seh_probe` regression

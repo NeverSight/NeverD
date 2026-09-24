@@ -227,6 +227,8 @@ public:
   static int debugSymRichness(const FunctionSym &FS);
   static TypeRef cDisplayType(const TypeRef &Ty);
   std::optional<int64_t> frameDisplacement(const HighExpr &E) const;
+  std::optional<int64_t>
+  certifiedFrameStorageDisplacement(const HighExpr &E) const;
   std::optional<std::string> namedFrameSlot(const HighExpr &E) const;
   bool isNamedFrameMemory(const HighExpr &E) const;
   std::string constStr(uint64_t Val);
@@ -409,7 +411,13 @@ public:
     bool UsedAsMemory = false;
   };
   std::map<int64_t, NamedFrameSlot> FrameSlots;
+  /// Slot identity retained for value forwarding and catch-object recovery
+  /// after their memory representation switches to stack_storage.
+  std::map<int64_t, NamedFrameSlot> FrameStorageSlots;
   std::map<std::string, int64_t> FrameAliases;
+  /// A dynamic address derived from a known frame alias uses the same byte
+  /// storage as fixed stack accesses. Keep the alias displacement at uses.
+  bool ProjectFrameAliasesIntoStorage = false;
   /// Names assigned both a member address and a frame slot (join PHI).
   std::set<std::string> AmbiguousFrameAliases;
   std::map<std::string, std::string> CopyForward;

@@ -21450,6 +21450,61 @@ TEST(HighCPointerAddresses, CatchFuncletParentFrameStoreBecomesReturn) {
   EXPECT_NE(Source.find("return e.Value"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, DynamicIndexOnRealSecondArgumentStaysArgument) {
+  HighFunc Func;
+  Func.Name = "indexed_second_arg";
+  Func.FrameSize = 0x40;
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params = {{"index", NdType::makeInt(8, false)},
+                 {"arg1", NdType::makePtr(NdType::makeInt(1))}};
+  HighStmt IndexedStore;
+  IndexedStore.Kind = StmtKind::Store;
+  IndexedStore.StoreAddr = HighExpr::makeBinop(
+      NdOp::INT_ADD, parameter(1), parameter(0));
+  IndexedStore.StoreVal = HighExpr::makeConst(2, 1);
+  Func.Body.push_back(std::move(IndexedStore));
+
+  const std::string Source = emitFunctions({Func});
+  const size_t Body = Source.find('{');
+  ASSERT_NE(Body, std::string::npos) << Source;
+  EXPECT_NE(Source.find("arg1", Body), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, DynamicFrameReadKeepsAliasedFixedStore) {
+  HighFunc Func;
+  Func.Name = "indexed_frame_read";
+  Func.FrameSize = 64;
+  Func.ReturnType = NdType::makeInt(1);
+  Func.Params = {{"index", NdType::makeInt(8, false)}};
+  MedVar SP;
+  SP.Kind = MedVar::Reg;
+  SP.Size = 8;
+  SP.TheArch = Arch::X64;
+  SP.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+  auto SlotAddr = [&] {
+    return HighExpr::makeBinop(
+        NdOp::INT_SUB,
+        HighExpr::makeVar(SP, NdType::makeInt(8, false)),
+        HighExpr::makeConst(16, 8));
+  };
+  HighStmt FixedStore;
+  FixedStore.Kind = StmtKind::Store;
+  FixedStore.StoreAddr = SlotAddr();
+  FixedStore.StoreVal = HighExpr::makeConst(7, 1);
+  Func.Body.push_back(std::move(FixedStore));
+  HighStmt Ret;
+  Ret.Kind = StmtKind::Return;
+  Ret.RetVal = HighExpr::makeLoad(
+      HighExpr::makeBinop(NdOp::INT_ADD, SlotAddr(), parameter(0)),
+      NdType::makeInt(1));
+  Func.Body.push_back(std::move(Ret));
+
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_NE(Source.find("= 7);"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("var_m10"), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, AttachCxxFuncletBodiesDoesNotRecurseOnCyclicCatch) {
   HighFunc Parent;
   Parent.Name = "parent";
@@ -31761,6 +31816,105 @@ std::string highcOnlyFunction(BinaryImage Img, va_t Entry) {
     return {};
   OS.flush();
   return Source;
+}
+
+std::string_view sourceLineContaining(std::string_view Source,
+                                      std::string_view Needle,
+                                      size_t Start = 0) {
+  const size_t At = Source.find(Needle, Start);
+  if (At == std::string_view::npos)
+    return {};
+  const size_t PreviousLine = Source.rfind('\n', At);
+  const size_t Begin = PreviousLine == std::string_view::npos
+                           ? 0
+                           : PreviousLine + 1;
+  const size_t NextLine = Source.find('\n', At);
+  return Source.substr(Begin, NextLine == std::string_view::npos
+                                 ? Source.size() - Begin
+                                 : NextLine - Begin);
+}
+
+TEST(HighCPointerAddresses, CorpusBufferedCatchUsesParentFrameForIndex) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "cxx_eh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+  constexpr va_t Entry = 0x140001320;
+  BinaryLoadOptions Options;
+  Options.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, Options);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
+  ASSERT_FALSE(Source.empty()) << Source;
+
+  const auto Store = sourceLineContaining(Source, "= 5);");
+  const size_t Catch = Source.find("catch (const ProbeError &e)");
+  ASSERT_NE(Catch, std::string::npos) << Source;
+  const auto Load = sourceLineContaining(Source, "t31 =", Catch);
+  const auto Clear = sourceLineContaining(Source, "neverd_di =");
+  const auto Home = sourceLineContaining(Source, "= arg0);");
+  ASSERT_FALSE(Store.empty()) << Source;
+  ASSERT_FALSE(Load.empty()) << Source;
+  ASSERT_FALSE(Clear.empty()) << Source;
+  ASSERT_FALSE(Home.empty()) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_NE(Clear.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Home.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_EQ(Home.find("unknown register"), std::string_view::npos) << Source;
+  EXPECT_NE(Store.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Load.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_EQ(Source.find("var_m48"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("var_8"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("throw ProbeError(37)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("e.Value"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CorpusSehIndexedBufferUsesSameFrame) {
+  if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
+    GTEST_SKIP() << "windows-eh corpus root is not configured";
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/x86_64/fh4/no-gs/o0/abi-probe/"
+                    "seh_probe-msvc-x86_64-fh4-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+  constexpr va_t Entry = 0x1400010B0;
+  BinaryLoadOptions Options;
+  Options.OnlyFunctionEntries.insert(Entry);
+  auto Img = loadBinary(Path, Options);
+  ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
+  const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
+  ASSERT_FALSE(Source.empty()) << Source;
+
+  const auto Store = sourceLineContaining(Source, "= 3);");
+  const auto Load = sourceLineContaining(Source, "t38_3 =");
+  const auto Clear = sourceLineContaining(Source, "neverd_di =");
+  const auto Home = sourceLineContaining(Source, "= arg0);");
+  const auto ExceptStore = sourceLineContaining(Source, "+= 20;");
+  ASSERT_FALSE(Store.empty()) << Source;
+  ASSERT_FALSE(Load.empty()) << Source;
+  ASSERT_FALSE(Clear.empty()) << Source;
+  ASSERT_FALSE(Home.empty()) << Source;
+  ASSERT_FALSE(ExceptStore.empty()) << Source;
+  EXPECT_NE(Source.find("stack_storage["), std::string::npos) << Source;
+  EXPECT_NE(Clear.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Home.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_EQ(Home.find("unknown register"), std::string_view::npos) << Source;
+  EXPECT_NE(ExceptStore.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_EQ(ExceptStore.find("unknown register"), std::string_view::npos)
+      << Source;
+  EXPECT_NE(Store.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_NE(Load.find("frame_base"), std::string_view::npos) << Source;
+  EXPECT_EQ(Source.find("var_m48"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("var_8"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v0"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("v2"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__try"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__except"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, CorpusFuncLoadGsCookieIsVoidNoreturnFail) {
