@@ -2170,6 +2170,11 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
   std::function<bool(const MedVar &, int, std::set<Key>, std::set<FrameSlotKey>,
                      std::set<Key>)>
       prove;
+  // A small low-bit mask turns an unrelocated numeric immediate into a bounded
+  // index even when that immediate happens to equal an object-file data VA.
+  // Keep this context local to the mask's source walk: the same unknown
+  // constant used as an unmasked pointer still needs table-base provenance.
+  bool InBoundedNumericMask = false;
   std::function<bool(const MedVar &, int, std::set<Key>, std::set<FrameSlotKey>,
                      std::set<Key>)>
       proveUncached = [&](const MedVar &Start, int Depth, std::set<Key> Seen,
@@ -2247,10 +2252,15 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
              !codeIdentityOccurrenceMayRelocate(
                  Start, /*IncludeLayoutCodeOwners=*/false);
     }
-    if (Start.isConst())
+    if (Start.isConst()) {
+      if (InBoundedNumericMask &&
+          Start.Provenance == ConstantAddressProvenance::Unknown &&
+          !getVarMayRelocateConstant(Start.ConstVal, Start.Size))
+        return true;
       return !constantIsMappedAddress(Start.ConstVal, Start.Size)
                  ? true
                  : stableOffsetFailure("mapped-constant", Start, Depth);
+    }
     Seen.insert(keyOf(Start));
 
     if (const PhiNode *Nested = lookupPhi(Start)) {
@@ -2307,6 +2317,30 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     const MedOp *Def = lookupDef(Start);
     if (!Def)
       return true;
+    if (Def->Opcode == NdOp::INT_AND && Def->NumInputs >= 2 &&
+        Def->Output.Size == Start.Size) {
+      for (uint8_t MaskIndex = 0; MaskIndex < 2; ++MaskIndex) {
+        const MedVar &Mask = Def->Inputs[MaskIndex];
+        const MedVar &Source = Def->Inputs[MaskIndex ^ 1u];
+        // A contiguous mask of at most eight low bits cannot transport a
+        // native pointer. Require exact-width operands and a genuinely
+        // numeric mask; explicit address/relocation occurrences remain under
+        // the ordinary all-path proof even when their old VA is small.
+        if (!Mask.isConst() || Mask.Size != Start.Size ||
+            Source.Size != Start.Size || Mask.ConstVal == 0 ||
+            Mask.ConstVal > 0xff ||
+            (Mask.ConstVal & (Mask.ConstVal + 1)) != 0 ||
+            !constantIsStableAddressOffset(Mask))
+          continue;
+        const bool PreviousMaskContext = InBoundedNumericMask;
+        InBoundedNumericMask = true;
+        const bool SourceStable =
+            prove(Source, Depth + 1, Seen, ActiveFrameSlots, AnchoredPhis);
+        InBoundedNumericMask = PreviousMaskContext;
+        if (SourceStable)
+          return true;
+      }
+    }
     bool SawLoad = false;
     bool SawArithmetic = false;
     if (auto Value =
@@ -2756,7 +2790,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
       return true;
     const bool Cycle = !Start.isConst() && Seen.count(keyOf(Start));
     const auto CacheKey = addressProvenanceVarKey(Start);
-    if (!Cycle && Depth <= 128) {
+    if (!Cycle && !InBoundedNumericMask && Depth <= 128) {
       auto It = IndependentProofs.find(CacheKey);
       // A certificate obtained deeper in this same proof also fits here. A
       // shallower certificate cannot discharge a deeper use's depth budget.
@@ -2775,7 +2809,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(
     const bool Result =
         proveUncached(Start, Depth, std::move(Seen),
                       std::move(ActiveFrameSlots), std::move(AnchoredPhis));
-    if (Result && !Cycle && Depth <= 128 &&
+    if (Result && !Cycle && !InBoundedNumericMask && Depth <= 128 &&
         GenerationBefore == ContextGeneration) {
       auto [It, Inserted] = IndependentProofs.emplace(CacheKey, Depth);
       if (!Inserted)

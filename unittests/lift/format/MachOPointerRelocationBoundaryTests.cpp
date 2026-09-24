@@ -1724,7 +1724,11 @@ MedFunc makeDeepScalarIndexTableLookup(Arch TargetArch) {
   return Func;
 }
 
-MedFunc makeMaskedScalarPhiIndexLookup() {
+MedFunc
+makeMaskedScalarPhiIndexLookup(uint64_t InitialIndex = 0,
+                               uint64_t IndexMask = 0xffffffffULL,
+                               ConstantAddressProvenance InitialProvenance =
+                                   ConstantAddressProvenance::Unknown) {
   constexpr uint16_t PointerSize = 8;
   auto makeVar = [](MedVar::VarKind Kind, int Id, int SSAVer, uint16_t Size) {
     MedVar V;
@@ -1775,13 +1779,15 @@ MedFunc makeMaskedScalarPhiIndexLookup() {
   Loop.Succs = {2};
   PhiNode IndexPhi;
   IndexPhi.Output = ScalarIndex;
-  IndexPhi.Args = {{0, MedVar::makeConst(0, PointerSize)}, {2, NextIndex}};
+  IndexPhi.Args = {
+      {0, MedVar::makeConst(InitialIndex, PointerSize, InitialProvenance)},
+      {2, NextIndex}};
   Loop.Phis.push_back(std::move(IndexPhi));
   MedOp Mask;
   Mask.Opcode = NdOp::INT_AND;
   Mask.Output = MaskedIndex;
   Mask.addInput(ScalarIndex);
-  Mask.addInput(MedVar::makeConst(0xffffffffULL, PointerSize));
+  Mask.addInput(MedVar::makeConst(IndexMask, PointerSize));
   Loop.Ops.push_back(std::move(Mask));
   MedOp Scale;
   Scale.Opcode = NdOp::INT_LEFT;
@@ -9729,6 +9735,57 @@ TEST(MachOLLVMDataPointerBoundary,
               SawIntegerMask |= Integer->getZExtValue() == Mask32;
     EXPECT_TRUE(SawIntegerMask);
     EXPECT_EQ(Module->getNamedGlobal(makeNdDataSymbol(Mask32)), nullptr);
+  }
+}
+
+TEST(MachOLLVMDataPointerBoundary,
+     DistinguishesBoundedNumericCollisionFromAddressPhi) {
+  // A numeric PHI initializer can happen to lie inside a low-VA read-only
+  // object. A small runtime index remains numeric after AND 7,
+  // but an unmasked value or an explicitly relocated address may still carry
+  // an original-image pointer and must retain the fail-closed path.
+  struct Scenario {
+    uint64_t Mask;
+    ConstantAddressProvenance Provenance;
+    bool ExpectSuccess;
+  };
+  const Scenario Cases[] = {
+      {7, ConstantAddressProvenance::Unknown, true},
+      {0xffffffffULL, ConstantAddressProvenance::Unknown, false},
+      {7, ConstantAddressProvenance::DataAddress, false},
+  };
+  for (const Scenario &Case : Cases) {
+    SCOPED_TRACE(Case.Mask == 7 ? "small mask" : "pointer-width mask");
+    SCOPED_TRACE(Case.Provenance == ConstantAddressProvenance::Unknown
+                     ? "numeric immediate"
+                     : "explicit data address");
+    BinaryImage Image = makeSpilledConstTableImage(Arch::AArch64);
+    addThresholdCrossingConstTableRun(Image);
+    Image.RelocDataAddrs.insert(SpilledConstTableVA);
+    MedFunc Lookup = makeMaskedScalarPhiIndexLookup(LowSpilledConstTableVA + 7,
+                                                    Case.Mask, Case.Provenance);
+    llvm::LLVMContext Context;
+    testing::internal::CaptureStderr();
+    auto Module = MedLLVMEmitter().emit(
+        {Lookup}, Context, "macho-bounded-numeric-table-index", Arch::AArch64,
+        {}, &Image, BinaryFormat::MachO);
+    std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (!Case.ExpectSuccess) {
+      EXPECT_EQ(Module, nullptr);
+      EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
+                std::string::npos)
+          << Diagnostic;
+      continue;
+    }
+    ASSERT_NE(Module, nullptr) << Diagnostic;
+    expectValidModule(*Module);
+    llvm::Function *Function = Module->getFunction(Lookup.Name);
+    ASSERT_NE(Function, nullptr);
+    const llvm::LoadInst *TableLoad = findVolatileI16Load(*Function);
+    ASSERT_NE(TableLoad, nullptr);
+    std::set<const llvm::Value *> Seen;
+    EXPECT_TRUE(
+        valueReferencesConstantGlobal(TableLoad->getPointerOperand(), Seen));
   }
 }
 
