@@ -958,6 +958,7 @@ void HighCWriter::collectCopyForward(const HighFunc &Func) {
   // never reassigned; a loop-carried variable (`v = arg0; ... v = next;`)
   // has several definitions and must keep its own name.
   std::map<std::string, unsigned> Definitions;
+  std::map<std::string, unsigned> SlotStores;
   std::function<void(const std::vector<HighStmt> &)> CountDefinitions =
       [&](const std::vector<HighStmt> &Stmts) {
         for (const HighStmt &Stmt : Stmts) {
@@ -965,6 +966,17 @@ void HighCWriter::collectCopyForward(const HighFunc &Func) {
               (Stmt.Dst->Kind == ExprKind::Var ||
                Stmt.Dst->Kind == ExprKind::Phi))
             ++Definitions[varName(Stmt.Dst->Var)];
+          // A named frame slot stored on two paths (outgoing arguments of
+          // two calls) is not one copy either.
+          const HighExpr *SlotAddr = nullptr;
+          if (Stmt.Kind == StmtKind::Assign && Stmt.Dst &&
+              Stmt.Dst->Kind == ExprKind::Load && !Stmt.Dst->Operands.empty())
+            SlotAddr = Stmt.Dst->Operands[0].get();
+          else if (Stmt.Kind == StmtKind::Store)
+            SlotAddr = Stmt.StoreAddr.get();
+          if (SlotAddr)
+            if (auto Slot = namedFrameSlot(*SlotAddr))
+              ++SlotStores[*Slot];
           CountDefinitions(Stmt.Body);
           CountDefinitions(Stmt.ElseBody);
           for (const auto &C : Stmt.Cases)
@@ -1010,7 +1022,8 @@ void HighCWriter::collectCopyForward(const HighFunc &Func) {
                                 const HighExpr &Val) {
         if (!Slot)
           return;
-        if (Nested || SeenLoad.count(*Slot) || !isParamCopy(Val) || !Val.Type ||
+        if (Nested || SeenLoad.count(*Slot) || SlotStores[*Slot] != 1 ||
+            !isParamCopy(Val) || !Val.Type ||
             Val.Type->Kind != NdTypeKind::Int) {
           CopyForward.erase(*Slot);
           Analysis.DeadVars.erase(*Slot);

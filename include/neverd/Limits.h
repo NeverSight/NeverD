@@ -359,6 +359,10 @@ constexpr int64_t kMaxFrameSize = 16 * 1024 * 1024; // 16 MiB
 /// How many stores before a call to scan for stack-passed arguments.
 constexpr int kCallArgStoreScanWindow = 12;
 
+/// The Win64 scan window: outgoing-area stores for a many-argument call are
+/// interleaved with their address and value computations.
+constexpr int kWin64CallArgStoreScanWindow = 128;
+
 //===----------------------------------------------------------------------===//
 // Backend / code generation
 //===----------------------------------------------------------------------===//

@@ -45,8 +45,13 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
   const auto &Ops = *Scan.Ops;
   const TargetRegInfo &TRI = *Scan.TRI;
   const int64_t SlotBytes = static_cast<int64_t>(TRI.PointerSize);
-  const int StoreScanStart = std::max(0, static_cast<int>(Scan.CallIdx) -
-                                             limits::kCallArgStoreScanWindow);
+  // Win64 stores every stack argument into the outgoing area after the
+  // previous call; a 12-argument call needs far more than the default window
+  // once address arithmetic and argument computations are interleaved.
+  const int Window = isWin64(Scan) ? limits::kWin64CallArgStoreScanWindow
+                                   : limits::kCallArgStoreScanWindow;
+  const int StoreScanStart =
+      std::max(0, static_cast<int>(Scan.CallIdx) - Window);
 
   std::vector<std::pair<int64_t, MedVar>> StoredSlots;
   for (int J = static_cast<int>(Scan.CallIdx) - 1; J >= StoreScanStart; --J) {
@@ -412,12 +417,27 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   Scan.FrameSize = CurMed ? CurMed->FrameSize : 0;
   if (CurMed && LoadedEntrySlotsFor != CurMed) {
     LoadedEntrySlots.clear();
+    auto AddSlot = [&](const MedVar &V) {
+      if (auto Off = EntryOffsetOf(V))
+        LoadedEntrySlots.insert(*Off);
+    };
     for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto Off = EntryOffsetOf(Op.Inputs[0]))
-            LoadedEntrySlots.insert(*Off);
+      for (const auto &Op : Blk.Ops) {
+        if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          continue;
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
+          AddSlot(Op.Inputs[0]);
+        // A slot whose address escapes (kept in a register, stored, or
+        // passed to a callee) is a local the callee or a later load reads
+        // through that pointer, not an outgoing argument.
+        // The stack and frame pointers themselves only locate the frame.
+        if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::COPY) &&
+            Op.Output.Kind == MedVar::Reg && Op.Output.RegOff != SpRegOff &&
+            Op.Output.RegOff != TRI.FramePointer)
+          AddSlot(Op.Output);
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+          AddSlot(Op.Inputs[1]);
+      }
     LoadedEntrySlotsFor = CurMed;
   }
   Scan.LoadedEntrySlots = &LoadedEntrySlots;

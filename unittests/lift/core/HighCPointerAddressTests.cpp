@@ -3690,6 +3690,73 @@ TEST(HighCPointerAddresses, CalleeByteArgumentPassesOnlyTheByte) {
   EXPECT_NE(HighC.find("arg0"), std::string::npos) << HighC;
 }
 
+TEST(HighCPointerAddresses, Win64TwelveArgumentCallKeepsEveryStackArgument) {
+  // HalGetScatterGatherList passes twelve arguments; the outgoing-area
+  // stores span far more ops than a short scan window.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001080;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x68}; // sub rsp, 68h
+  for (uint8_t K = 0; K < 8; ++K) // mov qword [rsp+20h+8K], K+1
+    Code.insert(Code.end(),
+                {0x48, 0xc7, 0x44, 0x24, static_cast<uint8_t>(0x20 + 8 * K),
+                 static_cast<uint8_t>(K + 1), 0x00, 0x00, 0x00});
+  Code.insert(Code.end(), {0x33, 0xc9,       // xor ecx, ecx
+                           0x33, 0xd2,       // xor edx, edx
+                           0x45, 0x33, 0xc0, // xor r8d, r8d
+                           0x45, 0x33, 0xc9, // xor r9d, r9d
+                           0xe8});           // call G
+  const int32_t Rel = static_cast<int32_t>(G - (Entry + Code.size() + 4));
+  for (int I = 0; I < 4; ++I)
+    Code.push_back(static_cast<uint8_t>(Rel >> (8 * I)));
+  Code.insert(Code.end(), {0x48, 0x83, 0xc4, 0x68, 0xc3}); // add rsp; ret
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0x44, 0x24, 0x60, // mov rax, [rsp+60h]
+                           0xc3});
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "twelve";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_NE(HighC.find("twelve(0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)"),
+            std::string::npos)
+      << HighC;
+}
+
+TEST(HighCPointerAddresses, SlotStoredOnTwoPathsKeepsItsDeclaration) {
+  // Two calls on two paths store different arguments to the same outgoing
+  // slot; neither store may be forwarded away from its declaration.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001080;
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x38,       // sub rsp, 38h
+      0x85, 0xc9,                   // test ecx, ecx
+      0x74, 0x0f,                   // jz +15
+      0x4c, 0x89, 0x4c, 0x24, 0x20, // mov [rsp+20h], r9
+      0xe8, 0x6e, 0x00, 0x00, 0x00, // call G (0x140001080)
+      0x48, 0x83, 0xc4, 0x38, 0xc3, // add rsp, 38h; ret
+      0x4c, 0x89, 0x44, 0x24, 0x20, // mov [rsp+20h], r8
+      0xe8, 0x5f, 0x00, 0x00, 0x00, // call G
+      0x48, 0x83, 0xc4, 0x38, 0xc3};
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0x44, 0x24, 0x28, // mov rax, [rsp+28h]
+                           0x48, 0x03, 0xc1,             // add rax, rcx
+                           0xc3});
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "five";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  for (size_t Pos = HighC.find("var_m"); Pos != std::string::npos;
+       Pos = HighC.find("var_m", Pos + 1)) {
+    const std::string Name = HighC.substr(
+        Pos, HighC.find_first_not_of("var_m0123456789ABCDEF", Pos) - Pos);
+    EXPECT_NE(HighC.find(" " + Name + ";"), std::string::npos)
+        << Name << " is used but not declared\n"
+        << HighC;
+  }
+  EXPECT_NE(HighC.find("five(arg0, "), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.
