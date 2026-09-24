@@ -152,6 +152,35 @@ TEST(ObjCBlockCallHints, ResultUseAcrossBranchDoesNotInferBlockReturn) {
   EXPECT_TRUE(F.hints().empty());
 }
 
+TEST(ObjCBlockCallHints, TraversesIntermediateBlockWithoutInvoke) {
+  Fixture F(Arch::AArch64);
+  F.Low.Blocks.reserve(3);
+  auto InvokeOps = F.Low.Blocks[0].Ops;
+  for (auto &Op : InvokeOps)
+    Op.Addr += 0x20;
+  F.Low.Blocks[0].Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1010, 8)}, 0x1000)};
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Middle = F.Low.Blocks[1];
+  Middle.Id = 1;
+  Middle.StartAddr = 0x1010;
+  Middle.Preds = {0};
+  Middle.Succs = {2};
+  Middle.Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1010)};
+  F.Low.Blocks.emplace_back();
+  auto &Tail = F.Low.Blocks[2];
+  Tail.Id = 2;
+  Tail.StartAddr = 0x1020;
+  Tail.Preds = {1};
+  Tail.Ops = std::move(InvokeOps);
+
+  const auto Hints = F.hints();
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_TRUE(Hints.count(0x102c));
+  Middle.Ops[0].Opcode = NdOp::INTRINSIC;
+  EXPECT_TRUE(F.hints().empty());
+}
+
 TEST(ObjCBlockCallHints, FollowsUniquePredecessorToBlockInvoke) {
   Fixture F(Arch::AArch64);
   auto Pointer = NdType::makePtr(NdType::makeVoid());

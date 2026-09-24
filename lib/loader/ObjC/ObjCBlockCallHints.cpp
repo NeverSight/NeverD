@@ -587,6 +587,12 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
       Image.Bits != Bitness::Bits64 || Function.Blocks.empty() ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
     return Result;
+  bool HasIndirectCall = false;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops)
+      HasIndirectCall |= Op.Opcode == NdOp::INDIR_CALL;
+  if (!HasIndirectCall)
+    return Result;
   const LowBlock *Entry = nullptr;
   if (Function.Blocks.size() == 1) {
     Entry = &Function.Blocks.front();
@@ -650,30 +656,37 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
         continue;
       auto Extended = Path;
       Extended.push_back(Successor);
-      LowBlock Linear;
-      bool Valid = true;
-      for (size_t I = 0; I < Extended.size(); ++I) {
-        const auto *Part = Extended[I];
-        if (Linear.Ops.size() + Part->Ops.size() + 1 > 65536) {
-          Valid = false;
-          break;
+      bool HasInvoke = false;
+      for (const auto &Op : Successor->Ops)
+        HasInvoke |= Op.Opcode == NdOp::INDIR_CALL;
+      if (HasInvoke) {
+        LowBlock Linear;
+        bool Valid = true;
+        for (size_t I = 0; I < Extended.size(); ++I) {
+          const auto *Part = Extended[I];
+          if (Linear.Ops.size() + Part->Ops.size() + 1 > 65536) {
+            Valid = false;
+            break;
+          }
+          Linear.Ops.insert(Linear.Ops.end(), Part->Ops.begin(),
+                            Part->Ops.end());
+          if (I + 1 != Extended.size() &&
+              (Part->Ops.empty() ||
+               !branchTerminator(Part->Ops.back().Opcode))) {
+            LowOp Boundary;
+            Boundary.Opcode = NdOp::BRANCH;
+            Linear.Ops.push_back(std::move(Boundary));
+          }
         }
-        Linear.Ops.insert(Linear.Ops.end(), Part->Ops.begin(), Part->Ops.end());
-        if (I + 1 != Extended.size() &&
-            (Part->Ops.empty() || !branchTerminator(Part->Ops.back().Opcode))) {
-          LowOp Boundary;
-          Boundary.Opcode = NdOp::BRANCH;
-          Linear.Ops.push_back(std::move(Boundary));
+        if (!Valid)
+          continue;
+        const auto Hints = analyzeBlock(Image, Linear, EntrySignature,
+                                        BoundCalls, &Function, true);
+        for (const auto &Op : Successor->Ops) {
+          const auto Found = Hints.find(Op.Addr);
+          if (Found != Hints.end())
+            Result.emplace(*Found);
         }
-      }
-      if (!Valid)
-        continue;
-      const auto Hints = analyzeBlock(Image, Linear, EntrySignature, BoundCalls,
-                                      &Function, true);
-      for (const auto &Op : Successor->Ops) {
-        const auto Found = Hints.find(Op.Addr);
-        if (Found != Hints.end())
-          Result.emplace(*Found);
       }
       if (Paths.size() < 64)
         Paths.push_back(std::move(Extended));
