@@ -181,6 +181,54 @@ TEST(ObjCBlockCallHints, TraversesIntermediateBlockWithoutInvoke) {
   EXPECT_TRUE(F.hints().empty());
 }
 
+TEST(ObjCBlockCallHints, ProvesInvokeAcrossConvergingOrdinaryPaths) {
+  Fixture F(Arch::AArch64);
+  F.Low.Blocks.reserve(4);
+  auto InvokeOps = F.Low.Blocks[0].Ops;
+  for (auto &Op : InvokeOps) {
+    Op.Addr += 0x40;
+    for (unsigned I = 0; I < Op.NumInputs; ++I)
+      if (Op.Inputs[I].isReg() && Op.Inputs[I].Offset == F.R2)
+        Op.Inputs[I] = NdVar::reg(a64reg::X19, 8);
+  }
+  F.Low.Blocks[0].Ops = {
+      op(NdOp::COPY, NdVar::reg(a64reg::X19, 8), {NdVar::reg(F.R2, 8)}, 0x1000),
+      op(NdOp::COND_BR, {}, {NdVar::cst(0x1020, 8)}, 0x1004)};
+  F.Low.Blocks[0].Succs = {1, 2};
+  F.Low.Blocks.emplace_back();
+  auto &Left = F.Low.Blocks[1];
+  Left.Id = 1;
+  Left.StartAddr = 0x1010;
+  Left.Preds = {0};
+  Left.Succs = {3};
+  Left.Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1040, 8)}, 0x1010)};
+  F.Low.Blocks.emplace_back();
+  auto &Right = F.Low.Blocks[2];
+  Right.Id = 2;
+  Right.StartAddr = 0x1020;
+  Right.Preds = {0};
+  Right.Succs = {3};
+  Right.Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1040, 8)}, 0x1020)};
+  F.Low.Blocks.emplace_back();
+  auto &Join = F.Low.Blocks[3];
+  Join.Id = 3;
+  Join.StartAddr = 0x1040;
+  Join.Preds = {1, 2};
+  Join.Ops = std::move(InvokeOps);
+
+  const auto Hints = F.hints();
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x104c).Signature.ReturnType->Size, 4U);
+
+  Right.Ops[0].Opcode = NdOp::INTRINSIC;
+  EXPECT_TRUE(F.hints().empty());
+  Right.Ops[0].Opcode = NdOp::BRANCH;
+  ExceptionalEdge Exceptional;
+  Exceptional.BlockId = 2;
+  Join.ExceptionalPreds = {Exceptional};
+  EXPECT_TRUE(F.hints().empty());
+}
+
 TEST(ObjCBlockCallHints, FollowsUniquePredecessorToBlockInvoke) {
   Fixture F(Arch::AArch64);
   auto Pointer = NdType::makePtr(NdType::makeVoid());

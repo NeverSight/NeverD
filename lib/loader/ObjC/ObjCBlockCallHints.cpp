@@ -7,6 +7,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 
+#include <algorithm>
 #include <optional>
 #include <tuple>
 
@@ -42,6 +43,45 @@ bool overlaps(const NdVar &V, uint64_t Offset, unsigned Size) {
 }
 bool branchTerminator(NdOp Opcode) {
   return Opcode == NdOp::BRANCH || Opcode == NdOp::COND_BR;
+}
+bool sameScalarType(const TypeRef &A, const TypeRef &B) {
+  return A && B && A->Kind == B->Kind && A->Size == B->Size &&
+         A->IsSigned == B->IsSigned &&
+         (A->Kind == NdTypeKind::Void || A->Kind == NdTypeKind::Int ||
+          A->Kind == NdTypeKind::Ptr);
+}
+bool sameLocation(const SourceABIValueLocation &A,
+                  const SourceABIValueLocation &B) {
+  return A.Kind == B.Kind && A.RegisterOffset == B.RegisterOffset &&
+         A.EntryStackOffset == B.EntryStackOffset &&
+         A.ValueBytes == B.ValueBytes && A.ExtendTo32Bits == B.ExtendTo32Bits;
+}
+bool sameInferredBlockABI(const SourceCallTypeHint &A,
+                          const SourceCallTypeHint &B) {
+  if (A.CallKind != SourceCallTypeHint::Kind::BlockInvoke ||
+      B.CallKind != A.CallKind ||
+      A.Signature.Origin !=
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      B.Signature.Origin != A.Signature.Origin ||
+      A.Signature.Convention != B.Signature.Convention ||
+      A.Signature.Architecture != B.Signature.Architecture ||
+      !A.Signature.HasExplicitABI || !B.Signature.HasExplicitABI ||
+      !sameScalarType(A.Signature.ReturnType, B.Signature.ReturnType) ||
+      !sameLocation(A.Signature.ReturnLocation, B.Signature.ReturnLocation) ||
+      !A.Signature.ReturnComponents.empty() ||
+      !B.Signature.ReturnComponents.empty() ||
+      A.Signature.Parameters.size() != B.Signature.Parameters.size())
+    return false;
+  for (size_t I = 0; I < A.Signature.Parameters.size(); ++I) {
+    const auto &Left = A.Signature.Parameters[I];
+    const auto &Right = B.Signature.Parameters[I];
+    if (Left.Name != Right.Name || Left.TheRole != Right.TheRole ||
+        !sameScalarType(Left.Type, Right.Type) ||
+        !sameLocation(Left.Location, Right.Location) ||
+        !Left.Components.empty() || !Right.Components.empty())
+      return false;
+  }
+  return true;
 }
 bool noIndirectResultPointer(const LowOp &Op, Arch Architecture) {
   // Darwin arm64 passes an indirect aggregate result in X8. The observed
@@ -691,6 +731,114 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
       if (Paths.size() < 64)
         Paths.push_back(std::move(Extended));
     }
+  }
+
+  // A join can still have a single call ABI when every ordinary incoming
+  // path independently proves it. Enumerate all bounded acyclic paths back
+  // to entry; an unknown predecessor invalidates the whole proof.
+  for (const auto &Candidate : Function.Blocks) {
+    bool HasUnboundInvoke = false;
+    for (const auto &Op : Candidate.Ops)
+      HasUnboundInvoke |=
+          Op.Opcode == NdOp::INDIR_CALL && !Result.count(Op.Addr);
+    if (!HasUnboundInvoke || &Candidate == Entry)
+      continue;
+    std::vector<std::vector<const LowBlock *>> Pending{{&Candidate}};
+    std::vector<std::vector<const LowBlock *>> Incoming;
+    bool Complete = true;
+    while (!Pending.empty() && Complete) {
+      auto Reverse = std::move(Pending.back());
+      Pending.pop_back();
+      const auto *Current = Reverse.back();
+      if (Current == Entry) {
+        std::reverse(Reverse.begin(), Reverse.end());
+        Incoming.push_back(std::move(Reverse));
+        continue;
+      }
+      if (Current->Preds.empty() || !Current->ExceptionalPreds.empty() ||
+          Reverse.size() >= 64) {
+        Complete = false;
+        break;
+      }
+      std::set<int> SeenPredecessors;
+      for (const auto PredecessorId : Current->Preds) {
+        const auto It = ById.find(PredecessorId);
+        if (!SeenPredecessors.insert(PredecessorId).second ||
+            It == ById.end() ||
+            std::find(It->second->Succs.begin(), It->second->Succs.end(),
+                      Current->Id) == It->second->Succs.end()) {
+          Complete = false;
+          break;
+        }
+        const auto *Predecessor = It->second;
+        for (const auto *Ancestor : Reverse)
+          if (Ancestor == Predecessor)
+            Complete = false;
+        for (size_t I = 0; I < Predecessor->Ops.size(); ++I) {
+          const auto Opcode = Predecessor->Ops[I].Opcode;
+          if (Opcode == NdOp::INTRINSIC || Opcode == NdOp::RETURN ||
+              Opcode == NdOp::INDIR_BR ||
+              (branchTerminator(Opcode) && I + 1 != Predecessor->Ops.size()))
+            Complete = false;
+        }
+        if (!Complete)
+          break;
+        auto Extended = Reverse;
+        Extended.push_back(Predecessor);
+        Pending.push_back(std::move(Extended));
+        if (Pending.size() + Incoming.size() > 16) {
+          Complete = false;
+          break;
+        }
+      }
+    }
+    if (!Complete || Incoming.size() < 2)
+      continue;
+    std::map<va_t, SourceCallTypeHint> Common;
+    bool FirstPath = true;
+    for (const auto &Path : Incoming) {
+      LowBlock Linear;
+      for (size_t I = 0; I < Path.size(); ++I) {
+        const auto *Part = Path[I];
+        if (Linear.Ops.size() + Part->Ops.size() + 1 > 65536) {
+          Complete = false;
+          break;
+        }
+        Linear.Ops.insert(Linear.Ops.end(), Part->Ops.begin(), Part->Ops.end());
+        if (I + 1 != Path.size() &&
+            (Part->Ops.empty() || !branchTerminator(Part->Ops.back().Opcode))) {
+          LowOp Boundary;
+          Boundary.Opcode = NdOp::BRANCH;
+          Linear.Ops.push_back(std::move(Boundary));
+        }
+      }
+      if (!Complete)
+        break;
+      const auto Hints = analyzeBlock(Image, Linear, EntrySignature, BoundCalls,
+                                      &Function, true);
+      if (FirstPath) {
+        for (const auto &Op : Candidate.Ops) {
+          const auto Found = Hints.find(Op.Addr);
+          if (Op.Opcode == NdOp::INDIR_CALL && Found != Hints.end() &&
+              !Result.count(Op.Addr))
+            Common.emplace(*Found);
+        }
+        FirstPath = false;
+      } else {
+        for (auto It = Common.begin(); It != Common.end();) {
+          const auto Found = Hints.find(It->first);
+          if (Found == Hints.end() ||
+              !sameInferredBlockABI(It->second, Found->second))
+            It = Common.erase(It);
+          else
+            ++It;
+        }
+      }
+      if (Common.empty())
+        break;
+    }
+    if (Complete)
+      Result.insert(Common.begin(), Common.end());
   }
   return Result;
 }
