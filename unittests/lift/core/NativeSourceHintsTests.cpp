@@ -224,6 +224,53 @@ TEST(NativeSourceHints, UIColorIntAlphaAllocatorUsesMixedSwiftRegisters) {
                                                                   0x1000));
 }
 
+TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s3WMF15LocationManagerC014stopMonitoringB0yyF", 0x1000, 0,
+       true});
+  const auto Hint =
+      sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s3WMF15LocationManagerC014stopMonitoringB0SiyF";
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "Z";
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo15LocationManagerC3WMFE014stopMonitoringB0yyF";
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong,
+                                                                0x1000));
+}
+
 TEST(NativeSourceHints, ZeroArgClassInitializerUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
