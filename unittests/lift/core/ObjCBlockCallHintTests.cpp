@@ -282,6 +282,66 @@ TEST(ObjCBlockCallHints, BoundReleaseProvesUnobservedBlockReturn) {
                 0x1012));
   EXPECT_TRUE(
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Ops.erase(Ops.end() - 3);
+  Ops[3].Output = NdVar::reg(a64reg::X9, 8);
+  Ops[4].Inputs[0] = NdVar::reg(a64reg::X9, 8);
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+}
+
+TEST(ObjCBlockCallHints, BoundReleaseProvesDiscardedResultAcrossJoin) {
+  Fixture F(Arch::AArch64);
+  F.Low.Blocks.reserve(3);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceCallTypeHint Release;
+  Release.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
+  Release.TargetName = "objc_release";
+  Release.Signature.ReturnType = NdType::makeVoid();
+  Release.Signature.Parameters = {{"object", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Release.Signature, F.Image.Arch, Error))
+      << Error;
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1024, Release}};
+  F.Low.Blocks[0].Ops.back() =
+      op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1010);
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Join = F.Low.Blocks[1];
+  Join.Id = 1;
+  Join.StartAddr = 0x1020;
+  Join.Preds = {0, 2};
+  Join.Ops = {
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(F.R2, 8)}, 0x1020),
+      op(NdOp::CALL, {}, {NdVar::cst(0x3000, 8)}, 0x1024),
+      op(NdOp::RETURN, {}, {}, 0x1028)};
+  F.Low.Blocks.emplace_back();
+  F.Low.Blocks[2].Id = 2;
+  F.Low.Blocks[2].StartAddr = 0x1030;
+  F.Low.Blocks[2].Succs = {1};
+
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Kind, NdTypeKind::Void);
+  EXPECT_TRUE(F.hints().empty());
+  Join.Preds = {2};
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Join.Preds = {0, 2};
+  Join.Ops.insert(
+      Join.Ops.begin() + 1,
+      op(NdOp::COPY, NdVar::tmp(2, 8),
+         {NdVar::reg(getTargetRegInfo(F.Image.Arch).IntReturnRegs[1], 8)},
+         0x1022));
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Join.Ops.erase(Join.Ops.begin() + 1);
+  F.Low.Blocks[0].Ops.back().Opcode = NdOp::COND_BR;
+  F.Low.Blocks[0].Succs.push_back(2);
+  F.Low.Blocks[2].Preds = {0};
+  F.Low.Blocks[2].Ops = {op(NdOp::RETURN, {}, {}, 0x1030)};
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
 TEST(ObjCBlockCallHints, BoundIntegerMessageResultFeedsVoidBlockArgument) {

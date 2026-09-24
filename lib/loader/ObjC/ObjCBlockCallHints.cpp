@@ -3,6 +3,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 
@@ -42,6 +43,39 @@ bool overlaps(const NdVar &V, uint64_t Offset, unsigned Size) {
 bool branchTerminator(NdOp Opcode) {
   return Opcode == NdOp::BRANCH || Opcode == NdOp::COND_BR;
 }
+bool noIndirectResultPointer(const LowOp &Op, Arch Architecture) {
+  // Darwin arm64 passes an indirect aggregate result in X8. The observed
+  // invoke target in X8 rules that convention out for this call site.
+  return Architecture == Arch::AArch64 && Op.NumInputs == 1 &&
+         Op.Inputs[0].isReg() && Op.Inputs[0].Offset == a64reg::X8 &&
+         Op.Inputs[0].Size == 8;
+}
+bool boundReleaseCall(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+                      va_t Address, Arch Architecture,
+                      const TargetRegInfo &TRI) {
+  if (!BoundCalls)
+    return false;
+  const auto It = BoundCalls->find(Address);
+  if (It == BoundCalls->end())
+    return false;
+  const auto &Hint = It->second;
+  std::string Error;
+  return Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+         Hint.TargetName == "objc_release" &&
+         Hint.Signature.Architecture == Architecture &&
+         Hint.Signature.HasExplicitABI &&
+         validateSourceABI(Hint.Signature, Error) &&
+         Hint.Signature.ReturnType &&
+         Hint.Signature.ReturnType->Kind == NdTypeKind::Void &&
+         Hint.Signature.Parameters.size() == 1 &&
+         Hint.Signature.Parameters[0].Type &&
+         Hint.Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
+         Hint.Signature.Parameters[0].Location.Kind ==
+             SourceABICarrierKind::IntegerRegister &&
+         Hint.Signature.Parameters[0].Location.RegisterOffset ==
+             TRI.IntParamRegs[0] &&
+         Hint.Signature.Parameters[0].Location.ValueBytes == 8;
+}
 
 std::optional<unsigned>
 resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
@@ -60,29 +94,9 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
       // return GPR has already been overwritten, this call also clobbers the
       // volatile FP return bank. The preceding invoke result is unobserved,
       // so its source projection can use a void block prototype.
-      if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL && BoundCalls) {
-        const auto It = BoundCalls->find(Op.Addr);
-        if (It != BoundCalls->end()) {
-          const auto &Hint = It->second;
-          std::string Error;
-          if (Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
-              Hint.TargetName == "objc_release" &&
-              Hint.Signature.Architecture == Architecture &&
-              Hint.Signature.HasExplicitABI &&
-              validateSourceABI(Hint.Signature, Error) &&
-              Hint.Signature.ReturnType &&
-              Hint.Signature.ReturnType->Kind == NdTypeKind::Void &&
-              Hint.Signature.Parameters.size() == 1 &&
-              Hint.Signature.Parameters[0].Type &&
-              Hint.Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
-              Hint.Signature.Parameters[0].Location.Kind ==
-                  SourceABICarrierKind::IntegerRegister &&
-              Hint.Signature.Parameters[0].Location.RegisterOffset ==
-                  TRI.IntParamRegs[0] &&
-              Hint.Signature.Parameters[0].Location.ValueBytes == 8)
-            return 0U;
-        }
-      }
+      if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL &&
+          boundReleaseCall(BoundCalls, Op.Addr, Architecture, TRI))
+        return 0U;
       if (IntegerLive && BoundCalls) {
         const auto It = BoundCalls->find(Op.Addr);
         if (It != BoundCalls->end()) {
@@ -130,11 +144,115 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
   }
   return Width;
 }
+
+bool discardedResultAcrossCFG(
+    const BinaryImage &Image, const LowFunc &Function, va_t CallAddress,
+    const TargetRegInfo &TRI,
+    const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
+  if (Image.Arch != Arch::AArch64 || !BoundCalls ||
+      TRI.IntReturnRegs.size() < 2 || TRI.FPReturnRegs.empty() ||
+      Function.Blocks.size() > 64)
+    return false;
+  std::map<int, const LowBlock *> ById;
+  const LowBlock *CallBlock = nullptr;
+  size_t CallIndex = 0;
+  for (const auto &Block : Function.Blocks) {
+    if (Block.Id < 0 || !ById.emplace(Block.Id, &Block).second)
+      return false;
+    for (size_t I = 0; I < Block.Ops.size(); ++I)
+      if (Block.Ops[I].Opcode == NdOp::INDIR_CALL &&
+          Block.Ops[I].Addr == CallAddress) {
+        if (CallBlock)
+          return false;
+        CallBlock = &Block;
+        CallIndex = I;
+      }
+  }
+  if (!CallBlock)
+    return false;
+
+  struct Cursor {
+    const LowBlock *Block;
+    size_t Index;
+    bool Integer0Live;
+    bool Integer1Live;
+    std::set<int> Visited;
+  };
+  std::vector<Cursor> Work{
+      {CallBlock, CallIndex + 1, true, true, {CallBlock->Id}}};
+  size_t Budget = 4096;
+  while (!Work.empty()) {
+    auto State = std::move(Work.back());
+    Work.pop_back();
+    bool Released = false;
+    for (size_t I = State.Index; I < State.Block->Ops.size(); ++I) {
+      if (!Budget--)
+        return false;
+      const auto &Op = State.Block->Ops[I];
+      if (Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::INDIR_BR ||
+          Op.Opcode == NdOp::RETURN)
+        return false;
+      for (unsigned J = 0; J < Op.NumInputs; ++J) {
+        const auto &Input = Op.Inputs[J];
+        if ((State.Integer0Live && overlaps(Input, TRI.IntReturnReg, 8)) ||
+            (State.Integer1Live && overlaps(Input, TRI.IntReturnRegs[1], 8)))
+          return false;
+        for (const auto FPRegister : TRI.FPReturnRegs)
+          if (overlaps(Input, FPRegister, 16))
+            return false;
+      }
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (Op.Opcode != NdOp::CALL || State.Integer0Live ||
+            !boundReleaseCall(BoundCalls, Op.Addr, Image.Arch, TRI))
+          return false;
+        Released = true;
+        break;
+      }
+      auto Kills = [&](uint64_t Register) {
+        return Op.Output.isReg() && Op.Output.Offset == Register &&
+               (Op.Output.Size >= 8 ||
+                (Op.Output.Size == 4 &&
+                 TRI.writeZeroExtends(Op.Output.Offset, Op.Output.Size)));
+      };
+      State.Integer0Live &= !Kills(TRI.IntReturnReg);
+      State.Integer1Live &= !Kills(TRI.IntReturnRegs[1]);
+      if (branchTerminator(Op.Opcode)) {
+        if (I + 1 != State.Block->Ops.size())
+          return false;
+        break;
+      }
+    }
+    if (Released)
+      continue;
+    if (State.Block->Succs.empty())
+      return false;
+    for (const auto SuccessorId : State.Block->Succs) {
+      const auto It = ById.find(SuccessorId);
+      if (It == ById.end() || State.Visited.count(SuccessorId) ||
+          !It->second->ExceptionalPreds.empty())
+        return false;
+      bool HasPredecessor = false;
+      for (const auto PredecessorId : It->second->Preds)
+        HasPredecessor |= PredecessorId == State.Block->Id;
+      if (!HasPredecessor)
+        return false;
+      auto Next = State;
+      Next.Block = It->second;
+      Next.Index = 0;
+      Next.Visited.insert(SuccessorId);
+      Work.push_back(std::move(Next));
+      if (Work.size() > 64)
+        return false;
+    }
+  }
+  return true;
+}
+
 std::map<va_t, SourceCallTypeHint>
 analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
              const SourceFunctionTypeHint *EntrySignature,
              const std::map<va_t, SourceCallTypeHint> *BoundCalls,
-             bool FollowValidatedBranches) {
+             const LowFunc *WholeFunction, bool FollowValidatedBranches) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Block.Ops.size() > 65536)
     return Result;
@@ -222,6 +340,13 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         if (!Signature) {
           auto ReturnBytes =
               resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
+          if (!ReturnBytes && WholeFunction &&
+              discardedResultAcrossCFG(Image, *WholeFunction, Op.Addr, TRI,
+                                       BoundCalls))
+            ReturnBytes = 0U;
+          if (ReturnBytes && *ReturnBytes == 0 &&
+              !noIndirectResultPointer(Op, Image.Arch))
+            ReturnBytes.reset();
           if (ReturnBytes) {
             SourceFunctionTypeHint Inferred;
             Inferred.Origin =
@@ -477,7 +602,8 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
   }
   if (!Entry || !Entry->Preds.empty() || !Entry->ExceptionalPreds.empty())
     return Result;
-  Result = analyzeBlock(Image, *Entry, EntrySignature, BoundCalls, false);
+  Result =
+      analyzeBlock(Image, *Entry, EntrySignature, BoundCalls, &Function, false);
   if (Function.Blocks.size() == 1 || Function.Blocks.size() > 64)
     return Result;
 
@@ -542,8 +668,8 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
       }
       if (!Valid)
         continue;
-      const auto Hints =
-          analyzeBlock(Image, Linear, EntrySignature, BoundCalls, true);
+      const auto Hints = analyzeBlock(Image, Linear, EntrySignature, BoundCalls,
+                                      &Function, true);
       for (const auto &Op : Successor->Ops) {
         const auto Found = Hints.find(Op.Addr);
         if (Found != Hints.end())
