@@ -26,10 +26,16 @@ def noescape_attribute(pretty):
 # encodings as well as compiler/export agreement across every profile.
 # https://github.com/apple-oss-distributions/libdispatch/blob/main/dispatch/queue.h
 # https://developer.apple.com/documentation/dispatch/dispatch_after
+# https://developer.apple.com/documentation/dispatch/dispatch_group_async
+# https://developer.apple.com/documentation/dispatch/dispatch_group_notify
+# https://developer.apple.com/documentation/dispatch/dispatch_source_set_event_handler
 COPYING_CONSUMERS = {
     'dispatch_after': ('v24Q0@8@?16', 2, 'v8@?0'),
     'dispatch_async': ('v16@0@?8', 1, 'v8@?0'),
     'dispatch_barrier_async': ('v16@0@?8', 1, 'v8@?0'),
+    'dispatch_group_async': ('v24@0@8@?16', 2, 'v8@?0'),
+    'dispatch_group_notify': ('v24@0@8@?16', 2, 'v8@?0'),
+    'dispatch_source_set_event_handler': ('v16@0@?8', 1, 'v8@?0'),
 }
 
 

@@ -31,6 +31,17 @@ class DarwinBlockDeclarationTests(unittest.TestCase):
                                         ('v16@0@?8', 1, 'v8@?0')]:
             self.assertIsNone(block_lifetime('dispatch_after', parent, index,
                                               callback, ''))
+        for name in ('dispatch_group_async', 'dispatch_group_notify'):
+            self.assertEqual(block_lifetime(name, 'v24@0@8@?16', 2,
+                                            'v8@?0', ''), 'Copied')
+            self.assertIsNone(block_lifetime(name, 'v24@0@8@?16', 1,
+                                              'v8@?0', ''))
+            self.assertIsNone(block_lifetime(name, 'v24@0@8@?16', 2,
+                                              'i8@?0', ''))
+        self.assertEqual(block_lifetime('dispatch_source_set_event_handler',
+                                        'v16@0@?8', 1, 'v8@?0', ''), 'Copied')
+        self.assertIsNone(block_lifetime('dispatch_source_set_event_handler',
+                                          'v16@0@?8', 0, 'v8@?0', ''))
         for name in ('dispatch_async', 'dispatch_barrier_async'):
             self.assertEqual(block_lifetime(name, 'v16@0@?8', 1, 'v8@?0', ''), 'Copied')
             for parent, index, callback in [('v16@0@?8', 0, 'v8@?0'),
