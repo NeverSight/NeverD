@@ -145,11 +145,14 @@ alone cannot create that fact. The binding names the import slot, while the
 call names the veneer. Inferred native effects are still recomputed from the
 current graph, and source publication revalidates the import identity.
 
-Native two-word integer returns are requested by an observed complete read of
+Native two-word integer returns are requested by an observed low-prefix read of
 the second return register after an exact direct call in the same LowIR block.
-An intervening call, intrinsic or overlapping register write ends that demand;
-the demand itself proves no ABI. Both result registers must independently pass
-the existing bounded MedIR return-path proof. The candidate then uses an
+The read may be narrower than a word, but an intervening call, intrinsic or
+overlapping register write ends the demand. Demand also follows a one-block
+direct tail forwarder whose last operations are an adjacent call and return of
+the first result word. Neither observation nor forwarding proves an ABI: both
+result registers must independently pass the existing bounded MedIR
+return-path proof. The candidate then uses an
 internal two-field record and the shared `ReturnComponents` lowering for calls
 and returns. A later dependency iteration may extend an inferred native scalar
 contract when its second word becomes provable; external and declared source
