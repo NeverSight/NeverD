@@ -261,13 +261,13 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
         auto Inputs = swiftBooleanRuntimeInputs(Candidate->ImportName);
         if (!Inputs)
           return {};
-        // Other raw Boolean calls establish only their inputs. No result byte
-        // is declared defined: in particular, i1 must not become a byte ABI.
+        // Other raw Boolean calls establish their inputs and bit 0 of x0.
+        // Their higher result bits remain unknown: i1 is not a byte ABI.
         const auto [It, Inserted] =
             RawInputs.emplace(*Site, std::move(*Inputs));
-        if (!Inserted ||
-            !Calls.emplace(*Site, SourceBooleanOtherCallContract{&It->second})
-                 .second)
+        SourceBooleanOtherCallContract Contract{&It->second};
+        Contract.DefinesRawBooleanBit0 = true;
+        if (!Inserted || !Calls.emplace(*Site, Contract).second)
           return {};
         Selected.push_back(SwiftBooleanProjection{{&Low, *Site}, *Candidate});
         continue;
@@ -297,8 +297,9 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
       }
       if (swift_boolean_projection_detail::fixedObjectMessage(Image, *Site,
                                                               Hint->second)) {
-        Calls.emplace(*Site,
-                      SourceBooleanOtherCallContract{&Hint->second.Signature});
+        SourceBooleanOtherCallContract Contract{&Hint->second.Signature};
+        Contract.OverwritesObjCCommand = true;
+        Calls.emplace(*Site, Contract);
         continue;
       }
       if (!Slot ||

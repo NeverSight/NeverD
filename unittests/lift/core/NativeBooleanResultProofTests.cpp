@@ -674,6 +674,62 @@ TEST(NativeBooleanResultProof,
   EXPECT_FALSE(F.prove());
 }
 
+TEST(NativeBooleanResultProof,
+     SelectorStubOverwritesOnlyItsCommandRegister) {
+  Fixture F;
+  SourceFunctionTypeHint Message;
+  Message.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+  Message.ReturnType = NdType::makePtr(NdType::makeVoid());
+  for (unsigned I = 0; I < 3; ++I)
+    Message.Parameters.push_back(
+        {"arg" + std::to_string(I), NdType::makePtr(NdType::makeVoid())});
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Message, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  F.linear({call(), copy(a64reg::X8, a64reg::X0),
+            mask(a64reg::X0, a64reg::X0), copy(a64reg::X1, a64reg::X8),
+            constant(a64reg::X0, 0), constant(a64reg::X2, 0),
+            call(0x3000), ret()});
+  auto &Contract = F.Calls.begin()->second;
+  Contract.Signature = &Message;
+  EXPECT_FALSE(F.prove());
+  Contract.OverwritesObjCCommand = true;
+  EXPECT_TRUE(F.prove());
+  F.Low.Blocks.front().Ops[5] = copy(a64reg::X2, a64reg::X8);
+  F.Low.Blocks.front().Ops[5].Addr = 0x1014;
+  EXPECT_FALSE(F.prove());
+  F.Low.Blocks.front().Ops[5] = constant(a64reg::X2, 0);
+  F.Low.Blocks.front().Ops[5].Addr = 0x1014;
+  Message.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  EXPECT_FALSE(F.prove());
+}
+
+TEST(NativeBooleanResultProof, OtherRawBooleanCallDefinesOnlyBitZero) {
+  Fixture F;
+  SourceFunctionTypeHint Inputs;
+  Inputs.ReturnType = NdType::makeVoid();
+  Inputs.Parameters = {{"lhs", NdType::makePtr(NdType::makeVoid())},
+                       {"rhs", NdType::makePtr(NdType::makeVoid())}};
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Inputs, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  F.linear({call(), copy(a64reg::X8, a64reg::X0),
+            constant(a64reg::X0, 0), constant(a64reg::X1, 0),
+            call(0x3000), mask(a64reg::X0, a64reg::X0), ret()});
+  auto &Contract = F.Calls.begin()->second;
+  Contract.Signature = &Inputs;
+  EXPECT_FALSE(F.prove());
+  Contract.DefinesRawBooleanBit0 = true;
+  EXPECT_TRUE(F.prove());
+  F.Low.Blocks.front().Ops[5] = mask(a64reg::X0, a64reg::X0, 2);
+  F.Low.Blocks.front().Ops[5].Addr = 0x1014;
+  EXPECT_FALSE(F.prove());
+  F.Low.Blocks.front().Ops[5] = mask(a64reg::X0, a64reg::X0);
+  F.Low.Blocks.front().Ops[5].Addr = 0x1014;
+  Inputs.ReturnType = NdType::makeInt(1, false);
+  EXPECT_FALSE(F.prove());
+}
+
 TEST(NativeBooleanResultProof, RejectsMalformedGraphsOperationsAndContracts) {
   for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
     SCOPED_TRACE(Mutation);

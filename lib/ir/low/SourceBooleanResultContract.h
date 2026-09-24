@@ -52,6 +52,12 @@ struct SourceBooleanOtherCallContract {
   // No ABI fact: all physical state must be identical at this occurrence.
   // This never defines result bytes or grants source-binding permission.
   bool RequiresIdenticalState = false;
+  // An authenticated Objective-C selector stub overwrites x1 with its fixed
+  // selector before dispatch, so the caller's old x1 is not an ABI input.
+  bool OverwritesObjCCommand = false;
+  // An authenticated raw Swift i1 call defines only bit 0 of x0. Its void
+  // input signature must never become a source-level byte-return ABI.
+  bool DefinesRawBooleanBit0 = false;
 };
 } // namespace neverd
 #endif

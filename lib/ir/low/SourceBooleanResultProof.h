@@ -220,6 +220,10 @@ struct Transfer {
                        : sourceABIParameters(*It->second.Signature);
         for (const auto &Parameter : Parameters) {
           const auto &Location = Parameter.Location;
+          if (!IsSelected && It->second.OverwritesObjCCommand &&
+              Location.Kind == SourceABICarrierKind::IntegerRegister &&
+              Location.RegisterOffset == TRI.IntParamRegs[1])
+            continue;
           // Differing stores are forbidden and SP is identical above, so
           // stack arguments observe the same memory.
           if (Location.Kind != SourceABICarrierKind::Stack &&
@@ -257,6 +261,9 @@ struct Transfer {
         ClearResult(It->second.Signature->ReturnLocation);
         for (const auto &Location : It->second.Signature->ReturnComponents)
           ClearResult(Location);
+        if (It->second.DefinesRawBooleanBit0)
+          put(Registers, TRI.IntReturnReg,
+              lookup(Registers, TRI.IntReturnReg) & uint8_t(0xfe));
         continue;
       }
       if (Op.Opcode == NdOp::RETURN) {
@@ -481,7 +488,8 @@ proveSourceBooleanResultNormalization(
         *Key.StaticTarget == Function.Entry || Contract.DoesNotReturn)
       return std::nullopt;
     if (Contract.RequiresIdenticalState) {
-      if (Contract.Signature)
+      if (Contract.Signature || Contract.OverwritesObjCCommand ||
+          Contract.DefinesRawBooleanBit0)
         return std::nullopt;
       continue;
     }
@@ -490,6 +498,30 @@ proveSourceBooleanResultNormalization(
         Contract.Signature->ReturnLocation.Kind ==
             SourceABICarrierKind::IndirectResultPointer ||
         !validateSourceABI(*Contract.Signature, Error))
+      return std::nullopt;
+    if (Contract.OverwritesObjCCommand) {
+      const auto &Signature = *Contract.Signature;
+      if (Signature.Origin != SourceFunctionTypeHint::OriginKind::ObjCSDK ||
+          Signature.Parameters.size() < 2 ||
+          Signature.Parameters[1].Location.Kind !=
+              SourceABICarrierKind::IntegerRegister ||
+          Signature.Parameters[1].Location.RegisterOffset !=
+              getTargetRegInfo(Architecture).IntParamRegs[1] ||
+          Signature.Parameters[1].Location.ValueBytes != 8 ||
+          Signature.Parameters[1].Location.ExtendTo32Bits ||
+          !Signature.Parameters[1].Components.empty())
+        return std::nullopt;
+    }
+    if (Contract.DefinesRawBooleanBit0 &&
+        (Contract.OverwritesObjCCommand ||
+         Contract.Signature->Convention !=
+             SourceFunctionTypeHint::ConventionKind::Swift ||
+         !Contract.Signature->HasExplicitABI ||
+         !Contract.Signature->ReturnType ||
+         Contract.Signature->ReturnType->Kind != NdTypeKind::Void ||
+         Contract.Signature->ReturnLocation.Kind !=
+             SourceABICarrierKind::None ||
+         !Contract.Signature->ReturnComponents.empty()))
       return std::nullopt;
   }
   std::map<int, size_t> Ids;
