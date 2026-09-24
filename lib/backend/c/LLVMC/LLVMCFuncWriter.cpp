@@ -37,6 +37,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -2155,6 +2156,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   EHBoundaryBlocks.clear();
   EHSkippedMainBlocks.clear();
   EHMainBlock = nullptr;
+  EHInvokeNormalGotos.clear();
   EHFallthroughLabelCandidates.clear();
   OmitCleanupRetTo.clear();
   PhiTailSlot = nullptr;
@@ -8538,37 +8540,120 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     }
     const llvm::Instruction *HandlerTerm =
         Handler ? Handler->getTerminator() : nullptr;
-    const auto *HandlerBr = llvm::dyn_cast_or_null<llvm::UncondBrInst>(HandlerTerm);
+    const auto *HandlerBr =
+        llvm::dyn_cast_or_null<llvm::UncondBrInst>(HandlerTerm);
     bool Ok = FirstCont && !InvokeBlocks.empty() && HandlerTerm &&
               ((HandlerBr && HandlerBr->getSuccessor(0) == FirstCont &&
                 !edgePrintsPhiCopy(Handler, FirstCont)) ||
                llvm::isa<llvm::ReturnInst>(HandlerTerm));
+    llvm::SmallVector<const llvm::BasicBlock *, 16> MainWalk;
+    if (Ok)
+      for (const llvm::BasicBlock &BB : Fn)
+        if (!SkipInTry.contains(&BB) && !AfterWrap.contains(&BB) &&
+            (&BB == &Fn.getEntryBlock() || !llvm::pred_empty(&BB)) &&
+            !isPrintPassthrough(&BB) && !FoldedJoinArms.count(&BB) &&
+            !InlinedFallthroughBlocks.count(&BB) &&
+            !ConditionChainBodies.count(&BB) &&
+            !DuplicatedAssignBlocks.count(&BB) &&
+            !backEdgeCallBeforeHeader(&BB))
+          MainWalk.push_back(&BB);
     bool HasNormalExit = false;
+    std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> NeedGoto;
     if (Ok) {
       for (const llvm::BasicBlock *InvokeBB : InvokeBlocks) {
         const auto *Invoke =
             llvm::cast<llvm::InvokeInst>(InvokeBB->getTerminator());
-        if (Invoke->getNormalDest() == FirstCont) {
-          HasNormalExit = true;
-          continue;
-        }
-        // One recovered clause can protect several disjoint ranges.  Earlier
-        // invokes continue within the try; only the last exit needs to reach
-        // the shared normal/handler continuation after the whole statement.
-        if (!TryRegion.count(Invoke->getNormalDest())) {
+        const bool ExitsTry = Invoke->getNormalDest() == FirstCont;
+        HasNormalExit |= ExitsTry;
+        if (!ExitsTry && !TryRegion.count(Invoke->getNormalDest())) {
           Ok = false;
           break;
+        }
+        const llvm::BasicBlock *NormalDest = Invoke->getNormalDest();
+        llvm::SmallPtrSet<const llvm::BasicBlock *, 8> PassthroughSeen;
+        while (NormalDest && isPrintPassthrough(NormalDest)) {
+          if (!PassthroughSeen.insert(NormalDest).second) {
+            Ok = false;
+            break;
+          }
+          const llvm::BasicBlock *Next =
+              NormalDest->getTerminator()->getSuccessor(0);
+          if (edgePrintsPhiCopy(NormalDest, Next)) {
+            Ok = false;
+            break;
+          }
+          NormalDest = Next;
+        }
+        if (!Ok)
+          break;
+        const auto It = std::find(MainWalk.begin(), MainWalk.end(), InvokeBB);
+        if (It == MainWalk.end() || !NormalDest ||
+            (ExitsTry ? !AfterWrap.count(NormalDest)
+                      : std::find(MainWalk.begin(), MainWalk.end(),
+                                  NormalDest) == MainWalk.end())) {
+          Ok = false;
+          break;
+        }
+        if (!ExitsTry) {
+          // The invoke printer falls through after the call and PHI copies.
+          // Preserve an internal normal edge that is not the next statement.
+          if (std::next(It) == MainWalk.end() || *std::next(It) != NormalDest)
+            NeedGoto.emplace(InvokeBB, NormalDest);
+          continue;
+        }
+        // A normal exit can fall through the end of __try only if every
+        // remaining main-walk block is an empty EH boundary marker. Otherwise
+        // jump to the continuation after the entire __except statement.
+        if (NormalDest != FirstCont)
+          NeedGoto.emplace(InvokeBB, NormalDest);
+        for (auto Later = std::next(It); Later != MainWalk.end(); ++Later) {
+          const auto *End =
+              SehRangeInvoke(**Later, llvm::Intrinsic::seh_try_end);
+          bool EmptyEnd = End && End->getNormalDest() == FirstCont &&
+                          !edgePrintsPhiCopy(*Later, FirstCont);
+          if (EmptyEnd)
+            for (const llvm::Instruction &Inst : **Later)
+              if (&Inst != End && instructionIsPrinted(Inst)) {
+                EmptyEnd = false;
+                break;
+              }
+          if (!EmptyEnd) {
+            NeedGoto.emplace(InvokeBB, NormalDest);
+            break;
+          }
         }
       }
     }
     Ok = Ok && HasNormalExit;
+    if (Ok)
+      for (const auto &[_, Target] : NeedGoto) {
+        const llvm::BasicBlock *LoopLatch = nullptr;
+        const llvm::BasicBlock *LoopExit = nullptr;
+        const llvm::BasicBlock *LoopBody = nullptr;
+        const llvm::AllocaInst *LoopSlot = nullptr;
+        const llvm::BasicBlock *SplitLatch = nullptr;
+        const llvm::BasicBlock *SplitStep = nullptr;
+        const llvm::AllocaInst *SplitSlot = nullptr;
+        if (FoldedJoinArms.count(Target) ||
+            InlinedFallthroughBlocks.count(Target) ||
+            ConditionChainBodies.count(Target) ||
+            DuplicatedAssignBlocks.count(Target) ||
+            isPrintPassthrough(Target) ||
+            backEdgeCallBeforeHeader(Target) ||
+            cursorForLoop(Target, LoopLatch, LoopExit, LoopBody, LoopSlot) ||
+            splitPhiCursorLoop(Target, SplitLatch, SplitStep, SplitSlot)) {
+          // A printed goto needs a label at the actual continuation.  These
+          // blocks are consumed by another rendering path and have no label.
+          Ok = false;
+          break;
+        }
+      }
     if (Ok) {
       for (const llvm::BasicBlock *BB : AfterWrap) {
         bool Any = false;
         for (const llvm::BasicBlock *Pred : llvm::predecessors(BB)) {
           Any = true;
-          const bool FromInvoke =
-              InvokeBlocks.count(Pred) && BB == FirstCont;
+          const bool FromInvoke = InvokeBlocks.count(Pred) && BB == FirstCont;
           const bool FromHandler = Pred == Handler && BB == FirstCont;
           const bool FromCont = AfterWrap.count(Pred);
           if (!FromInvoke && !FromHandler && !FromCont) {
@@ -8582,6 +8667,11 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     }
     if (!Ok)
       AfterWrap.clear();
+    else {
+      EHInvokeNormalGotos.insert(NeedGoto.begin(), NeedGoto.end());
+      for (const auto &[_, Target] : NeedGoto)
+        ReferencedBlocks.insert(Target);
+    }
   }
 
   if (!UseRanges && AfterWrap.empty() && EHWraps.size() == 1 &&
@@ -8840,9 +8930,23 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   EHFallthroughLabels.reserve(EHFallthroughLabelCandidates.size());
   for (const llvm::BasicBlock *BB : EHFallthroughLabelCandidates)
     EHFallthroughLabels.push_back(blockLabel(BB));
-  OS << dropUnreferencedFallthroughEHLabels(
+  const std::string Final = dropUnreferencedFallthroughEHLabels(
       dropUnusedCallDecls(std::move(Buffered), DropNames),
       EHFallthroughLabels);
+  for (const auto &[_, Target] : EHInvokeNormalGotos) {
+    const std::string Name = blockLabel(Target);
+    for (const auto &[Block, OtherName] : BlockLabels)
+      if (Block != Target && OtherName == Name)
+        llvm::report_fatal_error(
+            "LLVMC EH invoke normal target label is ambiguous");
+    const std::string Label = "\n" + Name + ":\n";
+    const size_t First = Final.find(Label);
+    if (First == std::string::npos ||
+        Final.find(Label, First + Label.size()) != std::string::npos)
+      llvm::report_fatal_error(
+          "LLVMC EH invoke normal target has no unique emitted label");
+  }
+  OS << Final;
 }
 
 } // namespace neverd

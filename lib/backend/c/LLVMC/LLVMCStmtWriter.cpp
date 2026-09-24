@@ -4659,6 +4659,11 @@ void LLVMCWriter::writeInvoke(llvm::InvokeInst &Invoke, const std::string &Name,
         break;
       KnownImmediates.erase(Phi);
     }
+    if (auto It = EHInvokeNormalGotos.find(Invoke.getParent());
+        It != EHInvokeNormalGotos.end()) {
+      emitIndent(Indent);
+      OS << "goto " << blockLabel(It->second) << ";\n";
+    }
   }
 }
 

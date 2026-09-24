@@ -1271,6 +1271,86 @@ TEST(COFFExceptionIR, LLVMCExceptContinuationFollowsHandler) {
       << Source;
 }
 
+TEST(COFFExceptionIR, LLVMCProjectsNonAdjacentInvokeNormalEdges) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-except-exit-order", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType =
+      llvm::FunctionType::get(I32, /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::FunctionType *FnType =
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnType, llvm::GlobalValue::ExternalLinkage, "seh_exit_order", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *AfterStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCondBr(Function->getArg(0), Exit, Inside);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Exit, Dispatch);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  JoinBuilder.CreateCall(AfterStep);
+  JoinBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_exit_order(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ExitAt = Source.find("exit_step();", BodyAt);
+  const auto InsideAt = Source.find("inside_step();", BodyAt);
+  const auto AfterAt = Source.find("after_step();", BodyAt);
+  const auto ExceptAt = Source.find("} __except (", BodyAt);
+  const auto ExitGotoAt = Source.find("goto L_join;", ExitAt);
+  const auto InsideGotoAt = Source.find("goto L_exit;", InsideAt);
+  ASSERT_NE(ExitAt, std::string::npos) << Source;
+  ASSERT_NE(InsideAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(ExitGotoAt, std::string::npos) << Source;
+  ASSERT_NE(InsideGotoAt, std::string::npos) << Source;
+  EXPECT_LT(ExitAt, InsideAt) << Source;
+  EXPECT_LT(ExitGotoAt, InsideAt) << Source;
+  EXPECT_LT(InsideGotoAt, ExceptAt) << Source;
+  EXPECT_LT(ExceptAt, AfterAt) << Source;
+  EXPECT_NE(Source.find("L_exit:", BodyAt), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_join:", BodyAt), std::string::npos) << Source;
+}
+
 TEST(COFFExceptionIR, LLVMCFinallyWrapContainsCleanupBody) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-seh-finally-body", Context);

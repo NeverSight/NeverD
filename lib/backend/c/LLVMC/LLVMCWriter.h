@@ -686,6 +686,9 @@ public:
   std::set<const llvm::BasicBlock *> EHSkippedMainBlocks;
   /// Current block of that walk; recursive handler/structured prints differ.
   const llvm::BasicBlock *EHMainBlock = nullptr;
+  /// Non-fallthrough normal invoke edges in a projected SEH try body.
+  std::map<const llvm::BasicBlock *, const llvm::BasicBlock *>
+      EHInvokeNormalGotos;
   /// Try-end labels whose normal incoming branch was actually printed as
   /// fallthrough. Other printed references are checked after rendering.
   std::set<const llvm::BasicBlock *> EHFallthroughLabelCandidates;
