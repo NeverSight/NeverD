@@ -462,16 +462,22 @@ swiftMangledZeroArgClassVoidMethodSourceABI(const BinaryImage &Image,
   const auto &Function = Parsed.Root->Children[0];
   const auto &Owner = Function.Children[0];
   const auto &Type = Function.Children[2];
+  const auto Identifier = [](const Node &N) {
+    return N.Kind == "Identifier" && N.Text && !N.Text->empty() && !N.Index &&
+           N.Children.empty();
+  };
+  const auto &Member = Function.Children[1];
+  const bool NamedMember =
+      Identifier(Member) ||
+      (Shape(Member, "PrivateDeclName", 2) && Identifier(Member.Children[0]) &&
+       Identifier(Member.Children[1]));
   if (!Shape(Owner, "Class", 2) || Owner.Children[0].Kind != "Module" ||
       !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
       Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
       Owner.Children[1].Kind != "Identifier" || !Owner.Children[1].Text ||
       Owner.Children[1].Text->empty() || Owner.Children[1].Index ||
-      !Owner.Children[1].Children.empty() ||
-      Function.Children[1].Kind != "Identifier" || !Function.Children[1].Text ||
-      Function.Children[1].Text->empty() || Function.Children[1].Index ||
-      !Function.Children[1].Children.empty() || !Shape(Type, "Type", 1) ||
-      !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Owner.Children[1].Children.empty() || !NamedMember ||
+      !Shape(Type, "Type", 1) || !Shape(Type.Children[0], "FunctionType", 2) ||
       !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",

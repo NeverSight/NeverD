@@ -249,6 +249,16 @@ TEST(NativeSourceHints, ZeroArgClassVoidMethodUsesSwiftSelf) {
   std::string Error;
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
+  auto Private = Image;
+  Private.Symbols[0].Name = "_$s3WMF18AlignedImageButtonC12adjustInsets33_"
+                            "2AE2377B0A7FC7A2DEBED24238BE2C37LLyyF";
+  const auto PrivateHint =
+      sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Private, 0x1000);
+  ASSERT_TRUE(PrivateHint);
+  ASSERT_EQ(PrivateHint->Parameters.size(), 1U);
+  EXPECT_EQ(PrivateHint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*PrivateHint, Error)) << Error;
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name = "_$s3WMF15LocationManagerC014stopMonitoringB0SiyF";
   EXPECT_FALSE(sdk::swiftMangledZeroArgClassVoidMethodSourceABI(Wrong, 0x1000));
