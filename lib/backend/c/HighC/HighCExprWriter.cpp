@@ -356,7 +356,7 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
 }
 
 std::optional<std::string>
-HighCWriter::namedFrameSlot(const HighExpr &E) const {
+HighCWriter::namedFrameSlot(const HighExpr &E, const TypeRef &Access) const {
   const auto Disp = frameDisplacement(E);
   if (!Disp)
     return std::nullopt;
@@ -365,6 +365,9 @@ HighCWriter::namedFrameSlot(const HighExpr &E) const {
     return std::nullopt;
   if (!It->second.Interior.empty())
     return It->second.Interior;
+  if (Access && Access->Size && It->second.Type &&
+      Access->Size < It->second.Type->Size)
+    return "(*(" + memoryTypeName(Access) + " *)&" + It->second.Name + ")";
   return It->second.Name;
 }
 

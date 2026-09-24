@@ -4265,3 +4265,25 @@ TEST(HighCPointerAddresses, ByteStoreInsideAWiderSlotChangesThatSlot) {
       << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses, NarrowStoreToAWiderSlotChangesOnlyItsBytes) {
+  // A byte stored at the start of an eight-byte slot leaves the other seven
+  // bytes as they were; the later eight-byte read sees both.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+      0x48, 0x89, 0x4c, 0x24, 0x08, // mov [rsp+8], rcx
+      0x88, 0x54, 0x24, 0x08,       // mov [rsp+8], dl
+      0x48, 0x8d, 0x4c, 0x24, 0x08, // lea rcx, [rsp+8]
+      0xe8, 0x0b, 0x00, 0x00, 0x00, // call use
+      0x48, 0x8b, 0x44, 0x24, 0x08, // mov rax, [rsp+8]
+      0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+      0xc3,                         // ret
+      0xc3};                        // use: ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_TRUE(
+      std::regex_search(HighC, std::regex(R"(\(\*\(int8_t \*\)&var_\w+\) =)")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}

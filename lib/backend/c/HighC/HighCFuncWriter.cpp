@@ -648,7 +648,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     Grew = FrameAliases != Before;
   }
   auto Note = [&](const HighExpr *Addr, const TypeRef &Ty,
-                  bool AddressTaken = false) {
+                  bool AddressTaken = false, bool IsStore = false) {
     if (!Addr)
       return;
     const auto Disp = frameDisplacement(*Addr);
@@ -670,6 +670,9 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     }
     if (Ty && (!Slot.Type || Ty->Size > Slot.Type->Size))
       Slot.Type = Ty;
+    if (IsStore && Ty && Ty->Size &&
+        (!Slot.MinStoreSize || Ty->Size < Slot.MinStoreSize))
+      Slot.MinStoreSize = Ty->Size;
   };
   // A frame displacement used as a value prints as `&var_N`. Mark it
   // address-taken so copy-forward/DeadVars cannot drop the declaration.
@@ -681,7 +684,8 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
       return;
     }
     if (E.Kind == ExprKind::Store && E.Operands.size() >= 2) {
-      Note(E.Operands[0].get(), E.Operands[1] ? E.Operands[1]->Type : nullptr);
+      Note(E.Operands[0].get(), E.Operands[1] ? E.Operands[1]->Type : nullptr,
+           /*AddressTaken=*/false, /*IsStore=*/true);
       if (E.Operands[0])
         Walk(*E.Operands[0], true);
       if (E.Operands[1])
@@ -712,10 +716,12 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     for (const HighStmt &S : Stmts) {
       if (!Analysis.DeadStmts.count(&S) && !stmtHiddenFromC(S)) {
         if (S.Kind == StmtKind::Store && S.StoreAddr)
-          Note(S.StoreAddr.get(), S.StoreVal ? S.StoreVal->Type : nullptr);
+          Note(S.StoreAddr.get(), S.StoreVal ? S.StoreVal->Type : nullptr,
+               /*AddressTaken=*/false, /*IsStore=*/true);
         if (S.Kind == StmtKind::Assign && S.Dst &&
             S.Dst->Kind == ExprKind::Load && !S.Dst->Operands.empty())
-          Note(S.Dst->Operands[0].get(), S.Dst->Type);
+          Note(S.Dst->Operands[0].get(), S.Dst->Type, /*AddressTaken=*/false,
+               /*IsStore=*/true);
         if (S.StoreAddr)
           Walk(*S.StoreAddr, true);
         if (S.StoreVal)
@@ -775,6 +781,11 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     SharedFrameStorage.insert(Slot.Interior);
     SharedFrameStorage.insert(Slot.Outer);
   }
+  // A store narrower than its slot changes only some of the slot's bytes.
+  for (auto &[Disp, Slot] : FrameSlots)
+    if (Slot.Interior.empty() && Slot.MinStoreSize &&
+        Slot.MinStoreSize < Slot.Type->Size)
+      SharedFrameStorage.insert(Slot.Name);
   for (auto &[Disp, Slot] : FrameSlots)
     if (SharedFrameStorage.count(Slot.Name))
       Slot.AddressTaken = true;

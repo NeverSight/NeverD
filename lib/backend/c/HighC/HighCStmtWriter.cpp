@@ -227,7 +227,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
         return;
       if (Stmt.Dst->MemoryOrdering == NdMemoryOrdering::None &&
           Stmt.Dst->MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Slot = namedFrameSlot(*Stmt.Dst->Operands[0])) {
+        if (auto Slot =
+                namedFrameSlot(*Stmt.Dst->Operands[0], Stmt.Dst->Type)) {
           if (isCompilerEHConstant(*Stmt.Val))
             break;
           if (isParamCopy(*Stmt.Val)) {
@@ -246,7 +247,10 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
           TypeRef ProjectedDestType = Stmt.Dst->Type;
           if (auto Disp = frameDisplacement(*Stmt.Dst->Operands[0])) {
             auto ProjectedSlot = FrameSlots.find(*Disp);
-            if (ProjectedSlot != FrameSlots.end() && ProjectedSlot->second.Type)
+            if (ProjectedSlot != FrameSlots.end() &&
+                ProjectedSlot->second.Type &&
+                !(ProjectedDestType &&
+                  ProjectedDestType->Size < ProjectedSlot->second.Type->Size))
               ProjectedDestType = ProjectedSlot->second.Type;
           }
           if (ProjectedDestType && ProjectedDestType->Kind == NdTypeKind::Ptr)
@@ -333,7 +337,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       break;
     if (Stmt.MemoryOrdering == NdMemoryOrdering::None &&
         Stmt.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-      if (auto Slot = namedFrameSlot(*Stmt.StoreAddr)) {
+      if (auto Slot = namedFrameSlot(*Stmt.StoreAddr, Stmt.StoreVal->Type)) {
         if (isParamCopy(*Stmt.StoreVal)) {
           if (auto Src = copyForwardSource(*Stmt.StoreVal)) {
             auto It = CopyForward.find(*Slot);
@@ -350,7 +354,9 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
         TypeRef ProjectedDestType = Stmt.StoreVal->Type;
         if (auto Disp = frameDisplacement(*Stmt.StoreAddr)) {
           auto ProjectedSlot = FrameSlots.find(*Disp);
-          if (ProjectedSlot != FrameSlots.end() && ProjectedSlot->second.Type)
+          if (ProjectedSlot != FrameSlots.end() && ProjectedSlot->second.Type &&
+              !(ProjectedDestType &&
+                ProjectedDestType->Size < ProjectedSlot->second.Type->Size))
             ProjectedDestType = ProjectedSlot->second.Type;
         }
         if (ProjectedDestType && ProjectedDestType->Kind == NdTypeKind::Ptr)

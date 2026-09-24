@@ -130,7 +130,11 @@ public:
   bool pointerNeedsIntegerView(const TypeRef &Ty) const;
   const HighExpr *unwrapIntegerView(const HighExpr *E) const;
   std::optional<int64_t> frameDisplacement(const HighExpr &E) const;
-  std::optional<std::string> namedFrameSlot(const HighExpr &E) const;
+  /// The C lvalue for the frame slot at \p E.  When \p Access is narrower
+  /// than the slot, the access goes through the slot's address so it
+  /// changes only those bytes.
+  std::optional<std::string> namedFrameSlot(const HighExpr &E,
+                                            const TypeRef &Access = {}) const;
   bool isNamedFrameMemory(const HighExpr &E) const;
   std::string constStr(uint64_t Val);
   std::string formatReturnExpr(const HighExpr &Expr);
@@ -226,6 +230,8 @@ public:
     /// and this slot's access through it, `(*(T *)((char *)&outer + k))`.
     std::string Outer;
     std::string Interior;
+    /// Width of the narrowest store at this displacement, 0 if none.
+    unsigned MinStoreSize = 0;
   };
   std::map<int64_t, NamedFrameSlot> FrameSlots;
   std::map<std::string, int64_t> FrameAliases;
