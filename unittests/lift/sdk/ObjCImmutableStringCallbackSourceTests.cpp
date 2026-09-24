@@ -562,4 +562,59 @@ int main(void) {
 )C";
   execute(Source);
 }
+
+TEST(ObjCImmutableStringCallbackSources,
+     ExecutedAddressorCallbackInitializesOnceAndRetainsCopiedWord) {
+  AddressorCallbackFixture F;
+  auto P =
+      projectObjCImmutableStringCallback(F.high(), F.Image, F.Result, F.Once);
+  ASSERT_TRUE(P);
+  P->Function.Name = "initialize_string";
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::MachO;
+  Options.EmitComments = false;
+  std::string Source = "#include <string.h>\n";
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({P->Function}, OS, Options));
+  std::set<std::string> Helpers;
+  Source +=
+      renderObjCLocalStorageHelpers(F.Image, P->LocalStorageExtents, Helpers);
+  std::map<va_t, const HighFunc *> Functions;
+  for (const auto &H : F.Result.HighFuncs)
+    Functions.emplace(H.Entry, &H);
+  Source += renderSwiftOnceAddressorHelpers(F.Image, P->SwiftOnceAccessors,
+                                            F.Once, Functions, Helpers);
+  Source += R"C(
+static unsigned initializations;
+static unsigned retentions;
+static int mismatch;
+void neverd_swift_once(void *predicate, void (*initializer)(void *), void *context) {
+  ++initializations;
+  initializer(context);
+  *(intptr_t *)predicate = -1;
+}
+void neverd_swift_once_initializer_1400(void *context) {
+  uint64_t *words = (uint64_t *)(uintptr_t)neverd_local_storage_2020_address();
+  mismatch |= context != (void *)(uintptr_t)neverd_local_storage_2010_address();
+  words[0] = UINT64_C(0x1122334455667788);
+  words[1] = UINT64_C(0x8877665544332211);
+}
+void *swift_bridgeObjectRetain(void *value) {
+  uint64_t words[2];
+  memcpy(words, (void *)neverd_local_storage_2000_address(), sizeof(words));
+  mismatch |= words[0] != UINT64_C(0x1122334455667788);
+  mismatch |= words[1] != UINT64_C(0x8877665544332211);
+  mismatch |= (uintptr_t)value != words[1];
+  ++retentions;
+  return value;
+}
+int main(void) {
+  initialize_string((void *)0x1234);
+  initialize_string((void *)0x5678);
+  return mismatch || initializations != 1 || retentions != 2;
+}
+)C";
+  execute(Source);
+}
 } // namespace
