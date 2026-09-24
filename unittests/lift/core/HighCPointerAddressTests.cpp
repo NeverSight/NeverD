@@ -3785,6 +3785,39 @@ TEST(HighCPointerAddresses, EntryLoopHeaderKeepsLoopCarriedValue) {
   EXPECT_NE(LLVMC.find("+ 8"), std::string::npos) << LLVMC;
 }
 
+TEST(HighCPointerAddresses, LabeledCodeAfterFastFailKeepsItsLabel) {
+  // VmpFreeMemoryRanges: the loop exit lands on code placed right after
+  // `int 29h`.  That code is reached by a goto, so its label must survive.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x53,             // push rbx
+                                     0x48, 0x8b, 0xd9, // mov rbx, rcx
+                                     0x48, 0x8b, 0x0b, // loop: mov rcx, [rbx]
+                                     0x48, 0x3b, 0xcb, // cmp rcx, rbx
+                                     0x74, 0x15,       // je done
+                                     0x48, 0x39, 0x59, 0x08, // cmp [rcx+8], rbx
+                                     0x75, 0x08,             // jne fail
+                                     0x48, 0x8b, 0x09,       // mov rcx, [rcx]
+                                     0x48, 0x89, 0x0b,       // mov [rbx], rcx
+                                     0xeb, 0xea,             // jmp loop
+                                     0xb9, 0x03, 0x00, 0x00,
+                                     0x00,             // fail: mov ecx, 3
+                                     0xcd, 0x29,       // int 29h
+                                     0x48, 0x8b, 0xc3, // done: mov rax, rbx
+                                     0x5b,             // pop rbx
+                                     0xc3};            // ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__fastfail(3)"), std::string::npos) << HighC;
+  std::smatch Goto;
+  for (auto It = HighC.cbegin(); std::regex_search(
+           It, HighC.cend(), Goto, std::regex(R"(goto (L_\w+);)"));
+       It = Goto.suffix().first)
+    EXPECT_NE(HighC.find(Goto[1].str() + ":"), std::string::npos)
+        << Goto[1] << " has no label\n"
+        << HighC;
+  EXPECT_NE(HighC.find("return"), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.

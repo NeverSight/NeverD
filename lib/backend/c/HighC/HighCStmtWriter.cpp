@@ -739,8 +739,20 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
 void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
   va_t LastLabel = InvalidVA;
   bool AfterNoReturn = false;
+  // A goto can still reach a statement placed after a noreturn call (the
+  // `ret` that follows `int 29h`), so a labeled one is live code.
+  std::function<bool(const HighStmt &)> CarriesLabel = [&](const HighStmt &S) {
+    if (S.Addr != 0 && S.Addr != InvalidVA && GotoTargets.count(S.Addr))
+      return true;
+    for (const HighStmt &Child : S.Body)
+      if (CarriesLabel(Child))
+        return true;
+    return false;
+  };
   for (size_t I = 0; I < Stmts.size(); ++I) {
     const HighStmt &S = Stmts[I];
+    if (AfterNoReturn && CarriesLabel(S))
+      AfterNoReturn = false;
     if (AfterNoReturn &&
         (isDebugTrapStmt(S) || S.Kind == StmtKind::Return ||
          S.Kind == StmtKind::Nop ||
