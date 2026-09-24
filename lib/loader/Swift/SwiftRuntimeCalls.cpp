@@ -358,16 +358,33 @@ bool declaredStdlibABI(const BinaryImage &Image, va_t Slot,
   constexpr llvm::StringLiteral AssertionFailure =
       "$ss17_assertionFailure__4file4line5flagss5NeverOs12StaticStringV_"
       "SSAHSus6UInt32VtF";
+  constexpr llvm::StringLiteral StringRangeSubscript =
+      "$sSSySsSnySS5IndexVGcig";
   const auto Bind = Image.DyldBindSlots.find(Slot);
-  if (Name != AssertionFailure || Bind == Image.DyldBindSlots.end() ||
-      Bind->second.Module != "/usr/lib/swift/libswiftCore.dylib")
+  if (Bind == Image.DyldBindSlots.end() ||
+      Bind->second.Module != "/usr/lib/swift/libswiftCore.dylib" ||
+      (Name != AssertionFailure && Name != StringRangeSubscript) ||
+      (Name == StringRangeSubscript && Image.Arch != Arch::AArch64))
     return false;
 
   auto &Signature = Hint.Signature;
   Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftSDK;
   const auto Word = NdType::makeInt(8, false);
-  const auto Byte = NdType::makeInt(1, false);
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  if (Name == StringRangeSubscript) {
+    // Swift 6.1.2 arm64 client IR: swiftcc { i64, i64, i64, ptr }
+    // (i64, i64, i64, ptr). The range precedes the String value; neither
+    // its four-word result nor its storage can be collapsed to a pointer.
+    Signature.ReturnType =
+        NdType::makeStruct({Word, Word, Word, Pointer});
+    Signature.Parameters = {{"lower", Word}, {"upper", Word},
+                            {"string_bits", Word},
+                            {"string_storage", Pointer}};
+    Hint.SwiftStringInputs = {{2, 3}};
+    std::string Diagnostic;
+    return assignDarwinSwiftSourceABI(Signature, Image.Arch, Diagnostic);
+  }
+  const auto Byte = NdType::makeInt(1, false);
   Signature.ReturnType = NdType::makeVoid();
   // Compiler IR lowers the two StaticString values to (i64, i64, i8), the
   // String value to (i64, ptr), followed by UInt and UInt32. This is a fixed

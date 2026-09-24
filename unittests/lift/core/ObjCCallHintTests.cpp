@@ -1384,6 +1384,80 @@ TEST(ObjCCallHints, FoundationNSNotFoundGetterRequiresExactStrongImport) {
   }
 }
 
+TEST(ObjCCallHints, SwiftStringRangeSubscriptKeepsFourWordResultABI) {
+  constexpr llvm::StringLiteral Name = "$sSSySsSnySS5IndexVGcig";
+  constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
+  auto Image = runtimeImage("_" + Name.str());
+  Image.DyldBindSlots[0x2180] = {"_" + Name.str(), 0, Provider.str(), false};
+  const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+  EXPECT_EQ(Hint->TargetName, Name);
+  EXPECT_EQ(Hint->SwiftStringInputs,
+            (std::vector<std::pair<unsigned, unsigned>>{{2, 3}}));
+  const auto &ABI = Hint->Signature;
+  EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+  EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  ASSERT_TRUE(ABI.ReturnType);
+  EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Struct);
+  EXPECT_EQ(ABI.ReturnType->Size, 32U);
+  ASSERT_EQ(ABI.ReturnType->Fields.size(), 4U);
+  ASSERT_EQ(ABI.ReturnComponents.size(), 4U);
+  ASSERT_EQ(ABI.Parameters.size(), 4U);
+  for (size_t I = 0; I < 4; ++I) {
+    EXPECT_EQ(ABI.ReturnComponents[I].Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.ReturnComponents[I].RegisterOffset, I * 8);
+    EXPECT_EQ(ABI.Parameters[I].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+  }
+  EXPECT_EQ(ABI.ReturnType->Fields[3]->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(ABI.Parameters[3].Type->Kind, NdTypeKind::Ptr);
+  std::string Diagnostic;
+  EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+  std::vector<ExprPtr> Arguments;
+  for (const auto &Parameter : ABI.Parameters) {
+    auto Argument = HighExpr::makeConst(0, Parameter.Type->Size);
+    Argument->Type = Parameter.Type;
+    Arguments.push_back(std::move(Argument));
+  }
+  auto Call = HighExpr::makeCall(Name.str(), 0x2180, std::move(Arguments));
+  Call->Type = ABI.ReturnType;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+  HighFunc Function;
+  Function.Entry = 0x1200;
+  Function.Name = "slice_string";
+  Function.ReturnType = ABI.ReturnType;
+  Function.SourceTypeHint = ABI;
+  for (size_t I = 0; I < ABI.Parameters.size(); ++I)
+    Function.Params.push_back({ABI.Parameters[I].Name,
+                               ABI.Parameters[I].Type});
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  Function.Body = {Return};
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::MachO;
+  EXPECT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+  EXPECT_NE(Source.find("slice_string"), std::string::npos);
+  EXPECT_NE(Source.find("swiftcall"), std::string::npos);
+  Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Image, {}));
+  Image.DyldBindSlots[0x2180].Module = Provider.str();
+  Image.DyldBindSlots[0x2180].WeakImport = true;
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  auto X64 = runtimeImage("_" + Name.str(), Arch::X64);
+  X64.DyldBindSlots[0x2180] = {"_" + Name.str(), 0, Provider.str(), false};
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
+}
+
 TEST(ObjCCallHints, FoundationValueBridgesKeepCompilerObservedSwiftABI) {
   enum class Shape {
     IndirectFromObjC,
