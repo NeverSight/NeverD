@@ -148,6 +148,30 @@ bool boundReleaseAwayFromResult(
          TRI.IntReturnRegs.size() >= 2 && *Register != TRI.IntReturnRegs[0] &&
          *Register != TRI.IntReturnRegs[1];
 }
+bool boundVoidObjCMessage(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+                          va_t Address, Arch Architecture) {
+  if (Architecture != Arch::AArch64 || !BoundCalls)
+    return false;
+  const auto It = BoundCalls->find(Address);
+  if (It == BoundCalls->end())
+    return false;
+  const auto &Hint = It->second;
+  std::string Error;
+  if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      Hint.Signature.Architecture != Architecture ||
+      Hint.Signature.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+      !Hint.Signature.HasExplicitABI ||
+      !validateSourceABI(Hint.Signature, Error) || !Hint.Signature.ReturnType ||
+      Hint.Signature.ReturnType->Kind != NdTypeKind::Void ||
+      !Hint.Signature.ReturnComponents.empty())
+    return false;
+  for (const auto &Parameter : Hint.Signature.Parameters)
+    if (!Parameter.Type || !scalar(Parameter.Type) ||
+        Parameter.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+        !Parameter.Components.empty())
+      return false;
+  return true;
+}
 
 std::optional<unsigned>
 resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
@@ -155,6 +179,8 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
             const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
   std::optional<unsigned> Width;
   bool IntegerLive = true;
+  bool SecondIntegerLive =
+      Architecture == Arch::AArch64 && TRI.IntReturnRegs.size() >= 2;
   bool FloatingLive = true;
   for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
     const auto &Op = Block.Ops[I];
@@ -195,11 +221,16 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
             return std::max(Width.value_or(0), 8U);
         }
       }
+      if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL &&
+          boundVoidObjCMessage(BoundCalls, Op.Addr, Architecture))
+        return 0U;
       return Width;
     }
     for (unsigned J = 0; J < Op.NumInputs; ++J) {
       const auto &V = Op.Inputs[J];
       if (FloatingLive && overlaps(V, TRI.FPReturnReg, 16))
+        return std::nullopt;
+      if (SecondIntegerLive && overlaps(V, TRI.IntReturnRegs[1], 8))
         return std::nullopt;
       if (IntegerLive && V.isReg() && V.Offset == TRI.IntReturnReg &&
           width(V.Size))
@@ -207,6 +238,8 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
     }
     if (overlaps(Op.Output, TRI.IntReturnReg, 8))
       IntegerLive = false;
+    if (SecondIntegerLive && overlaps(Op.Output, TRI.IntReturnRegs[1], 8))
+      SecondIntegerLive = false;
     if (overlaps(Op.Output, TRI.FPReturnReg, 16))
       FloatingLive = false;
     if (Op.Opcode == NdOp::RETURN) {
@@ -282,6 +315,11 @@ bool discardedResultAcrossCFG(
         if (Op.Opcode == NdOp::CALL &&
             boundReleaseAwayFromResult(BoundCalls, Op.Addr, Image.Arch, TRI))
           continue;
+        if (Op.Opcode == NdOp::CALL && !State.Integer0Live &&
+            boundVoidObjCMessage(BoundCalls, Op.Addr, Image.Arch)) {
+          Released = true;
+          break;
+        }
         if (Op.Opcode != NdOp::CALL || State.Integer0Live ||
             !boundReleaseCall(BoundCalls, Op.Addr, Image.Arch, TRI))
           return false;
