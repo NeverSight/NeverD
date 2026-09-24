@@ -127,7 +127,9 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
       (Hint.ReturnType->Kind == NdTypeKind::Int && Hint.ReturnType->Size == 16))
     return true;
   const auto Members = sourceAggregateMembers(Hint.ReturnType);
-  return !Members.empty() && Members.size() <= 2 &&
+  return !Members.empty() &&
+         (Members.size() <= 2 ||
+          (Architecture == Arch::AArch64 && Members.size() == 4)) &&
          std::all_of(Members.begin(), Members.end(),
                      [&](const auto &M) { return Word(M.Type); });
 }
@@ -211,7 +213,7 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
       }))
     return {};
   const bool FullWords =
-      Result.size() <= 3 &&
+      Result.size() <= 4 &&
       std::all_of(Result.begin(), Result.end(),
                   [&](const auto &Member) {
                     return Member.Type->Kind != NdTypeKind::Float &&
@@ -353,13 +355,18 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (Members.empty() || Parts.size() != Members.size())
       return false;
     const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
-    if (!Floating && Members.size() > 2)
+    const bool SwiftFourWordReturn =
+        IsReturn && !Floating &&
+        Hint.Convention == SourceFunctionTypeHint::ConventionKind::Swift &&
+        Hint.Architecture == Arch::AArch64 && Members.size() == 4;
+    if (!Floating && Members.size() > 2 && !SwiftFourWordReturn)
       return false;
     if (Floating && Hint.Architecture != Arch::AArch64)
       return false;
-    const auto Bank = Floating   ? TRI.FPParamRegs
-                      : IsReturn ? TRI.IntReturnRegs
-                                 : TRI.IntParamRegs;
+    const auto Bank = Floating              ? TRI.FPParamRegs
+                      : SwiftFourWordReturn ? TRI.IntParamRegs
+                      : IsReturn            ? TRI.IntReturnRegs
+                                            : TRI.IntParamRegs;
     const auto Start =
         std::find(Bank.begin(), Bank.end(), Parts.front().RegisterOffset);
     const bool Stack = Parts.front().Kind == SourceABICarrierKind::Stack;
@@ -571,7 +578,13 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     if (Members.empty())
       return fail(Diagnostic, "Unsupported Darwin record return ABI");
     const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
-    const auto Bank = Floating ? TRI.FPParamRegs : TRI.IntReturnRegs;
+    const bool SwiftFourWordReturn =
+        !Floating &&
+        Convention == SourceFunctionTypeHint::ConventionKind::Swift &&
+        Architecture == Arch::AArch64 && Members.size() == 4;
+    const auto Bank = Floating              ? TRI.FPParamRegs
+                      : SwiftFourWordReturn ? TRI.IntParamRegs
+                                            : TRI.IntReturnRegs;
     const bool Indirect =
         !Floating && Members.size() == 3 && Architecture == Arch::AArch64 &&
         Convention == SourceFunctionTypeHint::ConventionKind::C;

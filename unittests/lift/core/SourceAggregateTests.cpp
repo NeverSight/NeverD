@@ -443,6 +443,63 @@ TEST(SourceAggregate,
   }
 }
 
+TEST(SourceAggregate, SwiftFourWordCallPreservesEveryReturnCarrier) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Record = NdType::makeStruct({Word, Word, Word, Word});
+  SourceFunctionTypeHint Hint;
+  Hint.ReturnType = Record;
+  std::string Error;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error)) << Error;
+
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "swift_four_word_call";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = 0x1000;
+  Block.EndAddr = 0x1008;
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x1000;
+  Call.addInput(NdVar::cst(0x2000, 8));
+  LowOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = 0x1004;
+  Block.Ops = {Call, Return};
+  Low.Blocks = {Block};
+  std::map<va_t, SourceFunctionTypeHint> Hints{{0x1000, Hint}, {0x2000, Hint}};
+  LowToMedConverter Converter;
+  Converter.setSourceCallHintsEnabled(true);
+  Converter.setSourceCalleeTypeHints(&Hints);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  ASSERT_FALSE(Med.Blocks.empty());
+  ASSERT_FALSE(Med.Blocks.front().Ops.empty());
+  const auto &BoundCall = Med.Blocks.front().Ops.front();
+  ASSERT_TRUE(BoundCall.SourceCallHint);
+  EXPECT_EQ(BoundCall.Output.Size, 32U);
+  std::map<uint64_t, uint16_t> Extracts;
+  for (const auto &Operation : Med.Blocks.front().Ops)
+    if (Operation.Opcode == NdOp::SUBBYTES && Operation.NumInputs == 2 &&
+        Operation.Inputs[0] == BoundCall.Output &&
+        Operation.Inputs[1].isConst())
+      Extracts.emplace(Operation.Inputs[1].ConstVal, Operation.Output.Size);
+  EXPECT_EQ(Extracts,
+            (std::map<uint64_t, uint16_t>{{0, 8}, {8, 8}, {16, 8}, {24, 8}}));
+
+  Med.SourceTypeHint = Hint;
+  recoverCallAbi(Med, Arch::AArch64, {});
+  inferMedTypes(Med, Arch::AArch64);
+  const auto High = MedToHighConverter().convert(Med, Arch::AArch64);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  OS.flush();
+  EXPECT_NE(C.find("swiftcall"), std::string::npos) << C;
+  EXPECT_NE(C.find("field_3"), std::string::npos) << C;
+}
+
 TEST(SourceAggregate, WordRecordSpillsKeepArchitectureSpecificBankState) {
   const auto Word = NdType::makeInt(8, false);
   for (Arch A : {Arch::AArch64, Arch::X64})

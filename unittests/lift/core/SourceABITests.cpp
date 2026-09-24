@@ -325,6 +325,43 @@ TEST(SourceABI, SwiftWordCallsKeepConventionAndRejectUnmodelledResults) {
   }
 }
 
+TEST(SourceABI, SwiftArm64FourWordResultRequiresExactReturnBank) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceFunctionTypeHint Hint;
+  Hint.ReturnType = NdType::makeStruct({Word, Pointer, Word, Pointer});
+  Hint.Parameters = {{"arg", Word}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error)) << Error;
+  ASSERT_TRUE(validateSourceABI(Hint, Error)) << Error;
+  EXPECT_EQ(Hint.ReturnType->Size, 32U);
+  ASSERT_EQ(Hint.ReturnComponents.size(), 4U);
+  const auto &Registers = getTargetRegInfo(Arch::AArch64).IntParamRegs;
+  for (size_t I = 0; I < 4; ++I) {
+    EXPECT_EQ(Hint.ReturnComponents[I].Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(Hint.ReturnComponents[I].RegisterOffset, Registers[I]);
+    EXPECT_EQ(Hint.ReturnComponents[I].ValueBytes, 8U);
+  }
+  for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+    auto Invalid = Hint;
+    if (Mutation == 0)
+      Invalid.ReturnComponents[2].RegisterOffset = Registers[4];
+    if (Mutation == 1)
+      Invalid.ReturnComponents[3].ValueBytes = 4;
+    if (Mutation == 2)
+      Invalid.ReturnComponents.pop_back();
+    if (Mutation == 3)
+      Invalid.Convention = SourceFunctionTypeHint::ConventionKind::C;
+    if (Mutation == 4)
+      Invalid.ReturnComponents[1].ExtendTo32Bits = true;
+    EXPECT_FALSE(validateSourceABI(Invalid, Error)) << Mutation;
+  }
+  auto Unsupported = Hint;
+  EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::X64, Error));
+  EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+}
+
 TEST(SourceABI, SwiftScalarArgumentsKeepNarrowAndStackCarriers) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
     const auto &TRI = getTargetRegInfo(Architecture);
