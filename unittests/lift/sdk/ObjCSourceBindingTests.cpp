@@ -762,7 +762,8 @@ struct SwiftWitnessAccessorFixture {
   static constexpr va_t MetadataSlot = 0x4028;
   static constexpr va_t RuntimeSlot = 0x4030;
 
-  explicit SwiftWitnessAccessorFixture(Arch Architecture) {
+  explicit SwiftWitnessAccessorFixture(Arch Architecture,
+                                       bool SubstringSequence = false) {
     Image.Format = BinaryFormat::MachO;
     Image.Arch = Architecture;
     Image.Bits = Bitness::Bits64;
@@ -790,23 +791,30 @@ struct SwiftWitnessAccessorFixture {
     Data.VA = Data.FileOff = 0x4000;
     Data.Flags = Mapping.Flags;
     Image.Sections.push_back(Data);
-    Image.Symbols.push_back({"_$sS2SSysWL", Cache, 8, false});
-    Image.Symbols.push_back({"_$sS2SSysWl", AccessorAddress, 0x40, true});
-    Image.ImportPtrSlots[ConformanceSlot] = "_$sSSSysMc";
-    Image.ImportPtrSlots[MetadataSlot] = "_$sSSN";
+    const char *CacheName =
+        SubstringSequence ? "_$sS2sSTsWL" : "_$sS2SSysWL";
+    const char *AccessorName =
+        SubstringSequence ? "_$sS2sSTsWl" : "_$sS2SSysWl";
+    const char *Conformance =
+        SubstringSequence ? "_$sSsSTsMc" : "_$sSSSysMc";
+    const char *Metadata = SubstringSequence ? "_$sSsN" : "_$sSSN";
+    Image.Symbols.push_back({CacheName, Cache, 8, false});
+    Image.Symbols.push_back({AccessorName, AccessorAddress, 0x40, true});
+    Image.ImportPtrSlots[ConformanceSlot] = Conformance;
+    Image.ImportPtrSlots[MetadataSlot] = Metadata;
     Image.ImportPtrSlots[RuntimeSlot] = "_swift_getWitnessTable";
-    EXPECT_TRUE(Image.recordDyldBindSlot(ConformanceSlot, "_$sSSSysMc", 0,
+    EXPECT_TRUE(Image.recordDyldBindSlot(ConformanceSlot, Conformance, 0,
                                          "/usr/lib/swift/libswiftCore.dylib",
                                          false));
     EXPECT_TRUE(Image.recordDyldBindSlot(
-        MetadataSlot, "_$sSSN", 0, "/usr/lib/swift/libswiftCore.dylib", false));
+        MetadataSlot, Metadata, 0, "/usr/lib/swift/libswiftCore.dylib", false));
     EXPECT_TRUE(Image.recordDyldBindSlot(RuntimeSlot, "_swift_getWitnessTable",
                                          0, "/usr/lib/swift/libswiftCore.dylib",
                                          false));
 
     const auto Pointer = NdType::makePtr(NdType::makeVoid());
     Accessor.Entry = AccessorAddress;
-    Accessor.Name = "_$sS2SSysWl";
+    Accessor.Name = AccessorName;
     Accessor.ReturnType = Pointer;
     MedVar CachedVar;
     CachedVar.Kind = MedVar::Temp;
@@ -929,6 +937,33 @@ TEST(ObjCSourceBindings, SwiftWitnessAccessorRebuildsZeroArgumentCacheHelper) {
               std::string::npos);
     EXPECT_NE(Source.find("(void *)0"), std::string::npos);
     EXPECT_NE(Source.find("__ATOMIC_RELEASE"), std::string::npos);
+  }
+}
+
+TEST(ObjCSourceBindings, SubstringSequenceWitnessKeepsExactMetadataPair) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SwiftWitnessAccessorFixture F(Architecture, true);
+    const std::map<va_t, const HighFunc *> Functions{
+        {F.Accessor.Entry, &F.Accessor}};
+    const auto Result =
+        bindObjCSourceReferences(F.Caller, F.Image, nullptr, &Functions);
+    ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+    EXPECT_TRUE(Result.Dependencies.empty());
+    EXPECT_EQ(Result.SwiftWitnessCaches,
+              (std::map<va_t, va_t>{{F.Cache, F.Accessor.Entry}}));
+    std::set<std::string> Helpers;
+    const auto Source = renderObjCSwiftWitnessCacheHelpers(
+        F.Image, Result.SwiftWitnessCaches, Functions, Helpers);
+    EXPECT_NE(Source.find("__asm__(\"_$sSsSTsMc\")"),
+              std::string::npos);
+    EXPECT_NE(Source.find("__asm__(\"_$sSsN\")"), std::string::npos);
+    EXPECT_NE(Source.find("(void *)0"), std::string::npos);
+
+    F.Image.ImportPtrSlots[F.MetadataSlot] = "_$sSSN";
+    F.Image.ImportStorageSlots[F.MetadataSlot].Name = "_$sSSN";
+    F.Image.DyldBindSlots[F.MetadataSlot].Name = "_$sSSN";
+    EXPECT_FALSE(sdk::objc_binding_detail::swiftWitnessAccessorCallHint(
+        F.Accessor, F.Image));
   }
 }
 

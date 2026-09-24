@@ -107,7 +107,7 @@ def witness_storage(ir, probes, metadata):
     return result
 
 
-def conformance_storage(ir, probes, metadata):
+def conformance_storage(ir, probes, metadata, protocol="StringProtocol"):
     """Read descriptors used by compiler-generated lazy witness accessors.
 
     The named probe must call a zero-argument accessor and pass its result to
@@ -127,12 +127,16 @@ def conformance_storage(ir, probes, metadata):
             r'ptr @swift_getWitnessTable\(ptr, ptr, ptr\)'
             r'(?: local_unnamed_addr)?(?: #[0-9]+)?', runtime[0]):
         raise ValueError("witness accessor has an unexpected runtime ABI")
+    generic_name = {"StringProtocol": "neverd_string_protocol_probe",
+                    "Sequence": "neverd_sequence_probe"}.get(protocol)
+    if not generic_name:
+        raise ValueError("unsupported conformance probe")
     generic = re.findall(
-        r'^declare ([^\n]*@neverd_string_protocol_probe[^\n]*)$', ir, re.M)
+        r'^declare ([^\n]*@' + generic_name + r'[^\n]*)$', ir, re.M)
     if len(generic) != 1 or not re.fullmatch(
-            r'swiftcc void @neverd_string_protocol_probe\(ptr noalias, ptr, ptr\)'
+            r'swiftcc void @' + generic_name + r'\(ptr noalias, ptr, ptr\)'
             r'(?: local_unnamed_addr)?(?: #[0-9]+)?', generic[0]):
-        raise ValueError("StringProtocol probe has an unexpected call ABI")
+        raise ValueError(protocol + " probe has an unexpected call ABI")
 
     result = set()
     for probe in probes:
@@ -142,11 +146,20 @@ def conformance_storage(ir, probes, metadata):
                             r'\(\)[^\n]*\{\n(.*?)^\}', ir, re.M | re.S)
         if len(bodies) != 1:
             raise ValueError("missing or ambiguous conformance storage probe")
+        wrapper = re.fullmatch(
+            r'\s*entry:\s*tail call swiftcc void @"(\$s[^"\n]+)"\(\)'
+            r'(?: #[0-9]+)?\s*ret void\s*', bodies[0])
+        if wrapper:
+            bodies = re.findall(
+                r'^define swiftcc void @"' + re.escape(wrapper[1]) +
+                r'"\(\)[^\n]*\{\n(.*?)^\}', ir, re.M | re.S)
+            if len(bodies) != 1:
+                continue
         getter_calls = re.findall(
             r'^\s*(%[A-Za-z_0-9.]+) = (?:tail )?call ptr '
             r'@"([^"\n]+)"\(\)(?: #[0-9]+)?$', bodies[0], re.M)
         generic_calls = re.findall(
-            r'^\s*call swiftcc void @neverd_string_protocol_probe\('
+            r'^\s*call swiftcc void @' + generic_name + r'\('
             r'ptr noalias nonnull %[A-Za-z_0-9.]+, '
             r'ptr nonnull @"([^"\n]+)", ptr (%[A-Za-z_0-9.]+)\)'
             r'(?: #[0-9]+)?$', bodies[0], re.M)
@@ -215,7 +228,6 @@ def main():
     sdk = args.sdk.resolve(strict=True)
     probes = ['metadata_' + name for name in METADATA_TYPES]
     witnesses = ['witness_' + name for name in HASHABLE_TYPES]
-    conformances = ['witness_StringProtocol']
     with tempfile.TemporaryDirectory(prefix='neverd-swift-data-') as work:
         source = Path(work) / 'metadata.swift'
         source.write_text('\n'.join(
@@ -231,7 +243,12 @@ def main():
             '@_silgen_name("neverd_string_protocol_probe") '
             'func observeStringProtocol<T: StringProtocol>(_ value: T)\n' +
             '@_cdecl("witness_StringProtocol") public func '
-            'witness_StringProtocol() { observeStringProtocol("") }\n')
+            'witness_StringProtocol() { observeStringProtocol("") }\n'
+            '@_silgen_name("neverd_sequence_probe") '
+            'func observeSequence<T: Sequence>(_ value: T)\n'
+            '@_cdecl("witness_SubstringSequence") public func '
+            'witness_SubstringSequence() { '
+            'observeSequence(Swift.Substring()) }\n')
         profiles = []
         for index, target in enumerate(TARGETS):
             ir = Path(work) / f'{index}.ll'
@@ -241,7 +258,11 @@ def main():
             metadata = metadata_storage(text, probes)
             profiles.append(metadata |
                             witness_storage(text, witnesses, metadata) |
-                            conformance_storage(text, conformances, metadata))
+                            conformance_storage(text, ['witness_StringProtocol'],
+                                                metadata) |
+                            conformance_storage(text,
+                                                ['witness_SubstringSequence'], metadata,
+                                                "Sequence"))
     class TBDLoader(yaml.SafeLoader):
         pass
     TBDLoader.add_constructor('!tapi-tbd', lambda loader, node:
@@ -253,7 +274,7 @@ def main():
                     json.loads((sdk / 'SDKSettings.json').read_text())['Version'],
                     run([str(args.swiftc), '--version']).strip())
     count = sum(line.startswith('{') for line in output.splitlines())
-    expected = len(METADATA_TYPES) + len(HASHABLE_TYPES) + len(conformances)
+    expected = len(METADATA_TYPES) + len(HASHABLE_TYPES) + 2
     if count != expected:
         parser.error('not all standard storage queries have complete evidence '
                      f'({count}/{expected})')

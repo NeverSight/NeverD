@@ -29,6 +29,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 
 namespace neverd::sdk {
@@ -1128,12 +1129,13 @@ inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
 inline std::optional<uint64_t> constantAddress(const HighExpr &Expression,
                                                unsigned Depth = 0);
 
-/// Recognize the complete compiler-emitted String:StringProtocol lazy witness
+/// Recognize a complete compiler-emitted lazy witness
 /// accessor. Private Swift cache symbols can repeat, so the proof is rooted in
 /// this exact function's dataflow rather than a suffix or global name lookup.
 inline std::optional<SourceCallTypeHint>
 swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
-                             va_t Address) {
+                             va_t Address,
+                             std::array<std::string, 2> *Globals = nullptr) {
   if (!Function.Entry || !Function.ReturnType ||
       Function.ReturnType->Kind == NdTypeKind::Void ||
       Function.ReturnType->Size != 8 || Image.Format != BinaryFormat::MachO ||
@@ -1237,7 +1239,7 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
       Resolve(Resolve, Store->StoreVal).get() != Witness.get())
     return std::nullopt;
 
-  const char *ExpectedGlobals[] = {"$sSSSysMc", "$sSSN"};
+  std::array<std::string, 2> ImportedGlobals;
   for (size_t Index = 0; Index < 2; ++Index) {
     const auto Value = Resolve(Resolve, Witness->Operands[Index]);
     if (!Value || Value->Kind != ExprKind::Load ||
@@ -1248,11 +1250,16 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
     const auto Slot = constantAddress(*Value->Operands[0]);
     const auto Global =
         Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot) : std::nullopt;
-    if (!Global || Global->TargetName != ExpectedGlobals[Index] ||
-        Global->Signature.Origin !=
+    if (!Global || Global->Signature.Origin !=
             SourceFunctionTypeHint::OriginKind::SwiftRuntime)
       return std::nullopt;
+    ImportedGlobals[Index] = Global->TargetName;
   }
+  if (ImportedGlobals !=
+          std::array<std::string, 2>{"$sSSSysMc", "$sSSN"} &&
+      ImportedGlobals !=
+          std::array<std::string, 2>{"$sSsSTsMc", "$sSsN"})
+    return std::nullopt;
   const bool ReturnsLoad =
       std::any_of(Returns.begin(), Returns.end(), [&](const ExprPtr &Value) {
         return Value.get() == Load.get();
@@ -1273,6 +1280,8 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
   std::string Reason;
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
     return std::nullopt;
+  if (Globals)
+    *Globals = std::move(ImportedGlobals);
   return Hint;
 }
 
@@ -5139,19 +5148,16 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
   std::string Source;
   if (!Caches.empty())
     Source +=
-        "\nextern unsigned char neverd_swift_string_protocol_conformance[] "
-        "__asm__(\"_$sSSSysMc\");\n"
-        "extern unsigned char neverd_swift_string_metadata[] "
-        "__asm__(\"_$sSSN\");\n"
-        "extern void *neverd_swift_get_witness_table(void *, void *, void *) "
+        "\nextern void *neverd_swift_get_witness_table(void *, void *, void *) "
         "__asm__(\"_swift_getWitnessTable\");\n";
   for (const auto &[CacheAddress, AccessorAddress] : Caches) {
     const auto Function = Functions.find(AccessorAddress);
+    std::array<std::string, 2> Globals;
     const auto Current =
         Function == Functions.end() || !Function->second
             ? std::nullopt
             : objc_binding_detail::swiftWitnessCacheAddressHint(
-                  *Function->second, Image, CacheAddress);
+                  *Function->second, Image, CacheAddress, &Globals);
     if (!Current)
       throw std::runtime_error("Swift witness cache is no longer valid");
     const std::string CacheStem =
@@ -5159,9 +5165,15 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
     const std::string CacheName = CacheStem + "_address";
     const std::string AccessorName = "neverd_swift_witness_accessor_" +
                                      llvm::utohexstr(AccessorAddress, true);
+    const std::string ConformanceName = CacheStem + "_conformance";
+    const std::string MetadataName = CacheStem + "_metadata";
     SharedFunctions.insert(CacheName);
     SharedFunctions.insert(AccessorName);
-    Source += "\nstatic void *" + CacheStem +
+    Source += "\nextern unsigned char " + ConformanceName +
+              "[] __asm__(\"_" + Globals[0] + "\");\n"
+              "extern unsigned char " + MetadataName +
+              "[] __asm__(\"_" + Globals[1] + "\");\n"
+              "static void *" + CacheStem +
               ";\n"
               "uintptr_t " +
               CacheName +
@@ -5178,8 +5190,8 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
               "  if (value)\n"
               "    return (uintptr_t)value;\n"
               "  value = neverd_swift_get_witness_table(\n"
-              "      neverd_swift_string_protocol_conformance,\n"
-              "      neverd_swift_string_metadata, (void *)0);\n"
+              "      " + ConformanceName + ",\n"
+              "      " + MetadataName + ", (void *)0);\n"
               "  __atomic_store_n(&" +
               CacheStem +
               ", value, __ATOMIC_RELEASE);\n"

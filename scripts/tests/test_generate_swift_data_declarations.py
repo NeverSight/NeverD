@@ -51,6 +51,13 @@ CONFORMANCE_IR = (
     'cont:\n'
     '  %3 = phi ptr [ %0, %entry ], [ %2, %cacheIsNull ]\n'
     '  ret ptr %3\n}\n')
+SUBSTRING_SEQUENCE = (CONFORMANCE_IR
+                      .replace('$sSSSysMc', '$sSsSTsMc')
+                      .replace('$sSSN', '$sSsN')
+                      .replace('witness_StringProtocol',
+                               'witness_SubstringSequence')
+                      .replace('neverd_string_protocol_probe',
+                               'neverd_sequence_probe'))
 
 
 class SwiftDataDeclarationTests(unittest.TestCase):
@@ -95,6 +102,32 @@ class SwiftDataDeclarationTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 self.assertEqual(conformance_storage(
                     invalid, ['witness_StringProtocol'], {NAME}), set())
+
+    def test_substring_sequence_descriptor_requires_matching_probe(self):
+        descriptor = '$sSsSTsMc'
+        self.assertEqual(conformance_storage(
+            SUBSTRING_SEQUENCE, ['witness_SubstringSequence'], {'$sSsN'},
+            'Sequence'), {descriptor})
+        self.assertEqual(conformance_storage(
+            SUBSTRING_SEQUENCE, ['witness_SubstringSequence'], {NAME},
+            'Sequence'), set())
+        wrapped = SUBSTRING_SEQUENCE.replace(
+            'define void @witness_SubstringSequence() #0 {\nentry:\n',
+            'define void @witness_SubstringSequence() #0 {\nentry:\n'
+            '  tail call swiftcc void @"$s4Test22substringSequenceProbeyyF"() #4\n'
+            '  ret void\n}\n'
+            'define swiftcc void @"$s4Test22substringSequenceProbeyyF"() #0 {\n'
+            'entry:\n')
+        self.assertEqual(conformance_storage(
+            wrapped, ['witness_SubstringSequence'], {'$sSsN'},
+            'Sequence'), {descriptor})
+        self.assertEqual(conformance_storage(
+            wrapped.replace('tail call swiftcc void', 'call swiftcc void'),
+            ['witness_SubstringSequence'], {'$sSsN'}, 'Sequence'), set())
+        with self.assertRaises(ValueError):
+            conformance_storage(SUBSTRING_SEQUENCE,
+                                ['witness_SubstringSequence'], {'$sSsN'},
+                                'Unknown')
 
     def test_conformance_probe_requires_unique_definition_and_exact_abis(self):
         for invalid in [
