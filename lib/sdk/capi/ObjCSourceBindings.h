@@ -2628,6 +2628,11 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
               for (size_t J = I + 1; J < Value->Operands.size(); ++J) {
                 if (Value->Operands.size() == 4 && (I != 2 || J != 3))
                   continue;
+                // Direct constants are handled by the ordinary call binder.
+                // This prepass only needs pairs involving a local alias.
+                if (!MetadataLocalAt(Value->Operands[I]) &&
+                    !MetadataLocalAt(Value->Operands[J]))
+                  continue;
                 const auto First = MetadataAddressAt(Value->Operands[I]);
                 const auto Second = MetadataAddressAt(Value->Operands[J]);
                 if (!First || !Second)
