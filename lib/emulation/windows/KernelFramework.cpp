@@ -1355,10 +1355,12 @@ KernelFramework::advance(uint64_t Token) {
       return E;
     Objects.erase(OI);
   }
+  const uint64_t ReturnValue = C.ReturnValue;
   Continuations.erase(I);
   if (auto E = resumePausedPnp())
     return E;
-  return PendingCall ? std::optional<uint64_t>{} : std::optional<uint64_t>{0};
+  return PendingCall ? std::optional<uint64_t>{}
+                     : std::optional<uint64_t>{ReturnValue};
 }
 
 llvm::Expected<uint64_t> KernelFramework::start(std::vector<Step> Steps) {
@@ -1371,7 +1373,16 @@ llvm::Expected<uint64_t> KernelFramework::start(std::vector<Step> Steps) {
 }
 
 std::optional<KernelFramework::GuestCall> KernelFramework::takeGuestCall() {
-  return std::exchange(PendingCall, std::nullopt);
+  auto Call = std::exchange(PendingCall, std::nullopt);
+  if (Call) {
+    if (auto Callback = RequestCompletionCallbacks.find(Call->Token);
+        Callback != RequestCompletionCallbacks.end()) {
+      if (auto Request = Requests.find(Callback->second.Request);
+          Request != Requests.end())
+        Request->second.CompletionCallbackEntered = true;
+    }
+  }
+  return Call;
 }
 
 llvm::Expected<std::optional<uint64_t>>
@@ -1437,6 +1448,20 @@ KernelFramework::finishGuestCall(uint64_t Token, uint64_t Result) {
   if (Cancel != CancelCallbacks.end() &&
       Requests.at(Cancel->second).Cancellation != CancelState::Delivered)
     return invalid("cancellation callback has not entered guest execution");
+  auto Completion = RequestCompletionCallbacks.find(Token);
+  if (Completion != RequestCompletionCallbacks.end()) {
+    if (auto Request = Requests.find(Completion->second.Request);
+        Request != Requests.end()) {
+      if (!Request->second.CompletionCallbackPending ||
+          !Request->second.CompletionCallbackEntered)
+        return invalid("request completion callback was not delivered");
+      Request->second.CompletionCallbackPending = false;
+      Request->second.CompletionCallbackEntered = false;
+    }
+    if (auto E = retire(Completion->second.Params))
+      return E;
+    RequestCompletionCallbacks.erase(Completion);
+  }
   auto Next = advance(Token);
   if (!Next)
     return Next.takeError();

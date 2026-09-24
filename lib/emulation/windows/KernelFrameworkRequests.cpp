@@ -505,6 +505,25 @@ llvm::Error KernelFramework::writeRequestParameters(uint64_t Address,
   return llvm::Error::success();
 }
 
+llvm::Error KernelFramework::writeRequestCompletionParams(uint64_t Address,
+                                                          uint32_t Status) {
+  if (auto E = writable(Address, RequestCompletionParamsSize))
+    return E;
+  if (auto E = Memory.write(Address,
+                            std::vector<uint8_t>(RequestCompletionParamsSize)))
+    return E;
+  if (auto E = Memory.writeInteger(Address, RequestCompletionParamsSize, 4))
+    return E;
+  if (auto E = Memory.writeInteger(Address + RequestCompletionTypeOffset,
+                                   RequestCompletionTypeNoFormat, 4))
+    return E;
+  if (auto E = Memory.writeInteger(Address + RequestCompletionStatusOffset,
+                                   Status, 4))
+    return E;
+  return Memory.writeInteger(Address + RequestCompletionInformationOffset, 0,
+                             8);
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
@@ -527,7 +546,10 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name != api::WdfRequestComplete &&
       Name != api::WdfRequestCompleteWithInformation &&
+      Name != api::WdfRequestFormatRequestUsingCurrentType &&
       Name != api::WdfRequestSend && Name != api::WdfRequestGetStatus &&
+      Name != api::WdfRequestSetCompletionRoutine &&
+      Name != api::WdfRequestGetCompletionParams &&
       Name != api::WdfRequestStopAcknowledge &&
       Name != api::WdfRequestGetParameters &&
       Name != api::WdfRequestRetrieveInputBuffer &&
@@ -795,6 +817,24 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return Canceled.takeError();
     return Result{*Canceled ? 1 : 0};
   }
+  if (Name == api::WdfRequestFormatRequestUsingCurrentType) {
+    if (!R->second.FileCreate || !R->second.File || R->second.Queue ||
+        R->second.LastSendStatus)
+      return requestError(
+          "current-type formatting requires an unsent framework-file CREATE");
+    R->second.FormattedForSend = true;
+    return Result{0};
+  }
+  if (Name == api::WdfRequestSetCompletionRoutine) {
+    if (!R->second.FileCreate || !R->second.File || R->second.Queue ||
+        R->second.LastSendStatus || R->second.CompletionCallbackPending ||
+        (!A[2] && A[3]))
+      return requestError(
+          "completion routine requires an unsent framework-file CREATE");
+    R->second.CompletionRoutine = A[2];
+    R->second.CompletionContext = A[3];
+    return Result{0};
+  }
   if (Name == api::WdfRequestSend) {
     auto Target = Objects.find(A[2]);
     auto Device = Devices.find(R->second.Device);
@@ -804,42 +844,87 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         Device == Devices.end() || Device->second.LocalTarget != A[2] ||
         Target->second.Parent != R->second.Device)
       return requestError("send requires the request device's local target");
-    if (!A[3])
-      return requestError("local file forwarding requires send options");
-    if (auto E = ValidateAccess(A[3], RequestSendOptionsSize, false))
-      return E;
-    auto Size = read(A[3], sizeof(uint32_t));
-    auto Flags = read(A[3] + RequestSendFlagsOffset, sizeof(uint32_t));
-    if (!Size || !Flags)
-      return llvm::joinErrors(Size.takeError(), Flags.takeError());
-    if (*Size != RequestSendOptionsSize ||
-        (*Flags != RequestSendAndForget && *Flags != RequestSendSynchronous))
+    uint64_t Flags = 0;
+    if (A[3]) {
+      if (auto E = ValidateAccess(A[3], RequestSendOptionsSize, false))
+        return E;
+      auto Size = read(A[3], sizeof(uint32_t));
+      auto Options = read(A[3] + RequestSendFlagsOffset, sizeof(uint32_t));
+      if (!Size || !Options)
+        return llvm::joinErrors(Size.takeError(), Options.takeError());
+      if (*Size != RequestSendOptionsSize)
+        return requestError("unsupported request send options size");
+      Flags = *Options;
+    }
+    if (Flags != 0 && Flags != RequestSendAndForget &&
+        Flags != RequestSendSynchronous)
       return requestError(
-          "only synchronous or send-and-forget file forwarding is modeled");
+          "only default asynchronous, synchronous or send-and-forget file "
+          "forwarding is modeled");
     if (!R->second.FileCreate || R->second.Queue ||
         R->second.Cancellation != CancelState::Unmarked ||
         !Device->second.Files.forwards(Device->second.Filter) ||
         R->second.LastSendStatus)
       return requestError("send requires an unsent forwardable CREATE request");
-    const bool Synchronous = *Flags == RequestSendSynchronous;
-    if ((Synchronous && !R->second.File) || (!Synchronous && R->second.File))
-      return requestError("synchronous send requires a framework file object; "
-                          "send-and-forget requires none");
+    const bool SendAndForget = Flags == RequestSendAndForget;
+    const bool Synchronous = Flags == RequestSendSynchronous;
+    const bool Asynchronous = !SendAndForget && !Synchronous;
+    if ((SendAndForget && R->second.File) ||
+        (!SendAndForget && !R->second.File))
+      return requestError("send with completion ownership requires a "
+                          "framework file object; send-and-forget requires "
+                          "none");
+    if (Asynchronous &&
+        (!R->second.FormattedForSend || !R->second.CompletionRoutine))
+      return requestError(
+          "asynchronous CREATE send requires formatting and a completion "
+          "routine");
+    if (Synchronous && R->second.CompletionRoutine)
+      return requestError(
+          "synchronous CREATE send with a completion routine is unsupported");
     if (!RequestsHost.ValidateFileForward ||
-        (Synchronous ? !RequestsHost.SendFileSynchronously
-                     : !RequestsHost.ForwardFile))
+        (SendAndForget ? !RequestsHost.ForwardFile
+                       : !RequestsHost.SendFileSynchronously))
       return requestError("lower file-request host is unavailable");
     if (auto E = RequestsHost.ValidateFileForward(R->second.IRP))
       return E;
-    auto Status = Synchronous
-                      ? RequestsHost.SendFileSynchronously(R->second.IRP)
-                      : RequestsHost.ForwardFile(R->second.IRP);
-    if (!Status)
-      return Status.takeError();
+    uint64_t CompletionParams = 0;
+    if (Asynchronous) {
+      if (PendingCall || NextContinuation == UINT64_MAX)
+        return requestError("completion callback capacity exhausted");
+      auto Storage = allocate(RequestCompletionParamsSize, true, false);
+      if (!Storage)
+        return Storage.takeError();
+      CompletionParams = *Storage;
+    }
+    auto Status = SendAndForget
+                      ? RequestsHost.ForwardFile(R->second.IRP)
+                      : RequestsHost.SendFileSynchronously(R->second.IRP);
+    if (!Status) {
+      auto E = Status.takeError();
+      if (CompletionParams)
+        E = llvm::joinErrors(std::move(E), retire(CompletionParams));
+      return E;
+    }
     if (*Status == windows::StatusPending)
       return requestError("asynchronous lower file completion is unsupported");
-    if (Synchronous) {
+    if (!SendAndForget) {
       R->second.LastSendStatus = *Status;
+      if (Asynchronous) {
+        if (auto E = writeRequestCompletionParams(CompletionParams, *Status))
+          return E;
+        const uint64_t Token = NextContinuation++;
+        Continuation SendReturn;
+        SendReturn.ReturnValue = 1;
+        Continuations.emplace(Token, std::move(SendReturn));
+        RequestCompletionCallbacks.emplace(
+            Token, RequestCompletionCallback{A[1], CompletionParams});
+        R->second.CompletionCallbackPending = true;
+        PendingCall = GuestCall{
+            Token,
+            R->second.CompletionRoutine,
+            {A[1], A[2], CompletionParams, R->second.CompletionContext}};
+      }
       return Result{1};
     }
     R->second.Completed = true;
@@ -854,11 +939,28 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name == api::WdfRequestGetStatus) {
     if (!R->second.LastSendStatus)
-      return requestError("request has no completed synchronous send");
+      return requestError("request has no completed lower send");
     return Result{*R->second.LastSendStatus};
+  }
+  if (Name == api::WdfRequestGetCompletionParams) {
+    if (!R->second.LastSendStatus)
+      return requestError("request has no completed lower send");
+    if (auto E = writable(A[2], RequestCompletionParamsSize))
+      return E;
+    auto Size = read(A[2], sizeof(uint32_t));
+    if (!Size)
+      return Size.takeError();
+    if (*Size != RequestCompletionParamsSize)
+      return requestError("unsupported completion parameter size");
+    if (auto E = writeRequestCompletionParams(A[2], *R->second.LastSendStatus))
+      return E;
+    return Result{0};
   }
   if (Name == api::WdfRequestComplete ||
       Name == api::WdfRequestCompleteWithInformation) {
+    if (R->second.CompletionCallbackPending &&
+        !R->second.CompletionCallbackEntered)
+      return requestError("request completion precedes its lower callback");
     if (R->second.LastSendStatus && uint32_t(A[2]) != *R->second.LastSendStatus)
       return requestError(
           "forwarded CREATE must complete with its synchronous lower status");

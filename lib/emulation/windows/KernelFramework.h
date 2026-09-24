@@ -195,6 +195,7 @@ public:
 
 private:
   llvm::Error writeRequestParameters(uint64_t Address, const RequestView &View);
+  llvm::Error writeRequestCompletionParams(uint64_t Address, uint32_t Status);
   GuestMemory &Memory;
   KernelExportRegistry &Exports;
   Allocate AllocateStorage;
@@ -328,9 +329,19 @@ private:
     uint64_t CancelRoutine = 0;
     uint64_t File = 0;
     bool FileCreate = false;
+    bool FormattedForSend = false;
+    uint64_t CompletionRoutine = 0;
+    uint64_t CompletionContext = 0;
+    bool CompletionCallbackPending = false;
+    bool CompletionCallbackEntered = false;
     std::optional<uint32_t> LastSendStatus;
   };
   std::map<uint64_t, Request> Requests;
+  struct RequestCompletionCallback {
+    uint64_t Request = 0;
+    uint64_t Params = 0;
+  };
+  std::map<uint64_t, RequestCompletionCallback> RequestCompletionCallbacks;
   std::map<uint64_t, uint64_t> CallerRequests;
   struct RequestMemory {
     uint64_t Request = 0;
@@ -397,6 +408,8 @@ private:
   struct Continuation {
     std::vector<Step> Steps;
     size_t Index = 0;
+    /// API result restored after a nested guest callback returns.
+    uint64_t ReturnValue = 0;
   };
   uint64_t NextContinuation = 1;
   std::map<uint64_t, Continuation> Continuations;
