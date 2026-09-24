@@ -2699,6 +2699,26 @@ makeCOFFImageRelativeRVASwitch(COFFImageRelativeRVASwitchOptions Options = {}) {
   return Image;
 }
 
+TEST_F(JTE_X86_64, CompactPDataCountsAllKnownEntriesForEvidenceWork) {
+  constexpr neverd::va_t ImageBase = 0x140000000;
+  constexpr neverd::va_t FunctionVA = ImageBase + 0x1000;
+  neverd::BinaryImage Image = makeCOFFImageRelativeRVASwitch();
+  Image.LoadOnlyFunctionEntries.insert(FunctionVA);
+  Image.COFFPDataRecords = {{0x1000, 0x1041, 0, 0},
+                            {0x3000, 0x3020, 0, 0},
+                            {0x4000, 0x4020, 0, 0},
+                            {0x5000, 0x5020, 0, 0}};
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const std::set<neverd::va_t> FunctionEntries{FunctionVA};
+  Builder.setKnownFuncEntries(&FunctionEntries);
+  (void)Builder.build(Image, Decoder, FunctionVA,
+                      "coff_image_relative_rva_switch");
+  EXPECT_TRUE(Builder.isKnownFunctionEntry(ImageBase + 0x4000));
+  EXPECT_EQ(Builder.knownFunctionEntryCount(), Image.COFFPDataRecords.size());
+}
+
 TEST_F(JTE_X86_64, RecoversExactCOFFImageRelativeRVASwitch) {
   constexpr neverd::va_t ImageBase = 0x140000000;
   constexpr neverd::va_t FunctionVA = ImageBase + 0x1000;
@@ -7484,6 +7504,10 @@ static fs::path indexIdentityA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_index_identity_a64.o";
 }
 
+static fs::path pageoffWrongBaseA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_pageoff_wrong_base_a64.o";
+}
+
 static fs::path pageoffReachingA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_pageoff_reaching_a64.o";
 }
@@ -8033,18 +8057,19 @@ TEST_F(JTE_AArch64, PageOffsetOutputRequiresExactReachingPageBase) {
   ASSERT_FALSE(TRI.IntParamRegs.empty());
   const uint64_t X0 = TRI.IntParamRegs.front();
 
-  auto buildFunction = [&](const char *Name) {
-    const neverd::Symbol *Sym = Image.findSymbol(Name);
+  auto buildFunction = [&](neverd::BinaryImage &SourceImage, const char *Name) {
+    const neverd::Symbol *Sym = SourceImage.findSymbol(Name);
     EXPECT_NE(Sym, nullptr) << Name;
     neverd::Decoder Decoder;
     EXPECT_TRUE(Decoder.init(neverd::Arch::AArch64));
     neverd::CFGBuilder Builder;
-    return Sym ? Builder.build(Image, Decoder, Sym->Addr, Name)
+    return Sym ? Builder.build(SourceImage, Decoder, Sym->Addr, Name)
                : neverd::LowFunc{};
   };
-  auto outputCertificates = [&](const neverd::LowFunc &Function,
+  auto outputCertificates = [&](neverd::BinaryImage &SourceImage,
+                                const neverd::LowFunc &Function,
                                 const char *TableName) {
-    const neverd::Symbol *Table = Image.findSymbol(TableName);
+    const neverd::Symbol *Table = SourceImage.findSymbol(TableName);
     EXPECT_NE(Table, nullptr) << TableName;
     std::vector<const neverd::RelocatedInstructionAddressOccurrence *> Found;
     if (!Table)
@@ -8058,21 +8083,29 @@ TEST_F(JTE_AArch64, PageOffsetOutputRequiresExactReachingPageBase) {
     return Found;
   };
 
-  const neverd::LowFunc Exact = buildFunction("a64_writable_w_self_escape");
+  const neverd::LowFunc Exact =
+      buildFunction(Image, "a64_writable_w_self_escape");
   const auto ExactCertificates =
-      outputCertificates(Exact, "a64_writable_w_self_table");
+      outputCertificates(Image, Exact, "a64_writable_w_self_table");
   ASSERT_EQ(ExactCertificates.size(), 1u);
   EXPECT_FALSE(ExactCertificates.front()->OutputMayDepend);
 
+  auto WrongImageOrErr = neverd::loadBinary(pageoffWrongBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(WrongImageOrErr))
+      << llvm::toString(WrongImageOrErr.takeError());
+  neverd::BinaryImage &WrongImage = *WrongImageOrErr;
   const neverd::LowFunc Wrong =
-      buildFunction("a64_pageoff_wrong_base_no_escape");
-  EXPECT_TRUE(outputCertificates(Wrong, "a64_pageoff_wrong_base_table").empty())
+      buildFunction(WrongImage, "a64_pageoff_wrong_base_no_escape");
+  EXPECT_TRUE(outputCertificates(WrongImage, Wrong,
+                                 "a64_pageoff_wrong_base_table")
+                  .empty())
       << "a PAGEOFF relocation alone must not authenticate its output";
 
   const neverd::LowFunc Clobbered =
-      buildFunction("a64_pageoff_clobbered_base_no_escape");
-  EXPECT_TRUE(
-      outputCertificates(Clobbered, "a64_pageoff_clobbered_base_table").empty())
+      buildFunction(Image, "a64_pageoff_clobbered_base_no_escape");
+  EXPECT_TRUE(outputCertificates(Image, Clobbered,
+                                 "a64_pageoff_clobbered_base_table")
+                  .empty())
       << "a matching ADRP killed before the ADD is not a reaching source";
 
   auto BypassImageOrErr = neverd::loadBinary(pageoffReachingA64Obj());
@@ -8104,17 +8137,42 @@ TEST_F(JTE_AArch64, PageOffsetOutputRequiresExactReachingPageBase) {
          "the ADRP path remains a conservative escape source";
 }
 
-TEST_F(JTE_AArch64, UnpairedAndClobberedPageOffsetsDoNotEscapeTable) {
-  auto R = liftToLLVMIRUnopt(indexIdentityA64Obj());
-  ASSERT_EQ(R.exitCode, 0) << R.err;
-  for (const char *Name : {"a64_pageoff_wrong_base_no_escape",
-                           "a64_pageoff_clobbered_base_no_escape"}) {
-    const std::string Body = llvmFunctionBody(R.out, Name);
-    ASSERT_FALSE(Body.empty()) << Name << '\n' << R.out;
-    EXPECT_NE(Body.find("switch i"), std::string::npos) << Body;
-    EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
-    EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
-  }
+TEST_F(JTE_AArch64, WrongBasePageOffsetFailsClosedOnEscape) {
+  auto ImageOrErr = neverd::loadBinary(pageoffWrongBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_pageoff_wrong_base_no_escape");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low = Builder.build(
+      Image, Decoder, Function->Addr, "a64_pageoff_wrong_base_no_escape");
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 2u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+
+  auto LLVM = liftToLLVMIRUnopt(pageoffWrongBaseA64Obj());
+  EXPECT_NE(LLVM.exitCode, 0) << LLVM.out;
+  EXPECT_NE(LLVM.err.find("incomplete relocatable address value"),
+            std::string::npos)
+      << LLVM.err;
+  EXPECT_NE(LLVM.err.find("escapes through a call argument"),
+            std::string::npos)
+      << LLVM.err;
+}
+
+TEST_F(JTE_AArch64, ClobberedPageOffsetKeepsIndependentSwitch) {
+  auto LLVM = liftToLLVMIRUnopt(indexIdentityA64Obj());
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  const std::string Body = llvmFunctionBody(
+      LLVM.out, "a64_pageoff_clobbered_base_no_escape");
+  ASSERT_FALSE(Body.empty()) << LLVM.out;
+  EXPECT_NE(Body.find("switch i"), std::string::npos) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
 }
 
 TEST_F(JTE_AArch64, BypassedPageBaseMayEscapeWritableTable) {

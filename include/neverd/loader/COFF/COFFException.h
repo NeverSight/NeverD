@@ -34,12 +34,13 @@ ExceptionFunction decodeX64ExceptionFunction(const BinaryImage &Img,
 /// executable import veneers have been discovered.  Unknown personalities are
 /// retained without guessing their handler-data schema.  When
 /// BinaryImage::LoadOnlyFunctionEntries is nonempty, only those entries and
-/// catch funclets they name are materialized.
+/// the catch funclets / out-of-line SEH filters they name are materialized.
 void resolveExceptionHandlers(BinaryImage &Img);
 
 /// Decode unwind and language tables for \p Entries (and their catch
-/// funclets) if they are not already present.  Empty \p Entries with an empty
-/// load filter means every already-materialized function.
+/// funclets and out-of-line SEH filters) if they are not already present.
+/// Empty \p Entries with an empty load filter means every already-materialized
+/// function.
 void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries);
 
 /// Materialize the x64 RUNTIME_FUNCTION covering \p Address from

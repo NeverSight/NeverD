@@ -124,14 +124,21 @@ static int realMain(int Argc, char *Argv[]) {
     neverd_session_set_pdb_path(Sess, PdbFile.getValue().c_str());
   if (!MapFile.getValue().empty())
     neverd_session_set_map_path(Sess, MapFile.getValue().c_str());
-  // Hex `--func` is known before load.  Thread it in so a 100k-function PE
-  // does not decode every `.pdata` language table for a one-function dump.
+  // Resolve an exact PDB public name, when available, before loading for the
+  // same one-function PE path as a known hex address.  The hint is checked
+  // against the loaded name table below; normal loading remains authoritative.
+  neverd_va_t NameHint = 0;
   if (!ExportFunc.empty()) {
     StringRef FuncRef(ExportFunc.getValue());
     if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
       uint64_t Addr = 0;
       if (!FuncRef.empty() && !FuncRef.getAsInteger(16, Addr) && Addr != 0)
         neverd_session_restrict_function(Sess, Addr);
+    } else {
+      NameHint = neverd_session_resolve_function_name_before_load(
+          Sess, InputFile.getValue().c_str(), ExportFunc.getValue().c_str());
+      if (NameHint)
+        neverd_session_restrict_function(Sess, NameHint);
     }
   }
 
@@ -164,11 +171,32 @@ static int realMain(int Argc, char *Argv[]) {
         },
         nullptr);
   }
-  if (!neverd_session_load(Sess, InputFile.getValue().c_str())) {
+  bool Loaded = neverd_session_load(Sess, InputFile.getValue().c_str());
+  if (!Loaded && NameHint) {
+    // A name hint must never change the success or diagnostic of the normal
+    // load.  Retry the unrestricted path if an early restriction was rejected.
+    neverd_session_restrict_function(Sess, 0);
+    NameHint = 0;
+    Loaded = neverd_session_load(Sess, InputFile.getValue().c_str());
+  }
+  if (!Loaded) {
     if (!JsonOutput)
       errs() << "\n";
     WithColor::error() << "failed to load: " << takeLastError(Sess) << "\n";
     return 1;
+  }
+  if (NameHint) {
+    const int Found = neverd_func_find_by_name(Sess, ExportFunc.c_str());
+    if (Found < 0 || neverd_func_entry(Sess, Found) != NameHint) {
+      neverd_session_restrict_function(Sess, 0);
+      if (!neverd_session_load(Sess, InputFile.getValue().c_str())) {
+        if (!JsonOutput)
+          errs() << "\n";
+        WithColor::error() << "failed to load: " << takeLastError(Sess)
+                           << "\n";
+        return 1;
+      }
+    }
   }
   if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd ||
        AuditCmd || HuntCmd) &&

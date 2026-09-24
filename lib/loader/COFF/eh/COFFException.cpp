@@ -23,6 +23,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace neverd::coff_loader {
 namespace {
@@ -314,14 +315,57 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
           Img.ExceptionMetadata.ParseStatus, F.ParseStatus);
       F.LanguageTablesResolved = true;
       Progress = true;
+      std::vector<va_t> ExtraBodies;
       if (!Wanted.empty() && F.Cxx) {
         for (const CxxTryBlock &Try : F.Cxx->TryBlocks) {
           for (const CxxCatchHandler &Handler : Try.Handlers) {
-            if (Handler.HandlerVA == 0 || !Wanted.insert(Handler.HandlerVA).second)
-              continue;
-            if (ensureX64RuntimeFunction(Img, Handler.HandlerVA))
-              Progress = true;
+            if (Handler.HandlerVA != 0)
+              ExtraBodies.push_back(Handler.HandlerVA);
           }
+        }
+        for (const CxxUnwindAction &Action : F.Cxx->UnwindMap) {
+          if (Action.ActionVA != 0 && !F.CodeRange.contains(Action.ActionVA))
+            ExtraBodies.push_back(Action.ActionVA);
+        }
+      }
+      if (!Wanted.empty() && F.SEH) {
+        for (const SEHScopeRecord &Scope : F.SEH->Scopes) {
+          const va_t Filter = Scope.FilterOrFinallyVA;
+          if (Filter && !F.CodeRange.contains(Filter))
+            ExtraBodies.push_back(Filter);
+        }
+      }
+      for (va_t Body : ExtraBodies) {
+        if (!Wanted.insert(Body).second)
+          continue;
+        if (ensureX64RuntimeFunction(Img, Body))
+          Progress = true;
+      }
+    }
+  }
+  // Cleanup-only FH3 lists `__wind` ActionVAs after language decode.
+  // `--func` must materialize those pdata bodies so KnownCodeRanges covers
+  // the far unwind cluster; slicing `.text` to the parent dropped them.
+  if (!Wanted.empty()) {
+    bool Added = true;
+    while (Added) {
+      Added = false;
+      const size_t Count = Img.ExceptionMetadata.Functions.size();
+      for (size_t I = 0; I < Count; ++I) {
+        const ExceptionFunction &F = Img.ExceptionMetadata.Functions[I];
+        if (!functionOverlapsWanted(F, Wanted) || !F.Cxx)
+          continue;
+        std::vector<va_t> Actions;
+        Actions.reserve(F.Cxx->UnwindMap.size());
+        for (const CxxUnwindAction &Action : F.Cxx->UnwindMap) {
+          if (Action.ActionVA != 0 && !F.CodeRange.contains(Action.ActionVA))
+            Actions.push_back(Action.ActionVA);
+        }
+        for (va_t ActionVA : Actions) {
+          if (!Wanted.insert(ActionVA).second)
+            continue;
+          if (ensureX64RuntimeFunction(Img, ActionVA))
+            Added = true;
         }
       }
     }

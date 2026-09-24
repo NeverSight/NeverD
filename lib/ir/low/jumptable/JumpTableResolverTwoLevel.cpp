@@ -1553,7 +1553,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     Queries.push_back(std::move(BitmapIsConstant));
 
     const size_t KnownEntryLookup =
-        KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+        orderedLookupWork(knownFunctionEntryCount());
     const size_t RuntimeEntryLookup =
         orderedLookupWork(Img.RuntimeFunctionAddrs.size());
     const size_t VerifiedEntryLookup =
@@ -1989,7 +1989,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     return false;
   if (!Clamp.Present) {
     const size_t KnownEntryLookup =
-        KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+        orderedLookupWork(knownFunctionEntryCount());
     const size_t RuntimeEntryLookup =
         orderedLookupWork(Img.RuntimeFunctionAddrs.size());
     const size_t VerifiedEntryLookup =

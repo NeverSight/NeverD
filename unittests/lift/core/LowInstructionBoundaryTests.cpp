@@ -4167,6 +4167,12 @@ TEST(LowInstructionBoundary,
   NumericUse.addInput(NdVar::reg(0, 4));
   NumericUse.addInput(UnknownValue);
   Block.Ops.push_back(std::move(NumericUse));
+  LowOp StoreNumeric;
+  StoreNumeric.Opcode = NdOp::STORE;
+  StoreNumeric.Addr = kEntry + 4;
+  StoreNumeric.addInput(NdVar::cst(0x4000, 4));
+  StoreNumeric.addInput(NdVar::tmp(8, 4));
+  Block.Ops.push_back(std::move(StoreNumeric));
 
   const NdVar ExactAddress = NdVar::tmp(16, 4);
   LowOp MaterializeAddress;
@@ -4183,6 +4189,12 @@ TEST(LowInstructionBoundary,
   AddressUse.addInput(NdVar::reg(4, 4));
   AddressUse.addInput(ExactAddress);
   Block.Ops.push_back(std::move(AddressUse));
+  LowOp StoreAddress;
+  StoreAddress.Opcode = NdOp::STORE;
+  StoreAddress.Addr = kEntry + 0xc;
+  StoreAddress.addInput(NdVar::cst(0x4004, 4));
+  StoreAddress.addInput(NdVar::tmp(24, 4));
+  Block.Ops.push_back(std::move(StoreAddress));
   Low.Blocks.push_back(std::move(Block));
 
   BinaryImage Image;

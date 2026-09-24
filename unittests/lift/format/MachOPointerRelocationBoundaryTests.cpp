@@ -2870,6 +2870,8 @@ MedFunc makeReentrantFeasibleEdgeRecurrentTableLookup(Arch TargetArch) {
   return Func;
 }
 
+constexpr va_t RelocationFoldObservationVA = 0x600;
+
 LowFunc makeRelocationSensitiveConstantFoldFunction(Arch TargetArch) {
   const uint16_t PointerSize =
       static_cast<uint16_t>(getTargetRegInfo(TargetArch).PointerSize);
@@ -2883,6 +2885,17 @@ LowFunc makeRelocationSensitiveConstantFoldFunction(Arch TargetArch) {
   Block.StartAddr = CallerVA;
   Block.EndAddr = CallerVA + 0x5C;
 
+  unsigned NextObservation = 0;
+  auto observe = [&](NdVar Value, va_t Addr) {
+    LowOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.Addr = Addr;
+    Store.addInput(NdVar::address(
+        RelocationFoldObservationVA + NextObservation++ * PointerSize,
+        PointerSize));
+    Store.addInput(Value);
+    Block.Ops.push_back(std::move(Store));
+  };
   auto addBinary = [&](NdOp Opcode, NdVar Output, NdVar A, NdVar B, va_t Addr) {
     LowOp Op;
     Op.Opcode = Opcode;
@@ -2891,6 +2904,7 @@ LowFunc makeRelocationSensitiveConstantFoldFunction(Arch TargetArch) {
     Op.addInput(A);
     Op.addInput(B);
     Block.Ops.push_back(std::move(Op));
+    observe(Output, Addr);
   };
 
   const NdVar Page = NdVar::address(TextVA, PointerSize);
@@ -2958,6 +2972,7 @@ LowFunc makeRelocationSensitiveConstantFoldFunction(Arch TargetArch) {
   TruncateAddress.Addr = CallerVA + 0x48;
   TruncateAddress.addInput(NdVar::address(0x410, PointerSize));
   Block.Ops.push_back(std::move(TruncateAddress));
+  observe(NarrowAddress, CallerVA + 0x48);
   addBinary(NdOp::INT_ADD, NdVar::tmp(0x140, PointerSize), NarrowAddress,
             NdVar::cst(8, PointerSize), CallerVA + 0x4C);
   addBinary(NdOp::INT_ADD, NdVar::tmp(0x150, PointerSize),
@@ -17833,6 +17848,14 @@ TEST(LowToMedRelocationInvariantBoundary,
       LowRodata.Flags = SegmentFlags::Readable;
       LowRodata.Data.assign(LowRodata.Size, 0);
       Image.Segments.push_back(std::move(LowRodata));
+      Segment Observations;
+      Observations.Name = ".observations";
+      Observations.VA = RelocationFoldObservationVA;
+      Observations.Size = 0x100;
+      Observations.FileSz = Observations.Size;
+      Observations.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Observations.Data.assign(Observations.Size, 0);
+      Image.Segments.push_back(std::move(Observations));
       Image.RelocDataAddrs.insert(0x248);
       LowToMedConverter Converter;
       Converter.setBinaryImage(&Image);
@@ -17841,27 +17864,54 @@ TEST(LowToMedRelocationInvariantBoundary,
           Format);
       ASSERT_EQ(Func.Blocks.size(), 1U);
 
-      auto opAt = [&](va_t Addr) -> const MedOp * {
+      auto observedValueAt = [&](va_t Addr) -> const MedVar * {
         const auto &Ops = Func.Blocks.front().Ops;
         auto It = std::find_if(Ops.begin(), Ops.end(), [&](const MedOp &Op) {
-          return Op.Addr == Addr;
+          return Op.Addr == Addr && Op.Opcode == NdOp::STORE;
+        });
+        EXPECT_NE(It, Ops.end());
+        if (It == Ops.end())
+          return nullptr;
+        EXPECT_EQ(It->NumInputs, 2U);
+        if (It->NumInputs != 2)
+          return nullptr;
+        return &It->Inputs[1];
+      };
+      auto definingOpAt = [&](va_t Addr, const MedVar &Value) -> const MedOp * {
+        const auto &Ops = Func.Blocks.front().Ops;
+        auto It = std::find_if(Ops.begin(), Ops.end(), [&](const MedOp &Op) {
+          return Op.Addr == Addr && Op.Output == Value;
         });
         EXPECT_NE(It, Ops.end());
         return It == Ops.end() ? nullptr : &*It;
       };
+      auto observedConstantAt = [&](va_t Addr) -> const MedVar * {
+        const MedVar *Value = observedValueAt(Addr);
+        if (!Value || Value->isConst())
+          return Value;
+        const MedOp *Def = definingOpAt(Addr, *Value);
+        if (!Def)
+          return nullptr;
+        EXPECT_EQ(Def->Opcode, NdOp::COPY);
+        EXPECT_EQ(Def->NumInputs, 1U);
+        if (Def->Opcode != NdOp::COPY || Def->NumInputs != 1)
+          return nullptr;
+        return &Def->Inputs[0];
+      };
       auto expectCopyConstant = [&](va_t Addr, uint64_t Value,
                                     ConstantAddressProvenance Provenance =
                                         ConstantAddressProvenance::Unknown) {
-        const MedOp *Op = opAt(Addr);
-        ASSERT_NE(Op, nullptr);
-        EXPECT_EQ(Op->Opcode, NdOp::COPY);
-        ASSERT_EQ(Op->NumInputs, 1U);
-        EXPECT_TRUE(Op->Inputs[0].isConst());
-        EXPECT_EQ(Op->Inputs[0].ConstVal, Value);
-        EXPECT_EQ(Op->Inputs[0].Provenance, Provenance);
+        const MedVar *Observed = observedConstantAt(Addr);
+        ASSERT_NE(Observed, nullptr);
+        ASSERT_TRUE(Observed->isConst());
+        EXPECT_EQ(Observed->ConstVal, Value);
+        EXPECT_EQ(Observed->Provenance, Provenance);
       };
       auto expectBinary = [&](va_t Addr, NdOp Opcode) {
-        const MedOp *Op = opAt(Addr);
+        const MedVar *Observed = observedValueAt(Addr);
+        ASSERT_NE(Observed, nullptr);
+        ASSERT_FALSE(Observed->isConst());
+        const MedOp *Op = definingOpAt(Addr, *Observed);
         ASSERT_NE(Op, nullptr);
         EXPECT_EQ(Op->Opcode, Opcode);
         EXPECT_EQ(Op->NumInputs, 2U);
@@ -17899,14 +17949,12 @@ TEST(LowToMedRelocationInvariantBoundary,
                          ConstantAddressProvenance::Address);
       expectBinary(CallerVA + 0x4C, NdOp::INT_ADD);
       expectBinary(CallerVA + 0x50, NdOp::INT_ADD);
-      const MedOp *CompletedPageAddress = opAt(CallerVA + 0x54);
+      const MedVar *CompletedPageAddress = observedConstantAt(CallerVA + 0x54);
       ASSERT_NE(CompletedPageAddress, nullptr);
-      EXPECT_EQ(CompletedPageAddress->Opcode, NdOp::COPY);
-      ASSERT_EQ(CompletedPageAddress->NumInputs, 1U);
-      EXPECT_TRUE(CompletedPageAddress->Inputs[0].isConst());
-      EXPECT_EQ(CompletedPageAddress->Inputs[0].ConstVal, 0x248U);
+      ASSERT_TRUE(CompletedPageAddress->isConst());
+      EXPECT_EQ(CompletedPageAddress->ConstVal, 0x248U);
       EXPECT_TRUE(
-          isExactAddressProvenance(CompletedPageAddress->Inputs[0].Provenance));
+          isExactAddressProvenance(CompletedPageAddress->Provenance));
     }
 }
 

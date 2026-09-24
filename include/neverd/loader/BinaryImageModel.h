@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <iterator>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -472,9 +473,10 @@ struct BinaryImage {
   /// continuation chunks.
   std::vector<std::pair<va_t, va_t>> KnownCodeRanges;
   /// When nonempty, PE language-table decode and x64 unwind materialization
-  /// are limited to these entries and the catch funclets they name.
-  /// Exclusive-end ranges for the rest of `.pdata` still populate
-  /// KnownCodeRanges.
+  /// are limited to these entries and the catch/unwind funclets they name.
+  /// KnownCodeRanges keeps the requested bodies plus immediate `.pdata`
+  /// neighbors so CFG can clip; it does not ingest the rest of `.pdata`.
+  /// `hasKnownFunctionEntryAt` still binary-searches `COFFPDataRecords`.
   std::set<va_t> LoadOnlyFunctionEntries;
   /// Compact x64 `.pdata` index used when LoadOnlyFunctionEntries is set so
   /// unrequested RUNTIME_FUNCTION bodies are not materialized as
@@ -1032,14 +1034,11 @@ struct BinaryImage {
   /// True when typed symbol metadata owns p Addr as a function entry.
   /// Normalize ARM/Thumb spellings so patch-time synthetic original-VA
   /// symbols can recover the same code identity after reloading the image.
-  bool hasFunctionSymbolAt(va_t Addr) const {
-    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
-    for (const auto &Sym : Symbols)
-      if (Sym.IsFunc &&
-          normalizeCodeAddress(Sym.Addr, Arch, Mode) == Normalized)
-        return true;
-    return false;
-  }
+  /// An operation-scoped index makes repeated CFG queries logarithmic without
+  /// mutating this publicly editable image from parallel workers. An absent or
+  /// foreign index reads the current Symbols directly.
+  bool hasFunctionSymbolAt(
+      va_t Addr, const ExecutableCodeOwnerIndex *Index = nullptr) const;
 
   /// Largest non-function symbol size defined exactly at \p Addr (0 if none).
   /// Distinguishes a sized data object (a const array/table) from a bare label,
@@ -1415,6 +1414,106 @@ struct BinaryImage {
 
   bool isRuntimeFunctionAt(va_t Addr) const {
     return RuntimeFunctionAddrs.count(Addr) != 0;
+  }
+
+  /// Compact `--func` `.pdata` start.  Does not materialize the body.
+  bool hasPdataFunctionEntryAt(va_t Addr) const {
+    if (COFFPDataRecords.empty() || Addr < Base)
+      return false;
+    const uint64_t RVA64 = Addr - Base;
+    if (RVA64 > std::numeric_limits<uint32_t>::max())
+      return false;
+    const uint32_t RVA = static_cast<uint32_t>(RVA64);
+    const auto It = std::lower_bound(
+        COFFPDataRecords.begin(), COFFPDataRecords.end(), RVA,
+        [](const COFFPDataRecord &Rec, uint32_t Needle) {
+          return Rec.BeginRVA < Needle;
+        });
+    return It != COFFPDataRecords.end() && It->BeginRVA == RVA &&
+           It->BeginRVA < It->EndRVA;
+  }
+
+  /// Next compact `--func` `.pdata` start strictly after Addr.
+  va_t nextPdataFunctionEntryAfter(va_t Addr) const {
+    if (COFFPDataRecords.empty() || Addr < Base)
+      return InvalidVA;
+    const uint64_t AfterRVA = static_cast<uint64_t>(Addr - Base) + 1;
+    if (AfterRVA > std::numeric_limits<uint32_t>::max())
+      return InvalidVA;
+    const auto It = std::lower_bound(
+        COFFPDataRecords.begin(), COFFPDataRecords.end(),
+        static_cast<uint32_t>(AfterRVA),
+        [](const COFFPDataRecord &Rec, uint32_t RVA) {
+          return Rec.BeginRVA < RVA;
+        });
+    for (auto Cur = It; Cur != COFFPDataRecords.end(); ++Cur)
+      if (Cur->BeginRVA < Cur->EndRVA)
+        return Base + Cur->BeginRVA;
+    return InvalidVA;
+  }
+
+  /// True when pdata, KnownCodeRanges, or RuntimeFunctionAddrs name Addr as a
+  /// function start.  `--func` keeps the compact `.pdata` index instead of
+  /// copying every range into KnownCodeRanges; a BeginRVA hit is still a
+  /// start so `jmp` to an unmaterialized callee stays a tail call.  A range
+  /// beginning inside an earlier range can also describe an interior code
+  /// chunk, so its start alone is not independent function-entry evidence.
+  bool hasKnownFunctionEntryAt(va_t Addr) const {
+    const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+    if (RuntimeFunctionAddrs.count(Addr) != 0 ||
+        RuntimeFunctionAddrs.count(Normalized) != 0)
+      return true;
+    if (ExceptionMetadata.hasFunctionEntry(Addr) ||
+        ExceptionMetadata.hasFunctionEntry(Normalized))
+      return true;
+    if (hasPdataFunctionEntryAt(Addr) || hasPdataFunctionEntryAt(Normalized))
+      return true;
+    if (KnownCodeRanges.empty())
+      return false;
+    const auto It = std::lower_bound(
+        KnownCodeRanges.begin(), KnownCodeRanges.end(), Normalized,
+        [](const std::pair<va_t, va_t> &Range, va_t Needle) {
+          return Range.first < Needle;
+        });
+    if (It == KnownCodeRanges.end() || It->first != Normalized ||
+        It->second <= Normalized)
+      return false;
+    for (auto Prev = It; Prev != KnownCodeRanges.begin();) {
+      --Prev;
+      if (Prev->first < Normalized && Prev->second > Normalized)
+        return false;
+    }
+    return true;
+  }
+
+  /// Smallest function start strictly after Addr from the same metadata used
+  /// by hasKnownFunctionEntryAt.  InvalidVA means this is the last start.
+  va_t nextKnownFunctionEntryAfter(va_t Addr) const {
+    va_t Best = InvalidVA;
+    auto Consider = [&](va_t Start) {
+      if (Start > Addr && (Best == InvalidVA || Start < Best))
+        Best = Start;
+    };
+    if (auto It = RuntimeFunctionAddrs.upper_bound(Addr);
+        It != RuntimeFunctionAddrs.end())
+      Consider(*It);
+    if (const ExceptionFunction *Next = ExceptionMetadata.nextFunctionAfter(Addr))
+      Consider(Next->CodeRange.Begin);
+    if (!KnownCodeRanges.empty()) {
+      const auto It = std::upper_bound(
+          KnownCodeRanges.begin(), KnownCodeRanges.end(), Addr,
+          [](va_t Needle, const std::pair<va_t, va_t> &Range) {
+            return Needle < Range.first;
+          });
+      for (auto Cur = It; Cur != KnownCodeRanges.end(); ++Cur)
+        if (hasKnownFunctionEntryAt(Cur->first)) {
+          Consider(Cur->first);
+          break;
+        }
+    }
+    if (const va_t Next = nextPdataFunctionEntryAfter(Addr); Next != InvalidVA)
+      Consider(Next);
+    return Best;
   }
 
   /// True only for a complete pointer-width slot in a mapped, non-executable

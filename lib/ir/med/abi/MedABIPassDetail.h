@@ -61,6 +61,12 @@ std::optional<int> resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                                                const MedVar &V, bool IsWin64,
                                                int Depth = 0);
 
+/// Object pointer of an MSVC vfptr slot `(*(*obj + imm))`.  The slot load,
+/// `+imm`, and vfptr load must sit in \p Blk before \p CallIdx.  nullopt when
+/// the target is not that shape (a raw function pointer, an import, ...).
+std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
+                                       const MedVar &Target);
+
 //===----------------------------------------------------------------------===//
 // Stack-pointer offset tracing
 //===----------------------------------------------------------------------===//
@@ -120,6 +126,11 @@ const PhiNode *selectAuthoritativeArgPhi(const MedFunc &Func,
                                          const TargetRegInfo &TRI, int ArgIdx,
                                          bool IsWin64);
 
+/// True when \p V is a non-const incoming of \p Phi.  A same-block copy of a
+/// then-arm field load (`mov r9d, edi` of `p->field`) must not beat the
+/// join PHI that also carries the else `0`.
+bool phiCarriesIncoming(const PhiNode &Phi, const MedVar &V);
+
 /// Value reaching argument register \p ArgIdx at the call in block \p BlockId,
 /// found by walking the CFG backwards into predecessor blocks (nearest write,
 /// then a block PHI, then -- when \p AllowUnknownLiveIn -- an incoming
@@ -130,7 +141,14 @@ std::optional<MedVar> findReachingArgReg(const MedFunc &Func,
                                          const TargetRegInfo &TRI, Arch TheArch,
                                          int BlockId, int ArgIdx, bool IsWin64,
                                          bool AllowUnknownLiveIn = false,
-                                         bool *FromLiveIn = nullptr);
+                                         bool *FromLiveIn = nullptr,
+                                         bool *FoundDef = nullptr);
+
+/// Unique predecessor's `if (p)` / `if (!p)` pointer.  After an intervening
+/// Win64 thiscall clobbers rcx. The callee this is the guarded table, not
+/// live-in parent this.
+std::optional<MedVar> uniquePredNonNullGuard(const MedFunc &Func,
+                                            const MedBlock &Blk);
 
 } // namespace neverd
 

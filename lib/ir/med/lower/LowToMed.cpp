@@ -149,6 +149,7 @@ void LowToMedConverter::neutralizeStackProbeCalls(MedFunc &Func) {
 MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
                                    BinaryFormat Fmt) {
   TargetArch = TheArch;
+  TargetFormat = Fmt;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
       if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
@@ -340,6 +341,33 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
       } else {
         for (uint8_t I = 0; I < LOp.NumInputs; ++I)
           MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
+      }
+
+      if (LOp.Opcode == NdOp::INTRINSIC && LOp.NumInputs > 0 &&
+          LOp.Inputs[0].isConst()) {
+        const auto Id = static_cast<Intrinsic>(LOp.Inputs[0].Offset);
+        const uint8_t Count = intrinsicOutputCount(Id);
+        for (size_t Next = LowOpIndex + 1;
+             Next < LB.Ops.size() && MOp.IntrinsicOutputs.size() < Count;
+             ++Next) {
+          const LowOp &Write = LB.Ops[Next];
+          if (Write.Addr != LOp.Addr)
+            break;
+          const bool IsTransport =
+              Write.Opcode == NdOp::COPY || Write.Opcode == NdOp::INT_ZEXT ||
+              Write.Opcode == NdOp::INT_SEXT || Write.Opcode == NdOp::SUBBYTES;
+          if (!IsTransport)
+            break;
+          if (Write.NumInputs == 0 || !Write.Inputs[0].isTemp())
+            continue;
+          MedVar Source = ndVarToMedVar(Write.Inputs[0]);
+          if (std::none_of(MOp.IntrinsicOutputs.begin(),
+                           MOp.IntrinsicOutputs.end(),
+                           [&](const MedVar &Existing) {
+                             return Existing == Source;
+                           }))
+            MOp.IntrinsicOutputs.push_back(Source);
+        }
       }
 
       MB.Ops.push_back(MOp);
@@ -738,6 +766,7 @@ void LowToMedConverter::resolveI386GetPcModels(
     const MedVar ExpectedInput = ndVarToMedVar(Occurrence.InputWitness);
     std::optional<MedI386GetPcModel> Bound;
     bool Multiple = false;
+    bool SawSurvivingCopy = false;
     for (const MedBlock &Block : Func.Blocks) {
       for (const MedOp &Op : Block.Ops) {
         if (Op.Addr != Occurrence.InstructionAddr ||
@@ -750,7 +779,10 @@ void LowToMedConverter::resolveI386GetPcModels(
             Candidate.Id == Expected.Id && Candidate.Size == Expected.Size &&
             (Candidate.Kind != MedVar::Reg ||
              Candidate.RegOff == Expected.RegOff);
-        if (!SameLane || Op.NumInputs != 1)
+        if (!SameLane)
+          continue;
+        SawSurvivingCopy = true;
+        if (Op.NumInputs != 1)
           continue;
         const MedVar &CandidateInput = Op.Inputs[0];
         const bool SameInputLane =
@@ -772,10 +804,43 @@ void LowToMedConverter::resolveI386GetPcModels(
       if (Multiple)
         break;
     }
+    // Propagation can redirect every user of the POP's architectural COPY to
+    // its input and DCE can then remove that COPY.  The CFG proof still names
+    // the exact POP LOAD temporary.  Bind that surviving producer only when
+    // there is no conflicting rewritten COPY, and require one matching LOAD at
+    // the same instruction before the original COPY sequence.  Its raw stack
+    // load remains in MedIR; only an address expression derived from this
+    // authenticated SSA value may fold to the call-next PC.
+    if (!Multiple && !Bound && !SawSurvivingCopy) {
+      const MedVar *PopLoad = nullptr;
+      for (const MedBlock &Block : Func.Blocks) {
+        for (const MedOp &Op : Block.Ops) {
+          if (Op.Addr != Occurrence.InstructionAddr ||
+              Op.OriginSeq >= Occurrence.OpSeq || Op.Opcode != NdOp::LOAD ||
+              Op.NumInputs != 1 ||
+              Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+              Op.Output.Kind != ExpectedInput.Kind ||
+              Op.Output.Id != ExpectedInput.Id ||
+              Op.Output.Size != ExpectedInput.Size)
+            continue;
+          if (PopLoad) {
+            Multiple = true;
+            break;
+          }
+          PopLoad = &Op.Output;
+        }
+        if (Multiple)
+          break;
+      }
+      if (PopLoad)
+        Bound = MedI386GetPcModel{MedVar{}, *PopLoad,
+                                   Occurrence.PCValue};
+    }
     if (Multiple || !Bound)
       continue;
 
-    const Key BoundKey = keyFor(Bound->Output);
+    const Key BoundKey =
+        keyFor(Bound->Output.Size != 0 ? Bound->Output : Bound->Value);
     if (Ambiguous.count(BoundKey))
       continue;
     auto [It, Inserted] = BoundModels.emplace(BoundKey, *Bound);

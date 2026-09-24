@@ -8,6 +8,7 @@
 
 #include "MachOI386RelocationTestsDetail.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/med/LowToMed.h"
 
 namespace {
 
@@ -153,6 +154,12 @@ TEST_F(MachOI386Relocation,
   ASSERT_NE(SeedCopy, nullptr);
   ASSERT_EQ(SeedCopy->NumInputs, 1u);
   EXPECT_EQ(GetPc.InputWitness, SeedCopy->Inputs[0]);
+
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&*PICImgOrErr);
+  const MedFunc Med = Converter.convert(Low, Arch::X86, BinaryFormat::MachO);
+  ASSERT_EQ(Med.I386GetPcModels.size(), 1u);
+  EXPECT_EQ(Med.I386GetPcModels.front().PCValue, GetPc.PCValue);
 
   for (llvm::StringRef Name : {llvm::StringRef("test_macho_i386.o"),
                                llvm::StringRef("test_macho_i386_nopic.o")}) {

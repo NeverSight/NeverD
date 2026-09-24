@@ -207,8 +207,8 @@ bool HighExpr::hasOrderedMemoryAccess() const {
     if (Expr->MemoryOrdering != NdMemoryOrdering::None ||
         Expr->MemoryAddressSpace != NdMemoryAddressSpace::Default)
       return true;
-    for (const ExprPtr &Operand : Expr->Operands)
-      Work.push_back(Operand.get());
+    Expr->forEachChildExpr(
+        [&](const ExprPtr &Operand) { Work.push_back(Operand.get()); });
   }
   return false;
 }

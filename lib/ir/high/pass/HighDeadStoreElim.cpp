@@ -398,10 +398,12 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
 //===----------------------------------------------------------------------===//
 
 void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts) {
-  Stmts.erase(
-      std::remove_if(Stmts.begin(), Stmts.end(),
-                     [](const HighStmt &S) { return S.Kind == StmtKind::Nop; }),
-      Stmts.end());
+  Stmts.erase(std::remove_if(Stmts.begin(), Stmts.end(),
+                            [](const HighStmt &S) {
+                              return S.Kind == StmtKind::Nop &&
+                                     (!S.Addr || S.Addr == InvalidVA);
+                            }),
+              Stmts.end());
 
   for (size_t I = 0; I + 1 < Stmts.size(); ++I) {
     auto &CurrStmt = Stmts[I];

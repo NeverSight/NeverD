@@ -104,11 +104,9 @@ void CFGBuilder::establishCurrentFuncRange(const BinaryImage &Img,
 
   // Even without sized metadata, the next independently detected entry is a
   // hard upper boundary.  It does not prove an unbounded last function.
-  if (KnownFuncEntries) {
-    auto Next = KnownFuncEntries->upper_bound(CurrentFuncEntry);
-    if (Next != KnownFuncEntries->end())
-      ConsiderEnd(*Next);
-  }
+  if (const va_t Next = nextKnownFunctionEntry(CurrentFuncEntry);
+      Next != InvalidVA)
+    ConsiderEnd(Next);
 
   if (End != InvalidVA)
     CurrentFuncRange = std::make_pair(CurrentFuncEntry, End);
@@ -122,7 +120,8 @@ bool CFGBuilder::isOwnedInteriorTarget(const BinaryImage &Img,
   if (!CurrentFuncRange || Target <= CurrentFuncRange->first ||
       Target >= CurrentFuncRange->second)
     return false;
-  if (KnownFuncEntries && KnownFuncEntries->count(Target))
+  if (isKnownFunctionEntry(Target) && !isCurrentExceptionalEntry(Target) &&
+      !isCurrentOwnedFragment(Target))
     return false;
   if ((Target % getInsnAlignment()) != 0 ||
       !Img.hasExecutableCodeOwnerAt(Target) ||

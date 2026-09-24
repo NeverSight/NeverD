@@ -35,6 +35,28 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
   FunctionIdentifiers.clear();
   for (llvm::Function &Fn : Mod) {
     llvm::StringRef Name = Fn.getName();
+    std::string DebugName;
+    if (isSynthesizedFuncName(Name)) {
+      llvm::StringRef Hex = Name;
+      if (!Hex.consume_front(kAutoFuncPrefix))
+        Hex.consume_front(kAutoFuncPrefixEVM);
+      uint64_t Addr = 0;
+      if (!Hex.empty() && !Hex.getAsInteger(16, Addr) && Addr != 0) {
+        if (Dbg) {
+          if (auto FS = Dbg->resolveFunction(static_cast<va_t>(Addr));
+              FS && !FS->Name.empty())
+            DebugName = FS->Name;
+        }
+        if (DebugName.empty() && Img) {
+          std::string FromImage =
+              Img->getFunctionNameAt(static_cast<va_t>(Addr));
+          if (!FromImage.empty() && !isSynthesizedFuncName(FromImage))
+            DebugName = std::move(FromImage);
+        }
+      }
+    }
+    if (!DebugName.empty())
+      Name = DebugName;
     Name.consume_front("_");
     FunctionIdentifiers.emplace(
         &Fn, GlobalIdentifierAllocator.allocate(Name, "nd_function"));
@@ -151,6 +173,31 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
     if (RawName.empty())
       continue;
 
+    // IAT/import slots are callable names at call sites, not C objects.
+    // Printing `__imp_??1?$CStringT@...` as `extern uint64_t` is not C.
+    if (!GV.hasInitializer()) {
+      llvm::StringRef Raw = RawName;
+      std::string ImportName;
+      if (Raw.starts_with("__imp_") || Raw.starts_with("_imp_") ||
+          Raw.starts_with("??") || Raw.starts_with("ord_"))
+        ImportName = canonicalizeCProjectionIdentifier(Raw, "nd_import");
+      else if (auto Slot = parseNdCodePtrSymbol(Raw)) {
+        if (Img)
+          if (const Import *Imp = Img->findImportAt(*Slot);
+              Imp && !Imp->Name.empty())
+            ImportName =
+                canonicalizeCProjectionIdentifier(Imp->Name, "nd_import");
+      } else if (auto Slot = parseNdDataSymbol(Raw)) {
+        if (Img)
+          if (const Import *Imp = Img->findImportAt(*Slot);
+              Imp && !Imp->Name.empty())
+            ImportName =
+                canonicalizeCProjectionIdentifier(Imp->Name, "nd_import");
+      }
+      if (!ImportName.empty())
+        continue;
+    }
+
     std::string Name = resolveNdDataName(RawName);
     if (Name.empty()) {
       std::string Identifier = RawName;
@@ -167,6 +214,22 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       else if (std::isdigit(static_cast<unsigned char>(Name[0])))
         Name = "g_" + Name;
     } else if (!GV.hasInitializer()) {
+      llvm::StringRef Resolved = Name;
+      if (Resolved.starts_with("__imp_") || Resolved.starts_with("_imp_") ||
+          Resolved.starts_with("??") || Resolved.starts_with("ord_") ||
+          Resolved.contains("??"))
+        continue;
+      if (auto Slot = parseNdDataSymbol(RawName); Slot && Img) {
+        if (Img->findImportAt(*Slot))
+          continue;
+        auto *VTy = GV.getValueType();
+        const uint16_t Size =
+            VTy && VTy->isIntegerTy()
+                ? static_cast<uint16_t>(VTy->getIntegerBitWidth() / 8)
+                : 0;
+        if (foldReadonlyScalar(*Slot, Size))
+          continue;
+      }
       auto *VTy = GV.getValueType();
       const char *CTy = "uint8_t";
       if (VTy->isIntegerTy(16))
@@ -211,6 +274,18 @@ void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
     std::string Name = imageDataCName(Ptr);
     if (Name.empty() || !Ty)
       return;
+    if (auto VA = imageDataVA(Ptr)) {
+      const uint16_t Size = Ty->isIntegerTy()
+                                ? static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8)
+                                : 0;
+      if (foldReadonlyScalar(*VA, Size))
+        return;
+    }
+    llvm::StringRef Raw = Name;
+    if (Raw.starts_with("__imp_") || Raw.starts_with("_imp_") ||
+        Raw.starts_with("??") || Raw.starts_with("ord_") ||
+        Raw.contains("??"))
+      return;
     auto It = Objs.find(Name);
     if (It == Objs.end() ||
         (Ty->isIntegerTy() && It->second->isIntegerTy() &&
@@ -225,8 +300,18 @@ void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
         Note(SI->getPointerOperand(), SI->getValueOperand()->getType());
     }
   }
-  for (const auto &[Name, Ty] : Objs)
+  for (const auto &[Name, Ty] : Objs) {
+    if (Img) {
+      if (auto Slot = parseNdDataSymbol(Name)) {
+        const uint16_t Size = Ty->isIntegerTy()
+                                  ? static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8)
+                                  : 0;
+        if (foldReadonlyScalar(*Slot, Size))
+          continue;
+      }
+    }
     OS << "extern " << typeToCLLVM(Ty) << " " << Name << ";\n";
+  }
   if (!Objs.empty())
     OS << "\n";
 }
@@ -254,6 +339,12 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
 
     if (libc::isKnownFunction(Name))
       continue;
+    if (const MsvcAtlCallee *Atl = msvcAtlCallee(Name)) {
+      OS << msvcAtlSyntheticPrototype(Name, *Atl,
+                                      Opts.TheArch == Arch::X64 && Atl->FastCall)
+         << ";\n";
+      continue;
+    }
 
     auto *FT = Fn.getFunctionType();
     OS << typeToCLLVM(FT->getReturnType()) << " " << Name << "(";

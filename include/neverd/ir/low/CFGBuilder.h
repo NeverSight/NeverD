@@ -654,6 +654,14 @@ public:
   void setKnownFuncEntries(const std::set<va_t> *Entries) {
     KnownFuncEntries = Entries;
   }
+  /// True when the borrowed set or image pdata/KnownCodeRanges names Addr as
+  /// a separately callable function start.
+  bool isKnownFunctionEntry(va_t Addr) const;
+  /// Next non-exceptional function start after After.  InvalidVA if none.
+  va_t nextKnownFunctionEntry(va_t After) const;
+  /// Conservative inventory size for jump-table work prepaid against entry
+  /// lookups.  Uses image metadata when the borrowed set is a `--func` shard.
+  size_t knownFunctionEntryCount() const;
   /// Share immutable import/symbol lookup across builds of one unchanged
   /// image. The index must outlive all builds; null retains the live lookup.
   void setNoReturnTargetIndex(const libc::NoReturnTargetIndex *Index) {
@@ -1059,6 +1067,10 @@ private:
   /// ownership proof for a separately callable entry.
   void establishCurrentFuncRange(const BinaryImage &Img,
                                  const ExceptionFunction *Exception);
+  bool isCurrentExceptionalEntry(va_t Address) const {
+    return CurrentExceptionalEntries.count(Address) != 0;
+  }
+  bool isCurrentOwnedFragment(va_t Address) const;
   /// Decode relocation-proven and same-function-discovered address-taken
   /// blocks as disconnected CFG roots, without splitting decoded instructions.
   void exploreAddressTakenRoots(const BinaryImage &Img, Decoder &Dec);
@@ -2493,6 +2505,10 @@ private:
   size_t RelativeRelocationRootSourceCacheBuildCountForTesting = 0;
   size_t RelativeRelocationRootSourceCacheLookupCountForTesting = 0;
   const std::set<va_t> *KnownFuncEntries = nullptr;
+  /// Filter, handler, and landing-pad VAs inside the current primary range.
+  /// MSVC often labels those thunks as functions; they still belong to this
+  /// CFG, so KnownFuncEntries must not clip or refuse them.
+  std::set<va_t> CurrentExceptionalEntries;
   const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
   const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;

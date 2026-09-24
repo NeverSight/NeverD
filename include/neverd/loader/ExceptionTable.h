@@ -41,6 +41,10 @@ struct ExceptionInfo {
   uint32_t DirectoryRVA = 0;
   uint32_t DirectorySize = 0;
   std::vector<size_t> FunctionIndex;
+  /// Widest indexed code range. findFunction only walks starts inside
+  /// `[Address - MaxCodeSize, Address]` plus any hit, so `--func` on a
+  /// large PE is logarithmic instead of a full pdata scan.
+  uint64_t MaxCodeSize = 0;
   std::vector<std::string> Diagnostics;
 
   /// Models present in this image.  A single image legitimately carries more
@@ -161,8 +165,12 @@ struct ExceptionInfo {
 
   void rebuildIndex() {
     FunctionIndex.resize(Functions.size());
-    for (size_t I = 0; I < Functions.size(); ++I)
+    MaxCodeSize = 0;
+    for (size_t I = 0; I < Functions.size(); ++I) {
       FunctionIndex[I] = I;
+      if (Functions[I].CodeRange.size() > MaxCodeSize)
+        MaxCodeSize = Functions[I].CodeRange.size();
+    }
     std::stable_sort(FunctionIndex.begin(), FunctionIndex.end(),
                      [&](size_t A, size_t B) {
                        const auto &RA = Functions[A].CodeRange;
@@ -174,15 +182,46 @@ struct ExceptionInfo {
   }
 
   const ExceptionFunction *findFunction(va_t Address) const {
+    if (FunctionIndex.empty())
+      return nullptr;
+    size_t Lo = 0;
+    size_t Hi = FunctionIndex.size();
+    while (Lo < Hi) {
+      const size_t Mid = Lo + (Hi - Lo) / 2;
+      const size_t I = FunctionIndex[Mid];
+      if (I < Functions.size() && Functions[I].CodeRange.Begin <= Address)
+        Lo = Mid + 1;
+      else
+        Hi = Mid;
+    }
     const ExceptionFunction *Best = nullptr;
-    for (size_t I : FunctionIndex) {
+    if (Lo > 0) {
+      const size_t Near = FunctionIndex[Lo - 1];
+      if (Near < Functions.size() &&
+          Functions[Near].CodeRange.contains(Address))
+        Best = &Functions[Near];
+    }
+    // A huge or malformed range would make MaxCodeSize span the image.
+    // Walk a bounded nest window after the nearest start; pdata is
+    // almost always disjoint, so the first hit is the owner.
+    const uint64_t Window =
+        MaxCodeSize == 0
+            ? 0
+            : std::min<uint64_t>(MaxCodeSize, uint64_t{2} * 1024 * 1024);
+    const va_t WalkFloor = Window != 0 && Address >= Window
+                               ? Address - static_cast<va_t>(Window)
+                               : 0;
+    unsigned Nest = 0;
+    for (size_t N = Lo; N > 0 && Nest < 16;) {
+      const size_t I = FunctionIndex[--N];
       if (I >= Functions.size())
         continue;
       const ExceptionFunction &F = Functions[I];
-      if (F.CodeRange.Begin > Address)
+      if (F.CodeRange.Begin < WalkFloor)
         break;
       if (!F.CodeRange.contains(Address))
         continue;
+      ++Nest;
       if (!Best || F.CodeRange.size() < Best->CodeRange.size())
         Best = &F;
     }
@@ -192,6 +231,54 @@ struct ExceptionInfo {
   ExceptionFunction *findFunction(va_t Address) {
     return const_cast<ExceptionFunction *>(
         static_cast<const ExceptionInfo *>(this)->findFunction(Address));
+  }
+
+  /// First runtime-function record whose range starts exactly at Address.
+  const ExceptionFunction *findFunctionEntry(va_t Address) const {
+    if (FunctionIndex.empty())
+      return nullptr;
+    size_t Lo = 0;
+    size_t Hi = FunctionIndex.size();
+    while (Lo < Hi) {
+      const size_t Mid = Lo + (Hi - Lo) / 2;
+      const size_t I = FunctionIndex[Mid];
+      if (I >= Functions.size() || Functions[I].CodeRange.Begin < Address)
+        Lo = Mid + 1;
+      else
+        Hi = Mid;
+    }
+    if (Lo >= FunctionIndex.size())
+      return nullptr;
+    const size_t I = FunctionIndex[Lo];
+    if (I < Functions.size() && Functions[I].CodeRange.Begin == Address)
+      return &Functions[I];
+    return nullptr;
+  }
+
+  bool hasFunctionEntry(va_t Address) const {
+    return findFunctionEntry(Address) != nullptr;
+  }
+
+  /// First runtime-function whose Begin is strictly greater than Address.
+  const ExceptionFunction *nextFunctionAfter(va_t Address) const {
+    if (FunctionIndex.empty())
+      return nullptr;
+    size_t Lo = 0;
+    size_t Hi = FunctionIndex.size();
+    while (Lo < Hi) {
+      const size_t Mid = Lo + (Hi - Lo) / 2;
+      const size_t I = FunctionIndex[Mid];
+      if (I >= Functions.size() || Functions[I].CodeRange.Begin <= Address)
+        Lo = Mid + 1;
+      else
+        Hi = Mid;
+    }
+    if (Lo >= FunctionIndex.size())
+      return nullptr;
+    const size_t I = FunctionIndex[Lo];
+    if (I < Functions.size() && Functions[I].CodeRange.Begin > Address)
+      return &Functions[I];
+    return nullptr;
   }
 };
 

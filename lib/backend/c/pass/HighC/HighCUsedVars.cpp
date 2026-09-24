@@ -11,38 +11,26 @@
 
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 
+#include <algorithm>
+
 namespace neverd {
-
-namespace {
-
-template <typename Visitor>
-void walkExprNodes(const HighExpr &Root, Visitor &&Visit) {
-  std::set<const HighExpr *> Seen;
-  std::vector<const HighExpr *> Work{&Root};
-  while (!Work.empty()) {
-    const HighExpr *Expr = Work.back();
-    Work.pop_back();
-    if (!Seen.insert(Expr).second)
-      continue;
-    Visit(*Expr);
-    for (auto It = Expr->Operands.rbegin(); It != Expr->Operands.rend(); ++It)
-      if (*It)
-        Work.push_back(It->get());
-  }
-}
-
-} // anonymous namespace
 
 void collectUsedVarsExpr(const HighExpr &Expr,
                          std::map<std::string, TypeRef> &Vars,
-                         VarNameFn VarFn) {
-  walkExprNodes(Expr, [&](const HighExpr &E) {
-    if (isNamedValueExpr(E)) {
-      std::string Name = VarFn(E.Var);
+                         VarNameFn VarFn, CallArgLimitFn ArgLimit) {
+  std::set<const HighExpr *> Seen;
+  std::vector<const HighExpr *> Work{&Expr};
+  while (!Work.empty()) {
+    const HighExpr *Cur = Work.back();
+    Work.pop_back();
+    if (!Cur || !Seen.insert(Cur).second)
+      continue;
+    if (isNamedValueExpr(*Cur)) {
+      std::string Name = VarFn(Cur->Var);
       if (!Name.empty() && Vars.find(Name) == Vars.end())
-        Vars[Name] = E.Type;
+        Vars[Name] = Cur->Type;
     }
-    for (auto &CO : E.IntrinsicOutputs) {
+    for (auto &CO : Cur->IntrinsicOutputs) {
       std::string Name = VarFn(CO);
       if (Name.empty())
         continue;
@@ -50,23 +38,32 @@ void collectUsedVarsExpr(const HighExpr &Expr,
       if (Vars.find(Name) == Vars.end())
         Vars[Name] = Ty;
     }
-  });
+    size_t Limit = Cur->Operands.size();
+    if (Cur->Kind == ExprKind::Call && ArgLimit)
+      Limit = std::min(Limit, ArgLimit(*Cur));
+    for (size_t I = Limit; I > 0; --I)
+      if (Cur->Operands[I - 1])
+        Work.push_back(Cur->Operands[I - 1].get());
+    if (Cur->IndirectTarget)
+      Work.push_back(Cur->IndirectTarget.get());
+  }
 }
 
 void collectUsedVars(const std::vector<HighStmt> &Stmts,
-                     std::map<std::string, TypeRef> &Vars, VarNameFn VarFn) {
+                     std::map<std::string, TypeRef> &Vars, VarNameFn VarFn,
+                     CallArgLimitFn ArgLimit) {
   for (auto &S : Stmts) {
     forEachExpr(S, [&](const ExprPtr &E) {
       if (E)
-        collectUsedVarsExpr(*E, Vars, VarFn);
+        collectUsedVarsExpr(*E, Vars, VarFn, ArgLimit);
     });
-    collectUsedVars(S.Body, Vars, VarFn);
-    collectUsedVars(S.ElseBody, Vars, VarFn);
+    collectUsedVars(S.Body, Vars, VarFn, ArgLimit);
+    collectUsedVars(S.ElseBody, Vars, VarFn, ArgLimit);
     for (auto &C : S.Cases)
-      collectUsedVars(C.Body, Vars, VarFn);
-    collectUsedVars(S.DefaultBody, Vars, VarFn);
+      collectUsedVars(C.Body, Vars, VarFn, ArgLimit);
+    collectUsedVars(S.DefaultBody, Vars, VarFn, ArgLimit);
     for (auto &ClauseBody : S.EHClauseBodies)
-      collectUsedVars(ClauseBody, Vars, VarFn);
+      collectUsedVars(ClauseBody, Vars, VarFn, ArgLimit);
   }
 }
 

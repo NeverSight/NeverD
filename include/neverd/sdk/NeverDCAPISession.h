@@ -91,6 +91,17 @@ NEVERD_API void neverd_session_set_debug_info_enabled(neverd_session_t Sess,
 NEVERD_API void neverd_session_restrict_function(neverd_session_t Sess,
                                                  neverd_va_t Entry);
 
+/// Best-effort exact-name hint for a PE with an explicitly selected PDB.
+/// Call after neverd_session_set_pdb_path() and before neverd_session_load().
+/// Returns 0 if the name is absent or ambiguous, the files disagree, or the
+/// fast lookup is unavailable.  This does not change the session or report an
+/// error; callers should load normally and resolve the name in that case.
+/// A nonzero result may be passed to neverd_session_restrict_function(), but
+/// callers must verify the name after loading and retry without restriction if
+/// it no longer resolves to that address.
+NEVERD_API neverd_va_t neverd_session_resolve_function_name_before_load(
+    neverd_session_t Sess, const char *BinaryPath, const char *Name);
+
 /// Called from `neverd_session_load` on the same thread.  \p phase is a
 /// stable token (`image`, `debug`, `ready`).  \p done/\p total are 0 when
 /// the step is indeterminate.  \p detail may be empty.  Pass NULL to clear.

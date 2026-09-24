@@ -282,27 +282,30 @@ unsigned applyDebugSymbols(BinaryImage &Img, const DebugContext &Dbg) {
     }
   }
 
-  // Names-only data publics (Phase A PDB) must still name image objects.
-  // Size 0 is intentional: extents stay unauthenticated.
+  // Names-only data publics (Phase A PDB / MAP) must still name image
+  // objects.  Size 0 is intentional: extents stay unauthenticated.
+  // Index once: a large MAP can carry tens of thousands of data publics.
+  std::map<va_t, size_t> DataByAddr;
+  for (size_t I = 0; I < Img.Symbols.size(); ++I) {
+    if (!Img.Symbols[I].IsFunc)
+      DataByAddr.try_emplace(Img.Symbols[I].Addr, I);
+  }
   for (const DataObjectSym &Object : Dbg.allDataObjects()) {
     if (Object.Name.empty() || Object.Addr == InvalidVA)
       continue;
-    bool Found = false;
-    for (Symbol &Existing : Img.Symbols) {
-      if (Existing.Addr != Object.Addr || Existing.IsFunc)
-        continue;
-      Found = true;
+    auto It = DataByAddr.find(Object.Addr);
+    if (It != DataByAddr.end()) {
+      Symbol &Existing = Img.Symbols[It->second];
       if (Existing.Name.empty() || isSynthesizedFuncName(Existing.Name))
         Existing.Name = Object.Name;
-      break;
-    }
-    if (Found)
       continue;
+    }
     Symbol New;
     New.Name = Object.Name;
     New.Addr = Object.Addr;
     New.Size = Object.Size;
     New.IsFunc = false;
+    DataByAddr.emplace(Object.Addr, Img.Symbols.size());
     Img.Symbols.push_back(std::move(New));
   }
 

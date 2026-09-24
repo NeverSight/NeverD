@@ -326,6 +326,11 @@ constexpr int kMaxVerifyInsns = 64;
 /// with an already-detected function.
 constexpr uint64_t kMaxOverlapDistance = 0x10000;
 
+/// `--func` may attach out-of-line catch/unwind pdata, but a malformed or
+/// merged runtime-function range must not import that owner's entire EH
+/// graph.  Real MSVC methods stay well below 1 MiB.
+constexpr uint64_t kMaxOnlyFunctionEHOwnerSize = 0x100000;
+
 //===----------------------------------------------------------------------===//
 // Expression tree / IR limits
 //===----------------------------------------------------------------------===//
@@ -463,6 +468,12 @@ constexpr size_t kMinFuncScanChunk = 64 * 1024;
 /// setup outweighs the work, so the check stays single-threaded.
 constexpr size_t kMinParallelVerify = 512;
 
+/// Minimum Low/Med/High work items before `parallelForEach` spawns 8 MiB
+/// workers. `--func` expands unwind ActionVAs so the batch is often 2–20,
+/// not 1; those stacks are CLI latency. Below this the caller thread runs
+/// the batch (heaviest-first when weighted).
+constexpr size_t kMinParallelIRWorkItems = 32;
+
 //===----------------------------------------------------------------------===//
 // C output formatting
 //===----------------------------------------------------------------------===//
@@ -470,6 +481,10 @@ constexpr size_t kMinParallelVerify = 512;
 /// Threshold below which integer constants are printed in decimal
 /// rather than hexadecimal in decompiled C output.
 constexpr uint64_t kDecimalConstThreshold = 4096;
+
+/// Display-only TPI member / enumerator names.  Structs stay small;
+/// LF_ENUM string-id tables are sequential and commonly exceed 1k.
+constexpr size_t kMaxTpiDisplayFields = 16384;
 
 /// Bytes to read from MSVC `TypeDescriptor::name[]` (RTTI).
 constexpr size_t kMaxMsvcTypeDescriptorNameBytes = 256;
@@ -516,6 +531,10 @@ constexpr size_t kMaxStructuredHighStmts = 4000;
 /// if/else folding passes for ordinary vs large CFGs.
 constexpr int kIfElseStructuringPasses = 10;
 constexpr int kIfElseLargeCfgPasses = 3;
+/// Newly folded then/else arms already lived in the parent list. Re-drain
+/// them with this many passes; the parent still runs kIfElseStructuringPasses
+/// and structureIfElseNested already structured existing children.
+constexpr int kIfElseNestedArmPasses = 1;
 
 /// x86 registration-chain prologue helper expansion fixed point.
 constexpr unsigned kMaxRegistrationEHFixedPoint = 16;

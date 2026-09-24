@@ -41,6 +41,13 @@ public:
   /// image-independent folding policy.
   void setBinaryImage(const BinaryImage *I) { Image = I; }
 
+  /// Register DCE with an explicit architecture. Used by tests that build
+  /// MedIR directly; the pipeline path sets TargetArch in convert().
+  void runRegisterDce(MedFunc &Func, Arch TheArch) {
+    TargetArch = TheArch;
+    runDce(Func);
+  }
+
   /// Source rendering only. The pipeline must keep this disabled for patching
   /// and lifting: these declarations are not authenticated semantic evidence.
   void setSourceCallHintsEnabled(bool Enabled) {
@@ -215,6 +222,8 @@ private:
   int NextTempId = 0;
   uint32_t NextCallSiteId = 1;
   Arch TargetArch = Arch::Unknown;
+  /// Set by convert(). Win64 COFF preserves RSI/RDI; SysV does not.
+  BinaryFormat TargetFormat = BinaryFormat::Unknown;
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;

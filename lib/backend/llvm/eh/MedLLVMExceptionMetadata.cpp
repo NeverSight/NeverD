@@ -13,6 +13,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/IR/Function.h"
@@ -42,10 +43,21 @@ void MedLLVMEmitter::emitExceptionMetadata(const MedFunc &Func,
     Source = exception_rewrite::SourceState::Malformed;
     break;
   }
-  exception_rewrite::setContract(
-      LLVMFunc, Source,
-      EH.hasLanguageTable() ? exception_rewrite::LoweringState::Missing
-                            : exception_rewrite::LoweringState::NotRequired);
+  // Missing means native IR lowering was required and has not been applied.
+  // Known-unsupported Windows shapes (C++ dtors, out-of-line funclets,
+  // AArch64 SEH callbacks) stay metadata-only so `--llvm` opt is not
+  // `input-invalid`. Empty/malformed tables and Itanium refusals stay
+  // Missing. Eligible emitters overwrite this with Complete after they finish.
+  exception_rewrite::LoweringState Lowering =
+      exception_rewrite::LoweringState::NotRequired;
+  if (EH.hasLanguageTable()) {
+    const WindowsEHNativeSourceClassification IR =
+        classifyWindowsEHNativeSource(EH, TargetArch, TargetFormat,
+                                      WindowsEHNativeCapability::IRLowering);
+    if (!isIntentionalMetadataOnlyNativeIR(IR.Reason))
+      Lowering = exception_rewrite::LoweringState::Missing;
+  }
+  exception_rewrite::setContract(LLVMFunc, Source, Lowering);
   // The source described a native frame even when it carried no language
   // table.  Ask the target backend for its native CFI so the object-format
   // installer has something target-correct to register for the new frame.

@@ -529,7 +529,10 @@ inline void writeGraph(Budget &O, Buffer &Data, const BinaryImage &Img,
   for (const auto &V : MF->I386GetPcModels) {
     if (!A.row("med-get-pc-model"))
       break;
-    A.v("output", V.Output);
+    if (V.Output.Size != 0)
+      A.v("output", V.Output);
+    else
+      A.s("output", "elided");
     A.v("value", V.Value);
     A.u("pc", V.PCValue);
     A.end();

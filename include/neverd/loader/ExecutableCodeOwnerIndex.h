@@ -38,6 +38,7 @@ private:
                                     const ExecutableCodeOwnerIndex *);
 
   bool isImportStubAt(va_t Addr) const;
+  bool hasFunctionSymbolAt(va_t Addr) const;
   bool hasKnownOrTypedOwnerAt(va_t Addr) const;
   va_t getFunctionMetadataEnd(va_t Entry) const;
   bool ownsFunctionFragment(va_t Entry, va_t Target) const;

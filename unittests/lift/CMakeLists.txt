@@ -1043,6 +1043,7 @@ target_link_libraries(NeverDLiftTests PRIVATE
   NeverDLift
   NeverDPipeline
   NeverDSupport
+  NeverDDebugInfo
 )
 
 add_neverd_unittest(NeverDWindowsEHMetadataEncoderTests
@@ -1811,6 +1812,7 @@ set(X86_32_TEST_SOURCES
 set(AARCH64_TEST_SOURCES
   aarch64/test_param_phi_a64.s
   aarch64/test_jumptable_index_identity_a64.s
+  aarch64/test_pageoff_wrong_base_a64.s
   aarch64/test_pageoff_reaching_a64.s
   aarch64/test_pageoff_alternatives_a64.s
   aarch64/test_pageoff_nominal_miss_a64.s

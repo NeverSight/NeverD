@@ -54,9 +54,9 @@ bool containsMemoryRead(const ExprPtr &E) {
       continue;
     if (Current->Kind == ExprKind::Load)
       return true;
-    for (const auto &Operand : Current->Operands)
-      if (Operand)
-        Worklist.push_back(Operand.get());
+    Current->forEachChildExpr([&](const ExprPtr &Operand) {
+      Worklist.push_back(Operand.get());
+    });
   }
   return false;
 }
@@ -160,6 +160,7 @@ void rewriteRhsVars(std::vector<HighStmt> &Stmts,
       return;
     for (auto &Op : E->Operands)
       Rewrite(Op);
+    Rewrite(E->IndirectTarget);
   };
   walkStmts(Stmts, [&](HighStmt &S) { forEachRhsExpr(S, Rewrite); });
 }
@@ -170,8 +171,8 @@ void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
     return;
   if (E->Kind == ExprKind::Var)
     Uses[VK(E->Var)]++;
-  for (auto &Op : E->Operands)
-    countExprVarUses(Op, Uses, Seen);
+  E->forEachChildExpr(
+      [&](const ExprPtr &Op) { countExprVarUses(Op, Uses, Seen); });
 }
 
 void inlineSingleDefs(std::vector<HighStmt> &Stmts,
@@ -201,6 +202,7 @@ void inlineSingleDefs(std::vector<HighStmt> &Stmts,
       return;
     for (auto &Op : E->Operands)
       DoInline(Op);
+    DoInline(E->IndirectTarget);
   };
   walkStmts(Stmts, [&](HighStmt &S) { forEachRhsExpr(S, DoInline); });
 }
@@ -551,8 +553,7 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts) {
             return;
           if (E->Kind == ExprKind::Var)
             UsedVars.insert(VK(E->Var));
-          for (auto &Op : E->Operands)
-            CollectUsed(Op);
+          E->forEachChildExpr(CollectUsed);
         };
         forEachRhsExpr(BodyStmt, CollectUsed);
         for (auto &Used : UsedVars)
@@ -606,6 +607,7 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts) {
             return;
           for (auto &Op : E->Operands)
             RewriteAlias(Op);
+          RewriteAlias(E->IndirectTarget);
         };
         for (auto &BodyStmt : S.Body)
           forEachRhsExpr(BodyStmt, RewriteAlias);

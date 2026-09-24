@@ -8,8 +8,10 @@
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 
 #include <algorithm>
+#include <atomic>
 #include <initializer_list>
 #include <set>
+#include <thread>
 
 using namespace neverd;
 
@@ -183,6 +185,45 @@ TEST(ExecutableCodeOwnerIndex,
     const ExecutableCodeOwnerIndex Index(Image);
     EXPECT_FALSE(Image.hasExecutableCodeOwnerAt(0x401, &Index));
   }
+}
+
+TEST(ExecutableCodeOwnerIndex,
+     FunctionSymbolStartsAreScopedAndSafeForParallelQueries) {
+  BinaryImage Image = makeMetadataImage(BinaryFormat::ELF);
+  for (va_t Addr = 0x500; Addr < 0x900; Addr += 4)
+    Image.Symbols.push_back(Symbol::makeFunc(Addr));
+  const ExecutableCodeOwnerIndex Index(Image);
+  const BinaryImage &ReadOnlyImage = Image;
+  std::atomic<bool> Start{false};
+  std::atomic<unsigned> Mismatches{0};
+  std::vector<std::thread> Workers;
+  for (unsigned Worker = 0; Worker < 8; ++Worker)
+    Workers.emplace_back([&] {
+      while (!Start.load(std::memory_order_acquire))
+        std::this_thread::yield();
+      for (unsigned Pass = 0; Pass < 4; ++Pass)
+        for (va_t Addr = 0x500; Addr < 0x900; ++Addr) {
+          const bool Expected = Addr % 4 == 0;
+          if (ReadOnlyImage.hasFunctionSymbolAt(Addr, &Index) != Expected ||
+              ReadOnlyImage.hasFunctionSymbolAt(Addr) != Expected)
+            Mismatches.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+  Start.store(true, std::memory_order_release);
+  for (std::thread &Worker : Workers)
+    Worker.join();
+  EXPECT_EQ(Mismatches.load(), 0u);
+
+  BinaryImage Other = Image;
+  Other.Symbols = {Symbol::makeFunc(0xa00)};
+  EXPECT_TRUE(Other.hasFunctionSymbolAt(0xa00, &Index));
+  EXPECT_FALSE(Other.hasFunctionSymbolAt(0x500, &Index));
+  Image.Symbols = {Symbol::makeFunc(0xb00)};
+  EXPECT_TRUE(Image.hasFunctionSymbolAt(0xb00));
+  EXPECT_FALSE(Image.hasFunctionSymbolAt(0x500));
+  const ExecutableCodeOwnerIndex Updated(Image);
+  EXPECT_TRUE(Image.hasFunctionSymbolAt(0xb00, &Updated));
+  EXPECT_FALSE(Image.hasFunctionSymbolAt(0x500, &Updated));
 }
 
 TEST(ExecutableCodeOwnerIndex, KeepsMappingPrecedenceAndLiveEntryEvidence) {

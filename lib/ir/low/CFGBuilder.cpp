@@ -18,6 +18,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -37,6 +38,64 @@
 #define DEBUG_TYPE "neverd-cfg-builder"
 
 namespace neverd {
+
+bool CFGBuilder::isKnownFunctionEntry(va_t Addr) const {
+  if (KnownFuncEntries && KnownFuncEntries->count(Addr) != 0)
+    return true;
+  return CurrentImg && CurrentImg->hasKnownFunctionEntryAt(Addr);
+}
+
+bool CFGBuilder::isCurrentOwnedFragment(va_t Addr) const {
+  return CurrentImg && isExplicitlyOwnedFunctionFragment(
+                           *CurrentImg, CurrentFuncEntry, Addr,
+                           ExecutableCodeOwners);
+}
+
+va_t CFGBuilder::nextKnownFunctionEntry(va_t After) const {
+  va_t Best = InvalidVA;
+  auto Consider = [&](va_t Addr) {
+    if (Addr == InvalidVA || Addr <= After || isCurrentExceptionalEntry(Addr) ||
+        isCurrentOwnedFragment(Addr))
+      return;
+    if (Best == InvalidVA || Addr < Best)
+      Best = Addr;
+  };
+  if (KnownFuncEntries) {
+    auto It = KnownFuncEntries->upper_bound(After);
+    while (It != KnownFuncEntries->end()) {
+      if (!isCurrentExceptionalEntry(*It) && !isCurrentOwnedFragment(*It)) {
+        Consider(*It);
+        break;
+      }
+      ++It;
+    }
+  }
+  if (CurrentImg) {
+    va_t Probe = After;
+    for (unsigned I = 0; I < 16; ++I) {
+      const va_t Next = CurrentImg->nextKnownFunctionEntryAfter(Probe);
+      if (Next == InvalidVA)
+        break;
+      if (!isCurrentExceptionalEntry(Next) && !isCurrentOwnedFragment(Next)) {
+        Consider(Next);
+        break;
+      }
+      Probe = Next;
+    }
+  }
+  return Best;
+}
+
+size_t CFGBuilder::knownFunctionEntryCount() const {
+  size_t N = KnownFuncEntries ? KnownFuncEntries->size() : 0;
+  if (!CurrentImg)
+    return N;
+  N = std::max(N, CurrentImg->RuntimeFunctionAddrs.size());
+  N = std::max(N, CurrentImg->KnownCodeRanges.size());
+  N = std::max(N, CurrentImg->ExceptionMetadata.FunctionIndex.size());
+  N = std::max(N, CurrentImg->COFFPDataRecords.size());
+  return N;
+}
 
 void detail::retireReplayedI386GOTPCAmbiguities(
     std::set<I386GOTOFFAmbiguityReplayKey> &Pending,
@@ -161,6 +220,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   PersistentCFGRoots.clear();
   OrdinaryCFGRoots.clear();
   DurableCFGRoots.clear();
+  CurrentExceptionalEntries.clear();
   RelocationCFGRootSources.clear();
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
@@ -233,7 +293,6 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   }
   if (!Exception)
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
-  establishCurrentFuncRange(Img, Exception);
   std::vector<va_t> ExceptionalRoots;
   std::vector<va_t> ContinuationRoots;
   if (Exception) {
@@ -272,8 +331,16 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
         AddBoundary(Scope.ContinuationVA);
       }
     if (Exception->Cxx) {
-      for (const CxxIPState &State : Exception->Cxx->IPMap)
-        AddBoundary(State.IP);
+      // IP map entries that keep the current state (including the implicit
+      // entry state -1) must not cut a block.  MSVC often plants the first
+      // IP on a call (`GetRank`); splitting there leaves `mov rcx, this` in
+      // the predecessor and collectCallArgs recovers the incoming sret.
+      int32_t PrevState = -1;
+      for (const CxxIPState &State : Exception->Cxx->IPMap) {
+        if (State.State != PrevState)
+          AddBoundary(State.IP);
+        PrevState = State.State;
+      }
       for (const CxxUnwindAction &Action : Exception->Cxx->UnwindMap)
         AddExceptionalRoot(Action.ActionVA);
       for (const CxxTryBlock &Try : Exception->Cxx->TryBlocks)
@@ -334,6 +401,9 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                          *Exception->Go->DeferReturnOffset);
     }
   }
+  CurrentExceptionalEntries.insert(ExceptionalRoots.begin(),
+                                   ExceptionalRoots.end());
+  establishCurrentFuncRange(Img, Exception);
   explore(Img, Dec, EntryAddr);
   // A relocation can take the address of a basic block that no ordinary edge
   // reaches (GNU computed-goto labels are the canonical case).  Decode those
@@ -1063,8 +1133,8 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // Fallthrough or a queued edge into another function's entry belongs to
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
-      if (Cur != CurrentFuncEntry && KnownFuncEntries &&
-          KnownFuncEntries->count(Cur) != 0)
+      if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
+          !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur))
         break;
       // An actual graph extension invalidates every generation-local replay
       // and positive ambiguity shadow.  Pending exact query identities remain

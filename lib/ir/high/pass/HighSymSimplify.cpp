@@ -404,10 +404,16 @@ sym::SymRef Translator::in(const ExprPtr &E) {
     }
 
     case ExprKind::Var:
-      // Named by SSA identity, so every mention of one value is one input.
-      Result = Ctx.mkVar("v" + std::to_string(Current->Var.Id) + "_" +
-                             std::to_string(Current->Var.SSAVer),
-                         Width);
+      // Use the same disjoint parameter namespace as HighIR SSA.  A lowered
+      // arg1 and a temp with Id 1 can otherwise become the same symbolic
+      // variable, letting simplification replace a memory-read snapshot with
+      // the argument's value.
+      {
+        const VarKey Key = varKey(Current->Var);
+        Result = Ctx.mkVar("v" + std::to_string(Key.first) + "_" +
+                               std::to_string(Key.second),
+                           Width);
+      }
       // Recorded like an opaque input, because the way back cannot tell the two
       // apart: both are engine variables that have to become HighIR again.
       Sources.emplace(Result.index(), Current);

@@ -29,8 +29,9 @@ struct CEmitterOptions {
   bool UseDebugNames = true;
   Arch TheArch = Arch::X64;
   BinaryFormat Format = BinaryFormat::Unknown;
-  /// When set, HighC can fold rdata integer loads and name image-backed
-  /// data objects instead of emitting raw virtual addresses.
+  /// When set, HighC can fold rdata integer loads, print printable
+  /// rdata C/wchar literals, and name image-backed data objects
+  /// instead of emitting raw virtual addresses.
   const BinaryImage *Image = nullptr;
 };
 

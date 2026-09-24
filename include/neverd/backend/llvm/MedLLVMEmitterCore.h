@@ -1413,6 +1413,7 @@ private:
   /// entries become llvm::Function constants; relocation-proven labels inside
   /// an emitted function become llvm::BlockAddress constants.
   llvm::Constant *resolveLiftedCodeAddress(va_t Address);
+  llvm::Constant *resolveLiftedFunctionInterior(va_t Address);
 
   /// Resolve a relocation-proven executable VA that may not have a lifted
   /// body: an image function symbol at \p Address, or the exclusive end of
@@ -1939,6 +1940,14 @@ private:
   // declarations.
   std::map<std::pair<va_t, int>, llvm::BasicBlock *> PreparedFuncBlocks;
   std::map<va_t, llvm::BasicBlock *> LiftedCodeBlocks;
+  /// Exclusive end of each declared MedFunc, so an interior continuation IP
+  /// (MSVC catch `lea rip, parent+k`) can GEP from that function before or
+  /// after its body exists.
+  std::map<va_t, va_t> EmittedFuncCodeEnds;
+  /// Image VAs that a sibling SEH scope names as its filter/finally callback.
+  /// Those functions are typed with the Win64 callback ABI so native lowering
+  /// can authenticate them.
+  std::map<va_t, SEHScopeKind> SEHCallbackKinds;
   /// A source VA must identify exactly one lifted block before it can become an
   /// LLVM blockaddress. Keep duplicate skeleton claims explicit instead of
   /// letting the first map insertion silently choose an owner.

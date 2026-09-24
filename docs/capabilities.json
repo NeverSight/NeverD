@@ -127,6 +127,7 @@
           "neverd_session_is_64bit",
           "neverd_session_is_loaded",
           "neverd_session_load",
+          "neverd_session_resolve_function_name_before_load",
           "neverd_session_restrict_function",
           "neverd_session_section_count",
           "neverd_session_segment_count",

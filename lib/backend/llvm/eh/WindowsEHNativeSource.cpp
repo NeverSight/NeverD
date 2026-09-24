@@ -301,6 +301,176 @@ WindowsEHNativeSourceReason validateCxxFH4(const ExceptionFunction &EH) {
   return WindowsEHNativeSourceReason::Eligible;
 }
 
+bool isEmptyUnwindAction(const CxxUnwindAction &Action) {
+  return Action.Kind == CxxUnwindAction::ActionKind::None &&
+         Action.ActionVA == 0 && Action.ObjectOffset == 0;
+}
+
+bool directStateIsOutsideTries(const ExceptionFunction &EH, va_t Address) {
+  if (!EH.Cxx || Address == 0 || Address == EH.CodeRange.Begin)
+    return false;
+  int32_t State = -1;
+  for (const CxxIPState &IP : EH.Cxx->IPMap) {
+    if (IP.IP > Address)
+      break;
+    State = IP.State;
+  }
+  for (const CxxTryBlock &Try : EH.Cxx->TryBlocks)
+    if (State >= Try.TryLow && State <= Try.TryHigh)
+      return false;
+  return true;
+}
+
+bool isLowerableChainAction(const CxxUnwindAction &Action,
+                            const ExceptionFunction &EH) {
+  if (Action.ActionVA == 0)
+    return false;
+  if (Action.Kind == CxxUnwindAction::ActionKind::Direct &&
+      Action.ObjectOffset == 0) {
+    if (!EH.CodeRange.contains(Action.ActionVA))
+      return true;
+    if (directStateIsOutsideTries(EH, Action.ActionVA))
+      return true;
+    // A try-state address is a funclet only when it is its own IP boundary.
+    // An address strictly inside the protected range stays out.
+    if (!EH.Cxx)
+      return false;
+    for (const CxxIPState &IP : EH.Cxx->IPMap)
+      if (IP.IP == Action.ActionVA)
+        return true;
+    return false;
+  }
+  if (EH.CodeRange.contains(Action.ActionVA))
+    return false;
+  if (Action.Kind == CxxUnwindAction::ActionKind::DestructorWithObject)
+    return Action.ObjectOffset != 0;
+  return false;
+}
+
+} // namespace
+
+const CxxUnwindAction *cxxSingleObjectDestructor(const ExceptionFunction &EH) {
+  if (!EH.Cxx || !EH.CodeRange.isValid())
+    return nullptr;
+  const CxxUnwindAction *Found = nullptr;
+  for (const CxxUnwindAction &Action : EH.Cxx->UnwindMap) {
+    const bool Empty = Action.Kind == CxxUnwindAction::ActionKind::None &&
+                       Action.ActionVA == 0 && Action.ObjectOffset == 0;
+    if (Empty)
+      continue;
+    if (Found ||
+        Action.Kind != CxxUnwindAction::ActionKind::DestructorWithObject ||
+        Action.ToState != -1 || Action.ActionVA == 0 ||
+        Action.ObjectOffset == 0 || EH.CodeRange.contains(Action.ActionVA))
+      return nullptr;
+    Found = &Action;
+  }
+  return Found;
+}
+
+std::vector<const CxxUnwindAction *>
+cxxLowerableDestructorChain(const ExceptionFunction &EH) {
+  std::vector<const CxxUnwindAction *> Empty;
+  if (!EH.Cxx || !EH.CodeRange.isValid())
+    return Empty;
+  const std::vector<CxxUnwindAction> &Map = EH.Cxx->UnwindMap;
+  std::vector<int32_t> Live;
+  for (size_t I = 0; I < Map.size(); ++I) {
+    const CxxUnwindAction &Action = Map[I];
+    if (isEmptyUnwindAction(Action))
+      continue;
+    if (!isLowerableChainAction(Action, EH))
+      return Empty;
+    Live.push_back(static_cast<int32_t>(I));
+  }
+  if (Live.empty())
+    return Empty;
+
+  std::vector<char> Seen(Map.size(), 0);
+  std::vector<const CxxUnwindAction *> Order;
+  int32_t State = Live.back();
+  for (size_t Step = 0; Step <= Map.size(); ++Step) {
+    if (State < 0)
+      break;
+    if (static_cast<size_t>(State) >= Map.size() ||
+        Seen[static_cast<size_t>(State)])
+      return Empty;
+    Seen[static_cast<size_t>(State)] = 1;
+    const CxxUnwindAction &Action = Map[static_cast<size_t>(State)];
+    if (isLowerableChainAction(Action, EH))
+      Order.push_back(&Action);
+    else if (!isEmptyUnwindAction(Action))
+      return Empty;
+    State = Action.ToState;
+  }
+  if (State != -1)
+    return Empty;
+  for (int32_t Index : Live)
+    if (!Seen[static_cast<size_t>(Index)])
+      return Empty;
+  return Order;
+}
+
+std::vector<const CxxUnwindAction *>
+cxxDirectFuncletChain(const ExceptionFunction &EH) {
+  std::vector<const CxxUnwindAction *> Chain = cxxLowerableDestructorChain(EH);
+  for (const CxxUnwindAction *Action : Chain)
+    if (!Action || Action->Kind != CxxUnwindAction::ActionKind::Direct)
+      return {};
+  return Chain;
+}
+
+const CxxUnwindAction *cxxSingleDirectFunclet(const ExceptionFunction &EH) {
+  const std::vector<const CxxUnwindAction *> Chain = cxxDirectFuncletChain(EH);
+  return Chain.size() == 1 ? Chain.front() : nullptr;
+}
+
+namespace {
+
+bool cxxStandaloneOutOfLineCatch(const ExceptionFunction &EH) {
+  if (!EH.Cxx || !EH.CodeRange.isValid() || EH.Cxx->TryBlocks.empty())
+    return false;
+  const CxxExceptionInfo &Cxx = *EH.Cxx;
+  auto StateAt = [&](va_t Address) {
+    int32_t State = -1;
+    for (const CxxIPState &IP : Cxx.IPMap) {
+      if (IP.IP > Address)
+        break;
+      State = IP.State;
+    }
+    return State;
+  };
+  for (const CxxTryBlock &Try : Cxx.TryBlocks) {
+    if (Try.Handlers.empty())
+      return false;
+    for (const CxxCatchHandler &Catch : Try.Handlers) {
+      if (Catch.CatchObjectOffset != 0 || Catch.ParentFrameOffset != 0)
+        return false;
+      // An in-function handler stays out. An empty list has no continuation
+      // state to check. Every listed continuation must be a distinct address
+      // inside this function and in this catch's state range.
+      if (Catch.HandlerVA == 0 || Catch.HandlerVA == EH.CodeRange.Begin ||
+          EH.CodeRange.contains(Catch.HandlerVA))
+        return false;
+      if (Catch.ContinuationVAs.empty())
+        continue;
+      for (size_t I = 0; I < Catch.ContinuationVAs.size(); ++I) {
+        const va_t Continuation = Catch.ContinuationVAs[I];
+        if (Continuation == 0 || Continuation == EH.CodeRange.Begin ||
+            !EH.CodeRange.contains(Continuation))
+          return false;
+        for (size_t J = 0; J < I; ++J)
+          if (Catch.ContinuationVAs[J] == Continuation)
+            return false;
+        const int32_t HandlerState = StateAt(Continuation);
+        if (HandlerState <= Try.TryHigh || HandlerState > Try.CatchHigh)
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 WindowsEHNativeSourceClassification
@@ -405,11 +575,24 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     return reject(Model, WindowsEHNativeSourceReason::ConflictingLanguageModel,
                   Capability);
 
-  const WindowsEHNativeSourceReason Reason =
+  WindowsEHNativeSourceReason Reason =
       Model == WindowsEHNativeSourceModel::SEH
           ? validateSEH(EH, TargetArch)
       : Model == WindowsEHNativeSourceModel::CxxFH3 ? validateCxxFH3(EH)
                                                     : validateCxxFH4(EH);
+  // Output patch stays fail-closed for every unwind action and for an
+  // out-of-line catch. IR lowering can represent one destructor chain, and a
+  // catch whose funclet is outside the function when every continuation is
+  // inside the function, or when that catch names no continuation at all.
+  // Two or more continuations are resumed from the funclet's pointer result.
+  if (Capability == WindowsEHNativeCapability::IRLowering &&
+      (Model == WindowsEHNativeSourceModel::CxxFH3 ||
+       Model == WindowsEHNativeSourceModel::CxxFH4) &&
+      ((Reason == WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction &&
+        !cxxLowerableDestructorChain(EH).empty()) ||
+       (Reason == WindowsEHNativeSourceReason::InvalidCxxHandler &&
+        cxxStandaloneOutOfLineCatch(EH))))
+    Reason = WindowsEHNativeSourceReason::Eligible;
   if (Reason != WindowsEHNativeSourceReason::Eligible)
     return reject(Model, Reason, Capability);
   if (Model == WindowsEHNativeSourceModel::SEH) {
@@ -561,6 +744,32 @@ getWindowsEHNativeSourceReasonName(WindowsEHNativeSourceReason Reason) {
     return "unsupported-seh-callback-abi";
   }
   return "unknown";
+}
+
+bool isIntentionalMetadataOnlyNativeIR(WindowsEHNativeSourceReason Reason) {
+  switch (Reason) {
+  case WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction:
+  case WindowsEHNativeSourceReason::UnsupportedCxxCatchFunclet:
+  case WindowsEHNativeSourceReason::UnsupportedCxxSeparated:
+  case WindowsEHNativeSourceReason::UnsupportedCxxHandlerFrameState:
+  case WindowsEHNativeSourceReason::UnsupportedCxxContinuation:
+  case WindowsEHNativeSourceReason::UnsupportedCxxAsynchronous:
+  case WindowsEHNativeSourceReason::UnsupportedCxxNoexcept:
+  case WindowsEHNativeSourceReason::UnsupportedCxxExceptionSpecification:
+  case WindowsEHNativeSourceReason::UnsupportedCxxDynamicStackAlignment:
+  case WindowsEHNativeSourceReason::UnsupportedCxxFlags:
+  case WindowsEHNativeSourceReason::UnsupportedCxxBBT:
+  case WindowsEHNativeSourceReason::UnsupportedCxxVersion:
+  case WindowsEHNativeSourceReason::NonFH3Encoding:
+  case WindowsEHNativeSourceReason::InvalidCxxTryBlock:
+  case WindowsEHNativeSourceReason::InvalidCxxHandler:
+  case WindowsEHNativeSourceReason::InvalidCxxStateGraph:
+  case WindowsEHNativeSourceReason::FH4AnalysisOnly:
+  case WindowsEHNativeSourceReason::UnsupportedSEHCallbackABI:
+    return true;
+  default:
+    return false;
+  }
 }
 
 } // namespace neverd

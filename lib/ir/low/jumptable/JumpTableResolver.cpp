@@ -1758,7 +1758,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   auto PrepayPhysicalTargetInventory = [&](size_t ExpectedTargets,
                                            size_t ValidationPasses) {
     const size_t KnownEntryLookup =
-        KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+        orderedLookupWork(knownFunctionEntryCount());
     const size_t RuntimeEntryLookup =
         orderedLookupWork(Img.RuntimeFunctionAddrs.size());
     const size_t VerifiedEntryLookup =
@@ -1829,8 +1829,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         !Candidate.AuthenticatedFrameStorage.Initializers.empty()) {
       if (!consumeCandidateFactorProduct({2, Img.Symbols.size(), 2}))
         return false;
-      if (Img.hasFunctionSymbolAt(CurrentFuncEntry) &&
-          Img.hasFunctionSymbolAt(CurrentFuncRange->second))
+      if (Img.hasFunctionSymbolAt(CurrentFuncEntry, ExecutableCodeOwners) &&
+          Img.hasFunctionSymbolAt(CurrentFuncRange->second,
+                                  ExecutableCodeOwners))
         OwnershipRange = &CurrentFuncRange;
     }
     if (!*OwnershipRange)
@@ -1886,9 +1887,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       // containing symbol remains a separately callable function.  None may
       // be converted into switch ownership merely because the containing body
       // is sized.
-      if (Target == CurrentFuncEntry ||
-          (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-          Img.hasFunctionSymbolAt(Target))
+      if (Target == CurrentFuncEntry || isKnownFunctionEntry(Target) ||
+          Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners))
         return false;
       const bool InAuthoritativeBody = Target > (*OwnershipRange)->first &&
                                        Target < (*OwnershipRange)->second;
@@ -1956,9 +1956,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       const bool IsOwnedFragment = isExplicitlyOwnedFunctionFragment(
           Img, CurrentFuncEntry, Target, ExecutableCodeOwners);
       const bool IsCallableEntry =
-          Target == CurrentFuncEntry ||
-          (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-          Img.hasFunctionSymbolAt(Target);
+          Target == CurrentFuncEntry || isKnownFunctionEntry(Target) ||
+          Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners);
       if (Target == CurrentFuncEntry || IsOwnedFragment) {
         // A self jump re-enters with the current machine frame.  Turning it
         // into an ordinary indirect CALL would push a continuation and grow
@@ -4776,17 +4775,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
 
   // A relocation-backed absolute pointer array is a computed-goto table only
   // when every entry is an interior basic-block target of this function.
-  // CurrentFuncEntry is a self callback, and known/typed entries are ordinary
-  // function pointers even when a containing symbol's size covers them.  Keep
-  // those branches as normal indirect tail calls; no strong/potential marker
-  // is published because candidate-local ownership already rejected them.
+  // CurrentFuncEntry is a self callback, and foreign known/typed entries are
+  // ordinary function pointers even when a containing symbol covers them.
+  // A chained unwind fragment explicitly owned by this primary keeps the
+  // current frame and remains a local target.
   if (Info.RelocAbsolute) {
     if (!consumeCandidateEvidence(Targets.size()))
       return {};
     if (std::any_of(Targets.begin(), Targets.end(), [&](va_t Target) {
-          return Target == CurrentFuncEntry ||
-                 (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-                 Img.hasFunctionSymbolAt(Target);
+          if (isCurrentOwnedFragment(Target))
+            return false;
+          return Target == CurrentFuncEntry || isKnownFunctionEntry(Target) ||
+                 Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners);
         })) {
       ClaimRejectedPhysicalTableIdentity();
       return {};

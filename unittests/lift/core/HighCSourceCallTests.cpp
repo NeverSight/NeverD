@@ -655,6 +655,7 @@ TEST(HighCSourceCalls, NoncontiguousOrNestedEntriesRemainAmbiguous) {
 
 TEST(HighCSourceCalls, ConditionalEntryEvaluatesBeforeItsTakenEdgeCopies) {
   for (bool ExplicitElse : {false, true}) {
+    SCOPED_TRACE(ExplicitElse);
     const auto Integer = NdType::makeInt(4);
     MedVar Variable;
     Variable.Kind = MedVar::Temp;

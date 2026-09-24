@@ -113,6 +113,10 @@ inline void expectLeafCallResultStored(llvm::StringRef Body) {
 
   size_t CallEnd = Body.find(';', Call);
   ASSERT_NE(CallEnd, llvm::StringRef::npos) << Body.str();
+  // A direct assignment to the recovered stack local already stores the
+  // call result; there is no separate transport temporary to scan for.
+  if (LHS.starts_with("var_"))
+    return;
   llvm::StringRef Rest = Body.drop_front(CallEnd + 1);
   bool Stored = false;
   while (!Rest.empty()) {

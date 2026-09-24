@@ -248,7 +248,8 @@ CFGBuilder::makeInstructionBoundary(const InsnRecord &Rec,
 bool CFGBuilder::isTailCallTarget(va_t Target) const {
   if (Target == InvalidVA || Target == CurrentFuncEntry)
     return false;
-  if (KnownFuncEntries && KnownFuncEntries->count(Target) > 0)
+  if (isKnownFunctionEntry(Target) && !isCurrentExceptionalEntry(Target) &&
+      !isCurrentOwnedFragment(Target))
     return true;
   // A direct branch landing on a registered import veneer is a tail call to
   // that external function.  Without this the veneer is followed and inlined

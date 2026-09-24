@@ -107,9 +107,20 @@ struct HighExpr {
   va_t CallAddr = 0;
   bool IsIndirectCall = false;
   int IndirectParamIdx = -1;
+  /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
+  std::shared_ptr<HighExpr> IndirectTarget;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
   Intrinsic IntrinsicId = Intrinsic::None;
   std::vector<MedVar> IntrinsicOutputs;
+
+  /// Operands plus \ref IndirectTarget.
+  template <typename F> void forEachChildExpr(F &&Fn) const {
+    for (const auto &Op : Operands)
+      if (Op)
+        Fn(Op);
+    if (IndirectTarget)
+      Fn(IndirectTarget);
+  }
 
   /// For Cast
   TypeRef CastTo;
@@ -458,6 +469,10 @@ struct HighFunc {
   unsigned UnstructuredExceptionRegions = 0;
 };
 
+/// After EH wrapping, invert `if (c) goto L; work; L:` in try/catch lists.
+/// Med `ExceptionalPreds` must not block this: the handler is already a clause.
+void invertSkipGotos(HighFunc &Func);
+
 /// Copy catch-funclet and C++ unwind-funclet HighFunc bodies into empty
 /// `CxxCatch` / `CxxCleanup` clause slots of the parent. MSVC x64 catch
 /// handlers and destructor unwind actions are separate pdata functions.
@@ -508,6 +523,7 @@ inline void attachCxxFuncletBodies(std::vector<HighFunc> &Funcs) {
       }
     };
     Attach(Attach, Func.Body);
+    invertSkipGotos(Func);
   }
 }
 

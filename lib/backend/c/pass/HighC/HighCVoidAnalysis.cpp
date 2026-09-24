@@ -16,6 +16,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 
 namespace neverd {
 
@@ -35,6 +36,99 @@ bool isDebugTrapStmt(const HighStmt &Stmt) {
       Stmt.Val)
     return isDebugTrapExpr(Stmt.Val.get());
   return false;
+}
+
+struct ImpliedPredCalls {
+  std::set<va_t> Addrs;
+  std::set<std::string> Targets;
+
+  bool matches(const HighExpr &Call) const {
+    if (Call.Kind != ExprKind::Call)
+      return false;
+    if (Call.CallAddr && Addrs.count(Call.CallAddr))
+      return true;
+    return !Call.CallTarget.empty() && Targets.count(Call.CallTarget);
+  }
+
+  void addFrom(const HighExpr *E) {
+    if (!E)
+      return;
+    if (E->Kind == ExprKind::Call) {
+      if (E->CallAddr)
+        Addrs.insert(E->CallAddr);
+      if (!E->CallTarget.empty())
+        Targets.insert(E->CallTarget);
+    }
+    for (const auto &Op : E->Operands)
+      addFrom(Op.get());
+  }
+};
+
+void collectExprVars(const HighExpr *E, std::vector<MedVar> &Vars) {
+  if (!E)
+    return;
+  if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi)
+    Vars.push_back(E->Var);
+  for (const auto &Op : E->Operands)
+    collectExprVars(Op.get(), Vars);
+}
+
+bool hasMedVar(const std::vector<MedVar> &Vars, const MedVar &V) {
+  for (const MedVar &It : Vars)
+    if (It == V)
+      return true;
+  return false;
+}
+
+void addAssignChainPredCalls(const std::vector<HighStmt> &Stmts, size_t IfI,
+                             const HighExpr *Cond, ImpliedPredCalls &Pred) {
+  Pred.addFrom(Cond);
+  std::vector<MedVar> Need;
+  collectExprVars(Cond, Need);
+  for (size_t J = IfI; J > 0 && !Need.empty();) {
+    --J;
+    const HighStmt &P = Stmts[J];
+    if (P.Kind != StmtKind::Assign || !P.Dst || !P.Val)
+      continue;
+    if (P.Dst->Kind != ExprKind::Var && P.Dst->Kind != ExprKind::Phi)
+      continue;
+    if (!hasMedVar(Need, P.Dst->Var))
+      continue;
+    Pred.addFrom(P.Val.get());
+    collectExprVars(P.Val.get(), Need);
+    std::vector<MedVar> Kept;
+    Kept.reserve(Need.size());
+    for (const MedVar &V : Need)
+      if (V != P.Dst->Var)
+        Kept.push_back(V);
+    Need = std::move(Kept);
+  }
+}
+
+void hideImpliedPredicateCalls(HighCAnalysisState &State,
+                               const std::vector<HighStmt> &Stmts,
+                               ImpliedPredCalls Dom) {
+  for (size_t I = 0; I < Stmts.size(); ++I) {
+    const HighStmt &S = Stmts[I];
+    if (State.OmittedCallResults.count(&S) && S.Val && Dom.matches(*S.Val)) {
+      State.DeadStmts.insert(&S);
+      State.OmittedCallResults.erase(&S);
+    }
+    ImpliedPredCalls Then = Dom;
+    if (S.Cond)
+      addAssignChainPredCalls(Stmts, I, S.Cond.get(), Then);
+    hideImpliedPredicateCalls(State, S.Body, Then);
+    hideImpliedPredicateCalls(State, S.ElseBody, Dom);
+    for (const SwitchCase &C : S.Cases)
+      hideImpliedPredicateCalls(State, C.Body, Dom);
+    hideImpliedPredicateCalls(State, S.DefaultBody, Dom);
+    for (const auto &Clause : S.EHClauseBodies)
+      hideImpliedPredicateCalls(State, Clause, Dom);
+    // Fallthrough after `if (P)` (or an always-exiting skip) still evaluated
+    // P. A later unused `P();` is the same implied predicate.
+    if (S.Cond)
+      addAssignChainPredCalls(Stmts, I, S.Cond.get(), Dom);
+  }
 }
 
 const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
@@ -328,7 +422,7 @@ void analyzeVoidDeadChain(HighCAnalysisState &State, const HighFunc &Func,
 }
 
 void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
-                          VarNameFn VarFn) {
+                          VarNameFn VarFn, CallArgLimitFn ArgLimit) {
   auto ExprHasEffect = [](const HighExpr &E) -> bool {
     std::function<bool(const HighExpr &)> Walk = [&](const HighExpr &N) {
       if (N.Kind == ExprKind::Call || N.Kind == ExprKind::Store)
@@ -353,7 +447,7 @@ void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
         return;
       forEachRhsExpr(S, [&](const ExprPtr &E) {
         if (E)
-          collectUsedVarsExpr(*E, Used, VarFn);
+          collectUsedVarsExpr(*E, Used, VarFn, ArgLimit);
       });
     });
     walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -371,6 +465,77 @@ void analyzeUnusedAssigns(HighCAnalysisState &State, const HighFunc &Func,
       Changed = true;
     });
   }
+}
+
+void analyzeUnusedCallResults(HighCAnalysisState &State, const HighFunc &Func,
+                              VarNameFn VarFn, CallArgLimitFn ArgLimit) {
+  std::map<std::string, TypeRef> Used;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S))
+      return;
+    forEachRhsExpr(S, [&](const ExprPtr &E) {
+      if (E)
+        collectUsedVarsExpr(*E, Used, VarFn, ArgLimit);
+    });
+  });
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S) || State.OmittedCallResults.count(&S))
+      return;
+    if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
+      return;
+    if (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi)
+      return;
+    if (S.Val->Kind != ExprKind::Call)
+      return;
+    if (isNoreturnCallExpr(State, *S.Val))
+      return;
+    if (Used.count(VarFn(S.Dst->Var)))
+      return;
+    State.OmittedCallResults.insert(&S);
+  });
+
+  // HighC prints cleanup `call();` and drops the trailing `return dest`.
+  // The dest is still "used" by that skipped return, so omit it here.
+  std::function<void(const std::vector<HighStmt> &)> WalkCleanup;
+  WalkCleanup = [&](const std::vector<HighStmt> &Stmts) {
+    for (const HighStmt &S : Stmts) {
+      WalkCleanup(S.Body);
+      WalkCleanup(S.ElseBody);
+      for (const auto &C : S.Cases)
+        WalkCleanup(C.Body);
+      WalkCleanup(S.DefaultBody);
+      for (size_t C = 0; C < S.EHClauseBodies.size(); ++C) {
+        const bool Cleanup =
+            C < S.EHClauses.size() &&
+            S.EHClauses[C].Kind == HighEHClauseKind::CxxCleanup;
+        if (Cleanup) {
+          const auto &Body = S.EHClauseBodies[C];
+          for (size_t J = 0; J < Body.size(); ++J) {
+            const HighStmt &CS = Body[J];
+            if (State.DeadStmts.count(&CS))
+              continue;
+            if (CS.Kind != StmtKind::Assign || !CS.Dst || !CS.Val)
+              continue;
+            if (CS.Val->Kind != ExprKind::Call)
+              continue;
+            const HighStmt *Ret = nullptr;
+            for (size_t K = J + 1; K < Body.size(); ++K) {
+              if (Body[K].Kind == StmtKind::Nop)
+                continue;
+              if (Body[K].Kind == StmtKind::Return)
+                Ret = &Body[K];
+              break;
+            }
+            if (Ret)
+              State.OmittedCallResults.insert(&CS);
+          }
+        }
+        WalkCleanup(S.EHClauseBodies[C]);
+      }
+    }
+  };
+  WalkCleanup(Func.Body);
+  hideImpliedPredicateCalls(State, Func.Body, ImpliedPredCalls{});
 }
 
 } // namespace neverd

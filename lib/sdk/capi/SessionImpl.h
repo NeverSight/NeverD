@@ -24,6 +24,7 @@
 #include "neverd/evm/emit/EVMLLVMEmitter.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -402,6 +403,17 @@ struct Session {
     if (PipeResult.MedFuncs.empty()) {
       setError("no native functions available for LLVM emission");
       return false;
+    }
+    // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
+    // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
+    // 0-arg calls for unwritten live-in rcx.
+    {
+      std::map<va_t, std::string> FuncNames;
+      for (const auto &MF : PipeResult.MedFuncs)
+        if (!MF.Name.empty())
+          FuncNames[MF.Entry] = MF.Name;
+      for (auto &MF : PipeResult.MedFuncs)
+        recoverCallAbi(MF, Img.Arch, FuncNames, &Img);
     }
     std::vector<std::pair<va_t, std::string>> ImportMap;
     for (const auto &[Addr, Name] : Img.getImportAddressNames())

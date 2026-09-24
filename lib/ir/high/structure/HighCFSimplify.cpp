@@ -21,12 +21,15 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <optional>
@@ -415,6 +418,13 @@ static void seedIfThenJoinInits(std::vector<HighStmt> &Stmts) {
 void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
                                              const MedFunc &Med) {
   const bool IsMega = Func.Body.size() > limits::kMaxStructuredHighStmts;
+  const char *Detail = std::getenv("NEVERD_HIGHIR_DETAIL");
+  const bool WantDetail = Detail && Detail[0] == '1' && Detail[1] == '\0';
+  auto Now = [] { return std::chrono::steady_clock::now(); };
+  auto ElapsedMs = [](auto Start, auto End) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(End - Start)
+        .count();
+  };
 
   std::unordered_map<va_t, int> AddrToBlock;
   AddrToBlock.reserve(Med.Blocks.size());
@@ -422,8 +432,9 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
     if (!Block.Ops.empty())
       AddrToBlock[Block.Ops.front().Addr] = Block.Id;
 
+  auto TLoops = Now();
   detectAndConvertLoops(Func, AddrToBlock, Med, IsMega);
-
+  auto TSwitch = Now();
   if (!IsMega)
     recoverSwitchStatements(Func);
 
@@ -432,7 +443,9 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
              : (Med.Blocks.size() > limits::kMaxIfElseStructuringBlocks)
                    ? limits::kIfElseLargeCfgPasses
                    : limits::kIfElseStructuringPasses;
+  auto TIfElse = Now();
   structureIfElse(Func, IfElseMaxPasses, &Med);
+  auto TPost = Now();
 
   removeTrivialGotos(Func.Body);
   simplifyNestedGotos(Func.Body);
@@ -444,7 +457,17 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
 
   Func.Body.erase(
       std::remove_if(Func.Body.begin(), Func.Body.end(),
-                     [](const HighStmt &S) { return S.Kind == StmtKind::Nop; }),
+                     [](const HighStmt &S) {
+                       return S.Kind == StmtKind::Nop &&
+                              (!S.Addr || S.Addr == InvalidVA);
+                     }),
       Func.Body.end());
+  auto TEnd = Now();
+  if (WantDetail)
+    syncWarning() << "m2h-simp: " << Med.Name
+                  << " [loops=" << ElapsedMs(TLoops, TSwitch)
+                  << "ms switch=" << ElapsedMs(TSwitch, TIfElse)
+                  << "ms ifelse=" << ElapsedMs(TIfElse, TPost)
+                  << "ms post=" << ElapsedMs(TPost, TEnd) << "ms]\n";
 }
 } // namespace neverd

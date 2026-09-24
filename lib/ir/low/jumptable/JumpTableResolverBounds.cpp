@@ -1031,8 +1031,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     for (uint32_t Width = Upper - Lower + 1; Width != 0; Width >>= 1)
       ++SearchPasses;
     const size_t KnownEntryLookup =
-        KnownFuncEntries ? orderedEvidenceLookupWork(KnownFuncEntries->size())
-                         : 0;
+        orderedEvidenceLookupWork(knownFunctionEntryCount());
     const size_t RuntimeEntryLookup =
         orderedEvidenceLookupWork(CurrentImg->RuntimeFunctionAddrs.size());
     const size_t VerifiedEntryLookup =
@@ -4456,8 +4455,7 @@ bool CFGBuilder::inferBoundsFromModulo(
       for (uint32_t Width = Upper - Lower + 1; Width != 0; Width >>= 1)
         ++SearchPasses;
       const size_t KnownEntryLookup =
-          KnownFuncEntries ? orderedEvidenceLookupWork(KnownFuncEntries->size())
-                           : 0;
+          orderedEvidenceLookupWork(knownFunctionEntryCount());
       const size_t RuntimeEntryLookup =
           orderedEvidenceLookupWork(CurrentImg->RuntimeFunctionAddrs.size());
       const size_t VerifiedEntryLookup =

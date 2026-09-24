@@ -14,6 +14,7 @@
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <algorithm>
@@ -156,28 +157,64 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
   if (!Opts.OnlyFunctionEntries.empty()) {
     // Single-function CLI export must not scan the whole image: call-target
     // detection on a 100k-function PE is the work we are trying to skip.
-    // Catch and C++ unwind funclets are separate pdata functions; include
-    // them so HighC can embed their bodies in `catch` / destructor clauses
-    // of the requested parent.
+    // Catch, C++ unwind funclets, and out-of-line SEH filters are separate
+    // pdata functions; include them so HighC can embed catch/dtor bodies and
+    // native SEH lowering can authenticate the filter callback.
     std::set<va_t> Wanted(Opts.OnlyFunctionEntries.begin(),
                           Opts.OnlyFunctionEntries.end());
     std::vector<va_t> Work(Wanted.begin(), Wanted.end());
     for (size_t I = 0; I < Work.size(); ++I) {
       const ExceptionFunction *EH =
           Img.ExceptionMetadata.findFunction(Work[I]);
-      if (!EH || !EH->Cxx)
+      if (!EH)
         continue;
-      for (const CxxTryBlock &Try : EH->Cxx->TryBlocks)
-        for (const CxxCatchHandler &Handler : Try.Handlers)
-          if (Handler.HandlerVA && Wanted.insert(Handler.HandlerVA).second)
-            Work.push_back(Handler.HandlerVA);
-      for (const CxxUnwindAction &Action : EH->Cxx->UnwindMap)
-        if (Action.ActionVA && Wanted.insert(Action.ActionVA).second)
-          Work.push_back(Action.ActionVA);
+      // Interior VAs inherit a containing pdata.  A huge or merged owner
+      // must not enqueue every catch/unwind thunk in that range; keep only
+      // nearby out-of-line funclets so `--func` can still attach a local
+      // destructor body.
+      const bool HugeOwner =
+          EH->CodeRange.size() > limits::kMaxOnlyFunctionEHOwnerSize;
+      auto addOutOfLine = [&](va_t Addr) {
+        if (!Addr || EH->CodeRange.contains(Addr))
+          return;
+        // An interior VA of a foreign pdata owner would CFG-decode that
+        // whole body.  MSVC template unwind actions often land inside a
+        // megabyte-scale function; `--func` only needs a local start.
+        const ExceptionFunction *Owner =
+            Img.ExceptionMetadata.findFunction(Addr);
+        if (Owner && Owner->CodeRange.Begin != Addr)
+          return;
+        const uint64_t Dist =
+            Addr >= Work[I] ? Addr - Work[I] : Work[I] - Addr;
+        if (HugeOwner && Dist > limits::kMaxOverlapDistance)
+          return;
+        if (Owner &&
+            Owner->CodeRange.size() > limits::kMaxOnlyFunctionEHOwnerSize &&
+            Dist > limits::kMaxOverlapDistance)
+          return;
+        if (Wanted.insert(Addr).second)
+          Work.push_back(Addr);
+      };
+      if (EH->Cxx) {
+        for (const CxxTryBlock &Try : EH->Cxx->TryBlocks)
+          for (const CxxCatchHandler &Handler : Try.Handlers)
+            addOutOfLine(Handler.HandlerVA);
+        for (const CxxUnwindAction &Action : EH->Cxx->UnwindMap)
+          addOutOfLine(Action.ActionVA);
+      }
+      if (EH->SEH) {
+        for (const SEHScopeRecord &Scope : EH->SEH->Scopes)
+          addOutOfLine(Scope.FilterOrFinallyVA);
+      }
     }
     FuncEntries.reserve(Wanted.size());
     for (va_t Addr : Wanted) {
-      if (!Img.hasExecutableCodeOwnerAt(Addr))
+      // `--func` already chose the work set.  Do not scan every image
+      // symbol to prove the VA is a "known" start: C++ unwind ActionVAs
+      // are often outside RuntimeFunctionAddrs, and that walk dominates
+      // single-function export on a large PE.
+      const Segment *Seg = Img.getSegmentFor(Addr);
+      if (!Seg || !Seg->isExecutable())
         continue;
       FuncEntries.push_back({Addr, Img.getFunctionNameAt(Addr)});
     }
@@ -192,7 +229,16 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
 
   // mergeDebugSymbols also *adds* every PDB function that is not already a
   // candidate. Single-function export must not reintroduce the rest of the
-  // image after OnlyFunctionEntries has already chosen the work set.
+  // image after OnlyFunctionEntries has already chosen the work set, but it
+  // still has to replace synthesized names on the selected entries.
+  if (Dbg && Dbg->hasInfo() && !Opts.OnlyFunctionEntries.empty()) {
+    for (auto &[Addr, Name] : FuncEntries) {
+      if (!isSynthesizedFuncName(Name))
+        continue;
+      if (auto DF = Dbg->functionName(Addr); DF && !DF->empty())
+        Name = *DF;
+    }
+  }
   if (Dbg && Dbg->hasInfo() && Opts.OnlyFunctionEntries.empty()) {
     mergeDebugSymbols(FuncEntries, *Dbg);
     std::vector<std::pair<va_t, va_t>> DebugRanges;

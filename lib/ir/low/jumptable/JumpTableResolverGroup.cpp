@@ -487,8 +487,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
             {{SlotCount,
               64 + 8 * lookupWork(Insns.size()) +
                   2 * lookupWork(Img.CodePtrRelocSlots.size()) +
-                  2 * lookupWork(KnownFuncEntries ? KnownFuncEntries->size()
-                                                  : 0)},
+                  2 * lookupWork(knownFunctionEntryCount())},
              {Img.Symbols.size(), 2 * SlotCount},
              {Img.Segments.size(), 8 * SlotCount},
              {Img.DataAddressRelocOperands.size(), 24}}))
@@ -506,8 +505,8 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
                           uint32_t{Bytes[2]} << 16 | uint32_t{Bytes[3]} << 24;
       if (Target <= AuthoritativeCurrentFuncRange->first ||
           Target >= AuthoritativeCurrentFuncRange->second ||
-          Img.hasFunctionSymbolAt(Target) ||
-          (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
+          Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners) ||
+          isKnownFunctionEntry(Target) ||
           !Insns.count(Target)) {
         Valid = false;
         break;

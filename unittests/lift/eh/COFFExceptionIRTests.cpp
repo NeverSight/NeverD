@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -21,6 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
@@ -339,6 +341,37 @@ TEST(COFFExceptionIR, HighCCxxTryRendersCatchSyntaxInReadableListing) {
   EXPECT_EQ(Source.find("// try {"), std::string::npos) << Source;
 }
 
+TEST(COFFExceptionIR, HighCCxxCatchRendersQualifiedTypeName) {
+  HighFunc Function;
+  Function.Name = "cxx_qualified_catch";
+  Function.Entry = 0x140001000;
+  Function.ReturnType = NdType::makeVoid();
+
+  HighStmt Try;
+  Try.Kind = StmtKind::CxxTry;
+  Try.EHRange = {0x140001000, 0x140001040};
+  HighStmt BodyRet;
+  BodyRet.Kind = StmtKind::Return;
+  Try.Body.push_back(BodyRet);
+
+  HighEHClause Catch;
+  Catch.Kind = HighEHClauseKind::CxxCatch;
+  Catch.TypeName = "Ns::Outer::Inner";
+  Catch.Adjectives = 0x9; // const | reference
+  Catch.HandlerVA = 0x140001020;
+  Try.EHClauses.push_back(Catch);
+  HighStmt CatchRet;
+  CatchRet.Kind = StmtKind::Return;
+  Try.EHClauseBodies.push_back({CatchRet});
+  Function.Body.push_back(std::move(Try));
+  Function.ExceptionMetadata = makeFH3Metadata({0x140001020});
+
+  std::string Source = emitHighC({Function});
+  EXPECT_NE(Source.find("catch (const Ns::Outer::Inner &)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("/* Ns::Outer::Inner"), std::string::npos) << Source;
+}
+
 TEST(COFFExceptionIR, HighCCxxCatchRendersRecoveredTypeName) {
   HighFunc Function;
   Function.Name = "cxx_named_catch";
@@ -425,9 +458,10 @@ TEST(COFFExceptionIR, HighCSEHFilterRendersNamedFilterCall) {
 
   std::string Source = emitHighC({Function});
   EXPECT_NE(Source.find("__try {"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("nd_seh_filter_0x140001100(GetExceptionInformation())"),
+  EXPECT_NE(Source.find("sub_140001100(GetExceptionInformation())"),
             std::string::npos)
       << Source;
+  EXPECT_EQ(Source.find("nd_seh_filter_"), std::string::npos) << Source;
   EXPECT_NE(Source.find("handler @ 0x140001200"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("#if 0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
@@ -630,10 +664,627 @@ TEST(COFFExceptionIR, LLVMCCatchSwitchRendersExceptSyntax) {
             std::string::npos)
       << Source;
   EXPECT_NE(Source.find("may_raise();"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("/* __except (EXCEPTION_EXECUTE_HANDLER) */"),
+  EXPECT_EQ(Source.find("/* __except (EXCEPTION_EXECUTE_HANDLER) */"),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("unhandled:"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCWrapUsesRecoveredSEHFilter) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-filter", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::FunctionType *FilterType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context),
+      {llvm::PointerType::getUnqual(Context)}, false);
+  llvm::Function *Filter = llvm::Function::Create(
+      FilterType, llvm::GlobalValue::ExternalLinkage, "probe_filter", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_try_fn", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  EntryBuilder.CreateInvoke(Helper, Handler, Dispatch);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(Switch, {Filter});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("} __except (probe_filter(GetExceptionInformation())) {"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("} __except (EXCEPTION_EXECUTE_HANDLER)"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNestsFinallyInsideExceptWrap) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-nested", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "nested_seh", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Finally =
+      llvm::BasicBlock::Create(Context, "finally", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  EntryBuilder.CreateInvoke(Helper, Cont, Dispatch);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch, {llvm::ConstantPointerNull::get(
+                   llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Cont);
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup = FinallyBuilder.CreateCleanupPad(
+      llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCleanupRet(Cleanup, Cont);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("__try {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("} __finally {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("} __except (EXCEPTION_EXECUTE_HANDLER) {"),
+            std::string::npos)
+      << Source;
+  const auto ExceptAt = Source.find("} __except");
+  const auto FinallyAt = Source.find("} __finally");
+  EXPECT_NE(FinallyAt, std::string::npos) << Source;
+  EXPECT_NE(ExceptAt, std::string::npos) << Source;
+  EXPECT_LT(FinallyAt, ExceptAt) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCExceptWrapContainsHandlerBody) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-handler-body", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType =
+      llvm::FunctionType::get(I32, /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_try_fn", Module);
+  Function->setPersonalityFn(Personality);
+  auto *Sink = new llvm::GlobalVariable(
+      Module, I32, /*isConstant=*/false, llvm::GlobalValue::ExternalLinkage,
+      llvm::ConstantInt::get(I32, 0), "ProbeSink");
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  EntryBuilder.CreateInvoke(Helper, Cont, Dispatch);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch, {llvm::ConstantPointerNull::get(
+                   llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateStore(llvm::ConstantInt::get(I32, 41), Sink);
+  HandlerBuilder.CreateBr(Cont);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  const auto ExceptAt = Source.find("} __except (EXCEPTION_EXECUTE_HANDLER) {");
+  const auto StoreAt = Source.find("ProbeSink = 41");
+  EXPECT_NE(ExceptAt, std::string::npos) << Source;
+  EXPECT_NE(StoreAt, std::string::npos) << Source;
+  EXPECT_LT(ExceptAt, StoreAt) << Source;
+  EXPECT_EQ(Source.find("/* recovered handler labels remain in the protected body */"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("/* __except"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCExceptContinuationFollowsHandler) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-except-cont", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_except_cont", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::Function *Raise = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *Handle = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "handler_step", Module);
+  llvm::Function *After = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateInvoke(Raise, Cont, Dispatch);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch, {llvm::ConstantPointerNull::get(
+                   llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateCall(Handle);
+  HandlerBuilder.CreateBr(Cont);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateCall(After);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_except_cont(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto TryAt = Source.find("__try {", BodyAt);
+  const auto RaiseAt = Source.find("may_raise();", BodyAt);
+  const auto ExceptAt =
+      Source.find("} __except (EXCEPTION_EXECUTE_HANDLER) {", BodyAt);
+  const auto HandleAt = Source.find("handler_step();", BodyAt);
+  const auto AfterAt = Source.find("after_step();", BodyAt);
+  ASSERT_NE(TryAt, std::string::npos) << Source;
+  ASSERT_NE(RaiseAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(HandleAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  const auto ExceptOpen = Source.find('{', ExceptAt);
+  ASSERT_NE(ExceptOpen, std::string::npos) << Source;
+  size_t ExceptClose = std::string::npos;
+  int Depth = 1;
+  for (size_t I = ExceptOpen + 1; I < Source.size(); ++I) {
+    if (Source[I] == '{')
+      ++Depth;
+    else if (Source[I] == '}') {
+      --Depth;
+      if (Depth == 0) {
+        ExceptClose = I;
+        break;
+      }
+    }
+  }
+  ASSERT_NE(ExceptClose, std::string::npos) << Source;
+  EXPECT_LT(TryAt, RaiseAt) << Source;
+  EXPECT_LT(RaiseAt, ExceptAt) << Source;
+  EXPECT_LT(ExceptAt, HandleAt) << Source;
+  EXPECT_LT(HandleAt, ExceptClose) << Source;
+  EXPECT_LT(ExceptClose, AfterAt) << Source;
+  EXPECT_EQ(Source.find("goto ", BodyAt), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("handler_step();", HandleAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("after_step();", AfterAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("may_raise();", RaiseAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCFinallyWrapContainsCleanupBody) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-body", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_fn", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Finally =
+      llvm::BasicBlock::Create(Context, "finally", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *CleanupFn = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "run_finally", Module);
+  EntryBuilder.CreateInvoke(Helper, Cont, Finally);
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup = FinallyBuilder.CreateCleanupPad(
+      llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn);
+  FinallyBuilder.CreateCleanupRet(Cleanup, Cont);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  const auto FinallyAt = Source.find("} __finally {");
+  const auto CallAt = Source.find("run_finally();");
+  EXPECT_NE(FinallyAt, std::string::npos) << Source;
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_LT(FinallyAt, CallAt) << Source;
+  EXPECT_EQ(Source.find("/* recovered handler labels remain in the protected body */"),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCFinallyContinuationFollowsCleanup) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-cont", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_cont",
+      Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Finally =
+      llvm::BasicBlock::Create(Context, "finally", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::Function *Raise = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *CleanupFn = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "run_finally", Module);
+  llvm::Function *After = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateInvoke(Raise, Cont, Finally);
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup = FinallyBuilder.CreateCleanupPad(
+      llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn);
+  FinallyBuilder.CreateCleanupRet(Cleanup, Cont);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateCall(After);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_finally_cont(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto TryAt = Source.find("__try {", BodyAt);
+  const auto RaiseAt = Source.find("may_raise();", BodyAt);
+  const auto FinallyAt = Source.find("} __finally {", BodyAt);
+  const auto RunAt = Source.find("run_finally();", BodyAt);
+  const auto AfterAt = Source.find("after_step();", BodyAt);
+  ASSERT_NE(TryAt, std::string::npos) << Source;
+  ASSERT_NE(RaiseAt, std::string::npos) << Source;
+  ASSERT_NE(FinallyAt, std::string::npos) << Source;
+  ASSERT_NE(RunAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  const auto FinallyOpen = Source.find('{', FinallyAt);
+  ASSERT_NE(FinallyOpen, std::string::npos) << Source;
+  size_t FinallyClose = std::string::npos;
+  int Depth = 1;
+  for (size_t I = FinallyOpen + 1; I < Source.size(); ++I) {
+    if (Source[I] == '{')
+      ++Depth;
+    else if (Source[I] == '}') {
+      --Depth;
+      if (Depth == 0) {
+        FinallyClose = I;
+        break;
+      }
+    }
+  }
+  ASSERT_NE(FinallyClose, std::string::npos) << Source;
+  EXPECT_LT(TryAt, RaiseAt) << Source;
+  EXPECT_LT(RaiseAt, FinallyAt) << Source;
+  EXPECT_LT(FinallyAt, RunAt) << Source;
+  EXPECT_LT(RunAt, FinallyClose) << Source;
+  EXPECT_LT(FinallyClose, AfterAt) << Source;
+  EXPECT_EQ(Source.find("goto ", BodyAt), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("run_finally();", RunAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("after_step();", AfterAt + 1), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("may_raise();", RaiseAt + 1), std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-nested-bodies", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType =
+      llvm::FunctionType::get(I32, /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  llvm::Function *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "nested_seh_bodies",
+      Module);
+  Function->setPersonalityFn(Personality);
+  auto *Sink = new llvm::GlobalVariable(
+      Module, I32, /*isConstant=*/false, llvm::GlobalValue::ExternalLinkage,
+      llvm::ConstantInt::get(I32, 0), "ProbeSink");
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *BeginOuter =
+      llvm::BasicBlock::Create(Context, "begin_outer", Function);
+  llvm::BasicBlock *BeginInner =
+      llvm::BasicBlock::Create(Context, "begin_inner", Function);
+  llvm::BasicBlock *InnerBody =
+      llvm::BasicBlock::Create(Context, "inner_body", Function);
+  llvm::BasicBlock *EndInner =
+      llvm::BasicBlock::Create(Context, "end_inner", Function);
+  llvm::BasicBlock *AfterInner =
+      llvm::BasicBlock::Create(Context, "after_inner", Function);
+  llvm::BasicBlock *EndOuter =
+      llvm::BasicBlock::Create(Context, "end_outer", Function);
+  llvm::BasicBlock *AfterOuter =
+      llvm::BasicBlock::Create(Context, "after_outer", Function);
+  llvm::BasicBlock *CatchDispatch =
+      llvm::BasicBlock::Create(Context, "catch_dispatch", Function);
+  llvm::BasicBlock *CatchPad =
+      llvm::BasicBlock::Create(Context, "catch_pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::BasicBlock *FinallyDispatch =
+      llvm::BasicBlock::Create(Context, "finally_dispatch", Function);
+
+  llvm::Function *Arm = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "arm_region", Module);
+  llvm::Function *Raise = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *OuterStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "outer_step", Module);
+  llvm::Function *RunFinally = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "run_finally", Module);
+
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCall(Arm);
+  EntryBuilder.CreateBr(BeginOuter);
+  llvm::IRBuilder<> BeginOuterBuilder(BeginOuter);
+  BeginOuterBuilder.CreateInvoke(TryBegin, BeginInner, CatchDispatch);
+  llvm::IRBuilder<> BeginInnerBuilder(BeginInner);
+  BeginInnerBuilder.CreateInvoke(TryBegin, InnerBody, FinallyDispatch);
+  llvm::IRBuilder<> InnerBuilder(InnerBody);
+  InnerBuilder.CreateInvoke(Raise, EndInner, FinallyDispatch);
+  llvm::IRBuilder<> EndInnerBuilder(EndInner);
+  EndInnerBuilder.CreateInvoke(TryEnd, AfterInner, FinallyDispatch);
+  llvm::IRBuilder<> AfterInnerBuilder(AfterInner);
+  AfterInnerBuilder.CreateCall(OuterStep);
+  AfterInnerBuilder.CreateBr(EndOuter);
+  llvm::IRBuilder<> EndOuterBuilder(EndOuter);
+  EndOuterBuilder.CreateInvoke(TryEnd, AfterOuter, CatchDispatch);
+  llvm::IRBuilder<> AfterOuterBuilder(AfterOuter);
+  AfterOuterBuilder.CreateRetVoid();
+
+  llvm::IRBuilder<> DispatchBuilder(CatchDispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(CatchPad);
+  llvm::IRBuilder<> PadBuilder(CatchPad);
+  llvm::CatchPadInst *Catch = PadBuilder.CreateCatchPad(
+      Switch, {llvm::ConstantPointerNull::get(
+                   llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(Catch, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateStore(llvm::ConstantInt::get(I32, 41), Sink);
+  HandlerBuilder.CreateBr(AfterOuter);
+
+  llvm::IRBuilder<> FinallyBuilder(FinallyDispatch);
+  llvm::CleanupPadInst *Cleanup = FinallyBuilder.CreateCleanupPad(
+      llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(RunFinally);
+  FinallyBuilder.CreateCleanupRet(Cleanup, CatchDispatch);
+
+  std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("nested_seh_bodies(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ArmAt = Source.find("arm_region();", BodyAt);
+  const auto TryAt = Source.find("__try {", BodyAt);
+  const auto RaiseAt = Source.find("may_raise();", BodyAt);
+  const auto FinallyKw = Source.find("} __finally {", BodyAt);
+  const auto RunAt = Source.find("run_finally();", BodyAt);
+  const auto OuterAt = Source.find("outer_step();", BodyAt);
+  const auto ExceptKw =
+      Source.find("} __except (EXCEPTION_EXECUTE_HANDLER) {", BodyAt);
+  const auto StoreAt = Source.find("ProbeSink = 41", BodyAt);
+  EXPECT_NE(ArmAt, std::string::npos) << Source;
+  EXPECT_NE(TryAt, std::string::npos) << Source;
+  EXPECT_NE(RaiseAt, std::string::npos) << Source;
+  EXPECT_NE(FinallyKw, std::string::npos) << Source;
+  EXPECT_NE(RunAt, std::string::npos) << Source;
+  EXPECT_NE(OuterAt, std::string::npos) << Source;
+  EXPECT_NE(ExceptKw, std::string::npos) << Source;
+  EXPECT_NE(StoreAt, std::string::npos) << Source;
+  EXPECT_LT(ArmAt, TryAt) << Source;
+  EXPECT_LT(TryAt, RaiseAt) << Source;
+  EXPECT_LT(RaiseAt, FinallyKw) << Source;
+  EXPECT_LT(FinallyKw, RunAt) << Source;
+  EXPECT_LT(RunAt, OuterAt) << Source;
+  EXPECT_LT(OuterAt, ExceptKw) << Source;
+  EXPECT_LT(ExceptKw, StoreAt) << Source;
+  EXPECT_EQ(Source.find("run_finally();", BodyAt),
+            Source.rfind("run_finally();"))
+      << Source;
+  EXPECT_EQ(Source.find("outer_step();", BodyAt), Source.rfind("outer_step();"))
+      << Source;
+  EXPECT_EQ(Source.find("ProbeSink = 41", BodyAt),
+            Source.rfind("ProbeSink = 41"))
+      << Source;
+  EXPECT_EQ(Source.find("may_raise();", BodyAt), Source.rfind("may_raise();"))
+      << Source;
+  EXPECT_EQ(Source.find(
+                "/* recovered handler labels remain in the protected body */"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("llvm_x2E_seh"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCCxxCleanupWrapContainsDestructor) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-cxx-dtor", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage, "__CxxFrameHandler3",
+      Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "cxx_dtor_fn", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *CleanupBB =
+      llvm::BasicBlock::Create(Context, "cleanup", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *Dtor = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "release_string", Module);
+  EntryBuilder.CreateInvoke(Helper, Cont, CleanupBB);
+  llvm::IRBuilder<> CleanupBuilder(CleanupBB);
+  llvm::CleanupPadInst *Cleanup = CleanupBuilder.CreateCleanupPad(
+      llvm::ConstantTokenNone::get(Context));
+  CleanupBuilder.CreateCall(Dtor);
+  CleanupBuilder.CreateCleanupRet(Cleanup, nullptr);
+  llvm::IRBuilder<> ContBuilder(Cont);
+  ContBuilder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  const auto CleanupAt = Source.find("} /* unwind cleanup */");
+  const auto CallAt = Source.find("release_string();");
+  EXPECT_NE(CleanupAt, std::string::npos) << Source;
+  EXPECT_NE(CallAt, std::string::npos) << Source;
+  EXPECT_LT(CleanupAt, CallAt) << Source;
+  EXPECT_EQ(Source.find("release_string();"), Source.rfind("release_string();"))
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCUnwindOnlyAttachmentOmitsFakeTryWrap) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-unwind-only", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "unwind_only", Module);
+  Function->setMetadata(windows_eh_md::FunctionAttachment,
+                        llvm::MDNode::get(Context, llvm::MDString::get(
+                                                       Context, "unwind")));
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "unwind_only_helper",
+      Module);
+  Builder.CreateCall(Helper);
+  Builder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("unwind_only_helper();"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("neverd.analysis-only"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCAnalysisOnlyCxxUsesUnwindCleanupWrap) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-cxx-cleanup", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage, "__CxxFrameHandler3",
+      Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "cleanup_only", Module);
+  Function->setPersonalityFn(Personality);
+  Function->setMetadata(windows_eh_md::FunctionAttachment,
+                        llvm::MDNode::get(Context, llvm::MDString::get(
+                                                       Context, "fh3")));
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Function *Helper = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "use_string", Module);
+  Builder.CreateCall(Helper);
+  Builder.CreateRetVoid();
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("} /* unwind cleanup */"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("catch ("), std::string::npos) << Source;
 }
 
 TEST(COFFExceptionIR,
@@ -964,6 +1615,637 @@ TEST(COFFExceptionIR, StructuresReducibleSEHAndCxxRegionsInHighIR) {
   EXPECT_EQ(Cleanup.UnwindObjectOffset, -0x20);
 }
 
+TEST(COFFExceptionIR, CleanupOnlyCxxStatesBecomeCxxTryNotSEH) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ActionVA = FunctionVA + 0x20;
+  MedFunc Func =
+      makeWindowsHandlerFixture("cleanup_only_cxx", 0x14000f000);
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x40};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind =
+      CxxUnwindAction::ActionKind::DestructorWithObjectPointer;
+  Cxx.UnwindMap[0].ObjectOffset = -0x20;
+  Cxx.IPMap = {{FunctionVA, 0}, {FunctionVA + 0x10, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  ASSERT_EQ(High.StructuredExceptionRegions, 1u);
+  ASSERT_EQ(High.UnstructuredExceptionRegions, 0u);
+  ASSERT_FALSE(High.Body.empty());
+  EXPECT_EQ(High.Body.front().Kind, StmtKind::CxxTry);
+  ASSERT_EQ(High.Body.front().EHClauses.size(), 1u);
+  EXPECT_EQ(High.Body.front().EHClauses.front().Kind,
+            HighEHClauseKind::CxxCleanup);
+  EXPECT_EQ(High.Body.front().EHClauses.front().FilterOrActionVA, ActionVA);
+  ASSERT_EQ(High.Body.front().EHClauseBodies.size(), 1u);
+  ASSERT_EQ(High.Body.front().EHClauseBodies.front().size(), 1u);
+  EXPECT_EQ(High.Body.front().EHClauseBodies.front().front().Addr, ActionVA);
+
+  std::string Source = emitHighC({High});
+  EXPECT_NE(Source.find("__wind {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("unwind cleanup"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("sub_14000F000();"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unstructured SEH"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlyCxxWithoutIpMapIsNotUnstructuredSEH) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ActionVA = FunctionVA + 0x100;
+  MedFunc Func = makeWindowsHandlerFixture("cleanup_only_no_ip", 0x14000f000);
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x40};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[0].ObjectOffset = 40;
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  ASSERT_GE(High.StructuredExceptionRegions, 1u);
+  ASSERT_FALSE(High.Body.empty());
+  EXPECT_EQ(High.Body.front().Kind, StmtKind::CxxTry);
+  ASSERT_FALSE(High.Body.front().EHClauses.empty());
+  EXPECT_EQ(High.Body.front().EHClauses.front().Kind,
+            HighEHClauseKind::CxxCleanup);
+
+  std::string Source = emitHighC({High});
+  EXPECT_NE(Source.find("__wind {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("unwind cleanup"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unstructured SEH"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlyCxxStateInsideIfBecomesCxxTry) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ThenVA = FunctionVA + 0x2C0;
+  constexpr va_t ElseVA = FunctionVA + 0x400;
+  constexpr va_t ActionVA = FunctionVA + 0x800;
+  MedFunc Med;
+  Med.Entry = FunctionVA;
+  Med.Name = "cleanup_inside_if";
+  Med.ReturnType = NdType::makeVoid();
+  MedVar Arg0;
+  Arg0.Kind = MedVar::Param;
+  Arg0.Id = 0;
+  Arg0.Size = 8;
+  Arg0.TheArch = Arch::X64;
+  Med.Params.push_back(Arg0);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = FunctionVA;
+  Entry.EndAddr = FunctionVA + 0x20;
+  Entry.Succs = {1, 2};
+  MedOp Br;
+  Br.Opcode = NdOp::COND_BR;
+  Br.Addr = FunctionVA + 0x8;
+  Br.addInput(MedVar::makeConst(ThenVA, 8));
+  Br.addInput(MedVar::makeConst(1, 1));
+  Entry.Ops.push_back(std::move(Br));
+
+  MedBlock Then;
+  Then.Id = 1;
+  Then.StartAddr = ThenVA;
+  Then.EndAddr = ThenVA + 0x70;
+  Then.Preds = {0};
+  Then.Succs = {2};
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = ThenVA + 8;
+  Call.addInput(MedVar::makeConst(0x140002000, 8));
+  Then.Ops.push_back(std::move(Call));
+  MedOp ThenBr;
+  ThenBr.Opcode = NdOp::BRANCH;
+  ThenBr.Addr = ThenVA + 0x10;
+  ThenBr.addInput(MedVar::makeConst(ElseVA, 8));
+  Then.Ops.push_back(std::move(ThenBr));
+
+  MedBlock Else;
+  Else.Id = 2;
+  Else.StartAddr = ElseVA;
+  Else.EndAddr = ElseVA + 0x10;
+  Else.Preds = {0, 1};
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = ElseVA;
+  Else.Ops.push_back(std::move(Ret));
+
+  Med.Blocks.push_back(std::move(Entry));
+  Med.Blocks.push_back(std::move(Then));
+  Med.Blocks.push_back(std::move(Else));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x500};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.IPMap = {{FunctionVA, -1}, {ThenVA, 0}, {ThenVA + 0x70, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Med.ExceptionMetadata = std::move(EH);
+
+  std::map<va_t, std::string> Names{{0x140002000, "use_temp"}};
+  MedToHighConverter Converter;
+  Converter.setFuncNames(&Names);
+  HighFunc High = Converter.convert(Med, Arch::X64);
+
+  const HighStmt *Try = nullptr;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::CxxTry)
+      Try = &S;
+  });
+  ASSERT_NE(Try, nullptr);
+  EXPECT_EQ(Try->EHRange.Begin, ThenVA);
+  EXPECT_EQ(Try->EHRange.End, ThenVA + 0x70);
+  ASSERT_FALSE(Try->EHClauses.empty());
+  EXPECT_EQ(Try->EHClauses.front().Kind, HighEHClauseKind::CxxCleanup);
+  EXPECT_EQ(High.StructuredExceptionRegions, 1u);
+
+  bool Nested = false;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    if ((S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse) &&
+        !S.Body.empty() && S.Body.front().Kind == StmtKind::CxxTry)
+      Nested = true;
+  });
+  EXPECT_TRUE(Nested);
+
+  const std::string Source = emitHighC({High});
+  EXPECT_NE(Source.find("__wind {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("use_temp("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlyParentLiveRangeWrapsChildFragments) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t OuterActionVA = FunctionVA + 0x60;
+  constexpr va_t InnerActionVA = FunctionVA + 0x70;
+  MedFunc Med;
+  Med.Entry = FunctionVA;
+  Med.Name = "cleanup_parent_live";
+  Med.ReturnType = NdType::makeVoid();
+
+  auto AddCall = [](MedBlock &Block, va_t Addr, va_t Target) {
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Addr;
+    Call.addInput(MedVar::makeConst(Target, 8));
+    Block.Ops.push_back(std::move(Call));
+  };
+
+  MedBlock Body;
+  Body.Id = 0;
+  Body.StartAddr = FunctionVA;
+  Body.EndAddr = FunctionVA + 0x50;
+  AddCall(Body, FunctionVA + 4, 0x140002000);
+  AddCall(Body, FunctionVA + 0x14, 0x140002010);
+  AddCall(Body, FunctionVA + 0x24, 0x140002020);
+  AddCall(Body, FunctionVA + 0x34, 0x140002030);
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = FunctionVA + 0x44;
+  Body.Ops.push_back(std::move(Ret));
+  Med.Blocks.push_back(std::move(Body));
+
+  MedBlock OuterHandler;
+  OuterHandler.Id = 1;
+  OuterHandler.StartAddr = OuterActionVA;
+  OuterHandler.EndAddr = OuterActionVA + 0x10;
+  AddCall(OuterHandler, OuterActionVA, 0x14000F000);
+  Med.Blocks.push_back(std::move(OuterHandler));
+
+  MedBlock InnerHandler;
+  InnerHandler.Id = 2;
+  InnerHandler.StartAddr = InnerActionVA;
+  InnerHandler.EndAddr = InnerActionVA + 0x10;
+  AddCall(InnerHandler, InnerActionVA, 0x14000F100);
+  Med.Blocks.push_back(std::move(InnerHandler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x80};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 2;
+  Cxx.UnwindMap = {{-1, 0}, {0, 0}};
+  Cxx.UnwindMap[0].ActionVA = OuterActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.UnwindMap[1].ActionVA = InnerActionVA;
+  Cxx.UnwindMap[1].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.IPMap = {{FunctionVA, -1},
+               {FunctionVA + 0x10, 0},
+               {FunctionVA + 0x20, 1},
+               {FunctionVA + 0x30, 0},
+               {FunctionVA + 0x40, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Med.ExceptionMetadata = std::move(EH);
+
+  std::map<va_t, std::string> Names{{0x140002000, "before"},
+                                    {0x140002010, "outer_a"},
+                                    {0x140002020, "inner_work"},
+                                    {0x140002030, "outer_b"},
+                                    {0x14000F000, "dtor_outer"},
+                                    {0x14000F100, "dtor_inner"}};
+  MedToHighConverter Converter;
+  Converter.setFuncNames(&Names);
+  HighFunc High = Converter.convert(Med, Arch::X64);
+
+  const HighStmt *Outer = nullptr;
+  const HighStmt *Inner = nullptr;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    if (S.Kind != StmtKind::CxxTry || S.EHClauses.empty())
+      return;
+    if (S.EHClauses.front().State == 0)
+      Outer = &S;
+    if (S.EHClauses.front().State == 1)
+      Inner = &S;
+  });
+  ASSERT_NE(Outer, nullptr);
+  ASSERT_NE(Inner, nullptr);
+  EXPECT_EQ(Outer->EHRange.Begin, FunctionVA + 0x10);
+  EXPECT_EQ(Outer->EHRange.End, FunctionVA + 0x40);
+  EXPECT_EQ(Inner->EHRange.Begin, FunctionVA + 0x20);
+  EXPECT_EQ(Inner->EHRange.End, FunctionVA + 0x30);
+  bool Nested = false;
+  walkStmts(Outer->Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::CxxTry && !S.EHClauses.empty() &&
+        S.EHClauses.front().State == 1)
+      Nested = true;
+  });
+  EXPECT_TRUE(Nested);
+  EXPECT_GE(High.StructuredExceptionRegions, 2u);
+
+  const std::string Source = emitHighC({High});
+  EXPECT_NE(Source.find("before("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("outer_a("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("inner_work("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("outer_b("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("dtor_outer("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("dtor_inner("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlyLiveRangeWrapsIfWhoseCondIsPreviousIp) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ActionVA = FunctionVA + 0x60;
+  MedFunc Med;
+  Med.Entry = FunctionVA;
+  Med.Name = "cleanup_if_cond_prior_ip";
+  Med.ReturnType = NdType::makeVoid();
+  MedVar Arg0;
+  Arg0.Kind = MedVar::Param;
+  Arg0.Id = 0;
+  Arg0.Size = 8;
+  Arg0.TheArch = Arch::X64;
+  Med.Params.push_back(Arg0);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = FunctionVA;
+  Entry.EndAddr = FunctionVA + 0x10;
+  Entry.Succs = {1, 2};
+  MedOp Br;
+  Br.Opcode = NdOp::COND_BR;
+  Br.Addr = FunctionVA + 8;
+  Br.addInput(MedVar::makeConst(FunctionVA + 0x20, 8));
+  Br.addInput(MedVar::makeConst(1, 1));
+  Entry.Ops.push_back(std::move(Br));
+
+  MedBlock Then;
+  Then.Id = 1;
+  Then.StartAddr = FunctionVA + 0x20;
+  Then.EndAddr = FunctionVA + 0x30;
+  Then.Preds = {0};
+  Then.Succs = {3};
+  MedOp ThenCall;
+  ThenCall.Opcode = NdOp::CALL;
+  ThenCall.Addr = FunctionVA + 0x24;
+  ThenCall.addInput(MedVar::makeConst(0x140002000, 8));
+  Then.Ops.push_back(std::move(ThenCall));
+  MedOp ThenBr;
+  ThenBr.Opcode = NdOp::BRANCH;
+  ThenBr.Addr = FunctionVA + 0x28;
+  ThenBr.addInput(MedVar::makeConst(FunctionVA + 0x50, 8));
+  Then.Ops.push_back(std::move(ThenBr));
+
+  MedBlock Else;
+  Else.Id = 2;
+  Else.StartAddr = FunctionVA + 0x30;
+  Else.EndAddr = FunctionVA + 0x40;
+  Else.Preds = {0};
+  Else.Succs = {3};
+  MedOp ElseCall;
+  ElseCall.Opcode = NdOp::CALL;
+  ElseCall.Addr = FunctionVA + 0x34;
+  ElseCall.addInput(MedVar::makeConst(0x140002010, 8));
+  Else.Ops.push_back(std::move(ElseCall));
+  MedOp ElseBr;
+  ElseBr.Opcode = NdOp::BRANCH;
+  ElseBr.Addr = FunctionVA + 0x38;
+  ElseBr.addInput(MedVar::makeConst(FunctionVA + 0x50, 8));
+  Else.Ops.push_back(std::move(ElseBr));
+
+  MedBlock Join;
+  Join.Id = 3;
+  Join.StartAddr = FunctionVA + 0x50;
+  Join.EndAddr = FunctionVA + 0x58;
+  Join.Preds = {1, 2};
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = FunctionVA + 0x50;
+  Join.Ops.push_back(std::move(Ret));
+  Med.Blocks.push_back(std::move(Entry));
+  Med.Blocks.push_back(std::move(Then));
+  Med.Blocks.push_back(std::move(Else));
+  Med.Blocks.push_back(std::move(Join));
+
+  MedBlock Handler;
+  Handler.Id = 4;
+  Handler.StartAddr = ActionVA;
+  Handler.EndAddr = ActionVA + 0x10;
+  MedOp Dtor;
+  Dtor.Opcode = NdOp::CALL;
+  Dtor.Addr = ActionVA;
+  Dtor.addInput(MedVar::makeConst(0x14000F000, 8));
+  Handler.Ops.push_back(std::move(Dtor));
+  Med.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x70};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.IPMap = {{FunctionVA, -1},
+               {FunctionVA + 0x20, 0},
+               {FunctionVA + 0x50, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Med.ExceptionMetadata = std::move(EH);
+
+  std::map<va_t, std::string> Names{{0x140002000, "then_work"},
+                                    {0x140002010, "else_work"},
+                                    {0x14000F000, "dtor_name"}};
+  MedToHighConverter Converter;
+  Converter.setFuncNames(&Names);
+  HighFunc High = Converter.convert(Med, Arch::X64);
+
+  const HighStmt *Try = nullptr;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::CxxTry)
+      Try = &S;
+  });
+  ASSERT_NE(Try, nullptr);
+  bool WrappedIf = false;
+  walkStmts(Try->Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse)
+      WrappedIf = true;
+  });
+  EXPECT_TRUE(WrappedIf);
+  EXPECT_EQ(Try->EHRange.Begin, FunctionVA + 0x20);
+  EXPECT_EQ(Try->EHRange.End, FunctionVA + 0x50);
+
+  const std::string Source = emitHighC({High});
+  EXPECT_NE(Source.find("__wind {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("then_work("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("else_work("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("dtor_name("), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlySplitFragmentsWrapsIfElseDiamond) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ActionVA = FunctionVA + 0x60;
+  MedFunc Med;
+  Med.Entry = FunctionVA;
+  Med.Name = "cleanup_split_diamond";
+  Med.ReturnType = NdType::makeVoid();
+  MedVar Arg0;
+  Arg0.Kind = MedVar::Param;
+  Arg0.Id = 0;
+  Arg0.Size = 8;
+  Arg0.TheArch = Arch::X64;
+  Med.Params.push_back(Arg0);
+
+  MedBlock Entry;
+  Entry.Id = 0;
+  Entry.StartAddr = FunctionVA;
+  Entry.EndAddr = FunctionVA + 0x10;
+  Entry.Succs = {1, 2};
+  MedOp Br;
+  Br.Opcode = NdOp::COND_BR;
+  Br.Addr = FunctionVA + 8;
+  Br.addInput(MedVar::makeConst(FunctionVA + 0x20, 8));
+  Br.addInput(MedVar::makeConst(1, 1));
+  Entry.Ops.push_back(std::move(Br));
+
+  MedBlock Then;
+  Then.Id = 1;
+  Then.StartAddr = FunctionVA + 0x20;
+  Then.EndAddr = FunctionVA + 0x30;
+  Then.Preds = {0};
+  Then.Succs = {3};
+  MedOp ThenCall;
+  ThenCall.Opcode = NdOp::CALL;
+  ThenCall.Addr = FunctionVA + 0x24;
+  ThenCall.addInput(MedVar::makeConst(0x140002000, 8));
+  Then.Ops.push_back(std::move(ThenCall));
+  MedOp ThenBr;
+  ThenBr.Opcode = NdOp::BRANCH;
+  ThenBr.Addr = FunctionVA + 0x28;
+  ThenBr.addInput(MedVar::makeConst(FunctionVA + 0x50, 8));
+  Then.Ops.push_back(std::move(ThenBr));
+
+  MedBlock Else;
+  Else.Id = 2;
+  Else.StartAddr = FunctionVA + 0x40;
+  Else.EndAddr = FunctionVA + 0x50;
+  Else.Preds = {0};
+  Else.Succs = {3};
+  MedOp ElseCall;
+  ElseCall.Opcode = NdOp::CALL;
+  ElseCall.Addr = FunctionVA + 0x44;
+  ElseCall.addInput(MedVar::makeConst(0x140002010, 8));
+  Else.Ops.push_back(std::move(ElseCall));
+  MedOp ElseBr;
+  ElseBr.Opcode = NdOp::BRANCH;
+  ElseBr.Addr = FunctionVA + 0x48;
+  ElseBr.addInput(MedVar::makeConst(FunctionVA + 0x50, 8));
+  Else.Ops.push_back(std::move(ElseBr));
+
+  MedBlock Join;
+  Join.Id = 3;
+  Join.StartAddr = FunctionVA + 0x50;
+  Join.EndAddr = FunctionVA + 0x58;
+  Join.Preds = {1, 2};
+  MedOp Hole;
+  Hole.Opcode = NdOp::CALL;
+  Hole.Addr = FunctionVA + 0x50;
+  Hole.addInput(MedVar::makeConst(0x140002020, 8));
+  Join.Ops.push_back(std::move(Hole));
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = FunctionVA + 0x54;
+  Join.Ops.push_back(std::move(Ret));
+  Med.Blocks.push_back(std::move(Entry));
+  Med.Blocks.push_back(std::move(Then));
+  Med.Blocks.push_back(std::move(Else));
+  Med.Blocks.push_back(std::move(Join));
+
+  MedBlock Handler;
+  Handler.Id = 4;
+  Handler.StartAddr = ActionVA;
+  Handler.EndAddr = ActionVA + 0x10;
+  MedOp Dtor;
+  Dtor.Opcode = NdOp::CALL;
+  Dtor.Addr = ActionVA;
+  Dtor.addInput(MedVar::makeConst(0x14000F000, 8));
+  Handler.Ops.push_back(std::move(Dtor));
+  Med.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x70};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.IPMap = {{FunctionVA, -1},
+               {FunctionVA + 0x20, 0},
+               {FunctionVA + 0x30, -1},
+               {FunctionVA + 0x40, 0},
+               {FunctionVA + 0x50, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Med.ExceptionMetadata = std::move(EH);
+
+  std::map<va_t, std::string> Names{{0x140002000, "then_work"},
+                                    {0x140002010, "else_work"},
+                                    {0x140002020, "hole_work"},
+                                    {0x14000F000, "dtor_name"}};
+  MedToHighConverter Converter;
+  Converter.setFuncNames(&Names);
+  HighFunc High = Converter.convert(Med, Arch::X64);
+  EXPECT_GE(High.StructuredExceptionRegions, 1u);
+
+  const std::string Source = emitHighC({High});
+  const size_t Wind = Source.find("__wind {");
+  const size_t Unwind = Source.find("__unwind", Wind);
+  ASSERT_NE(Wind, std::string::npos) << Source;
+  ASSERT_NE(Unwind, std::string::npos) << Source;
+  const size_t ThenPos = Source.find("then_work(", Wind);
+  const size_t ElsePos = Source.find("else_work(", Wind);
+  const size_t HolePos = Source.find("hole_work(", Unwind);
+  ASSERT_NE(ThenPos, std::string::npos) << Source;
+  ASSERT_NE(ElsePos, std::string::npos) << Source;
+  ASSERT_NE(HolePos, std::string::npos) << Source;
+  EXPECT_LT(ThenPos, Unwind) << Source;
+  EXPECT_LT(ElsePos, Unwind) << Source;
+  EXPECT_GT(HolePos, Unwind) << Source;
+}
+
+TEST(COFFExceptionIR, CleanupOnlySplitFragmentsDoNotWrapLoneIfGoto) {
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ActionVA = FunctionVA + 0x60;
+  MedFunc Med;
+  Med.Entry = FunctionVA;
+  Med.Name = "cleanup_split_if_goto";
+  Med.ReturnType = NdType::makeVoid();
+  MedVar Arg0;
+  Arg0.Kind = MedVar::Param;
+  Arg0.Id = 0;
+  Arg0.Size = 8;
+  Arg0.TheArch = Arch::X64;
+  Med.Params.push_back(Arg0);
+
+  MedBlock Work;
+  Work.Id = 0;
+  Work.StartAddr = FunctionVA;
+  Work.EndAddr = FunctionVA + 0x50;
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = FunctionVA + 0x24;
+  Call.addInput(MedVar::makeConst(0x140002000, 8));
+  Work.Ops.push_back(std::move(Call));
+  MedOp Br;
+  Br.Opcode = NdOp::COND_BR;
+  Br.Addr = FunctionVA + 0x44;
+  Br.addInput(MedVar::makeConst(FunctionVA + 0x50, 8));
+  Br.addInput(MedVar::makeConst(1, 1));
+  Work.Ops.push_back(std::move(Br));
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = FunctionVA + 0x48;
+  Work.Ops.push_back(std::move(Ret));
+  Med.Blocks.push_back(std::move(Work));
+
+  MedBlock Handler;
+  Handler.Id = 1;
+  Handler.StartAddr = ActionVA;
+  Handler.EndAddr = ActionVA + 0x10;
+  MedOp Dtor;
+  Dtor.Opcode = NdOp::CALL;
+  Dtor.Addr = ActionVA;
+  Dtor.addInput(MedVar::makeConst(0x14000F000, 8));
+  Handler.Ops.push_back(std::move(Dtor));
+  Med.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, FunctionVA + 0x70};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap = {{-1, 0}};
+  Cxx.UnwindMap[0].ActionVA = ActionVA;
+  Cxx.UnwindMap[0].Kind = CxxUnwindAction::ActionKind::Direct;
+  Cxx.IPMap = {{FunctionVA, -1},
+               {FunctionVA + 0x20, 0},
+               {FunctionVA + 0x30, -1},
+               {FunctionVA + 0x40, 0},
+               {FunctionVA + 0x50, -1}};
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Med.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Med, Arch::X64);
+  EXPECT_EQ(High.StructuredExceptionRegions, 0u);
+  EXPECT_EQ(High.UnstructuredExceptionRegions, 1u);
+  bool LoneIfTry = false;
+  walkStmts(High.Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::CxxTry && S.EHIsReducible)
+      LoneIfTry = true;
+  });
+  EXPECT_FALSE(LoneIfTry);
+}
+
 TEST(COFFExceptionIR, NestsCxxTriesThatShareIpInterval) {
   MedFunc Func;
   Func.Entry = 0x140001000;
@@ -1030,6 +2312,87 @@ TEST(COFFExceptionIR, NestsCxxTriesThatShareIpInterval) {
       Nested = true;
   EXPECT_TRUE(Nested) << "inner try must stay nested, not a sibling catch";
   EXPECT_EQ(OuterTry->EHClauses.size(), 1u);
+}
+
+TEST(COFFExceptionIR, StructuresOuterCxxTrySplitByNegativeIpState) {
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "outer_split_ip";
+  Func.ReturnType = NdType::makeVoid();
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = Func.Entry;
+  Protected.EndAddr = Func.Entry + 0x50;
+  MedOp OuterCall;
+  OuterCall.Opcode = NdOp::CALL;
+  OuterCall.Addr = Func.Entry + 8;
+  OuterCall.addInput(MedVar::makeConst(Func.Entry + 0x100, 8));
+  Protected.Ops.push_back(OuterCall);
+  MedOp InnerCall;
+  InnerCall.Opcode = NdOp::CALL;
+  InnerCall.Addr = Func.Entry + 0x18;
+  InnerCall.addInput(MedVar::makeConst(Func.Entry + 0x110, 8));
+  Protected.Ops.push_back(InnerCall);
+  MedOp Ret;
+  Ret.Opcode = NdOp::RETURN;
+  Ret.Addr = Func.Entry + 0x48;
+  Protected.Ops.push_back(Ret);
+  Func.Blocks.push_back(std::move(Protected));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {Func.Entry, Func.Entry + 0x50};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler4;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 4;
+  Cxx.UnwindMap = {{-1, 0}, {0, 0}, {0, 0}, {-1, 0}};
+  Cxx.IPMap = {{Func.Entry, -1},
+               {Func.Entry + 4, 0},
+               {Func.Entry + 0x10, 2},
+               {Func.Entry + 0x30, 0},
+               {Func.Entry + 0x40, -1},
+               {Func.Entry + 0x44, 0}};
+  CxxTryBlock Inner;
+  Inner.TryLow = 2;
+  Inner.TryHigh = 2;
+  Inner.CatchHigh = 3;
+  CxxCatchHandler InnerCatch;
+  InnerCatch.HandlerVA = Func.Entry + 0x80;
+  InnerCatch.Adjectives = 0x9;
+  Inner.Handlers.push_back(InnerCatch);
+  CxxTryBlock Outer;
+  Outer.TryLow = 0;
+  Outer.TryHigh = 2;
+  Outer.CatchHigh = 3;
+  CxxCatchHandler OuterCatch;
+  OuterCatch.HandlerVA = Func.Entry + 0x90;
+  OuterCatch.TypeDescriptorVA = 0;
+  OuterCatch.Adjectives = 0x40;
+  Outer.Handlers.push_back(OuterCatch);
+  Cxx.TryBlocks.push_back(std::move(Inner));
+  Cxx.TryBlocks.push_back(std::move(Outer));
+  ASSERT_TRUE(Cxx.hasValidStateGraph());
+  EH.Cxx = std::move(Cxx);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  ASSERT_GE(High.StructuredExceptionRegions, 2u);
+  const HighStmt *OuterTry = nullptr;
+  for (const HighStmt &S : High.Body)
+    if (S.Kind == StmtKind::CxxTry)
+      OuterTry = &S;
+  ASSERT_NE(OuterTry, nullptr);
+  bool Nested = false;
+  for (const HighStmt &S : OuterTry->Body)
+    if (S.Kind == StmtKind::CxxTry)
+      Nested = true;
+  EXPECT_TRUE(Nested);
+  bool CatchAll = false;
+  for (const HighEHClause &Clause : OuterTry->EHClauses)
+    if (Clause.Kind == HighEHClauseKind::CxxCatch &&
+        Clause.TypeDescriptorVA == 0 && Clause.Adjectives == 0x40)
+      CatchAll = true;
+  EXPECT_TRUE(CatchAll);
 }
 
 TEST(COFFExceptionIR, StructuresSingleBlockSEHHandlerBody) {
@@ -1485,6 +2848,76 @@ TEST(COFFExceptionIR, PdataRangeStartsKeepTailJmpFromFusingCallee) {
       << Source;
 }
 
+TEST(COFFExceptionIR, PdataIndexKeepsTailJmpFromFusingUnmaterializedCallee) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t First = 0x140001000;
+  constexpr va_t Second = 0x140002000;
+  Img.Entry = First;
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = First;
+  Text.Size = 0x1010;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  // jmp rel32 from First to a non-neighbor pdata start.
+  const uint32_t Rel = static_cast<uint32_t>(Second - (First + 5));
+  Text.Data[0] = 0xe9;
+  Text.Data[1] = static_cast<uint8_t>(Rel);
+  Text.Data[2] = static_cast<uint8_t>(Rel >> 8);
+  Text.Data[3] = static_cast<uint8_t>(Rel >> 16);
+  Text.Data[4] = static_cast<uint8_t>(Rel >> 24);
+  Text.Data[Second - First] = 0xb8;
+  Text.Data[Second - First + 1] = 0x2b;
+  Text.Data[Second - First + 2] = 0;
+  Text.Data[Second - First + 3] = 0;
+  Text.Data[Second - First + 4] = 0;
+  Text.Data[Second - First + 5] = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = First;
+  TextSection.Size = 0x1010;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(First, First + 5);
+  Img.COFFPDataRecords.push_back({0x1000, 0x1005, 0, 0});
+  Img.COFFPDataRecords.push_back({0x2000, 0x2006, 0, 0});
+  Img.Symbols.push_back(Symbol::makeFunc(First, 5));
+  ExceptionFunction EH;
+  EH.CodeRange = {First, First + 5};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+  ASSERT_TRUE(Img.hasKnownFunctionEntryAt(Second));
+  ASSERT_FALSE(Img.ExceptionMetadata.findFunction(Second));
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(First);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  ASSERT_EQ(Result.LowFuncs.size(), 1u);
+  size_t Ops = 0;
+  for (const auto &B : Result.LowFuncs[0].Blocks)
+    Ops += B.Ops.size();
+  EXPECT_LT(Ops, 8u) << "far tail jmp must not fuse the pdata callee";
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_EQ(Source.find("0x2b"), std::string::npos)
+      << "tail jmp to an unmaterialized pdata start must not fuse its body:\n"
+      << Source;
+}
+
 TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsUnrequestedFunctions) {
   BinaryImage Img;
   Img.Arch = Arch::X64;
@@ -1532,6 +2965,119 @@ TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsUnrequestedFunctions) {
   EXPECT_EQ(OneResult.HighFuncs[0].Entry, Second);
   ASSERT_EQ(OneResult.LowFuncs.size(), 1u);
   EXPECT_EQ(OneResult.LowFuncs[0].Entry, Second);
+}
+
+TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsHugeOwnerUnwindGraph) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t First = 0x140001000;
+  constexpr uint64_t Huge = limits::kMaxOnlyFunctionEHOwnerSize + 0x1000;
+  Img.Entry = First;
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = First;
+  Text.Size = Huge;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(0x20, 0xcc);
+  Text.Data[0] = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = First;
+  TextSection.Size = Huge;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(First, First + 1);
+  Img.Symbols.push_back(Symbol::makeFunc(First, 1));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {First, First + Huge};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 8;
+  Cxx.UnwindMap.assign(8, {-1, 0});
+  for (unsigned I = 0; I < Cxx.UnwindMap.size(); ++I) {
+    Cxx.UnwindMap[I].ActionVA =
+        First + limits::kMaxOverlapDistance + 0x1000 + 0x20 * I;
+    Img.KnownCodeRanges.emplace_back(Cxx.UnwindMap[I].ActionVA,
+                                     Cxx.UnwindMap[I].ActionVA + 1);
+    Img.Symbols.push_back(Symbol::makeFunc(Cxx.UnwindMap[I].ActionVA, 1));
+  }
+  EH.Cxx = std::move(Cxx);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(First);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  EXPECT_EQ(Result.HighFuncs[0].Entry, First);
+}
+
+TEST(COFFExceptionIR, OnlyFunctionEntriesSkipsInteriorUnwindAction) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  constexpr va_t First = 0x140001000;
+  constexpr va_t Foreign = 0x140010000;
+  constexpr va_t Action = 0x140011000;
+  constexpr uint64_t ForeignSize = limits::kMaxOnlyFunctionEHOwnerSize + 0x2000;
+  Img.Entry = First;
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = First;
+  Text.Size = Foreign + ForeignSize - First;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(0x40, 0xcc);
+  Text.Data[0] = 0xc3;
+  Img.Segments.push_back(std::move(Text));
+
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = First;
+  TextSection.Size = Foreign + ForeignSize - First;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(First, First + 1);
+  Img.KnownCodeRanges.emplace_back(Foreign, Foreign + ForeignSize);
+  Img.Symbols.push_back(Symbol::makeFunc(First, 1));
+
+  ExceptionFunction Small;
+  Small.CodeRange = {First, First + 0x20};
+  Small.Kind = RuntimeFunctionKind::Primary;
+  Small.Personality = ExceptionPersonality::CxxFrameHandler3;
+  CxxExceptionInfo Cxx;
+  Cxx.MaxState = 1;
+  Cxx.UnwindMap.push_back({-1, Action});
+  Small.Cxx = std::move(Cxx);
+  Img.ExceptionMetadata.Functions.push_back(std::move(Small));
+
+  ExceptionFunction Huge;
+  Huge.CodeRange = {Foreign, Foreign + ForeignSize};
+  Huge.Kind = RuntimeFunctionKind::Primary;
+  Img.ExceptionMetadata.Functions.push_back(std::move(Huge));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(First);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  EXPECT_EQ(Result.HighFuncs[0].Entry, First);
 }
 
 } // namespace

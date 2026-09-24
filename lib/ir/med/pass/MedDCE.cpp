@@ -187,6 +187,24 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   }
 
   // Seed: parameter register assignments before CALL/INDIR_CALL/tail-call
+  auto seedParamWrites = [&](const std::vector<MedOp> &Ops, int Before) {
+    for (int J = Before; J >= 0; --J) {
+      const MedOp &Prev = Ops[static_cast<size_t>(J)];
+      if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
+          Prev.Opcode == NdOp::INTRINSIC)
+        break;
+      if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
+          (TRI.isParamReg(Prev.Output.RegOff) ||
+           TRI.isVectorReg(Prev.Output.RegOff)))
+        MarkLive(Prev.Output);
+    }
+  };
+  auto blockById = [&](int Id) -> const MedBlock * {
+    for (const auto &Cand : Func.Blocks)
+      if (Cand.Id == Id)
+        return &Cand;
+    return nullptr;
+  };
   for (auto &Blk : Func.Blocks) {
     for (size_t I = 0; I < Blk.Ops.size(); ++I) {
       bool IsCall = (Blk.Ops[I].Opcode == NdOp::CALL ||
@@ -195,17 +213,15 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       bool IsTail = (Blk.Ops[I].Opcode == NdOp::INDIR_BR && Blk.Succs.empty());
       if (!IsCall && !IsTail)
         continue;
-      for (int J = static_cast<int>(I) - 1; J >= 0; --J) {
-        auto &Prev = Blk.Ops[J];
-        if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
-            Prev.Opcode == NdOp::INTRINSIC)
-          break;
-        if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0) {
-          if (TRI.isParamReg(Prev.Output.RegOff) ||
-              TRI.isVectorReg(Prev.Output.RegOff))
-            MarkLive(Prev.Output);
-        }
-      }
+      seedParamWrites(Blk.Ops, static_cast<int>(I) - 1);
+      // IP-map / EH splits often isolate the CALL. `lea r8; mov edx; lea rcx`
+      // then sit in the predecessor and must stay live as call setup.
+      if (I != 0)
+        continue;
+      for (int PredId : Blk.Preds)
+        if (const MedBlock *Pred = blockById(PredId))
+          seedParamWrites(Pred->Ops,
+                          static_cast<int>(Pred->Ops.size()) - 1);
     }
   }
 

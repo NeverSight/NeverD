@@ -91,6 +91,17 @@ TEST(COFFExceptionModel, QueriesOwningRuntimeFunction) {
             ExceptionParseStatus::Partial);
   EXPECT_EQ(EI.findFunction(0x1040), nullptr);
   EXPECT_EQ(EI.findFunction(0x3000), nullptr);
+
+  ExceptionFunction Parent;
+  Parent.CodeRange = {0x1000, 0x3000};
+  Parent.ParseStatus = ExceptionParseStatus::Complete;
+  EI.Functions.push_back(Parent);
+  EI.rebuildIndex();
+  ASSERT_NE(EI.findFunction(0x1020), nullptr);
+  EXPECT_EQ(EI.findFunction(0x1020)->CodeRange.End, 0x1040u);
+  ASSERT_NE(EI.findFunction(0x1800), nullptr);
+  EXPECT_EQ(EI.findFunction(0x1800)->CodeRange.Begin, 0x1000u);
+  EXPECT_EQ(EI.findFunction(0x1800)->CodeRange.End, 0x3000u);
 }
 
 TEST(COFFExceptionParser, AcceptsAcyclicX64UnwindChainBeyondLegacyDepth) {

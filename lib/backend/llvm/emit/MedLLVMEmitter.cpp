@@ -640,6 +640,22 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   // aggregate from the recovered field registers so the backend's calling-
   // convention lowering places each field in its return register (x86-64 SysV
   // eightbytes -> RAX/RDX/XMM0/XMM1; AArch64 non-HFA -> X0/X1, HFA -> V0..V3).
+  if (TargetArch == Arch::X64 && TargetFormat == BinaryFormat::COFF &&
+      !Func.IsVariadic && Func.Params.size() == 2 && Func.MultiReturn.empty()) {
+    if (auto KindIt = SEHCallbackKinds.find(Func.Entry);
+        KindIt != SEHCallbackKinds.end()) {
+      auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
+      if (KindIt->second == SEHScopeKind::Filter) {
+        RetType = llvm::Type::getInt32Ty(*Ctx);
+        ParamTypes = {PtrTy, PtrTy};
+      } else if (KindIt->second == SEHScopeKind::Finally) {
+        RetType = llvm::Type::getVoidTy(*Ctx);
+        ParamTypes.assign(
+            {llvm::Type::getInt8Ty(*Ctx), PtrTy});
+      }
+    }
+  }
+
   if (!Func.MultiReturn.empty()) {
     std::vector<llvm::Type *> FieldTypes;
     for (const auto &RR : Func.MultiReturn) {
@@ -742,6 +758,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   CodePtrTableGlobals.clear();
   PreparedFuncBlocks.clear();
   LiftedCodeBlocks.clear();
+  EmittedFuncCodeEnds.clear();
+  SEHCallbackKinds.clear();
   ConflictingLiftedCodeBlocks.clear();
   CxxContinuationPlans.clear();
   ActiveCxxContinuationPlan.reset();
@@ -946,14 +964,42 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   // Import function declarations are deferred to the CALL handler so
   // they get the correct parameter types from the actual call site.
 
+  for (const MedFunc &Func : Funcs) {
+    if (!Func.ExceptionMetadata || !Func.ExceptionMetadata->SEH)
+      continue;
+    for (const SEHScopeRecord &Scope : Func.ExceptionMetadata->SEH->Scopes) {
+      if (Scope.FilterOrFinallyVA == 0)
+        continue;
+      if (Scope.Kind == SEHScopeKind::Filter ||
+          Scope.Kind == SEHScopeKind::Finally)
+        SEHCallbackKinds.emplace(Scope.FilterOrFinallyVA, Scope.Kind);
+    }
+  }
+
   // Pre-declare every function before emitting any body so a body can reference
   // a sibling that is emitted later — e.g. a function-pointer dispatch table
   // whose entries name leaf functions the (earlier-emitted) dispatcher
   // resolves.
-  for (auto &Func : Funcs) {
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    auto &Func = Funcs[FuncIndex];
     if (Func.Name.empty() || Func.Blocks.empty())
       continue;
     declareFunc(Func);
+    // A body mask deliberately withholds this implementation. Its interior
+    // addresses cannot be reconstructed from the declaration alone.
+    if (BodyMask && !(*BodyMask)[FuncIndex])
+      continue;
+    va_t End = Func.Entry;
+    if (Func.OriginalSize)
+      End = Func.Entry + Func.OriginalSize;
+    if (Func.ExceptionMetadata &&
+        Func.ExceptionMetadata->CodeRange.End > End)
+      End = Func.ExceptionMetadata->CodeRange.End;
+    for (const MedBlock &Block : Func.Blocks)
+      if (Block.EndAddr > End)
+        End = Block.EndAddr;
+    if (End > Func.Entry)
+      EmittedFuncCodeEnds[Func.Entry] = End;
   }
   initializeCxxContinuationPlans(Funcs, BodyMask);
 

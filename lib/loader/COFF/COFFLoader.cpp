@@ -73,7 +73,8 @@ Arch machineToArch(uint16_t Machine) {
 llvm::Expected<BinaryImage>
 COFFLoader::load(const std::filesystem::path &Path) {
   BinaryImage Img;
-  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::COFF);
+  auto BufOrErr = readFileInto(Path, Img, BinaryFormat::COFF,
+                               /*CopyRaw=*/RestrictFunctionEntries.empty());
   if (!BufOrErr)
     return BufOrErr.takeError();
   auto &Buf = *BufOrErr;
