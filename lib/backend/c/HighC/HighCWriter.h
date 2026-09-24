@@ -226,10 +226,15 @@ public:
     TypeRef Type;
     bool AddressTaken = false;
     bool UsedAsMemory = false;
-    /// For a slot that lies wholly inside another: the enclosing slot's name
-    /// and this slot's access through it, `(*(T *)((char *)&outer + k))`.
+    /// For a slot that shares bytes with others: the name of the storage that
+    /// holds them all, this slot's byte offset in it, and its access through
+    /// it, `(*(T *)((char *)&outer + k))`.
     std::string Outer;
+    int64_t OuterOffset = 0;
     std::string Interior;
+    /// When no single slot covers an overlapping group, the group's first
+    /// slot declares the storage as this many aligned bytes.
+    int64_t RegionBytes = 0;
     /// Width of the narrowest store at this displacement, 0 if none.
     unsigned MinStoreSize = 0;
   };

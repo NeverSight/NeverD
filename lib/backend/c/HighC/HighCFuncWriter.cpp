@@ -755,31 +755,39 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
     if (!Slot.Type)
       Slot.Type = NdType::makeInt(4);
 
-  // A slot wholly inside another is part of that object, not a separate
-  // variable: a byte stored at -0x82 changes what a later read of the eight
-  // bytes at -0x84 sees.  Access it through the outermost enclosing slot.
+  // Slots that share bytes are one object, not separate variables: a byte
+  // stored at -0x82 changes what a later read of the eight bytes at -0x84
+  // sees.  Each group of overlapping slots lives in one storage, the group's
+  // first slot; when that slot does not cover the whole group it is declared
+  // as a byte array.  The other slots are accessed through it.
   SharedFrameStorage.clear();
-  for (auto &[Disp, Slot] : FrameSlots) {
-    if (!Slot.Type->Size)
+  auto SlotEnd = [](const std::pair<const int64_t, NamedFrameSlot> &Entry) {
+    return Entry.first +
+           static_cast<int64_t>(std::max<uint64_t>(Entry.second.Type->Size, 1));
+  };
+  for (auto It = FrameSlots.begin(); It != FrameSlots.end();) {
+    auto First = It;
+    int64_t End = SlotEnd(*It);
+    for (++It; It != FrameSlots.end() && It->first < End; ++It)
+      End = std::max(End, SlotEnd(*It));
+    if (std::next(First) == It)
       continue;
-    const int64_t End = Disp + static_cast<int64_t>(Slot.Type->Size);
-    const std::pair<const int64_t, NamedFrameSlot> *Outer = nullptr;
-    for (const auto &Entry : FrameSlots) {
-      if (Entry.first >= Disp)
-        break;
-      if (Entry.first + static_cast<int64_t>(Entry.second.Type->Size) >= End) {
-        Outer = &Entry;
-        break;
-      }
+    NamedFrameSlot &Owner = First->second;
+    const bool Covers = SlotEnd(*First) >= End;
+    if (!Covers)
+      Owner.RegionBytes = End - First->first;
+    for (auto Member = First; Member != It; ++Member) {
+      if (Member == First && Covers)
+        continue;
+      NamedFrameSlot &Slot = Member->second;
+      Slot.Outer = Owner.Name;
+      Slot.OuterOffset = Member->first - First->first;
+      Slot.Interior = "(*(" + memoryTypeName(Slot.Type) + " *)((char *)&" +
+                      Slot.Outer + " + " + std::to_string(Slot.OuterOffset) +
+                      "))";
+      SharedFrameStorage.insert(Slot.Interior);
     }
-    if (!Outer)
-      continue;
-    Slot.Outer = Outer->second.Name;
-    Slot.Interior = "(*(" + memoryTypeName(Slot.Type) + " *)((char *)&" +
-                    Slot.Outer + " + " + std::to_string(Disp - Outer->first) +
-                    "))";
-    SharedFrameStorage.insert(Slot.Interior);
-    SharedFrameStorage.insert(Slot.Outer);
+    SharedFrameStorage.insert(Owner.Name);
   }
   // A store narrower than its slot changes only some of the slot's bytes.
   for (auto &[Disp, Slot] : FrameSlots)
@@ -1109,6 +1117,12 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
           Name && !CopyForward.count(*Name))
         PrintedAddrSlots.insert(*Name);
     }
+    // A store prints its slot by name even when the address is a variable
+    // that aliases the frame.
+    if (S.Kind == StmtKind::Store && S.StoreAddr)
+      if (auto Name = namedFrameSlot(*S.StoreAddr);
+          Name && !CopyForward.count(*Name))
+        PrintedAddrSlots.insert(*Name);
     forEachRhsExpr(S, [&](const ExprPtr &E) {
       if (!E)
         return;
@@ -1150,7 +1164,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (!Slot.Interior.empty() && PrintedAddrSlots.count(Slot.Interior))
       PrintedAddrSlots.insert(Slot.Outer);
   for (const auto &[Disp, Slot] : FrameSlots) {
-    if (!Slot.Interior.empty())
+    if (!Slot.Interior.empty() && !Slot.RegionBytes)
       continue;
     if (ParamNames.count(Slot.Name))
       continue;
@@ -1161,7 +1175,11 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       continue;
     ParamNames.insert(Slot.Name);
     emitIndent(1);
-    OS << declarationToC(Slot.Type, Slot.Name) << ";\n";
+    if (Slot.RegionBytes)
+      OS << "_Alignas(16) uint8_t " << Slot.Name << "[" << Slot.RegionBytes
+         << "];\n";
+    else
+      OS << declarationToC(Slot.Type, Slot.Name) << ";\n";
   }
   emitLocalDecls(Func, ParamNames);
 

@@ -4287,3 +4287,29 @@ TEST(HighCPointerAddresses, NarrowStoreToAWiderSlotChangesOnlyItsBytes) {
       << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses, PartlyOverlappingSlotsShareOneStorage) {
+  // MiGetPage: eight bytes at -0x84 and eight bytes at -0x82 share six bytes.
+  // Neither covers the other, so both live in one declared region.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x38,       // sub rsp, 38h
+      0x48, 0x89, 0x4c, 0x24, 0x08, // mov [rsp+8], rcx
+      0x48, 0x89, 0x54, 0x24, 0x0a, // mov [rsp+0Ah], rdx
+      0x48, 0x8d, 0x4c, 0x24, 0x08, // lea rcx, [rsp+8]
+      0xe8, 0x0b, 0x00, 0x00, 0x00, // call use
+      0x48, 0x8b, 0x44, 0x24, 0x08, // mov rax, [rsp+8]
+      0x48, 0x83, 0xc4, 0x38,       // add rsp, 38h
+      0xc3,                         // ret
+      0xc3};                        // use: ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_TRUE(std::regex_search(
+      HighC, std::regex(R"(_Alignas\(16\) uint8_t var_\w+\[10\];)")))
+      << HighC;
+  EXPECT_TRUE(std::regex_search(
+      HighC,
+      std::regex(R"(\(\*\(int64_t \*\)\(\(char \*\)&var_\w+ \+ 2\)\) =)")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}

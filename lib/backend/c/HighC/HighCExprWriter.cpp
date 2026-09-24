@@ -363,12 +363,17 @@ HighCWriter::namedFrameSlot(const HighExpr &E, const TypeRef &Access) const {
   const auto It = FrameSlots.find(*Disp);
   if (It == FrameSlots.end())
     return std::nullopt;
-  if (!It->second.Interior.empty())
-    return It->second.Interior;
-  if (Access && Access->Size && It->second.Type &&
-      Access->Size < It->second.Type->Size)
-    return "(*(" + memoryTypeName(Access) + " *)&" + It->second.Name + ")";
-  return It->second.Name;
+  const NamedFrameSlot &Slot = It->second;
+  const bool Narrow =
+      Access && Access->Size && Slot.Type && Access->Size < Slot.Type->Size;
+  if (!Slot.Interior.empty())
+    return Narrow
+               ? "(*(" + memoryTypeName(Access) + " *)((char *)&" + Slot.Outer +
+                     " + " + std::to_string(Slot.OuterOffset) + "))"
+               : Slot.Interior;
+  if (Narrow)
+    return "(*(" + memoryTypeName(Access) + " *)&" + Slot.Name + ")";
+  return Slot.Name;
 }
 
 bool HighCWriter::isNamedFrameMemory(const HighExpr &E) const {
