@@ -20,6 +20,8 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <optional>
+#include <set>
 #include <vector>
 
 namespace neverd {
@@ -43,6 +45,14 @@ struct CallArgScan {
   /// The value register argument \p Index holds at the call, for filling a
   /// register slot the call did not visibly write (nullptr when unknown).
   llvm::function_ref<ExprPtr(int)> ReachingRegArg;
+  /// Offset of an address from the stack pointer at function entry, when it
+  /// resolves through copies and constant adjustments (an `r11 = rsp`
+  /// frame); nullopt otherwise.
+  llvm::function_ref<std::optional<int64_t>(const MedVar &)> EntryOffsetOf;
+  /// Bytes the prologue moved the stack pointer below its entry value.
+  int64_t FrameSize = 0;
+  /// Entry-relative stack slots the function loads; see MedToHigh.h.
+  const std::set<int64_t> *LoadedEntrySlots = nullptr;
 };
 
 /// Win64 passes arguments 0-3 in RCX, RDX, R8, R9 above a 32-byte home area;

@@ -3748,3 +3748,39 @@ TEST(HighCPointerAddresses, SummarizedCalleeTakesOnlyTheArgumentsItReads) {
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   EXPECT_NE(HighC.find("sub_140001020(arg0);"), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, Win64StackArgumentsThroughEntryStackCopy) {
+  // RtlQueryPackageIdentity: `mov r11, rsp` addresses the outgoing slots,
+  // and slot 5 is never written.  All seven arguments are still passed; the
+  // local at [r11-18h], stored before the call and read after, is not one.
+  constexpr va_t Entry = 0x140001000;
+  std::vector<uint8_t> Code = {
+      0x4c, 0x8b, 0xdc,                               // mov r11, rsp
+      0x48, 0x83, 0xec, 0x58,                         // sub rsp, 58h
+      0x49, 0xc7, 0x43, 0xe8, 0x00, 0x00, 0x00, 0x00, // mov [r11-18h], 0
+      0x49, 0x8d, 0x43, 0xe8,                         // lea rax, [r11-18h]
+      0x49, 0x89, 0x43, 0xd8,                         // mov [r11-28h], rax
+      0x49, 0xc7, 0x43, 0xc8, 0x05, 0x00, 0x00, 0x00, // mov [r11-38h], 5
+      0xe8, 0x1c, 0x00, 0x00, 0x00,                   // call 0x140001040
+      0x48, 0x8b, 0x44, 0x24, 0x40,                   // mov rax, [rsp+40h]
+      0x48, 0x83, 0xc4, 0x58,                         // add rsp, 58h
+      0xc3};
+  Code.resize(0x40, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0xc1,             // mov rax, rcx
+                           0x48, 0x03, 0xc2,             // add rax, rdx
+                           0x49, 0x03, 0xc0,             // add rax, r8
+                           0x49, 0x03, 0xc1,             // add rax, r9
+                           0x48, 0x03, 0x44, 0x24, 0x28, // add rax, [rsp+28h]
+                           0x48, 0x03, 0x44, 0x24, 0x30, // add rax, [rsp+30h]
+                           0x48, 0x03, 0x44, 0x24, 0x38, // add rax, [rsp+38h]
+                           0xc3});
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  std::smatch Call;
+  ASSERT_TRUE(std::regex_search(HighC, Call,
+                                std::regex(R"(= sub_140001040\(([^;]*)\);)")))
+      << HighC;
+  const std::string Args = Call[1].str();
+  EXPECT_EQ(std::count(Args.begin(), Args.end(), ','), 6) << HighC;
+  EXPECT_NE(Args.find(", 5, "), std::string::npos) << HighC;
+}

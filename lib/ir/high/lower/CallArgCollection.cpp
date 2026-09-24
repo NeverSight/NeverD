@@ -48,6 +48,7 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
   const int StoreScanStart = std::max(0, static_cast<int>(Scan.CallIdx) -
                                              limits::kCallArgStoreScanWindow);
 
+  std::vector<std::pair<int64_t, MedVar>> StoredSlots;
   for (int J = static_cast<int>(Scan.CallIdx) - 1; J >= StoreScanStart; --J) {
     const MedOp &Prev = Ops[J];
     if (Prev.Opcode == NdOp::CALL || Prev.Opcode == NdOp::INDIR_CALL ||
@@ -88,12 +89,20 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       }
     }
 
+    if (StackOff < 0 && isWin64(Scan) && Scan.EntryOffsetOf)
+      if (std::optional<int64_t> Entry = Scan.EntryOffsetOf(AddrVar))
+        StackOff = *Entry + Scan.FrameSize;
+
     if (StackOff < 0 || StackOff >= Scan.MaxArgs * SlotBytes)
       continue;
     if (SlotBytes == 0 || StackOff % SlotBytes != 0)
       continue;
 
     int ArgPos = Scan.FirstStackSlot + static_cast<int>(StackOff / SlotBytes);
+    // A slot the function reads back is a local stored before the call.
+    if (isWin64(Scan) && Scan.LoadedEntrySlots &&
+        Scan.LoadedEntrySlots->count(StackOff - Scan.FrameSize))
+      continue;
     if (isWin64(Scan)) {
       // Home-area stores spill register arguments; they are not arguments.
       constexpr int64_t kHomeBytes = 32;
@@ -103,8 +112,32 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       ArgPos =
           kRegisterArgs + static_cast<int>((StackOff - kHomeBytes) / SlotBytes);
     }
-    if (ArgPos >= 0 && ArgPos < Scan.MaxArgs && !Found[ArgPos])
+    if (ArgPos >= 0 && ArgPos < Scan.MaxArgs && !Found[ArgPos]) {
       Found[ArgPos] = Scan.ToExpr(Prev.Inputs[1]);
+      StoredSlots.push_back({StackOff, AddrVar});
+    }
+  }
+
+  // A Win64 stack slot the caller did not write between two it did is still
+  // an argument: the callee reads whatever the slot holds.  Read it through
+  // the address of a written neighbour rather than dropping later arguments.
+  if (!isWin64(Scan) || StoredSlots.empty())
+    return;
+  int Last = -1;
+  for (int K = 4; K < Scan.MaxArgs; ++K)
+    if (Found[K])
+      Last = K;
+  const auto &[BaseOff, BaseAddr] = StoredSlots.front();
+  for (int K = 4; K < Last; ++K) {
+    if (Found[K])
+      continue;
+    const int64_t Off = 32 + int64_t(K - 4) * SlotBytes;
+    ExprPtr Address = HighExpr::makeBinop(
+        NdOp::INT_ADD, Scan.ToExpr(BaseAddr),
+        HighExpr::makeConst(static_cast<uint64_t>(Off - BaseOff),
+                            TRI.PointerSize));
+    Found[K] = HighExpr::makeLoad(std::move(Address),
+                                  NdType::makeInt(TRI.PointerSize));
   }
 }
 
@@ -345,6 +378,49 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
     return nullptr;
   };
   Scan.ReachingRegArg = ReachingRegArg;
+  std::function<std::optional<int64_t>(const MedVar &, int)> EntryOffset =
+      [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
+    if (!CurMed || Depth > 8)
+      return std::nullopt;
+    if (V.Kind == MedVar::Reg && V.RegOff == SpRegOff && V.SSAVer == 0)
+      return 0;
+    const MedOp *Def = nullptr;
+    for (const auto &Blk : CurMed->Blocks)
+      for (const auto &Op : Blk.Ops)
+        if (Op.Output.Kind == V.Kind && Op.Output.Id == V.Id &&
+            Op.Output.SSAVer == V.SSAVer) {
+          if (Def)
+            return std::nullopt;
+          Def = &Op;
+        }
+    if (!Def || Def->NumInputs < 1)
+      return std::nullopt;
+    if (Def->Opcode == NdOp::COPY)
+      return EntryOffset(Def->Inputs[0], Depth + 1);
+    if ((Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
+        Def->NumInputs == 2 && Def->Inputs[1].isConst()) {
+      auto Base = EntryOffset(Def->Inputs[0], Depth + 1);
+      if (!Base)
+        return std::nullopt;
+      const int64_t C = static_cast<int64_t>(Def->Inputs[1].ConstVal);
+      return Def->Opcode == NdOp::INT_ADD ? *Base + C : *Base - C;
+    }
+    return std::nullopt;
+  };
+  auto EntryOffsetOf = [&](const MedVar &V) { return EntryOffset(V, 0); };
+  Scan.EntryOffsetOf = EntryOffsetOf;
+  Scan.FrameSize = CurMed ? CurMed->FrameSize : 0;
+  if (CurMed && LoadedEntrySlotsFor != CurMed) {
+    LoadedEntrySlots.clear();
+    for (const auto &Blk : CurMed->Blocks)
+      for (const auto &Op : Blk.Ops)
+        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          if (auto Off = EntryOffsetOf(Op.Inputs[0]))
+            LoadedEntrySlots.insert(*Off);
+    LoadedEntrySlotsFor = CurMed;
+  }
+  Scan.LoadedEntrySlots = &LoadedEntrySlots;
 
   std::vector<ExprPtr> Args;
   switch (TargetArch) {

@@ -158,6 +158,10 @@ private:
   /// call block (loop-carried via a header PHI) rather than written before the
   /// call.
   const MedFunc *CurMed = nullptr;
+  /// Entry-relative stack slots CurMed loads anywhere; such a slot is a
+  /// local, not an outgoing argument (cached per function).
+  std::set<int64_t> LoadedEntrySlots;
+  const MedFunc *LoadedEntrySlotsFor = nullptr;
   const BinaryImage *Image = nullptr;
   Arch TargetArch = Arch::Unknown;
   const std::map<va_t, std::string> *FuncNames = nullptr;
