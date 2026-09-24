@@ -18,6 +18,7 @@
 #include "WindowsKernelLayout.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
 #include <optional>
@@ -153,7 +154,8 @@ class Formatter {
 
   llvm::Error append(llvm::StringRef Text) {
     if (Text.size() > MaxDebugBytes - Output.size())
-      return runtimeError("DbgPrint output exceeds the 512-byte model limit");
+      return runtimeError(llvm::formatv(
+          "DbgPrint output exceeds the {0}-byte model limit", MaxDebugBytes));
     Output.append(Text.data(), Text.size());
     return llvm::Error::success();
   }
@@ -386,7 +388,7 @@ class Formatter {
           return Result.takeError();
         Text = std::move(*Result);
       } else {
-        const uint64_t Unit = Value & (Wide ? 0xffff : 0xff);
+        const uint64_t Unit = Wide ? uint16_t(Value) : uint8_t(Value);
         if (Unit > MaxASCII)
           return runtimeError(
               "DbgPrint non-ASCII character requires an unmodeled code page");

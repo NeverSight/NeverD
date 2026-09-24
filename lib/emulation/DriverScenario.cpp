@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
@@ -25,6 +26,7 @@
 
 namespace neverd::emulation {
 namespace {
+constexpr uint64_t KibibyteBytes = 1024;
 
 namespace resourceField {
 #define NEVERD_DRIVER_RESOURCE_FIELD(Name, Spelling)                           \
@@ -80,7 +82,7 @@ llvm::Error invalid(const llvm::Twine &Message) {
 bool validDeviceName(llvm::StringRef Name) {
   return Name.size() <= profile::MaxDeviceNameSize &&
          std::all_of(Name.begin(), Name.end(),
-                     [](unsigned char C) { return C >= 0x20 && C <= 0x7e; });
+                     [](unsigned char C) { return C >= ' ' && C <= '~'; });
 }
 
 bool validIdentifier(llvm::StringRef ID, size_t Limit) {
@@ -798,7 +800,10 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
   if (const auto *Device = Object->get(DeviceField)) {
     auto Name = Device->getAsString();
     if (!Name || Name->empty() || !validDeviceName(*Name))
-      return invalid("device must contain 1..512 printable ASCII bytes");
+      return invalid(
+          llvm::formatv("device must contain 1..{0} printable ASCII bytes",
+                        profile::MaxDeviceNameSize)
+              .str());
     Result.Device = Name->str();
   }
   if (const auto *DeviceID = Object->get(DeviceIDField)) {
@@ -938,8 +943,11 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     if (!Text || Text->size() > DriverScenarioBufferLimit * 2 ||
         Text->size() % 2 ||
         !std::all_of(Text->begin(), Text->end(), llvm::isHexDigit))
-      return invalid(Field + " must be an even-length hexadecimal byte string "
-                             "of at most 65536 bytes");
+      return invalid(Field +
+                     llvm::formatv(" must be an even-length hexadecimal byte "
+                                   "string of at most {0} bytes",
+                                   DriverScenarioBufferLimit)
+                         .str());
     Output.reserve(Text->size() / 2);
     for (size_t I = 0; I < Text->size(); I += 2)
       Output.push_back((llvm::hexDigitValue((*Text)[I]) << 4) |
@@ -954,7 +962,10 @@ llvm::Expected<DriverRequest> request(const llvm::json::Value &Value) {
     auto Size = Output->getAsUINT64();
     if (!Size || *Size > DriverScenarioBufferLimit)
       return invalid(
-          "output_size must be an unsigned integer of at most 65536");
+          llvm::formatv("output_size must be an unsigned integer of at most "
+                        "{0}",
+                        DriverScenarioBufferLimit)
+              .str());
     Result.OutputSize = static_cast<uint32_t>(*Size);
   }
   return Result;
@@ -1157,18 +1168,30 @@ llvm::Error validateDriverDma(llvm::ArrayRef<DriverPnpDevice> Devices) {
     if (Dma.AddressBits != 32 && Dma.AddressBits != 64)
       return invalid("DMA address_bits must be 32 or 64");
     if (!Dma.MaximumLength || Dma.MaximumLength > DriverDmaMaximumLengthLimit)
-      return invalid("DMA maximum_length must be between 1 and 1 MiB");
+      return invalid(
+          llvm::formatv("DMA maximum_length must be between 1 and {0} bytes",
+                        DriverDmaMaximumLengthLimit)
+              .str());
     if (!Dma.MapRegisters || Dma.MapRegisters > DriverDmaMapRegisterLimit)
-      return invalid("DMA map_registers must be between 1 and 256");
+      return invalid(
+          llvm::formatv("DMA map_registers must be between 1 and {0}",
+                        DriverDmaMapRegisterLimit)
+              .str());
     if (!Dma.Alignment || Dma.Alignment > DriverDmaAlignmentLimit ||
         (Dma.Alignment & (Dma.Alignment - 1)))
-      return invalid("DMA alignment must be a power of two between 1 and 4096");
+      return invalid(llvm::formatv("DMA alignment must be a power of two "
+                                   "between 1 and {0}",
+                                   DriverDmaAlignmentLimit)
+                         .str());
     if (!Dma.LogicalBase || Dma.LogicalBase % DriverDmaPageSize)
       return invalid("DMA logical_base must be nonzero and page aligned");
     if (!Dma.LogicalLength || Dma.LogicalLength > DriverDmaLogicalLengthLimit ||
         Dma.LogicalLength % DriverDmaPageSize)
       return invalid(
-          "DMA logical_length must be page aligned from 4 KiB to 1 GiB");
+          llvm::formatv("DMA logical_length must be page aligned from {0} "
+                        "to {1} bytes",
+                        DriverDmaPageSize, DriverDmaLogicalLengthLimit)
+              .str());
     if (Dma.LogicalBase > UINT64_MAX - Dma.LogicalLength)
       return invalid("DMA logical aperture overflows 64 bits");
     if (Dma.AddressBits == 32 &&
@@ -1531,11 +1554,18 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
         Request.ByteOffset > INT64_MAX)
       return invalid("request exceeds the buffer or signed offset limit");
     if (!validDeviceName(Request.Device))
-      return invalid("device must contain at most 512 printable ASCII bytes");
+      return invalid(
+          llvm::formatv("device must contain at most {0} printable ASCII "
+                        "bytes",
+                        profile::MaxDeviceNameSize)
+              .str());
     Total +=
         Request.Input.size() + Request.OutputSize + Request.DirectInput.size();
     if (Total > DriverScenarioTotalBufferLimit)
-      return invalid("combined request buffers exceed 512 KiB");
+      return invalid(
+          llvm::formatv("combined request buffers exceed {0} KiB",
+                        DriverScenarioTotalBufferLimit / KibibyteBytes)
+              .str());
     switch (Request.Kind) {
     case DriverRequestKind::Create:
     case DriverRequestKind::Cleanup:
@@ -1612,7 +1642,7 @@ driverOptionsFromScenarioJSON(llvm::StringRef JSON, DriverOptions Base) {
       if (!Present || ExportName.empty() ||
           ExportName.size() > profile::MaxKernelExportNameSize ||
           !std::all_of(ExportName.begin(), ExportName.end(),
-                       [](unsigned char C) { return C >= 0x21 && C <= 0x7e; }))
+                       [](unsigned char C) { return C >= '!' && C <= '~'; }))
         return invalid(
             "kernel_exports requires printable names and boolean values");
       Base.KernelExports.emplace(ExportName, *Present);
