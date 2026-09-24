@@ -19,10 +19,11 @@ except ImportError:
     from generate_swift_metadata_declarations import TARGETS, EXPORT_TARGETS
 
 
-METADATA_TYPES = ("Any", "AnyHashable", "String", "Bool", "Int", "Int8",
+METADATA_TYPES = ("Any", "AnyHashable", "String", "Substring", "Bool", "Int", "Int8",
                   "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
                   "UInt32", "UInt64", "Float", "Double")
-HASHABLE_TYPES = tuple(name for name in METADATA_TYPES if name != "Any")
+HASHABLE_TYPES = tuple(name for name in METADATA_TYPES
+                       if name not in ("Any", "Substring"))
 
 
 def hashable_value(name):

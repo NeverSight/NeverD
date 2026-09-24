@@ -15,6 +15,7 @@
 {"$sSfSHsWP", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
 {"$sSiN", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
 {"$sSiSHsWP", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
+{"$sSsN", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
 {"$sSuN", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
 {"$sSuSHsWP", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},
 {"$ss11AnyHashableVN", "/usr/lib/swift/libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"},

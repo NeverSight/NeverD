@@ -54,10 +54,13 @@ CONFORMANCE_IR = (
 
 
 class SwiftDataDeclarationTests(unittest.TestCase):
-    def test_any_has_metadata_identity_without_inventing_hashable_witness(self):
+    def test_metadata_only_types_do_not_invent_hashable_witnesses(self):
         self.assertIn('Any', METADATA_TYPES)
         self.assertNotIn('Any', HASHABLE_TYPES)
-        self.assertEqual(set(METADATA_TYPES) - set(HASHABLE_TYPES), {'Any'})
+        self.assertIn('Substring', METADATA_TYPES)
+        self.assertNotIn('Substring', HASHABLE_TYPES)
+        self.assertEqual(set(METADATA_TYPES) - set(HASHABLE_TYPES),
+                         {'Any', 'Substring'})
         self.assertEqual(metadata_storage(ANY_IR, ['metadata_Any']), {ANY})
         for invalid in [
             ANY_IR.replace('external global', 'external thread_local global'),
