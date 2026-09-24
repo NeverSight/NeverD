@@ -97,6 +97,14 @@ static const std::vector<RoundTripTC> kX64 = {
    "__asm__ volatile(\"cmpl %2,%1\\n\\tsetl %0\":\"=q\"(r):\"r\"(x),\"r\"(y):\"cc\");"
    "return r;}\n",
    {0x80000000ULL, 1}, "SignedFold"},
+  // The compare reads the old register value. MOV rewrites it without changing
+  // flags; a later signed SETcc must not compare the new value to the old RHS.
+  {"cmp_mov_setle_old_value",
+   "long f(long a,long b){int x=(int)a,y=(int)b;unsigned char r;"
+   "__asm__ volatile(\"cmpl %2,%1\\n\\tmovl $0x80000000,%1\\n\\tsetle %0\":"
+   "\"=q\"(r),\"+r\"(x):\"r\"(y):\"cc\");"
+   "return r;}\n",
+   {0x7FFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL}, "SignedFold"},
   {"test_setl_ctrl",
    "long f(long a){int x=(int)a;unsigned char r;"
    "__asm__ volatile(\"testl %1,%1\\n\\tsetl %0\":\"=q\"(r):\"r\"(x):\"cc\");"

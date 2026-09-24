@@ -331,6 +331,8 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
         if (Prev.Output.Id != ResultVar.Id ||
             Prev.Output.SSAVer != ResultVar.SSAVer || Prev.NumInputs < 1)
           continue;
+        Result.Result = ResultVar;
+        Result.SourceOpIndex = J;
         if (Prev.Opcode == NdOp::INT_SUB) {
           Result.A = Prev.Inputs[0];
           Result.B = Prev.Inputs[1];

@@ -71,6 +71,11 @@ struct CmpSource {
   /// as a comparison from a real subtraction; for any other flag source they
   /// must be left unfolded.
   bool FromSub = false;
+  /// The exact subtraction/result that supplied the ZF or SF source.  A
+  /// signed fold may compare another flag's operands only after proving they
+  /// are views of these same values in the same instruction.
+  MedVar Result;
+  int SourceOpIndex = -1;
 };
 
 // ---- Architecture-specific compound flag pattern resolvers ----
