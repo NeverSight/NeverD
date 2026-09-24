@@ -49,6 +49,8 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
   bool FloatingLive = true;
   for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
     const auto &Op = Block.Ops[I];
+    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::INTRINSIC)
+      return Width;
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
       if (IntegerLive && BoundCalls) {
         const auto It = BoundCalls->find(Op.Addr);
@@ -105,12 +107,28 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
                         const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
-      Image.Bits != Bitness::Bits64 || Function.Blocks.size() != 1 ||
+      Image.Bits != Bitness::Bits64 || Function.Blocks.empty() ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
     return Result;
-  const auto &Block = Function.Blocks.front();
-  if (!Block.Succs.empty() || !Block.Preds.empty() || Block.Ops.size() > 65536)
+  const LowBlock *BlockPtr = nullptr;
+  if (Function.Blocks.size() == 1) {
+    BlockPtr = &Function.Blocks.front();
+    if (!BlockPtr->Succs.empty())
+      return Result;
+  } else {
+    // Facts are valid only along the entry block's straight-line prefix.
+    // Never carry its register or frame identities across a CFG edge.
+    for (const auto &Candidate : Function.Blocks)
+      if (Candidate.StartAddr == Function.Entry) {
+        if (BlockPtr)
+          return Result;
+        BlockPtr = &Candidate;
+      }
+  }
+  if (!BlockPtr || !BlockPtr->Preds.empty() ||
+      !BlockPtr->ExceptionalPreds.empty() || BlockPtr->Ops.size() > 65536)
     return Result;
+  const auto &Block = *BlockPtr;
   const auto &TRI = getTargetRegInfo(Image.Arch);
   std::string EntryError;
   if (EntrySignature && (EntrySignature->Architecture != Image.Arch ||
@@ -159,7 +177,7 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
   for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
     const auto &Op = Block.Ops[Index];
     if (Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::BRANCH)
-      return {};
+      return Result;
     if (Op.Addr != PreviousAddress) {
       for (auto It = Values.begin(); It != Values.end();)
         if (std::get<0>(It->first) == VnodeSpace::TEMP)

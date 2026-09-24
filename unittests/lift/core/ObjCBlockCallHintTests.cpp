@@ -86,6 +86,84 @@ TEST(ObjCBlockCallHints, ProvesSameReceiverAndKeepsOnlyWrittenScalarArguments) {
   }
 }
 
+TEST(ObjCBlockCallHints, ProvesInvokeInMultiBlockEntryPrefixOnly) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F(Architecture);
+    F.Low.Blocks.reserve(2);
+    auto &Entry = F.Low.Blocks[0];
+    Entry.Ops.back() = op(
+        NdOp::COPY, NdVar::tmp(1, 4),
+        {NdVar::reg(getTargetRegInfo(Architecture).IntReturnReg, 4)}, 0x1010);
+    Entry.Ops.push_back(op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1014));
+    Entry.Succs = {1};
+    Entry.EndAddr = 0x1018;
+    F.Low.Blocks.emplace_back();
+    auto &Successor = F.Low.Blocks[1];
+    Successor.Id = 1;
+    Successor.StartAddr = 0x1020;
+    Successor.EndAddr = 0x1024;
+    Successor.Preds = {0};
+    Successor.Ops = {op(NdOp::RETURN, {}, {}, 0x1020)};
+
+    auto Hints = F.hints();
+    ASSERT_EQ(Hints.size(), 1U);
+    EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Size, 4U);
+
+    Entry.Preds = {1};
+    EXPECT_TRUE(F.hints().empty());
+    Entry.Preds.clear();
+    Entry.StartAddr = 0x1004;
+    EXPECT_TRUE(F.hints().empty());
+    Entry.StartAddr = F.Low.Entry;
+    Entry.Ops.insert(Entry.Ops.begin(),
+                     op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0xffc));
+    EXPECT_TRUE(F.hints().empty());
+  }
+}
+
+TEST(ObjCBlockCallHints, DoesNotAnalyzeSuccessorBlockAsEntry) {
+  Fixture F(Arch::AArch64);
+  const auto InvokeOps = F.Low.Blocks[0].Ops;
+  F.Low.Blocks[0].Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1000)};
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Successor = F.Low.Blocks[1];
+  Successor.Id = 1;
+  Successor.StartAddr = 0x1020;
+  Successor.EndAddr = 0x1040;
+  Successor.Preds = {0};
+  Successor.Ops = InvokeOps;
+  EXPECT_TRUE(F.hints().empty());
+}
+
+TEST(ObjCBlockCallHints, BoundARCConsumerProvesEntryBlockInvokeBeforeBranch) {
+  Fixture F(Arch::AArch64);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceCallTypeHint Retain;
+  Retain.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
+  Retain.TargetName = "objc_retainAutoreleasedReturnValue";
+  Retain.Signature.ReturnType = Pointer;
+  Retain.Signature.Parameters = {{"object", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Retain.Signature, F.Image.Arch, Error))
+      << Error;
+  F.Low.Blocks[0].Ops.back() =
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x3000, 8)}, 0x1010);
+  F.Low.Blocks[0].Ops.push_back(
+      op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1014));
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  F.Low.Blocks[1].Id = 1;
+  F.Low.Blocks[1].StartAddr = 0x1020;
+  F.Low.Blocks[1].Preds = {0};
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1010, Retain}};
+  const auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Size, 8U);
+  EXPECT_TRUE(F.hints().empty());
+}
+
 TEST(ObjCBlockCallHints,
      RetainedObjectResultProvesBlockInvokeAcrossBoundCalls) {
   Fixture F(Arch::AArch64);
