@@ -361,12 +361,15 @@ bool declaredStdlibABI(const BinaryImage &Image, va_t Slot,
   constexpr llvm::StringLiteral StringRangeSubscript =
       "$sSSySsSnySS5IndexVGcig";
   constexpr llvm::StringLiteral AllocError = "swift_allocError";
+  constexpr llvm::StringLiteral OpaqueConformance2 =
+      "swift_getOpaqueTypeConformance2";
   const auto Bind = Image.DyldBindSlots.find(Slot);
   if (Bind == Image.DyldBindSlots.end() ||
       Bind->second.Module != "/usr/lib/swift/libswiftCore.dylib" ||
       (Name != AssertionFailure && Name != StringRangeSubscript &&
-       Name != AllocError) ||
-      ((Name == StringRangeSubscript || Name == AllocError) &&
+       Name != AllocError && Name != OpaqueConformance2) ||
+      ((Name == StringRangeSubscript || Name == AllocError ||
+        Name == OpaqueConformance2) &&
        Image.Arch != Arch::AArch64))
     return false;
 
@@ -383,6 +386,17 @@ bool declaredStdlibABI(const BinaryImage &Image, va_t Slot,
                             {"conformance", Pointer},
                             {"initial_value", Pointer},
                             {"is_take", NdType::makeInt(1, false)}};
+    std::string Diagnostic;
+    return assignDarwinSwiftSourceABI(Signature, Image.Arch, Diagnostic);
+  }
+  if (Name == OpaqueConformance2) {
+    // Swift RuntimeFunctions.def (9215272a) declares a swiftcc witness-table
+    // pointer result from (arguments, signed descriptor, index). The strong
+    // libswiftCore import proves this versioned entry is present.
+    Signature.ReturnType = Pointer;
+    Signature.Parameters = {{"arguments", Pointer},
+                            {"descriptor", Pointer},
+                            {"index", Word}};
     std::string Diagnostic;
     return assignDarwinSwiftSourceABI(Signature, Image.Arch, Diagnostic);
   }
@@ -643,6 +657,23 @@ swiftRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
     Signature.Convention = SourceFunctionTypeHint::ConventionKind::Swift;
     Signature.ReturnType = NdType::makeVoid();
     Signature.Parameters = {{"actor", Pointer}};
+  } else if (Name == "swift_task_alloc" || Name == "swift_task_dealloc") {
+    // Swift 6.1.2 arm64 async client IR declares swiftcc ptr(i64) and
+    // swiftcc void(ptr), respectively. Preserve allocation and release as
+    // real calls with the exact libswift_Concurrency provider.
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Image.Arch != Arch::AArch64 || Bind == Image.DyldBindSlots.end() ||
+        Bind->second.Module !=
+            "/usr/lib/swift/libswift_Concurrency.dylib")
+      return std::nullopt;
+    Signature.Convention = SourceFunctionTypeHint::ConventionKind::Swift;
+    if (Name == "swift_task_alloc") {
+      Signature.ReturnType = Pointer;
+      Signature.Parameters = {{"size", NdType::makeInt(8, false)}};
+    } else {
+      Signature.ReturnType = NdType::makeVoid();
+      Signature.Parameters = {{"pointer", Pointer}};
+    }
   } else if (!declaredFixedABI(Image, ImportSlot, Name, Result)) {
     return std::nullopt;
   }

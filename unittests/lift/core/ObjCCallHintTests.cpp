@@ -1497,6 +1497,45 @@ TEST(ObjCCallHints, SwiftAllocErrorKeepsObjectAndPayloadResults) {
   EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
 }
 
+TEST(ObjCCallHints, SwiftOpaqueConformance2KeepsSignedDescriptorABI) {
+  auto Image = runtimeImage("_swift_getOpaqueTypeConformance2");
+  Image.DyldBindSlots[0x2180] = {"_swift_getOpaqueTypeConformance2", 0,
+                                 "/usr/lib/swift/libswiftCore.dylib", false};
+  const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+  ASSERT_TRUE(Hint);
+  const auto &ABI = Hint->Signature;
+  EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+  EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  ASSERT_TRUE(ABI.ReturnType);
+  EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(ABI.ReturnLocation.Kind,
+            SourceABICarrierKind::IntegerRegister);
+  EXPECT_EQ(ABI.ReturnLocation.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).IntReturnReg);
+  ASSERT_EQ(ABI.Parameters.size(), 3U);
+  for (size_t I = 0; I < 3; ++I) {
+    EXPECT_EQ(ABI.Parameters[I].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+  }
+  EXPECT_EQ(ABI.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(ABI.Parameters[1].Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(ABI.Parameters[2].Type->Kind, NdTypeKind::Int);
+  EXPECT_EQ(ABI.Parameters[2].Type->Size, 8U);
+  std::string Diagnostic;
+  EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+  Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  Image.DyldBindSlots[0x2180].Module = "/usr/lib/swift/libswiftCore.dylib";
+  Image.DyldBindSlots[0x2180].Name += "_suffix";
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+  auto X64 = runtimeImage("_swift_getOpaqueTypeConformance2", Arch::X64);
+  X64.DyldBindSlots[0x2180] = {"_swift_getOpaqueTypeConformance2", 0,
+                               "/usr/lib/swift/libswiftCore.dylib", false};
+  EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
+}
+
 TEST(ObjCCallHints, SwiftDefaultActorLifecycleKeepsSwiftConvention) {
   constexpr llvm::StringLiteral Provider =
       "/usr/lib/swift/libswift_Concurrency.dylib";
@@ -1516,6 +1555,47 @@ TEST(ObjCCallHints, SwiftDefaultActorLifecycleKeepsSwiftConvention) {
     EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Void);
     ASSERT_EQ(ABI.Parameters.size(), 1U);
     EXPECT_EQ(ABI.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(ABI.Parameters[0].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(ABI.Parameters[0].Location.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).IntParamRegs[0]);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+    Image.DyldBindSlots[0x2180].Module = "/usr/lib/swift/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    Image.DyldBindSlots[0x2180].Module = Provider.str();
+    Image.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    auto X64 = runtimeImage(Import, Arch::X64);
+    X64.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(X64, 0x2180));
+  }
+}
+
+TEST(ObjCCallHints, SwiftTaskFrameAllocationKeepsSwiftConvention) {
+  constexpr llvm::StringLiteral Provider =
+      "/usr/lib/swift/libswift_Concurrency.dylib";
+  for (const char *Name : {"swift_task_alloc", "swift_task_dealloc"}) {
+    const bool Alloc = llvm::StringRef(Name) == "swift_task_alloc";
+    const std::string Import = std::string("_") + Name;
+    auto Image = runtimeImage(Import);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint) << Name;
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    const auto &ABI = Hint->Signature;
+    EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftRuntime);
+    EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(ABI.ReturnType);
+    EXPECT_EQ(ABI.ReturnType->Kind,
+              Alloc ? NdTypeKind::Ptr : NdTypeKind::Void);
+    EXPECT_EQ(ABI.ReturnLocation.Kind,
+              Alloc ? SourceABICarrierKind::IntegerRegister
+                    : SourceABICarrierKind::None);
+    ASSERT_EQ(ABI.Parameters.size(), 1U);
+    EXPECT_EQ(ABI.Parameters[0].Type->Kind,
+              Alloc ? NdTypeKind::Int : NdTypeKind::Ptr);
+    EXPECT_EQ(ABI.Parameters[0].Type->Size, 8U);
     EXPECT_EQ(ABI.Parameters[0].Location.Kind,
               SourceABICarrierKind::IntegerRegister);
     EXPECT_EQ(ABI.Parameters[0].Location.RegisterOffset,
