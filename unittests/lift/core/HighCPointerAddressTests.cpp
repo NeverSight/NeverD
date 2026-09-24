@@ -23065,11 +23065,67 @@ TEST(HighCPointerAddresses, X86DivPreconditionKeepsArithmeticWraps) {
   Func.Body.push_back(std::move(Trap));
 
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("(uint32_t)(eRecord) + (uint32_t)(1)"), std::string::npos)
+  const size_t DividendAt = Source.find("neverd_dividend = ");
+  ASSERT_NE(DividendAt, std::string::npos) << Source;
+  const size_t DividendEnd = Source.find(';', DividendAt);
+  ASSERT_NE(DividendEnd, std::string::npos) << Source;
+  const std::string Dividend =
+      Source.substr(DividendAt, DividendEnd - DividendAt);
+  // eRecord is declared uint32_t. Its add wraps at 32 bits before the
+  // dividend is widened; the old per-operand casts are unnecessary.
+  EXPECT_NE(Dividend.find("(uint32_t)(eRecord + 1)"), std::string::npos)
       << Source;
-  EXPECT_EQ(Source.find("neverd_dividend = (uint64_t)(eRecord + 1)"),
-            std::string::npos)
+  EXPECT_EQ(Dividend.find("(uint64_t)(eRecord) + 1"), std::string::npos)
       << Source;
+
+  // For UINT32_MAX + 1 the correct dividend is zero. If the add is widened
+  // first, its high half becomes one and this precondition traps at divisor 1.
+  const std::string RuntimeSource = Source + R"(
+int main(void) {
+    div_add(UINT32_MAX, 1);
+    return 0;
+}
+)";
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ExecutablePath, ErrorPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-div-wrap", "c", SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-div-wrap", "exe",
+                                                  ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-div-wrap", "err", ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream OS(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    OS << RuntimeSource;
+  }
+  llvm::SmallVector<llvm::StringRef, 12> Arguments{
+      Compiler, "-std=c11", "-O1", SourcePath, "-o", ExecutablePath};
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, std::nullopt, ErrorPath.str()};
+  std::string Error;
+  const int CompileStatus = llvm::sys::ExecuteAndWait(
+      Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
+  auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+  ASSERT_EQ(CompileStatus, 0)
+      << Error << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : "") << "\n"
+      << RuntimeSource;
+  llvm::SmallVector<llvm::StringRef, 1> RunArguments{ExecutablePath};
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, RunArguments,
+                                      std::nullopt, {}, 30, 0, &Error),
+            0)
+      << Error << "\n"
+      << RuntimeSource;
 }
 
 HighFunc divFieldPrecondition(bool UnsignedField) {
@@ -35874,6 +35930,9 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   EXPECT_NE(Source.find("return (int32_t)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(int64_t)(uint32_t)(int32_t)"), std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("return (int32_t)(var_m18 + 1);"),
+            std::string::npos)
+      << Source;
 }
 
 TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
@@ -36057,6 +36116,40 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
             std::string::npos)
       << Source;
   EXPECT_NE(Source.find("= " + Carrier + ";"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("llvm_x2E_seh_x2E_try"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("L_seh_catch_pad_0:\n        ;\n"),
+            std::string::npos)
+      << Source;
+
+  // The CLI's analysis-only LLVM route can print register-home assignments
+  // that its earlier declaration prediction did not see. Every simple local
+  // assignment must have a declaration before it in the rendered C.
+  size_t Start = 0;
+  while (Start < Source.size()) {
+    const size_t End = Source.find('\n', Start);
+    const std::string_view Line(Source.data() + Start,
+                                (End == std::string::npos ? Source.size()
+                                                          : End) - Start);
+    const size_t First = Line.find_first_not_of(" \t");
+    if (First != std::string_view::npos) {
+      size_t NameEnd = First;
+      while (NameEnd < Line.size() &&
+             ((Line[NameEnd] >= 'A' && Line[NameEnd] <= 'Z') ||
+              (Line[NameEnd] >= 'a' && Line[NameEnd] <= 'z') ||
+              (Line[NameEnd] >= '0' && Line[NameEnd] <= '9') ||
+              Line[NameEnd] == '_'))
+        ++NameEnd;
+      if (NameEnd > First && Line.substr(NameEnd).starts_with(" = ")) {
+        const std::string Name(Line.substr(First, NameEnd - First));
+        EXPECT_NE(Source.rfind(" " + Name + ";", Start), std::string::npos)
+            << "assignment to undeclared " << Name << "\n" << Source;
+      }
+    }
+    if (End == std::string::npos)
+      break;
+    Start = End + 1;
+  }
 }
 
 TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {

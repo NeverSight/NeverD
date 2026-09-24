@@ -137,6 +137,67 @@ void compileAndExecute(const std::string &Source, bool CheckShiftUB,
                           << Source;
 }
 
+TEST(HighCIntegerWidths, UnsignedMachineWidthArithmeticUsesDeclaredType) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  auto AddOne = [&](const std::string &Name, TypeRef Declared,
+                    TypeRef OperandType, TypeRef ResultType, const char *Input,
+                    const char *Expected) {
+    HighFunc Func;
+    Func.Name = Name;
+    Func.ReturnType = ResultType;
+    Func.Params = {{"arg0", Declared}};
+    auto Sum = HighExpr::makeBinop(NdOp::INT_ADD, parameter(0, OperandType),
+                                   HighExpr::makeConst(1, 4));
+    Sum->Type = ResultType;
+    returnValue(Func, Sum);
+    appendCheck(Checks, Name, argument(Declared, Input), Expected);
+    Functions.push_back(std::move(Func));
+  };
+
+  const auto U16 = NdType::makeInt(2, false);
+  const auto U32 = NdType::makeInt(4, false);
+  const auto S32 = NdType::makeInt(4, true);
+  const auto U64 = NdType::makeInt(8, false);
+  AddOne("natural_u32_add", U32, U32, U32, "0xffffffff", "0");
+  AddOne("natural_u64_add", U64, U64, U64, "0xffffffffffffffff", "0");
+  AddOne("natural_u32_to_s32", U32, S32, S32, "0xffffff9c",
+         "0xffffffffffffff9d");
+  // C promotes uint16_t to int, so the result still needs an explicit
+  // machine-width truncation. Signed operands also need unsigned arithmetic
+  // to avoid signed-overflow UB, even if HighIR inferred an unsigned result.
+  AddOne("narrow_u16_add", U16, U16, U16, "0xffff", "0");
+  AddOne("signed_s32_add", S32, S32, S32, "0x7fffffff", "0xffffffff80000000");
+  AddOne("signed_decl_unsigned_ir_add", S32, U32, U32, "0xffffffff", "0");
+
+  const std::string Source = emitFunctions(Functions);
+  auto Body = [&](const std::string &Name) {
+    const size_t Begin = Source.find(Name + "(");
+    EXPECT_NE(Begin, std::string::npos) << Source;
+    if (Begin == std::string::npos)
+      return std::string{};
+    const size_t End = Source.find("\n}", Begin);
+    EXPECT_NE(End, std::string::npos) << Source;
+    return Source.substr(Begin, End == std::string::npos ? End : End - Begin);
+  };
+  EXPECT_NE(Body("natural_u32_add").find("return arg0 + 1;"), std::string::npos)
+      << Source;
+  EXPECT_NE(Body("natural_u64_add").find("return arg0 + 1;"), std::string::npos)
+      << Source;
+  EXPECT_NE(Body("natural_u32_to_s32").find("return (int32_t)(arg0 + 1);"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("narrow_u16_add").find("return arg0 + 1;"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("signed_s32_add").find("return arg0 + 1;"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("signed_decl_unsigned_ir_add").find("return arg0 + 1;"),
+            std::string::npos)
+      << Source;
+  compileAndExecute(Source + executionHarness(Checks), false,
+                    /*CheckArithmeticUB=*/true);
+}
+
 TEST(HighCIntegerWidths, ArithmeticWrapsBeforeWideningWithoutSignedOverflow) {
   std::vector<HighFunc> Functions;
   std::string Checks;

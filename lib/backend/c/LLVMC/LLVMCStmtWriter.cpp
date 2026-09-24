@@ -2937,11 +2937,11 @@ void LLVMCWriter::writeGEP(llvm::GetElementPtrInst &GEP,
 }
 
 bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
-  auto *II = llvm::dyn_cast<llvm::IntrinsicInst>(&Call);
-  if (!II)
+  const llvm::Function *Callee = Call.getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic())
     return false;
 
-  auto IID = II->getIntrinsicID();
+  auto IID = Callee->getIntrinsicID();
   if (IID == llvm::Intrinsic::sideeffect || IID == llvm::Intrinsic::donothing ||
       IID == llvm::Intrinsic::seh_try_begin ||
       IID == llvm::Intrinsic::seh_try_end ||

@@ -7429,12 +7429,13 @@ bool lineDeclaresName(llvm::StringRef Line, llvm::StringRef Name) {
   return Found;
 }
 
-bool nameUsedOutsideDecl(llvm::StringRef Text, llvm::StringRef Name) {
+std::optional<size_t> firstNameUseOutsideDecl(llvm::StringRef Text,
+                                              llvm::StringRef Name) {
   size_t Pos = 0;
   while (Pos < Text.size()) {
     const size_t At = Text.find(Name, Pos);
     if (At == llvm::StringRef::npos)
-      return false;
+      return std::nullopt;
     const bool Left =
         At == 0 || !isCIdentChar(static_cast<unsigned char>(Text[At - 1]));
     const size_t End = At + Name.size();
@@ -7447,11 +7448,15 @@ bool nameUsedOutsideDecl(llvm::StringRef Text, llvm::StringRef Name) {
       if (LineEnd == llvm::StringRef::npos)
         LineEnd = Text.size();
       if (!lineDeclaresName(Text.substr(LineStart, LineEnd - LineStart), Name))
-        return true;
+        return At;
     }
     Pos = End;
   }
-  return false;
+  return std::nullopt;
+}
+
+bool nameUsedOutsideDecl(llvm::StringRef Text, llvm::StringRef Name) {
+  return firstNameUseOutsideDecl(Text, Name).has_value();
 }
 
 std::string dropUnusedCallDecls(std::string Text,
@@ -7614,6 +7619,8 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     }
   }
 
+  BufOS.flush();
+  const size_t DeclInsertPos = Buffered.size();
   emitFunctionDecls(Fn);
   {
     llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Seen;
@@ -7963,10 +7970,17 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         continue;
       writeBasicBlock(BB, 1 + EHTryDepth);
     }
+    bool EmittedEHLabel = false;
     for (const llvm::BasicBlock &BB : Fn) {
       if (!SkipInTry.contains(&BB) || !isEHDispatchOrPad(BB))
         continue;
       OS << blockLabel(&BB) << ":\n";
+      EmittedEHLabel = true;
+    }
+    if (EmittedEHLabel) {
+      // A label at the end of a compound statement needs a statement in C11.
+      emitIndent(1 + EHTryDepth);
+      OS << ";\n";
     }
     while (EHTryDepth > 0) {
       --EHTryDepth;
@@ -8028,6 +8042,65 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   BufOS.flush();
   Guard.Armed = false;
   OS.retarget(Guard.Primary);
+  // Declaration prediction runs before the statement walk. EH wraps and
+  // cross-block alloca homes can change which values and slots the statement
+  // writer actually prints. Reconcile against the rendered body so
+  // every printed local has a C declaration, without naming unprinted values
+  // or changing the instruction-order freshVar sequence.
+  std::set<std::string> DeclaredNames(CallDeclNames.begin(),
+                                      CallDeclNames.end());
+  std::vector<std::pair<size_t, std::string>> MissingDecls;
+  for (llvm::BasicBlock &BB : Fn) {
+    for (llvm::Instruction &Inst : BB) {
+      if (Inst.getType()->isVoidTy() || Inst.getType()->isTokenTy())
+        continue;
+      const auto It = ValNames.find(&Inst);
+      if (It == ValNames.end() || It->second.empty() ||
+          DeclaredNames.count(It->second))
+        continue;
+      const std::optional<size_t> FirstUse =
+          firstNameUseOutsideDecl(Buffered, It->second);
+      if (!FirstUse)
+        continue;
+      std::string Declaration;
+      if (auto *AI = llvm::dyn_cast<llvm::AllocaInst>(&Inst)) {
+        llvm::Type *Allocated = AI->getAllocatedType();
+        if (auto *Array = llvm::dyn_cast<llvm::ArrayType>(Allocated)) {
+          Declaration = "    " + typeToCLLVM(Array->getElementType()) + " " +
+                        It->second + "[" +
+                        std::to_string(Array->getNumElements()) + "];\n";
+        } else {
+          std::string Type = typeToCLLVM(Allocated);
+          if (auto Found = AllocaTypes.find(AI);
+              Found != AllocaTypes.end() && Found->second &&
+              Found->second->Kind == NdTypeKind::Ptr &&
+              Found->second->Pointee &&
+              Found->second->Pointee->Kind == NdTypeKind::Struct) {
+            const std::string Tag =
+                cNamedTypeSpelling(Found->second->Pointee->SourceName);
+            if (!Tag.empty())
+              Type = Tag + "*";
+          }
+          Declaration = "    " + Type + " " + It->second + ";\n";
+        }
+      } else {
+        Declaration = "    " + typeToCLLVM(Inst.getType()) + " " + It->second +
+                      ";\n";
+      }
+      MissingDecls.emplace_back(*FirstUse, std::move(Declaration));
+      DeclaredNames.insert(It->second);
+    }
+  }
+  if (!MissingDecls.empty()) {
+    std::stable_sort(MissingDecls.begin(), MissingDecls.end(),
+                     [](const auto &A, const auto &B) {
+                       return A.first < B.first;
+                     });
+    std::string Declarations;
+    for (const auto &[_, Decl] : MissingDecls)
+      Declarations += Decl;
+    Buffered.insert(DeclInsertPos, Declarations);
+  }
   std::vector<std::string> DropNames = CallDeclNames;
   DropNames.insert(DropNames.end(), FoldedLocalNames.begin(),
                    FoldedLocalNames.end());

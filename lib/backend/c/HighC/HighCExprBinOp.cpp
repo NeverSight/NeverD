@@ -344,6 +344,68 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
        E.Op == NdOp::INT_MULT) &&
       E.Type && E.Type->Kind == NdTypeKind::Int) {
     const uint16_t Size = E.Type->Size;
+    // A declared uint32_t/uint64_t operand makes the whole C operation
+    // unsigned at the machine width, even if HighIR views its result as
+    // signed. Keep that readable spelling when the other operand is unsigned
+    // at the same width or a small positive C int.
+    // Do not apply this to narrow integers (C promotes them to int), signed
+    // declarations (overflow is undefined), or two untyped constants.
+    if (Size == 4 || Size == 8) {
+      auto NaturalUnsignedOperand =
+          [&](const ExprPtr &Value) -> std::optional<bool> {
+        // A register/temporary may be forwarded to a named stack load. Check
+        // both the forwarded source type and the spelling actually printed.
+        const HighExpr *Printed = forwardedExpr(Value.get());
+        if (!Printed)
+          return std::nullopt;
+        if (Printed->Kind == ExprKind::Const) {
+          if (Printed->ConstVal <= 0x7fffffffULL &&
+              exprStr(*Value) == constStr(Printed->ConstVal))
+            return false;
+          return std::nullopt;
+        }
+        if (Printed->Kind == ExprKind::Var &&
+            Printed->Var.Kind == MedVar::Param) {
+          const TypeRef Decl = declaredParamType(Printed->Var);
+          if (Decl && Decl->Kind == NdTypeKind::Int && !Decl->IsSigned &&
+              !Decl->IsEnum && Decl->Size == Size &&
+              exprStr(*Value) == varName(Printed->Var))
+            return true;
+          return std::nullopt;
+        }
+        if (Printed->Kind == ExprKind::Load &&
+            Printed->MemoryOrdering == NdMemoryOrdering::None &&
+            Printed->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            !Printed->Operands.empty() && Printed->Operands[0]) {
+          const auto Disp = frameDisplacement(*Printed->Operands[0]);
+          if (!Disp)
+            return std::nullopt;
+          const auto Slot = FrameSlots.find(*Disp);
+          if (const auto Home = incomingHomeParamName(*Disp);
+              Home && Slot != FrameSlots.end() && *Home == Slot->second.Name)
+            return std::nullopt;
+          if (Slot != FrameSlots.end() && Slot->second.Type &&
+              Slot->second.Type->Kind == NdTypeKind::Int &&
+              !Slot->second.Type->IsSigned && !Slot->second.Type->IsEnum &&
+              Slot->second.Type->Size == Size &&
+              exprStr(*Value) == Slot->second.Name)
+            return true;
+        }
+        return std::nullopt;
+      };
+      const auto LeftUnsigned = NaturalUnsignedOperand(E.Operands[0]);
+      const auto RightUnsigned = NaturalUnsignedOperand(E.Operands[1]);
+      if (LeftUnsigned && RightUnsigned && (*LeftUnsigned || *RightUnsigned)) {
+        const char *Symbol = E.Op == NdOp::INT_ADD   ? " + "
+                             : E.Op == NdOp::INT_SUB ? " - "
+                                                     : " * ";
+        const std::string Value =
+            exprStr(*E.Operands[0]) + Symbol + exprStr(*E.Operands[1]);
+        if (E.Type->IsSigned)
+          return "(" + typeToC(E.Type) + ")(" + Value + ")";
+        return ParentPrec >= getOpPrecedence(E.Op) ? "(" + Value + ")" : Value;
+      }
+    }
     const auto IntegerWidth = [](uint16_t Width) {
       return Width >= 1 && Width <= 16;
     };
