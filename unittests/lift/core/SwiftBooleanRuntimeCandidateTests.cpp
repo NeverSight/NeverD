@@ -449,7 +449,9 @@ struct ProjectionFixture {
   }
 };
 
-SourceCallTypeHint addOpaqueGetter(ProjectionFixture &F) {
+SourceCallTypeHint addOpaqueObjectMessage(
+    ProjectionFixture &F,
+    llvm::StringRef Selector = "interactivePopGestureRecognizer") {
   constexpr va_t Getter = 0x1040, SelectorSlot = 0x2040;
   constexpr va_t MessageSlot = Slot + 8;
   Section Data;
@@ -461,12 +463,14 @@ SourceCallTypeHint addOpaqueGetter(ProjectionFixture &F) {
   F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
   F.Image.DynInfo.NeededLibs.push_back(
       "/System/Library/Frameworks/UIKit.framework/UIKit");
+  F.Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/Foundation.framework/Foundation");
   F.Image.ImportPtrSlots[MessageSlot] = "_objc_msgSend";
   EXPECT_TRUE(F.Image.recordDyldBindSlot(MessageSlot, "_objc_msgSend", 0,
                                          "/usr/lib/libobjc.A.dylib", false));
   F.Image.ObjCSourceReferences[SelectorSlot] = {
       ObjCSourceReference::Kind::Selector, SelectorSlot, 8,
-      "interactivePopGestureRecognizer"};
+      Selector.str()};
   const uint32_t Stub[] = {0xb0000001, 0xf9402021, 0xb0000010, 0xf9404610,
                            0xd61f0200};
   for (unsigned I = 0; I != std::size(Stub); ++I)
@@ -474,13 +478,13 @@ SourceCallTypeHint addOpaqueGetter(ProjectionFixture &F) {
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
   auto Signature =
-      objcSelectorSourceTypeHint(F.Image, "interactivePopGestureRecognizer");
+      objcSelectorSourceTypeHint(F.Image, Selector);
   EXPECT_TRUE(Signature);
   if (Signature)
     Hint.Signature = *Signature;
   Hint.TargetAddress = Getter;
   Hint.TargetName = "objc_msgSend";
-  Hint.Selector = "interactivePopGestureRecognizer";
+  Hint.Selector = Selector.str();
   Hint.SelectorReferenceAddress = SelectorSlot;
   return Hint;
 }
@@ -536,7 +540,7 @@ TEST(SwiftBooleanProjection, NativeEntryUsesConservativeWordUntilBound) {
 TEST(SwiftBooleanProjection,
      OpaqueGetterRequiresCurrentStubImportSelectorAndFixedABI) {
   ProjectionFixture F;
-  const auto Hint = addOpaqueGetter(F);
+  const auto Hint = addOpaqueObjectMessage(F);
   SourceCallOccurrenceKey Site{0x3000, 0, NdOp::CALL, 0x1040};
   EXPECT_TRUE(readImmutableCodeBytes(F.Image, 0x1040, 20));
   EXPECT_TRUE(objcSelectorStubOverwritesCommand(F.Image, 0x1040));
@@ -547,7 +551,8 @@ TEST(SwiftBooleanProjection,
   EXPECT_EQ(Hint.Signature.Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
   EXPECT_TRUE(Hint.Signature.HasExplicitABI);
   ASSERT_TRUE(
-      swift_boolean_projection_detail::opaqueObjectGetter(F.Image, Site, Hint));
+      swift_boolean_projection_detail::opaqueObjectMessage(F.Image, Site,
+                                                            Hint));
   for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Image = F.Image;
@@ -586,8 +591,7 @@ TEST(SwiftBooleanProjection,
       Image.DyldBindSlots[Slot + 8].Addend = 1;
       break;
     case 10:
-      Image.DynInfo.NeededLibs.pop_back();
-      Image.DynInfo.NeededLibs.pop_back();
+      Image.DynInfo.NeededLibs.clear();
       break;
     case 11:
       Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
@@ -624,15 +628,32 @@ TEST(SwiftBooleanProjection,
           SegmentFlags::Readable | SegmentFlags::Executable;
       break;
     }
-    EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectGetter(
+    EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectMessage(
         Image, Site, Changed));
   }
 }
 
 TEST(SwiftBooleanProjection,
+     OpaqueObjectMessageAcceptsExactPointerArgumentsWithoutSupplyingABI) {
+  ProjectionFixture F;
+  constexpr llvm::StringLiteral Selector =
+      "localizedStringForKey:value:table:";
+  auto Hint = addOpaqueObjectMessage(F, Selector);
+  const SourceCallOccurrenceKey Site{0x3000, 0, NdOp::CALL, 0x1040};
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 5U);
+  EXPECT_TRUE(swift_boolean_projection_detail::opaqueObjectMessage(F.Image,
+                                                                    Site,
+                                                                    Hint));
+  Hint.Signature.Parameters[4].Type = NdType::makeInt(8, false);
+  EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectMessage(F.Image,
+                                                                     Site,
+                                                                     Hint));
+}
+
+TEST(SwiftBooleanProjection,
      OpaqueGetterBeforeSelectedCallKeepsFailedStubsClosed) {
   ProjectionFixture F;
-  addOpaqueGetter(F);
+  addOpaqueObjectMessage(F);
   auto &Block = F.Low.Blocks.front();
   auto Getter = Block.Ops.front();
   Getter.Addr = 0x3000;
@@ -654,6 +675,29 @@ TEST(SwiftBooleanProjection,
   // __objc_stubs target cannot fall back to an unknown native opaque call.
   F.word(0x1040, 0xb0000000);
   EXPECT_EQ(buildObjCSourceCallHints(F.Image, F.Low).count(0x3000), 0U);
+  EXPECT_FALSE(F.qualify());
+}
+
+TEST(SwiftBooleanProjection,
+     OpaquePointerMessageBeforeBooleanCallRetainsCompleteProof) {
+  ProjectionFixture F;
+  addOpaqueObjectMessage(F, "localizedStringForKey:value:table:");
+  auto &Block = F.Low.Blocks.front();
+  auto Message = Block.Ops.front();
+  Message.Addr = 0x3000;
+  Message.Inputs[0].Offset = 0x1040;
+  for (auto &Op : Block.Ops)
+    Op.Addr += 4;
+  Block.Ops.insert(Block.Ops.begin(), Message);
+  Block.EndAddr += 4;
+  F.word(0x3000, 0x97fff810); // BL exact selector stub.
+  F.word(0x3004, 0x97fff7ff); // BL Boolean veneer.
+  F.word(0x3008, 0x92400000); // AND X0, X0, #1.
+  F.word(0x300c, 0xd65f03c0); // RET.
+  const auto Hints = buildObjCSourceCallHints(F.Image, F.Low);
+  ASSERT_EQ(Hints.count(0x3000), 1U);
+  EXPECT_TRUE(F.qualify());
+  F.Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
   EXPECT_FALSE(F.qualify());
 }
 

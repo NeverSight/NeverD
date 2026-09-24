@@ -100,17 +100,17 @@ inline bool ordinaryRuntime(const SourceCallTypeHint &Hint) {
          Hint.CallKind == Kind::DarwinRuntimeCall;
 }
 
-// This identifies a current fixed getter occurrence only. Its implementation
-// remains opaque: no ABI, clobber or result fact is supplied to the proof.
-inline bool opaqueObjectGetter(const BinaryImage &Image,
-                               const SourceCallOccurrenceKey &Site,
-                               const SourceCallTypeHint &Hint) {
+// This identifies a current fixed object-returning message occurrence. Its
+// implementation remains opaque: no ABI, clobber or result fact is supplied
+// to the Boolean proof, which requires identical physical state at the call.
+inline bool opaqueObjectMessage(const BinaryImage &Image,
+                                const SourceCallOccurrenceKey &Site,
+                                const SourceCallTypeHint &Hint) {
   if (!Site.StaticTarget || *Site.StaticTarget % 4 ||
       *Site.StaticTarget > UINT64_MAX - 20 ||
       Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Hint.TargetAddress != Site.StaticTarget ||
       Hint.TargetName != "objc_msgSend" || Hint.Selector.empty() ||
-      Hint.Selector.find(':') != std::string::npos ||
       !Hint.SelectorReferenceAddress || Hint.Format || Hint.NilTerminated ||
       Hint.WeakImport || Hint.DoesNotReturn ||
       !readImmutableCodeBytes(Image, *Site.StaticTarget, 20) ||
@@ -149,7 +149,10 @@ inline bool opaqueObjectGetter(const BinaryImage &Image,
          Signature.ReturnLocation.ValueBytes == 8 &&
          !Signature.ReturnLocation.ExtendTo32Bits &&
          Signature.ReturnComponents.empty() &&
-         Signature.Parameters.size() == 2 &&
+         Signature.Parameters.size() >= 2 &&
+         Signature.Parameters.size() <= TRI.IntParamRegs.size() &&
+         std::count(Hint.Selector.begin(), Hint.Selector.end(), ':') ==
+             Signature.Parameters.size() - 2 &&
          std::all_of(Signature.Parameters.begin(), Signature.Parameters.end(),
                      [](const auto &P) {
                        return P.Type && P.Type->Kind == NdTypeKind::Ptr &&
@@ -157,16 +160,16 @@ inline bool opaqueObjectGetter(const BinaryImage &Image,
                               P.TheRole ==
                                   SourceParameterTypeHint::Role::Ordinary;
                      }) &&
-         Signature.Parameters[0].Location.Kind ==
-             SourceABICarrierKind::IntegerRegister &&
-         Signature.Parameters[0].Location.RegisterOffset == 0 &&
-         Signature.Parameters[0].Location.ValueBytes == 8 &&
-         !Signature.Parameters[0].Location.ExtendTo32Bits &&
-         Signature.Parameters[1].Location.Kind ==
-             SourceABICarrierKind::IntegerRegister &&
-         Signature.Parameters[1].Location.RegisterOffset == 8 &&
-         Signature.Parameters[1].Location.ValueBytes == 8 &&
-         !Signature.Parameters[1].Location.ExtendTo32Bits;
+         std::all_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                     [&](const auto &P) {
+                       const auto Index = &P - Signature.Parameters.data();
+                       return P.Location.Kind ==
+                                  SourceABICarrierKind::IntegerRegister &&
+                              P.Location.RegisterOffset ==
+                                  TRI.IntParamRegs[Index] &&
+                              P.Location.ValueBytes == 8 &&
+                              !P.Location.ExtendTo32Bits;
+                     });
 }
 
 // This supplies only the complete physical ABI to the difference proof. The
@@ -279,8 +282,8 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
           return {};
         continue;
       }
-      if (swift_boolean_projection_detail::opaqueObjectGetter(Image, *Site,
-                                                              Hint->second)) {
+      if (swift_boolean_projection_detail::opaqueObjectMessage(Image, *Site,
+                                                               Hint->second)) {
         Calls.emplace(*Site,
                       SourceBooleanOtherCallContract{nullptr, false, true});
         continue;
