@@ -35991,9 +35991,14 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   // __except.  Keep both the conditional skip and handler rejoin edges.
   EXPECT_NE(Source.find("goto L_seh_try_end_0_0;"), std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("L_seh_try_end_0_0:"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("goto L_seh_try_end_0_1;"), std::string::npos)
       << Source;
+  EXPECT_EQ(Source.find("L_seh_try_end_0_1:"), std::string::npos)
+      << Source;
   EXPECT_NE(Source.find("goto L_bb_5;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_bb_5:"), std::string::npos) << Source;
 
   auto OptImg = loadBinary(Path, FuncOpts);
   ASSERT_TRUE(static_cast<bool>(OptImg)) << llvm::toString(OptImg.takeError());

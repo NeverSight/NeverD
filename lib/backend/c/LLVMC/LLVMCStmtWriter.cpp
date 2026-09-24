@@ -1686,6 +1686,8 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     if (!edgePrintsPhiCopy(Inst.getParent(), Target) &&
         uncondBranchFallsIntoEHBoundary(Inst.getParent(), Target)) {
       writePhiCopies(Inst.getParent(), Target, Indent);
+      if (!EHSkippedMainBlocks.empty())
+        EHFallthroughLabelCandidates.insert(Target);
       return;
     }
     const bool FallsThrough = joinPrintsNext(Inst.getParent(), Target);

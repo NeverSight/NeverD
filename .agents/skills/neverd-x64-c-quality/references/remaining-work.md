@@ -19,6 +19,9 @@ analysis and comparison output belong outside the repository.
   `seh.try.end` marker when intervening handler blocks are printed later in
   `__except` and the edge needs no PHI copy. The public `seh_probe` regression
   keeps its conditional skip and handler rejoin jumps.
+- LLVMC drops that try-end marker's now-unused C label only after the final
+  function text confirms no other reference. The same public regression keeps
+  the conditional skip and handler join labels that still have printed jumps.
 
 ## Established rules
 

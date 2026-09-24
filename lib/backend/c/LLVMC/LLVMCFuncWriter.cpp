@@ -27,6 +27,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -1512,6 +1513,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   EHBoundaryBlocks.clear();
   EHSkippedMainBlocks.clear();
   EHMainBlock = nullptr;
+  EHFallthroughLabelCandidates.clear();
   OmitCleanupRetTo.clear();
   PhiTailSlot = nullptr;
 
@@ -7490,6 +7492,65 @@ std::string dropUnusedCallDecls(std::string Text,
   return Text;
 }
 
+std::string dropUnreferencedFallthroughEHLabels(
+    std::string Text, llvm::ArrayRef<std::string> Labels) {
+  struct Mention {
+    size_t Count = 0;
+    size_t Definition = std::string::npos;
+  };
+  llvm::StringMap<Mention> Mentions;
+  for (const std::string &Label : Labels) {
+    if (!Label.empty() &&
+        std::all_of(Label.begin(), Label.end(), [](unsigned char C) {
+          return isCIdentChar(C);
+        }))
+      Mentions[Label];
+  }
+  if (Mentions.empty())
+    return Text;
+
+  // Count exact C identifier tokens throughout the rendered function. A
+  // mention even in a comment or string retains the label conservatively.
+  const llvm::StringRef Source(Text);
+  for (size_t Pos = 0; Pos < Source.size();) {
+    if (!isCIdentChar(static_cast<unsigned char>(Source[Pos]))) {
+      ++Pos;
+      continue;
+    }
+    const size_t Start = Pos;
+    while (Pos < Source.size() &&
+           isCIdentChar(static_cast<unsigned char>(Source[Pos])))
+      ++Pos;
+    auto It = Mentions.find(Source.substr(Start, Pos - Start));
+    if (It == Mentions.end())
+      continue;
+    ++It->second.Count;
+    if ((Start == 0 || Source[Start - 1] == '\n') &&
+        Pos + 1 < Source.size() && Source[Pos] == ':' &&
+        Source[Pos + 1] == '\n')
+      It->second.Definition = Start;
+  }
+
+  std::vector<std::pair<size_t, size_t>> Drops;
+  for (const auto &Entry : Mentions)
+    if (Entry.getValue().Count == 1 &&
+        Entry.getValue().Definition != std::string::npos)
+      Drops.emplace_back(Entry.getValue().Definition,
+                         Entry.getKey().size() + 2);
+  if (Drops.empty())
+    return Text;
+  std::sort(Drops.begin(), Drops.end());
+  std::string Out;
+  Out.reserve(Text.size());
+  size_t Last = 0;
+  for (const auto &[At, Length] : Drops) {
+    Out.append(Text, Last, At - Last);
+    Last = At + Length;
+  }
+  Out.append(Text, Last, std::string::npos);
+  return Out;
+}
+
 } // namespace
 
 void LLVMCWriter::writeFunction(llvm::Function &Fn) {
@@ -8124,7 +8185,13 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   std::vector<std::string> DropNames = CallDeclNames;
   DropNames.insert(DropNames.end(), FoldedLocalNames.begin(),
                    FoldedLocalNames.end());
-  OS << dropUnusedCallDecls(Buffered, DropNames);
+  std::vector<std::string> EHFallthroughLabels;
+  EHFallthroughLabels.reserve(EHFallthroughLabelCandidates.size());
+  for (const llvm::BasicBlock *BB : EHFallthroughLabelCandidates)
+    EHFallthroughLabels.push_back(blockLabel(BB));
+  OS << dropUnreferencedFallthroughEHLabels(
+      dropUnusedCallDecls(std::move(Buffered), DropNames),
+      EHFallthroughLabels);
 }
 
 } // namespace neverd
