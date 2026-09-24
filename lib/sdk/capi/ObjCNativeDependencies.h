@@ -214,20 +214,28 @@ inline size_t inferObjCNativeDependencies(
     // A closed, compiler-observed Swift function shape supplies its own
     // source ABI. Native scalar inference must not erase its second return
     // word or reinterpret its stack and swiftcc argument carriers.
-    if (A->second->Entry == Target &&
+    const bool CompleteMangledAudit =
+        A->second->Entry == Target &&
         A->second->Disposition == PipelineFunctionDisposition::Accepted &&
         A->second->HasLowIR && A->second->HasMedIR &&
         A->second->MedIRVerified && A->second->DecodedInstructions &&
         A->second->DecodedInstructions == A->second->LiftedInstructions &&
         A->second->DecodeFailures.empty() &&
         A->second->UnsupportedInstructions.empty() &&
-        A->second->TruncatedPaths.empty())
+        A->second->TruncatedPaths.empty();
+    if (CompleteMangledAudit) {
       if (auto Mangled = swiftMangledStringBundleSourceABI(
               Image, Target, IntegerPairReturns.count(Target))) {
         Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
         ++Added;
         continue;
       }
+      if (auto Mangled = swiftMangledObjCBoolGetterSourceABI(Image, Target)) {
+        Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
+        ++Added;
+        continue;
+      }
+    }
     auto Hint = inferNativeSourceTypeHint(
         Image, *M->second, *H->second, *A->second, Diagnostics[Target],
         L->second, IntegerPairReturns.count(Target), CalleeContracts);

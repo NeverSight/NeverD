@@ -131,6 +131,85 @@ swiftMangledStringBundleSourceABI(const BinaryImage &Image, va_t Entry,
              : std::nullopt;
 }
 
+// A Swift extension getter on an Objective-C class carries its receiver in
+// swiftself, even when the mangled signature has no ordinary arguments. The
+// closed Bool shape supplies the return width; the source pipeline must still
+// prove the body and every call before publication.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledObjCBoolGetterSourceABI(const BinaryImage &Image, va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Getter", 1))
+    return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  if (!Shape(Variable, "Variable", 3) ||
+      !Shape(Variable.Children[0], "Extension", 2) ||
+      Variable.Children[0].Children[0].Kind != "Module" ||
+      !Variable.Children[0].Children[0].Text ||
+      Variable.Children[0].Children[0].Text->empty() ||
+      Variable.Children[0].Children[0].Index ||
+      !Variable.Children[0].Children[0].Children.empty() ||
+      !Shape(Variable.Children[0].Children[1], "Class", 2) ||
+      !Text(Variable.Children[0].Children[1].Children[0], "Module", "__C") ||
+      Variable.Children[0].Children[1].Children[1].Kind != "Identifier" ||
+      !Variable.Children[0].Children[1].Children[1].Text ||
+      Variable.Children[0].Children[1].Children[1].Text->empty() ||
+      Variable.Children[0].Children[1].Children[1].Index ||
+      !Variable.Children[0].Children[1].Children[1].Children.empty() ||
+      Variable.Children[1].Kind != "Identifier" ||
+      !Variable.Children[1].Text || Variable.Children[1].Text->empty() ||
+      Variable.Children[1].Index || !Variable.Children[1].Children.empty() ||
+      !Shape(Variable.Children[2], "Type", 1) ||
+      !Shape(Variable.Children[2].Children[0], "Structure", 2) ||
+      !Text(Variable.Children[2].Children[0].Children[0], "Module", "Swift") ||
+      !Text(Variable.Children[2].Children[0].Children[1], "Identifier", "Bool"))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makeInt(1, false);
+  Hint.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[0].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
 } // namespace neverd::sdk
 
 #endif
