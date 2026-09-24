@@ -159,6 +159,7 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
     return OldDevice.takeError();
   const bool WasForwarded = Request->Forwarded;
   const auto WasPending = Request->UnwoundPending[Slot];
+  const bool FileBusReceived = Request->FileBusReceived;
   const size_t ResultIndex = Request->ResultIndex;
   const auto &Observation = Result.Requests[ResultIndex];
   const auto Received = Observation.Pnp ? Observation.Pnp->BusReceivedAt100ns
@@ -174,7 +175,7 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
   Request->Forwarded = true;
   Request->UnwoundPending[Slot].reset();
   if (Provider) {
-    auto Status = callProviderDriver(Device, IRP);
+    auto Status = callProviderDriver(Device, IRP, Owner);
     if (Status)
       return Status;
     auto E = Status.takeError();
@@ -186,7 +187,8 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
     // Provider preflight reads the prospective stack cursor. If it rejected
     // the call without accepting the packet, restore that cursor and its slot
     // metadata. Once a real receipt occurred, effects cannot be rolled back.
-    if (Retained && !Retained->Completed && NowReceived == Received) {
+    if (Retained && !Retained->Completed && NowReceived == Received &&
+        Retained->FileBusReceived == FileBusReceived) {
       E = llvm::joinErrors(
           std::move(E),
           Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1));

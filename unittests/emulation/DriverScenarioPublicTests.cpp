@@ -876,7 +876,7 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
   Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
 #endif
   for (const char *Image : Images)
-    for (char Mode : {'O', 'p'}) {
+    for (char Mode : {'O', 'p', 's'}) {
       SCOPED_TRACE(Image);
       SCOPED_TRACE(Mode);
       const std::string Service = KMDFPnpServicePrefix.str() + Mode;

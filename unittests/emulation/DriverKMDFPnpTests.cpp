@@ -178,7 +178,7 @@ TEST(DriverKMDFPnp, AddStartIoRemoveAndUnloadFollowRealCallbacks) {
 TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
   for (const char *Image : pnpImages())
     for (uint64_t Base : {0x180000000ULL, 0x190000000ULL}) {
-      for (char Mode : {'O', 'o', 'n', 'p'}) {
+      for (char Mode : {'O', 'o', 'n', 'p', 's'}) {
         SCOPED_TRACE(Image);
         SCOPED_TRACE(Base);
         SCOPED_TRACE(Mode);
@@ -199,8 +199,11 @@ TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
         EXPECT_EQ(callCount(*Result, "WdfDeviceInitSetFileObjectConfig"), 1u);
         EXPECT_EQ(callCount(*Result, "WdfIoQueueCreate"), 0u);
         EXPECT_EQ(callCount(*Result, "WdfDeviceGetIoTarget"),
-                  Mode == 'p' ? 2u : 0u);
-        EXPECT_EQ(callCount(*Result, "WdfRequestSend"), Mode == 'p' ? 1u : 0u);
+                  Mode == 'p' || Mode == 's' ? 2u : 0u);
+        EXPECT_EQ(callCount(*Result, "WdfRequestSend"),
+                  Mode == 'p' || Mode == 's' ? 1u : 0u);
+        EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"),
+                  Mode == 's' ? 1u : 0u);
         const auto Messages = pnpMessages(*Result);
         EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
                              "KMDF PnP: file order invalid\n"),
@@ -214,7 +217,7 @@ TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
         EXPECT_LT(Cleanup, Close);
         auto Create = std::find(Messages.begin(), Messages.end(),
                                 "KMDF PnP: file create forwarded\n");
-        if (Mode == 'p') {
+        if (Mode == 'p' || Mode == 's') {
           ASSERT_NE(Create, Messages.end());
           EXPECT_LT(Create, Cleanup);
         } else {
@@ -226,7 +229,7 @@ TEST(DriverKMDFPnp, FileLifecycleRespectsFilterForwardingChoice) {
 
 TEST(DriverKMDFPnp, FailedLowerCreateRetiresFrameworkFileObject) {
   for (const char *Image : pnpImages())
-    for (char Mode : {'O', 'p'}) {
+    for (char Mode : {'O', 'p', 's'}) {
       auto Input = forwardedFileOptions(Mode);
       Input.Requests.erase(
           std::remove_if(Input.Requests.begin(), Input.Requests.end(),
@@ -243,7 +246,10 @@ TEST(DriverKMDFPnp, FailedLowerCreateRetiresFrameworkFileObject) {
       ASSERT_EQ(Result->Requests.size(), Input.Requests.size());
       EXPECT_EQ(Result->Requests[1].IOStatus, windows::StatusUnsuccessful);
       EXPECT_TRUE(Result->Requests[1].Completed);
-      EXPECT_EQ(callCount(*Result, "WdfRequestSend"), Mode == 'p' ? 1u : 0u);
+      EXPECT_EQ(callCount(*Result, "WdfRequestSend"),
+                Mode == 'p' || Mode == 's' ? 1u : 0u);
+      EXPECT_EQ(callCount(*Result, "WdfRequestGetStatus"),
+                Mode == 's' ? 1u : 0u);
       EXPECT_TRUE(Result->UnloadCompleted);
       const auto Messages = pnpMessages(*Result);
       EXPECT_EQ(std::count(Messages.begin(), Messages.end(),
@@ -256,7 +262,7 @@ TEST(DriverKMDFPnp, FailedLowerCreateRetiresFrameworkFileObject) {
 }
 
 TEST(DriverKMDFPnp, ForwardingRequiresItsConfiguredLowerResponse) {
-  for (char Mode : {'O', 'p'}) {
+  for (char Mode : {'O', 'p', 's'}) {
     auto Input = forwardedFileOptions(Mode);
     Input.Requests[1].FileBusCompletion.reset();
     auto Result = emulateDriver(NEVERD_KMDF_PNP_FIXTURE, Input);
@@ -282,7 +288,8 @@ TEST(DriverKMDFPnp, ManualFileSendRejectsUnsupportedOptions) {
     auto Result = emulateDriver(Image, Input);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
     EXPECT_EQ(Result->Stop, DriverStopReason::ModelError);
-    EXPECT_NE(Result->Diagnostic.find("only send-and-forget file forwarding"),
+    EXPECT_NE(Result->Diagnostic.find(
+                  "only synchronous or send-and-forget file forwarding"),
               std::string::npos);
     ASSERT_GE(Result->Requests.size(), 2u);
     EXPECT_FALSE(Result->Requests[1].Completed);

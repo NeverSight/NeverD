@@ -112,6 +112,9 @@ public:
     /// WDM host owns the original packet and its terminal completion.
     std::function<llvm::Error(uint64_t)> ValidateFileForward;
     std::function<llvm::Expected<uint32_t>(uint64_t)> ForwardFile;
+    /// A synchronous lower send returns its status while the framework keeps
+    /// the original CREATE request for a later WdfRequestComplete.
+    std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileSynchronously;
   };
   void setRequestHost(RequestHost Host) { RequestsHost = std::move(Host); }
   struct RequestDispatch {
@@ -325,6 +328,7 @@ private:
     uint64_t CancelRoutine = 0;
     uint64_t File = 0;
     bool FileCreate = false;
+    std::optional<uint32_t> LastSendStatus;
   };
   std::map<uint64_t, Request> Requests;
   std::map<uint64_t, uint64_t> CallerRequests;

@@ -544,7 +544,7 @@ private:
   llvm::Expected<uint64_t> currentRequestStack(uint64_t IRP) const;
   /// Only the framework host may forward a framework-owned file IRP. Guest
   /// WDM dispatch still requires independent ownership of the packet.
-  enum class ForwardingOwner { WDM, FrameworkFile };
+  enum class ForwardingOwner { WDM, FrameworkFile, FrameworkFileSynchronous };
   llvm::Expected<uint64_t>
   callDriver(uint64_t Device, uint64_t IRP,
              ForwardingOwner Owner = ForwardingOwner::WDM);
@@ -568,7 +568,9 @@ private:
   };
   uint64_t NextProviderSequence = 1;
   std::map<uint64_t, ProviderCompletion> ProviderCompletions;
-  llvm::Expected<uint64_t> callProviderDriver(uint64_t Device, uint64_t IRP);
+  llvm::Expected<uint64_t>
+  callProviderDriver(uint64_t Device, uint64_t IRP,
+                     ForwardingOwner Owner = ForwardingOwner::WDM);
   llvm::Error processProviderCompletions();
   llvm::Expected<std::optional<uint64_t>> advanceIRPCompletion(uint64_t Token);
   llvm::Expected<bool> dispatchPending(const ActiveRequest &Request,

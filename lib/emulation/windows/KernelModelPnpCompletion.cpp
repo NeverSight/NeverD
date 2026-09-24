@@ -27,8 +27,9 @@ llvm::Error providerError(const llvm::Twine &Message) {
 }
 } // namespace
 
-llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
-                                                         uint64_t IRP) {
+llvm::Expected<uint64_t>
+KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
+                                ForwardingOwner Owner) {
   auto *Request = requestForIRP(IRP);
   const auto *Provider = pnpDeviceForPDO(Device);
   if (!Request || Request->Completed || !isProviderDevice(Device) ||
@@ -59,17 +60,25 @@ llvm::Expected<uint64_t> KernelModel::callProviderDriver(uint64_t Device,
     const uint32_t Status = *Request->FileBusCompletion->Status;
     if (Status == StatusPending)
       return providerError("synchronous file response cannot be pending");
-    auto Plan = planIRPCompletion(IRP, Status);
-    if (!Plan)
-      return Plan.takeError();
+    const bool RetainRequest =
+        Owner == ForwardingOwner::FrameworkFileSynchronous;
+    if (RetainRequest && Request->Kind != DriverRequestKind::Create)
+      return providerError("synchronous framework send requires CREATE");
+    if (!RetainRequest) {
+      auto Plan = planIRPCompletion(IRP, Status);
+      if (!Plan)
+        return Plan.takeError();
+    }
     if (auto E = Memory.writeInteger(IRP + IRPStatusOffset, Status, 4))
       return E;
     if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
       return E;
     Request->IOStatusWritten.fill(true);
     Request->FileBusReceived = true;
-    if (auto E = completeRequest(IRP, 0))
-      return E;
+    if (!RetainRequest) {
+      if (auto E = completeRequest(IRP, 0))
+        return E;
+    }
     return Status;
   }
   if (Request->Kind == DriverRequestKind::Pnp && Request->PnpOperation) {

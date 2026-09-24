@@ -240,8 +240,9 @@ void KernelModel::configureFrameworkRequestHost() {
           "bus response");
     return llvm::Error::success();
   };
-  Host.ForwardFile = [this, Validate = Host.ValidateFileForward](
-                         uint64_t IRP) -> llvm::Expected<uint32_t> {
+  auto ForwardFile = [this, Validate = Host.ValidateFileForward](
+                         uint64_t IRP,
+                         ForwardingOwner Owner) -> llvm::Expected<uint32_t> {
     if (auto E = Validate(IRP))
       return E;
     auto *Request = requestForIRP(IRP);
@@ -259,14 +260,29 @@ void KernelModel::configureFrameworkRequestHost() {
     std::fill(Location.begin() + StackCompletionOffset, Location.end(), 0);
     if (auto E = Memory.write(*Stack - StackSize, Location))
       return E;
-    auto Status = callDriver(Request->DeviceRoute.back(), IRP,
-                             ForwardingOwner::FrameworkFile);
+    auto Status = callDriver(Request->DeviceRoute.back(), IRP, Owner);
     if (!Status)
       return Status.takeError();
-    if (!Request->Completed || PendingWdmCall)
+    if (PendingWdmCall ||
+        Request->Completed != (Owner == ForwardingOwner::FrameworkFile))
       return frameworkRequestError(
           "framework file target did not complete synchronously");
+    if (Owner == ForwardingOwner::FrameworkFileSynchronous) {
+      if (!Request->FileBusReceived)
+        return frameworkRequestError("synchronous file send lost its response");
+      if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1))
+        return E;
+      if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset,
+                                       IRP + IRPSize + *Cursor * StackSize, 8))
+        return E;
+    }
     return static_cast<uint32_t>(*Status);
+  };
+  Host.ForwardFile = [ForwardFile](uint64_t IRP) {
+    return ForwardFile(IRP, ForwardingOwner::FrameworkFile);
+  };
+  Host.SendFileSynchronously = [ForwardFile](uint64_t IRP) {
+    return ForwardFile(IRP, ForwardingOwner::FrameworkFileSynchronous);
   };
   Framework->setRequestHost(std::move(Host));
 }

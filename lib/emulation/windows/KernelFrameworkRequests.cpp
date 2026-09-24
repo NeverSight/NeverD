@@ -527,7 +527,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name != api::WdfRequestComplete &&
       Name != api::WdfRequestCompleteWithInformation &&
-      Name != api::WdfRequestSend && Name != api::WdfRequestStopAcknowledge &&
+      Name != api::WdfRequestSend && Name != api::WdfRequestGetStatus &&
+      Name != api::WdfRequestStopAcknowledge &&
       Name != api::WdfRequestGetParameters &&
       Name != api::WdfRequestRetrieveInputBuffer &&
       Name != api::WdfRequestRetrieveOutputBuffer &&
@@ -804,31 +805,43 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         Target->second.Parent != R->second.Device)
       return requestError("send requires the request device's local target");
     if (!A[3])
-      return requestError(
-          "local file forwarding requires send-and-forget options");
+      return requestError("local file forwarding requires send options");
     if (auto E = ValidateAccess(A[3], RequestSendOptionsSize, false))
       return E;
     auto Size = read(A[3], sizeof(uint32_t));
     auto Flags = read(A[3] + RequestSendFlagsOffset, sizeof(uint32_t));
     if (!Size || !Flags)
       return llvm::joinErrors(Size.takeError(), Flags.takeError());
-    if (*Size != RequestSendOptionsSize || *Flags != RequestSendAndForget)
-      return requestError("only send-and-forget file forwarding is modeled");
-    if (!R->second.FileCreate || R->second.File || R->second.Queue ||
-        R->second.Cancellation != CancelState::Unmarked ||
-        !Device->second.Files.forwards(Device->second.Filter))
+    if (*Size != RequestSendOptionsSize ||
+        (*Flags != RequestSendAndForget && *Flags != RequestSendSynchronous))
       return requestError(
-          "send-and-forget requires a forwardable CREATE without a "
-          "framework file object");
-    if (!RequestsHost.ValidateFileForward || !RequestsHost.ForwardFile)
+          "only synchronous or send-and-forget file forwarding is modeled");
+    if (!R->second.FileCreate || R->second.Queue ||
+        R->second.Cancellation != CancelState::Unmarked ||
+        !Device->second.Files.forwards(Device->second.Filter) ||
+        R->second.LastSendStatus)
+      return requestError("send requires an unsent forwardable CREATE request");
+    const bool Synchronous = *Flags == RequestSendSynchronous;
+    if ((Synchronous && !R->second.File) || (!Synchronous && R->second.File))
+      return requestError("synchronous send requires a framework file object; "
+                          "send-and-forget requires none");
+    if (!RequestsHost.ValidateFileForward ||
+        (Synchronous ? !RequestsHost.SendFileSynchronously
+                     : !RequestsHost.ForwardFile))
       return requestError("lower file-request host is unavailable");
     if (auto E = RequestsHost.ValidateFileForward(R->second.IRP))
       return E;
-    auto Status = RequestsHost.ForwardFile(R->second.IRP);
+    auto Status = Synchronous
+                      ? RequestsHost.SendFileSynchronously(R->second.IRP)
+                      : RequestsHost.ForwardFile(R->second.IRP);
     if (!Status)
       return Status.takeError();
     if (*Status == windows::StatusPending)
       return requestError("asynchronous lower file completion is unsupported");
+    if (Synchronous) {
+      R->second.LastSendStatus = *Status;
+      return Result{1};
+    }
     R->second.Completed = true;
     R->second.CompletionStatus = *Status;
     std::vector<Step> Steps;
@@ -839,8 +852,16 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return Retired.takeError();
     return Result{1};
   }
+  if (Name == api::WdfRequestGetStatus) {
+    if (!R->second.LastSendStatus)
+      return requestError("request has no completed synchronous send");
+    return Result{*R->second.LastSendStatus};
+  }
   if (Name == api::WdfRequestComplete ||
       Name == api::WdfRequestCompleteWithInformation) {
+    if (R->second.LastSendStatus && uint32_t(A[2]) != *R->second.LastSendStatus)
+      return requestError(
+          "forwarded CREATE must complete with its synchronous lower status");
     if (R->second.Cancellation == CancelState::Marked ||
         R->second.Cancellation == CancelState::Queued)
       return requestError(
