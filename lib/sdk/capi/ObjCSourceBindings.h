@@ -55,6 +55,7 @@ struct ObjCSourceBindingResult {
   std::map<va_t, SourceCallTypeHint::SwiftTypeMetadataAddress>
       SwiftTypeMetadataPairs;
   std::map<va_t, std::string> SwiftNominalDescriptors;
+  std::map<va_t, std::string> SwiftNominalMetadata;
   /// Cache address -> exact accessor entry, revalidated when helpers render.
   std::map<va_t, va_t> SwiftWitnessCaches;
   /// Exact compiler-emitted Swift lazy global addressors used by this body.
@@ -965,6 +966,62 @@ swiftNominalDescriptorAddressHint(const BinaryImage &Image, va_t Address) {
   if (!assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason))
     return std::nullopt;
   return Hint;
+}
+
+// A value-witness call needs the original concrete metadata identity. A
+// copied metadata record would have different runtime identity and witness
+// pointers, so accept only one exported Swift struct metadata symbol whose
+// descriptor word points to its matching exported nominal descriptor.
+inline std::optional<SourceCallTypeHint>
+swiftNominalMetadataAddressHint(const BinaryImage &Image, va_t Address) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.MachOTwoLevelNamespace || Image.MachOChainedFixupsAmbiguous ||
+      Address % 8 || Address > InvalidVA - 16)
+    return std::nullopt;
+  const auto *Section = Image.getSectionFor(Address);
+  const auto Bytes = readImmutableImageBytes(Image, Address, 8);
+  const auto DescriptorAddress = readImmutableImagePointer(Image, Address + 8);
+  if (!Section || Image.getSectionFor(Address + 15) != Section || !Bytes ||
+      !DescriptorAddress ||
+      llvm::support::endian::read64le(Bytes->data()) != 0x200)
+    return std::nullopt;
+  const Symbol *Metadata = nullptr;
+  for (const auto &Candidate : Image.Symbols)
+    if (Candidate.Addr == Address && !Candidate.IsFunc &&
+        !Candidate.Name.empty()) {
+      if (Metadata)
+        return std::nullopt;
+      Metadata = &Candidate;
+    }
+  if (!Metadata || (Metadata->Size && Metadata->Size < 16))
+    return std::nullopt;
+  llvm::StringRef Name(Metadata->Name);
+  if (!Name.starts_with("_$s") || !Name.ends_with("VN"))
+    return std::nullopt;
+  const auto Descriptor =
+      swiftDirectTypeMetadataDescriptor(Image, *DescriptorAddress);
+  if (!Descriptor || *Descriptor != Name.drop_back(1).str() + "Mn")
+    return std::nullopt;
+  size_t Exports = 0;
+  for (const auto &Export : Image.Exports) {
+    if (Export.Addr == Address && Export.Name == Metadata->Name)
+      ++Exports;
+    else if (Export.Addr == Address || Export.Name == Metadata->Name)
+      return std::nullopt;
+  }
+  if (Exports != 1)
+    return std::nullopt;
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress;
+  Hint.TargetAddress = Address;
+  Hint.TargetName = Metadata->Name;
+  Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::SwiftRuntime;
+  Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Reason;
+  return assignDarwinScalarSourceABI(Hint.Signature, Image.Arch, Reason)
+             ? std::optional<SourceCallTypeHint>(std::move(Hint))
+             : std::nullopt;
 }
 
 struct SwiftTypeMetadataDescriptorReference {
@@ -3370,12 +3427,43 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           Expected->Signature.Parameters[1].Type->Kind == NdTypeKind::Ptr)
         SingletonDescriptor = constantAddress(*Expression->Operands[1]);
     }
+    std::optional<va_t> WitnessMetadata;
+    if (Expression->Kind == ExprKind::Call && Expression->IsIndirectCall &&
+        Expression->SourceCallHint &&
+        Expression->SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::SwiftValueWitness &&
+        isSwiftValueWitnessSourceCallHint(*Expression->SourceCallHint,
+                                          Image.Arch) &&
+        Expression->Operands.size() ==
+            Expression->SourceCallHint->Signature.Parameters.size() &&
+        !Expression->Operands.empty() && Expression->Operands.back() &&
+        Expression->Operands.back()->Kind == ExprKind::Const &&
+        Expression->Operands.back()->Type &&
+        Expression->Operands.back()->Type->Size == 8 &&
+        (Expression->Operands.back()->ConstProvenance ==
+             ConstantAddressProvenance::Address ||
+         Expression->Operands.back()->ConstProvenance ==
+             ConstantAddressProvenance::DataAddress))
+      WitnessMetadata = constantAddress(*Expression->Operands.back());
     const auto TaggedCString =
         !NumericOperand && !AddressContext && !MemoryAddress
             ? taggedCStringAddressOperand(*Original, Image)
             : std::nullopt;
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {
       auto &Operand = Expression->Operands[Index];
+      if (Operand && WitnessMetadata &&
+          Index + 1 == Expression->Operands.size()) {
+        auto Hint = swiftNominalMetadataAddressHint(Image, *WitnessMetadata);
+        if (Hint) {
+          Result.SwiftNominalMetadata[*WitnessMetadata] = Hint->TargetName;
+          auto Metadata = HighExpr::makeCall({}, 0, {});
+          Metadata->Type = Operand->Type;
+          Metadata->SourceCallHint =
+              std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+          Operand = std::move(Metadata);
+          continue;
+        }
+      }
       if (Index == 1 && Operand && SingletonDescriptor) {
         auto Hint =
             swiftNominalDescriptorAddressHint(Image, *SingletonDescriptor);
@@ -4206,6 +4294,19 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
       SourceCallTypeHint::Kind::RuntimeSwiftNominalDescriptorAddress) {
     const auto Expected =
         swiftNominalDescriptorAddressHint(Image, Binding.TargetAddress);
+    return Expected && Binding.TargetName == Expected->TargetName &&
+           Binding.Selector.empty() && Binding.OwnerClass.empty() &&
+           !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
+           Binding.BorrowedByteInputs.empty() &&
+           Binding.SwiftStringInputs.empty() && !Expression.IsIndirectCall &&
+           !Expression.CallAddr && Expression.CallTarget.empty() &&
+           Expression.IntrinsicOutputs.empty() &&
+           objc_projection_detail::sameHint(Expected->Signature, Hint);
+  }
+  if (Binding.CallKind ==
+      SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress) {
+    const auto Expected =
+        swiftNominalMetadataAddressHint(Image, Binding.TargetAddress);
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress && !Binding.ByteCount &&
@@ -5130,6 +5231,28 @@ inline std::string renderObjCSwiftNominalDescriptorHelpers(
       throw std::runtime_error("Swift nominal descriptor is no longer valid");
     const std::string Stem =
         "neverd_swift_nominal_descriptor_" + llvm::utohexstr(Address, true);
+    SharedFunctions.insert(Stem + "_address");
+    Source += "\nextern unsigned char " + Stem + "_bytes[] __asm__(\"" +
+              Symbol + "\");\n";
+    Source += "uintptr_t " + Stem +
+              "_address(void) {\n"
+              "  return (uintptr_t)" +
+              Stem + "_bytes;\n}\n";
+  }
+  return Source;
+}
+
+inline std::string renderObjCSwiftNominalMetadataHelpers(
+    const BinaryImage &Image, const std::map<va_t, std::string> &Metadata,
+    std::set<std::string> &SharedFunctions) {
+  std::string Source;
+  for (const auto &[Address, Symbol] : Metadata) {
+    const auto Expected =
+        objc_binding_detail::swiftNominalMetadataAddressHint(Image, Address);
+    if (!Expected || Expected->TargetName != Symbol)
+      throw std::runtime_error("Swift nominal metadata is no longer valid");
+    const std::string Stem =
+        "neverd_swift_nominal_metadata_" + llvm::utohexstr(Address, true);
     SharedFunctions.insert(Stem + "_address");
     Source += "\nextern unsigned char " + Stem + "_bytes[] __asm__(\"" +
               Symbol + "\");\n";

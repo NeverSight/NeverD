@@ -1056,6 +1056,99 @@ struct SwiftSingletonDescriptorFixture : SwiftTypeMetadataFixture {
 };
 
 TEST(ObjCSourceBindings,
+     SwiftValueWitnessUsesOnlyMatchingExportedStructMetadataIdentity) {
+  constexpr va_t Metadata = 0x6020;
+  const std::string Symbol = "_$s7WMFData24WMFFeatureConfigResponseVN";
+  auto Fixture = [&] {
+    SwiftTypeMetadataFixture F(Arch::AArch64, false, false, false, true);
+    Segment Data;
+    Data.VA = Data.FileOff = 0x6000;
+    Data.Size = Data.FileSz = 0x100;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.ReadOnlyAfterRelocations = true;
+    Data.Data.resize(0x100);
+    llvm::support::endian::write64le(Data.Data.data() + 0x20, 0x200);
+    llvm::support::endian::write64le(Data.Data.data() + 0x28,
+                                     F.LocalDescriptor);
+    F.Image.Segments.push_back(Data);
+    Section Section;
+    Section.VA = Section.FileOff = 0x6000;
+    Section.Size = Section.FileSz = 0x100;
+    Section.Flags = Data.Flags;
+    F.Image.Sections.push_back(Section);
+    F.Image.MachOHasChainedFixups = true;
+    F.Image.DataPtrRelocSlots.insert(Metadata + 8);
+    F.Image.MachOResolvedChainedPointerSlots.insert(Metadata + 8);
+    F.Image.DataPtrRelocTargetOwners[Metadata + 8] = 0x4000;
+    F.Image.Symbols.push_back({Symbol, Metadata, 0, false});
+    F.Image.Exports.push_back({Symbol, 0, Metadata});
+    const auto Hint = swiftValueWitnessSourceCallHint(
+        Arch::AArch64, SourceCallTypeHint::SwiftValueWitnessKind::Destroy);
+    EXPECT_TRUE(Hint);
+    auto Value = HighExpr::makeConst(0, 8);
+    Value->Type = NdType::makePtr(NdType::makeVoid());
+    auto Identity = HighExpr::makeConst(Metadata, 8,
+                                        ConstantAddressProvenance::DataAddress);
+    Identity->Type = NdType::makePtr(NdType::makeVoid());
+    auto Call = HighExpr::makeCall("indirect_call", 0,
+                                   {std::move(Value), std::move(Identity)});
+    Call->Type = NdType::makeVoid();
+    Call->IsIndirectCall = true;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    HighStmt Statement;
+    Statement.Kind = StmtKind::ExprStmt;
+    Statement.Val = std::move(Call);
+    F.Function.ReturnType = NdType::makeVoid();
+    F.Function.Body = {std::move(Statement)};
+    return F;
+  };
+
+  auto F = Fixture();
+  const auto Expected =
+      objc_binding_detail::swiftNominalMetadataAddressHint(F.Image, Metadata);
+  ASSERT_TRUE(Expected);
+  EXPECT_EQ(Expected->TargetName, Symbol);
+  const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  ASSERT_EQ(Bound.SwiftNominalMetadata.size(), 1U);
+  EXPECT_EQ(Bound.SwiftNominalMetadata.at(Metadata), Symbol);
+  const auto Identity = Bound.Function.Body[0].Val->Operands.back();
+  ASSERT_TRUE(Identity->SourceCallHint);
+  EXPECT_EQ(Identity->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftNominalMetadataAddress);
+  EXPECT_TRUE(objcSourceCallBound(*Identity, F.Image, {}));
+  std::set<std::string> Helpers;
+  const auto Source = renderObjCSwiftNominalMetadataHelpers(
+      F.Image, Bound.SwiftNominalMetadata, Helpers);
+  EXPECT_NE(Source.find("__asm__(\"" + Symbol + "\")"), std::string::npos);
+  EXPECT_TRUE(Helpers.count("neverd_swift_nominal_metadata_6020_address"));
+
+  F.Image.Exports.pop_back();
+  EXPECT_FALSE(objcSourceCallBound(*Identity, F.Image, {}));
+  EXPECT_THROW(renderObjCSwiftNominalMetadataHelpers(
+                   F.Image, Bound.SwiftNominalMetadata, Helpers),
+               std::runtime_error);
+  auto Forged = Fixture();
+  llvm::support::endian::write64le(
+      Forged.Image.Segments.back().Data.data() + 0x28, 0x4028);
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftNominalMetadata.empty());
+  Forged = Fixture();
+  Forged.Image.Segments.back().ReadOnlyAfterRelocations = false;
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftNominalMetadata.empty());
+  Forged = Fixture();
+  Forged.Image.MachOResolvedChainedPointerSlots.clear();
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftNominalMetadata.empty());
+  Forged = Fixture();
+  Forged.Function.Body[0].Val->Operands.back()->ConstProvenance =
+      ConstantAddressProvenance::Scalar;
+  EXPECT_TRUE(bindObjCSourceReferences(Forged.Function, Forged.Image)
+                  .SwiftNominalMetadata.empty());
+}
+
+TEST(ObjCSourceBindings,
      SwiftSingletonMetadataBindsExportedNominalDescriptorAddress) {
   SwiftSingletonDescriptorFixture F;
   EXPECT_TRUE(F.Image.isCodeAddress(F.CallAddress));

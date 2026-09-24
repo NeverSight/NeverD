@@ -312,6 +312,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Hint.CallKind == Kind::RuntimeLocalStorageAddress ||
       Hint.CallKind == Kind::RuntimeSwiftTypeMetadataAddress ||
       Hint.CallKind == Kind::RuntimeSwiftNominalDescriptorAddress ||
+      Hint.CallKind == Kind::RuntimeSwiftNominalMetadataAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress ||
       Hint.CallKind == Kind::RuntimeSwiftWitnessAccessor ||
       Hint.CallKind == Kind::RuntimeSwiftOnceAccessor ||
@@ -448,6 +449,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       if (!Hint.TargetAddress || Hint.TargetName.empty() || Hint.ByteCount)
         return bad("Swift nominal descriptor has no source identity");
       Value = "neverd_swift_nominal_descriptor_" +
+              llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
+    } else if (Hint.CallKind == Kind::RuntimeSwiftNominalMetadataAddress) {
+      if (!Hint.TargetAddress || Hint.TargetName.empty() || Hint.ByteCount)
+        return bad("Swift nominal metadata has no source identity");
+      Value = "neverd_swift_nominal_metadata_" +
               llvm::utohexstr(Hint.TargetAddress, true) + "_address()";
     } else if (Hint.CallKind == Kind::RuntimeSwiftWitnessCacheAddress) {
       if (!Hint.TargetAddress || Hint.ByteCount || Hint.TargetName.empty())
