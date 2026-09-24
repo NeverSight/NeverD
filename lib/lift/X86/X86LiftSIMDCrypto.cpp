@@ -101,8 +101,10 @@ bool liftSIMDCrypto(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       uint64_t Imm = (X86.op_count >= 1 && X86.operands[0].type == X86_OP_IMM)
                          ? static_cast<uint64_t>(X86.operands[0].imm)
                          : 0;
-      S.emitIntrinsic(Intrinsic::Xabort, NdVar::reg(x86reg::RAX, 8),
-                      {NdVar::cst(Imm & 0xFF, 1)});
+      // Outside a transaction XABORT does nothing; an abort resumes at the
+      // XBEGIN fallback, whose own output carries EAX.  No value falls
+      // through, so it defines no register here.
+      S.emitIntrinsic(Intrinsic::Xabort, NdVar(), {NdVar::cst(Imm & 0xFF, 1)});
       break;
     }
     Intrinsic Id;

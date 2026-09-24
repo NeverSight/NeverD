@@ -4069,3 +4069,64 @@ TEST(HighCPointerAddresses, DirectionFlagIsClearOnEntry) {
   EXPECT_NE(HighC.find("rep movsb"), std::string::npos) << HighC;
   EXPECT_EQ(HighC.find("std"), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, RepeatedCpuidAndRdtscDoNotRedeclareLocals) {
+  // KiDetectHardwareFeatures-style code runs CPUID and RDTSC more than once.
+  // Each expansion declares its scratch local, so it needs its own scope.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x53,                         // push rbx
+                                     0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+                                     0x0f, 0xa2,                   // cpuid
+                                     0x44, 0x8b, 0xc0, // mov r8d, eax
+                                     0xb8, 0x07, 0x00, 0x00, 0x00, // mov eax, 7
+                                     0x33, 0xc9,       // xor ecx, ecx
+                                     0x0f, 0xa2,       // cpuid
+                                     0x41, 0x03, 0xc0, // add eax, r8d
+                                     0x44, 0x8b, 0xc8, // mov r9d, eax
+                                     0x0f, 0x31,       // rdtsc
+                                     0x44, 0x8b, 0xd0, // mov r10d, eax
+                                     0x0f, 0x31,       // rdtsc
+                                     0x41, 0x03, 0xc2, // add eax, r10d
+                                     0x41, 0x03, 0xc1, // add eax, r9d
+                                     0xcd, 0x2c,       // int 2Ch
+                                     0x5b,             // pop rbx
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(HighC.find("{{"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__cpuid(cpuInfo, 1)"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__cpuid(cpuInfo, 7)"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__int2c()"), std::string::npos) << HighC;
+  // Every scratch declaration opens a block of its own.
+  for (const char *Decl : {"int cpuInfo[4];", "uint64_t _tsc ="}) {
+    size_t Count = 0;
+    for (size_t Pos = HighC.find(Decl); Pos != std::string::npos;
+         Pos = HighC.find(Decl, Pos + 1)) {
+      ++Count;
+      const size_t LineStart = HighC.rfind('\n', Pos);
+      const size_t PrevLine = HighC.rfind('\n', LineStart - 1);
+      EXPECT_EQ(
+          llvm::StringRef(HighC).slice(PrevLine + 1, LineStart).trim().str(),
+          "{")
+          << Decl << " is not the first statement of a block\n"
+          << HighC;
+    }
+    EXPECT_EQ(Count, 2u) << Decl << "\n" << HighC;
+  }
+}
+
+TEST(HighCPointerAddresses, DebugServiceInterruptKeepsItsRaxResult) {
+  // DebugService: `int 2Dh` returns its status in RAX.  The asm block has
+  // no value, so the result must be moved out inside that block.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x8b, 0xc1, // mov eax, ecx
+                                     0xcd, 0x2d, // int 2Dh
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(HighC.find("{{"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("int 45"), std::string::npos) << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(mov \w+, [er]?ax)")))
+      << HighC;
+  EXPECT_EQ(HighC.find("= __asm"), std::string::npos) << HighC;
+}

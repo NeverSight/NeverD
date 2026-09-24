@@ -828,14 +828,16 @@ std::string renderCpuid(const std::vector<MedVar> &Outs,
                         std::function<std::string(const MedVar &)> VarFn,
                         const IsAliveFn &IsAlive) {
   std::string Leaf = Ops.empty() ? "0" : ExprFn(*Ops[0]);
-  std::string Result = "int cpuInfo[4];\n";
+  // A block scope, so a second CPUID in the function does not redeclare
+  // cpuInfo.
+  std::string Result = "{\n    int cpuInfo[4];\n";
   Result += "    __cpuid(cpuInfo, " + Leaf + ");\n";
   const char *Names[] = {"cpuInfo[0]", "cpuInfo[1]", "cpuInfo[2]",
                          "cpuInfo[3]"};
   for (size_t I = 0; I < Outs.size() && I < 4; ++I)
     if (isAlive(Outs[I], IsAlive))
       Result += "    " + VarFn(Outs[I]) + " = " + Names[I] + ";\n";
-  return Result;
+  return Result + "}\n";
 }
 
 std::string renderXgetbv(const std::vector<MedVar> &Outs,
@@ -868,12 +870,14 @@ std::string renderRdtsc(const std::vector<MedVar> &Outs, const char *FnName,
   bool HiAlive = isAlive(Outs[1], IsAlive);
   if (!LoAlive && !HiAlive)
     return std::string("__") + FnName + "();\n";
-  std::string Result = std::string("uint64_t _tsc = __") + FnName + "();\n";
+  // Block scope: a function may read the counter more than once.
+  std::string Result =
+      std::string("{\n    uint64_t _tsc = __") + FnName + "();\n";
   if (LoAlive)
     Result += "    " + VarFn(Outs[0]) + " = (uint32_t)_tsc;\n";
   if (HiAlive)
     Result += "    " + VarFn(Outs[1]) + " = (uint32_t)(_tsc >> 32);\n";
-  return Result;
+  return Result + "}\n";
 }
 
 std::string renderRdtscp(const std::vector<MedVar> &Outs,
@@ -883,7 +887,7 @@ std::string renderRdtscp(const std::vector<MedVar> &Outs,
                          const IsAliveFn &IsAlive) {
   if (Outs.size() < 3)
     return renderRdtsc(Outs, "rdtscp", ExprFn, VarFn, IsAlive);
-  std::string Result = "uint32_t _aux;\n";
+  std::string Result = "{\n    uint32_t _aux;\n";
   Result += "    uint64_t _tsc = __rdtscp(&_aux);\n";
   if (isAlive(Outs[0], IsAlive))
     Result += "    " + VarFn(Outs[0]) + " = (uint32_t)_tsc;\n";
@@ -891,7 +895,7 @@ std::string renderRdtscp(const std::vector<MedVar> &Outs,
     Result += "    " + VarFn(Outs[1]) + " = (uint32_t)(_tsc >> 32);\n";
   if (isAlive(Outs[2], IsAlive))
     Result += "    " + VarFn(Outs[2]) + " = _aux;\n";
-  return Result;
+  return Result + "}\n";
 }
 
 const HighExpr *unwrapX86IntegerView(const HighExpr *E) {
@@ -953,6 +957,29 @@ renderX86TypedIntrinsicCall(Arch TheArch, const HighExpr &Call,
       Code = ExprFn(*Call.Operands[1]);
     HasCIntrinsics = true;
     return "__fastfail(" + Code + ")";
+  }
+  if (Call.IntrinsicId == I::IntN && !Call.Operands.empty() &&
+      Call.Operands[0]) {
+    const HighExpr *Vec = unwrapX86IntegerView(Call.Operands[0].get());
+    if (Vec && Vec->Kind == ExprKind::Const && (Vec->ConstVal & 0xFF) == 0x2C) {
+      HasCIntrinsics = true;
+      return "__int2c()";
+    }
+  }
+  // Shadow-stack writes take C operands through the MSVC intrinsics; an
+  // inline-asm operand cannot be a C expression.
+  if ((Call.IntrinsicId == I::CetWrss || Call.IntrinsicId == I::CetWruss) &&
+      Call.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+      Call.Operands.size() == 2 && Call.Operands[0] && Call.Operands[1] &&
+      Call.Operands[1]->Type &&
+      (Call.Operands[1]->Type->Size == 4 ||
+       Call.Operands[1]->Type->Size == 8)) {
+    const bool Is64 = Call.Operands[1]->Type->Size == 8;
+    HasCIntrinsics = true;
+    return std::string(Call.IntrinsicId == I::CetWrss ? "_wrss" : "_wruss") +
+           (Is64 ? "q((unsigned __int64)(" : "d((unsigned int)(") +
+           ExprFn(*Call.Operands[1]) + "), (void *)(uintptr_t)(" +
+           ExprFn(*Call.Operands[0]) + "))";
   }
   const bool IsGfni = Call.IntrinsicId == I::Gf2p8MulB ||
                       Call.IntrinsicId == I::Gf2p8AffineQb ||
@@ -1112,7 +1139,7 @@ std::string renderX86IntrinsicCall(Intrinsic Id,
   case I::Cpuid: {
     std::string Leaf = Ops.empty() ? "0" : Ops[0];
     HasCIntrinsics = true;
-    return "{{ int cpuInfo[4]; __cpuid(cpuInfo, " + Leaf + "); }}";
+    return "{ int cpuInfo[4]; __cpuid(cpuInfo, " + Leaf + "); }";
   }
   case I::Rdtscp: {
     HasCIntrinsics = true;
@@ -1143,7 +1170,7 @@ std::string renderX86AsmStatement(const char *Mnemonic,
     AsmStmt += (I == 0 ? " " : ", ");
     AsmStmt += Ops[I];
   }
-  return "__asm {{ " + AsmStmt + " }}";
+  return "__asm { " + AsmStmt + " }";
 }
 
 } // namespace neverd
