@@ -262,6 +262,57 @@ TEST_F(DriverKernelFrameworkRequest,
 }
 
 TEST_F(DriverKernelFrameworkRequest,
+       RetrievedMemoryAliasesRequestBuffersUntilCompletion) {
+  initializeQueue();
+  const auto IRP = packet();
+  const auto Request = request(route(IRP));
+  auto MemoryFor = [&](bool Output) {
+    put(BufferSlot, Sentinel);
+    EXPECT_EQ(take(invoke(Output ? "WdfRequestRetrieveOutputMemory"
+                                 : "WdfRequestRetrieveInputMemory",
+                          {Globals, Request, BufferSlot})),
+              0u);
+    return get(BufferSlot);
+  };
+  const auto Input = MemoryFor(false);
+  const auto Output = MemoryFor(true);
+  EXPECT_NE(Input, Output);
+  EXPECT_EQ(MemoryFor(false), Input);
+  EXPECT_EQ(MemoryFor(true), Output);
+  put(LengthSlot, Sentinel);
+  EXPECT_EQ(take(invoke("WdfMemoryGetBuffer", {Globals, Input, LengthSlot})),
+            InputBuffer);
+  EXPECT_EQ(get(LengthSlot), 3u);
+  EXPECT_EQ(take(invoke("WdfMemoryGetBuffer", {Globals, Output, LengthSlot})),
+            OutputBuffer);
+  EXPECT_EQ(get(LengthSlot), 7u);
+  complete(Request);
+  expectError(invoke("WdfMemoryGetBuffer", {Globals, Input, LengthSlot}),
+              "invalid or completed framework request memory");
+  expectError(invoke("WdfMemoryGetBuffer", {Globals, Output, LengthSlot}),
+              "invalid or completed framework request memory");
+}
+
+TEST_F(DriverKernelFrameworkRequest,
+       RetrievedMemoryRejectsMissingAndNeitherBuffers) {
+  initializeQueue();
+  const auto EmptyInput = request(route(packet(14, 0, 7)));
+  EXPECT_EQ(take(invoke("WdfRequestRetrieveInputMemory",
+                        {Globals, EmptyInput, BufferSlot})),
+            framework::RequestBufferTooSmall);
+  EXPECT_EQ(get(BufferSlot), 0u);
+  complete(EmptyInput);
+  const auto NeitherIRP = packet();
+  Packets.at(NeitherIRP).View.Neither = true;
+  const auto Neither = request(route(NeitherIRP));
+  EXPECT_EQ(take(invoke("WdfRequestRetrieveOutputMemory",
+                        {Globals, Neither, BufferSlot})),
+            framework::ControlInvalidDeviceRequest);
+  EXPECT_EQ(get(BufferSlot), 0u);
+  complete(Neither);
+}
+
+TEST_F(DriverKernelFrameworkRequest,
        ReadWriteAndFallbackUseTheirOwnCallbackABI) {
   put(QueueConfig + 24, 0);
   put(QueueConfig + 16, DefaultPC);

@@ -672,6 +672,7 @@ void checkKMDFControlReport(const llvm::json::Object &Report, char Mode) {
                                             : Mode == 'M' ? "4b4d444d5a4b78"
                                             : Mode == 'I' ? "4b4d44495a4b78"
                                             : Mode == 'T' ? "4b4d44545a4b78"
+                                            : Mode == 'b' ? "4b4d44625a4b78"
                                                           : "4b4d44425a4b78");
   EXPECT_EQ((*Requests)[2].getAsObject()->getString("output_hex"), "60616263");
   const auto *Devices = Report.getArray("devices");
@@ -693,6 +694,34 @@ TEST_F(DriverScenarioPublic, CAPIAndCLICompleteGenuineKMDFControlIO) {
     ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
     ASSERT_NE(Parsed->getAsObject(), nullptr);
     checkKMDFControlReport(*Parsed->getAsObject(), 'B');
+    EXPECT_TRUE(error().empty());
+  }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_CONTROL_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIUsesKMDFRequestMemoryAliases) {
+#ifdef NEVERD_KMDF_CONTROL_FIXTURE
+  neverd_driver_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.instruction_limit = 100000;
+  Options.memory_limit = 64 * 1024 * 1024;
+  Options.event_limit = 10000;
+  Options.timeout_milliseconds = 5000;
+  Options.service_name = "NeverDKmdfControlb";
+  std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
+#ifdef NEVERD_KMDF_CONTROL_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_CONTROL_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images) {
+    SCOPED_TRACE(Image);
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, Image, KMDFControlScenario, &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    ASSERT_NE(Parsed->getAsObject(), nullptr);
+    checkKMDFControlReport(*Parsed->getAsObject(), 'b');
     EXPECT_TRUE(error().empty());
   }
 #else

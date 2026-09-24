@@ -511,11 +511,11 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   using Result = std::optional<uint64_t>;
   if (Name == api::WdfMemoryGetBuffer) {
     auto O = Objects.find(A[1]);
-    auto M = UserMemories.find(A[1]);
+    auto M = RequestMemories.find(A[1]);
     if (O == Objects.end() || O->second.Kind != ObjectKind::Memory ||
-        O->second.Binding != B.Globals || M == UserMemories.end() ||
+        O->second.Binding != B.Globals || M == RequestMemories.end() ||
         !M->second.Active)
-      return requestError("invalid or completed framework user memory");
+      return requestError("invalid or completed framework request memory");
     if (A[2]) {
       if (auto E = writable(A[2], sizeof(uint64_t)))
         return E;
@@ -531,6 +531,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       Name != api::WdfRequestGetParameters &&
       Name != api::WdfRequestRetrieveInputBuffer &&
       Name != api::WdfRequestRetrieveOutputBuffer &&
+      Name != api::WdfRequestRetrieveInputMemory &&
+      Name != api::WdfRequestRetrieveOutputMemory &&
       Name != api::WdfRequestRetrieveUnsafeUserInputBuffer &&
       Name != api::WdfRequestRetrieveUnsafeUserOutputBuffer &&
       Name != api::WdfRequestProbeAndLockUserBufferForRead &&
@@ -844,6 +846,51 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   auto View = RequestsHost.View(R->second.IRP);
   if (!View)
     return View.takeError();
+  const bool InputMemory = Name == api::WdfRequestRetrieveInputMemory;
+  const bool OutputMemory = Name == api::WdfRequestRetrieveOutputMemory;
+  if (InputMemory || OutputMemory) {
+    if (auto E = writable(A[2], sizeof(uint64_t)))
+      return E;
+    if (auto E = Memory.writeInteger(A[2], 0, sizeof(uint64_t)))
+      return E;
+    if (View->Neither || (InputMemory && View->Major == RequestMajorRead) ||
+        (OutputMemory && View->Major == RequestMajorWrite))
+      return Result{ControlInvalidDeviceRequest};
+    const uint32_t Length =
+        OutputMemory ? View->OutputLength : View->InputLength;
+    if (!Length)
+      return Result{RequestBufferTooSmall};
+    auto Existing = std::find_if(
+        RequestMemories.begin(), RequestMemories.end(), [&](const auto &Entry) {
+          const auto &Memory = Entry.second;
+          return Memory.Request == A[1] && Memory.Active &&
+                 Memory.Output == OutputMemory;
+        });
+    if (Existing != RequestMemories.end()) {
+      if (auto E = Memory.writeInteger(A[2], Existing->first, sizeof(uint64_t)))
+        return E;
+      return Result{0};
+    }
+    if (!RequestsHost.Buffer)
+      return requestError("request buffer host is unavailable");
+    auto Buffer = RequestsHost.Buffer(R->second.IRP, OutputMemory);
+    if (!Buffer)
+      return Buffer.takeError();
+    if (!*Buffer)
+      return Result{windows::StatusInsufficientResources};
+    Attributes Attrs;
+    Attrs.Parent = A[1];
+    auto Created = createObject(B.Globals, Attrs, false);
+    if (!Created)
+      return Created.takeError();
+    const uint64_t Handle = *Created;
+    Objects.at(Handle).Kind = ObjectKind::Memory;
+    RequestMemories.emplace(Handle, RequestMemory{A[1], std::nullopt, *Buffer,
+                                                  Length, true, OutputMemory});
+    if (auto E = Memory.writeInteger(A[2], Handle, sizeof(uint64_t)))
+      return E;
+    return Result{0};
+  }
   const bool UnsafeInput = Name == api::WdfRequestRetrieveUnsafeUserInputBuffer;
   const bool UnsafeOutput =
       Name == api::WdfRequestRetrieveUnsafeUserOutputBuffer;
@@ -898,8 +945,8 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       return llvm::joinErrors(Handle.takeError(),
                               RequestsHost.ReleaseUserBuffer(Locked->MDL));
     Objects.at(*Handle).Kind = ObjectKind::Memory;
-    UserMemories.emplace(*Handle,
-                         UserMemory{A[1], Locked->MDL, Locked->Buffer, A[3]});
+    RequestMemories.emplace(
+        *Handle, RequestMemory{A[1], Locked->MDL, Locked->Buffer, A[3]});
     if (auto E = Memory.writeInteger(A[4], *Handle, sizeof(uint64_t)))
       return E;
     return Result{0};

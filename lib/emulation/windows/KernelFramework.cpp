@@ -1190,12 +1190,15 @@ KernelFramework::advance(uint64_t Token) {
       if (auto E = RequestsHost.Complete(
               R->second.IRP, R->second.CompletionStatus, *Information))
         return E;
-      for (auto &[Handle, M] : UserMemories)
+      for (auto &[Handle, M] : RequestMemories)
         if (M.Request == S.Object && M.Active) {
-          if (!RequestsHost.ReleaseUserBuffer)
-            return invalid("framework user-memory release host is unavailable");
-          if (auto E = RequestsHost.ReleaseUserBuffer(M.MDL))
-            return E;
+          if (M.LockedMDL) {
+            if (!RequestsHost.ReleaseUserBuffer)
+              return invalid(
+                  "framework user-memory release host is unavailable");
+            if (auto E = RequestsHost.ReleaseUserBuffer(*M.LockedMDL))
+              return E;
+          }
           M.Active = false;
         }
       const uint64_t QueueHandle = R->second.Queue;
@@ -1331,16 +1334,16 @@ KernelFramework::advance(uint64_t Token) {
     if (O.Kind == ObjectKind::Request)
       Requests.erase(S.Object);
     if (O.Kind == ObjectKind::Memory) {
-      auto M = UserMemories.find(S.Object);
-      if (M == UserMemories.end())
+      auto M = RequestMemories.find(S.Object);
+      if (M == RequestMemories.end())
         return invalid("framework memory lost its object state");
-      if (M->second.Active) {
+      if (M->second.Active && M->second.LockedMDL) {
         if (!RequestsHost.ReleaseUserBuffer)
           return invalid("framework user-memory release host is unavailable");
-        if (auto E = RequestsHost.ReleaseUserBuffer(M->second.MDL))
+        if (auto E = RequestsHost.ReleaseUserBuffer(*M->second.LockedMDL))
           return E;
       }
-      UserMemories.erase(M);
+      RequestMemories.erase(M);
     }
     for (const auto &[Type, Context] : O.Contexts)
       if (auto E = retire(Context.Address))

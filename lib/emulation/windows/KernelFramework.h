@@ -327,11 +327,14 @@ private:
   };
   std::map<uint64_t, Request> Requests;
   std::map<uint64_t, uint64_t> CallerRequests;
-  struct UserMemory {
-    uint64_t Request = 0, MDL = 0, Buffer = 0, Length = 0;
+  struct RequestMemory {
+    uint64_t Request = 0;
+    std::optional<uint64_t> LockedMDL;
+    uint64_t Buffer = 0, Length = 0;
     bool Active = true;
+    std::optional<bool> Output;
   };
-  std::map<uint64_t, UserMemory> UserMemories;
+  std::map<uint64_t, RequestMemory> RequestMemories;
   struct Context {
     uint64_t Address = 0, Size = 0;
     uint64_t Cleanup = 0, Destroy = 0;

@@ -70,6 +70,8 @@
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_NEVERD_KMDF_NEITHER                                              \
   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_NEVERD_KMDF_DIRECT                                               \
+  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 
 enum {
   TransformPrefixLength = 4,
@@ -81,6 +83,7 @@ enum {
 
 _Static_assert(sizeof(void *) == 8, "x64 fixture");
 _Static_assert(IOCTL_NEVERD_KMDF_TRANSFORM == 0x222000, "IOCTL ABI");
+_Static_assert(IOCTL_NEVERD_KMDF_DIRECT == 0x222002, "direct IOCTL ABI");
 _Static_assert(IOCTL_NEVERD_KMDF_NEITHER == 0x222003, "neither IOCTL ABI");
 _Static_assert(sizeof(WDF_IO_QUEUE_CONFIG) == 96, "queue config ABI");
 ABI_OFFSET(WDF_IO_QUEUE_CONFIG, DispatchType, 4);
@@ -151,6 +154,8 @@ ABI_SLOT(WdfRequestCompleteWithInformation, 265);
 ABI_SLOT(WdfRequestGetParameters, 266);
 ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
+ABI_SLOT(WdfRequestRetrieveInputMemory, 267);
+ABI_SLOT(WdfRequestRetrieveOutputMemory, 268);
 ABI_SLOT(WdfRequestRetrieveInputWdmMdl, 271);
 ABI_SLOT(WdfRequestRetrieveOutputWdmMdl, 272);
 ABI_SLOT(WdfRequestRetrieveUnsafeUserInputBuffer, 273);
@@ -1216,13 +1221,55 @@ static void IoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request,
     return;
   }
   // IoControlCode is the fifth Windows x64 argument, passed on the stack.
-  if (IoControlCode != (TransferMode == 'T' ? IOCTL_NEVERD_KMDF_NEITHER
-                                            : IOCTL_NEVERD_KMDF_TRANSFORM)) {
+  if (IoControlCode != (TransferMode == 'T'   ? IOCTL_NEVERD_KMDF_NEITHER
+                        : TransferMode == 'c' ? IOCTL_NEVERD_KMDF_DIRECT
+                                              : IOCTL_NEVERD_KMDF_TRANSFORM)) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
     return;
   }
   if (TransferMode == 'T') {
     TransformNeitherRequest(Request, OutputLength, InputLength);
+    return;
+  }
+  if (TransferMode == 'b' || TransferMode == 'c') {
+    WDFMEMORY InputMemory = NULL;
+    WDFMEMORY OutputMemory = NULL;
+    WDFMEMORY InputAgain = NULL;
+    size_t InputSize = 0;
+    size_t OutputSize = 0;
+    UCHAR Source[TransformPrefixLength];
+    NTSTATUS Status = WdfRequestRetrieveInputMemory(Request, &InputMemory);
+    if (NT_SUCCESS(Status))
+      Status = WdfRequestRetrieveOutputMemory(Request, &OutputMemory);
+    if (NT_SUCCESS(Status))
+      Status = WdfRequestRetrieveInputMemory(Request, &InputAgain);
+    PUCHAR Input = NT_SUCCESS(Status)
+                       ? (PUCHAR)WdfMemoryGetBuffer(InputMemory, &InputSize)
+                       : NULL;
+    PUCHAR Output = NT_SUCCESS(Status)
+                        ? (PUCHAR)WdfMemoryGetBuffer(OutputMemory, &OutputSize)
+                        : NULL;
+    const BOOLEAN BuffersMatchMethod =
+        (Input == Output) == (TransferMode == 'b');
+    const BOOLEAN ValidMemory =
+        NT_SUCCESS(Status) && InputMemory == InputAgain && Input != NULL &&
+        Output != NULL && BuffersMatchMethod && InputSize == InputLength &&
+        InputLength != 0 && InputLength <= sizeof(Source) &&
+        OutputSize >= InputLength + TransformPrefixLength &&
+        OutputLength >= InputLength + TransformPrefixLength;
+    if (!Check(ValidMemory, 321)) {
+      WdfRequestComplete(Request, STATUS_UNSUCCESSFUL);
+      return;
+    }
+    RtlCopyMemory(Source, Input, InputLength);
+    Output[0] = 'K';
+    Output[1] = 'M';
+    Output[2] = 'D';
+    Output[3] = TransferMode;
+    for (ULONG Index = 0; Index < InputLength; ++Index)
+      Output[TransformPrefixLength + Index] = Source[Index] ^ TransformMask;
+    WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
+                                      InputLength + TransformPrefixLength);
     return;
   }
   if (TransferMode == '4') {
@@ -1644,6 +1691,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   case L'h':
   case L'i':
   case L'j':
+  case L'b':
+  case L'c':
   case L'1':
   case L'2':
   case L'3':
@@ -1678,10 +1727,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
     return STATUS_INSUFFICIENT_RESOURCES;
   if (TransferMode == 'e')
     WdfDeviceInitSetExclusive(DeviceInit, TRUE);
-  WdfDeviceInitSetIoType(DeviceInit, TransferMode == 'D' ? WdfDeviceIoDirect
-                                     : TransferMode == 'T'
-                                         ? WdfDeviceIoNeither
-                                         : WdfDeviceIoBuffered);
+  WdfDeviceInitSetIoType(DeviceInit,
+                         (TransferMode == 'D' || TransferMode == 'c')
+                             ? WdfDeviceIoDirect
+                         : TransferMode == 'T' ? WdfDeviceIoNeither
+                                               : WdfDeviceIoBuffered);
   if (TransferMode == 'I' || TransferMode == 'J' || TransferMode == 'K' ||
       TransferMode == 'T' || TransferMode == '8')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
@@ -1807,7 +1857,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   DeviceObject = WdfDeviceWdmGetDeviceObject(CreatedDevice);
   if (!Check(DeviceObject != NULL &&
                  (DeviceObject->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO)) ==
-                     (TransferMode == 'D'   ? DO_DIRECT_IO
+                     (TransferMode == 'D' || TransferMode == 'c' ? DO_DIRECT_IO
                       : TransferMode == 'T' ? 0
                                             : DO_BUFFERED_IO) &&
                  (DeviceObject->Flags & DO_DEVICE_INITIALIZING) != 0 &&

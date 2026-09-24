@@ -28,6 +28,9 @@ constexpr uint32_t DataError = 0xc000003e;
 constexpr uint32_t Cancelled = 0xc0000120;
 constexpr uint32_t AccessViolation = 0xc0000005;
 constexpr uint32_t AccessDenied = 0xc0000022;
+constexpr uint32_t BufferedControlCode = 0x222000;
+constexpr uint32_t DirectControlCode = 0x222002;
+constexpr uint32_t NeitherControlCode = 0x222003;
 
 std::vector<const char *> controlImages() {
   std::vector<const char *> Images{NEVERD_KMDF_CONTROL_FIXTURE};
@@ -58,7 +61,9 @@ DriverOptions controlOptions(char Mode = 'B') {
   Create.Device = "\\DosDevices\\NeverDKmdfControl";
   Options.Requests.push_back(std::move(Create));
   auto IO = controlRequest(DriverRequestKind::DeviceControl);
-  IO.ControlCode = Mode == 'T' ? 0x222003 : 0x222000;
+  IO.ControlCode = Mode == 'T'   ? NeitherControlCode
+                   : Mode == 'c' ? DirectControlCode
+                                 : BufferedControlCode;
   IO.Input = {0, 1, 0x5a, 0xff};
   // The fixture checks both logical lengths despite their aliased allocation.
   IO.OutputSize = 19;
@@ -91,6 +96,55 @@ size_t apiCount(const DriverResult &Result, llvm::StringRef Name) {
 
 void checkCompletedLifecycle(const DriverResult &Result, size_t RequestCount,
                              bool FileCallbacks = false);
+
+TEST(DriverKMDFControl, RequestMemoryAliasesBufferedIoUntilCompletion) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('b');
+      Options.LoadAddress = Address;
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      checkCompletedLifecycle(*Result, 6);
+      ASSERT_EQ(Result->Requests.size(), 6u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'b', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveInputMemory"), 2u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveOutputMemory"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfMemoryGetBuffer"), 2u);
+    }
+}
+
+TEST(DriverKMDFControl, RequestMemoryAliasesDirectIoUntilCompletion) {
+  for (const auto *Image : controlImages())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Address);
+      auto Options = controlOptions('c');
+      Options.LoadAddress = Address;
+      Options.Requests.erase(Options.Requests.begin() + 2,
+                             Options.Requests.begin() + 4);
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      SCOPED_TRACE(::testing::PrintToString(Result->Messages));
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      EXPECT_TRUE(Result->UnloadCompleted);
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      for (const auto &Request : Result->Requests) {
+        EXPECT_TRUE(Request.Completed);
+        EXPECT_EQ(Request.IOStatus, 0u);
+      }
+      EXPECT_EQ(
+          Result->Requests[1].Output,
+          (std::vector<uint8_t>{'K', 'M', 'D', 'c', 0x5a, 0x5b, 0, 0xa5}));
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveInputMemory"), 2u);
+      EXPECT_EQ(apiCount(*Result, "WdfRequestRetrieveOutputMemory"), 1u);
+      EXPECT_EQ(apiCount(*Result, "WdfMemoryGetBuffer"), 2u);
+    }
+}
 
 TEST(DriverKMDFControl, SynchronousQueueOperationsWaitForRequestRetirement) {
   for (const auto *Image : controlImages())
