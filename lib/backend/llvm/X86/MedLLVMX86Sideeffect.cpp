@@ -45,6 +45,10 @@ bool MedLLVMEmitter::emitX86DebugTrap(const MedOp &Op, Intrinsic IC,
     return true;
   }
   case I::IntN: {
+    // An interrupt with a register result is value-producing; the value
+    // emitter binds that result.
+    if (Op.Output.Size > 0)
+      return false;
     auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
     // Windows `int 0x29` is `__fastfail(ecx)`.  Emit a named noreturn call
     // so LLVMC prints the intrinsic and does not treat the interrupt vector

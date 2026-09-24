@@ -14,11 +14,13 @@
 #include "neverd/Common.h"
 #include "neverd/ir/NdTypes.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
+#include <utility>
 
 namespace llvm {
 class Type;
@@ -42,6 +44,21 @@ std::string escapeCString(llvm::StringRef Str);
 /// Implemented with the x86 C renderer.  \p SizeBytes is the access width.
 /// Returns null when that width has no matching intrinsic.
 const char *x86SegmentedReadIntrinsic(bool GS, unsigned SizeBytes);
+
+/// The registers x64 Windows `int 2Dh` (the debug service) reads, in the
+/// order the lifter passes them after the vector: the service code in RAX,
+/// then RCX, RDX, R8 and R9.
+llvm::ArrayRef<const char *> x86DebugServiceRegisters();
+
+/// An x86 software interrupt as an MSVC `__asm` statement.  Inline asm cannot
+/// take C expressions as operands, so each register input is first copied to a
+/// block-scoped temporary.  \p Inputs pairs a register with the C text of its
+/// value.  When \p ResultVar is not empty, \p ResultReg is moved into it
+/// inside the same block.
+std::string renderX86InterruptAsm(
+    unsigned Vector,
+    llvm::ArrayRef<std::pair<const char *, std::string>> Inputs,
+    llvm::StringRef ResultVar, llvm::StringRef ResultReg);
 
 /// Returns the platform-specific intrinsic headers for the given arch.
 /// Dispatches to the per-arch lists implemented alongside the intrinsic

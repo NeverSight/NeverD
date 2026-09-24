@@ -82,6 +82,14 @@ std::string renderX86SegmentedIntrinsicStatement(
 /// Windows `int 0x29` / `__fastfail`.  True when \p E is that intrinsic.
 bool isX86FastFailCall(const HighExpr &E);
 
+/// A value-returning x86 `int imm8`, or the x64 `int 2Dh` debug service, as an
+/// `__asm` block that loads its register inputs and, when \p ResultVar is not
+/// empty, moves the result register into it.  Empty when \p Call is not such
+/// an interrupt.
+std::string renderX86InterruptStatement(
+    Arch TheArch, const HighExpr &Call, llvm::StringRef ResultVar,
+    unsigned ResultSize, std::function<std::string(const HighExpr &)> ExprFn);
+
 /// MSVC `<intrin.h>` GS/FS scalar load, or empty when this access is not that
 /// x86 form.
 std::string renderX86MsvcSegmentedLoad(Arch TheArch, unsigned SizeBytes,

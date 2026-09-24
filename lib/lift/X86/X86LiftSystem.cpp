@@ -160,7 +160,15 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         X86.operands[0].type == X86_OP_IMM) {
       const uint64_t Vector =
           static_cast<uint64_t>(X86.operands[0].imm) & 0xFF;
-      if (Vector == 0x2C) {
+      if (Vector == 0x2D && L.targetArch() == Arch::X64) {
+        // x64 Windows debug service (DebugPrint, DebugPrompt, ...): EAX holds
+        // the service code, RCX/RDX/R8/R9 its arguments; the status comes
+        // back in RAX.  The input order is x86DebugServiceRegisters().
+        S.emitIntrinsic(Intrinsic::DebugService, NdVar::reg(x86reg::RAX, 8),
+                        {NdVar::reg(x86reg::RAX, 8), NdVar::reg(x86reg::RCX, 8),
+                         NdVar::reg(x86reg::RDX, 8), NdVar::reg(x86reg::R8, 8),
+                         NdVar::reg(x86reg::R9, 8)});
+      } else if (Vector == 0x2C) {
         // `int 0x2c` is MSVC's `__int2c()` (assertion failure); it returns
         // no value in RAX.
         S.emitVoidIntrinsic(Intrinsic::IntN, {NdVar::cst(Vector, 1)});

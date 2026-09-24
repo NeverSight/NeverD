@@ -343,3 +343,6 @@ X86MsrAccess,
 ReadCr0, ReadCr2, ReadCr3, ReadCr4, ReadCr8,
 WriteCr0, WriteCr2, WriteCr3, WriteCr4, WriteCr8,
 ReadDr, WriteDr,
+// x64 Windows `int 2Dh` debug service (DebugPrint, DebugPrompt, ...).
+// Inputs: RAX (service code), RCX, RDX, R8, R9; output: RAX (status).
+DebugService,

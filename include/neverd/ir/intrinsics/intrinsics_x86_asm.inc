@@ -166,3 +166,4 @@ A(Intrinsic::X87Fldenv,     "fldenv");
 A(Intrinsic::X87Fnstenv,    "fnstenv");
 A(Intrinsic::X87Frstor,     "frstor");
 A(Intrinsic::X87Fnsave,     "fnsave");
+A(Intrinsic::DebugService,  "int 2Dh");

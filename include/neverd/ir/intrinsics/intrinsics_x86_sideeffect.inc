@@ -170,3 +170,4 @@ SIDEEFFECT(Intrinsic::WriteCr4);
 SIDEEFFECT(Intrinsic::WriteCr8);
 SIDEEFFECT(Intrinsic::ReadDr);
 SIDEEFFECT(Intrinsic::WriteDr);
+SIDEEFFECT(Intrinsic::DebugService);

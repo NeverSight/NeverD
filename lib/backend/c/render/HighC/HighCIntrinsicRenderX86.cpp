@@ -16,8 +16,10 @@
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <cctype>
 #include <string>
 #include <utility>
 
@@ -54,6 +56,36 @@ const char *x86SegmentedReadIntrinsic(bool GS, unsigned SizeBytes) {
   default:
     return nullptr;
   }
+}
+
+llvm::ArrayRef<const char *> x86DebugServiceRegisters() {
+  static const char *const Regs[] = {"rax", "rcx", "rdx", "r8", "r9"};
+  return Regs;
+}
+
+std::string renderX86InterruptAsm(
+    unsigned Vector,
+    llvm::ArrayRef<std::pair<const char *, std::string>> Inputs,
+    llvm::StringRef ResultVar, llvm::StringRef ResultReg) {
+  // MASM hex: a leading digit, then an `h` suffix (`int 2Dh`, `int 0CCh`).
+  std::string Hex = llvm::utohexstr(Vector & 0xFF);
+  if (!std::isdigit(static_cast<unsigned char>(Hex.front())))
+    Hex = "0" + Hex;
+  const std::string Pad = Inputs.empty() ? "" : "    ";
+  std::string Asm = Pad + "__asm {\n";
+  for (const auto &[Reg, Value] : Inputs)
+    Asm += Pad + "    mov " + std::string(Reg) + ", _" + Reg + "\n";
+  Asm += Pad + "    int " + Hex + "h\n";
+  if (!ResultVar.empty())
+    Asm += Pad + "    mov " + ResultVar.str() + ", " + ResultReg.str() + "\n";
+  Asm += Pad + "}\n";
+  if (Inputs.empty())
+    return Asm;
+  std::string Result = "{\n";
+  for (const auto &[Reg, Value] : Inputs)
+    Result +=
+        "    uint64_t _" + std::string(Reg) + " = (uint64_t)(" + Value + ");\n";
+  return Result + Asm + "}\n";
 }
 
 namespace {
@@ -924,6 +956,38 @@ bool isX86FastFailCall(const HighExpr &E) {
     return false;
   const HighExpr *Vec = unwrapX86IntegerView(E.Operands[0].get());
   return Vec && Vec->Kind == ExprKind::Const && (Vec->ConstVal & 0xFF) == 0x29;
+}
+
+std::string renderX86InterruptStatement(
+    Arch TheArch, const HighExpr &Call, llvm::StringRef ResultVar,
+    unsigned ResultSize, std::function<std::string(const HighExpr &)> ExprFn) {
+  if ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
+      Call.Kind != ExprKind::Call)
+    return {};
+  const char *Reg = ResultSize == 1                           ? "al"
+                    : ResultSize == 2                         ? "ax"
+                    : ResultSize == 4 || TheArch == Arch::X86 ? "eax"
+                                                              : "rax";
+  if (Call.IntrinsicId == Intrinsic::DebugService) {
+    const auto Regs = x86DebugServiceRegisters();
+    if (TheArch != Arch::X64 || Call.Operands.size() != Regs.size())
+      llvm::report_fatal_error(
+          "x64 debug service has an invalid operand shape");
+    std::vector<std::pair<const char *, std::string>> Inputs;
+    for (size_t I = 0; I < Regs.size(); ++I) {
+      if (!Call.Operands[I])
+        llvm::report_fatal_error("x64 debug service has a missing operand");
+      Inputs.emplace_back(Regs[I], ExprFn(*Call.Operands[I]));
+    }
+    return renderX86InterruptAsm(0x2D, Inputs, ResultVar, Reg);
+  }
+  if (Call.IntrinsicId != Intrinsic::IntN || Call.Operands.size() != 1 ||
+      !Call.Operands[0] || isX86FastFailCall(Call))
+    return {};
+  const HighExpr *Vec = unwrapX86IntegerView(Call.Operands[0].get());
+  if (!Vec || Vec->Kind != ExprKind::Const)
+    return {};
+  return renderX86InterruptAsm(Vec->ConstVal & 0xFF, {}, ResultVar, Reg);
 }
 
 std::string renderX86MsvcSegmentedLoad(Arch TheArch, unsigned SizeBytes,

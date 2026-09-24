@@ -201,27 +201,16 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     }
     bool DeadIntrinsicResult = Stmt.Dst->Kind == ExprKind::Var &&
                                Analysis.DeadVars.count(varName(Stmt.Dst->Var));
-    // A software interrupt (`int 2Dh`, the debug service) has no C spelling
-    // and returns its status in RAX.  An asm block is not a value, so move
-    // the result out inside the same block.
-    if (!DeadIntrinsicResult && Stmt.Dst->Kind == ExprKind::Var &&
-        Stmt.Val->Kind == ExprKind::Call &&
-        Stmt.Val->IntrinsicId != Intrinsic::None &&
-        !intrinsicCName(Stmt.Val->IntrinsicId) &&
-        (Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86)) {
-      const std::string Text = exprStr(*Stmt.Val);
-      llvm::StringRef Asm(Text);
-      if (Asm.consume_front("__asm { ") && Asm.consume_back(" }") &&
-          Asm.starts_with("int ")) {
-        const uint64_t Size = Stmt.Dst->Type ? Stmt.Dst->Type->Size : 8;
-        const char *Reg = Size == 1                   ? "al"
-                          : Size == 2                 ? "ax"
-                          : Size == 4                 ? "eax"
-                          : Opts.TheArch == Arch::X86 ? "eax"
-                                                      : "rax";
-        emitRenderedStatement(Indent,
-                              "__asm {\n    " + Asm.str() + "\n    mov " +
-                                  varName(Stmt.Dst->Var) + ", " + Reg + "\n}");
+    // A software interrupt (`int 2Dh`, the debug service) has no C spelling:
+    // an asm block loads its register inputs and moves the result out.
+    if (Stmt.Dst->Kind == ExprKind::Var) {
+      const std::string Rendered = renderX86InterruptStatement(
+          Opts.TheArch, *Stmt.Val,
+          DeadIntrinsicResult ? "" : varName(Stmt.Dst->Var),
+          Stmt.Dst->Type ? Stmt.Dst->Type->Size : 8,
+          [this](const HighExpr &E) { return exprStr(E); });
+      if (!Rendered.empty()) {
+        emitRenderedStatement(Indent, Rendered);
         break;
       }
     }

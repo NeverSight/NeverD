@@ -4115,18 +4115,90 @@ TEST(HighCPointerAddresses, RepeatedCpuidAndRdtscDoNotRedeclareLocals) {
   }
 }
 
-TEST(HighCPointerAddresses, DebugServiceInterruptKeepsItsRaxResult) {
-  // DebugService: `int 2Dh` returns its status in RAX.  The asm block has
-  // no value, so the result must be moved out inside that block.
+// Syntax-check C as the ntoskrnl scorer does: MSVC target, `__asm` blocks.
+static void expectCompilesForMsvc(const std::string &Function) {
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ErrorPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-msvc", "c", SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("neverd-msvc", "err", ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    OS << "#include <stdint.h>\n" << Function;
+  }
+  llvm::SmallVector<llvm::StringRef, 10> Arguments{
+      Compiler,
+      "-fsyntax-only",
+      "--target=x86_64-pc-windows-msvc",
+      "-fms-extensions",
+      "-ffreestanding",
+      "-x",
+      "c",
+      "-std=gnu17",
+      SourcePath};
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, std::nullopt, ErrorPath.str()};
+  std::string Error;
+  const int Status = llvm::sys::ExecuteAndWait(
+      Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
+  auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+  EXPECT_EQ(Status, 0) << Error
+                       << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : "")
+                       << "\n"
+                       << Function;
+}
+
+TEST(HighCPointerAddresses, DebugServiceInterruptKeepsItsRegisterInputs) {
+  // DebugService2: `int 2Dh` reads the service code in EAX and its arguments
+  // in RCX, RDX, R8 and R9, and returns a status in RAX.  The moves and loads
+  // that set them up are the whole function; none may be dropped.
   constexpr va_t Entry = 0x140001000;
-  const std::vector<uint8_t> Code = {0x8b, 0xc1, // mov eax, ecx
-                                     0xcd, 0x2d, // int 2Dh
-                                     0xc3};
+  const std::vector<uint8_t> Code = {
+      0x66, 0x44, 0x8b, 0x4a, 0x02, // mov r9w, [rdx+2]
+      0x4c, 0x8b, 0x42, 0x08,       // mov r8, [rdx+8]
+      0x66, 0x8b, 0x11,             // mov dx, [rcx]
+      0x48, 0x8b, 0x49, 0x08,       // mov rcx, [rcx+8]
+      0xb8, 0x02, 0x00, 0x00, 0x00, // mov eax, 2
+      0xcd, 0x2d,                   // int 2Dh
+      0xcc,                         // int 3
+      0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
-  EXPECT_EQ(HighC.find("{{"), std::string::npos) << HighC;
-  EXPECT_NE(HighC.find("int 45"), std::string::npos) << HighC;
-  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(mov \w+, [er]?ax)")))
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  for (const std::string *Source : {&HighC, &LLVMC}) {
+    EXPECT_NE(Source->find("int 2Dh"), std::string::npos) << *Source;
+    for (const char *Reg : {"rax", "rcx", "rdx", "r8", "r9"}) {
+      const std::string Name = std::string("_") + Reg;
+      EXPECT_NE(Source->find("uint64_t " + Name + " = "), std::string::npos)
+          << Name << "\n"
+          << *Source;
+      EXPECT_NE(Source->find(std::string("mov ") + Reg + ", " + Name),
+                std::string::npos)
+          << Name << "\n"
+          << *Source;
+    }
+    EXPECT_EQ(Source->find("{{"), std::string::npos) << *Source;
+  }
+  // The service code and the pointer loads survive.
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(_rax = .*\b2\)+;)")))
       << HighC;
-  EXPECT_EQ(HighC.find("= __asm"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("(uint64_t)(8)"), std::string::npos) << HighC;
+  // The service status in RAX is the function's return value.
+  for (const std::string *Source : {&HighC, &LLVMC})
+    EXPECT_EQ(Source->find("void sub_140001000"), std::string::npos) << *Source;
+  // `mov r9w` keeps the caller's upper R9 bytes, so R9 is a parameter.
+  EXPECT_NE(HighC.find("arg3"), std::string::npos) << HighC;
+  expectCompilesForMsvc(HighC);
 }

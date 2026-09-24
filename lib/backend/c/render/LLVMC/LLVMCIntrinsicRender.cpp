@@ -29,8 +29,8 @@ InlineAsmRender renderInlineAsm(Arch TheArch, const std::string &AsmStr,
     return renderARMInlineAsm(AsmStr, Mnemonic, ResultName, ResultLive, Args);
 
   if (TheArch == Arch::X86 || TheArch == Arch::X64)
-    return renderX86InlineAsm(AsmStr, Mnemonic, IsStructReturn, ResultName,
-                              ResultLive, Args);
+    return renderX86InlineAsm(TheArch, AsmStr, Mnemonic, IsStructReturn,
+                              ResultName, ResultLive, Args);
 
   return {"__asm__ volatile(\"" + AsmStr + "\" ::: \"memory\");\n", false};
 }

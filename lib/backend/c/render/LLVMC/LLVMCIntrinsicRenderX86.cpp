@@ -39,10 +39,33 @@ const char *lookupX86AsmToC(const char *Mnem) {
   return nullptr;
 }
 
-InlineAsmRender
-renderX86InlineAsm(const std::string &AsmStr, const std::string &Mnemonic,
-                   bool IsStructReturn, const std::string &ResultName,
-                   bool ResultLive, const std::vector<std::string> &Args) {
+InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
+                                   const std::string &Mnemonic,
+                                   bool IsStructReturn,
+                                   const std::string &ResultName,
+                                   bool ResultLive,
+                                   const std::vector<std::string> &Args) {
+  // A value-returning `int $$N`, as MedLLVM emits it with register operands.
+  {
+    llvm::StringRef Text(AsmStr);
+    unsigned Vector = 0;
+    if (Text.consume_front("int $$") && !Text.getAsInteger(10, Vector) &&
+        Vector <= 0xFF) {
+      const auto Regs = x86DebugServiceRegisters();
+      if (Args.empty() || (TheArch == Arch::X64 && Vector == 0x2D &&
+                           Args.size() == Regs.size())) {
+        std::vector<std::pair<const char *, std::string>> Inputs;
+        for (size_t I = 0; I < Args.size(); ++I)
+          Inputs.emplace_back(Regs[I], Args[I]);
+        return {
+            renderX86InterruptAsm(Vector, Inputs,
+                                  ResultLive ? llvm::StringRef(ResultName) : "",
+                                  TheArch == Arch::X64 ? "rax" : "eax"),
+            false};
+      }
+    }
+  }
+
   if (Mnemonic == "cpuid") {
     std::string Leaf = Args.empty() ? "0" : Args[0];
     if (IsStructReturn)

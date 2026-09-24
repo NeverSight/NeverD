@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -28,6 +29,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <cassert>
+#include <iterator>
 
 namespace neverd {
 
@@ -612,6 +614,46 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
 
   if (IC == I::Rdtsc || IC == I::Rdtscp)
     return emitRdtscValue(Op, IC, Builder);
+
+  // `int imm8` with a register result, and the x64 debug service (`int 2Dh`),
+  // which also reads RAX, RCX, RDX, R8 and R9 in the lifter's input order.
+  if ((IC == I::IntN || IC == I::DebugService) && Op.Output.Size > 0) {
+    static const char *const DebugServiceRegs[] = {"{rax}", "{rcx}", "{rdx}",
+                                                   "{r8}", "{r9}"};
+    unsigned Vector = 0x2D;
+    uint16_t FirstReg = 1;
+    if (IC == I::IntN) {
+      if (Op.NumInputs != 2 || !Op.Inputs[1].isConst())
+        llvm::report_fatal_error("x86 INT has no immediate vector");
+      Vector = Op.Inputs[1].ConstVal & 0xFF;
+      FirstReg = 2;
+    } else if (TargetArch != Arch::X64 ||
+               Op.NumInputs != 1 + std::size(DebugServiceRegs)) {
+      llvm::report_fatal_error(
+          "x64 debug service has an invalid operand shape");
+    }
+    auto *OutTy = sizeToType(Op.Output.Size);
+    // i386 has no RAX: read EAX and widen it to the lifted output.
+    const bool Wide = TargetArch == Arch::X64 && Op.Output.Size == 8;
+    auto *AsmTy = Wide ? OutTy : llvm::Type::getInt32Ty(*Ctx);
+    std::string Cons = Wide ? "={rax}" : "={eax}";
+    std::vector<llvm::Type *> Tys;
+    std::vector<llvm::Value *> Vals;
+    for (uint16_t I = FirstReg; I < Op.NumInputs; ++I) {
+      Vals.push_back(getVar(Op.Inputs[I], Builder));
+      Tys.push_back(Vals.back()->getType());
+      Cons += std::string(",") + DebugServiceRegs[I - FirstReg];
+    }
+    Cons += ",~{memory}";
+    auto *FnTy = llvm::FunctionType::get(AsmTy, Tys, false);
+    auto *IA = llvm::InlineAsm::get(FnTy, "int $$" + std::to_string(Vector),
+                                    Cons, /*hasSideEffects=*/true);
+    llvm::CallInst *Result = Builder.CreateCall(IA, Vals, "int");
+    // The debug service's status is a real return value, not a residue.
+    if (IC == I::DebugService)
+      llvm_value_provenance::markSemanticProducer(*Result);
+    return Builder.CreateZExtOrTrunc(Result, OutTy);
+  }
 
   if (IC == I::Stmxcsr && Op.Output.Size > 0)
     return llvm::ConstantInt::get(sizeToType(Op.Output.Size),

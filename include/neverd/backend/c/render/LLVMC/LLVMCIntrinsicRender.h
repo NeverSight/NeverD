@@ -44,10 +44,12 @@ struct InlineAsmRender {
 
 //--- Arch-specific (LLVMCIntrinsicRenderX86.cpp) ---
 const char *lookupX86AsmToC(const char *Mnem);
-InlineAsmRender
-renderX86InlineAsm(const std::string &AsmStr, const std::string &Mnemonic,
-                   bool IsStructReturn, const std::string &ResultName,
-                   bool ResultLive, const std::vector<std::string> &Args);
+InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
+                                   const std::string &Mnemonic,
+                                   bool IsStructReturn,
+                                   const std::string &ResultName,
+                                   bool ResultLive,
+                                   const std::vector<std::string> &Args);
 std::string renderX86Fence(llvm::AtomicOrdering Ordering);
 const char *renderX86DebugBreak();
 bool isX86FastFailName(llvm::StringRef Name);
