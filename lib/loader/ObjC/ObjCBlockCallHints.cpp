@@ -560,6 +560,17 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
       auto Target = Op.NumInputs == 1 ? Read(Op.Inputs[0]) : std::nullopt;
       auto Receiver = Read(NdVar::reg(TRI.IntParamRegs[0], 8));
+      if (Op.Opcode == NdOp::INDIR_CALL && Target &&
+          Target->K == Value::Kind::Invoke && Receiver &&
+          Receiver->K == Value::Kind::Number) {
+        std::string Error;
+        const auto Address = Receiver->Base + uint64_t(Receiver->Offset);
+        if (auto Literal = readObjCBlockLiteral(Image, Address, Error)) {
+          Receiver->Base = Literal->Address;
+          Receiver->Offset = 0;
+          Receiver->BlockSignature = Literal->Descriptor.InvokeTypeHint;
+        }
+      }
       if (Op.Opcode == NdOp::INDIR_CALL && Target && Receiver &&
           Target->K == Value::Kind::Invoke && Receiver->Offset == 0 &&
           sameBase(*Target, *Receiver) && !FloatingArgumentWrite &&
@@ -568,11 +579,8 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         std::set<size_t> NullIndices;
         if (Receiver->BlockSignature)
           Signature = *Receiver->BlockSignature;
-        if (Receiver->K == Value::Kind::Number) {
-          std::string Error;
-          if (auto Literal = readObjCBlockLiteral(Image, Receiver->Base, Error))
-            Signature = Literal->Descriptor.InvokeTypeHint;
-        }
+        if (Receiver->K == Value::Kind::Number)
+          Signature = Receiver->BlockSignature;
         if (!Signature) {
           auto ReturnBytes =
               resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
@@ -813,11 +821,12 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         Out = Value{Value::Kind::ImageBits,
                     uint64_t(Address->Base + Address->Offset), 0,
                     NdType::makeInt(8, false)};
-      if (Address && Address->K == Value::Kind::Number &&
-          Address->Offset == 0 && Address->Base >= 16 && Op.Output.Size == 8) {
+      if (Address && Address->K == Value::Kind::Number && Op.Output.Size == 8) {
+        const auto Effective = Address->Base + uint64_t(Address->Offset);
         std::string Error;
-        if (readObjCBlockLiteral(Image, Address->Base - 16, Error)) {
-          Address->Base -= 16;
+        if (Effective >= 16 &&
+            readObjCBlockLiteral(Image, Effective - 16, Error)) {
+          Address->Base = Effective - 16;
           Address->Offset = 16;
         }
       }

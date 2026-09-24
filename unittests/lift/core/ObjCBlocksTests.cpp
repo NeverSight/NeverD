@@ -155,6 +155,50 @@ TEST(ObjCBlocks,
   EXPECT_EQ(Signature.Parameters[1].Type->Size, 4U);
 }
 
+TEST(ObjCBlocks, PageRelativeLiteralInvokeRequiresValidatedBlockIdentity) {
+  auto HintsFor = [](BlockFixture &Fixture) {
+    const auto &TRI = getTargetRegInfo(Fixture.Image.Arch);
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.Blocks.emplace_back();
+    auto &B = Low.Blocks[0];
+    B.Id = 0;
+    auto Add = [&](NdOp Opcode, NdVar Output,
+                   std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      Op.Addr = 0x1000 + B.Ops.size() * 4;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      B.Ops.push_back(Op);
+    };
+    const auto Receiver = NdVar::reg(TRI.IntParamRegs[0], 8);
+    const auto Argument = NdVar::reg(TRI.IntParamRegs[1], 8);
+    const auto Target = NdVar::reg(64, 8);
+    Add(NdOp::COPY, Receiver, {NdVar::cst(0x2000, 8)});
+    Add(NdOp::INT_ADD, Receiver, {Receiver, NdVar::cst(0x100, 8)});
+    Add(NdOp::COPY, Argument, {NdVar::cst(42, 8)});
+    Add(NdOp::COPY, Target, {NdVar::cst(0x2000, 8)});
+    Add(NdOp::INT_ADD, Target, {Target, NdVar::cst(0x110, 8)});
+    Add(NdOp::LOAD, Target, {Target});
+    Add(NdOp::INDIR_CALL, NdVar::reg(TRI.IntReturnReg, 8), {Target});
+    Add(NdOp::RETURN, {}, {NdVar::reg(TRI.IntReturnReg, 8)});
+    return buildObjCBlockCallHints(Fixture.Image, Low);
+  };
+
+  BlockFixture Valid;
+  auto Hints = HintsFor(Valid);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.begin()->second.Signature.Origin,
+            SourceFunctionTypeHint::OriginKind::BlockRuntime);
+  EXPECT_EQ(Hints.begin()->second.Signature.ReturnType->Size, 4U);
+
+  BlockFixture Invalid;
+  Invalid.Image.ImportPtrSlots.clear();
+  EXPECT_TRUE(HintsFor(Invalid).empty());
+}
+
 TEST(ObjCBlocks, ChainedPointerSlotsRequireIndividualResolution) {
   for (va_t Missing : {BlockFixture::Literal + 16, BlockFixture::Literal + 24,
                        BlockFixture::Descriptor + 16}) {
