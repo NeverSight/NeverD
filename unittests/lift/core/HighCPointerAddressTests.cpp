@@ -4202,3 +4202,43 @@ TEST(HighCPointerAddresses, DebugServiceInterruptKeepsItsRegisterInputs) {
   EXPECT_NE(HighC.find("arg3"), std::string::npos) << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses,
+     GotoTargetKeepsItsLabelWhenItsFramePointerWriteIsFolded) {
+  // RtlUnicodeStringCat: a cold block after the return only sets EBP to a
+  // status and jumps to the join, whose PHI takes that constant.  Dropping
+  // the folded RBP write must not drop the label the loop's goto names.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x33, 0xed,       // xor ebp, ebp
+                                     0x48, 0x8b, 0x01, // loop: mov rax, [rcx]
+                                     0x48, 0x85, 0xc0, // test rax, rax
+                                     0x74, 0x12,       // je cold
+                                     0x48, 0x3b, 0xc2, // cmp rax, rdx
+                                     0x74, 0x07,       // je join
+                                     0x48, 0x8b, 0xc8, // mov rcx, rax
+                                     0xff, 0xc5,       // inc ebp
+                                     0xeb, 0xec,       // jmp loop
+                                     0x8b, 0xc5,       // join: mov eax, ebp
+                                     0xc3,             // ret
+                                     0xcc, 0xcc, 0xcc, //
+                                     0xbd, 0x0d, 0x00,
+                                     0x00, 0xc0,  // cold: mov ebp, 0C000000Dh
+                                     0xeb, 0xf3}; // jmp join
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  const size_t Status = HighC.find("0xC000000D");
+  ASSERT_NE(Status, std::string::npos) << HighC;
+  // When the cold block keeps its label, the label comes first: a goto to it
+  // must still run the status copy before reaching the join.
+  if (const size_t Label = HighC.find("L_14000101C:");
+      Label != std::string::npos)
+    EXPECT_LT(Label, Status) << HighC;
+  std::smatch Goto;
+  for (auto It = HighC.cbegin(); std::regex_search(
+           It, HighC.cend(), Goto, std::regex(R"(goto (L_\w+);)"));
+       It = Goto.suffix().first)
+    EXPECT_NE(HighC.find(Goto[1].str() + ":"), std::string::npos)
+        << Goto[1] << " has no label\n"
+        << HighC;
+  expectCompilesForMsvc(HighC);
+}

@@ -764,17 +764,12 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   inferTypes(Func);
   auto TPost = std::chrono::steady_clock::now();
 
-  Func.Body.erase(std::remove_if(Func.Body.begin(), Func.Body.end(),
-                                 [](const HighStmt &S) {
-                                   if (S.Kind != StmtKind::Assign || !S.Dst ||
-                                       !S.Val)
-                                     return false;
-                                   if (S.Dst->Kind == ExprKind::Var &&
-                                       S.Val->Kind == ExprKind::Var)
-                                     return S.Dst->Var == S.Val->Var;
-                                   return false;
-                                 }),
-                  Func.Body.end());
+  eraseKeepingBranchEntries(
+      Func.Body, gotoTargets(Func.Body), [](const HighStmt &S) {
+        return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+               S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
+               S.Dst->Var == S.Val->Var;
+      });
 
   stripPrologueEpilogue(Func);
   ensureTrailingReturn(Func, Med);

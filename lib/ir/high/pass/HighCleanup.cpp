@@ -107,8 +107,25 @@ void coalesceBranchEntryStatements(HighFunc &Func) {
 // Prologue / epilogue stripping
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+/// True when dropping an assignment of \p E loses no effect: no call, store,
+/// ordered access or segmented memory access (the rule DCE applies).
+bool valueIsDisposable(const ExprPtr &E) {
+  if (!E)
+    return true;
+  if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
+      E->MemoryOrdering != NdMemoryOrdering::None ||
+      E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  return std::all_of(E->Operands.begin(), E->Operands.end(), valueIsDisposable);
+}
+
+} // namespace
+
 void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
+  const std::set<va_t> BranchTargets = gotoTargets(Func.Body);
 
   auto IsSPReg = [&TRI](const MedVar &V) -> bool {
     return V.Kind == MedVar::Reg && TRI.isStackPointer(V.RegOff);
@@ -152,9 +169,7 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
            TRI.isCallPreserved(V.RegOff, V.Size, Convention);
   };
 
-  Func.Body.erase(
-      std::remove_if(Func.Body.begin(), Func.Body.end(), IsCalleeSaveStore),
-      Func.Body.end());
+  eraseKeepingBranchEntries(Func.Body, BranchTargets, IsCalleeSaveStore);
 
   std::set<std::string> UsedFrameVars;
   std::function<void(const ExprPtr &)> CollectVarRefs;
@@ -201,8 +216,11 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
           S.Val->Operands[1]->Kind == ExprKind::Const) {
         return UsedFrameVars.count(S.Dst->str()) == 0;
       }
+      // RBP is also a general callee-saved register (MSVC x64): keep a
+      // definition whose value still has an effect, such as a call.
       if (S.Dst->Kind == ExprKind::Var && IsFPReg(S.Dst->Var))
-        return UsedFrameVars.count(S.Dst->str()) == 0;
+        return UsedFrameVars.count(S.Dst->str()) == 0 &&
+               valueIsDisposable(S.Val);
       // A temporary derived from SP may address live local storage, including
       // block captures. Its origin does not make its definition a prologue.
       // The following liveness-based DCE removes unused address computations.
@@ -220,18 +238,15 @@ void MedToHighConverter::stripPrologueEpilogue(HighFunc &Func) {
     if (IsLRReg(S.Dst->Var))
       return true;
     if (IsFPReg(S.Dst->Var))
-      return UsedFrameVars.count(S.Dst->str()) == 0;
+      return UsedFrameVars.count(S.Dst->str()) == 0 && valueIsDisposable(S.Val);
     return false;
   };
 
   std::function<void(std::vector<HighStmt> &)> StripRecursive;
   StripRecursive = [&](std::vector<HighStmt> &Stmts) {
-    Stmts.erase(std::remove_if(Stmts.begin(), Stmts.end(),
-                               [&](const HighStmt &S) {
-                                 return IsPrologueEpilogue(S) ||
-                                        IsEpilogueLoad(S);
-                               }),
-                Stmts.end());
+    eraseKeepingBranchEntries(Stmts, BranchTargets, [&](const HighStmt &S) {
+      return IsPrologueEpilogue(S) || IsEpilogueLoad(S);
+    });
     for (auto &S : Stmts) {
       StripRecursive(S.Body);
       StripRecursive(S.ElseBody);
