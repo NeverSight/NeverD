@@ -516,6 +516,11 @@ resolved read-only relocation to one unique data symbol with exactly one
 matching export. Direct `0x01` or other symbolic references, unexported private
 contexts, weak or mismatched providers, malformed records, and ambiguous
 symbols remain unsupported.
+When the exact pair passes that proof but its addresses travel through local
+variables, source projection may bind the defining constants. Each local must
+have one direct constant definition, be definitely assigned before use, and be
+read only as an argument in typed native calls carrying that same proven pair.
+Any reassignment or other use leaves the address unbound.
 
 An explicit pointer-typed load or store supplies the same eight-byte cell extent
 as an integer machine carrier. It uses the existing named writable-storage and
