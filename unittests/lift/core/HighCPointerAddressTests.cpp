@@ -3757,6 +3757,34 @@ TEST(HighCPointerAddresses, SlotStoredOnTwoPathsKeepsItsDeclaration) {
   EXPECT_NE(HighC.find("five(arg0, "), std::string::npos) << HighC;
 }
 
+TEST(HighCPointerAddresses, EntryLoopHeaderKeepsLoopCarriedValue) {
+  // PopDirectedDripsFlushDeviceQueue: the first instruction is the loop
+  // header, so the entry block has a back-edge predecessor.  The loop must
+  // still advance RCX to [rcx+8] and test it on every iteration, including
+  // the first.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x85, 0xc9, // loop: test rcx, rcx
+                                     0x74, 0x15,       // je ret
+                                     0x48, 0x8b, 0x01, // mov rax, [rcx]
+                                     0x48, 0x3b, 0xc1, // cmp rax, rcx
+                                     0x75, 0x06,       // jne fail
+                                     0x48, 0x8b, 0x49, 0x08, // mov rcx, [rcx+8]
+                                     0xeb, 0xed,             // jmp loop
+                                     0xb9, 0x03, 0x00, 0x00,
+                                     0x00,       // fail: mov ecx, 3
+                                     0xcd, 0x29, // int 29h
+                                     0xc3};      // ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__fastfail(3)"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("(uint64_t)(8)"), std::string::npos) << HighC;
+  // The null test comes before the first load.
+  EXPECT_LT(HighC.find("== 0"), HighC.find("(*(int64_t *)")) << HighC;
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(LLVMC.find("+ 8"), std::string::npos) << LLVMC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.

@@ -153,6 +153,50 @@ namespace {
 /// The lifter writes each auxiliary result through the input of a COPY that
 /// follows the intrinsic in the same instruction; sub-register normalization
 /// of the value just copied may sit between those COPYs.
+/// A function whose first instruction is also a loop header enters a block
+/// that has predecessors.  SSA can place no PHI for the machine-entry edge,
+/// so the loop-carried value would be lost (`for (p = arg; ...; p = p->next)`
+/// kept rereading `arg`).  Give the function an empty entry block that falls
+/// into the header; every other block moves up one index, so the header
+/// still directly follows the entry.
+void splitEntryLoopHeader(MedFunc &Func) {
+  if (Func.Blocks.empty())
+    return;
+  bool EntryHasPred = false;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (int Succ : Block.Succs)
+      EntryHasPred |= Succ == 0;
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      EntryHasPred |= Edge.BlockId == 0;
+  }
+  if (!EntryHasPred)
+    return;
+  auto Shift = [](int &Id) {
+    if (Id >= 0)
+      ++Id;
+  };
+  for (MedBlock &Block : Func.Blocks) {
+    Shift(Block.Id);
+    for (int &Succ : Block.Succs)
+      Shift(Succ);
+    for (int &Pred : Block.Preds)
+      Shift(Pred);
+    for (ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      Shift(Edge.BlockId);
+    for (ExceptionalEdge &Edge : Block.ExceptionalPreds)
+      Shift(Edge.BlockId);
+  }
+  Func.Blocks.front().Preds.push_back(0);
+  MedBlock Entry;
+  Entry.Id = 0;
+  // The entry holds no instruction; an address would alias the header's
+  // label and block lookups.
+  Entry.StartAddr = InvalidVA;
+  Entry.EndAddr = InvalidVA;
+  Entry.Succs.push_back(1);
+  Func.Blocks.insert(Func.Blocks.begin(), std::move(Entry));
+}
+
 void markIntrinsicAuxResults(MedFunc &Func) {
   for (MedBlock &Block : Func.Blocks)
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
@@ -525,6 +569,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     debugVerifyMedFunc(Func, "neutralizeStackProbeCalls");
 
     markIntrinsicAuxResults(Func);
+    splitEntryLoopHeader(Func);
+    debugVerifyMedFunc(Func, "splitEntryLoopHeader");
     buildSsa(Func);
     debugVerifyMedFunc(Func, "buildSsa");
 
