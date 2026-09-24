@@ -4336,3 +4336,27 @@ TEST(HighCPointerAddresses, ConditionalJumpIntoAnotherFunctionIsATailCall) {
   EXPECT_EQ(HighC.find("goto"), std::string::npos) << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses, FastFailEndsTheColdPath) {
+  // CmpDrainDelayDerefContext: a cold path ends with `int 29h; int3`, and
+  // the bytes after it belong to another function.  __fastfail never
+  // returns, so that code must not be pulled into this function.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x85, 0xc9,                   // test ecx, ecx
+      0x75, 0x03,                   // jne cold
+      0x31, 0xc0,                   // xor eax, eax
+      0xc3,                         // ret
+      0xb9, 0x03, 0x00, 0x00, 0x00, // cold: mov ecx, 3
+      0xcd, 0x29,                   // int 29h
+      0xcc,                         // int3
+      0x85, 0xd2,                   // (other function) test edx, edx
+      0x75, 0x05,                   // jne other_ret
+      0xb8, 0x77, 0x00, 0x00, 0x00, // mov eax, 77h
+      0xc3};                        // other_ret: ret
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__fastfail(3)"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("0x77"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("119"), std::string::npos) << HighC;
+}

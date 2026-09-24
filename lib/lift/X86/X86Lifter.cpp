@@ -902,6 +902,11 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_IRETD:
   case X86_INS_IRETQ:
     return true;
+  case X86_INS_INT:
+    // Windows `int 0x29` is __fastfail: it never returns (MedNoReturn agrees).
+    return I->detail && I->detail->x86.op_count >= 1 &&
+           I->detail->x86.operands[0].type == X86_OP_IMM &&
+           (I->detail->x86.operands[0].imm & 0xFF) == 0x29;
   default:
     return false;
   }
