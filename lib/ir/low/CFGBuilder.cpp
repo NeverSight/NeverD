@@ -4365,6 +4365,148 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   CandidateProposalStageActive = false;
   CandidateProposalStageMutationAddrs.clear();
 
+  // A reachable unresolved transfer can re-enter an indexed LOAD after its
+  // local mask, invalidating the selector-domain proof even for a single
+  // dispatch.  Check after the proposal round stabilizes, when all sibling
+  // table edges are present; a temporary missing sibling edge is not an
+  // opaque re-entry.  If the round never stabilizes, withdraw relative
+  // tables instead.  A direct call into this function can also enter after
+  // the mask; an external direct call and a non-resumable trap cannot.
+  auto CanReenterAtUnknownAddress = [](const InsnRecord &Rec) {
+    return Rec.IsResumableTerminator ||
+           (Rec.IsIndirect && !Rec.IsRet && Rec.JumpTableTargets.empty()) ||
+           (Rec.IsBranch && !Rec.IsIndirect && !Rec.IsCall &&
+            Rec.BranchTarget == InvalidVA);
+  };
+  if (Img.Arch == Arch::X64 && !ResolvedTableInfo.empty()) {
+    size_t ClosureBudget = limits::kMaxJumpTableMaskFixedPointEvidenceWork;
+    auto DebitClosure = [&](size_t Work) {
+      if (Work > ClosureBudget) {
+        ClosureBudget = 0;
+        return false;
+      }
+      ClosureBudget -= Work;
+      return true;
+    };
+    bool HasRelativeTable = false;
+    bool RevokePublishedTables =
+        !DebitClosure(ResolvedTableInfo.size());
+    if (RevokePublishedTables)
+      HasRelativeTable = true;
+    if (!RevokePublishedTables)
+      for (const auto &[Addr, Info] : ResolvedTableInfo) {
+        (void)Addr;
+        HasRelativeTable |= Info.IsRelative;
+      }
+    // An independent local bound may have been published before the proposal
+    // stage exhausted its iteration/work budget.  It still needs this final
+    // re-entry audit, which cannot certify an unstable graph.
+    if (HasRelativeTable && !ReachedFixedPoint)
+      RevokePublishedTables = true;
+    // The first scan is a cheap negative gate.  Most switch functions have no
+    // unknown target or direct call into this function and pay no graph-copy/
+    // reachability cost here.
+    bool HasUnknownTransfer = false;
+    if (HasRelativeTable) {
+      if (!DebitClosure(Insns.size()))
+        RevokePublishedTables = true;
+      else
+        for (const auto &[Addr, Rec] : Insns) {
+          (void)Addr;
+          HasUnknownTransfer = CanReenterAtUnknownAddress(Rec);
+          if (!HasUnknownTransfer && Rec.IsCall && !Rec.IsIndirect &&
+              Rec.Immediate) {
+            // The resolver flow graph models calls by their fallthrough.  A
+            // known call target in this same decoded function is another
+            // entry with potentially different selector state.
+            if (Insns.size() == std::numeric_limits<size_t>::max() ||
+                !DebitClosure(Insns.size() + 1)) {
+              RevokePublishedTables = true;
+              break;
+            }
+            HasUnknownTransfer = Insns.count(*Rec.Immediate) != 0;
+          }
+          if (HasUnknownTransfer)
+            break;
+        }
+    }
+    if (HasUnknownTransfer && !RevokePublishedTables) {
+      if (!DebitClosure(ResolvedTableInfo.size()))
+        RevokePublishedTables = true;
+      for (const auto &[Addr, Info] : ResolvedTableInfo) {
+        if (RevokePublishedTables)
+          break;
+        if (!Info.IsRelative)
+          continue;
+        // A balanced-tree lookup takes at most its node count plus one
+        // comparisons.  Reserve both it and the candidate graph query.
+        if (Insns.size() == std::numeric_limits<size_t>::max() ||
+            !DebitClosure(Insns.size() + 1)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        const auto Branch = Insns.find(Addr);
+        if (Branch == Insns.end() || Branch->second.JumpTableTargets.empty())
+          continue;
+        bool ReachabilityComplete = false;
+        const std::set<va_t> Reachable = candidateReachableInstructions(
+            Branch->second, Branch->second.JumpTableTargets,
+            PersistentCFGRoots, Info.StorageRanges, &ClosureBudget,
+            &ReachabilityComplete);
+        if (!ReachabilityComplete ||
+            Reachable.size() == std::numeric_limits<size_t>::max() ||
+            !DebitClosure(Reachable.size() + 1) ||
+            !Reachable.count(CurrentFuncEntry)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        if (Insns.size() > std::numeric_limits<size_t>::max() - 2) {
+          RevokePublishedTables = true;
+          break;
+        }
+        const size_t LookupWork = Insns.size() + 2;
+        if ((Reachable.size() != 0 &&
+             LookupWork > ClosureBudget / Reachable.size()) ||
+            !DebitClosure(Reachable.size() * LookupWork)) {
+          RevokePublishedTables = true;
+          break;
+        }
+        for (va_t ReachableAddr : Reachable) {
+          const auto Open = Insns.find(ReachableAddr);
+          if (Open != Insns.end() &&
+              CanReenterAtUnknownAddress(Open->second)) {
+            RevokePublishedTables = true;
+            break;
+          }
+          if (Open != Insns.end() && Open->second.IsCall &&
+              !Open->second.IsIndirect && Open->second.Immediate) {
+            if (!DebitClosure(Insns.size() + 1) ||
+                Insns.count(*Open->second.Immediate) != 0) {
+              RevokePublishedTables = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (HasRelativeTable && RevokePublishedTables) {
+      // The target vectors and metadata were charged when retained by the
+      // proposal stage; withdrawing them needs no new allocation.
+      bool RemovedTableEdges = false;
+      for (auto &[Addr, Rec] : Insns) {
+        (void)Addr;
+        RemovedTableEdges |= !Rec.JumpTableTargets.empty();
+        Rec.JumpTableTargets.clear();
+      }
+      ResolvedTableInfo.clear();
+      PriorStrongJumpTableProposals.clear();
+      PriorProvisionalRelativeEdges.clear();
+      CandidateFixedPointExplorationTargets.clear();
+      if (RemovedTableEdges)
+        rebuildBlocks(Func);
+    }
+  }
+
   // A proof-dependent target set may only escape after one whole round saw no
   // new decoded targets and no target-set change.  If the bounded iteration
   // budget is exhausted first, discard those provisional edges rather than

@@ -763,6 +763,7 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
     const JumpTableStorageRange *OwnPublishedRuntimeStorage,
     std::optional<ExactFiniteAbsoluteSingletonProof> *AbsoluteSingletonProof)
     const {
+  (void)OwnPublishedRuntimeStorage;
   if (IncompleteIndexDomain)
     *IncompleteIndexDomain = false;
   if (SemanticIndexDomainAmbiguous)
@@ -950,91 +951,6 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
     return matchForTargets(Queries, CandidateTargetsOverride, EvidenceBudget,
                            AnalysisComplete, QueryAnalysisComplete);
   };
-
-  // A complete runtime certificate records a producer's exact dense table
-  // range and its already published targets. Replay that producer on the
-  // current immutable graph before retaining either fact. The range supplies
-  // only the finite query ceiling; every reachable selector value must still
-  // be proved at this branch's exact index occurrence.
-  if (OwnPublishedRuntimeStorage) {
-    const uint32_t Count = OwnPublishedRuntimeStorage->PhysicalSlotCount;
-    const uint64_t PhysicalStride =
-        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
-    if (!AllowFixedPointBootstrap || !RequireProducerReachability ||
-        !CandidateProposalStageActive || !CurrentImg ||
-        CurrentImg->Arch != Arch::X64 || !Info.IsRelative ||
-        Info.RelocAbsolute || Info.PreScaledIndex || !Info.HasBaseAddr ||
-        !CandidateTargetsOverride || !ReachableInstructions ||
-        IndexOccurrences.size() != 1 || Count < limits::kMinJumpTableEntries ||
-        Count > 64 || Info.PhysicalCapacity != Count ||
-        Info.ExactBoundedRelativeRelocationSlots != Count ||
-        OwnPublishedRuntimeStorage->BaseAddr != Info.BaseAddr ||
-        OwnPublishedRuntimeStorage->EntrySize != Info.EntrySize ||
-        OwnPublishedRuntimeStorage->EntryStride != PhysicalStride ||
-        !detail::isCompleteRelativeRuntimeCertificatePayload(
-            *OwnPublishedRuntimeStorage, *CandidateTargetsOverride) ||
-        Rec.JumpTableTargets.size() != Count ||
-        CandidateTargetsOverride->size() != Count)
-      return 0;
-    if (!consumeBudgetProducts({{Count, 8}, {2, 12}}))
-      return 0;
-    if (!std::equal(Rec.JumpTableTargets.begin(),
-                    Rec.JumpTableTargets.end(),
-                    CandidateTargetsOverride->begin()))
-      return 0;
-    const std::set<va_t> &Roots = ActiveJumpTableProofRoots
-                                      ? *ActiveJumpTableProofRoots
-                                      : PersistentCFGRoots;
-    bool ReachabilityComplete = false;
-    bool ControlFlowClosed = false;
-    const std::set<va_t> FullReachable = candidateReachableInstructions(
-        Rec, *CandidateTargetsOverride, Roots, Info.StorageRanges,
-        EvidenceBudget, &ReachabilityComplete, CertifiedEdgeOverrides,
-        &ControlFlowClosed);
-    if (!ReachabilityComplete)
-      return failGraphIncomplete();
-    if (!consumeBudgetProducts(
-            {{FullReachable.size(), 1},
-             {ReachableInstructions->size(), 1},
-             {2, orderedEvidenceLookupWork(FullReachable.size())}}))
-      return 0;
-    if (!ControlFlowClosed || !FullReachable.count(CurrentFuncEntry) ||
-        !FullReachable.count(Rec.Addr) ||
-        FullReachable != *ReachableInstructions)
-      return 0;
-
-    const JumpTableValueOccurrence &Index = IndexOccurrences.front();
-    JumpTableValueQuery Present;
-    Present.Candidate = Index.Value;
-    Present.UseAddr = Index.Addr;
-    Present.UseSeq = Index.Seq;
-    Present.Relation = JumpTableValueRelation::ResolvableValue;
-    JumpTableValueQuery Finite = Present;
-    Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
-    Finite.UnsignedUpperBound = Count;
-    std::vector<bool> QueryComplete;
-    std::vector<uint64_t> FeasibleMasks;
-    const std::vector<bool> Matches = tableValuesMatchAtUses(
-        {Present, Finite}, nullptr, &QueryComplete, Rec.Addr,
-        CandidateTargetsOverride, EvidenceBudget,
-        /*LocalMatchEvidenceLimit=*/0,
-        /*CandidateBranchesSharingTargets=*/nullptr, &FeasibleMasks,
-        kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
-    if (Matches.size() != 2 || QueryComplete.size() != 2 ||
-        FeasibleMasks.size() != 2 || !QueryComplete[0] || !QueryComplete[1])
-      return failGraphIncomplete();
-    const uint64_t ExpectedMask =
-        Count == 64 ? std::numeric_limits<uint64_t>::max()
-                    : (uint64_t{1} << Count) - 1;
-    if (!Matches[0] || !Matches[1] || FeasibleMasks[1] != ExpectedMask)
-      return 0;
-    if (FeasibleCoordinates) {
-      FeasibleCoordinates->reserve(Count);
-      for (uint32_t Coordinate = 0; Coordinate < Count; ++Coordinate)
-        FeasibleCoordinates->push_back(Coordinate);
-    }
-    return Count;
-  }
 
   // A shared computed-goto dispatch may start from one literal selector and
   // acquire additional masked selectors only after that literal edge opens a
@@ -4682,8 +4598,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
       ExactConsumerGroup, CertifiedEdgeOverrides,
       CertifiedSiblingRuntimeStorage, ExactFiniteRelativeSingletonTarget,
       ExactFiniteRelativeClosureUnknown, RetainProvisionalRelativeEdges,
-      AllowInlineZeroCapacityBoundedReplay,
-      InlineRelativeReadableCapacity, OwnPublishedRuntimeStorage,
+      AllowInlineZeroCapacityBoundedReplay, InlineRelativeReadableCapacity,
+      OwnPublishedRuntimeStorage,
       /*AbsoluteSingletonProof=*/nullptr);
 }
 

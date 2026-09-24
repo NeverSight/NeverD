@@ -432,6 +432,179 @@ jt_lfp_constbase_budget_t1:
         relative_state_growth jt_lfp_relative_state_growth, 0
         relative_state_growth jt_lfp_relative_state_poison, 1
 
+// Both dispatches have an ordinary x&3 selector proof over the same complete
+// relative object.  Case zero also has an opaque escape: the caller may pass
+// the address of either _entry_load or _loop_load in %rdx.  That path sets the
+// index to four and jumps directly to the indexed LOAD after its local mask.
+// A graph that omits this unknown reentry must not certify either table.
+        .globl  jt_lfp_relative_unknown_reentry
+        .type   jt_lfp_relative_unknown_reentry,@function
+jt_lfp_relative_unknown_reentry:
+        xorl    %ecx, %ecx
+        movl    %edi, %esi
+        andl    $3, %esi
+        leaq    jt_lfp_relative_unknown_reentry_table(%rip), %r10
+        .globl  jt_lfp_relative_unknown_reentry_entry_load
+jt_lfp_relative_unknown_reentry_entry_load:
+        movslq  (%r10,%rsi,4), %r8
+        addq    %r10, %r8
+        .globl  jt_lfp_relative_unknown_reentry_entry_branch
+jt_lfp_relative_unknown_reentry_entry_branch:
+        jmpq    *%r8
+jt_lfp_relative_unknown_reentry_loop:
+        movl    %ecx, %esi
+        andl    $3, %esi
+        .globl  jt_lfp_relative_unknown_reentry_loop_load
+jt_lfp_relative_unknown_reentry_loop_load:
+        movslq  (%r10,%rsi,4), %r8
+        addq    %r10, %r8
+        .globl  jt_lfp_relative_unknown_reentry_loop_branch
+jt_lfp_relative_unknown_reentry_loop_branch:
+        jmpq    *%r8
+        .globl  jt_lfp_relative_unknown_reentry_t0
+jt_lfp_relative_unknown_reentry_t0:
+        testq   %rdx, %rdx
+        je      jt_lfp_relative_unknown_reentry_join
+        movl    $4, %esi
+        .globl  jt_lfp_relative_unknown_reentry_opaque_jump
+jt_lfp_relative_unknown_reentry_opaque_jump:
+        jmpq    *%rdx
+        .globl  jt_lfp_relative_unknown_reentry_t1
+jt_lfp_relative_unknown_reentry_t1:
+        addl    $1, %eax
+        jmp     jt_lfp_relative_unknown_reentry_join
+        .globl  jt_lfp_relative_unknown_reentry_t2
+jt_lfp_relative_unknown_reentry_t2:
+        addl    $2, %eax
+        jmp     jt_lfp_relative_unknown_reentry_join
+        .globl  jt_lfp_relative_unknown_reentry_t3
+jt_lfp_relative_unknown_reentry_t3:
+        addl    $3, %eax
+jt_lfp_relative_unknown_reentry_join:
+        incl    %ecx
+        cmpl    $5, %ecx
+        jne     jt_lfp_relative_unknown_reentry_loop
+        retq
+        .size   jt_lfp_relative_unknown_reentry, .-jt_lfp_relative_unknown_reentry
+
+// A single locally masked dispatch has the same unknown-reentry hazard even
+// without a same-table sibling or a complete-runtime self certificate.
+        .globl  jt_lfp_relative_single_unknown_reentry
+        .type   jt_lfp_relative_single_unknown_reentry,@function
+jt_lfp_relative_single_unknown_reentry:
+        movl    %edi, %esi
+        andl    $3, %esi
+        leaq    jt_lfp_relative_single_unknown_reentry_table(%rip), %r10
+        .globl  jt_lfp_relative_single_unknown_reentry_load
+jt_lfp_relative_single_unknown_reentry_load:
+        movslq  (%r10,%rsi,4), %r8
+        addq    %r10, %r8
+        .globl  jt_lfp_relative_single_unknown_reentry_branch
+jt_lfp_relative_single_unknown_reentry_branch:
+        jmpq    *%r8
+jt_lfp_relative_single_unknown_reentry_t0:
+        testq   %rdx, %rdx
+        je      jt_lfp_relative_single_unknown_reentry_end
+        movl    $4, %esi
+        .globl  jt_lfp_relative_single_unknown_reentry_opaque_jump
+jt_lfp_relative_single_unknown_reentry_opaque_jump:
+        jmpq    *%rdx
+jt_lfp_relative_single_unknown_reentry_t1:
+        movl    $1, %eax
+        retq
+jt_lfp_relative_single_unknown_reentry_t2:
+        movl    $2, %eax
+        retq
+jt_lfp_relative_single_unknown_reentry_t3:
+        movl    $3, %eax
+jt_lfp_relative_single_unknown_reentry_end:
+        retq
+        .size   jt_lfp_relative_single_unknown_reentry, .-jt_lfp_relative_single_unknown_reentry
+
+// A direct call to the indexed LOAD in this function bypasses the local mask.
+// Case zero sets the selector to four, outside the four-slot relative object.
+// The call target is known, but its entry state invalidates the table proof.
+        .globl  jt_lfp_relative_direct_call_reentry
+        .type   jt_lfp_relative_direct_call_reentry,@function
+jt_lfp_relative_direct_call_reentry:
+        movl    %edi, %esi
+        andl    $3, %esi
+        leaq    jt_lfp_relative_direct_call_reentry_table(%rip), %r10
+        .globl  jt_lfp_relative_direct_call_reentry_load
+jt_lfp_relative_direct_call_reentry_load:
+.Lrelative_direct_call_reentry_load:
+        movslq  (%r10,%rsi,4), %r8
+        addq    %r10, %r8
+        .globl  jt_lfp_relative_direct_call_reentry_branch
+jt_lfp_relative_direct_call_reentry_branch:
+        jmpq    *%r8
+jt_lfp_relative_direct_call_reentry_t0:
+        movl    $4, %esi
+        .globl  jt_lfp_relative_direct_call_reentry_call
+jt_lfp_relative_direct_call_reentry_call:
+        callq   .Lrelative_direct_call_reentry_load
+        retq
+jt_lfp_relative_direct_call_reentry_t1:
+        movl    $1, %eax
+        retq
+jt_lfp_relative_direct_call_reentry_t2:
+        movl    $2, %eax
+        retq
+jt_lfp_relative_direct_call_reentry_t3:
+        movl    $3, %eax
+        retq
+        .size   jt_lfp_relative_direct_call_reentry, .-jt_lfp_relative_direct_call_reentry
+
+// This five-slot relative table lives inline in .text, so its entries have no
+// relocations.  Case zero directly calls the indexed LOAD with selector five,
+// bypassing the modulo proof despite the known call target.
+        .globl  jt_lfp_inline_relative_direct_call_reentry
+        .type   jt_lfp_inline_relative_direct_call_reentry,@function
+jt_lfp_inline_relative_direct_call_reentry:
+        movl    %edi, %eax
+        xorl    %edx, %edx
+        movl    $5, %ecx
+        divl    %ecx
+        leaq    .Linline_relative_direct_call_reentry_table(%rip), %rax
+        .globl  jt_lfp_inline_relative_direct_call_reentry_load
+jt_lfp_inline_relative_direct_call_reentry_load:
+.Linline_relative_direct_call_reentry_load:
+        movslq  (%rax,%rdx,4), %rcx
+        addq    %rax, %rcx
+        .globl  jt_lfp_inline_relative_direct_call_reentry_branch
+jt_lfp_inline_relative_direct_call_reentry_branch:
+        jmpq    *%rcx
+jt_lfp_inline_relative_direct_call_reentry_t0:
+        movl    $5, %edx
+        .globl  jt_lfp_inline_relative_direct_call_reentry_call
+jt_lfp_inline_relative_direct_call_reentry_call:
+        callq   .Linline_relative_direct_call_reentry_load
+        retq
+jt_lfp_inline_relative_direct_call_reentry_t1:
+        movl    $1, %eax
+        retq
+jt_lfp_inline_relative_direct_call_reentry_t2:
+        movl    $2, %eax
+        retq
+jt_lfp_inline_relative_direct_call_reentry_t3:
+        movl    $3, %eax
+        retq
+jt_lfp_inline_relative_direct_call_reentry_t4:
+        movl    $4, %eax
+        retq
+        .size   jt_lfp_inline_relative_direct_call_reentry, .-jt_lfp_inline_relative_direct_call_reentry
+        .p2align 2
+        .globl  jt_lfp_inline_relative_direct_call_reentry_table
+        .type   jt_lfp_inline_relative_direct_call_reentry_table,@object
+jt_lfp_inline_relative_direct_call_reentry_table:
+.Linline_relative_direct_call_reentry_table:
+        .long   jt_lfp_inline_relative_direct_call_reentry_t0-jt_lfp_inline_relative_direct_call_reentry_table
+        .long   jt_lfp_inline_relative_direct_call_reentry_t1-jt_lfp_inline_relative_direct_call_reentry_table
+        .long   jt_lfp_inline_relative_direct_call_reentry_t2-jt_lfp_inline_relative_direct_call_reentry_table
+        .long   jt_lfp_inline_relative_direct_call_reentry_t3-jt_lfp_inline_relative_direct_call_reentry_table
+        .long   jt_lfp_inline_relative_direct_call_reentry_t4-jt_lfp_inline_relative_direct_call_reentry_table
+        .size   jt_lfp_inline_relative_direct_call_reentry_table, .-jt_lfp_inline_relative_direct_call_reentry_table
+
         .section .data.rel.ro.jt_lfp_self_callback,"aw",@progbits
         .p2align 3
         .globl  jt_lfp_sized_self_callback_table
@@ -541,5 +714,38 @@ jt_lfp_constbase_budget_table:
 
         relative_state_growth_table jt_lfp_relative_state_growth
         relative_state_growth_table jt_lfp_relative_state_poison
+
+        .section .rodata.jt_lfp_relative_unknown_reentry,"a",@progbits
+        .p2align 2
+        .globl  jt_lfp_relative_unknown_reentry_table
+        .type   jt_lfp_relative_unknown_reentry_table,@object
+jt_lfp_relative_unknown_reentry_table:
+        .long   jt_lfp_relative_unknown_reentry_t0-jt_lfp_relative_unknown_reentry_table
+        .long   jt_lfp_relative_unknown_reentry_t1-jt_lfp_relative_unknown_reentry_table
+        .long   jt_lfp_relative_unknown_reentry_t2-jt_lfp_relative_unknown_reentry_table
+        .long   jt_lfp_relative_unknown_reentry_t3-jt_lfp_relative_unknown_reentry_table
+        .size   jt_lfp_relative_unknown_reentry_table, .-jt_lfp_relative_unknown_reentry_table
+
+        .section .rodata.jt_lfp_relative_single_unknown_reentry,"a",@progbits
+        .p2align 2
+        .globl  jt_lfp_relative_single_unknown_reentry_table
+        .type   jt_lfp_relative_single_unknown_reentry_table,@object
+jt_lfp_relative_single_unknown_reentry_table:
+        .long   jt_lfp_relative_single_unknown_reentry_t0-jt_lfp_relative_single_unknown_reentry_table
+        .long   jt_lfp_relative_single_unknown_reentry_t1-jt_lfp_relative_single_unknown_reentry_table
+        .long   jt_lfp_relative_single_unknown_reentry_t2-jt_lfp_relative_single_unknown_reentry_table
+        .long   jt_lfp_relative_single_unknown_reentry_t3-jt_lfp_relative_single_unknown_reentry_table
+        .size   jt_lfp_relative_single_unknown_reentry_table, .-jt_lfp_relative_single_unknown_reentry_table
+
+        .section .rodata.jt_lfp_relative_direct_call_reentry,"a",@progbits
+        .p2align 2
+        .globl  jt_lfp_relative_direct_call_reentry_table
+        .type   jt_lfp_relative_direct_call_reentry_table,@object
+jt_lfp_relative_direct_call_reentry_table:
+        .long   jt_lfp_relative_direct_call_reentry_t0-jt_lfp_relative_direct_call_reentry_table
+        .long   jt_lfp_relative_direct_call_reentry_t1-jt_lfp_relative_direct_call_reentry_table
+        .long   jt_lfp_relative_direct_call_reentry_t2-jt_lfp_relative_direct_call_reentry_table
+        .long   jt_lfp_relative_direct_call_reentry_t3-jt_lfp_relative_direct_call_reentry_table
+        .size   jt_lfp_relative_direct_call_reentry_table, .-jt_lfp_relative_direct_call_reentry_table
 
         .section .note.GNU-stack,"",@progbits

@@ -744,6 +744,200 @@ TEST_F(JumpTableProposalLFP,
   EXPECT_FALSE(Failed.HasPendingGrowth);
 }
 
+TEST_F(JumpTableProposalLFP,
+       DenseRelativeSelfReplayRejectsOpaqueOutOfRangeReentry) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_table");
+  const neverd::Symbol *Entry =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_entry_branch");
+  const neverd::Symbol *Loop =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_loop_branch");
+  const neverd::Symbol *EntryLoad =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_entry_load");
+  const neverd::Symbol *LoopLoad =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_loop_load");
+  const neverd::Symbol *Opaque =
+      Image.findSymbol("jt_lfp_relative_unknown_reentry_opaque_jump");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Entry, nullptr);
+  ASSERT_NE(Loop, nullptr);
+  ASSERT_NE(EntryLoad, nullptr);
+  ASSERT_NE(LoopLoad, nullptr);
+  ASSERT_NE(Opaque, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4);
+  EXPECT_LT(EntryLoad->Addr, Entry->Addr);
+  EXPECT_LT(LoopLoad->Addr, Loop->Addr);
+  EXPECT_GT(Opaque->Addr, Entry->Addr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  EXPECT_TRUE(Builder.recordedCompleteRuntimeStorageCertificateForTesting())
+      << "the negative must exercise dense same-table self replay";
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "an opaque jump can re-enter either indexed LOAD after its mask "
+         "with selector four, outside the four-slot object";
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Entry->Addr), 1u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Loop->Addr), 1u);
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+}
+
+TEST_F(JumpTableProposalLFP,
+       SingleRelativeMaskRejectsOpaqueOutOfRangeReentry) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_single_unknown_reentry");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_single_unknown_reentry_table");
+  const neverd::Symbol *Load =
+      Image.findSymbol("jt_lfp_relative_single_unknown_reentry_load");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_lfp_relative_single_unknown_reentry_branch");
+  const neverd::Symbol *Opaque =
+      Image.findSymbol("jt_lfp_relative_single_unknown_reentry_opaque_jump");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Load, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Opaque, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4);
+  EXPECT_LT(Load->Addr, Branch->Addr);
+  EXPECT_GT(Opaque->Addr, Branch->Addr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "an unresolved jump can reach the indexed LOAD after its local mask";
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+}
+
+TEST_F(JumpTableProposalLFP,
+       SingleRelativeMaskRejectsDirectCallOutOfRangeReentry) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_direct_call_reentry");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_relative_direct_call_reentry_table");
+  const neverd::Symbol *Load =
+      Image.findSymbol("jt_lfp_relative_direct_call_reentry_load");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_lfp_relative_direct_call_reentry_branch");
+  const neverd::Symbol *Call =
+      Image.findSymbol("jt_lfp_relative_direct_call_reentry_call");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Load, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Table->Size, 4u * sizeof(uint32_t));
+  ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            4);
+  EXPECT_LT(Load->Addr, Branch->Addr);
+  EXPECT_GT(Call->Addr, Branch->Addr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "a direct call to the indexed LOAD bypasses its local mask with "
+         "selector four";
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+}
+
+TEST_F(JumpTableProposalLFP,
+       InlineRelativeModuloRejectsDirectCallOutOfRangeReentry) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_inline_relative_direct_call_reentry");
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_lfp_inline_relative_direct_call_reentry_table");
+  const neverd::Symbol *Load =
+      Image.findSymbol("jt_lfp_inline_relative_direct_call_reentry_load");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_lfp_inline_relative_direct_call_reentry_branch");
+  const neverd::Symbol *Call =
+      Image.findSymbol("jt_lfp_inline_relative_direct_call_reentry_call");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Load, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Table->Size, 5u * sizeof(uint32_t));
+  EXPECT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                          Image.RelCodeRelocSlots.end(),
+                          [&](neverd::va_t Slot) {
+                            return Slot >= Table->Addr &&
+                                   Slot < Table->Addr + Table->Size;
+                          }),
+            0);
+  EXPECT_LT(Load->Addr, Branch->Addr);
+  EXPECT_GT(Call->Addr, Branch->Addr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "a same-function direct call bypasses the modulo proof with index "
+         "five outside the inline five-slot table";
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Branch->Addr), 1u);
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+}
+
 TEST_F(JumpTableProposalLFP, OpenConsumerCannotBorrowSiblingRuntimeDomain) {
   auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
