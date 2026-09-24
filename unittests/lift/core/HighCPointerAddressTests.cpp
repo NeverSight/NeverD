@@ -36152,7 +36152,13 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   EXPECT_EQ(Source.find("L_seh_try_end_0_1:"), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("goto L_bb_5;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("L_bb_5:"), std::string::npos) << Source;
+  const auto JoinAt = Source.find("L_bb_5:");
+  const auto ExceptCloseAt = Source.find("\n    }\n", ExceptAt);
+  ASSERT_NE(ExceptCloseAt, std::string::npos) << Source;
+  ASSERT_NE(JoinAt, std::string::npos) << Source;
+  // The handler rejoins the normal path after the whole SEH statement.
+  // Jumping from __except into its __try is invalid Windows C.
+  EXPECT_LT(ExceptCloseAt, JoinAt) << Source;
 
   auto OptImg = loadBinary(Path, FuncOpts);
   ASSERT_TRUE(static_cast<bool>(OptImg)) << llvm::toString(OptImg.takeError());

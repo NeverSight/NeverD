@@ -8543,16 +8543,25 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
               ((HandlerBr && HandlerBr->getSuccessor(0) == FirstCont &&
                 !edgePrintsPhiCopy(Handler, FirstCont)) ||
                llvm::isa<llvm::ReturnInst>(HandlerTerm));
+    bool HasNormalExit = false;
     if (Ok) {
       for (const llvm::BasicBlock *InvokeBB : InvokeBlocks) {
         const auto *Invoke =
             llvm::cast<llvm::InvokeInst>(InvokeBB->getTerminator());
-        if (Invoke->getNormalDest() != FirstCont) {
+        if (Invoke->getNormalDest() == FirstCont) {
+          HasNormalExit = true;
+          continue;
+        }
+        // One recovered clause can protect several disjoint ranges.  Earlier
+        // invokes continue within the try; only the last exit needs to reach
+        // the shared normal/handler continuation after the whole statement.
+        if (!TryRegion.count(Invoke->getNormalDest())) {
           Ok = false;
           break;
         }
       }
     }
+    Ok = Ok && HasNormalExit;
     if (Ok) {
       for (const llvm::BasicBlock *BB : AfterWrap) {
         bool Any = false;
