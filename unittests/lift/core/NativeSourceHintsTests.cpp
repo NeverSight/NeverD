@@ -538,7 +538,7 @@ TEST(NativeSourceHints, CGRectClassInitializerUsesFourFPLanesAndSwiftSelf) {
                                                                  0x1000));
 }
 
-TEST(NativeSourceHints, FailableCoderClassInitializerUsesSwiftSelf) {
+TEST(NativeSourceHints, CoderClassInitializerUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
   Image.Arch = Arch::AArch64;
@@ -567,6 +567,17 @@ TEST(NativeSourceHints, FailableCoderClassInitializerUsesSwiftSelf) {
   std::string Error;
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
+  auto Nonfailable = Image;
+  Nonfailable.Symbols[0].Name =
+      "_$s4main16NonfailableCoderC5coderACSo7NSCoderC_tcfc";
+  const auto Plain = sdk::swiftMangledCoderClassInitializerSourceABI(
+      Nonfailable, 0x1000);
+  ASSERT_TRUE(Plain);
+  EXPECT_EQ(Plain->ReturnLocation.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Plain->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Plain->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*Plain, Error)) << Error;
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name =
       "_$s4main13TestCoderViewC5coderACSgSo7NSCoderC_tcfC";
@@ -578,7 +589,7 @@ TEST(NativeSourceHints, FailableCoderClassInitializerUsesSwiftSelf) {
                                                                 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name =
-      "_$s4main13TestCoderViewC5coderACSo7NSCoderC_tcfc";
+      "_$s4main13TestCoderViewC5coderSSSo7NSCoderC_tcfc";
   EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
                                                                 0x1000));
   Wrong = Image;

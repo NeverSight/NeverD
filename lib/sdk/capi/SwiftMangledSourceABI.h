@@ -858,8 +858,9 @@ swiftMangledCGRectClassInitializerSourceABI(const BinaryImage &Image,
              : std::nullopt;
 }
 
-// Swift's failable class init(coder:) takes NSCoder in x0 and the allocated
-// receiver in swiftself, then returns an optional class pointer in x0.
+// Swift class init(coder:) takes NSCoder in x0 and the allocated receiver in
+// swiftself, then returns a class pointer (optionally null when failable) in
+// x0.
 // Match the entire initializing-constructor type so ObjC thunks, allocating
 // entries, and specializations cannot borrow this entry contract.
 inline std::optional<SourceFunctionTypeHint>
@@ -932,20 +933,25 @@ swiftMangledCoderClassInitializerSourceABI(const BinaryImage &Image,
       !Shape(Argument.Children[0].Children[0], "Class", 2) ||
       !Named(Argument.Children[0].Children[0].Children[0], "Module", "__C") ||
       !Named(Argument.Children[0].Children[0].Children[1], "Identifier",
-             "NSCoder") ||
-      !Shape(Result, "BoundGenericEnum", 2) ||
-      !Shape(Result.Children[0], "Type", 1) ||
-      !Shape(Result.Children[0].Children[0], "Enum", 2) ||
-      !Named(Result.Children[0].Children[0].Children[0], "Module", "Swift") ||
-      !Named(Result.Children[0].Children[0].Children[1], "Identifier",
-             "Optional") ||
-      !Shape(Result.Children[1], "TypeList", 1) ||
-      !Shape(Result.Children[1].Children[0], "Type", 1) ||
-      !Shape(Result.Children[1].Children[0].Children[0], "Class", 2))
+             "NSCoder"))
     return std::nullopt;
-  const auto &ResultClass = Result.Children[1].Children[0].Children[0];
-  if (!Named(ResultClass.Children[0], "Module", *Class.Children[0].Text) ||
-      !Named(ResultClass.Children[1], "Identifier", *Class.Children[1].Text))
+  const Node *ResultClass = nullptr;
+  if (Shape(Result, "Class", 2))
+    ResultClass = &Result;
+  else if (Shape(Result, "BoundGenericEnum", 2) &&
+           Shape(Result.Children[0], "Type", 1) &&
+           Shape(Result.Children[0].Children[0], "Enum", 2) &&
+           Named(Result.Children[0].Children[0].Children[0], "Module",
+                 "Swift") &&
+           Named(Result.Children[0].Children[0].Children[1], "Identifier",
+                 "Optional") &&
+           Shape(Result.Children[1], "TypeList", 1) &&
+           Shape(Result.Children[1].Children[0], "Type", 1) &&
+           Shape(Result.Children[1].Children[0].Children[0], "Class", 2))
+    ResultClass = &Result.Children[1].Children[0].Children[0];
+  if (!ResultClass ||
+      !Named(ResultClass->Children[0], "Module", *Class.Children[0].Text) ||
+      !Named(ResultClass->Children[1], "Identifier", *Class.Children[1].Text))
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
