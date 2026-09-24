@@ -623,8 +623,11 @@ TEST(NativeBooleanResultProof, TerminalBrkPathHasNoBooleanObservation) {
   EXPECT_FALSE(F.prove());
 }
 
-TEST(NativeBooleanResultProof, NarrowFlagImmediateBeforeBooleanCall) {
-  for (NdOp Opcode : {NdOp::INT_CARRY, NdOp::INT_SOVF, NdOp::INT_SBOR}) {
+TEST(NativeBooleanResultProof, NarrowPredicateImmediateBeforeBooleanCall) {
+  for (NdOp Opcode : {NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL, NdOp::INT_LESS,
+                      NdOp::INT_SLESS, NdOp::INT_LESSEQUAL,
+                      NdOp::INT_SLESSEQUAL, NdOp::INT_CARRY,
+                      NdOp::INT_SOVF, NdOp::INT_SBOR}) {
     SCOPED_TRACE(int(Opcode));
     Fixture F;
     const auto Flag = operation(

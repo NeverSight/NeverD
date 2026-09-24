@@ -384,12 +384,18 @@ struct Transfer {
                                        : Op.Inputs[I].Size != Op.Output.Size)
               return false;
         } else {
-          // AArch64 CMN/CMP can lift carry, overflow and borrow flags from a
-          // full-width register and a narrower encoded immediate. The
-          // transfer never calculates a flag value: identical inputs stay
-          // identical, and a differing input taints the whole flag byte.
-          const bool NarrowFlagImmediate =
-              (Op.Opcode == NdOp::INT_CARRY ||
+          // AArch64 CMN/CMP can lift comparisons and arithmetic flags from a
+          // full-width register and a narrower encoded immediate. This
+          // transfer never calculates a predicate: identical inputs stay
+          // identical, and a differing input taints the whole result byte.
+          const bool NarrowPredicateImmediate =
+              (Op.Opcode == NdOp::INT_EQUAL ||
+               Op.Opcode == NdOp::INT_NOTEQUAL ||
+               Op.Opcode == NdOp::INT_LESS ||
+               Op.Opcode == NdOp::INT_SLESS ||
+               Op.Opcode == NdOp::INT_LESSEQUAL ||
+               Op.Opcode == NdOp::INT_SLESSEQUAL ||
+               Op.Opcode == NdOp::INT_CARRY ||
                Op.Opcode == NdOp::INT_SOVF ||
                Op.Opcode == NdOp::INT_SBOR) &&
               ((Op.Inputs[0].isConst() &&
@@ -400,7 +406,7 @@ struct Transfer {
                 Op.Inputs[0].Size <= 8));
           if (Op.Output.Size != 1 ||
               (Op.Inputs[0].Size != Op.Inputs[1].Size &&
-               !NarrowFlagImmediate))
+               !NarrowPredicateImmediate))
             return false;
         }
       } else if (Op.Opcode == NdOp::SELECT) {
