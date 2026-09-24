@@ -4313,3 +4313,26 @@ TEST(HighCPointerAddresses, PartlyOverlappingSlotsShareOneStorage) {
       << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses, ConditionalJumpIntoAnotherFunctionIsATailCall) {
+  // KiCallUserMode: `jne KiKernelSysretExit` continues in another function.
+  // That edge is a tail call, not a goto to a label this function lacks.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001010;
+  std::vector<uint8_t> Code = {0x85, 0xc9, // test ecx, ecx
+                               0x0f, 0x85, 0x08, 0x00, 0x00,
+                               0x00,       // jne G
+                               0x33, 0xc0, // xor eax, eax
+                               0xc3};      // ret
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+                           0xc3});
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "sysret_exit";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_NE(HighC.find("sysret_exit("), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("goto"), std::string::npos) << HighC;
+  expectCompilesForMsvc(HighC);
+}

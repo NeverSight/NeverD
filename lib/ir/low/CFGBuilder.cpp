@@ -1064,8 +1064,22 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
       if (Cur != CurrentFuncEntry && KnownFuncEntries &&
-          KnownFuncEntries->count(Cur) != 0)
+          KnownFuncEntries->count(Cur) != 0) {
+        // Reaching it is a tail call, whether by a conditional branch or by
+        // falling through.  Model it at that address as `call target; ret`,
+        // like an unconditional jump there; otherwise the edge has no block.
+        if (!Insns.count(Cur)) {
+          InsnRecord Stub;
+          Stub.Addr = Cur;
+          Stub.Size = 1;
+          Stub.Mode = effectiveInstructionMode(Img.Arch, Img.Mode);
+          Stub.BranchTarget = Cur;
+          rewriteAsTailCall(Stub);
+          Insns[Cur] = std::move(Stub);
+          ExploredAddrs.insert(Cur);
+        }
         break;
+      }
       // An actual graph extension invalidates every generation-local replay
       // and positive ambiguity shadow.  Pending exact query identities remain
       // fail-closed carry, but only a fresh query on this immutable graph may
