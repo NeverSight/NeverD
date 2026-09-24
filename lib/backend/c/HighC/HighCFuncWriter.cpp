@@ -748,6 +748,36 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   for (auto &[Disp, Slot] : FrameSlots)
     if (!Slot.Type)
       Slot.Type = NdType::makeInt(4);
+
+  // A slot wholly inside another is part of that object, not a separate
+  // variable: a byte stored at -0x82 changes what a later read of the eight
+  // bytes at -0x84 sees.  Access it through the outermost enclosing slot.
+  SharedFrameStorage.clear();
+  for (auto &[Disp, Slot] : FrameSlots) {
+    if (!Slot.Type->Size)
+      continue;
+    const int64_t End = Disp + static_cast<int64_t>(Slot.Type->Size);
+    const std::pair<const int64_t, NamedFrameSlot> *Outer = nullptr;
+    for (const auto &Entry : FrameSlots) {
+      if (Entry.first >= Disp)
+        break;
+      if (Entry.first + static_cast<int64_t>(Entry.second.Type->Size) >= End) {
+        Outer = &Entry;
+        break;
+      }
+    }
+    if (!Outer)
+      continue;
+    Slot.Outer = Outer->second.Name;
+    Slot.Interior = "(*(" + memoryTypeName(Slot.Type) + " *)((char *)&" +
+                    Slot.Outer + " + " + std::to_string(Disp - Outer->first) +
+                    "))";
+    SharedFrameStorage.insert(Slot.Interior);
+    SharedFrameStorage.insert(Slot.Outer);
+  }
+  for (auto &[Disp, Slot] : FrameSlots)
+    if (SharedFrameStorage.count(Slot.Name))
+      Slot.AddressTaken = true;
 }
 
 size_t HighCWriter::emittedParamCount(const HighFunc &Func) const {
@@ -1104,7 +1134,13 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Walk(*E, false);
     });
   });
+  // An enclosing slot is printed whenever one of its interior accesses is.
+  for (const auto &[Disp, Slot] : FrameSlots)
+    if (!Slot.Interior.empty() && PrintedAddrSlots.count(Slot.Interior))
+      PrintedAddrSlots.insert(Slot.Outer);
   for (const auto &[Disp, Slot] : FrameSlots) {
+    if (!Slot.Interior.empty())
+      continue;
     if (ParamNames.count(Slot.Name))
       continue;
     if (!PrintedAddrSlots.count(Slot.Name))

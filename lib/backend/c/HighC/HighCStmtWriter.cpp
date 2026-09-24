@@ -1089,7 +1089,8 @@ void HighCWriter::collectCopyForward(const HighFunc &Func) {
                                 const HighExpr &Val) {
         if (!Slot)
           return;
-        if (Nested || SeenLoad.count(*Slot) || SlotStores[*Slot] != 1 ||
+        if (Nested || SharedFrameStorage.count(*Slot) ||
+            SeenLoad.count(*Slot) || SlotStores[*Slot] != 1 ||
             !isParamCopy(Val) || !Val.Type ||
             Val.Type->Kind != NdTypeKind::Int) {
           CopyForward.erase(*Slot);

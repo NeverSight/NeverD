@@ -222,9 +222,16 @@ public:
     TypeRef Type;
     bool AddressTaken = false;
     bool UsedAsMemory = false;
+    /// For a slot that lies wholly inside another: the enclosing slot's name
+    /// and this slot's access through it, `(*(T *)((char *)&outer + k))`.
+    std::string Outer;
+    std::string Interior;
   };
   std::map<int64_t, NamedFrameSlot> FrameSlots;
   std::map<std::string, int64_t> FrameAliases;
+  /// Slot names and interior accesses that share storage with another slot;
+  /// copy forwarding must not treat them as independent variables.
+  std::set<std::string> SharedFrameStorage;
   std::map<std::string, std::string> CopyForward;
   std::map<int, std::string> ParamDisplayNames;
   bool InEHClauseBody = false;

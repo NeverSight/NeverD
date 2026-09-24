@@ -363,6 +363,8 @@ HighCWriter::namedFrameSlot(const HighExpr &E) const {
   const auto It = FrameSlots.find(*Disp);
   if (It == FrameSlots.end())
     return std::nullopt;
+  if (!It->second.Interior.empty())
+    return It->second.Interior;
   return It->second.Name;
 }
 
