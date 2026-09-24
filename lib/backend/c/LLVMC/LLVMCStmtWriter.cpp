@@ -1147,8 +1147,11 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
         return;
       }
     }
-    auto LHS = logicalShiftLhs(Inst, valueStr(Inst.getOperand(0)));
-    auto RHS = valueStr(Inst.getOperand(1));
+    const bool IsOr = Inst.getOpcode() == llvm::Instruction::Or;
+    auto LHS = logicalShiftLhs(Inst, IsOr ? orOperandStr(Inst.getOperand(0))
+                                        : valueStr(Inst.getOperand(0)));
+    auto RHS = IsOr ? orOperandStr(Inst.getOperand(1))
+                    : valueStr(Inst.getOperand(1));
     emitIndent(Indent);
     OS << Name << " = " << binopStr(Inst.getOpcode(), LHS, RHS, Inst.getType())
        << ";\n";

@@ -72,6 +72,21 @@ std::string syntheticFrameSlotName(int64_t Disp) {
                                 : static_cast<uint64_t>(Disp);
   return (Disp < 0 ? "var_m" : "var_") + llvm::utohexstr(Mag);
 }
+
+bool orCanPeelAsAdd(const llvm::Value *Base, const llvm::ConstantInt *Bits) {
+  if (Bits->isZero())
+    return true;
+  const auto *And = llvm::dyn_cast<llvm::BinaryOperator>(Base);
+  if (!And || And->getOpcode() != llvm::Instruction::And)
+    return false;
+  const auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(0));
+  if (!Mask)
+    Mask = llvm::dyn_cast<llvm::ConstantInt>(And->getOperand(1));
+  // When the AND clears every OR bit, OR and ADD have the same value.
+  // The mask itself is printed in C, so this proof does not depend on an
+  // LLVM alloca alignment that the generated C declaration may not retain.
+  return Mask && (Mask->getValue() & Bits->getValue()).isZero();
+}
 } // namespace
 
 const llvm::Value *LLVMCWriter::peelIntegerView(const llvm::Value *V) const {
@@ -1142,16 +1157,18 @@ LLVMCWriter::peelPointerOffset(const llvm::Value *V) const {
     if (const auto *BO = llvm::dyn_cast<llvm::BinaryOperator>(V)) {
       if (BO->getOpcode() == llvm::Instruction::Add ||
           BO->getOpcode() == llvm::Instruction::Or) {
-        const llvm::Value *LHS = BO->getOperand(0);
-        const llvm::Value *RHS = BO->getOperand(1);
-        if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(RHS)) {
-          Off += CI->getZExtValue();
-          V = LHS;
-          continue;
+        const llvm::Value *Base = BO->getOperand(0);
+        const auto *CI =
+            llvm::dyn_cast<llvm::ConstantInt>(BO->getOperand(1));
+        if (!CI) {
+          CI = llvm::dyn_cast<llvm::ConstantInt>(Base);
+          Base = BO->getOperand(1);
         }
-        if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(LHS)) {
+        if (CI && CI->getValue().getActiveBits() <= 64 &&
+            (BO->getOpcode() == llvm::Instruction::Add ||
+             orCanPeelAsAdd(Base, CI))) {
           Off += CI->getZExtValue();
-          V = RHS;
+          V = Base;
           continue;
         }
       }
@@ -2177,6 +2194,21 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   }
 }
 
+std::string LLVMCWriter::orOperandStr(const llvm::Value *Operand) {
+  if (!Operand)
+    return {};
+  std::string Text = valueStr(Operand);
+  if (!Operand->getType()->isIntegerTy())
+    return Text;
+  const auto Peeled = peelPointerOffset(Operand);
+  if (!Peeled || !Peeled->first->getType()->isPointerTy())
+    return Text;
+  // The pointer-offset printer may return `&frame` for an integer IR value.
+  // A C bitwise OR needs that address in its integer representation.
+  return "(" + typeToCLLVM(Operand->getType()) + ")(uintptr_t)(" + Text +
+         ")";
+}
+
 std::string LLVMCWriter::castStr(unsigned /*Opcode*/, const std::string &Src,
                                  llvm::Type * /*SrcTy*/, llvm::Type *DstTy) {
   std::string Dst = typeToCLLVM(DstTy);
@@ -2316,8 +2348,12 @@ std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
   if (const auto *CI = llvm::dyn_cast<llvm::ICmpInst>(&Inst))
     return "(" + icmpInlineText(*CI) + ")";
   if (Inst.isBinaryOp()) {
-    std::string LHS = logicalShiftLhs(Inst, valueStr(Inst.getOperand(0)));
-    const std::string RHS = valueStr(Inst.getOperand(1));
+    const bool IsOr = Inst.getOpcode() == llvm::Instruction::Or;
+    std::string LHS = logicalShiftLhs(
+        Inst, IsOr ? orOperandStr(Inst.getOperand(0))
+                   : valueStr(Inst.getOperand(0)));
+    const std::string RHS = IsOr ? orOperandStr(Inst.getOperand(1))
+                                 : valueStr(Inst.getOperand(1));
     return "(" + binopStr(Inst.getOpcode(), LHS, RHS, Inst.getType()) + ")";
   }
   if (const auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&Inst)) {

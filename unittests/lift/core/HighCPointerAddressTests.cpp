@@ -33343,6 +33343,127 @@ TEST(LLVMCPointerAddresses, SyntheticFrameSlotFoldsAddSubChain) {
   EXPECT_EQ(Source.find("- 8"), std::string::npos) << Source;
 }
 
+TEST(LLVMCPointerAddresses, SyntheticFrameOrNeedsKnownZeroBits) {
+  auto Emit = [](bool BitwiseOr) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("llvm-c-frame-or-vs-add", Context);
+    llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
+    llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+    llvm::Type *Ptr = llvm::PointerType::getUnqual(I8);
+    llvm::FunctionType *FnTy = llvm::FunctionType::get(Ptr, false);
+    llvm::Function *Function = llvm::Function::Create(
+        FnTy, llvm::GlobalValue::ExternalLinkage,
+        BitwiseOr ? "frame_or" : "frame_add", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::Value *Frame = Builder.CreateAlloca(
+        llvm::ArrayType::get(I8, 64), nullptr, "frame");
+    llvm::Value *Base = Builder.CreatePtrToInt(Frame, I64);
+    llvm::Value *Eight = llvm::ConstantInt::get(I64, 8);
+    llvm::Value *Address = BitwiseOr ? Builder.CreateOr(Base, Eight)
+                                     : Builder.CreateAdd(Base, Eight);
+    Builder.CreateRet(Builder.CreateIntToPtr(Address, Ptr));
+
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.EmitIncludes = false;
+    EXPECT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr,
+                                    Function));
+    OS.flush();
+    return Source;
+  };
+
+  const std::string OrSource = Emit(true);
+  EXPECT_NE(OrSource.find(" | 8"), std::string::npos) << OrSource;
+  EXPECT_EQ(OrSource.find(" + 8"), std::string::npos) << OrSource;
+
+  const std::string AddSource = Emit(false);
+  EXPECT_NE(AddSource.find(" + 8"), std::string::npos) << AddSource;
+  EXPECT_EQ(AddSource.find(" | 8"), std::string::npos) << AddSource;
+}
+
+TEST(LLVMCPointerAddresses, RepeatedFrameOrKeepsStoreLoadAlias) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-frame-repeated-or", Context);
+  llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
+  llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
+  llvm::Type *Ptr = llvm::PointerType::getUnqual(I8);
+  llvm::FunctionType *FnTy = llvm::FunctionType::get(I8, false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnTy, llvm::GlobalValue::ExternalLinkage, "frame_or_alias", Module);
+  llvm::IRBuilder<> Builder(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  llvm::Value *Frame = Builder.CreateAlloca(
+      llvm::ArrayType::get(I8, 64), nullptr, "frame");
+  llvm::Value *Base = Builder.CreatePtrToInt(Frame, I64);
+  llvm::Value *Once =
+      Builder.CreateOr(Base, llvm::ConstantInt::get(I64, 8), "once");
+  llvm::Value *Twice =
+      Builder.CreateOr(Once, llvm::ConstantInt::get(I64, 8), "twice");
+  llvm::Value *Sentinel = Builder.CreateInBoundsGEP(
+      I8, Frame, llvm::ConstantInt::get(I64, 16));
+  Builder.CreateStore(llvm::ConstantInt::get(I8, 7), Sentinel);
+  Builder.CreateStore(llvm::ConstantInt::get(I8, 42),
+                      Builder.CreateIntToPtr(Once, Ptr));
+  Builder.CreateRet(
+      Builder.CreateLoad(I8, Builder.CreateIntToPtr(Twice, Ptr)));
+
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, nullptr,
+                                  Function));
+  OS.flush();
+  EXPECT_NE(Source.find(" | 8"), std::string::npos) << Source;
+  Source += R"(
+int main(void) {
+  return frame_or_alias() == 42 ? 0 : 1;
+}
+)";
+
+#ifdef NEVERD_TEST_CLANG
+  const std::string Compiler = NEVERD_TEST_CLANG;
+#else
+  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
+  const std::string Compiler = *FoundCompiler;
+#endif
+  llvm::SmallString<128> SourcePath, ExecutablePath, ErrorPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-frame-or", "c",
+                                                  SourcePath));
+  llvm::FileRemover RemoveSource(SourcePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-frame-or", "exe",
+                                                  ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-frame-or", "err",
+                                                  ErrorPath));
+  llvm::FileRemover RemoveError(ErrorPath);
+  std::error_code EC;
+  {
+    llvm::raw_fd_ostream SourceFile(SourcePath, EC);
+    ASSERT_FALSE(EC) << EC.message();
+    SourceFile << Source;
+  }
+  llvm::SmallVector<llvm::StringRef, 8> CompileArgs{
+      Compiler, "-std=c11", "-O0", SourcePath, "-o", ExecutablePath};
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, std::nullopt, ErrorPath.str()};
+  std::string Error;
+  const int CompileStatus = llvm::sys::ExecuteAndWait(
+      Compiler, CompileArgs, std::nullopt, Redirects, 30, 0, &Error);
+  auto ErrorBuffer = llvm::MemoryBuffer::getFile(ErrorPath);
+  ASSERT_EQ(CompileStatus, 0)
+      << Error << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : "") << "\n"
+      << Source;
+  llvm::SmallVector<llvm::StringRef, 1> RunArgs{ExecutablePath};
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, RunArgs, std::nullopt,
+                                      {}, 30, 0, &Error),
+            0)
+      << Error << "\n"
+      << Source;
+}
+
 TEST(LLVMCPointerAddresses, FramePtrBoxInteriorLoadPrintsArrow) {
   auto Aux = NdType::makeNamedRecord("CAuxData", 64);
   Aux->FieldDisplayNames = {"m_type"};
