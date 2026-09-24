@@ -336,3 +336,5 @@ ARM64 Objective-C 原始碼復原支援由呼叫端證明的最多八個 Swift �
 將快取的 Dictionary 或 Array 橋接為 NSDictionary 或 NSArray 的 Swift 延遲載入 Objective-C 類別 getter，使用保留副作用的 once 契約。投影要求精確的 `vgZTo` 類別方法與 Foundation 橋接繫結、唯一且僅以 x2 為 context 的 `swift_once`、相符的 `_Wz`/`_WZ` 符號，以及忽略 context 且沒有一般直接呼叫者的初始化器。只有該 context 會改為 null；橋接、autorelease、儲存讀取、控制流程與相依性檢查皆保留。
 
 HighC 使用相容 Clang 的結果指標內建函式表示有號加減法溢位旗標，並以原運算元位寬的暫存值接收未使用的結果。即使中間區域變數為無號型別，也會依原位元型態將輸入重新解讀為有號值。因此，已復原 Swift once 初始化器的生成 C 保留邊界行為，並可由 Apple Clang 編譯。
+
+Swift 值見證呼叫識別現在可沿經驗證的不可變映像中繼資料位址（包括 ADRP 頁基址加偏移）追蹤到精確的見證表載入。字面量中繼資料位址前方必須有已映射且由檔案支援的完整 8 位元組槽位；數值恰好相同、映像外位址或截斷槽位均不合格。這僅證明間接呼叫的 ABI；方法能否復原仍取決於重定位與原始碼相依閉包檢查。

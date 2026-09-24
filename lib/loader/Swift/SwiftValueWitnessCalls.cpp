@@ -22,12 +22,15 @@ struct Step {
 };
 
 struct Root {
-  enum class Kind { Entry, Definition, CallResult } TheKind = Kind::Entry;
+  enum class Kind { Entry, Definition, CallResult, Constant } TheKind =
+      Kind::Entry;
   size_t Block = 0;
   size_t Operation = 0;
   VnodeSpace Space = VnodeSpace::REG;
   uint64_t Offset = 0;
   uint16_t Bytes = 0;
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+  uint64_t AddressOwnerVA = InvalidVA;
   bool operator==(const Root &) const = default;
 };
 
@@ -61,6 +64,27 @@ struct Path {
   }
 };
 
+std::optional<va_t> literalMetadataAddress(const Path &Metadata) {
+  if (Metadata.Base.TheKind != Root::Kind::Constant)
+    return std::nullopt;
+  va_t Address = Metadata.Base.Offset;
+  for (const auto &Part : Metadata.Steps) {
+    if (Part.TheKind != Step::Kind::Add)
+      return std::nullopt;
+    if (Part.Offset < 0) {
+      const uint64_t Magnitude = uint64_t{0} - uint64_t(Part.Offset);
+      if (Address < Magnitude)
+        return std::nullopt;
+      Address -= Magnitude;
+    } else {
+      if (Address > UINT64_MAX - uint64_t(Part.Offset))
+        return std::nullopt;
+      Address += uint64_t(Part.Offset);
+    }
+  }
+  return Address;
+}
+
 using Variable = std::tuple<VnodeSpace, uint64_t, uint16_t>;
 Variable variable(const NdVar &Value) {
   return {Value.Space, Value.Offset, Value.Size};
@@ -74,6 +98,7 @@ bool overlaps(const NdVar &Left, const NdVar &Right) {
 }
 
 class Tracer {
+  const BinaryImage &Image;
   const LowFunc &Function;
   const TargetRegInfo &TRI;
   std::map<int, size_t> Blocks;
@@ -89,7 +114,23 @@ class Tracer {
       Exhausted |= !RemainingBudget;
       return std::nullopt;
     }
-    if (Value.Size != 8 || Value.isConst() || Value.isRam() ||
+    if (Value.Size != 8)
+      return std::nullopt;
+    if (Value.isConst()) {
+      // A numeric immediate cannot stand in for a Swift metadata pointer.
+      // Keep only loader-authenticated image addresses; the final metadata
+      // slot is checked after the complete ADRP/add path is reconstructed.
+      if ((Value.Provenance != ConstantAddressProvenance::Address &&
+           Value.Provenance != ConstantAddressProvenance::DataAddress &&
+           Value.Provenance != ConstantAddressProvenance::AddressFragment) ||
+          !Image.isDataAddress(Value.Offset))
+        return std::nullopt;
+      return Path{Root{Root::Kind::Constant, 0, 0, VnodeSpace::CONST,
+                       Value.Offset, 8, Value.Provenance,
+                       Value.AddressOwnerVA},
+                  {}};
+    }
+    if (Value.isRam() ||
         (Value.Space != VnodeSpace::REG && Value.Space != VnodeSpace::TEMP))
       return std::nullopt;
     --Budget;
@@ -138,8 +179,7 @@ class Tracer {
             Operation.Opcode == NdOp::INT_ADD &&
             Operation.Inputs[Base].isConst())
           std::swap(Base, Constant);
-        if (!Operation.Inputs[Constant].isConst() ||
-            Operation.Inputs[Base].isConst())
+        if (!Operation.Inputs[Constant].isConst())
           return std::nullopt;
         auto Result = Input(Base);
         if (!Result)
@@ -193,8 +233,9 @@ class Tracer {
   }
 
 public:
-  Tracer(const LowFunc &Function, const TargetRegInfo &TRI)
-      : Function(Function), TRI(TRI) {
+  Tracer(const BinaryImage &Image, const LowFunc &Function,
+         const TargetRegInfo &TRI)
+      : Image(Image), Function(Function), TRI(TRI) {
     size_t EntryBlocks = 0;
     size_t Edges = 0;
     std::map<int, std::set<int>> Predecessors, Successors;
@@ -295,7 +336,7 @@ buildSwiftValueWitnessCallHints(const BinaryImage &Image,
       }
   }
 
-  Tracer Trace(Function, getTargetRegInfo(Image.Arch));
+  Tracer Trace(Image, Function, getTargetRegInfo(Image.Arch));
   if (!Trace.valid())
     return Result;
   for (size_t BlockIndex = 0; BlockIndex < Function.Blocks.size();
@@ -318,6 +359,16 @@ buildSwiftValueWitnessCallHints(const BinaryImage &Image,
                      NdVar::reg(Witness.Metadata.RegisterOffset, uint16_t(8)));
         if (!Type)
           continue;
+        if (Type->Base.TheKind == Root::Kind::Constant) {
+          // The witness table pointer lives immediately before metadata.
+          // Verify that exact image-backed slot, not merely the page base.
+          const auto Address = literalMetadataAddress(*Type);
+          if (!Address || *Address < 8 || *Address % 8 ||
+              !Image.isDataAddress(*Address) ||
+              !Image.isDataAddress(*Address - 8) ||
+              !Image.readVA(*Address - 8, 8))
+            continue;
+        }
         Path Expected = *Type;
         if (!Expected.add(-8) || !Expected.load(8) ||
             !Expected.add(int64_t(Witness.Slot) * 8) || !Expected.load(8) ||

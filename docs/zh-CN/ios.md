@@ -350,3 +350,5 @@ ARM64 Objective-C 源码恢复支持由调用方证明的最多八个 Swift 字�
 将缓存的 Dictionary 或 Array 桥接为 NSDictionary 或 NSArray 的 Swift 懒加载 Objective-C 类 getter，使用保留副作用的 once 契约。投影要求精确的 `vgZTo` 类方法和 Foundation 桥接绑定、唯一且仅以 x2 为 context 的 `swift_once`、匹配的 `_Wz`/`_WZ` 符号，以及忽略 context 且没有普通直接调用者的初始化器。仅将该 context 改为 null；桥接、autorelease、存储读取、控制流和依赖检查均保留。
 
 HighC 使用兼容 Clang 的结果指针内建函数表示有符号加减法溢出标志，并用原操作数位宽的临时值接收未使用的结果。即使中间局部变量是无符号类型，也会按原位型将输入重新解释为有符号值。因此，已恢复 Swift once 初始化器的生成 C 保留边界行为，并可通过 Apple Clang 编译。
+
+Swift 值见证调用识别现在可沿经验证的不可变映像元数据地址（包括 ADRP 页基址加偏移）追踪到准确的见证表加载。字面量元数据地址前方必须有映射且由文件支持的完整 8 字节槽；数值碰巧相同、映像外地址或截断槽均不合格。这仅证明间接调用的 ABI；方法能否恢复仍取决于重定位和源码依赖闭包检查。
