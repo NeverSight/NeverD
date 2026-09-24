@@ -78,11 +78,13 @@ slice into their consuming operation.
 
 HighIR may also discard undefined upper bytes from a reconstructed integer only
 when a following constant mask cannot observe any bit above the complete low
-operand. A direct `CONCAT`, a bounded integer cast, or a zero-offset `SUBBYTES`
-view may expose that low operand. The replacement is an explicit zero
-extension and the mask remains in place. The upper expression must be bounded
-and discardable; calls, loads, ordered accesses, traps, malformed widths, and
-masks that reach an upper bit retain the original unknown value.
+operand. A direct `CONCAT`, a bounded integer cast, a zero-offset `SUBBYTES`
+view, or a same-width zero-bit logical right shift may expose that low operand.
+The low operand may fill the masked result width. The replacement is an
+explicit zero extension and the mask remains in place. The upper expression
+must be bounded and discardable; calls, loads, ordered accesses, traps,
+malformed widths, and masks that reach an upper bit retain the original
+unknown value.
 
 An internal void summary for a native cleanup forwarder does not assert an
 original void prototype. It contributes no result carrier. Calls must match
