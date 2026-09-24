@@ -100,6 +100,9 @@ static constexpr SwiftRuntimeDeclaration SwiftRuntimeDeclarations[] = {
     {"swift_getAssociatedTypeWitnessRelative", "(pz)zpppp", false, true},
     {"swift_getBorrowTypeMetadata", "(pz)zp", false, true},
     {"swift_getEnumCaseMultiPayload", "upp", false, false},
+    // Swift RuntimeFunctions.def (9215272a) declares these generic
+    // single-payload enum helpers with SwiftCC and callback pointers.
+    {"swift_getEnumTagSinglePayloadGeneric", "upupp", false, true},
     {"swift_getErrorValue", "vppp", false, false},
     {"swift_getExistentialMetatypeMetadata", "pp", false, false},
     {"swift_getForeignTypeMetadata", "(pz)zp", false, true},
@@ -176,6 +179,7 @@ static constexpr SwiftRuntimeDeclaration SwiftRuntimeDeclarations[] = {
     {"swift_slowAlloc", "pzz", false, false},
     {"swift_slowDealloc", "vpzz", false, false},
     {"swift_storeEnumTagMultiPayload", "vppu", false, false},
+    {"swift_storeEnumTagSinglePayloadGeneric", "vpuupp", false, true},
     {"swift_tryRetain", "pp", false, false},
     {"swift_unexpectedError", "vp", true, true},
     {"swift_unknownObjectRelease", "vp", false, false},

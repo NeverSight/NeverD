@@ -1497,6 +1497,53 @@ TEST(ObjCCallHints, SwiftAllocErrorKeepsObjectAndPayloadResults) {
   EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
 }
 
+TEST(ObjCCallHints, SwiftGenericSinglePayloadEnumKeepsCallbackABI) {
+  constexpr llvm::StringLiteral Provider =
+      "/usr/lib/swift/libswiftCore.dylib";
+  for (const char *Name : {"swift_getEnumTagSinglePayloadGeneric",
+                           "swift_storeEnumTagSinglePayloadGeneric"}) {
+    const bool IsGet = llvm::StringRef(Name).starts_with("swift_get");
+    const std::string Import = std::string("_") + Name;
+    auto Image = runtimeImage(Import);
+    Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint) << Name;
+    const auto &ABI = Hint->Signature;
+    EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    EXPECT_EQ(ABI.ReturnType->Kind,
+              IsGet ? NdTypeKind::Int : NdTypeKind::Void);
+    EXPECT_EQ(ABI.ReturnLocation.Kind,
+              IsGet ? SourceABICarrierKind::IntegerRegister
+                    : SourceABICarrierKind::None);
+    if (IsGet)
+      EXPECT_EQ(ABI.ReturnType->Size, 4U);
+    ASSERT_EQ(ABI.Parameters.size(), IsGet ? 4U : 5U);
+    for (size_t I = 0; I < ABI.Parameters.size(); ++I) {
+      const bool IsCase = I == 1 || (!IsGet && I == 2);
+      EXPECT_EQ(ABI.Parameters[I].Type->Kind,
+                IsCase ? NdTypeKind::Int : NdTypeKind::Ptr);
+      EXPECT_EQ(ABI.Parameters[I].Type->Size, IsCase ? 4U : 8U);
+      EXPECT_EQ(ABI.Parameters[I].Location.Kind,
+                SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+                getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+    }
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+    Image.DyldBindSlots[0x2180].Module = "/tmp/foreign.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    Image.DyldBindSlots[0x2180].Module = Provider.str();
+    Image.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Image, 0x2180));
+    auto X64 = runtimeImage(Import, Arch::X64);
+    X64.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+    const auto X64Hint = swiftRuntimeSourceCallHint(X64, 0x2180);
+    ASSERT_TRUE(X64Hint);
+    EXPECT_TRUE(validateSourceABI(X64Hint->Signature, Diagnostic))
+        << Diagnostic;
+  }
+}
+
 TEST(ObjCCallHints, SwiftOpaqueConformance2KeepsSignedDescriptorABI) {
   auto Image = runtimeImage("_swift_getOpaqueTypeConformance2");
   Image.DyldBindSlots[0x2180] = {"_swift_getOpaqueTypeConformance2", 0,
