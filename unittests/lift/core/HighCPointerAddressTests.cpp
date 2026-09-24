@@ -4360,3 +4360,35 @@ TEST(HighCPointerAddresses, FastFailEndsTheColdPath) {
   EXPECT_EQ(HighC.find("0x77"), std::string::npos) << HighC;
   EXPECT_EQ(HighC.find("119"), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, ExRaiseStatusEndsTheColdPath) {
+  // sub_14022B640: a cold path ends with `call ExRaiseStatus; int3`, and the
+  // bytes after it belong to another function.  ExRaiseStatus is
+  // DECLSPEC_NORETURN, so that code must not be pulled into this function.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Raise = 0x140001040;
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+      0x85, 0xc9,                   // test ecx, ecx
+      0x75, 0x07,                   // jne cold
+      0x31, 0xc0,                   // xor eax, eax
+      0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+      0xc3,                         // ret
+      0xb9, 0x9a, 0x00, 0x00, 0xc0, // cold: mov ecx, 0C000009Ah
+      0xe8, 0x27, 0x00, 0x00, 0x00, // call ExRaiseStatus
+      0xcc,                         // int3
+      0x85, 0xd2,                   // (other function) test edx, edx
+      0x75, 0x05,                   // jne other_ret
+      0xb8, 0x77, 0x00, 0x00, 0x00, // mov eax, 77h
+      0xc3};                        // other_ret: ret
+  Code.resize(Raise - Entry, 0xcc);
+  Code.push_back(0xc3);
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol RaiseSym = Symbol::makeFunc(Raise);
+  RaiseSym.Name = "ExRaiseStatus";
+  Img.Symbols.push_back(RaiseSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_NE(HighC.find("ExRaiseStatus("), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("119"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("0x77"), std::string::npos) << HighC;
+}
