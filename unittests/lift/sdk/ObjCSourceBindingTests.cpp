@@ -1132,6 +1132,63 @@ TEST(ObjCSourceBindings,
     }
 }
 
+TEST(ObjCSourceBindings,
+     SwiftConcreteTypeMetadataPairsFollowUniqueLocalCallArguments) {
+  SwiftTypeMetadataFixture F(Arch::AArch64);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  MedVar CacheLocal;
+  CacheLocal.Kind = MedVar::Temp;
+  CacheLocal.Id = 501;
+  CacheLocal.Size = 8;
+  MedVar ReferenceLocal = CacheLocal;
+  ReferenceLocal.Id = 502;
+  auto Assign = [&](MedVar Local, va_t Address) {
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Assign;
+    Statement.Dst = HighExpr::makeVar(Local, Pointer);
+    Statement.Val =
+        HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+    return Statement;
+  };
+  F.Function.Body.insert(F.Function.Body.begin(),
+                         Assign(CacheLocal, SwiftTypeMetadataFixture::Cache));
+  F.Function.Body.insert(
+      F.Function.Body.begin() + 1,
+      Assign(ReferenceLocal, SwiftTypeMetadataFixture::Reference));
+  auto &Arguments = F.Function.Body.back().Val->Operands;
+  Arguments[0] = HighExpr::makeVar(CacheLocal, Pointer);
+  Arguments[1] = HighExpr::makeVar(ReferenceLocal, Pointer);
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  for (size_t I = 0; I < 2; ++I) {
+    const auto &Value = Result.Function.Body[I].Val;
+    ASSERT_TRUE(Value->SourceCallHint);
+    EXPECT_EQ(Value->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+    EXPECT_TRUE(objcSourceCallBound(*Value, F.Image, {}));
+  }
+
+  F.Function.Body.insert(F.Function.Body.end(),
+                         Assign(CacheLocal, SwiftTypeMetadataFixture::Cache));
+  const auto Reassigned = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_FALSE(Reassigned.Function.Body[0].Val->SourceCallHint);
+  F.Function.Body.pop_back();
+
+  HighStmt OtherUse;
+  OtherUse.Kind = StmtKind::ExprStmt;
+  OtherUse.Val = HighExpr::makeVar(CacheLocal, Pointer);
+  F.Function.Body.push_back(OtherUse);
+  const auto Escaped = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_FALSE(Escaped.Function.Body[0].Val->SourceCallHint);
+  F.Function.Body.pop_back();
+
+  std::swap(F.Function.Body[0], F.Function.Body[2]);
+  const auto UseBeforeDefinition =
+      bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_FALSE(UseBeforeDefinition.Function.Body[2].Val->SourceCallHint);
+}
+
 TEST(ObjCSourceBindings, SwiftStdlibDescriptorRebuildsExactMetadataRecipe) {
   auto F = swiftStdlibTypeMetadataFixture();
   const auto Result = bindObjCSourceReferences(F.Function, F.Image);
