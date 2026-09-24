@@ -31,6 +31,7 @@ protected:
   static constexpr uint64_t FirstControlIRP = Driver + 0x5600;
   static constexpr uint64_t SecondControlIRP = Driver + 0x5700;
   static constexpr uint64_t FileNameBuffer = Driver + 0x5800;
+  static constexpr uint64_t ThirdControlIRP = Driver + 0x5900;
   static constexpr uint64_t CreatePC = 0x180003000;
   static constexpr uint64_t CleanupPC = 0x180003100;
   static constexpr uint64_t ClosePC = 0x180003200;
@@ -203,6 +204,12 @@ TEST_F(DriverKernelFrameworkFile,
        ManualQueueFindAndRetrieveRequestsByFileObject) {
   configure(framework::FileObjectCannotUseFsContexts, false,
             framework::QueueDispatchManual);
+  Views.emplace(ThirdControlIRP,
+                KernelFramework::RequestView{
+                    ThirdControlIRP, 0, framework::RequestMajorDeviceControl, 0,
+                    0, 0, false, 0, 0, 0});
+  expectError(Model.routeRequest(WdmDevice, ThirdControlIRP),
+              "no matching framework file object");
   const auto FirstCreate = route(CreateIRP, framework::RequestMajorCreate);
   const uint64_t FirstFile = FirstCreate.Arguments[2];
   take(invoke(api::WdfRequestComplete, {Globals, FirstCreate.Arguments[1], 0}));
@@ -362,6 +369,72 @@ TEST_F(DriverKernelFrameworkFile,
 }
 
 TEST_F(DriverKernelFrameworkFile,
+       OptionalFileClassReturnsNullForUnmatchedIoAndKeepsCreatedIdentity) {
+  configure(framework::FileObjectCannotUseFsContexts |
+                framework::FileObjectCanBeOptional,
+            false, framework::QueueDispatchManual);
+  const auto Create = route(CreateIRP, framework::RequestMajorCreate);
+  const uint64_t File = Create.Arguments[2];
+  take(invoke(api::WdfRequestComplete, {Globals, Create.Arguments[1], 0}));
+
+  EXPECT_EQ(
+      route(FirstControlIRP, framework::RequestMajorDeviceControl, 0).Status,
+      windows::StatusPending);
+  EXPECT_EQ(route(SecondControlIRP, framework::RequestMajorDeviceControl,
+                  SecondWdmFile)
+                .Status,
+            windows::StatusPending);
+  EXPECT_EQ(route(ThirdControlIRP, framework::RequestMajorDeviceControl).Status,
+            windows::StatusPending);
+
+  for (uint64_t ExpectedFile : {uint64_t{0}, uint64_t{0}, File}) {
+    put(Output, Sentinel);
+    EXPECT_EQ(take(invoke(api::WdfIoQueueRetrieveNextRequest,
+                          {Globals, FileQueue, Output})),
+              0u);
+    const uint64_t Request = get(Output);
+    EXPECT_EQ(take(invoke(api::WdfRequestGetFileObject, {Globals, Request})),
+              ExpectedFile);
+    take(invoke(api::WdfRequestComplete, {Globals, Request, 0}));
+  }
+  EXPECT_EQ(Completions.at(FirstControlIRP), 0u);
+  EXPECT_EQ(Completions.at(SecondControlIRP), 0u);
+  EXPECT_EQ(Completions.at(ThirdControlIRP), 0u);
+  route(CleanupIRP, framework::RequestMajorCleanup);
+  finish(callback());
+  route(CloseIRP, framework::RequestMajorClose);
+  finish(callback());
+}
+
+TEST_F(DriverKernelFrameworkFile,
+       OptionalFsContext2ClassStillStoresAndRetiresTheCreatedFileHandle) {
+  configure(framework::FileObjectCanUseFsContext2 |
+                framework::FileObjectCanBeOptional,
+            false, framework::QueueDispatchManual);
+  const auto Create = route(CreateIRP, framework::RequestMajorCreate);
+  const uint64_t File = Create.Arguments[2];
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), File);
+  take(invoke(api::WdfRequestComplete, {Globals, Create.Arguments[1], 0}));
+
+  EXPECT_EQ(
+      route(FirstControlIRP, framework::RequestMajorDeviceControl, 0).Status,
+      windows::StatusPending);
+  put(Output, Sentinel);
+  EXPECT_EQ(take(invoke(api::WdfIoQueueRetrieveNextRequest,
+                        {Globals, FileQueue, Output})),
+            0u);
+  const uint64_t Request = get(Output);
+  EXPECT_EQ(take(invoke(api::WdfRequestGetFileObject, {Globals, Request})), 0u);
+  take(invoke(api::WdfRequestComplete, {Globals, Request, 0}));
+
+  route(CleanupIRP, framework::RequestMajorCleanup);
+  finish(callback());
+  route(CloseIRP, framework::RequestMajorClose);
+  finish(callback());
+  EXPECT_EQ(get(WdmFile + windows::FileContext2Offset), 0u);
+}
+
+TEST_F(DriverKernelFrameworkFile,
        FailedCreateDeletesFileWithoutCleanupOrCloseCallbacks) {
   configure(framework::FileObjectCannotUseFsContexts, true);
   const auto Create = route(CreateIRP, framework::RequestMajorCreate);
@@ -445,6 +518,12 @@ TEST_F(DriverKernelFrameworkFile,
   put(FileConfig + framework::FileAutoForwardOffset,
       framework::FileAutoForwardDefault, sizeof(uint32_t));
   put(FileConfig + framework::FileClassOffset, framework::FileObjectInvalid,
+      sizeof(uint32_t));
+  expectError(invoke(api::WdfDeviceInitSetFileObjectConfig,
+                     {Globals, Init, FileConfig, 0}),
+              "unsupported framework file-object class");
+  put(FileConfig + framework::FileClassOffset,
+      framework::FileObjectNotRequired | framework::FileObjectCanBeOptional,
       sizeof(uint32_t));
   expectError(invoke(api::WdfDeviceInitSetFileObjectConfig,
                      {Globals, Init, FileConfig, 0}),

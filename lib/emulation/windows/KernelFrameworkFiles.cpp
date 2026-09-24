@@ -24,8 +24,12 @@ llvm::Error fileError(const llvm::Twine &Message) {
                                  "KMDF file object: " + Message);
 }
 
+uint32_t baseFileClass(uint32_t Class) {
+  return static_cast<uint32_t>(Class & ~FileObjectCanBeOptional);
+}
+
 std::optional<uint64_t> fileContextOffset(uint32_t Class) {
-  switch (Class) {
+  switch (baseFileClass(Class)) {
   case FileObjectCanUseFsContext:
     return windows::FileContextOffset;
   case FileObjectCanUseFsContext2:
@@ -70,18 +74,27 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
     if (*AutoForward != FileAutoForwardFalse &&
         *AutoForward != FileAutoForwardDefault)
       return fileError("forwarded file lifecycle requires a lower target");
-    if (*Class != FileObjectNotRequired &&
-        *Class != FileObjectCanUseFsContext &&
-        *Class != FileObjectCanUseFsContext2 &&
-        *Class != FileObjectCannotUseFsContexts)
+    const uint32_t FileClass = static_cast<uint32_t>(*Class);
+    const uint32_t BaseClass = baseFileClass(FileClass);
+    switch (BaseClass) {
+    case FileObjectNotRequired:
+      if (FileClass & FileObjectCanBeOptional)
+        return fileError("unsupported framework file-object class");
+      break;
+    case FileObjectCanUseFsContext:
+    case FileObjectCanUseFsContext2:
+    case FileObjectCannotUseFsContexts:
+      break;
+    default:
       return fileError("unsupported framework file-object class");
+    }
     auto Validation = attributes(A[3], AttributesUse::Device);
     if (!Validation)
       return Validation.takeError();
     if (std::holds_alternative<uint32_t>(*Validation))
       return fileError("invalid file-object attributes");
     const auto &Attrs = std::get<Attributes>(*Validation);
-    if (*Class == FileObjectNotRequired &&
+    if (BaseClass == FileObjectNotRequired &&
         (Attrs.Type || Attrs.ContextSize || Attrs.Cleanup || Attrs.Destroy))
       return fileError("file-object attributes require a file object");
     FileConfig Config;
@@ -89,7 +102,7 @@ KernelFramework::callFile(llvm::StringRef Name, Binding &B,
     Config.Create = *Create;
     Config.Close = *Close;
     Config.Cleanup = *Cleanup;
-    Config.Class = uint32_t(*Class);
+    Config.Class = FileClass;
     Config.ObjectAttributes = Attrs;
     Init->second.Files = Config;
     return Result{0};
@@ -123,12 +136,21 @@ KernelFramework::requestFileObject(uint64_t Device, uint64_t WdmFile) const {
   const auto &Config = Devices.at(Device).Files;
   if (!Config.Enabled || Config.Class == FileObjectNotRequired)
     return 0;
+  const bool Optional = Config.Class & FileObjectCanBeOptional;
   auto File = FileHandles.find(WdmFile);
-  if (!WdmFile || File == FileHandles.end())
+  if (!WdmFile || File == FileHandles.end()) {
+    if (Optional)
+      return 0;
     return fileError("request has no matching framework file object");
+  }
   auto Object = FileObjects.find(File->second);
-  if (Object == FileObjects.end() || Object->second.Device != Device)
+  if (Object == FileObjects.end())
     return fileError("request has no matching framework file object");
+  if (Object->second.Device != Device) {
+    if (Optional)
+      return 0;
+    return fileError("request has no matching framework file object");
+  }
   if (auto Offset = fileContextOffset(Config.Class)) {
     auto Stored = Memory.readInteger(WdmFile + *Offset, sizeof(uint64_t));
     if (!Stored)

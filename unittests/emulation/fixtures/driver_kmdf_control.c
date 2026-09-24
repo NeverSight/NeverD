@@ -30,7 +30,8 @@
 /// 0 finds and retrieves a forwarded request from that notification.
 /// f registers file callbacks and context lifetime; g rejects CREATE and
 /// verifies framework file deletion without CLEANUP or CLOSE callbacks.
-/// h and i store the framework file handle in FsContext and FsContext2.
+/// h and i store the framework file handle in FsContext and FsContext2; j
+/// accepts optional file identity while storing created handles in FsContext.
 /// C observes request cleanup, child destruction and retained context. X
 /// completes from a cancel callback; H
 /// delegates cancel completion to a worker while the cancel callback waits; U
@@ -169,6 +170,8 @@ _Static_assert(sizeof(WDF_FILEOBJECT_CONFIG) == 40, "file config ABI");
 _Static_assert(WdfFileObjectWdfCanUseFsContext == 2 &&
                    WdfFileObjectWdfCanUseFsContext2 == 3,
                "file context class ABI");
+_Static_assert(WdfFileObjectCanBeOptional == 0x80000000,
+               "optional file class ABI");
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtDeviceFileCreate, 8);
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileClose, 16);
 ABI_OFFSET(WDF_FILEOBJECT_CONFIG, EvtFileCleanup, 24);
@@ -263,7 +266,8 @@ static void FileCreate(WDFDEVICE Device, WDFREQUEST Request,
                  WdfFileObjectWdmGetFileObject(File) == WdmFile &&
                  FileName != NULL && FileName->Length == 0 &&
                  WdfFileObjectGetFlags(File) == WdmFile->Flags &&
-                 (TransferMode != 'h' || WdmFile->FsContext == File) &&
+                 ((TransferMode != 'h' && TransferMode != 'j') ||
+                  WdmFile->FsContext == File) &&
                  (TransferMode != 'i' || WdmFile->FsContext2 == File) &&
                  Context->Phase == 0,
              300)) {
@@ -1639,6 +1643,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   case L'g':
   case L'h':
   case L'i':
+  case L'j':
   case L'1':
   case L'2':
   case L'3':
@@ -1681,13 +1686,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
       TransferMode == 'T' || TransferMode == '8')
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit, IoInCallerContext);
   if (TransferMode == 'f' || TransferMode == 'g' || TransferMode == 'h' ||
-      TransferMode == 'i') {
+      TransferMode == 'i' || TransferMode == 'j') {
     WDF_FILEOBJECT_CONFIG_INIT(&FileConfiguration, FileCreate, FileClose,
                                FileCleanup);
     if (TransferMode == 'h')
       FileConfiguration.FileObjectClass = WdfFileObjectWdfCanUseFsContext;
     if (TransferMode == 'i')
       FileConfiguration.FileObjectClass = WdfFileObjectWdfCanUseFsContext2;
+    if (TransferMode == 'j')
+      FileConfiguration.FileObjectClass =
+          WdfFileObjectWdfCanUseFsContext | WdfFileObjectCanBeOptional;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&FileAttributes, FILE_CONTEXT);
     FileAttributes.ExecutionLevel = WdfExecutionLevelPassive;
     FileAttributes.SynchronizationScope = WdfSynchronizationScopeNone;

@@ -1064,7 +1064,7 @@ TEST(DriverKMDFControl, RejectedCreateDeletesOnlyTheFileObject) {
 }
 
 TEST(DriverKMDFControl, FileContextClassesUseTheirDeclaredWdmSlot) {
-  for (const char Mode : {'h', 'i'})
+  for (const char Mode : {'h', 'i', 'j'})
     for (const auto *Image : controlImages())
       for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
         SCOPED_TRACE(Mode);
