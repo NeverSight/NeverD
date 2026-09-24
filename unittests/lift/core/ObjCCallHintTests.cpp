@@ -5878,6 +5878,57 @@ TEST(ObjCCallHints, DispatchOnceFPreservesExactCallbackPrototypeAndExport) {
   }
 }
 
+TEST(ObjCCallHints, ReachabilityCallsPreserveCallbackAndBooleanABI) {
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/SystemConfiguration.framework/"
+      "SystemConfiguration";
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const char *Name : {"SCNetworkReachabilitySetCallback",
+                             "SCNetworkReachabilitySetDispatchQueue"}) {
+      const std::string Import = std::string("_") + Name;
+      auto Image = runtimeImage(Import, Architecture);
+      Image.DyldBindSlots[0x2180] = {Import, 0, Provider.str(), false};
+      const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+      ASSERT_TRUE(Hint) << Name;
+      EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::DarwinRuntimeCall);
+      EXPECT_EQ(Hint->TargetName, Name);
+      const auto &ABI = Hint->Signature;
+      EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::DarwinSDK);
+      ASSERT_TRUE(ABI.ReturnType);
+      EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Int);
+      EXPECT_EQ(ABI.ReturnType->Size, 1U);
+      ASSERT_EQ(ABI.Parameters.size(),
+                std::string_view(Name) == "SCNetworkReachabilitySetCallback"
+                    ? 3U
+                    : 2U);
+      for (const auto &Parameter : ABI.Parameters)
+        EXPECT_EQ(Parameter.Location.Kind,
+                  SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(ABI.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(ABI.Parameters.back().Type->Kind, NdTypeKind::Ptr);
+      if (ABI.Parameters.size() == 3) {
+        const auto Callback = ABI.Parameters[1].Type;
+        ASSERT_EQ(Callback->Kind, NdTypeKind::Ptr);
+        ASSERT_TRUE(Callback->Pointee);
+        EXPECT_EQ(Callback->Pointee->Kind, NdTypeKind::Func);
+        EXPECT_EQ(Callback->Pointee->RetType->Kind, NdTypeKind::Void);
+        ASSERT_EQ(Callback->Pointee->ParamTypes.size(), 3U);
+        EXPECT_EQ(Callback->Pointee->ParamTypes[0]->Kind, NdTypeKind::Ptr);
+        EXPECT_EQ(Callback->Pointee->ParamTypes[1]->Kind, NdTypeKind::Int);
+        EXPECT_EQ(Callback->Pointee->ParamTypes[1]->Size, 4U);
+        EXPECT_EQ(Callback->Pointee->ParamTypes[2]->Kind, NdTypeKind::Ptr);
+      }
+      std::string Diagnostic;
+      EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+      Image.DyldBindSlots[0x2180].Module = "/tmp/impostor.dylib";
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+      Image.DyldBindSlots[0x2180].Module = Provider.str();
+      Image.DyldBindSlots[0x2180].WeakImport = true;
+      EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+    }
+  }
+}
+
 TEST(ObjCCallHints,
      DispatchQueueSetSpecificPreservesDestructorPrototypeAndExport) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {

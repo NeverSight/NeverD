@@ -1207,6 +1207,14 @@ subscript as four ordinary input words (two `String.Index` bounds, then both
 the strong import and this complete ABI; the last result word remains a
 pointer, and x86-64 has no ABI declaration from this probe.
 
+The SystemConfiguration SDK declares `SCNetworkReachabilitySetCallback` and
+`SCNetworkReachabilitySetDispatchQueue` with an unsigned byte `Boolean`
+result. The former takes a reachability reference, a three-argument callback
+and a context pointer; the latter takes the reference and a dispatch queue.
+Their source bindings require the exact strong framework import and preserve
+the callback prototype even when a particular caller unregisters it with
+null arguments.
+
 The exact libswiftCore `KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTS` import takes one type-metadata pointer and never returns, as declared by Swift 6.1.2. Only its authenticated provider and ABI receive this termination contract; the original call and trap remain in the source path. In an ordinary returning ARM64 helper, this exact call may end a successorless exceptional branch, including one with an immediate trap. Every normal return still requires a complete state proof.
 
 The eight-instruction ARM64 class-accessor proof has one shared machine owner. It validates immutable instructions and the strong `objc_opt_self` import, proving that incoming arguments are unused and all eight result bytes come from that runtime call. These facts do not establish the class object’s identity or source closure. Super getters and metadata factories retain their independent class, pipeline, frame and dependency checks. Structural unwind acceptance is also shared; partial decoding and language dispatch remain unsupported.

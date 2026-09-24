@@ -83,6 +83,41 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
+  // SCNetworkReachability.h declares these two fixed C calls. Keep the
+  // callback's complete input shape even when a caller passes null: other
+  // callers can install a real callback and context through the same import.
+  if (Name == "SCNetworkReachabilitySetCallback" ||
+      Name == "SCNetworkReachabilitySetDispatchQueue") {
+    const auto Bind = Image.DyldBindSlots.find(ImportSlot);
+    if (Bind == Image.DyldBindSlots.end() ||
+        !darwinExportModuleMatches(
+            "/System/Library/Frameworks/SystemConfiguration.framework/"
+            "SystemConfiguration",
+            Bind->second.Module))
+      return std::nullopt;
+    SourceCallTypeHint Result;
+    Result.CallKind = SourceCallTypeHint::Kind::DarwinRuntimeCall;
+    Result.TargetAddress = ImportSlot;
+    Result.TargetName = Name.str();
+    auto &Signature = Result.Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
+    Signature.ReturnType = NdType::makeInt(1, false); // Boolean
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Signature.Parameters.push_back({"target", Pointer});
+    if (Name == "SCNetworkReachabilitySetCallback") {
+      const auto Callback = NdType::makePtr(NdType::makeFunc(
+          NdType::makeVoid(), {Pointer, NdType::makeInt(4, false), Pointer}));
+      Signature.Parameters.push_back({"callout", Callback});
+      Signature.Parameters.push_back({"context", Pointer});
+    } else {
+      Signature.Parameters.push_back({"queue", Pointer});
+    }
+    std::string Diagnostic;
+    if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))
+      return std::nullopt;
+    return Result;
+  }
+
   // UIKit declares these fixed source contracts. The command-line-tools SDK
   // used for DarwinSourceDeclarations.inc has no UIKit headers or binary, so
   // retain the public contracts at the same exact symbol/provider boundary as
