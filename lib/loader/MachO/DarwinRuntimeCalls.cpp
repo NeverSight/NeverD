@@ -83,10 +83,11 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
   if (!Name.consume_front("_"))
     return std::nullopt;
 
-  // SCNetworkReachability.h declares these two fixed C calls. Keep the
+  // SCNetworkReachability.h declares these fixed C calls. Keep the
   // callback's complete input shape even when a caller passes null: other
   // callers can install a real callback and context through the same import.
-  if (Name == "SCNetworkReachabilitySetCallback" ||
+  if (Name == "SCNetworkReachabilityCreateWithName" ||
+      Name == "SCNetworkReachabilitySetCallback" ||
       Name == "SCNetworkReachabilitySetDispatchQueue") {
     const auto Bind = Image.DyldBindSlots.find(ImportSlot);
     if (Bind == Image.DyldBindSlots.end() ||
@@ -101,16 +102,20 @@ darwinRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot) {
     Result.TargetName = Name.str();
     auto &Signature = Result.Signature;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::DarwinSDK;
-    Signature.ReturnType = NdType::makeInt(1, false); // Boolean
     const auto Pointer = NdType::makePtr(NdType::makeVoid());
-    Signature.Parameters.push_back({"target", Pointer});
-    if (Name == "SCNetworkReachabilitySetCallback") {
+    if (Name == "SCNetworkReachabilityCreateWithName") {
+      Signature.ReturnType = Pointer;
+      Signature.Parameters = {{"allocator", Pointer}, {"nodename", Pointer}};
+    } else if (Name == "SCNetworkReachabilitySetCallback") {
+      Signature.ReturnType = NdType::makeInt(1, false); // Boolean
+      Signature.Parameters.push_back({"target", Pointer});
       const auto Callback = NdType::makePtr(NdType::makeFunc(
           NdType::makeVoid(), {Pointer, NdType::makeInt(4, false), Pointer}));
       Signature.Parameters.push_back({"callout", Callback});
       Signature.Parameters.push_back({"context", Pointer});
     } else {
-      Signature.Parameters.push_back({"queue", Pointer});
+      Signature.ReturnType = NdType::makeInt(1, false); // Boolean
+      Signature.Parameters = {{"target", Pointer}, {"queue", Pointer}};
     }
     std::string Diagnostic;
     if (!assignDarwinFixedSourceABI(Signature, Image.Arch, Diagnostic))

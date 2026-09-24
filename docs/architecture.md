@@ -1207,7 +1207,9 @@ subscript as four ordinary input words (two `String.Index` bounds, then both
 the strong import and this complete ABI; the last result word remains a
 pointer, and x86-64 has no ABI declaration from this probe.
 
-The SystemConfiguration SDK declares `SCNetworkReachabilitySetCallback` and
+The SystemConfiguration SDK declares `SCNetworkReachabilityCreateWithName`
+with allocator and C-string inputs and a reference result. It declares
+`SCNetworkReachabilitySetCallback` and
 `SCNetworkReachabilitySetDispatchQueue` with an unsigned byte `Boolean`
 result. The former takes a reachability reference, a three-argument callback
 and a context pointer; the latter takes the reference and a dispatch queue.

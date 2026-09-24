@@ -5929,6 +5929,36 @@ TEST(ObjCCallHints, ReachabilityCallsPreserveCallbackAndBooleanABI) {
   }
 }
 
+TEST(ObjCCallHints, ReachabilityCreateWithNameKeepsAllocatorAndName) {
+  constexpr llvm::StringLiteral Name = "_SCNetworkReachabilityCreateWithName";
+  constexpr llvm::StringLiteral Provider =
+      "/System/Library/Frameworks/SystemConfiguration.framework/"
+      "SystemConfiguration";
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    auto Image = runtimeImage(Name, Architecture);
+    Image.DyldBindSlots[0x2180] = {Name.str(), 0, Provider.str(), false};
+    const auto Hint = darwinRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->TargetName, "SCNetworkReachabilityCreateWithName");
+    EXPECT_EQ(Hint->Signature.Origin,
+              SourceFunctionTypeHint::OriginKind::DarwinSDK);
+    ASSERT_TRUE(Hint->Signature.ReturnType);
+    EXPECT_EQ(Hint->Signature.ReturnType->Kind, NdTypeKind::Ptr);
+    ASSERT_EQ(Hint->Signature.Parameters.size(), 2U);
+    EXPECT_EQ(Hint->Signature.Parameters[0].Name, "allocator");
+    EXPECT_EQ(Hint->Signature.Parameters[1].Name, "nodename");
+    for (const auto &Parameter : Hint->Signature.Parameters) {
+      EXPECT_EQ(Parameter.Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Parameter.Location.Kind,
+                SourceABICarrierKind::IntegerRegister);
+    }
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(Hint->Signature, Diagnostic)) << Diagnostic;
+    Image.DyldBindSlots[0x2180].Module = "/tmp/impostor.dylib";
+    EXPECT_FALSE(darwinRuntimeSourceCallHint(Image, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints,
      DispatchQueueSetSpecificPreservesDestructorPrototypeAndExport) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
