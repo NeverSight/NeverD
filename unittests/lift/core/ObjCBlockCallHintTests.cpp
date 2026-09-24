@@ -384,6 +384,44 @@ TEST(ObjCBlockCallHints, BoundReleaseProvesUnobservedBlockReturn) {
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
+TEST(ObjCBlockCallHints, ReleaseOfOtherRegisterDoesNotConsumeBlockResult) {
+  Fixture F(Arch::AArch64);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceCallTypeHint Release;
+  Release.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
+  Release.TargetName = "objc_release";
+  Release.Signature.ReturnType = NdType::makeVoid();
+  Release.Signature.Parameters = {{"object", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Release.Signature, F.Image.Arch, Error))
+      << Error;
+  auto OtherRelease = Release;
+  OtherRelease.Signature.Parameters[0].Location.RegisterOffset = a64reg::X19;
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1010, OtherRelease},
+                                                 {0x1018, Release}};
+  auto &Ops = F.Low.Blocks[0].Ops;
+  Ops.back() = op(NdOp::CALL, {}, {NdVar::cst(0x3000, 8)}, 0x1010);
+  Ops.push_back(
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(F.R2, 8)}, 0x1014));
+  Ops.push_back(op(NdOp::CALL, {}, {NdVar::cst(0x3004, 8)}, 0x1018));
+  Ops.push_back(op(NdOp::RETURN, {}, {}, 0x101c));
+  const auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  auto WrongCalls = Calls;
+  WrongCalls.at(0x1010) = Release;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &WrongCalls).empty());
+  Ops.insert(Ops.begin() + 6,
+             op(NdOp::COPY, NdVar::tmp(1, 8),
+                {NdVar::reg(getTargetRegInfo(F.Image.Arch).FPReturnReg, 8)},
+                0x1012));
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+}
+
 TEST(ObjCBlockCallHints, BoundReleaseProvesDiscardedResultAcrossJoin) {
   Fixture F(Arch::AArch64);
   F.Low.Blocks.reserve(3);

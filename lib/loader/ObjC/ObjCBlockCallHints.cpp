@@ -109,31 +109,44 @@ bool noIndirectResultPointer(const LowOp &Op, Arch Architecture) {
          Op.Inputs[0].isReg() && Op.Inputs[0].Offset == a64reg::X8 &&
          Op.Inputs[0].Size == 8;
 }
+std::optional<uint64_t>
+boundReleaseRegister(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+                     va_t Address, Arch Architecture) {
+  if (!BoundCalls)
+    return std::nullopt;
+  const auto It = BoundCalls->find(Address);
+  if (It == BoundCalls->end())
+    return std::nullopt;
+  const auto &Hint = It->second;
+  std::string Error;
+  if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+      Hint.TargetName != "objc_release" ||
+      Hint.Signature.Architecture != Architecture ||
+      !Hint.Signature.HasExplicitABI ||
+      !validateSourceABI(Hint.Signature, Error) || !Hint.Signature.ReturnType ||
+      Hint.Signature.ReturnType->Kind != NdTypeKind::Void ||
+      Hint.Signature.Parameters.size() != 1 ||
+      !Hint.Signature.Parameters[0].Type ||
+      Hint.Signature.Parameters[0].Type->Kind != NdTypeKind::Ptr ||
+      Hint.Signature.Parameters[0].Location.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      Hint.Signature.Parameters[0].Location.ValueBytes != 8)
+    return std::nullopt;
+  return Hint.Signature.Parameters[0].Location.RegisterOffset;
+}
 bool boundReleaseCall(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
                       va_t Address, Arch Architecture,
                       const TargetRegInfo &TRI) {
-  if (!BoundCalls)
-    return false;
-  const auto It = BoundCalls->find(Address);
-  if (It == BoundCalls->end())
-    return false;
-  const auto &Hint = It->second;
-  std::string Error;
-  return Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
-         Hint.TargetName == "objc_release" &&
-         Hint.Signature.Architecture == Architecture &&
-         Hint.Signature.HasExplicitABI &&
-         validateSourceABI(Hint.Signature, Error) &&
-         Hint.Signature.ReturnType &&
-         Hint.Signature.ReturnType->Kind == NdTypeKind::Void &&
-         Hint.Signature.Parameters.size() == 1 &&
-         Hint.Signature.Parameters[0].Type &&
-         Hint.Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
-         Hint.Signature.Parameters[0].Location.Kind ==
-             SourceABICarrierKind::IntegerRegister &&
-         Hint.Signature.Parameters[0].Location.RegisterOffset ==
-             TRI.IntParamRegs[0] &&
-         Hint.Signature.Parameters[0].Location.ValueBytes == 8;
+  return boundReleaseRegister(BoundCalls, Address, Architecture) ==
+         TRI.IntParamRegs[0];
+}
+bool boundReleaseAwayFromResult(
+    const std::map<va_t, SourceCallTypeHint> *BoundCalls, va_t Address,
+    Arch Architecture, const TargetRegInfo &TRI) {
+  const auto Register = boundReleaseRegister(BoundCalls, Address, Architecture);
+  return Architecture == Arch::AArch64 && Register &&
+         TRI.IntReturnRegs.size() >= 2 && *Register != TRI.IntReturnRegs[0] &&
+         *Register != TRI.IntReturnRegs[1];
 }
 
 std::optional<unsigned>
@@ -156,6 +169,11 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
       if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL &&
           boundReleaseCall(BoundCalls, Op.Addr, Architecture, TRI))
         return 0U;
+      // This exact release reads another register. Keep both return banks
+      // live until a later overwrite proves the block result unobserved.
+      if (Op.Opcode == NdOp::CALL &&
+          boundReleaseAwayFromResult(BoundCalls, Op.Addr, Architecture, TRI))
+        continue;
       if (IntegerLive && BoundCalls) {
         const auto It = BoundCalls->find(Op.Addr);
         if (It != BoundCalls->end()) {
@@ -261,6 +279,9 @@ bool discardedResultAcrossCFG(
             return false;
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (Op.Opcode == NdOp::CALL &&
+            boundReleaseAwayFromResult(BoundCalls, Op.Addr, Image.Arch, TRI))
+          continue;
         if (Op.Opcode != NdOp::CALL || State.Integer0Live ||
             !boundReleaseCall(BoundCalls, Op.Addr, Image.Arch, TRI))
           return false;
