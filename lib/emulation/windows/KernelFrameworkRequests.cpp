@@ -16,6 +16,7 @@
 #include "WindowsKernelLayout.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace neverd::emulation {
 namespace {
@@ -903,6 +904,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
         Target->second.Parent != R->second.Device)
       return requestError("send requires the request device's local target");
     uint64_t Flags = 0;
+    std::optional<int64_t> SendTimeout;
     if (A[3]) {
       if (auto E = ValidateAccess(A[3], RequestSendOptionsSize, false))
         return E;
@@ -913,19 +915,28 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       if (*Size != RequestSendOptionsSize)
         return requestError("unsupported request send options size");
       Flags = *Options;
+      if (Flags & RequestSendTimeout) {
+        auto RawTimeout = read(A[3] + RequestSendTimeoutOffset);
+        if (!RawTimeout)
+          return RawTimeout.takeError();
+        SendTimeout = std::bit_cast<int64_t>(*RawTimeout);
+        if (*SendTimeout > 0)
+          return requestError("absolute request send timeout is unsupported");
+      }
     }
-    if (Flags != 0 && Flags != RequestSendAndForget &&
-        Flags != RequestSendSynchronous)
+    if (Flags != 0 && Flags != RequestSendTimeout &&
+        Flags != RequestSendAndForget && Flags != RequestSendSynchronous &&
+        Flags != (RequestSendTimeout | RequestSendSynchronous))
       return requestError(
           "only default asynchronous, synchronous or send-and-forget file "
-          "forwarding is modeled");
+          "forwarding with an optional relative timeout is modeled");
     if (!R->second.FileCreate || R->second.Queue ||
         R->second.Cancellation != CancelState::Unmarked ||
         !Device->second.Files.forwards(Device->second.Filter) ||
         R->second.LastSendStatus || R->second.CompletionCallbackPending)
       return requestError("send requires an unsent forwardable CREATE request");
     const bool SendAndForget = Flags == RequestSendAndForget;
-    const bool Synchronous = Flags == RequestSendSynchronous;
+    const bool Synchronous = Flags & RequestSendSynchronous;
     const bool Asynchronous = !SendAndForget && !Synchronous;
     if ((SendAndForget && R->second.File) ||
         (!SendAndForget && !R->second.File))
@@ -959,10 +970,11 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       R->second.PendingCompletionParams = CompletionParams;
       R->second.CompletionCallbackPending = true;
     }
-    auto Status = SendAndForget ? RequestsHost.ForwardFile(R->second.IRP)
-                  : Synchronous
-                      ? RequestsHost.SendFileSynchronously(R->second.IRP)
-                      : RequestsHost.SendFileAsynchronously(R->second.IRP);
+    auto Status =
+        SendAndForget ? RequestsHost.ForwardFile(R->second.IRP)
+        : Synchronous
+            ? RequestsHost.SendFileSynchronously(R->second.IRP)
+            : RequestsHost.SendFileAsynchronously(R->second.IRP, SendTimeout);
     if (!Status) {
       auto E = Status.takeError();
       if (CompletionParams) {

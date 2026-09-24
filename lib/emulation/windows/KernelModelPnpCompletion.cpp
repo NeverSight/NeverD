@@ -29,7 +29,8 @@ llvm::Error providerError(const llvm::Twine &Message) {
 
 llvm::Expected<uint64_t>
 KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
-                                ForwardingOwner Owner) {
+                                ForwardingOwner Owner,
+                                std::optional<int64_t> SendTimeout) {
   auto *Request = requestForIRP(IRP);
   const auto *Provider = pnpDeviceForPDO(Device);
   if (!Request || Request->Completed || !isProviderDevice(Device) ||
@@ -69,8 +70,17 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
           ProviderCompletions.count(IRP))
         return providerError(
             "delayed file response requires one asynchronous CREATE send");
-      auto Deadline = Scheduler.computeDeadline(
-          -int64_t(Request->FileBusCompletion->Delay100ns));
+      const uint64_t LowerDelay = Request->FileBusCompletion->Delay100ns;
+      uint32_t CompletionStatus = Status;
+      int64_t Delay = -int64_t(LowerDelay);
+      if (SendTimeout && *SendTimeout < 0) {
+        const uint64_t TimeoutInterval = uint64_t(-(*SendTimeout + 1)) + 1;
+        if (TimeoutInterval < LowerDelay) {
+          Delay = *SendTimeout;
+          CompletionStatus = StatusIOTimeout;
+        }
+      }
+      auto Deadline = Scheduler.computeDeadline(Delay);
       if (!Deadline)
         return Deadline.takeError();
       if (NextProviderSequence == UINT64_MAX)
@@ -79,7 +89,7 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
         return E;
       ProviderCompletions.emplace(
           IRP, ProviderCompletion{Device, *Deadline, NextProviderSequence++,
-                                  Status, true});
+                                  CompletionStatus, true});
       Request->FileBusReceived = true;
       return StatusPending;
     }

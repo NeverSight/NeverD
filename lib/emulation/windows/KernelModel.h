@@ -551,7 +551,8 @@ private:
   };
   llvm::Expected<uint64_t>
   callDriver(uint64_t Device, uint64_t IRP,
-             ForwardingOwner Owner = ForwardingOwner::WDM);
+             ForwardingOwner Owner = ForwardingOwner::WDM,
+             std::optional<int64_t> SendTimeout = std::nullopt);
   struct IRPCompletionStep {
     uint32_t Slot;
     bool Pending;
@@ -575,7 +576,8 @@ private:
   std::map<uint64_t, ProviderCompletion> ProviderCompletions;
   llvm::Expected<uint64_t>
   callProviderDriver(uint64_t Device, uint64_t IRP,
-                     ForwardingOwner Owner = ForwardingOwner::WDM);
+                     ForwardingOwner Owner = ForwardingOwner::WDM,
+                     std::optional<int64_t> SendTimeout = std::nullopt);
   llvm::Error processProviderCompletions();
   llvm::Expected<std::optional<uint64_t>> advanceIRPCompletion(uint64_t Token);
   llvm::Expected<bool> dispatchPending(const ActiveRequest &Request,

@@ -242,8 +242,9 @@ void KernelModel::configureFrameworkRequestHost() {
     return llvm::Error::success();
   };
   auto ForwardFile = [this, Validate = Host.ValidateFileForward](
-                         uint64_t IRP,
-                         ForwardingOwner Owner) -> llvm::Expected<uint32_t> {
+                         uint64_t IRP, ForwardingOwner Owner,
+                         std::optional<int64_t> SendTimeout =
+                             std::nullopt) -> llvm::Expected<uint32_t> {
     const bool Asynchronous =
         Owner == ForwardingOwner::FrameworkFileAsynchronous;
     if (auto E = Validate(IRP, Asynchronous))
@@ -263,7 +264,8 @@ void KernelModel::configureFrameworkRequestHost() {
     std::fill(Location.begin() + StackCompletionOffset, Location.end(), 0);
     if (auto E = Memory.write(*Stack - StackSize, Location))
       return E;
-    auto Status = callDriver(Request->DeviceRoute.back(), IRP, Owner);
+    auto Status =
+        callDriver(Request->DeviceRoute.back(), IRP, Owner, SendTimeout);
     if (!Status)
       return Status.takeError();
     if (PendingWdmCall ||
@@ -290,9 +292,11 @@ void KernelModel::configureFrameworkRequestHost() {
   Host.SendFileSynchronously = [ForwardFile](uint64_t IRP) {
     return ForwardFile(IRP, ForwardingOwner::FrameworkFileSynchronous);
   };
-  Host.SendFileAsynchronously = [ForwardFile](uint64_t IRP) {
-    return ForwardFile(IRP, ForwardingOwner::FrameworkFileAsynchronous);
-  };
+  Host.SendFileAsynchronously =
+      [ForwardFile](uint64_t IRP, std::optional<int64_t> SendTimeout) {
+        return ForwardFile(IRP, ForwardingOwner::FrameworkFileAsynchronous,
+                           SendTimeout);
+      };
   Framework->setRequestHost(std::move(Host));
 }
 } // namespace neverd::emulation

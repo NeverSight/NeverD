@@ -20,6 +20,7 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -791,6 +792,8 @@ constexpr llvm::StringLiteral KMDFPnpFileForwardScenario = R"({
 
 constexpr llvm::StringLiteral KMDFPnpServicePrefix = "NeverDKmdfPnp";
 constexpr int64_t DelayedKMDFFileCompletion100ns = 17;
+constexpr int64_t KMDFFileSendTimeout100ns = 5;
+constexpr int64_t ExpectedIOTimeoutStatus = 0xc00000b5;
 
 neverd_driver_options_v1 kmdfPnpOptions(const char *Service) {
   neverd_driver_options_v1 Options{};
@@ -925,6 +928,64 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
                       DelayedKMDFFileCompletion100ns);
       }
     }
+#else
+  GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIDeliversKMDFFileSendTimeout) {
+#ifdef NEVERD_KMDF_PNP_FIXTURE
+  std::vector<const char *> Images{NEVERD_KMDF_PNP_FIXTURE};
+#ifdef NEVERD_KMDF_PNP_CFG_FIXTURE
+  Images.push_back(NEVERD_KMDF_PNP_CFG_FIXTURE);
+#endif
+  for (const char *Image : Images) {
+    SCOPED_TRACE(Image);
+    const std::string Service = KMDFPnpServicePrefix.str() + 't';
+    auto Options = kmdfPnpOptions(Service.c_str());
+    auto Scenario = llvm::json::parse(KMDFPnpFileForwardScenario);
+    ASSERT_TRUE(bool(Scenario)) << llvm::toString(Scenario.takeError());
+    auto *Requests = Scenario->getAsObject()->getArray("requests");
+    ASSERT_NE(Requests, nullptr);
+    auto *Create = (*Requests)[1].getAsObject();
+    ASSERT_NE(Create, nullptr);
+    auto *Completion = Create->getObject("bus_completion");
+    ASSERT_NE(Completion, nullptr);
+    (*Completion)["delay_100ns"] = DelayedKMDFFileCompletion100ns;
+    for (auto It = Requests->begin(); It != Requests->end();) {
+      const auto *Object = It->getAsObject();
+      if (Object && (Object->getString("kind") == "cleanup" ||
+                     Object->getString("kind") == "close"))
+        It = Requests->erase(It);
+      else
+        ++It;
+    }
+    const std::string ScenarioJSON = llvm::formatv("{0}", *Scenario).str();
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+            Session, Image, ScenarioJSON.c_str(), &Options)));
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError()) << error();
+    const auto *Report = Parsed->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    EXPECT_EQ(Report->getString("stop_reason"), "returned")
+        << Report->getString("diagnostic").value_or("").str();
+    const auto *Output = Report->getArray("requests");
+    ASSERT_NE(Output, nullptr);
+    ASSERT_EQ(Output->size(), 4u);
+    const auto *Open = (*Output)[1].getAsObject();
+    ASSERT_NE(Open, nullptr);
+    EXPECT_EQ(Open->getInteger("io_status"), ExpectedIOTimeoutStatus);
+    EXPECT_EQ(Open->getBoolean("completed"), true);
+    const auto *Start = (*Output)[0].getAsObject()->getObject("pnp");
+    const auto *Remove = (*Output)[2].getAsObject()->getObject("pnp");
+    ASSERT_NE(Start, nullptr);
+    ASSERT_NE(Remove, nullptr);
+    ASSERT_TRUE(Start->getInteger("bus_completed_at_100ns"));
+    ASSERT_TRUE(Remove->getInteger("bus_received_at_100ns"));
+    EXPECT_GE(*Remove->getInteger("bus_received_at_100ns"),
+              *Start->getInteger("bus_completed_at_100ns") +
+                  KMDFFileSendTimeout100ns);
+  }
 #else
   GTEST_SKIP() << "NEVERD_KMDF_PNP_FIXTURE requires a genuine WDK fixture";
 #endif

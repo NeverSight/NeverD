@@ -117,7 +117,8 @@ public:
     std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileSynchronously;
     /// An asynchronous send can retain the request until a later provider
     /// completion, even when the lower provider responds immediately.
-    std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileAsynchronously;
+    std::function<llvm::Expected<uint32_t>(uint64_t, std::optional<int64_t>)>
+        SendFileAsynchronously;
   };
   void setRequestHost(RequestHost Host) { RequestsHost = std::move(Host); }
   struct RequestDispatch {

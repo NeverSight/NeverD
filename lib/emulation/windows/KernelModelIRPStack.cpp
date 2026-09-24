@@ -85,8 +85,9 @@ llvm::Expected<bool> KernelModel::dispatchPending(const ActiveRequest &Request,
   return (*Control & StackPendingReturned) != 0;
 }
 
-llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
-                                                 ForwardingOwner Owner) {
+llvm::Expected<uint64_t>
+KernelModel::callDriver(uint64_t Device, uint64_t IRP, ForwardingOwner Owner,
+                        std::optional<int64_t> SendTimeout) {
   auto *Request = requestForIRP(IRP);
   if (!Request || Request->Completed)
     return stackError("IoCallDriver requires a live owned IRP");
@@ -175,7 +176,7 @@ llvm::Expected<uint64_t> KernelModel::callDriver(uint64_t Device, uint64_t IRP,
   Request->Forwarded = true;
   Request->UnwoundPending[Slot].reset();
   if (Provider) {
-    auto Status = callProviderDriver(Device, IRP, Owner);
+    auto Status = callProviderDriver(Device, IRP, Owner, SendTimeout);
     if (Status)
       return Status;
     auto E = Status.takeError();

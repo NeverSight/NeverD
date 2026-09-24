@@ -64,6 +64,7 @@ ABI_SLOT(WdfRequestRetrieveInputBuffer, 269);
 ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
+static const LONGLONG FileSendTimeout100ns = -5;
 static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
 static ULONG DeliveryCount;
@@ -117,18 +118,24 @@ static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
                              WDFFILEOBJECT File) {
   WDF_REQUEST_SEND_OPTIONS Options;
   WDFIOTARGET Target = WdfDeviceGetIoTarget(Device);
-  if ((ServiceMode == L's' || ServiceMode == L'a' || ServiceMode == L'b'
+  if ((ServiceMode == L's' || ServiceMode == L'a' || ServiceMode == L'b' ||
+               ServiceMode == L't'
            ? File == NULL
            : File != NULL) ||
       Target == NULL || Target != WdfDeviceGetIoTarget(Device)) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_STATE);
     return;
   }
-  if (ServiceMode == L'a' || ServiceMode == L'b') {
+  if (ServiceMode == L'a' || ServiceMode == L'b' || ServiceMode == L't') {
     WdfRequestFormatRequestUsingCurrentType(Request);
     FileTarget = Target;
     WdfRequestSetCompletionRoutine(Request, FilterFileCreateCompleted, Target);
-    if (!WdfRequestSend(Request, Target, WDF_NO_SEND_OPTIONS))
+    if (ServiceMode == L't') {
+      WDF_REQUEST_SEND_OPTIONS_INIT(&Options, 0);
+      WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&Options, FileSendTimeout100ns);
+    }
+    if (!WdfRequestSend(Request, Target,
+                        ServiceMode == L't' ? &Options : WDF_NO_SEND_OPTIONS))
       WdfRequestComplete(Request, WdfRequestGetStatus(Request));
     return;
   }
@@ -389,13 +396,14 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     WdfDeviceInitSetExclusive(Init, TRUE);
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
       ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-      ServiceMode == L'b' || ServiceMode == L'u') {
+      ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
     if (ServiceMode != L'o')
       WdfFdoInitSetFilter(Init);
     WDF_FILEOBJECT_CONFIG_INIT(
         &FileConfig,
         ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-                ServiceMode == L'b' || ServiceMode == L'u'
+                ServiceMode == L'b' || ServiceMode == L't' ||
+                ServiceMode == L'u'
             ? FilterFileCreate
             : NULL,
         FilterFileClose, FilterFileCleanup);
@@ -450,7 +458,7 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   }
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
       ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-      ServiceMode == L'b' || ServiceMode == L'u') {
+      ServiceMode == L'b' || ServiceMode == L't' || ServiceMode == L'u') {
     DbgPrint("KMDF PnP: filter ready\n");
     return STATUS_SUCCESS;
   }
