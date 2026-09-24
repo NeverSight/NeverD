@@ -13,6 +13,13 @@ analysis and comparison output belong outside the repository.
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
 | Toolset coverage varies by hosted runner | Verify each compiler's actual version and path before publishing corpus artifacts. Treat unavailable versions as explicit skips. |
 
+## Closed in the public SEH corpus
+
+- LLVMC's fallback projection now lets the final normal try block fall into a
+  `seh.try.end` marker when intervening handler blocks are printed later in
+  `__except` and the edge needs no PHI copy. The public `seh_probe` regression
+  keeps its conditional skip and handler rejoin jumps.
+
 ## Established rules
 
 - HighC owns structured `__try` / `__except` / `__finally` and source-like

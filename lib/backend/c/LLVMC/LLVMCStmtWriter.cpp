@@ -1683,7 +1683,8 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
 
   if (auto *Br = llvm::dyn_cast<llvm::UncondBrInst>(&Inst)) {
     const llvm::BasicBlock *Target = Br->getSuccessor(0);
-    if (uncondBranchFallsIntoEHBoundary(Inst.getParent(), Target)) {
+    if (!edgePrintsPhiCopy(Inst.getParent(), Target) &&
+        uncondBranchFallsIntoEHBoundary(Inst.getParent(), Target)) {
       writePhiCopies(Inst.getParent(), Target, Indent);
       return;
     }

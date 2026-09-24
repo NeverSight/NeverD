@@ -1510,6 +1510,8 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   EHTryDepth = 0;
   EHWrapIsCxx = false;
   EHBoundaryBlocks.clear();
+  EHSkippedMainBlocks.clear();
+  EHMainBlock = nullptr;
   OmitCleanupRetTo.clear();
   PhiTailSlot = nullptr;
 
@@ -6727,7 +6729,8 @@ LLVMCWriter::andRejoinTest(const llvm::BasicBlock *From,
 
 bool LLVMCWriter::uncondBranchFallsIntoEHBoundary(
     const llvm::BasicBlock *From, const llvm::BasicBlock *To) const {
-  if (!From || !To || !EHBoundaryBlocks.count(To) || !From->getParent())
+  if (!From || !To || !EHBoundaryBlocks.count(To) || !From->getParent() ||
+      To->getParent() != From->getParent() || EHMainBlock != From)
     return false;
   bool SeenFrom = false;
   for (const llvm::BasicBlock &BB : *From->getParent()) {
@@ -6736,7 +6739,12 @@ bool LLVMCWriter::uncondBranchFallsIntoEHBoundary(
         SeenFrom = true;
       continue;
     }
-    return &BB == To;
+    if (&BB == To)
+      return true;
+    // Only blocks held for the later handler clause may intervene.  Any
+    // other main-walk block or EH marker would print before this target.
+    if (EHBoundaryBlocks.count(&BB) || !EHSkippedMainBlocks.count(&BB))
+      return false;
   }
   return false;
 }
@@ -7957,6 +7965,14 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   }
 
   if (!UseRanges) {
+    EHSkippedMainBlocks.insert(SkipInTry.begin(), SkipInTry.end());
+    // Multiple try ranges may share one recovered clause.  The fallback
+    // prints all normal blocks first and moves handler bodies to __except;
+    // only a try-end marker in this main walk can be a fallthrough target.
+    for (const llvm::BasicBlock &BB : Fn)
+      if (!SkipInTry.contains(&BB) && !AfterWrap.contains(&BB) &&
+          SehRangeInvoke(BB, llvm::Intrinsic::seh_try_end))
+        EHBoundaryBlocks.insert(&BB);
     for (const EHWrapClause &Clause : EHWraps) {
       writeEHWrapOpen(Clause, 1 + EHTryDepth);
       ++EHTryDepth;
@@ -7968,7 +7984,9 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         continue;
       if (backEdgeCallBeforeHeader(&BB))
         continue;
+      EHMainBlock = &BB;
       writeBasicBlock(BB, 1 + EHTryDepth);
+      EHMainBlock = nullptr;
     }
     bool EmittedEHLabel = false;
     for (const llvm::BasicBlock &BB : Fn) {
@@ -8033,7 +8051,9 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         continue;
       if (backEdgeCallBeforeHeader(&BB))
         continue;
+      EHMainBlock = &BB;
       writeBasicBlock(BB, 1 + EHTryDepth);
+      EHMainBlock = nullptr;
     }
   }
 

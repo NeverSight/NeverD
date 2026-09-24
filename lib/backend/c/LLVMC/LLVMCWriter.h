@@ -410,9 +410,8 @@ public:
   /// One call laid out immediately before the header it branches to. Its
   /// only predecessor is later, so the call prints on that back edge.
   bool backEdgeCallBeforeHeader(const llvm::BasicBlock *BB);
-  /// Unconditional branch whose target is the next IR block and a
-  /// `llvm.seh.try.begin` / `try.end` boundary. The boundary opens or closes
-  /// the wrap, so the goto would name a block that is not printed.
+  /// Unconditional branch into an EH marker printed next by the main walk.
+  /// Intervening handler blocks print later inside the exception clause.
   bool uncondBranchFallsIntoEHBoundary(const llvm::BasicBlock *From,
                                        const llvm::BasicBlock *To) const;
   const llvm::Value *peelIntegerView(const llvm::Value *V) const;
@@ -683,6 +682,10 @@ public:
   bool EHWrapIsCxx = false;
   /// Blocks whose terminator is `llvm.seh.try.begin` or `llvm.seh.try.end`.
   std::set<const llvm::BasicBlock *> EHBoundaryBlocks;
+  /// Handler/dispatch blocks omitted from the main EH block walk.
+  std::set<const llvm::BasicBlock *> EHSkippedMainBlocks;
+  /// Current block of that walk; recursive handler/structured prints differ.
+  const llvm::BasicBlock *EHMainBlock = nullptr;
   std::set<const llvm::Value *> OmittedUnknowns;
   std::set<const llvm::Value *> OmittedInlined;
   std::set<const llvm::StoreInst *> OmittedLeftoverNarrow;
