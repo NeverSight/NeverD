@@ -79,7 +79,7 @@ TEST(NativeSourceHints, ObjCExtensionBoolGetterUsesSwiftSelf) {
   Image.Segments.push_back(std::move(Text));
   Image.Symbols.push_back(
       {"_$sSo8NSBundleC3WMFE14isAppExtensionSbvg", 0x1000, 0, true});
-  const auto Hint = sdk::swiftMangledObjCBoolGetterSourceABI(Image, 0x1000);
+  const auto Hint = sdk::swiftMangledObjCBoolMemberSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
   EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
   EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
@@ -91,18 +91,34 @@ TEST(NativeSourceHints, ObjCExtensionBoolGetterUsesSwiftSelf) {
   std::string Error;
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
+  auto Method = Image;
+  Method.Symbols[0].Name =
+      "_$sSo14NSUserDefaultsC3WMFE34wmf_isTableOfContentsVisibleInlineSbyF";
+  const auto MethodHint =
+      sdk::swiftMangledObjCBoolMemberSourceABI(Method, 0x1000);
+  ASSERT_TRUE(MethodHint);
+  ASSERT_EQ(MethodHint->Parameters.size(), 1U);
+  EXPECT_EQ(MethodHint->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(MethodHint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  EXPECT_EQ(MethodHint->ReturnType->Size, 1U);
+  EXPECT_TRUE(validateSourceABI(*MethodHint, Error)) << Error;
+  Method.Symbols[0].Name =
+      "_$sSo14NSUserDefaultsC3WMFE34wmf_isTableOfContentsVisibleInlineSiyF";
+  EXPECT_FALSE(sdk::swiftMangledObjCBoolMemberSourceABI(Method, 0x1000));
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name = "_$sSo8NSBundleC3WMFE14isAppExtensionSbvp";
-  EXPECT_FALSE(sdk::swiftMangledObjCBoolGetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledObjCBoolMemberSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name = "_$sSo8NSBundleC3WMFE14isAppExtensionSSvg";
-  EXPECT_FALSE(sdk::swiftMangledObjCBoolGetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledObjCBoolMemberSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledObjCBoolGetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledObjCBoolMemberSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Arch = Arch::X64;
-  EXPECT_FALSE(sdk::swiftMangledObjCBoolGetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledObjCBoolMemberSourceABI(Wrong, 0x1000));
 }
 
 namespace {

@@ -230,7 +230,7 @@ inline size_t inferObjCNativeDependencies(
         ++Added;
         continue;
       }
-      if (auto Mangled = swiftMangledObjCBoolGetterSourceABI(Image, Target)) {
+      if (auto Mangled = swiftMangledObjCBoolMemberSourceABI(Image, Target)) {
         Options.SourceTypeHints.emplace(Target, std::move(*Mangled));
         ++Added;
         continue;

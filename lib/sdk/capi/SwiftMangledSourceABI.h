@@ -131,12 +131,12 @@ swiftMangledStringBundleSourceABI(const BinaryImage &Image, va_t Entry,
              : std::nullopt;
 }
 
-// A Swift extension getter on an Objective-C class carries its receiver in
-// swiftself, even when the mangled signature has no ordinary arguments. The
-// closed Bool shape supplies the return width; the source pipeline must still
-// prove the body and every call before publication.
+// A Swift extension Bool getter or zero-argument method on an Objective-C
+// class carries its receiver in swiftself. The closed mangled type supplies
+// the return width; the source pipeline must still prove the body and every
+// call before publication.
 inline std::optional<SourceFunctionTypeHint>
-swiftMangledObjCBoolGetterSourceABI(const BinaryImage &Image, va_t Entry) {
+swiftMangledObjCBoolMemberSourceABI(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
       !Image.isCodeAddress(Entry))
@@ -172,31 +172,47 @@ swiftMangledObjCBoolGetterSourceABI(const BinaryImage &Image, va_t Entry) {
            N.Children.empty();
   };
   if (!Parsed.Root || !Parsed.Error.empty() ||
-      !Shape(*Parsed.Root, "Global", 1) ||
-      !Shape(Parsed.Root->Children[0], "Getter", 1))
+      !Shape(*Parsed.Root, "Global", 1))
     return std::nullopt;
-  const auto &Variable = Parsed.Root->Children[0].Children[0];
-  if (!Shape(Variable, "Variable", 3) ||
-      !Shape(Variable.Children[0], "Extension", 2) ||
-      Variable.Children[0].Children[0].Kind != "Module" ||
-      !Variable.Children[0].Children[0].Text ||
-      Variable.Children[0].Children[0].Text->empty() ||
-      Variable.Children[0].Children[0].Index ||
-      !Variable.Children[0].Children[0].Children.empty() ||
-      !Shape(Variable.Children[0].Children[1], "Class", 2) ||
-      !Text(Variable.Children[0].Children[1].Children[0], "Module", "__C") ||
-      Variable.Children[0].Children[1].Children[1].Kind != "Identifier" ||
-      !Variable.Children[0].Children[1].Children[1].Text ||
-      Variable.Children[0].Children[1].Children[1].Text->empty() ||
-      Variable.Children[0].Children[1].Children[1].Index ||
-      !Variable.Children[0].Children[1].Children[1].Children.empty() ||
-      Variable.Children[1].Kind != "Identifier" ||
-      !Variable.Children[1].Text || Variable.Children[1].Text->empty() ||
-      Variable.Children[1].Index || !Variable.Children[1].Children.empty() ||
-      !Shape(Variable.Children[2], "Type", 1) ||
-      !Shape(Variable.Children[2].Children[0], "Structure", 2) ||
-      !Text(Variable.Children[2].Children[0].Children[0], "Module", "Swift") ||
-      !Text(Variable.Children[2].Children[0].Children[1], "Identifier", "Bool"))
+  const auto &Root = Parsed.Root->Children[0];
+  const Node *Member = nullptr, *Result = nullptr;
+  if (Shape(Root, "Getter", 1) &&
+      Shape(Root.Children[0], "Variable", 3)) {
+    Member = &Root.Children[0];
+    if (Shape(Member->Children[2], "Type", 1))
+      Result = &Member->Children[2].Children[0];
+  } else if (Shape(Root, "Function", 3)) {
+    Member = &Root;
+    const auto &Type = Root.Children[2];
+    if (Shape(Type, "Type", 1) &&
+        Shape(Type.Children[0], "FunctionType", 2) &&
+        Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) &&
+        Shape(Type.Children[0].Children[0].Children[0], "Type", 1) &&
+        Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple", 0) &&
+        Shape(Type.Children[0].Children[1], "ReturnType", 1) &&
+        Shape(Type.Children[0].Children[1].Children[0], "Type", 1))
+      Result = &Type.Children[0].Children[1].Children[0].Children[0];
+  }
+  if (!Member || !Result ||
+      !Shape(Member->Children[0], "Extension", 2) ||
+      Member->Children[0].Children[0].Kind != "Module" ||
+      !Member->Children[0].Children[0].Text ||
+      Member->Children[0].Children[0].Text->empty() ||
+      Member->Children[0].Children[0].Index ||
+      !Member->Children[0].Children[0].Children.empty() ||
+      !Shape(Member->Children[0].Children[1], "Class", 2) ||
+      !Text(Member->Children[0].Children[1].Children[0], "Module", "__C") ||
+      Member->Children[0].Children[1].Children[1].Kind != "Identifier" ||
+      !Member->Children[0].Children[1].Children[1].Text ||
+      Member->Children[0].Children[1].Children[1].Text->empty() ||
+      Member->Children[0].Children[1].Children[1].Index ||
+      !Member->Children[0].Children[1].Children[1].Children.empty() ||
+      Member->Children[1].Kind != "Identifier" ||
+      !Member->Children[1].Text || Member->Children[1].Text->empty() ||
+      Member->Children[1].Index || !Member->Children[1].Children.empty() ||
+      !Shape(*Result, "Structure", 2) ||
+      !Text(Result->Children[0], "Module", "Swift") ||
+      !Text(Result->Children[1], "Identifier", "Bool"))
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
