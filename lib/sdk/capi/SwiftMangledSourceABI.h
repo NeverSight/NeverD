@@ -890,8 +890,306 @@ swiftMangledClassScalarSetterSourceABI(const BinaryImage &Image, va_t Entry) {
              : std::nullopt;
 }
 
-// A compiler-observed arm64 Swift class initializing constructor with one
-// imported CGRect takes its four doubles in v0-v3 and the already allocated
+// An initializing Swift class constructor taking Any receives a pointer to
+// existential storage in x0 and its allocated receiver in swiftself. Match
+// the complete unspecialized constructor type; an allocating entry or ObjC
+// thunk has a different contract.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledAnyClassInitializerSourceABI(const BinaryImage &Image, va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Constructor", 3))
+    return std::nullopt;
+  const auto &Constructor = Parsed.Root->Children[0];
+  const auto &Class = Constructor.Children[0];
+  const auto &Labels = Constructor.Children[1];
+  const auto &Type = Constructor.Children[2];
+  if (!Shape(Class, "Class", 2) || Class.Children[0].Kind != "Module" ||
+      !Class.Children[0].Text || Class.Children[0].Text->empty() ||
+      Class.Children[0].Index || !Class.Children[0].Children.empty() ||
+      Class.Children[1].Kind != "Identifier" || !Class.Children[1].Text ||
+      Class.Children[1].Text->empty() || Class.Children[1].Index ||
+      !Class.Children[1].Children.empty() || !Shape(Labels, "LabelList", 1) ||
+      !Text(Labels.Children[0], "Identifier", "layer") ||
+      !Shape(Type, "Type", 1) || !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             1) ||
+      !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Class", 2))
+    return std::nullopt;
+  const auto &Argument =
+      Type.Children[0].Children[0].Children[0].Children[0].Children[0];
+  if (!Shape(Argument, "TupleElement", 1) ||
+      !Shape(Argument.Children[0], "Type", 1) ||
+      !Shape(Argument.Children[0].Children[0], "ProtocolList", 1) ||
+      !Shape(Argument.Children[0].Children[0].Children[0], "TypeList", 0))
+    return std::nullopt;
+  const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
+  if (!Text(Result.Children[0], "Module", *Class.Children[0].Text) ||
+      !Text(Result.Children[1], "Identifier", *Class.Children[1].Text))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"value", NdType::makePtr(NdType::makeVoid())},
+                     {"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
+// An Objective-C class extension getter for an optional Dictionary<String,
+// Int> uses swiftself and returns the dictionary's nullable storage word in
+// x0. Match the whole type tree so other collection layouts cannot inherit
+// this one-word contract.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+    const BinaryImage &Image, va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  const auto Nominal = [&](const Node &N, llvm::StringRef Kind,
+                           llvm::StringRef Module, llvm::StringRef Name) {
+    return Shape(N, Kind, 2) && Text(N.Children[0], "Module", Module) &&
+           Text(N.Children[1], "Identifier", Name);
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Getter", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Variable", 3))
+    return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  const auto &Extension = Variable.Children[0];
+  const auto &Property = Variable.Children[1];
+  const auto &Type = Variable.Children[2];
+  if (!Shape(Extension, "Extension", 2) ||
+      Extension.Children[0].Kind != "Module" || !Extension.Children[0].Text ||
+      Extension.Children[0].Text->empty() || Extension.Children[0].Index ||
+      !Extension.Children[0].Children.empty() ||
+      !Nominal(Extension.Children[1], "Class", "__C", "NSUserDefaults") ||
+      Property.Kind != "Identifier" || !Property.Text ||
+      Property.Text->empty() || Property.Index || !Property.Children.empty() ||
+      !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "BoundGenericEnum", 2))
+    return std::nullopt;
+  const auto &Optional = Type.Children[0];
+  if (!Shape(Optional.Children[0], "Type", 1) ||
+      !Nominal(Optional.Children[0].Children[0], "Enum", "Swift", "Optional") ||
+      !Shape(Optional.Children[1], "TypeList", 1) ||
+      !Shape(Optional.Children[1].Children[0], "Type", 1) ||
+      !Shape(Optional.Children[1].Children[0].Children[0],
+             "BoundGenericStructure", 2))
+    return std::nullopt;
+  const auto &Dictionary = Optional.Children[1].Children[0].Children[0];
+  if (!Shape(Dictionary.Children[0], "Type", 1) ||
+      !Nominal(Dictionary.Children[0].Children[0], "Structure", "Swift",
+               "Dictionary") ||
+      !Shape(Dictionary.Children[1], "TypeList", 2))
+    return std::nullopt;
+  const auto &Entries = Dictionary.Children[1].Children;
+  if (!Shape(Entries[0], "Type", 1) ||
+      !Nominal(Entries[0].Children[0], "Structure", "Swift", "String") ||
+      !Shape(Entries[1], "Type", 1) ||
+      !Nominal(Entries[1].Children[0], "Structure", "Swift", "Int"))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[0].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
+// The two-color Swift class initializer passes its UIColor objects in x0/x1
+// and its allocated receiver in swiftself. Match the observed specialization
+// that converts both arguments from owned to guaranteed, and the complete
+// constructor type, before binding x20 as a source parameter.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledUIColorPairClassInitializerSourceABI(const BinaryImage &Image,
+                                                 va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 2) ||
+      !Shape(Parsed.Root->Children[0], "FunctionSignatureSpecialization", 4) ||
+      !Shape(Parsed.Root->Children[1], "Constructor", 3))
+    return std::nullopt;
+  const auto &Specialization = Parsed.Root->Children[0];
+  if (Specialization.Children[0].Kind != "SpecializationPassID" ||
+      Specialization.Children[0].Text ||
+      Specialization.Children[0].Index != 4 ||
+      !Specialization.Children[0].Children.empty() ||
+      !Shape(Specialization.Children[1], "FunctionSignatureSpecializationParam",
+             1) ||
+      !Shape(Specialization.Children[2], "FunctionSignatureSpecializationParam",
+             1) ||
+      !Shape(Specialization.Children[3], "FunctionSignatureSpecializationParam",
+             0))
+    return std::nullopt;
+  for (unsigned I : {1U, 2U}) {
+    const auto &Kind = Specialization.Children[I].Children[0];
+    if (Kind.Kind != "FunctionSignatureSpecializationParamKind" || Kind.Text ||
+        Kind.Index != 128 || !Kind.Children.empty())
+      return std::nullopt;
+  }
+  const auto &Constructor = Parsed.Root->Children[1];
+  const auto &Class = Constructor.Children[0];
+  const auto &Labels = Constructor.Children[1];
+  const auto &Type = Constructor.Children[2];
+  if (!Shape(Class, "Class", 2) || Class.Children[0].Kind != "Module" ||
+      !Class.Children[0].Text || Class.Children[0].Text->empty() ||
+      Class.Children[0].Index || !Class.Children[0].Children.empty() ||
+      Class.Children[1].Kind != "Identifier" || !Class.Children[1].Text ||
+      Class.Children[1].Text->empty() || Class.Children[1].Index ||
+      !Class.Children[1].Children.empty() || !Shape(Labels, "LabelList", 2) ||
+      !Shape(Type, "Type", 1) || !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple",
+             2) ||
+      !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Class", 2))
+    return std::nullopt;
+  for (const auto &Label : Labels.Children)
+    if (Label.Kind != "Identifier" || !Label.Text || Label.Text->empty() ||
+        Label.Index || !Label.Children.empty())
+      return std::nullopt;
+  const auto &Arguments = Type.Children[0].Children[0].Children[0].Children[0];
+  for (const auto &Argument : Arguments.Children)
+    if (!Shape(Argument, "TupleElement", 1) ||
+        !Shape(Argument.Children[0], "Type", 1) ||
+        !Shape(Argument.Children[0].Children[0], "Class", 2) ||
+        !Text(Argument.Children[0].Children[0].Children[0], "Module", "__C") ||
+        !Text(Argument.Children[0].Children[0].Children[1], "Identifier",
+              "UIColor"))
+      return std::nullopt;
+  const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
+  if (!Text(Result.Children[0], "Module", *Class.Children[0].Text) ||
+      !Text(Result.Children[1], "Identifier", *Class.Children[1].Text))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"firstColor", NdType::makePtr(NdType::makeVoid())},
+                     {"secondColor", NdType::makePtr(NdType::makeVoid())},
+                     {"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[2].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
+// A class initializer with a CGRect parameter takes four floating lanes and a
 // receiver in swiftself. Require the complete nominal/return type tree so an
 // ObjC thunk or allocating constructor cannot acquire this entry contract.
 inline std::optional<SourceFunctionTypeHint>

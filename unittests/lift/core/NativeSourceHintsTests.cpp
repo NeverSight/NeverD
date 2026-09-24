@@ -603,6 +603,158 @@ TEST(NativeSourceHints, CGRectClassInitializerUsesFourFPLanesAndSwiftSelf) {
                                                                  0x1000));
 }
 
+TEST(NativeSourceHints, AnyClassInitializerUsesExistentialAndSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s6Lottie20NullCompositionLayerC5layerACyp_tcfc", 0x1000, 0, true});
+  const auto Hint =
+      sdk::swiftMangledAnyClassInitializerSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+  ASSERT_EQ(Hint->Parameters.size(), 2U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->Parameters[1].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name = "_$s6Lottie20NullCompositionLayerC5layerACyp_tcfC";
+  EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s6Lottie20NullCompositionLayerC5layerACSo8CALayerC_tcfc";
+  EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
+}
+
+TEST(NativeSourceHints, OptionalDictionaryExtensionGetterUsesSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back({"_$sSo14NSUserDefaultsC3WMFE31wmf_"
+                           "yearToSessionSecondsMappingSDySSSiGSgvg",
+                           0x1000, 0, true});
+  const auto Hint =
+      sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(Image,
+                                                                      0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo14NSUserDefaultsC3WMFE31wmf_yearToSessionSecondsMappingSDySSSiGvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name = "_$sSo14NSUserDefaultsC3WMFE31wmf_"
+                          "yearToSessionSecondsMappingSDySSSbGSgvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringIntDictionaryGetterSourceABI(
+      Wrong, 0x1000));
+}
+
+TEST(NativeSourceHints, SpecializedUIColorPairInitializerUsesSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s3WMF8GradientC10startColor03endD0ACSo7UIColorC_AGtcfcTf4ggn_n",
+       0x1000, 0, true});
+  const auto Hint =
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+  ASSERT_EQ(Hint->Parameters.size(), 3U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, a64reg::X1);
+  EXPECT_EQ(Hint->Parameters[2].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s3WMF8GradientC10startColor03endD0ACSo7UIColorC_AGtcfc";
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s3WMF8GradientC10startColor03endD0ACSo7UIColorC_AGtcfCTf4ggn_n";
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s3WMF8GradientC10startColor03endD0ACSo7UIButtonC_AGtcfcTf4ggn_n";
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(
+      sdk::swiftMangledUIColorPairClassInitializerSourceABI(Wrong, 0x1000));
+}
+
 TEST(NativeSourceHints, CoderClassInitializerUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
