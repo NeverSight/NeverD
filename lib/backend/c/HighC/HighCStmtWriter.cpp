@@ -495,6 +495,8 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     for (auto &C : Stmt.Cases) {
       emitIndent(Indent);
       OS << "case " << constStr(C.Value) << ":\n";
+      if (C.FallsThrough)
+        continue;
       writeStmts(C.Body, Indent + 1);
       emitIndent(Indent + 1);
       OS << "break;\n";
@@ -844,9 +846,13 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent) {
         }
       }
     }
+    // The first label wins.  A try statement shares its address with its
+    // first statement; labelling the try itself keeps a goto from outside
+    // (or a loop back-edge) legal, since C forbids jumping into __try and
+    // x64 SEH protection is by address, not by entry.
     bool EmittedLabel = false;
     if (S.Addr != 0 && S.Addr != InvalidVA && GotoTargets.count(S.Addr) &&
-        S.Addr != LastLabel) {
+        S.Addr != LastLabel && EmittedLabels.insert(S.Addr).second) {
       OS << "L_" + llvm::utohexstr(S.Addr) + ":\n";
       LastLabel = S.Addr;
       EmittedLabel = true;

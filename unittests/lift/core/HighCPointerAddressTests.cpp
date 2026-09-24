@@ -3840,6 +3840,36 @@ TEST(HighCPointerAddresses, SummarizedCalleeNeverGetsGuessedPassThrough) {
   EXPECT_EQ(HighC.find("reads_nothing(arg0)"), std::string::npos) << HighC;
 }
 
+TEST(HighCPointerAddresses, SwitchCasesSharingATargetShareOneBody) {
+  // FsRtlIsTotalDeviceFailure: three compares branch to one `xor al, al`.
+  // Each case used to get its own copy of that block, label included.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x85, 0xc9,                         // test ecx, ecx
+      0x79, 0x1c,                         // jns zero
+      0x81, 0xf9, 0x3f, 0x00, 0x00, 0xc0, // cmp ecx, 0C000003Fh
+      0x74, 0x14,                         // je zero
+      0x81, 0xf9, 0x9c, 0x00, 0x00, 0xc0, // cmp ecx, 0C000009Ch
+      0x74, 0x0c,                         // je zero
+      0x81, 0xf9, 0x70, 0x04, 0x00, 0xc0, // cmp ecx, 0C0000470h
+      0x74, 0x04,                         // je zero
+      0xb0, 0x01,                         // mov al, 1
+      0xc3,                               // ret
+      0xcc,                               // int3
+      0x32, 0xc0,                         // zero: xor al, al
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  std::smatch Label;
+  std::map<std::string, int> Labels;
+  for (auto It = HighC.cbegin();
+       std::regex_search(It, HighC.cend(), Label, std::regex(R"((L_\w+):)"));
+       It = Label.suffix().first)
+    EXPECT_EQ(++Labels[Label[1].str()], 1) << Label[1] << "\n" << HighC;
+  EXPECT_NE(HighC.find("0xC000003F"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("0xC0000470"), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.

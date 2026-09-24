@@ -173,6 +173,8 @@ public:
   std::map<std::string, std::string> FunctionIdentifiersBySourceName;
   std::map<std::string, std::string> ExternalFunctionIdentifiers;
   std::set<va_t> GotoTargets;
+  /// Labels already printed in the current function; C allows each once.
+  std::set<va_t> EmittedLabels;
   bool HasCIntrinsics = false;
   bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;

@@ -21,6 +21,8 @@
 
 #include "neverd/ir/high/MedToHigh.h"
 
+#include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -142,10 +144,28 @@ void recoverSwitchStatements(HighFunc &Func) {
       return Result;
     };
 
+    // Cases that branch to one target share one copy of its statements:
+    // `case A: case B: body`.  Copying the body per case duplicated its
+    // labels (FsRtlIsTotalDeviceFailure).
+    std::map<va_t, size_t> FirstUse;
+    for (size_t K = 0; K < CaseInfos.size(); ++K)
+      FirstUse.try_emplace(CaseInfos[K].BodyAddr, K);
+    std::stable_sort(CaseInfos.begin(), CaseInfos.end(),
+                     [&](const CaseInfo &A, const CaseInfo &B) {
+                       return FirstUse[A.BodyAddr] < FirstUse[B.BodyAddr];
+                     });
     std::set<size_t> Consumed;
-    for (auto &Case : CaseInfos) {
+    for (size_t CaseIdx = 0; CaseIdx < CaseInfos.size(); ++CaseIdx) {
+      const CaseInfo &Case = CaseInfos[CaseIdx];
       SwitchCase NewCase;
       NewCase.Value = Case.Value;
+      if (CaseIdx + 1 < CaseInfos.size() &&
+          CaseInfos[CaseIdx + 1].BodyAddr == Case.BodyAddr) {
+        NewCase.FallsThrough = true;
+        SwitchStmt.Cases.push_back(std::move(NewCase));
+        Consumed.insert(Case.StmtIdx);
+        continue;
+      }
       NewCase.Body = FindAndCollect(Case.BodyAddr);
       SwitchStmt.Cases.push_back(std::move(NewCase));
 
@@ -204,10 +224,22 @@ void recoverSwitchStatements(HighFunc &Func) {
     if (I + 1 < Func.Body.size() && Func.Body[I].Kind == StmtKind::Switch) {
       auto &SwitchRef = Func.Body[I];
       if (switchAlwaysReturns(SwitchRef)) {
+        // Code after the switch is dead only up to the next goto target.
+        std::set<va_t> Targets;
+        walkStmts(Func.Body, [&](const HighStmt &S) {
+          if (S.Kind == StmtKind::Goto)
+            Targets.insert(S.GotoTarget);
+        });
         size_t J = I + 1;
         while (J < Func.Body.size()) {
           auto &Dead = Func.Body[J];
           if (Dead.Kind == StmtKind::While || Dead.Kind == StmtKind::Switch)
+            break;
+          bool Labeled = false;
+          walkStmts(std::vector<HighStmt>{Dead}, [&](const HighStmt &S) {
+            Labeled |= S.Addr != 0 && Targets.count(S.Addr);
+          });
+          if (Labeled)
             break;
           J++;
         }

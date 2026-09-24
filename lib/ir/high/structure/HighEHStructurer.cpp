@@ -679,7 +679,10 @@ uniqueHandlerBlockRange(const MedFunc &Med, const ExceptionFunction &EH,
       return std::nullopt;
     Match = &Block;
   }
-  if (!Match)
+  // Normal flow may share the handler's code (RtlGuardIsValidStackPointer
+  // falls into its `xor eax, eax`).  Moving that block into the __except
+  // body would take it away from the ordinary path.
+  if (!Match || !Match->Preds.empty())
     return std::nullopt;
 
   ExceptionAddressRange Range{Match->StartAddr, Match->EndAddr};

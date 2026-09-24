@@ -213,6 +213,7 @@ bool HighCWriter::isAnalysisOnlyFunction(const HighFunc &Func) const {
 
 void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   GotoTargets.clear();
+  EmittedLabels.clear();
   collectGotoTargets(Func.Body);
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
     for (const HighEHClause &Clause : Stmt.EHClauses) {

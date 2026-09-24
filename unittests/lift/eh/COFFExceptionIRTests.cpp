@@ -1167,6 +1167,88 @@ TEST(COFFExceptionIR, KeepsSEHHandlerPlacedAfterReturn) {
     EXPECT_NE(Source.find("L_140001020:"), std::string::npos) << Source;
 }
 
+TEST(COFFExceptionIR, SharedHandlerAndColdEntryKeepTheirPaths) {
+  // RtlGuardIsValidStackPointer: a cold block jumps back to the start of the
+  // protected range, and normal flow falls into the handler's code.  The
+  // label must sit before `__try` (C forbids jumping into it) and the
+  // shared handler block must stay reachable from the ordinary path.
+  constexpr va_t F = 0x140001000;
+  constexpr va_t Protected = F + 0x10;
+  constexpr va_t Shared = F + 0x20;
+  constexpr va_t Cold = F + 0x30;
+
+  MedFunc Func;
+  Func.Entry = F;
+  Func.Name = "shared_handler";
+  Func.ReturnType = NdType::makeVoid();
+  auto AddBlock = [&](int Id, va_t Start, va_t End, std::vector<int> Succs,
+                      std::vector<int> Preds) -> MedBlock & {
+    MedBlock Block;
+    Block.Id = Id;
+    Block.StartAddr = Start;
+    Block.EndAddr = End;
+    Block.Succs = std::move(Succs);
+    Block.Preds = std::move(Preds);
+    Func.Blocks.push_back(std::move(Block));
+    return Func.Blocks.back();
+  };
+  auto Op = [](NdOp Code, va_t Addr, uint64_t Const) {
+    MedOp O;
+    O.Opcode = Code;
+    O.Addr = Addr;
+    O.addInput(MedVar::makeConst(Const, 8));
+    return O;
+  };
+  AddBlock(0, F, F + 4, {3}, {}).Ops.push_back(Op(NdOp::BRANCH, F, Cold));
+  {
+    MedBlock &B = AddBlock(1, Protected, Protected + 8, {2}, {3});
+    B.Ops.push_back(Op(NdOp::CALL, Protected, 0x140008000));
+    B.Ops.push_back(Op(NdOp::BRANCH, Protected + 5, Shared));
+  }
+  {
+    MedBlock &B = AddBlock(2, Shared, Shared + 8, {}, {1});
+    B.Ops.push_back(Op(NdOp::CALL, Shared, 0x140009000));
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Shared + 5;
+    B.Ops.push_back(std::move(Return));
+  }
+  AddBlock(3, Cold, Cold + 4, {1}, {0})
+      .Ops.push_back(Op(NdOp::BRANCH, Cold, Protected));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {F, Cold + 4};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {Protected, Protected + 8};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Shared;
+  SEHExceptionInfo SEH;
+  SEH.Scopes.push_back(std::move(Scope));
+  EH.SEH = std::move(SEH);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(HighCEmitter().emit({High}, Stream));
+  Stream.flush();
+  const size_t Try = Source.find("__try");
+  ASSERT_NE(Try, std::string::npos) << Source;
+  const size_t Label = Source.find("L_140001010:");
+  ASSERT_NE(Label, std::string::npos) << Source;
+  EXPECT_LT(Label, Try) << Source;
+  EXPECT_EQ(Source.find("L_140001010:", Label + 1), std::string::npos)
+      << Source;
+  // The shared block is printed once, outside the __except body.
+  const size_t Marker = Source.find("sub_140009000();");
+  ASSERT_NE(Marker, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("sub_140009000();", Marker + 1), std::string::npos)
+      << Source;
+  EXPECT_GT(Marker, Source.find("__except")) << Source;
+}
+
 TEST(COFFExceptionIR, StructuresSingleBlockFH3CatchBody) {
   constexpr va_t FunctionVA = 0x140001000;
   constexpr va_t HandlerVA = FunctionVA + 0x20;

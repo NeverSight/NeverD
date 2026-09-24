@@ -244,6 +244,9 @@ struct HighEHClause {
 struct SwitchCase {
   uint64_t Value = 0;
   std::vector<struct HighStmt> Body;
+  /// An empty case that shares the next case's body (`case A: case B:`)
+  /// instead of ending with a break.
+  bool FallsThrough = false;
 };
 
 struct HighStmt {
@@ -421,7 +424,7 @@ inline bool switchAlwaysReturns(const HighStmt &Stmt) {
   if (!Returns(Stmt.DefaultBody))
     return false;
   for (const auto &Case : Stmt.Cases)
-    if (!Returns(Case.Body))
+    if (!Case.FallsThrough && !Returns(Case.Body))
       return false;
   return true;
 }
