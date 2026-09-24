@@ -488,6 +488,46 @@ struct ObjCConstructorFixture : ObjCThunkFixture {
   }
 };
 
+struct ObjCBridgedGetterFixture : ObjCThunkFixture {
+  static constexpr va_t BridgeSlot = 0x20b0;
+  explicit ObjCBridgedGetterFixture(Arch Architecture, bool Array = false)
+      : ObjCThunkFixture(Architecture) {
+    Image.ObjCMethods[0].IsClassMethod = true;
+    const std::string BridgeName =
+        Array ? "$sSa10FoundationE19_bridgeToObjectiveCSo7NSArrayCyF"
+              : "$sSD10FoundationE19_bridgeToObjectiveCSo12NSDictionaryCyF";
+    Image.ImportPtrSlots[BridgeSlot] = "_" + BridgeName;
+    Image.DyldBindSlots[BridgeSlot] = {
+        "_" + BridgeName, 0,
+        "/System/Library/Frameworks/Foundation.framework/Foundation", false};
+    const auto BridgeHint = swiftRuntimeSourceCallHint(Image, BridgeSlot);
+    EXPECT_TRUE(BridgeHint);
+    if (!BridgeHint)
+      return;
+    auto &Thunk = Pipeline.HighFuncs[0];
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = 10;
+    Value.Size = 8;
+    HighStmt Bridge;
+    Bridge.Kind = StmtKind::Assign;
+    Bridge.Dst = HighExpr::makeVar(Value, Pointer);
+    std::vector<ExprPtr> Arguments{Thunk.Body[3].Dst};
+    Arguments.push_back(HighExpr::makeConst(0x40, 8));
+    if (!Array) {
+      Arguments.push_back(HighExpr::makeConst(0x50, 8));
+      Arguments.push_back(HighExpr::makeConst(0x60, 8));
+    }
+    Bridge.Val = HighExpr::makeCall(BridgeName, BridgeSlot, Arguments);
+    Bridge.Val->Type = Pointer;
+    Bridge.Val->SourceCallHint =
+        std::make_shared<SourceCallTypeHint>(*BridgeHint);
+    Thunk.Body[4].Val->Operands[0] = Bridge.Dst;
+    Thunk.Body.insert(Thunk.Body.begin() + 4, std::move(Bridge));
+  }
+};
+
 struct NestedCallbackFixture : OnceFixture {
   static constexpr va_t NestedPredicate = 0x2020;
   static constexpr va_t LeafAddress = 0x10a0;
@@ -1093,6 +1133,94 @@ TEST(SwiftOnceSources, NativeSwiftGetterPreservesRetainAndAutoreleaseCalls) {
                                                        nullptr, &Functions);
       EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
     }
+  }
+}
+
+TEST(SwiftOnceSources, ProjectsBridgedLazyClassGetterAndPreservesBridge) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const bool Array : {false, true}) {
+      ObjCBridgedGetterFixture F(Architecture, Array);
+      const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+      ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+      auto Bound = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[0],
+                                                 F.Image, Plan, F.functions());
+      ASSERT_EQ(Bound.SwiftOnceObjCThunks,
+                std::set<va_t>{ObjCThunkFixture::ThunkAddress});
+      EXPECT_EQ(Bound.Dependencies,
+                std::set<va_t>{AddressorFixture::InitializerAddress});
+      ASSERT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+      ASSERT_EQ(Bound.Function.Params.size(), 2U);
+      ASSERT_EQ(Bound.Function.Body.size(), 7U);
+      const auto &Once = *Bound.Function.Body[1].Body[0].CallExpr;
+      ASSERT_EQ(Once.Operands[2]->Kind, ExprKind::Const);
+      EXPECT_EQ(Once.Operands[2]->ConstVal, 0U);
+      const auto &Bridge = Bound.Function.Body[4];
+      ASSERT_TRUE(Bridge.Val && Bridge.Val->SourceCallHint);
+      EXPECT_EQ(Bridge.Val->SourceCallHint->TargetAddress,
+                ObjCBridgedGetterFixture::BridgeSlot);
+      EXPECT_EQ(Bound.Function.Body[5].Val->Operands[0]->Var,
+                Bridge.Dst->Var);
+      const auto Functions = F.functions();
+      const auto Projection = bindObjCSourceReferences(
+          Bound.Function, F.Image, nullptr, &Functions);
+      EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
+    }
+  }
+}
+
+TEST(SwiftOnceSources, RejectsBridgedLazyClassGetterEvidenceDrift) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    ObjCBridgedGetterFixture F(Arch::AArch64);
+    auto &Thunk = F.Pipeline.HighFuncs[0];
+    if (Mutation == 0)
+      F.Image.ObjCMethods[0].IsClassMethod = false;
+    if (Mutation == 1)
+      F.Image.ObjCMethods[0].Selector = "value:";
+    if (Mutation == 2) {
+      auto Hint = std::make_shared<SourceCallTypeHint>(
+          *Thunk.Body[4].Val->SourceCallHint);
+      Hint->TargetName = "forged_bridge";
+      Thunk.Body[4].Val->SourceCallHint = std::move(Hint);
+    }
+    if (Mutation == 3)
+      F.Image.DyldBindSlots[ObjCBridgedGetterFixture::BridgeSlot].Module =
+          "/tmp/Foundation";
+    if (Mutation == 4) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Id = 2;
+      Context.Size = 8;
+      Use.Val = HighExpr::makeVar(Context, NdType::makeInt(8));
+      Thunk.Body.insert(Thunk.Body.end() - 1, std::move(Use));
+    }
+    if (Mutation == 5) {
+      HighStmt Use;
+      Use.Kind = StmtKind::ExprStmt;
+      MedVar Context;
+      Context.Kind = MedVar::Param;
+      Context.Id = 0;
+      Context.Size = 8;
+      Use.Val = HighExpr::makeVar(Context, NdType::makeInt(8));
+      F.Pipeline.HighFuncs[1].Body.insert(
+          F.Pipeline.HighFuncs[1].Body.begin(), std::move(Use));
+    }
+    if (Mutation == 6)
+      F.Image.Symbols.push_back(F.Image.Symbols.back());
+    if (Mutation == 7)
+      Thunk.Body.push_back(Thunk.Body[1].Body[0]);
+    if (Mutation == 8)
+      Thunk.Body[4].Val = HighExpr::makeConst(0, 8);
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    if (Mutation != 5)
+      EXPECT_TRUE(Plan.ObjCThunks.empty());
+    auto Bound = bindSwiftOnceSourceReferences(Thunk, F.Image, Plan,
+                                               F.functions());
+    EXPECT_TRUE(Bound.SwiftOnceObjCThunks.empty());
+    EXPECT_FALSE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
   }
 }
 

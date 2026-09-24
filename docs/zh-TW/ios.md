@@ -332,3 +332,5 @@ ARM64 Objective-C 原始碼復原支援由呼叫端證明的最多八個 Swift �
 強綁定的 Swift 泛型單載荷列舉標籤函式現在使用其宣告的 `swiftcall` ABI：分支與標籤值為 32 位元，後設資料與回呼為指標，讀取函式回傳 32 位元標籤，寫入函式沒有回傳值。弱匯入或其他模組的同名函式不適用；此綁定不會推斷未定義的回傳高位或回呼函式主體。
 
 固定版本的 Swift 宣告也為 `swift_initClassMetadata2` 與 `swift_updateClassMetadata2` 綁定五個指標寬度參數，以及雙字的 `swiftcall` 後設資料相依回傳值（後設資料指標、狀態字）。僅精確符合的 libswiftCore 強匯入適用。產生器現在也能從固定版本原始碼重現這些項目與泛型列舉標籤項目。
+
+將快取的 Dictionary 或 Array 橋接為 NSDictionary 或 NSArray 的 Swift 延遲載入 Objective-C 類別 getter，使用保留副作用的 once 契約。投影要求精確的 `vgZTo` 類別方法與 Foundation 橋接繫結、唯一且僅以 x2 為 context 的 `swift_once`、相符的 `_Wz`/`_WZ` 符號，以及忽略 context 且沒有一般直接呼叫者的初始化器。只有該 context 會改為 null；橋接、autorelease、儲存讀取、控制流程與相依性檢查皆保留。

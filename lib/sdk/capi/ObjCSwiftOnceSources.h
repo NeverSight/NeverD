@@ -1049,13 +1049,13 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
                                     *Method->TypeHint};
 }
 
-/// A Swift Objective-C constructor can forward an unspecified third argument
-/// to swift_once while using its declared receiver normally. Only erase that
-/// context after the exact initializer is independently proved not to read it.
-/// The constructor's control flow, memory effects and other calls are retained
-/// and must pass the ordinary source-body and dependency checks.
+/// A Swift Objective-C constructor or bridged lazy class getter can forward an
+/// unspecified third argument to swift_once while retaining other effects.
+/// Only erase that context after the exact initializer is independently proved
+/// not to read it. The remaining control flow, memory effects and calls must
+/// pass the ordinary source-body and dependency checks.
 inline std::optional<SwiftOnceObjCThunkContract>
-objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
+objcEffectfulThunkContract(const HighFunc &F, const BinaryImage &Image) {
   const ObjCMethod *Method = nullptr;
   for (const auto &Candidate : Image.ObjCMethods) {
     if (Candidate.Implementation != F.Entry)
@@ -1064,8 +1064,16 @@ objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
       return std::nullopt;
     Method = &Candidate;
   }
-  if (!Method || Method->IsClassMethod || Method->Selector != "init" ||
-      F.SourceTypeHint || F.Params.size() != 3 || !F.ReturnType ||
+  if (!Method)
+    return std::nullopt;
+  const bool Constructor = !Method->IsClassMethod && Method->Selector == "init" &&
+                           llvm::StringRef(F.Name).ends_with("cfcTo");
+  const bool BridgedGetter =
+      Method->IsClassMethod && !Method->Selector.empty() &&
+      Method->Selector.find(':') == std::string::npos &&
+      llvm::StringRef(F.Name).ends_with("vgZTo");
+  if ((!Constructor && !BridgedGetter) || F.SourceTypeHint ||
+      F.Params.size() != 3 || !F.ReturnType ||
       F.ReturnType->Size != 8 ||
       (F.ReturnType->Kind != NdTypeKind::Int &&
        F.ReturnType->Kind != NdTypeKind::Ptr))
@@ -1087,7 +1095,7 @@ objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
   size_t ThunkSymbols = 0;
   for (const auto &Symbol : Image.Symbols)
     if (Symbol.IsFunc && Symbol.Addr == F.Entry && Symbol.Name == F.Name &&
-        llvm::StringRef(Symbol.Name).ends_with("cfcTo"))
+        llvm::StringRef(Symbol.Name).ends_with(Constructor ? "cfcTo" : "vgZTo"))
       ++ThunkSymbols;
   if (ThunkSymbols != 1)
     return std::nullopt;
@@ -1098,6 +1106,7 @@ objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
   size_t Budget = 100000;
   size_t ContextUses = 0;
   const HighExpr *Once = nullptr;
+  bool CollectionBridge = false;
   bool Valid = true;
   std::function<void(const ExprPtr &, unsigned)> Visit = [&](const ExprPtr &E,
                                                              unsigned Depth) {
@@ -1118,13 +1127,28 @@ objcConstructorThunkContract(const HighFunc &F, const BinaryImage &Image) {
         Valid = false;
       Once = E.get();
     }
+    if (BridgedGetter && E->Kind == ExprKind::Call && !E->IsIndirectCall &&
+        E->SourceCallHint &&
+        E->SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::SwiftRuntimeCall &&
+        (E->SourceCallHint->TargetName ==
+             "$sSD10FoundationE19_bridgeToObjectiveCSo12NSDictionaryCyF" ||
+         E->SourceCallHint->TargetName ==
+             "$sSa10FoundationE19_bridgeToObjectiveCSo7NSArrayCyF")) {
+      const auto Expected =
+          swiftRuntimeSourceCallHint(Image, E->SourceCallHint->TargetAddress);
+      CollectionBridge |=
+          Expected && objc_binding_detail::runtimeBindingMatches(
+                          *E->SourceCallHint, *Expected);
+    }
     for (const auto &Operand : E->Operands)
       Visit(Operand, Depth + 1);
   };
   walkStmts(F.Body, [&](const HighStmt &Statement) {
     forEachExpr(Statement, [&](const ExprPtr &E) { Visit(E, 0); });
   });
-  if (!Valid || !Once || ContextUses != 1)
+  if (!Valid || !Once || ContextUses != 1 ||
+      (BridgedGetter && !CollectionBridge))
     return std::nullopt;
   const auto Predicate =
       objc_binding_detail::constantAddress(*Once->Operands[0]);
@@ -1154,7 +1178,7 @@ inline std::optional<SwiftOnceObjCThunkContract>
 objcThunkContract(const HighFunc &F, const BinaryImage &Image) {
   if (auto Contract = objcGetterThunkContract(F, Image))
     return Contract;
-  return objcConstructorThunkContract(F, Image);
+  return objcEffectfulThunkContract(F, Image);
 }
 
 inline SourceFunctionTypeHint callbackHint(Arch Architecture) {

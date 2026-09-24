@@ -332,3 +332,5 @@ ARM64 Objective-C のソース復元は、呼び出し元で証明した最大�
 強いインポートを持つ Swift の汎用単一ペイロード列挙型タグ関数に、宣言どおりの `swiftcall` ABI を適用します。case と tag は 32 ビット、メタデータとコールバックはポインタ、取得結果は 32 ビットで、設定関数は値を返しません。弱いインポートや別モジュールの同名関数は対象外です。この結び付けから未定義の上位結果ビットやコールバック本体は推定しません。
 
 固定した Swift 宣言では、`swift_initClassMetadata2` と `swift_updateClassMetadata2` に 5 個のポインタ幅引数と、2 ワードの `swiftcall` メタデータ依存結果（メタデータポインタ、状態ワード）も定義されています。libswiftCore からの完全一致する強いインポートだけを対象とします。生成器はこれらと汎用列挙型タグの項目を固定したソースから再生成できます。
+
+キャッシュした Dictionary または Array を NSDictionary または NSArray にブリッジする Swift の遅延初期化 Objective-C クラス getter には、副作用を保持する once 契約を適用します。正確な `vgZTo` クラスメソッドと Foundation ブリッジの束縛、x2 の唯一の用途が context である単一の `swift_once`、一致する `_Wz`/`_WZ` シンボル、context を読まず通常の直接呼び出し元を持たない初期化関数が必要です。null に置き換えるのはその context だけで、ブリッジ、autorelease、ストレージ読み取り、制御フロー、依存関係の検証は保持します。

@@ -346,3 +346,5 @@ ARM64 Objective-C 源码恢复支持由调用方证明的最多八个 Swift 字�
 强绑定的 Swift 泛型单载荷枚举标签函数现在使用其声明的 `swiftcall` ABI：分支和标签值为 32 位，元数据和回调为指针，读取函数返回 32 位标签，写入函数无返回值。弱导入或其他模块的同名函数不适用；这项绑定不会推断未定义的返回高位或回调函数体。
 
 固定版本的 Swift 声明还为 `swift_initClassMetadata2` 和 `swift_updateClassMetadata2` 绑定五个指针宽度参数，以及双字的 `swiftcall` 元数据依赖返回值（元数据指针、状态字）。仅精确匹配的 libswiftCore 强导入适用。生成器现在也能从固定版本源码重现这些条目和泛型枚举标签条目。
+
+将缓存的 Dictionary 或 Array 桥接为 NSDictionary 或 NSArray 的 Swift 懒加载 Objective-C 类 getter，使用保留副作用的 once 契约。投影要求精确的 `vgZTo` 类方法和 Foundation 桥接绑定、唯一且仅以 x2 为 context 的 `swift_once`、匹配的 `_Wz`/`_WZ` 符号，以及忽略 context 且没有普通直接调用者的初始化器。仅将该 context 改为 null；桥接、autorelease、存储读取、控制流和依赖检查均保留。
