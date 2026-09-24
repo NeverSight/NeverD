@@ -858,6 +858,108 @@ swiftMangledCGRectClassInitializerSourceABI(const BinaryImage &Image,
              : std::nullopt;
 }
 
+// Swift's failable class init(coder:) takes NSCoder in x0 and the allocated
+// receiver in swiftself, then returns an optional class pointer in x0.
+// Match the entire initializing-constructor type so ObjC thunks, allocating
+// entries, and specializations cannot borrow this entry contract.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledCoderClassInitializerSourceABI(const BinaryImage &Image,
+                                           va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Count) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Count;
+  };
+  const auto Named = [](const Node &N, llvm::StringRef Kind,
+                        llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Constructor", 3))
+    return std::nullopt;
+  const auto &Constructor = Parsed.Root->Children[0];
+  const auto &Class = Constructor.Children[0];
+  const auto &Labels = Constructor.Children[1];
+  const auto &Type = Constructor.Children[2];
+  if (!Shape(Class, "Class", 2) ||
+      Class.Children[0].Kind != "Module" || !Class.Children[0].Text ||
+      Class.Children[0].Text->empty() || Class.Children[0].Index ||
+      !Class.Children[0].Children.empty() ||
+      Class.Children[1].Kind != "Identifier" || !Class.Children[1].Text ||
+      Class.Children[1].Text->empty() || Class.Children[1].Index ||
+      !Class.Children[1].Children.empty() ||
+      !Shape(Labels, "LabelList", 1) ||
+      !Named(Labels.Children[0], "Identifier", "coder") ||
+      !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "FunctionType", 2) ||
+      !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
+      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Tuple", 1) ||
+      !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
+      !Shape(Type.Children[0].Children[1].Children[0], "Type", 1))
+    return std::nullopt;
+  const auto &Argument =
+      Type.Children[0].Children[0].Children[0].Children[0].Children[0];
+  const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
+  if (!Shape(Argument, "TupleElement", 1) ||
+      !Shape(Argument.Children[0], "Type", 1) ||
+      !Shape(Argument.Children[0].Children[0], "Class", 2) ||
+      !Named(Argument.Children[0].Children[0].Children[0], "Module", "__C") ||
+      !Named(Argument.Children[0].Children[0].Children[1], "Identifier",
+             "NSCoder") ||
+      !Shape(Result, "BoundGenericEnum", 2) ||
+      !Shape(Result.Children[0], "Type", 1) ||
+      !Shape(Result.Children[0].Children[0], "Enum", 2) ||
+      !Named(Result.Children[0].Children[0].Children[0], "Module", "Swift") ||
+      !Named(Result.Children[0].Children[0].Children[1], "Identifier",
+             "Optional") ||
+      !Shape(Result.Children[1], "TypeList", 1) ||
+      !Shape(Result.Children[1].Children[0], "Type", 1) ||
+      !Shape(Result.Children[1].Children[0].Children[0], "Class", 2))
+    return std::nullopt;
+  const auto &ResultClass = Result.Children[1].Children[0].Children[0];
+  if (!Named(ResultClass.Children[0], "Module", *Class.Children[0].Text) ||
+      !Named(ResultClass.Children[1], "Identifier", *Class.Children[1].Text))
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"coder", NdType::makePtr(NdType::makeVoid())},
+                     {"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
 // A class initializing constructor (cfc, not its allocating cfC entry) takes
 // the already allocated object in swiftself and returns that object. Limit the
 // declaration to an exact zero-argument constructor whose result repeats the

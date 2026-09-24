@@ -538,6 +538,64 @@ TEST(NativeSourceHints, CGRectClassInitializerUsesFourFPLanesAndSwiftSelf) {
                                                                  0x1000));
 }
 
+TEST(NativeSourceHints, FailableCoderClassInitializerUsesSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s4main13TestCoderViewC5coderACSgSo7NSCoderC_tcfc", 0x1000, 0,
+       true});
+  const auto Hint =
+      sdk::swiftMangledCoderClassInitializerSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset, a64reg::X0);
+  ASSERT_EQ(Hint->Parameters.size(), 2U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->Parameters[1].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s4main13TestCoderViewC5coderACSgSo7NSCoderC_tcfC";
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s4main13TestCoderViewC5coderACSo7NSCoderC_tcfc";
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$s4main13TestCoderViewC5coderACSgSo8NSObjectC_tcfc";
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledCoderClassInitializerSourceABI(Wrong,
+                                                                0x1000));
+}
+
 namespace {
 struct NativeFixture {
   BinaryImage Image;
