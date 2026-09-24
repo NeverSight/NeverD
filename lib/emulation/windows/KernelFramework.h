@@ -110,11 +110,14 @@ public:
     std::function<llvm::Error(uint64_t, uint32_t, uint64_t)> Complete;
     /// Forward a file lifecycle IRP on its retained lower-device route. The
     /// WDM host owns the original packet and its terminal completion.
-    std::function<llvm::Error(uint64_t)> ValidateFileForward;
+    std::function<llvm::Error(uint64_t, bool)> ValidateFileForward;
     std::function<llvm::Expected<uint32_t>(uint64_t)> ForwardFile;
     /// A synchronous lower send returns its status while the framework keeps
     /// the original CREATE request for a later WdfRequestComplete.
     std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileSynchronously;
+    /// An asynchronous send can retain the request until a later provider
+    /// completion, even when the lower provider responds immediately.
+    std::function<llvm::Expected<uint32_t>(uint64_t)> SendFileAsynchronously;
   };
   void setRequestHost(RequestHost Host) { RequestsHost = std::move(Host); }
   struct RequestDispatch {
@@ -127,6 +130,13 @@ public:
   /// framework dispatch status independently from a void callback's RAX.
   llvm::Expected<std::optional<RequestDispatch>>
   routeRequest(uint64_t WdmDevice, uint64_t IRP, bool AfterCaller = false);
+  llvm::Expected<GuestCall>
+  previewFileSendCompletion(uint64_t IRP, uint32_t Status,
+                            uint64_t EarlierCallbacks = 0) const;
+  llvm::Expected<GuestCall> queueFileSendCompletion(uint64_t IRP,
+                                                    uint32_t Status,
+                                                    uint64_t ReturnValue = 0);
+  llvm::Error beginRequestCompletionCallback(uint64_t Token);
   llvm::Expected<RequestDispatch> continueCallerContext(uint64_t IRP);
   /// The WDM host first records cancellation, then asks for the one guest
   /// notification owned by this request. Ordinary WDM requests return nullopt.
@@ -332,6 +342,8 @@ private:
     bool FormattedForSend = false;
     uint64_t CompletionRoutine = 0;
     uint64_t CompletionContext = 0;
+    uint64_t CompletionTarget = 0;
+    uint64_t PendingCompletionParams = 0;
     bool CompletionCallbackPending = false;
     bool CompletionCallbackEntered = false;
     std::optional<uint32_t> LastSendStatus;

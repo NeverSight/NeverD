@@ -22,32 +22,45 @@ llvm::Error interruptEventError(const llvm::Twine &Message) {
 llvm::Expected<uint64_t>
 KernelModel::preflightScheduledBoundary(uint64_t Time) {
   uint64_t ProviderCount = 0;
+  uint64_t WDMProviderCount = 0;
+  uint64_t FrameworkCompletions = 0;
   std::vector<KernelScheduler::Callback> ProviderCallbacks;
   for (const auto &[IRP, Provider] : ProviderCompletions) {
     if (Provider.Deadline > Time)
       continue;
     const auto *Request = requestForIRP(IRP);
-    if (!Request || Request->Completed ||
-        Request->PnpDevice != Provider.Device)
+    if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return interruptEventError(
           "PnP provider: deadline lost its live request or PDO identity");
-    auto Plan = planIRPCompletion(IRP, Provider.Status);
-    if (!Plan)
-      return Plan.takeError();
-    if (Plan->PC)
-      ProviderCallbacks.push_back({IRP, Provider.Device,
-                                   profile::WorkerThreadIdentity, Plan->PC,
-                                   Plan->Arguments});
+    if (Provider.FrameworkFile) {
+      if (!Framework)
+        return interruptEventError("file completion lost its framework model");
+      auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,
+                                                       FrameworkCompletions++);
+      if (!Call)
+        return Call.takeError();
+      ProviderCallbacks.push_back({IRP, Request->Device,
+                                   profile::WorkerThreadIdentity, Call->PC,
+                                   Call->Arguments});
+    } else {
+      ++WDMProviderCount;
+      auto Plan = planIRPCompletion(IRP, Provider.Status);
+      if (!Plan)
+        return Plan.takeError();
+      if (Plan->PC)
+        ProviderCallbacks.push_back({IRP, Provider.Device,
+                                     profile::WorkerThreadIdentity, Plan->PC,
+                                     Plan->Arguments});
+    }
     ++ProviderCount;
   }
   if (ProviderCount) {
     if (hasPendingModelGuestCall())
       return interruptEventError(
           "PnP provider: deadline cannot replace a pending guest callback");
-    if (ProviderCount > UINT64_MAX - NextIRPCall)
-      return interruptEventError(
-          "PnP provider: completion identity exhausted");
-    if (auto E = Scheduler.canEnqueueWDMCompletions(ProviderCallbacks))
+    if (WDMProviderCount > UINT64_MAX - NextIRPCall)
+      return interruptEventError("PnP provider: completion identity exhausted");
+    if (auto E = Scheduler.canEnqueueCompletions(ProviderCallbacks))
       return E;
   }
 
@@ -79,8 +92,8 @@ KernelModel::preflightScheduledBoundary(uint64_t Time) {
   const uint64_t Providers = ProviderCallbacks.size();
   if (WDMCancellations.size() > UINT64_MAX - Cancellations ||
       Cancellations + WDMCancellations.size() > UINT64_MAX - Providers ||
-      *InterruptCount > UINT64_MAX - Providers - Cancellations -
-                            WDMCancellations.size())
+      *InterruptCount >
+          UINT64_MAX - Providers - Cancellations - WDMCancellations.size())
     return interruptEventError("scheduled boundary callback count overflow");
   // The caller combines this exact count with timer-DPC coalescing in one
   // scheduler capacity/identity preflight before changing time or
@@ -98,8 +111,7 @@ llvm::Error KernelModel::processInterruptEvents() {
     auto &Event = **Delivery;
     if (Event.Call.Token.Owner != GuestCallOwner::Interrupt ||
         !Event.Call.Token.ID)
-      return interruptEventError(
-          "interrupt event lost its typed continuation");
+      return interruptEventError("interrupt event lost its typed continuation");
     KernelScheduler::InterruptCallback Callback;
     Callback.Object = Event.Call.Token.ID;
     Callback.Owner = Event.PDO;

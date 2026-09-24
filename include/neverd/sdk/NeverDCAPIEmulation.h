@@ -71,7 +71,11 @@ neverd_emulate_driver_json(neverd_session_t Sess, const char *Path,
 /// separate direct IOCTL buffer's initial hex bytes). READ accepts output_size
 /// and byte_offset; WRITE accepts input and byte_offset. Offsets default to
 /// zero, accept integers or 0x strings, and the entire transfer must fit
-/// nonnegative signed 64-bit file offsets. Configured pnp_devices require a
+/// nonnegative signed 64-bit file offsets. Forwarded CREATE/CLEANUP/CLOSE
+/// requests require an explicit bus_completion with a final status. A positive
+/// delay_100ns is accepted only for a default asynchronous CREATE send with a
+/// completion routine; other file sends require an immediate response.
+/// Configured pnp_devices require a
 /// unique case-sensitive ASCII id, bus="resource_free" or "register_bank",
 /// initial_device_power=
 /// "D0" and initial_system_power="working". The register_bank bus additionally

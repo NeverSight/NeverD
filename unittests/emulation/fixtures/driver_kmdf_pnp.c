@@ -16,6 +16,7 @@
 /// O uses filter-default file forwarding, o requests it explicitly, n disables
 /// it on a filter, p sends CREATE without a file object, s synchronously sends
 /// CREATE with a file object, a uses an asynchronous completion callback,
+/// b completes the original request with an independent status,
 /// u uses unsupported send flags, and F fails AddDevice.
 ///
 //===----------------------------------------------------------------------===//
@@ -93,7 +94,8 @@ static VOID FilterFileCreateCompleted(WDFREQUEST Request, WDFIOTARGET Target,
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_STATE);
     return;
   }
-  WdfRequestComplete(Request, Params->IoStatus.Status);
+  WdfRequestComplete(Request, ServiceMode == L'b' ? STATUS_UNSUCCESSFUL
+                                                  : Params->IoStatus.Status);
   DbgPrint("KMDF PnP: file create forwarded\n");
 }
 
@@ -115,13 +117,14 @@ static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
                              WDFFILEOBJECT File) {
   WDF_REQUEST_SEND_OPTIONS Options;
   WDFIOTARGET Target = WdfDeviceGetIoTarget(Device);
-  if ((ServiceMode == L's' || ServiceMode == L'a' ? File == NULL
-                                                  : File != NULL) ||
+  if ((ServiceMode == L's' || ServiceMode == L'a' || ServiceMode == L'b'
+           ? File == NULL
+           : File != NULL) ||
       Target == NULL || Target != WdfDeviceGetIoTarget(Device)) {
     WdfRequestComplete(Request, STATUS_INVALID_DEVICE_STATE);
     return;
   }
-  if (ServiceMode == L'a') {
+  if (ServiceMode == L'a' || ServiceMode == L'b') {
     WdfRequestFormatRequestUsingCurrentType(Request);
     FileTarget = Target;
     WdfRequestSetCompletionRoutine(Request, FilterFileCreateCompleted, Target);
@@ -386,16 +389,16 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
     WdfDeviceInitSetExclusive(Init, TRUE);
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
       ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-      ServiceMode == L'u') {
+      ServiceMode == L'b' || ServiceMode == L'u') {
     if (ServiceMode != L'o')
       WdfFdoInitSetFilter(Init);
-    WDF_FILEOBJECT_CONFIG_INIT(&FileConfig,
-                               ServiceMode == L'p' || ServiceMode == L's' ||
-                                       ServiceMode == L'a' ||
-                                       ServiceMode == L'u'
-                                   ? FilterFileCreate
-                                   : NULL,
-                               FilterFileClose, FilterFileCleanup);
+    WDF_FILEOBJECT_CONFIG_INIT(
+        &FileConfig,
+        ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
+                ServiceMode == L'b' || ServiceMode == L'u'
+            ? FilterFileCreate
+            : NULL,
+        FilterFileClose, FilterFileCleanup);
     if (ServiceMode == L'p' || ServiceMode == L'u')
       FileConfig.FileObjectClass = WdfFileObjectNotRequired;
     if (ServiceMode == L'o')
@@ -447,7 +450,7 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
   }
   if (ServiceMode == L'O' || ServiceMode == L'o' || ServiceMode == L'n' ||
       ServiceMode == L'p' || ServiceMode == L's' || ServiceMode == L'a' ||
-      ServiceMode == L'u') {
+      ServiceMode == L'b' || ServiceMode == L'u') {
     DbgPrint("KMDF PnP: filter ready\n");
     return STATUS_SUCCESS;
   }

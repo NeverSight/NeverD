@@ -43,10 +43,9 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
                              Request->Kind == DriverRequestKind::Cleanup ||
                              Request->Kind == DriverRequestKind::Close;
   if (FileLifecycle) {
-    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status ||
-        Request->FileBusCompletion->Delay100ns)
+    if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status)
       return providerError(
-          "file forwarding requires a synchronous configured bus response");
+          "file forwarding requires a configured bus response");
     if (Request->FileBusReceived)
       return providerError("file request was already dispatched to the bus");
     auto Stack = currentRequestStack(IRP);
@@ -59,11 +58,31 @@ KernelModel::callProviderDriver(uint64_t Device, uint64_t IRP,
       return providerError("forwarded file identity changed");
     const uint32_t Status = *Request->FileBusCompletion->Status;
     if (Status == StatusPending)
-      return providerError("synchronous file response cannot be pending");
+      return providerError("file bus response requires a final status");
     const bool RetainRequest =
-        Owner == ForwardingOwner::FrameworkFileSynchronous;
+        Owner == ForwardingOwner::FrameworkFileSynchronous ||
+        Owner == ForwardingOwner::FrameworkFileAsynchronous;
     if (RetainRequest && Request->Kind != DriverRequestKind::Create)
-      return providerError("synchronous framework send requires CREATE");
+      return providerError("framework file send requires CREATE");
+    if (Request->FileBusCompletion->Delay100ns) {
+      if (Owner != ForwardingOwner::FrameworkFileAsynchronous ||
+          ProviderCompletions.count(IRP))
+        return providerError(
+            "delayed file response requires one asynchronous CREATE send");
+      auto Deadline = Scheduler.computeDeadline(
+          -int64_t(Request->FileBusCompletion->Delay100ns));
+      if (!Deadline)
+        return Deadline.takeError();
+      if (NextProviderSequence == UINT64_MAX)
+        return providerError("completion identity exhausted");
+      if (auto E = markRequestPending(IRP))
+        return E;
+      ProviderCompletions.emplace(
+          IRP, ProviderCompletion{Device, *Deadline, NextProviderSequence++,
+                                  Status, true});
+      Request->FileBusReceived = true;
+      return StatusPending;
+    }
     if (!RetainRequest) {
       auto Plan = planIRPCompletion(IRP, Status);
       if (!Plan)
@@ -210,31 +229,47 @@ llvm::Error KernelModel::processProviderCompletions() {
   struct DueCompletion {
     uint64_t IRP;
     ProviderCompletion Provider;
-    IRPCompletionPlan Plan;
+    std::optional<IRPCompletionPlan> Plan;
   };
   std::vector<DueCompletion> Due;
   std::vector<KernelScheduler::Callback> Callbacks;
+  uint64_t FrameworkCompletions = 0;
+  uint64_t WDMCompletions = 0;
   for (const auto &[IRP, Provider] : ProviderCompletions) {
     if (Provider.Deadline > Scheduler.now100ns())
       continue;
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed || Request->PnpDevice != Provider.Device)
       return providerError("deadline lost its live request or PDO identity");
-    auto Plan = planIRPCompletion(IRP, Provider.Status);
-    if (!Plan)
-      return Plan.takeError();
-    if (Plan->PC)
-      Callbacks.push_back({IRP, Provider.Device, profile::WorkerThreadIdentity,
-                           Plan->PC, Plan->Arguments});
-    Due.push_back({IRP, Provider, std::move(*Plan)});
+    if (Provider.FrameworkFile) {
+      if (!Framework || !Request->FileBusReceived)
+        return providerError("file completion lost its framework request");
+      auto Call = Framework->previewFileSendCompletion(IRP, Provider.Status,
+                                                       FrameworkCompletions++);
+      if (!Call)
+        return Call.takeError();
+      Callbacks.push_back({IRP, Request->Device, profile::WorkerThreadIdentity,
+                           Call->PC, Call->Arguments});
+      Due.push_back({IRP, Provider, std::nullopt});
+    } else {
+      ++WDMCompletions;
+      auto Plan = planIRPCompletion(IRP, Provider.Status);
+      if (!Plan)
+        return Plan.takeError();
+      if (Plan->PC)
+        Callbacks.push_back({IRP, Provider.Device,
+                             profile::WorkerThreadIdentity, Plan->PC,
+                             Plan->Arguments});
+      Due.push_back({IRP, Provider, std::move(*Plan)});
+    }
   }
   if (Due.empty())
     return llvm::Error::success();
   if (PendingWdmCall || (Framework && Framework->hasPendingGuestCall()))
     return providerError("deadline cannot replace a pending guest callback");
-  if (Due.size() > UINT64_MAX - NextIRPCall)
+  if (WDMCompletions > UINT64_MAX - NextIRPCall)
     return providerError("completion identity exhausted");
-  if (auto E = Scheduler.canEnqueueWDMCompletions(Callbacks))
+  if (auto E = Scheduler.canEnqueueCompletions(Callbacks))
     return E;
   std::sort(Due.begin(), Due.end(), [](const auto &A, const auto &B) {
     return std::tie(A.Provider.Deadline, A.Provider.Sequence) <
@@ -251,6 +286,29 @@ llvm::Error KernelModel::processProviderCompletions() {
     if (auto E = Memory.writeInteger(IRP + IRPInformationOffset, 0, 8))
       return E;
     Request.IOStatusWritten.fill(true);
+    if (Completion.Provider.FrameworkFile) {
+      auto Cursor = requestStackCursor(IRP);
+      if (!Cursor)
+        return Cursor.takeError();
+      if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1))
+        return E;
+      if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset,
+                                       IRP + IRPSize + *Cursor * StackSize, 8))
+        return E;
+      auto Call =
+          Framework->queueFileSendCompletion(IRP, Completion.Provider.Status);
+      if (!Call)
+        return Call.takeError();
+      ProviderCompletions.erase(IRP);
+      auto ID = Scheduler.enqueueFrameworkCompletion(
+          {IRP, Request.Device, profile::WorkerThreadIdentity, Call->PC,
+           std::move(Call->Arguments)});
+      if (!ID)
+        return ID.takeError();
+      ScheduledModelContinuations.emplace(
+          *ID, GuestCallToken{GuestCallOwner::Framework, Call->Token});
+      continue;
+    }
     auto &Observation = Result.Requests[Request.ResultIndex];
     auto Publish = [&](auto &Bus) {
       Bus.BusStatus = Completion.Provider.Status;
@@ -276,13 +334,13 @@ llvm::Error KernelModel::processProviderCompletions() {
       return E;
     }
     auto Call = takeWdmGuestCall();
-    if (bool(Call) != bool(Completion.Plan.PC))
+    if (bool(Call) != bool(Completion.Plan->PC))
       return providerError("completion diverged from its preflight plan");
     if (!Call)
       continue;
     if (Call->Token.Owner != GuestCallOwner::WDM ||
-        Call->PC != Completion.Plan.PC ||
-        Call->Arguments != Completion.Plan.Arguments)
+        Call->PC != Completion.Plan->PC ||
+        Call->Arguments != Completion.Plan->Arguments)
       return providerError("completion callback changed after preflight");
     auto ID = Scheduler.enqueueWDMCompletion(
         {IRP, Completion.Provider.Device, profile::WorkerThreadIdentity,

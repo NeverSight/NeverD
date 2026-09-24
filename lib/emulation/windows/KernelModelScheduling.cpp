@@ -313,6 +313,15 @@ KernelModel::nextScheduled(bool AdvanceTime, std::optional<uint64_t> Deadline) {
         if (auto E = Framework->beginCancelCallback(Token->second.ID))
           return E;
     }
+    if ((**Next).Kind == KernelScheduler::CallbackKind::FrameworkCompletion) {
+      auto Token = ScheduledModelContinuations.find((**Next).ID);
+      if (!Framework || Token == ScheduledModelContinuations.end() ||
+          Token->second.Owner != GuestCallOwner::Framework)
+        return schedulingError(
+            "request completion lost its framework identity");
+      if (auto E = Framework->beginRequestCompletionCallback(Token->second.ID))
+        return E;
+    }
     if ((**Next).Kind == KernelScheduler::CallbackKind::Interrupt) {
       auto Token = ScheduledModelContinuations.find((**Next).ID);
       if (Token == ScheduledModelContinuations.end() ||
@@ -389,6 +398,7 @@ llvm::Error KernelModel::finishScheduled(uint64_t ID) {
     return retireDeviceIfUnreferenced(Invocation.Owner);
   }
   if (Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
+      Invocation.Kind == KernelScheduler::CallbackKind::FrameworkCompletion ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCancel ||
       Invocation.Kind == KernelScheduler::CallbackKind::WDMCompletion ||
       Invocation.Kind == KernelScheduler::CallbackKind::Interrupt ||

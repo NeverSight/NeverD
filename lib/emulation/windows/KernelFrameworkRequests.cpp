@@ -524,6 +524,64 @@ llvm::Error KernelFramework::writeRequestCompletionParams(uint64_t Address,
                              8);
 }
 
+llvm::Expected<KernelFramework::GuestCall>
+KernelFramework::previewFileSendCompletion(uint64_t IRP, uint32_t Status,
+                                           uint64_t EarlierCallbacks) const {
+  if (Status == windows::StatusPending)
+    return requestError("lower file completion requires a final status");
+  if (EarlierCallbacks >= UINT64_MAX - NextContinuation)
+    return requestError("completion callback capacity exhausted");
+  auto Request = llvm::find_if(Requests, [IRP](const auto &Entry) {
+    return Entry.second.IRP == IRP && Entry.second.FileCreate;
+  });
+  if (Request == Requests.end() || Request->second.Completed ||
+      !Request->second.CompletionCallbackPending ||
+      Request->second.CompletionCallbackEntered ||
+      Request->second.LastSendStatus || !Request->second.CompletionRoutine ||
+      !Request->second.CompletionTarget ||
+      !Request->second.PendingCompletionParams)
+    return requestError("lower file completion lost its sent request");
+  return GuestCall{0,
+                   Request->second.CompletionRoutine,
+                   {Request->first, Request->second.CompletionTarget,
+                    Request->second.PendingCompletionParams,
+                    Request->second.CompletionContext}};
+}
+
+llvm::Expected<KernelFramework::GuestCall>
+KernelFramework::queueFileSendCompletion(uint64_t IRP, uint32_t Status,
+                                         uint64_t ReturnValue) {
+  auto Call = previewFileSendCompletion(IRP, Status);
+  if (!Call)
+    return Call.takeError();
+  if (auto E = writeRequestCompletionParams(Call->Arguments[2], Status))
+    return E;
+  const uint64_t Token = NextContinuation++;
+  Continuation C;
+  C.ReturnValue = ReturnValue;
+  Continuations.emplace(Token, std::move(C));
+  RequestCompletionCallbacks.emplace(
+      Token, RequestCompletionCallback{Call->Arguments[0], Call->Arguments[2]});
+  auto &Request = Requests.at(Call->Arguments[0]);
+  Request.LastSendStatus = Status;
+  Request.PendingCompletionParams = 0;
+  Call->Token = Token;
+  return Call;
+}
+
+llvm::Error KernelFramework::beginRequestCompletionCallback(uint64_t Token) {
+  auto Callback = RequestCompletionCallbacks.find(Token);
+  if (Callback == RequestCompletionCallbacks.end())
+    return requestError("completion callback has no retained request");
+  auto Request = Requests.find(Callback->second.Request);
+  if (Request == Requests.end() || !Request->second.CompletionCallbackPending ||
+      Request->second.CompletionCallbackEntered ||
+      !Request->second.LastSendStatus)
+    return requestError("completion callback lost its lower result");
+  Request->second.CompletionCallbackEntered = true;
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::optional<uint64_t>>
 KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
                              llvm::ArrayRef<uint64_t> A) {
@@ -819,7 +877,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
   }
   if (Name == api::WdfRequestFormatRequestUsingCurrentType) {
     if (!R->second.FileCreate || !R->second.File || R->second.Queue ||
-        R->second.LastSendStatus)
+        R->second.LastSendStatus || R->second.CompletionCallbackPending)
       return requestError(
           "current-type formatting requires an unsent framework-file CREATE");
     R->second.FormattedForSend = true;
@@ -864,7 +922,7 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (!R->second.FileCreate || R->second.Queue ||
         R->second.Cancellation != CancelState::Unmarked ||
         !Device->second.Files.forwards(Device->second.Filter) ||
-        R->second.LastSendStatus)
+        R->second.LastSendStatus || R->second.CompletionCallbackPending)
       return requestError("send requires an unsent forwardable CREATE request");
     const bool SendAndForget = Flags == RequestSendAndForget;
     const bool Synchronous = Flags == RequestSendSynchronous;
@@ -884,9 +942,10 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
           "synchronous CREATE send with a completion routine is unsupported");
     if (!RequestsHost.ValidateFileForward ||
         (SendAndForget ? !RequestsHost.ForwardFile
-                       : !RequestsHost.SendFileSynchronously))
+         : Synchronous ? !RequestsHost.SendFileSynchronously
+                       : !RequestsHost.SendFileAsynchronously))
       return requestError("lower file-request host is unavailable");
-    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP))
+    if (auto E = RequestsHost.ValidateFileForward(R->second.IRP, Asynchronous))
       return E;
     uint64_t CompletionParams = 0;
     if (Asynchronous) {
@@ -896,35 +955,36 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
       if (!Storage)
         return Storage.takeError();
       CompletionParams = *Storage;
+      R->second.CompletionTarget = A[2];
+      R->second.PendingCompletionParams = CompletionParams;
+      R->second.CompletionCallbackPending = true;
     }
-    auto Status = SendAndForget
-                      ? RequestsHost.ForwardFile(R->second.IRP)
-                      : RequestsHost.SendFileSynchronously(R->second.IRP);
+    auto Status = SendAndForget ? RequestsHost.ForwardFile(R->second.IRP)
+                  : Synchronous
+                      ? RequestsHost.SendFileSynchronously(R->second.IRP)
+                      : RequestsHost.SendFileAsynchronously(R->second.IRP);
     if (!Status) {
       auto E = Status.takeError();
-      if (CompletionParams)
+      if (CompletionParams) {
+        R->second.CompletionCallbackPending = false;
+        R->second.CompletionTarget = 0;
+        R->second.PendingCompletionParams = 0;
         E = llvm::joinErrors(std::move(E), retire(CompletionParams));
+      }
       return E;
     }
-    if (*Status == windows::StatusPending)
+    if (*Status == windows::StatusPending && !Asynchronous)
       return requestError("asynchronous lower file completion is unsupported");
     if (!SendAndForget) {
-      R->second.LastSendStatus = *Status;
       if (Asynchronous) {
-        if (auto E = writeRequestCompletionParams(CompletionParams, *Status))
-          return E;
-        const uint64_t Token = NextContinuation++;
-        Continuation SendReturn;
-        SendReturn.ReturnValue = 1;
-        Continuations.emplace(Token, std::move(SendReturn));
-        RequestCompletionCallbacks.emplace(
-            Token, RequestCompletionCallback{A[1], CompletionParams});
-        R->second.CompletionCallbackPending = true;
-        PendingCall = GuestCall{
-            Token,
-            R->second.CompletionRoutine,
-            {A[1], A[2], CompletionParams, R->second.CompletionContext}};
-      }
+        if (*Status != windows::StatusPending) {
+          auto Call = queueFileSendCompletion(R->second.IRP, *Status, 1);
+          if (!Call)
+            return Call.takeError();
+          PendingCall = std::move(*Call);
+        }
+      } else
+        R->second.LastSendStatus = *Status;
       return Result{1};
     }
     R->second.Completed = true;
@@ -961,9 +1021,6 @@ KernelFramework::callRequest(llvm::StringRef Name, Binding &B,
     if (R->second.CompletionCallbackPending &&
         !R->second.CompletionCallbackEntered)
       return requestError("request completion precedes its lower callback");
-    if (R->second.LastSendStatus && uint32_t(A[2]) != *R->second.LastSendStatus)
-      return requestError(
-          "forwarded CREATE must complete with its synchronous lower status");
     if (R->second.Cancellation == CancelState::Marked ||
         R->second.Cancellation == CancelState::Queued)
       return requestError(

@@ -28,8 +28,7 @@ KernelModel::planWDMCancellation(uint64_t IRP,
                                  const ActiveRequest &Request) const {
   if (Request.Completed)
     return cancellationError("WDM cancellation requires a live IRP");
-  auto Routine =
-      Memory.readInteger(IRP + windows::IRPCancelRoutineOffset, 8);
+  auto Routine = Memory.readInteger(IRP + windows::IRPCancelRoutineOffset, 8);
   if (!Routine)
     return Routine.takeError();
   if (!*Routine)
@@ -54,8 +53,7 @@ KernelModel::planWDMCancellation(uint64_t IRP,
   return std::optional<KernelScheduler::Callback>{std::move(Callback)};
 }
 
-llvm::Expected<uint64_t>
-KernelModel::acquireCancelSpinLock(uint64_t OldIRQL) {
+llvm::Expected<uint64_t> KernelModel::acquireCancelSpinLock(uint64_t OldIRQL) {
   if (CancelLock.Held)
     return cancellationError("cancel spin lock is already held");
   if (CurrentIRQL > scheduler::DispatchLevel)
@@ -109,16 +107,15 @@ llvm::Expected<uint64_t> KernelModel::cancelIRP(uint64_t IRP) {
     Observation.CancelRequestedAt100ns = Scheduler.now100ns();
   if (!*Plan)
     return 0;
-  if (auto E = Memory.writeInteger(IRP + windows::IRPCancelIROffset,
-                                   OldIRQL, 1))
+  if (auto E =
+          Memory.writeInteger(IRP + windows::IRPCancelIROffset, OldIRQL, 1))
     return E;
-  if (auto E = Memory.writeInteger(IRP + windows::IRPCancelRoutineOffset, 0,
-                                   8))
+  if (auto E = Memory.writeInteger(IRP + windows::IRPCancelRoutineOffset, 0, 8))
     return E;
   const uint64_t Token = NextIRPCall++;
   IRPCalls.emplace(Token, IRPCall{IRPCallKind::Cancel, IRP, 0, true});
-  PendingWdmCall = KernelGuestCall{{GuestCallOwner::WDM, Token},
-                                   (**Plan).PC, std::move((**Plan).Arguments)};
+  PendingWdmCall = KernelGuestCall{
+      {GuestCallOwner::WDM, Token}, (**Plan).PC, std::move((**Plan).Arguments)};
   CancelLock.Held = true;
   CancelLock.Callback = true;
   CancelLock.Owner = 0;
@@ -144,12 +141,12 @@ llvm::Error KernelModel::processRequestCancellations() {
       if (!Plan)
         return Plan.takeError();
       WDMCancellation = std::move(*Plan);
-      if (auto E = Memory.writeInteger(
-              IRP + windows::IRPCancelIROffset, scheduler::PassiveLevel, 1))
+      if (auto E = Memory.writeInteger(IRP + windows::IRPCancelIROffset,
+                                       scheduler::PassiveLevel, 1))
         return E;
       if (WDMCancellation)
-        if (auto E = Memory.writeInteger(
-                IRP + windows::IRPCancelRoutineOffset, 0, 8))
+        if (auto E = Memory.writeInteger(IRP + windows::IRPCancelRoutineOffset,
+                                         0, 8))
           return E;
     }
     if (auto E = Memory.writeInteger(IRP + windows::IRPCancelOffset, 1, 1))
@@ -160,8 +157,7 @@ llvm::Error KernelModel::processRequestCancellations() {
         Scheduler.now100ns();
     if (!KMDF) {
       if (WDMCancellation) {
-        auto ID = Scheduler.enqueueWDMCancellation(
-            std::move(*WDMCancellation));
+        auto ID = Scheduler.enqueueWDMCancellation(std::move(*WDMCancellation));
         if (!ID)
           return ID.takeError();
       }
@@ -194,6 +190,7 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
         "callback continuation does not match active task");
   const auto Kind = Scheduler.active()->Kind;
   if (Kind != KernelScheduler::CallbackKind::FrameworkCancel &&
+      Kind != KernelScheduler::CallbackKind::FrameworkCompletion &&
       Kind != KernelScheduler::CallbackKind::WDMCompletion &&
       Kind != KernelScheduler::CallbackKind::Interrupt &&
       !KernelScheduler::isDMACallbackKind(Kind))
@@ -202,14 +199,16 @@ KernelModel::continueScheduled(uint64_t ID, uint64_t ReturnValue) {
   if (Token == ScheduledModelContinuations.end())
     return cancellationError("scheduled callback lost its model continuation");
   const auto ExpectedOwner =
-      Kind == KernelScheduler::CallbackKind::FrameworkCancel
+      (Kind == KernelScheduler::CallbackKind::FrameworkCancel ||
+       Kind == KernelScheduler::CallbackKind::FrameworkCompletion)
           ? GuestCallOwner::Framework
       : Kind == KernelScheduler::CallbackKind::Interrupt
           ? GuestCallOwner::Interrupt
       : KernelScheduler::isDMACallbackKind(Kind) ? GuestCallOwner::DMA
                                                  : GuestCallOwner::WDM;
   if (Token->second.Owner != ExpectedOwner)
-    return cancellationError("scheduled callback has a foreign continuation owner");
+    return cancellationError(
+        "scheduled callback has a foreign continuation owner");
   auto Result = finishGuestCall(Token->second, ReturnValue);
   if (!Result)
     return Result.takeError();

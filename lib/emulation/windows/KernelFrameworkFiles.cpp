@@ -209,7 +209,7 @@ KernelFramework::routeFileRequest(uint64_t Device, uint64_t IRP,
   if (Forward && !(View.Major == RequestMajorCreate && Config.Create)) {
     if (!RequestsHost.ValidateFileForward || !RequestsHost.ForwardFile)
       return fileError("lower file-request host is unavailable");
-    if (auto E = RequestsHost.ValidateFileForward(IRP))
+    if (auto E = RequestsHost.ValidateFileForward(IRP, false))
       return E;
   }
   if (View.Major == RequestMajorCreate) {

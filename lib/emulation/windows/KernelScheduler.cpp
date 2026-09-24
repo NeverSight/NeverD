@@ -82,8 +82,8 @@ llvm::Error KernelScheduler::validateDPC(const DpcCallback &DPC) const {
   return schedulerError("invalid DPC importance");
 }
 
-llvm::Error KernelScheduler::validateInterrupt(
-    const InterruptCallback &Interrupt) const {
+llvm::Error
+KernelScheduler::validateInterrupt(const InterruptCallback &Interrupt) const {
   if (auto E = validateCallback(Interrupt))
     return E;
   if (Interrupt.Priority < scheduler::MinDeviceIRQL ||
@@ -216,8 +216,8 @@ llvm::Expected<bool> KernelScheduler::queueDPC(DpcCallback DPC) {
   return true;
 }
 
-llvm::Error KernelScheduler::canEnqueueWDMCompletions(
-    llvm::ArrayRef<Callback> Batch) const {
+llvm::Error
+KernelScheduler::canEnqueueCompletions(llvm::ArrayRef<Callback> Batch) const {
   if (auto E = validateTime())
     return E;
   std::set<uint64_t> Objects;
@@ -226,17 +226,26 @@ llvm::Error KernelScheduler::canEnqueueWDMCompletions(
       return E;
     if (containsObject(Completions, Completion.Object) ||
         !Objects.insert(Completion.Object).second)
-      return schedulerError("WDM completion is already queued");
+      return schedulerError("request completion is already queued");
   }
   return checkCapacity(Batch.size());
 }
 
 llvm::Expected<uint64_t>
 KernelScheduler::enqueueWDMCompletion(Callback Completion) {
-  if (auto E = canEnqueueWDMCompletions({Completion}))
+  if (auto E = canEnqueueCompletions({Completion}))
+    return E;
+  Completions.push_back(
+      makeInvocation(std::move(Completion), CallbackKind::WDMCompletion, Now));
+  return Completions.back().ID;
+}
+
+llvm::Expected<uint64_t>
+KernelScheduler::enqueueFrameworkCompletion(Callback Completion) {
+  if (auto E = canEnqueueCompletions({Completion}))
     return E;
   Completions.push_back(makeInvocation(std::move(Completion),
-                                       CallbackKind::WDMCompletion, Now));
+                                       CallbackKind::FrameworkCompletion, Now));
   return Completions.back().ID;
 }
 
@@ -547,8 +556,9 @@ llvm::Error KernelScheduler::forgetTimer(uint64_t Timer) {
   return llvm::Error::success();
 }
 
-llvm::Error KernelScheduler::validateTimerExpirations(
-    uint64_t Time, uint64_t AdditionalCallbacks) const {
+llvm::Error
+KernelScheduler::validateTimerExpirations(uint64_t Time,
+                                          uint64_t AdditionalCallbacks) const {
   if (auto E = validateTime())
     return E;
   if (Time < Now || Time > Bounds.MaxTime100ns)
@@ -564,7 +574,7 @@ llvm::Error KernelScheduler::validateTimerExpirations(
       continue;
     ++Expirations;
     if (Timer.Period100ns && (Timer.Period100ns > UINT64_MAX - Time ||
-                               Timer.Period100ns > Bounds.MaxTime100ns - Time))
+                              Timer.Period100ns > Bounds.MaxTime100ns - Time))
       return schedulerError(
           "periodic timer deadline overflows virtual time limit");
     if (Timer.DPC && !isDPCQueued(Timer.DPC->Object))
@@ -672,8 +682,9 @@ llvm::Error KernelScheduler::processDueTimers() {
   return expireTimers(Now);
 }
 
-llvm::Error KernelScheduler::canAdvanceTo100ns(
-    uint64_t Time, uint64_t AdditionalCallbacks) const {
+llvm::Error
+KernelScheduler::canAdvanceTo100ns(uint64_t Time,
+                                   uint64_t AdditionalCallbacks) const {
   if (Time > Now) {
     if (Active || !InlineDMA.empty() || queuedCallbackCount())
       return schedulerError("cannot advance virtual time with runnable work");

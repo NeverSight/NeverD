@@ -118,7 +118,7 @@ TEST(DriverKernelScheduler, InterruptIdentityDoesNotAliasOtherCallbackKinds) {
   EXPECT_EQ(Call->Kind, Scheduler::CallbackKind::Interrupt);
   success(S.finish(Call->ID));
   EXPECT_TRUE(S.hasQueuedFrameworkCancel());
-  EXPECT_TRUE(S.hasQueuedWDMCompletion());
+  EXPECT_TRUE(S.hasQueuedCompletion());
 }
 
 TEST(DriverKernelScheduler, InterruptBatchFailureDoesNotConsumeIdentities) {

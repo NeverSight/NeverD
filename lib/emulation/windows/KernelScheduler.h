@@ -50,6 +50,7 @@ public:
     FrameworkCancel,
     WDMCancel,
     WDMCompletion,
+    FrameworkCompletion,
     Interrupt,
     DMAListControl,
     DMAAdapterControl
@@ -110,18 +111,18 @@ public:
   /// eligibility and the request lifetime; the scheduler only orders delivery.
   /// An already-queued cancellation object is an explicit error.
   llvm::Expected<uint64_t> enqueueFrameworkCancel(Callback Cancellation);
-  llvm::Error canEnqueueWDMCancellations(
-      llvm::ArrayRef<Callback> Cancellations) const;
+  llvm::Error
+  canEnqueueWDMCancellations(llvm::ArrayRef<Callback> Cancellations) const;
   llvm::Expected<uint64_t> enqueueWDMCancellation(Callback Cancellation);
   bool hasQueuedCancellation() const { return !Cancellations.empty(); }
   bool hasQueuedFrameworkCancel() const;
 
   /// Preflight a whole provider-completion batch without reserving identities
   /// or mutating queues. The model commits without intervening guest execution.
-  llvm::Error
-  canEnqueueWDMCompletions(llvm::ArrayRef<Callback> Completions) const;
+  llvm::Error canEnqueueCompletions(llvm::ArrayRef<Callback> Completions) const;
   llvm::Expected<uint64_t> enqueueWDMCompletion(Callback Completion);
-  bool hasQueuedWDMCompletion() const { return !Completions.empty(); }
+  llvm::Expected<uint64_t> enqueueFrameworkCompletion(Callback Completion);
+  bool hasQueuedCompletion() const { return !Completions.empty(); }
 
   /// Object identifies an explicit event, not a connection: separate pulses
   /// on the same interrupt are never coalesced by DPC/work-item identity rules.
@@ -208,9 +209,10 @@ public:
   /// DPC. AdditionalCallbacks reserves nothing: preflight and commit must have
   /// no intervening mutation. The preflight counts due timer DPCs together with
   /// that exact external count and checks time, expiration and identity bounds.
-  /// Future time cannot skip an earlier timer or advance with ready/active work.
+  /// Future time cannot skip an earlier timer or advance with ready/active
+  /// work.
   llvm::Error canAdvanceTo100ns(uint64_t Time,
-                               uint64_t AdditionalCallbacks = 0) const;
+                                uint64_t AdditionalCallbacks = 0) const;
   llvm::Error advanceTo100ns(uint64_t Time);
 
   /// Nonnegative DueTime100ns is absolute; negative is relative. Period is
@@ -286,7 +288,7 @@ private:
   Invocation makeInvocation(Callback Work, CallbackKind Kind, uint64_t DueTime);
   llvm::Error expireTimers(uint64_t Time);
   llvm::Error validateTimerExpirations(uint64_t Time,
-                                      uint64_t AdditionalCallbacks) const;
+                                       uint64_t AdditionalCallbacks) const;
 };
 
 } // namespace neverd::emulation

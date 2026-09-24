@@ -1533,10 +1533,14 @@ llvm::Error validateDriverScenario(const DriverOptions &Options) {
           Request.Kind != DriverRequestKind::Close)
         return invalid("bus_completion requires a file lifecycle request");
       if (Request.DeviceID.empty() || !Request.FileBusCompletion->Status ||
-          Request.FileBusCompletion->Delay100ns ||
           *Request.FileBusCompletion->Status == windows::StatusPending)
         return invalid("file bus_completion requires device_id and a "
-                       "synchronous explicit final status");
+                       "nonpending explicit final status");
+      if (Request.FileBusCompletion->Delay100ns > INT64_MAX)
+        return invalid("file bus_completion delay exceeds signed time range");
+      if (Request.FileBusCompletion->Delay100ns &&
+          Request.Kind != DriverRequestKind::Create)
+        return invalid("delayed file bus_completion requires CREATE");
     }
     if (Request.CancelAfter100ns) {
       if (*Request.CancelAfter100ns > INT64_MAX)

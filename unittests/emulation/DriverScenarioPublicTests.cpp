@@ -790,6 +790,7 @@ constexpr llvm::StringLiteral KMDFPnpFileForwardScenario = R"({
     "unload":true})";
 
 constexpr llvm::StringLiteral KMDFPnpServicePrefix = "NeverDKmdfPnp";
+constexpr int64_t DelayedKMDFFileCompletion100ns = 17;
 
 neverd_driver_options_v1 kmdfPnpOptions(const char *Service) {
   neverd_driver_options_v1 Options{};
@@ -881,9 +882,21 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
       SCOPED_TRACE(Mode);
       const std::string Service = KMDFPnpServicePrefix.str() + Mode;
       auto Options = kmdfPnpOptions(Service.c_str());
+      auto Scenario = llvm::json::parse(KMDFPnpFileForwardScenario);
+      ASSERT_TRUE(bool(Scenario)) << llvm::toString(Scenario.takeError());
+      if (Mode == 'a') {
+        auto *Requests = Scenario->getAsObject()->getArray("requests");
+        ASSERT_NE(Requests, nullptr);
+        auto *Create = (*Requests)[1].getAsObject();
+        ASSERT_NE(Create, nullptr);
+        auto *Completion = Create->getObject("bus_completion");
+        ASSERT_NE(Completion, nullptr);
+        (*Completion)["delay_100ns"] = DelayedKMDFFileCompletion100ns;
+      }
+      const std::string ScenarioJSON = llvm::formatv("{0}", *Scenario).str();
       auto Parsed =
           llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
-              Session, Image, KMDFPnpFileForwardScenario.data(), &Options)));
+              Session, Image, ScenarioJSON.c_str(), &Options)));
       ASSERT_TRUE(bool(Parsed))
           << llvm::toString(Parsed.takeError()) << error();
       const auto *Report = Parsed->getAsObject();
@@ -899,6 +912,17 @@ TEST_F(DriverScenarioPublic, CAPIForwardsKMDFFileLifecycleToConfiguredPDO) {
         ASSERT_NE(Request, nullptr);
         EXPECT_EQ(Request->getInteger("io_status"), 0);
         EXPECT_EQ(Request->getBoolean("completed"), true);
+      }
+      if (Mode == 'a') {
+        const auto *Start = (*Requests)[0].getAsObject()->getObject("pnp");
+        const auto *Remove = (*Requests)[4].getAsObject()->getObject("pnp");
+        ASSERT_NE(Start, nullptr);
+        ASSERT_NE(Remove, nullptr);
+        ASSERT_TRUE(Start->getInteger("bus_completed_at_100ns"));
+        ASSERT_TRUE(Remove->getInteger("bus_received_at_100ns"));
+        EXPECT_GE(*Remove->getInteger("bus_received_at_100ns"),
+                  *Start->getInteger("bus_completed_at_100ns") +
+                      DelayedKMDFFileCompletion100ns);
       }
     }
 #else

@@ -146,8 +146,7 @@ public:
            (Transfer && *Transfer <= Scheduler.now100ns()) ||
            Scheduler.hasQueuedInterrupt() || hasQueuedDPC() ||
            Scheduler.hasQueuedDMACallback() ||
-           Scheduler.hasQueuedCancellation() ||
-           Scheduler.hasQueuedWDMCompletion();
+           Scheduler.hasQueuedCancellation() || Scheduler.hasQueuedCompletion();
   }
   llvm::Error activateStack(uint64_t Base, uint64_t Size);
   llvm::Error retireStack(uint64_t Base, uint64_t Size);
@@ -544,7 +543,12 @@ private:
   llvm::Expected<uint64_t> currentRequestStack(uint64_t IRP) const;
   /// Only the framework host may forward a framework-owned file IRP. Guest
   /// WDM dispatch still requires independent ownership of the packet.
-  enum class ForwardingOwner { WDM, FrameworkFile, FrameworkFileSynchronous };
+  enum class ForwardingOwner {
+    WDM,
+    FrameworkFile,
+    FrameworkFileSynchronous,
+    FrameworkFileAsynchronous
+  };
   llvm::Expected<uint64_t>
   callDriver(uint64_t Device, uint64_t IRP,
              ForwardingOwner Owner = ForwardingOwner::WDM);
@@ -565,6 +569,7 @@ private:
   struct ProviderCompletion {
     uint64_t Device = 0, Deadline = 0, Sequence = 0;
     uint32_t Status = 0;
+    bool FrameworkFile = false;
   };
   uint64_t NextProviderSequence = 1;
   std::map<uint64_t, ProviderCompletion> ProviderCompletions;

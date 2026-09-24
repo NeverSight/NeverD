@@ -224,7 +224,8 @@ void KernelModel::configureFrameworkRequestHost() {
     Request->IOStatusWritten.fill(true);
     return completeRequest(IRP, 0);
   };
-  Host.ValidateFileForward = [this](uint64_t IRP) -> llvm::Error {
+  Host.ValidateFileForward = [this](uint64_t IRP,
+                                    bool AllowDelayed) -> llvm::Error {
     const auto *Request = requestForIRP(IRP);
     if (!Request || Request->Completed ||
         Request->DeviceRoute.size() != DirectPnpRouteSize ||
@@ -234,16 +235,18 @@ void KernelModel::configureFrameworkRequestHost() {
       return frameworkRequestError(
           "framework file forwarding requires a direct live PDO target");
     if (!Request->FileBusCompletion || !Request->FileBusCompletion->Status ||
-        Request->FileBusCompletion->Delay100ns)
+        (Request->FileBusCompletion->Delay100ns && !AllowDelayed))
       return frameworkRequestError(
-          "framework file forwarding requires a synchronous configured "
-          "bus response");
+          "framework file forwarding requires a configured bus response "
+          "within the send mode");
     return llvm::Error::success();
   };
   auto ForwardFile = [this, Validate = Host.ValidateFileForward](
                          uint64_t IRP,
                          ForwardingOwner Owner) -> llvm::Expected<uint32_t> {
-    if (auto E = Validate(IRP))
+    const bool Asynchronous =
+        Owner == ForwardingOwner::FrameworkFileAsynchronous;
+    if (auto E = Validate(IRP, Asynchronous))
       return E;
     auto *Request = requestForIRP(IRP);
     auto Stack = currentRequestStack(IRP);
@@ -266,10 +269,13 @@ void KernelModel::configureFrameworkRequestHost() {
     if (PendingWdmCall ||
         Request->Completed != (Owner == ForwardingOwner::FrameworkFile))
       return frameworkRequestError(
-          "framework file target did not complete synchronously");
-    if (Owner == ForwardingOwner::FrameworkFileSynchronous) {
+          "framework file target did not honor its completion ownership");
+    if (*Status == windows::StatusPending && !Asynchronous)
+      return frameworkRequestError("file send unexpectedly remained pending");
+    if (Owner == ForwardingOwner::FrameworkFileSynchronous ||
+        (Asynchronous && *Status != windows::StatusPending)) {
       if (!Request->FileBusReceived)
-        return frameworkRequestError("synchronous file send lost its response");
+        return frameworkRequestError("file send lost its lower response");
       if (auto E = Memory.writeInteger(IRP + IRPLocationOffset, *Cursor + 1, 1))
         return E;
       if (auto E = Memory.writeInteger(IRP + IRPStackPointerOffset,
@@ -283,6 +289,9 @@ void KernelModel::configureFrameworkRequestHost() {
   };
   Host.SendFileSynchronously = [ForwardFile](uint64_t IRP) {
     return ForwardFile(IRP, ForwardingOwner::FrameworkFileSynchronous);
+  };
+  Host.SendFileAsynchronously = [ForwardFile](uint64_t IRP) {
+    return ForwardFile(IRP, ForwardingOwner::FrameworkFileAsynchronous);
   };
   Framework->setRequestHost(std::move(Host));
 }
