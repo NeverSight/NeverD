@@ -72,7 +72,7 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
   // Fold a small fixed bias into the helper base. Keep the indexed part as
   // the emitted offset so the copied byte range starts at the first load,
   // including a load a few bytes before the original image constant.
-  if (P.Offset->Kind == ExprKind::BinOp &&
+  if (!ObjectPointers && P.Offset->Kind == ExprKind::BinOp &&
       (P.Offset->Op == NdOp::INT_ADD ||
        P.Offset->Op == NdOp::INT_SUB) &&
       P.Offset->Operands.size() == 2) {
