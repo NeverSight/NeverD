@@ -597,8 +597,8 @@ swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image, va_t Entry) {
 
 // A Swift class Bool or Int property setter takes its new value in x0 and the
 // instance in swiftself. Its mangled Setter/Variable tree distinguishes the
-// void result from the Bool property type; generic register-result inference
-// must not treat a clobbered x0 as a setter return value.
+// void result from the Bool, Int, or arm64 CGFloat property type; generic
+// register-result inference must not treat a clobbered x0 as a setter return.
 inline std::optional<SourceFunctionTypeHint>
 swiftMangledClassScalarSetterSourceABI(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
@@ -652,18 +652,25 @@ swiftMangledClassScalarSetterSourceABI(const BinaryImage &Image, va_t Entry) {
       !Owner.Children[1].Children.empty() || Property.Kind != "Identifier" ||
       !Property.Text || Property.Text->empty() || Property.Index ||
       !Property.Children.empty() || !Shape(Type, "Type", 1) ||
-      !Shape(Type.Children[0], "Structure", 2) ||
-      !Text(Type.Children[0].Children[0], "Module", "Swift"))
+      !Shape(Type.Children[0], "Structure", 2))
     return std::nullopt;
-  const bool IsBool = Text(Type.Children[0].Children[1], "Identifier", "Bool");
-  const bool IsInt = Text(Type.Children[0].Children[1], "Identifier", "Int");
-  if (!IsBool && !IsInt)
+  const auto &Value = Type.Children[0];
+  const bool Swift = Text(Value.Children[0], "Module", "Swift");
+  const bool IsBool =
+      Swift && Text(Value.Children[1], "Identifier", "Bool");
+  const bool IsInt = Swift && Text(Value.Children[1], "Identifier", "Int");
+  const bool IsCGFloat =
+      Text(Value.Children[0], "Module", "CoreGraphics") &&
+      Text(Value.Children[1], "Identifier", "CGFloat");
+  if (!IsBool && !IsInt && !IsCGFloat)
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
   Hint.ReturnType = NdType::makeVoid();
-  Hint.Parameters = {{"value", NdType::makeInt(IsBool ? 1 : 8, !IsBool)},
+  Hint.Parameters = {{"value", IsCGFloat ? NdType::makeFloat(8)
+                                          : NdType::makeInt(IsBool ? 1 : 8,
+                                                            !IsBool)},
                      {"self", NdType::makePtr(NdType::makeVoid())}};
   Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
   std::string Error;

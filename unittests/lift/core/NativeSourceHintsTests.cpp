@@ -361,12 +361,32 @@ TEST(NativeSourceHints, SwiftClassScalarSetterUsesValueAndSwiftSelf) {
   EXPECT_EQ(IntegerHint->Parameters[1].Location.RegisterOffset, a64reg::X20);
   EXPECT_TRUE(validateSourceABI(*IntegerHint, Error)) << Error;
 
+  auto CGFloat = Image;
+  CGFloat.Symbols[0].Name =
+      "_$s6Lottie23CompatibleAnimationViewC04loopC5Count12CoreGraphics7CGFloatVvs";
+  const auto CGFloatHint =
+      sdk::swiftMangledClassScalarSetterSourceABI(CGFloat, 0x1000);
+  ASSERT_TRUE(CGFloatHint);
+  EXPECT_EQ(CGFloatHint->ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(CGFloatHint->Parameters.size(), 2U);
+  EXPECT_EQ(CGFloatHint->Parameters[0].Type->Kind, NdTypeKind::Float);
+  EXPECT_EQ(CGFloatHint->Parameters[0].Type->Size, 8U);
+  EXPECT_EQ(CGFloatHint->Parameters[0].Location.Kind,
+            SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(CGFloatHint->Parameters[0].Location.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).FPParamRegs[0]);
+  EXPECT_EQ(CGFloatHint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*CGFloatHint, Error)) << Error;
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name = "_$s3WMF25ArticleCollectionViewCellC10isSelectedSbvg";
   EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols[0].Name =
       "_$s3WMF25ArticleCollectionViewCellC17horizontalSpacingSdvs";
+  EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
+  Wrong = CGFloat;
+  Wrong.Symbols[0].Name += "To";
   EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
