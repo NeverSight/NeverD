@@ -570,6 +570,53 @@ TEST(HighControlFlowSemantics, MaskedLowBitsDiscardOnlyUnobservedConcatHigh) {
   }
 }
 
+TEST(HighControlFlowSemantics, NarrowBitTestDiscardsShiftedUnknownHigh) {
+  for (unsigned ViewCase = 0; ViewCase != 2; ++ViewCase) {
+    auto Low = byteSlice(local(0), 0, 1);
+    auto Joined = concatenate(HighExpr::makeUndef(ViewCase ? 7 : 3), Low);
+    ExprPtr Value = ViewCase ? byteSlice(Joined, 0, 4) : Joined;
+    auto Shifted =
+        HighExpr::makeBinop(NdOp::INT_RIGHT, Value, HighExpr::makeConst(0, 4));
+    Shifted->Type = NdType::makeInt(4, false);
+    auto Masked =
+        HighExpr::makeBinop(NdOp::INT_AND, Shifted, HighExpr::makeConst(1, 4));
+    Masked->Type = NdType::makeInt(ViewCase ? 4 : 1, false);
+    HighFunc Function;
+    Function.Body = {result(0, Masked)};
+
+    simplifyAllExprs(Function.Body);
+
+    ASSERT_EQ(Function.Body[0].RetVal, Masked);
+    EXPECT_NE(Masked->Operands[0], Shifted) << ViewCase;
+    for (uint64_t Input :
+         {uint64_t{0}, uint64_t{1}, uint64_t{2}, uint64_t{0xff}, UINT64_MAX})
+      EXPECT_EQ(execute(Function, Input), Input & 1) << ViewCase;
+  }
+}
+
+TEST(HighControlFlowSemantics, ShiftedMaskKeepsObservedOrEffectfulHigh) {
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    ExprPtr High = HighExpr::makeUndef(3);
+    if (Case == 1) {
+      High = HighExpr::makeCall("effect", 0x4000, {});
+      High->Type = NdType::makeInt(3, false);
+    }
+    auto Joined = concatenate(High, byteSlice(local(0), 0, 1));
+    auto Shifted = HighExpr::makeBinop(
+        NdOp::INT_RIGHT, Joined, HighExpr::makeConst(Case == 2 ? 1 : 0, 4));
+    Shifted->Type = NdType::makeInt(4, false);
+    auto Masked = HighExpr::makeBinop(
+        NdOp::INT_AND, Shifted, HighExpr::makeConst(Case == 0 ? 0x100 : 1, 4));
+    Masked->Type = NdType::makeInt(4, false);
+    HighFunc Function;
+    Function.Body = {result(0, Masked)};
+
+    simplifyAllExprs(Function.Body);
+
+    EXPECT_EQ(Masked->Operands[0], Shifted) << Case;
+  }
+}
+
 TEST(HighControlFlowSemantics, MaskedConcatKeepsObservedOrEffectfulHigh) {
   for (unsigned Case = 0; Case != 3; ++Case) {
     ExprPtr High = HighExpr::makeUndef(7);

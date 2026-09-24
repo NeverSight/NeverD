@@ -103,6 +103,21 @@ static bool discardMaskedConcatHigh(const ExprPtr &E) {
     return false;
 
   auto Joined = E->Operands[0];
+  // A zero-bit logical shift does not change the bits observed by the mask.
+  // AArch64 TBZ lowering can place this shift between a narrow call result
+  // and its bit-zero test, even when the register's upper bytes are unknown.
+  if (Joined && Joined->Kind == ExprKind::BinOp &&
+      Joined->Op == NdOp::INT_RIGHT && Joined->Operands.size() == 2 &&
+      Joined->Type && Joined->Type->Kind == NdTypeKind::Int &&
+      Joined->Operands[0] && Joined->Operands[0]->Type &&
+      Joined->Type->Size == Joined->Operands[0]->Type->Size &&
+      Joined->Operands[1] && Joined->Operands[1]->Kind == ExprKind::Const &&
+      Joined->Operands[1]->ConstVal == 0 &&
+      Joined->IntrinsicId == Intrinsic::None &&
+      Joined->IntrinsicOutputs.empty() &&
+      Joined->MemoryOrdering == NdMemoryOrdering::None &&
+      Joined->MemoryAddressSpace == NdMemoryAddressSpace::Default)
+    Joined = Joined->Operands[0];
   if (Joined && Joined->Kind == ExprKind::Cast &&
       Joined->Operands.size() == 1 && Joined->Type && Joined->CastTo &&
       Joined->Type->Kind == NdTypeKind::Int &&
@@ -141,7 +156,7 @@ static bool discardMaskedConcatHigh(const ExprPtr &E) {
   if (!High || !Low || !High->Type || !Low->Type ||
       High->Type->Kind != NdTypeKind::Int ||
       Low->Type->Kind != NdTypeKind::Int || !High->Type->Size ||
-      !Low->Type->Size || Low->Type->Size >= E->Type->Size ||
+      !Low->Type->Size || Low->Type->Size > E->Type->Size ||
       High->Type->Size + Low->Type->Size != Joined->Type->Size)
     return false;
 

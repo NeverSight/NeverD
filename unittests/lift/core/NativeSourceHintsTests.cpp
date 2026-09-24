@@ -236,8 +236,7 @@ TEST(NativeSourceHints, ZeroArgClassVoidAndBoolMethodsUseSwiftSelf) {
   Image.Segments.push_back(std::move(Text));
   Image.Symbols.push_back(
       {"_$s3WMF15LocationManagerC014stopMonitoringB0yyF", 0x1000, 0, true});
-  const auto Hint =
-      sdk::swiftMangledZeroArgClassMethodSourceABI(Image, 0x1000);
+  const auto Hint = sdk::swiftMangledZeroArgClassMethodSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
   EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
   EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);

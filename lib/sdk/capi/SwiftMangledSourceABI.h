@@ -424,8 +424,7 @@ swiftMangledUIColorIntAlphaAllocatorSourceABI(const BinaryImage &Image,
 // only its object in swiftself. Reject static, generic, extension, and ObjC
 // thunk wrappers: their root mangling shapes are distinct from this body.
 inline std::optional<SourceFunctionTypeHint>
-swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image,
-                                       va_t Entry) {
+swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
       !Image.isCodeAddress(Entry))
@@ -492,10 +491,9 @@ swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image,
     return std::nullopt;
   const auto &Result = Type.Children[0].Children[1].Children[0].Children[0];
   const bool VoidResult = Shape(Result, "Tuple", 0);
-  const bool BoolResult =
-      Shape(Result, "Structure", 2) &&
-      Text(Result.Children[0], "Module", "Swift") &&
-      Text(Result.Children[1], "Identifier", "Bool");
+  const bool BoolResult = Shape(Result, "Structure", 2) &&
+                          Text(Result.Children[0], "Module", "Swift") &&
+                          Text(Result.Children[1], "Identifier", "Bool");
   if (!VoidResult && !BoolResult)
     return std::nullopt;
 
