@@ -506,7 +506,11 @@ public:
                                    const llvm::Value *Stored);
   void writePhiCopies(const llvm::BasicBlock *From, const llvm::BasicBlock *To,
                       int Indent);
-  bool phiIncomingIsPrinted(const llvm::PHINode *Phi, llvm::Value *Incoming);
+  bool phiIncomingIsPrinted(const llvm::PHINode *Phi, llvm::Value *Incoming,
+                            bool ForceMaterialized = false);
+  bool phiEdgeNeedsMaterialization(const llvm::BasicBlock *From,
+                                   const llvm::BasicBlock *To) const;
+  bool isReservedEHNormalTarget(const llvm::BasicBlock *BB) const;
   bool edgePrintsPhiCopy(const llvm::BasicBlock *From,
                          const llvm::BasicBlock *To);
   std::string resolveImportCalleeName(const llvm::Value *Callee) const;
@@ -689,6 +693,10 @@ public:
   /// Non-fallthrough normal invoke edges in a projected SEH try body.
   std::map<const llvm::BasicBlock *, const llvm::BasicBlock *>
       EHInvokeNormalGotos;
+  /// Empty handler blocks whose edge effects still need statements.
+  std::set<const llvm::BasicBlock *> EHPrintedPassthroughHandlers;
+  /// PHIs in a continuation moved beyond the EH wrap need path-local copies.
+  std::set<const llvm::BasicBlock *> EHMovedContinuationBlocks;
   /// Try-end labels whose normal incoming branch was actually printed as
   /// fallthrough. Other printed references are checked after rendering.
   std::set<const llvm::BasicBlock *> EHFallthroughLabelCandidates;

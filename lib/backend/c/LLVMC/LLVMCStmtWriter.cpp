@@ -4451,20 +4451,32 @@ bool LLVMCWriter::phiPrintedAsJoinCallArg(const llvm::PHINode *Phi) {
 }
 
 bool LLVMCWriter::phiIncomingIsPrinted(const llvm::PHINode *Phi,
-                                       llvm::Value *Incoming) {
+                                       llvm::Value *Incoming,
+                                       bool ForceMaterialized) {
   if (!Phi || !Incoming || Analysis.Inlinable.count(Phi))
     return false;
   if ((OmittedUnknowns.count(Phi) || OmittedInlined.count(Phi) ||
        usersAreDeadCopies(Phi)) &&
       !phiPrintedAsJoinCallArg(Phi))
     return false;
-  if (foldImmediate(Incoming) && usersOnlySeeImmediate(Phi) &&
+  if (!ForceMaterialized && foldImmediate(Incoming) &&
+      usersOnlySeeImmediate(Phi) &&
       !phiPrintedAsJoinCallArg(Phi))
     return false;
   if ((isUnknownPlaceholder(Incoming) || isCallClobberValue(Incoming)) &&
       usersOnlySeeImmediate(Phi))
     return false;
   return true;
+}
+
+bool LLVMCWriter::phiEdgeNeedsMaterialization(
+    const llvm::BasicBlock *From, const llvm::BasicBlock *To) const {
+  if (!From || !To)
+    return false;
+  if (EHMovedContinuationBlocks.count(To))
+    return true;
+  const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(From->getTerminator());
+  return Invoke && Invoke->getNormalDest() == To;
 }
 
 bool LLVMCWriter::edgePrintsPhiCopy(const llvm::BasicBlock *From,
@@ -4482,7 +4494,8 @@ bool LLVMCWriter::edgePrintsPhiCopy(const llvm::BasicBlock *From,
         break;
       if (Phi->getBasicBlockIndex(Pred) < 0)
         continue;
-      if (phiIncomingIsPrinted(Phi, Phi->getIncomingValueForBlock(Pred)))
+      if (phiIncomingIsPrinted(Phi, Phi->getIncomingValueForBlock(Pred),
+                               phiEdgeNeedsMaterialization(Pred, Dest)))
         return true;
     }
     return false;
@@ -4500,6 +4513,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
                                  const llvm::BasicBlock *To, int Indent) {
   if (!From || !To)
     return;
+  const bool MaterializeEdge = phiEdgeNeedsMaterialization(From, To);
   for (const llvm::Instruction &Inst : *To) {
     const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
     if (!Phi)
@@ -4516,7 +4530,10 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
     const std::string RHS = valueStr(Incoming);
     if (auto Imm = foldImmediate(Incoming)) {
       KnownImmediates[Phi] = *Imm;
-      if (usersOnlySeeImmediate(Phi) && !phiPrintedAsJoinCallArg(Phi))
+      // Invoke normal edges clear their cached PHIs, and a continuation
+      // printed after __except sees values from both try and handler paths.
+      if (!MaterializeEdge && usersOnlySeeImmediate(Phi) &&
+          !phiPrintedAsJoinCallArg(Phi))
         continue;
     }
     if ((isUnknownPlaceholder(Incoming) || isCallClobberValue(Incoming)) &&

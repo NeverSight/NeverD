@@ -1076,7 +1076,8 @@ void LLVMCWriter::writeBasicBlock(const llvm::BasicBlock &BB, int Indent) {
   if (FoldedJoinArms.count(&BB) || InlinedFallthroughBlocks.count(&BB) ||
       ConditionChainBodies.count(&BB) || DuplicatedAssignBlocks.count(&BB))
     return;
-  if (BB.getParent() && isPrintPassthrough(&BB))
+  if (BB.getParent() && isPrintPassthrough(&BB) &&
+      !EHPrintedPassthroughHandlers.count(&BB))
     return;
   const llvm::BasicBlock *LoopLatch = nullptr;
   const llvm::BasicBlock *LoopExit = nullptr;
@@ -2157,6 +2158,8 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   EHSkippedMainBlocks.clear();
   EHMainBlock = nullptr;
   EHInvokeNormalGotos.clear();
+  EHPrintedPassthroughHandlers.clear();
+  EHMovedContinuationBlocks.clear();
   EHFallthroughLabelCandidates.clear();
   OmitCleanupRetTo.clear();
   PhiTailSlot = nullptr;
@@ -7550,7 +7553,7 @@ bool LLVMCWriter::storeFeedsPhiCallTail(const llvm::StoreInst *SI) {
   if (!Slot || !Br)
     return false;
   const llvm::BasicBlock *Tail = phiFedCallTail(Br->getSuccessor(0));
-  if (!Tail)
+  if (!Tail || isReservedEHNormalTarget(Tail))
     return false;
   for (const llvm::Instruction &Inst : *Tail) {
     const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
@@ -7665,6 +7668,12 @@ bool LLVMCWriter::redundantLoopElseContinue(const llvm::BasicBlock *From,
   return true;
 }
 
+bool LLVMCWriter::isReservedEHNormalTarget(const llvm::BasicBlock *BB) const {
+  return BB && std::any_of(EHInvokeNormalGotos.begin(),
+                           EHInvokeNormalGotos.end(),
+                           [&](const auto &Edge) { return Edge.second == BB; });
+}
+
 void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
                             const llvm::BasicBlock *To, int Indent,
                             bool EmitGoto) {
@@ -7674,7 +7683,8 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
   const llvm::BasicBlock *CurFrom = From;
   const llvm::BasicBlock *CurTo = To;
   auto EmptyUncondBridge = [&](const llvm::BasicBlock *BB) {
-    if (!cursorForContinue().Depth || !BB)
+    if (!cursorForContinue().Depth || !BB ||
+        isReservedEHNormalTarget(BB))
       return false;
     const CursorForContinue &State = cursorForContinue();
     if (BB == State.Latch || BB == State.Step)
@@ -7701,7 +7711,8 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
   }
   if (CurTo)
     writePhiCopies(CurFrom, CurTo, Indent);
-  if (const llvm::BasicBlock *Tail = phiFedCallTail(CurTo)) {
+  if (const llvm::BasicBlock *Tail = phiFedCallTail(CurTo);
+      Tail && !isReservedEHNormalTarget(Tail)) {
     const llvm::CallInst *Call = nullptr;
     for (const llvm::Instruction &Inst : *Tail) {
       const auto *C = llvm::dyn_cast<llvm::CallInst>(&Inst);
@@ -7738,6 +7749,7 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
   }
   if (EmitGoto) {
     if (const llvm::BasicBlock *Epi = sharedReturnEpilogue(CurTo)) {
+      const bool NeedsEHNormalLabel = isReservedEHNormalTarget(Epi);
       for (llvm::Instruction &Inst : *const_cast<llvm::BasicBlock *>(Epi)) {
         if (llvm::isa<llvm::AllocaInst>(&Inst))
           continue;
@@ -7746,13 +7758,14 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
           continue;
         writeInstruction(Inst, Indent);
       }
-      ReferencedBlocks.erase(Epi);
+      if (!NeedsEHNormalLabel)
+        ReferencedBlocks.erase(Epi);
       bool Falls = false;
       for (const llvm::BasicBlock *Pred : llvm::predecessors(Epi)) {
         if (joinPrintsNext(Pred, Epi))
           Falls = true;
       }
-      if (!Falls)
+      if (!Falls && !NeedsEHNormalLabel)
         InlinedFallthroughBlocks.insert(Epi);
       return;
     }
@@ -7792,7 +7805,8 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
     writeGoto(CurTo, BackBr->getSuccessor(0), Indent, true);
     return;
   }
-  if (const llvm::BasicBlock *Tail = duplicatedCallTail(CurTo ? CurTo : To)) {
+  if (const llvm::BasicBlock *Tail = duplicatedCallTail(CurTo ? CurTo : To);
+      Tail && !isReservedEHNormalTarget(Tail)) {
     for (llvm::Instruction &Inst : *const_cast<llvm::BasicBlock *>(Tail)) {
       if (Inst.isTerminator() || llvm::isa<llvm::AllocaInst>(&Inst))
         continue;
@@ -8531,6 +8545,7 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         continue;
       AfterWrap.insert(&BB);
     }
+    EHMovedContinuationBlocks.insert(AfterWrap.begin(), AfterWrap.end());
     const llvm::BasicBlock *FirstCont = nullptr;
     for (const llvm::BasicBlock &BB : Fn) {
       if (!AfterWrap.count(&BB))
@@ -8543,11 +8558,10 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     const auto *HandlerBr =
         llvm::dyn_cast_or_null<llvm::UncondBrInst>(HandlerTerm);
     bool Ok = FirstCont && !InvokeBlocks.empty() && HandlerTerm &&
-              ((HandlerBr && HandlerBr->getSuccessor(0) == FirstCont &&
-                !edgePrintsPhiCopy(Handler, FirstCont)) ||
+              ((HandlerBr && HandlerBr->getSuccessor(0) == FirstCont) ||
                llvm::isa<llvm::ReturnInst>(HandlerTerm));
-    llvm::SmallVector<const llvm::BasicBlock *, 16> MainWalk;
-    if (Ok)
+    auto MainBlocks = [&]() {
+      llvm::SmallVector<const llvm::BasicBlock *, 16> Blocks;
       for (const llvm::BasicBlock &BB : Fn)
         if (!SkipInTry.contains(&BB) && !AfterWrap.contains(&BB) &&
             (&BB == &Fn.getEntryBlock() || !llvm::pred_empty(&BB)) &&
@@ -8556,7 +8570,64 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
             !ConditionChainBodies.count(&BB) &&
             !DuplicatedAssignBlocks.count(&BB) &&
             !backEdgeCallBeforeHeader(&BB))
-          MainWalk.push_back(&BB);
+          Blocks.push_back(&BB);
+      return Blocks;
+    };
+    auto NormalPrintTarget = [&](const llvm::InvokeInst &Invoke)
+        -> const llvm::BasicBlock * {
+      const llvm::BasicBlock *Target = Invoke.getNormalDest();
+      llvm::SmallPtrSet<const llvm::BasicBlock *, 8> Seen;
+      while (Target && isPrintPassthrough(Target)) {
+        if (!Seen.insert(Target).second)
+          return nullptr;
+        const llvm::BasicBlock *Next =
+            Target->getTerminator()->getSuccessor(0);
+        // writeInvoke prints the direct normal PHI copies, but it does not
+        // print copies on later passthrough edges.
+        if (edgePrintsPhiCopy(Target, Next))
+          return nullptr;
+        Target = Next;
+      }
+      return Target;
+    };
+    auto ConsumedByOtherPrinter = [&](const llvm::BasicBlock *Target) {
+      const llvm::BasicBlock *LoopLatch = nullptr;
+      const llvm::BasicBlock *LoopExit = nullptr;
+      const llvm::BasicBlock *LoopBody = nullptr;
+      const llvm::AllocaInst *LoopSlot = nullptr;
+      const llvm::BasicBlock *SplitLatch = nullptr;
+      const llvm::BasicBlock *SplitStep = nullptr;
+      const llvm::AllocaInst *SplitSlot = nullptr;
+      return FoldedJoinArms.count(Target) ||
+             InlinedFallthroughBlocks.count(Target) ||
+             ConditionChainBodies.count(Target) ||
+             DuplicatedAssignBlocks.count(Target) ||
+             cursorForLoop(Target, LoopLatch, LoopExit, LoopBody, LoopSlot) ||
+             splitPhiCursorLoop(Target, SplitLatch, SplitStep, SplitSlot);
+    };
+    auto HasGotoLabel = [&](const llvm::BasicBlock *Target) {
+      // A printed goto needs a label on its actual target block.
+      return Target && !ConsumedByOtherPrinter(Target) &&
+             !isPrintPassthrough(Target) && !backEdgeCallBeforeHeader(Target);
+    };
+    bool HandlerCopy = false;
+    if (Ok && HandlerBr)
+      for (const llvm::Instruction &Inst : *FirstCont) {
+        const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
+        if (!Phi)
+          break;
+        const int Index = Phi->getBasicBlockIndex(Handler);
+        if (Index >= 0 &&
+            phiIncomingIsPrinted(Phi, Phi->getIncomingValue(Index), true)) {
+          HandlerCopy = true;
+          break;
+        }
+      }
+    if (HandlerCopy && ConsumedByOtherPrinter(Handler))
+      Ok = false;
+    llvm::SmallVector<const llvm::BasicBlock *, 16> MainWalk;
+    if (Ok)
+      MainWalk = MainBlocks();
     bool HasNormalExit = false;
     std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> NeedGoto;
     if (Ok) {
@@ -8569,23 +8640,7 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
           Ok = false;
           break;
         }
-        const llvm::BasicBlock *NormalDest = Invoke->getNormalDest();
-        llvm::SmallPtrSet<const llvm::BasicBlock *, 8> PassthroughSeen;
-        while (NormalDest && isPrintPassthrough(NormalDest)) {
-          if (!PassthroughSeen.insert(NormalDest).second) {
-            Ok = false;
-            break;
-          }
-          const llvm::BasicBlock *Next =
-              NormalDest->getTerminator()->getSuccessor(0);
-          if (edgePrintsPhiCopy(NormalDest, Next)) {
-            Ok = false;
-            break;
-          }
-          NormalDest = Next;
-        }
-        if (!Ok)
-          break;
+        const llvm::BasicBlock *NormalDest = NormalPrintTarget(*Invoke);
         const auto It = std::find(MainWalk.begin(), MainWalk.end(), InvokeBB);
         if (It == MainWalk.end() || !NormalDest ||
             (ExitsTry ? !AfterWrap.count(NormalDest)
@@ -8626,28 +8681,11 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
     }
     Ok = Ok && HasNormalExit;
     if (Ok)
-      for (const auto &[_, Target] : NeedGoto) {
-        const llvm::BasicBlock *LoopLatch = nullptr;
-        const llvm::BasicBlock *LoopExit = nullptr;
-        const llvm::BasicBlock *LoopBody = nullptr;
-        const llvm::AllocaInst *LoopSlot = nullptr;
-        const llvm::BasicBlock *SplitLatch = nullptr;
-        const llvm::BasicBlock *SplitStep = nullptr;
-        const llvm::AllocaInst *SplitSlot = nullptr;
-        if (FoldedJoinArms.count(Target) ||
-            InlinedFallthroughBlocks.count(Target) ||
-            ConditionChainBodies.count(Target) ||
-            DuplicatedAssignBlocks.count(Target) ||
-            isPrintPassthrough(Target) ||
-            backEdgeCallBeforeHeader(Target) ||
-            cursorForLoop(Target, LoopLatch, LoopExit, LoopBody, LoopSlot) ||
-            splitPhiCursorLoop(Target, SplitLatch, SplitStep, SplitSlot)) {
-          // A printed goto needs a label at the actual continuation.  These
-          // blocks are consumed by another rendering path and have no label.
+      for (const auto &[_, Target] : NeedGoto)
+        if (!HasGotoLabel(Target)) {
           Ok = false;
           break;
         }
-      }
     if (Ok) {
       for (const llvm::BasicBlock *BB : AfterWrap) {
         bool Any = false;
@@ -8665,12 +8703,67 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
           break;
       }
     }
-    if (!Ok)
+    if (!Ok) {
       AfterWrap.clear();
-    else {
-      EHInvokeNormalGotos.insert(NeedGoto.begin(), NeedGoto.end());
-      for (const auto &[_, Target] : NeedGoto)
-        ReferencedBlocks.insert(Target);
+      EHMovedContinuationBlocks.clear();
+      NeedGoto.clear();
+      // The fallback places every main-walk block inside one __try.  Its
+      // handler is printed later in __except, so a goto to a main block would
+      // enter that protected C scope.  writeGoto can instead inline its
+      // proven shared return epilogue and finish inside __except.
+      if (!HandlerTerm)
+        llvm::report_fatal_error("LLVMC EH fallback handler has no terminator");
+      if (ConsumedByOtherPrinter(Handler))
+        llvm::report_fatal_error(
+            "LLVMC EH fallback handler has no printed C body");
+      for (unsigned I = 0; I < HandlerTerm->getNumSuccessors(); ++I) {
+        const llvm::BasicBlock *Successor = HandlerTerm->getSuccessor(I);
+        if (Successor == Handler) {
+          if (isPrintPassthrough(Handler))
+            llvm::report_fatal_error(
+                "LLVMC EH fallback handler has no printed C loop");
+          ReferencedBlocks.insert(Handler);
+          continue;
+        }
+        const bool EmitsGoto = llvm::isa<llvm::CatchReturnInst>(HandlerTerm) ||
+                               (HandlerBr &&
+                                !joinPrintsNext(Handler, Successor));
+        const bool ReturnsInline =
+            EmitsGoto && sharedReturnEpilogue(Successor) == Successor;
+        if (!ReturnsInline)
+          llvm::report_fatal_error(
+              "LLVMC EH fallback handler enters protected try body");
+        EHPrintedPassthroughHandlers.insert(Handler);
+      }
+
+      // The invoke printer emits the call and direct normal-edge PHI copies,
+      // then falls through.  Its normal successor must be the next printed
+      // main block or an explicit goto to a labeled block in the same __try.
+      const auto FallbackWalk = MainBlocks();
+      for (const llvm::BasicBlock *InvokeBB : InvokeBlocks) {
+        const auto *Invoke =
+            llvm::cast<llvm::InvokeInst>(InvokeBB->getTerminator());
+        const llvm::BasicBlock *Target = NormalPrintTarget(*Invoke);
+        const auto From =
+            std::find(FallbackWalk.begin(), FallbackWalk.end(), InvokeBB);
+        const auto To =
+            std::find(FallbackWalk.begin(), FallbackWalk.end(), Target);
+        if (From == FallbackWalk.end() || To == FallbackWalk.end())
+          llvm::report_fatal_error(
+              "LLVMC EH fallback invoke normal edge has no printed try target");
+        if (std::next(From) == To)
+          continue;
+        if (!HasGotoLabel(Target))
+          llvm::report_fatal_error(
+              "LLVMC EH fallback invoke normal target has no C label");
+        NeedGoto.emplace(InvokeBB, Target);
+      }
+    }
+    EHInvokeNormalGotos.insert(NeedGoto.begin(), NeedGoto.end());
+    for (const auto &[_, Target] : NeedGoto)
+      ReferencedBlocks.insert(Target);
+    if (Ok && HandlerCopy) {
+      EHPrintedPassthroughHandlers.insert(Handler);
     }
   }
 
@@ -8807,6 +8900,18 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
       writeEHWrapClose(EHWraps[static_cast<size_t>(EHTryDepth)],
                        1 + EHTryDepth);
     }
+    auto ClearPhiImmediates = [&](const llvm::BasicBlock &BB) {
+      for (const llvm::Instruction &Inst : BB) {
+        const auto *Phi = llvm::dyn_cast<llvm::PHINode>(&Inst);
+        if (!Phi)
+          break;
+        KnownImmediates.erase(Phi);
+      }
+    };
+    // The last printed handler edge may have assigned constants to PHIs in
+    // the shared continuation, including passthrough blocks not printed below.
+    for (const llvm::BasicBlock *BB : AfterWrap)
+      ClearPhiImmediates(*BB);
     for (auto &BB : Fn) {
       if (!AfterWrap.contains(&BB))
         continue;
@@ -8814,6 +8919,8 @@ void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
         continue;
       if (backEdgeCallBeforeHeader(&BB))
         continue;
+      // Copies from another continuation edge are also path-local.
+      ClearPhiImmediates(BB);
       writeBasicBlock(BB, 1);
     }
   } else {

@@ -8,7 +8,6 @@ analysis and comparison output belong outside the repository.
 | Gap | Next check |
 |---|---|
 | LLVMC Windows EH remains goto form | Keep recovered filters, nested cleanup order, and both normal and unwind edges visible. Compare the public `seh_probe` and C++ EH corpus output with HighC. |
-| LLVMC fallback can lose a nonadjacent invoke normal edge | Build a two-invoke SEH fixture whose handler-to-join edge needs a PHI copy; preserve the normal successors when the shared continuation cannot move after `__except`. |
 | LLVMC output may retain avoidable frame references or control flow | Reproduce each issue with a public synthetic LLVM fixture. Keep a negative test for any value or edge that must remain printed. |
 | Source types and member calls remain partially recovered | Use authenticated PDB/TPI type and method metadata; do not infer a virtual method name from a vtable offset alone. |
 | Release performance varies by function and debug input | Time paired fresh `--func` calls and separate load from decompile cost. Profile before changing shared analysis. Preserve byte-identical C and EH semantics. |
@@ -35,6 +34,15 @@ analysis and comparison output belong outside the repository.
   the next printed block. A two-invoke regression keeps both nonadjacent
   normal edges as labeled jumps; the final text requires each new target label
   exactly once without a name collision. Public `seh_probe` passes Windows C syntax.
+- A handler-to-continuation PHI copy no longer prevents that continuation from
+  moving after `__except`; the copy is emitted on the handler edge and its
+  cached constant cannot replace the joined PHI in the continuation. When the
+  continuation still cannot move, LLVMC projects only invoke normal edges to
+  printed targets in the same fallback `__try`, checks each required C label,
+  and rejects a handler jump back into that protected scope. A proven shared
+  return epilogue can be inlined in `__except` without such a jump. Public
+  synthetic SEH fixtures cover the PHI join, fallback jumps and inlined
+  handler return, and unsafe cross-scope case.
 
 ## Established rules
 

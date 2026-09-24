@@ -1351,6 +1351,457 @@ TEST(COFFExceptionIR, LLVMCProjectsNonAdjacentInvokeNormalEdges) {
   EXPECT_NE(Source.find("L_join:", BodyAt), std::string::npos) << Source;
 }
 
+TEST(COFFExceptionIR, LLVMCProjectsInvokeNormalEdgesWithHandlerPhiCopy) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-except-phi-exit-order", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *PersonalityType =
+      llvm::FunctionType::get(I32, /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::FunctionType *FnType =
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false);
+  llvm::Function *Function = llvm::Function::Create(
+      FnType, llvm::GlobalValue::ExternalLinkage, "seh_phi_exit_order", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      llvm::FunctionType::get(I32, false),
+      llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *AfterStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCondBr(Function->getArg(0), Exit, Inside);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  llvm::Value *Result = ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Exit, Dispatch);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  llvm::PHINode *Joined = JoinBuilder.CreatePHI(I32, 2, "joined");
+  Joined->addIncoming(Result, Exit);
+  Joined->addIncoming(JoinBuilder.getInt32(99), Handler);
+  JoinBuilder.CreateCall(AfterStep, {Joined});
+  JoinBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_phi_exit_order(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ExitAt = Source.find("exit_step()", BodyAt);
+  const auto InsideAt = Source.find("inside_step();", BodyAt);
+  const auto ExceptAt = Source.find("} __except (", BodyAt);
+  const auto AfterAt = Source.find("after_step(", BodyAt);
+  const auto ExitGotoAt = Source.find("goto L_join;", ExitAt);
+  const auto InsideGotoAt = Source.find("goto L_exit;", InsideAt);
+  const auto InvokeCopyAt = Source.find("joined", ExitAt);
+  ASSERT_NE(ExitAt, std::string::npos) << Source;
+  ASSERT_NE(InsideAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  ASSERT_NE(ExitGotoAt, std::string::npos) << Source;
+  ASSERT_NE(InsideGotoAt, std::string::npos) << Source;
+  ASSERT_NE(InvokeCopyAt, std::string::npos) << Source;
+  const auto InvokeCopyNameEnd = Source.find(" = ", InvokeCopyAt);
+  ASSERT_NE(InvokeCopyNameEnd, std::string::npos) << Source;
+  ASSERT_LT(InvokeCopyNameEnd, ExitGotoAt) << Source;
+  const std::string JoinedName =
+      Source.substr(InvokeCopyAt, InvokeCopyNameEnd - InvokeCopyAt);
+  const auto InvokeCopyValueEnd = Source.find(';', InvokeCopyNameEnd);
+  ASSERT_NE(InvokeCopyValueEnd, std::string::npos) << Source;
+  EXPECT_NE(Source.substr(InvokeCopyNameEnd + 3,
+                          InvokeCopyValueEnd - InvokeCopyNameEnd - 3),
+            "99") << Source;
+  const auto HandlerCopyAt =
+      Source.find(JoinedName + " = 99;", ExceptAt);
+  ASSERT_NE(HandlerCopyAt, std::string::npos) << Source;
+  EXPECT_LT(ExitAt, ExitGotoAt) << Source;
+  EXPECT_LT(InvokeCopyAt, ExitGotoAt) << Source;
+  EXPECT_LT(ExitGotoAt, InsideAt) << Source;
+  EXPECT_LT(InsideGotoAt, ExceptAt) << Source;
+  EXPECT_LT(HandlerCopyAt, AfterAt) << Source;
+  EXPECT_LT(ExceptAt, AfterAt) << Source;
+  EXPECT_NE(Source.find("L_join:", BodyAt), std::string::npos) << Source;
+  EXPECT_NE(Source.find("after_step(" + JoinedName + ");", BodyAt),
+            std::string::npos)
+      << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCProjectsBothConstantPhiCopiesAfterExcept) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-two-constant-phi-edges", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_phi_constant_edges", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *AfterStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCondBr(Function->getArg(0), Exit, Inside);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Exit, Dispatch);
+  llvm::IRBuilder<> JoinBuilder(Join);
+  llvm::PHINode *Joined = JoinBuilder.CreatePHI(I32, 2, "joined");
+  Joined->addIncoming(JoinBuilder.getInt32(7), Exit);
+  Joined->addIncoming(JoinBuilder.getInt32(99), Handler);
+  JoinBuilder.CreateCall(AfterStep, {Joined});
+  JoinBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_phi_constant_edges(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ExitAt = Source.find("exit_step();", BodyAt);
+  const auto ExceptAt = Source.find("} __except (", BodyAt);
+  const auto AfterAt = Source.find("after_step(", BodyAt);
+  ASSERT_NE(ExitAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  const auto NormalCopyAt = Source.find("joined", ExitAt);
+  ASSERT_NE(NormalCopyAt, std::string::npos) << Source;
+  const auto NameEnd = Source.find(" = 7;", NormalCopyAt);
+  ASSERT_NE(NameEnd, std::string::npos) << Source;
+  ASSERT_LT(NameEnd, ExceptAt) << Source;
+  const std::string JoinedName = Source.substr(NormalCopyAt, NameEnd - NormalCopyAt);
+  const auto HandlerCopyAt = Source.find(JoinedName + " = 99;", ExceptAt);
+  ASSERT_NE(HandlerCopyAt, std::string::npos) << Source;
+  EXPECT_LT(HandlerCopyAt, AfterAt) << Source;
+  EXPECT_NE(Source.find("after_step(" + JoinedName + ");", AfterAt),
+            std::string::npos) << Source;
+  EXPECT_NE(Source.find("goto L_join;", ExitAt), std::string::npos) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void exit_step(void);\nvoid inside_step(void);\n"
+        "void after_step(uint32_t);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCFallbackProjectsInvokeNormalEdgesInsideTry) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-fallback-exit-order", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_fallback_exit", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  // Layout places a later normal block before the join.  The first block in
+  // AfterWrap is therefore not the invoke's normal destination.
+  llvm::BasicBlock *Done = llvm::BasicBlock::Create(Context, "done", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *AfterStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::Function *Dtor = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::PointerType::getUnqual(Context)},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "object_dtor", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCondBr(Function->getArg(0), Exit, Inside);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  ExitBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Exit, Dispatch);
+  llvm::IRBuilder<> DoneBuilder(Done);
+  DoneBuilder.CreateCall(
+      Dtor, {llvm::ConstantPointerNull::get(
+                llvm::PointerType::getUnqual(Context))});
+  DoneBuilder.CreateRetVoid();
+  llvm::IRBuilder<> JoinBuilder(Join);
+  JoinBuilder.CreateCall(AfterStep);
+  JoinBuilder.CreateBr(Done);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Done);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_fallback_exit(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ExitAt = Source.find("exit_step();", BodyAt);
+  const auto InsideAt = Source.find("inside_step();", BodyAt);
+  const auto AfterAt = Source.find("after_step();", BodyAt);
+  const auto ExceptAt = Source.find("} __except (", BodyAt);
+  const auto ExitGotoAt = Source.find("goto L_join;", ExitAt);
+  const auto InsideGotoAt = Source.find("goto L_exit;", InsideAt);
+  ASSERT_NE(ExitAt, std::string::npos) << Source;
+  ASSERT_NE(InsideAt, std::string::npos) << Source;
+  ASSERT_NE(AfterAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  ASSERT_NE(ExitGotoAt, std::string::npos) << Source;
+  ASSERT_NE(InsideGotoAt, std::string::npos) << Source;
+  EXPECT_LT(ExitAt, ExitGotoAt) << Source;
+  EXPECT_LT(ExitGotoAt, InsideAt) << Source;
+  EXPECT_LT(InsideGotoAt, AfterAt) << Source;
+  EXPECT_LT(AfterAt, ExceptAt) << Source;
+  EXPECT_NE(Source.find("L_exit:", BodyAt), std::string::npos) << Source;
+  EXPECT_NE(Source.find("L_join:", BodyAt), std::string::npos) << Source;
+  const auto HandlerDtorAt = Source.find("object_dtor(", ExceptAt);
+  EXPECT_NE(HandlerDtorAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("goto L_done;", ExceptAt), std::string::npos)
+      << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void exit_step(void);\nvoid inside_step(void);\n"
+        "void after_step(void);\nvoid object_dtor(void *);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCFallbackKeepsInvokeTargetReturnLabel) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-fallback-shared-return-label", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::Type::getInt1Ty(Context)}, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_ret_label", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  llvm::BasicBlock *Other = llvm::BasicBlock::Create(Context, "other", Function);
+  llvm::BasicBlock *Inside =
+      llvm::BasicBlock::Create(Context, "inside", Function);
+  llvm::BasicBlock *Done = llvm::BasicBlock::Create(Context, "done", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *InsideStep = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "inside_step", Module);
+  llvm::Function *Dtor = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {llvm::PointerType::getUnqual(Context)},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "object_dtor", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  EntryBuilder.CreateCondBr(Function->getArg(0), Inside, Other);
+  llvm::IRBuilder<> ExitBuilder(Exit);
+  ExitBuilder.CreateInvoke(ExitStep, Done, Dispatch);
+  llvm::IRBuilder<> OtherBuilder(Other);
+  OtherBuilder.CreateBr(Done);
+  llvm::IRBuilder<> InsideBuilder(Inside);
+  InsideBuilder.CreateInvoke(InsideStep, Exit, Dispatch);
+  llvm::IRBuilder<> DoneBuilder(Done);
+  DoneBuilder.CreateCall(
+      Dtor, {llvm::ConstantPointerNull::get(
+                llvm::PointerType::getUnqual(Context))});
+  DoneBuilder.CreateRetVoid();
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Done);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  const std::string Source = emitLLVMC(Module);
+  const auto BodyAt = Source.find("seh_ret_label(");
+  ASSERT_NE(BodyAt, std::string::npos) << Source;
+  const auto ExitAt = Source.find("exit_step();", BodyAt);
+  const auto ExceptAt = Source.find("} __except (", BodyAt);
+  ASSERT_NE(ExitAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  const auto ExitGotoAt = Source.find("goto L_done;", ExitAt);
+  ASSERT_NE(ExitGotoAt, std::string::npos) << Source;
+  ASSERT_LT(ExitGotoAt, ExceptAt) << Source;
+  const auto LabelAt = Source.find("\nL_done:\n", BodyAt);
+  ASSERT_NE(LabelAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("\nL_done:\n", LabelAt + 1), std::string::npos)
+      << Source;
+  EXPECT_LT(ExitGotoAt, LabelAt) << Source;
+  EXPECT_NE(Source.find("object_dtor(", LabelAt), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("object_dtor(", ExceptAt), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("goto L_done;", ExceptAt), std::string::npos)
+      << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "void exit_step(void);\nvoid inside_step(void);\n"
+        "void object_dtor(void *);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCFallbackRejectsHandlerJumpIntoTry) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-fallback-illegal-entry", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(I32, /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Void, false),
+      llvm::GlobalValue::ExternalLinkage, "seh_illegal_entry", Module);
+  Function->setPersonalityFn(Personality);
+
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Done = llvm::BasicBlock::Create(Context, "done", Function);
+  llvm::BasicBlock *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  llvm::BasicBlock *Dispatch =
+      llvm::BasicBlock::Create(Context, "dispatch", Function);
+  llvm::BasicBlock *Pad = llvm::BasicBlock::Create(Context, "pad", Function);
+  llvm::BasicBlock *Handler =
+      llvm::BasicBlock::Create(Context, "handler", Function);
+  llvm::Function *ExitStep = llvm::Function::Create(
+      llvm::FunctionType::get(I32, false),
+      llvm::GlobalValue::ExternalLinkage, "exit_step", Module);
+  llvm::Function *AfterStep = llvm::Function::Create(
+      llvm::FunctionType::get(Void, {I32}, false),
+      llvm::GlobalValue::ExternalLinkage, "after_step", Module);
+  llvm::IRBuilder<> EntryBuilder(Entry);
+  llvm::Value *Result = EntryBuilder.CreateInvoke(ExitStep, Join, Dispatch);
+  llvm::IRBuilder<> DoneBuilder(Done);
+  DoneBuilder.CreateRetVoid();
+  llvm::IRBuilder<> JoinBuilder(Join);
+  llvm::PHINode *Joined = JoinBuilder.CreatePHI(I32, 2, "joined");
+  Joined->addIncoming(Result, Entry);
+  Joined->addIncoming(JoinBuilder.getInt32(99), Handler);
+  JoinBuilder.CreateCall(AfterStep, {Joined});
+  JoinBuilder.CreateBr(Done);
+  llvm::IRBuilder<> DispatchBuilder(Dispatch);
+  llvm::CatchSwitchInst *Switch = DispatchBuilder.CreateCatchSwitch(
+      llvm::ConstantTokenNone::get(Context), nullptr, 1);
+  Switch->addHandler(Pad);
+  llvm::IRBuilder<> PadBuilder(Pad);
+  llvm::CatchPadInst *CatchPad = PadBuilder.CreateCatchPad(
+      Switch,
+      {llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context))});
+  PadBuilder.CreateCatchRet(CatchPad, Handler);
+  llvm::IRBuilder<> HandlerBuilder(Handler);
+  HandlerBuilder.CreateBr(Join);
+  EXPECT_FALSE(llvm::verifyFunction(*Function, &llvm::errs()));
+
+  // The first movable continuation is Done, but the handler branches to
+  // Join.  Keeping Join in the fallback __try would emit an illegal jump
+  // from __except into that protected scope.
+  EXPECT_DEATH((void)emitLLVMC(Module),
+               "LLVMC EH fallback handler enters protected try body");
+}
+
 TEST(COFFExceptionIR, LLVMCFinallyWrapContainsCleanupBody) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-seh-finally-body", Context);
