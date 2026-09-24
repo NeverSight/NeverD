@@ -1720,11 +1720,21 @@ void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
         Invalid("cxx.try handlers");
         return;
       }
-      DetailOS << " * cxx.try[" << I << "]: states="
-               << *ehAnnotationSInt(*Row, windows_eh_md::CxxTryLow, 32) << ".."
-               << *ehAnnotationSInt(*Row, windows_eh_md::CxxTryHigh, 32)
-               << ", catch_high="
-               << *ehAnnotationSInt(*Row, windows_eh_md::CxxCatchHigh, 32)
+      CxxTryBlock StateRange;
+      StateRange.TryLow = static_cast<int32_t>(
+          *ehAnnotationSInt(*Row, windows_eh_md::CxxTryLow, 32));
+      StateRange.TryHigh = static_cast<int32_t>(
+          *ehAnnotationSInt(*Row, windows_eh_md::CxxTryHigh, 32));
+      StateRange.CatchHigh = static_cast<int32_t>(
+          *ehAnnotationSInt(*Row, windows_eh_md::CxxCatchHigh, 32));
+      if (!StateRange.hasValidStateRange(static_cast<uint32_t>(
+              *ehAnnotationUInt(*CxxHeader, windows_eh_md::CxxMaxState, 32)))) {
+        Invalid("cxx.try state range");
+        return;
+      }
+      DetailOS << " * cxx.try[" << I << "]: states=" << StateRange.TryLow
+               << ".." << StateRange.TryHigh
+               << ", catch_high=" << StateRange.CatchHigh
                << ", handlers=" << Handlers->getNumOperands() << "\n";
       if (!WithinBudget()) {
         Invalid("annotation size limit");

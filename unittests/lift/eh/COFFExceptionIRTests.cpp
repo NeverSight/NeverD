@@ -829,6 +829,7 @@ TEST(COFFExceptionIR, LLVMCCorruptWindowsEHMetadataIsExplicitAndBounded) {
   Cxx.SEH.reset();
   Cxx.Cxx.emplace();
   Cxx.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH4;
+  Cxx.Cxx->MaxState = 2;
   Cxx.Cxx->TryBlocks.push_back({});
   const std::string BadCatch =
       EmitCorrupt(Cxx, [](llvm::LLVMContext &Context, auto &Fields) {
@@ -852,6 +853,30 @@ TEST(COFFExceptionIR, LLVMCCorruptWindowsEHMetadataIsExplicitAndBounded) {
       << BadCatch;
   EXPECT_EQ(BadCatch.find("status=complete"), std::string::npos) << BadCatch;
   EXPECT_EQ(BadCatch.find("cxx.format="), std::string::npos) << BadCatch;
+
+  ExceptionFunction InvertedTry = Cxx;
+  InvertedTry.Cxx->TryBlocks[0].TryLow = 1;
+  InvertedTry.Cxx->TryBlocks[0].TryHigh = 0;
+  InvertedTry.Cxx->TryBlocks[0].CatchHigh = 1;
+  const std::string InvertedStates =
+      EmitCorrupt(InvertedTry, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(InvertedStates.find("metadata-invalid (cxx.try state range)"),
+            std::string::npos)
+      << InvertedStates;
+  EXPECT_EQ(InvertedStates.find("cxx.try[0]:"), std::string::npos)
+      << InvertedStates;
+
+  ExceptionFunction MissingCatchState = Cxx;
+  MissingCatchState.Cxx->TryBlocks[0].TryLow = 0;
+  MissingCatchState.Cxx->TryBlocks[0].TryHigh = 0;
+  MissingCatchState.Cxx->TryBlocks[0].CatchHigh = 0;
+  const std::string MissingCatchGap =
+      EmitCorrupt(MissingCatchState, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(MissingCatchGap.find("metadata-invalid (cxx.try state range)"),
+            std::string::npos)
+      << MissingCatchGap;
+  EXPECT_EQ(MissingCatchGap.find("cxx.try[0]:"), std::string::npos)
+      << MissingCatchGap;
 
   ExceptionFunction Hostile = EH;
   Hostile.PersonalityName = "safe*/\nint injected;";
