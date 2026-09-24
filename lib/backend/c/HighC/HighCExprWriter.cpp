@@ -295,8 +295,10 @@ std::optional<int64_t> HighCWriter::frameDisplacement(const HighExpr &E) const {
       if (isSyntheticEntryStackPointer(Cur->Var, *CurrentFunc, Opts.TheArch)) {
         // x64 SEH handlers are exceptional entries: LowIR models their RSP as
         // the function-entry value, but the unwinder has already established
-        // the allocated frame.  Rebase onto a slot the try body already named.
-        if (CurrentFunc->FrameSize > 0) {
+        // the allocated frame.  Rebase onto a slot the try body already named,
+        // unless SSA already placed handler RSP from the unwind operations.
+        if (CurrentFunc->FrameSize > 0 &&
+            !CurrentFunc->SEHHandlerFramesEstablished) {
           const int64_t Rebased = Acc - CurrentFunc->FrameSize;
           if (InEHClauseBody)
             return Rebased;

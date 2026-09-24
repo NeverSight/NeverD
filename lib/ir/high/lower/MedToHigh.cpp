@@ -703,6 +703,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   Func.Entry = Med.Entry;
   Func.FrameSize = Med.FrameSize;
   Func.FrameHeadroom = Med.FrameHeadroom;
+  Func.SEHHandlerFramesEstablished = Med.SEHHandlerFramesEstablished;
   Func.Name = Med.Name;
   Func.DoesNotReturn = Med.DoesNotReturn;
   Func.ExceptionMetadata = Med.ExceptionMetadata;

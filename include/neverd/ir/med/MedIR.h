@@ -319,6 +319,9 @@ struct MedFunc {
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;
+  /// SSA placed RSP at every Windows x64 __except handler root at the body's
+  /// established frame (from the unwind operations).
+  bool SEHHandlerFramesEstablished = false;
 
   TypeRef ReturnType;
 

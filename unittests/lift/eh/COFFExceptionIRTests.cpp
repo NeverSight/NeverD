@@ -1820,6 +1820,85 @@ TEST(COFFExceptionIR, LoneJumpAtTryExitKeepsItsLabel) {
         << Source;
 }
 
+TEST(COFFExceptionIR, ExceptHandlerSeesTheEstablishedFrame) {
+  // PnpInsertEventInQueue: the unwinder enters an __except handler with RSP
+  // at the function body's frame.  The handler's `[rsp+30h]` is the RCX home
+  // slot the prologue wrote, not a stack argument of the entry frame.
+  constexpr va_t F = 0x140001000;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = F;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x4c, 0x24, 0x08, // mov [rsp+8], rcx
+      0x53,                         // push rbx
+      0x48, 0x83, 0xec, 0x20,       // sub rsp, 20h
+      0x8b, 0x01,                   // try: mov eax, [rcx]
+      0xeb, 0x07,                   // jmp done
+      0x48, 0x8b, 0x44, 0x24, 0x30, // handler: mov rax, [rsp+30h]
+      0x8b, 0x00,                   // mov eax, [rax]
+      0x48, 0x83, 0xc4, 0x20,       // done: add rsp, 20h
+      0x5b,                         // pop rbx
+      0xc3};                        // ret
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = F;
+  Text.Size = 0x40;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  std::copy(Code.begin(), Code.end(), Text.Data.begin());
+  Img.Segments.push_back(std::move(Text));
+  Section TextSection;
+  TextSection.Name = ".text";
+  TextSection.VA = F;
+  TextSection.Size = 0x40;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(TextSection));
+  Img.KnownCodeRanges.emplace_back(F, F + Code.size());
+  Img.Symbols.push_back(Symbol::makeFunc(F, Code.size()));
+  ExceptionFunction EH;
+  EH.CodeRange = {F, F + Code.size()};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  UnwindOperation Push;
+  Push.Kind = UnwindOperationKind::PushNonVolatile;
+  EH.UnwindOperations.push_back(Push);
+  UnwindOperation Alloc;
+  Alloc.Kind = UnwindOperationKind::AllocateSmall;
+  Alloc.StackOffset = 0x20;
+  EH.UnwindOperations.push_back(Alloc);
+  SEHExceptionInfo SEH;
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {F + 0x0a, F + 0x0e};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = F + 0x0e;
+  SEH.Scopes.push_back(Scope);
+  EH.SEH = std::move(SEH);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(F);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  // The handler dereferences the value stored in the RCX home slot.  With RSP
+  // at the entry value it read a stack argument the function does not have;
+  // rebasing twice named an unwritten local instead.
+  EXPECT_EQ(Source.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("var_m"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("= arg0;"), std::string::npos) << Source;
+}
+
 TEST(COFFExceptionIR, HandlerWhoseFirstCopyIsDeadKeepsItsLabel) {
   // PsOpenThread: the __except handler starts with `mov edi, eax`, whose
   // value nothing reads.  The empty __except arm prints as a goto to the

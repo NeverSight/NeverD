@@ -15,18 +15,54 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/X86Regs.h"
+#include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <queue>
 #include <set>
 
 #define DEBUG_TYPE "neverd-med-ssa"
 
 namespace neverd {
+
+namespace {
+
+/// Bytes an x64 prologue moves RSP below its entry value, from the unwind
+/// operations: the stack pointer the unwinder restores before a Windows
+/// __except handler runs.  Empty when a frame register or an operation this
+/// does not model decides it.
+std::optional<uint64_t> x64EstablishedFrameBytes(const ExceptionFunction &EH) {
+  if (EH.UnwindOperations.empty())
+    return std::nullopt;
+  uint64_t Bytes = 0;
+  for (const UnwindOperation &Op : EH.UnwindOperations) {
+    switch (Op.Kind) {
+    case UnwindOperationKind::PushNonVolatile:
+      Bytes += 8;
+      break;
+    case UnwindOperationKind::AllocateSmall:
+    case UnwindOperationKind::AllocateLarge:
+      Bytes += Op.StackOffset;
+      break;
+    case UnwindOperationKind::SaveNonVolatile:
+    case UnwindOperationKind::SaveNonVolatileFar:
+    case UnwindOperationKind::SaveXMM128:
+    case UnwindOperationKind::SaveXMM128Far:
+    case UnwindOperationKind::Epilog:
+      break;
+    default:
+      return std::nullopt;
+    }
+  }
+  return Bytes;
+}
+
+} // namespace
 
 void LowToMedConverter::buildSsa(MedFunc &Func) {
   if (Func.Blocks.empty())
@@ -405,12 +441,21 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
       }
     }
 
+    // A Windows x64 __except handler is entered by the unwinder with RSP at
+    // the function body's established frame, not at its entry value.
+    std::optional<uint64_t> SEHFrameBytes;
+    if (TargetArch == Arch::X64 && Func.ExceptionMetadata &&
+        Func.ExceptionMetadata->SEH)
+      SEHFrameBytes = x64EstablishedFrameBytes(*Func.ExceptionMetadata);
+    Func.SEHHandlerFramesEstablished = SEHFrameBytes.has_value();
     for (int Root : Roots) {
       std::vector<MedOp> InitOps;
       const bool IsItaniumEHRoot =
           !Func.Blocks[Root].ExceptionalPreds.empty() &&
           Func.ExceptionMetadata && Func.ExceptionMetadata->Itanium &&
           Func.ExceptionMetadata->Itanium->IsCallSiteAddressForm;
+      const bool IsSEHHandlerRoot = Root != 0 && SEHFrameBytes &&
+                                    !Func.Blocks[Root].ExceptionalPreds.empty();
       for (int Id : LiveIn[Root]) {
         auto VIt = VarOfId.find(Id);
         if (VIt == VarOfId.end())
@@ -444,6 +489,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           Input = MedVar::makeConst(0, Input.Size,
                                     ConstantAddressProvenance::Scalar);
         Init.addInput(Input);
+        if (IsSEHHandlerRoot && Input.Kind == MedVar::Reg &&
+            Input.RegOff == TRI.StackPointer && Input.Size == TRI.PointerSize) {
+          Init.Opcode = NdOp::INT_SUB;
+          Init.addInput(MedVar::makeConst(*SEHFrameBytes, TRI.PointerSize,
+                                          ConstantAddressProvenance::Scalar));
+        }
         Init.Addr = Func.Blocks[Root].StartAddr;
         InitOps.push_back(Init);
         LLVM_DEBUG(llvm::dbgs() << "  live-in: " << VIt->second.display()

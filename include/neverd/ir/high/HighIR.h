@@ -480,6 +480,9 @@ struct HighFunc {
   /// Bytes reserved below and above the synthetic entry stack pointer.
   int64_t FrameSize = 0;
   int64_t FrameHeadroom = 0;
+  /// MedFunc::SEHHandlerFramesEstablished: handler stack addresses are
+  /// already relative to the established frame and need no rebase.
+  bool SEHHandlerFramesEstablished = false;
   std::string Name;
   std::string DebugName;
   std::string SourceFile;
