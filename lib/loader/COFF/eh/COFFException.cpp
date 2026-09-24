@@ -157,6 +157,21 @@ void ensureExceptionHandlers(BinaryImage &Img, const std::set<va_t> &Entries) {
   for (va_t Addr : Wanted)
     ensureX64RuntimeFunction(Img, Addr);
 
+  // A focused x64 load decodes the requested frame's pdata, but the handler
+  // address may name a stripped GS wrapper with its own pdata record.  GS
+  // inference needs that wrapper's exact code range before it can inspect its
+  // calls.  Collect addresses first because materializing a pdata record may
+  // reallocate ExceptionMetadata.Functions.
+  if (Img.Arch == Arch::X64 && !Wanted.empty()) {
+    std::set<va_t> HandlerEntries;
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions)
+      if (F.PersonalityVA != 0 && F.HandlerDataVA != 0 &&
+          functionOverlapsWanted(F, Wanted))
+        HandlerEntries.insert(F.PersonalityVA);
+    for (va_t Addr : HandlerEntries)
+      ensureX64RuntimeFunction(Img, Addr);
+  }
+
   std::unordered_map<va_t, std::pair<va_t, std::string>> PersonalityCache;
   PersonalityCache.reserve(64);
   std::unordered_map<va_t, ExceptionPersonality> InferredGS;
