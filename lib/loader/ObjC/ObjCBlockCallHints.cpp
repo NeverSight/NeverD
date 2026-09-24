@@ -5,6 +5,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/DarwinImportVeneer.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -194,6 +195,52 @@ bool boundRetainBlock(const BinaryImage &Image,
          Runtime->TargetName == Bound.TargetName;
 }
 
+bool pointerAutoreleaseReturnTailcall(
+    const BinaryImage &Image, const LowOp &Op,
+    const SourceFunctionTypeHint *EntrySignature, const TargetRegInfo &TRI) {
+  if (Image.Arch != Arch::AArch64 || Op.Opcode != NdOp::CALL ||
+      Op.NumInputs != 1 || !Op.Inputs[0].isConst() || !Op.Output.isReg() ||
+      Op.Output.Offset != TRI.IntReturnReg || Op.Output.Size != 8 ||
+      !EntrySignature || !EntrySignature->HasExplicitABI ||
+      !EntrySignature->ReturnType ||
+      EntrySignature->ReturnType->Kind != NdTypeKind::Ptr ||
+      EntrySignature->ReturnLocation.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      EntrySignature->ReturnLocation.RegisterOffset != TRI.IntReturnReg ||
+      EntrySignature->ReturnLocation.ValueBytes != 8)
+    return false;
+  const auto Slot = darwinImportVeneerSlot(Image, Op.Inputs[0].Offset);
+  if (!Slot)
+    return false;
+  const auto Bind = Image.DyldBindSlots.find(*Slot);
+  if (Bind == Image.DyldBindSlots.end() ||
+      Bind->second.Module != "/usr/lib/libobjc.A.dylib" ||
+      std::find(Image.DynInfo.NeededLibs.begin(),
+                Image.DynInfo.NeededLibs.end(),
+                Bind->second.Module) == Image.DynInfo.NeededLibs.end())
+    return false;
+  const auto Runtime = objcRuntimeSourceCallHint(Image, *Slot);
+  std::string Error;
+  if (!Runtime ||
+      Runtime->CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+      Runtime->TargetName != "objc_autoreleaseReturnValue" ||
+      !validateSourceABI(Runtime->Signature, Error) ||
+      !Runtime->Signature.ReturnType ||
+      Runtime->Signature.ReturnType->Kind != NdTypeKind::Ptr ||
+      Runtime->Signature.ReturnLocation.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      Runtime->Signature.ReturnLocation.RegisterOffset != TRI.IntReturnReg ||
+      Runtime->Signature.Parameters.size() != 1 ||
+      !Runtime->Signature.Parameters[0].Type ||
+      Runtime->Signature.Parameters[0].Type->Kind != NdTypeKind::Ptr ||
+      Runtime->Signature.Parameters[0].Location.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      Runtime->Signature.Parameters[0].Location.RegisterOffset !=
+          TRI.IntParamRegs[0])
+    return false;
+  return true;
+}
+
 std::optional<SourceFunctionTypeHint>
 stackBlockSignature(const BinaryImage &Image,
                     const std::map<std::pair<int64_t, unsigned>, Value> &Slots,
@@ -315,7 +362,8 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
 bool discardedResultAcrossCFG(
     const BinaryImage &Image, const LowFunc &Function, va_t CallAddress,
     const TargetRegInfo &TRI,
-    const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
+    const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+    const SourceFunctionTypeHint *EntrySignature) {
   if (Image.Arch != Arch::AArch64 || !BoundCalls ||
       TRI.IntReturnRegs.size() < 2 || TRI.FPReturnRegs.empty() ||
       Function.Blocks.size() > 64)
@@ -369,6 +417,15 @@ bool discardedResultAcrossCFG(
             return false;
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (!State.Integer0Live && State.Block->Succs.empty() &&
+            I + 2 == State.Block->Ops.size() &&
+            State.Block->Ops[I + 1].Opcode == NdOp::RETURN &&
+            pointerAutoreleaseReturnTailcall(Image, Op, EntrySignature, TRI)) {
+          // The block result is neither this pointer-only ARC call's argument
+          // nor the containing method's returned pointer.
+          Released = true;
+          break;
+        }
         if (Op.Opcode == NdOp::CALL &&
             boundReleaseAwayFromResult(BoundCalls, Op.Addr, Image.Arch, TRI))
           continue;
@@ -521,7 +578,7 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
               resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
           if (!ReturnBytes && WholeFunction &&
               discardedResultAcrossCFG(Image, *WholeFunction, Op.Addr, TRI,
-                                       BoundCalls))
+                                       BoundCalls, EntrySignature))
             ReturnBytes = 0U;
           if (ReturnBytes && *ReturnBytes == 0 &&
               !noIndirectResultPointer(Op, Image.Arch))

@@ -227,6 +227,79 @@ TEST(ObjCBlockCallHints,
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
+TEST(ObjCBlockCallHints, DiscardedResultBeforePointerAutoreleaseTailcall) {
+  Fixture F(Arch::AArch64);
+  F.Entry.ReturnType = NdType::makePtr(NdType::makeVoid());
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(F.Entry, F.Image.Arch, Error)) << Error;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x1000;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x1000);
+  F.Image.Segments.push_back(std::move(Text));
+  Section TextSection;
+  TextSection.VA = 0x1000;
+  TextSection.Size = TextSection.FileSz = 0x1000;
+  TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  TextSection.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+  F.Image.Sections.push_back(TextSection);
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Size = Data.FileSz = 0x1000;
+  Data.FileOff = 0x1000;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.resize(0x1000);
+  F.Image.Segments.push_back(std::move(Data));
+  Section DataSection;
+  DataSection.VA = 0x2000;
+  DataSection.Size = DataSection.FileSz = 0x1000;
+  DataSection.FileOff = 0x1000;
+  DataSection.Flags = SegmentFlags::Readable;
+  F.Image.Sections.push_back(DataSection);
+  const uint32_t StubCode[] = {0xb0000010, 0xf940c210, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        F.Image.Segments[0].Data.data() + 0x100 + I * 4, StubCode[I]);
+  F.Image.ImportPtrSlots[0x2180] = "_objc_autoreleaseReturnValue";
+  F.Image.DyldBindSlots[0x2180] = {"_objc_autoreleaseReturnValue", 0,
+                                   "/usr/lib/libobjc.A.dylib", false};
+  F.Image.DynInfo.NeededLibs.push_back("/usr/lib/libobjc.A.dylib");
+  F.Low.Blocks.reserve(2);
+  auto &Entry = F.Low.Blocks[0];
+  Entry.Ops.back() = op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1010);
+  Entry.Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Exit = F.Low.Blocks[1];
+  Exit.Id = 1;
+  Exit.StartAddr = 0x1020;
+  Exit.EndAddr = 0x1028;
+  Exit.Preds = {0};
+  Exit.Ops = {
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::cst(0x1234, 8)}, 0x1020),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x1100, 8)}, 0x1024),
+      op(NdOp::RETURN, {}, {}, 0x1024)};
+  const std::map<va_t, SourceCallTypeHint> Calls;
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  Exit.Ops[0] = op(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                   {NdVar::cst(0x1234, 8)}, 0x1020);
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Exit.Ops[0] =
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::cst(0x1234, 8)}, 0x1020);
+  F.Image.DyldBindSlots[0x2180].WeakImport = true;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  F.Image.DyldBindSlots[0x2180].WeakImport = false;
+  F.Entry.ReturnType = NdType::makeInt(8);
+  ASSERT_TRUE(assignDarwinObjCSourceABI(F.Entry, F.Image.Arch, Error)) << Error;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+}
+
 TEST(ObjCBlockCallHints, ProvesInvokeInMultiBlockEntryPrefixOnly) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     Fixture F(Architecture);
