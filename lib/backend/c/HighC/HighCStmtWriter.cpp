@@ -557,6 +557,38 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     break;
 
   case StmtKind::SEHTry: {
+    // C forbids a goto into a __try body, but machine code may branch into
+    // the middle of a protected range.  x64 SEH protection is by address,
+    // so splitting an __except try at that entry into two consecutive tries
+    // is equivalent and puts the label between them.  __finally runs on
+    // normal exit too, and an inline handler body would be copied, so only
+    // out-of-line __except handlers are split.
+    if (Stmt.Body.size() >= 2 && !Stmt.EHClauses.empty() &&
+        std::all_of(Stmt.EHClauses.begin(), Stmt.EHClauses.end(),
+                    [](const HighEHClause &Clause) {
+                      return Clause.Kind == HighEHClauseKind::SEHExcept;
+                    }) &&
+        std::all_of(Stmt.EHClauseBodies.begin(), Stmt.EHClauseBodies.end(),
+                    [](const auto &Body) { return Body.empty(); })) {
+      std::map<va_t, unsigned> Inner;
+      walkStmts(Stmt.Body, [&](const HighStmt &Child) {
+        if (Child.Kind == StmtKind::Goto)
+          ++Inner[Child.GotoTarget];
+      });
+      for (size_t K = 1; K < Stmt.Body.size(); ++K) {
+        const va_t Addr = Stmt.Body[K].Addr;
+        auto Uses = GotoTargetUses.find(Addr);
+        if (Addr == 0 || Addr == InvalidVA || Uses == GotoTargetUses.end() ||
+            Uses->second <= Inner[Addr])
+          continue;
+        std::vector<HighStmt> Split(2, Stmt);
+        Split[0].Body.assign(Stmt.Body.begin(), Stmt.Body.begin() + K);
+        Split[1].Body.assign(Stmt.Body.begin() + K, Stmt.Body.end());
+        Split[1].Addr = Addr;
+        writeStmts(Split, Indent);
+        return;
+      }
+    }
     if (!Stmt.EHIsReducible || Stmt.EHClauses.size() != 1 ||
         Stmt.EHClauseBodies.size() != 1) {
       emitIndent(Indent);
@@ -934,7 +966,11 @@ void HighCWriter::writeTryBody(const std::vector<HighStmt> &Stmts, int Indent) {
       --End;
       continue;
     }
-    if (Last.Kind == StmtKind::Goto) {
+    // A trailing goto leaves the try for the code after it.  One that is
+    // itself a branch target still owns that label; jumping out of __try is
+    // legal, so keep it.
+    if (Last.Kind == StmtKind::Goto &&
+        !(Last.Addr != 0 && GotoTargets.count(Last.Addr))) {
       --End;
       continue;
     }

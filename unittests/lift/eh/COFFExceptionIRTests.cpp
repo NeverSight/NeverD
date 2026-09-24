@@ -1249,6 +1249,52 @@ TEST(COFFExceptionIR, SharedHandlerAndColdEntryKeepTheirPaths) {
   EXPECT_GT(Marker, Source.find("__except")) << Source;
 }
 
+TEST(COFFExceptionIR, GotoIntoTryBodySplitsTheTry) {
+  // NtSetSystemTime: a cold path branches into the middle of a protected
+  // range.  C forbids jumping into __try; x64 SEH protection is by address,
+  // so the writer prints two consecutive tries with the label between them.
+  constexpr va_t F = 0x140001000;
+  HighFunc Func;
+  Func.Name = "split_try";
+  Func.Entry = F;
+  Func.ReturnType = NdType::makeInt(4);
+  auto Return = [](va_t Addr, uint64_t Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Return;
+    S.Addr = Addr;
+    S.RetVal = HighExpr::makeConst(Value, 4);
+    return S;
+  };
+  HighStmt Goto;
+  Goto.Kind = StmtKind::Goto;
+  Goto.Addr = F;
+  Goto.GotoTarget = F + 0x14;
+  Func.Body.push_back(std::move(Goto));
+  HighStmt Try;
+  Try.Kind = StmtKind::SEHTry;
+  Try.Addr = F + 0x10;
+  Try.EHRange = {F + 0x10, F + 0x18};
+  Try.EHIsReducible = true;
+  HighEHClause Clause;
+  Clause.Kind = HighEHClauseKind::SEHExcept;
+  Clause.HandlerVA = F + 0x20;
+  Try.EHClauses.push_back(Clause);
+  Try.EHClauseBodies.emplace_back();
+  Try.Body.push_back(Return(F + 0x10, 1));
+  Try.Body.push_back(Return(F + 0x14, 2));
+  Func.Body.push_back(std::move(Try));
+
+  const std::string Source = emitHighC({Func});
+  const size_t First = Source.find("__try");
+  const size_t Label = Source.find("L_140001014:");
+  ASSERT_NE(First, std::string::npos) << Source;
+  ASSERT_NE(Label, std::string::npos) << Source;
+  EXPECT_LT(Source.find("__except", First), Label) << Source;
+  EXPECT_NE(Source.find("__try", Label), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("L_140001014:", Label + 1), std::string::npos)
+      << Source;
+}
+
 TEST(COFFExceptionIR, StructuresSingleBlockFH3CatchBody) {
   constexpr va_t FunctionVA = 0x140001000;
   constexpr va_t HandlerVA = FunctionVA + 0x20;

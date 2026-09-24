@@ -459,6 +459,14 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
           Block.StartAddr == InvalidVA || Block.EndAddr <= Block.StartAddr)
         continue;
       Entries.insert(Block.StartAddr);
+      // DCE runs repeatedly; an anchor from an earlier round, possibly
+      // wrapped since, already carries the address.
+      bool Anchored = false;
+      walkStmts(Func.Body, [&](const HighStmt &S) {
+        Anchored |= S.Addr == Block.StartAddr;
+      });
+      if (Anchored)
+        continue;
       auto First = std::find_if(
           Func.Body.begin(), Func.Body.end(), [&](const HighStmt &S) {
             return S.Addr >= Block.StartAddr && S.Addr < Block.EndAddr;

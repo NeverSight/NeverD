@@ -173,6 +173,8 @@ public:
   std::map<std::string, std::string> FunctionIdentifiersBySourceName;
   std::map<std::string, std::string> ExternalFunctionIdentifiers;
   std::set<va_t> GotoTargets;
+  /// How many gotos target each address in the current function.
+  std::map<va_t, unsigned> GotoTargetUses;
   /// Labels already printed in the current function; C allows each once.
   std::set<va_t> EmittedLabels;
   bool HasCIntrinsics = false;
