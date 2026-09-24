@@ -438,13 +438,14 @@ llvm::Error KernelFramework::writable(uint64_t Address, uint32_t Size) {
 
 llvm::Expected<std::vector<uint8_t>>
 KernelFramework::readRegistryPath(uint64_t Address) {
-  auto Length = read(Address, 2);
-  auto Maximum = read(Address + 2, 2);
-  auto Buffer = read(Address + 8);
+  auto Length = read(Address, sizeof(char16_t));
+  auto Maximum =
+      read(Address + windows::UnicodeMaximumOffset, sizeof(char16_t));
+  auto Buffer = read(Address + windows::UnicodeBufferOffset);
   if (!Length || !Maximum || !Buffer)
     return joinedErrors(Length.takeError(), Maximum.takeError(),
                         Buffer.takeError());
-  if (!*Length || *Length % 2 || *Maximum < *Length ||
+  if (!*Length || *Length % sizeof(char16_t) || *Maximum < *Length ||
       *Length > MaxRegistryPathBytes)
     return invalid("invalid counted driver registry path");
   if (auto E = ValidateAccess(*Buffer, *Length, false))
@@ -592,7 +593,7 @@ llvm::Expected<uint64_t> KernelFramework::bind(llvm::ArrayRef<uint64_t> A) {
   if (*Module)
     return invalid("binding record already contains a module identity");
   for (size_t I = 0; I <= FrameworkComponent.size(); ++I) {
-    auto Ch = read(*Component + 2 * I, 2);
+    auto Ch = read(*Component + sizeof(char16_t) * I, sizeof(char16_t));
     if (!Ch)
       return Ch.takeError();
     const uint64_t Expected =
@@ -909,18 +910,8 @@ KernelFramework::createDriver(Binding &B, llvm::ArrayRef<uint64_t> A) {
       Exports.insertFrameworkFunction(B.Globals, FrameworkUnloadRoutine);
   if (!Thunk)
     return Thunk.takeError();
-  auto Length = read(RegistryPath, 2);
-  auto Buffer = read(RegistryPath + 8);
-  if (!Length || !Buffer)
-    return joinedErrors(Length.takeError(), Buffer.takeError());
-  if (*Length % 2 || *Length > MaxRegistryPathBytes)
-    return invalid("invalid counted driver registry path");
-  if (auto E = ValidateAccess(*Buffer, *Length, false))
-    return E;
-  std::vector<uint8_t> Path(*Length + 2);
-  if (auto E =
-          Memory.read(*Buffer, llvm::MutableArrayRef(Path).take_front(*Length)))
-    return E;
+  std::vector<uint8_t> Path = std::move(*SuppliedPath);
+  Path.resize(Path.size() + sizeof(char16_t), 0);
   auto Copy = allocate(Path.size(), false, false);
   if (!Copy)
     return Copy.takeError();

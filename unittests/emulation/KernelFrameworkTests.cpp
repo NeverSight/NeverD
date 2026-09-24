@@ -181,6 +181,30 @@ TEST_F(DriverKernelFramework, DriverConfigurationReturnsDocumentedStatuses) {
   expectError(Model.validateGuestAccess(Path, 2, true), "read-only");
 }
 
+TEST_F(DriverKernelFramework, DriverRegistryCopyUsesTheValidatedBindingPath) {
+  bind();
+  const uint64_t Copy = Driver + 0xe00;
+  const uint64_t CopyText = Copy + 0x40;
+  std::vector<uint8_t> Original(get(Registry, sizeof(char16_t)));
+  success(Memory.read(RegistryText, Original));
+  success(Memory.write(CopyText, Original));
+  put(Copy, Original.size(), sizeof(char16_t));
+  put(Copy + windows::UnicodeMaximumOffset, Original.size(), sizeof(char16_t));
+  put(Copy + windows::UnicodeBufferOffset, CopyText);
+
+  put(RegistryText + sizeof(char16_t), 'X', sizeof(char16_t));
+  EXPECT_EQ(take(invoke(framework::api::WdfDriverCreate,
+                        {Globals, Driver, Copy, 0, Config, DriverSlot})),
+            0u);
+  const uint64_t Path =
+      take(invoke(framework::api::WdfDriverGetRegistryPath,
+                  {Globals, get(DriverSlot)}));
+  std::vector<uint8_t> Stored(Original.size() + sizeof(char16_t));
+  success(Memory.read(Path, Stored));
+  Original.resize(Stored.size(), 0);
+  EXPECT_EQ(Stored, Original);
+}
+
 TEST_F(DriverKernelFramework,
        TypedContextIsZeroedAndDuplicatePreservesIdentity) {
   bind();
