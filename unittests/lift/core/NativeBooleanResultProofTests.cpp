@@ -595,6 +595,53 @@ TEST(NativeBooleanResultProof, EveryPhysicalJoinAndLoopPathMustBeSafe) {
   EXPECT_FALSE(F.prove());
 }
 
+TEST(NativeBooleanResultProof, TerminalBrkPathHasNoBooleanObservation) {
+  Fixture F;
+  const auto Brk = operation(
+      NdOp::INTRINSIC, NdVar::reg(a64reg::X0, 8),
+      {NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2)});
+  F.Low.Blocks = {
+      block(0, 0x1000,
+            {call(), operation(NdOp::COND_BR, {},
+                               {NdVar::cst(0x1010, 8),
+                                NdVar::reg(a64reg::X2, 1)})},
+            {}, {1, 2}),
+      block(1, 0x1008,
+            {mask(a64reg::X0, a64reg::X0),
+             operation(NdOp::BRANCH, {}, {NdVar::cst(0x1018, 8)})},
+            {0}, {3}),
+      block(2, 0x1010, {Brk}, {0}),
+      block(3, 0x1018, {ret()}, {1})};
+  F.bindCalls();
+  ASSERT_TRUE(source_boolean_result_detail::terminalBrk(F.Low.Blocks[2]));
+  EXPECT_TRUE(F.prove());
+  auto &Trap = F.Low.Blocks[2];
+  Trap.Ops[0].Inputs[0].Offset = static_cast<uint64_t>(Intrinsic::Hlt_A64);
+  EXPECT_FALSE(F.prove());
+  Trap.Ops[0].Inputs[0].Offset = static_cast<uint64_t>(Intrinsic::Brk);
+  Trap.Succs.push_back(3);
+  EXPECT_FALSE(F.prove());
+}
+
+TEST(NativeBooleanResultProof, NarrowFlagImmediateBeforeBooleanCall) {
+  for (NdOp Opcode : {NdOp::INT_CARRY, NdOp::INT_SOVF, NdOp::INT_SBOR}) {
+    SCOPED_TRACE(int(Opcode));
+    Fixture F;
+    const auto Flag = operation(
+        Opcode,
+        NdVar::reg(Opcode == NdOp::INT_SOVF ? a64reg::VFLAG : a64reg::CFLAG,
+                   1),
+        {NdVar::reg(a64reg::X19, 8), NdVar::cst(1, 4)});
+    F.linear({Flag, call(), copy(a64reg::X8, a64reg::X0), mask(), ret()});
+    EXPECT_TRUE(F.prove());
+    F.Low.Blocks.front().Ops.front().Inputs[1] = NdVar::reg(a64reg::X20, 4);
+    EXPECT_FALSE(F.prove());
+    F.Low.Blocks.front().Ops.front().Inputs[1] = NdVar::cst(1, 4);
+    F.Low.Blocks.front().Ops.front().Output = NdVar::reg(a64reg::CFLAG, 8);
+    EXPECT_FALSE(F.prove());
+  }
+}
+
 TEST(NativeBooleanResultProof, RejectsMalformedGraphsOperationsAndContracts) {
   for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
     SCOPED_TRACE(Mutation);

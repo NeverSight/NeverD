@@ -91,6 +91,16 @@ inline bool directCall(const BinaryImage &Image,
   return Site.Instruction + Displacement == *Site.StaticTarget;
 }
 
+inline bool terminalBrk(const BinaryImage &Image, const LowBlock &Block) {
+  if (!source_boolean_result_detail::terminalBrk(Block))
+    return false;
+  const auto Bytes = readImmutableCodeBytes(Image, Block.Ops.front().Addr, 4);
+  if (!Bytes)
+    return false;
+  const auto Word = llvm::support::endian::read32le(Bytes->data());
+  return (Word & 0xffe0001f) == 0xd4200000;
+}
+
 inline bool ordinaryRuntime(const SourceCallTypeHint &Hint) {
   using Kind = SourceCallTypeHint::Kind;
   return Hint.CallKind == Kind::ObjCRuntimeCall ||
@@ -232,6 +242,9 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
         Block.EndAddr - Block.StartAddr > 32768 ||
         !readImmutableCodeBytes(Image, Block.StartAddr,
                                 Block.EndAddr - Block.StartAddr))
+      return {};
+    if (source_boolean_result_detail::terminalBrk(Block) &&
+        !swift_boolean_projection_detail::terminalBrk(Image, Block))
       return {};
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)

@@ -1228,7 +1228,17 @@ The eight-instruction ARM64 class-accessor proof has one shared machine owner. I
 
 Boolean normalization proofs treat SP as an implicit input to every call, including calls with no arguments or only register arguments. A differing incoming SP is rejected before the call; restoring SP later cannot undo the callee’s stack accesses.
 
+A successorless ARM64 `BRK` block is a terminal Boolean-proof path only when
+its one LowIR intrinsic and the current immutable instruction bytes agree.
+That path has no return observation; ordinary paths must still prove the
+normalized result and complete return and preserved-register state.
+
 The Boolean result proof tracks exact difference bits through constant integer left, logical-right and arithmetic-right shifts within the operand width, and through bitwise results truncated to a smaller destination. This covers ARM64 bit-test predicates without declaring unobserved runtime padding defined. A variable shift or SELECT is accepted only when all inputs are identical in both executions; differing-input variable shifts, out-of-range constant shifts and padding that reaches a branch, argument, store or returned value still reject normalization.
+
+ARM64 carry, signed-overflow and signed-borrow flag operations may combine a
+full-width register with a narrower encoded immediate. The proof accepts that
+shape only for a one-byte flag result: equal inputs remain equal, while any
+differing input taints the whole flag rather than inventing its value.
 
 An inferred native 64-bit integer return can be refined to its low 32 bits when every return supports that projection and at least one explicitly contains undefined upper padding. Complete source flow and all local definitions must agree; unknown low bytes, cyclic definitions, missing branches and effectful upper expressions remain rejected. The candidate is re-lifted with its new source ABI. Callers that observe the discarded upper word retain unresolved values and cannot publish recovered source.
 

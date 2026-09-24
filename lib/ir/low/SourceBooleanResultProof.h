@@ -5,6 +5,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 
@@ -72,6 +73,21 @@ inline bool ordinaryBinary(NdOp Opcode) {
   default:
     return false;
   }
+}
+
+// A BRK has no successor and cannot expose the selected Boolean's undefined
+// high bits through a return. The image-backed owner additionally checks the
+// exact immutable ARM64 instruction before using this LowIR shape.
+inline bool terminalBrk(const LowBlock &Block) {
+  if (!Block.Succs.empty() || Block.Ops.size() != 1)
+    return false;
+  const auto &Op = Block.Ops.front();
+  return Block.EndAddr == Op.Addr + 4 && Op.Seq == 0 &&
+         Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
+         Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+         Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Brk) &&
+         Op.Output == NdVar::reg(
+                          getTargetRegInfo(Arch::AArch64).IntReturnReg, 8);
 }
 
 struct Transfer {
@@ -261,6 +277,8 @@ struct Transfer {
           return false;
         continue;
       }
+      if (Op.Opcode == NdOp::INTRINSIC && terminalBrk(Block))
+        continue;
       std::vector<uint8_t> Value(Op.Output.Size, InputDiffers ? 0xff : 0);
       if (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
           Op.Opcode == NdOp::INT_SEXT) {
@@ -365,9 +383,26 @@ struct Transfer {
             if (Op.Inputs[I].isConst() ? Op.Inputs[I].Size > Op.Output.Size
                                        : Op.Inputs[I].Size != Op.Output.Size)
               return false;
-        } else if (Op.Output.Size != 1 ||
-                   Op.Inputs[0].Size != Op.Inputs[1].Size)
-          return false;
+        } else {
+          // AArch64 CMN/CMP can lift carry, overflow and borrow flags from a
+          // full-width register and a narrower encoded immediate. The
+          // transfer never calculates a flag value: identical inputs stay
+          // identical, and a differing input taints the whole flag byte.
+          const bool NarrowFlagImmediate =
+              (Op.Opcode == NdOp::INT_CARRY ||
+               Op.Opcode == NdOp::INT_SOVF ||
+               Op.Opcode == NdOp::INT_SBOR) &&
+              ((Op.Inputs[0].isConst() &&
+                Op.Inputs[0].Size <= Op.Inputs[1].Size &&
+                Op.Inputs[1].Size <= 8) ||
+               (Op.Inputs[1].isConst() &&
+                Op.Inputs[1].Size <= Op.Inputs[0].Size &&
+                Op.Inputs[0].Size <= 8));
+          if (Op.Output.Size != 1 ||
+              (Op.Inputs[0].Size != Op.Inputs[1].Size &&
+               !NarrowFlagImmediate))
+            return false;
+        }
       } else if (Op.Opcode == NdOp::SELECT) {
         if (Op.NumInputs != 3 || !Op.Output.Size || Op.Inputs[0].Size != 1 ||
             Op.Inputs[1].Size != Op.Output.Size ||
@@ -523,6 +558,8 @@ proveSourceBooleanResultNormalization(
           Last.Inputs[0].Size != 8 || !AddAddress(Last.Inputs[0].Offset) ||
           (Last.Opcode == NdOp::COND_BR && !AddAddress(B.EndAddr)))
         return std::nullopt;
+    } else if (terminalBrk(B)) {
+      // An unconditional trap is a terminal path, not fallthrough.
     } else if (!AddAddress(B.EndAddr))
       return std::nullopt;
     for (int Id : B.Succs) {

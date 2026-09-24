@@ -504,6 +504,33 @@ TEST(SwiftBooleanProjection, CombinesCurrentIdentityAndConsumerProof) {
   EXPECT_TRUE(buildObjCSourceCallHints(F.Image, F.Low).empty());
 }
 
+TEST(SwiftBooleanProjection, TerminalBrkRequiresCurrentImmutableOpcode) {
+  ProjectionFixture F;
+  LowBlock Trap;
+  Trap.StartAddr = 0x300c;
+  Trap.EndAddr = 0x3010;
+  LowOp Brk;
+  Brk.Addr = Trap.StartAddr;
+  Brk.Seq = 0;
+  Brk.Opcode = NdOp::INTRINSIC;
+  Brk.Output = NdVar::reg(getTargetRegInfo(Arch::AArch64).IntReturnReg, 8);
+  Brk.addInput(NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2));
+  Trap.Ops.push_back(Brk);
+  F.word(Trap.StartAddr, 0xd4200020); // BRK #1.
+  EXPECT_TRUE(swift_boolean_projection_detail::terminalBrk(F.Image, Trap));
+  F.word(Trap.StartAddr, 0xd503201f); // NOP.
+  EXPECT_FALSE(swift_boolean_projection_detail::terminalBrk(F.Image, Trap));
+  F.word(Trap.StartAddr, 0xd4200020);
+  F.Image.Segments.back().Flags = SegmentFlags::Readable |
+                                  SegmentFlags::Writable |
+                                  SegmentFlags::Executable;
+  EXPECT_FALSE(swift_boolean_projection_detail::terminalBrk(F.Image, Trap));
+  F.Image.Segments.back().Flags = SegmentFlags::Readable |
+                                  SegmentFlags::Executable;
+  Trap.Ops.front().Inputs[0].Offset = static_cast<uint64_t>(Intrinsic::Hlt_A64);
+  EXPECT_FALSE(swift_boolean_projection_detail::terminalBrk(F.Image, Trap));
+}
+
 TEST(SwiftBooleanProjection, NativeEntryUsesConservativeWordUntilBound) {
   ProjectionFixture F;
   F.Image.ObjCMethods.clear();
