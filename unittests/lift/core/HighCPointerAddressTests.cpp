@@ -3818,6 +3818,28 @@ TEST(HighCPointerAddresses, LabeledCodeAfterFastFailKeepsItsLabel) {
   EXPECT_NE(HighC.find("return"), std::string::npos) << HighC;
 }
 
+TEST(HighCPointerAddresses, SummarizedCalleeNeverGetsGuessedPassThrough) {
+  // The callee reads no register, so its summary publishes no argument.
+  // RCX holds 0xC9 at the call; it must not print as the caller's arg0.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001040;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28, // sub rsp, 28h
+                               0x48, 0x89, 0x0d, 0xf5, 0x0f, 0x00,
+                               0x00, // mov [rip+..], rcx
+                               0xb9, 0xc9, 0x00, 0x00, 0x00, // mov ecx, 0C9h
+                               0xe8, 0x2b, 0x00, 0x00, 0x00, // call G
+                               0x48, 0x83, 0xc4, 0x28, 0xc3};
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x33, 0xc0, 0xc3}); // xor eax, eax; ret
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "reads_nothing";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_NE(HighC.find("reads_nothing("), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("reads_nothing(arg0)"), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.

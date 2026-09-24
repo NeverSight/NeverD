@@ -467,7 +467,14 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
     }
   }
 
-  if (Win64 && CurMed) {
+  // A callee summary already published exactly the register arguments the
+  // callee reads, SSA-renamed to their reaching values; guessing a
+  // pass-through parameter for an unread slot would print the function's
+  // incoming RCX where the caller loaded 0xC9.
+  const bool SummarizedCallee = CallIdx < Ops.size() &&
+                                Ops[CallIdx].CalleeRegisterArgs >= 0 &&
+                                !Ops[CallIdx].SourceCallHint;
+  if (Win64 && CurMed && !SummarizedCallee) {
     size_t FillTo = 0;
     if (!Hinted.empty())
       FillTo = std::min(Hinted.size(), static_cast<size_t>(4));

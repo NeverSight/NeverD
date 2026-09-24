@@ -443,7 +443,33 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   ExprRecurseDepth = 0;
   breakStmtCycles(Func.Body);
   coalesceBranchEntryStatements(Func.Body);
-  const auto Entries = referencedStatementEntries(Func.Body);
+  auto Entries = referencedStatementEntries(Func.Body);
+  // A block no branch reaches is still entered from outside the CFG: an
+  // __except handler or landing pad runs from the exception dispatcher.  It
+  // sits after the function's return, so it must count as an entry or it
+  // is deleted as code after a terminator.
+  // Its first instructions may be copies that folded away; put an empty
+  // anchor at its start address before the first surviving statement, so the
+  // entry keeps its code, its label, and its address range for the EH
+  // structurer.
+  if (CurMed)
+    for (size_t B = 1; B < CurMed->Blocks.size(); ++B) {
+      const MedBlock &Block = CurMed->Blocks[B];
+      if (!Block.Preds.empty() || Block.StartAddr == 0 ||
+          Block.StartAddr == InvalidVA || Block.EndAddr <= Block.StartAddr)
+        continue;
+      Entries.insert(Block.StartAddr);
+      auto First = std::find_if(
+          Func.Body.begin(), Func.Body.end(), [&](const HighStmt &S) {
+            return S.Addr >= Block.StartAddr && S.Addr < Block.EndAddr;
+          });
+      if (First == Func.Body.end() || First->Addr == Block.StartAddr)
+        continue;
+      HighStmt Anchor;
+      Anchor.Kind = StmtKind::Block;
+      Anchor.Addr = Block.StartAddr;
+      Func.Body.insert(First, std::move(Anchor));
+    }
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 0: unreachable (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");

@@ -267,6 +267,11 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
     if (Statement.Kind == StmtKind::Goto)
       BranchEntries.insert(Statement.GotoTarget);
   });
+  // A block no branch reaches is entered from outside the CFG (an __except
+  // handler runs from the exception dispatcher); it needs the same anchor.
+  for (size_t B = 1; B < Med.Blocks.size(); ++B)
+    if (Med.Blocks[B].Preds.empty())
+      BranchEntries.insert(Med.Blocks[B].StartAddr);
   for (auto It = MissingEntries.rbegin(); It != MissingEntries.rend(); ++It) {
     if (!BranchEntries.count(It->second))
       continue;

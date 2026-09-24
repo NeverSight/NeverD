@@ -1091,6 +1091,82 @@ TEST(COFFExceptionIR, StructuresSingleBlockSEHHandlerBody) {
   EXPECT_EQ(Source.find("sub_140009000();", Marker + 1), std::string::npos);
 }
 
+TEST(COFFExceptionIR, KeepsSEHHandlerPlacedAfterReturn) {
+  // IovBuildAsynchronousFsdRequest: the __except handler follows the return
+  // and its first instruction leaves no statement.  Only the exception
+  // dispatcher enters it, so no goto anchors its address; it must still keep
+  // its code and label.
+  constexpr va_t FunctionVA = 0x140001000;
+  constexpr va_t ReturnVA = FunctionVA + 0x10;
+  constexpr va_t HandlerVA = FunctionVA + 0x20;
+  constexpr va_t HandlerCallVA = HandlerVA + 0xC;
+
+  MedFunc Func;
+  Func.Entry = FunctionVA;
+  Func.Name = "seh_handler_after_return";
+  Func.ReturnType = NdType::makeVoid();
+
+  MedBlock Protected;
+  Protected.Id = 0;
+  Protected.StartAddr = FunctionVA;
+  Protected.EndAddr = ReturnVA;
+  Protected.Succs = {1};
+  MedOp ProtectedCall;
+  ProtectedCall.Opcode = NdOp::CALL;
+  ProtectedCall.Addr = FunctionVA + 4;
+  ProtectedCall.addInput(MedVar::makeConst(0x140008000, 8));
+  Protected.Ops.push_back(std::move(ProtectedCall));
+  Func.Blocks.push_back(std::move(Protected));
+
+  MedBlock Exit;
+  Exit.Id = 1;
+  Exit.StartAddr = ReturnVA;
+  Exit.EndAddr = ReturnVA + 1;
+  Exit.Preds = {0};
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = ReturnVA;
+  Exit.Ops.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Exit));
+
+  MedBlock Handler;
+  Handler.Id = 2;
+  Handler.StartAddr = HandlerVA;
+  Handler.EndAddr = HandlerCallVA + 5;
+  MedOp Folded;
+  Folded.Opcode = NdOp::NOP;
+  Folded.Addr = HandlerVA;
+  Handler.Ops.push_back(std::move(Folded));
+  MedOp HandlerCall;
+  HandlerCall.Opcode = NdOp::CALL;
+  HandlerCall.Addr = HandlerCallVA;
+  HandlerCall.addInput(MedVar::makeConst(0x140009000, 8));
+  Handler.Ops.push_back(std::move(HandlerCall));
+  Func.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {FunctionVA, HandlerCallVA + 5};
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {FunctionVA, ReturnVA};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = HandlerVA;
+  SEHExceptionInfo SEH;
+  SEH.Scopes.push_back(std::move(Scope));
+  EH.SEH = std::move(SEH);
+  Func.ExceptionMetadata = std::move(EH);
+
+  HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(HighCEmitter().emit({High}, Stream));
+  Stream.flush();
+  EXPECT_NE(Source.find("sub_140009000();"), std::string::npos) << Source;
+  if (Source.find("goto L_140001020") != std::string::npos)
+    EXPECT_NE(Source.find("L_140001020:"), std::string::npos) << Source;
+}
+
 TEST(COFFExceptionIR, StructuresSingleBlockFH3CatchBody) {
   constexpr va_t FunctionVA = 0x140001000;
   constexpr va_t HandlerVA = FunctionVA + 0x20;
