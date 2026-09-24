@@ -178,6 +178,12 @@ referencedStatementEntries(const std::vector<HighStmt> &Stmts) {
     if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
         S.GotoTarget != InvalidVA)
       Entries.insert(S.GotoTarget);
+    // An __except arm with an empty body is printed as a goto to its
+    // handler, which the exception dispatcher enters.
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.Kind == HighEHClauseKind::SEHExcept && Clause.HandlerVA != 0 &&
+          Clause.HandlerVA != InvalidVA)
+        Entries.insert(Clause.HandlerVA);
   });
   return Entries;
 }
