@@ -15,6 +15,9 @@ analysis and comparison output belong outside the repository.
 
 ## Closed in the public SEH corpus
 
+- LLVMC now projects canonical Windows EH SEH scopes, C++ unwind/try/catch/IP
+  records, and GS cookie facts as bounded comments. Unsupported or malformed
+  metadata is diagnosed explicitly; the executable C remains goto form.
 - HighC now keeps fixed slots and indexed accesses to the same frame in one
   byte backing store, including C++ catch funclets and SEH handlers. Public
   buffered C++/SEH cases and a fixed-write/indexed-read regression cover the

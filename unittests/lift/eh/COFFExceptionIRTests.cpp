@@ -601,6 +601,282 @@ TEST(COFFExceptionIR, LLVMCExceptionAnnotationReadsCanonicalStringsOnly) {
       << Source;
 }
 
+TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-windows-eh-details", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto AddFunction = [&](llvm::StringRef Name, const ExceptionFunction &EH) {
+    llvm::Function *Function = llvm::Function::Create(
+        VoidType, llvm::GlobalValue::ExternalLinkage, Name, Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    Function->setMetadata(windows_eh_md::FunctionAttachment,
+                          windows_eh_md::getCanonicalFunctionMetadata(
+                              Context, EH, Arch::X64, BinaryFormat::COFF));
+  };
+
+  ExceptionFunction SEH;
+  SEH.CodeRange = {0x140001000, 0x140001080};
+  SEH.Encoding = ExceptionEncoding::X64UnwindV1;
+  SEH.PersonalityName = "__GSHandlerCheck_SEH";
+  SEH.SEH.emplace();
+  SEHScopeRecord Filter;
+  Filter.GuardedRange = {0x140001010, 0x140001030};
+  Filter.Kind = SEHScopeKind::Filter;
+  Filter.FilterOrFinallyVA = 0x140002000;
+  Filter.HandlerVA = 0x140002020;
+  Filter.ContinuationVA = 0x140001040;
+  SEH.SEH->Scopes.push_back(Filter);
+  SEHScopeRecord Finally;
+  Finally.GuardedRange = {0x140001040, 0x140001060};
+  Finally.Kind = SEHScopeKind::Finally;
+  Finally.FilterOrFinallyVA = 0x140002040;
+  SEH.SEH->Scopes.push_back(Finally);
+  SEH.GSCookie.emplace();
+  SEH.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+  SEH.GSCookie->CookieOffset = 128;
+  SEH.GSCookie->HasExceptionHandler = true;
+  SEH.GSCookie->HasUnwindHandler = true;
+  SEH.GSCookie->HasAlignment = true;
+  SEH.GSCookie->AlignmentBaseOffset = -16;
+  SEH.GSCookie->Alignment = 16;
+  AddFunction("seh_details", SEH);
+
+  ExceptionFunction Cxx;
+  Cxx.CodeRange = {0x140003000, 0x140003100};
+  Cxx.Encoding = ExceptionEncoding::X64UnwindV1;
+  Cxx.PersonalityName = "__GSHandlerCheck_EH4";
+  Cxx.Cxx.emplace();
+  Cxx.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH4;
+  Cxx.Cxx->MaxState = 3;
+  Cxx.Cxx->UnwindMap.push_back(
+      {-1, 0x140004000, CxxUnwindAction::ActionKind::Direct, 0});
+  Cxx.Cxx->UnwindMap.push_back(
+      {0, 0x140004020, CxxUnwindAction::ActionKind::DestructorWithObject, -24});
+  Cxx.Cxx->UnwindMap.push_back(
+      {1, 0x140004040, CxxUnwindAction::ActionKind::Direct, 0});
+  CxxTryBlock Try;
+  Try.TryLow = 0;
+  Try.TryHigh = 1;
+  Try.CatchHigh = 2;
+  CxxCatchHandler Catch;
+  Catch.Adjectives = 0x40;
+  Catch.TypeDescriptorVA = 0x140005000;
+  Catch.CatchObjectOffset = -32;
+  Catch.HandlerVA = 0x140003080;
+  Catch.ParentFrameOffset = -16;
+  Catch.ContinuationVAs = {0x1400030a0, 0x1400030b0};
+  Try.Handlers.push_back(Catch);
+  Cxx.Cxx->TryBlocks.push_back(Try);
+  Cxx.Cxx->IPMap = {{0x140003010, -1}, {0x140003040, 0}, {0x140003080, 2}};
+  Cxx.GSCookie.emplace();
+  Cxx.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+  Cxx.GSCookie->CookieOffset = 128;
+  AddFunction("cxx_details", Cxx);
+
+  const std::string Source = emitLLVMC(Module);
+  EXPECT_NE(Source.find("seh.scope[0]: filter [0x140001010, 0x140001030)"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("seh.scope[1]: finally [0x140001040, 0x140001060)"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("gs.cookie_offset=128, ehandler=1, uhandler=1, "
+                        "alignment_base=-16, alignment=16"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("cxx.format=fh4, states=3, try_blocks=1, ip_states=3"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("cxx.unwind[0]: to_state=-1, kind=direct"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("cxx.unwind[1]: to_state=0, "
+                        "kind=destructor-object, action=0x140004020, "
+                        "object_offset=-24"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("cxx.try[0]: states=0..1, catch_high=2, handlers=1"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("catch[0]: type=0x140005000, handler=0x140003080, "
+                        "adjectives=0x40, object_offset=-32, "
+                        "parent_frame_offset=-16, "
+                        "continuations=0x1400030A0,0x1400030B0"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("cxx.ip_state[2]: ip=0x140003080, state=2"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("catch ("), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCCorruptWindowsEHMetadataIsExplicitAndBounded) {
+  auto EmitCorrupt = [](const ExceptionFunction &EH, auto Corrupt) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("llvm-c-corrupt-windows-eh", Context);
+    Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+    llvm::FunctionType *VoidType =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+    llvm::Function *Function = llvm::Function::Create(
+        VoidType, llvm::GlobalValue::ExternalLinkage, "corrupt_eh", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    llvm::MDNode *Canonical = windows_eh_md::getCanonicalFunctionMetadata(
+        Context, EH, Arch::X64, BinaryFormat::COFF);
+    llvm::SmallVector<llvm::Metadata *, windows_eh_md::OperandCount> Fields;
+    for (const llvm::MDOperand &Operand : Canonical->operands())
+      Fields.push_back(Operand.get());
+    Corrupt(Context, Fields);
+    Function->setMetadata(windows_eh_md::FunctionAttachment,
+                          llvm::MDNode::get(Context, Fields));
+    return emitLLVMC(Module);
+  };
+
+  ExceptionFunction EH;
+  EH.CodeRange = {0x140001000, 0x140001080};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {0x140001010, 0x140001030};
+  Scope.Kind = SEHScopeKind::Finally;
+  EH.SEH->Scopes.push_back(Scope);
+
+  const std::string BadVersion =
+      EmitCorrupt(EH, [](llvm::LLVMContext &Context, auto &Fields) {
+        Fields[windows_eh_md::Version] = llvm::ConstantAsMetadata::get(
+            llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 9));
+      });
+  EXPECT_NE(BadVersion.find("unsupported metadata schema version 9"),
+            std::string::npos)
+      << BadVersion;
+  EXPECT_EQ(BadVersion.find("status=complete"), std::string::npos)
+      << BadVersion;
+
+  ExceptionFunction BadCodeRange = EH;
+  BadCodeRange.CodeRange = {0x140001080, 0x140001000};
+  const std::string InvertedCode =
+      EmitCorrupt(BadCodeRange, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(InvertedCode.find("metadata-invalid (function code range)"),
+            std::string::npos)
+      << InvertedCode;
+  EXPECT_EQ(InvertedCode.find("status=complete"), std::string::npos)
+      << InvertedCode;
+
+  ExceptionFunction BadScopeRange = EH;
+  BadScopeRange.SEH->Scopes[0].GuardedRange = {0x140001030, 0x140001010};
+  const std::string InvertedScope =
+      EmitCorrupt(BadScopeRange, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(InvertedScope.find("metadata-invalid (seh.scope range)"),
+            std::string::npos)
+      << InvertedScope;
+  EXPECT_EQ(InvertedScope.find("status=complete"), std::string::npos)
+      << InvertedScope;
+
+  const std::string BadScope =
+      EmitCorrupt(EH, [](llvm::LLVMContext &Context, auto &Fields) {
+        Fields[windows_eh_md::SEHScopes] = llvm::MDNode::get(
+            Context, {llvm::MDNode::get(
+                         Context, {llvm::MDString::get(Context, "bad row")})});
+      });
+  EXPECT_NE(BadScope.find("metadata-invalid (seh.scope row)"),
+            std::string::npos)
+      << BadScope;
+  EXPECT_EQ(BadScope.find("status=complete"), std::string::npos) << BadScope;
+  EXPECT_EQ(BadScope.find("seh.scope["), std::string::npos) << BadScope;
+
+  const std::string NullStatus =
+      EmitCorrupt(EH, [](llvm::LLVMContext &, auto &Fields) {
+        Fields[windows_eh_md::ParseStatus] = nullptr;
+      });
+  EXPECT_NE(NullStatus.find("metadata-invalid (function string field)"),
+            std::string::npos)
+      << NullStatus;
+  EXPECT_EQ(NullStatus.find("status=complete"), std::string::npos)
+      << NullStatus;
+
+  const std::string NullScopeRow =
+      EmitCorrupt(EH, [](llvm::LLVMContext &Context, auto &Fields) {
+        llvm::Metadata *Null = nullptr;
+        Fields[windows_eh_md::SEHScopes] = llvm::MDNode::get(Context, {Null});
+      });
+  EXPECT_NE(NullScopeRow.find("metadata-invalid (seh.scope row)"),
+            std::string::npos)
+      << NullScopeRow;
+  EXPECT_EQ(NullScopeRow.find("status=complete"), std::string::npos)
+      << NullScopeRow;
+
+  const std::string BadUnwindRow =
+      EmitCorrupt(EH, [](llvm::LLVMContext &Context, auto &Fields) {
+        Fields[windows_eh_md::UnwindOperations] = llvm::MDNode::get(
+            Context, {llvm::MDString::get(Context, "bad unwind row")});
+      });
+  EXPECT_NE(BadUnwindRow.find("metadata-invalid (unwind operations)"),
+            std::string::npos)
+      << BadUnwindRow;
+  EXPECT_EQ(BadUnwindRow.find("status=complete"), std::string::npos)
+      << BadUnwindRow;
+
+  ExceptionFunction Cxx = EH;
+  Cxx.SEH.reset();
+  Cxx.Cxx.emplace();
+  Cxx.Cxx->NativeEncoding = CxxExceptionInfo::Encoding::FH4;
+  Cxx.Cxx->TryBlocks.push_back({});
+  const std::string BadCatch =
+      EmitCorrupt(Cxx, [](llvm::LLVMContext &Context, auto &Fields) {
+        llvm::MDNode *BadHandlers = llvm::MDNode::get(
+            Context,
+            {llvm::MDNode::get(Context,
+                               {llvm::MDString::get(Context, "bad catch")})});
+        llvm::MDNode *BadTry = llvm::MDNode::get(
+            Context,
+            {llvm::ConstantAsMetadata::get(
+                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 0)),
+             llvm::ConstantAsMetadata::get(
+                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 0)),
+             llvm::ConstantAsMetadata::get(
+                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 1)),
+             BadHandlers});
+        Fields[windows_eh_md::CxxTryMap] = llvm::MDNode::get(Context, {BadTry});
+      });
+  EXPECT_NE(BadCatch.find("metadata-invalid (cxx.catch row)"),
+            std::string::npos)
+      << BadCatch;
+  EXPECT_EQ(BadCatch.find("status=complete"), std::string::npos) << BadCatch;
+  EXPECT_EQ(BadCatch.find("cxx.format="), std::string::npos) << BadCatch;
+
+  ExceptionFunction Hostile = EH;
+  Hostile.PersonalityName = "safe*/\nint injected;";
+  Hostile.Diagnostics.push_back("payload */\nint injected;");
+  const std::string Escaped =
+      EmitCorrupt(Hostile, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(Escaped.find("personality=safe* /?int injected;"),
+            std::string::npos)
+      << Escaped;
+  EXPECT_NE(Escaped.find("diagnostic: payload * /?int injected;"),
+            std::string::npos)
+      << Escaped;
+  EXPECT_EQ(Escaped.find("*/\nint injected;"), std::string::npos) << Escaped;
+
+  ExceptionFunction Oversized = EH;
+  Oversized.Diagnostics.push_back(std::string(4097, 'a'));
+  const std::string Limited =
+      EmitCorrupt(Oversized, [](llvm::LLVMContext &, auto &) {});
+  EXPECT_NE(Limited.find("metadata-invalid (diagnostic string field)"),
+            std::string::npos)
+      << Limited;
+  EXPECT_EQ(Limited.find("status=complete"), std::string::npos) << Limited;
+  EXPECT_LT(Limited.size(), 10000u) << Limited;
+}
+
 TEST(COFFExceptionIR,
      HighCWindowsEvidenceAndHostileIdentifiersRemainFailClosed) {
   HighFunc Guarded;

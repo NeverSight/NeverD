@@ -19,7 +19,10 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ExceptionCommon.h"
+#include "neverd/loader/ExceptionEncoding.h"
 #include "neverd/loader/ExceptionPersonality.h"
+#include "neverd/loader/ExceptionWindowsEH.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -34,10 +37,12 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
@@ -1200,6 +1205,233 @@ bool LLVMCWriter::functionNeedsAnalysisOnlyEHWrap(
   return false;
 }
 
+namespace {
+
+constexpr size_t MaxEHAnnotationRows = 4096;
+constexpr size_t MaxEHAnnotationChars = 256 * 1024;
+constexpr size_t MaxEHAnnotationStringChars = 4096;
+
+std::optional<uint64_t> ehAnnotationUInt(const llvm::MDNode &Node,
+                                         unsigned Index, unsigned Width) {
+  if (Index >= Node.getNumOperands())
+    return std::nullopt;
+  const auto *Constant = llvm::dyn_cast_if_present<llvm::ConstantAsMetadata>(
+      Node.getOperand(Index));
+  const auto *Int =
+      Constant ? llvm::dyn_cast<llvm::ConstantInt>(Constant->getValue())
+               : nullptr;
+  if (!Int || Int->getBitWidth() != Width || Width > 64)
+    return std::nullopt;
+  return Int->getZExtValue();
+}
+
+std::optional<int64_t> ehAnnotationSInt(const llvm::MDNode &Node,
+                                        unsigned Index, unsigned Width) {
+  if (!ehAnnotationUInt(Node, Index, Width))
+    return std::nullopt;
+  const auto *Constant =
+      llvm::cast<llvm::ConstantAsMetadata>(Node.getOperand(Index));
+  return llvm::cast<llvm::ConstantInt>(Constant->getValue())->getSExtValue();
+}
+
+std::optional<llvm::StringRef> ehAnnotationString(const llvm::MDNode &Node,
+                                                  unsigned Index) {
+  if (Index >= Node.getNumOperands())
+    return std::nullopt;
+  const auto *Text =
+      llvm::dyn_cast_if_present<llvm::MDString>(Node.getOperand(Index));
+  if (!Text)
+    return std::nullopt;
+  return Text->getString();
+}
+
+const llvm::MDNode *ehAnnotationNode(const llvm::MDNode &Node, unsigned Index) {
+  if (Index >= Node.getNumOperands())
+    return nullptr;
+  return llvm::dyn_cast_if_present<llvm::MDNode>(Node.getOperand(Index));
+}
+
+bool ehAnnotationUIntFields(
+    const llvm::MDNode &Node,
+    std::initializer_list<std::pair<unsigned, unsigned>> Fields) {
+  for (auto [Index, Width] : Fields)
+    if (!ehAnnotationUInt(Node, Index, Width))
+      return false;
+  return true;
+}
+
+bool ehAnnotationCountRows(const llvm::MDNode &Node, size_t &Rows) {
+  if (Node.getNumOperands() > MaxEHAnnotationRows - Rows)
+    return false;
+  Rows += Node.getNumOperands();
+  return true;
+}
+
+bool ehAnnotationUnwindOperation(const llvm::MDNode &Row) {
+  return Row.getNumOperands() == windows_eh_md::UnwindOperationOperandCount &&
+         ehAnnotationUIntFields(
+             Row, {{windows_eh_md::UnwindOpKind, 8},
+                   {windows_eh_md::UnwindOpCodeOffset, 32},
+                   {windows_eh_md::UnwindOpInfo, 8},
+                   {windows_eh_md::UnwindOpSlotCount, 8},
+                   {windows_eh_md::UnwindOpRegister, 16},
+                   {windows_eh_md::UnwindOpStackOffset, 64},
+                   {windows_eh_md::UnwindOpRegisterClass, 8},
+                   {windows_eh_md::UnwindOpRegisterMask, 32},
+                   {windows_eh_md::UnwindOpInstructionSize, 8}}) &&
+         ehAnnotationString(Row, windows_eh_md::UnwindOpOperandBytes);
+}
+
+bool ehAnnotationUnwindOperations(const llvm::MDNode &Operations,
+                                  size_t &Rows) {
+  if (!ehAnnotationCountRows(Operations, Rows))
+    return false;
+  for (const llvm::MDOperand &Operand : Operations.operands()) {
+    const auto *Row = llvm::dyn_cast_if_present<llvm::MDNode>(Operand.get());
+    if (!Row || !ehAnnotationUnwindOperation(*Row))
+      return false;
+  }
+  return true;
+}
+
+bool ehAnnotationOptionalSInt32(const llvm::MDNode &Node) {
+  return Node.getNumOperands() == 0 ||
+         (Node.getNumOperands() == 1 && ehAnnotationSInt(Node, 0, 32));
+}
+
+const char *ehAnnotationUnrenderedShape(const llvm::MDNode &UnwindOperations,
+                                        const llvm::MDNode &Epilogs,
+                                        const llvm::MDNode &PrimaryIndex,
+                                        const llvm::MDNode &ChainedRange,
+                                        const llvm::MDNode &Registration) {
+  size_t Rows = 0;
+  if (!ehAnnotationUnwindOperations(UnwindOperations, Rows))
+    return "unwind operations";
+  if (!ehAnnotationCountRows(Epilogs, Rows))
+    return "epilog row limit";
+  for (const llvm::MDOperand &Operand : Epilogs.operands()) {
+    const auto *Row = llvm::dyn_cast_if_present<llvm::MDNode>(Operand.get());
+    if (!Row || Row->getNumOperands() != windows_eh_md::EpilogOperandCount ||
+        !ehAnnotationUIntFields(
+            *Row, {{windows_eh_md::EpilogStartOffset, 64},
+                   {windows_eh_md::EpilogFlags, 8},
+                   {windows_eh_md::EpilogFirstOperationOffset, 32},
+                   {windows_eh_md::EpilogLastInstructionOffset, 32}}))
+      return "epilog row";
+    const auto *Operations =
+        ehAnnotationNode(*Row, windows_eh_md::EpilogOperations);
+    if (!Operations || !ehAnnotationUnwindOperations(*Operations, Rows))
+      return "epilog operations";
+  }
+  if (PrimaryIndex.getNumOperands() > 1 ||
+      (PrimaryIndex.getNumOperands() == 1 &&
+       !ehAnnotationUInt(PrimaryIndex, 0, 64)))
+    return "primary index";
+  if (ChainedRange.getNumOperands() != 0 &&
+      (ChainedRange.getNumOperands() != 2 ||
+       !ehAnnotationUIntFields(ChainedRange, {{0, 64}, {1, 64}})))
+    return "chained primary range";
+  if (Registration.getNumOperands() == 0)
+    return nullptr;
+  if (Registration.getNumOperands() !=
+          windows_eh_md::RegistrationOperandCount ||
+      !ehAnnotationUIntFields(
+          Registration, {{windows_eh_md::RegistrationHandlerVA, 64},
+                         {windows_eh_md::RegistrationScopeTableVA, 64},
+                         {windows_eh_md::RegistrationHasSecurityCookies, 1},
+                         {windows_eh_md::RegistrationGSCookieOffset, 32},
+                         {windows_eh_md::RegistrationGSCookieXOROffset, 32},
+                         {windows_eh_md::RegistrationEHCookieOffset, 32},
+                         {windows_eh_md::RegistrationEHCookieXOROffset, 32},
+                         {windows_eh_md::RegistrationScopeTableMagic, 32},
+                         {windows_eh_md::RegistrationChainInstallVA, 64},
+                         {windows_eh_md::RegistrationChainRemoveVA, 64}}))
+    return "registration row";
+  for (unsigned Index : {windows_eh_md::RegistrationTryLevelOffset,
+                         windows_eh_md::RegistrationSeededTryLevel,
+                         windows_eh_md::RegistrationRecordOffset}) {
+    const auto *Value = ehAnnotationNode(Registration, Index);
+    if (!Value || !ehAnnotationOptionalSInt32(*Value))
+      return "registration optional value";
+  }
+  const auto *Stores =
+      ehAnnotationNode(Registration, windows_eh_md::RegistrationTryLevelStores);
+  const auto *Scopes =
+      ehAnnotationNode(Registration, windows_eh_md::RegistrationScopes);
+  if (!Stores || !Scopes || !ehAnnotationCountRows(*Stores, Rows) ||
+      !ehAnnotationCountRows(*Scopes, Rows))
+    return "registration row limit";
+  for (const llvm::MDOperand &Operand : Stores->operands()) {
+    const auto *Row = llvm::dyn_cast_if_present<llvm::MDNode>(Operand.get());
+    if (!Row ||
+        Row->getNumOperands() !=
+            windows_eh_md::RegistrationTryLevelStoreOperandCount ||
+        !ehAnnotationUIntFields(*Row,
+                                {{windows_eh_md::RegistrationStoreVA, 64},
+                                 {windows_eh_md::RegistrationStoreEndVA, 64},
+                                 {windows_eh_md::RegistrationStoreLevel, 32}}))
+      return "registration store";
+  }
+  for (const llvm::MDOperand &Operand : Scopes->operands()) {
+    const auto *Row = llvm::dyn_cast_if_present<llvm::MDNode>(Operand.get());
+    if (!Row ||
+        Row->getNumOperands() != windows_eh_md::RegistrationScopeOperandCount ||
+        !ehAnnotationUIntFields(
+            *Row, {{windows_eh_md::RegistrationScopeEnclosingLevel, 32},
+                   {windows_eh_md::RegistrationScopeFilterVA, 64},
+                   {windows_eh_md::RegistrationScopeHandlerVA, 64},
+                   {windows_eh_md::RegistrationScopeIsFinally, 1}}))
+      return "registration scope";
+  }
+  return nullptr;
+}
+
+bool ehAnnotationStatus(llvm::StringRef Status) {
+  return Status ==
+             getExceptionParseStatusName(ExceptionParseStatus::Complete) ||
+         Status == getExceptionParseStatusName(ExceptionParseStatus::Partial) ||
+         Status == getExceptionParseStatusName(ExceptionParseStatus::Malformed);
+}
+
+bool ehAnnotationEncoding(llvm::StringRef Encoding) {
+  for (unsigned Value = 0;
+       Value <= static_cast<unsigned>(ExceptionEncoding::ARMEHABIGeneric);
+       ++Value)
+    if (Encoding ==
+        getExceptionEncodingName(static_cast<ExceptionEncoding>(Value)))
+      return true;
+  return false;
+}
+
+bool ehAnnotationPersonality(llvm::StringRef Personality) {
+  for (unsigned Value = 0;
+       Value <= static_cast<unsigned>(ExceptionPersonality::GoSEHTrampoline);
+       ++Value)
+    if (Personality ==
+        getExceptionPersonalityName(static_cast<ExceptionPersonality>(Value)))
+      return true;
+  return false;
+}
+
+std::string ehAnnotationCommentText(llvm::StringRef Input) {
+  std::string Output;
+  Output.reserve(Input.size());
+  for (size_t I = 0; I < Input.size(); ++I) {
+    const unsigned char Ch = Input[I];
+    if (Ch == '*' && I + 1 < Input.size() && Input[I + 1] == '/') {
+      Output += "* /";
+      ++I;
+    } else if (Ch < 0x20 || Ch == 0x7f) {
+      Output += '?';
+    } else {
+      Output += static_cast<char>(Ch);
+    }
+  }
+  return Output;
+}
+
+} // namespace
+
 void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
   if (!Opts.EmitComments)
     return;
@@ -1207,35 +1439,439 @@ void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
       Fn.getMetadata(windows_eh_md::FunctionAttachment);
   if (!Payload)
     return;
-  auto MdU64 = [&](unsigned Index) -> uint64_t {
-    if (Index >= Payload->getNumOperands())
-      return 0;
-    if (const auto *C = llvm::dyn_cast<llvm::ConstantAsMetadata>(
-            Payload->getOperand(Index)))
-      if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(C->getValue()))
-        return CI->getZExtValue();
-    return 0;
+  auto Invalid = [&](const char *Reason) {
+    OS << "/* neverd.exception: metadata-invalid (" << Reason << ") */\n";
   };
-  auto MdStr = [&](unsigned Index) -> std::string {
-    if (Index >= Payload->getNumOperands())
-      return {};
-    if (const auto *S =
-            llvm::dyn_cast<llvm::MDString>(Payload->getOperand(Index)))
-      return S->getString().str();
-    return {};
-  };
-  const std::string Encoding = MdStr(windows_eh_md::Encoding);
-  const std::string ParseStatus = MdStr(windows_eh_md::ParseStatus);
-  if (Encoding.empty() || ParseStatus.empty())
+  if (Payload->getNumOperands() != windows_eh_md::OperandCount) {
+    Invalid("function shape");
     return;
-  OS << "/* neverd.exception: encoding=" << Encoding
-     << ", status=" << ParseStatus
-     << ", personality=" << MdStr(windows_eh_md::PersonalityName) << "\n";
-  OS << " * code=[0x" << llvm::utohexstr(MdU64(windows_eh_md::CodeBegin))
-     << ", 0x" << llvm::utohexstr(MdU64(windows_eh_md::CodeEnd)) << ")";
-  if (uint64_t Unwind = MdU64(windows_eh_md::UnwindInfoVA))
+  }
+  const auto Version = ehAnnotationUInt(*Payload, windows_eh_md::Version, 32);
+  if (!Version) {
+    Invalid("schema version type");
+    return;
+  }
+  if (*Version != windows_eh_md::SchemaVersion) {
+    OS << "/* neverd.exception: unsupported metadata schema version "
+       << *Version << " */\n";
+    return;
+  }
+  if (!ehAnnotationUIntFields(*Payload,
+                              {{windows_eh_md::RuntimeKind, 8},
+                               {windows_eh_md::CodeBegin, 64},
+                               {windows_eh_md::CodeEnd, 64},
+                               {windows_eh_md::RuntimeFunctionRVA, 32},
+                               {windows_eh_md::UnwindInfoRVA, 32},
+                               {windows_eh_md::UnwindInfoVA, 64},
+                               {windows_eh_md::UnwindVersion, 8},
+                               {windows_eh_md::UnwindFlags, 8},
+                               {windows_eh_md::PrologueSize, 32},
+                               {windows_eh_md::FrameRegister, 16},
+                               {windows_eh_md::FrameOffset, 32},
+                               {windows_eh_md::PackedUnwindData, 32},
+                               {windows_eh_md::PersonalityVA, 64},
+                               {windows_eh_md::HandlerDataVA, 64},
+                               {windows_eh_md::ChainedUnwindInfoRVA, 32},
+                               {windows_eh_md::CanRegenerate, 1}})) {
+    Invalid("function field type");
+    return;
+  }
+  const auto Status = ehAnnotationString(*Payload, windows_eh_md::ParseStatus);
+  const auto Encoding = ehAnnotationString(*Payload, windows_eh_md::Encoding);
+  const auto PersonalityKind =
+      ehAnnotationString(*Payload, windows_eh_md::Personality);
+  const auto Personality =
+      ehAnnotationString(*Payload, windows_eh_md::PersonalityName);
+  if (!Status || !ehAnnotationStatus(*Status) || !Encoding ||
+      !ehAnnotationEncoding(*Encoding) || !PersonalityKind ||
+      !ehAnnotationPersonality(*PersonalityKind) || !Personality ||
+      Personality->size() > MaxEHAnnotationStringChars ||
+      !ehAnnotationString(*Payload, windows_eh_md::NativeUnwindBytes)) {
+    Invalid("function string field");
+    return;
+  }
+  const uint64_t CodeBegin =
+      *ehAnnotationUInt(*Payload, windows_eh_md::CodeBegin, 64);
+  const uint64_t CodeEnd =
+      *ehAnnotationUInt(*Payload, windows_eh_md::CodeEnd, 64);
+  if (CodeEnd < CodeBegin) {
+    Invalid("function code range");
+    return;
+  }
+
+  const llvm::MDNode *SEH =
+      ehAnnotationNode(*Payload, windows_eh_md::SEHScopes);
+  const llvm::MDNode *CxxHeader =
+      ehAnnotationNode(*Payload, windows_eh_md::CxxHeader);
+  const llvm::MDNode *CxxUnwind =
+      ehAnnotationNode(*Payload, windows_eh_md::CxxUnwindMap);
+  const llvm::MDNode *CxxTry =
+      ehAnnotationNode(*Payload, windows_eh_md::CxxTryMap);
+  const llvm::MDNode *CxxIP =
+      ehAnnotationNode(*Payload, windows_eh_md::CxxIPMap);
+  const llvm::MDNode *GS = ehAnnotationNode(*Payload, windows_eh_md::GSCookie);
+  const llvm::MDNode *Diagnostics =
+      ehAnnotationNode(*Payload, windows_eh_md::Diagnostics);
+  const llvm::MDNode *UnwindOperations =
+      ehAnnotationNode(*Payload, windows_eh_md::UnwindOperations);
+  const llvm::MDNode *Epilogs =
+      ehAnnotationNode(*Payload, windows_eh_md::Epilogs);
+  const llvm::MDNode *PrimaryIndex =
+      ehAnnotationNode(*Payload, windows_eh_md::PrimaryFunctionIndex);
+  const llvm::MDNode *ChainedRange =
+      ehAnnotationNode(*Payload, windows_eh_md::ChainedPrimaryRange);
+  const llvm::MDNode *Registration =
+      ehAnnotationNode(*Payload, windows_eh_md::Registration);
+  if (!SEH || !CxxHeader || !CxxUnwind || !CxxTry || !CxxIP || !GS ||
+      !Diagnostics || !UnwindOperations || !Epilogs || !PrimaryIndex ||
+      !ChainedRange || !Registration) {
+    Invalid("function nested field type");
+    return;
+  }
+  if (const char *Reason = ehAnnotationUnrenderedShape(
+          *UnwindOperations, *Epilogs, *PrimaryIndex, *ChainedRange,
+          *Registration)) {
+    Invalid(Reason);
+    return;
+  }
+  if (SEH->getNumOperands() > MaxEHAnnotationRows ||
+      CxxUnwind->getNumOperands() > MaxEHAnnotationRows ||
+      CxxTry->getNumOperands() > MaxEHAnnotationRows ||
+      CxxIP->getNumOperands() > MaxEHAnnotationRows ||
+      Diagnostics->getNumOperands() > MaxEHAnnotationRows) {
+    Invalid("annotation row limit");
+    return;
+  }
+
+  std::string Details;
+  llvm::raw_string_ostream DetailOS(Details);
+  size_t Rows = 0;
+  auto WithinBudget = [&]() {
+    DetailOS.flush();
+    return ++Rows <= MaxEHAnnotationRows &&
+           Details.size() <= MaxEHAnnotationChars;
+  };
+  for (unsigned I = 0; I < SEH->getNumOperands(); ++I) {
+    const auto *Row =
+        llvm::dyn_cast_if_present<llvm::MDNode>(SEH->getOperand(I));
+    if (!Row || Row->getNumOperands() != windows_eh_md::SEHScopeOperandCount ||
+        !ehAnnotationUIntFields(
+            *Row, {{windows_eh_md::SEHScopeGuardBegin, 64},
+                   {windows_eh_md::SEHScopeGuardEnd, 64},
+                   {windows_eh_md::SEHScopeKindValue, 8},
+                   {windows_eh_md::SEHScopeFilterOrFinallyVA, 64},
+                   {windows_eh_md::SEHScopeNormalizedFilterVA, 64},
+                   {windows_eh_md::SEHScopeHandlerVA, 64},
+                   {windows_eh_md::SEHScopeContinuationVA, 64}})) {
+      Invalid("seh.scope row");
+      return;
+    }
+    const auto ScopeStatus =
+        ehAnnotationString(*Row, windows_eh_md::SEHScopeParseStatus);
+    const uint64_t Kind =
+        *ehAnnotationUInt(*Row, windows_eh_md::SEHScopeKindValue, 8);
+    const uint64_t GuardBegin =
+        *ehAnnotationUInt(*Row, windows_eh_md::SEHScopeGuardBegin, 64);
+    const uint64_t GuardEnd =
+        *ehAnnotationUInt(*Row, windows_eh_md::SEHScopeGuardEnd, 64);
+    if (!ScopeStatus || !ehAnnotationStatus(*ScopeStatus) ||
+        Kind > static_cast<uint64_t>(SEHScopeKind::Finally)) {
+      Invalid("seh.scope value");
+      return;
+    }
+    if (GuardEnd < GuardBegin) {
+      Invalid("seh.scope range");
+      return;
+    }
+    const char *KindName =
+        Kind == static_cast<uint64_t>(SEHScopeKind::Finally)    ? "finally"
+        : Kind == static_cast<uint64_t>(SEHScopeKind::CatchAll) ? "except-all"
+                                                                : "filter";
+    DetailOS << " * seh.scope[" << I << "]: " << KindName << " [0x"
+             << llvm::utohexstr(GuardBegin) << ", 0x"
+             << llvm::utohexstr(GuardEnd) << ")";
+    auto PrintVA = [&](unsigned Index, const char *Label) {
+      if (uint64_t VA = *ehAnnotationUInt(*Row, Index, 64))
+        DetailOS << " " << Label << "=0x" << llvm::utohexstr(VA);
+    };
+    PrintVA(windows_eh_md::SEHScopeFilterOrFinallyVA, "filter_or_finally");
+    PrintVA(windows_eh_md::SEHScopeNormalizedFilterVA, "normalized_filter");
+    PrintVA(windows_eh_md::SEHScopeHandlerVA, "handler");
+    PrintVA(windows_eh_md::SEHScopeContinuationVA, "continuation");
+    DetailOS << ", status=" << *ScopeStatus << "\n";
+    if (!WithinBudget()) {
+      Invalid("annotation size limit");
+      return;
+    }
+  }
+
+  if (CxxHeader->getNumOperands() == 0) {
+    if (CxxUnwind->getNumOperands() || CxxTry->getNumOperands() ||
+        CxxIP->getNumOperands()) {
+      Invalid("cxx maps without header");
+      return;
+    }
+  } else {
+    if (CxxHeader->getNumOperands() != windows_eh_md::CxxHeaderOperandCount ||
+        !ehAnnotationUIntFields(
+            *CxxHeader, {{windows_eh_md::CxxNativeEncoding, 8},
+                         {windows_eh_md::CxxMagic, 32},
+                         {windows_eh_md::CxxFlags, 32},
+                         {windows_eh_md::CxxMaxState, 32},
+                         {windows_eh_md::CxxUnwindHelpOffset, 32},
+                         {windows_eh_md::CxxESTypeListVA, 64},
+                         {windows_eh_md::CxxBBTFlags, 32},
+                         {windows_eh_md::CxxFrameOffset, 32},
+                         {windows_eh_md::CxxIsCatchFunclet, 1},
+                         {windows_eh_md::CxxIsSeparated, 1},
+                         {windows_eh_md::CxxIsSynchronous, 1},
+                         {windows_eh_md::CxxIsNoExcept, 1},
+                         {windows_eh_md::CxxVersion, 8},
+                         {windows_eh_md::CxxHasDynamicStackAlignment, 1},
+                         {windows_eh_md::CxxNativeFuncInfoVA, 64}}) ||
+        !ehAnnotationNode(*CxxHeader, windows_eh_md::CxxExceptionSpecTypes)) {
+      Invalid("cxx header row");
+      return;
+    }
+    const auto *SpecTypes =
+        ehAnnotationNode(*CxxHeader, windows_eh_md::CxxExceptionSpecTypes);
+    size_t SpecRows = 0;
+    if (!ehAnnotationCountRows(*SpecTypes, SpecRows)) {
+      Invalid("cxx exception spec row limit");
+      return;
+    }
+    for (const llvm::MDOperand &Operand : SpecTypes->operands()) {
+      const auto *Row = llvm::dyn_cast_if_present<llvm::MDNode>(Operand.get());
+      if (!Row ||
+          Row->getNumOperands() !=
+              windows_eh_md::CxxExceptionSpecOperandCount ||
+          !ehAnnotationUIntFields(
+              *Row, {{windows_eh_md::CxxExceptionSpecAdjectives, 32},
+                     {windows_eh_md::CxxExceptionSpecTypeDescriptorVA, 64}})) {
+        Invalid("cxx exception spec row");
+        return;
+      }
+    }
+    const uint64_t Format =
+        *ehAnnotationUInt(*CxxHeader, windows_eh_md::CxxNativeEncoding, 8);
+    if (Format > static_cast<uint64_t>(CxxExceptionInfo::Encoding::FH4)) {
+      Invalid("cxx format value");
+      return;
+    }
+    DetailOS << " * cxx.format=" << (Format ? "fh4" : "fh3") << ", states="
+             << *ehAnnotationUInt(*CxxHeader, windows_eh_md::CxxMaxState, 32)
+             << ", try_blocks=" << CxxTry->getNumOperands()
+             << ", ip_states=" << CxxIP->getNumOperands() << "\n";
+    if (!WithinBudget()) {
+      Invalid("annotation size limit");
+      return;
+    }
+    for (unsigned I = 0; I < CxxUnwind->getNumOperands(); ++I) {
+      const auto *Row =
+          llvm::dyn_cast_if_present<llvm::MDNode>(CxxUnwind->getOperand(I));
+      if (!Row ||
+          Row->getNumOperands() != windows_eh_md::CxxUnwindOperandCount ||
+          !ehAnnotationUIntFields(
+              *Row, {{windows_eh_md::CxxUnwindToState, 32},
+                     {windows_eh_md::CxxUnwindActionVA, 64},
+                     {windows_eh_md::CxxUnwindKind, 8},
+                     {windows_eh_md::CxxUnwindObjectOffset, 32}})) {
+        Invalid("cxx.unwind row");
+        return;
+      }
+      const uint64_t Kind =
+          *ehAnnotationUInt(*Row, windows_eh_md::CxxUnwindKind, 8);
+      if (Kind >
+          static_cast<uint64_t>(
+              CxxUnwindAction::ActionKind::DestructorWithObjectPointer)) {
+        Invalid("cxx.unwind kind");
+        return;
+      }
+      DetailOS << " * cxx.unwind[" << I << "]: to_state="
+               << *ehAnnotationSInt(*Row, windows_eh_md::CxxUnwindToState, 32)
+               << ", kind="
+               << getCxxUnwindActionKindName(
+                      static_cast<CxxUnwindAction::ActionKind>(Kind));
+      if (uint64_t Action =
+              *ehAnnotationUInt(*Row, windows_eh_md::CxxUnwindActionVA, 64))
+        DetailOS << ", action=0x" << llvm::utohexstr(Action);
+      if (int64_t Offset =
+              *ehAnnotationSInt(*Row, windows_eh_md::CxxUnwindObjectOffset, 32))
+        DetailOS << ", object_offset=" << Offset;
+      DetailOS << "\n";
+      if (!WithinBudget()) {
+        Invalid("annotation size limit");
+        return;
+      }
+    }
+    for (unsigned I = 0; I < CxxTry->getNumOperands(); ++I) {
+      const auto *Row =
+          llvm::dyn_cast_if_present<llvm::MDNode>(CxxTry->getOperand(I));
+      if (!Row || Row->getNumOperands() != windows_eh_md::CxxTryOperandCount ||
+          !ehAnnotationUIntFields(*Row, {{windows_eh_md::CxxTryLow, 32},
+                                         {windows_eh_md::CxxTryHigh, 32},
+                                         {windows_eh_md::CxxCatchHigh, 32}})) {
+        Invalid("cxx.try row");
+        return;
+      }
+      const llvm::MDNode *Handlers =
+          ehAnnotationNode(*Row, windows_eh_md::CxxTryHandlers);
+      if (!Handlers || Handlers->getNumOperands() > MaxEHAnnotationRows) {
+        Invalid("cxx.try handlers");
+        return;
+      }
+      DetailOS << " * cxx.try[" << I << "]: states="
+               << *ehAnnotationSInt(*Row, windows_eh_md::CxxTryLow, 32) << ".."
+               << *ehAnnotationSInt(*Row, windows_eh_md::CxxTryHigh, 32)
+               << ", catch_high="
+               << *ehAnnotationSInt(*Row, windows_eh_md::CxxCatchHigh, 32)
+               << ", handlers=" << Handlers->getNumOperands() << "\n";
+      if (!WithinBudget()) {
+        Invalid("annotation size limit");
+        return;
+      }
+      for (unsigned J = 0; J < Handlers->getNumOperands(); ++J) {
+        const auto *Catch =
+            llvm::dyn_cast_if_present<llvm::MDNode>(Handlers->getOperand(J));
+        if (!Catch ||
+            Catch->getNumOperands() != windows_eh_md::CxxCatchOperandCount ||
+            !ehAnnotationUIntFields(
+                *Catch, {{windows_eh_md::CxxCatchAdjectives, 32},
+                         {windows_eh_md::CxxCatchTypeDescriptorVA, 64},
+                         {windows_eh_md::CxxCatchObjectOffset, 32},
+                         {windows_eh_md::CxxCatchHandlerVA, 64},
+                         {windows_eh_md::CxxCatchParentFrameOffset, 32}})) {
+          Invalid("cxx.catch row");
+          return;
+        }
+        const llvm::MDNode *Continuations =
+            ehAnnotationNode(*Catch, windows_eh_md::CxxCatchContinuations);
+        if (!Continuations ||
+            Continuations->getNumOperands() > MaxEHAnnotationRows) {
+          Invalid("cxx.catch continuations");
+          return;
+        }
+        DetailOS << " *   catch[" << J << "]: type=0x"
+                 << llvm::utohexstr(*ehAnnotationUInt(
+                        *Catch, windows_eh_md::CxxCatchTypeDescriptorVA, 64))
+                 << ", handler=0x"
+                 << llvm::utohexstr(*ehAnnotationUInt(
+                        *Catch, windows_eh_md::CxxCatchHandlerVA, 64))
+                 << ", adjectives=0x"
+                 << llvm::utohexstr(*ehAnnotationUInt(
+                        *Catch, windows_eh_md::CxxCatchAdjectives, 32))
+                 << ", object_offset="
+                 << *ehAnnotationSInt(*Catch,
+                                      windows_eh_md::CxxCatchObjectOffset, 32)
+                 << ", parent_frame_offset="
+                 << *ehAnnotationSInt(
+                        *Catch, windows_eh_md::CxxCatchParentFrameOffset, 32);
+        if (Continuations->getNumOperands()) {
+          DetailOS << ", continuations=";
+          for (unsigned K = 0; K < Continuations->getNumOperands(); ++K) {
+            const auto VA = ehAnnotationUInt(*Continuations, K, 64);
+            if (!VA) {
+              Invalid("cxx.catch continuation value");
+              return;
+            }
+            DetailOS << (K ? "," : "") << "0x" << llvm::utohexstr(*VA);
+          }
+        }
+        DetailOS << "\n";
+        if (!WithinBudget()) {
+          Invalid("annotation size limit");
+          return;
+        }
+      }
+    }
+    for (unsigned I = 0; I < CxxIP->getNumOperands(); ++I) {
+      const auto *Row =
+          llvm::dyn_cast_if_present<llvm::MDNode>(CxxIP->getOperand(I));
+      if (!Row || Row->getNumOperands() != windows_eh_md::CxxIPOperandCount ||
+          !ehAnnotationUIntFields(*Row,
+                                  {{windows_eh_md::CxxIPVA, 64},
+                                   {windows_eh_md::CxxIPStateValue, 32}})) {
+        Invalid("cxx.ip_state row");
+        return;
+      }
+      DetailOS << " * cxx.ip_state[" << I << "]: ip=0x"
+               << llvm::utohexstr(
+                      *ehAnnotationUInt(*Row, windows_eh_md::CxxIPVA, 64))
+               << ", state="
+               << *ehAnnotationSInt(*Row, windows_eh_md::CxxIPStateValue, 32)
+               << "\n";
+      if (!WithinBudget()) {
+        Invalid("annotation size limit");
+        return;
+      }
+    }
+  }
+
+  if (GS->getNumOperands()) {
+    if (GS->getNumOperands() != windows_eh_md::GSCookieOperandCount ||
+        !ehAnnotationUIntFields(
+            *GS, {{windows_eh_md::GSCookieOffset, 32},
+                  {windows_eh_md::GSCookieHasExceptionHandler, 1},
+                  {windows_eh_md::GSCookieHasUnwindHandler, 1},
+                  {windows_eh_md::GSCookieHasAlignment, 1},
+                  {windows_eh_md::GSCookieAlignmentBaseOffset, 32},
+                  {windows_eh_md::GSCookieAlignment, 32}})) {
+      Invalid("gs.cookie row");
+      return;
+    }
+    const auto GSStatus =
+        ehAnnotationString(*GS, windows_eh_md::GSCookieParseStatus);
+    if (!GSStatus || !ehAnnotationStatus(*GSStatus) ||
+        !ehAnnotationString(*GS, windows_eh_md::GSCookiePayload)) {
+      Invalid("gs.cookie string field");
+      return;
+    }
+    DetailOS << " * gs.cookie_offset="
+             << *ehAnnotationSInt(*GS, windows_eh_md::GSCookieOffset, 32)
+             << ", ehandler="
+             << *ehAnnotationUInt(*GS,
+                                  windows_eh_md::GSCookieHasExceptionHandler, 1)
+             << ", uhandler="
+             << *ehAnnotationUInt(*GS, windows_eh_md::GSCookieHasUnwindHandler,
+                                  1);
+    if (*ehAnnotationUInt(*GS, windows_eh_md::GSCookieHasAlignment, 1))
+      DetailOS << ", alignment_base="
+               << *ehAnnotationSInt(
+                      *GS, windows_eh_md::GSCookieAlignmentBaseOffset, 32)
+               << ", alignment="
+               << *ehAnnotationUInt(*GS, windows_eh_md::GSCookieAlignment, 32);
+    DetailOS << ", status=" << *GSStatus << "\n";
+    if (!WithinBudget()) {
+      Invalid("annotation size limit");
+      return;
+    }
+  }
+  for (unsigned I = 0; I < Diagnostics->getNumOperands(); ++I) {
+    const auto Diagnostic = ehAnnotationString(*Diagnostics, I);
+    if (!Diagnostic || Diagnostic->size() > MaxEHAnnotationStringChars) {
+      Invalid("diagnostic string field");
+      return;
+    }
+    DetailOS << " * diagnostic: " << ehAnnotationCommentText(*Diagnostic)
+             << "\n";
+    if (!WithinBudget()) {
+      Invalid("annotation size limit");
+      return;
+    }
+  }
+
+  OS << "/* neverd.exception: encoding=" << *Encoding << ", status=" << *Status
+     << ", personality=" << ehAnnotationCommentText(*Personality) << "\n";
+  OS << " * code=[0x" << llvm::utohexstr(CodeBegin) << ", 0x"
+     << llvm::utohexstr(CodeEnd) << ")";
+  if (uint64_t Unwind =
+          *ehAnnotationUInt(*Payload, windows_eh_md::UnwindInfoVA, 64))
     OS << ", unwind=0x" << llvm::utohexstr(Unwind);
-  OS << " */\n";
+  if (Details.empty()) {
+    OS << " */\n";
+  } else {
+    OS << "\n" << Details << " */\n";
+  }
 }
 
 bool LLVMCWriter::isUnknownCopyInst(const llvm::Instruction &Inst) const {
