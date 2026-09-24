@@ -39,6 +39,9 @@ bool sameBase(const Value &A, const Value &B) {
 bool overlaps(const NdVar &V, uint64_t Offset, unsigned Size) {
   return V.isReg() && V.Offset < Offset + Size && Offset < V.Offset + V.Size;
 }
+bool branchTerminator(NdOp Opcode) {
+  return Opcode == NdOp::BRANCH || Opcode == NdOp::COND_BR;
+}
 
 std::optional<unsigned>
 resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
@@ -49,7 +52,8 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
   bool FloatingLive = true;
   for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
     const auto &Op = Block.Ops[I];
-    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::INTRINSIC)
+    if (branchTerminator(Op.Opcode) || Op.Opcode == NdOp::INDIR_BR ||
+        Op.Opcode == NdOp::INTRINSIC)
       return Width;
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
       if (IntegerLive && BoundCalls) {
@@ -99,36 +103,14 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
   }
   return Width;
 }
-} // namespace
-
 std::map<va_t, SourceCallTypeHint>
-buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
-                        const SourceFunctionTypeHint *EntrySignature,
-                        const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
+analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
+             const SourceFunctionTypeHint *EntrySignature,
+             const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+             bool FollowValidatedBranches) {
   std::map<va_t, SourceCallTypeHint> Result;
-  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
-      Image.Bits != Bitness::Bits64 || Function.Blocks.empty() ||
-      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
+  if (Block.Ops.size() > 65536)
     return Result;
-  const LowBlock *BlockPtr = nullptr;
-  if (Function.Blocks.size() == 1) {
-    BlockPtr = &Function.Blocks.front();
-    if (!BlockPtr->Succs.empty())
-      return Result;
-  } else {
-    // Facts are valid only along the entry block's straight-line prefix.
-    // Never carry its register or frame identities across a CFG edge.
-    for (const auto &Candidate : Function.Blocks)
-      if (Candidate.StartAddr == Function.Entry) {
-        if (BlockPtr)
-          return Result;
-        BlockPtr = &Candidate;
-      }
-  }
-  if (!BlockPtr || !BlockPtr->Preds.empty() ||
-      !BlockPtr->ExceptionalPreds.empty() || BlockPtr->Ops.size() > 65536)
-    return Result;
-  const auto &Block = *BlockPtr;
   const auto &TRI = getTargetRegInfo(Image.Arch);
   std::string EntryError;
   if (EntrySignature && (EntrySignature->Architecture != Image.Arch ||
@@ -176,8 +158,19 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
   uint64_t NextCallResultBase = 1ULL << 32;
   for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
     const auto &Op = Block.Ops[Index];
-    if (Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::BRANCH)
+    if (Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::INDIR_BR)
       return Result;
+    if (branchTerminator(Op.Opcode)) {
+      if (!FollowValidatedBranches)
+        return Result;
+      for (auto It = Values.begin(); It != Values.end();)
+        if (std::get<0>(It->first) == VnodeSpace::TEMP)
+          It = Values.erase(It);
+        else
+          ++It;
+      PreviousAddress = InvalidVA;
+      continue;
+    }
     if (Op.Addr != PreviousAddress) {
       for (auto It = Values.begin(); It != Values.end();)
         if (std::get<0>(It->first) == VnodeSpace::TEMP)
@@ -408,6 +401,110 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
           WrittenArguments.insert(Reg);
       for (auto Reg : TRI.FPParamRegs)
         FloatingArgumentWrite |= overlaps(Op.Output, Reg, 16);
+    }
+  }
+  return Result;
+}
+} // namespace
+
+std::map<va_t, SourceCallTypeHint>
+buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
+                        const SourceFunctionTypeHint *EntrySignature,
+                        const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
+  std::map<va_t, SourceCallTypeHint> Result;
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Function.Blocks.empty() ||
+      (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
+    return Result;
+  const LowBlock *Entry = nullptr;
+  if (Function.Blocks.size() == 1) {
+    Entry = &Function.Blocks.front();
+    if (!Entry->Succs.empty())
+      return Result;
+  } else {
+    for (const auto &Candidate : Function.Blocks)
+      if (Candidate.StartAddr == Function.Entry) {
+        if (Entry)
+          return Result;
+        Entry = &Candidate;
+      }
+  }
+  if (!Entry || !Entry->Preds.empty() || !Entry->ExceptionalPreds.empty())
+    return Result;
+  Result = analyzeBlock(Image, *Entry, EntrySignature, BoundCalls, false);
+  if (Function.Blocks.size() == 1 || Function.Blocks.size() > 64)
+    return Result;
+
+  // A successor with one ordinary predecessor has one proven incoming state.
+  // Reconstruct that path, retaining branches as result-use barriers, and
+  // publish only calls physically present in its final block. Joins, cycles,
+  // exceptional entries, and paths exceeding the local proof budget stay
+  // unbound.
+  std::map<int, const LowBlock *> ById;
+  for (const auto &Block : Function.Blocks)
+    if (Block.Id < 0 || !ById.emplace(Block.Id, &Block).second)
+      return Result;
+  std::vector<std::vector<const LowBlock *>> Paths{{Entry}};
+  for (size_t PathIndex = 0; PathIndex < Paths.size(); ++PathIndex) {
+    const auto Path = Paths[PathIndex];
+    const auto *Parent = Path.back();
+    if (Path.size() >= 64)
+      continue;
+    bool Transferable = true;
+    for (size_t I = 0; I < Parent->Ops.size(); ++I) {
+      const auto Opcode = Parent->Ops[I].Opcode;
+      if (Opcode == NdOp::INTRINSIC || Opcode == NdOp::RETURN ||
+          Opcode == NdOp::INDIR_BR ||
+          (branchTerminator(Opcode) && I + 1 != Parent->Ops.size())) {
+        Transferable = false;
+        break;
+      }
+    }
+    if (!Transferable)
+      continue;
+    for (const auto SuccessorId : Parent->Succs) {
+      const auto It = ById.find(SuccessorId);
+      if (It == ById.end())
+        continue;
+      const auto *Successor = It->second;
+      if (Successor->Preds.size() != 1 ||
+          Successor->Preds.front() != Parent->Id ||
+          !Successor->ExceptionalPreds.empty())
+        continue;
+      bool Cycle = false;
+      for (const auto *Ancestor : Path)
+        Cycle |= Ancestor->Id == SuccessorId;
+      if (Cycle)
+        continue;
+      auto Extended = Path;
+      Extended.push_back(Successor);
+      LowBlock Linear;
+      bool Valid = true;
+      for (size_t I = 0; I < Extended.size(); ++I) {
+        const auto *Part = Extended[I];
+        if (Linear.Ops.size() + Part->Ops.size() + 1 > 65536) {
+          Valid = false;
+          break;
+        }
+        Linear.Ops.insert(Linear.Ops.end(), Part->Ops.begin(), Part->Ops.end());
+        if (I + 1 != Extended.size() &&
+            (Part->Ops.empty() || !branchTerminator(Part->Ops.back().Opcode))) {
+          LowOp Boundary;
+          Boundary.Opcode = NdOp::BRANCH;
+          Linear.Ops.push_back(std::move(Boundary));
+        }
+      }
+      if (!Valid)
+        continue;
+      const auto Hints =
+          analyzeBlock(Image, Linear, EntrySignature, BoundCalls, true);
+      for (const auto &Op : Successor->Ops) {
+        const auto Found = Hints.find(Op.Addr);
+        if (Found != Hints.end())
+          Result.emplace(*Found);
+      }
+      if (Paths.size() < 64)
+        Paths.push_back(std::move(Extended));
     }
   }
   return Result;

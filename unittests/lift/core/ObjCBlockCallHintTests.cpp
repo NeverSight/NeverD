@@ -121,7 +121,7 @@ TEST(ObjCBlockCallHints, ProvesInvokeInMultiBlockEntryPrefixOnly) {
   }
 }
 
-TEST(ObjCBlockCallHints, DoesNotAnalyzeSuccessorBlockAsEntry) {
+TEST(ObjCBlockCallHints, RejectsSuccessorWithoutUniqueEntryPath) {
   Fixture F(Arch::AArch64);
   const auto InvokeOps = F.Low.Blocks[0].Ops;
   F.Low.Blocks[0].Ops = {op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1000)};
@@ -131,9 +131,94 @@ TEST(ObjCBlockCallHints, DoesNotAnalyzeSuccessorBlockAsEntry) {
   Successor.Id = 1;
   Successor.StartAddr = 0x1020;
   Successor.EndAddr = 0x1040;
-  Successor.Preds = {0};
+  Successor.Preds = {0, 2};
   Successor.Ops = InvokeOps;
   EXPECT_TRUE(F.hints().empty());
+}
+
+TEST(ObjCBlockCallHints, ResultUseAcrossBranchDoesNotInferBlockReturn) {
+  Fixture F(Arch::AArch64);
+  F.Low.Blocks[0].Ops.back() =
+      op(NdOp::BRANCH, {}, {NdVar::cst(0x1020, 8)}, 0x1010);
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Successor = F.Low.Blocks[1];
+  Successor.Id = 1;
+  Successor.StartAddr = 0x1020;
+  Successor.Preds = {0};
+  Successor.Ops = {
+      op(NdOp::COPY, NdVar::tmp(1, 8), {NdVar::reg(F.R0, 8)}, 0x1020),
+      op(NdOp::RETURN, {}, {NdVar::tmp(1, 8)}, 0x1024)};
+  EXPECT_TRUE(F.hints().empty());
+}
+
+TEST(ObjCBlockCallHints, FollowsUniquePredecessorToBlockInvoke) {
+  Fixture F(Arch::AArch64);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceCallTypeHint Getter;
+  Getter.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Getter.Signature.ReturnType = Pointer;
+  Getter.Signature.Parameters = {{"self", Pointer}, {"cmd", Pointer}};
+  SourceCallTypeHint Retain;
+  Retain.CallKind = SourceCallTypeHint::Kind::ObjCRuntimeCall;
+  Retain.TargetName = "objc_retainAutoreleasedReturnValue";
+  Retain.Signature.ReturnType = Pointer;
+  Retain.Signature.Parameters = {{"object", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(Getter.Signature, F.Image.Arch, Error))
+      << Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Retain.Signature, F.Image.Arch, Error))
+      << Error;
+  const std::map<va_t, SourceCallTypeHint> Calls{
+      {0x1010, Getter}, {0x1014, Retain}, {0x1024, Retain}};
+
+  F.Low.Blocks.reserve(3);
+  F.Low.Blocks[0].Ops = {
+      op(NdOp::COPY, NdVar::reg(a64reg::X19, 8), {NdVar::reg(F.R2, 8)}, 0x1000),
+      op(NdOp::BRANCH, {}, {NdVar::cst(0x1010, 8)}, 0x1004)};
+  F.Low.Blocks[0].Succs = {1};
+  F.Low.Blocks.emplace_back();
+  auto &Successor = F.Low.Blocks[1];
+  Successor.Id = 1;
+  Successor.StartAddr = 0x1010;
+  Successor.EndAddr = 0x102c;
+  Successor.Preds = {0};
+  Successor.Ops = {
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x2000, 8)}, 0x1010),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x3000, 8)}, 0x1014),
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(16, 8)}, 0x1018),
+      op(NdOp::LOAD, NdVar::reg(F.Target, 8), {NdVar::tmp(0, 8)}, 0x1018),
+      op(NdOp::COPY, NdVar::reg(F.R1, 8), {NdVar::reg(a64reg::X19, 8)}, 0x101c),
+      op(NdOp::INDIR_CALL, NdVar::reg(F.R0, 8), {NdVar::reg(F.Target, 8)},
+         0x1020),
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x3000, 8)}, 0x1024),
+      op(NdOp::RETURN, {}, {NdVar::reg(F.R0, 8)}, 0x1028)};
+
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x1020).Signature.Parameters.size(), 2U);
+  EXPECT_EQ(Hints.at(0x1020).Signature.ReturnType->Size, 8U);
+  F.Low.Blocks[0].Ops.back().Opcode = NdOp::COND_BR;
+  F.Low.Blocks[0].Succs.push_back(2);
+  F.Low.Blocks.emplace_back();
+  F.Low.Blocks[2].Id = 2;
+  F.Low.Blocks[2].StartAddr = 0x1030;
+  F.Low.Blocks[2].Preds = {0};
+  EXPECT_EQ(buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).size(),
+            1U);
+  Successor.Preds.push_back(2);
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Successor.Preds.pop_back();
+  F.Low.Blocks[0].Ops.back().Opcode = NdOp::INDIR_BR;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  F.Low.Blocks[0].Ops.back().Opcode = NdOp::COND_BR;
+  F.Low.Blocks[0].Ops[0].Opcode = NdOp::INTRINSIC;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
 TEST(ObjCBlockCallHints, BoundARCConsumerProvesEntryBlockInvokeBeforeBranch) {
