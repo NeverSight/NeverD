@@ -367,7 +367,8 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
           SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
       F.SourceTypeHint->Convention !=
           SourceFunctionTypeHint::ConventionKind::C ||
-      (F.Params.size() != 3 && F.Params.size() != 4 && F.Params.size() != 6) ||
+      (F.Params.size() != 3 && F.Params.size() != 4 &&
+       F.Params.size() != 5 && F.Params.size() != 6) ||
       F.SourceTypeHint->Parameters.size() != F.Params.size())
     return std::nullopt;
   for (const auto &P : F.Params)
@@ -576,6 +577,15 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
       return std::nullopt;
     return SwiftOnceGetterContract{Predicate, Storage, std::nullopt,
                                    Initializer, F.Params.size()};
+  }
+  if (F.Params.size() == 5) {
+    // ObjC entry thunks can tail-call the shared getter with self and _cmd
+    // preceding the three actual once inputs. The complete use scan above
+    // must establish that neither leading register is observed.
+    if (StringStorageParameters || Predicate != 2 || Initializer != 4 ||
+        Reads != std::set<size_t>{2, 3})
+      return std::nullopt;
+    return SwiftOnceGetterContract{2, 3, std::nullopt, 4, 5};
   }
   if (!StringStorageParameters)
     return std::nullopt;
@@ -1856,7 +1866,9 @@ discoverSwiftOnceSources(const BinaryImage &Image,
               auto Target = objc_binding_detail::constantAddress(
                   *E->Operands[Getter->second.Initializer]);
               if (Target && Functions.count(*Target) &&
-                  Image.isCodeAddress(*Target) && !DirectTargets.count(*Target))
+                  Image.isCodeAddress(*Target) && !DirectTargets.count(*Target) &&
+                  (Getter->second.parameterCount() != 5 ||
+                   ignoresContext(*Functions.at(*Target))))
                 Plan.CallbackHints.emplace(*Target, callbackHint(Image.Arch));
             }
           }

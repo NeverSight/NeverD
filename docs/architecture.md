@@ -472,6 +472,13 @@ loads. Callers must pass adjacent words of one named writable 16-byte object.
 The callback and all dependencies still require ordinary source closure; the
 storage proof does not authorize skipping an initializer or inventing contents.
 
+A shared object getter may also carry unused Objective-C `self` and `_cmd`
+registers before its predicate, object cell and initializer. The five-carrier
+form is accepted only after the complete use scan proves that the leading two
+registers are unobserved and the three trailing roles are exact. It proposes
+a callback ABI only when the initializer independently ignores its context;
+multi-level initializers without that proof remain unresolved.
+
 A compiler-emitted zero-argument Swift lazy-global addressor is rebuilt only
 when the exact `vau`/`vpZ`/`_Wz`/`_WZ` symbol family agrees with one canonical
 load, completion test, authenticated `swift_once` call, and the same storage
