@@ -110,12 +110,12 @@ inline bool ordinaryRuntime(const SourceCallTypeHint &Hint) {
          Hint.CallKind == Kind::DarwinRuntimeCall;
 }
 
-// This identifies a current fixed object-returning message occurrence. Its
-// implementation remains opaque: no ABI, clobber or result fact is supplied
-// to the Boolean proof, which requires identical physical state at the call.
-inline bool opaqueObjectMessage(const BinaryImage &Image,
-                                const SourceCallOccurrenceKey &Site,
-                                const SourceCallTypeHint &Hint) {
+// This identifies a current fixed object-returning SDK message occurrence.
+// Its authenticated pointer ABI may be supplied to the Boolean proof; source
+// publication still revalidates the message and receiver independently.
+inline bool fixedObjectMessage(const BinaryImage &Image,
+                               const SourceCallOccurrenceKey &Site,
+                               const SourceCallTypeHint &Hint) {
   if (!Site.StaticTarget || *Site.StaticTarget % 4 ||
       *Site.StaticTarget > UINT64_MAX - 20 ||
       Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
@@ -295,10 +295,10 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
           return {};
         continue;
       }
-      if (swift_boolean_projection_detail::opaqueObjectMessage(Image, *Site,
-                                                               Hint->second)) {
+      if (swift_boolean_projection_detail::fixedObjectMessage(Image, *Site,
+                                                              Hint->second)) {
         Calls.emplace(*Site,
-                      SourceBooleanOtherCallContract{nullptr, false, true});
+                      SourceBooleanOtherCallContract{&Hint->second.Signature});
         continue;
       }
       if (!Slot ||

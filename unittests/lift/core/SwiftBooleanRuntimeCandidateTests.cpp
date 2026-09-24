@@ -565,7 +565,7 @@ TEST(SwiftBooleanProjection, NativeEntryUsesConservativeWordUntilBound) {
 }
 
 TEST(SwiftBooleanProjection,
-     OpaqueGetterRequiresCurrentStubImportSelectorAndFixedABI) {
+     FixedObjectGetterRequiresCurrentStubImportSelectorAndFixedABI) {
   ProjectionFixture F;
   const auto Hint = addOpaqueObjectMessage(F);
   SourceCallOccurrenceKey Site{0x3000, 0, NdOp::CALL, 0x1040};
@@ -578,7 +578,7 @@ TEST(SwiftBooleanProjection,
   EXPECT_EQ(Hint.Signature.Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
   EXPECT_TRUE(Hint.Signature.HasExplicitABI);
   ASSERT_TRUE(
-      swift_boolean_projection_detail::opaqueObjectMessage(F.Image, Site,
+      swift_boolean_projection_detail::fixedObjectMessage(F.Image, Site,
                                                             Hint));
   for (unsigned Mutation = 0; Mutation != 21; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -655,30 +655,30 @@ TEST(SwiftBooleanProjection,
           SegmentFlags::Readable | SegmentFlags::Executable;
       break;
     }
-    EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectMessage(
+    EXPECT_FALSE(swift_boolean_projection_detail::fixedObjectMessage(
         Image, Site, Changed));
   }
 }
 
 TEST(SwiftBooleanProjection,
-     OpaqueObjectMessageAcceptsExactPointerArgumentsWithoutSupplyingABI) {
+     FixedObjectMessageRequiresExactPointerABI) {
   ProjectionFixture F;
   constexpr llvm::StringLiteral Selector =
       "localizedStringForKey:value:table:";
   auto Hint = addOpaqueObjectMessage(F, Selector);
   const SourceCallOccurrenceKey Site{0x3000, 0, NdOp::CALL, 0x1040};
   ASSERT_EQ(Hint.Signature.Parameters.size(), 5U);
-  EXPECT_TRUE(swift_boolean_projection_detail::opaqueObjectMessage(F.Image,
+  EXPECT_TRUE(swift_boolean_projection_detail::fixedObjectMessage(F.Image,
                                                                     Site,
                                                                     Hint));
   Hint.Signature.Parameters[4].Type = NdType::makeInt(8, false);
-  EXPECT_FALSE(swift_boolean_projection_detail::opaqueObjectMessage(F.Image,
+  EXPECT_FALSE(swift_boolean_projection_detail::fixedObjectMessage(F.Image,
                                                                      Site,
                                                                      Hint));
 }
 
 TEST(SwiftBooleanProjection,
-     OpaqueGetterBeforeSelectedCallKeepsFailedStubsClosed) {
+     FixedObjectGetterBeforeSelectedCallKeepsFailedStubsClosed) {
   ProjectionFixture F;
   addOpaqueObjectMessage(F);
   auto &Block = F.Low.Blocks.front();
@@ -706,7 +706,7 @@ TEST(SwiftBooleanProjection,
 }
 
 TEST(SwiftBooleanProjection,
-     OpaquePointerMessageBeforeBooleanCallRetainsCompleteProof) {
+     FixedPointerMessageBeforeBooleanCallRetainsCompleteProof) {
   ProjectionFixture F;
   addOpaqueObjectMessage(F, "localizedStringForKey:value:table:");
   auto &Block = F.Low.Blocks.front();

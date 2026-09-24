@@ -645,6 +645,35 @@ TEST(NativeBooleanResultProof, NarrowPredicateImmediateBeforeBooleanCall) {
   }
 }
 
+TEST(NativeBooleanResultProof,
+     FixedPointerCallObservesArgumentsNotUnrelatedVolatileBytes) {
+  Fixture F;
+  SourceFunctionTypeHint Message;
+  Message.Origin = SourceFunctionTypeHint::OriginKind::ObjCSDK;
+  Message.ReturnType = NdType::makePtr(NdType::makeVoid());
+  for (unsigned I = 0; I < 5; ++I)
+    Message.Parameters.push_back(
+        {"arg" + std::to_string(I), NdType::makePtr(NdType::makeVoid())});
+  std::string Diagnostic;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Message, Arch::AArch64, Diagnostic))
+      << Diagnostic;
+  F.linear({call(), copy(a64reg::X8, a64reg::X0),
+            mask(a64reg::X0, a64reg::X0), constant(a64reg::X1, 0),
+            constant(a64reg::X2, 0), constant(a64reg::X3, 0),
+            constant(a64reg::X4, 0), call(0x3000), ret()});
+  ASSERT_EQ(F.Calls.size(), 1U);
+  auto &Contract = F.Calls.begin()->second;
+  Contract.Signature = &Message;
+  EXPECT_TRUE(F.prove());
+  Contract = SourceBooleanOtherCallContract{nullptr, false, true};
+  EXPECT_FALSE(F.prove());
+  Contract.Signature = &Message;
+  Contract.RequiresIdenticalState = false;
+  F.Low.Blocks.front().Ops[6] = copy(a64reg::X4, a64reg::X8);
+  F.Low.Blocks.front().Ops[6].Addr = 0x1018;
+  EXPECT_FALSE(F.prove());
+}
+
 TEST(NativeBooleanResultProof, RejectsMalformedGraphsOperationsAndContracts) {
   for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
     SCOPED_TRACE(Mutation);
