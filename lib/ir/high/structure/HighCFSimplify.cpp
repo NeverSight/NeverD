@@ -412,6 +412,104 @@ static void seedIfThenJoinInits(std::vector<HighStmt> &Stmts) {
 // simplifyControlFlow -- the main entry point
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// Duplicate small return tails into the gotos that reach them
+//===----------------------------------------------------------------------===//
+
+static bool isPureValue(const HighExpr &E, unsigned Depth = 0) {
+  if (Depth > 16)
+    return false;
+  switch (E.Kind) {
+  case ExprKind::Var:
+  case ExprKind::Const:
+  case ExprKind::Phi:
+    return true;
+  case ExprKind::BinOp:
+  case ExprKind::UnaryOp:
+  case ExprKind::Cast:
+  case ExprKind::BitCast:
+    if (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||
+        E.Op == NdOp::ATOMIC_CMPXCHG)
+      return false;
+    for (const ExprPtr &Op : E.Operands)
+      if (!Op || !isPureValue(*Op, Depth + 1))
+        return false;
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// `goto L` where L starts a few pure assignments and a return (typically
+/// `result = 1; return result;` shared through an epilogue) becomes a copy
+/// of those statements.  The labelled original stays for any other path, so
+/// no code is removed; only the jump is.
+bool duplicateSmallReturnTails(std::vector<HighStmt> &Body) {
+  constexpr size_t kMaxTailAssigns = 3;
+  std::map<va_t, std::vector<HighStmt>> Tails;
+  std::function<void(std::vector<HighStmt> &)> Collect =
+      [&](std::vector<HighStmt> &Stmts) {
+        for (size_t I = 0; I < Stmts.size(); ++I) {
+          const va_t Label = Stmts[I].Addr;
+          if (Label != 0 && Label != InvalidVA && !Tails.count(Label) &&
+              (I == 0 || Stmts[I - 1].Addr != Label)) {
+            // An empty block can anchor the label ahead of the tail.
+            size_t First = I;
+            while (First < Stmts.size() &&
+                   Stmts[First].Kind == StmtKind::Block &&
+                   Stmts[First].Body.empty())
+              ++First;
+            size_t J = First;
+            while (J < Stmts.size() && J - First < kMaxTailAssigns &&
+                   Stmts[J].Kind == StmtKind::Assign && Stmts[J].Dst &&
+                   Stmts[J].Dst->Kind == ExprKind::Var && Stmts[J].Val &&
+                   isPureValue(*Stmts[J].Val))
+              ++J;
+            if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Return &&
+                (!Stmts[J].RetVal || isPureValue(*Stmts[J].RetVal)))
+              Tails.emplace(Label,
+                            std::vector<HighStmt>(Stmts.begin() + First,
+                                                  Stmts.begin() + J + 1));
+          }
+          Collect(Stmts[I].Body);
+          Collect(Stmts[I].ElseBody);
+          for (auto &C : Stmts[I].Cases)
+            Collect(C.Body);
+          Collect(Stmts[I].DefaultBody);
+        }
+      };
+  Collect(Body);
+  if (Tails.empty())
+    return false;
+  bool Changed = false;
+  std::function<void(std::vector<HighStmt> &)> Rewrite =
+      [&](std::vector<HighStmt> &Stmts) {
+        for (size_t I = 0; I < Stmts.size(); ++I) {
+          if (Stmts[I].Kind == StmtKind::Goto) {
+            auto It = Tails.find(Stmts[I].GotoTarget);
+            if (It != Tails.end()) {
+              std::vector<HighStmt> Copy = It->second;
+              // The copies are not jump targets; keep the label unique.
+              for (HighStmt &C : Copy)
+                C.Addr = Stmts[I].Addr;
+              Stmts.erase(Stmts.begin() + I);
+              Stmts.insert(Stmts.begin() + I, Copy.begin(), Copy.end());
+              I += Copy.size() - 1;
+              Changed = true;
+              continue;
+            }
+          }
+          Rewrite(Stmts[I].Body);
+          Rewrite(Stmts[I].ElseBody);
+          for (auto &C : Stmts[I].Cases)
+            Rewrite(C.Body);
+          Rewrite(Stmts[I].DefaultBody);
+        }
+      };
+  Rewrite(Body);
+  return Changed;
+}
+
 void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
                                              const MedFunc &Med) {
   const bool IsMega = Func.Body.size() > limits::kMaxStructuredHighStmts;

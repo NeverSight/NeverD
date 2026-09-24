@@ -3784,3 +3784,57 @@ TEST(HighCPointerAddresses, Win64StackArgumentsThroughEntryStackCopy) {
   EXPECT_EQ(std::count(Args.begin(), Args.end(), ','), 6) << HighC;
   EXPECT_NE(Args.find(", 5, "), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
+  // MmIsWriteErrorFatal: many paths `goto` a shared `result = 1; return`.
+  MedVar Result;
+  Result.Kind = MedVar::Temp;
+  Result.Id = 7;
+  Result.Size = 8;
+  auto Assign = [&](uint64_t Value, va_t Addr) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = HighExpr::makeVar(Result);
+    S.Val = HighExpr::makeConst(Value, 8);
+    return S;
+  };
+  auto Return = [&](va_t Addr) {
+    HighStmt S;
+    S.Kind = StmtKind::Return;
+    S.Addr = Addr;
+    S.RetVal = HighExpr::makeVar(Result);
+    return S;
+  };
+  HighStmt Goto;
+  Goto.Kind = StmtKind::Goto;
+  Goto.Addr = 0x1010;
+  Goto.GotoTarget = 0x1040;
+  HighStmt If;
+  If.Kind = StmtKind::If;
+  If.Addr = 0x1000;
+  If.Cond = HighExpr::makeConst(1, 1);
+  If.Body.push_back(Goto);
+
+  std::vector<HighStmt> Body;
+  Body.push_back(If);
+  Body.push_back(Assign(0, 0x1020));
+  Body.push_back(Return(0x1030));
+  Body.push_back(Assign(1, 0x1040));
+  Body.push_back(Return(0x1044));
+
+  ASSERT_TRUE(duplicateSmallReturnTails(Body));
+  ASSERT_EQ(Body[0].Body.size(), 2u);
+  EXPECT_EQ(Body[0].Body[0].Kind, StmtKind::Assign);
+  EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 1u);
+  EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
+  // The labelled original is kept for any other path.
+  ASSERT_EQ(Body.size(), 5u);
+  EXPECT_EQ(Body[3].Addr, 0x1040u);
+
+  // A tail with an effect (a call) is not duplicated.
+  std::vector<HighStmt> Effectful = Body;
+  Effectful[0].Body = {Goto};
+  Effectful[3].Val = HighExpr::makeCall("f", 0x2000, {});
+  EXPECT_FALSE(duplicateSmallReturnTails(Effectful));
+}
