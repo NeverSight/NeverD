@@ -334,3 +334,5 @@ ARM64 Objective-C 原始碼復原支援由呼叫端證明的最多八個 Swift �
 固定版本的 Swift 宣告也為 `swift_initClassMetadata2` 與 `swift_updateClassMetadata2` 綁定五個指標寬度參數，以及雙字的 `swiftcall` 後設資料相依回傳值（後設資料指標、狀態字）。僅精確符合的 libswiftCore 強匯入適用。產生器現在也能從固定版本原始碼重現這些項目與泛型列舉標籤項目。
 
 將快取的 Dictionary 或 Array 橋接為 NSDictionary 或 NSArray 的 Swift 延遲載入 Objective-C 類別 getter，使用保留副作用的 once 契約。投影要求精確的 `vgZTo` 類別方法與 Foundation 橋接繫結、唯一且僅以 x2 為 context 的 `swift_once`、相符的 `_Wz`/`_WZ` 符號，以及忽略 context 且沒有一般直接呼叫者的初始化器。只有該 context 會改為 null；橋接、autorelease、儲存讀取、控制流程與相依性檢查皆保留。
+
+HighC 使用相容 Clang 的結果指標內建函式表示有號加減法溢位旗標，並以原運算元位寬的暫存值接收未使用的結果。即使中間區域變數為無號型別，也會依原位元型態將輸入重新解讀為有號值。因此，已復原 Swift once 初始化器的生成 C 保留邊界行為，並可由 Apple Clang 編譯。

@@ -226,6 +226,64 @@ TEST(HighCIntegerWidths, ArithmeticWrapsBeforeWideningWithoutSignedOverflow) {
                     true);
 }
 
+TEST(HighCIntegerWidths, SignedOverflowPredicatesCompileAndMatchBoundaries) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Width : {1, 2, 4, 8, 16}) {
+    const unsigned Bits = Width * 8;
+    const std::vector<llvm::APInt> Values{
+        llvm::APInt(Bits, 0),
+        llvm::APInt(Bits, 1),
+        llvm::APInt::getSignedMaxValue(Bits),
+        llvm::APInt::getSignedMaxValue(Bits) - 1,
+        llvm::APInt::getSignedMinValue(Bits),
+        llvm::APInt::getSignedMinValue(Bits) + 1,
+        llvm::APInt::getAllOnes(Bits)};
+    for (bool SignedCarrier : {true, false}) {
+      const auto Type = NdType::makeInt(Width, SignedCarrier);
+      const auto BitArgument = [&](const llvm::APInt &BitsValue) {
+        if (Width <= 8)
+          return argument(
+              Type, std::to_string(BitsValue.getZExtValue()).c_str());
+        const auto Bits = "(((__uint128_t)UINT64_C(" +
+                          std::to_string(BitsValue.lshr(64).getZExtValue()) +
+                          ") << 64) | UINT64_C(" +
+                          std::to_string(BitsValue.trunc(64).getZExtValue()) +
+                          "))";
+        return SignedCarrier
+                   ? "__builtin_bit_cast(" + typeToC(Type) + ", " + Bits + ")"
+                   : Bits;
+      };
+      for (const auto Op : {NdOp::INT_SOVF, NdOp::INT_SBOR}) {
+        HighFunc Func;
+        Func.Name = "signed_overflow_" + std::to_string(Bits) +
+                    (SignedCarrier ? "_s" : "_u") +
+                    (Op == NdOp::INT_SOVF ? "_add" : "_sub");
+        Func.ReturnType = NdType::makeInt(1, false);
+        Func.Params = {{"arg0", Type}, {"arg1", Type}};
+        auto Value =
+            HighExpr::makeBinop(Op, parameter(0, Type), parameter(1, Type));
+        Value->Type = Func.ReturnType;
+        returnValue(Func, Value);
+        for (const auto &Left : Values)
+          for (const auto &Right : Values) {
+            bool Overflow = false;
+            [[maybe_unused]] const auto Result =
+                Op == NdOp::INT_SOVF ? Left.sadd_ov(Right, Overflow)
+                                      : Left.ssub_ov(Right, Overflow);
+            appendCheck(
+                Checks, Func.Name, BitArgument(Left) + ", " + BitArgument(Right),
+                Overflow ? "1" : "0");
+          }
+        Functions.push_back(std::move(Func));
+      }
+    }
+  }
+  const auto Source = emitFunctions(Functions);
+  EXPECT_EQ(Source.find("_overflow_p"), std::string::npos);
+  compileAndExecute(Source + executionHarness(Checks), false);
+}
+
 TEST(HighCIntegerWidths, WordShapedConstantsKeepTheirFullWidthValue) {
   std::vector<HighFunc> Functions;
   std::string Checks;

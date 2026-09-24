@@ -334,3 +334,5 @@ ARM64 Objective-C 소스 복원은 호출자에서 증명한 최대 여덟 곳�
 고정된 Swift 선언은 `swift_initClassMetadata2`와 `swift_updateClassMetadata2`에도 포인터 너비 인수 5개와 두 워드의 `swiftcall` 메타데이터 의존 결과(메타데이터 포인터, 상태 워드)를 지정합니다. libswiftCore의 정확한 강한 가져오기만 적용됩니다. 생성기는 이제 이 항목과 제네릭 열거형 태그 항목을 고정된 소스에서 재현합니다.
 
 캐시된 Dictionary 또는 Array를 NSDictionary 또는 NSArray로 브리지하는 Swift 지연 초기화 Objective-C 클래스 getter에는 부작용을 보존하는 once 계약을 적용합니다. 정확한 `vgZTo` 클래스 메서드와 Foundation 브리지 바인딩, x2를 context에만 사용하는 단일 `swift_once`, 일치하는 `_Wz`/`_WZ` 기호, context를 읽지 않고 일반적인 직접 호출자가 없는 초기화 함수가 필요합니다. 해당 context만 null로 바꾸며 브리지, autorelease, 저장소 읽기, 제어 흐름과 종속성 검사는 유지합니다.
+
+HighC는 부호 있는 덧셈과 뺄셈의 오버플로 플래그를 Clang 호환 결과 포인터 내장 함수와 원래 피연산자 폭의 임시 결과로 표현합니다. 중간 지역 변수가 부호 없는 형식이어도 입력 비트 패턴을 부호 있는 값으로 재해석합니다. 따라서 복구된 Swift once 초기화 함수의 생성 C는 경계 동작을 유지하고 Apple Clang에서 컴파일됩니다.

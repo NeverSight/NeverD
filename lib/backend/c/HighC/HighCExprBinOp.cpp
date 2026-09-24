@@ -343,13 +343,23 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
            CarrierType + ")(" + Right + ")) < (" + Left + "))";
   }
   case NdOp::INT_SOVF:
-    return "__builtin_add_overflow_p(" + exprStr(*E.Operands[0]) + ", " +
-           exprStr(*E.Operands[1]) + ", (" + typeToC(E.Operands[0]->Type) +
-           ")0)";
-  case NdOp::INT_SBOR:
-    return "__builtin_sub_overflow_p(" + exprStr(*E.Operands[0]) + ", " +
-           exprStr(*E.Operands[1]) + ", (" + typeToC(E.Operands[0]->Type) +
-           ")0)";
+  case NdOp::INT_SBOR: {
+    // Clang supports the pointer-result builtins, but not GCC's *_overflow_p.
+    // Signed overflow is defined by the operand bits even when HighIR carries
+    // them through unsigned locals. Bitcast both inputs at the original width;
+    // a compound literal receives the unused arithmetic result.
+    const auto Size = E.Operands[0]->Type->Size;
+    const auto SignedType = typeToC(NdType::makeInt(Size, true));
+    const auto UnsignedType = typeToC(NdType::makeInt(Size, false));
+    const auto SignedBits = [&](const HighExpr &Operand) {
+      return "__builtin_bit_cast(" + SignedType + ", (" + UnsignedType +
+             ")(" + exprStr(Operand) + "))";
+    };
+    return std::string(E.Op == NdOp::INT_SOVF ? "__builtin_add_overflow("
+                                              : "__builtin_sub_overflow(") +
+           SignedBits(*E.Operands[0]) + ", " + SignedBits(*E.Operands[1]) +
+           ", &(" + SignedType + "){0})";
+  }
   default:
     break;
   }
