@@ -69,6 +69,43 @@ inline std::optional<LoadPlan> loadPlan(const ExprPtr &E, bool Bound,
   if (!P.Base || !ordinary(P.Offset) || P.Offset->Type->Size != 8 ||
       P.Offset->Type->Kind != NdTypeKind::Int)
     return std::nullopt;
+  // Fold a small fixed bias into the helper base. Keep the indexed part as
+  // the emitted offset so the copied byte range starts at the first load,
+  // including a load a few bytes before the original image constant.
+  if (P.Offset->Kind == ExprKind::BinOp &&
+      (P.Offset->Op == NdOp::INT_ADD ||
+       P.Offset->Op == NdOp::INT_SUB) &&
+      P.Offset->Operands.size() == 2) {
+    ExprPtr Indexed;
+    uint64_t Bias = 0;
+    bool Subtract = P.Offset->Op == NdOp::INT_SUB;
+    for (unsigned Side = 0; Side < (Subtract ? 1U : 2U); ++Side) {
+      const auto &Candidate = P.Offset->Operands[Side];
+      const auto &Constant = P.Offset->Operands[1 - Side];
+      if (!ordinary(Candidate) || !ordinary(Constant) ||
+          Candidate->Type->Kind != NdTypeKind::Int ||
+          Candidate->Type->Size != 8 ||
+          Constant->Kind != ExprKind::Const ||
+          !Constant->Operands.empty() ||
+          Constant->Type->Kind != NdTypeKind::Int ||
+          Constant->Type->Size != 8 || Constant->ConstVal > 65536)
+        continue;
+      Indexed = Candidate;
+      Bias = Constant->ConstVal;
+      break;
+    }
+    if (Indexed) {
+      // A published helper already owns its exact base and byte count. Do
+      // not reinterpret an edited offset as a second, shifted helper range.
+      if (Bound)
+        return std::nullopt;
+      if ((Subtract && P.Base < Bias) ||
+          (!Subtract && P.Base > UINT64_MAX - Bias))
+        return std::nullopt;
+      P.Base = Subtract ? P.Base - Bias : P.Base + Bias;
+      P.Offset = Indexed;
+    }
+  }
   P.Index = P.Offset;
   if (P.Index->Kind == ExprKind::BinOp &&
       (P.Index->Op == NdOp::INT_LEFT || P.Index->Op == NdOp::INT_MULT) &&

@@ -1847,6 +1847,54 @@ TEST(ObjCSourceBindings, ReadOnlyTablesBindEveryBoundedScalarLoadOccurrence) {
     }
 }
 
+TEST(ObjCSourceBindings, ReadOnlyTablesNormalizeBoundedFixedAddressBias) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (bool Subtract : {false, true}) {
+      auto F = readonlyTableFixture(1);
+      F.Image.Arch = Architecture;
+      auto &Load = F.Function.Body[0].Body[0].RetVal;
+      auto &Address = Load->Operands[0];
+      auto Indexed = Address->Operands[1];
+      Address->Operands[0] =
+          HighExpr::makeConst(Subtract ? 0x1042 : 0x103e, 8);
+      Address->Operands[1] = HighExpr::makeBinop(
+          Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Indexed,
+          HighExpr::makeConst(2, 8));
+
+      auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      ASSERT_EQ(Bound.BorrowedBytes.size(), 1U);
+      EXPECT_EQ(*Bound.BorrowedBytes.begin(),
+                (BorrowedByteRange{0x1040, 3}));
+      auto Result = Bound.Function.Body[0].Body[0].RetVal;
+      ASSERT_EQ(Result->Kind, ExprKind::Load);
+      ASSERT_EQ(Result->Operands[0]->Operands.size(), 2U);
+      const auto &Helper = Result->Operands[0]->Operands[0];
+      ASSERT_TRUE(Helper->SourceCallHint);
+      EXPECT_EQ(Helper->SourceCallHint->TargetAddress, 0x1040U);
+      EXPECT_EQ(Result->Operands[0]->Operands[1]->Op, NdOp::INT_MULT);
+      const auto Allowed = readOnlyScalarSourceHelpers(Bound.Function, F.Image);
+      ASSERT_EQ(Allowed.size(), 1U);
+      EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+      Result->Operands[0]->Operands[1] = HighExpr::makeBinop(
+          NdOp::INT_ADD, Result->Operands[0]->Operands[1],
+          HighExpr::makeConst(2, 8));
+      EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
+
+      auto Invalid = readonlyTableFixture(1);
+      Invalid.Image.Arch = Architecture;
+      auto &InvalidAddress =
+          Invalid.Function.Body[0].Body[0].RetVal->Operands[0];
+      InvalidAddress->Operands[1] = HighExpr::makeBinop(
+          Subtract ? NdOp::INT_SUB : NdOp::INT_ADD,
+          InvalidAddress->Operands[1], HighExpr::makeConst(65537, 8));
+      const auto Rejected = bindObjCSourceReferences(Invalid.Function,
+                                                    Invalid.Image);
+      EXPECT_FALSE(Rejected.Limitation.empty());
+      EXPECT_TRUE(Rejected.BorrowedBytes.empty());
+    }
+}
+
 TEST(ObjCSourceBindings, ReadOnlyTablesRejectUnprovenRangesStorageAndUses) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (unsigned Mutation = 0; Mutation < 14; ++Mutation) {
