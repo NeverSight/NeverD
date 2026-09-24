@@ -284,7 +284,7 @@ TEST(NativeSourceHints, ZeroArgClassVoidAndBoolMethodsUseSwiftSelf) {
   EXPECT_FALSE(sdk::swiftMangledZeroArgClassMethodSourceABI(Wrong, 0x1000));
 }
 
-TEST(NativeSourceHints, SwiftClassBoolSetterUsesValueAndSwiftSelf) {
+TEST(NativeSourceHints, SwiftClassScalarSetterUsesValueAndSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
   Image.Arch = Arch::AArch64;
@@ -297,7 +297,7 @@ TEST(NativeSourceHints, SwiftClassBoolSetterUsesValueAndSwiftSelf) {
   Image.Segments.push_back(std::move(Text));
   Image.Symbols.push_back(
       {"_$s3WMF25ArticleCollectionViewCellC10isSelectedSbvs", 0x1000, 0, true});
-  const auto Hint = sdk::swiftMangledClassBoolSetterSourceABI(Image, 0x1000);
+  const auto Hint = sdk::swiftMangledClassScalarSetterSourceABI(Image, 0x1000);
   ASSERT_TRUE(Hint);
   EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::SwiftMangled);
   EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
@@ -311,18 +311,31 @@ TEST(NativeSourceHints, SwiftClassBoolSetterUsesValueAndSwiftSelf) {
   std::string Error;
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
+  auto Integer = Image;
+  Integer.Symbols[0].Name = "_$s6Lottie8LRUCacheC10countLimitSivs";
+  const auto IntegerHint =
+      sdk::swiftMangledClassScalarSetterSourceABI(Integer, 0x1000);
+  ASSERT_TRUE(IntegerHint);
+  EXPECT_EQ(IntegerHint->ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(IntegerHint->Parameters.size(), 2U);
+  EXPECT_EQ(IntegerHint->Parameters[0].Type->Size, 8U);
+  EXPECT_EQ(IntegerHint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(IntegerHint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*IntegerHint, Error)) << Error;
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name = "_$s3WMF25ArticleCollectionViewCellC10isSelectedSbvg";
-  EXPECT_FALSE(sdk::swiftMangledClassBoolSetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
   Wrong = Image;
-  Wrong.Symbols[0].Name = "_$s3WMF25ArticleCollectionViewCellC10isSelectedSivs";
-  EXPECT_FALSE(sdk::swiftMangledClassBoolSetterSourceABI(Wrong, 0x1000));
+  Wrong.Symbols[0].Name =
+      "_$s3WMF25ArticleCollectionViewCellC17horizontalSpacingSdvs";
+  EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
-  EXPECT_FALSE(sdk::swiftMangledClassBoolSetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
   Wrong = Image;
   Wrong.Arch = Arch::X64;
-  EXPECT_FALSE(sdk::swiftMangledClassBoolSetterSourceABI(Wrong, 0x1000));
+  EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
 }
 
 TEST(NativeSourceHints, ZeroArgClassInitializerUsesSwiftSelf) {

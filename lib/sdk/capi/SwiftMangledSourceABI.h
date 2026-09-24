@@ -508,12 +508,12 @@ swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image, va_t Entry) {
              : std::nullopt;
 }
 
-// A Swift class Bool property setter takes its new value in x0 and the
+// A Swift class Bool or Int property setter takes its new value in x0 and the
 // instance in swiftself. Its mangled Setter/Variable tree distinguishes the
 // void result from the Bool property type; generic register-result inference
 // must not treat a clobbered x0 as a setter return value.
 inline std::optional<SourceFunctionTypeHint>
-swiftMangledClassBoolSetterSourceABI(const BinaryImage &Image, va_t Entry) {
+swiftMangledClassScalarSetterSourceABI(const BinaryImage &Image, va_t Entry) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
       !Image.isCodeAddress(Entry))
@@ -566,14 +566,17 @@ swiftMangledClassBoolSetterSourceABI(const BinaryImage &Image, va_t Entry) {
       !Property.Text || Property.Text->empty() || Property.Index ||
       !Property.Children.empty() || !Shape(Type, "Type", 1) ||
       !Shape(Type.Children[0], "Structure", 2) ||
-      !Text(Type.Children[0].Children[0], "Module", "Swift") ||
-      !Text(Type.Children[0].Children[1], "Identifier", "Bool"))
+      !Text(Type.Children[0].Children[0], "Module", "Swift"))
+    return std::nullopt;
+  const bool IsBool = Text(Type.Children[0].Children[1], "Identifier", "Bool");
+  const bool IsInt = Text(Type.Children[0].Children[1], "Identifier", "Int");
+  if (!IsBool && !IsInt)
     return std::nullopt;
 
   SourceFunctionTypeHint Hint;
   Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
   Hint.ReturnType = NdType::makeVoid();
-  Hint.Parameters = {{"value", NdType::makeInt(1, false)},
+  Hint.Parameters = {{"value", NdType::makeInt(IsBool ? 1 : 8, !IsBool)},
                      {"self", NdType::makePtr(NdType::makeVoid())}};
   Hint.Parameters[1].TheRole = SourceParameterTypeHint::Role::SwiftContext;
   std::string Error;
