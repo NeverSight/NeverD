@@ -8,6 +8,8 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
+
 namespace neverd {
 
 namespace {
@@ -19,6 +21,20 @@ GPRFamilyMask familyBit(Arch A, uint64_t RegOff) {
   if (!Family || *Family == kX64StackPointerFamily)
     return 0;
   return GPRFamilyMask(1) << *Family;
+}
+
+/// Record a read of \p Size bytes at \p RegOff.
+void addRead(Arch A, GPRReadWidths &Reads, uint64_t RegOff, uint64_t Size) {
+  auto Family = gprFamilyOf(A, RegOff);
+  if (!Family || *Family == kX64StackPointerFamily)
+    return;
+  const uint64_t End = std::min<uint64_t>(RegOff % 8 + Size, 8);
+  Reads[*Family] = std::max(Reads[*Family], static_cast<uint8_t>(End));
+}
+
+void joinReads(GPRReadWidths &Into, const GPRReadWidths &From) {
+  for (size_t I = 0; I < Into.size(); ++I)
+    Into[I] = std::max(Into[I], From[I]);
 }
 } // namespace
 
@@ -63,16 +79,16 @@ LocalRegisterEffect localRegisterEffect(const BinaryImage &Img,
       RegisterStep Step;
       for (uint8_t In = 0; In < Op.NumInputs; ++In)
         if (Op.Inputs[In].isReg())
-          Step.Reads |= familyBit(Img.Arch, Op.Inputs[In].Offset);
+          addRead(Img.Arch, Step.Reads, Op.Inputs[In].Offset,
+                  Op.Inputs[In].Size);
       if (Op.Output.isReg()) {
         const GPRFamilyMask Bit = familyBit(Img.Arch, Op.Output.Offset);
         Effect.Writes |= Bit;
         // A 32- or 64-bit write defines the whole register; a byte or word
-        // write keeps the rest of the old value.
+        // write keeps the rest of the old value, which stays live exactly as
+        // wide as a later read needs it.
         if (Op.Output.Size >= 4)
           Step.Kills |= Bit;
-        else
-          Step.Reads |= Bit;
       }
       const auto [Control, Flags] = ControlOf(I);
       const bool TailCall = Control == LowInstructionControl::TailCall;
@@ -127,47 +143,57 @@ LocalRegisterEffect localRegisterEffect(const BinaryImage &Img,
 }
 
 namespace {
-/// Families live on entry to \p F, given the current callee summaries.
-GPRFamilyMask entryLiveFamilies(const LocalRegisterEffect &F,
-                                const std::map<va_t, GPRFamilyMask> &MayWrite,
-                                const std::map<va_t, GPRFamilyMask> &EntryReads,
-                                GPRFamilyMask VolatileFamilies,
-                                GPRFamilyMask ArgumentFamilies) {
-  auto Transfer = [&](const RegisterBlock &Block, GPRFamilyMask Live) {
+/// Bytes of each family live on entry to \p F, given the current callee
+/// summaries.
+GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
+                              const std::map<va_t, GPRFamilyMask> &MayWrite,
+                              const std::map<va_t, GPRReadWidths> &EntryReads,
+                              GPRFamilyMask VolatileFamilies,
+                              GPRFamilyMask ArgumentFamilies) {
+  auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
+    for (size_t I = 0; I < Live.size(); ++I)
+      if ((Mask >> I) & 1)
+        Live[I] = 0;
+  };
+  auto Transfer = [&](const RegisterBlock &Block, GPRReadWidths Live) {
     for (auto It = Block.Steps.rbegin(); It != Block.Steps.rend(); ++It) {
       const RegisterStep &Step = *It;
       if (Step.Exits)
-        Live = 0;
+        Live.fill(0);
       if (Step.UnknownTailCall) {
-        Live = ArgumentFamilies;
+        Live.fill(0);
+        for (size_t I = 0; I < Live.size(); ++I)
+          if ((ArgumentFamilies >> I) & 1)
+            Live[I] = 8;
       } else if (Step.UnknownCall) {
-        Live &= ~VolatileFamilies;
+        Clear(Live, VolatileFamilies);
       } else if (Step.Callee != InvalidVA) {
         auto W = MayWrite.find(Step.Callee);
-        Live &= ~(W != MayWrite.end() ? W->second : VolatileFamilies);
+        Clear(Live, W != MayWrite.end() ? W->second : VolatileFamilies);
         if (auto R = EntryReads.find(Step.Callee); R != EntryReads.end())
-          Live |= R->second;
+          joinReads(Live, R->second);
       }
-      Live = (Live & ~Step.Kills) | Step.Reads;
+      Clear(Live, Step.Kills);
+      joinReads(Live, Step.Reads);
     }
     return Live;
   };
-  std::vector<GPRFamilyMask> LiveIn(F.Blocks.size(), 0);
+  std::vector<GPRReadWidths> LiveIn(F.Blocks.size(), GPRReadWidths{});
   for (bool Changed = true; Changed;) {
     Changed = false;
     for (size_t B = F.Blocks.size(); B-- > 0;) {
-      GPRFamilyMask LiveOut = 0;
+      GPRReadWidths LiveOut{};
       for (size_t S : F.Blocks[B].Succs)
         if (S < LiveIn.size())
-          LiveOut |= LiveIn[S];
-      const GPRFamilyMask In = Transfer(F.Blocks[B], LiveOut);
+          joinReads(LiveOut, LiveIn[S]);
+      const GPRReadWidths In = Transfer(F.Blocks[B], LiveOut);
       if (In != LiveIn[B]) {
         LiveIn[B] = In;
         Changed = true;
       }
     }
   }
-  return LiveIn.empty() ? 0 : LiveIn[0];
+  return LiveIn.empty() ? GPRReadWidths{} : LiveIn[0];
 }
 } // namespace
 
@@ -216,18 +242,18 @@ solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
 
   // Entry reads, also a least fixed point: a callee's reads only grow a
   // caller's.  A body we do not fully know has none.
-  std::map<va_t, GPRFamilyMask> &Reads = Result.EntryReads;
+  std::map<va_t, GPRReadWidths> &Reads = Result.EntryReads;
   for (const auto &[Entry, Effect] : Funcs)
     if (!Effect.Incomplete)
-      Reads[Entry] = 0;
+      Reads[Entry] = GPRReadWidths{};
   for (bool Changed = true; Changed;) {
     Changed = false;
-    for (auto &[Entry, Mask] : Reads) {
-      const GPRFamilyMask Next =
-          Mask | entryLiveFamilies(Funcs.at(Entry), Writes, Reads,
-                                   VolatileFamilies, ArgumentFamilies);
-      if (Next != Mask) {
-        Mask = Next;
+    for (auto &[Entry, Widths] : Reads) {
+      GPRReadWidths Next = Widths;
+      joinReads(Next, entryLiveWidths(Funcs.at(Entry), Writes, Reads,
+                                      VolatileFamilies, ArgumentFamilies));
+      if (Next != Widths) {
+        Widths = Next;
         Changed = true;
       }
     }

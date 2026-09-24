@@ -17,6 +17,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/evm/EVMIR.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
@@ -158,9 +159,9 @@ struct PipelineResult {
   /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
   /// callee entry.  Absent entries keep the ABI clobber set.
   std::map<va_t, uint32_t> CallMayWriteGPRs;
-  /// GPR families each lifted callee reads before writing (its register
-  /// arguments, including pass-throughs), keyed by callee entry.
-  std::map<va_t, uint32_t> CallEntryReadGPRs;
+  /// Bytes of each GPR family a lifted callee reads before writing (its
+  /// register arguments, including pass-throughs), keyed by callee entry.
+  std::map<va_t, GPRReadWidths> CallEntryReadGPRs;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;

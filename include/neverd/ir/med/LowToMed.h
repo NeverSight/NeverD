@@ -15,6 +15,7 @@
 #ifndef NEVERD_IR_MED_LOWTOMED_H
 #define NEVERD_IR_MED_LOWTOMED_H
 
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 
@@ -61,7 +62,7 @@ public:
     CallMayWriteGPRs = M;
   }
   /// Direct-callee entry-read summaries (PipelineResult::CallEntryReadGPRs).
-  void setCallEntryReadGPRs(const std::map<va_t, uint32_t> *M) {
+  void setCallEntryReadGPRs(const std::map<va_t, GPRReadWidths> *M) {
     CallEntryReadGPRs = M;
   }
 
@@ -243,7 +244,7 @@ private:
   /// Per-callee callee-cleanup pop (entry VA -> bytes); see setCalleePopMap.
   const std::map<va_t, int> *CalleePopMap = nullptr;
   const std::map<va_t, uint32_t> *CallMayWriteGPRs = nullptr;
-  const std::map<va_t, uint32_t> *CallEntryReadGPRs = nullptr;
+  const std::map<va_t, GPRReadWidths> *CallEntryReadGPRs = nullptr;
 
   /// GOT/pointer-slot VAs holding a stack-probe import; see setStackProbeSlots.
   /// Null/empty until the pipeline (which has the loaded import tables)

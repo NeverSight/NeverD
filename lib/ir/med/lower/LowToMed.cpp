@@ -197,10 +197,19 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
                                                x86reg::R8, x86reg::R9};
       int8_t Count = 0;
       for (int8_t I = 0; I < 4; ++I)
-        if ((R->second >> (Win64Args[I] / 8)) & 1)
+        if (R->second[Win64Args[I] / 8])
           Count = I + 1;
-      for (int8_t I = 0; I < Count; ++I)
-        MOp.addInput(ndVarToMedVar(NdVar::reg(Win64Args[I], 8)));
+      // Pass exactly the bytes the callee reads (DL for a KIRQL), so the
+      // bytes it ignores do not become an unknown incoming value.  An unread
+      // slot below the last read one is still an argument position.
+      for (int8_t I = 0; I < Count; ++I) {
+        const uint8_t Width = R->second[Win64Args[I] / 8];
+        const uint16_t Size = Width <= 1   ? 1
+                              : Width <= 2 ? 2
+                              : Width <= 4 ? 4
+                                           : 8;
+        MOp.addInput(ndVarToMedVar(NdVar::reg(Win64Args[I], Size)));
+      }
       MOp.CalleeRegisterArgs = Count;
     }
   if (!CallMayWriteGPRs)

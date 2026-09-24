@@ -26,6 +26,7 @@
 #include "neverd/Common.h"
 #include "neverd/ir/low/LowIR.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -42,13 +43,17 @@ struct BinaryImage;
 /// (AL, AH, EAX, ...) sets the whole family.
 using GPRFamilyMask = uint32_t;
 
+/// Per GPR family, how many low bytes of the slot are read (0 = none, 1 for
+/// CL, 2 for CX or CH, 4 for ECX, 8 for RCX).
+using GPRReadWidths = std::array<uint8_t, 16>;
+
 /// The GPR family of a register slice, or nullopt when \p RegOff is not one
 /// of the sixteen x86-64 GPRs this summary tracks.
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff);
 
 /// One straight-line step of a function, for register liveness.
 struct RegisterStep {
-  GPRFamilyMask Reads = 0;
+  GPRReadWidths Reads{};
   /// Families this step fully redefines (a 32- or 64-bit write).
   GPRFamilyMask Kills = 0;
   /// A direct call or branch into another function's entry.
@@ -88,10 +93,10 @@ struct CallRegisterSummaries {
   /// Families a call may change, for functions whose whole call tree is
   /// known.
   std::map<va_t, GPRFamilyMask> MayWrite;
-  /// Families read before being written on some path from entry, including
-  /// through callees.  A pass-through argument counts; a register a nested
-  /// call merely receives does not.
-  std::map<va_t, GPRFamilyMask> EntryReads;
+  /// Bytes of each family read before being written on some path from
+  /// entry, including through callees.  A pass-through argument counts; a
+  /// register a nested call merely receives does not.
+  std::map<va_t, GPRReadWidths> EntryReads;
 };
 
 /// Solve may-write and entry-read GPR sets over \p Funcs (entry -> local

@@ -3667,6 +3667,29 @@ TEST(HighCPointerAddresses, CalleeBranchToAnotherFunctionCountsItsWrites) {
   EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
 }
 
+TEST(HighCPointerAddresses, CalleeByteArgumentPassesOnlyTheByte) {
+  // IoReleaseVpbSpinLock: `mov dl, cl` forwards a KIRQL to a callee that
+  // reads only DL.  The untouched upper RDX bytes are not an argument.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001040;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+                               0x88, 0xca,                   // mov dl, cl
+                               0xb9, 0x09, 0x00, 0x00, 0x00, // mov ecx, 9
+                               0xe8, 0x30, 0x00, 0x00, 0x00, // call G
+                               0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+                               0xc3};
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x0f, 0xb6, 0xc2, 0xc3}); // movzx eax, dl; ret
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "take_irql";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("take_irql("), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("arg0"), std::string::npos) << HighC;
+}
+
 TEST(HighCPointerAddresses, ControlAndDebugRegisterMovesUseMsvcIntrinsics) {
   // Inlined KeRaiseIrql/KeLowerIrql move CR8; ntoskrnl rejected ~2000
   // functions while these MOVs had no lift.
