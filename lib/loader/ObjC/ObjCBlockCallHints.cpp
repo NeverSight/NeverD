@@ -40,16 +40,39 @@ bool overlaps(const NdVar &V, uint64_t Offset, unsigned Size) {
   return V.isReg() && V.Offset < Offset + Size && Offset < V.Offset + V.Size;
 }
 
-std::optional<unsigned> resultWidth(const LowBlock &Block, size_t CallIndex,
-                                    const TargetRegInfo &TRI,
-                                    Arch Architecture) {
+std::optional<unsigned>
+resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
+            Arch Architecture,
+            const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
   std::optional<unsigned> Width;
   bool IntegerLive = true;
   bool FloatingLive = true;
   for (size_t I = CallIndex + 1; I < Block.Ops.size(); ++I) {
     const auto &Op = Block.Ops[I];
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      if (IntegerLive && BoundCalls) {
+        const auto It = BoundCalls->find(Op.Addr);
+        if (It != BoundCalls->end()) {
+          const auto &Hint = It->second;
+          std::string Error;
+          if (Hint.CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+              Hint.TargetName == "objc_retainAutoreleasedReturnValue" &&
+              Hint.Signature.Architecture == Architecture &&
+              Hint.Signature.HasExplicitABI &&
+              validateSourceABI(Hint.Signature, Error) &&
+              Hint.Signature.Parameters.size() == 1 &&
+              Hint.Signature.Parameters[0].Type &&
+              Hint.Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
+              Hint.Signature.Parameters[0].Location.Kind ==
+                  SourceABICarrierKind::IntegerRegister &&
+              Hint.Signature.Parameters[0].Location.RegisterOffset ==
+                  TRI.IntReturnReg &&
+              Hint.Signature.Parameters[0].Location.ValueBytes == 8)
+            return std::max(Width.value_or(0), 8U);
+        }
+      }
       return Width;
+    }
     for (unsigned J = 0; J < Op.NumInputs; ++J) {
       const auto &V = Op.Inputs[J];
       if (FloatingLive && overlaps(V, TRI.FPReturnReg, 16))
@@ -78,7 +101,8 @@ std::optional<unsigned> resultWidth(const LowBlock &Block, size_t CallIndex,
 
 std::map<va_t, SourceCallTypeHint>
 buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
-                        const SourceFunctionTypeHint *EntrySignature) {
+                        const SourceFunctionTypeHint *EntrySignature,
+                        const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Function.Blocks.size() != 1 ||
@@ -131,6 +155,7 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
     return std::nullopt;
   };
   va_t PreviousAddress = InvalidVA;
+  uint64_t NextCallResultBase = 1ULL << 32;
   for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
     const auto &Op = Block.Ops[Index];
     if (Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::BRANCH)
@@ -157,7 +182,8 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
             Signature = Literal->Descriptor.InvokeTypeHint;
         }
         if (!Signature) {
-          auto ReturnBytes = resultWidth(Block, Index, TRI, Image.Arch);
+          auto ReturnBytes =
+              resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
           if (ReturnBytes) {
             SourceFunctionTypeHint Inferred;
             Inferred.Origin =
@@ -172,8 +198,10 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
               }
               auto Argument = Read(NdVar::reg(Reg, 8));
               if (Gap || !Argument || !scalar(Argument->Type) ||
-                  Argument->K == Value::Kind::Frame ||
-                  Argument->K == Value::Kind::Invoke) {
+                  Argument->K == Value::Kind::Invoke ||
+                  (Argument->K == Value::Kind::Frame &&
+                   (FrameEscaped || Argument->Offset < -1048576 ||
+                    Argument->Offset > 1048576))) {
                 Valid = false;
                 break;
               }
@@ -210,11 +238,66 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
           }
         }
       }
-      // Do not carry an identity or a spill through an unknown callee.
-      Values.clear();
+      // A validated Darwin source ABI preserves the stack and nonvolatile
+      // registers on the normal return edge. Every other identity and every
+      // frame spill is invalidated. The ARC result is a fresh opaque pointer:
+      // the later invoke-slot proof must still show the same block receiver.
+      std::map<Key, Value> Preserved;
+      const SourceCallTypeHint *Bound = nullptr;
+      if (BoundCalls) {
+        const auto It = BoundCalls->find(Op.Addr);
+        if (It != BoundCalls->end()) {
+          std::string Error;
+          const auto Kind = It->second.CallKind;
+          const bool DarwinCall =
+              Kind == SourceCallTypeHint::Kind::ObjCMessage ||
+              Kind == SourceCallTypeHint::Kind::ObjCSuper2 ||
+              Kind == SourceCallTypeHint::Kind::ObjCRuntimeCall ||
+              Kind == SourceCallTypeHint::Kind::DarwinRuntimeCall;
+          if (DarwinCall && It->second.Signature.Architecture == Image.Arch &&
+              validateSourceABI(It->second.Signature, Error))
+            Bound = &It->second;
+        }
+      }
+      if (Bound)
+        for (const auto &[K, V] : Values)
+          if (std::get<0>(K) == VnodeSpace::REG && V.K != Value::Kind::Invoke &&
+              (TRI.isCallPreserved(std::get<1>(K), std::get<2>(K)) ||
+               (std::get<1>(K) == TRI.StackPointer &&
+                V.K == Value::Kind::Frame)))
+            Preserved.emplace(K, V);
+      for (auto Register : TRI.IntParamRegs) {
+        const auto Argument = Read(NdVar::reg(Register, 8));
+        if (Argument && Argument->K == Value::Kind::Frame)
+          FrameEscaped = true;
+      }
+      Values = std::move(Preserved);
       FrameSlots.clear();
       WrittenArguments.clear();
       FloatingArgumentWrite = false;
+      if (Op.Opcode == NdOp::CALL && Bound &&
+          Bound->CallKind == SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+          Bound->TargetName == "objc_retainAutoreleasedReturnValue" &&
+          Bound->Signature.HasExplicitABI && Bound->Signature.ReturnType &&
+          Bound->Signature.ReturnType->Kind == NdTypeKind::Ptr &&
+          Bound->Signature.ReturnLocation.Kind ==
+              SourceABICarrierKind::IntegerRegister &&
+          Bound->Signature.ReturnLocation.RegisterOffset == TRI.IntReturnReg &&
+          Bound->Signature.ReturnLocation.ValueBytes == 8 &&
+          Bound->Signature.Parameters.size() == 1 &&
+          Bound->Signature.Parameters[0].Type &&
+          Bound->Signature.Parameters[0].Type->Kind == NdTypeKind::Ptr &&
+          Bound->Signature.Parameters[0].Location.Kind ==
+              SourceABICarrierKind::IntegerRegister &&
+          Bound->Signature.Parameters[0].Location.RegisterOffset ==
+              TRI.IntParamRegs[0] &&
+          Bound->Signature.Parameters[0].Location.ValueBytes == 8 &&
+          Op.Output.isReg() && Op.Output.Offset == TRI.IntReturnReg &&
+          Op.Output.Size == 8) {
+        Values.emplace(key(Op.Output), Value{Value::Kind::Scalar,
+                                             NextCallResultBase++, 0, Pointer});
+        WrittenArguments.insert(TRI.IntParamRegs[0]);
+      }
       continue;
     }
     const bool PlainMemory =

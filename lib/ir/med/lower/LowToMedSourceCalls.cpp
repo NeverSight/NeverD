@@ -72,7 +72,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         EntrySignature = &It->second;
     }
   if (Image) {
-    auto BlockHints = buildObjCBlockCallHints(*Image, Low, EntrySignature);
+    auto BlockHints =
+        buildObjCBlockCallHints(*Image, Low, EntrySignature, &Hints);
     Hints.insert(BlockHints.begin(), BlockHints.end());
   }
   std::optional<SourceFunctionTypeHint> ProvisionalBooleanEntry;
