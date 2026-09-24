@@ -365,7 +365,15 @@ void LowToMedConverter::buildSsa(MedFunc &Func) {
           if (Op.Output.Kind == MedVar::Reg) {
             auto It = RegOffToIds.find(Op.Output.RegOff);
             if (It != RegOffToIds.end())
-              Kill.insert(It->second.begin(), It->second.end());
+              for (int Id : It->second) {
+                // A partial write (`mov r9w, ...`) leaves the upper bytes of
+                // a wider view live: a later full read still takes them from
+                // the caller.
+                auto View = RegVarOfId.find(Id);
+                if (View == RegVarOfId.end() ||
+                    View->second.Size <= Op.Output.Size)
+                  Kill.insert(Id);
+              }
           }
         }
         std::set<int> Clobbered = CallClobberedIds(Op);
