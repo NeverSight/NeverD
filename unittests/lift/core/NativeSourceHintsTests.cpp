@@ -396,6 +396,56 @@ TEST(NativeSourceHints, SwiftClassScalarSetterUsesValueAndSwiftSelf) {
   EXPECT_FALSE(sdk::swiftMangledClassScalarSetterSourceABI(Wrong, 0x1000));
 }
 
+TEST(NativeSourceHints, SwiftClassScalarGetterUsesSwiftSelf) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$s3WMF24WMFAuthenticationManagerC20authStateIsTemporarySbvg",
+       0x1000, 0, true});
+  auto Hint = sdk::swiftMangledClassScalarGetterSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Hint->ReturnType->Size, 1U);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto CGFloat = Image;
+  CGFloat.Symbols[0].Name =
+      "_$s3WMF25ArticleCollectionViewCellC24swipeTranslationWhenOpen12CoreGraphics7CGFloatVvg";
+  Hint = sdk::swiftMangledClassScalarGetterSourceABI(CGFloat, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Float);
+  EXPECT_EQ(Hint->ReturnType->Size, 8U);
+  EXPECT_EQ(Hint->ReturnLocation.Kind,
+            SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hint->ReturnLocation.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).FPReturnReg);
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = CGFloat;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledClassScalarGetterSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name.back() = 's';
+  EXPECT_FALSE(sdk::swiftMangledClassScalarGetterSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledClassScalarGetterSourceABI(Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledClassScalarGetterSourceABI(Wrong, 0x1000));
+}
+
 TEST(NativeSourceHints, ZeroArgClassInitializerUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;

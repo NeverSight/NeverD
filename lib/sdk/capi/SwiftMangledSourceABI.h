@@ -595,6 +595,87 @@ swiftMangledZeroArgClassMethodSourceABI(const BinaryImage &Image, va_t Entry) {
              : std::nullopt;
 }
 
+// A direct Swift class property getter takes only swiftself. The complete
+// mangled tree determines whether its result is Bool, Int, or arm64 CGFloat;
+// ObjC thunk suffixes and extensions have separate entry contracts.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledClassScalarGetterSourceABI(const BinaryImage &Image, va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Getter", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Variable", 3))
+    return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  const auto &Owner = Variable.Children[0];
+  const auto &Property = Variable.Children[1];
+  const auto &Type = Variable.Children[2];
+  if (!Shape(Owner, "Class", 2) || Owner.Children[0].Kind != "Module" ||
+      !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
+      Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
+      Owner.Children[1].Kind != "Identifier" || !Owner.Children[1].Text ||
+      Owner.Children[1].Text->empty() || Owner.Children[1].Index ||
+      !Owner.Children[1].Children.empty() || Property.Kind != "Identifier" ||
+      !Property.Text || Property.Text->empty() || Property.Index ||
+      !Property.Children.empty() || !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "Structure", 2))
+    return std::nullopt;
+  const auto &Value = Type.Children[0];
+  const bool Swift = Text(Value.Children[0], "Module", "Swift");
+  const bool IsBool =
+      Swift && Text(Value.Children[1], "Identifier", "Bool");
+  const bool IsInt = Swift && Text(Value.Children[1], "Identifier", "Int");
+  const bool IsCGFloat =
+      Text(Value.Children[0], "Module", "CoreGraphics") &&
+      Text(Value.Children[1], "Identifier", "CGFloat");
+  if (!IsBool && !IsInt && !IsCGFloat)
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = IsCGFloat ? NdType::makeFloat(8)
+                              : NdType::makeInt(IsBool ? 1 : 8, !IsBool);
+  Hint.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[0].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
 // A Swift class Bool or Int property setter takes its new value in x0 and the
 // instance in swiftself. Its mangled Setter/Variable tree distinguishes the
 // void result from the Bool, Int, or arm64 CGFloat property type; generic
