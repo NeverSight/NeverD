@@ -12,6 +12,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -550,6 +551,54 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("unsafe_table_helper();"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("#if 0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
+TEST(COFFExceptionIR, LLVMCExceptionAnnotationReadsCanonicalStringsOnly) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-windows-eh-annotation", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  auto AddFunction = [&](llvm::StringRef Name) {
+    llvm::Function *Function = llvm::Function::Create(
+        VoidType, llvm::GlobalValue::ExternalLinkage, Name, Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    return Function;
+  };
+
+  ExceptionFunction EH;
+  EH.CodeRange = {0x140001000, 0x140001040};
+  EH.Encoding = ExceptionEncoding::X64UnwindV2;
+  EH.ParseStatus = ExceptionParseStatus::Partial;
+  EH.UnwindInfoVA = 0x140003000;
+  llvm::Function *Canonical = AddFunction("canonical_eh");
+  Canonical->setMetadata(windows_eh_md::FunctionAttachment,
+                         windows_eh_md::getCanonicalFunctionMetadata(
+                             Context, EH, Arch::X64, BinaryFormat::COFF));
+
+  llvm::Function *NativeOnly = AddFunction("native_marker_only");
+  NativeOnly->setMetadata(
+      windows_eh_md::NativeAttachment,
+      llvm::MDNode::get(Context,
+                        {llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                             llvm::Type::getInt1Ty(Context), 1)),
+                         llvm::MDString::get(Context, "seh-x64-native")}));
+
+  std::string Source = emitLLVMC(Module);
+  const auto Annotation = Source.find("neverd.exception:");
+  ASSERT_NE(Annotation, std::string::npos) << Source;
+  EXPECT_NE(Source.find("encoding=x64-unwind-v2, status=partial", Annotation),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("code=[0x140001000, 0x140001040), "
+                        "unwind=0x140003000",
+                        Annotation),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("neverd.exception:", Annotation + 1), std::string::npos)
+      << Source;
 }
 
 TEST(COFFExceptionIR,

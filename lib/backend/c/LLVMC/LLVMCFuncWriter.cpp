@@ -19,8 +19,6 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/loader/ExceptionCommon.h"
-#include "neverd/loader/ExceptionEncoding.h"
 #include "neverd/loader/ExceptionPersonality.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -1208,8 +1206,6 @@ void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
   const llvm::MDNode *Payload =
       Fn.getMetadata(windows_eh_md::FunctionAttachment);
   if (!Payload)
-    Payload = Fn.getMetadata(windows_eh_md::NativeAttachment);
-  if (!Payload)
     return;
   auto MdU64 = [&](unsigned Index) -> uint64_t {
     if (Index >= Payload->getNumOperands())
@@ -1228,12 +1224,12 @@ void LLVMCWriter::writeExceptionAnnotation(const llvm::Function &Fn) {
       return S->getString().str();
     return {};
   };
-  OS << "/* neverd.exception: encoding="
-     << getExceptionEncodingName(
-            static_cast<ExceptionEncoding>(MdU64(windows_eh_md::Encoding)))
-     << ", status="
-     << getExceptionParseStatusName(static_cast<ExceptionParseStatus>(
-            MdU64(windows_eh_md::ParseStatus)))
+  const std::string Encoding = MdStr(windows_eh_md::Encoding);
+  const std::string ParseStatus = MdStr(windows_eh_md::ParseStatus);
+  if (Encoding.empty() || ParseStatus.empty())
+    return;
+  OS << "/* neverd.exception: encoding=" << Encoding
+     << ", status=" << ParseStatus
      << ", personality=" << MdStr(windows_eh_md::PersonalityName) << "\n";
   OS << " * code=[0x" << llvm::utohexstr(MdU64(windows_eh_md::CodeBegin))
      << ", 0x" << llvm::utohexstr(MdU64(windows_eh_md::CodeEnd)) << ")";
