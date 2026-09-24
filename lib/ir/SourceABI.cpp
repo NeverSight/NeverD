@@ -97,10 +97,23 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
   const auto Scalar = [](const TypeRef &T) {
     return scalarType(T) && T->Kind != NdTypeKind::Float;
   };
-  if (!Hint.ReturnType || Hint.Parameters.size() > 64 ||
-      !std::all_of(Hint.Parameters.begin(), Hint.Parameters.end(),
-                   [&](const auto &P) { return Scalar(P.Type); }))
+  if (!Hint.ReturnType || Hint.Parameters.size() > 64)
     return false;
+  size_t FloatingParameters = 0;
+  for (const auto &Parameter : Hint.Parameters) {
+    if (Parameter.Type && Parameter.Type->Kind == NdTypeKind::Float) {
+      // The compiler-observed arm64 swiftcc scalar lane is v0..v7. Keep
+      // stack-passed Swift FP values outside this fixed ABI contract.
+      if (Architecture != Arch::AArch64 ||
+          Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+          !scalarType(Parameter.Type) ||
+          ++FloatingParameters >
+              getTargetRegInfo(Architecture).FPParamRegs.size())
+        return false;
+    } else if (!Scalar(Parameter.Type)) {
+      return false;
+    }
+  }
   unsigned IndirectResults = 0, Contexts = 0;
   for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
     const auto &Parameter = Hint.Parameters[I];
@@ -125,6 +138,9 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
        (Hint.ReturnType->Size == 1 || Hint.ReturnType->Size == 4)) ||
       Hint.ReturnType->Kind == NdTypeKind::Void ||
       (Hint.ReturnType->Kind == NdTypeKind::Int && Hint.ReturnType->Size == 16))
+    return true;
+  if (Architecture == Arch::AArch64 &&
+      Hint.ReturnType->Kind == NdTypeKind::Float && scalarType(Hint.ReturnType))
     return true;
   const auto Members = sourceAggregateMembers(Hint.ReturnType);
   return !Members.empty() &&
@@ -271,6 +287,7 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (!swiftFixedShape(Hint, Hint.Architecture))
       return fail(Diagnostic, "Unsupported fixed Swift source ABI shape");
     size_t IntegerIndex = 0;
+    size_t FloatingIndex = 0;
     int64_t StackOffset = Hint.Architecture == Arch::X64 ? 8 : 0;
     for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
       const auto &P = Hint.Parameters[I];
@@ -285,6 +302,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
         Expected.Kind = SourceABICarrierKind::IntegerRegister;
         Expected.RegisterOffset =
             Hint.Architecture == Arch::AArch64 ? a64reg::X20 : x86reg::R13;
+      } else if (P.Type->Kind == NdTypeKind::Float) {
+        Expected.Kind = SourceABICarrierKind::FloatingRegister;
+        Expected.RegisterOffset = TRI.FPParamRegs[FloatingIndex++];
       } else if (IntegerIndex < TRI.IntParamRegs.size()) {
         Expected.Kind = SourceABICarrierKind::IntegerRegister;
         Expected.RegisterOffset = TRI.IntParamRegs[IntegerIndex++];

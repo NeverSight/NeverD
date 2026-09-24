@@ -32,6 +32,8 @@ void narrowSourceConcatLocals(HighFunc &Function);
 namespace {
 using namespace neverd;
 
+void executeC(const std::string &Source, bool Math);
+
 TEST(SourceABI, EmptyBoundCallDoesNotAcquireUnrelatedRegisterArguments) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     const auto &TRI = getTargetRegInfo(Architecture);
@@ -306,7 +308,7 @@ TEST(SourceABI, SwiftWordCallsKeepConventionAndRejectUnmodelledResults) {
       }
     }
     for (const auto &Unsupported :
-         {NdType::makeInt(2), NdType::makeFloat(8),
+         {NdType::makeInt(2),
           NdType::makeStruct({Pointer, Pointer, Pointer})}) {
       SourceFunctionTypeHint Hint;
       Hint.ReturnType = Unsupported;
@@ -314,12 +316,20 @@ TEST(SourceABI, SwiftWordCallsKeepConventionAndRejectUnmodelledResults) {
       EXPECT_FALSE(assignDarwinSwiftSourceABI(Hint, Architecture, Error));
     }
     for (const auto &Unsupported :
-         {NdType::makeFloat(8),
-          NdType::makeStruct({Pointer, Pointer, Pointer})}) {
+         {NdType::makeStruct({Pointer, Pointer, Pointer})}) {
       SourceFunctionTypeHint Hint;
       std::string Error;
       Hint.ReturnType = NdType::makeVoid();
       Hint.Parameters = {{"unsupported", Unsupported}};
+      EXPECT_FALSE(assignDarwinSwiftSourceABI(Hint, Architecture, Error));
+    }
+    if (Architecture == Arch::X64) {
+      SourceFunctionTypeHint Hint;
+      Hint.ReturnType = NdType::makeFloat(8);
+      std::string Error;
+      EXPECT_FALSE(assignDarwinSwiftSourceABI(Hint, Architecture, Error));
+      Hint.ReturnType = NdType::makeVoid();
+      Hint.Parameters = {{"float", NdType::makeFloat(8)}};
       EXPECT_FALSE(assignDarwinSwiftSourceABI(Hint, Architecture, Error));
     }
   }
@@ -360,6 +370,114 @@ TEST(SourceABI, SwiftArm64FourWordResultRequiresExactReturnBank) {
   auto Unsupported = Hint;
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::X64, Error));
   EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+}
+
+TEST(SourceABI, SwiftArm64ScalarFloatUsesIndependentRegisterBank) {
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceFunctionTypeHint Hint;
+  Hint.ReturnType = NdType::makeFloat(8);
+  Hint.Parameters = {{"first", NdType::makeFloat(8)},
+                     {"object", Pointer},
+                     {"second", NdType::makeFloat(4)},
+                     {"count", NdType::makeInt(8, false)}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error)) << Error;
+  ASSERT_TRUE(validateSourceABI(Hint, Error)) << Error;
+  const auto &Registers = getTargetRegInfo(Arch::AArch64);
+  EXPECT_EQ(Hint.Parameters[0].Location.RegisterOffset,
+            Registers.FPParamRegs[0]);
+  EXPECT_EQ(Hint.Parameters[0].Location.ValueBytes, 8U);
+  EXPECT_EQ(Hint.Parameters[1].Location.RegisterOffset,
+            Registers.IntParamRegs[0]);
+  EXPECT_EQ(Hint.Parameters[2].Location.RegisterOffset,
+            Registers.FPParamRegs[1]);
+  EXPECT_EQ(Hint.Parameters[2].Location.ValueBytes, 4U);
+  EXPECT_EQ(Hint.Parameters[3].Location.RegisterOffset,
+            Registers.IntParamRegs[1]);
+  EXPECT_EQ(Hint.ReturnLocation.Kind, SourceABICarrierKind::FloatingRegister);
+  EXPECT_EQ(Hint.ReturnLocation.RegisterOffset, Registers.FPReturnReg);
+  for (unsigned Mutation = 0; Mutation < 3; ++Mutation) {
+    auto Invalid = Hint;
+    if (Mutation == 0)
+      Invalid.Parameters[2].Location.RegisterOffset = Registers.FPParamRegs[2];
+    if (Mutation == 1)
+      Invalid.Parameters[2].Location.ValueBytes = 8;
+    if (Mutation == 2)
+      Invalid.ReturnLocation.RegisterOffset = Registers.FPParamRegs[1];
+    EXPECT_FALSE(validateSourceABI(Invalid, Error)) << Mutation;
+  }
+  auto Unsupported = Hint;
+  EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::X64, Error));
+  Unsupported = Hint;
+  Unsupported.Parameters.insert(Unsupported.Parameters.end(),
+                                Registers.FPParamRegs.size(),
+                                {"extra", NdType::makeFloat(8)});
+  EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::AArch64, Error));
+}
+
+TEST(SourceABI, SwiftArm64FloatCallEmitsExecutableSource) {
+  SourceFunctionTypeHint Hint;
+  Hint.ReturnType = NdType::makeFloat(8);
+  Hint.Parameters = {{"left", NdType::makeFloat(8)},
+                     {"right", NdType::makeFloat(8)}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error)) << Error;
+  const auto &Registers = getTargetRegInfo(Arch::AArch64);
+  LowFunc Low;
+  Low.Entry = 0x1000;
+  Low.Name = "swift_fp_sum";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Low.Entry;
+  Block.EndAddr = Low.Entry + 4;
+  auto Add = [&](NdOp Opcode, NdVar Output,
+                 std::initializer_list<NdVar> Inputs) {
+    LowOp Op;
+    Op.Opcode = Opcode;
+    Op.Addr = Low.Entry;
+    Op.Output = Output;
+    for (const auto &Input : Inputs)
+      Op.addInput(Input);
+    Block.Ops.push_back(Op);
+  };
+  Add(NdOp::SUBBYTES, NdVar::tmp(0, 8),
+      {NdVar::reg(Registers.FPParamRegs[0], 16), NdVar::cst(0, 4)});
+  Add(NdOp::SUBBYTES, NdVar::tmp(1, 8),
+      {NdVar::reg(Registers.FPParamRegs[1], 16), NdVar::cst(0, 4)});
+  Add(NdOp::FLOAT_ADD, NdVar::tmp(2, 8), {NdVar::tmp(0, 8), NdVar::tmp(1, 8)});
+  Add(NdOp::SUBBYTES, NdVar::tmp(3, 8),
+      {NdVar::reg(Registers.FPReturnReg, 16), NdVar::cst(8, 4)});
+  Add(NdOp::CONCAT, NdVar::reg(Registers.FPReturnReg, 16),
+      {NdVar::tmp(3, 8), NdVar::tmp(2, 8)});
+  Add(NdOp::RETURN, {}, {NdVar::reg(Registers.IntReturnReg, 8)});
+  Low.Blocks.push_back(Block);
+  std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, Hint}};
+  LowToMedConverter Converter;
+  Converter.setSourceCalleeTypeHints(&Hints);
+  auto Med = Converter.convert(Low, Arch::AArch64, BinaryFormat::MachO);
+  Med.SourceTypeHint = Hint;
+  inferMedTypes(Med, Arch::AArch64);
+  ASSERT_TRUE(Med.SourceTypeHint);
+  auto High = MedToHighConverter().convert(Med, Arch::AArch64);
+  ASSERT_TRUE(High.SourceTypeHint);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("swiftcall"), std::string::npos) << Source;
+  executeC(Source + R"(
+int main(void) {
+  for (int i = -16; i <= 16; ++i) {
+    double left = (double)i * 0.5;
+    double right = (double)(i + 3) * 0.25;
+    if (swift_fp_sum(left, right) != left + right) return 1;
+  }
+  return 0;
+}
+)",
+           false);
 }
 
 TEST(SourceABI, SwiftScalarArgumentsKeepNarrowAndStackCarriers) {
