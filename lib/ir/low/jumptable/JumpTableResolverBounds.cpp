@@ -742,7 +742,7 @@ private:
 /// top index to M-c, so the table holds at most (M + Offset) + 1 entries.
 /// Returns that bound, or 0 when the index does not reduce to a clean low-bit
 /// mask.
-uint32_t CFGBuilder::inferBoundsFromMask(
+uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
     const InsnRecord &Rec, const JumpTableInfo &Info, bool AllowNonContiguous,
     bool *IncompleteIndexDomain, bool *UsedNonContiguous,
     std::vector<uint32_t> *FeasibleCoordinates,
@@ -759,7 +759,10 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     bool *ExactFiniteRelativeClosureUnknown,
     bool RetainProvisionalRelativeEdges,
     bool AllowInlineZeroCapacityBoundedReplay,
-    uint32_t InlineRelativeReadableCapacity) const {
+    uint32_t InlineRelativeReadableCapacity,
+    const JumpTableStorageRange *OwnPublishedRuntimeStorage,
+    std::optional<ExactFiniteAbsoluteSingletonProof> *AbsoluteSingletonProof)
+    const {
   if (IncompleteIndexDomain)
     *IncompleteIndexDomain = false;
   if (SemanticIndexDomainAmbiguous)
@@ -774,6 +777,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     ExactFiniteRelativeSingletonTarget->reset();
   if (ExactFiniteRelativeClosureUnknown)
     *ExactFiniteRelativeClosureUnknown = false;
+  if (AbsoluteSingletonProof)
+    AbsoluteSingletonProof->reset();
   size_t LocalWorkBudget = limits::kMaxJumpTableMaskCoreEvidenceWork;
   size_t OwnedEvidenceBudget =
       std::min<size_t>(limits::kMaxJumpTableMaskFixedPointEvidenceWork,
@@ -945,6 +950,91 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     return matchForTargets(Queries, CandidateTargetsOverride, EvidenceBudget,
                            AnalysisComplete, QueryAnalysisComplete);
   };
+
+  // A complete runtime certificate records a producer's exact dense table
+  // range and its already published targets. Replay that producer on the
+  // current immutable graph before retaining either fact. The range supplies
+  // only the finite query ceiling; every reachable selector value must still
+  // be proved at this branch's exact index occurrence.
+  if (OwnPublishedRuntimeStorage) {
+    const uint32_t Count = OwnPublishedRuntimeStorage->PhysicalSlotCount;
+    const uint64_t PhysicalStride =
+        Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+    if (!AllowFixedPointBootstrap || !RequireProducerReachability ||
+        !CandidateProposalStageActive || !CurrentImg ||
+        CurrentImg->Arch != Arch::X64 || !Info.IsRelative ||
+        Info.RelocAbsolute || Info.PreScaledIndex || !Info.HasBaseAddr ||
+        !CandidateTargetsOverride || !ReachableInstructions ||
+        IndexOccurrences.size() != 1 || Count < limits::kMinJumpTableEntries ||
+        Count > 64 || Info.PhysicalCapacity != Count ||
+        Info.ExactBoundedRelativeRelocationSlots != Count ||
+        OwnPublishedRuntimeStorage->BaseAddr != Info.BaseAddr ||
+        OwnPublishedRuntimeStorage->EntrySize != Info.EntrySize ||
+        OwnPublishedRuntimeStorage->EntryStride != PhysicalStride ||
+        !detail::isCompleteRelativeRuntimeCertificatePayload(
+            *OwnPublishedRuntimeStorage, *CandidateTargetsOverride) ||
+        Rec.JumpTableTargets.size() != Count ||
+        CandidateTargetsOverride->size() != Count)
+      return 0;
+    if (!consumeBudgetProducts({{Count, 8}, {2, 12}}))
+      return 0;
+    if (!std::equal(Rec.JumpTableTargets.begin(),
+                    Rec.JumpTableTargets.end(),
+                    CandidateTargetsOverride->begin()))
+      return 0;
+    const std::set<va_t> &Roots = ActiveJumpTableProofRoots
+                                      ? *ActiveJumpTableProofRoots
+                                      : PersistentCFGRoots;
+    bool ReachabilityComplete = false;
+    bool ControlFlowClosed = false;
+    const std::set<va_t> FullReachable = candidateReachableInstructions(
+        Rec, *CandidateTargetsOverride, Roots, Info.StorageRanges,
+        EvidenceBudget, &ReachabilityComplete, CertifiedEdgeOverrides,
+        &ControlFlowClosed);
+    if (!ReachabilityComplete)
+      return failGraphIncomplete();
+    if (!consumeBudgetProducts(
+            {{FullReachable.size(), 1},
+             {ReachableInstructions->size(), 1},
+             {2, orderedEvidenceLookupWork(FullReachable.size())}}))
+      return 0;
+    if (!ControlFlowClosed || !FullReachable.count(CurrentFuncEntry) ||
+        !FullReachable.count(Rec.Addr) ||
+        FullReachable != *ReachableInstructions)
+      return 0;
+
+    const JumpTableValueOccurrence &Index = IndexOccurrences.front();
+    JumpTableValueQuery Present;
+    Present.Candidate = Index.Value;
+    Present.UseAddr = Index.Addr;
+    Present.UseSeq = Index.Seq;
+    Present.Relation = JumpTableValueRelation::ResolvableValue;
+    JumpTableValueQuery Finite = Present;
+    Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
+    Finite.UnsignedUpperBound = Count;
+    std::vector<bool> QueryComplete;
+    std::vector<uint64_t> FeasibleMasks;
+    const std::vector<bool> Matches = tableValuesMatchAtUses(
+        {Present, Finite}, nullptr, &QueryComplete, Rec.Addr,
+        CandidateTargetsOverride, EvidenceBudget,
+        /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr, &FeasibleMasks,
+        kMaskDomainResolverDepthLimit, CertifiedEdgeOverrides);
+    if (Matches.size() != 2 || QueryComplete.size() != 2 ||
+        FeasibleMasks.size() != 2 || !QueryComplete[0] || !QueryComplete[1])
+      return failGraphIncomplete();
+    const uint64_t ExpectedMask =
+        Count == 64 ? std::numeric_limits<uint64_t>::max()
+                    : (uint64_t{1} << Count) - 1;
+    if (!Matches[0] || !Matches[1] || FeasibleMasks[1] != ExpectedMask)
+      return 0;
+    if (FeasibleCoordinates) {
+      FeasibleCoordinates->reserve(Count);
+      for (uint32_t Coordinate = 0; Coordinate < Count; ++Coordinate)
+        FeasibleCoordinates->push_back(Coordinate);
+    }
+    return Count;
+  }
 
   // A shared computed-goto dispatch may start from one literal selector and
   // acquire additional masked selectors only after that literal edge opens a
@@ -1664,7 +1754,8 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                 const std::vector<JumpTableValueOccurrence> &Occurrences,
                 const std::vector<va_t> *OccurrenceBranches,
                 const std::set<va_t> *SharedTargetBranches,
-                size_t MinimumPresentBranches, bool *AnalysisIncomplete)
+                size_t MinimumPresentBranches, bool *AnalysisIncomplete,
+                const CFGBuilder *QueryGraph)
             -> std::optional<std::vector<uint32_t>> {
           if (AnalysisIncomplete)
             *AnalysisIncomplete = false;
@@ -1723,7 +1814,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
           }
           std::vector<bool> QueryComplete;
           std::vector<uint64_t> FeasibleMasks;
-          const std::vector<bool> Matches = tableValuesMatchAtUses(
+          const std::vector<bool> Matches = QueryGraph->tableValuesMatchAtUses(
               Queries, nullptr, &QueryComplete, Rec.Addr, Targets,
               EvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
               SharedTargetBranches, &FeasibleMasks,
@@ -1882,7 +1973,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                         exactFiniteCoordinatesForTargets(
                             &NoTargets, Occurrences, OccurrenceBranches,
                             SharedTargetBranches, MinimumPresentBranches,
-                            &AnalysisIncomplete);
+                            &AnalysisIncomplete, this);
                     ExactFiniteSeedIncomplete |= AnalysisIncomplete;
                     return Coordinates;
                   }();
@@ -2033,6 +2124,186 @@ uint32_t CFGBuilder::inferBoundsFromMask(
         // complete empty-edge mask proof supplied independent authority.  Once
         // either ordinary seed exists, its candidate-local replay is the sole
         // domain proof and the unused auxiliary attempt cannot poison it.
+        bool PairedInventoryIncomplete = false;
+        auto hasTwoSameObjectIndirectConsumers = [&] {
+          // Most absolute tables have just one relocation-backed consumer.
+          // Pay for a cheap complete occurrence inventory first; only an
+          // object with at least two possible consumers needs the bounded
+          // branch search below.  A poisoned second GOTOFF kind still counts
+          // here and must be rejected by the full proof, not sent to the
+          // ordinary single-consumer replay.
+          if (!consumeBudgetProducts(
+                  {{RelocatedInstructionAddressOccurrences.size(), 8}})) {
+            PairedInventoryIncomplete = true;
+            return false;
+          }
+          size_t SameObjectOccurrences = 0;
+          for (const auto &Occurrence :
+               RelocatedInstructionAddressOccurrences)
+            if (Occurrence.TargetVA == Info.BaseAddr &&
+                Occurrence.Width == 4 &&
+                Occurrence.Provenance ==
+                    ConstantAddressProvenance::DataAddress &&
+                !Occurrence.PCRelativeFromInstructionEnd &&
+                !Occurrence.OutputMayDepend && Occurrence.InputIndex >= 0)
+              ++SameObjectOccurrences;
+          if (SameObjectOccurrences < 2)
+            return false;
+          if (!CurrentFuncRange) {
+            PairedInventoryIncomplete = true;
+            return false;
+          }
+          size_t PerOccurrenceWork =
+              64 + orderedEvidenceLookupWork(Insns.size()) +
+              orderedEvidenceLookupWork(BlockStarts.size()) +
+              orderedEvidenceLookupWork(PublishedBlockStarts.size());
+          if (!detail::addLinearComparisonWork(PerOccurrenceWork,
+                                               Insns.size(), 16)) {
+            PairedInventoryIncomplete = true;
+            return false;
+          }
+          std::set<va_t> Branches;
+          for (const auto &Occurrence :
+               RelocatedInstructionAddressOccurrences) {
+            if (Occurrence.TargetVA != Info.BaseAddr ||
+                Occurrence.Width != 4 ||
+                Occurrence.Provenance !=
+                    ConstantAddressProvenance::DataAddress ||
+                Occurrence.PCRelativeFromInstructionEnd ||
+                Occurrence.OutputMayDepend || Occurrence.InputIndex < 0)
+              continue;
+            if (!consumeBudgetProducts({{1, PerOccurrenceWork}})) {
+              PairedInventoryIncomplete = true;
+              return false;
+            }
+            const auto Source = Insns.find(Occurrence.InstructionAddr);
+            if (Source == Insns.end() || Source->second.Size == 0 ||
+                Source->second.IsInstructionGuard ||
+                Source->second.Size > InvalidVA - Source->first ||
+                Occurrence.FieldVA < Source->first ||
+                Occurrence.FieldVA >= Source->first + Source->second.Size)
+              continue;
+            va_t BlockEnd = CurrentFuncRange->second;
+            if (!PublishedBlockStarts.empty()) {
+              const auto Next =
+                  std::upper_bound(PublishedBlockStarts.begin(),
+                                   PublishedBlockStarts.end(),
+                                   Occurrence.InstructionAddr);
+              if (Next != PublishedBlockStarts.end())
+                BlockEnd = std::min(BlockEnd, *Next);
+            } else {
+              const auto Next = BlockStarts.upper_bound(
+                  Occurrence.InstructionAddr);
+              if (Next != BlockStarts.end())
+                BlockEnd = std::min(BlockEnd, *Next);
+            }
+            for (auto It = Insns.upper_bound(Occurrence.InstructionAddr);
+                 It != Insns.end() && It->first < BlockEnd; ++It) {
+              const InsnRecord &Candidate = It->second;
+              if (!Candidate.IsBranch && !Candidate.IsRet)
+                continue;
+              if (Candidate.IsBranch && Candidate.IsIndirect &&
+                  !Candidate.IsCall && !Candidate.IsRet &&
+                  !Candidate.IsCond)
+                Branches.insert(Candidate.Addr);
+              break;
+            }
+            if (Branches.size() >= 2)
+              return true;
+          }
+          return false;
+        };
+        if (CandidateProposalStageActive && CurrentImg &&
+            CurrentImg->Arch == Arch::X86 && CurrentImg->isELF() &&
+            CurrentImg->getPointerSize() == 4 && Info.RelocAbsolute &&
+            !Info.IsRelative && !Info.PreScaledIndex &&
+            !Info.TwoTableSelect && !Info.TwoLevelIndex &&
+            Info.PhysicalCapacity == CandidateCapacity &&
+            CandidateCapacity <= 64 && IndexOccurrences.size() == 1 &&
+            Authorized.size() < CandidateCapacity &&
+            hasTwoSameObjectIndirectConsumers()) {
+          const bool PreviousIncomplete =
+              IncompleteIndexDomain && *IncompleteIndexDomain;
+          if (ExactFiniteSeedIncomplete && IncompleteIndexDomain)
+            *IncompleteIndexDomain = true;
+          // The two exact GOTOFF consumers may form a cycle before either
+          // branch owns a published edge.  Prove both source roles and both
+          // finite selectors on one private all-physical successor graph,
+          // then replay their separate finite sets on the frozen owner graph.
+          CFGBuilder Scratch;
+          bool ScratchIncomplete = false;
+          if (!prepareCandidateFiniteProofScratch(
+                  Scratch, PhysicalTargets, EvidenceBudget,
+                  &ScratchIncomplete)) {
+            if (ScratchIncomplete && IncompleteIndexDomain)
+              *IncompleteIndexDomain = true;
+            return 0;
+          }
+          std::map<va_t, std::vector<uint32_t>> JointDomains;
+          bool JointIncomplete = false;
+          const bool JointProven = proveCandidateFiniteAbsoluteSiblings(
+              Scratch, Rec, Info, PhysicalTargets, JointDomains,
+              EvidenceBudget, &JointIncomplete);
+          if (!JointProven) {
+            if (JointIncomplete && IncompleteIndexDomain)
+              *IncompleteIndexDomain = true;
+            return 0;
+          }
+          const auto CurrentDomain = JointDomains.find(Rec.Addr);
+          if (CurrentDomain == JointDomains.end() ||
+              CurrentDomain->second.empty() ||
+              !consumeBudgetProducts(
+                  {{CurrentDomain->second.size(),
+                    orderedEvidenceLookupWork(
+                        CurrentDomain->second.size() + Authorized.size()) +
+                        5}}))
+            return 0;
+          std::set<uint32_t> JointCoordinates(
+              CurrentDomain->second.begin(), CurrentDomain->second.end());
+          if (JointCoordinates.size() != CurrentDomain->second.size() ||
+              !std::includes(JointCoordinates.begin(), JointCoordinates.end(),
+                             Authorized.begin(), Authorized.end()) ||
+              !intersectGraphGrowthCoordinates(JointCoordinates) ||
+              JointCoordinates.size() != CurrentDomain->second.size())
+            return 0;
+          const std::optional<std::vector<va_t>> JointTargets =
+              targetsFor(JointCoordinates);
+          if (!JointTargets)
+            return 0;
+          if (FeasibleCoordinates &&
+              !consumeBudgetProducts({{JointCoordinates.size(), 3}}))
+            return 0;
+          const std::optional<bool> Growth = queueGraphGrowth(
+              *JointTargets,
+              hasCompleteDenseRuntimeCoordinates(JointCoordinates));
+          if (!Growth || *Growth)
+            return 0;
+          if (IncompleteIndexDomain)
+            *IncompleteIndexDomain = PreviousIncomplete;
+          if (AbsoluteSingletonProof && JointCoordinates.size() == 1 &&
+              JointTargets->size() == 1) {
+            const uint64_t PhysicalStride =
+                Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;
+            *AbsoluteSingletonProof = ExactFiniteAbsoluteSingletonProof{
+                *JointCoordinates.begin(), JointTargets->front(),
+                JumpTableStorageRange{Info.BaseAddr, Info.EntrySize,
+                                      PhysicalStride, CandidateCapacity}};
+          }
+          if (KnownOneWitnesses)
+            KnownOneWitnesses->clear();
+          if (UsedNonContiguous)
+            *UsedNonContiguous =
+                JointCoordinates.size() != *JointCoordinates.rbegin() + 1;
+          if (FeasibleCoordinates)
+            FeasibleCoordinates->assign(JointCoordinates.begin(),
+                                        JointCoordinates.end());
+          return *JointCoordinates.rbegin() + 1;
+        }
+        if (PairedInventoryIncomplete) {
+          if (IncompleteIndexDomain)
+            *IncompleteIndexDomain = true;
+          return 0;
+        }
         if (Authorized.empty() && ExactFiniteSeedIncomplete) {
           if (IncompleteIndexDomain)
             *IncompleteIndexDomain = true;
@@ -2050,6 +2321,18 @@ uint32_t CFGBuilder::inferBoundsFromMask(
             const std::vector<va_t> &AuthorizedTargets = *AuthorizedTargetsOr;
 
             if (ExactFiniteReplayOccurrences) {
+              // The exact empty-edge seed authorizes these destinations, but
+              // their instructions may not have been decoded yet.  Request
+              // graph growth before asking the value resolver to replay the
+              // selector through those destinations; an absent destination
+              // would otherwise make that replay incomplete before it could
+              // queue the already-proven edge.  Publication still requires a
+              // replay on the resulting immutable graph snapshot.
+              const std::optional<bool> InitialGrowth = queueGraphGrowth(
+                  AuthorizedTargets,
+                  hasCompleteDenseRuntimeCoordinates(Authorized));
+              if (!InitialGrowth || *InitialGrowth)
+                return 0;
               bool ExactReplayIncomplete = false;
               const std::optional<std::vector<uint32_t>> ExactCoordinates =
                   exactFiniteCoordinatesForTargets(
@@ -2057,8 +2340,105 @@ uint32_t CFGBuilder::inferBoundsFromMask(
                       ExactFiniteReplayOccurrenceBranches,
                       ExactFiniteReplaySharedTargetBranches,
                       ExactFiniteReplayMinimumPresentBranches,
-                      &ExactReplayIncomplete);
+                      &ExactReplayIncomplete, this);
               if (!ExactCoordinates || ExactCoordinates->empty()) {
+                // A partial relative-table graph can contain a back edge to
+                // this dispatch before its remaining case bodies are decoded.
+                // In that graph a finite-set query may be incomplete even
+                // though the full physical successor over-approximation has
+                // an inductive bounded domain.  Decode and query that larger
+                // graph privately: physical slots locate code, but grant no
+                // selector authority and must never become provisional edges.
+                const bool MayTryFullPhysicalInduction =
+                    ExactReplayIncomplete && Iteration == 0 &&
+                    CurrentImg && CurrentImg->Arch == Arch::X64 &&
+                    CandidateProposalStageActive && Info.IsRelative &&
+                    !Info.RelocAbsolute && !Info.PreScaledIndex &&
+                    !Info.TwoTableSelect && !Info.TwoLevelIndex &&
+                    Info.ExactBoundedRelativeRelocationSlots ==
+                        CandidateCapacity &&
+                    ExactFiniteReplayOccurrences == &IndexOccurrences;
+                if (MayTryFullPhysicalInduction) {
+                  const bool PreviousIncomplete =
+                      IncompleteIndexDomain && *IncompleteIndexDomain;
+                  // The ordinary exact replay was incomplete. Keep that
+                  // status on every unsuccessful fallback; only a complete
+                  // finite substitute proof may discharge it.
+                  if (IncompleteIndexDomain)
+                    *IncompleteIndexDomain = true;
+                  CFGBuilder Scratch;
+                  bool ScratchIncomplete = false;
+                  const bool ScratchReady = prepareCandidateFiniteProofScratch(
+                      Scratch, PhysicalTargets, EvidenceBudget,
+                      &ScratchIncomplete);
+                  if (!ScratchReady) {
+                    if (ScratchIncomplete && IncompleteIndexDomain)
+                      *IncompleteIndexDomain = true;
+                    return 0;
+                  }
+                  bool FullReachabilityComplete = false;
+                  bool FullControlFlowClosed = false;
+                  const std::set<va_t> FullReachable =
+                      Scratch.candidateReachableInstructions(
+                          Rec, PhysicalTargets, Roots, Info.StorageRanges,
+                          EvidenceBudget, &FullReachabilityComplete,
+                          CertifiedEdgeOverrides, &FullControlFlowClosed);
+                  if (!FullReachabilityComplete) {
+                    if (IncompleteIndexDomain)
+                      *IncompleteIndexDomain = true;
+                    return 0;
+                  }
+                  if (!FullControlFlowClosed ||
+                      !FullReachable.count(CurrentFuncEntry) ||
+                      !FullReachable.count(Rec.Addr))
+                    return 0;
+                  bool FullAnalysisIncomplete = false;
+                  const std::optional<std::vector<uint32_t>> FullCoordinates =
+                      exactFiniteCoordinatesForTargets(
+                          &PhysicalTargets, *ExactFiniteReplayOccurrences,
+                          ExactFiniteReplayOccurrenceBranches,
+                          ExactFiniteReplaySharedTargetBranches,
+                          ExactFiniteReplayMinimumPresentBranches,
+                          &FullAnalysisIncomplete, &Scratch);
+                  if (!FullCoordinates || FullCoordinates->empty()) {
+                    if (FullAnalysisIncomplete && IncompleteIndexDomain)
+                      *IncompleteIndexDomain = true;
+                    return 0;
+                  }
+                  if (!consumeBudgetProducts(
+                          {{FullCoordinates->size(),
+                            orderedEvidenceLookupWork(
+                                FullCoordinates->size()) +
+                                4},
+                           {Authorized.size(),
+                            orderedEvidenceLookupWork(
+                                FullCoordinates->size())}}))
+                    return 0;
+                  std::set<uint32_t> InductiveCoordinates(
+                      FullCoordinates->begin(), FullCoordinates->end());
+                  if (InductiveCoordinates.size() != FullCoordinates->size() ||
+                      !std::includes(InductiveCoordinates.begin(),
+                                     InductiveCoordinates.end(),
+                                     Authorized.begin(), Authorized.end()))
+                    return 0;
+                  if (!intersectGraphGrowthCoordinates(InductiveCoordinates) ||
+                      InductiveCoordinates.size() != FullCoordinates->size())
+                    return 0;
+                  const std::optional<std::vector<va_t>> InductiveTargets =
+                      targetsFor(InductiveCoordinates);
+                  if (!InductiveTargets)
+                    return 0;
+                  const std::optional<bool> Growth = queueGraphGrowth(
+                      *InductiveTargets,
+                      hasCompleteDenseRuntimeCoordinates(
+                          InductiveCoordinates));
+                  if (!Growth || *Growth)
+                    return 0;
+                  if (IncompleteIndexDomain)
+                    *IncompleteIndexDomain = PreviousIncomplete;
+                  Authorized = std::move(InductiveCoordinates);
+                  continue;
+                }
                 if (ExactReplayIncomplete && IncompleteIndexDomain)
                   *IncompleteIndexDomain = true;
                 return 0;
@@ -2079,13 +2459,7 @@ uint32_t CFGBuilder::inferBoundsFromMask(
               if (!intersectGraphGrowthCoordinates(Next))
                 return 0;
               if (Next == Authorized) {
-                const std::optional<bool> Growth = queueGraphGrowth(
-                    AuthorizedTargets,
-                    hasCompleteDenseRuntimeCoordinates(Authorized));
-                if (!Growth)
-                  return 0;
-                if (*Growth)
-                  return 0;
+                // The current authorized targets were queued before replay.
                 // An exact finite subset is complete only for a one-shot
                 // dispatch.  If any admitted case reaches this branch again,
                 // retire the auxiliary subset and let the ordinary mask/
@@ -4278,6 +4652,39 @@ uint32_t CFGBuilder::inferBoundsFromMask(
     }
   }
   return 0;
+}
+
+uint32_t CFGBuilder::inferBoundsFromMask(
+    const InsnRecord &Rec, const JumpTableInfo &Info, bool AllowNonContiguous,
+    bool *IncompleteIndexDomain, bool *UsedNonContiguous,
+    std::vector<uint32_t> *FeasibleCoordinates,
+    std::vector<JumpTableMaskKnownOneWitness> *KnownOneWitnesses,
+    bool RequireProducerReachability,
+    const std::vector<va_t> *CandidateTargetsOverride,
+    const std::set<va_t> *ReachableInstructions, bool AllowFixedPointBootstrap,
+    bool AllowRawDenseShortcut, size_t *AggregateEvidenceBudget,
+    bool *SemanticIndexDomainAmbiguous,
+    const JumpTableExactConsumerGroup *ExactConsumerGroup,
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    const JumpTableStorageRange *CertifiedSiblingRuntimeStorage,
+    std::optional<va_t> *ExactFiniteRelativeSingletonTarget,
+    bool *ExactFiniteRelativeClosureUnknown,
+    bool RetainProvisionalRelativeEdges,
+    bool AllowInlineZeroCapacityBoundedReplay,
+    uint32_t InlineRelativeReadableCapacity,
+    const JumpTableStorageRange *OwnPublishedRuntimeStorage) const {
+  return inferBoundsFromMaskWithAbsoluteProof(
+      Rec, Info, AllowNonContiguous, IncompleteIndexDomain,
+      UsedNonContiguous, FeasibleCoordinates, KnownOneWitnesses,
+      RequireProducerReachability, CandidateTargetsOverride,
+      ReachableInstructions, AllowFixedPointBootstrap, AllowRawDenseShortcut,
+      AggregateEvidenceBudget, SemanticIndexDomainAmbiguous,
+      ExactConsumerGroup, CertifiedEdgeOverrides,
+      CertifiedSiblingRuntimeStorage, ExactFiniteRelativeSingletonTarget,
+      ExactFiniteRelativeClosureUnknown, RetainProvisionalRelativeEdges,
+      AllowInlineZeroCapacityBoundedReplay,
+      InlineRelativeReadableCapacity, OwnPublishedRuntimeStorage,
+      /*AbsoluteSingletonProof=*/nullptr);
 }
 
 /// A modulo switch (`switch(x % N)`, N not a power of two) carries no `cmp`

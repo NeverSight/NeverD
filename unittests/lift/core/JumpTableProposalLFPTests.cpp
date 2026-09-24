@@ -627,6 +627,123 @@ TEST_F(JumpTableProposalLFP, ProvisionalRelativeEdgesCloseExactSameTableCycle) {
   EXPECT_FALSE(BoundaryFailure.HasPendingExploration);
 }
 
+TEST_F(JumpTableProposalLFP,
+       ExactFiniteRelativeGrowthDecodesBeforeReplayingAndRejectsPoison) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+
+  auto CheckFixture = [&](const char *Name, bool Poisoned) {
+    SCOPED_TRACE(Name);
+    const std::string Prefix = std::string("jt_lfp_relative_state_") + Name;
+    const neverd::Symbol *Function = Image.findSymbol(Prefix);
+    const neverd::Symbol *Table = Image.findSymbol(Prefix + "_table");
+    const neverd::Symbol *Entry = Image.findSymbol(Prefix + "_entry_branch");
+    const neverd::Symbol *Loop = Image.findSymbol(Prefix + "_loop_branch");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Table, nullptr);
+    ASSERT_NE(Entry, nullptr);
+    ASSERT_NE(Loop, nullptr);
+    ASSERT_EQ(Table->Size, 5u * sizeof(uint32_t));
+    ASSERT_EQ(std::count_if(Image.RelCodeRelocSlots.begin(),
+                            Image.RelCodeRelocSlots.end(),
+                            [&](neverd::va_t Slot) {
+                              return Slot >= Table->Addr &&
+                                     Slot < Table->Addr + Table->Size;
+                            }),
+              5);
+
+    const neverd::LowFunc Low = buildLow(Image, *Function);
+    if (Poisoned) {
+      EXPECT_TRUE(Low.JumpTables.empty())
+          << "state six indexes beyond the authenticated five-slot object";
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Entry->Addr), 1u);
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(Loop->Addr), 1u);
+      EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+      EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+      return;
+    }
+
+    ASSERT_EQ(Low.JumpTables.size(), 2u);
+    std::set<neverd::va_t> ExpectedTargets;
+    for (int Slot = 0; Slot < 5; ++Slot) {
+      const neverd::Symbol *Target =
+          Image.findSymbol(Prefix + "_t" + std::to_string(Slot));
+      ASSERT_NE(Target, nullptr);
+      ExpectedTargets.insert(Target->Addr);
+    }
+    for (const neverd::JumpTable &Recovered : Low.JumpTables) {
+      EXPECT_EQ(Recovered.BaseAddr, Table->Addr);
+      if (Recovered.InsnAddr == Entry->Addr) {
+        EXPECT_EQ(Recovered.Targets.size(), 1u);
+        EXPECT_EQ(Recovered.Targets.front(), *ExpectedTargets.begin());
+      } else {
+        EXPECT_EQ(Recovered.InsnAddr, Loop->Addr);
+        EXPECT_EQ(std::set<neverd::va_t>(Recovered.Targets.begin(),
+                                        Recovered.Targets.end()),
+                  ExpectedTargets);
+      }
+    }
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  };
+
+  CheckFixture("growth", false);
+  CheckFixture("poison", true);
+}
+
+TEST_F(JumpTableProposalLFP,
+       ExactFiniteRelativeGrowthBudgetFailureLeavesNoPartialCycle) {
+  auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_lfp_relative_state_growth");
+  ASSERT_NE(Function, nullptr);
+
+  struct Result {
+    neverd::LowFunc Low;
+    bool HasProvisional = false;
+    bool HasPendingGrowth = false;
+  };
+  auto BuildWithBudget = [&](size_t Budget) {
+    neverd::Decoder Decoder;
+    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    Result Out;
+    Out.Low = Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    Out.HasProvisional = Builder.hasProvisionalRelativeEdgesForTesting();
+    Out.HasPendingGrowth =
+        Builder.hasMaskFixedPointExplorationTargetsForTesting();
+    return Out;
+  };
+  auto Complete = [](const Result &Run) {
+    return Run.Low.JumpTables.size() == 2u &&
+           Run.Low.UnsafeIndirectBranchAddresses.empty() &&
+           !Run.HasProvisional && !Run.HasPendingGrowth;
+  };
+  size_t FailingBudget = 0;
+  size_t PassingBudget = neverd::limits::kMaxJumpTableProposalStageEvidenceWork;
+  ASSERT_TRUE(Complete(BuildWithBudget(PassingBudget)));
+  while (FailingBudget + 1 < PassingBudget) {
+    const size_t Midpoint = FailingBudget +
+                            (PassingBudget - FailingBudget) / 2;
+    if (Complete(BuildWithBudget(Midpoint)))
+      PassingBudget = Midpoint;
+    else
+      FailingBudget = Midpoint;
+  }
+  const Result Failed = BuildWithBudget(FailingBudget);
+  EXPECT_TRUE(Failed.Low.JumpTables.empty());
+  EXPECT_FALSE(Failed.Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_TRUE(hasOpcode(Failed.Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(hasOpcode(Failed.Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(Failed.HasProvisional);
+  EXPECT_FALSE(Failed.HasPendingGrowth);
+}
+
 TEST_F(JumpTableProposalLFP, OpenConsumerCannotBorrowSiblingRuntimeDomain) {
   auto ImageOrErr = neverd::loadBinary(proposalLFPObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))

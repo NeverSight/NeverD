@@ -369,6 +369,69 @@ jt_lfp_constbase_budget_t1:
         retq
         .size   jt_lfp_constbase_budget, .-jt_lfp_constbase_budget
 
+// The first dispatch proves only slot zero.  Its case reaches a second
+// dispatch with state two, so the exact finite seed there must decode slot
+// one before replay.  Each newly decoded case supplies the next state.  The
+// poisoned mirror reaches state six after slot one, outside the five-slot
+// physical object, and must never publish a partial cycle.
+        .macro  relative_state_growth name, poison
+        .globl  \name
+        .type   \name,@function
+\name:
+        xorl    %eax, %eax
+        movl    $1, %esi
+        leaq    \name\()_table(%rip), %rdx
+        xorl    %ecx, %ecx
+        movslq  (%rdx,%rcx,4), %r8
+        addq    %rdx, %r8
+        .globl  \name\()_entry_branch
+\name\()_entry_branch:
+        jmpq    *%r8
+\name\()_loop:
+        testl   %esi, %esi
+        je      \name\()_exit
+        movl    %esi, %ecx
+        decl    %ecx
+        movslq  (%rdx,%rcx,4), %r8
+        addq    %rdx, %r8
+        .globl  \name\()_loop_branch
+\name\()_loop_branch:
+        jmpq    *%r8
+        .globl  \name\()_t0
+\name\()_t0:
+        movl    $2, %esi
+        jmp     \name\()_loop
+        .globl  \name\()_t1
+\name\()_t1:
+        .if     \poison
+        movl    $6, %esi
+        .else
+        movl    $3, %esi
+        .endif
+        jmp     \name\()_loop
+        .globl  \name\()_t2
+\name\()_t2:
+        movl    $4, %esi
+        jmp     \name\()_loop
+        .globl  \name\()_t3
+\name\()_t3:
+        movl    $5, %esi
+        jmp     \name\()_loop
+        .globl  \name\()_t4
+\name\()_t4:
+        testl   %edi, %edi
+        je      \name\()_exit
+        decl    %edi
+        movl    $1, %esi
+        jmp     \name\()_loop
+\name\()_exit:
+        retq
+        .size   \name, .-\name
+        .endm
+
+        relative_state_growth jt_lfp_relative_state_growth, 0
+        relative_state_growth jt_lfp_relative_state_poison, 1
+
         .section .data.rel.ro.jt_lfp_self_callback,"aw",@progbits
         .p2align 3
         .globl  jt_lfp_sized_self_callback_table
@@ -461,5 +524,22 @@ jt_lfp_constbase_budget_table:
         .quad   jt_lfp_constbase_budget_t0
         .quad   jt_lfp_constbase_budget_t1
         .size   jt_lfp_constbase_budget_table, .-jt_lfp_constbase_budget_table
+
+        .section .rodata.jt_lfp_relative_state_growth,"a",@progbits
+        .macro  relative_state_growth_table name
+        .p2align 2
+        .globl  \name\()_table
+        .type   \name\()_table,@object
+\name\()_table:
+        .long   \name\()_t0-\name\()_table
+        .long   \name\()_t1-\name\()_table
+        .long   \name\()_t2-\name\()_table
+        .long   \name\()_t3-\name\()_table
+        .long   \name\()_t4-\name\()_table
+        .size   \name\()_table, .-\name\()_table
+        .endm
+
+        relative_state_growth_table jt_lfp_relative_state_growth
+        relative_state_growth_table jt_lfp_relative_state_poison
 
         .section .note.GNU-stack,"",@progbits

@@ -3689,6 +3689,34 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
   // Published edges take precedence: an older provisional subset must never
   // replace the ordinary graph. Neither query may borrow storage authority.
   std::map<va_t, std::vector<va_t>> ModelReachEdgeOverrides;
+  if (CandidateFiniteProofDecodeOnly) {
+    // A fresh candidate-only graph may use all authenticated physical slots
+    // as an inductive successor hypothesis.  This map is absent from the
+    // owner builder and never enters its provisional or strong proposal maps.
+    if (CandidateProposalStageActive ||
+        CandidateFiniteProofModelEdges.size() != 2 ||
+        !ConsumeProduct(CandidateFiniteProofModelEdges.size(), 8)) {
+      RestoreProofRoots();
+      return false;
+    }
+    for (const auto &[Addr, Targets] : CandidateFiniteProofModelEdges) {
+      if (!consumeI386GOTOFFProposalEvidence(OrderedLookupWork(Insns.size())) ||
+          !ConsumeProduct(Targets.size(), 3) ||
+          !consumeI386GOTOFFProposalEvidence(
+              OrderedLookupWork(ModelReachEdgeOverrides.size()) + 3)) {
+        RestoreProofRoots();
+        return false;
+      }
+      const auto Found = Insns.find(Addr);
+      if (Found == Insns.end() || !Found->second.IsBranch ||
+          !Found->second.IsIndirect ||
+          !Found->second.JumpTableTargets.empty() || Targets.empty()) {
+        RestoreProofRoots();
+        return false;
+      }
+      ModelReachEdgeOverrides.emplace(Addr, Targets);
+    }
+  }
   if (CandidateProposalStageActive) {
     if (!ConsumeProduct(PriorProvisionalRelativeEdges.size(), 8)) {
       RestoreProofRoots();
@@ -7200,12 +7228,14 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Ctx.numNodes() > std::numeric_limits<uint32_t>::max())
         return false;
       const size_t SelectorExpressionNodeCount = Ctx.numNodes();
-      // A non-merged feasible-set proof issues at most one envelope query and
-      // one equality query per coordinate.  Preserve that transaction-wide
-      // solver ceiling when a predecessor merge is proved arm by arm; each
-      // solver invocation also continues to debit the shared symbolic and
-      // candidate evidence accounts.
-      size_t RemainingSolverQueries = static_cast<size_t>(Bound) + 1;
+      // Each independently symbolized predecessor arm can need one envelope
+      // query and one equality query per coordinate; a constant index needs
+      // only one path-predicate query. Reserve that allowance before its first
+      // SAT call, but cap the entire expanded proof at 128 possible calls.
+      // Every actual call also pays the local and candidate evidence accounts
+      // below. Exceeding either limit fails closed.
+      constexpr size_t MaxFiniteSetSolverQueries = 128;
+      size_t ReservedSolverQueries = 0;
       if (!consumeSymbolWork(2))
         return false;
       std::vector<ResolverValue> SyntheticValues;
@@ -7337,6 +7367,33 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             PathPredicate = Ctx.mkAnd(PathConstraints);
           }
         }
+        if (PathPredicate) {
+          if (const std::optional<llvm::APInt> ConstantPredicate =
+                  Ctx.asConst(PathPredicate)) {
+            if (ConstantPredicate->isZero())
+              return FeasibleProofOutcome::Proven;
+            PathPredicate = {};
+          }
+        }
+        const std::optional<llvm::APInt> ConstantIndex = Ctx.asConst(Index);
+        size_t RemainingLeafSolverQueries = 0;
+        bool LeafSolverQueriesReserved = false;
+        auto consumeLeafSolverQuery = [&] {
+          if (!LeafSolverQueriesReserved) {
+            const size_t PerLeaf =
+                ConstantIndex ? 1 : static_cast<size_t>(Bound) + 1;
+            if (PerLeaf > MaxFiniteSetSolverQueries - ReservedSolverQueries ||
+                !consumeSymbolWork(PerLeaf))
+              return false;
+            ReservedSolverQueries += PerLeaf;
+            RemainingLeafSolverQueries = PerLeaf;
+            LeafSolverQueriesReserved = true;
+          }
+          if (RemainingLeafSolverQueries == 0 || !consumeSymbolWork(3))
+            return false;
+          --RemainingLeafSolverQueries;
+          return true;
+        };
         auto constrainQuery = [&](symbolic::SymRef Query) {
           if (!PathPredicate)
             return Query;
@@ -7344,11 +7401,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             return symbolic::SymRef{};
           return Ctx.mkAnd(PathPredicate, Query);
         };
-        if (const std::optional<llvm::APInt> Constant = Ctx.asConst(Index)) {
+        if (ConstantIndex) {
           if (PathPredicate) {
-            if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+            if (!consumeLeafSolverQuery())
               return FeasibleProofOutcome::Incomplete;
-            --RemainingSolverQueries;
             const solver::SatResult ConstraintResult = solver::checkSat(
                 Ctx, PathPredicate, nullptr, makeSolverOptions());
             if (ConstraintResult == solver::SatResult::Unsat)
@@ -7356,10 +7412,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             if (ConstraintResult != solver::SatResult::Sat)
               return FeasibleProofOutcome::Incomplete;
           }
-          if (Constant->getActiveBits() > 64 ||
-              Constant->getZExtValue() >= Bound)
+          if (ConstantIndex->getActiveBits() > 64 ||
+              ConstantIndex->getZExtValue() >= Bound)
             return FeasibleProofOutcome::Counterexample;
-          Mask |= uint64_t{1} << Constant->getZExtValue();
+          Mask |= uint64_t{1} << ConstantIndex->getZExtValue();
           return FeasibleProofOutcome::Proven;
         }
         bool RecipeIncomplete = false;
@@ -7420,9 +7476,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         const bool FullWidthEnvelope =
             Width < 64 && Bound >= (uint64_t{1} << Width);
         if (!FullWidthEnvelope) {
-          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+          if (!consumeLeafSolverQuery())
             return FeasibleProofOutcome::Incomplete;
-          --RemainingSolverQueries;
           symbolic::SymRef Counterexample = constrainQuery(
               Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound))));
           if (!Counterexample)
@@ -7437,9 +7492,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
           if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
             continue;
-          if (RemainingSolverQueries == 0 || !consumeSymbolWork(3))
+          if (!consumeLeafSolverQuery())
             return FeasibleProofOutcome::Incomplete;
-          --RemainingSolverQueries;
           symbolic::SymRef CoordinateQuery =
               constrainQuery(Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)));
           if (!CoordinateQuery)

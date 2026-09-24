@@ -1111,6 +1111,223 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   return Func;
 }
 
+static std::optional<size_t>
+candidateFiniteProofOwnerLookupWork(const BinaryImage &Img,
+                                    size_t KnownFunctionEntries) {
+  size_t Work = 128;
+  if (!detail::addLinearComparisonWork(Work, Img.Segments.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.Sections.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.Symbols.size(), 16) ||
+      !detail::addLinearComparisonWork(Work, Img.KnownCodeRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.ImportStubRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.Imports.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, Img.Exports.size(), 8) ||
+      !detail::addLinearComparisonWork(Work, KnownFunctionEntries, 4))
+    return std::nullopt;
+  return Work;
+}
+
+bool CFGBuilder::prepareCandidateFiniteProofScratch(
+    CFGBuilder &Scratch, const std::vector<va_t> &PhysicalTargets,
+    size_t *EvidenceBudget, bool *AnalysisIncomplete) const {
+  if (AnalysisIncomplete)
+    *AnalysisIncomplete = false;
+  auto Incomplete = [&] {
+    if (EvidenceBudget)
+      *EvidenceBudget = 0;
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
+    return false;
+  };
+  if (!EvidenceBudget || !CurrentImg || !CurrentFuncRange ||
+      !Scratch.Insns.empty() || Scratch.CurrentImg || PhysicalTargets.empty() ||
+      PhysicalTargets.size() > limits::kMaxJumpTableEntries)
+    return false;
+
+  const BinaryImage &Img = *CurrentImg;
+  const std::optional<size_t> OwnerWork =
+      candidateFiniteProofOwnerLookupWork(Img, knownFunctionEntryCount());
+  if (!OwnerWork)
+    return Incomplete();
+  const size_t OwnerLookupWork = *OwnerWork;
+  size_t CopyWork = 512;
+  auto Add = [&](size_t Count, size_t Cost) {
+    return detail::addLinearComparisonWork(CopyWork, Count, Cost);
+  };
+  // Charge construction, all owned copies, and retirement before filling the
+  // fresh builder.  Proposal caches, provisional/strong edges, group proof
+  // contexts, and resolved-table metadata are intentionally not copied.
+  if (!Add(Insns.size(), 192) || !Add(BlockStarts.size(), 24) ||
+      !Add(PublishedBlockStarts.size(), 16) ||
+      !Add(PublishedReachableInsns.size(), 24) ||
+      !Add(PersistentCFGRoots.size(), 24) ||
+      !Add(OrdinaryCFGRoots.size(), 24) ||
+      !Add(DurableCFGRoots.size(), 24) ||
+      !Add(RelocationCFGRootSources.size(), 64) ||
+      !Add(DiscoveredCodeRefSources.size(), 64) ||
+      !Add(ExploredAddrs.getMemorySize() / sizeof(va_t), 12) ||
+      !Add(RelocatedInstructionAddressOccurrences.size(), 384) ||
+      !Add(RelocatedInstructionScalarOperandOccurrences.size(), 192) ||
+      !Add(RelocatedInstructionScalarModelOccurrences.size(), 384) ||
+      !Add(I386GetPcOccurrences.size(), 96) ||
+      !Add(CurrentExceptionalEntries.size(), 24) ||
+      !Add(ActiveJumpTableProofRoots ? ActiveJumpTableProofRoots->size() : 0,
+           24) ||
+      !Add(PhysicalTargets.size(), 32))
+    return Incomplete();
+  // Every physical target may run owner-at, owner-range, mapped-byte and
+  // interior-target checks. Those helpers scan image inventories without an
+  // index when no borrowed owner index exists, so charge their worst-case
+  // repeated work before even the first scratch mutation.
+  for (unsigned Check = 0; Check != 6; ++Check)
+    if (!Add(PhysicalTargets.size(), OwnerLookupWork))
+      return Incomplete();
+  for (const auto &[Addr, Rec] : Insns) {
+    (void)Addr;
+    if (!Add(Rec.Ops.size(), 384) ||
+        !Add(Rec.JumpTableTargets.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &[Target, Sources] : RelocationCFGRootSources) {
+    (void)Target;
+    if (!Add(Sources.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &[Target, Sources] : DiscoveredCodeRefSources) {
+    (void)Target;
+    if (!Add(Sources.size(), 24))
+      return Incomplete();
+  }
+  for (const auto &Occurrence : RelocatedInstructionAddressOccurrences)
+    if (!Add(Occurrence.ArithmeticProof.size(), 384))
+      return Incomplete();
+  if (CopyWork > *EvidenceBudget)
+    return Incomplete();
+  *EvidenceBudget -= CopyWork;
+
+  const uint32_t Alignment = getInsnAlignment();
+  for (va_t Target : PhysicalTargets) {
+    if (Target == InvalidVA || (Alignment > 1 && Target % Alignment != 0) ||
+        !Img.hasExecutableCodeOwnerAt(Target) ||
+        !Img.hasExecutableCodeOwnerRange(Target, Alignment) ||
+        !Img.readVA(Target, 1))
+      return false;
+    // A physical pointer into another function, an unowned byte range, or
+    // the middle of an already decoded instruction is never a proof root.
+    if (Target != CurrentFuncEntry && !isCurrentOwnedFragment(Target) &&
+        !isCurrentExceptionalEntry(Target) &&
+        !isOwnedInteriorTarget(Img, Target))
+      return false;
+    auto After = Insns.upper_bound(Target);
+    if (After != Insns.begin()) {
+      const auto &Prev = *std::prev(After);
+      if (Prev.first < Target &&
+          Target - Prev.first < static_cast<va_t>(Prev.second.Size))
+        return false;
+    }
+  }
+
+  Scratch.Insns = Insns;
+  Scratch.BlockStarts = BlockStarts;
+  Scratch.PublishedBlockStarts = PublishedBlockStarts;
+  Scratch.PublishedReachableInsns = PublishedReachableInsns;
+  Scratch.PersistentCFGRoots = PersistentCFGRoots;
+  Scratch.OrdinaryCFGRoots = OrdinaryCFGRoots;
+  Scratch.DurableCFGRoots = DurableCFGRoots;
+  Scratch.RelocationCFGRootSources = RelocationCFGRootSources;
+  Scratch.DiscoveredCodeRefSources = DiscoveredCodeRefSources;
+  Scratch.ExploredAddrs = ExploredAddrs;
+  Scratch.RelocatedInstructionAddressOccurrences =
+      RelocatedInstructionAddressOccurrences;
+  Scratch.RelocatedInstructionScalarOperandOccurrences =
+      RelocatedInstructionScalarOperandOccurrences;
+  Scratch.RelocatedInstructionScalarModelOccurrences =
+      RelocatedInstructionScalarModelOccurrences;
+  Scratch.I386GetPcOccurrences = I386GetPcOccurrences;
+  Scratch.CurrentImg = CurrentImg;
+  Scratch.ExecutableCodeOwners = ExecutableCodeOwners;
+  Scratch.CurrentFuncEntry = CurrentFuncEntry;
+  Scratch.CurrentFuncRange = CurrentFuncRange;
+  Scratch.AuthoritativeCurrentFuncRange = AuthoritativeCurrentFuncRange;
+  Scratch.KnownFuncEntries = KnownFuncEntries;
+  Scratch.CurrentExceptionalEntries = CurrentExceptionalEntries;
+  Scratch.NoReturnTargets = NoReturnTargets;
+  Scratch.I386GOTModelEvidenceIncomplete = I386GOTModelEvidenceIncomplete;
+  Scratch.I386GOTOFFProposalEvidenceBudgetForTesting =
+      I386GOTOFFProposalEvidenceBudgetForTesting;
+  Scratch.I386GOTModelEvidenceBudgetForTesting =
+      I386GOTModelEvidenceBudgetForTesting;
+  Scratch.FiniteSetSymbolEvidenceBudgetForTesting =
+      FiniteSetSymbolEvidenceBudgetForTesting;
+  Scratch.StackTableEvidenceRemaining = StackTableEvidenceRemaining;
+  Scratch.CrossFunctionContinuationRoots = CrossFunctionContinuationRoots;
+  Scratch.ProtectedJumpTableRelocationSlots =
+      ProtectedJumpTableRelocationSlots;
+  Scratch.UnsafeJumpTableBranches = UnsafeJumpTableBranches;
+  Scratch.ActiveJumpTableProofRoots = ActiveJumpTableProofRoots;
+  Scratch.ActiveJumpTableCandidateAddr = ActiveJumpTableCandidateAddr;
+  Scratch.ActiveJumpTableCandidateProofRank =
+      ActiveJumpTableCandidateProofRank;
+  Scratch.ActiveJumpTableCandidateDependencyRank =
+      ActiveJumpTableCandidateDependencyRank;
+  Scratch.JumpTableProofContextComplete = JumpTableProofContextComplete;
+  Scratch.CandidateFiniteProofDecodeOnly = true;
+  Scratch.CandidateFiniteProofDecodeBudget = EvidenceBudget;
+
+  Decoder Dec;
+  Dec.setStrict(true);
+  if (!Dec.init(Img.Arch, Img.Mode)) {
+    Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+    return Incomplete();
+  }
+  for (va_t Target : PhysicalTargets) {
+    Scratch.BlockStarts.insert(Target);
+    if (!Scratch.ExploredAddrs.count(Target))
+      Scratch.explore(Img, Dec, Target);
+    if (Scratch.CandidateFiniteProofDecodeIncomplete) {
+      Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+      return Incomplete();
+    }
+    if (!Scratch.Insns.count(Target)) {
+      Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+      return Incomplete();
+    }
+  }
+  Scratch.CandidateFiniteProofDecodeBudget = nullptr;
+  if (!Scratch.DecodeFailureAddresses.empty() ||
+      !Scratch.UnsupportedInstructionAddresses.empty() ||
+      !Scratch.TruncatedPathAddresses.empty())
+    return Incomplete();
+
+  size_t ValidationWork = 0;
+  if (OwnerLookupWork > std::numeric_limits<size_t>::max() - 32 ||
+      !detail::addLinearComparisonWork(ValidationWork, Scratch.Insns.size(),
+                                       OwnerLookupWork + 32) ||
+      ValidationWork > *EvidenceBudget)
+    return Incomplete();
+  *EvidenceBudget -= ValidationWork;
+  va_t PreviousEnd = 0;
+  bool HavePrevious = false;
+  for (const auto &[Addr, Rec] : Scratch.Insns) {
+    if (Rec.Size == 0 ||
+        static_cast<va_t>(Rec.Size) >
+            std::numeric_limits<va_t>::max() - Addr ||
+        (HavePrevious && Addr < PreviousEnd))
+      return false;
+    PreviousEnd = Addr + static_cast<va_t>(Rec.Size);
+    HavePrevious = true;
+    if (Insns.count(Addr))
+      continue;
+    if (!Img.hasExecutableCodeOwnerRange(Addr, Rec.Size) ||
+        (Addr != CurrentFuncEntry && !isCurrentOwnedFragment(Addr) &&
+         !isCurrentExceptionalEntry(Addr) &&
+         (Addr <= CurrentFuncRange->first ||
+          Addr >= CurrentFuncRange->second || isKnownFunctionEntry(Addr))))
+      return false;
+  }
+  return true;
+}
+
 void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   // Resolver-stage proposal caches are valid only for one immutable decoded
   // graph.  Exploring even one new target can add an alternate predecessor,
@@ -1136,6 +1353,32 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
           !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur))
         break;
+      if (CandidateFiniteProofDecodeOnly) {
+        // This builder is a disposable proof snapshot.  Charge each attempted
+        // direct-path decode before it can allocate an instruction, its LowIR
+        // operations, relocation occurrences, or worklist successors.  The
+        // base charge includes their eventual destruction. Repeated live
+        // owner and relocation queries also pay for the image inventories;
+        // the hard cap bounds an unexpectedly large direct-path closure.
+        constexpr size_t MaxScratchDecodeAttempts = 1024;
+        const std::optional<size_t> OwnerWork =
+            candidateFiniteProofOwnerLookupWork(Img,
+                                                knownFunctionEntryCount());
+        size_t ScratchDecodeWork = 8192;
+        if (!OwnerWork ||
+            !detail::addLinearComparisonWork(ScratchDecodeWork, *OwnerWork,
+                                             64) ||
+            !CandidateFiniteProofDecodeBudget ||
+            CandidateFiniteProofDecodeAttempts >= MaxScratchDecodeAttempts ||
+            *CandidateFiniteProofDecodeBudget < ScratchDecodeWork) {
+          CandidateFiniteProofDecodeIncomplete = true;
+          if (CandidateFiniteProofDecodeBudget)
+            *CandidateFiniteProofDecodeBudget = 0;
+          break;
+        }
+        *CandidateFiniteProofDecodeBudget -= ScratchDecodeWork;
+        ++CandidateFiniteProofDecodeAttempts;
+      }
       // An actual graph extension invalidates every generation-local replay
       // and positive ambiguity shadow.  Pending exact query identities remain
       // fail-closed carry, but only a fresh query on this immutable graph may
@@ -1477,13 +1720,15 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
 
       if (Saved.IsBranch && !Saved.IsCall) {
         if (Saved.IsIndirect && !Saved.IsCond) {
-          auto Targets = resolveJumpTable(Img, Saved);
-          if (!Targets.empty()) {
-            Saved.JumpTableTargets = std::move(Targets);
-            for (va_t T : Saved.JumpTableTargets) {
-              BlockStarts.insert(T);
-              if (!ExploredAddrs.count(T))
-                Worklist.push(T);
+          if (!CandidateFiniteProofDecodeOnly) {
+            auto Targets = resolveJumpTable(Img, Saved);
+            if (!Targets.empty()) {
+              Saved.JumpTableTargets = std::move(Targets);
+              for (va_t T : Saved.JumpTableTargets) {
+                BlockStarts.insert(T);
+                if (!ExploredAddrs.count(T))
+                  Worklist.push(T);
+              }
             }
           }
         }

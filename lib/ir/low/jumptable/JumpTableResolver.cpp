@@ -76,6 +76,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <utility>
@@ -233,6 +234,446 @@ std::set<va_t> CFGBuilder::jumpTableProofRoots(
       Roots.erase(Target);
   }
   return Roots;
+}
+
+bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
+    CFGBuilder &Scratch, const InsnRecord &Current, const JumpTableInfo &Info,
+    const std::vector<va_t> &PhysicalTargets,
+    std::map<va_t, std::vector<uint32_t>> &OutputDomains,
+    size_t *EvidenceBudget,
+    bool *AnalysisIncomplete) const {
+  OutputDomains.clear();
+  if (AnalysisIncomplete)
+    *AnalysisIncomplete = false;
+  auto Incomplete = [&] {
+    if (EvidenceBudget)
+      *EvidenceBudget = 0;
+    if (AnalysisIncomplete)
+      *AnalysisIncomplete = true;
+    return false;
+  };
+  auto Charge = [&](size_t Work) {
+    if (!EvidenceBudget || Work > *EvidenceBudget)
+      return Incomplete();
+    *EvidenceBudget -= Work;
+    return true;
+  };
+  auto LookupWork = [](size_t Count) {
+    size_t Work = 1;
+    for (; Count > 1; Count = Count / 2 + Count % 2)
+      ++Work;
+    return Work;
+  };
+  if (!EvidenceBudget || !CurrentImg || CurrentImg->Arch != Arch::X86 ||
+      !CurrentImg->isELF() || CurrentImg->getPointerSize() != 4 ||
+      Scratch.CurrentImg != CurrentImg ||
+      !Scratch.CandidateFiniteProofDecodeOnly ||
+      Scratch.CandidateFiniteProofDecodeIncomplete ||
+      Scratch.CandidateProposalStageActive || !Info.HasBaseAddr ||
+      !Info.RelocAbsolute || Info.IsRelative || Info.PreScaledIndex ||
+      Info.TwoTableSelect || Info.TwoLevelIndex || Info.EntrySize != 4 ||
+      (Info.EntryStride != 0 && Info.EntryStride != 4) ||
+      Info.PhysicalCapacity != PhysicalTargets.size() ||
+      PhysicalTargets.size() < limits::kMinJumpTableEntries ||
+      PhysicalTargets.size() > 64 || !Insns.count(Current.Addr) ||
+      !Scratch.Insns.count(Current.Addr))
+    return false;
+  const BinaryImage &Img = *CurrentImg;
+  const size_t SlotCount = PhysicalTargets.size();
+  if (Info.BaseAddr > InvalidVA - SlotCount * uint64_t{4})
+    return false;
+  const va_t StorageEnd = Info.BaseAddr + SlotCount * uint64_t{4};
+  size_t PhysicalInventoryWork = 16;
+  if (!detail::addLinearComparisonWork(PhysicalInventoryWork,
+                                       Img.Symbols.size(), 1) ||
+      !detail::addLinearComparisonWork(PhysicalInventoryWork,
+                                       Img.Segments.size(), 4) ||
+      !detail::addLinearComparisonWork(PhysicalInventoryWork,
+                                       Img.Sections.size(), 4) ||
+      !Charge(PhysicalInventoryWork))
+    return false;
+  const uint64_t SizedObject = Img.dataObjectSizeAt(Info.BaseAddr);
+  const std::optional<va_t> OwnerEnd =
+      Img.mappedObjectOwnerEnd(Info.BaseAddr);
+  if (!OwnerEnd || *OwnerEnd < StorageEnd ||
+      (SizedObject != 0 && SizedObject != SlotCount * 4) ||
+      (SizedObject == 0 && *OwnerEnd != StorageEnd))
+    return false;
+  const JumpTableStorageRange PhysicalStorage{
+      Info.BaseAddr, 4, 4, static_cast<uint32_t>(SlotCount)};
+  size_t PerSlotWork = 64;
+  if (!detail::addLinearComparisonWork(PerSlotWork, Img.Segments.size(),
+                                       12) ||
+      !detail::addLinearComparisonWork(PerSlotWork, Img.Sections.size(),
+                                       12) ||
+      !detail::addLinearComparisonWork(PerSlotWork, Img.Symbols.size(), 12) ||
+      !detail::addLinearComparisonWork(PerSlotWork,
+                                       Img.KnownCodeRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(PerSlotWork,
+                                       Img.ImportStubRanges.size(), 8) ||
+      !detail::addLinearComparisonWork(PerSlotWork, Img.Imports.size(), 8) ||
+      !detail::addLinearComparisonWork(PerSlotWork,
+                                       knownFunctionEntryCount(), 4) ||
+      !detail::addLinearComparisonWork(
+          PerSlotWork, LookupWork(Img.CodePtrRelocSlots.size()) +
+                           LookupWork(Scratch.Insns.size()), 1))
+    return Incomplete();
+  size_t SlotWork = 0;
+  if (!detail::addLinearComparisonWork(
+          SlotWork, SlotCount, PerSlotWork) ||
+      !Charge(SlotWork))
+    return false;
+  std::vector<va_t> SuppressibleSlots;
+  SuppressibleSlots.reserve(SlotCount);
+  for (size_t I = 0; I < SlotCount; ++I) {
+    const va_t Slot = Info.BaseAddr + I * uint64_t{4};
+    if (!Img.CodePtrRelocSlots.count(Slot))
+      return false;
+    const uint8_t *Bytes = Img.readVA(Slot, 4);
+    if (!Bytes ||
+        normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode) !=
+            PhysicalTargets[I] ||
+        !Scratch.isOwnedInteriorTarget(Img, PhysicalTargets[I]))
+      return false;
+    SuppressibleSlots.push_back(Slot);
+  }
+
+  // Discover the exact consumers from the owner's immutable relocation and
+  // decoded-instruction inventory.  Newly decoded scratch case bodies may
+  // support the induction, but can never nominate a sibling or its table.
+  size_t ScanWork = 64;
+  size_t PerOccurrenceWork =
+      32 + LookupWork(Img.DataAddressRelocOperands.size()) +
+      LookupWork(Insns.size()) + LookupWork(BlockStarts.size());
+  if (!detail::addLinearComparisonWork(PerOccurrenceWork, Insns.size(), 16) ||
+      !detail::addLinearComparisonWork(
+          ScanWork, RelocatedInstructionAddressOccurrences.size(),
+          PerOccurrenceWork) ||
+      !Charge(ScanWork))
+    return false;
+  std::map<va_t, va_t> BranchFields;
+  va_t TableOwner = InvalidVA;
+  for (const RelocatedInstructionAddressOccurrence &Occurrence :
+       RelocatedInstructionAddressOccurrences) {
+    if (Occurrence.TargetVA != Info.BaseAddr || Occurrence.Width != 4 ||
+        Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
+        Occurrence.PCRelativeFromInstructionEnd ||
+        Occurrence.OutputMayDepend || Occurrence.InputIndex < 0)
+      continue;
+    const auto Field = Img.DataAddressRelocOperands.find(Occurrence.FieldVA);
+    if (Field == Img.DataAddressRelocOperands.end() ||
+        Field->second.Kind != RelocatedAddressFieldKind::I386ELFGOTOFF ||
+        Field->second.Width != 4 ||
+        Field->second.TargetVA != Info.BaseAddr ||
+        Field->second.TargetOwnerVA != Occurrence.TargetOwnerVA ||
+        !Img.relocatedI386GOTOFFTargetBelongsToOwner(
+            Field->second.TargetVA, Field->second.TargetOwnerVA))
+      continue;
+    if (TableOwner != InvalidVA && TableOwner != Field->second.TargetOwnerVA)
+      return false;
+    TableOwner = Field->second.TargetOwnerVA;
+    const auto Source = Insns.find(Occurrence.InstructionAddr);
+    if (Source == Insns.end() || Source->second.IsInstructionGuard ||
+        Source->second.Size == 0 ||
+        Source->second.Size > InvalidVA - Source->first ||
+        Occurrence.FieldVA < Source->first ||
+        Occurrence.FieldVA >= Source->first + Source->second.Size)
+      return false;
+    va_t BlockEnd = CurrentFuncRange ? CurrentFuncRange->second : InvalidVA;
+    if (!PublishedBlockStarts.empty()) {
+      const auto Next = std::upper_bound(PublishedBlockStarts.begin(),
+                                         PublishedBlockStarts.end(),
+                                         Occurrence.InstructionAddr);
+      if (Next != PublishedBlockStarts.end())
+        BlockEnd = std::min(BlockEnd, *Next);
+    } else {
+      const auto Next = BlockStarts.upper_bound(Occurrence.InstructionAddr);
+      if (Next != BlockStarts.end())
+        BlockEnd = std::min(BlockEnd, *Next);
+    }
+    va_t Branch = InvalidVA;
+    for (auto It = Insns.upper_bound(Occurrence.InstructionAddr);
+         It != Insns.end() && It->first < BlockEnd; ++It) {
+      const InsnRecord &Candidate = It->second;
+      if (Candidate.IsBranch || Candidate.IsRet) {
+        if (Candidate.IsBranch && Candidate.IsIndirect &&
+            !Candidate.IsCall && !Candidate.IsRet && !Candidate.IsCond)
+          Branch = Candidate.Addr;
+        break;
+      }
+    }
+    if (Branch == InvalidVA)
+      continue;
+    if (!BranchFields.emplace(Branch, Occurrence.FieldVA).second ||
+        BranchFields.size() > 2)
+      return false;
+  }
+  if (BranchFields.size() != 2 || !BranchFields.count(Current.Addr))
+    return false;
+
+  size_t EdgeWork = 0;
+  if (!detail::addLinearComparisonWork(EdgeWork, SlotCount, 24) ||
+      !Charge(EdgeWork * 2 + 32))
+    return false;
+  std::map<va_t, std::vector<va_t>> HypotheticalEdges;
+  for (const auto &[Branch, FieldVA] : BranchFields) {
+    (void)FieldVA;
+    const auto Found = Scratch.Insns.find(Branch);
+    const auto Original = Insns.find(Branch);
+    if (Found == Scratch.Insns.end() || Original == Insns.end() ||
+        Original->second.JumpTableTargets.size() > SlotCount ||
+        !Charge(Original->second.JumpTableTargets.size() *
+                (LookupWork(SlotCount) + 4)))
+      return false;
+    // The candidate graph deliberately uses the complete physical successor
+    // over-approximation. A previously published finite edge must not shrink
+    // that graph. The owner snapshot is retained and checked for exact equality
+    // with the final finite certificate below before either domain escapes.
+    for (va_t Published : Original->second.JumpTableTargets)
+      if (std::find(PhysicalTargets.begin(), PhysicalTargets.end(),
+                    Published) == PhysicalTargets.end())
+        return false;
+    Found->second.JumpTableTargets.clear();
+    HypotheticalEdges.emplace(Branch, PhysicalTargets);
+  }
+  Scratch.CandidateFiniteProofModelEdges = HypotheticalEdges;
+  std::map<va_t, std::vector<uint32_t>> FiniteDomains;
+  std::map<va_t, JumpTableValueOccurrence> ExactIndices;
+  for (const auto &[Branch, FieldVA] : BranchFields) {
+    (void)FieldVA;
+    Scratch.ActiveJumpTableCandidateAddr = Branch;
+    Scratch.ActiveJumpTableCandidateProofRank = 0;
+    Scratch.ActiveJumpTableCandidateDependencyRank = 0;
+    Scratch.ActiveJumpTableProofRoots.reset();
+    Scratch.I386GOTOFFProposalShapeClaimed = false;
+    Scratch.I386GOTOFFProposalEvidenceIncomplete = false;
+    Scratch.I386GOTOFFAmbiguousModelReach = false;
+    Scratch.I386GOTOFFPrivateFrameModelAuthenticated = false;
+    Scratch.CurrentI386GOTOFFAmbiguityKeys.clear();
+    Scratch.I386GOTOFFModelReachCache.clear();
+    const size_t ModelAllowance = std::min(
+        *EvidenceBudget,
+        std::min<size_t>(
+            limits::kMaxI386GOTOFFProposalEvidenceWork,
+            I386GOTOFFProposalEvidenceBudgetForTesting.value_or(
+                limits::kMaxI386GOTOFFProposalEvidenceWork)));
+    Scratch.I386GOTOFFProposalEvidenceRemaining = ModelAllowance;
+    JumpTableInfo Probe;
+    const bool Shape = Scratch.tryCrossInstrRelativeTable(
+        Img, Scratch.Insns.at(Branch), Probe);
+    const size_t ModelUsed =
+        ModelAllowance - Scratch.I386GOTOFFProposalEvidenceRemaining;
+    if (!Charge(ModelUsed))
+      return false;
+    if (Scratch.I386GOTOFFProposalEvidenceIncomplete ||
+        Scratch.I386GOTModelEvidenceIncomplete ||
+        Scratch.StackTableEvidenceIncompleteBranches.count(Branch))
+      return Incomplete();
+    if (!Shape || !Scratch.I386GOTOFFProposalShapeClaimed ||
+        !Probe.HasBaseAddr || Probe.BaseAddr != Info.BaseAddr ||
+        Probe.EntrySize != 4 ||
+        (Probe.EntryStride != 0 && Probe.EntryStride != 4) ||
+        Probe.PhysicalCapacity != SlotCount || !Probe.RelocAbsolute ||
+        Probe.IsRelative || Probe.PreScaledIndex || Probe.TwoTableSelect ||
+        Probe.TwoLevelIndex || Probe.TargetLoads.size() != 1 ||
+        !Probe.LoadRoles.empty())
+      return false;
+    if (Probe.IndexValueAlternatives.size() > 1 || !Charge(64))
+      return false;
+    std::vector<JumpTableValueOccurrence> Indices;
+    if (!Probe.IndexValueAlternatives.empty())
+      Indices.push_back(Probe.IndexValueAlternatives.front());
+    if (Indices.empty() && Probe.IndexValueAtUse.Size == 4 &&
+        Probe.IndexUseAddr != InvalidVA && Probe.IndexUseSeq >= 0 &&
+        !Probe.IndexValueDefinedAtUse)
+      Indices.push_back({Probe.IndexValueAtUse, Probe.IndexUseAddr,
+                         Probe.IndexUseSeq, false});
+    if (Indices.size() != 1 || Indices.front().Value.Size != 4 ||
+        Indices.front().DefinedAtPoint)
+      return false;
+    JumpTableLoadRole Role;
+    Role.Load = Probe.TargetLoads.front();
+    Role.LoadWidth = 4;
+    Role.AllowedBases = {Info.BaseAddr};
+    Role.Indices = Indices;
+    Role.AddressScale = 4;
+    Probe.LoadRoles.push_back(std::move(Role));
+    Probe.StorageRanges = {PhysicalStorage};
+    Probe.SuppressibleRelocationSlots = SuppressibleSlots;
+
+    size_t RelocationSourceCount = 0;
+    for (const auto &[Target, Sources] : Scratch.RelocationCFGRootSources) {
+      (void)Target;
+      if (Sources.size() >
+          std::numeric_limits<size_t>::max() - RelocationSourceCount)
+        return Incomplete();
+      RelocationSourceCount += Sources.size();
+    }
+    const std::optional<size_t> RootWork =
+        detail::jumpTableProofRootConstructionWork(
+            Scratch.PersistentCFGRoots.size(), 0, 1, 0,
+            SuppressibleSlots.size(),
+            Scratch.ProtectedJumpTableRelocationSlots
+                ? Scratch.ProtectedJumpTableRelocationSlots->size()
+                : 0,
+            Img.Segments.size(), Img.CodePtrRelocSlots.size(),
+            Scratch.RelocationCFGRootSources.size(), RelocationSourceCount,
+            Scratch.DurableCFGRoots.size());
+    if (!RootWork || !Charge(*RootWork))
+      return Incomplete();
+    const std::set<va_t> NoDecodedAnchors;
+    Scratch.ActiveJumpTableProofRoots =
+        Scratch.jumpTableProofRoots(Probe, &NoDecodedAnchors);
+    if (!Scratch.ActiveJumpTableProofRoots ||
+        !Scratch.ActiveJumpTableProofRoots->count(CurrentFuncEntry) ||
+        !ActiveJumpTableProofRoots)
+      return false;
+    size_t RootComparisonWork = 16;
+    if (!detail::addLinearComparisonWork(
+            RootComparisonWork, ActiveJumpTableProofRoots->size(), 4) ||
+        !detail::addLinearComparisonWork(
+            RootComparisonWork, Scratch.ActiveJumpTableProofRoots->size(),
+            4) ||
+        !Charge(RootComparisonWork))
+      return Incomplete();
+    if (*ActiveJumpTableProofRoots != *Scratch.ActiveJumpTableProofRoots)
+      return false;
+    bool TargetComplete = false;
+    const bool TargetRole = Scratch.branchTargetDependsOnTableLoad(
+        Scratch.Insns.at(Branch), Probe, EvidenceBudget, &TargetComplete,
+        /*UseDefinedAlternativesAsRoots=*/true, &HypotheticalEdges);
+    bool AddressComplete = false;
+    const bool AddressRole = Scratch.tableLoadAddressesMatchRole(
+        Probe, EvidenceBudget, &AddressComplete,
+        /*UseDefinedAlternativesAsRoots=*/true, &HypotheticalEdges);
+    if (!TargetComplete || !AddressComplete)
+      return Incomplete();
+    if (!TargetRole || !AddressRole)
+      return false;
+    JumpTableValueQuery Present;
+    Present.Candidate = Indices.front().Value;
+    Present.UseAddr = Indices.front().Addr;
+    Present.UseSeq = Indices.front().Seq;
+    Present.Relation = JumpTableValueRelation::ResolvableValue;
+    JumpTableValueQuery Finite = Present;
+    Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
+    Finite.UnsignedUpperBound = SlotCount;
+    std::vector<bool> Complete;
+    std::vector<uint64_t> Masks;
+    const std::vector<bool> Matches = Scratch.tableValuesMatchAtUses(
+        {Present, Finite}, nullptr, &Complete,
+        /*CandidateBranchOverride=*/InvalidVA,
+        /*CandidateTargetsOverride=*/nullptr, EvidenceBudget,
+        /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr, &Masks,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+        &HypotheticalEdges);
+    if (Matches.size() != 2 || Complete.size() != 2 || Masks.size() != 2 ||
+        !Complete[0] || !Complete[1])
+      return Incomplete();
+    if (!Matches[0] || !Matches[1] || Masks[1] == 0)
+      return false;
+    bool ReachComplete = false;
+    bool Closed = false;
+    const std::set<va_t> Reachable = Scratch.candidateReachableInstructions(
+        Scratch.Insns.at(Branch), PhysicalTargets,
+        *Scratch.ActiveJumpTableProofRoots, Probe.StorageRanges,
+        EvidenceBudget, &ReachComplete, &HypotheticalEdges, &Closed);
+    if (!ReachComplete)
+      return Incomplete();
+    if (!Closed || !Reachable.count(CurrentFuncEntry))
+      return false;
+    for (const auto &[Sibling, SiblingField] : BranchFields) {
+      (void)SiblingField;
+      if (!Reachable.count(Sibling))
+        return false;
+    }
+    if (!Charge(SlotCount * 5 + 64))
+      return false;
+    std::vector<uint32_t> Coordinates;
+    for (uint32_t I = 0; I < SlotCount; ++I)
+      if (Masks[1] & (uint64_t{1} << I))
+        Coordinates.push_back(I);
+    if (Coordinates.empty())
+      return false;
+    ExactIndices.emplace(Branch, Indices.front());
+    FiniteDomains.emplace(Branch, std::move(Coordinates));
+  }
+  if (FiniteDomains.size() != 2 || !FiniteDomains.count(Current.Addr) ||
+      ExactIndices.size() != 2)
+    return false;
+
+  // The full-physical graph only established an inductive upper bound.  Now
+  // replay the resulting two separate *finite* domains on the owner's frozen
+  // instruction snapshot.  Both queries and both closed-world CFG checks
+  // must succeed before any domain reaches the enclosing resolver stage.
+  std::map<va_t, std::vector<va_t>> CertifiedEdges;
+  if (!Charge(2 * SlotCount * 8 + 32))
+    return false;
+  for (const auto &[Branch, Coordinates] : FiniteDomains) {
+    std::vector<va_t> Targets;
+    Targets.reserve(Coordinates.size());
+    for (uint32_t Coordinate : Coordinates) {
+      if (Coordinate >= SlotCount)
+        return false;
+      Targets.push_back(PhysicalTargets[Coordinate]);
+    }
+    CertifiedEdges.emplace(Branch, std::move(Targets));
+  }
+  for (const auto &[Branch, Targets] : CertifiedEdges) {
+    const std::vector<va_t> &Published = Insns.at(Branch).JumpTableTargets;
+    if (!Charge(Published.size() + Targets.size() + 4) ||
+        (!Published.empty() && Published != Targets))
+      return false;
+  }
+  for (const auto &[Branch, Coordinates] : FiniteDomains) {
+    bool ReachComplete = false;
+    bool Closed = false;
+    const std::set<va_t> Reachable = candidateReachableInstructions(
+        Insns.at(Branch), CertifiedEdges.at(Branch),
+        *ActiveJumpTableProofRoots, {PhysicalStorage}, EvidenceBudget,
+        &ReachComplete, &CertifiedEdges, &Closed);
+    if (!ReachComplete)
+      return Incomplete();
+    if (!Closed || !Reachable.count(CurrentFuncEntry))
+      return false;
+    for (const auto &[Sibling, FieldVA] : BranchFields) {
+      (void)FieldVA;
+      if (!Reachable.count(Sibling))
+        return false;
+    }
+    const JumpTableValueOccurrence &Index = ExactIndices.at(Branch);
+    JumpTableValueQuery Present;
+    Present.Candidate = Index.Value;
+    Present.UseAddr = Index.Addr;
+    Present.UseSeq = Index.Seq;
+    Present.Relation = JumpTableValueRelation::ResolvableValue;
+    JumpTableValueQuery Finite = Present;
+    Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
+    Finite.UnsignedUpperBound = SlotCount;
+    std::vector<bool> Complete;
+    std::vector<uint64_t> Masks;
+    const std::vector<bool> Matches = tableValuesMatchAtUses(
+        {Present, Finite}, nullptr, &Complete,
+        /*CandidateBranchOverride=*/InvalidVA,
+        /*CandidateTargetsOverride=*/nullptr, EvidenceBudget,
+        /*LocalMatchEvidenceLimit=*/0,
+        /*CandidateBranchesSharingTargets=*/nullptr, &Masks,
+        limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+        &CertifiedEdges);
+    if (Matches.size() != 2 || Complete.size() != 2 || Masks.size() != 2 ||
+        !Complete[0] || !Complete[1])
+      return Incomplete();
+    if (!Matches[0] || !Matches[1])
+      return false;
+    uint64_t ExpectedMask = 0;
+    for (uint32_t Coordinate : Coordinates)
+      ExpectedMask |= uint64_t{1} << Coordinate;
+    if (Masks[1] != ExpectedMask)
+      return false;
+  }
+  OutputDomains = std::move(FiniteDomains);
+  return true;
 }
 
 std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
@@ -2176,6 +2617,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   std::map<va_t, std::vector<va_t>> RelativeEdgeOverrides;
   const std::map<va_t, std::vector<va_t>> *TargetRoleEdgeOverrides = nullptr;
   const std::vector<va_t> *CurrentCandidateSelfReplayTargets = nullptr;
+  const JumpTableStorageRange *CurrentCandidateSelfReplayRuntimeStorage =
+      nullptr;
   std::optional<ProvisionalRelativeEdgeProposal>
       ProvisionalRelativeEdgeTemplate;
   bool HasExactTargetLoadOccurrences = false;
@@ -2388,8 +2831,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                                                     EveryTargetAlreadyDecoded;
           CurrentCandidateReplayedOwnProvisionalRelativeEdge |=
               ReplayStablePublishedTargets;
-          if (ReplayStablePublishedTargets)
+          if (ReplayStablePublishedTargets) {
             CurrentCandidateSelfReplayTargets = &Proposal.Targets;
+            if (CompleteRuntimeReplay)
+              CurrentCandidateSelfReplayRuntimeStorage =
+                  &*Proposal.CompleteRuntimeStorageRange;
+          }
           continue;
         }
         SameImmutableShape &= Proposal.AuthenticatesPhysicalStorage;
@@ -3520,6 +3967,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   bool SemanticMaskDomainAmbiguous = false;
   bool UsedNonContiguousMask = false;
   std::optional<va_t> ExactFiniteRelativeSingletonTargetValue;
+  std::optional<ExactFiniteAbsoluteSingletonProof>
+      ExactFiniteAbsoluteSingletonProofValue;
   bool ExactFiniteRelativeClosureUnknownValue = false;
   std::vector<uint32_t> MaskCoordinates;
   std::vector<JumpTableMaskKnownOneWitness> MaskKnownOneWitnesses;
@@ -3543,7 +3992,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   const uint32_t MaskBound =
       GuardedGroupProofContext
           ? 0
-          : inferBoundsFromMask(
+          : inferBoundsFromMaskWithAbsoluteProof(
                 Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
                 &UsedNonContiguousMask, &MaskCoordinates,
                 &MaskKnownOneWitnesses,
@@ -3563,7 +4012,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                 CandidateProposalStageActive &&
                     ProvisionalRelativeEdgeTemplate.has_value(),
                 /*AllowInlineZeroCapacityBoundedReplay=*/false,
-                InlineRelativeReadableCapacity);
+                InlineRelativeReadableCapacity,
+                CurrentCandidateSelfReplayRuntimeStorage,
+                &ExactFiniteAbsoluteSingletonProofValue);
   const std::optional<bool> MaskGraphGrowth = SuspendForPendingGraphGrowth(
       /*RetainNoGrowthProposal=*/
       !ExactFiniteRelativeSingletonTargetValue.has_value());
@@ -3707,6 +4158,60 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
     return true;
   };
+  bool AllowAbsoluteSingletonPublication = false;
+  if (ExactFiniteAbsoluteSingletonProofValue) {
+    const ExactFiniteAbsoluteSingletonProof &Certificate =
+        *ExactFiniteAbsoluteSingletonProofValue;
+    const JumpTableStorageRange ExpectedPhysical{
+        Info.BaseAddr, Info.EntrySize, PhysicalEntryStride,
+        Info.PhysicalCapacity};
+    if (!CandidateProposalStageActive || Img.Arch != Arch::X86 ||
+        !Img.isELF() || Img.getPointerSize() != 4 ||
+        TargetRoleEdgeOverrides || !Info.RelocAbsolute || Info.IsRelative ||
+        Info.PreScaledIndex || Info.TwoTableSelect || Info.TwoLevelIndex ||
+        !Info.HasBaseAddr || Info.EntrySize != 4 ||
+        PhysicalEntryStride != 4 || MaskBound == 0 ||
+        IncompleteMaskDomain || SemanticMaskDomainAmbiguous ||
+        Certificate.PhysicalStorage != ExpectedPhysical ||
+        Certificate.Coordinate >= Info.PhysicalCapacity ||
+        MaskCoordinates.size() != 1 ||
+        MaskCoordinates.front() != Certificate.Coordinate ||
+        MaskBound != Certificate.Coordinate + 1)
+      return {};
+    std::optional<JumpTableStorageRange> ExactPhysical;
+    if (!ProveExactPhysicalStorage(Info, ExactPhysical) || !ExactPhysical ||
+        *ExactPhysical != Certificate.PhysicalStorage)
+      return {};
+    const va_t Slot = Info.BaseAddr + uint64_t{Certificate.Coordinate} * 4;
+    if (!consumeCandidateProducts(
+            {{Img.Segments.size(), 4}, {Img.Sections.size(), 4},
+             {Img.Symbols.size(), 4}, {Img.KnownCodeRanges.size(), 4},
+             {1, orderedLookupWork(Img.CodePtrRelocSlots.size()) + 16}}))
+      return {};
+    const uint8_t *Bytes = Img.readVA(Slot, 4);
+    if (!Img.CodePtrRelocSlots.count(Slot) || !Bytes ||
+        normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode) !=
+            Certificate.Target ||
+        !isOwnedInteriorTarget(Img, Certificate.Target))
+      return {};
+    JumpTableInfo PhysicalProbe;
+    PhysicalProbe.setBaseAddr(Info.BaseAddr);
+    PhysicalProbe.RelocAbsolute = true;
+    PhysicalProbe.EntrySize = 4;
+    PhysicalProbe.EntryStride = 4;
+    PhysicalProbe.MaxEntries = Info.PhysicalCapacity;
+    PhysicalProbe.PhysicalCapacity = Info.PhysicalCapacity;
+    PhysicalProbe.StorageRanges = {*ExactPhysical};
+    if (!HasValidatedLocalPhysicalTargetOwnership(
+            PhysicalProbe, /*RequireWholePhysicalLocalSet=*/true) ||
+        !consumeCandidateEvidence(
+            orderedLookupWork(PotentialJumpTableBranches.size()) + 1))
+      return {};
+    PotentialJumpTableBranches.insert(Rec.Addr);
+    CurrentCandidateIsStrongProposal = true;
+    Info.ExactPhysicalStorageRange = *ExactPhysical;
+    AllowAbsoluteSingletonPublication = true;
+  }
   auto RecordAuthenticatedRelativeClosureProposal = [&]() {
     if (!CandidateProposalStageActive)
       return true;
@@ -3963,7 +4468,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                            return Coordinate >= GuardCoordinateLimit;
                          }),
           MaskCoordinates.end());
-      if (MaskCoordinates.size() < limits::kMinJumpTableEntries)
+      if (MaskCoordinates.size() < limits::kMinJumpTableEntries &&
+          !AllowAbsoluteSingletonPublication)
         return {};
     }
 
@@ -4021,6 +4527,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     } else {
       Info.StorageRanges = std::move(ExactStorage);
     }
+    if (AllowAbsoluteSingletonPublication) {
+      if (!Info.ExactPhysicalStorageRange ||
+          !consumeCandidateEvidence(4))
+        return {};
+      Info.StorageRanges = {*Info.ExactPhysicalStorageRange};
+    }
     const size_t ProtectedLookupWork =
         ProtectedJumpTableRelocationSlots
             ? orderedLookupWork(ProtectedJumpTableRelocationSlots->size())
@@ -4049,6 +4561,27 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                                Slot);
                          }),
           Info.SuppressibleRelocationSlots.end());
+    if (AllowAbsoluteSingletonPublication) {
+      if (!Info.ExactPhysicalStorageRange ||
+          !consumeCandidateProducts(
+              {{Info.PhysicalCapacity,
+                orderedLookupWork(Img.CodePtrRelocSlots.size()) +
+                    (ProtectedJumpTableRelocationSlots
+                         ? orderedLookupWork(
+                               ProtectedJumpTableRelocationSlots->size())
+                         : 0) +
+                    5}}))
+        return {};
+      Info.SuppressibleRelocationSlots.clear();
+      Info.SuppressibleRelocationSlots.reserve(Info.PhysicalCapacity);
+      for (uint32_t I = 0; I < Info.PhysicalCapacity; ++I) {
+        const va_t Slot = Info.BaseAddr + uint64_t{I} * PhysicalEntryStride;
+        if (Img.CodePtrRelocSlots.count(Slot) &&
+            (!ProtectedJumpTableRelocationSlots ||
+             !ProtectedJumpTableRelocationSlots->count(Slot)))
+          Info.SuppressibleRelocationSlots.push_back(Slot);
+      }
+    }
     Info.MaxEntries = PhysicalSpan;
     Info.IndexDomainAuthenticated = true;
     LLVM_DEBUG(llvm::dbgs()
@@ -4186,7 +4719,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // index bound.  A single immutable pointer is a separate direct-branch
   // problem and is intentionally not published as a jump table here.
   if (!Info.IndexDomainAuthenticated ||
-      Info.MaxEntries < limits::kMinJumpTableEntries) {
+      (Info.MaxEntries < limits::kMinJumpTableEntries &&
+       !AllowAbsoluteSingletonPublication)) {
     ClaimRejectedPhysicalTableIdentity();
     return {};
   }
@@ -4369,7 +4903,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           /*ExactFiniteRelativeClosureUnknown=*/nullptr,
           /*RetainProvisionalRelativeEdges=*/false,
           CurrentCandidateHasPriorProvisionalRelativeEdge,
-          InlineRelativeReadableCapacity);
+          InlineRelativeReadableCapacity,
+          CurrentCandidateSelfReplayRuntimeStorage);
       const std::optional<size_t> MaskComparisonWork =
           detail::maskDomainComparisonWork(
               Coordinates.size(), Info.AuthenticatedMaskCoordinates.size(),
@@ -4591,7 +5126,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // Importing a prior physical identity is only a comparison aid for the
   // complete runtime/load/rank carry gate above.  A failed carry must revoke
   // it before target materialization or consumer auditing can observe it.
-  if (ImportedPriorRelativePhysicalIdentity && !CarryPriorStrongProposal)
+  if (ImportedPriorRelativePhysicalIdentity && !CarryPriorStrongProposal &&
+      !AllowAbsoluteSingletonPublication)
     Info.ExactPhysicalStorageRange.reset();
 
   // readTableEntries and every grounded/emulated replacement are bounded by
@@ -4611,7 +5147,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // one valid target.  Truncation is only meaningful for the legacy unbounded
   // scanner; truncating a bounded domain silently changes guest control flow.
   const size_t BeforeSanity = Targets.size();
-  const bool Sane = sanityCheckTargets(Img, Targets);
+  const bool Sane = AllowAbsoluteSingletonPublication
+                        ? (Targets.size() == 1 &&
+                           Targets.front() ==
+                               ExactFiniteAbsoluteSingletonProofValue->Target &&
+                           KeptIdx.size() == 1 &&
+                           KeptIdx.front() ==
+                               ExactFiniteAbsoluteSingletonProofValue
+                                   ->Coordinate)
+                        : sanityCheckTargets(Img, Targets);
   if (!Sane || ((Info.MaxEntries > 0 || !Info.RuntimeSlotIndices.empty()) &&
                 Targets.size() != BeforeSanity))
     Targets.clear();
@@ -4768,7 +5312,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return {};
   }
 
-  if (Targets.size() < limits::kMinJumpTableEntries) {
+  if (AllowAbsoluteSingletonPublication &&
+      (Targets.size() != 1 ||
+       Targets.front() != ExactFiniteAbsoluteSingletonProofValue->Target))
+    return {};
+  if (Targets.size() < limits::kMinJumpTableEntries &&
+      !AllowAbsoluteSingletonPublication) {
     ClaimRejectedPhysicalTableIdentity();
     return {};
   }
@@ -4814,13 +5363,20 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.ExactPhysicalStorageRange->EntryStride >= Info.EntrySize &&
       Info.ExactPhysicalStorageRange->PhysicalSlotCount >=
           limits::kMinJumpTableEntries;
+  const bool AuditExactAbsoluteSingletonPhysicalObject =
+      AllowAbsoluteSingletonPublication && Info.RelocAbsolute &&
+      Info.ExactPhysicalStorageRange &&
+      *Info.ExactPhysicalStorageRange ==
+          ExactFiniteAbsoluteSingletonProofValue->PhysicalStorage;
   std::vector<JumpTableStorageRange> ConsumerAuditStorageRanges =
-      AuditExactRelativePhysicalObject
+      (AuditExactRelativePhysicalObject ||
+       AuditExactAbsoluteSingletonPhysicalObject)
           ? std::vector<JumpTableStorageRange>{*Info.ExactPhysicalStorageRange}
           : Info.StorageRanges;
   if (!ConsumerAuditStorageRanges.empty() && Img.getPointerSize() != 0 &&
       (!Info.SuppressibleRelocationSlots.empty() ||
-       AuditExactRelativePhysicalObject)) {
+       AuditExactRelativePhysicalObject ||
+       AuditExactAbsoluteSingletonPhysicalObject)) {
     ActiveJumpTableConsumerAudit = true;
     const std::set<uint64_t> &CodeRelocationSlots =
         AuditExactRelativePhysicalObject ? Img.RelCodeRelocSlots

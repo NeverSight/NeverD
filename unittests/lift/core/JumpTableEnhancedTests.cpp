@@ -614,6 +614,261 @@ TEST_F(JTE_X86_32, GOTOFFPeeledLoopKeepsPerDispatchDomains) {
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
 }
 
+TEST_F(JTE_X86_32, GOTOFFJointLoopProvesBothFiniteDispatches) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_gotoff_joint_loop");
+  const auto *First = Image.findSymbol("jt_i386_gotoff_joint_first_branch");
+  const auto *Second = Image.findSymbol("jt_i386_gotoff_joint_second_branch");
+  const auto *Storage = Image.findSymbol("jt_i386_gotoff_joint_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_NE(Storage, nullptr);
+  ASSERT_EQ(Storage->Size, 20u);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low = Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 2u);
+  for (const auto &Table : Low.JumpTables) {
+    EXPECT_EQ(Table.BaseAddr, Storage->Addr);
+    ASSERT_TRUE(Table.HasDispatchSlotMap);
+    if (Table.InsnAddr == First->Addr) {
+      EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 1}));
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 1}));
+    } else {
+      EXPECT_EQ(Table.InsnAddr, Second->Addr);
+      EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{2, 3, 4}));
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{2, 3, 4}));
+    }
+  }
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+}
+
+TEST_F(JTE_X86_32, GOTOFFJointLoopRejectsInvalidSiblingEvidence) {
+  for (unsigned Variant = 0; Variant != 3; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("jt_i386_gotoff_joint_loop");
+    const auto *Second =
+        Image.findSymbol("jt_i386_gotoff_joint_second_branch");
+    const auto *Storage = Image.findSymbol("jt_i386_gotoff_joint_table");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Second, nullptr);
+    ASSERT_NE(Storage, nullptr);
+    size_t Mutations = 0;
+    if (Variant == 0) {
+      // Numeric equality with the same object is insufficient without the
+      // second instruction's exact GOTOFF relocation role.
+      for (auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
+        if (FieldVA >= Function->Addr &&
+            FieldVA < Function->Addr + Function->Size &&
+            Field.TargetVA == Storage->Addr &&
+            FieldVA > Second->Addr - 16 && FieldVA < Second->Addr) {
+          Field.Kind = neverd::RelocatedAddressFieldKind::Generic;
+          ++Mutations;
+        }
+    } else if (Variant == 1) {
+      for (auto It = Image.I386GOTPCFields.begin();
+           It != Image.I386GOTPCFields.end();) {
+        if (It->first >= Function->Addr &&
+            It->first < Function->Addr + Function->Size) {
+          It = Image.I386GOTPCFields.erase(It);
+          ++Mutations;
+        } else {
+          ++It;
+        }
+      }
+    } else {
+      for (auto &Symbol : Image.Symbols)
+        if (Symbol.Name == "jt_i386_gotoff_joint_table") {
+          Symbol.Size += 4;
+          ++Mutations;
+        }
+    }
+    ASSERT_EQ(Mutations, 1u);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(Image, Decoder, Function->Addr,
+                                   Function->Name);
+    EXPECT_TRUE(std::none_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                             [&](const auto &Table) {
+                               return Table.InsnAddr == Second->Addr;
+                             }));
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  }
+}
+
+TEST_F(JTE_X86_32, GOTOFFJointLoopRejectsOutOfRangeAndExhaustion) {
+  auto Run = [&](const char *FunctionName, const char *SecondName,
+                 std::optional<size_t> Budget) {
+    auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+    EXPECT_TRUE(static_cast<bool>(ImageOrErr));
+    if (!ImageOrErr)
+      return;
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol(FunctionName);
+    const auto *Second = Image.findSymbol(SecondName);
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(Second, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    if (Budget)
+      Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    const auto Low = Builder.build(Image, Decoder, Function->Addr,
+                                   Function->Name);
+    EXPECT_TRUE(std::none_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                             [&](const auto &Table) {
+                               return Table.InsnAddr == Second->Addr;
+                             }));
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+  };
+  Run("jt_i386_gotoff_joint_oob_loop",
+      "jt_i386_gotoff_joint_oob_second_branch", std::nullopt);
+  Run("jt_i386_gotoff_joint_loop", "jt_i386_gotoff_joint_second_branch",
+      size_t{0});
+}
+
+TEST_F(JTE_X86_32, GOTOFFJointSingletonProvesExactDomains) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function =
+      Image.findSymbol("jt_i386_gotoff_joint_singleton_loop");
+  const auto *First =
+      Image.findSymbol("jt_i386_gotoff_joint_singleton_first_branch");
+  const auto *Second =
+      Image.findSymbol("jt_i386_gotoff_joint_singleton_second_branch");
+  const auto *Storage =
+      Image.findSymbol("jt_i386_gotoff_joint_singleton_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_NE(Storage, nullptr);
+  ASSERT_EQ(Storage->Size, 20u);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 2u);
+  std::set<neverd::va_t> Seen;
+  for (const auto &Table : Low.JumpTables) {
+    Seen.insert(Table.InsnAddr);
+    EXPECT_EQ(Table.BaseAddr, Storage->Addr);
+    EXPECT_TRUE(Table.HasDispatchSlotMap);
+    if (Table.InsnAddr == First->Addr) {
+      EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0}));
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0}));
+    } else if (Table.InsnAddr == Second->Addr) {
+      EXPECT_EQ(Table.SlotIndices, (std::vector<uint32_t>{0, 1, 2, 3, 4}));
+      EXPECT_EQ(Table.CaseLabels, (std::vector<int64_t>{0, 1, 2, 3, 4}));
+    } else {
+      ADD_FAILURE() << "unexpected branch";
+    }
+  }
+  EXPECT_EQ(Seen, (std::set<neverd::va_t>{First->Addr, Second->Addr}));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+}
+
+TEST_F(JTE_X86_32, GOTOFFJointSingletonPoisonRetiresBothDispatches) {
+  for (unsigned Variant = 0; Variant < 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    auto &Image = *ImageOrErr;
+    const auto *Function =
+        Image.findSymbol("jt_i386_gotoff_joint_singleton_loop");
+    const auto *First =
+        Image.findSymbol("jt_i386_gotoff_joint_singleton_first_branch");
+    const auto *Second =
+        Image.findSymbol("jt_i386_gotoff_joint_singleton_second_branch");
+    const auto *Storage =
+        Image.findSymbol("jt_i386_gotoff_joint_singleton_table");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_NE(First, nullptr);
+    ASSERT_NE(Second, nullptr);
+    ASSERT_NE(Storage, nullptr);
+    size_t Mutations = 0;
+    if (Variant == 0) {
+      for (auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
+        if (FieldVA > Second->Addr - 16 && FieldVA < Second->Addr &&
+            Field.TargetVA == Storage->Addr &&
+            Field.Kind == neverd::RelocatedAddressFieldKind::I386ELFGOTOFF) {
+          Field.Kind = neverd::RelocatedAddressFieldKind::Generic;
+          ++Mutations;
+        }
+    } else if (Variant == 1) {
+      for (auto It = Image.I386GOTPCFields.begin();
+           It != Image.I386GOTPCFields.end();) {
+        if (It->first >= Function->Addr &&
+            It->first < Function->Addr + Function->Size) {
+          It = Image.I386GOTPCFields.erase(It);
+          ++Mutations;
+        } else
+          ++It;
+      }
+    } else if (Variant == 2) {
+      for (auto &Symbol : Image.Symbols)
+        if (Symbol.Name == "jt_i386_gotoff_joint_singleton_table") {
+          Symbol.Size += 4;
+          ++Mutations;
+        }
+    } else {
+      Mutations = Image.CodePtrRelocSlots.erase(Storage->Addr + 4 * 4);
+    }
+    ASSERT_EQ(Mutations, 1u);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+    EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+  }
+}
+
+TEST_F(JTE_X86_32, GOTOFFJointSingletonBudgetsRetireBothDispatches) {
+  for (unsigned Variant = 0; Variant < 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function =
+        Image.findSymbol("jt_i386_gotoff_joint_singleton_loop");
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    if (Variant == 0)
+      Builder.setMaskFixedPointEvidenceBudgetForTesting(0);
+    if (Variant == 1)
+      Builder.setFiniteSetSymbolEvidenceBudgetForTesting(0);
+    if (Variant == 2)
+      Builder.setI386GOTModelEvidenceBudgetForTesting(0);
+    if (Variant == 3)
+      Builder.setI386GOTOFFProposalEvidenceBudgetForTesting(0);
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Builder.hasProvisionalRelativeEdgesForTesting());
+    EXPECT_FALSE(Builder.hasMaskFixedPointExplorationTargetsForTesting());
+  }
+}
+
 TEST_F(JTE_X86_32, GOTOFFPeeledDecKeepsOddKnownOneDomain) {
   auto ImageOrErr = neverd::loadBinary(i386GOTOFFForcepeelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -2548,11 +2803,12 @@ TEST_F(JTE_X86_32, GOTOFFProposalBudgetExhaustionFailsClosed) {
   ExpectOpaque(Zero, 0);
 
   // This allowance reaches the combined query with margin after all
-  // root/model bookkeeping, then exhausts only inside metered graph
-  // propagation.  Passing a null GraphWorkBudget makes that query unbounded
+  // root/model bookkeeping and the paired-consumer occurrence inventory,
+  // then exhausts only inside metered graph propagation.  Passing a null
+  // GraphWorkBudget makes that query unbounded
   // and incorrectly publishes the table (with EverPublished set and no unsafe
   // identity), so the semantic assertions below are a true wiring mutation.
-  constexpr size_t QueryBudget = 3840;
+  constexpr size_t QueryBudget = 6000;
   const BudgetedBuild GraphBoundary = BuildWithBudget(QueryBudget);
   EXPECT_TRUE(GraphBoundary.GraphQueryIssued);
   EXPECT_TRUE(GraphBoundary.GraphBudgetExhausted)
