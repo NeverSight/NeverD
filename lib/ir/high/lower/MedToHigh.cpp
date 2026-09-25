@@ -812,8 +812,15 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   eliminateHighDeadPhiCopies(Func);
   if (Func.Body.size() <= limits::kMaxStructuredHighStmts) {
     bool Changed = duplicateSmallReturnTails(Func.Body);
-    for (int Round = 0; Round < 8 && reduceSingleUseGotos(Func.Body); ++Round)
-      Changed = true;
+    // Region splices nest whole multi-block regions, so they run only after
+    // the local rewrites have settled.
+    for (bool Regions : {false, true})
+      for (int Round = 0; Round < 8; ++Round) {
+        const bool Grouped = groupSwitchCases(Func.Body);
+        if (!reduceSingleUseGotos(Func.Body, Regions) && !Grouped)
+          break;
+        Changed = true;
+      }
     if (Changed)
       eliminateDeadStmts(Func);
   }

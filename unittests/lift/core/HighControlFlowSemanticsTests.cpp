@@ -179,9 +179,13 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
       if (S.Kind == StmtKind::Switch) {
         const auto Selector = Value(S.SwitchExpr);
         const std::vector<HighStmt> *Selected = &S.DefaultBody;
-        for (const auto &Case : S.Cases)
-          if (Case.Value == Selector) {
-            Selected = &Case.Body;
+        for (size_t I = 0; I < S.Cases.size(); ++I)
+          if (S.Cases[I].Value == Selector) {
+            // `case A: case B: body` shares the next non-empty body.
+            size_t J = I;
+            while (J + 1 < S.Cases.size() && S.Cases[J].FallsThrough)
+              ++J;
+            Selected = &S.Cases[J].Body;
             break;
           }
         auto R = Run(*Selected);

@@ -714,7 +714,158 @@ static bool sameStraightLineBody(const std::vector<HighStmt> &A,
   return true;
 }
 
-bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
+bool groupSwitchCases(std::vector<HighStmt> &Body) {
+  std::map<va_t, unsigned> Uses;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
+        S.GotoTarget != InvalidVA)
+      ++Uses[S.GotoTarget];
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.HandlerVA != 0 && Clause.HandlerVA != InvalidVA)
+        Uses[Clause.HandlerVA] = ~0u;
+  });
+  auto labeled = [&](const HighStmt &S) {
+    return S.Addr != 0 && S.Addr != InvalidVA && Uses.count(S.Addr) != 0;
+  };
+  // `goto Next` that leaves a case for the statement right after the switch
+  // is a `break`.  Loops and nested switches own their own `break`.
+  std::function<bool(std::vector<HighStmt> &, va_t)> GotoNextToBreak =
+      [&](std::vector<HighStmt> &L, va_t Next) {
+        bool Changed = false;
+        for (HighStmt &S : L) {
+          if (S.Kind == StmtKind::Goto && S.GotoTarget == Next) {
+            if (--Uses[Next] == 0)
+              Uses.erase(Next);
+            S.Kind = StmtKind::Break;
+            S.GotoTarget = 0;
+            Changed = true;
+          } else if (S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse ||
+                     S.Kind == StmtKind::Block) {
+            Changed |= GotoNextToBreak(S.Body, Next);
+            Changed |= GotoNextToBreak(S.ElseBody, Next);
+          }
+        }
+        return Changed;
+      };
+  // Where a case body goes: a lone goto's target, or 0 for leaving the
+  // switch.  Bodies with any other content, or whose statement is itself a
+  // label, have no exit key.
+  constexpr va_t kLeave = 0;
+  auto exitOf = [&](const std::vector<HighStmt> &L) -> std::optional<va_t> {
+    if (L.empty())
+      return kLeave;
+    if (L.size() != 1 || labeled(L[0]))
+      return std::nullopt;
+    if (L[0].Kind == StmtKind::Break)
+      return kLeave;
+    if (L[0].Kind == StmtKind::Goto && L[0].GotoTarget != 0 &&
+        L[0].GotoTarget != InvalidVA)
+      return L[0].GotoTarget;
+    return std::nullopt;
+  };
+
+  bool Changed = false;
+  std::function<void(std::vector<HighStmt> &)> Visit =
+      [&](std::vector<HighStmt> &L) {
+        for (size_t I = 0; I < L.size(); ++I) {
+          HighStmt &S = L[I];
+          Visit(S.Body);
+          Visit(S.ElseBody);
+          for (SwitchCase &C : S.Cases)
+            Visit(C.Body);
+          Visit(S.DefaultBody);
+          for (auto &ClauseBody : S.EHClauseBodies)
+            Visit(ClauseBody);
+          if (S.Kind != StmtKind::Switch || S.Cases.empty())
+            continue;
+          if (I + 1 < L.size() && L[I + 1].Addr != 0 &&
+              L[I + 1].Addr != InvalidVA && L[I + 1].Addr != S.Addr) {
+            const va_t Next = L[I + 1].Addr;
+            for (SwitchCase &C : S.Cases)
+              Changed |= GotoNextToBreak(C.Body, Next);
+            Changed |= GotoNextToBreak(S.DefaultBody, Next);
+          }
+          // Units: a run of fall-through cases and the case owning the body.
+          std::vector<std::vector<SwitchCase>> Units;
+          std::vector<SwitchCase> Cur;
+          for (SwitchCase &C : S.Cases) {
+            Cur.push_back(std::move(C));
+            if (!Cur.back().FallsThrough) {
+              Units.push_back(std::move(Cur));
+              Cur.clear();
+            }
+          }
+          if (!Cur.empty())
+            Units.push_back(std::move(Cur));
+          // Two case bodies are interchangeable when they leave for the
+          // same place or are the same short label-free statement list.
+          auto sameBody = [&](const std::vector<HighStmt> &A,
+                              const std::vector<HighStmt> &B) {
+            const std::optional<va_t> EA = exitOf(A), EB = exitOf(B);
+            if (EA || EB)
+              return EA == EB;
+            if (A.size() > 8 || !sameStraightLineBody(A, B))
+              return false;
+            for (const HighStmt &X : A)
+              if (labeled(X))
+                return false;
+            for (const HighStmt &X : B)
+              if (labeled(X))
+                return false;
+            return true;
+          };
+          auto hasBody = [&](size_t U) {
+            return !Units[U].back().FallsThrough;
+          };
+          auto dropBody = [&](std::vector<HighStmt> &L) {
+            for (const HighStmt &X : L)
+              if (X.Kind == StmtKind::Goto && X.GotoTarget != 0 &&
+                  X.GotoTarget != InvalidVA && --Uses[X.GotoTarget] == 0)
+                Uses.erase(X.GotoTarget);
+            L.clear();
+          };
+          // A case that does what an explicit `default` does adds nothing.
+          // Without one, a case that just leaves keeps its recovered label.
+          std::vector<bool> Dropped(Units.size(), false);
+          for (size_t U = 0; U < Units.size(); ++U)
+            if (!S.DefaultBody.empty() && hasBody(U) &&
+                sameBody(Units[U].back().Body, S.DefaultBody)) {
+              Dropped[U] = true;
+              dropBody(Units[U].back().Body);
+              Changed = true;
+            }
+          // Cases with the same destination share one body.
+          std::vector<SwitchCase> NewCases;
+          std::vector<bool> Emitted(Units.size(), false);
+          for (size_t U = 0; U < Units.size(); ++U) {
+            if (Dropped[U] || Emitted[U])
+              continue;
+            std::vector<size_t> Group{U};
+            if (hasBody(U))
+              for (size_t V = U + 1; V < Units.size(); ++V)
+                if (!Dropped[V] && !Emitted[V] && hasBody(V) &&
+                    sameBody(Units[V].back().Body, Units[U].back().Body))
+                  Group.push_back(V);
+            for (size_t G = 0; G < Group.size(); ++G) {
+              Emitted[Group[G]] = true;
+              auto &Unit = Units[Group[G]];
+              if (G + 1 < Group.size()) {
+                dropBody(Unit.back().Body);
+                Unit.back().FallsThrough = true;
+                Changed = true;
+              }
+              for (SwitchCase &C : Unit)
+                NewCases.push_back(std::move(C));
+            }
+          }
+          S.Cases = std::move(NewCases);
+        }
+      };
+  Visit(Body);
+  return Changed;
+}
+
+bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
   // Every way a statement address is entered: gotos and __except handlers.
   std::map<va_t, unsigned> Uses;
   std::set<va_t> Pinned;
@@ -1065,6 +1216,47 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
     }
     return nullptr;
   };
+  // End of the region starting at the label at \p K: the first terminator
+  // followed by a label (or the list end) such that every label starting
+  // after K up to it is entered only by gotos inside the region.
+  auto regionEnd = [&](const std::vector<HighStmt> &LL,
+                       size_t K) -> std::optional<size_t> {
+    constexpr size_t kMaxRegionStmts = 256;
+    std::map<va_t, unsigned> Internal;
+    std::set<va_t> Inner;
+    for (size_t M = K; M < LL.size() && M - K < kMaxRegionStmts; ++M) {
+      if (M > K && labelStart(LL, M)) {
+        if (usesOf(LL[M].Addr) == ~0u)
+          return std::nullopt;
+        Inner.insert(LL[M].Addr);
+      }
+      std::function<void(const HighStmt &)> CountGotos =
+          [&](const HighStmt &S) {
+            if (S.Kind == StmtKind::Goto)
+              ++Internal[S.GotoTarget];
+          };
+      CountGotos(LL[M]);
+      walkStmts(LL[M].Body, CountGotos);
+      walkStmts(LL[M].ElseBody, CountGotos);
+      for (const auto &C : LL[M].Cases)
+        walkStmts(C.Body, CountGotos);
+      walkStmts(LL[M].DefaultBody, CountGotos);
+      for (const auto &ClauseBody : LL[M].EHClauseBodies)
+        walkStmts(ClauseBody, CountGotos);
+      if (!isTerminator(LL[M]) ||
+          !(M + 1 == LL.size() || labelStart(LL, M + 1)))
+        continue;
+      bool Closed = true;
+      for (va_t Label : Inner)
+        if (Internal[Label] != usesOf(Label)) {
+          Closed = false;
+          break;
+        }
+      if (Closed)
+        return M;
+    }
+    return std::nullopt;
+  };
   for (unsigned Applied = 0; Applied < 512; ++Applied) {
     std::map<va_t, Site> Labels;
     std::vector<std::pair<Site, va_t>> Gotos;
@@ -1108,8 +1300,17 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
           Bad = true;
         ++M;
       }
-      if (Bad || M >= LL.size() || (M > K && labelStart(LL, M)))
-        continue;
+      if (Bad || M >= LL.size() || (M > K && labelStart(LL, M))) {
+        // A longer region also qualifies when every label starting inside
+        // it is entered only from inside it: the whole region then moves
+        // as one unit and its internal jumps stay internal.
+        std::optional<size_t> End =
+            SpliceRegions ? regionEnd(LL, K) : std::nullopt;
+        if (!End)
+          continue;
+        M = *End;
+        Bad = false;
+      }
       // The goto must not sit inside the block it would receive.
       for (const auto &[List, Index] : GotoSite.Chain)
         if (List == &LL && Index >= K && Index <= M)
@@ -1117,10 +1318,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
       if (GotoSite.List == &LL && GotoSite.Index >= K && GotoSite.Index <= M)
         Bad = true;
       std::vector<HighStmt> Moved(LL.begin() + K, LL.begin() + M + 1);
-      walkStmts(Moved, [&](const HighStmt &S) {
-        Bad |= S.Kind == StmtKind::Break || S.Kind == StmtKind::Continue ||
-               S.Kind == StmtKind::SEHTry;
-      });
+      Bad |= hasLooseBreakOrContinue(Moved);
+      walkStmts(Moved,
+                [&](const HighStmt &S) { Bad |= S.Kind == StmtKind::SEHTry; });
       if (Bad)
         continue;
       for (size_t J = K; J <= M; ++J) {

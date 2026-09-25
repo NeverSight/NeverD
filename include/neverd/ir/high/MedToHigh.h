@@ -64,7 +64,13 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body);
 /// Late goto reduction: merge conditional jumps to one target, move a block
 /// entered by a single forward jump into that `if`, and turn a jump over the
 /// fall-through path into `if`/`else`.  Returns true when anything changed.
-bool reduceSingleUseGotos(std::vector<HighStmt> &Body);
+/// With \p SpliceRegions, a single-use label may also start a multi-block
+/// region that is entered only from inside itself; that region moves too.
+bool reduceSingleUseGotos(std::vector<HighStmt> &Body,
+                          bool SpliceRegions = false);
+/// Share one body among switch cases that go to the same place, and drop
+/// cases that go where `default` goes.
+bool groupSwitchCases(std::vector<HighStmt> &Body);
 
 /// Emit a label-per-block goto/return skeleton.  Used when structuring would
 /// exceed SSA limits, or when conversion fails and identity alone would leave

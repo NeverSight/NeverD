@@ -506,30 +506,43 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     OS << "}\n";
     break;
 
-  case StmtKind::Switch:
+  case StmtKind::Switch: {
     if (!Stmt.SwitchExpr)
       return;
     emitIndent(Indent);
     OS << "switch (" << exprStr(*Stmt.SwitchExpr) << ") {\n";
+    // A body that already leaves the case needs no `break` after it.
+    auto endsInJump = [&](const std::vector<HighStmt> &Body) {
+      if (Body.empty() || Analysis.DeadStmts.count(&Body.back()))
+        return false;
+      const StmtKind K = Body.back().Kind;
+      return K == StmtKind::Return || K == StmtKind::Goto ||
+             K == StmtKind::Break || K == StmtKind::Continue;
+    };
     for (auto &C : Stmt.Cases) {
       emitIndent(Indent);
       OS << "case " << constStr(C.Value) << ":\n";
       if (C.FallsThrough)
         continue;
       writeStmts(C.Body, Indent + 1);
-      emitIndent(Indent + 1);
-      OS << "break;\n";
+      if (!endsInJump(C.Body)) {
+        emitIndent(Indent + 1);
+        OS << "break;\n";
+      }
     }
     if (!Stmt.DefaultBody.empty()) {
       emitIndent(Indent);
       OS << "default:\n";
       writeStmts(Stmt.DefaultBody, Indent + 1);
-      emitIndent(Indent + 1);
-      OS << "break;\n";
+      if (!endsInJump(Stmt.DefaultBody)) {
+        emitIndent(Indent + 1);
+        OS << "break;\n";
+      }
     }
     emitIndent(Indent);
     OS << "}\n";
     break;
+  }
 
   case StmtKind::Goto:
     emitIndent(Indent);

@@ -4098,6 +4098,86 @@ unsigned countGotos(const std::vector<HighStmt> &Body) {
 }
 } // namespace
 
+TEST(HighCPointerAddresses, GroupSwitchCasesSharesBodiesAndDropsDefaultCopies) {
+  // switch (v) { case 1: goto A; case 2: goto D; case 3: goto A;
+  //   case 4: goto N; case 5: return; case 6: return; default: goto D; }
+  // N: x = 0; return;  A: x = 1; return;  D: x = 2; return;
+  MedVar Sel;
+  Sel.Kind = MedVar::Temp;
+  Sel.Id = 9;
+  Sel.Size = 4;
+  HighStmt Sw;
+  Sw.Kind = StmtKind::Switch;
+  Sw.Addr = 0x1000;
+  Sw.SwitchExpr = HighExpr::makeVar(Sel);
+  auto addCase = [&](uint64_t Value, HighStmt Body) {
+    SwitchCase C;
+    C.Value = Value;
+    C.Body.push_back(std::move(Body));
+    Sw.Cases.push_back(std::move(C));
+  };
+  addCase(1, gotoAt(0, 0x1040));
+  addCase(2, gotoAt(0, 0x1050));
+  addCase(3, gotoAt(0, 0x1040));
+  addCase(4, gotoAt(0, 0x1030));
+  addCase(5, returnAt(0));
+  addCase(6, returnAt(0));
+  Sw.DefaultBody.push_back(gotoAt(0, 0x1050));
+  std::vector<HighStmt> Body = {Sw,
+                                assignConst(0x1030, 1, 0),
+                                returnAt(0x1038),
+                                assignConst(0x1040, 1, 1),
+                                returnAt(0x1048),
+                                assignConst(0x1050, 1, 2),
+                                returnAt(0x1058)};
+  ASSERT_TRUE(groupSwitchCases(Body));
+  const auto &Cases = Body[0].Cases;
+  // Case 2 does what default does; 1 and 3 share one goto; 4 leaves the
+  // switch for the next statement; 5 and 6 share one return.
+  ASSERT_EQ(Cases.size(), 5u);
+  EXPECT_EQ(Cases[0].Value, 1u);
+  EXPECT_TRUE(Cases[0].FallsThrough);
+  EXPECT_EQ(Cases[1].Value, 3u);
+  ASSERT_EQ(Cases[1].Body.size(), 1u);
+  EXPECT_EQ(Cases[1].Body[0].GotoTarget, 0x1040u);
+  EXPECT_EQ(Cases[2].Value, 4u);
+  ASSERT_EQ(Cases[2].Body.size(), 1u);
+  EXPECT_EQ(Cases[2].Body[0].Kind, StmtKind::Break);
+  EXPECT_EQ(Cases[3].Value, 5u);
+  EXPECT_TRUE(Cases[3].FallsThrough);
+  EXPECT_EQ(Cases[4].Value, 6u);
+  EXPECT_EQ(Cases[4].Body[0].Kind, StmtKind::Return);
+  EXPECT_EQ(countGotos(Body), 2u);
+}
+
+TEST(HighCPointerAddresses, GroupSwitchCasesKeepsLabeledCaseBodies) {
+  // A case whose goto is itself a label target keeps its own body.
+  MedVar Sel;
+  Sel.Kind = MedVar::Temp;
+  Sel.Id = 9;
+  Sel.Size = 4;
+  HighStmt Sw;
+  Sw.Kind = StmtKind::Switch;
+  Sw.Addr = 0x1000;
+  Sw.SwitchExpr = HighExpr::makeVar(Sel);
+  for (uint64_t V : {1u, 2u}) {
+    SwitchCase C;
+    C.Value = V;
+    C.Body.push_back(gotoAt(V == 1 ? 0x1010 : 0x1018, 0x1040));
+    Sw.Cases.push_back(std::move(C));
+  }
+  std::vector<HighStmt> Body = {gotoAt(0x0ff0, 0x1018),    Sw,
+                                assignConst(0x1030, 1, 0), returnAt(0x1038),
+                                assignConst(0x1040, 1, 1), returnAt(0x1048)};
+  groupSwitchCases(Body);
+  const auto &Cases = Body[1].Cases;
+  ASSERT_EQ(Cases.size(), 2u);
+  EXPECT_FALSE(Cases[0].FallsThrough);
+  EXPECT_FALSE(Cases[1].FallsThrough);
+  ASSERT_EQ(Cases[1].Body.size(), 1u);
+  EXPECT_EQ(Cases[1].Body[0].Addr, 0x1018u);
+}
+
 TEST(HighCPointerAddresses, ReduceGotosMergesJumpsToOneTarget) {
   // if (a) goto L; if (b) goto L; x = 0; return; L: x = 1; return;
   std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1040),
