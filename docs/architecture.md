@@ -250,12 +250,24 @@ The same copied-contract boundary covers `NSBlockOperation`
 `blockOperationWithBlock:`, `CLGeocoder`
 `reverseGeocodeLocation:completionHandler:`, and the two asynchronous
 `UNUserNotificationCenter` settings and authorization callbacks. The
-authorization callback is unavailable on x86-64 in this catalog because the
+`NSPersistentContainer loadPersistentStoresWithCompletionHandler:` callback
+also uses a copied contract because store descriptions can request asynchronous
+addition and the SDK imports the completion as escaping. The receiver must
+resolve to `NSPersistentContainer` and both method and callback ABIs must match.
+The authorization callback is unavailable on x86-64 in this catalog because the
 macOS and iOS SDKs encode its `BOOL` argument differently.
 Rejected Objective-C block consumers distinguish an unqualified receiver,
 callback ABI mismatch, and unproven message binding in their dependency
 diagnostic, so a missing lifetime proof can be traced without treating a
 selector name alone as authority.
+
+An invoke may pass a nested stack block only when construction proves every
+header and owned capture byte, the exact call consumes that frame base, and the
+consumer's lifetime contract is still bound. The outer context cannot be
+smuggled through a nested capture or another frame argument. Complete 16-byte
+loads from initialized captures may pass through private vector spills as
+opaque bytes; partial pointer values and computed wide expressions retain
+their private or unproven identity and cannot establish a capture.
 
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an

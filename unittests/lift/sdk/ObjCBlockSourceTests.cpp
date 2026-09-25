@@ -1378,6 +1378,8 @@ TEST(ObjCBlockSources, AppleAsyncConsumersRequireExactSDKBlockContract) {
   constexpr Case Cases[] = {
       {"Foundation", "NSBlockOperation", "blockOperationWithBlock:", 2, 1, true,
        true},
+      {"CoreData", "NSPersistentContainer",
+       "loadPersistentStoresWithCompletionHandler:", 2, 3, false, true},
       {"CoreLocation", "CLGeocoder",
        "reverseGeocodeLocation:completionHandler:", 3, 3, false, true},
       {"UserNotifications", "UNUserNotificationCenter",
@@ -1673,6 +1675,131 @@ TEST(ObjCBlockSources,
                     (std::set<va_t>{F.Invoke, F.Copy, F.Dispose}));
       }
     }
+}
+
+TEST(ObjCBlockSources,
+     InvokeMayPassItsProvenNestedBlockWithoutExposingOuterContext) {
+  SourceFixture F(true);
+  auto Outer = F.caller();
+  Outer.Entry = 0x1500;
+  Outer.Name = "nested_block_invoke";
+  F.Result.HighFuncs.push_back(std::move(Outer));
+  const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+  ASSERT_EQ(Plan.StackBlocks.at(0x1500).size(), 1U);
+  const auto &Function = F.Result.HighFuncs.back();
+  const auto *Consumer = Function.Body.back().RetVal.get();
+  EXPECT_TRUE(
+      Plan.StackBlocks.at(0x1500)[0].ValidatedConsumers.count(Consumer));
+
+  const ObjCBlockSourceContext Source(F.Image);
+  const std::set<uint64_t> Initialized;
+  std::set<std::pair<va_t, size_t>> Active;
+  std::string Reason;
+  EXPECT_FALSE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason));
+  EXPECT_NE(Reason.find("exposes private context storage"), std::string::npos);
+  Reason.clear();
+  EXPECT_TRUE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason,
+      nullptr, nullptr, &Plan))
+      << Reason;
+
+  Function.Body.back().RetVal->SourceCallHint.reset();
+  Reason.clear();
+  EXPECT_FALSE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason,
+      nullptr, nullptr, &Plan));
+}
+
+TEST(ObjCBlockSources, PartialContextPointerInFrameRemainsPrivate) {
+  SourceFixture F(true);
+  auto &Function = F.Result.HighFuncs[1];
+  Function.FrameSize = 16;
+  const ObjCBlockSourceContext Source(F.Image);
+  std::set<std::pair<va_t, size_t>> Active;
+  std::string Reason;
+  auto CallFrameConsumer = [&](ExprPtr Value) {
+    auto Call = HighExpr::makeCall({}, 0, {frame(F.Image, -8)});
+    Call->Type = Function.ReturnType;
+    Function.Body = {store(frame(F.Image, -8), Value), ret(Call)};
+    Reason.clear();
+    return objc_block_source_detail::noEscape(
+        Source, F.functions(), Function.Entry, 0, nullptr, Active, Reason);
+  };
+  EXPECT_TRUE(CallFrameConsumer(HighExpr::makeConst(7, 8))) << Reason;
+  auto Partial =
+      HighExpr::makeBinop(NdOp::SUBBYTES, parameter(0, Function.Params[0].Type),
+                          HighExpr::makeConst(0, 4));
+  Partial->Type = NdType::makeInt(4, false);
+  auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Partial);
+  Extended->Type = NdType::makeInt(8, false);
+  EXPECT_FALSE(CallFrameConsumer(Extended));
+  EXPECT_NE(Reason.find("exposes private context storage"), std::string::npos);
+}
+
+TEST(ObjCBlockSources, CompleteWideCaptureSpillRetainsConstructionEvidence) {
+  SourceFixture F(true);
+  F.put64(F.Descriptor + 8, 48);
+  auto &Caller = F.caller();
+  Caller.FrameSize = 128;
+  auto Wide = NdType::makeInt(16);
+  Caller.Body.insert(
+      Caller.Body.begin(),
+      store(frame(F.Image, -80),
+            HighExpr::makeLoad(parameter(0, Caller.Params[0].Type), Wide)));
+  Caller.Body[5] =
+      store(frame(F.Image, -16), HighExpr::makeLoad(frame(F.Image, -80), Wide));
+  const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+  ASSERT_FALSE(Plan.Rejections.count(F.Caller))
+      << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller) : "");
+  ASSERT_EQ(Plan.StackBlocks.at(F.Caller).size(), 1U);
+  EXPECT_EQ(Plan.StackBlocks.at(F.Caller)[0].InitializedCaptures.size(), 16U);
+
+  // A computed wide value has no byte-for-byte load provenance, even when
+  // its numeric operands happen to match the capture at runtime.
+  auto Computed = HighExpr::makeBinop(NdOp::CONCAT, HighExpr::makeConst(0, 8),
+                                      HighExpr::makeConst(0, 8));
+  Computed->Type = Wide;
+  Caller.Body[0].StoreVal = Computed;
+  const auto Rejected = discoverObjCBlockSources(F.Image, F.Result);
+  EXPECT_TRUE(Rejected.Rejections.count(F.Caller));
+}
+
+TEST(ObjCBlockSources, CompleteWideContextCaptureMayBeSpilledPrivately) {
+  SourceFixture F(true);
+  auto &Function = F.Result.HighFuncs[1];
+  Function.FrameSize = 32;
+  auto Wide = NdType::makeInt(16);
+  auto Address =
+      HighExpr::makeBinop(NdOp::INT_ADD, parameter(0, Function.Params[0].Type),
+                          HighExpr::makeConst(32, 8));
+  auto Call = HighExpr::makeCall({}, 0, {frame(F.Image, -16)});
+  Call->Type = Function.ReturnType;
+  Function.Body = {
+      store(frame(F.Image, -16), HighExpr::makeLoad(Address, Wide)), ret(Call)};
+  std::set<uint64_t> Initialized;
+  for (uint64_t Byte = 32; Byte < 48; ++Byte)
+    Initialized.insert(Byte);
+  const ObjCBlockSourceContext Source(F.Image);
+  std::set<std::pair<va_t, size_t>> Active;
+  std::string Reason;
+  EXPECT_TRUE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason))
+      << Reason;
+  Initialized.erase(47);
+  EXPECT_FALSE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason));
+  EXPECT_NE(Reason.find("uninitialized capture storage"), std::string::npos);
+
+  auto PackedPointer =
+      HighExpr::makeBinop(NdOp::CONCAT, HighExpr::makeConst(0, 8),
+                          parameter(0, Function.Params[0].Type));
+  PackedPointer->Type = Wide;
+  Function.Body[0].StoreVal = PackedPointer;
+  Initialized.insert(47);
+  EXPECT_FALSE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason));
+  EXPECT_NE(Reason.find("exposes private context storage"), std::string::npos);
 }
 
 TEST(ObjCBlockSources,

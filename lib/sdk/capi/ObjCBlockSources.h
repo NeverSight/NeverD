@@ -28,6 +28,7 @@ struct ObjCStackBlockSource {
   va_t InvokeEntry = 0;
   ObjCBlockDescriptor Descriptor;
   std::set<uint64_t> InitializedCaptures;
+  std::set<const HighExpr *> ValidatedConsumers;
   std::map<const HighExpr *, ObjCBlockAddressBinding> References;
   std::map<const HighExpr *, uint64_t> HeaderConstants;
 };
@@ -74,6 +75,7 @@ struct Value {
     Context,
     Invoke,
     Isa,
+    OpaqueBytes,
     PointerBits,
     UnprovenIdentity
   } K = Scalar;
@@ -240,6 +242,8 @@ public:
     const unsigned Bytes = E->Type ? E->Type->Size : 0;
     if (E->Kind == ExprKind::Const && scalarWidth(Bytes))
       return {Value::Number, 0, E->ConstVal & mask(Bytes), {}, E.get()};
+    if (E->Kind == ExprKind::Const && Bytes == 16 && !E->ConstVal)
+      return {Value::OpaqueBytes, 0, 0, {}, E.get()};
     if (E->Kind == ExprKind::Var) {
       const auto Found =
           Locals.find(objc_projection_detail::localIdentity(E->Var));
@@ -317,7 +321,8 @@ public:
         V.Producer = E.get();
         return V;
       }
-      if (Bytes == 8 && E->Operands[0]->Type->Size == 8)
+      if (Bytes == E->Operands[0]->Type->Size &&
+          (Bytes == 8 || V.K == Value::OpaqueBytes))
         return V;
       // Deferred image bytes are an ordinary loaded value, not a pointer
       // identity. A width conversion loses the raw header-byte recipe while
@@ -401,6 +406,8 @@ public:
                    ? ContextRead(Address, Bytes)
                    : throw Invalid(
                          "block context memory read is not established");
+      if (Bytes == 16 && !pointerIdentity(Address))
+        return {Value::OpaqueBytes, 0, 0, {}, E.get()};
       if (Address.K == Value::Number && Bytes == 8) {
         auto Found = Imports.Slots.find(Address.Bits);
         if (Found != Imports.Slots.end() &&
@@ -446,8 +453,7 @@ public:
     if (Bytes > EvaluationBudget)
       throw Invalid("block frame proof exceeds its byte budget");
     EvaluationBudget -= Bytes;
-    const bool Identity = V.K == Value::Frame || V.K == Value::Context ||
-                          V.K == Value::Invoke || V.K == Value::Isa;
+    const bool Identity = pointerIdentity(V);
     for (unsigned I = 0; I < Bytes; ++I) {
       const int64_t Byte = Address.Offset + I;
       if (Identity)
@@ -514,7 +520,8 @@ noEscape(const ObjCBlockSourceContext &Source,
          size_t Parameter, const std::set<uint64_t> *Initialized,
          std::set<std::pair<va_t, size_t>> &Active, std::string &Reason,
          const std::set<uint64_t> *WritableStrongFields = nullptr,
-         std::map<uint64_t, std::set<uint64_t>> *AssignmentFlags = nullptr) {
+         std::map<uint64_t, std::set<uint64_t>> *AssignmentFlags = nullptr,
+         const ObjCBlockSourcePlan *ValidatedNestedBlocks = nullptr) {
   try {
     if (Active.size() >= 16 || !Active.insert({Entry, Parameter}).second)
       throw Invalid("block consumer recursion is not established");
@@ -531,12 +538,13 @@ noEscape(const ObjCBlockSourceContext &Source,
     State.ContextRead = [&](const Value &Address, unsigned Bytes) -> Value {
       if (!Initialized && Address.Offset == 16 && Bytes == 8)
         return {Value::Invoke};
-      if (!Initialized || Address.Offset < 32 || !scalarWidth(Bytes))
+      if (!Initialized || Address.Offset < 32 ||
+          (!scalarWidth(Bytes) && Bytes != 16))
         throw Invalid("block invoke reads an unknown context field");
       for (unsigned I = 0; I < Bytes; ++I)
         if (!Initialized->count(static_cast<uint64_t>(Address.Offset) + I))
           throw Invalid("block invoke reads uninitialized capture storage");
-      return {};
+      return Bytes == 16 ? Value{Value::OpaqueBytes} : Value{};
     };
     State.Call = [&](const HighExpr &E,
                      const std::vector<Value> &Arguments) -> Value {
@@ -570,6 +578,20 @@ noEscape(const ObjCBlockSourceContext &Source,
       }
       for (size_t I = 0; I < Arguments.size(); ++I) {
         const auto &A = Arguments[I];
+        if (A.K == Value::Frame && ValidatedNestedBlocks &&
+            objcSourceCallBound(E, Source.Image, Functions)) {
+          // The construction proof validated this exact call and frame base,
+          // including every capture byte. It rejects context/frame identities
+          // in captures, while the consumer owns only the nested literal.
+          auto Blocks = ValidatedNestedBlocks->StackBlocks.find(Entry);
+          if (Blocks != ValidatedNestedBlocks->StackBlocks.end() &&
+              std::any_of(Blocks->second.begin(), Blocks->second.end(),
+                          [&](const ObjCStackBlockSource &Block) {
+                            return Block.FrameOffset == A.Offset &&
+                                   Block.ValidatedConsumers.count(&E);
+                          }))
+            continue;
+        }
         // An invoke's own fresh stack storage is not the block context. It can
         // be passed to a bound call while the frame contains no context,
         // invoke, ISA, or other pointer identity. Once any such identity has
@@ -790,6 +812,7 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
   std::map<int64_t, ObjCStackBlockSource> Blocks;
   std::map<const HighExpr *, uint64_t> PooledHeaderValues;
   bool SawIsa = false;
+  va_t FailedAt = InvalidVA;
   try {
     Values State(Source, Function);
     auto UntouchedEntryPointer = [&](const ExprPtr &Expr,
@@ -1022,6 +1045,7 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
               "stack block flows to a consumer without a lifetime proof: " +
               Error);
         }
+        Block.ValidatedConsumers.insert(&E);
         if (DeclaredConsumer)
           InvalidatedBlocks.emplace(Block.FrameOffset,
                                     Block.Descriptor.LiteralSize);
@@ -1036,6 +1060,8 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           Blocks.emplace(Block.FrameOffset, std::move(Block));
         } else {
           auto &Known = Previous->second;
+          Known.ValidatedConsumers.insert(Block.ValidatedConsumers.begin(),
+                                          Block.ValidatedConsumers.end());
           for (const auto &[Expression, Reference] : Block.References) {
             auto [It, Fresh] = Known.References.emplace(Expression, Reference);
             if (!Fresh && (It->second.Kind != Reference.Kind ||
@@ -1060,6 +1086,7 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
       return {};
     };
     auto Evaluate = [&](const HighSourceFlowNode &Node) {
+      FailedAt = Node.Statement ? Node.Statement->Addr : InvalidVA;
       if (Node.Test) {
         (void)State.eval(Node.Test);
         return;
@@ -1130,7 +1157,9 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
         // block remains discoverable, while any header or owned capture that
         // relies on these untyped bytes still fails closed.
         const Value Stored =
-            scalarWidth(Bytes) ? V : Value{Value::UnprovenIdentity};
+            scalarWidth(Bytes) || (Bytes == 16 && V.K == Value::OpaqueBytes)
+                ? V
+                : Value{Value::UnprovenIdentity};
         State.storeFrame(Address, Bytes, Stored);
         for (unsigned I = 0; I < Bytes; ++I)
           Memory[Address.Offset + I] = {Stored, I, Bytes};
@@ -1165,8 +1194,11 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
       Result.push_back(std::move(Block));
     return Result;
   } catch (const Invalid &Error) {
-    if (SawIsa)
+    if (SawIsa) {
       Reason = Error.what();
+      if (FailedAt && FailedAt != InvalidVA)
+        Reason += " at 0x" + llvm::utohexstr(FailedAt, true);
+    }
     return {};
   }
 }
@@ -1411,18 +1443,24 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
                              const std::set<uint64_t> &Initialized) {
       auto Found = Functions.find(Entry);
       auto Hint = Plan.InvokeHints.find(Entry);
-      if (Plan.Rejections.count(Entry) || Found == Functions.end() ||
-          Hint == Plan.InvokeHints.end() || !Found->second->SourceTypeHint ||
-          !Descriptor.InvokeTypeHint ||
-          !objc_projection_detail::sameHint(*Found->second->SourceTypeHint,
+      if (auto Rejection = Plan.Rejections.find(Entry);
+          Rejection != Plan.Rejections.end())
+        throw Invalid("block invoke source was rejected: " + Rejection->second);
+      if (Found == Functions.end())
+        throw Invalid("block invoke has no recovered native function");
+      if (Hint == Plan.InvokeHints.end() || !Descriptor.InvokeTypeHint)
+        throw Invalid("block invoke has no descriptor ABI hint");
+      if (!Found->second->SourceTypeHint)
+        throw Invalid("block invoke native function has no source ABI");
+      if (!objc_projection_detail::sameHint(*Found->second->SourceTypeHint,
                                             *Descriptor.InvokeTypeHint) ||
           !objc_projection_detail::sameHint(Hint->second,
                                             *Descriptor.InvokeTypeHint))
-        throw Invalid(
-            "block invoke has no complete descriptor-bound native function");
+        throw Invalid("block invoke source ABI conflicts with descriptor");
       std::string Reason;
       std::set<std::pair<va_t, size_t>> Active;
-      if (!noEscape(Source, Functions, Entry, 0, &Initialized, Active, Reason))
+      if (!noEscape(Source, Functions, Entry, 0, &Initialized, Active, Reason,
+                    nullptr, nullptr, &Plan))
         throw Invalid("block invoke capture proof failed: " + Reason);
       Result.Dependencies.insert(Entry);
     };

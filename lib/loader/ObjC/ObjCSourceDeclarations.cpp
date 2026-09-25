@@ -1114,6 +1114,11 @@ objcBlockParameterContract(const BinaryImage &Image,
        "NSManagedObjectContext", true},
       {"performBlock:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0", "v8@?0",
        "NSPersistentStoreCoordinator", true},
+      // A store description may request asynchronous addition; Swift imports
+      // this completion as escaping, so the stack block must be copied.
+      {"loadPersistentStoresWithCompletionHandler:", "v24@0:8@?16",
+       "v24@0:8@?16", 2, "v24@?0@8@16", "v24@?0@8@16", "NSPersistentContainer",
+       true},
       // These APIs retain work beyond the message return. The authorization
       // callback's BOOL encoding differs between macOS and iOS x86-64.
       {"blockOperationWithBlock:", "@24@0:8@?16", "@24@0:8@?16", 2, "v8@?0",
