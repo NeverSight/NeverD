@@ -499,7 +499,8 @@ under one exact four-carrier contract: predicate, initializer, and two ordered
 storage words. The getter must make one authenticated `swift_once` call, feed
 the two unmodified words to the exact Swift `String`-to-`NSString` bridge, and
 use each address parameter only through pure same-width aliases and the proven
-loads. Callers must pass adjacent words of one named writable 16-byte object.
+loads. Callers must pass adjacent words of one validated writable storage
+region.
 The callback and all dependencies still require ordinary source closure; the
 storage proof does not authorize skipping an initializer or inventing contents.
 
@@ -509,6 +510,11 @@ form is accepted only after the complete use scan proves that the leading two
 registers are unobserved and the three trailing roles are exact. It proposes
 a callback ABI only when the initializer independently ignores its context;
 multi-level initializers without that proof remain unresolved.
+For either getter form, the cell may start at an interior offset of a named
+writable region when the complete prefix through the cell has no intervening
+symbol or pointer relocation. Projection keeps the region's shared base and
+the exact field offset, so independently emitted accesses use one rebuilt
+storage object.
 
 A compiler-emitted zero-argument Swift lazy-global addressor is rebuilt only
 when the exact `vau`/`vpZ`/`_Wz`/`_WZ` symbol family agrees with one canonical

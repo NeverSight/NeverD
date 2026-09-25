@@ -580,16 +580,16 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsEraseIgnoredContexts) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     OnceFixture F(Architecture);
     F.Pipeline.HighFuncs.resize(2);
-    F.Once->Operands[0] = HighExpr::makeConst(
-        0x2000, 8, ConstantAddressProvenance::DataAddress);
-    F.Once->Operands[1] = HighExpr::makeConst(
-        0x1080, 8, ConstantAddressProvenance::CodeAddress);
+    F.Once->Operands[0] =
+        HighExpr::makeConst(0x2000, 8, ConstantAddressProvenance::DataAddress);
+    F.Once->Operands[1] =
+        HighExpr::makeConst(0x1080, 8, ConstantAddressProvenance::CodeAddress);
 
     const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
     ASSERT_EQ(Plan.CallbackHints.count(0x1080), 1U);
     const auto Functions = F.functions();
-    const auto Bound = bindSwiftOnceSourceReferences(
-        F.Pipeline.HighFuncs[0], F.Image, Plan, Functions);
+    const auto Bound = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[0],
+                                                     F.Image, Plan, Functions);
     EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
     EXPECT_EQ(Bound.LocalStorageExtents,
               (std::map<va_t, uint64_t>{{0x2000, 8}}));
@@ -599,8 +599,8 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsEraseIgnoredContexts) {
     ASSERT_TRUE(Call->Operands[0]->SourceCallHint);
     EXPECT_EQ(Call->Operands[0]->SourceCallHint->CallKind,
               SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
-    EXPECT_TRUE(swiftOnceCallbackBound(*Call->Operands[1], F.Image, Plan,
-                                       Functions));
+    EXPECT_TRUE(
+        swiftOnceCallbackBound(*Call->Operands[1], F.Image, Plan, Functions));
     EXPECT_EQ(Call->Operands[2]->Kind, ExprKind::Const);
     EXPECT_EQ(Call->Operands[2]->ConstVal, 0U);
     EXPECT_EQ(F.Once->Operands[2]->Kind, ExprKind::Var);
@@ -676,10 +676,10 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsRequireIndependentLeafEvidence) {
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     OnceFixture F(Arch::AArch64);
     F.Pipeline.HighFuncs.resize(2);
-    F.Once->Operands[0] = HighExpr::makeConst(
-        0x2000, 8, ConstantAddressProvenance::DataAddress);
-    F.Once->Operands[1] = HighExpr::makeConst(
-        0x1080, 8, ConstantAddressProvenance::CodeAddress);
+    F.Once->Operands[0] =
+        HighExpr::makeConst(0x2000, 8, ConstantAddressProvenance::DataAddress);
+    F.Once->Operands[1] =
+        HighExpr::makeConst(0x1080, 8, ConstantAddressProvenance::CodeAddress);
     if (Mutation == 0) {
       MedVar Context;
       Context.Kind = MedVar::Param;
@@ -687,10 +687,9 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsRequireIndependentLeafEvidence) {
       Context.Size = 8;
       HighStmt Use;
       Use.Kind = StmtKind::ExprStmt;
-      Use.Val = HighExpr::makeVar(
-          Context, NdType::makePtr(NdType::makeVoid()));
-      F.Pipeline.HighFuncs[1].Body.insert(
-          F.Pipeline.HighFuncs[1].Body.begin(), std::move(Use));
+      Use.Val = HighExpr::makeVar(Context, NdType::makePtr(NdType::makeVoid()));
+      F.Pipeline.HighFuncs[1].Body.insert(F.Pipeline.HighFuncs[1].Body.begin(),
+                                          std::move(Use));
     } else if (Mutation == 1) {
       F.Once->Operands[0] = HighExpr::makeConst(
           0x1008, 8, ConstantAddressProvenance::CodeAddress);
@@ -1159,11 +1158,10 @@ TEST(SwiftOnceSources, ProjectsBridgedLazyClassGetterAndPreservesBridge) {
       ASSERT_TRUE(Bridge.Val && Bridge.Val->SourceCallHint);
       EXPECT_EQ(Bridge.Val->SourceCallHint->TargetAddress,
                 ObjCBridgedGetterFixture::BridgeSlot);
-      EXPECT_EQ(Bound.Function.Body[5].Val->Operands[0]->Var,
-                Bridge.Dst->Var);
+      EXPECT_EQ(Bound.Function.Body[5].Val->Operands[0]->Var, Bridge.Dst->Var);
       const auto Functions = F.functions();
-      const auto Projection = bindObjCSourceReferences(
-          Bound.Function, F.Image, nullptr, &Functions);
+      const auto Projection = bindObjCSourceReferences(Bound.Function, F.Image,
+                                                       nullptr, &Functions);
       EXPECT_TRUE(Projection.Limitation.empty()) << Projection.Limitation;
     }
   }
@@ -1205,8 +1203,8 @@ TEST(SwiftOnceSources, RejectsBridgedLazyClassGetterEvidenceDrift) {
       Context.Id = 0;
       Context.Size = 8;
       Use.Val = HighExpr::makeVar(Context, NdType::makeInt(8));
-      F.Pipeline.HighFuncs[1].Body.insert(
-          F.Pipeline.HighFuncs[1].Body.begin(), std::move(Use));
+      F.Pipeline.HighFuncs[1].Body.insert(F.Pipeline.HighFuncs[1].Body.begin(),
+                                          std::move(Use));
     }
     if (Mutation == 6)
       F.Image.Symbols.push_back(F.Image.Symbols.back());
@@ -1217,8 +1215,8 @@ TEST(SwiftOnceSources, RejectsBridgedLazyClassGetterEvidenceDrift) {
     const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
     if (Mutation != 5)
       EXPECT_TRUE(Plan.ObjCThunks.empty());
-    auto Bound = bindSwiftOnceSourceReferences(Thunk, F.Image, Plan,
-                                               F.functions());
+    auto Bound =
+        bindSwiftOnceSourceReferences(Thunk, F.Image, Plan, F.functions());
     EXPECT_TRUE(Bound.SwiftOnceObjCThunks.empty());
     EXPECT_FALSE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
   }
@@ -1668,8 +1666,10 @@ TEST(SwiftOnceSources, SharedObjectGetterIgnoresTwoLeadingObjCRegisters) {
       return HighExpr::makeVar(V, Pointer);
     };
     auto &Getter = F.Pipeline.HighFuncs[0];
-    Getter.Params = {{"objc_self", Pointer}, {"objc_cmd", Pointer},
-                     {"predicate", Pointer}, {"storage", Pointer},
+    Getter.Params = {{"objc_self", Pointer},
+                     {"objc_cmd", Pointer},
+                     {"predicate", Pointer},
+                     {"storage", Pointer},
                      {"initializer", Pointer}};
     SourceFunctionTypeHint Signature;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
@@ -1684,8 +1684,8 @@ TEST(SwiftOnceSources, SharedObjectGetterIgnoresTwoLeadingObjCRegisters) {
     F.Once->Operands = {Param(2), Param(4), Param(2)};
     Getter.Body[2].RetVal->Operands[0] = Param(3);
     auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
-    Call->Operands.insert(Call->Operands.begin(),
-                          {HighExpr::makeConst(0, 8), HighExpr::makeConst(0, 8)});
+    Call->Operands.insert(Call->Operands.begin(), {HighExpr::makeConst(0, 8),
+                                                   HighExpr::makeConst(0, 8)});
     auto Hint = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
     Hint->Signature = Signature;
     Call->SourceCallHint = std::move(Hint);
@@ -1707,9 +1707,9 @@ TEST(SwiftOnceSources, SharedObjectGetterIgnoresTwoLeadingObjCRegisters) {
     const auto UnsafeCallback = discoverSwiftOnceSources(F.Image, F.Pipeline);
     EXPECT_EQ(UnsafeCallback.Getters.size(), 1U);
     EXPECT_TRUE(UnsafeCallback.CallbackHints.empty());
-    EXPECT_TRUE(bindSwiftOnceSourceReferences(
-                    F.Pipeline.HighFuncs.back(), F.Image, UnsafeCallback,
-                    F.functions())
+    EXPECT_TRUE(bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs.back(),
+                                              F.Image, UnsafeCallback,
+                                              F.functions())
                     .Dependencies.empty());
     Callback.Body[0].RetVal.reset();
 
@@ -1718,6 +1718,49 @@ TEST(SwiftOnceSources, SharedObjectGetterIgnoresTwoLeadingObjCRegisters) {
     Escape.Val = Param(0);
     Getter.Body.insert(Getter.Body.begin(), Escape);
     EXPECT_TRUE(discoverSwiftOnceSources(F.Image, F.Pipeline).Getters.empty());
+  }
+}
+
+TEST(SwiftOnceSources, SharedObjectGetterBindsInteriorMergedStorage) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    OnceFixture F(Architecture);
+    F.Image.Symbols = {{"_predicate", 0x2000, 8, false},
+                       {"_MergedGlobals", 0x2020, 0, false},
+                       {"_nextStorage", 0x2040, 8, false}};
+    auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
+    Call->Operands[1] = HighExpr::makeConst(0x2030, 8);
+
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Getters.size(), 1U);
+    ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+    EXPECT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{0x2000, 8}, {0x2020, 24}}));
+    const auto Storage = Bound.Function.Body[0].RetVal->Operands[1];
+    ASSERT_EQ(Storage->Kind, ExprKind::BinOp);
+    ASSERT_EQ(Storage->Operands.size(), 2U);
+    ASSERT_TRUE(Storage->Operands[0]->SourceCallHint);
+    EXPECT_EQ(Storage->Operands[0]->SourceCallHint->TargetAddress, 0x2020U);
+    EXPECT_EQ(Storage->Operands[0]->SourceCallHint->ByteCount, 24U);
+    EXPECT_EQ(Storage->Operands[1]->ConstVal, 16U);
+    EXPECT_TRUE(
+        objcSourceCallBound(*Storage->Operands[0], F.Image, F.functions()));
+    EXPECT_TRUE(
+        bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
+
+    auto Overlap = F.Image;
+    Overlap.Symbols.push_back({"_intervening", 0x2034, 4, false});
+    EXPECT_TRUE(bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs.back(),
+                                              Overlap, Plan, F.functions())
+                    .Dependencies.empty());
+
+    auto Relocated = F.Image;
+    Relocated.DataPtrRelocSlots.insert(0x2030);
+    EXPECT_TRUE(bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs.back(),
+                                              Relocated, Plan, F.functions())
+                    .Dependencies.empty());
   }
 }
 

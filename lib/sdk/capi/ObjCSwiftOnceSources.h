@@ -367,8 +367,8 @@ getterContract(const HighFunc &F, const BinaryImage &Image) {
           SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
       F.SourceTypeHint->Convention !=
           SourceFunctionTypeHint::ConventionKind::C ||
-      (F.Params.size() != 3 && F.Params.size() != 4 &&
-       F.Params.size() != 5 && F.Params.size() != 6) ||
+      (F.Params.size() != 3 && F.Params.size() != 4 && F.Params.size() != 5 &&
+       F.Params.size() != 6) ||
       F.SourceTypeHint->Parameters.size() != F.Params.size())
     return std::nullopt;
   for (const auto &P : F.Params)
@@ -1066,15 +1066,15 @@ objcEffectfulThunkContract(const HighFunc &F, const BinaryImage &Image) {
   }
   if (!Method)
     return std::nullopt;
-  const bool Constructor = !Method->IsClassMethod && Method->Selector == "init" &&
+  const bool Constructor = !Method->IsClassMethod &&
+                           Method->Selector == "init" &&
                            llvm::StringRef(F.Name).ends_with("cfcTo");
-  const bool BridgedGetter =
-      Method->IsClassMethod && !Method->Selector.empty() &&
-      Method->Selector.find(':') == std::string::npos &&
-      llvm::StringRef(F.Name).ends_with("vgZTo");
+  const bool BridgedGetter = Method->IsClassMethod &&
+                             !Method->Selector.empty() &&
+                             Method->Selector.find(':') == std::string::npos &&
+                             llvm::StringRef(F.Name).ends_with("vgZTo");
   if ((!Constructor && !BridgedGetter) || F.SourceTypeHint ||
-      F.Params.size() != 3 || !F.ReturnType ||
-      F.ReturnType->Size != 8 ||
+      F.Params.size() != 3 || !F.ReturnType || F.ReturnType->Size != 8 ||
       (F.ReturnType->Kind != NdTypeKind::Int &&
        F.ReturnType->Kind != NdTypeKind::Ptr))
     return std::nullopt;
@@ -1890,7 +1890,8 @@ discoverSwiftOnceSources(const BinaryImage &Image,
               auto Target = objc_binding_detail::constantAddress(
                   *E->Operands[Getter->second.Initializer]);
               if (Target && Functions.count(*Target) &&
-                  Image.isCodeAddress(*Target) && !DirectTargets.count(*Target) &&
+                  Image.isCodeAddress(*Target) &&
+                  !DirectTargets.count(*Target) &&
                   (Getter->second.parameterCount() != 5 ||
                    ignoresContext(*Functions.at(*Target))))
                 Plan.CallbackHints.emplace(*Target, callbackHint(Image.Arch));
@@ -2033,10 +2034,10 @@ swiftOnceAddressorBound(const HighExpr &E, const BinaryImage &Image,
       Binding.SelectorReferenceAddress || Binding.Format ||
       Binding.NilTerminated || Binding.Receiver || Binding.SelectorResultUse ||
       Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
-      Binding.SelectorForwardingUse ||
-      Binding.SelectorArgumentStorageUse || Binding.ObjCIndirectResultStorage ||
-      Binding.ByteCount || Binding.ImmutablePointerSlot ||
-      Binding.SwiftTypeMetadata || !Binding.BorrowedByteInputs.empty() ||
+      Binding.SelectorForwardingUse || Binding.SelectorArgumentStorageUse ||
+      Binding.ObjCIndirectResultStorage || Binding.ByteCount ||
+      Binding.ImmutablePointerSlot || Binding.SwiftTypeMetadata ||
+      !Binding.BorrowedByteInputs.empty() ||
       !Binding.SwiftStringInputs.empty() ||
       !objc_projection_detail::sameHint(Binding.Signature, Expected->Signature))
     return false;
@@ -2065,10 +2066,10 @@ swiftOnceCallbackBound(const HighExpr &E, const BinaryImage &Image,
       Binding.SelectorReferenceAddress || Binding.Receiver || Binding.Format ||
       Binding.NilTerminated || Binding.SelectorResultUse ||
       Binding.SelectorResultTypeUse || Binding.SelectorArgumentTypeUse ||
-      Binding.SelectorForwardingUse ||
-      Binding.SelectorArgumentStorageUse || Binding.ObjCIndirectResultStorage ||
-      Binding.ValueWitness || Binding.ReturnedArgument ||
-      Binding.RuntimeObjCResultType || !Binding.BorrowedByteInputs.empty() ||
+      Binding.SelectorForwardingUse || Binding.SelectorArgumentStorageUse ||
+      Binding.ObjCIndirectResultStorage || Binding.ValueWitness ||
+      Binding.ReturnedArgument || Binding.RuntimeObjCResultType ||
+      !Binding.BorrowedByteInputs.empty() ||
       !Binding.SwiftStringInputs.empty() ||
       !objc_projection_detail::sameHint(*F->second->SourceTypeHint,
                                         Expected->second))
@@ -2192,16 +2193,15 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
       const auto Initializer =
           objc_binding_detail::constantAddress(*E->Operands[1]);
       auto PredicateHint =
-          Predicate ? objc_binding_detail::oncePredicateStorageHint(
-                          Image, *Predicate)
-                    : std::nullopt;
+          Predicate
+              ? objc_binding_detail::oncePredicateStorageHint(Image, *Predicate)
+              : std::nullopt;
       if (Predicate && Initializer && PredicateHint) {
         auto Address = HighExpr::makeCall({}, 0, {});
         auto AddressHint = std::make_shared<SourceCallTypeHint>();
         AddressHint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
         AddressHint->TargetAddress = *Initializer;
-        AddressHint->Signature.ReturnType =
-            NdType::makePtr(NdType::makeVoid());
+        AddressHint->Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
         std::string Error;
         if (assignDarwinScalarSourceABI(AddressHint->Signature, Image.Arch,
                                         Error)) {
@@ -2212,8 +2212,8 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
                 swift_once_source_detail::parameter(E->Operands[2]);
             auto Storage = HighExpr::makeCall({}, 0, {});
             Storage->Type = E->Operands[0]->Type;
-            Storage->SourceCallHint = std::make_shared<SourceCallTypeHint>(
-                std::move(*PredicateHint));
+            Storage->SourceCallHint =
+                std::make_shared<SourceCallTypeHint>(std::move(*PredicateHint));
             auto Null =
                 HighExpr::makeConst(0, 8, ConstantAddressProvenance::Scalar);
             Null->Type = NdType::makePtr(NdType::makeVoid());
@@ -2433,10 +2433,14 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
                   : *S > InvalidVA - StorageWidth || *S + StorageWidth > *P))
       return E;
     auto Predicate = objc_binding_detail::oncePredicateStorageHint(Image, *P);
+    // Merged writable globals may place the cached value at an interior
+    // offset of a named storage region. Keep the region's shared base and
+    // exact required extent so other accesses retain the same identity.
     auto Storage =
-        objc_binding_detail::localStorageHint(Image, *S, StorageWidth);
+        objc_binding_detail::localStorageAccessHint(Image, *S, StorageWidth);
     if (!Predicate || !Storage)
       return E;
+    const uint64_t StorageOffset = *S - Storage->TargetAddress;
     auto Address = HighExpr::makeCall({}, 0, {});
     auto Hint = std::make_shared<SourceCallTypeHint>();
     Hint->CallKind = SourceCallTypeHint::Kind::NativeAddress;
@@ -2463,11 +2467,12 @@ inline ObjCSourceBindingResult bindSwiftOnceSourceReferences(
                  : std::move(Value);
     };
     BindStorage(C.Predicate, *Predicate, 0);
-    BindStorage(C.Storage, *Storage, 0);
+    BindStorage(C.Storage, *Storage, StorageOffset);
     if (C.SecondStorage)
-      BindStorage(*C.SecondStorage, *Storage, 8);
+      BindStorage(*C.SecondStorage, *Storage, StorageOffset + 8);
     Result.LocalStorageExtents[Predicate->TargetAddress] = 8;
-    Result.LocalStorageExtents[Storage->TargetAddress] = StorageWidth;
+    Result.LocalStorageExtents[Storage->TargetAddress] = std::max<uint64_t>(
+        Result.LocalStorageExtents[Storage->TargetAddress], Storage->ByteCount);
     Result.Dependencies.insert(*I);
     return E;
   };
