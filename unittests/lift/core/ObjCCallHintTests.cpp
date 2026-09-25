@@ -7488,6 +7488,71 @@ TEST(ObjCCallHints,
     }
 }
 
+TEST(ObjCCallHints,
+     AuthenticatedLocalCallsPreserveCalleeSavedReceiverIdentity) {
+  auto Image = receiverImage(Arch::AArch64);
+  constexpr va_t Callee = 0x1500;
+  constexpr va_t Site = 0x1204;
+  const uint32_t Branch =
+      0x94000000u | (uint32_t((Callee - Site) / 4) & 0x03ffffffu);
+  llvm::support::endian::write32le(
+      Image.Segments[0].Data.data() + Site - Image.Segments[0].VA, Branch);
+  Image.Symbols.push_back(Symbol::makeFunc(Callee));
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto Saved = NdVar::reg(a64reg::X23, 8);
+  const auto Self = NdVar::reg(TRI.IntParamRegs[0], 8);
+  const auto Command = NdVar::reg(TRI.IntParamRegs[1], 8);
+  LowFunc Function;
+  Function.Entry = 0x1200;
+  Function.DecodedInstructionCount = Function.LiftedInstructionCount = 6;
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1218;
+  Block.Ops = {
+      operation(NdOp::COPY, Saved, {Self}, 0x1200),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X30, 8),
+                {NdVar::cst(Site + 4, 8)}, Site),
+      operation(NdOp::CALL, Self, {NdVar::cst(Callee, 8)}, Site),
+      operation(NdOp::COPY, Self, {Saved}, 0x1208),
+      operation(NdOp::LOAD, Command, {NdVar::cst(0x2100, 8)}, 0x120c),
+      operation(NdOp::INDIR_CALL, {}, {NdVar::cst(0x2180, 8)}, 0x1210),
+      operation(NdOp::RETURN, {}, {}, 0x1214),
+  };
+  Block.Ops[2].Seq = 1;
+  Block.InstructionBoundaries = {
+      {0x1200, 4, 0, 1},
+      {Site, 4, 1, 2, InstructionMode::Default, LowInstructionControl::Call,
+       LowInstructionControlFlag::Call, LowInstructionTargetMode::Preserve,
+       Callee},
+      {0x1208, 4, 3, 1},
+      {0x120c, 4, 4, 1},
+      {0x1210, 4, 5, 1, InstructionMode::Default, LowInstructionControl::Call,
+       LowInstructionControlFlag::Call | LowInstructionControlFlag::Indirect},
+      {0x1214, 4, 6, 1, InstructionMode::Default, LowInstructionControl::Return,
+       LowInstructionControlFlag::Return},
+  };
+  Function.Blocks.push_back(Block);
+
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1210));
+  ASSERT_TRUE(Hints.at(0x1210).Receiver);
+  EXPECT_EQ(Hints.at(0x1210).Receiver->ClassName, "First");
+  EXPECT_FALSE(Hints.count(Site)); // Preservation does not bind the call.
+
+  auto WithoutEntry = Image;
+  WithoutEntry.Symbols.clear();
+  EXPECT_FALSE(buildObjCSourceCallHints(WithoutEntry, Function).count(0x1210));
+  auto AlteredBranch = Image;
+  llvm::support::endian::write32le(AlteredBranch.Segments[0].Data.data() +
+                                       Site - Image.Segments[0].VA,
+                                   0xd503201fu);
+  EXPECT_FALSE(buildObjCSourceCallHints(AlteredBranch, Function).count(0x1210));
+  auto Incomplete = Function;
+  Incomplete.DecodeFailureAddresses.push_back(Site);
+  EXPECT_FALSE(buildObjCSourceCallHints(Image, Incomplete).count(0x1210));
+}
+
 TEST(ObjCCallHints, ReceiverDeclarationsSeparateOwnersAndDispatchRoles) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     for (const bool ClassMethod : {false, true}) {

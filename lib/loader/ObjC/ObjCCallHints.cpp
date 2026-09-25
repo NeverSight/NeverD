@@ -2,6 +2,7 @@
 
 #include "../MachO/DarwinRuntimeImport.h"
 #include "../MachO/DarwinSourceDeclarations.h"
+#include "../MachO/SourceLocalCall.h"
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -957,6 +958,7 @@ std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
   const auto &TRI = getTargetRegInfo(Image.Arch);
   const auto RegisterCopies = sourceRegisterCopies(Image, Function);
   const auto ClassGetters = sourceClassGetterCalls(Image, Function);
+  std::optional<SourceLocalCalls> LocalCalls;
   const size_t Count = Function.Blocks.size();
   if (Count > 16384)
     return {};
@@ -1228,12 +1230,13 @@ std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
       }
       for (auto It = Values.begin(); It != Values.end();) {
         const auto &[Space, Offset, Size] = It->first;
-        // The exact libobjc dispatch entry still obeys Darwin's preserved
-        // register contract when its selector ABI is unavailable. Keep only
-        // receiver provenance there; unknown arguments can escape the
-        // frame, and no other value fact crosses an unbound call. A declared
-        // source parameter with an authenticated object class retains that
-        // same identity in a full-width callee-saved register.
+        // Exact libobjc dispatch and an authenticated local BL both obey
+        // Darwin's callee-saved register contract even when the call's source
+        // signature is unavailable. Keep only receiver provenance there;
+        // unknown arguments can escape the frame, and no other value fact
+        // crosses an unbound call. A declared source parameter with an
+        // authenticated object class retains that same identity in a
+        // full-width callee-saved register.
         const bool PreservedReceiver =
             PreserveReceiverRegisters &&
             (It->second.TheKind == Value::Kind::Receiver ||
@@ -2011,8 +2014,30 @@ std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
         const bool AuthenticatedMessageDispatch =
             Target && (Target->Name == "objc_msgSend" ||
                        Target->Name == "objc_msgSendSuper2");
+        bool AuthenticatedLocalCall = false;
+        if (Image.Arch == Arch::AArch64 && !Target && Op.Opcode == NdOp::CALL &&
+            V && V->TheKind == Value::Kind::Number &&
+            llvm::any_of(Values, [&](const auto &Entry) {
+              const auto &[Space, Offset, Size] = Entry.first;
+              const auto &Fact = Entry.second;
+              return Space == VnodeSpace::REG &&
+                     TRI.isCallPreserved(Offset, Size) &&
+                     (Fact.TheKind == Value::Kind::Receiver ||
+                      (Fact.TheKind == Value::Kind::SourceParameter &&
+                       Fact.Object.has_value()));
+            })) {
+          const auto Site = sourceCallOccurrenceKey(Op);
+          if (Site && Site->StaticTarget && *Site->StaticTarget == V->Number) {
+            if (!LocalCalls)
+              LocalCalls.emplace(sourceLocalCalls(Image, Function));
+            AuthenticatedLocalCall =
+                LocalCalls->count(*Site) &&
+                Image.hasAuthenticatedFunctionEntryAt(V->Number) &&
+                !Image.isImportStubAt(V->Number);
+          }
+        }
         Clobber(Bound != BlockHints.end() ? &Bound->second.Signature : nullptr,
-                AuthenticatedMessageDispatch);
+                AuthenticatedMessageDispatch || AuthenticatedLocalCall);
         for (auto &[Slot, Fact] : OutParameterReceivers)
           State.DeclaredObjectFrameSlots[Slot] = std::move(Fact);
         if (State.DeclaredObjectFrameSlots.size() > 4096)
