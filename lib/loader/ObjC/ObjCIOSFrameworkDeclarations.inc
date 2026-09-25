@@ -85,6 +85,9 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "scale", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "sendActionsForControlEvents:", "v24@0:8Q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAccessibilityIgnoresInvertColors:", "v20@0:8B16", nullptr},
+// NSLayoutConstraint.active is BOOL. The arm64 iOS Objective-C method has a
+// one-byte Boolean input in the third integer argument register.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setActive:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setActivityIndicatorViewStyle:", "v24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAdjustsFontForContentSizeCategory:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setCenter:", "v32@0:8{CGPoint=dd}16", nullptr},

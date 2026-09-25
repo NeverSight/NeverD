@@ -10458,6 +10458,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"sendActionsForControlEvents:", NdTypeKind::Void, 3},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
       {"setAccessibilityIgnoresInvertColors:", NdTypeKind::Void, 3},
+      {"setActive:", NdTypeKind::Void, 3},
       {"setActivityIndicatorViewStyle:", NdTypeKind::Void, 3},
       {"setAdjustsFontForContentSizeCategory:", NdTypeKind::Void, 3},
       {"setCenter:", NdTypeKind::Void, 3},
@@ -10496,6 +10497,11 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       EXPECT_EQ(Hint->Parameters[2].Type->Size, 8U);
       EXPECT_TRUE(Hint->Parameters[2].Type->IsSigned);
       EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
+    }
+    if (llvm::StringRef(Case.Selector) == "setActive:") {
+      EXPECT_EQ(Hint->Parameters[2].Type->Kind, NdTypeKind::Int);
+      EXPECT_EQ(Hint->Parameters[2].Type->Size, 1U);
+      EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 16U);
     }
     if (llvm::StringRef(Case.Selector) == "setShowsCancelButton:animated:") {
       for (size_t I : {2U, 3U}) {
