@@ -349,6 +349,15 @@ public:
         return *Slice;
     if (E->Kind == ExprKind::BinOp && Inputs.size() == 2 &&
         E->Op == NdOp::CONCAT) {
+      // AArch64 SIMD zeroing can materialize a 128-bit frame initializer as
+      // two scalar zero words. It cannot carry a private pointer identity.
+      // Other computed wide values remain unproven.
+      if (Bytes == 16 && E->Operands[0]->Type &&
+          E->Operands[0]->Type->Size == 8 && E->Operands[1]->Type &&
+          E->Operands[1]->Type->Size == 8 &&
+          Inputs[0].K == Value::Number && !Inputs[0].Bits &&
+          Inputs[1].K == Value::Number && !Inputs[1].Bits)
+        return {Value::OpaqueBytes, 0, 0, {}, E.get()};
       const auto High = PointerPiece(Inputs[0]);
       const auto Low = PointerPiece(Inputs[1]);
       if (High && Low && std::get<0>(*High) == std::get<0>(*Low) &&

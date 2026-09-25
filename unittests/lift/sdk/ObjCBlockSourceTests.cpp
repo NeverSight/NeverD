@@ -687,28 +687,47 @@ TEST(ObjCBlockSources,
 
 TEST(ObjCBlockSources,
      OrdinaryFrameArgumentsBeforeConstructionDoNotHideLaterStackBlocks) {
-  for (bool AfterConstruction : {false, true}) {
-    SourceFixture F(true);
-    F.caller().Body.insert(
-        F.caller().Body.begin(),
-        store(frame(F.Image, -64), HighExpr::makeConst(0, 16)));
-    HighStmt Call;
-    Call.Kind = StmtKind::Call;
-    Call.CallExpr = HighExpr::makeCall("unknown", 0, {frame(F.Image, -56)});
-    if (AfterConstruction)
-      F.caller().Body.insert(F.caller().Body.end() - 1, std::move(Call));
-    else
-      F.caller().Body.insert(F.caller().Body.begin() + 1, std::move(Call));
-    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
-    const auto Rejection = Plan.Rejections.find(F.Caller);
-    EXPECT_EQ(Plan.StackBlocks.count(F.Caller), AfterConstruction ? 0U : 1U)
-        << (Rejection == Plan.Rejections.end() ? "" : Rejection->second);
-    if (AfterConstruction) {
-      ASSERT_NE(Rejection, Plan.Rejections.end());
-      EXPECT_NE(Rejection->second.find("nonliteral private frame"),
-                std::string::npos);
+  for (bool ComputedZero : {false, true})
+    for (bool AfterConstruction : {false, true}) {
+      SourceFixture F(true);
+      ExprPtr Zero = HighExpr::makeConst(0, 16);
+      if (ComputedZero) {
+        Zero = HighExpr::makeBinop(NdOp::CONCAT, HighExpr::makeConst(0, 8),
+                                   HighExpr::makeConst(0, 8));
+        Zero->Type = NdType::makeInt(16);
+      }
+      F.caller().Body.insert(F.caller().Body.begin(),
+                             store(frame(F.Image, -64), Zero));
+      HighStmt Call;
+      Call.Kind = StmtKind::Call;
+      Call.CallExpr = HighExpr::makeCall("unknown", 0, {frame(F.Image, -56)});
+      if (AfterConstruction)
+        F.caller().Body.insert(F.caller().Body.end() - 1, std::move(Call));
+      else
+        F.caller().Body.insert(F.caller().Body.begin() + 1, std::move(Call));
+      const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+      const auto Rejection = Plan.Rejections.find(F.Caller);
+      EXPECT_EQ(Plan.StackBlocks.count(F.Caller), AfterConstruction ? 0U : 1U)
+          << (Rejection == Plan.Rejections.end() ? "" : Rejection->second);
+      if (AfterConstruction) {
+        ASSERT_NE(Rejection, Plan.Rejections.end());
+        EXPECT_NE(Rejection->second.find("nonliteral private frame"),
+                  std::string::npos);
+      }
     }
-  }
+  SourceFixture F(true);
+  auto UnknownWide =
+      HighExpr::makeBinop(NdOp::CONCAT, HighExpr::makeConst(1, 8),
+                          HighExpr::makeConst(0, 8));
+  UnknownWide->Type = NdType::makeInt(16);
+  F.caller().Body.insert(F.caller().Body.begin(),
+                         store(frame(F.Image, -64), UnknownWide));
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("unknown", 0, {frame(F.Image, -56)});
+  F.caller().Body.insert(F.caller().Body.begin() + 1, std::move(Call));
+  const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+  EXPECT_FALSE(Plan.StackBlocks.count(F.Caller));
 }
 
 TEST(ObjCBlockSources, CopiedStackBlockCallsKeepDescriptorAcrossBranches) {
@@ -1755,14 +1774,15 @@ TEST(ObjCBlockSources, CompleteWideCaptureSpillRetainsConstructionEvidence) {
   ASSERT_EQ(Plan.StackBlocks.at(F.Caller).size(), 1U);
   EXPECT_EQ(Plan.StackBlocks.at(F.Caller)[0].InitializedCaptures.size(), 16U);
 
-  // A computed wide value has no byte-for-byte load provenance, even when
-  // its numeric operands happen to match the capture at runtime.
+  // Two exact zero words form initialized, pointer-free capture bytes.
   auto Computed = HighExpr::makeBinop(NdOp::CONCAT, HighExpr::makeConst(0, 8),
                                       HighExpr::makeConst(0, 8));
   Computed->Type = Wide;
   Caller.Body[0].StoreVal = Computed;
-  const auto Rejected = discoverObjCBlockSources(F.Image, F.Result);
-  EXPECT_TRUE(Rejected.Rejections.count(F.Caller));
+  const auto ZeroCapture = discoverObjCBlockSources(F.Image, F.Result);
+  ASSERT_FALSE(ZeroCapture.Rejections.count(F.Caller));
+  EXPECT_EQ(ZeroCapture.StackBlocks.at(F.Caller)[0].InitializedCaptures.size(),
+            16U);
 }
 
 TEST(ObjCBlockSources, CompleteWideContextCaptureMayBeSpilledPrivately) {
