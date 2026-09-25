@@ -1309,6 +1309,41 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           continue;
         }
       }
+      // T12b: `goto X; do { A...; X: B... } while (c);`  ->
+      // `while (1) { B...; if (!c) break; A... }`.
+      if (L[I].Kind == StmtKind::Goto && I + 1 < L.size() &&
+          L[I + 1].Kind == StmtKind::DoWhile && L[I + 1].Cond &&
+          usesOf(L[I].GotoTarget) == 1 &&
+          !(L[I].Addr != 0 && L[I].Addr != InvalidVA &&
+            usesOf(L[I].Addr) != 0) &&
+          !hasLooseBreakOrContinue(L[I + 1].Body)) {
+        auto &Loop = L[I + 1].Body;
+        size_t K = 1;
+        while (K < Loop.size() && !(Loop[K].Addr == L[I].GotoTarget &&
+                                    Loop[K - 1].Addr != Loop[K].Addr))
+          ++K;
+        if (K < Loop.size()) {
+          std::vector<HighStmt> Rotated(
+              std::make_move_iterator(Loop.begin() + K),
+              std::make_move_iterator(Loop.end()));
+          HighStmt Exit;
+          Exit.Kind = StmtKind::If;
+          Exit.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, L[I + 1].Cond);
+          HighStmt Break;
+          Break.Kind = StmtKind::Break;
+          Exit.Body.push_back(std::move(Break));
+          Rotated.push_back(std::move(Exit));
+          Rotated.insert(Rotated.end(), std::make_move_iterator(Loop.begin()),
+                         std::make_move_iterator(Loop.begin() + K));
+          Loop = std::move(Rotated);
+          L[I + 1].Kind = StmtKind::While;
+          L[I + 1].Cond = nullptr;
+          --Uses[L[I].GotoTarget];
+          L.erase(L.begin() + I);
+          Changed = true;
+          continue;
+        }
+      }
       // T13: `if (c) { ...; return; } S...; Y:` where the arm jumps to Y:
       // the arm never falls through, so S can be its else, after which the
       // jumps to Y are fall-through exits of the if.
