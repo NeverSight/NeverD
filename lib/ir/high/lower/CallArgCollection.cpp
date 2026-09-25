@@ -474,10 +474,25 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   const bool SummarizedCallee = CallIdx < Ops.size() &&
                                 Ops[CallIdx].CalleeRegisterArgs >= 0 &&
                                 !Ops[CallIdx].SourceCallHint;
+  // A recursive call passes this function's own parameters: its register
+  // arguments are this definition's register parameters.
+  const bool SelfCall = CallIdx < Ops.size() && CurMed &&
+                        Ops[CallIdx].NumInputs >= 1 &&
+                        Ops[CallIdx].Inputs[0].isConst() &&
+                        Ops[CallIdx].Inputs[0].ConstVal == CurMed->Entry;
+  // The signature this function is printed with: a native source type hint
+  // when it has one, else its recovered parameters.
+  const size_t OwnParamCount =
+      CurMed
+          ? (CurMed->SourceTypeHint ? CurMed->SourceTypeHint->Parameters.size()
+                                    : CurMed->Params.size())
+          : 0;
   if (Win64 && CurMed && !SummarizedCallee) {
     size_t FillTo = 0;
     if (!Hinted.empty())
       FillTo = std::min(Hinted.size(), static_cast<size_t>(4));
+    else if (SelfCall)
+      FillTo = std::min(OwnParamCount, static_cast<size_t>(4));
     else {
       for (int K = 3; K >= 0; --K)
         if (Found[K] && Found[K]->Kind != ExprKind::Undef) {
@@ -503,6 +518,11 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   auto BoundKnownCalleeArity = [&](std::vector<ExprPtr> Collected) {
     if (CallIdx >= Ops.size())
       return Collected;
+    if (SelfCall && Win64) {
+      if (Collected.size() > OwnParamCount)
+        Collected.resize(OwnParamCount);
+      return Collected;
+    }
     const MedOp &Call = Ops[CallIdx];
     std::string Name;
     if (Call.SourceCallHint && !Call.SourceCallHint->TargetName.empty())

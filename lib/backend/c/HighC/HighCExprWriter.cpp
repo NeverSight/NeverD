@@ -225,15 +225,32 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.IntrinsicId == Intrinsic::None)
     Name = functionIdentifier(Name);
 
+  // A callee defined in this file has a prototype: convert between pointer
+  // and integer arguments the way the machine passed them, in the register.
+  const HighFunc *Defined = nullptr;
+  if (E.IntrinsicId == Intrinsic::None && !E.CallTarget.empty())
+    if (auto It = DefinedFuncs.find(E.CallTarget); It != DefinedFuncs.end())
+      Defined = It->second;
   std::string S = Name + "(";
   for (size_t I = 0; I < E.Operands.size(); ++I) {
     if (I > 0)
       S += ", ";
     const HighExpr *Op = E.Operands[I].get();
-    if (Op)
-      S += exprStr(*Op);
-    else
+    if (!Op) {
       S += "0";
+      continue;
+    }
+    std::string Arg = exprStr(*Op);
+    if (Defined && I < Defined->Params.size() && Defined->Params[I].Type &&
+        Op->Type) {
+      const TypeRef &Param = Defined->Params[I].Type;
+      const bool ParamPtr = Param->Kind == NdTypeKind::Ptr;
+      const bool ArgPtr = Op->Type->Kind == NdTypeKind::Ptr;
+      if (ParamPtr != ArgPtr && (ParamPtr ? Op->Type->Kind == NdTypeKind::Int
+                                          : Param->Kind == NdTypeKind::Int))
+        Arg = "(" + typeToC(Param) + ")(uintptr_t)(" + Arg + ")";
+    }
+    S += Arg;
   }
   S += ")";
   return S;

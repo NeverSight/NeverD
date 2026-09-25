@@ -4499,3 +4499,27 @@ TEST(HighCPointerAddresses, PrototypeBoundsStackArgumentsOfACall) {
       HighC, std::regex(R"(ExAcquireFastMutexUnsafe\([^,()]+\))")))
       << HighC;
 }
+
+TEST(HighCPointerAddresses, RecursiveCallMatchesItsOwnSignature) {
+  // MiFindActualFaultingPte: a value stored into the outgoing argument area
+  // before a recursive call is not an extra argument; the call takes the
+  // parameters of the definition it calls.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x48,                      // sub rsp, 48h
+      0x48, 0xc7, 0x44, 0x24, 0x20, 0x05, 0, 0, 0, // mov qword [rsp+20h], 5
+      0x48, 0x85, 0xc9,                            // test rcx, rcx
+      0x74, 0x08,                                  // je done
+      0x48, 0x8b, 0x09,                            // mov rcx, [rcx]
+      0xe8, 0xe6, 0xff, 0xff, 0xff,                // call entry
+      0x48, 0x83, 0xc4, 0x48,                      // done: add rsp, 48h
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  // One argument, converted to the definition's pointer parameter.
+  EXPECT_TRUE(std::regex_search(
+      HighC,
+      std::regex(R"(= sub_140001000\(\(void\*\)\(uintptr_t\)\([^,]+\)\);)")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}

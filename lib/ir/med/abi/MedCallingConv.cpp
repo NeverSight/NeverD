@@ -683,17 +683,29 @@ std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
 
 void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> ParamRegs,
-                          std::set<uint64_t> UsedParamRegs, Arch TargetArch) {
+                          std::set<uint64_t> UsedParamRegs, Arch TargetArch,
+                          const GPRReadWidths *EntryReadSummary = nullptr) {
   // A routine with a documented WDK prototype takes exactly its declared
   // parameters, however its body forwards registers to other calls.
   const libc::WindowsKernelPrototype *Proto =
       TargetArch == Arch::X64 && Func.CC == CallingConv::Win64
           ? libc::windowsKernelPrototype(Func.Name)
           : nullptr;
+  // Every caller passes the register arguments this function's call-graph
+  // summary says it reads (LowToMed), so its own parameter list follows the
+  // same summary: a recursive call then matches the definition.
+  const bool FromSummary = !Proto && EntryReadSummary &&
+                           TargetArch == Arch::X64 &&
+                           Func.CC == CallingConv::Win64;
   if (Proto) {
     UsedParamRegs.clear();
     for (size_t I = 0; I < ParamRegs.size() && I < Proto->ArgCount; ++I)
       UsedParamRegs.insert(ParamRegs[I]);
+  } else if (FromSummary) {
+    UsedParamRegs.clear();
+    for (size_t I = 0; I < ParamRegs.size() && I < 4; ++I)
+      if ((*EntryReadSummary)[ParamRegs[I] / 8])
+        UsedParamRegs.insert(ParamRegs[I]);
   } else if (TargetArch == Arch::X64 && Func.CC == CallingConv::Win64) {
     // Only Win64 calls to summarized callees publish their register
     // arguments as inputs; elsewhere an argument read is invisible here.
@@ -770,7 +782,7 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
     }
     if (!Marker) {
       // A declared parameter the body never reads still holds its position.
-      if (Proto) {
+      if (Proto || FromSummary) {
         MedVar Placeholder;
         Placeholder.Kind = MedVar::Param;
         Placeholder.Id = -1;
@@ -1391,7 +1403,12 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
-    detectRegisterParams(Func, TRI, ParamRegs, UsedRegs, TargetArch);
+    const GPRReadWidths *Summary = nullptr;
+    if (CallEntryReadGPRs && TargetFormat == BinaryFormat::COFF)
+      if (auto It = CallEntryReadGPRs->find(Func.Entry);
+          It != CallEntryReadGPRs->end())
+        Summary = &It->second;
+    detectRegisterParams(Func, TRI, ParamRegs, UsedRegs, TargetArch, Summary);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
