@@ -117,6 +117,38 @@ bool noIndirectResultPointer(const LowOp &Op, Arch Architecture) {
          Op.Inputs[0].isReg() && Op.Inputs[0].Offset == a64reg::X8 &&
          Op.Inputs[0].Size == 8;
 }
+bool provenIndirectTailCall(const LowBlock &Block, const LowOp &Call) {
+  if (Call.Opcode != NdOp::INDIR_CALL || Call.NumInputs != 1 ||
+      !Call.Output.isReg())
+    return false;
+  bool Found = false;
+  for (const auto &Boundary : Block.InstructionBoundaries) {
+    if (Boundary.Address != Call.Addr)
+      continue;
+    if (Found || Boundary.Control != LowInstructionControl::TailCall ||
+        !hasLowInstructionControlFlag(Boundary.ControlFlags,
+                                      LowInstructionControlFlag::Indirect) ||
+        !Block.Succs.empty() || !Block.ExceptionalSuccs.empty() ||
+        Boundary.FirstOp > Block.Ops.size() ||
+        Boundary.OpCount > Block.Ops.size() - Boundary.FirstOp)
+      return false;
+    bool SameCall = false, Return = false;
+    for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
+         ++I) {
+      const auto &Op = Block.Ops[I];
+      if (Op.Opcode == NdOp::INDIR_CALL)
+        SameCall |= Op.Addr == Call.Addr && Op.Output == Call.Output &&
+                    Op.NumInputs == 1 && Op.Inputs[0] == Call.Inputs[0];
+      if (Op.Opcode == NdOp::RETURN)
+        Return |= Op.Addr == Call.Addr && Op.NumInputs == 1 &&
+                  Op.Inputs[0] == Call.Output;
+    }
+    if (!SameCall || !Return)
+      return false;
+    Found = true;
+  }
+  return Found;
+}
 std::optional<uint64_t>
 boundReleaseRegister(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
                      va_t Address, Arch Architecture) {
@@ -605,6 +637,7 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
                   SourceFunctionTypeHint::OriginKind::BlockRuntime &&
               EntrySignature->ReturnType &&
               EntrySignature->ReturnType->Kind == NdTypeKind::Void &&
+              provenIndirectTailCall(Block, Op) &&
               Index + 2 == Block.Ops.size() &&
               Block.Ops[Index + 1].Opcode == NdOp::RETURN &&
               Block.Ops[Index + 1].Addr == Op.Addr && Op.Output.isReg() &&

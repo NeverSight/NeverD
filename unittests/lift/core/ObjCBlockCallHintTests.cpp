@@ -166,6 +166,15 @@ TEST(ObjCBlockCallHints, CapturedVoidBlockTailBranchUsesItsEntryABI) {
       op(NdOp::INDIR_CALL, NdVar::reg(Return, 8), {NdVar::reg(F.R1, 8)},
          0x1008),
       op(NdOp::RETURN, {}, {NdVar::reg(Return, 8)}, 0x1008)};
+  LowInstructionBoundary Boundary;
+  Boundary.Address = 0x1008;
+  Boundary.FirstOp = 4;
+  Boundary.OpCount = 2;
+  Boundary.Control = LowInstructionControl::TailCall;
+  Boundary.ControlFlags = LowInstructionControlFlag::Call |
+                          LowInstructionControlFlag::Return |
+                          LowInstructionControlFlag::Indirect;
+  F.Low.Blocks[0].InstructionBoundaries.push_back(Boundary);
   ObjCBlockCaptureCallFields Captures;
   Captures.ScalarWords = {32};
   Captures.BlockWords = {32};
@@ -184,6 +193,15 @@ TEST(ObjCBlockCallHints, CapturedVoidBlockTailBranchUsesItsEntryABI) {
   EXPECT_EQ(OrdinaryCall.at(0x1008).Signature.ReturnType->Kind,
             NdTypeKind::Int);
   F.Low.Blocks[0].Ops.back().Addr = 0x1008;
+  F.Low.Blocks[0].InstructionBoundaries[0].Control =
+      LowInstructionControl::Call;
+  const auto UnprovenTail =
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures);
+  ASSERT_EQ(UnprovenTail.size(), 1U);
+  EXPECT_EQ(UnprovenTail.at(0x1008).Signature.ReturnType->Kind,
+            NdTypeKind::Int);
+  F.Low.Blocks[0].InstructionBoundaries[0].Control =
+      LowInstructionControl::TailCall;
   F.Low.Blocks[0].Ops.insert(
       F.Low.Blocks[0].Ops.end() - 2,
       op(NdOp::COPY, NdVar::reg(F.R2, 8), {NdVar::cst(7, 8)}, 0x1008));

@@ -280,8 +280,9 @@ proves a complete writable file-backed range disjoint from private storage.
 For an AArch64 register tail branch through a captured block, the loaded
 invoke register is a call target rather than an extra callback parameter.
 The synthetic call-and-return pair at one instruction address may use the
-descriptor-bound entry's void result ABI; an ordinary call at a different
-return address still needs observed result evidence.
+descriptor-bound entry's void result ABI only when its instruction boundary
+proves an indirect tail call with no successor. An ordinary call still needs
+observed result evidence.
 Stack adjustments retain their full pointer width with bounded narrow numeric
 offsets; SIMD zero extension can preserve the unchanged low image-byte recipe
 without creating a wider pointer or interpreting floating-point values.
