@@ -1427,6 +1427,14 @@ localStorageHint(const BinaryImage &Image, va_t Address, uint64_t Width) {
   return Hint;
 }
 
+inline std::optional<SourceCallTypeHint>
+swiftPrivateScalarStorageHint(const BinaryImage &Image, va_t Address) {
+  const auto *Symbol = uniqueWritableDataSymbol(Image, Address, 1);
+  const auto Width =
+      Symbol ? swiftPrivateScalarStorageWidth(Symbol->Name) : std::nullopt;
+  return Width ? localStorageHint(Image, Address, *Width) : std::nullopt;
+}
+
 // Darwin dispatch_once_t (also used by swift_once) is an intptr_t, initialized
 // to zero in static storage. A completed token cannot be transplanted without
 // its initialized state. Keep token storage shared through the normal helpers.
@@ -2953,6 +2961,24 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       Copies[Key] = Cast;
       return Cast;
     }
+    // A file-private Swift scalar has a compiler-encoded byte width. Rebuild
+    // its exact data-address value at its defining occurrence so aliases used
+    // by both exclusivity and identity-only APIs retain one storage address.
+    if (Original->Kind == ExprKind::Const && Original->Type &&
+        Original->Type->Size == 8 &&
+        isDataAddressProvenance(Original->ConstProvenance) && !NumericOperand &&
+        !MemoryAddress) {
+      if (auto Storage =
+              swiftPrivateScalarStorageHint(Image, Original->ConstVal)) {
+        *Expression = *HighExpr::makeCall({}, 0, {});
+        Expression->Type = Original->Type;
+        Expression->SourceCallHint =
+            std::make_shared<SourceCallTypeHint>(std::move(*Storage));
+        Result.LocalStorageExtents[Original->ConstVal] =
+            Expression->SourceCallHint->ByteCount;
+        return Expression;
+      }
+    }
     // Machine pointer stores use integer carriers. Preserve the occurrence's
     // complete address provenance even without a pointer-typed consumer; a
     // stored constant object must retain the identity of a directly used one.
@@ -3688,15 +3714,24 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                  "objc_getAssociatedObject" ||
              Expression->SourceCallHint->TargetName ==
                  "objc_setAssociatedObject");
-        auto Hint = Address ? associationKeyHint(Image, *Address,
-                                                 ObjCAssociation)
-                            : std::nullopt;
+        auto Hint = Address && ObjCAssociation
+                        ? swiftPrivateScalarStorageHint(Image, *Address)
+                        : std::nullopt;
+        const bool PrivateStorage = bool(Hint);
+        if (!Hint)
+          Hint = Address ? associationKeyHint(Image, *Address, ObjCAssociation)
+                         : std::nullopt;
         if (Hint) {
           auto Key = HighExpr::makeCall({}, 0, {});
           Key->Type = Operand->Type;
           Key->SourceCallHint =
               std::make_shared<SourceCallTypeHint>(std::move(*Hint));
-          Result.AssociationKeys.insert(*Address);
+          if (PrivateStorage)
+            Result.LocalStorageExtents[*Address] =
+                std::max<uint64_t>(Result.LocalStorageExtents[*Address],
+                                   Key->SourceCallHint->ByteCount);
+          else
+            Result.AssociationKeys.insert(*Address);
           Operand = std::move(Key);
           continue;
         }
@@ -3747,8 +3782,12 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         if (Extent != DirectLocalStorage.end())
           Width = Extent->second;
         else if (Address)
-          if (const auto *Symbol = uniqueWritableDataSymbol(Image, *Address, 1))
+          if (const auto *Symbol =
+                  uniqueWritableDataSymbol(Image, *Address, 1)) {
             Width = swiftStaticScalarStorageWidth(Symbol->Name);
+            if (!Width)
+              Width = swiftPrivateScalarStorageWidth(Symbol->Name);
+          }
         auto Hint = Expected &&
                             runtimeBindingMatches(*Expression->SourceCallHint,
                                                   *Expected) &&

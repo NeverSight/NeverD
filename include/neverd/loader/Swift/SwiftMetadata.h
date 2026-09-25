@@ -32,5 +32,11 @@ std::vector<SwiftRecoveredType> recoverSwiftTypes(const BinaryImage &Image);
 /// unrelated manglings are rejected rather than classified by suffix text.
 std::optional<uint64_t>
 swiftStaticScalarStorageWidth(llvm::StringRef MangledSymbol);
+
+/// Exact width of a file-private top-level Swift standard-library scalar.
+/// The private declaration identity and scalar type must both be present in
+/// the structured mangling; unrelated globals are not inferred from a suffix.
+std::optional<uint64_t>
+swiftPrivateScalarStorageWidth(llvm::StringRef MangledSymbol);
 } // namespace neverd
 #endif

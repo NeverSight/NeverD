@@ -17,6 +17,33 @@
 #include <stdexcept>
 
 namespace neverd {
+namespace {
+std::optional<uint64_t>
+scalarStorageWidth(const llvm::SwiftDemangleNode &Type) {
+  if (Type.Kind != "Type" || Type.Text || Type.Index ||
+      Type.Children.size() != 1)
+    return std::nullopt;
+  const auto &Nominal = Type.Children[0];
+  if (Nominal.Kind != "Structure" || Nominal.Text || Nominal.Index ||
+      Nominal.Children.size() != 2 || Nominal.Children[0].Kind != "Module" ||
+      !Nominal.Children[0].Text || *Nominal.Children[0].Text != "Swift" ||
+      Nominal.Children[0].Index || !Nominal.Children[0].Children.empty() ||
+      Nominal.Children[1].Kind != "Identifier" || !Nominal.Children[1].Text ||
+      Nominal.Children[1].Index || !Nominal.Children[1].Children.empty())
+    return std::nullopt;
+  const llvm::StringRef Name(*Nominal.Children[1].Text);
+  if (Name == "Bool" || Name == "Int8" || Name == "UInt8")
+    return 1;
+  if (Name == "Int16" || Name == "UInt16")
+    return 2;
+  if (Name == "Int32" || Name == "UInt32" || Name == "Float")
+    return 4;
+  if (Name == "Int" || Name == "UInt" || Name == "Int64" || Name == "UInt64" ||
+      Name == "Double")
+    return 8;
+  return std::nullopt;
+}
+} // namespace
 
 std::optional<uint64_t>
 swiftStaticScalarStorageWidth(llvm::StringRef MangledSymbol) {
@@ -34,11 +61,6 @@ swiftStaticScalarStorageWidth(llvm::StringRef MangledSymbol) {
                         size_t Children) {
     return Node.Kind == Kind && !Node.Text && !Node.Index &&
            Node.Children.size() == Children;
-  };
-  const auto Text = [](const llvm::SwiftDemangleNode &Node, const char *Kind,
-                       llvm::StringRef Value) {
-    return Node.Kind == Kind && Node.Text && *Node.Text == Value &&
-           !Node.Index && Node.Children.empty();
   };
   if (!Parsed.Root || !Parsed.Error.empty() ||
       !Shape(*Parsed.Root, "Global", 1))
@@ -64,27 +86,47 @@ swiftStaticScalarStorageWidth(llvm::StringRef MangledSymbol) {
   if (Property.Kind != "Identifier" || !Property.Text || Property.Index ||
       !Property.Children.empty())
     return std::nullopt;
-  const auto &Type = Variable.Children[2];
-  if (!Shape(Type, "Type", 1))
+  return scalarStorageWidth(Variable.Children[2]);
+}
+
+std::optional<uint64_t>
+swiftPrivateScalarStorageWidth(llvm::StringRef MangledSymbol) {
+  MangledSymbol.consume_front("_");
+  if (!MangledSymbol.starts_with("$s"))
     return std::nullopt;
-  const auto &Nominal = Type.Children[0];
-  if (!Shape(Nominal, "Structure", 2) ||
-      !Text(Nominal.Children[0], "Module", "Swift") ||
-      Nominal.Children[1].Kind != "Identifier" ||
-      !Nominal.Children[1].Text || Nominal.Children[1].Index ||
-      !Nominal.Children[1].Children.empty())
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 8000;
+  Options.MaxNodes = 1024;
+  Options.MaxDepth = 64;
+  Options.MaxMemoryBytes = 1024 * 1024;
+  Options.MaxOperations = 100000;
+  const auto Parsed = llvm::swiftDemangle(MangledSymbol, Options);
+  if (!Parsed.Root || !Parsed.Error.empty() || Parsed.Root->Kind != "Global" ||
+      Parsed.Root->Text || Parsed.Root->Index ||
+      Parsed.Root->Children.size() != 1)
     return std::nullopt;
-  const llvm::StringRef Name(*Nominal.Children[1].Text);
-  if (Name == "Bool" || Name == "Int8" || Name == "UInt8")
-    return 1;
-  if (Name == "Int16" || Name == "UInt16")
-    return 2;
-  if (Name == "Int32" || Name == "UInt32" || Name == "Float")
-    return 4;
-  if (Name == "Int" || Name == "UInt" || Name == "Int64" ||
-      Name == "UInt64" || Name == "Double")
-    return 8;
-  return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0];
+  if (Variable.Kind != "Variable" || Variable.Text || Variable.Index ||
+      Variable.Children.size() != 3)
+    return std::nullopt;
+  const auto &Module = Variable.Children[0];
+  const auto &Private = Variable.Children[1];
+  if (Module.Kind != "Module" || !Module.Text || Module.Text->empty() ||
+      Module.Index || !Module.Children.empty() ||
+      Private.Kind != "PrivateDeclName" || Private.Text || Private.Index ||
+      Private.Children.size() != 2)
+    return std::nullopt;
+  const auto &Identity = Private.Children[0];
+  const auto &Name = Private.Children[1];
+  if (Identity.Kind != "Identifier" || !Identity.Text || Identity.Index ||
+      !Identity.Children.empty() || Identity.Text->size() != 33 ||
+      Identity.Text->front() != '_' ||
+      !std::all_of(Identity.Text->begin() + 1, Identity.Text->end(),
+                   [](unsigned char C) { return std::isxdigit(C); }) ||
+      Name.Kind != "Identifier" || !Name.Text || Name.Text->empty() ||
+      Name.Index || !Name.Children.empty())
+    return std::nullopt;
+  return scalarStorageWidth(Variable.Children[2]);
 }
 
 namespace {

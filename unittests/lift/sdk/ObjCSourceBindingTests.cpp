@@ -5443,6 +5443,113 @@ TEST(ObjCSourceBindings,
   EXPECT_TRUE(Overlapping.LocalStorageExtents.empty());
 }
 
+TEST(ObjCSourceBindings, PrivateSwiftScalarAliasesKeepOneAssociationKey) {
+  constexpr va_t Address = 0x1040;
+  constexpr va_t SwiftSlot = 0x10d0;
+  constexpr va_t ObjCSlot = 0x10e0;
+  constexpr const char *Symbol = "_$s7WMFData21wmfLanguageVariantKey33_"
+                                 "6ED6687F0FBB5F3BAB3A4BCD1578B756LLs5UInt8Vvp";
+  ASSERT_EQ(swiftPrivateScalarStorageWidth(Symbol), 1U);
+  EXPECT_FALSE(swiftStaticScalarStorageWidth(Symbol));
+  EXPECT_FALSE(
+      swiftPrivateScalarStorageWidth("_$s7WMFData21wmfLanguageVariantKey33_"
+                                     "6ED6687F0FBB5F3BAB3A4BCD1578B756LLSSvp"));
+  EXPECT_FALSE(swiftPrivateScalarStorageWidth("_$s4Test3BoxC7enabledSbvpZ"));
+
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+  F.Image.Symbols.push_back({Symbol, Address, 1, false});
+  F.Image.ImportPtrSlots[SwiftSlot] = "_swift_beginAccess";
+  ASSERT_TRUE(F.Image.recordDyldBindSlot(SwiftSlot, "_swift_beginAccess", 0,
+                                         "/usr/lib/swift/libswiftCore.dylib",
+                                         false));
+  F.Image.ImportPtrSlots[ObjCSlot] = "_objc_setAssociatedObject";
+  const auto SwiftHint = swiftRuntimeSourceCallHint(F.Image, SwiftSlot);
+  const auto ObjCHint = objcRuntimeSourceCallHint(F.Image, ObjCSlot);
+  ASSERT_TRUE(SwiftHint);
+  ASSERT_TRUE(ObjCHint);
+
+  MedVar Key;
+  Key.Kind = MedVar::Temp;
+  Key.Id = 42;
+  Key.Size = 8;
+  auto Local = [&] { return HighExpr::makeVar(Key, NdType::makeInt(8)); };
+  HighStmt Assign;
+  Assign.Kind = StmtKind::Assign;
+  Assign.Dst = Local();
+  Assign.Val =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+  auto Access = HighExpr::makeCall("swift_beginAccess", SwiftSlot,
+                                   {Local(), HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8),
+                                    HighExpr::makeConst(0, 8)});
+  Access->Type = NdType::makeVoid();
+  Access->SourceCallHint = std::make_shared<SourceCallTypeHint>(*SwiftHint);
+  HighStmt AccessStatement;
+  AccessStatement.Kind = StmtKind::ExprStmt;
+  AccessStatement.CallExpr = Access;
+  auto Set = HighExpr::makeCall("objc_setAssociatedObject", ObjCSlot,
+                                {HighExpr::makeConst(0, 8), Local(),
+                                 HighExpr::makeConst(0, 8),
+                                 HighExpr::makeConst(3, 8)});
+  Set->Type = NdType::makeVoid();
+  Set->SourceCallHint = std::make_shared<SourceCallTypeHint>(*ObjCHint);
+  HighStmt SetStatement;
+  SetStatement.Kind = StmtKind::ExprStmt;
+  SetStatement.CallExpr = Set;
+  auto Direct = HighExpr::makeCall(
+      "objc_setAssociatedObject", ObjCSlot,
+      {HighExpr::makeConst(0, 8),
+       HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress),
+       HighExpr::makeConst(0, 8), HighExpr::makeConst(3, 8)});
+  Direct->Type = NdType::makeVoid();
+  Direct->SourceCallHint = std::make_shared<SourceCallTypeHint>(*ObjCHint);
+  HighStmt DirectStatement;
+  DirectStatement.Kind = StmtKind::ExprStmt;
+  DirectStatement.CallExpr = Direct;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  F.Function.ReturnType = NdType::makeVoid();
+  F.Function.Body = {Assign, AccessStatement, SetStatement, DirectStatement,
+                     Return};
+
+  const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_EQ(Bound.LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{Address, 1}}));
+  EXPECT_TRUE(Bound.AssociationKeys.empty());
+  const auto Storage = Bound.Function.Body[0].Val;
+  ASSERT_TRUE(Storage->SourceCallHint);
+  EXPECT_EQ(Storage->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(Storage->SourceCallHint->TargetAddress, Address);
+  EXPECT_TRUE(objcSourceCallBound(*Storage, F.Image, {}));
+  EXPECT_EQ(Bound.Function.Body[1].CallExpr->Operands[0]->Kind, ExprKind::Var);
+  EXPECT_EQ(Bound.Function.Body[2].CallExpr->Operands[1]->Kind, ExprKind::Var);
+  const auto DirectKey = Bound.Function.Body[3].CallExpr->Operands[1];
+  ASSERT_TRUE(DirectKey->SourceCallHint);
+  EXPECT_EQ(DirectKey->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(DirectKey->SourceCallHint->TargetAddress, Address);
+
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    auto Image = F.Image;
+    if (Mutation == 0)
+      Image.Symbols[0].Name = "_untypedStorage";
+    if (Mutation == 1)
+      Image.Symbols.push_back({"_alias", Address, 1, false});
+    if (Mutation == 2)
+      Image.Sections[0].Flags = SegmentFlags::Readable;
+    if (Mutation == 3)
+      Image.DataPtrRelocSlots.insert(Address);
+    const auto Rejected = bindObjCSourceReferences(F.Function, Image);
+    EXPECT_FALSE(Rejected.Limitation.empty()) << Mutation;
+    EXPECT_TRUE(Rejected.LocalStorageExtents.empty()) << Mutation;
+  }
+}
+
 TEST(ObjCSourceBindings,
      OnceTokensBindOnlyAuthenticatedZeroInitializedStorage) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
