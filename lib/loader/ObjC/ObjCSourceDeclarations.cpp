@@ -1868,6 +1868,63 @@ objcBlockParameterContract(const BinaryImage &Image,
         std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
   }
 
+  // WMFBlocksKit.swift imports these collection callbacks as @escaping.
+  // Match the embedded Swift-extension methods, owner and complete callback
+  // ABI before treating an Objective-C stack literal as copied by the bridge.
+  struct WMFCollectionBlock {
+    const char *Owner;
+    const char *Selector;
+    const char *Parent;
+    const char *Callback;
+    unsigned Parameter;
+  };
+  static constexpr WMFCollectionBlock WMFCollectionBlocks[] = {
+      {"NSArray", "wmf_map:", "@24@0:8@?16", "@16@?0@8", 2},
+      {"NSArray", "wmf_select:", "@24@0:8@?16", "B16@?0@8", 2},
+      {"NSArray", "wmf_match:", "@24@0:8@?16", "B16@?0@8", 2},
+      {"NSArray", "wmf_reduce:withBlock:", "@32@0:8@16@?24",
+       "@24@?0@8@16", 3},
+      {"NSSet", "wmf_map:", "@24@0:8@?16", "@16@?0@8", 2},
+      {"NSSet", "wmf_select:", "@24@0:8@?16", "B16@?0@8", 2},
+      {"NSSet", "wmf_match:", "@24@0:8@?16", "B16@?0@8", 2},
+      {"NSSet", "wmf_reduce:withBlock:", "@32@0:8@16@?24",
+       "@24@?0@8@16", 3},
+      {"NSDictionary", "wmf_map:", "@24@0:8@?16", "@24@?0@8@16", 2},
+      {"NSDictionary", "wmf_select:", "@24@0:8@?16", "B24@?0@8@16", 2},
+      {"NSDictionary", "wmf_match:", "@24@0:8@?16", "B24@?0@8@16", 2},
+      {"NSDictionary", "wmf_reduce:withBlock:", "@32@0:8@16@?24",
+       "@32@?0@8@16@24", 3},
+  };
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol)
+    for (const auto &D : WMFCollectionBlocks) {
+      if (Call.Selector != D.Selector || Parameter != D.Parameter ||
+          !DerivesFrom(Type->ClassName, D.Owner))
+        continue;
+      const ObjCMethod *Method = nullptr;
+      for (const auto &Candidate : Image.ObjCMethods)
+        if (Candidate.ClassName == D.Owner &&
+            Candidate.Selector == D.Selector && !Candidate.IsClassMethod) {
+          if (Method || !Candidate.CategoryAddress ||
+              !Candidate.MetadataAddress || Candidate.TypeEncoding != D.Parent ||
+              !objcMethodHasSourceBody(Candidate) ||
+              !Image.isCodeAddress(Candidate.Implementation))
+            return std::nullopt;
+          Method = &Candidate;
+        }
+      if (!Method)
+        return std::nullopt;
+      auto Parent = parseObjCMethodEncoding(D.Selector, D.Parent);
+      std::string Error;
+      auto Callback = parseObjCBlockSignature(D.Callback, Image.Arch, Error);
+      if (!Parent || !Callback ||
+          !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+          !SameDeclaration(*Expected, *Parent))
+        return std::nullopt;
+      return ObjCBlockParameterContract{
+          std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+    }
+
   struct Declaration {
     const char *Selector;
     const char *AArch64Parent;

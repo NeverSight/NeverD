@@ -1624,6 +1624,85 @@ TEST(ObjCBlockSources, WMFAsyncBlockOperationCopiesEscapingSwiftClosure) {
   EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
 }
 
+TEST(ObjCBlockSources, WMFCollectionSwiftExtensionsCopyCallbacks) {
+  struct Case {
+    const char *Owner;
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameter;
+    unsigned CallbackParameters;
+    NdTypeKind ReturnKind;
+  };
+  constexpr Case Cases[] = {
+      {"NSArray", "wmf_map:", "@24@0:8@?16", 2, 2, NdTypeKind::Ptr},
+      {"NSArray", "wmf_select:", "@24@0:8@?16", 2, 2, NdTypeKind::Int},
+      {"NSArray", "wmf_match:", "@24@0:8@?16", 2, 2, NdTypeKind::Int},
+      {"NSArray", "wmf_reduce:withBlock:", "@32@0:8@16@?24", 3, 3,
+       NdTypeKind::Ptr},
+      {"NSSet", "wmf_map:", "@24@0:8@?16", 2, 2, NdTypeKind::Ptr},
+      {"NSSet", "wmf_select:", "@24@0:8@?16", 2, 2, NdTypeKind::Int},
+      {"NSSet", "wmf_match:", "@24@0:8@?16", 2, 2, NdTypeKind::Int},
+      {"NSSet", "wmf_reduce:withBlock:", "@32@0:8@16@?24", 3, 3,
+       NdTypeKind::Ptr},
+      {"NSDictionary", "wmf_map:", "@24@0:8@?16", 2, 3, NdTypeKind::Ptr},
+      {"NSDictionary", "wmf_select:", "@24@0:8@?16", 2, 3,
+       NdTypeKind::Int},
+      {"NSDictionary", "wmf_match:", "@24@0:8@?16", 2, 3,
+       NdTypeKind::Int},
+      {"NSDictionary", "wmf_reduce:withBlock:", "@32@0:8@16@?24", 3, 4,
+       NdTypeKind::Ptr},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(std::string(Case.Owner) + " " + Case.Selector);
+    BlockFixture F;
+    F.Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    ObjCMethod Method;
+    Method.Implementation = 0x1300;
+    Method.MetadataAddress = 0x2800;
+    Method.CategoryAddress = 0x2700;
+    Method.CategoryName = "WMFBlocksKit";
+    Method.ClassName = Case.Owner;
+    Method.Selector = Case.Selector;
+    Method.TypeEncoding = Case.Encoding;
+    Method.Status = "supported";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    F.Image.ObjCMethods.push_back(Method);
+    ObjCMethod Caller;
+    Caller.Implementation = 0x1200;
+    Caller.ClassName = Case.Owner;
+    Caller.Selector = "submit:";
+    Caller.TypeEncoding = "v24@0:8@16";
+    Caller.Status = "supported";
+    Caller.TypeHint =
+        parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+    ASSERT_TRUE(Caller.TypeHint);
+    F.Image.ObjCMethods.push_back(Caller);
+    const auto Receiver = objcMethodReceiverTypeHint(F.Image, Caller.Implementation);
+    ASSERT_TRUE(Receiver);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = Case.Selector;
+    Call.Receiver = *Receiver;
+    const auto Declaration =
+        objcReceiverSourceTypeHint(F.Image, Case.Selector, *Receiver);
+    ASSERT_TRUE(Declaration.Signature);
+    Call.Signature = *Declaration.Signature;
+    const auto Contract =
+        objcBlockParameterContract(F.Image, Call, Case.Parameter);
+    ASSERT_TRUE(Contract);
+    EXPECT_EQ(Contract->Storage,
+              ObjCBlockParameterContract::Lifetime::Copied);
+    EXPECT_EQ(Contract->Signature.Parameters.size(), Case.CallbackParameters);
+    EXPECT_EQ(Contract->Signature.ReturnType->Kind, Case.ReturnKind);
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, Case.Parameter - 1));
+    F.Image.ObjCMethods.front().CategoryAddress = 0;
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, Case.Parameter));
+  }
+}
+
 TEST(ObjCBlockSources, AppleAsyncConsumersRequireExactSDKBlockContract) {
   struct Case {
     const char *Framework;
