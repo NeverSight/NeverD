@@ -647,6 +647,59 @@ TEST(NativeSourceHints, AnyClassInitializerUsesExistentialAndSwiftSelf) {
   EXPECT_FALSE(sdk::swiftMangledAnyClassInitializerSourceABI(Wrong, 0x1000));
 }
 
+TEST(NativeSourceHints, OptionalStringExtensionGetterUsesSwiftSelfAndPair) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$sSo5NSURLC7WMFDataE23wmf_languageVariantCodeSSSgvg", 0x1000,
+       0, true});
+  const auto Hint =
+      sdk::swiftMangledObjCOptionalStringGetterSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Hint);
+  EXPECT_EQ(Hint->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Hint->ReturnType->Size, 16U);
+  ASSERT_EQ(Hint->ReturnComponents.size(), 2U);
+  EXPECT_EQ(Hint->ReturnComponents[0].RegisterOffset, a64reg::X0);
+  EXPECT_EQ(Hint->ReturnComponents[1].RegisterOffset, a64reg::X1);
+  ASSERT_EQ(Hint->Parameters.size(), 1U);
+  EXPECT_EQ(Hint->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Hint->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo5NSURLC7WMFDataE23wmf_languageVariantCodeSSvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringGetterSourceABI(Wrong,
+                                                                  0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo5NSURLC7WMFDataE23wmf_languageVariantCodeSiSgvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringGetterSourceABI(Wrong,
+                                                                  0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringGetterSourceABI(Wrong,
+                                                                  0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringGetterSourceABI(Wrong,
+                                                                  0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalStringGetterSourceABI(Wrong,
+                                                                  0x1000));
+}
+
 TEST(NativeSourceHints, OptionalDictionaryExtensionGetterUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;
