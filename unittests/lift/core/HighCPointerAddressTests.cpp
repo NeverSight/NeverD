@@ -4098,6 +4098,41 @@ unsigned countGotos(const std::vector<HighStmt> &Body) {
 }
 } // namespace
 
+TEST(HighCPointerAddresses, LoopifyTurnsNestedBackJumpsIntoContinue) {
+  // x = 0; X: x = 1; if (c) goto X; return;
+  std::vector<HighStmt> Body = {assignConst(0x1000, 1, 0),
+                                assignConst(0x1010, 1, 1),
+                                condGoto(0x1018, 1, 0x1010), returnAt(0x1020)};
+  ASSERT_TRUE(loopifyBackwardGotos(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body.size(), 3u);
+  ASSERT_EQ(Body[1].Kind, StmtKind::While);
+  EXPECT_FALSE(Body[1].Cond);
+  const auto &Loop = Body[1].Body;
+  ASSERT_EQ(Loop.size(), 3u);
+  EXPECT_EQ(Loop[1].Body[0].Kind, StmtKind::Continue);
+  EXPECT_EQ(Loop[2].Kind, StmtKind::Break);
+  EXPECT_EQ(Body[2].Kind, StmtKind::Return);
+}
+
+TEST(HighCPointerAddresses, LoopifyRefusesJumpsFromNestedLoopsOrOutside) {
+  // A goto X inside an inner loop cannot become `continue`.
+  HighStmt Inner;
+  Inner.Kind = StmtKind::While;
+  Inner.Cond = HighExpr::makeConst(1, 1);
+  Inner.Body.push_back(condGoto(0x1018, 1, 0x1010));
+  std::vector<HighStmt> Nested = {assignConst(0x1010, 1, 1), Inner,
+                                  returnAt(0x1020)};
+  EXPECT_FALSE(loopifyBackwardGotos(Nested));
+  EXPECT_EQ(countGotos(Nested), 1u);
+  // A jump to X from before X keeps the label as a plain label.
+  std::vector<HighStmt> Outside = {
+      condGoto(0x1000, 1, 0x1010), assignConst(0x1010, 1, 1),
+      condGoto(0x1018, 1, 0x1010), returnAt(0x1020)};
+  EXPECT_FALSE(loopifyBackwardGotos(Outside));
+  EXPECT_EQ(countGotos(Outside), 2u);
+}
+
 TEST(HighCPointerAddresses, GroupSwitchCasesSharesBodiesAndDropsDefaultCopies) {
   // switch (v) { case 1: goto A; case 2: goto D; case 3: goto A;
   //   case 4: goto N; case 5: return; case 6: return; default: goto D; }

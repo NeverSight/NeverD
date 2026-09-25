@@ -714,6 +714,126 @@ static bool sameStraightLineBody(const std::vector<HighStmt> &A,
   return true;
 }
 
+bool loopifyBackwardGotos(std::vector<HighStmt> &Body) {
+  std::map<va_t, unsigned> Uses;
+  std::set<va_t> Pinned;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
+        S.GotoTarget != InvalidVA)
+      ++Uses[S.GotoTarget];
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.HandlerVA != 0 && Clause.HandlerVA != InvalidVA)
+        Pinned.insert(Clause.HandlerVA);
+  });
+  // Gotos to \p X inside \p S, or -1 when one sits in a nested loop (where
+  // `continue` would bind to that loop).
+  std::function<int(const HighStmt &, va_t, bool)> Count =
+      [&](const HighStmt &S, va_t X, bool InLoop) -> int {
+    if (S.Kind == StmtKind::Goto && S.GotoTarget == X)
+      return InLoop ? -1 : 1;
+    const bool Loop = S.Kind == StmtKind::While ||
+                      S.Kind == StmtKind::DoWhile || S.Kind == StmtKind::For;
+    int N = 0;
+    auto Add = [&](const std::vector<HighStmt> &L) {
+      for (const HighStmt &C : L) {
+        if (N < 0)
+          return;
+        const int M = Count(C, X, InLoop || Loop);
+        N = M < 0 ? -1 : N + M;
+      }
+    };
+    Add(S.Body);
+    Add(S.ElseBody);
+    for (const auto &C : S.Cases)
+      Add(C.Body);
+    Add(S.DefaultBody);
+    for (const auto &ClauseBody : S.EHClauseBodies)
+      Add(ClauseBody);
+    return N;
+  };
+  std::function<void(std::vector<HighStmt> &, va_t)> ToContinue =
+      [&](std::vector<HighStmt> &L, va_t X) {
+        for (HighStmt &S : L) {
+          if (S.Kind == StmtKind::Goto && S.GotoTarget == X) {
+            S.Kind = StmtKind::Continue;
+            S.GotoTarget = 0;
+            continue;
+          }
+          ToContinue(S.Body, X);
+          ToContinue(S.ElseBody, X);
+          for (auto &C : S.Cases)
+            ToContinue(C.Body, X);
+          ToContinue(S.DefaultBody, X);
+          for (auto &ClauseBody : S.EHClauseBodies)
+            ToContinue(ClauseBody, X);
+        }
+      };
+  bool Changed = false;
+  std::function<void(std::vector<HighStmt> &)> Visit =
+      [&](std::vector<HighStmt> &L) {
+        for (size_t K = 0; K < L.size(); ++K) {
+          const va_t X = L[K].Addr;
+          if (X == 0 || X == InvalidVA || Pinned.count(X) ||
+              (K > 0 && L[K - 1].Addr == X) || !Uses.count(X))
+            continue;
+          // Every jump to X must come from K onward in this list.
+          size_t M = K;
+          int Inside = 0;
+          bool Bad = false;
+          for (size_t J = K; J < L.size() && !Bad; ++J) {
+            const int N = Count(L[J], X, false);
+            if (N < 0)
+              Bad = true;
+            else if (N > 0) {
+              Inside += N;
+              M = J;
+            }
+          }
+          if (Bad || Inside == 0 || static_cast<unsigned>(Inside) != Uses[X])
+            continue;
+          std::vector<HighStmt> Region(
+              std::make_move_iterator(L.begin() + K),
+              std::make_move_iterator(L.begin() + M + 1));
+          bool HasTry = false;
+          walkStmts(Region, [&](const HighStmt &S) {
+            HasTry |= S.Kind == StmtKind::SEHTry ||
+                      S.Kind == StmtKind::CxxTry ||
+                      S.Kind == StmtKind::ItaniumTry;
+          });
+          if (HasTry || hasLooseBreakOrContinue(Region)) {
+            std::move(Region.begin(), Region.end(), L.begin() + K);
+            continue;
+          }
+          ToContinue(Region, X);
+          const StmtKind LastKind = Region.back().Kind;
+          if (LastKind != StmtKind::Return && LastKind != StmtKind::Goto &&
+              LastKind != StmtKind::Continue) {
+            HighStmt Break;
+            Break.Kind = StmtKind::Break;
+            Region.push_back(std::move(Break));
+          }
+          HighStmt Loop;
+          Loop.Kind = StmtKind::While;
+          Loop.Body = std::move(Region);
+          L.erase(L.begin() + K + 1, L.begin() + M + 1);
+          L[K] = std::move(Loop);
+          Uses.erase(X);
+          Changed = true;
+        }
+        for (HighStmt &S : L) {
+          Visit(S.Body);
+          Visit(S.ElseBody);
+          for (auto &C : S.Cases)
+            Visit(C.Body);
+          Visit(S.DefaultBody);
+          for (auto &ClauseBody : S.EHClauseBodies)
+            Visit(ClauseBody);
+        }
+      };
+  Visit(Body);
+  return Changed;
+}
+
 bool groupSwitchCases(std::vector<HighStmt> &Body) {
   std::map<va_t, unsigned> Uses;
   walkStmts(Body, [&](const HighStmt &S) {
@@ -1080,7 +1200,10 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           ++J;
         // A label after a terminator starts an out-of-line block; moving
         // that block (T1) reads better than wrapping everything before it.
-        if (J < L.size() && J > I + 1 && !isTerminator(L[J - 1])) {
+        // Once the local rewrites have settled (SpliceRegions), a jump that
+        // T1 could not absorb still becomes an if/else.
+        if (J < L.size() && J > I + 1 &&
+            (!isTerminator(L[J - 1]) || SpliceRegions)) {
           popGoto(L[I].Body);
           --Uses[Y];
           L[I].Kind = StmtKind::IfElse;

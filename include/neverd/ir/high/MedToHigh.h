@@ -71,6 +71,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body,
 /// Share one body among switch cases that go to the same place, and drop
 /// cases that go where `default` goes.
 bool groupSwitchCases(std::vector<HighStmt> &Body);
+/// `X: S...` whose every jump to X comes from inside S becomes
+/// `while (1) { S...; break; }` with those jumps as `continue`.
+bool loopifyBackwardGotos(std::vector<HighStmt> &Body);
 
 /// Emit a label-per-block goto/return skeleton.  Used when structuring would
 /// exceed SSA limits, or when conversion fails and identity alone would leave

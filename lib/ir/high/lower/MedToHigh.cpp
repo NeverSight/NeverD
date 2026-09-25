@@ -813,14 +813,24 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   if (Func.Body.size() <= limits::kMaxStructuredHighStmts) {
     bool Changed = duplicateSmallReturnTails(Func.Body);
     // Region splices nest whole multi-block regions, so they run only after
-    // the local rewrites have settled.
-    for (bool Regions : {false, true})
+    // the local rewrites have settled.  The late rewrites can leave new jumps
+    // to a small return tail; those get one more tail-duplication pass.
+    // Backward jumps become loops last, once fall-through joins no longer need
+    // explicit jumps.
+    for (int Phase = 0; Phase < 4; ++Phase) {
+      if (Phase == 2 && !duplicateSmallReturnTails(Func.Body))
+        continue;
+      if (Phase == 3 && !loopifyBackwardGotos(Func.Body))
+        break;
+      Changed |= Phase >= 2;
       for (int Round = 0; Round < 8; ++Round) {
         const bool Grouped = groupSwitchCases(Func.Body);
-        if (!reduceSingleUseGotos(Func.Body, Regions) && !Grouped)
+        if (!reduceSingleUseGotos(Func.Body, /*SpliceRegions=*/Phase != 0) &&
+            !Grouped)
           break;
         Changed = true;
       }
+    }
     if (Changed)
       eliminateDeadStmts(Func);
   }
