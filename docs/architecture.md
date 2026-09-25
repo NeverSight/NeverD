@@ -230,6 +230,13 @@ unqualified selector is usable only when all matching catalog rows agree on
 one callback contract. This proves the caller-side lifetime only: dispatch
 remains dynamic, no implementation address is selected, and methods without a
 cataloged `noescape` declaration continue to reject stack-block escape.
+The two Core Data `performBlock:` instance methods instead enqueue work after
+returning, so their block parameters require a copied lifetime. Their audited
+contracts use the same exact method and callback ABI checks and additionally
+require a revalidated receiver lineage to `NSManagedObjectContext` or
+`NSPersistentStoreCoordinator`; an unqualified `performBlock:` selector does
+not prove copying. `performBlockAndWait:` remains a separate nonescaping
+contract.
 
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an

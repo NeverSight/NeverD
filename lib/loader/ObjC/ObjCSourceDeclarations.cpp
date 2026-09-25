@@ -232,8 +232,7 @@ std::optional<SourceFunctionTypeHint> objcSelectorSourceTypeHintForResultUse(
        RequiredResult.Kind != SourceABICarrierKind::FloatingRegister) ||
       !RequiredResult.ValueBytes ||
       (RequiredType && *RequiredType != NdTypeKind::Int &&
-       *RequiredType != NdTypeKind::Ptr &&
-       *RequiredType != NdTypeKind::Float))
+       *RequiredType != NdTypeKind::Ptr && *RequiredType != NdTypeKind::Float))
     return std::nullopt;
   auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
   if (!Candidates)
@@ -309,8 +308,8 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
         return std::nullopt;
       Source = &Parameter;
     }
-  if (!Source || !isObjCSelectorArgumentEvidenceType(
-                     Source->Type, Evidence.ConsumedAsObject))
+  if (!Source || !isObjCSelectorArgumentEvidenceType(Source->Type,
+                                                     Evidence.ConsumedAsObject))
     return std::nullopt;
   auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
   if (!Candidates)
@@ -328,8 +327,7 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
   return Result;
 }
 
-std::optional<SourceFunctionTypeHint>
-objcMethodForwardingSourceTypeHint(
+std::optional<SourceFunctionTypeHint> objcMethodForwardingSourceTypeHint(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorForwardingEvidence &Evidence) {
   if (!Evidence.MethodEntry || Evidence.ReceiverSourceParameter < 2 ||
@@ -390,8 +388,7 @@ std::optional<SourceFunctionTypeHint>
 objcSelectorSourceTypeHintForForwardingUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorForwardingEvidence &Evidence) {
-  auto Result =
-      objcMethodForwardingSourceTypeHint(Image, Selector, Evidence);
+  auto Result = objcMethodForwardingSourceTypeHint(Image, Selector, Evidence);
   if (!Result)
     return std::nullopt;
 
@@ -428,8 +425,7 @@ bool isObjCSelectorArgumentEvidenceType(const TypeRef &Type,
   if (!Type || Type->Kind != NdTypeKind::Ptr || Type->Size != 8 ||
       !Type->Pointee)
     return false;
-  return (Type->Pointee->Kind == NdTypeKind::Ptr &&
-          Type->Pointee->Size == 8) ||
+  return (Type->Pointee->Kind == NdTypeKind::Ptr && Type->Pointee->Size == 8) ||
          (ConsumedAsObject && Type->Pointee->Kind == NdTypeKind::Void);
 }
 
@@ -645,8 +641,7 @@ bool receiverProtocolKnown(const BinaryImage &Image, llvm::StringRef Name) {
       return false;
     Present = true;
   }
-  const auto SDK =
-      objc::sdkReceiverDeclarations(Image, Name, true, false, {});
+  const auto SDK = objc::sdkReceiverDeclarations(Image, Name, true, false, {});
   return SDK.Present ? SDK.Complete : Present;
 }
 
@@ -820,16 +815,15 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
     for (const auto &Parent : SDK.Protocols)
       Parents.emplace(true, Parent);
     for (const auto &Member : SDK.Members)
-      Include(
-          Member.Signature,
-          Member.ReturnsReceiverType && !Type.IsProtocol
-              ? std::optional<std::string>(Type.ClassName)
-          : !Member.ReturnClass.empty()
-              ? std::optional<std::string>(Member.ReturnClass)
-              : std::nullopt,
-          Member.ReturnsReceiverType && Type.IsProtocol
-              ? std::optional<std::string>(Type.ClassName)
-              : std::nullopt);
+      Include(Member.Signature,
+              Member.ReturnsReceiverType && !Type.IsProtocol
+                  ? std::optional<std::string>(Type.ClassName)
+              : !Member.ReturnClass.empty()
+                  ? std::optional<std::string>(Member.ReturnClass)
+                  : std::nullopt,
+              Member.ReturnsReceiverType && Type.IsProtocol
+                  ? std::optional<std::string>(Type.ClassName)
+                  : std::nullopt);
     bool Present = SDK.Present;
     if (Protocol) {
       for (const auto &Declaration : Image.ObjCProtocols) {
@@ -1012,10 +1006,9 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
   return Result;
 }
 
-std::optional<SourceFunctionTypeHint>
-objcNonEscapingBlockSignature(const BinaryImage &Image,
-                              const SourceCallTypeHint &Call,
-                              unsigned Parameter) {
+std::optional<ObjCBlockParameterContract>
+objcBlockParameterContract(const BinaryImage &Image,
+                           const SourceCallTypeHint &Call, unsigned Parameter) {
   if (Call.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
       Call.Selector.empty() || Parameter >= Call.Signature.Parameters.size())
     return std::nullopt;
@@ -1083,13 +1076,15 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
     const char *AArch64Callback;
     const char *X64Callback;
     const char *Owner;
+    bool Copied = false;
   };
-  // Compiler-derived from public SDK 15.5 NS_NOESCAPE method
-  // parameters. A null callback records architecture profiles where the
-  // macOS and iOS declarations disagree; no implementation is included.
+  // Compiler-derived from public SDK 15.5 block method parameters. The
+  // nonescaping rows carry NS_NOESCAPE; copied rows are audited asynchronous
+  // Core Data methods. A null callback records architecture profiles where
+  // the macOS and iOS declarations disagree; no implementation is included.
   static constexpr Declaration Declarations[] = {
-      {"enumerateKeysAndObjectsUsingBlock:", "v24@0:8@?16",
-       "v24@0:8@?16", 2, "v32@?0@8@16^B24", nullptr, "NSDictionary"},
+      {"enumerateKeysAndObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
+       "v32@?0@8@16^B24", nullptr, "NSDictionary"},
       {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
        "v32@?0@8Q16^B24", "v32@?0@8Q16^B24", "NSArray"},
       {"enumerateObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
@@ -1099,35 +1094,40 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
       {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
        "v32@0:8Q16@?24", 3, "v32@?0@8Q16^B24", nullptr, "NSArray"},
       {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
-       "v32@0:8Q16@?24", 3, "v32@?0@8Q16^B24", nullptr,
-       "NSOrderedSet"},
+       "v32@0:8Q16@?24", 3, "v32@?0@8Q16^B24", nullptr, "NSOrderedSet"},
       {"enumerateObjectsWithOptions:usingBlock:", "v32@0:8Q16@?24",
        "v32@0:8Q16@?24", 3, "v24@?0@8^B16", nullptr, "NSSet"},
       {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSArray"},
       {"indexesOfObjectsPassingTest:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "B32@?0@8Q16^B24", "B32@?0@8Q16^B24", "NSOrderedSet"},
-      {"keysSortedByValueWithOptions:usingComparator:",
-       "@32@0:8Q16@?24", "@32@0:8Q16@?24", 3, "q24@?0@8@16",
-       "q24@?0@8@16", "NSDictionary"},
-      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2,
-       "v8@?0", "v8@?0", "NSManagedObjectContext"},
-      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2,
-       "v8@?0", "v8@?0", "NSPersistentStoreCoordinator"},
+      {"keysSortedByValueWithOptions:usingComparator:", "@32@0:8Q16@?24",
+       "@32@0:8Q16@?24", 3, "q24@?0@8@16", "q24@?0@8@16", "NSDictionary"},
+      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0",
+       "v8@?0", "NSManagedObjectContext"},
+      {"performBlockAndWait:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0",
+       "v8@?0", "NSPersistentStoreCoordinator"},
+      // Both Core Data performBlock: methods enqueue the callback after the
+      // message returns, so a stack literal must be copied for that lifetime.
+      {"performBlock:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0", "v8@?0",
+       "NSManagedObjectContext", true},
+      {"performBlock:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0", "v8@?0",
+       "NSPersistentStoreCoordinator", true},
       {"sortedArrayUsingComparator:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "q24@?0@8@16", "q24@?0@8@16", "NSArray"},
       {"sortedArrayUsingComparator:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "q24@?0@8@16", "q24@?0@8@16", "NSOrderedSet"},
       {"enumerateMatchesInString:options:range:usingBlock:",
-       "v56@0:8@16Q24{_NSRange=QQ}32@?48",
-       "v56@0:8@16Q24{_NSRange=QQ}32@?48", 5, "v32@?0@8Q16^B24",
-       nullptr, "NSRegularExpression"},
-      {"imageWithActions:", "@24@0:8@?16", "@24@0:8@?16", 2,
-       "v16@?0@8", "v16@?0@8", "UIGraphicsImageRenderer"},
+       "v56@0:8@16Q24{_NSRange=QQ}32@?48", "v56@0:8@16Q24{_NSRange=QQ}32@?48",
+       5, "v32@?0@8Q16^B24", nullptr, "NSRegularExpression"},
+      {"imageWithActions:", "@24@0:8@?16", "@24@0:8@?16", 2, "v16@?0@8",
+       "v16@?0@8", "UIGraphicsImageRenderer"},
   };
-  std::optional<SourceFunctionTypeHint> Result;
+  std::optional<ObjCBlockParameterContract> Result;
   for (const auto &D : Declarations) {
     if (Call.Selector != D.Selector || Parameter != D.Parameter)
+      continue;
+    if (D.Copied && !Type)
       continue;
     const auto *ParentEncoding =
         Image.Arch == Arch::AArch64 ? D.AArch64Parent : D.X64Parent;
@@ -1135,8 +1135,7 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
         Image.Arch == Arch::AArch64 ? D.AArch64Callback : D.X64Callback;
     if (!ParentEncoding || !CallbackEncoding)
       continue;
-    auto Parent = parseObjCMethodEncoding(
-        D.Selector, ParentEncoding);
+    auto Parent = parseObjCMethodEncoding(D.Selector, ParentEncoding);
     std::string Error;
     auto Callback =
         parseObjCBlockSignature(CallbackEncoding, Image.Arch, Error);
@@ -1148,11 +1147,27 @@ objcNonEscapingBlockSignature(const BinaryImage &Image,
       return std::nullopt;
     if (Type && !DerivesFrom(Type->ClassName, D.Owner))
       continue;
-    if (Result && !SameDeclaration(*Result, *Callback))
+    const auto Lifetime =
+        D.Copied ? ObjCBlockParameterContract::Lifetime::Copied
+                 : ObjCBlockParameterContract::Lifetime::NonEscaping;
+    if (Result && (Result->Storage != Lifetime ||
+                   !SameDeclaration(Result->Signature, *Callback)))
       return std::nullopt;
-    Result = std::move(*Callback);
+    Result = ObjCBlockParameterContract{std::move(*Callback), Lifetime};
   }
   return Result;
+}
+
+std::optional<SourceFunctionTypeHint>
+objcNonEscapingBlockSignature(const BinaryImage &Image,
+                              const SourceCallTypeHint &Call,
+                              unsigned Parameter) {
+  auto Contract = objcBlockParameterContract(Image, Call, Parameter);
+  return Contract && Contract->Storage ==
+                         ObjCBlockParameterContract::Lifetime::NonEscaping
+             ? std::optional<SourceFunctionTypeHint>(
+                   std::move(Contract->Signature))
+             : std::nullopt;
 }
 
 std::optional<ObjCFormatDeclaration>

@@ -46,8 +46,7 @@ objcSelectorSourceTypeHintForArgumentTypeUse(
 
 /// Reconstruct the source signature carried by an exact Objective-C method
 /// forwarder without consulting declarations for the forwarded selector.
-std::optional<SourceFunctionTypeHint>
-objcMethodForwardingSourceTypeHint(
+std::optional<SourceFunctionTypeHint> objcMethodForwardingSourceTypeHint(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorForwardingEvidence &Evidence);
 
@@ -133,10 +132,21 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver,
                                llvm::StringRef Selector);
 
-/// Return a compiler-declared nonescaping block ABI only when the current
-/// message binding still matches the SDK parent method, parameter, receiver
-/// hierarchy (when present), and callback declaration. Dynamic dispatch is
-/// preserved; this proves only the caller-side lifetime contract.
+struct ObjCBlockParameterContract {
+  enum class Lifetime { NonEscaping, Copied };
+  SourceFunctionTypeHint Signature;
+  Lifetime Storage;
+};
+
+/// Return an audited SDK block ABI and lifetime only when the message binding
+/// matches the parent method, parameter, receiver hierarchy, and callback.
+/// Copied contracts additionally require a qualified receiver. Dynamic
+/// dispatch is preserved; this proves only the caller-side lifetime contract.
+std::optional<ObjCBlockParameterContract>
+objcBlockParameterContract(const BinaryImage &Image,
+                           const SourceCallTypeHint &Call, unsigned Parameter);
+
+/// Return only compiler-declared nonescaping block contracts.
 std::optional<SourceFunctionTypeHint>
 objcNonEscapingBlockSignature(const BinaryImage &Image,
                               const SourceCallTypeHint &Call,

@@ -262,8 +262,8 @@ TEST(ObjCBlockSources,
   Forged.SourceCallHint = WrongEffect;
   EXPECT_FALSE(objcBlockSourceCallBound(Forged, F.Image, Plan, F.functions()));
   std::set<std::string> Shared;
-  auto Text = renderObjCBlockSourceHelpers(
-      Plan, Bound.Descriptors, Bound.Literals, Shared);
+  auto Text = renderObjCBlockSourceHelpers(Plan, Bound.Descriptors,
+                                           Bound.Literals, Shared);
   EXPECT_NE(Text.find("&neverd_block_invoke_1100"), std::string::npos);
   EXPECT_NE(Text.find("&storage.descriptor"), std::string::npos);
   EXPECT_EQ(Shared.size(), 3U);
@@ -279,16 +279,15 @@ TEST(ObjCBlockSources,
   F.put64(OtherLiteral + 24, F.Descriptor);
   const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
   ASSERT_EQ(Plan.Globals.size(), 2U);
-  const auto Bound = bindObjCBlockSourceReferences(
-      F.caller(), F.Image, Plan, F.functions());
+  const auto Bound =
+      bindObjCBlockSourceReferences(F.caller(), F.Image, Plan, F.functions());
   ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
   EXPECT_EQ(Bound.Dependencies, std::set<va_t>{F.Invoke});
   EXPECT_EQ(Bound.Literals, std::set<va_t>{F.Literal});
   std::set<std::string> Shared;
-  const auto Text = renderObjCBlockSourceHelpers(
-      Plan, Bound.Descriptors, Bound.Literals, Shared);
-  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)),
-            std::string::npos);
+  const auto Text = renderObjCBlockSourceHelpers(Plan, Bound.Descriptors,
+                                                 Bound.Literals, Shared);
+  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)), std::string::npos);
   EXPECT_EQ(Text.find(objcBlockHelperName(true, OtherLiteral)),
             std::string::npos);
 }
@@ -307,10 +306,8 @@ TEST(ObjCBlockSources, BlockHelpersPartitionLiteralsByDescriptor) {
   ASSERT_EQ(Plan.Descriptors.size(), 2U);
   std::set<std::string> Shared;
   const auto Text = renderObjCBlockSourceHelpers(
-      Plan, {F.Descriptor, OtherDescriptor}, {F.Literal, OtherLiteral},
-      Shared);
-  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)),
-            std::string::npos);
+      Plan, {F.Descriptor, OtherDescriptor}, {F.Literal, OtherLiteral}, Shared);
+  EXPECT_NE(Text.find(objcBlockHelperName(true, F.Literal)), std::string::npos);
   EXPECT_NE(Text.find(objcBlockHelperName(true, OtherLiteral)),
             std::string::npos);
 }
@@ -321,22 +318,19 @@ TEST(ObjCBlockSources,
     auto &Invoke = F.Result.HighFuncs[0];
     Invoke.FrameSize = 32;
     Invoke.Body.insert(Invoke.Body.begin(),
-                       store(frame(F.Image, -8),
-                             HighExpr::makeConst(0, 8)));
+                       store(frame(F.Image, -8), HighExpr::makeConst(0, 8)));
     if (StoreContext)
       Invoke.Body.insert(
           Invoke.Body.begin() + 1,
-          store(frame(F.Image, -24),
-                parameter(0, Invoke.Params[0].Type)));
+          store(frame(F.Image, -24), parameter(0, Invoke.Params[0].Type)));
     HighStmt Call;
     Call.Kind = StmtKind::Call;
     Call.CallExpr = HighExpr::makeCall({}, 0, {frame(F.Image, -8)});
     Invoke.Body.insert(Invoke.Body.end() - 1, std::move(Call));
     const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
-    const auto Bound = bindObjCBlockSourceReferences(
-        F.caller(), F.Image, Plan, F.functions());
-    EXPECT_EQ(Bound.Limitation.empty(), !StoreContext)
-        << Bound.Limitation;
+    const auto Bound =
+        bindObjCBlockSourceReferences(F.caller(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Limitation.empty(), !StoreContext) << Bound.Limitation;
   }
 }
 TEST(ObjCBlockSources, InvokePreservesOnlyACompleteLowPointerSubbytesView) {
@@ -1238,6 +1232,131 @@ TEST(ObjCBlockSources, DispatchConsumersCopyOnlyAuthenticatedBlockArguments) {
   }
 }
 
+TEST(ObjCBlockSources, CoreDataAsyncConsumerRequiresQualifiedCopiedContract) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (llvm::StringRef Owner :
+         {"NSManagedObjectContext", "NSPersistentStoreCoordinator"}) {
+      BlockFixture F;
+      F.Image.Arch = Architecture;
+      F.Image.DynInfo.NeededLibs = {
+          "/System/Library/Frameworks/CoreData.framework/CoreData",
+          "/System/Library/Frameworks/Foundation.framework/Foundation"};
+      ObjCClass Class;
+      Class.Name = "TestContext";
+      Class.SuperclassName = Owner.str();
+      Class.InheritanceStatus = "resolved";
+      F.Image.ObjCClasses.push_back(Class);
+      ObjCMethod Method;
+      Method.Implementation = 0x1200;
+      Method.ClassName = Class.Name;
+      Method.Selector = "submit:";
+      Method.TypeHint = parseObjCMethodEncoding("submit:", "v24@0:8@16");
+      ASSERT_TRUE(Method.TypeHint);
+      F.Image.ObjCMethods.push_back(Method);
+      auto Receiver =
+          objcMethodReceiverTypeHint(F.Image, Method.Implementation);
+      ASSERT_TRUE(Receiver);
+      SourceCallTypeHint Call;
+      Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+      Call.Selector = "performBlock:";
+      Call.Receiver = *Receiver;
+      auto Parent =
+          objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+      ASSERT_TRUE(Parent.Signature);
+      Call.Signature = *Parent.Signature;
+      auto Contract = objcBlockParameterContract(F.Image, Call, 2);
+      ASSERT_TRUE(Contract) << Owner.str();
+      EXPECT_EQ(Contract->Storage,
+                ObjCBlockParameterContract::Lifetime::Copied);
+      EXPECT_EQ(Contract->Signature.ReturnType->Kind, NdTypeKind::Void);
+      EXPECT_EQ(Contract->Signature.Parameters.size(), 1U);
+      EXPECT_FALSE(objcNonEscapingBlockSignature(F.Image, Call, 2));
+
+      auto Changed = Call;
+      Changed.Receiver.reset();
+      EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 2));
+      Changed = Call;
+      Changed.Signature.Parameters.pop_back();
+      EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 2));
+      Changed = Call;
+      Changed.Selector = "performBlockAndWait:";
+      auto Synchronous = objcBlockParameterContract(F.Image, Changed, 2);
+      ASSERT_TRUE(Synchronous);
+      EXPECT_EQ(Synchronous->Storage,
+                ObjCBlockParameterContract::Lifetime::NonEscaping);
+      EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 1));
+
+      F.Image.ObjCClasses.front().SuperclassName = "NSPersistentContainer";
+      EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
+    }
+}
+
+TEST(ObjCBlockSources, CoreDataAsyncCallCopiesOnlyAuthenticatedStackBlock) {
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    SourceFixture F(true);
+    F.string(F.Signature, Mutation == 2 ? "i12@?0i8" : "v8@?0");
+    std::string Error;
+    auto Descriptor =
+        readObjCBlockDescriptor(F.Image, F.Descriptor, 0xc0000000, Error);
+    ASSERT_TRUE(Descriptor) << Error;
+    auto &Invoke = F.Result.HighFuncs[0];
+    Invoke.SourceTypeHint = *Descriptor->InvokeTypeHint;
+    Invoke.ReturnType = Invoke.SourceTypeHint->ReturnType;
+    Invoke.Params.clear();
+    for (const auto &Parameter : Invoke.SourceTypeHint->Parameters)
+      Invoke.Params.push_back({Parameter.Name, Parameter.Type});
+    Invoke.Body = {ret(Mutation == 2 ? HighExpr::makeConst(0, 4) : nullptr)};
+
+    F.Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/CoreData.framework/CoreData",
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    ObjCClass Class;
+    Class.Name = "TestContext";
+    Class.SuperclassName = "NSManagedObjectContext";
+    Class.InheritanceStatus = "resolved";
+    F.Image.ObjCClasses.push_back(Class);
+    ObjCMethod Method;
+    Method.Implementation = F.Caller;
+    Method.ClassName = Class.Name;
+    Method.Selector = "submit:";
+    Method.TypeHint = parseObjCMethodEncoding("submit:", "v24@0:8@16");
+    ASSERT_TRUE(Method.TypeHint);
+    F.Image.ObjCMethods.push_back(Method);
+    auto Receiver = objcMethodReceiverTypeHint(F.Image, F.Caller);
+    ASSERT_TRUE(Receiver);
+    SourceCallTypeHint Binding;
+    Binding.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Binding.TargetName = "objc_msgSend";
+    Binding.Selector = "performBlock:";
+    Binding.Receiver = *Receiver;
+    auto Parent =
+        objcReceiverSourceTypeHint(F.Image, Binding.Selector, *Receiver);
+    ASSERT_TRUE(Parent.Signature);
+    Binding.Signature = *Parent.Signature;
+    if (Mutation == 1)
+      Binding.Receiver.reset();
+
+    auto Call = HighExpr::makeCall("objc_msgSend", 0,
+                                   {parameter(0, F.caller().Params[0].Type),
+                                    HighExpr::makeConst(0x2600, 8),
+                                    frame(F.Image, -48)});
+    Call->Type = Binding.Signature.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Binding);
+    if (Mutation != 1)
+      EXPECT_TRUE(objcSourceCallBound(*Call, F.Image, F.functions()));
+    HighStmt Send;
+    Send.Kind = StmtKind::Call;
+    Send.CallExpr = Call;
+    F.caller().Body.back() = Send;
+    F.caller().Body.push_back(ret(HighExpr::makeConst(0, 4)));
+    const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+    EXPECT_EQ(Plan.StackBlocks.count(F.Caller), Mutation == 0 ? 1U : 0U)
+        << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller)
+                                            : "");
+  }
+}
+
 TEST(ObjCBlockSources, ConstructionRejectsLateUnsafeEdgesTransactionally) {
   for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -1382,8 +1501,8 @@ TEST(ObjCBlockSources,
       EXPECT_EQ(applyObjCBlockInvokeHints(Plan, Options), 3U);
       EXPECT_EQ(applyObjCBlockInvokeHints(Plan, Options), 0U);
       std::set<std::string> Shared;
-      auto Text = renderObjCBlockSourceHelpers(
-          Plan, Bound.Descriptors, Bound.Literals, Shared);
+      auto Text = renderObjCBlockSourceHelpers(Plan, Bound.Descriptors,
+                                               Bound.Literals, Shared);
       EXPECT_NE(Text.find("void (*copy)(void *, void *)"), std::string::npos);
       EXPECT_NE(Text.find("&neverd_block_helper_1400"), std::string::npos);
       EXPECT_NE(Text.find("&neverd_block_helper_1410"), std::string::npos);

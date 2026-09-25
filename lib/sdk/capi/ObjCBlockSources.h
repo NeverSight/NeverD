@@ -981,7 +981,9 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           if (Contract)
             Consumer = Contract->Signature;
         } else if (Binding && Binding->CallKind == CallKind::ObjCMessage) {
-          Consumer = objcNonEscapingBlockSignature(Image, *Binding, I);
+          const auto Contract = objcBlockParameterContract(Image, *Binding, I);
+          if (Contract)
+            Consumer = Contract->Signature;
         }
         const bool DeclaredConsumer =
             Consumer && Block.Descriptor.InvokeTypeHint &&
@@ -1361,8 +1363,8 @@ inline ObjCBlockSourceBindingResult bindObjCBlockSourceReferences(
         if (auto Global = Plan.Globals.find(Original->ConstVal);
             Global != Plan.Globals.end()) {
           RequireDescriptor(Global->second.Descriptor);
-          RequireInvoke(Global->second.InvokeEntry,
-                        Global->second.Descriptor, {});
+          RequireInvoke(Global->second.InvokeEntry, Global->second.Descriptor,
+                        {});
           RequireOwnership(Global->second.Descriptor, {});
           Result.Literals.insert(Global->first);
           Address = ObjCBlockAddressBinding{
@@ -1497,11 +1499,9 @@ objcBlockSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
 
 /// All data definitions are function-local, while the three generated function
 /// identities are explicitly shared by the Objective-C source assembler.
-inline std::string
-renderObjCBlockSourceHelpers(const ObjCBlockSourcePlan &Plan,
-                             const std::set<va_t> &Descriptors,
-                             const std::set<va_t> &Literals,
-                             std::set<std::string> &SharedFunctions) {
+inline std::string renderObjCBlockSourceHelpers(
+    const ObjCBlockSourcePlan &Plan, const std::set<va_t> &Descriptors,
+    const std::set<va_t> &Literals, std::set<std::string> &SharedFunctions) {
   using namespace objc_block_source_detail;
   std::string Source;
   llvm::raw_string_ostream OS(Source);
