@@ -522,12 +522,19 @@ static std::optional<size_t> pureAssignCount(const HighStmt &S,
       return std::nullopt;
     if (isTailValue(*S.Val))
       return 1;
-    // One direct call whose arguments are tail values: each path still runs
-    // exactly one copy of it.
-    if (S.Val->Kind == ExprKind::Call &&
-        S.Val->IntrinsicId == Intrinsic::None &&
-        S.Val->IntrinsicOutputs.empty() &&
+    // One call (or single-result intrinsic) whose arguments are tail
+    // values: each path still runs exactly one copy of it.
+    if (S.Val->Kind == ExprKind::Call && S.Val->IntrinsicOutputs.empty() &&
         std::all_of(S.Val->Operands.begin(), S.Val->Operands.end(),
+                    [](const ExprPtr &Op) { return Op && isTailValue(*Op); }))
+      return 1;
+    return std::nullopt;
+  }
+  if (S.Kind == StmtKind::Call) {
+    const HighExpr *Call = S.CallExpr.get();
+    if (Call && Call->Kind == ExprKind::Call &&
+        Call->IntrinsicOutputs.empty() &&
+        std::all_of(Call->Operands.begin(), Call->Operands.end(),
                     [](const ExprPtr &Op) { return Op && isTailValue(*Op); }))
       return 1;
     return std::nullopt;
