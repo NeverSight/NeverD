@@ -73,6 +73,33 @@ struct BlockFixture {
   }
 };
 
+TEST(ObjCBlockSources, FlowJoinPoisonsOnlyPossiblePointerIdentities) {
+  using namespace objc_block_source_detail;
+  Values::Facts Into, From;
+  const Identity LeftOnly{0, 0, 0, 1};
+  const Identity RightOnly{0, 0, 0, 2};
+  const Identity ConflictingScalar{0, 0, 0, 3};
+  const Identity SamePointer{0, 0, 0, 4};
+  const Identity ScalarOnly{0, 0, 0, 5};
+  Into.Locals[LeftOnly] = {Value::Frame, 16};
+  From.Locals[RightOnly] = {Value::Context};
+  Into.Locals[ConflictingScalar] = {Value::Number, 0, 1};
+  From.Locals[ConflictingScalar] = {Value::Number, 0, 2};
+  Into.Locals[SamePointer] = From.Locals[SamePointer] = {Value::Frame, 8};
+  From.Locals[ScalarOnly] = {Value::Number, 0, 7};
+  Into.FrameValues[{8, 8}] = From.FrameValues[{8, 8}] = {Value::Number, 0, 1};
+  From.FrameIdentityBytes.insert(12);
+
+  EXPECT_TRUE(Values::merge(Into, From));
+  EXPECT_EQ(Into.Locals.at(LeftOnly).K, Value::UnprovenIdentity);
+  EXPECT_EQ(Into.Locals.at(RightOnly).K, Value::UnprovenIdentity);
+  EXPECT_EQ(Into.Locals.at(ConflictingScalar).K, Value::Scalar);
+  EXPECT_EQ(Into.Locals.at(SamePointer).K, Value::Frame);
+  EXPECT_FALSE(Into.Locals.count(ScalarOnly));
+  EXPECT_EQ(Into.FrameValues.at({8, 8}).K, Value::UnprovenIdentity);
+  EXPECT_FALSE(Values::merge(Into, From));
+}
+
 TEST(ObjCBlockSources, CallbackClassRequiresExactPublishedDescriptor) {
   BlockFixture F;
   F.string(F.Signature, "v24@?0@\"WMFFeedNewsStory\"8Q16");

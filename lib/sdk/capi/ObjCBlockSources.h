@@ -202,16 +202,28 @@ public:
   static bool merge(Facts &Into, const Facts &From) {
     bool Changed = false;
     auto MergeValues = [&](auto &Dest, const auto &Source) {
-      std::set<typename std::decay_t<decltype(Dest)>::key_type> Keys;
-      for (const auto &[Key, V] : Dest)
-        Keys.insert(Key);
-      for (const auto &[Key, V] : Source)
-        Keys.insert(Key);
-      for (const auto &Key : Keys) {
-        const auto D = Dest.find(Key);
-        const auto S = Source.find(Key);
-        const Value A = D == Dest.end() ? Value{} : D->second;
-        const Value B = S == Source.end() ? Value{} : S->second;
+      // A join runs for every reached edge. Walk the ordered maps once
+      // instead of materializing their union and looking up every key again.
+      auto D = Dest.begin();
+      auto S = Source.begin();
+      const auto Less = Dest.key_comp();
+      while (D != Dest.end() || S != Source.end()) {
+        if (S != Source.end() &&
+            (D == Dest.end() || Less(S->first, D->first))) {
+          // Missing destination facts are scalar unknown. Only a possible
+          // pointer identity from the other path needs an explicit poison.
+          if (pointerIdentity(S->second)) {
+            Dest.emplace_hint(D, S->first, Value{Value::UnprovenIdentity});
+            Changed = true;
+          }
+          ++S;
+          continue;
+        }
+        auto Current = D++;
+        const Value &A = Current->second;
+        const Value B = S != Source.end() && !Less(Current->first, S->first)
+                            ? (S++)->second
+                            : Value{};
         if (A.K == B.K && A.Offset == B.Offset && A.Bits == B.Bits &&
             A.Name == B.Name)
           continue;
@@ -221,7 +233,7 @@ public:
         if (A.K == Joined.K && !A.Offset && !A.Bits && A.Name.empty())
           continue;
         Changed = true;
-        Dest[Key] = Joined;
+        Current->second = Joined;
       }
     };
     MergeValues(Into.Locals, From.Locals);
