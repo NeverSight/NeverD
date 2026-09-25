@@ -700,6 +700,72 @@ TEST(NativeSourceHints, OptionalStringExtensionGetterUsesSwiftSelfAndPair) {
                                                                   0x1000));
 }
 
+TEST(NativeSourceHints, OptionalUInt64AndObjCClassGettersKeepTheirReturns) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::MachO;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Text));
+  Image.Symbols.push_back(
+      {"_$sSo10WMFArticleC3WMFE7quadKeys6UInt64VSgvg", 0x1000, 0, true});
+  const auto UInt64 =
+      sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(Image, 0x1000);
+  ASSERT_TRUE(UInt64);
+  EXPECT_EQ(UInt64->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(UInt64->ReturnType->Size, 16U);
+  ASSERT_EQ(UInt64->ReturnComponents.size(), 2U);
+  EXPECT_EQ(UInt64->ReturnComponents[0].RegisterOffset, a64reg::X0);
+  EXPECT_EQ(UInt64->ReturnComponents[1].RegisterOffset, a64reg::X1);
+  ASSERT_EQ(UInt64->Parameters.size(), 1U);
+  EXPECT_EQ(UInt64->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(UInt64->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  std::string Error;
+  EXPECT_TRUE(validateSourceABI(*UInt64, Error)) << Error;
+
+  Image.Symbols[0].Name =
+      "_$sSo10WMFArticleC3WMFE8locationSo10CLLocationCSgvg";
+  const auto Class =
+      sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(Image, 0x1000);
+  ASSERT_TRUE(Class);
+  EXPECT_EQ(Class->Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+  EXPECT_EQ(Class->ReturnType->Size, 8U);
+  EXPECT_EQ(Class->ReturnLocation.RegisterOffset, a64reg::X0);
+  ASSERT_EQ(Class->Parameters.size(), 1U);
+  EXPECT_EQ(Class->Parameters[0].TheRole,
+            SourceParameterTypeHint::Role::SwiftContext);
+  EXPECT_EQ(Class->Parameters[0].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*Class, Error)) << Error;
+
+  auto Wrong = Image;
+  Wrong.Symbols[0].Name += "To";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo10WMFArticleC3WMFE8locationSo10CLLocationCvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols[0].Name =
+      "_$sSo10WMFArticleC3WMFE7quadKeySiSgvg";
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+      Wrong, 0x1000));
+  Wrong = Image;
+  Wrong.Arch = Arch::X64;
+  EXPECT_FALSE(sdk::swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+      Wrong, 0x1000));
+}
+
 TEST(NativeSourceHints, OptionalDictionaryExtensionGetterUsesSwiftSelf) {
   BinaryImage Image;
   Image.Format = BinaryFormat::MachO;

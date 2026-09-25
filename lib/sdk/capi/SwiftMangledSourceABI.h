@@ -1072,6 +1072,109 @@ swiftMangledObjCOptionalStringGetterSourceABI(const BinaryImage &Image,
              : std::nullopt;
 }
 
+// An ObjC class extension getter for Optional<UInt64> returns its payload
+// in x0 and the enum tag in x1. An optional imported ObjC class instead uses
+// its null pointer as the empty case and returns only x0. Both getters take
+// their receiver in swiftself. Match the complete mangled result so no other
+// optional value layout inherits either register contract.
+inline std::optional<SourceFunctionTypeHint>
+swiftMangledObjCOptionalUInt64OrClassGetterSourceABI(
+    const BinaryImage &Image, va_t Entry) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      !Image.isCodeAddress(Entry))
+    return std::nullopt;
+  const Symbol *Only = nullptr;
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.Addr == Entry && Symbol.IsFunc) {
+      if (Only)
+        return std::nullopt;
+      Only = &Symbol;
+    }
+  if (!Only)
+    return std::nullopt;
+  llvm::StringRef Name(Only->Name);
+  Name.consume_front("_");
+  if (!Name.starts_with("$s"))
+    return std::nullopt;
+  llvm::SwiftDemangleOptions Options;
+  Options.MaxInputBytes = 1024;
+  Options.MaxNodes = 128;
+  Options.MaxDepth = 24;
+  Options.MaxMemoryBytes = 65536;
+  Options.MaxOperations = 10000;
+  const auto Parsed = llvm::swiftDemangle(Name.str(), Options);
+  using Node = llvm::SwiftDemangleNode;
+  const auto Shape = [](const Node &N, llvm::StringRef Kind, size_t Children) {
+    return N.Kind == Kind && !N.Text && !N.Index &&
+           N.Children.size() == Children;
+  };
+  const auto Text = [](const Node &N, llvm::StringRef Kind,
+                       llvm::StringRef Value) {
+    return N.Kind == Kind && N.Text && *N.Text == Value && !N.Index &&
+           N.Children.empty();
+  };
+  const auto Nominal = [&](const Node &N, llvm::StringRef Kind,
+                           llvm::StringRef Module, llvm::StringRef Name) {
+    return Shape(N, Kind, 2) && Text(N.Children[0], "Module", Module) &&
+           Text(N.Children[1], "Identifier", Name);
+  };
+  if (!Parsed.Root || !Parsed.Error.empty() ||
+      !Shape(*Parsed.Root, "Global", 1) ||
+      !Shape(Parsed.Root->Children[0], "Getter", 1) ||
+      !Shape(Parsed.Root->Children[0].Children[0], "Variable", 3))
+    return std::nullopt;
+  const auto &Variable = Parsed.Root->Children[0].Children[0];
+  const auto &Extension = Variable.Children[0];
+  const auto &Property = Variable.Children[1];
+  const auto &Type = Variable.Children[2];
+  if (!Shape(Extension, "Extension", 2) ||
+      Extension.Children[0].Kind != "Module" || !Extension.Children[0].Text ||
+      Extension.Children[0].Text->empty() || Extension.Children[0].Index ||
+      !Extension.Children[0].Children.empty() ||
+      !Shape(Extension.Children[1], "Class", 2) ||
+      !Text(Extension.Children[1].Children[0], "Module", "__C") ||
+      Extension.Children[1].Children[1].Kind != "Identifier" ||
+      !Extension.Children[1].Children[1].Text ||
+      Extension.Children[1].Children[1].Text->empty() ||
+      Extension.Children[1].Children[1].Index ||
+      !Extension.Children[1].Children[1].Children.empty() ||
+      Property.Kind != "Identifier" || !Property.Text ||
+      Property.Text->empty() || Property.Index || !Property.Children.empty() ||
+      !Shape(Type, "Type", 1) ||
+      !Shape(Type.Children[0], "BoundGenericEnum", 2))
+    return std::nullopt;
+  const auto &Optional = Type.Children[0];
+  if (!Shape(Optional.Children[0], "Type", 1) ||
+      !Nominal(Optional.Children[0].Children[0], "Enum", "Swift", "Optional") ||
+      !Shape(Optional.Children[1], "TypeList", 1) ||
+      !Shape(Optional.Children[1].Children[0], "Type", 1))
+    return std::nullopt;
+  const auto &Value = Optional.Children[1].Children[0].Children[0];
+  const bool UInt64 = Nominal(Value, "Structure", "Swift", "UInt64");
+  const bool ObjCClass =
+      Shape(Value, "Class", 2) &&
+      Text(Value.Children[0], "Module", "__C") &&
+      Value.Children[1].Kind == "Identifier" && Value.Children[1].Text &&
+      !Value.Children[1].Text->empty() && !Value.Children[1].Index &&
+      Value.Children[1].Children.empty();
+  if (!UInt64 && !ObjCClass)
+    return std::nullopt;
+
+  SourceFunctionTypeHint Hint;
+  Hint.Origin = SourceFunctionTypeHint::OriginKind::SwiftMangled;
+  Hint.ReturnType = UInt64
+                        ? NdType::makeStruct({NdType::makeInt(8, false),
+                                              NdType::makeInt(8, false)})
+                        : NdType::makePtr(NdType::makeVoid());
+  Hint.Parameters = {{"self", NdType::makePtr(NdType::makeVoid())}};
+  Hint.Parameters[0].TheRole = SourceParameterTypeHint::Role::SwiftContext;
+  std::string Error;
+  return assignDarwinSwiftSourceABI(Hint, Image.Arch, Error)
+             ? std::optional<SourceFunctionTypeHint>(std::move(Hint))
+             : std::nullopt;
+}
+
 // An Objective-C class extension getter for an optional Dictionary<String,
 // Int> uses swiftself and returns the dictionary's nullable storage word in
 // x0. Match the whole type tree so other collection layouts cannot inherit
