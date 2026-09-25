@@ -8962,6 +8962,65 @@ TEST(ObjCCallHints, MapKitPlacemarkCoordinateKeepsRecordAndNilDictionaryABI) {
   EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
 }
 
+TEST(ObjCCallHints, CoreImageDetectorFeaturesUsesExactProviderAndObjectABI) {
+  constexpr auto Selector = "featuresInImage:options:";
+  constexpr auto Module = "/System/Library/Frameworks/CoreImage.framework/CoreImage";
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = Selector;
+  Image.DynInfo.NeededLibs = {Module};
+
+  const auto Declaration = objcSelectorSourceTypeHint(Image, Selector);
+  ASSERT_TRUE(Declaration);
+  EXPECT_EQ(Declaration->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  EXPECT_EQ(Declaration->ReturnType->Kind, NdTypeKind::Ptr);
+  ASSERT_EQ(Declaration->Parameters.size(), 4U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (size_t I = 0; I < Declaration->Parameters.size(); ++I) {
+    EXPECT_EQ(Declaration->Parameters[I].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Declaration->Parameters[I].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(Declaration->Parameters[I].Location.RegisterOffset,
+              TRI.IntParamRegs[I]);
+  }
+
+  const auto Hints = buildObjCSourceCallHints(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Binding = Hints.at(0x1204);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*receiverCallExpression(Binding), Image,
+                                      {}));
+  const auto Med = convert(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  ASSERT_TRUE(Med.CallInfos.front().SourceCallHint);
+  ASSERT_EQ(Med.CallInfos.front().Args.size(), 4U);
+  for (size_t I = 0; I < 4; ++I)
+    EXPECT_EQ(Med.CallInfos.front().Args[I].RegOff, TRI.IntParamRegs[I]);
+
+  for (const auto &WrongModule :
+       {"/tmp/CoreImage.framework/CoreImage",
+        "/System/Library/Frameworks/Foundation.framework/Foundation"}) {
+    auto Invalid = Image;
+    Invalid.DynInfo.NeededLibs = {WrongModule};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Invalid, Selector));
+    EXPECT_FALSE(sdk::objcSourceCallBound(
+        *receiverCallExpression(Binding), Invalid, {}));
+  }
+  auto Conflict = Image;
+  ObjCMethod Other;
+  Other.Selector = Selector;
+  Other.TypeHint = parseObjCMethodEncoding(Selector, "v32@0:8@16@24");
+  ASSERT_TRUE(Other.TypeHint);
+  Conflict.ObjCMethods.push_back(std::move(Other));
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Conflict, Selector));
+  EXPECT_FALSE(sdk::objcSourceCallBound(*receiverCallExpression(Binding),
+                                       Conflict, {}));
+
+  auto Unsupported = image(Arch::X64);
+  Unsupported.ObjCMethods.clear();
+  Unsupported.DynInfo.NeededLibs = {Module};
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
+}
+
 TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
   const struct {

@@ -14,6 +14,11 @@
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "createCGImage:fromRect:", "^{CGImage=}56@0:8@16{CGRect={CGPoint=dd}{CGSize=dd}}24", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "detectorOfType:context:options:", "@40@0:8@16@24@32", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "extent", "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8", nullptr},
+// CIDetector.h in MacOSX SDK 15.5 declares this exact instance method;
+// arm64 macOS and Mac Catalyst Clang ASTs agree. The public iOS API has the
+// same object result and two object parameters, and Apple Clang emits this
+// encoding for an arm64 iOS simulator declaration. No x86_64 iOS fact is used.
+{"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "featuresInImage:options:", "@32@0:8@16@24", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "filterWithName:", "@24@0:8@16", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "imageByCroppingToRect:", "@48@0:8{CGRect={CGPoint=dd}{CGSize=dd}}16", nullptr},
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "outputImage", "@16@0:8", nullptr},
