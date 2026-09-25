@@ -1,10 +1,10 @@
 // clang-format off
-// Compiler-observed public UIKit API facts for arm64 iOS.
-// Xcode 26.5 iPhoneOS and arm64 iPhoneSimulator ASTs agree on each owned
-// declaration and its desugared types. Exact arm64 Objective-C encodings were
-// independently produced from the public UIKit headers by Apple Clang. This
-// catalog includes only declarations observed in both artifacts; selectors
-// whose owners disagree remain absent or are resolved by receiver evidence.
+// Public UIKit API facts for arm64 iOS. Most entries were observed in both
+// Xcode 26.5 iPhoneOS and arm64 iPhoneSimulator ASTs with agreeing desugared
+// types, then independently encoded by Apple Clang. The image and layout
+// additions below use Apple's published Objective-C declarations with their
+// exact arm64 encodings independently checked by Apple Clang. Selectors whose
+// owners disagree remain absent or are resolved by receiver evidence.
 // The source AST SHA-256 values are:
 //   iPhoneOS:       79259f6825fd8d118d351d98a4530e426f55faaaa569b172ab14256a6a840ba7
 //   iPhoneSimulator:707c4d1d4bf7f49570de9ad5f880a9398cd16b594468177307ba53332ba418b7
@@ -41,6 +41,9 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageByPreparingForDisplay", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageFlippedForRightToLeftLayoutDirection", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageForState:", "@24@0:8Q16", nullptr},
+// Apple's public UIImage declaration has three object inputs and an image
+// result. Apple Clang independently emits this exact arm64 encoding.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageNamed:inBundle:withConfiguration:", "@40@0:8@16@24@32", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageOrientation", "q16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageWithCGImage:", "@24@0:8^{CGImage=}16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageWithCIImage:scale:orientation:", "@40@0:8@16d24q32", nullptr},
@@ -48,6 +51,14 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithProgressViewStyle:", "@24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "insertSubview:belowSubview:", "v32@0:8@16@24", nullptr},
+// NSLayoutAnchor's public fixed factory takes another anchor and returns an
+// NSLayoutConstraint. UIView and UILayoutGuide expose these object anchors;
+// Apple Clang independently emits their exact arm64 encodings.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "constraintEqualToAnchor:", "@24@0:8@16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "leadingAnchor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "trailingAnchor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "topAnchor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "bottomAnchor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "instantiateWithOwner:options:", "@32@0:8@16@24", nullptr},
 // The complete device/simulator ASTs cited for UIProgressView below also agree
 // on UIView(UIConstraintBasedLayoutLayering)'s void invalidation method and
