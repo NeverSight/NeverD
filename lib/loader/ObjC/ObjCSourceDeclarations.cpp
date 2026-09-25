@@ -841,6 +841,13 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
        "loadContentForDate:inManagedObjectContext:force:addNewContent:"
        "completion:",
        "v48@0:8@16@24B32B36@?40", 3},
+      {"WMFNearbyContentSource",
+       "removeSectionsForMidnightUTCDate:withKeyNotEqualToKey:"
+       "inManagedObjectContext:",
+       "v40@0:8@16@24@32", 4},
+      {"WMFAnnouncementsContentSource",
+       "updateVisibilityOfAnnouncementsInManagedObjectContext:addNewContent:",
+       "v28@0:8@16B24", 2},
   };
   const ManagedContextDeclaration *Context = nullptr;
   for (const auto &Method : Image.ObjCMethods) {
@@ -1918,6 +1925,10 @@ objcBlockParameterContract(const BinaryImage &Image,
   // RelatedSearchFetcher declares its Swift completion @escaping. The explore
   // feed coordinator captures its update callback in a main-queue block. The
   // nearby source forwards its callbacks from a Core Data performBlock: body.
+  // EchoSubscriptionFetcher passes both completions to tokenized HTTP work.
+  // Explore Feed's background-fetch entry forwards the completion to its
+  // asynchronous update operation. MWKImageInfoFetcher forwards both callbacks
+  // into its asynchronous image-info request.
   // Authenticate exact method owners, encodings and callback ABIs before
   // treating an Objective-C stack block as copied by a callee.
   struct WMFInstanceBlock {
@@ -1964,6 +1975,20 @@ objcBlockParameterContract(const BinaryImage &Image,
       {"WMFNearbyContentSource",
        "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
        "v52@0:8@16@24B32@?36@?44", "v16@?0@\"NSError\"8", 6},
+      {"WMFEchoSubscriptionFetcher",
+       "subscribeWithSiteURL:deviceToken:completion:",
+       "v40@0:8@16@24@?32", "v16@?0@\"NSError\"8", 4},
+      {"WMFEchoSubscriptionFetcher",
+       "unsubscribeWithSiteURL:deviceToken:completion:",
+       "v40@0:8@16@24@?32", "v16@?0@\"NSError\"8", 4},
+      {"WMFExploreFeedContentController", "performBackgroundFetch:",
+       "v24@0:8@?16", "v16@?0Q8", 2},
+      {"MWKImageInfoFetcher",
+       "fetchGalleryInfoForImageFiles:fromSiteURL:success:failure:",
+       "@48@0:8@16@24@?32@?40", "v16@?0@\"NSArray\"8", 4},
+      {"MWKImageInfoFetcher",
+       "fetchGalleryInfoForImageFiles:fromSiteURL:success:failure:",
+       "@48@0:8@16@24@?32@?40", "v16@?0@\"NSError\"8", 5},
   };
   if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
       !Type->IsProtocol)

@@ -1723,6 +1723,20 @@ TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
       {"WMFNearbyContentSource",
        "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
        "v52@0:8@16@24B32@?36@?44", 6, 2},
+      {"WMFEchoSubscriptionFetcher",
+       "subscribeWithSiteURL:deviceToken:completion:",
+       "v40@0:8@16@24@?32", 4, 2},
+      {"WMFEchoSubscriptionFetcher",
+       "unsubscribeWithSiteURL:deviceToken:completion:",
+       "v40@0:8@16@24@?32", 4, 2},
+      {"WMFExploreFeedContentController", "performBackgroundFetch:",
+       "v24@0:8@?16", 2, 2},
+      {"MWKImageInfoFetcher",
+       "fetchGalleryInfoForImageFiles:fromSiteURL:success:failure:",
+       "@48@0:8@16@24@?32@?40", 4, 2},
+      {"MWKImageInfoFetcher",
+       "fetchGalleryInfoForImageFiles:fromSiteURL:success:failure:",
+       "@48@0:8@16@24@?32@?40", 5, 2},
   };
   for (const auto &C : Cases) {
     BlockFixture F;
@@ -1772,6 +1786,10 @@ TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
     ASSERT_TRUE(Contract) << C.Selector;
     EXPECT_EQ(Contract->Storage, ObjCBlockParameterContract::Lifetime::Copied);
     EXPECT_EQ(Contract->Signature.Parameters.size(), C.CallbackParameters);
+    if (std::string(C.Selector) == "performBackgroundFetch:") {
+      ASSERT_EQ(Contract->Signature.Parameters[1].Type->Kind, NdTypeKind::Int);
+      EXPECT_FALSE(Contract->Signature.Parameters[1].Type->IsSigned);
+    }
     EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 1));
     auto Changed = Call;
     Changed.Receiver.reset();

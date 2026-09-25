@@ -9488,6 +9488,13 @@ TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
        "loadContentForDate:inManagedObjectContext:force:addNewContent:"
        "completion:",
        "v48@0:8@16@24B32B36@?40", 3},
+      {"WMFNearbyContentSource",
+       "removeSectionsForMidnightUTCDate:withKeyNotEqualToKey:"
+       "inManagedObjectContext:",
+       "v40@0:8@16@24@32", 4},
+      {"WMFAnnouncementsContentSource",
+       "updateVisibilityOfAnnouncementsInManagedObjectContext:addNewContent:",
+       "v28@0:8@16B24", 2},
   };
   for (const auto &Case : Cases) {
     auto Image = image();
@@ -9529,7 +9536,8 @@ TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
     const auto Callback = objcBlockParameterContract(Image, Call, 2);
     ASSERT_TRUE(Callback) << Case.Owner;
     EXPECT_EQ(Callback->Storage, ObjCBlockParameterContract::Lifetime::Copied);
-    if (llvm::StringRef(Case.Owner) == "WMFAnnouncementsContentSource") {
+    if (llvm::StringRef(Case.Selector) ==
+        "saveAnnouncements:inManagedObjectContext:completion:") {
       const auto Array = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
       ASSERT_TRUE(Array);
       EXPECT_EQ(Array->ClassName, "NSArray");
