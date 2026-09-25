@@ -3482,8 +3482,12 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
          Expression->Operands.back()->ConstProvenance ==
              ConstantAddressProvenance::DataAddress))
       WitnessMetadata = constantAddress(*Expression->Operands.back());
+    // A Swift literal's tagged word can occupy a pointer-typed source
+    // carrier. Its exact OR must still relocate the address leaf even when
+    // the enclosing call declares that carrier as a pointer. A real memory
+    // address remains excluded: the high-bit tag is not dereferenceable.
     const auto TaggedCString =
-        !NumericOperand && !AddressContext && !MemoryAddress
+        !NumericOperand && !MemoryAddress
             ? taggedCStringAddressOperand(*Original, Image)
             : std::nullopt;
     for (size_t Index = 0; Index < Expression->Operands.size(); ++Index) {

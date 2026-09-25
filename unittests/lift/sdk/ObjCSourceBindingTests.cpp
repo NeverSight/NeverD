@@ -2328,6 +2328,42 @@ TEST(ObjCSourceBindings, TaggedCStringWordsKeepTheTagAndSharedPoolIdentity) {
     }
 }
 
+TEST(ObjCSourceBindings, TaggedCStringInPointerCarrierKeepsSharedPool) {
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Sections[0].Type = llvm::MachO::S_CSTRING_LITERALS;
+  F.Function.ReturnType = NdType::makeVoid();
+  const auto Address = HighExpr::makeConst(
+      0x1040, 8, ConstantAddressProvenance::DataAddress, 0x1040);
+  const auto Tagged = HighExpr::makeBinop(
+      NdOp::INT_OR, Address,
+      HighExpr::makeConst(SwiftLiteralString::ImmortalTag, 8,
+                          ConstantAddressProvenance::Scalar));
+  auto PointerCarrier = std::make_shared<HighExpr>();
+  PointerCarrier->Kind = ExprKind::Cast;
+  PointerCarrier->Type = NdType::makePtr(NdType::makeVoid());
+  PointerCarrier->CastTo = PointerCarrier->Type;
+  PointerCarrier->Operands = {Tagged};
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr =
+      HighExpr::makeVar(MedVar{.Kind = MedVar::Param, .Size = 8});
+  Store.StoreVal = PointerCarrier;
+  F.Function.Body = {Store};
+
+  const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  EXPECT_EQ(Bound.CStringSections, std::set<va_t>{0x1000});
+  const auto Relocated = Bound.Function.Body[0].StoreVal->Operands[0];
+  ASSERT_EQ(Relocated->Kind, ExprKind::BinOp);
+  EXPECT_EQ(Relocated->Op, NdOp::INT_OR);
+  EXPECT_EQ(Relocated->Operands[1]->ConstVal,
+            SwiftLiteralString::ImmortalTag);
+  ASSERT_EQ(Relocated->Operands[0]->Kind, ExprKind::BinOp);
+  EXPECT_EQ(Relocated->Operands[0]->Op, NdOp::INT_ADD);
+  EXPECT_EQ(Relocated->Operands[0]->Operands[1]->ConstVal, 0x40U);
+}
+
 TEST(ObjCSourceBindings, TaggedCStringWordsRejectUnprovenAddressOccurrences) {
   for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
     SCOPED_TRACE(Mutation);
