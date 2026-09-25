@@ -14,6 +14,7 @@
 #include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
+#include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
@@ -351,6 +352,7 @@ bool hasNativeSourceStateContract(
     Calls.emplace(Site, std::move(Contract));
   }
   std::optional<std::map<va_t, SourceCallTypeHint>> CurrentCallBindings;
+  std::optional<std::map<va_t, SourceCallTypeHint>> CurrentBlockBindings;
   std::vector<SwiftBooleanProjection> BooleanProjections;
   if (EntrySignature) {
     bool HasBoolean = false;
@@ -405,6 +407,40 @@ bool hasNativeSourceStateContract(
       const bool DynamicWitness =
           Op.Opcode == NdOp::INDIR_CALL && !Op.Inputs[0].isConst() &&
           isSwiftValueWitnessSourceCallHint(Binding, Image.Arch);
+      // An inferred block invocation is useful as an internal effect only
+      // when the current LowIR independently proves the same block+16 target,
+      // receiver, and zero-argument void ABI. A persisted MedIR hint alone
+      // cannot certify an indirect call's source contract.
+      const bool DynamicVoidBlock = [&] {
+        if (Image.Arch != Arch::AArch64 || Op.Opcode != NdOp::INDIR_CALL ||
+            Op.Inputs[0].isConst() || Op.NumInputs != 2 ||
+            Binding.CallKind != Kind::BlockInvoke || Binding.DoesNotReturn ||
+            Binding.WeakImport || !Binding.Signature.HasExplicitABI ||
+            (Binding.Signature.Origin !=
+                 SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+             Binding.Signature.Origin !=
+                 SourceFunctionTypeHint::OriginKind::BlockRuntime) ||
+            !Binding.Signature.ReturnType ||
+            Binding.Signature.ReturnType->Kind != NdTypeKind::Void ||
+            Binding.Signature.Parameters.size() != 1 ||
+            !Binding.Signature.Parameters[0].Type ||
+            Binding.Signature.Parameters[0].Type->Kind != NdTypeKind::Ptr ||
+            Binding.Signature.Parameters[0].Location.Kind !=
+                SourceABICarrierKind::IntegerRegister ||
+            Binding.Signature.Parameters[0].Location.RegisterOffset !=
+                a64reg::X0)
+          return false;
+        if (!CurrentCallBindings)
+          CurrentCallBindings = buildObjCSourceCallHints(Image, *Low);
+        if (!CurrentBlockBindings)
+          CurrentBlockBindings = buildObjCBlockCallHints(Image, *Low, nullptr,
+                                                         &*CurrentCallBindings);
+        const auto Current = CurrentBlockBindings->find(Op.Addr);
+        return Current != CurrentBlockBindings->end() &&
+               Current->second.CallKind == Binding.CallKind &&
+               !Current->second.DoesNotReturn && !Current->second.WeakImport &&
+               equalSourceABIs(Current->second.Signature, Binding.Signature);
+      }();
       const bool StaticBoolean = [&] {
         if (!EntrySignature || !Op.Inputs[0].isConst() ||
             !isSwiftBooleanSourceBinding(Binding) ||
@@ -533,7 +569,8 @@ bool hasNativeSourceStateContract(
             NativeSourceCallContract::TerminationKind::SwiftDictionaryViolation;
       }
       if ((!StaticRuntime && !StaticNative && !CertifiedNative &&
-           !StaticBoolean && !StaticMessage && !DynamicWitness) ||
+           !StaticBoolean && !StaticMessage && !DynamicWitness &&
+           !DynamicVoidBlock) ||
           (Binding.DoesNotReturn && !Contract.terminates()) ||
           !Binding.Signature.ReturnType || !Image.isCodeAddress(Op.Addr) ||
           !Calls

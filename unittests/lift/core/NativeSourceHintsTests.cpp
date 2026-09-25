@@ -1801,6 +1801,37 @@ struct NativeVoidFixture : NativeFixture {
   }
 };
 
+TEST(NativeSourceHints, VoidBlockInvocationNeedsCurrentReceiverProof) {
+  NativeVoidFixture Fixture(Arch::AArch64, true);
+  auto &Call = Fixture.Med.Blocks[0].Ops[0];
+  auto Binding = std::make_shared<SourceCallTypeHint>();
+  Binding->CallKind = SourceCallTypeHint::Kind::BlockInvoke;
+  Binding->Signature.Origin =
+      SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Binding->Signature.ReturnType = NdType::makeVoid();
+  Binding->Signature.Parameters = {
+      {"block", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Binding->Signature, Arch::AArch64, Error))
+      << Error;
+  Call.SourceCallHint = Binding;
+  MedVar Target;
+  Target.Kind = MedVar::Reg;
+  Target.Id = 20;
+  Target.SSAVer = 1;
+  Target.Size = 8;
+  Target.TheArch = Arch::AArch64;
+  Target.RegOff = a64reg::X8;
+  Call.Inputs[0] = Target;
+  EXPECT_FALSE(Fixture.inferVoid(Error));
+
+  // Even a matching-looking dynamic branch remains unbound without a
+  // current block+16 target load and the same receiver on the call edge.
+  Fixture.Low.Blocks[0].Ops[0].Inputs[0] = NdVar::reg(a64reg::X8, 8);
+  EXPECT_FALSE(Fixture.inferVoid(Error));
+}
+
 TEST(NativeSourceHints, VoidTailForwardersNeverSupplyAnUnprovenResult) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (bool Indirect : {false, true}) {
