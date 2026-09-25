@@ -237,6 +237,12 @@ require a revalidated receiver lineage to `NSManagedObjectContext` or
 `NSPersistentStoreCoordinator`; an unqualified `performBlock:` selector does
 not prove copying. `performBlockAndWait:` remains a separate nonescaping
 contract.
+The same copied-contract boundary covers `NSBlockOperation`
+`blockOperationWithBlock:`, `CLGeocoder`
+`reverseGeocodeLocation:completionHandler:`, and the two asynchronous
+`UNUserNotificationCenter` settings and authorization callbacks. The
+authorization callback is unavailable on x86-64 in this catalog because the
+macOS and iOS SDKs encode its `BOOL` argument differently.
 
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an

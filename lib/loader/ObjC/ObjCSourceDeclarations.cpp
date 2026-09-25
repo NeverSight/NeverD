@@ -1080,8 +1080,9 @@ objcBlockParameterContract(const BinaryImage &Image,
   };
   // Compiler-derived from public SDK 15.5 block method parameters. The
   // nonescaping rows carry NS_NOESCAPE; copied rows are audited asynchronous
-  // Core Data methods. A null callback records architecture profiles where
-  // the macOS and iOS declarations disagree; no implementation is included.
+  // or retained-work APIs. A null callback records architecture profiles
+  // where the macOS and iOS declarations disagree; no implementation is
+  // included.
   static constexpr Declaration Declarations[] = {
       {"enumerateKeysAndObjectsUsingBlock:", "v24@0:8@?16", "v24@0:8@?16", 2,
        "v32@?0@8@16^B24", nullptr, "NSDictionary"},
@@ -1113,6 +1114,18 @@ objcBlockParameterContract(const BinaryImage &Image,
        "NSManagedObjectContext", true},
       {"performBlock:", "v24@0:8@?16", "v24@0:8@?16", 2, "v8@?0", "v8@?0",
        "NSPersistentStoreCoordinator", true},
+      // These APIs retain work beyond the message return. The authorization
+      // callback's BOOL encoding differs between macOS and iOS x86-64.
+      {"blockOperationWithBlock:", "@24@0:8@?16", "@24@0:8@?16", 2, "v8@?0",
+       "v8@?0", "NSBlockOperation", true},
+      {"reverseGeocodeLocation:completionHandler:", "v32@0:8@16@?24",
+       "v32@0:8@16@?24", 3, "v24@?0@8@16", "v24@?0@8@16", "CLGeocoder", true},
+      {"getNotificationSettingsWithCompletionHandler:", "v24@0:8@?16",
+       "v24@0:8@?16", 2, "v16@?0@8", "v16@?0@8", "UNUserNotificationCenter",
+       true},
+      {"requestAuthorizationWithOptions:completionHandler:", "v32@0:8Q16@?24",
+       "v32@0:8Q16@?24", 3, "v20@?0B8@12", nullptr, "UNUserNotificationCenter",
+       true},
       {"sortedArrayUsingComparator:", "@24@0:8@?16", "@24@0:8@?16", 2,
        "q24@?0@8@16", "q24@?0@8@16", "NSArray"},
       {"sortedArrayUsingComparator:", "@24@0:8@?16", "@24@0:8@?16", 2,

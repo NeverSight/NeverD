@@ -1357,6 +1357,83 @@ TEST(ObjCBlockSources, CoreDataAsyncCallCopiesOnlyAuthenticatedStackBlock) {
   }
 }
 
+TEST(ObjCBlockSources, AppleAsyncConsumersRequireExactSDKBlockContract) {
+  struct Case {
+    const char *Framework;
+    const char *Owner;
+    const char *Selector;
+    unsigned Parameter;
+    unsigned CallbackParameters;
+    bool ClassMethod;
+    bool X64Available;
+  };
+  constexpr Case Cases[] = {
+      {"Foundation", "NSBlockOperation", "blockOperationWithBlock:", 2, 1, true,
+       true},
+      {"CoreLocation", "CLGeocoder",
+       "reverseGeocodeLocation:completionHandler:", 3, 3, false, true},
+      {"UserNotifications", "UNUserNotificationCenter",
+       "getNotificationSettingsWithCompletionHandler:", 2, 2, false, true},
+      {"UserNotifications", "UNUserNotificationCenter",
+       "requestAuthorizationWithOptions:completionHandler:", 3, 3, false,
+       false},
+  };
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(Case.Selector);
+      BlockFixture F;
+      F.Image.Arch = Architecture;
+      F.Image.DynInfo.NeededLibs = {
+          std::string("/System/Library/Frameworks/") + Case.Framework +
+              ".framework/" + Case.Framework,
+          "/System/Library/Frameworks/Foundation.framework/Foundation"};
+      ObjCMethod Method;
+      Method.Implementation = 0x1200;
+      Method.ClassName = Case.Owner;
+      Method.Selector = "submit:";
+      Method.IsClassMethod = Case.ClassMethod;
+      Method.TypeHint = parseObjCMethodEncoding("submit:", "v24@0:8@16");
+      ASSERT_TRUE(Method.TypeHint);
+      F.Image.ObjCMethods.push_back(Method);
+      auto Receiver =
+          objcMethodReceiverTypeHint(F.Image, Method.Implementation);
+      ASSERT_TRUE(Receiver);
+      SourceCallTypeHint Call;
+      Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+      Call.Selector = Case.Selector;
+      Call.Receiver = *Receiver;
+      auto Parent =
+          objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+      ASSERT_TRUE(Parent.Signature);
+      Call.Signature = *Parent.Signature;
+      auto Contract = objcBlockParameterContract(F.Image, Call, Case.Parameter);
+      const bool Available = Architecture != Arch::X64 || Case.X64Available;
+      EXPECT_EQ(bool(Contract), Available);
+      if (Contract) {
+        EXPECT_EQ(Contract->Storage,
+                  ObjCBlockParameterContract::Lifetime::Copied);
+        EXPECT_EQ(Contract->Signature.ReturnType->Kind, NdTypeKind::Void);
+        EXPECT_EQ(Contract->Signature.Parameters.size(),
+                  Case.CallbackParameters);
+      }
+      EXPECT_FALSE(
+          objcNonEscapingBlockSignature(F.Image, Call, Case.Parameter));
+
+      auto Changed = Call;
+      Changed.Receiver.reset();
+      EXPECT_FALSE(
+          objcBlockParameterContract(F.Image, Changed, Case.Parameter));
+      Changed = Call;
+      Changed.Signature.Parameters.pop_back();
+      EXPECT_FALSE(
+          objcBlockParameterContract(F.Image, Changed, Case.Parameter));
+      EXPECT_FALSE(
+          objcBlockParameterContract(F.Image, Call, Case.Parameter - 1));
+      F.Image.DynInfo.NeededLibs = {"/tmp/unrelated.framework/unrelated"};
+      EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, Case.Parameter));
+    }
+}
+
 TEST(ObjCBlockSources, ConstructionRejectsLateUnsafeEdgesTransactionally) {
   for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
     SCOPED_TRACE(Mutation);
