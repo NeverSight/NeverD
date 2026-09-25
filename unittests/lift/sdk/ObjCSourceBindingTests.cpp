@@ -5502,6 +5502,8 @@ TEST(ObjCSourceBindings, PrivateSwiftScalarAliasesKeepOneAssociationKey) {
                                          "/usr/lib/swift/libswiftCore.dylib",
                                          false));
   F.Image.ImportPtrSlots[ObjCSlot] = "_objc_setAssociatedObject";
+  F.Image.DynInfo.NeededLibs.push_back(
+      "/System/Library/Frameworks/Foundation.framework/Foundation");
   const auto SwiftHint = swiftRuntimeSourceCallHint(F.Image, SwiftSlot);
   const auto ObjCHint = objcRuntimeSourceCallHint(F.Image, ObjCSlot);
   ASSERT_TRUE(SwiftHint);
@@ -5545,17 +5547,39 @@ TEST(ObjCSourceBindings, PrivateSwiftScalarAliasesKeepOneAssociationKey) {
   HighStmt DirectStatement;
   DirectStatement.Kind = StmtKind::ExprStmt;
   DirectStatement.CallExpr = Direct;
+  const auto Registration =
+      objcSelectorSourceTypeHint(F.Image,
+                                 "addObserver:forKeyPath:options:context:");
+  ASSERT_TRUE(Registration);
+  auto RegistrationHint = std::make_shared<SourceCallTypeHint>();
+  RegistrationHint->CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  RegistrationHint->TargetName = "objc_msgSend";
+  RegistrationHint->Selector = "addObserver:forKeyPath:options:context:";
+  RegistrationHint->Signature = *Registration;
+  std::vector<ExprPtr> RegistrationArgs;
+  for (size_t Index = 0; Index < Registration->Parameters.size(); ++Index)
+    RegistrationArgs.push_back(HighExpr::makeConst(
+        Index == 5 ? Address : 0, 8,
+        Index == 5 ? ConstantAddressProvenance::DataAddress
+                   : ConstantAddressProvenance::Unknown));
+  auto Register = HighExpr::makeCall("objc_msgSend", 0, RegistrationArgs);
+  Register->Type = Registration->ReturnType;
+  Register->SourceCallHint = RegistrationHint;
+  HighStmt RegistrationStatement;
+  RegistrationStatement.Kind = StmtKind::ExprStmt;
+  RegistrationStatement.CallExpr = Register;
   HighStmt Return;
   Return.Kind = StmtKind::Return;
   F.Function.ReturnType = NdType::makeVoid();
   F.Function.Body = {Assign, AccessStatement, SetStatement, DirectStatement,
-                     Return};
+                     RegistrationStatement, Return};
 
   const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
   ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
   EXPECT_EQ(Bound.LocalStorageExtents,
             (std::map<va_t, uint64_t>{{Address, 1}}));
   EXPECT_TRUE(Bound.AssociationKeys.empty());
+  EXPECT_TRUE(Bound.KVOContexts.empty());
   const auto Storage = Bound.Function.Body[0].Val;
   ASSERT_TRUE(Storage->SourceCallHint);
   EXPECT_EQ(Storage->SourceCallHint->CallKind,
@@ -5569,6 +5593,57 @@ TEST(ObjCSourceBindings, PrivateSwiftScalarAliasesKeepOneAssociationKey) {
   EXPECT_EQ(DirectKey->SourceCallHint->CallKind,
             SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
   EXPECT_EQ(DirectKey->SourceCallHint->TargetAddress, Address);
+  const auto RegisteredContext =
+      Bound.Function.Body[4].CallExpr->Operands[5];
+  ASSERT_TRUE(RegisteredContext->SourceCallHint);
+  EXPECT_EQ(RegisteredContext->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(RegisteredContext->SourceCallHint->TargetAddress, Address);
+
+  ObjCMethod Callback;
+  Callback.Implementation = 0x2000;
+  Callback.ClassName = "Observer";
+  Callback.Selector = "observeValueForKeyPath:ofObject:change:context:";
+  Callback.TypeEncoding = "v48@0:8@16@24@32^v40";
+  Callback.Status = "supported";
+  Callback.TypeHint =
+      parseObjCMethodEncoding(Callback.Selector, Callback.TypeEncoding);
+  ASSERT_TRUE(Callback.TypeHint);
+  std::string Reason;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(*Callback.TypeHint, F.Image.Arch,
+                                       Reason))
+      << Reason;
+  auto CallbackImage = F.Image;
+  CallbackImage.ObjCMethods = {Callback};
+  HighFunc CallbackFunction;
+  CallbackFunction.Entry = Callback.Implementation;
+  CallbackFunction.SourceTypeHint = Callback.TypeHint;
+  for (const auto &Parameter : Callback.TypeHint->Parameters)
+    CallbackFunction.Params.push_back({Parameter.Name, Parameter.Type});
+  MedVar ContextParameter;
+  ContextParameter.Kind = MedVar::Param;
+  ContextParameter.Id = 5;
+  ContextParameter.Size = 8;
+  HighStmt Compare;
+  Compare.Kind = StmtKind::Return;
+  Compare.RetVal = HighExpr::makeBinop(
+      NdOp::INT_EQUAL,
+      HighExpr::makeVar(ContextParameter,
+                        Callback.TypeHint->Parameters[5].Type),
+      HighExpr::makeConst(Address, 8,
+                          ConstantAddressProvenance::DataAddress));
+  CallbackFunction.Body = {Compare};
+  const auto Compared =
+      bindObjCSourceReferences(CallbackFunction, CallbackImage);
+  ASSERT_TRUE(Compared.Limitation.empty()) << Compared.Limitation;
+  EXPECT_EQ(Compared.LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{Address, 1}}));
+  EXPECT_TRUE(Compared.KVOContexts.empty());
+  const auto ComparedContext = Compared.Function.Body[0].RetVal->Operands[1];
+  ASSERT_TRUE(ComparedContext->SourceCallHint);
+  EXPECT_EQ(ComparedContext->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(ComparedContext->SourceCallHint->TargetAddress, Address);
 
   for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
     auto Image = F.Image;

@@ -3757,13 +3757,25 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
                               *KVOCallbackParameter);
       if (KVORegistration || KVOCallbackComparison) {
         const auto Address = constantAddress(*Operand);
-        auto Hint = Address ? kvoContextHint(Image, *Address) : std::nullopt;
+        // A private Swift scalar may also be used by exclusivity or an
+        // associated-object call. All projections of that exact address must
+        // share its scalar storage, including KVO's opaque context identity.
+        auto Hint = Address ? swiftPrivateScalarStorageHint(Image, *Address)
+                            : std::nullopt;
+        const bool PrivateStorage = bool(Hint);
+        if (!Hint)
+          Hint = Address ? kvoContextHint(Image, *Address) : std::nullopt;
         if (Hint) {
           auto Context = HighExpr::makeCall({}, 0, {});
           Context->Type = Operand->Type;
           Context->SourceCallHint =
               std::make_shared<SourceCallTypeHint>(std::move(*Hint));
-          Result.KVOContexts.insert(*Address);
+          if (PrivateStorage)
+            Result.LocalStorageExtents[*Address] =
+                std::max<uint64_t>(Result.LocalStorageExtents[*Address],
+                                   Context->SourceCallHint->ByteCount);
+          else
+            Result.KVOContexts.insert(*Address);
           Operand = std::move(Context);
           continue;
         }
