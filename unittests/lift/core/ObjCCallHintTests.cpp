@@ -9375,6 +9375,95 @@ TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   EXPECT_FALSE(objcReceiverTypeHintValid(Image, WrongParameter));
 }
 
+TEST(ObjCCallHints, DDFileLoggerParameterQualifiesFileSize) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  ObjCClass Logger;
+  Logger.Name = "DDFileLogger";
+  Logger.Address = 0x2300;
+  Logger.SuperclassName = "NSObject";
+  Logger.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Logger);
+  ObjCClass FileInfo;
+  FileInfo.Name = "DDLogFileInfo";
+  FileInfo.Address = 0x2500;
+  FileInfo.SuperclassName = "NSObject";
+  FileInfo.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(FileInfo);
+  ObjCClass NSObject;
+  NSObject.Name = "NSObject";
+  NSObject.Address = 0x2700;
+  NSObject.RootClass = true;
+  NSObject.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(NSObject);
+  ObjCMethod Archive;
+  Archive.ClassName = Logger.Name;
+  Archive.ClassAddress = Logger.Address;
+  Archive.MetadataAddress = 0x2400;
+  Archive.Selector = "lt_shouldLogFileBeArchived:";
+  Archive.TypeEncoding = "B24@0:8@16";
+  Archive.Implementation = 0x1200;
+  Archive.Status = "supported";
+  Archive.TypeHint =
+      parseObjCMethodEncoding(Archive.Selector, Archive.TypeEncoding);
+  ASSERT_TRUE(Archive.TypeHint);
+  Image.ObjCMethods.push_back(Archive);
+  ObjCMethod Size;
+  Size.ClassName = FileInfo.Name;
+  Size.ClassAddress = FileInfo.Address;
+  Size.MetadataAddress = 0x2600;
+  Size.Selector = "fileSize";
+  Size.TypeEncoding = "Q16@0:8";
+  Size.Implementation = 0x1400;
+  Size.Status = "supported";
+  Size.TypeHint = parseObjCMethodEncoding(Size.Selector, Size.TypeEncoding);
+  ASSERT_TRUE(Size.TypeHint);
+  Image.ObjCMethods.push_back(Size);
+
+  const auto Root = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+  ASSERT_TRUE(Root);
+  EXPECT_EQ(Root->ClassName, "DDLogFileInfo");
+  EXPECT_EQ(Root->SourceParameter, 2U);
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+  const auto SizeCall = objcReceiverSourceTypeHint(Image, "fileSize", *Root);
+  ASSERT_TRUE(SizeCall.Signature);
+  ASSERT_TRUE(SizeCall.Signature->ReturnType);
+  EXPECT_EQ(SizeCall.Signature->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(SizeCall.Signature->ReturnType->Size, 8U);
+  Image.ObjCSourceReferences.at(0x2100).Name = "fileSize";
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  auto Function = caller();
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin(),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[2], 8)}, 0x11fc));
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).Receiver);
+  EXPECT_EQ(Hints.at(0x1200).Receiver->ClassName, "DDLogFileInfo");
+  EXPECT_EQ(Hints.at(0x1200).Signature.ReturnType->Size, 8U);
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Root));
+  };
+  auto Changed = Image;
+  Changed.ObjCMethods[0].ClassName = "OtherLogger";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "v24@0:8@16";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].MetadataAddress = 0;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].TypeEncoding = "d16@0:8";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Size);
+  Rejected(Changed);
+}
+
 TEST(ObjCCallHints, SDImageLoaderErrorReceiverSelectsNSErrorCode) {
   auto Image = image();
   Image.ObjCMethods.clear();

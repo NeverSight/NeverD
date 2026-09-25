@@ -722,29 +722,68 @@ objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry) {
 std::optional<ObjCReceiverTypeHint>
 objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
                                     unsigned Parameter) {
-  // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *.
-  // Its runtime method encoding erases that class, while the source callback
-  // passed to enumerateObjectsUsingBlock: uses NSArray's index argument.
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry ||
       Parameter != 2)
     return std::nullopt;
-  constexpr llvm::StringLiteral Selector =
+  // Objective-C's runtime encoding erases these source parameter classes.
+  // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *;
+  // CocoaLumberjack 3.6.2 DDFileLogger.m declares mostRecentLogFileInfo as
+  // DDLogFileInfo *. Recheck the exact embedded method and its ABI below.
+  constexpr llvm::StringLiteral NewsSelector =
       "saveGroupForNews:pageViews:date:inManagedObjectContext:";
-  if (!std::any_of(Image.ObjCMethods.begin(), Image.ObjCMethods.end(),
-                   [&](const ObjCMethod &Method) {
-                     return Method.Implementation == Entry &&
-                            Method.ClassName == "WMFFeedContentSource" &&
-                            Method.Selector == Selector;
-                   }))
+  constexpr llvm::StringLiteral LogSelector = "lt_shouldLogFileBeArchived:";
+  const auto Matches = [&](llvm::StringRef ClassName,
+                           llvm::StringRef Selector) {
+    return std::any_of(Image.ObjCMethods.begin(), Image.ObjCMethods.end(),
+                       [&](const ObjCMethod &Method) {
+                         return Method.Implementation == Entry &&
+                                Method.ClassName == ClassName &&
+                                Method.Selector == Selector;
+                       });
+  };
+  const bool News = Matches("WMFFeedContentSource", NewsSelector);
+  const bool LogFile = Matches("DDFileLogger", LogSelector);
+  if (News == LogFile)
     return std::nullopt;
-  const auto Array = objc::sdkReceiverDeclarations(
-      Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
-  if (!Array.Present || !Array.Complete)
-    return std::nullopt;
+  const llvm::StringRef OwnerName =
+      News ? "WMFFeedContentSource" : "DDFileLogger";
+  const llvm::StringRef Selector = News ? NewsSelector : LogSelector;
+  const llvm::StringRef Encoding = News ? "v48@0:8@16@24@32@40" : "B24@0:8@16";
+  const llvm::StringRef ParameterClass = News ? "NSArray" : "DDLogFileInfo";
+  if (News) {
+    const auto Array = objc::sdkReceiverDeclarations(
+        Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
+    if (!Array.Present || !Array.Complete)
+      return std::nullopt;
+  } else {
+    const ObjCClass *FileInfo = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == ParameterClass) {
+        if (FileInfo)
+          return std::nullopt;
+        FileInfo = &Class;
+      }
+    if (!FileInfo || !FileInfo->Address)
+      return std::nullopt;
+    const ObjCMethod *FileSize = nullptr;
+    for (const auto &Method : Image.ObjCMethods)
+      if (Method.ClassName == ParameterClass && Method.Selector == "fileSize") {
+        if (FileSize || Method.ClassAddress != FileInfo->Address ||
+            Method.CategoryAddress || !Method.CategoryName.empty() ||
+            !Method.MetadataAddress || Method.IsClassMethod ||
+            Method.TypeEncoding != "Q16@0:8" ||
+            !objcMethodHasSourceBody(Method) ||
+            !Image.isCodeAddress(Method.Implementation))
+          return std::nullopt;
+        FileSize = &Method;
+      }
+    if (!FileSize)
+      return std::nullopt;
+  }
   const ObjCClass *Owner = nullptr;
   for (const auto &Class : Image.ObjCClasses)
-    if (Class.Name == "WMFFeedContentSource") {
+    if (Class.Name == OwnerName) {
       if (Owner)
         return std::nullopt;
       Owner = &Class;
@@ -760,15 +799,15 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
         Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
         !Method.CategoryName.empty() || !Method.MetadataAddress ||
         Method.IsClassMethod || Method.Selector != Selector ||
-        Method.TypeEncoding != "v48@0:8@16@24@32@40" ||
-        !objcMethodHasSourceBody(Method) || !Image.isCodeAddress(Entry))
+        Method.TypeEncoding != Encoding || !objcMethodHasSourceBody(Method) ||
+        !Image.isCodeAddress(Entry))
       return std::nullopt;
     Found = &Method;
   }
   if (!Found)
     return std::nullopt;
   const auto Signature = objcMethodSourceTypeHint(Image, Entry);
-  if (!Signature || Signature->Parameters.size() != 6 ||
+  if (!Signature || Signature->Parameters.size() != (News ? 6U : 3U) ||
       !Signature->Parameters[Parameter].Type ||
       Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
       Signature->Parameters[Parameter].Type->Size != 8 ||
@@ -781,7 +820,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   ObjCReceiverTypeHint Result;
   Result.Origin = ObjCReceiverTypeHint::OriginKind::MethodParameter;
   Result.Address = Entry;
-  Result.ClassName = "NSArray";
+  Result.ClassName = ParameterClass.str();
   Result.SourceParameter = Parameter;
   return Result;
 }
