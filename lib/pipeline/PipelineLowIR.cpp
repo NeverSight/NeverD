@@ -2872,8 +2872,12 @@ void Pipeline::buildLowIR(
   std::vector<LowFunc> AllLow(Total);
   const libc::NoReturnTargetIndex NoReturnTargets(Img);
   const detail::AbsoluteRelocationRootIndex AbsoluteRelocationRoots(Img);
+  // The index answers the same ownership queries as a scan of the image's
+  // function metadata.  Without it, a jump-table proof prices each target as
+  // that scan, so a large x64 image (ntoskrnl: 35k unwind entries) rejected
+  // every table of more than a few dozen entries.
   const std::optional<ExecutableCodeOwnerIndex> ExecutableCodeOwners =
-      Img.Arch == Arch::AArch64
+      Img.Arch == Arch::AArch64 || Img.Arch == Arch::X64
           ? std::optional<ExecutableCodeOwnerIndex>(std::in_place, Img)
           : std::nullopt;
   const ExecutableCodeOwnerIndex *CodeOwnerIndex =
