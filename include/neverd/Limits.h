@@ -150,8 +150,11 @@ constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 134217728;
 /// One jump-table candidate's whole evidence account.  Large kernel functions
 /// (thousands of instructions with cold chunks) can spend most of the mask
 /// fixed-point allowance on inventory prepayment alone, so the candidate keeps
-/// twice that allowance for its remaining guard, role and claim proofs.
-constexpr uint32_t kMaxJumpTableCandidateEvidenceWork = 268435456;
+/// four times that allowance for its remaining guard, role and claim proofs.
+/// The MSVC two-level table in ntoskrnl 0x1406216C0 (97 cases, index table in
+/// PAGE) needs about 320 million units; its proof runs in well under a second,
+/// the units being conservative container-work prepayments.
+constexpr uint32_t kMaxJumpTableCandidateEvidenceWork = 536870912;
 static_assert(kMaxJumpTableCandidateEvidenceWork >=
               kMaxJumpTableMaskFixedPointEvidenceWork);
 
@@ -162,7 +165,7 @@ static_assert(kMaxJumpTableCandidateEvidenceWork >=
 /// kMaxJumpTableCandidateEvidenceWork; this larger, still finite account
 /// retains four-candidate headroom so the stage can validate a complete
 /// sibling batch before committing it.
-constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 1073741824;
+constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 2147483648u;
 static_assert(uint64_t{kMaxJumpTableProposalStageEvidenceWork} >=
               uint64_t{kMaxJumpTableCandidateEvidenceWork} * 4);
 
