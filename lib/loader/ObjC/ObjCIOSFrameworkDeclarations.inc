@@ -29,22 +29,28 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGRectValue", "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGSizeValue", "{CGSize=dd}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CIImage", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "activateConstraints:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "addSubview:", "v24@0:8@16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "addArrangedSubview:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "alpha", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "blackColor", "@16@0:8", nullptr},
 // UIDevice publicly declares these paired void orientation-notification
 // methods without parameters; Apple Clang emits v16@0:8 for arm64 iOS.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "beginGeneratingDeviceOrientationNotifications", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clearColor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "centerXAnchor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithAlphaComponent:", "@24@0:8d16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentDevice", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentEDRHeadroom", "d16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "contentLayoutGuide", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "dismissViewControllerAnimated:completion:", "v28@0:8B16@?20", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "endGeneratingDeviceOrientationNotifications", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "displayScale", "d16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "frameLayoutGuide", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "getRed:green:blue:alpha:", "B48@0:8^d16^d24^d32^d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "getWhite:alpha:", "B32@0:8^d16^d24", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "heightAnchor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageByPreparingForDisplay", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageFlippedForRightToLeftLayoutDirection", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageForState:", "@24@0:8Q16", nullptr},
@@ -60,10 +66,18 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithProgressViewStyle:", "@24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "insertSubview:belowSubview:", "v32@0:8@16@24", nullptr},
+// UICollectionViewLayoutInvalidationContext declares both readonly BOOL
+// properties; Apple Clang encodes their arm64 getters as B16@0:8.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "invalidateDataSourceCounts", "B16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "invalidateEverything", "B16@0:8", nullptr},
 // NSLayoutAnchor's public fixed factory takes another anchor and returns an
 // NSLayoutConstraint. UIView and UILayoutGuide expose these object anchors;
 // Apple Clang independently emits their exact arm64 encodings.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "constraintEqualToAnchor:", "@24@0:8@16", nullptr},
+// NSLayoutAnchor and NSLayoutDimension accept a CGFloat constant in the first
+// floating-point argument register on arm64 iOS.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "constraintEqualToAnchor:constant:", "@32@0:8@16d24", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "constraintEqualToConstant:", "@24@0:8d16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "leadingAnchor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "trailingAnchor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "topAnchor", "@16@0:8", nullptr},
@@ -87,15 +101,20 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "observedProgress", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "potentialEDRHeadroom", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "resignFirstResponder", "B16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "safeAreaLayoutGuide", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "scale", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "sendActionsForControlEvents:", "v24@0:8Q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAccessibilityIgnoresInvertColors:", "v20@0:8B16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAttributedText:", "v24@0:8@16", nullptr},
 // NSLayoutConstraint.active is BOOL. The arm64 iOS Objective-C method has a
 // one-byte Boolean input in the third integer argument register.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setActive:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setActivityIndicatorViewStyle:", "v24@0:8q16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setAdjustsFontForContentSizeCategory:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setCenter:", "v32@0:8{CGPoint=dd}16", nullptr},
+// UIView and UIAccessibility Boolean setters share this exact fixed ABI.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setClipsToBounds:", "v20@0:8B16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setIsAccessibilityElement:", "v20@0:8B16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setLayoutMargins:", "v48@0:8{UIEdgeInsets=dddd}16", nullptr},
 // Both ASTs cited above also declare setProgress: with incompatible owners:
 // UIProgressView takes float, while UIPageControl takes an object pointer.
@@ -111,6 +130,7 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setText:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTitleColor:forState:", "v32@0:8@16Q24", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setTranslatesAutoresizingMaskIntoConstraints:", "v20@0:8B16", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setUserInteractionEnabled:", "v20@0:8B16", nullptr},
 // The device/simulator ASTs agree that both NSTextAttachmentViewProvider and
 // UIViewController declare setView: with one nullable UIView* argument.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "setView:", "v24@0:8@16", nullptr},
@@ -122,6 +142,7 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "userInterfaceIdiom", "q16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "window", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "whiteColor", "@16@0:8", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "widthAnchor", "@16@0:8", nullptr},
     // Additional fixed declarations from complete Xcode 26.5 device/simulator ASTs.
 // SHA-256: dc99c06a9e4aab8015f8675b08ac55e042201401c21d39a4df4535aa63e0303f
 //          c443f389aae208205f42b4a592859ffb45766cc6e2f663b6ef919528e2676b61

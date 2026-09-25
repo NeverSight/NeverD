@@ -10423,13 +10423,19 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"CGColor", NdTypeKind::Ptr, 2},
       {"CGRectValue", NdTypeKind::Struct, 2},
       {"CIImage", NdTypeKind::Ptr, 2},
+      {"activateConstraints:", NdTypeKind::Void, 3},
+      {"addArrangedSubview:", NdTypeKind::Void, 3},
       {"CGSizeValue", NdTypeKind::Struct, 2},
       {"alpha", NdTypeKind::Float, 2},
       {"blackColor", NdTypeKind::Ptr, 2},
+      {"centerXAnchor", NdTypeKind::Ptr, 2},
       {"beginGeneratingDeviceOrientationNotifications", NdTypeKind::Void, 2},
+      {"contentLayoutGuide", NdTypeKind::Ptr, 2},
       {"colorWithAlphaComponent:", NdTypeKind::Ptr, 3},
       {"colorWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"getRed:green:blue:alpha:", NdTypeKind::Int, 6},
+      {"frameLayoutGuide", NdTypeKind::Ptr, 2},
+      {"heightAnchor", NdTypeKind::Ptr, 2},
       {"imageByPreparingForDisplay", NdTypeKind::Ptr, 2},
       {"imageFlippedForRightToLeftLayoutDirection", NdTypeKind::Ptr, 2},
       {"imageForState:", NdTypeKind::Ptr, 3},
@@ -10449,7 +10455,11 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"endGeneratingDeviceOrientationNotifications", NdTypeKind::Void, 2},
       {"initWithRed:green:blue:alpha:", NdTypeKind::Ptr, 6},
       {"insertSubview:belowSubview:", NdTypeKind::Void, 4},
+      {"invalidateDataSourceCounts", NdTypeKind::Int, 2},
+      {"invalidateEverything", NdTypeKind::Int, 2},
       {"constraintEqualToAnchor:", NdTypeKind::Ptr, 3},
+      {"constraintEqualToAnchor:constant:", NdTypeKind::Ptr, 4},
+      {"constraintEqualToConstant:", NdTypeKind::Ptr, 3},
       {"leadingAnchor", NdTypeKind::Ptr, 2},
       {"trailingAnchor", NdTypeKind::Ptr, 2},
       {"topAnchor", NdTypeKind::Ptr, 2},
@@ -10457,9 +10467,13 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"instantiateWithOwner:options:", NdTypeKind::Ptr, 4},
       {"nibWithNibName:bundle:", NdTypeKind::Ptr, 4},
       {"resignFirstResponder", NdTypeKind::Int, 2},
+      {"safeAreaLayoutGuide", NdTypeKind::Ptr, 2},
       {"sendActionsForControlEvents:", NdTypeKind::Void, 3},
       {"dismissViewControllerAnimated:completion:", NdTypeKind::Void, 4},
       {"setAccessibilityIgnoresInvertColors:", NdTypeKind::Void, 3},
+      {"setAttributedText:", NdTypeKind::Void, 3},
+      {"setClipsToBounds:", NdTypeKind::Void, 3},
+      {"setIsAccessibilityElement:", NdTypeKind::Void, 3},
       {"setActive:", NdTypeKind::Void, 3},
       {"setActivityIndicatorViewStyle:", NdTypeKind::Void, 3},
       {"setAdjustsFontForContentSizeCategory:", NdTypeKind::Void, 3},
@@ -10469,12 +10483,14 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"setShowsCancelButton:animated:", NdTypeKind::Void, 4},
       {"setText:", NdTypeKind::Void, 3},
       {"setTranslatesAutoresizingMaskIntoConstraints:", NdTypeKind::Void, 3},
+      {"setUserInteractionEnabled:", NdTypeKind::Void, 3},
       {"setView:", NdTypeKind::Void, 3},
       {"sizeToFit", NdTypeKind::Void, 2},
       {"superview", NdTypeKind::Ptr, 2},
       {"topViewController", NdTypeKind::Ptr, 2},
       {"window", NdTypeKind::Ptr, 2},
       {"whiteColor", NdTypeKind::Ptr, 2},
+      {"widthAnchor", NdTypeKind::Ptr, 2},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Selector);
@@ -10499,7 +10515,9 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       EXPECT_FALSE(Hint->Parameters[2].Type->IsSigned);
       EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
     }
-    if (llvm::StringRef(Case.Selector) == "isHighDynamicRange") {
+    if (llvm::StringRef(Case.Selector) == "isHighDynamicRange" ||
+        llvm::StringRef(Case.Selector) == "invalidateDataSourceCounts" ||
+        llvm::StringRef(Case.Selector) == "invalidateEverything") {
       EXPECT_EQ(Hint->ReturnType->Size, 1U);
       EXPECT_FALSE(Hint->ReturnType->IsSigned);
     }
@@ -10508,7 +10526,19 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       EXPECT_TRUE(Hint->Parameters[2].Type->IsSigned);
       EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 2U * 8);
     }
-    if (llvm::StringRef(Case.Selector) == "setActive:") {
+    if (llvm::StringRef(Case.Selector) == "constraintEqualToAnchor:constant:" ||
+        llvm::StringRef(Case.Selector) == "constraintEqualToConstant:") {
+      const auto &Constant = Hint->Parameters.back();
+      EXPECT_EQ(Constant.Type->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Constant.Type->Size, 8U);
+      EXPECT_EQ(Constant.Location.Kind,
+                SourceABICarrierKind::FloatingRegister);
+      EXPECT_EQ(Constant.Location.ValueBytes, 8U);
+    }
+    if (llvm::StringRef(Case.Selector) == "setActive:" ||
+        llvm::StringRef(Case.Selector) == "setClipsToBounds:" ||
+        llvm::StringRef(Case.Selector) == "setIsAccessibilityElement:" ||
+        llvm::StringRef(Case.Selector) == "setUserInteractionEnabled:") {
       EXPECT_EQ(Hint->Parameters[2].Type->Kind, NdTypeKind::Int);
       EXPECT_EQ(Hint->Parameters[2].Type->Size, 1U);
       EXPECT_EQ(Hint->Parameters[2].Location.RegisterOffset, 16U);
