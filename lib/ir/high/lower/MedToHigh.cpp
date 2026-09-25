@@ -691,6 +691,40 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
 // convert — top-level MedIR to HighIR pipeline
 //===----------------------------------------------------------------------===//
 
+void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
+  if (Func.Body.size() > limits::kMaxLateGotoReductionStmts)
+    return;
+  bool Changed = duplicateSmallReturnTails(Func.Body);
+  // Region splices nest whole multi-block regions, so they run only after
+  // the local rewrites have settled.  The late rewrites can leave new jumps
+  // to a small return tail; those get one more tail-duplication pass.
+  // Backward jumps become loops last, once fall-through joins no longer need
+  // explicit jumps.
+  for (int Phase = 0; Phase < 5; ++Phase) {
+    // Dead copies left by earlier rewrites can sit between a jump and
+    // its label; clear them before the next phase looks.
+    if (Phase != 0 && Changed)
+      eliminateDeadStmts(Func);
+    if (Phase == 2 && !duplicateSmallReturnTails(Func.Body))
+      continue;
+    if (Phase == 3 && !loopifyBackwardGotos(Func.Body))
+      continue;
+    if (Phase == 4 && !duplicateSmallReturnTails(Func.Body))
+      break;
+    Changed |= Phase >= 2;
+    for (int Round = 0; Round < 8; ++Round) {
+      const bool Grouped = groupSwitchCases(Func.Body) |
+                           (Phase != 0 && hoistLoopEntryLabels(Func.Body));
+      if (!reduceSingleUseGotos(Func.Body, /*SpliceRegions=*/Phase != 0) &&
+          !Grouped)
+        break;
+      Changed = true;
+    }
+  }
+  if (Changed)
+    eliminateDeadStmts(Func);
+}
+
 HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   HighConversionTrace Trace(Med, TheArch);
   Trace.med();
@@ -773,6 +807,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
         });
     ensureTrailingReturn(Func, Med);
     structureExceptionRegions(Func, Med);
+    reduceLateGotos(Func);
     Trace.high(Func, "after-exceptions");
     return Func;
   }
@@ -810,37 +845,7 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   foldStructuredContinuations(Func, &Med);
   coalesceBranchEntryStatements(Func);
   eliminateHighDeadPhiCopies(Func);
-  if (Func.Body.size() <= limits::kMaxStructuredHighStmts) {
-    bool Changed = duplicateSmallReturnTails(Func.Body);
-    // Region splices nest whole multi-block regions, so they run only after
-    // the local rewrites have settled.  The late rewrites can leave new jumps
-    // to a small return tail; those get one more tail-duplication pass.
-    // Backward jumps become loops last, once fall-through joins no longer need
-    // explicit jumps.
-    for (int Phase = 0; Phase < 5; ++Phase) {
-      // Dead copies left by earlier rewrites can sit between a jump and
-      // its label; clear them before the next phase looks.
-      if (Phase != 0 && Changed)
-        eliminateDeadStmts(Func);
-      if (Phase == 2 && !duplicateSmallReturnTails(Func.Body))
-        continue;
-      if (Phase == 3 && !loopifyBackwardGotos(Func.Body))
-        continue;
-      if (Phase == 4 && !duplicateSmallReturnTails(Func.Body))
-        break;
-      Changed |= Phase >= 2;
-      for (int Round = 0; Round < 8; ++Round) {
-        const bool Grouped = groupSwitchCases(Func.Body) |
-                             (Phase != 0 && hoistLoopEntryLabels(Func.Body));
-        if (!reduceSingleUseGotos(Func.Body, /*SpliceRegions=*/Phase != 0) &&
-            !Grouped)
-          break;
-        Changed = true;
-      }
-    }
-    if (Changed)
-      eliminateDeadStmts(Func);
-  }
+  reduceLateGotos(Func);
   Trace.high(Func, "after-exceptions");
   auto TEnd = std::chrono::steady_clock::now();
 

@@ -538,6 +538,10 @@ constexpr size_t kMaxIfElseStructuringBlocks = 500;
 
 /// HighIR statement count above which loop/if structuring is treated as mega.
 constexpr size_t kMaxStructuredHighStmts = 4000;
+/// Top-level statement bound for the late goto-reduction phases.  Their
+/// scans are near-linear per round; oversized block-by-block functions
+/// stay within a few seconds at this size.
+constexpr size_t kMaxLateGotoReductionStmts = 400000;
 
 /// if/else folding passes for ordinary vs large CFGs.
 constexpr int kIfElseStructuringPasses = 10;

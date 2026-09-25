@@ -188,6 +188,9 @@ private:
   /// collectCallArgs can resolve a register argument that is live-in to the
   /// call block (loop-carried via a header PHI) rather than written before the
   /// call.
+  /// Late goto reduction on the finished statement tree (tail duplication,
+  /// splices, if/else joins, loop recovery), bounded by statement count.
+  void reduceLateGotos(HighFunc &Func);
   const MedFunc *CurMed = nullptr;
   /// Entry-relative stack slots CurMed loads anywhere or whose address
   /// escapes; such a slot is a local, not an outgoing argument (cached per
