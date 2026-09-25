@@ -595,13 +595,31 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         if (Receiver->K == Value::Kind::Number)
           Signature = Receiver->BlockSignature;
         if (!Signature) {
+          // CFGBuilder represents a register-indirect tail branch as a call
+          // and a return at the same instruction address. The synthetic
+          // return reads X0 even when this descriptor-backed invoke is void.
+          // Only the authenticated entry ABI can discard that carrier.
+          const bool VoidTail =
+              Image.Arch == Arch::AArch64 && EntrySignature &&
+              EntrySignature->Origin ==
+                  SourceFunctionTypeHint::OriginKind::BlockRuntime &&
+              EntrySignature->ReturnType &&
+              EntrySignature->ReturnType->Kind == NdTypeKind::Void &&
+              Index + 2 == Block.Ops.size() &&
+              Block.Ops[Index + 1].Opcode == NdOp::RETURN &&
+              Block.Ops[Index + 1].Addr == Op.Addr && Op.Output.isReg() &&
+              Op.Output.Offset == TRI.IntReturnReg && Op.Output.Size == 8 &&
+              Block.Ops[Index + 1].NumInputs == 1 &&
+              Block.Ops[Index + 1].Inputs[0].isReg() &&
+              Block.Ops[Index + 1].Inputs[0].Offset == TRI.IntReturnReg;
           auto ReturnBytes =
-              resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
+              VoidTail ? std::optional<unsigned>(0)
+                       : resultWidth(Block, Index, TRI, Image.Arch, BoundCalls);
           if (!ReturnBytes && WholeFunction &&
               discardedResultAcrossCFG(Image, *WholeFunction, Op.Addr, TRI,
                                        BoundCalls, EntrySignature))
             ReturnBytes = 0U;
-          if (ReturnBytes && *ReturnBytes == 0 &&
+          if (ReturnBytes && *ReturnBytes == 0 && !VoidTail &&
               !noIndirectResultPointer(Op, Image.Arch))
             ReturnBytes.reset();
           if (ReturnBytes) {
@@ -619,6 +637,14 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
                 continue;
               }
               auto Argument = Read(NdVar::reg(Reg, 8));
+              // The register holding the indirect branch target is not also
+              // evidence for an explicit callback argument. A real later
+              // argument would leave a carrier gap and remain unbound.
+              if (I && Op.Inputs[0].isReg() && Op.Inputs[0].Offset == Reg &&
+                  Argument && Argument->K == Value::Kind::Invoke) {
+                Gap = true;
+                continue;
+              }
               if (Gap || !Argument || !scalar(Argument->Type) ||
                   Argument->K == Value::Kind::Invoke ||
                   (Argument->K == Value::Kind::Frame &&

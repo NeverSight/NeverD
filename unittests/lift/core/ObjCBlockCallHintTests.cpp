@@ -147,6 +147,56 @@ TEST(ObjCBlockCallHints, CapturedBlockRequiresDescriptorAndCopyHelperEvidence) {
   }
 }
 
+TEST(ObjCBlockCallHints, CapturedVoidBlockTailBranchUsesItsEntryABI) {
+  Fixture F(Arch::AArch64);
+  F.Entry.Origin = SourceFunctionTypeHint::OriginKind::BlockRuntime;
+  F.Entry.ReturnType = NdType::makeVoid();
+  F.Entry.Parameters = {{"block", NdType::makePtr(NdType::makeVoid())}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(F.Entry, F.Image.Arch, Error))
+      << Error;
+  const auto Return = getTargetRegInfo(F.Image.Arch).IntReturnReg;
+  F.Low.Blocks[0].Ops = {
+      op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(32, 8)}, 0x1000),
+      op(NdOp::LOAD, NdVar::reg(F.R0, 8), {NdVar::tmp(0, 8)}, 0x1000),
+      op(NdOp::INT_ADD, NdVar::tmp(1, 8),
+         {NdVar::reg(F.R0, 8), NdVar::cst(16, 8)}, 0x1004),
+      op(NdOp::LOAD, NdVar::reg(F.R1, 8), {NdVar::tmp(1, 8)}, 0x1004),
+      op(NdOp::INDIR_CALL, NdVar::reg(Return, 8), {NdVar::reg(F.R1, 8)},
+         0x1008),
+      op(NdOp::RETURN, {}, {NdVar::reg(Return, 8)}, 0x1008)};
+  ObjCBlockCaptureCallFields Captures;
+  Captures.ScalarWords = {32};
+  Captures.BlockWords = {32};
+  const auto Hints =
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures);
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Hint = Hints.at(0x1008);
+  EXPECT_EQ(Hint.Signature.ReturnType->Kind, NdTypeKind::Void);
+  ASSERT_EQ(Hint.Signature.Parameters.size(), 1U);
+  EXPECT_EQ(Hint.Signature.Parameters[0].Type->Kind, NdTypeKind::Ptr);
+
+  F.Low.Blocks[0].Ops.back().Addr = 0x100c;
+  const auto OrdinaryCall =
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures);
+  ASSERT_EQ(OrdinaryCall.size(), 1U);
+  EXPECT_EQ(OrdinaryCall.at(0x1008).Signature.ReturnType->Kind,
+            NdTypeKind::Int);
+  F.Low.Blocks[0].Ops.back().Addr = 0x1008;
+  F.Low.Blocks[0].Ops.insert(
+      F.Low.Blocks[0].Ops.end() - 2,
+      op(NdOp::COPY, NdVar::reg(F.R2, 8), {NdVar::cst(7, 8)}, 0x1008));
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures)
+          .empty());
+  F.Low.Blocks[0].Ops.erase(F.Low.Blocks[0].Ops.end() - 3);
+  Captures.BlockWords.clear();
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures)
+          .empty());
+}
+
 TEST(ObjCBlockCallHints, RetainBlockResultKeepsBlockIdentity) {
   Fixture F(Arch::AArch64);
   constexpr va_t ImportSlot = 0x2180;
