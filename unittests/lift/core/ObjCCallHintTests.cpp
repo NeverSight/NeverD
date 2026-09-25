@@ -9196,6 +9196,101 @@ TEST(ObjCCallHints, SDWebImageOptionsResultNeedsEmbeddedClassEvidence) {
   Rejected(Changed);
 }
 
+TEST(ObjCCallHints, WMFCalendarComponentsNeedsEmbeddedCategoryEvidence) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCMethod Caller;
+  Caller.ClassName = "NSCalendar";
+  Caller.Selector = "wmf_testComponents";
+  Caller.TypeEncoding = "@16@0:8";
+  Caller.Implementation = 0x1200;
+  Caller.Status = "supported";
+  Caller.TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+  ObjCMethod Components;
+  Components.ClassName = "NSCalendar";
+  Components.CategoryName = "WMFCommonCalendars";
+  Components.CategoryAddress = 0x2400;
+  Components.MetadataAddress = 0x2410;
+  Components.Selector = "wmf_components:fromDate:toDate:";
+  Components.TypeEncoding = "@40@0:8Q16@24@32";
+  Components.Implementation = 0x1400;
+  Components.Status = "supported";
+  Components.TypeHint =
+      parseObjCMethodEncoding(Components.Selector, Components.TypeEncoding);
+  ASSERT_TRUE(Components.TypeHint);
+  Image.ObjCMethods.push_back(Components);
+  ObjCMethod Factory = Components;
+  Factory.Selector = "wmf_gregorianCalendar";
+  Factory.TypeEncoding = "@16@0:8";
+  Factory.IsClassMethod = true;
+  Factory.Implementation = 0x1500;
+  Factory.MetadataAddress = 0x2420;
+  Factory.TypeHint =
+      parseObjCMethodEncoding(Factory.Selector, Factory.TypeEncoding);
+  ASSERT_TRUE(Factory.TypeHint);
+  Image.ObjCMethods.push_back(Factory);
+  ObjCMethod Conflicting;
+  Conflicting.ClassName = "OtherYear";
+  Conflicting.Selector = "year";
+  Conflicting.TypeEncoding = "@16@0:8";
+  Conflicting.TypeHint =
+      parseObjCMethodEncoding(Conflicting.Selector, Conflicting.TypeEncoding);
+  ASSERT_TRUE(Conflicting.TypeHint);
+  Image.ObjCMethods.push_back(Conflicting);
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "year"));
+
+  Image.ObjCSourceReferences[0x2120] = {ObjCSourceReference::Kind::Class,
+                                        0x2120, 8, "NSCalendar"};
+  const ObjCReceiverTypeHint FactoryRoot{
+      ObjCReceiverTypeHint::OriginKind::ClassReference, 0x2120, "NSCalendar",
+      true};
+  const auto Root =
+      objcReceiverCallResultTypeHint(Image, FactoryRoot, Factory.Selector);
+  ASSERT_TRUE(Root);
+  const auto Result =
+      objcReceiverCallResultTypeHint(Image, *Root, Components.Selector);
+  ASSERT_TRUE(Result);
+  const auto Year = objcReceiverSourceTypeHint(Image, "year", *Result);
+  ASSERT_TRUE(Year.Signature);
+  EXPECT_EQ(Year.Signature->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Year.Signature->ReturnType->Size, 8U);
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Result));
+    EXPECT_FALSE(
+        objcReceiverSourceTypeHint(Changed, "year", *Result).Signature);
+  };
+  auto Changed = Image;
+  Changed.ObjCMethods[1].CategoryName = "OtherCategory";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].CategoryAddress = 0;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].TypeEncoding = "@32@0:8Q16@24";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Components);
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[2].CategoryName = "OtherCategory";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[2].TypeEncoding = "v16@0:8";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  Rejected(Changed);
+  Changed = Image;
+  Changed.Arch = Arch::X64;
+  Rejected(Changed);
+}
+
 TEST(ObjCCallHints, SDImageLoaderErrorReceiverSelectsNSErrorCode) {
   auto Image = image();
   Image.ObjCMethods.clear();

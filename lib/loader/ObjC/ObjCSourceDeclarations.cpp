@@ -205,6 +205,39 @@ bool hasEmbeddedSDWebImageOptionsResult(const BinaryImage &Image) {
   return Factory == 1 && Initializer == 1 && Getter == 1 && Property == 1;
 }
 
+bool hasEmbeddedWMFCalendarMethod(const BinaryImage &Image,
+                                  llvm::StringRef Selector,
+                                  llvm::StringRef Encoding,
+                                  bool IsClassMethod) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  const auto Calendar =
+      objc::sdkReceiverDeclarations(Image, "NSCalendar", false, false, {});
+  if (!Calendar.Present || !Calendar.Complete)
+    return false;
+  if (Selector == "wmf_components:fromDate:toDate:") {
+    const auto Components = objc::sdkReceiverDeclarations(
+        Image, "NSDateComponents", false, false, "year");
+    if (!Components.Present || !Components.Complete ||
+        Components.Members.size() != 1 || !Components.Members.front().Signature)
+      return false;
+  }
+  unsigned Matches = 0;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.Selector != Selector)
+      continue;
+    if (Method.ClassName != "NSCalendar" ||
+        Method.CategoryName != "WMFCommonCalendars" ||
+        !Method.CategoryAddress || !Method.MetadataAddress ||
+        !Method.Implementation || Method.IsClassMethod != IsClassMethod ||
+        Method.TypeEncoding != Encoding || !objcMethodHasSourceBody(Method))
+      return false;
+    ++Matches;
+  }
+  return Matches == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -1052,17 +1085,31 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
         if (Method.ClassName == Name &&
             Method.IsClassMethod == Type.IsClassMethod &&
             Method.Selector == Selector) {
-          // Upstream SDWebImage declares this embedded manager method to
-          // return SDWebImageOptionsResult*. The runtime erases that class to
-          // id, so require the matching manager and result-class declarations
-          // in this image before carrying the source type to a later message.
+          // Embedded category/manager source declarations retain object result
+          // classes erased to id in runtime encodings. Match the exact local
+          // declaration before carrying that class to a later message.
+          const bool SDWebImageResult =
+              Name == "SDWebImageManager" && !Type.IsClassMethod &&
+              Selector == "processedResultForURL:options:context:" &&
+              Method.TypeEncoding == "@40@0:8@16Q24@32" &&
+              hasEmbeddedSDWebImageOptionsResult(Image);
+          const bool WMFCalendarResult =
+              Name == "NSCalendar" && !Type.IsClassMethod &&
+              Selector == "wmf_components:fromDate:toDate:" &&
+              hasEmbeddedWMFCalendarMethod(Image, Selector, "@40@0:8Q16@24@32",
+                                           false);
+          const bool WMFCalendarFactory =
+              Name == "NSCalendar" && Type.IsClassMethod &&
+              (Selector == "wmf_gregorianCalendar" ||
+               Selector == "wmf_utcGregorianCalendar") &&
+              hasEmbeddedWMFCalendarMethod(Image, Selector, "@16@0:8", true);
           Include(Method.TypeHint,
-                  Name == "SDWebImageManager" && !Type.IsClassMethod &&
-                          Selector ==
-                              "processedResultForURL:options:context:" &&
-                          Method.TypeEncoding == "@40@0:8@16Q24@32" &&
-                          hasEmbeddedSDWebImageOptionsResult(Image)
+                  SDWebImageResult
                       ? std::optional<std::string>("SDWebImageOptionsResult")
+                  : WMFCalendarResult
+                      ? std::optional<std::string>("NSDateComponents")
+                  : WMFCalendarFactory
+                      ? std::optional<std::string>("NSCalendar")
                       : declaredReturnClass(Method.TypeEncoding),
                   declaredReturnProtocol(Method.TypeEncoding));
         }
