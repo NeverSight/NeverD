@@ -9366,6 +9366,84 @@ TEST(ObjCCallHints, MWKLanguageLinkArrayResultsNeedEmbeddedDeclarations) {
       Changed, *Receiver, "readPreferredLanguageCodes"));
 }
 
+TEST(ObjCCallHints, WMFContentGroupArrayResultsQualifyEnumeration) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/CoreData.framework/CoreData",
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCMethod Caller;
+  Caller.ClassName = "NSManagedObjectContext";
+  Caller.Selector = "wmf_testContentGroups";
+  Caller.TypeEncoding = "v16@0:8";
+  Caller.Implementation = 0x1200;
+  Caller.Status = "supported";
+  Caller.TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+  static constexpr struct {
+    const char *Selector;
+    const char *Encoding;
+  } Cases[] = {
+      {"contentGroupsOfKind:sortedByDescriptors:", "@28@0:8i16@20"},
+      {"contentGroupsOfKind:sortedByKey:ascending:",
+       "@32@0:8i16@20B28"},
+      {"contentGroupsOfKind:", "@20@0:8i16"},
+  };
+  for (unsigned I = 0; I < std::size(Cases); ++I) {
+    ObjCMethod Method = Caller;
+    Method.Selector = Cases[I].Selector;
+    Method.TypeEncoding = Cases[I].Encoding;
+    Method.CategoryName = "WMFArticle";
+    Method.CategoryAddress = 0x2400;
+    Method.MetadataAddress = 0x2410 + I * 0x10;
+    Method.Implementation = 0x1300 + I * 0x10;
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    Image.ObjCMethods.push_back(Method);
+  }
+  const auto Receiver = objcMethodReceiverTypeHint(Image, Caller.Implementation);
+  ASSERT_TRUE(Receiver);
+  for (unsigned I = 0; I < std::size(Cases); ++I) {
+    SCOPED_TRACE(Cases[I].Selector);
+    const auto Array = objcReceiverCallResultTypeHint(
+        Image, *Receiver, Cases[I].Selector);
+    ASSERT_TRUE(Array);
+    EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Array));
+    const auto Enumeration = objcReceiverSourceTypeHint(
+        Image, "enumerateObjectsUsingBlock:", *Array);
+    ASSERT_TRUE(Enumeration.Signature);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "enumerateObjectsUsingBlock:";
+    Call.Receiver = *Array;
+    Call.Signature = *Enumeration.Signature;
+    const auto Contract = objcBlockParameterContract(Image, Call, 2);
+    ASSERT_TRUE(Contract);
+    EXPECT_EQ(Contract->Storage,
+              ObjCBlockParameterContract::Lifetime::NonEscaping);
+
+    auto Changed = Image;
+    Changed.ObjCMethods[I + 1].CategoryName = "OtherCategory";
+    EXPECT_FALSE(objcReceiverCallResultTypeHint(
+        Changed, *Receiver, Cases[I].Selector));
+    Changed = Image;
+    Changed.ObjCMethods[I + 1].TypeEncoding = "@16@0:8";
+    EXPECT_FALSE(objcReceiverCallResultTypeHint(
+        Changed, *Receiver, Cases[I].Selector));
+    Changed = Image;
+    Changed.ObjCMethods.push_back(Image.ObjCMethods[I + 1]);
+    EXPECT_FALSE(objcReceiverCallResultTypeHint(
+        Changed, *Receiver, Cases[I].Selector));
+  }
+  auto Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  EXPECT_FALSE(objcReceiverCallResultTypeHint(
+      Changed, *Receiver, Cases[0].Selector));
+}
+
 TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   auto Image = image();
   Image.ObjCMethods.clear();
@@ -9448,6 +9526,80 @@ TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   auto WrongParameter = *Root;
   WrongParameter.SourceParameter = 3;
   EXPECT_FALSE(objcReceiverTypeHintValid(Image, WrongParameter));
+}
+
+TEST(ObjCCallHints, SDImagePipelineArrayParameterQualifiesEnumeration) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Owner;
+  Owner.Name = "SDImagePipelineTransformer";
+  Owner.Address = 0x2300;
+  Image.ObjCClasses.push_back(Owner);
+  ObjCMethod Method;
+  Method.ClassName = Owner.Name;
+  Method.ClassAddress = Owner.Address;
+  Method.MetadataAddress = 0x2400;
+  Method.IsClassMethod = true;
+  Method.Selector = "cacheKeyForTransformers:";
+  Method.TypeEncoding = "@24@0:8@16";
+  Method.Implementation = 0x1200;
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  Image.ObjCMethods.push_back(Method);
+
+  const auto Root = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+  ASSERT_TRUE(Root);
+  EXPECT_EQ(Root->ClassName, "NSArray");
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+  const auto Enumeration =
+      objcReceiverSourceTypeHint(Image, "enumerateObjectsUsingBlock:", *Root);
+  ASSERT_TRUE(Enumeration.Signature);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = "enumerateObjectsUsingBlock:";
+  Call.Receiver = *Root;
+  Call.Signature = *Enumeration.Signature;
+  const auto Contract = objcBlockParameterContract(Image, Call, 2);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage,
+            ObjCBlockParameterContract::Lifetime::NonEscaping);
+  Image.ObjCSourceReferences.at(0x2100).Name = Call.Selector;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  auto Function = caller();
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin(),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[2], 8)}, 0x11fc));
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).Receiver);
+  EXPECT_EQ(Hints.at(0x1200).Receiver->Origin,
+            ObjCReceiverTypeHint::OriginKind::MethodParameter);
+  EXPECT_TRUE(objcBlockParameterContract(Image, Hints.at(0x1200), 2));
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Root));
+  };
+  auto Changed = Image;
+  Changed.ObjCMethods[0].IsClassMethod = false;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "v24@0:8@16";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Method);
+  Rejected(Changed);
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  Rejected(Changed);
+  Changed = Image;
+  Changed.Arch = Arch::X64;
+  Rejected(Changed);
 }
 
 TEST(ObjCCallHints, RecentSearchArrayParameterQualifiesSelectionBlock) {

@@ -352,6 +352,42 @@ bool hasEmbeddedMWKLanguageLinkArrayResult(const BinaryImage &Image,
   return Matches == 1;
 }
 
+bool hasEmbeddedWMFContentGroupArrayResult(const BinaryImage &Image,
+                                           llvm::StringRef Selector) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  llvm::StringRef Encoding;
+  if (Selector == "contentGroupsOfKind:sortedByDescriptors:")
+    Encoding = "@28@0:8i16@20";
+  else if (Selector == "contentGroupsOfKind:sortedByKey:ascending:")
+    Encoding = "@32@0:8i16@20B28";
+  else if (Selector == "contentGroupsOfKind:")
+    Encoding = "@20@0:8i16";
+  else
+    return false;
+  const auto Context = objc::sdkReceiverDeclarations(
+      Image, "NSManagedObjectContext", false, false, "performBlock:");
+  const auto Array = objc::sdkReceiverDeclarations(
+      Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
+  if (!Context.Present || !Context.Complete || !Array.Present ||
+      !Array.Complete)
+    return false;
+  unsigned Matches = 0;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.Selector != Selector)
+      continue;
+    if (Method.ClassName != "NSManagedObjectContext" ||
+        Method.CategoryName != "WMFArticle" || !Method.CategoryAddress ||
+        !Method.MetadataAddress || Method.IsClassMethod ||
+        Method.TypeEncoding != Encoding || !objcMethodHasSourceBody(Method) ||
+        !Image.isCodeAddress(Method.Implementation))
+      return false;
+    ++Matches;
+  }
+  return Matches == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -971,6 +1007,8 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   // its top-read argument is WMFFeedTopReadResponse *.
   // WMFAnnouncementsContentSource.m declares announcements as NSArray *.
   // MWKRecentSearchList.m declares its importEntries: parameter as NSArray *.
+  // SDWebImage 5.21.3 SDImageTransformer.m declares the pipeline transformer's
+  // cacheKeyForTransformers: parameter as NSArray<id<SDImageTransformer>> *.
   // CocoaLumberjack 3.6.2 DDFileLogger.m declares mostRecentLogFileInfo as
   // DDLogFileInfo *. Recheck the exact embedded method and its ABI below.
   constexpr llvm::StringLiteral NewsSelector =
@@ -980,6 +1018,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   constexpr llvm::StringLiteral AnnouncementsSelector =
       "saveAnnouncements:inManagedObjectContext:completion:";
   constexpr llvm::StringLiteral RecentSearchSelector = "importEntries:";
+  constexpr llvm::StringLiteral PipelineSelector = "cacheKeyForTransformers:";
   constexpr llvm::StringLiteral LogSelector = "lt_shouldLogFileBeArchived:";
   const auto Matches = [&](llvm::StringRef ClassName,
                            llvm::StringRef Selector) {
@@ -994,30 +1033,35 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   const bool TopRead = Matches("WMFFeedContentSource", TopReadSelector);
   const bool Announcements =
       Matches("WMFAnnouncementsContentSource", AnnouncementsSelector);
-  const bool RecentSearch = Matches("MWKRecentSearchList", RecentSearchSelector);
+  const bool RecentSearch =
+      Matches("MWKRecentSearchList", RecentSearchSelector);
+  const bool Pipeline = Matches("SDImagePipelineTransformer", PipelineSelector);
   const bool LogFile = Matches("DDFileLogger", LogSelector);
   if (unsigned(News) + unsigned(TopRead) + unsigned(Announcements) +
-          unsigned(RecentSearch) + unsigned(LogFile) !=
+          unsigned(RecentSearch) + unsigned(Pipeline) + unsigned(LogFile) !=
       1)
     return std::nullopt;
-  const llvm::StringRef OwnerName = LogFile ? "DDFileLogger"
+  const llvm::StringRef OwnerName = LogFile    ? "DDFileLogger"
+                                    : Pipeline ? "SDImagePipelineTransformer"
                                     : RecentSearch ? "MWKRecentSearchList"
                                     : Announcements
                                         ? "WMFAnnouncementsContentSource"
                                         : "WMFFeedContentSource";
   const llvm::StringRef Selector = LogFile         ? LogSelector
-                                   : RecentSearch    ? RecentSearchSelector
+                                   : Pipeline      ? PipelineSelector
+                                   : RecentSearch  ? RecentSearchSelector
                                    : Announcements ? AnnouncementsSelector
                                    : TopRead       ? TopReadSelector
                                                    : NewsSelector;
   const llvm::StringRef Encoding = LogFile         ? "B24@0:8@16"
-                                   : RecentSearch    ? "v24@0:8@16"
+                                   : Pipeline      ? "@24@0:8@16"
+                                   : RecentSearch  ? "v24@0:8@16"
                                    : Announcements ? "v40@0:8@16@24@?32"
                                                    : "v48@0:8@16@24@32@40";
   const llvm::StringRef ParameterClass = LogFile   ? "DDLogFileInfo"
                                          : TopRead ? "WMFFeedTopReadResponse"
                                                    : "NSArray";
-  if (News || Announcements || RecentSearch) {
+  if (News || Announcements || RecentSearch || Pipeline) {
     const auto Array = objc::sdkReceiverDeclarations(
         Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
     if (!Array.Present || !Array.Complete)
@@ -1088,7 +1132,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
     if (Found || Method.Implementation != Entry ||
         Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
         !Method.CategoryName.empty() || !Method.MetadataAddress ||
-        Method.IsClassMethod || Method.Selector != Selector ||
+        Method.IsClassMethod != Pipeline || Method.Selector != Selector ||
         Method.TypeEncoding != Encoding || !objcMethodHasSourceBody(Method) ||
         !Image.isCodeAddress(Entry))
       return std::nullopt;
@@ -1098,8 +1142,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
     return std::nullopt;
   const auto Signature = objcMethodSourceTypeHint(Image, Entry);
   if (!Signature ||
-      Signature->Parameters.size() != (LogFile         ? 3U
-                                       : RecentSearch    ? 3U
+      Signature->Parameters.size() != (LogFile || RecentSearch || Pipeline ? 3U
                                        : Announcements ? 5U
                                                        : 6U) ||
       !Signature->Parameters[Parameter].Type ||
@@ -1586,6 +1629,11 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
               Name == "MWKLanguageLinkController" &&
               hasEmbeddedMWKLanguageLinkArrayResult(Image, Selector,
                                                      Type.IsClassMethod);
+          // WMFContentGroup+Extensions.m declares these category results as
+          // NSArray<WMFContentGroup *> *; the runtime encoding retains id.
+          const bool WMFContentGroupArrayResult =
+              Name == "NSManagedObjectContext" && !Type.IsClassMethod &&
+              hasEmbeddedWMFContentGroupArrayResult(Image, Selector);
           Include(Method.TypeHint,
                   SDWebImageResult
                       ? std::optional<std::string>("SDWebImageOptionsResult")
@@ -1594,6 +1642,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
                   : WMFCalendarFactory
                       ? std::optional<std::string>("NSCalendar")
                   : MWKLanguageArrayResult
+                      ? std::optional<std::string>("NSArray")
+                  : WMFContentGroupArrayResult
                       ? std::optional<std::string>("NSArray")
                       : declaredReturnClass(Method.TypeEncoding),
                   declaredReturnProtocol(Method.TypeEncoding));
