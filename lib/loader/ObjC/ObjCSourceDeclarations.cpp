@@ -2031,6 +2031,43 @@ objcBlockParameterContract(const BinaryImage &Image,
           std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
     }
 
+  // The embedded NSManagedObjectContext category enumerates a local NSArray
+  // synchronously and forwards the group and stop pointer to this callback.
+  // Its block is neither retained nor passed to asynchronous work.
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol &&
+      DerivesFrom(Type->ClassName, "NSManagedObjectContext") &&
+      Call.Selector == "enumerateContentGroupsOfKind:withBlock:" &&
+      Parameter == 3) {
+    constexpr llvm::StringLiteral ParentEncoding = "v28@0:8i16@?20";
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == "NSManagedObjectContext" &&
+          Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
+        if (Method || !Candidate.CategoryAddress ||
+            Candidate.CategoryName != "WMFArticle" ||
+            !Candidate.MetadataAddress ||
+            Candidate.TypeEncoding != ParentEncoding ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, ParentEncoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature(
+        "v24@?0@\"WMFContentGroup\"8^B16", Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback),
+        ObjCBlockParameterContract::Lifetime::NonEscaping};
+  }
+
   // WMFBlocksKit.swift imports these collection callbacks as @escaping.
   // Match the embedded Swift-extension methods, owner and complete callback
   // ABI before treating an Objective-C stack literal as copied by the bridge.
