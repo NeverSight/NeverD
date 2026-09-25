@@ -1624,6 +1624,64 @@ TEST(ObjCBlockSources, WMFAsyncBlockOperationCopiesEscapingSwiftClosure) {
   EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
 }
 
+TEST(ObjCBlockSources, WMFSessionCopiesJSONCompletion) {
+  BlockFixture F;
+  F.Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Class;
+  Class.Name = "WMFSession";
+  Class.Address = 0x2700;
+  Class.SuperclassName = "NSObject";
+  Class.InheritanceStatus = "resolved";
+  F.Image.ObjCClasses.push_back(Class);
+  ObjCMethod Method;
+  Method.Implementation = 0x1300;
+  Method.MetadataAddress = 0x2800;
+  Method.ClassAddress = Class.Address;
+  Method.ClassName = Class.Name;
+  Method.Selector =
+      "getJSONDictionaryFromURL:ignoreCache:completionHandler:";
+  Method.TypeEncoding = "@36@0:8@16B24@?28";
+  Method.Status = "supported";
+  Method.TypeHint = parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  F.Image.ObjCMethods.push_back(Method);
+  ObjCMethod Caller;
+  Caller.Implementation = 0x1200;
+  Caller.ClassAddress = Class.Address;
+  Caller.ClassName = Class.Name;
+  Caller.Selector = "submit:";
+  Caller.TypeEncoding = "v24@0:8@16";
+  Caller.Status = "supported";
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+  ASSERT_TRUE(Caller.TypeHint);
+  F.Image.ObjCMethods.push_back(Caller);
+  const auto Receiver = objcMethodReceiverTypeHint(F.Image, Caller.Implementation);
+  ASSERT_TRUE(Receiver);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = Method.Selector;
+  Call.Receiver = *Receiver;
+  const auto Declaration =
+      objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+  ASSERT_TRUE(Declaration.Signature);
+  Call.Signature = *Declaration.Signature;
+  const auto Contract = objcBlockParameterContract(F.Image, Call, 4);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage, ObjCBlockParameterContract::Lifetime::Copied);
+  EXPECT_EQ(Contract->Signature.Parameters.size(), 4U);
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 3));
+
+  auto Changed = Call;
+  Changed.Receiver.reset();
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 4));
+  Changed = Call;
+  Changed.Signature.Parameters.pop_back();
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 4));
+  F.Image.ObjCMethods.front().TypeEncoding = "@36@0:8@16B24@28";
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 4));
+}
+
 TEST(ObjCBlockSources, WMFCollectionSwiftExtensionsCopyCallbacks) {
   struct Case {
     const char *Owner;

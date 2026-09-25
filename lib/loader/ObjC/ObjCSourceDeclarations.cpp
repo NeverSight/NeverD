@@ -1868,6 +1868,49 @@ objcBlockParameterContract(const BinaryImage &Image,
         std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
   }
 
+  // WMFSession's Swift declaration marks this completion as escaping and
+  // passes it into the URLSession task. The Objective-C bridge must own it.
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol && Type->ClassName == "WMFSession" &&
+      Call.Selector == "getJSONDictionaryFromURL:ignoreCache:completionHandler:" &&
+      Parameter == 4) {
+    const ObjCClass *Owner = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == "WMFSession") {
+        if (Owner)
+          return std::nullopt;
+        Owner = &Class;
+      }
+    if (!Owner || !Owner->Address)
+      return std::nullopt;
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == Owner->Name &&
+          Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
+        if (Method || Candidate.ClassAddress != Owner->Address ||
+            Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
+            !Candidate.MetadataAddress ||
+            Candidate.TypeEncoding != "@36@0:8@16B24@?28" ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, Method->TypeEncoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature(
+        "v32@?0@\"NSDictionary\"8@\"NSHTTPURLResponse\"16@\"NSError\"24",
+        Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+  }
+
   // WMFBlocksKit.swift imports these collection callbacks as @escaping.
   // Match the embedded Swift-extension methods, owner and complete callback
   // ABI before treating an Objective-C stack literal as copied by the bridge.
