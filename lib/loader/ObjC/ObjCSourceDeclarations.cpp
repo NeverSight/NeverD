@@ -1006,6 +1006,8 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *;
   // its top-read argument is WMFFeedTopReadResponse *.
   // WMFAnnouncementsContentSource.m declares announcements as NSArray *.
+  // WMFAnnouncementsFetcher.m declares the announcements being filtered as
+  // NSArray<WMFAnnouncement *> *.
   // MWKRecentSearchList.m declares its importEntries: parameter as NSArray *.
   // SDWebImage 5.21.3 SDImageTransformer.m declares the pipeline transformer's
   // cacheKeyForTransformers: parameter as NSArray<id<SDImageTransformer>> *.
@@ -1018,6 +1020,8 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   constexpr llvm::StringLiteral AnnouncementsSelector =
       "saveAnnouncements:inManagedObjectContext:completion:";
   constexpr llvm::StringLiteral RecentSearchSelector = "importEntries:";
+  constexpr llvm::StringLiteral FilterSelector =
+      "filterAnnouncements:withCurrentCountryInIPHeader:geoIPCookieValue:";
   constexpr llvm::StringLiteral PipelineSelector = "cacheKeyForTransformers:";
   constexpr llvm::StringLiteral LogSelector = "lt_shouldLogFileBeArchived:";
   const auto Matches = [&](llvm::StringRef ClassName,
@@ -1035,33 +1039,38 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
       Matches("WMFAnnouncementsContentSource", AnnouncementsSelector);
   const bool RecentSearch =
       Matches("MWKRecentSearchList", RecentSearchSelector);
+  const bool Filter = Matches("WMFAnnouncementsFetcher", FilterSelector);
   const bool Pipeline = Matches("SDImagePipelineTransformer", PipelineSelector);
   const bool LogFile = Matches("DDFileLogger", LogSelector);
   if (unsigned(News) + unsigned(TopRead) + unsigned(Announcements) +
-          unsigned(RecentSearch) + unsigned(Pipeline) + unsigned(LogFile) !=
+          unsigned(RecentSearch) + unsigned(Filter) + unsigned(Pipeline) +
+          unsigned(LogFile) !=
       1)
     return std::nullopt;
   const llvm::StringRef OwnerName = LogFile    ? "DDFileLogger"
                                     : Pipeline ? "SDImagePipelineTransformer"
+                                    : Filter   ? "WMFAnnouncementsFetcher"
                                     : RecentSearch ? "MWKRecentSearchList"
                                     : Announcements
                                         ? "WMFAnnouncementsContentSource"
                                         : "WMFFeedContentSource";
   const llvm::StringRef Selector = LogFile         ? LogSelector
                                    : Pipeline      ? PipelineSelector
+                                   : Filter        ? FilterSelector
                                    : RecentSearch  ? RecentSearchSelector
                                    : Announcements ? AnnouncementsSelector
                                    : TopRead       ? TopReadSelector
                                                    : NewsSelector;
   const llvm::StringRef Encoding = LogFile         ? "B24@0:8@16"
                                    : Pipeline      ? "@24@0:8@16"
+                                   : Filter        ? "@40@0:8@16@24@32"
                                    : RecentSearch  ? "v24@0:8@16"
                                    : Announcements ? "v40@0:8@16@24@?32"
                                                    : "v48@0:8@16@24@32@40";
   const llvm::StringRef ParameterClass = LogFile   ? "DDLogFileInfo"
                                          : TopRead ? "WMFFeedTopReadResponse"
                                                    : "NSArray";
-  if (News || Announcements || RecentSearch || Pipeline) {
+  if (News || Announcements || RecentSearch || Filter || Pipeline) {
     const auto Array = objc::sdkReceiverDeclarations(
         Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
     if (!Array.Present || !Array.Complete)
@@ -1143,8 +1152,8 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   const auto Signature = objcMethodSourceTypeHint(Image, Entry);
   if (!Signature ||
       Signature->Parameters.size() != (LogFile || RecentSearch || Pipeline ? 3U
-                                       : Announcements ? 5U
-                                                       : 6U) ||
+                                       : Announcements || Filter ? 5U
+                                                                 : 6U) ||
       !Signature->Parameters[Parameter].Type ||
       Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
       Signature->Parameters[Parameter].Type->Size != 8 ||

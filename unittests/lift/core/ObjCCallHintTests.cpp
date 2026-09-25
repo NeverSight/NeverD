@@ -9602,6 +9602,89 @@ TEST(ObjCCallHints, SDImagePipelineArrayParameterQualifiesEnumeration) {
   Rejected(Changed);
 }
 
+TEST(ObjCCallHints, WMFAnnouncementFilterArrayParameterQualifiesSelection) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Owner;
+  Owner.Name = "WMFAnnouncementsFetcher";
+  Owner.Address = 0x2300;
+  Image.ObjCClasses.push_back(Owner);
+  ObjCMethod Method;
+  Method.ClassName = Owner.Name;
+  Method.ClassAddress = Owner.Address;
+  Method.MetadataAddress = 0x2400;
+  Method.Selector =
+      "filterAnnouncements:withCurrentCountryInIPHeader:geoIPCookieValue:";
+  Method.TypeEncoding = "@40@0:8@16@24@32";
+  Method.Implementation = 0x1200;
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  Image.ObjCMethods.push_back(Method);
+  ObjCMethod Selection;
+  Selection.ClassName = "NSArray";
+  Selection.CategoryName = "MTLManipulationAdditions";
+  Selection.CategoryAddress = 0x2500;
+  Selection.MetadataAddress = 0x2510;
+  Selection.Selector = "wmf_select:";
+  Selection.TypeEncoding = "@24@0:8@?16";
+  Selection.Implementation = 0x1300;
+  Selection.Status = "supported";
+  Selection.TypeHint =
+      parseObjCMethodEncoding(Selection.Selector, Selection.TypeEncoding);
+  ASSERT_TRUE(Selection.TypeHint);
+  Image.ObjCMethods.push_back(Selection);
+
+  const auto Root = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+  ASSERT_TRUE(Root);
+  EXPECT_EQ(Root->ClassName, "NSArray");
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+  const auto Select = objcReceiverSourceTypeHint(Image, "wmf_select:", *Root);
+  ASSERT_TRUE(Select.Signature);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = "wmf_select:";
+  Call.Receiver = *Root;
+  Call.Signature = *Select.Signature;
+  const auto Contract = objcBlockParameterContract(Image, Call, 2);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage,
+            ObjCBlockParameterContract::Lifetime::Copied);
+  Image.ObjCSourceReferences.at(0x2100).Name = Call.Selector;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  auto Function = caller();
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin(),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[2], 8)}, 0x11fc));
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).Receiver);
+  EXPECT_EQ(Hints.at(0x1200).Receiver->Origin,
+            ObjCReceiverTypeHint::OriginKind::MethodParameter);
+  EXPECT_TRUE(objcBlockParameterContract(Image, Hints.at(0x1200), 2));
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Root));
+  };
+  auto Changed = Image;
+  Changed.ObjCMethods[0].IsClassMethod = true;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "@24@0:8@16";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Method);
+  Rejected(Changed);
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  Rejected(Changed);
+}
+
 TEST(ObjCCallHints, RecentSearchArrayParameterQualifiesSelectionBlock) {
   auto Image = image();
   Image.ObjCMethods.clear();
