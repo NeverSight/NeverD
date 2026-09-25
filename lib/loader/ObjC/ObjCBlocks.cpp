@@ -309,7 +309,7 @@ readLiteral(const BinaryImage &Image,
 std::optional<ObjCBlockLiteral> readObjCBlockLiteral(const BinaryImage &Image,
                                                      va_t Address,
                                                      std::string &Diagnostic) {
-  return readLiteral(Image, Image.collectImportStorageSlots(), Address,
+  return readLiteral(Image, Image.collectImportStorageSlot(Address), Address,
                      Diagnostic);
 }
 

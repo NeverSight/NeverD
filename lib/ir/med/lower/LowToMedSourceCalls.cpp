@@ -72,8 +72,13 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         EntrySignature = &It->second;
     }
   if (Image) {
+    const ObjCBlockCaptureCallFields *Captures = nullptr;
+    if (ObjCBlockCaptureFields)
+      if (auto It = ObjCBlockCaptureFields->find(Low.Entry);
+          It != ObjCBlockCaptureFields->end())
+        Captures = &It->second;
     auto BlockHints =
-        buildObjCBlockCallHints(*Image, Low, EntrySignature, &Hints);
+        buildObjCBlockCallHints(*Image, Low, EntrySignature, &Hints, Captures);
     Hints.insert(BlockHints.begin(), BlockHints.end());
   }
   std::optional<SourceFunctionTypeHint> ProvisionalBooleanEntry;
@@ -396,14 +401,12 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Upper.Opcode = NdOp::SUBBYTES;
           Upper.Addr = Op.Addr;
           Upper.Output = Temporary(WideBytes - Return.ValueBytes);
-          Upper.addInput(
-              ndVarToMedVar(NdVar::reg(WideOffset, WideBytes)));
+          Upper.addInput(ndVarToMedVar(NdVar::reg(WideOffset, WideBytes)));
           Upper.addInput(MedVar::makeConst(Return.ValueBytes, 4));
           MedOp Merge;
           Merge.Opcode = NdOp::CONCAT;
           Merge.Addr = Op.Addr;
-          Merge.Output =
-              ndVarToMedVar(NdVar::reg(WideOffset, WideBytes));
+          Merge.Output = ndVarToMedVar(NdVar::reg(WideOffset, WideBytes));
           Merge.addInput(Upper.Output);
           Merge.addInput(Op.Output);
           ReturnOps.push_back(std::move(Upper));

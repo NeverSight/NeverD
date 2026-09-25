@@ -484,6 +484,7 @@ std::map<va_t, SourceCallTypeHint>
 analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
              const SourceFunctionTypeHint *EntrySignature,
              const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+             const ObjCBlockCaptureCallFields *Captures,
              const LowFunc *WholeFunction, bool FollowValidatedBranches,
              std::map<va_t, std::set<size_t>> *NullArguments = nullptr) {
   std::map<va_t, SourceCallTypeHint> Result;
@@ -494,6 +495,18 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
   if (EntrySignature && (EntrySignature->Architecture != Image.Arch ||
                          !validateSourceABI(*EntrySignature, EntryError)))
     return Result;
+  const bool ProvenCaptureContext =
+      Captures && EntrySignature &&
+      EntrySignature->Origin ==
+          SourceFunctionTypeHint::OriginKind::BlockRuntime &&
+      !EntrySignature->Parameters.empty() &&
+      EntrySignature->Parameters[0].Type &&
+      EntrySignature->Parameters[0].Type->Kind == NdTypeKind::Ptr &&
+      EntrySignature->Parameters[0].Location.Kind ==
+          SourceABICarrierKind::IntegerRegister &&
+      EntrySignature->Parameters[0].Location.RegisterOffset ==
+          TRI.IntParamRegs[0] &&
+      EntrySignature->Parameters[0].Location.ValueBytes == 8;
   std::map<Key, Value> Values;
   std::map<std::pair<int64_t, unsigned>, Value> FrameSlots;
   std::set<uint64_t> WrittenArguments;
@@ -834,6 +847,17 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
         auto It = FrameSlots.find({Address->Offset, Op.Output.Size});
         if (It != FrameSlots.end())
           Out = It->second;
+      } else if (ProvenCaptureContext && Address &&
+                 Address->K == Value::Kind::Scalar &&
+                 Address->Base == TRI.IntParamRegs[0] + 1 &&
+                 Address->Offset >= 32 && Op.Output.Size == 8 &&
+                 Captures->ScalarWords.count(uint64_t(Address->Offset))) {
+        const bool BlockPointer =
+            Captures->BlockWords.count(uint64_t(Address->Offset));
+        Out =
+            Value{BlockPointer ? Value::Kind::Scalar : Value::Kind::CallInteger,
+                  NextCallResultBase++, 0,
+                  BlockPointer ? Pointer : NdType::makeInt(8, false)};
       } else if (Address &&
                  (Address->K == Value::Kind::Scalar ||
                   Address->K == Value::Kind::Number) &&
@@ -872,7 +896,8 @@ analyzeBlock(const BinaryImage &Image, const LowBlock &Block,
 std::map<va_t, SourceCallTypeHint>
 buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
                         const SourceFunctionTypeHint *EntrySignature,
-                        const std::map<va_t, SourceCallTypeHint> *BoundCalls) {
+                        const std::map<va_t, SourceCallTypeHint> *BoundCalls,
+                        const ObjCBlockCaptureCallFields *Captures) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Function.Blocks.empty() ||
@@ -899,8 +924,8 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
   }
   if (!Entry || !Entry->Preds.empty() || !Entry->ExceptionalPreds.empty())
     return Result;
-  Result =
-      analyzeBlock(Image, *Entry, EntrySignature, BoundCalls, &Function, false);
+  Result = analyzeBlock(Image, *Entry, EntrySignature, BoundCalls, Captures,
+                        &Function, false);
   if (Function.Blocks.size() == 1 || Function.Blocks.size() > 64)
     return Result;
 
@@ -972,7 +997,7 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
         if (!Valid)
           continue;
         const auto Hints = analyzeBlock(Image, Linear, EntrySignature,
-                                        BoundCalls, &Function, true);
+                                        BoundCalls, Captures, &Function, true);
         for (const auto &Op : Successor->Ops) {
           const auto Found = Hints.find(Op.Addr);
           if (Found != Hints.end())
@@ -1067,8 +1092,9 @@ buildObjCBlockCallHints(const BinaryImage &Image, const LowFunc &Function,
       if (!Complete)
         break;
       std::map<va_t, std::set<size_t>> NullArguments;
-      const auto Hints = analyzeBlock(Image, Linear, EntrySignature, BoundCalls,
-                                      &Function, true, &NullArguments);
+      const auto Hints =
+          analyzeBlock(Image, Linear, EntrySignature, BoundCalls, Captures,
+                       &Function, true, &NullArguments);
       if (FirstPath) {
         for (const auto &Op : Candidate.Ops) {
           const auto Found = Hints.find(Op.Addr);

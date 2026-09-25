@@ -6,6 +6,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/AArch64Regs.h"
+#include "neverd/lift/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
@@ -89,6 +90,60 @@ TEST(ObjCBlockCallHints, ProvesSameReceiverAndKeepsOnlyWrittenScalarArguments) {
     EXPECT_EQ(Hint.Signature.Parameters[1].Location.RegisterOffset, F.R1);
     EXPECT_EQ(Hint.Signature.ReturnType->Size, 4U);
     EXPECT_EQ(Hint.TargetAddress, 0U);
+  }
+}
+
+TEST(ObjCBlockCallHints, CapturedBlockRequiresDescriptorAndCopyHelperEvidence) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F(Architecture);
+    const auto Saved =
+        Architecture == Arch::AArch64 ? a64reg::X19 : x86reg::R12;
+    const auto Return = getTargetRegInfo(Architecture).IntReturnReg;
+    F.Entry.Origin = SourceFunctionTypeHint::OriginKind::BlockRuntime;
+    F.Entry.ReturnType = NdType::makeVoid();
+    F.Entry.Parameters = {{"block", NdType::makePtr(NdType::makeVoid())}};
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(F.Entry, F.Image.Arch, Error))
+        << Error;
+    F.Low.Blocks[0].Ops = {
+        op(NdOp::COPY, NdVar::reg(Saved, 8), {NdVar::reg(F.R0, 8)}, 0x1000),
+        op(NdOp::INT_ADD, NdVar::tmp(0, 8),
+           {NdVar::reg(F.R0, 8), NdVar::cst(56, 8)}, 0x1004),
+        op(NdOp::LOAD, NdVar::reg(F.R0, 8), {NdVar::tmp(0, 8)}, 0x1004),
+        op(NdOp::INT_ADD, NdVar::tmp(1, 8),
+           {NdVar::reg(Saved, 8), NdVar::cst(32, 8)}, 0x1008),
+        op(NdOp::LOAD, NdVar::reg(F.R1, 8), {NdVar::tmp(1, 8)}, 0x1008),
+        op(NdOp::INT_ADD, NdVar::tmp(2, 8),
+           {NdVar::reg(F.R0, 8), NdVar::cst(16, 8)}, 0x100c),
+        op(NdOp::LOAD, NdVar::reg(F.Target, 8), {NdVar::tmp(2, 8)}, 0x100c),
+        op(NdOp::INDIR_CALL, NdVar::reg(Return, 8), {NdVar::reg(F.Target, 8)},
+           0x1010),
+        op(NdOp::RETURN, {}, {NdVar::reg(Return, 8)}, 0x1014)};
+    ObjCBlockCaptureCallFields Captures;
+    Captures.ScalarWords = {32, 56};
+    Captures.BlockWords = {56};
+    auto Hints =
+        buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures);
+    ASSERT_EQ(Hints.size(), 1U);
+    EXPECT_EQ(Hints.at(0x1010).CallKind, SourceCallTypeHint::Kind::BlockInvoke);
+    ASSERT_EQ(Hints.at(0x1010).Signature.Parameters.size(), 2U);
+    EXPECT_EQ(Hints.at(0x1010).Signature.Parameters[1].Type->Kind,
+              NdTypeKind::Int);
+
+    Captures.BlockWords.clear();
+    EXPECT_TRUE(
+        buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures)
+            .empty());
+    Captures.BlockWords.insert(56);
+    Captures.ScalarWords.erase(32);
+    EXPECT_TRUE(
+        buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures)
+            .empty());
+    Captures.ScalarWords.insert(32);
+    F.Entry.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+    EXPECT_TRUE(
+        buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, nullptr, &Captures)
+            .empty());
   }
 }
 

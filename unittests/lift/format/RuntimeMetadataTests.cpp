@@ -580,6 +580,43 @@ TEST(RuntimeMetadata, NormalizesNativeImportStorageWithoutFirstWins) {
   EXPECT_TRUE(Collected.Conflicts.count(0x3020));
 }
 
+TEST(RuntimeMetadata, ScopedImportStorageMatchesCompleteMergeAfterMutations) {
+  BinaryImage Img;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(makeSegment(0x1000, 0x100, true));
+  Img.Segments.push_back(makeSegment(0x3000, 0x100, false));
+  auto Check = [&] {
+    const auto Full = Img.collectImportStorageSlots();
+    for (va_t Address :
+         {0x1010ULL, 0x3020ULL, 0x3030ULL, 0x3040ULL, 0x3050ULL, 0x3060ULL}) {
+      const auto Scoped = Img.collectImportStorageSlot(Address);
+      ASSERT_EQ(Scoped.Slots.size(), Full.Slots.count(Address));
+      ASSERT_EQ(Scoped.Conflicts.size(), Full.Conflicts.count(Address));
+      if (auto It = Full.Slots.find(Address); It != Full.Slots.end()) {
+        const auto &Slot = Scoped.Slots.at(Address);
+        EXPECT_EQ(Slot.Name, It->second.Name);
+        EXPECT_EQ(Slot.Addend, It->second.Addend);
+        EXPECT_EQ(Slot.Evidence, It->second.Evidence);
+      }
+    }
+  };
+  Check();
+  Img.ImportStorageSlots[0x3020] = {"same", 4,
+                                    ImportStorageEvidence::ImportDirectory};
+  Img.ImportPtrSlots[0x3020] = "same";
+  Img.DyldBindSlots[0x3020] = {"same", 12};
+  Img.ImportPtrSlots[0x3030] = "pointer_only";
+  Img.ImportPtrSlots[0x3040] = "first";
+  Img.DyldBindSlots[0x3040] = {"second", 0};
+  Img.ConflictingImportStorageSlots.insert(0x3050);
+  Img.ImportPtrSlots[0x1010] = "executable";
+  Check();
+  Img.DyldBindSlots[0x3020] = {"other", 12};
+  Img.ImportStorageSlots[0x3060] = {"direct", -3,
+                                    ImportStorageEvidence::ImportDirectory};
+  Check();
+}
+
 TEST(RuntimeMetadata, TextNormalizationKeepsImportStorageViewsConsistent) {
   BinaryImage Img;
   Img.Bits = Bitness::Bits64;

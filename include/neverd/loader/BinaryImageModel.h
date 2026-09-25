@@ -1515,6 +1515,32 @@ struct BinaryImage {
     return Result;
   }
 
+  /// Apply the same exact-slot merge to one address without copying every
+  /// import in the image. Repeated source revalidation uses this scoped view;
+  /// the complete collection remains available to whole-image consumers.
+  ImportStorageSlotCollection collectImportStorageSlot(va_t SlotVA) const {
+    ImportStorageSlotCollection Result;
+    if (ConflictingImportStorageSlots.count(SlotVA))
+      Result.Conflicts.insert(SlotVA);
+    auto Merge = [&](llvm::StringRef Name, int64_t Addend,
+                     ImportStorageEvidence Evidence) {
+      if (Result.Conflicts.count(SlotVA) ||
+          !isValidImportStorageSlot(SlotVA, Name))
+        return;
+      mergeImportStorageSlot(Result.Slots, Result.Conflicts, SlotVA, Name,
+                             Addend, Evidence);
+    };
+    if (auto It = ImportStorageSlots.find(SlotVA);
+        It != ImportStorageSlots.end())
+      Merge(It->second.Name, It->second.Addend, It->second.Evidence);
+    if (auto It = ImportPtrSlots.find(SlotVA); It != ImportPtrSlots.end())
+      Merge(It->second, 0, ImportStorageEvidence::PointerTable);
+    if (auto It = DyldBindSlots.find(SlotVA); It != DyldBindSlots.end())
+      Merge(It->second.Name, It->second.Addend,
+            ImportStorageEvidence::LoaderBind);
+    return Result;
+  }
+
   /// Record one mapped data slot whose callable role comes from a runtime
   /// contract.  Multiple contracts may intentionally name the same storage,
   /// so uniqueness is by (address, kind), not address alone.

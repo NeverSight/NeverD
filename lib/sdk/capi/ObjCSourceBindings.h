@@ -819,7 +819,7 @@ inline std::optional<va_t> swiftRelativeAddress(const BinaryImage &Image,
 
 inline std::optional<std::string>
 swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
-  const auto Imports = Image.collectImportStorageSlots();
+  const auto Imports = Image.collectImportStorageSlot(DescriptorSlot);
   const auto *SlotSection = Image.getSectionFor(DescriptorSlot);
   const auto *SlotSegment = Image.getSegmentFor(DescriptorSlot);
   const auto *SlotBytes = Image.readVA(DescriptorSlot, 8);
@@ -876,7 +876,7 @@ swiftLocalExportedDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
 
 inline std::optional<std::string>
 swiftTypeMetadataDescriptor(const BinaryImage &Image, va_t DescriptorSlot) {
-  const auto Imports = Image.collectImportStorageSlots();
+  const auto Imports = Image.collectImportStorageSlot(DescriptorSlot);
   const auto Import = Imports.Slots.find(DescriptorSlot);
   const auto Bind = Image.DyldBindSlots.find(DescriptorSlot);
   std::optional<std::string> DescriptorSymbol;
@@ -1308,14 +1308,12 @@ swiftWitnessCacheAddressHint(const HighFunc &Function, const BinaryImage &Image,
     const auto Global =
         Slot ? darwinRuntimeGlobalAddressHint(Image, *Slot) : std::nullopt;
     if (!Global || Global->Signature.Origin !=
-            SourceFunctionTypeHint::OriginKind::SwiftRuntime)
+                       SourceFunctionTypeHint::OriginKind::SwiftRuntime)
       return std::nullopt;
     ImportedGlobals[Index] = Global->TargetName;
   }
-  if (ImportedGlobals !=
-          std::array<std::string, 2>{"$sSSSysMc", "$sSSN"} &&
-      ImportedGlobals !=
-          std::array<std::string, 2>{"$sSsSTsMc", "$sSsN"})
+  if (ImportedGlobals != std::array<std::string, 2>{"$sSSSysMc", "$sSSN"} &&
+      ImportedGlobals != std::array<std::string, 2>{"$sSsSTsMc", "$sSsN"})
     return std::nullopt;
   const bool ReturnsLoad =
       std::any_of(Returns.begin(), Returns.end(), [&](const ExprPtr &Value) {
@@ -5292,11 +5290,14 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
     const std::string MetadataName = CacheStem + "_metadata";
     SharedFunctions.insert(CacheName);
     SharedFunctions.insert(AccessorName);
-    Source += "\nextern unsigned char " + ConformanceName +
-              "[] __asm__(\"_" + Globals[0] + "\");\n"
-              "extern unsigned char " + MetadataName +
-              "[] __asm__(\"_" + Globals[1] + "\");\n"
-              "static void *" + CacheStem +
+    Source += "\nextern unsigned char " + ConformanceName + "[] __asm__(\"_" +
+              Globals[0] +
+              "\");\n"
+              "extern unsigned char " +
+              MetadataName + "[] __asm__(\"_" + Globals[1] +
+              "\");\n"
+              "static void *" +
+              CacheStem +
               ";\n"
               "uintptr_t " +
               CacheName +
@@ -5313,8 +5314,12 @@ inline std::string renderObjCSwiftWitnessCacheHelpers(
               "  if (value)\n"
               "    return (uintptr_t)value;\n"
               "  value = neverd_swift_get_witness_table(\n"
-              "      " + ConformanceName + ",\n"
-              "      " + MetadataName + ", (void *)0);\n"
+              "      " +
+              ConformanceName +
+              ",\n"
+              "      " +
+              MetadataName +
+              ", (void *)0);\n"
               "  __atomic_store_n(&" +
               CacheStem +
               ", value, __ATOMIC_RELEASE);\n"

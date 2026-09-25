@@ -10,6 +10,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -36,6 +37,7 @@ struct ObjCBlockSourcePlan {
   std::map<va_t, SourceFunctionTypeHint> InvokeHints;
   std::map<va_t, SourceFunctionTypeHint> HelperHints;
   std::map<va_t, std::vector<ObjCStackBlockSource>> StackBlocks;
+  std::map<va_t, ObjCBlockCaptureCallFields> CapturedCallFields;
   std::map<va_t, std::string> Rejections;
 };
 struct ObjCBlockSourceBindingResult {
@@ -506,13 +508,13 @@ void proveSourceFlow(const HighFunc &F, Facts Initial, Transfer Evaluate,
 /// Prove that a context pointer is neither returned nor exposed to memory or
 /// unknown callees. A descriptor-backed invoke may read only known capture
 /// bytes. Forwarding consumers may read only the invoke pointer at byte 16.
-inline bool noEscape(const ObjCBlockSourceContext &Source,
-                     const std::map<va_t, const HighFunc *> &Functions,
-                     va_t Entry, size_t Parameter,
-                     const std::set<uint64_t> *Initialized,
-                     std::set<std::pair<va_t, size_t>> &Active,
-                     std::string &Reason,
-                     const std::set<uint64_t> *WritableStrongFields = nullptr) {
+inline bool
+noEscape(const ObjCBlockSourceContext &Source,
+         const std::map<va_t, const HighFunc *> &Functions, va_t Entry,
+         size_t Parameter, const std::set<uint64_t> *Initialized,
+         std::set<std::pair<va_t, size_t>> &Active, std::string &Reason,
+         const std::set<uint64_t> *WritableStrongFields = nullptr,
+         std::map<uint64_t, std::set<uint64_t>> *AssignmentFlags = nullptr) {
   try {
     if (Active.size() >= 16 || !Active.insert({Entry, Parameter}).second)
       throw Invalid("block consumer recursion is not established");
@@ -551,8 +553,11 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
           Arguments[2].K == Value::Number &&
           (Arguments[2].Bits == StrongObjectFieldFlag ||
            Arguments[2].Bits == StrongBlockFieldFlag) &&
-          objcSourceCallBound(E, Source.Image, Functions))
+          objcSourceCallBound(E, Source.Image, Functions)) {
+        if (AssignmentFlags)
+          (*AssignmentFlags)[Arguments[0].Offset].insert(Arguments[2].Bits);
         return {};
+      }
       if (B && B->CallKind == CallKind::BlockInvoke &&
           Arguments.size() == B->Signature.Parameters.size() &&
           !Arguments.empty() && Arguments[0].K == Value::Context &&
@@ -1200,6 +1205,112 @@ discoverObjCBlockSources(const ObjCBlockSourceContext &Source,
     for (auto &Block : Blocks)
       if (publish(Plan, Block.Descriptor, Block.InvokeEntry))
         Plan.StackBlocks[Function.Entry].push_back(std::move(Block));
+  }
+  // A strong descriptor field is not necessarily a block. The validated copy
+  // helper's _Block_object_assign flag 7 is the ownership evidence. Keep only
+  // capture words shared by every descriptor using the same invoke entry.
+  std::map<va_t, ObjCBlockCaptureCallFields> Common;
+  for (const auto &[Parent, Blocks] : Plan.StackBlocks) {
+    (void)Parent;
+    for (const auto &Block : Blocks) {
+      const auto &D = Block.Descriptor;
+      ObjCBlockCaptureCallFields Candidate;
+      auto Copy = Functions.find(D.CopyHelper);
+      auto Dispose = Functions.find(D.DisposeHelper);
+      auto CopyHint = Plan.HelperHints.find(D.CopyHelper);
+      auto DisposeHint = Plan.HelperHints.find(D.DisposeHelper);
+      if (D.CopyHelper && D.DisposeHelper && Copy != Functions.end() &&
+          Dispose != Functions.end() && CopyHint != Plan.HelperHints.end() &&
+          DisposeHint != Plan.HelperHints.end() &&
+          Copy->second->SourceTypeHint && Dispose->second->SourceTypeHint &&
+          objc_projection_detail::sameHint(*Copy->second->SourceTypeHint,
+                                           CopyHint->second) &&
+          objc_projection_detail::sameHint(*Dispose->second->SourceTypeHint,
+                                           DisposeHint->second)) {
+        // The assignment must execute on the only path through the helper;
+        // observing flag 7 on one branch would not prove every copy owns it.
+        const auto Flow = buildHighSourceFlowGraph(*Copy->second);
+        std::set<size_t> Seen;
+        size_t Node = Flow.Entry;
+        bool SinglePath = Flow.Diagnostics.Complete && !Flow.Nodes.empty();
+        while (SinglePath && Node != 0) {
+          if (Node >= Flow.Nodes.size() || !Seen.insert(Node).second) {
+            SinglePath = false;
+            break;
+          }
+          const auto &Current = Flow.Nodes[Node];
+          if (Current.Successors.empty()) {
+            SinglePath = Current.Statement &&
+                         Current.Statement->Kind == StmtKind::Return;
+            break;
+          }
+          if (Current.Successors.size() != 1) {
+            SinglePath = false;
+            break;
+          }
+          Node = Current.Successors.front();
+        }
+        if (!SinglePath) {
+          Common[Block.InvokeEntry] = {};
+          continue;
+        }
+        std::set<uint64_t> StrongFields;
+        for (const auto &Capture : D.Captures)
+          if (Capture.StorageKind == ObjCBlockCaptureRange::Kind::Strong &&
+              Capture.Offset % 8 == 0 && Capture.Size % 8 == 0)
+            for (uint64_t I = 0; I < Capture.Size; I += 8)
+              StrongFields.insert(Capture.Offset + I);
+        std::map<uint64_t, std::set<uint64_t>> AssignmentFlags;
+        std::set<std::pair<va_t, size_t>> Active;
+        std::string Reason;
+        const bool HelpersValid =
+            noEscape(Source, Functions, D.CopyHelper, 0,
+                     &Block.InitializedCaptures, Active, Reason, &StrongFields,
+                     &AssignmentFlags) &&
+            noEscape(Source, Functions, D.CopyHelper, 1,
+                     &Block.InitializedCaptures, Active, Reason) &&
+            noEscape(Source, Functions, D.DisposeHelper, 0,
+                     &Block.InitializedCaptures, Active, Reason);
+        if (HelpersValid)
+          for (uint64_t Offset = 32; Offset <= D.LiteralSize - 8; Offset += 8) {
+            bool Initialized = true;
+            for (uint64_t I = 0; I < 8; ++I)
+              Initialized &= Block.InitializedCaptures.count(Offset + I) != 0;
+            if (!Initialized)
+              continue;
+            Candidate.ScalarWords.insert(Offset);
+            if (auto Flags = AssignmentFlags.find(Offset);
+                Flags != AssignmentFlags.end() &&
+                Flags->second == std::set<uint64_t>{StrongBlockFieldFlag})
+              Candidate.BlockWords.insert(Offset);
+          }
+      }
+      auto [Existing, Added] = Common.emplace(Block.InvokeEntry, Candidate);
+      if (!Added) {
+        ObjCBlockCaptureCallFields Shared;
+        std::set_intersection(
+            Existing->second.ScalarWords.begin(),
+            Existing->second.ScalarWords.end(), Candidate.ScalarWords.begin(),
+            Candidate.ScalarWords.end(),
+            std::inserter(Shared.ScalarWords, Shared.ScalarWords.end()));
+        std::set_intersection(
+            Existing->second.BlockWords.begin(),
+            Existing->second.BlockWords.end(), Candidate.BlockWords.begin(),
+            Candidate.BlockWords.end(),
+            std::inserter(Shared.BlockWords, Shared.BlockWords.end()));
+        Existing->second = std::move(Shared);
+      }
+    }
+  }
+  for (auto &[Entry, Fields] : Common) {
+    bool GlobalUsesInvoke = false;
+    for (const auto &[Address, Literal] : Plan.Globals) {
+      (void)Address;
+      GlobalUsesInvoke |= Literal.InvokeEntry == Entry;
+    }
+    if (!GlobalUsesInvoke && !Plan.Rejections.count(Entry) &&
+        !Fields.BlockWords.empty())
+      Plan.CapturedCallFields.emplace(Entry, std::move(Fields));
   }
   return Plan;
 }

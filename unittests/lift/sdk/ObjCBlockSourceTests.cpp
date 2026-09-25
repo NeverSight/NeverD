@@ -1641,6 +1641,27 @@ TEST(ObjCBlockSources,
           Copy.Body[0].CallExpr->Operands[1] =
               parameter(0, Copy.Params[0].Type);
         auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+        const auto Capture = Plan.CapturedCallFields.find(F.Invoke);
+        if (Mutation == 0 && FieldFlag == 7) {
+          ASSERT_EQ(Plan.StackBlocks[F.Caller].size(), 1U)
+              << Plan.Rejections[F.Caller];
+          const auto &Block = Plan.StackBlocks[F.Caller][0];
+          std::set<uint64_t> StrongFields{32};
+          std::map<uint64_t, std::set<uint64_t>> AssignmentFlags;
+          std::set<std::pair<va_t, size_t>> Active;
+          std::string Reason;
+          const ObjCBlockSourceContext Source(F.Image);
+          EXPECT_TRUE(objc_block_source_detail::noEscape(
+              Source, F.functions(), F.Copy, 0, &Block.InitializedCaptures,
+              Active, Reason, &StrongFields, &AssignmentFlags))
+              << Reason;
+          EXPECT_EQ(AssignmentFlags[32], (std::set<uint64_t>{7}));
+          ASSERT_NE(Capture, Plan.CapturedCallFields.end());
+          EXPECT_EQ(Capture->second.BlockWords, (std::set<uint64_t>{32}));
+          EXPECT_TRUE(Capture->second.ScalarWords.count(32));
+        } else {
+          EXPECT_EQ(Capture, Plan.CapturedCallFields.end());
+        }
         const auto Bound = bindObjCBlockSourceReferences(F.caller(), F.Image,
                                                          Plan, F.functions());
         EXPECT_EQ(!Plan.StackBlocks.empty() && Bound.Limitation.empty(),

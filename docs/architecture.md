@@ -220,6 +220,15 @@ Source publication still proves the stack header, initialized captures,
 copy/dispose helpers, and invoke dependency. Either kind of consumer invalidates
 the caller's construction facts after use; a copied consumer is never reported
 as nonescaping. Unannotated block parameters confer no lifetime permission.
+An invoke may call a block stored in its own capture only when the containing
+literal has a complete descriptor, the capture word was initialized, and its
+validated copy helper assigns that strong field with block flag 7. The source
+pipeline passes these exact field offsets to LowIR call binding on a later
+round; ordinary initialized capture words contribute only observed integer
+carriers. Conflicting assignments or descriptors with different fields remove
+the proof, and the call still requires an exact receiver-plus-16 target load.
+Individual literal probes merge import evidence only for the isa slot they
+inspect; whole-image block discovery still walks the complete import inventory.
 
 Objective-C SDK `noescape` block parameters use the same loader-owned
 boundary. A catalog row is accepted only when the current message still has
@@ -1281,6 +1290,10 @@ An inferred native 64-bit integer return can be refined to its low 32 bits when 
 Constant Objective-C arrays and dictionaries can retain exact imported CoreFoundation Boolean singletons as elements. Each edge requires a strong, zero-addend SDK data binding in unique immutable file-backed storage, with no overlapping fixups. Generated helpers return the imported object address, preserving repeated-element identity without copying its representation. An import slot address is never interchangeable with its loaded object, and imported Booleans do not become dictionary string keys. Publication revalidates the complete graph.
 
 AArch64 Swift type-reference recipes also accept the exact `_ContiguousArrayStorage` nominal descriptor exported by `libswiftCore`, using the retained device and simulator SDK export evidence. This requires a strong, zero-addend import in unique immutable storage and the existing cache/reference/mangling proof; generated C preserves descriptor identity, relative references and the shared writable cache without copying descriptor bytes. The exact `_DictionaryStorage` descriptor is also accepted only when the linked image proves a strong, zero-addend `libswiftCore` bind; other standard-library descriptors remain unsupported.
+Repeated type-reference revalidation merges import evidence for the one descriptor
+slot under inspection. The scoped merge uses the same validation, priority and
+conflict rules as the complete image inventory, and reads current image state
+each time; it does not cache a proof across image changes.
 
 Exact data addresses of immutable self-pointer globals share the same reconstructed pointer-sized storage as loads of their values. The initial pointer refers to that storage itself, preserving both opaque-key identity and pointer contents. Direct-address publication revalidates unique mapped storage, the local self-rebase and immutability; mutable, overlapping, truncated or conflicting storage remains unresolved.
 

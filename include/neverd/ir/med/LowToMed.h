@@ -17,6 +17,7 @@
 
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,10 @@ public:
   void setSourceCalleeTypeHints(
       const std::map<va_t, SourceFunctionTypeHint> *Hints) {
     SourceCalleeTypeHints = Hints;
+  }
+  void setObjCBlockCaptureCallFields(
+      const std::map<va_t, ObjCBlockCaptureCallFields> *Fields) {
+    ObjCBlockCaptureFields = Fields;
   }
 
   /// Provide the per-callee callee-cleanup pop map (entry VA -> x86 `ret imm`
@@ -227,6 +232,8 @@ private:
   bool SourceCallHintsEnabled = false;
   const std::map<va_t, SourceFunctionTypeHint> *SourceEntryTypeHints = nullptr;
   const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;
+  const std::map<va_t, ObjCBlockCaptureCallFields> *ObjCBlockCaptureFields =
+      nullptr;
 
   std::vector<StackSlot> StackSlots;
 

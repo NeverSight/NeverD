@@ -20,6 +20,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ObjC/ObjCBlockCallHints.h"
 #include "neverd/pass/ir/simplify/SymSimplifyPass.h"
 #include "neverd/sbf/SBFIR.h"
 #include "neverd/solver/SymSynthVerifier.h"
@@ -70,6 +71,8 @@ struct PipelineOptions {
   /// have a public call contract whose machine body contains incidental live
   /// registers that are not source parameters.
   std::map<va_t, SourceFunctionTypeHint> SourceCalleeTypeHints;
+  /// Source-only descriptor and ownership proofs for captured block calls.
+  std::map<va_t, ObjCBlockCaptureCallFields> ObjCBlockCaptureFields;
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;

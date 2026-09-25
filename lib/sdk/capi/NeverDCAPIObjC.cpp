@@ -140,7 +140,11 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       BlockPlan = discoverObjCBlockSources(BlockSource, Result);
       const bool BlocksChanged =
           applyObjCBlockInvokeHints(BlockPlan, Options) != 0;
-      if (!NativeChanged && !BlocksChanged && !OnceChanged && !WitnessChanged)
+      const bool CapturesChanged =
+          Options.ObjCBlockCaptureFields != BlockPlan.CapturedCallFields;
+      Options.ObjCBlockCaptureFields = BlockPlan.CapturedCallFields;
+      if (!NativeChanged && !BlocksChanged && !CapturesChanged &&
+          !OnceChanged && !WitnessChanged)
         break;
       Result = RunPipeline(Depth + 1);
       if (!Result.Success) {
