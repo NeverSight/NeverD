@@ -891,12 +891,13 @@ std::string renderXgetbv(const std::vector<MedVar> &Outs,
   bool HiAlive = isAlive(Outs[1], IsAlive);
   if (!LoAlive && !HiAlive)
     return "_xgetbv(" + ECX + ");\n";
-  std::string Result = "uint64_t _xcr = _xgetbv(" + ECX + ");\n";
+  // Block scope: a function may read an extended control register twice.
+  std::string Result = "{\n    uint64_t _xcr = _xgetbv(" + ECX + ");\n";
   if (LoAlive)
     Result += "    " + VarFn(Outs[0]) + " = (uint32_t)_xcr;\n";
   if (HiAlive)
     Result += "    " + VarFn(Outs[1]) + " = (uint32_t)(_xcr >> 32);\n";
-  return Result;
+  return Result + "}\n";
 }
 
 std::string renderRdtsc(const std::vector<MedVar> &Outs, const char *FnName,

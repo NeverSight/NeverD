@@ -40,6 +40,8 @@ SIDEEFFECT(Intrinsic::Sldt);
 SIDEEFFECT(Intrinsic::Str);
 SIDEEFFECT(Intrinsic::Smsw);
 SIDEEFFECT(Intrinsic::Xabort);
+SIDEEFFECT(Intrinsic::Xbegin);
+SIDEEFFECT(Intrinsic::Xend);
 SIDEEFFECT(Intrinsic::Bound);
 SIDEEFFECT(Intrinsic::Wbinvd);
 SIDEEFFECT(Intrinsic::Swapgs);

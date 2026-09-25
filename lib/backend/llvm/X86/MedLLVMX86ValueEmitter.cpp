@@ -615,6 +615,16 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   if (IC == I::Rdtsc || IC == I::Rdtscp)
     return emitRdtscValue(Op, IC, Builder);
 
+  // TSX: XTEST reports whether execution is transactional; XBEGIN returns
+  // its abort status (or ~0 when the transaction starts).
+  if ((IC == I::Xtest || IC == I::Xbegin) && Op.Output.Size > 0) {
+    auto *Fn = llvm::Intrinsic::getOrInsertDeclaration(
+        Mod, IC == I::Xtest ? llvm::Intrinsic::x86_xtest
+                            : llvm::Intrinsic::x86_xbegin);
+    llvm::Value *Value = Builder.CreateCall(Fn, {}, "tsx");
+    return Builder.CreateZExtOrTrunc(Value, sizeToType(Op.Output.Size));
+  }
+
   // x64 `syscall`: the service number in RAX, the status back in RAX; the
   // instruction itself overwrites RCX and R11.
   if (IC == I::Syscall && Op.NumInputs == 2 && Op.Output.Size > 0) {

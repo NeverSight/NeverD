@@ -645,7 +645,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
                             << " insns=" << Low.DecodedInstructionCount
                             << " ops=" << CopiedOps << "\n");
     // The unoptimized ops still carry their LowIR occurrences, so switch
-    // selectors bind exactly as they would after the full pipeline.
+    // selectors and multi-output intrinsic results bind exactly as they
+    // would after the full pipeline.
+    markIntrinsicAuxResults(Func);
     resolveSwitchSelectorPlans(Func);
     return Func;
   }

@@ -128,6 +128,20 @@ bool liftSIMDCrypto(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
       Id = Intrinsic::Xbegin;
       break;
     }
+    if (Id == Intrinsic::Xtest) {
+      // XTEST clears ZF inside a transaction and sets it otherwise; it
+      // writes no general register.
+      NdVar InTransaction = S.makeTemp(1);
+      S.emitIntrinsic(Intrinsic::Xtest, InTransaction, {});
+      S.emit(NdOp::INT_EQUAL, NdVar::reg(x86reg::ZF, 1),
+             {InTransaction, NdVar::cst(0, 1)});
+      break;
+    }
+    if (Id != Intrinsic::Xbegin) {
+      // XEND and the XACQUIRE/XRELEASE hints write no register.
+      S.emitIntrinsic(Id, NdVar());
+      break;
+    }
     S.emitIntrinsic(Id);
     break;
   }

@@ -4176,6 +4176,21 @@ TEST(HighCPointerAddresses, ReduceGotosFormsLoopFromBackEdge) {
   EXPECT_EQ(countGotos(WithBreak), 1u);
 }
 
+TEST(HighCPointerAddresses, TsxEndAndTestDoNotClobberRax) {
+  // XEND writes no register and XTEST writes only ZF; a live RAX survives.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x8b, 0xc1, // mov rax, rcx
+                                     0x0f, 0x01, 0xd5, // xend
+                                     0x0f, 0x01, 0xd6, // xtest
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("_xend()"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("= _xend()"), std::string::npos) << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(return .*arg0)")))
+      << HighC;
+}
+
 TEST(HighCPointerAddresses, InterruptFlagChangesDoNotClobberRax) {
   // Zw* stubs save RSP in RAX and then execute CLI.
   constexpr va_t Entry = 0x140001000;
