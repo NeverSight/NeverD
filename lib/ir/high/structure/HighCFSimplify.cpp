@@ -1290,6 +1290,50 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           --I;
         continue;
       }
+      // T12: `goto X; do { S...; X: } while (c);`  ->  `while (c) { S... }`.
+      if (L[I].Kind == StmtKind::Goto && I + 1 < L.size() &&
+          L[I + 1].Kind == StmtKind::DoWhile && L[I + 1].Cond &&
+          usesOf(L[I].GotoTarget) == 1 && !L[I + 1].Body.empty()) {
+        auto &Loop = L[I + 1].Body;
+        const HighStmt &Last = Loop.back();
+        if (Last.Kind == StmtKind::Block && Last.Body.empty() &&
+            Last.Addr == L[I].GotoTarget &&
+            (Loop.size() == 1 || Loop[Loop.size() - 2].Addr != Last.Addr) &&
+            !(L[I].Addr != 0 && L[I].Addr != InvalidVA &&
+              usesOf(L[I].Addr) != 0)) {
+          --Uses[L[I].GotoTarget];
+          Loop.pop_back();
+          L[I + 1].Kind = StmtKind::While;
+          L.erase(L.begin() + I);
+          Changed = true;
+          continue;
+        }
+      }
+      // T13: `if (c) { ...; return; } S...; Y:` where the arm jumps to Y:
+      // the arm never falls through, so S can be its else, after which the
+      // jumps to Y are fall-through exits of the if.
+      if (SpliceRegions && L[I].Kind == StmtKind::If && L[I].Cond &&
+          L[I].ElseBody.empty() && !L[I].Body.empty() &&
+          isTerminator(L[I].Body.back())) {
+        std::set<va_t> ArmTargets;
+        walkStmts(L[I].Body, [&](const HighStmt &S) {
+          if (S.Kind == StmtKind::Goto)
+            ArmTargets.insert(S.GotoTarget);
+        });
+        if (L[I].Body.back().Kind == StmtKind::Goto)
+          ArmTargets.erase(L[I].Body.back().GotoTarget);
+        size_t J = I + 1;
+        while (J < L.size() &&
+               !(labelStart(L, J) && ArmTargets.count(L[J].Addr)))
+          ++J;
+        if (J < L.size() && J > I + 1) {
+          L[I].Kind = StmtKind::IfElse;
+          L[I].ElseBody.assign(std::make_move_iterator(L.begin() + I + 1),
+                               std::make_move_iterator(L.begin() + J));
+          L.erase(L.begin() + I + 1, L.begin() + J);
+          Changed = true;
+        }
+      }
       // T8: `if (c) { A; goto Y; } else { B; Y: C }`
       //   ->  `if (c) { A } else { B }` C.
       if (L[I].Kind == StmtKind::IfElse && L[I].Cond && !L[I].Body.empty() &&

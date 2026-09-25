@@ -4143,6 +4143,25 @@ TEST(HighCPointerAddresses, ReturnTailContinuesPastTheEndOfAnArm) {
   EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
 }
 
+TEST(HighCPointerAddresses, ReduceGotosUnrotatesAJumpIntoTheLoopTest) {
+  // goto X; do { a = 1; X: } while (c); return;
+  HighStmt Anchor;
+  Anchor.Kind = StmtKind::Block;
+  Anchor.Addr = 0x1020;
+  HighStmt Loop;
+  Loop.Kind = StmtKind::DoWhile;
+  Loop.Addr = 0x1010;
+  Loop.Cond = HighExpr::makeConst(1, 1);
+  Loop.Body = {assignConst(0x1010, 1, 1), Anchor};
+  std::vector<HighStmt> Body = {gotoAt(0x1000, 0x1020), Loop, returnAt(0x1030)};
+  ASSERT_TRUE(reduceSingleUseGotos(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body.size(), 2u);
+  EXPECT_EQ(Body[0].Kind, StmtKind::While);
+  ASSERT_TRUE(Body[0].Cond);
+  ASSERT_EQ(Body[0].Body.size(), 1u);
+}
+
 TEST(HighCPointerAddresses, LoopifyTurnsNestedBackJumpsIntoContinue) {
   // x = 0; X: x = 1; if (c) goto X; return;
   std::vector<HighStmt> Body = {assignConst(0x1000, 1, 0),
