@@ -199,6 +199,14 @@ public:
   std::map<std::string, const HighFunc *> DefinedFuncs;
   /// True when \p Name is a function this file or the image defines, not a
   /// libc routine of the same name (ntoskrnl implements its own `setjmp`).
+  /// A call to the function being written when it is printed as void: its
+  /// result cannot be assigned.
+  bool isVoidSelfCall(const HighExpr &E) const {
+    return E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None &&
+           CurrentFunc && InferredVoid &&
+           (E.CallAddr == CurrentFunc->Entry ||
+            (!E.CallTarget.empty() && E.CallTarget == CurrentFunc->Name));
+  }
   bool isOwnFunctionName(llvm::StringRef Name,
                          const std::vector<HighFunc> &Funcs);
   std::optional<std::set<std::string>> ImageFunctionNames;

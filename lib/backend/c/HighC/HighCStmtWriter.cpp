@@ -163,7 +163,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       OS << ";\n";
       break;
     }
-    if (isNoreturnCallExpr(Analysis, *Stmt.Val)) {
+    if (isNoreturnCallExpr(Analysis, *Stmt.Val) || isVoidSelfCall(*Stmt.Val)) {
       emitIndent(Indent);
       OS << exprStr(*Stmt.Val) << ";\n";
       break;

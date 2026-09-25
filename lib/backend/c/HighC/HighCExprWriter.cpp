@@ -438,6 +438,14 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     // because a machine-width expression can retain its original integer type.
     auto DeclaredType = declaredParamType(E.Var);
     std::string Name = copyForwardName(varName(E.Var));
+    // A copy forwarded to a parameter prints as that parameter, so it has
+    // the parameter's declared type.
+    if (!DeclaredType && CurrentFunc)
+      for (const HighParam &Param : CurrentFunc->Params)
+        if (Param.Name == Name) {
+          DeclaredType = Param.Type;
+          break;
+        }
     if (pointerNeedsIntegerView(DeclaredType))
       return "(uintptr_t)" + Name;
     return Name;

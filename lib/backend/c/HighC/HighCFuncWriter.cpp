@@ -368,7 +368,8 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
         (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
         !isHiddenCopyForwardAssign(S) && !MultiOutputRenderedStmts.count(&S)) {
       const HighExpr *Val = S.Val.get();
-      const bool ResultOmitted = Val && isNoreturnCallExpr(Analysis, *Val);
+      const bool ResultOmitted =
+          Val && (isNoreturnCallExpr(Analysis, *Val) || isVoidSelfCall(*Val));
       if (!ResultOmitted) {
         collectUsedVarsExpr(*S.Dst, UsedVars, VarFn);
         VisibleAssigned.insert(varName(S.Dst->Var));
