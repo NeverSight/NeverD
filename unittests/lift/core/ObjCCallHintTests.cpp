@@ -9598,6 +9598,10 @@ TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
       {"WMFAnnouncementsContentSource",
        "saveAnnouncements:inManagedObjectContext:completion:",
        "v40@0:8@16@24@?32", 3},
+      {"WMFAnnouncementsContentSource",
+       "loadContentForDate:inManagedObjectContext:force:addNewContent:"
+       "completion:",
+       "v48@0:8@16@24B32B36@?40", 3},
       {"WMFOnThisDayContentSource",
        "loadContentForDate:inManagedObjectContext:force:completion:",
        "v44@0:8@16@24B32@?36", 3},
@@ -9611,6 +9615,9 @@ TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
        "loadContentForDate:inManagedObjectContext:force:addNewContent:"
        "completion:",
        "v48@0:8@16@24B32B36@?40", 3},
+      {"WMFRelatedPagesContentSource",
+       "extracted:completion:date:groupURL:moc:",
+       "v56@0:8@16@?24@32@40@48", 6},
       {"WMFNearbyContentSource",
        "removeSectionsForMidnightUTCDate:withKeyNotEqualToKey:"
        "inManagedObjectContext:",
