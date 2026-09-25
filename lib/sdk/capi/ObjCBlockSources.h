@@ -792,8 +792,7 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
                Expr->Var.Id < Function.Params.size() &&
                !State.Locals.count(
                    objc_projection_detail::localIdentity(Expr->Var));
-      if ((Expr->Kind == ExprKind::Cast ||
-           Expr->Kind == ExprKind::BitCast) &&
+      if ((Expr->Kind == ExprKind::Cast || Expr->Kind == ExprKind::BitCast) &&
           Expr->Operands.size() == 1)
         return Visit(Expr->Operands[0], Visit);
       return false;
@@ -916,8 +915,8 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           return false;
         const auto InBlock = [&](int64_t Byte) {
           for (const auto &[Base, Block] : Blocks)
-            if (Byte >= Base &&
-                Byte - Base < static_cast<int64_t>(Block.Descriptor.LiteralSize))
+            if (Byte >= Base && Byte - Base < static_cast<int64_t>(
+                                                  Block.Descriptor.LiteralSize))
               return true;
           return false;
         };
@@ -1088,9 +1087,8 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           // private frame. This applies only to an unchanged entry parameter;
           // a loaded pointer or a reassigned parameter may alias the literal.
           const bool EntryStore =
-              Address.K == Value::Scalar && !pointerIdentity(V) &&
-              S.StoreVal && S.StoreVal->Type &&
-              scalarWidth(S.StoreVal->Type->Size) &&
+              Address.K == Value::Scalar && !pointerIdentity(V) && S.StoreVal &&
+              S.StoreVal->Type && scalarWidth(S.StoreVal->Type->Size) &&
               S.MemoryOrdering == NdMemoryOrdering::None &&
               S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
               UntouchedEntryPointer(S.StoreAddr, UntouchedEntryPointer);

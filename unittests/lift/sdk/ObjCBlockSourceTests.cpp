@@ -1,6 +1,7 @@
 #include "../../../lib/sdk/capi/ObjCBlockSources.h"
-#include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "gtest/gtest.h"
+
+#include "neverd/loader/ObjC/ObjCEncoding.h"
 
 #include "llvm/BinaryFormat/MachO.h"
 using namespace neverd;
@@ -1071,8 +1072,8 @@ TEST(ObjCBlockSources, UntouchedEntryPointerStoresCannotAliasPrivateBlock) {
           << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller)
                                               : "");
       if (Mutation < 2) {
-        const auto Bound = bindObjCBlockSourceReferences(
-            Caller, F.Image, Plan, F.functions());
+        const auto Bound =
+            bindObjCBlockSourceReferences(Caller, F.Image, Plan, F.functions());
         EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
       }
     }
@@ -1088,22 +1089,22 @@ TEST(ObjCBlockSources, SuperMessageBorrowsOnlyDisjointCompleteFrameRecord) {
       Caller.Body.back().Kind = StmtKind::ExprStmt;
       Caller.Body.back().Val = Caller.Body.back().RetVal;
       Caller.Body.back().RetVal.reset();
-      Caller.Body.push_back(store(frame(F.Image, -64),
-                                  parameter(0, Caller.Params[0].Type)));
+      Caller.Body.push_back(
+          store(frame(F.Image, -64), parameter(0, Caller.Params[0].Type)));
       if (Mutation != 2)
-        Caller.Body.push_back(store(
-            frame(F.Image, -56),
-            Mutation == 1 ? frame(F.Image, 0)
-                          : HighExpr::makeConst(0x2800, 8)));
+        Caller.Body.push_back(
+            store(frame(F.Image, -56), Mutation == 1
+                                           ? frame(F.Image, 0)
+                                           : HighExpr::makeConst(0x2800, 8)));
       auto Signature = parseObjCMethodEncoding("dealloc", "v16@0:8");
       ASSERT_TRUE(Signature);
       std::string Error;
       ASSERT_TRUE(assignDarwinObjCSourceABI(*Signature, Architecture, Error))
           << Error;
-      auto Super = HighExpr::makeCall(
-          "objc_msgSendSuper2", 0,
-          {frame(F.Image, Mutation == 3 ? -40 : -64),
-           HighExpr::makeConst(0x2900, 8)});
+      auto Super =
+          HighExpr::makeCall("objc_msgSendSuper2", 0,
+                             {frame(F.Image, Mutation == 3 ? -40 : -64),
+                              HighExpr::makeConst(0x2900, 8)});
       Super->Type = NdType::makeVoid();
       auto Hint = std::make_shared<SourceCallTypeHint>();
       Hint->CallKind = SourceCallTypeHint::Kind::ObjCSuper2;
