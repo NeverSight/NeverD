@@ -231,10 +231,20 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.IntrinsicId == Intrinsic::None && !E.CallTarget.empty())
     if (auto It = DefinedFuncs.find(E.CallTarget); It != DefinedFuncs.end())
       Defined = It->second;
+  // Its printed signature also fixes how many arguments the call passes: a
+  // value past its parameters is not read by it, and a parameter the call
+  // site did not determine is an unknown value.
+  const size_t ArgCount = Defined && !Defined->SourceTypeHint
+                              ? emittedParamCount(*Defined)
+                              : E.Operands.size();
   std::string S = Name + "(";
-  for (size_t I = 0; I < E.Operands.size(); ++I) {
+  for (size_t I = 0; I < ArgCount; ++I) {
     if (I > 0)
       S += ", ";
+    if (I >= E.Operands.size()) {
+      S += "0 /* unknown */";
+      continue;
+    }
     const HighExpr *Op = E.Operands[I].get();
     if (!Op) {
       S += "0";

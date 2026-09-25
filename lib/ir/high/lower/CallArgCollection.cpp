@@ -487,6 +487,29 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
           ? (CurMed->SourceTypeHint ? CurMed->SourceTypeHint->Parameters.size()
                                     : CurMed->Params.size())
           : 0;
+  // A recursive call passes exactly the parameters of the signature it
+  // calls.  A missing register argument is this function's own parameter
+  // when one was recovered for that position, else a value the call site
+  // does not determine.
+  auto MatchOwnSignature = [&](std::vector<ExprPtr> Collected) {
+    if (!SelfCall || !Win64)
+      return Collected;
+    if (Collected.size() > OwnParamCount)
+      Collected.resize(OwnParamCount);
+    for (size_t I = Collected.size(); I < OwnParamCount; ++I) {
+      if (I < CurMed->Params.size() &&
+          CurMed->Params[I].RegOff != kNoParamReg &&
+          CurMed->Params[I].Id >= 0) {
+        MedVar Param = CurMed->Params[I];
+        Param.Kind = MedVar::Param;
+        Param.Id = static_cast<int>(I);
+        Collected.push_back(HighExpr::makeVar(Param, TypeRef{}));
+      } else {
+        Collected.push_back(HighExpr::makeUndef(8));
+      }
+    }
+    return Collected;
+  };
   if (Win64 && CurMed && !SummarizedCallee) {
     size_t FillTo = 0;
     if (!Hinted.empty())
@@ -518,11 +541,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
   auto BoundKnownCalleeArity = [&](std::vector<ExprPtr> Collected) {
     if (CallIdx >= Ops.size())
       return Collected;
-    if (SelfCall && Win64) {
-      if (Collected.size() > OwnParamCount)
-        Collected.resize(OwnParamCount);
-      return Collected;
-    }
+    if (SelfCall && Win64)
+      return MatchOwnSignature(std::move(Collected));
     const MedOp &Call = Ops[CallIdx];
     std::string Name;
     if (Call.SourceCallHint && !Call.SourceCallHint->TargetName.empty())
@@ -560,7 +580,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
           Hinted[I] = Scanned;
       }
     }
-    return Hinted;
+    return MatchOwnSignature(std::move(Hinted));
   }
   Args.clear();
   for (int K = 0; K < MaxArgs; ++K) {
