@@ -206,6 +206,82 @@ bool hasEmbeddedSDWebImageOptionsResult(const BinaryImage &Image) {
   return Factory == 1 && Initializer == 1 && Getter == 1 && Property == 1;
 }
 
+bool hasEmbeddedDDLogFileInfoElement(const BinaryImage &Image,
+                                     const ObjCReceiverTypeHint &Receiver) {
+  // DDLogFileManager.sortedLogFileInfos is declared as
+  // NSArray<DDLogFileInfo *> *. Runtime metadata retains NSArray, but erases
+  // the element class. Only the exact getter result in this method may carry
+  // that element class through NSArray's indexed-subscript operation.
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      Receiver.Origin != ObjCReceiverTypeHint::OriginKind::MethodEntry ||
+      Receiver.ClassName != "DDLogFileManagerDefault" ||
+      Receiver.IsClassMethod || Receiver.Steps.empty() ||
+      Receiver.Steps.size() > 2 ||
+      Receiver.Steps.front().TheKind !=
+          ObjCReceiverTypeHint::TypeStep::Kind::MessageResult ||
+      Receiver.Steps.front().Selector != "sortedLogFileInfos")
+    return false;
+  const ObjCClass *Manager = nullptr;
+  const ObjCClass *Info = nullptr;
+  for (const auto &Class : Image.ObjCClasses) {
+    const ObjCClass **Match = Class.Name == "DDLogFileManagerDefault" ? &Manager
+                              : Class.Name == "DDLogFileInfo"         ? &Info
+                                                                      : nullptr;
+    if (!Match)
+      continue;
+    if (*Match || !Class.Address)
+      return false;
+    *Match = &Class;
+  }
+  if (!Manager || !Info)
+    return false;
+  unsigned Entry = 0, Getter = 0, FileSize = 0, Property = 0;
+  for (const auto &Method : Image.ObjCMethods) {
+    const bool IsEntry = Method.ClassName == Manager->Name &&
+                         Method.Selector == "deleteOldLogFilesWithError:";
+    const bool IsGetter = Method.ClassName == Manager->Name &&
+                          Method.Selector == "sortedLogFileInfos";
+    const bool IsFileSize =
+        Method.ClassName == Info->Name && Method.Selector == "fileSize";
+    if (!IsEntry && !IsGetter && !IsFileSize)
+      continue;
+    if (Method.ClassAddress != (IsFileSize ? Info : Manager)->Address ||
+        Method.CategoryAddress || !Method.CategoryName.empty() ||
+        !Method.MetadataAddress || Method.IsClassMethod ||
+        !objcMethodHasSourceBody(Method) ||
+        !Image.isCodeAddress(Method.Implementation))
+      return false;
+    if (IsEntry) {
+      if (Method.Implementation != Receiver.Address ||
+          Method.TypeEncoding != "B24@0:8^@16")
+        return false;
+      ++Entry;
+    } else if (IsGetter) {
+      if (Method.TypeEncoding != "@16@0:8")
+        return false;
+      ++Getter;
+    } else {
+      if (Method.TypeEncoding != "Q16@0:8")
+        return false;
+      ++FileSize;
+    }
+  }
+  for (const auto &Candidate : Image.ObjCProperties)
+    if (Candidate.Owner == ObjCProperty::OwnerKind::Class &&
+        Candidate.ClassName == Manager->Name &&
+        Candidate.Name == "sortedLogFileInfos") {
+      if (Candidate.OwnerAddress != Manager->Address ||
+          Candidate.Getter != "sortedLogFileInfos" ||
+          Candidate.IsClassProperty || !Candidate.MetadataAddress ||
+          Candidate.Status != "supported" ||
+          Candidate.TypeEncoding != "@\"NSArray\"")
+        return false;
+      ++Property;
+    }
+  return Entry == 1 && Getter == 1 && FileSize == 1 && Property == 1;
+}
+
 bool hasEmbeddedWMFCalendarMethod(const BinaryImage &Image,
                                   llvm::StringRef Selector,
                                   llvm::StringRef Encoding,
@@ -992,12 +1068,25 @@ std::optional<ReceiverType> receiverType(const BinaryImage &Image,
         return std::nullopt;
       const auto Declaration =
           receiverDeclaration(Image, Access.Selector, Result);
+      const bool DDLogFileInfoElement =
+          Receiver.Steps.size() == 2 && &Access == &Receiver.Steps[1] &&
+          Access.Selector == "objectAtIndexedSubscript:" &&
+          Result.ClassName == "NSArray" && !Result.IsClassMethod &&
+          !Result.IsProtocol &&
+          hasEmbeddedDDLogFileInfoElement(Image, Receiver) &&
+          Declaration.Signature && Declaration.Signature->ReturnType &&
+          Declaration.Signature->ReturnType->Kind == NdTypeKind::Ptr &&
+          Declaration.Signature->ReturnType->Size == 8 &&
+          !Declaration.ReturnClass && !Declaration.ReturnProtocol;
       if (!Declaration.Signature || Declaration.RequiresGlobalAgreement ||
-          (!Declaration.ReturnClass && !Declaration.ReturnProtocol) ||
+          (!Declaration.ReturnClass && !Declaration.ReturnProtocol &&
+           !DDLogFileInfoElement) ||
           (Declaration.ReturnClass && Declaration.ReturnProtocol))
         return std::nullopt;
-      if (Declaration.ReturnClass)
-        Result = {*Declaration.ReturnClass, false, true, false};
+      if (Declaration.ReturnClass || DDLogFileInfoElement)
+        Result = {DDLogFileInfoElement ? "DDLogFileInfo"
+                                       : *Declaration.ReturnClass,
+                  false, true, false};
       else if (receiverProtocolKnown(Image, *Declaration.ReturnProtocol))
         Result = {*Declaration.ReturnProtocol, false, false, true};
       else
@@ -1352,8 +1441,16 @@ objcReceiverCallResultTypeHint(const BinaryImage &Image,
     return std::nullopt;
   const auto Declaration =
       objcReceiverSourceTypeHint(Image, Selector, Receiver);
+  const bool DDLogFileInfoElement =
+      Receiver.Steps.size() == 1 && Selector == "objectAtIndexedSubscript:" &&
+      hasEmbeddedDDLogFileInfoElement(Image, Receiver) &&
+      Declaration.Signature && Declaration.Signature->ReturnType &&
+      Declaration.Signature->ReturnType->Kind == NdTypeKind::Ptr &&
+      Declaration.Signature->ReturnType->Size == 8 &&
+      !Declaration.ReturnClass && !Declaration.ReturnProtocol;
   if (!Declaration.Signature || Declaration.RequiresGlobalAgreement ||
-      (!Declaration.ReturnClass && !Declaration.ReturnProtocol) ||
+      (!Declaration.ReturnClass && !Declaration.ReturnProtocol &&
+       !DDLogFileInfoElement) ||
       (Declaration.ReturnClass && Declaration.ReturnProtocol))
     return std::nullopt;
   auto Result = Receiver;

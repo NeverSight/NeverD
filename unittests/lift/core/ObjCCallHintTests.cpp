@@ -9464,6 +9464,99 @@ TEST(ObjCCallHints, DDFileLoggerParameterQualifiesFileSize) {
   Rejected(Changed);
 }
 
+TEST(ObjCCallHints, DDLogFileManagerArrayElementQualifiesFileSize) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass NSObject;
+  NSObject.Name = "NSObject";
+  NSObject.Address = 0x2200;
+  NSObject.RootClass = true;
+  NSObject.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(NSObject);
+  ObjCClass Manager;
+  Manager.Name = "DDLogFileManagerDefault";
+  Manager.Address = 0x2300;
+  Manager.SuperclassName = "NSObject";
+  Manager.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Manager);
+  ObjCClass Info = Manager;
+  Info.Name = "DDLogFileInfo";
+  Info.Address = 0x2500;
+  Image.ObjCClasses.push_back(Info);
+  auto AddMethod = [&](llvm::StringRef ClassName, va_t ClassAddress,
+                       llvm::StringRef Selector, llvm::StringRef Encoding,
+                       va_t Entry, va_t Metadata) {
+    ObjCMethod Method;
+    Method.ClassName = ClassName.str();
+    Method.ClassAddress = ClassAddress;
+    Method.Selector = Selector.str();
+    Method.TypeEncoding = Encoding.str();
+    Method.Implementation = Entry;
+    Method.MetadataAddress = Metadata;
+    Method.Status = "supported";
+    Method.TypeHint = parseObjCMethodEncoding(Selector, Encoding);
+    EXPECT_TRUE(Method.TypeHint);
+    Image.ObjCMethods.push_back(std::move(Method));
+  };
+  AddMethod(Manager.Name, Manager.Address,
+            "deleteOldLogFilesWithError:", "B24@0:8^@16", 0x1200, 0x2400);
+  AddMethod(Manager.Name, Manager.Address, "sortedLogFileInfos", "@16@0:8",
+            0x1400, 0x2410);
+  AddMethod(Info.Name, Info.Address, "fileSize", "Q16@0:8", 0x1500, 0x2600);
+  ObjCProperty Property;
+  Property.Owner = ObjCProperty::OwnerKind::Class;
+  Property.OwnerAddress = Manager.Address;
+  Property.ClassName = Manager.Name;
+  Property.Name = "sortedLogFileInfos";
+  Property.Getter = Property.Name;
+  Property.TypeEncoding = "@\"NSArray\"";
+  Property.MetadataAddress = 0x2700;
+  Property.Status = "supported";
+  Property.GetterTypeHint = parseObjCMethodEncoding(Property.Getter, "@16@0:8");
+  ASSERT_TRUE(Property.GetterTypeHint);
+  Image.ObjCProperties.push_back(Property);
+
+  const auto Root = objcMethodReceiverTypeHint(Image, 0x1200);
+  ASSERT_TRUE(Root);
+  const auto Array =
+      objcReceiverCallResultTypeHint(Image, *Root, "sortedLogFileInfos");
+  ASSERT_TRUE(Array);
+  ASSERT_EQ(Array->Steps.size(), 1U);
+  const auto Element = objcReceiverCallResultTypeHint(
+      Image, *Array, "objectAtIndexedSubscript:");
+  ASSERT_TRUE(Element);
+  ASSERT_EQ(Element->Steps.size(), 2U);
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Element));
+  const auto Size = objcReceiverSourceTypeHint(Image, "fileSize", *Element);
+  ASSERT_TRUE(Size.Signature);
+  ASSERT_TRUE(Size.Signature->ReturnType);
+  EXPECT_EQ(Size.Signature->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Size.Signature->ReturnType->Size, 8U);
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Element));
+    EXPECT_FALSE(
+        objcReceiverSourceTypeHint(Changed, "fileSize", *Element).Signature);
+  };
+  auto Changed = Image;
+  Changed.ObjCProperties[0].TypeEncoding = "@\"NSString\"";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "v24@0:8^@16";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].MetadataAddress = 0;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[2].TypeEncoding = "d16@0:8";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCProperties.push_back(Property);
+  Rejected(Changed);
+}
+
 TEST(ObjCCallHints, SDImageLoaderErrorReceiverSelectsNSErrorCode) {
   auto Image = image();
   Image.ObjCMethods.clear();
