@@ -9291,6 +9291,81 @@ TEST(ObjCCallHints, WMFCalendarComponentsNeedsEmbeddedCategoryEvidence) {
   Rejected(Changed);
 }
 
+TEST(ObjCCallHints, MWKLanguageLinkArrayResultsNeedEmbeddedDeclarations) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Owner;
+  Owner.Name = "MWKLanguageLinkController";
+  Owner.Address = 0x2300;
+  Owner.SuperclassName = "NSObject";
+  Owner.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Owner);
+  ObjCMethod Caller;
+  Caller.ClassName = Owner.Name;
+  Caller.ClassAddress = Owner.Address;
+  Caller.MetadataAddress = 0x2410;
+  Caller.Selector = "testArrayResults";
+  Caller.TypeEncoding = "v16@0:8";
+  Caller.Implementation = 0x1200;
+  Caller.Status = "supported";
+  Caller.TypeHint =
+      parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+  ASSERT_TRUE(Caller.TypeHint);
+  Image.ObjCMethods.push_back(Caller);
+  ObjCMethod Read = Caller;
+  Read.Selector = "readPreferredLanguageCodes";
+  Read.TypeEncoding = "@16@0:8";
+  Read.MetadataAddress = 0x2420;
+  Read.Implementation = 0x1300;
+  Read.TypeHint = parseObjCMethodEncoding(Read.Selector, Read.TypeEncoding);
+  ASSERT_TRUE(Read.TypeHint);
+  Image.ObjCMethods.push_back(Read);
+  ObjCMethod All = Read;
+  All.Selector = "allLanguages";
+  All.MetadataAddress = 0x2430;
+  All.Implementation = 0x1400;
+  Image.ObjCMethods.push_back(All);
+  ObjCMethod ClassAll = All;
+  ClassAll.IsClassMethod = true;
+  ClassAll.MetadataAddress = 0x2440;
+  ClassAll.Implementation = 0x1500;
+  Image.ObjCMethods.push_back(ClassAll);
+
+  const auto Receiver = objcMethodReceiverTypeHint(Image, 0x1200);
+  ASSERT_TRUE(Receiver);
+  for (const auto *Selector : {"readPreferredLanguageCodes", "allLanguages"}) {
+    SCOPED_TRACE(Selector);
+    const auto Array =
+        objcReceiverCallResultTypeHint(Image, *Receiver, Selector);
+    ASSERT_TRUE(Array);
+    const auto Enumeration = objcReceiverSourceTypeHint(
+        Image, "enumerateObjectsUsingBlock:", *Array);
+    ASSERT_TRUE(Enumeration.Signature);
+  }
+  Image.ObjCSourceReferences[0x2120] = {ObjCSourceReference::Kind::Class,
+                                        0x2120, 8, Owner.Name};
+  const ObjCReceiverTypeHint ClassReference{
+      ObjCReceiverTypeHint::OriginKind::ClassReference, 0x2120, Owner.Name,
+      true};
+  EXPECT_TRUE(
+      objcReceiverCallResultTypeHint(Image, ClassReference, "allLanguages"));
+
+  auto Changed = Image;
+  Changed.ObjCMethods[1].TypeEncoding = "v16@0:8";
+  EXPECT_FALSE(objcReceiverCallResultTypeHint(
+      Changed, *Receiver, "readPreferredLanguageCodes"));
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Read);
+  EXPECT_FALSE(objcReceiverCallResultTypeHint(
+      Changed, *Receiver, "readPreferredLanguageCodes"));
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  EXPECT_FALSE(objcReceiverCallResultTypeHint(
+      Changed, *Receiver, "readPreferredLanguageCodes"));
+}
+
 TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   auto Image = image();
   Image.ObjCMethods.clear();

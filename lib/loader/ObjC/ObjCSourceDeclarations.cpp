@@ -315,6 +315,43 @@ bool hasEmbeddedWMFCalendarMethod(const BinaryImage &Image,
   return Matches == 1;
 }
 
+bool hasEmbeddedMWKLanguageLinkArrayResult(const BinaryImage &Image,
+                                           llvm::StringRef Selector,
+                                           bool IsClassMethod) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 ||
+      (Selector != "readPreferredLanguageCodes" &&
+       Selector != "allLanguages") ||
+      (Selector == "readPreferredLanguageCodes" && IsClassMethod))
+    return false;
+  const auto Array =
+      objc::sdkReceiverDeclarations(Image, "NSArray", false, false, {});
+  if (!Array.Present || !Array.Complete)
+    return false;
+  const ObjCClass *Owner = nullptr;
+  for (const auto &Class : Image.ObjCClasses)
+    if (Class.Name == "MWKLanguageLinkController") {
+      if (Owner)
+        return false;
+      Owner = &Class;
+    }
+  if (!Owner || !Owner->Address)
+    return false;
+  unsigned Matches = 0;
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.ClassName == Owner->Name && Method.Selector == Selector &&
+        Method.IsClassMethod == IsClassMethod) {
+      if (Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
+          !Method.CategoryName.empty() || !Method.MetadataAddress ||
+          Method.TypeEncoding != "@16@0:8" ||
+          !objcMethodHasSourceBody(Method) ||
+          !Image.isCodeAddress(Method.Implementation))
+        return false;
+      ++Matches;
+    }
+  return Matches == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -1536,6 +1573,12 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
               (Selector == "wmf_gregorianCalendar" ||
                Selector == "wmf_utcGregorianCalendar") &&
               hasEmbeddedWMFCalendarMethod(Image, Selector, "@16@0:8", true);
+          // The Objective-C encoding erases NSArray from these three
+          // MWKLanguageLinkController source declarations.
+          const bool MWKLanguageArrayResult =
+              Name == "MWKLanguageLinkController" &&
+              hasEmbeddedMWKLanguageLinkArrayResult(Image, Selector,
+                                                     Type.IsClassMethod);
           Include(Method.TypeHint,
                   SDWebImageResult
                       ? std::optional<std::string>("SDWebImageOptionsResult")
@@ -1543,6 +1586,8 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
                       ? std::optional<std::string>("NSDateComponents")
                   : WMFCalendarFactory
                       ? std::optional<std::string>("NSCalendar")
+                  : MWKLanguageArrayResult
+                      ? std::optional<std::string>("NSArray")
                       : declaredReturnClass(Method.TypeEncoding),
                   declaredReturnProtocol(Method.TypeEncoding));
         }
