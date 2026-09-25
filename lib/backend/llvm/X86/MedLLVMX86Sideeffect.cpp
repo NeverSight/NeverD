@@ -746,8 +746,8 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
     if (Op.NumInputs != 2)
       llvm::report_fatal_error("x86 POPF has no EFLAGS image");
     const bool Wide = TargetArch == Arch::X64;
-    auto *AsmTy = Wide ? llvm::Type::getInt64Ty(*Ctx)
-                       : llvm::Type::getInt32Ty(*Ctx);
+    auto *AsmTy =
+        Wide ? llvm::Type::getInt64Ty(*Ctx) : llvm::Type::getInt32Ty(*Ctx);
     llvm::Value *Flags =
         Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), AsmTy);
     auto *FnTy =
@@ -774,9 +774,9 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
         Builder.CreateTrunc(Builder.CreateLShr(Value, 32), I32Ty, "msr_hi");
     auto *FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
                                          {I32Ty, I32Ty, I32Ty}, false);
-    auto *IA = llvm::InlineAsm::get(FnTy, "wrmsr",
-                                    "{ecx},{eax},{edx},~{memory}",
-                                    /*hasSideEffects=*/true);
+    auto *IA =
+        llvm::InlineAsm::get(FnTy, "wrmsr", "{ecx},{eax},{edx},~{memory}",
+                             /*hasSideEffects=*/true);
     Builder.CreateCall(IA, {Selector, Lo, Hi});
     return true;
   }

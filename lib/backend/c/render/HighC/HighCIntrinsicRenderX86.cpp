@@ -1004,10 +1004,9 @@ std::string renderX86InterruptStatement(
     // ordinary C after the block.
     if (ResultVar.empty())
       return renderX86InterruptAsm(0, Inputs, "", Reg, "syscall");
-    std::string Block = renderX86InterruptAsm(0, Inputs, "_rax", "rax",
-                                              "syscall");
-    Block.insert(Block.rfind('}'),
-                 "    " + ResultVar.str() + " = _rax;\n");
+    std::string Block =
+        renderX86InterruptAsm(0, Inputs, "_rax", "rax", "syscall");
+    Block.insert(Block.rfind('}'), "    " + ResultVar.str() + " = _rax;\n");
     return Block;
   }
   if (Call.IntrinsicId != Intrinsic::IntN || Call.Operands.size() != 1 ||

@@ -43,16 +43,14 @@ struct Machine {
   // The masked bits of a memory value, which must not depend on any machine
   // input: evaluated with every input all-zeros and again all-ones.
   uint64_t getMemoryBits(uint64_t Address, unsigned Size, uint64_t Mask) {
-    const SymRef Masked =
-        Ctx.mkAnd(State.load(Ctx.mkConst(64, Address), Size),
-                  Ctx.mkConst(Size * 8, Mask));
+    const SymRef Masked = Ctx.mkAnd(State.load(Ctx.mkConst(64, Address), Size),
+                                    Ctx.mkConst(Size * 8, Mask));
     llvm::SmallVector<uint32_t, 4> Vars;
     Ctx.collectVars(Masked, Vars);
     uint32_t Count = 0;
     for (uint32_t Var : Vars)
       Count = std::max(Count, Var + 1);
-    const uint64_t Zeros =
-        Ctx.evalU64(Masked, std::vector<uint64_t>(Count, 0));
+    const uint64_t Zeros = Ctx.evalU64(Masked, std::vector<uint64_t>(Count, 0));
     const uint64_t Ones =
         Ctx.evalU64(Masked, std::vector<uint64_t>(Count, ~uint64_t{0}));
     EXPECT_EQ(Zeros, Ones) << Ctx.toString(Masked);

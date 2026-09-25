@@ -621,14 +621,13 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
     std::vector<llvm::Value *> Vals;
     for (uint16_t I = 1; I < Op.NumInputs; ++I)
-      Vals.push_back(Builder.CreateZExtOrTrunc(getVar(Op.Inputs[I], Builder),
-                                               I64Ty));
+      Vals.push_back(
+          Builder.CreateZExtOrTrunc(getVar(Op.Inputs[I], Builder), I64Ty));
     std::vector<llvm::Type *> Tys(Vals.size(), I64Ty);
     auto *FnTy = llvm::FunctionType::get(I64Ty, Tys, false);
-    auto *IA = llvm::InlineAsm::get(
-        FnTy, "syscall",
-        "={rax},{rax},~{rcx},~{r11},~{memory}",
-        /*hasSideEffects=*/true);
+    auto *IA = llvm::InlineAsm::get(FnTy, "syscall",
+                                    "={rax},{rax},~{rcx},~{r11},~{memory}",
+                                    /*hasSideEffects=*/true);
     llvm::CallInst *Result = Builder.CreateCall(IA, Vals, "syscall");
     llvm_value_provenance::markSemanticProducer(*Result);
     return Builder.CreateZExtOrTrunc(Result, sizeToType(Op.Output.Size));
@@ -645,14 +644,13 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     llvm::Value *Selector =
         Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), I32Ty);
     auto *FnTy = llvm::FunctionType::get(I64Ty, {I32Ty}, false);
-    auto *IA =
-        TargetArch == Arch::X64
-            ? llvm::InlineAsm::get(FnTy,
-                                   "rdmsr\n\tshlq $$32, %rdx\n\torq %rdx, %rax",
-                                   "={rax},{ecx},~{rdx},~{memory}",
-                                   /*hasSideEffects=*/true)
-            : llvm::InlineAsm::get(FnTy, "rdmsr", "=A,{ecx},~{memory}",
-                                   /*hasSideEffects=*/true);
+    auto *IA = TargetArch == Arch::X64
+                   ? llvm::InlineAsm::get(
+                         FnTy, "rdmsr\n\tshlq $$32, %rdx\n\torq %rdx, %rax",
+                         "={rax},{ecx},~{rdx},~{memory}",
+                         /*hasSideEffects=*/true)
+                   : llvm::InlineAsm::get(FnTy, "rdmsr", "=A,{ecx},~{memory}",
+                                          /*hasSideEffects=*/true);
     llvm::Value *Value = Builder.CreateCall(IA, {Selector}, "msr");
     return Builder.CreateZExtOrTrunc(Value, sizeToType(Op.Output.Size));
   }
@@ -705,12 +703,12 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   // modelled arithmetic flags.
   if (IC == I::Pushf && Op.Output.Size > 0) {
     const bool Wide = TargetArch == Arch::X64;
-    auto *AsmTy = Wide ? llvm::Type::getInt64Ty(*Ctx)
-                       : llvm::Type::getInt32Ty(*Ctx);
+    auto *AsmTy =
+        Wide ? llvm::Type::getInt64Ty(*Ctx) : llvm::Type::getInt32Ty(*Ctx);
     auto *FnTy = llvm::FunctionType::get(AsmTy, false);
     auto *IA = llvm::InlineAsm::get(
-        FnTy, Wide ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0",
-        "=r,~{memory}", /*hasSideEffects=*/true);
+        FnTy, Wide ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0", "=r,~{memory}",
+        /*hasSideEffects=*/true);
     llvm::Value *Flags = Builder.CreateCall(IA, {}, "eflags");
     return Builder.CreateZExtOrTrunc(Flags, sizeToType(Op.Output.Size));
   }

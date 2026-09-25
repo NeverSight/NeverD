@@ -4253,8 +4253,8 @@ TEST(HighCPointerAddresses, MergedXmm0ResultIsTheDoubleReturnValue) {
       << HighC;
   EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(\(double\)\(int64_t\))")))
       << HighC;
-  EXPECT_TRUE(
-      std::regex_search(HighC, std::regex(R"(return __builtin_bit_cast\(double)")))
+  EXPECT_TRUE(std::regex_search(
+      HighC, std::regex(R"(return __builtin_bit_cast\(double)")))
       << HighC;
   expectCompilesForMsvc(HighC);
 }
@@ -4285,10 +4285,10 @@ TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
   // RAX under every operating system's convention.  The `mov eax` must not be
   // dropped, and the status must be an ordinary C assignment.
   constexpr va_t Entry = 0x140001000;
-  const std::vector<uint8_t> Code = {
-      0xb8, 0x55, 0x00, 0x00, 0x00, // mov eax, 55h
-      0x0f, 0x05,                   // syscall
-      0xc3};
+  const std::vector<uint8_t> Code = {0xb8, 0x55, 0x00,
+                                     0x00, 0x00, // mov eax, 55h
+                                     0x0f, 0x05, // syscall
+                                     0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   const std::string LLVMC =
@@ -4299,8 +4299,7 @@ TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
     EXPECT_NE(Source->find("mov _rax, rax"), std::string::npos) << *Source;
     EXPECT_TRUE(std::regex_search(*Source, std::regex(R"(\w+ = _rax;)")))
         << *Source;
-    EXPECT_EQ(Source->find("void sub_140001000"), std::string::npos)
-        << *Source;
+    EXPECT_EQ(Source->find("void sub_140001000"), std::string::npos) << *Source;
   }
   EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(_rax = .*\b(85|0x55)\b)")))
       << HighC;
@@ -4332,12 +4331,11 @@ TEST(HighCPointerAddresses, PopfRestoresSystemFlags) {
   // EFLAGS image.  The system flags are not modelled as registers, so the
   // save must read the machine flags and the restore must write them back.
   constexpr va_t Entry = 0x140001000;
-  const std::vector<uint8_t> Code = {
-      0x9c,             // pushfq
-      0xfa,             // cli
-      0x48, 0x8b, 0x01, // mov rax, [rcx]
-      0x9d,             // popfq
-      0xc3};
+  const std::vector<uint8_t> Code = {0x9c,             // pushfq
+                                     0xfa,             // cli
+                                     0x48, 0x8b, 0x01, // mov rax, [rcx]
+                                     0x9d,             // popfq
+                                     0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   const std::string LLVMC =
