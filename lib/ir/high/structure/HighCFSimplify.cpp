@@ -1445,7 +1445,17 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           !L[I].Body.empty() && !L[I].ElseBody.empty() &&
           (isTerminator(L[I].Body.back()) ||
            L[I].Body.back().Kind == StmtKind::Break ||
-           L[I].Body.back().Kind == StmtKind::Continue)) {
+           L[I].Body.back().Kind == StmtKind::Continue) &&
+          // T13's shape: the arm exits to the label right after the if/else,
+          // which the fall-through rewrite still has to absorb.
+          !(I + 1 < L.size() && labelStart(L, I + 1) && [&] {
+            bool Exits = false;
+            walkStmts(L[I].Body, [&](const HighStmt &S) {
+              Exits |=
+                  S.Kind == StmtKind::Goto && S.GotoTarget == L[I + 1].Addr;
+            });
+            return Exits;
+          }())) {
         std::vector<HighStmt> Tail = std::move(L[I].ElseBody);
         L[I].ElseBody.clear();
         L[I].Kind = StmtKind::If;
