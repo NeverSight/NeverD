@@ -388,6 +388,39 @@ bool hasEmbeddedWMFContentGroupArrayResult(const BinaryImage &Image,
   return Matches == 1;
 }
 
+bool hasEmbeddedSDCallbackQueueAsync(const BinaryImage &Image) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  const ObjCClass *Owner = nullptr;
+  for (const auto &Class : Image.ObjCClasses)
+    if (Class.Name == "SDCallbackQueue") {
+      if (Owner)
+        return false;
+      Owner = &Class;
+    }
+  if (!Owner || !Owner->Address)
+    return false;
+  unsigned Async = 0, MainQueue = 0;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.ClassName != Owner->Name)
+      continue;
+    const bool IsAsync = Method.Selector == "async:";
+    const bool IsMainQueue = Method.Selector == "mainQueue";
+    if (!IsAsync && !IsMainQueue)
+      continue;
+    if (Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
+        !Method.CategoryName.empty() || !Method.MetadataAddress ||
+        Method.IsClassMethod != IsMainQueue ||
+        Method.TypeEncoding != (IsAsync ? "v24@0:8@?16" : "@16@0:8") ||
+        !objcMethodHasSourceBody(Method) ||
+        !Image.isCodeAddress(Method.Implementation))
+      return false;
+    ++(IsAsync ? Async : MainQueue);
+  }
+  return Async == 1 && MainQueue == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -874,6 +907,73 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry)
     return std::nullopt;
+  // SDWebImage 5.21.3 UIView+WebCache.m declares both indicator queue inputs
+  // as SDCallbackQueue *. Linker category merging can change the category
+  // name, so authenticate the two embedded UIView methods together.
+  const bool IndicatorEntry =
+      Parameter == 2 &&
+      std::any_of(
+          Image.ObjCMethods.begin(), Image.ObjCMethods.end(),
+          [&](const ObjCMethod &Method) {
+            return Method.Implementation == Entry &&
+                   Method.ClassName == "UIView" &&
+                   (Method.Selector == "sd_startImageIndicatorWithQueue:" ||
+                    Method.Selector == "sd_stopImageIndicatorWithQueue:");
+          });
+  if (IndicatorEntry && hasEmbeddedSDCallbackQueueAsync(Image)) {
+    const auto View =
+        objc::sdkReceiverDeclarations(Image, "UIView", false, false, {});
+    if (View.Present && View.Complete) {
+      const ObjCMethod *Found = nullptr;
+      va_t CategoryAddress = 0;
+      std::string CategoryName;
+      unsigned Start = 0, Stop = 0;
+      for (const auto &Method : Image.ObjCMethods) {
+        if (Method.ClassName != "UIView" ||
+            (Method.Selector != "sd_startImageIndicatorWithQueue:" &&
+             Method.Selector != "sd_stopImageIndicatorWithQueue:"))
+          continue;
+        if (!Method.CategoryAddress || Method.CategoryName.empty() ||
+            !Method.MetadataAddress || Method.IsClassMethod ||
+            Method.TypeEncoding != "v24@0:8@16" ||
+            !objcMethodHasSourceBody(Method) ||
+            !Image.isCodeAddress(Method.Implementation) ||
+            (CategoryAddress && CategoryAddress != Method.CategoryAddress) ||
+            (!CategoryName.empty() && CategoryName != Method.CategoryName))
+          return std::nullopt;
+        CategoryAddress = Method.CategoryAddress;
+        CategoryName = Method.CategoryName;
+        if (Method.Selector == "sd_startImageIndicatorWithQueue:")
+          ++Start;
+        else
+          ++Stop;
+        if (Method.Implementation == Entry) {
+          if (Found)
+            return std::nullopt;
+          Found = &Method;
+        }
+      }
+      if (Found && Start == 1 && Stop == 1) {
+        const auto Signature = objcMethodSourceTypeHint(Image, Entry);
+        if (!Signature || Signature->Parameters.size() != 3 ||
+            !Signature->Parameters[Parameter].Type ||
+            Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
+            Signature->Parameters[Parameter].Type->Size != 8 ||
+            Signature->Parameters[Parameter].Location.Kind !=
+                SourceABICarrierKind::IntegerRegister ||
+            Signature->Parameters[Parameter].Location.RegisterOffset !=
+                getTargetRegInfo(Arch::AArch64).IntParamRegs[Parameter] ||
+            Signature->Parameters[Parameter].Location.ValueBytes != 8)
+          return std::nullopt;
+        ObjCReceiverTypeHint Result;
+        Result.Origin = ObjCReceiverTypeHint::OriginKind::MethodParameter;
+        Result.Address = Entry;
+        Result.ClassName = "SDCallbackQueue";
+        Result.SourceParameter = Parameter;
+        return Result;
+      }
+    }
+  }
   // These WMF source declarations name an NSManagedObjectContext argument,
   // although the Objective-C method encoding retains only its object carrier.
   // Keep the exact owner, selector, encoding and parameter position together;
@@ -1860,6 +1960,24 @@ objcBlockParameterContract(const BinaryImage &Image,
     }
     return false;
   };
+
+  // SDCallbackQueue.async: either invokes the block immediately or hands it
+  // to dispatch_async, which copies it. Match the embedded class and method
+  // declaration before giving a stack block this escaping lifetime proof.
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol && Type->ClassName == "SDCallbackQueue" &&
+      Call.Selector == "async:" && Parameter == 2 &&
+      hasEmbeddedSDCallbackQueueAsync(Image)) {
+    auto Parent = parseObjCMethodEncoding("async:", "v24@0:8@?16");
+    std::string Error;
+    auto Callback = parseObjCBlockSignature("v8@?0", Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+  }
 
   // FLAnimatedImage's logging implementation invokes the supplied string
   // producer before returning and never retains it. Its public source and the

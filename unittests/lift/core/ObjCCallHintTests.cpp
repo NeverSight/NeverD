@@ -9685,6 +9685,93 @@ TEST(ObjCCallHints, WMFAnnouncementFilterArrayParameterQualifiesSelection) {
   Rejected(Changed);
 }
 
+TEST(ObjCCallHints, SDWebImageIndicatorQueueParameterQualifiesAsyncBlock) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation",
+      "/System/Library/Frameworks/UIKit.framework/UIKit"};
+  ObjCClass Queue;
+  Queue.Name = "SDCallbackQueue";
+  Queue.Address = 0x2300;
+  Queue.SuperclassName = "NSObject";
+  Queue.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Queue);
+  ObjCMethod Async;
+  Async.ClassName = Queue.Name;
+  Async.ClassAddress = Queue.Address;
+  Async.MetadataAddress = 0x2400;
+  Async.Selector = "async:";
+  Async.TypeEncoding = "v24@0:8@?16";
+  Async.Implementation = 0x1400;
+  Async.Status = "supported";
+  Async.TypeHint = parseObjCMethodEncoding(Async.Selector, Async.TypeEncoding);
+  ASSERT_TRUE(Async.TypeHint);
+  Image.ObjCMethods.push_back(Async);
+  ObjCMethod MainQueue = Async;
+  MainQueue.MetadataAddress = 0x2410;
+  MainQueue.Selector = "mainQueue";
+  MainQueue.TypeEncoding = "@16@0:8";
+  MainQueue.IsClassMethod = true;
+  MainQueue.Implementation = 0x1500;
+  MainQueue.TypeHint =
+      parseObjCMethodEncoding(MainQueue.Selector, MainQueue.TypeEncoding);
+  ASSERT_TRUE(MainQueue.TypeHint);
+  Image.ObjCMethods.push_back(MainQueue);
+  ObjCMethod Indicator;
+  Indicator.ClassName = "UIView";
+  Indicator.CategoryName = "WMFDefaultNib";
+  Indicator.CategoryAddress = 0x2500;
+  Indicator.MetadataAddress = 0x2510;
+  Indicator.Selector = "sd_startImageIndicatorWithQueue:";
+  Indicator.TypeEncoding = "v24@0:8@16";
+  Indicator.Implementation = 0x1200;
+  Indicator.Status = "supported";
+  Indicator.TypeHint =
+      parseObjCMethodEncoding(Indicator.Selector, Indicator.TypeEncoding);
+  ASSERT_TRUE(Indicator.TypeHint);
+  Image.ObjCMethods.push_back(Indicator);
+  ObjCMethod Stop = Indicator;
+  Stop.MetadataAddress = 0x2520;
+  Stop.Selector = "sd_stopImageIndicatorWithQueue:";
+  Stop.Implementation = 0x1300;
+  Stop.TypeHint = parseObjCMethodEncoding(Stop.Selector, Stop.TypeEncoding);
+  ASSERT_TRUE(Stop.TypeHint);
+  Image.ObjCMethods.push_back(Stop);
+
+  for (va_t Entry : {va_t{0x1200}, va_t{0x1300}}) {
+    const auto Root = objcMethodParameterReceiverTypeHint(Image, Entry, 2);
+    ASSERT_TRUE(Root);
+    EXPECT_EQ(Root->ClassName, "SDCallbackQueue");
+    EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+    const auto Declaration = objcReceiverSourceTypeHint(Image, "async:", *Root);
+    ASSERT_TRUE(Declaration.Signature);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "async:";
+    Call.Receiver = *Root;
+    Call.Signature = *Declaration.Signature;
+    const auto Contract = objcBlockParameterContract(Image, Call, 2);
+    ASSERT_TRUE(Contract);
+    EXPECT_EQ(Contract->Storage, ObjCBlockParameterContract::Lifetime::Copied);
+  }
+  auto Changed = Image;
+  Changed.ObjCMethods[2].TypeEncoding = "v16@0:8";
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCMethods[3].CategoryAddress = 0x2600;
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "v16@0:8";
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Async);
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+}
+
 TEST(ObjCCallHints, RecentSearchArrayParameterQualifiesSelectionBlock) {
   auto Image = image();
   Image.ObjCMethods.clear();
