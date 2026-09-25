@@ -172,6 +172,33 @@ parseObjCBlockSignature(llvm::StringRef Signature, Arch Architecture,
   return Hint;
 }
 
+std::optional<std::string>
+objcBlockObjectParameterClass(llvm::StringRef Signature, unsigned Parameter) {
+  if (!Parameter || Parameter >= 64 || Signature.empty() ||
+      Signature.size() > 4096)
+    return std::nullopt;
+  size_t Offset = 0;
+  if (!parseObjCScalarType(Signature, Offset) ||
+      !skipOffset(Signature, Offset) ||
+      !Signature.substr(Offset).starts_with("@?"))
+    return std::nullopt;
+  Offset += 2;
+  if (!skipOffset(Signature, Offset))
+    return std::nullopt;
+  std::optional<std::string> Result;
+  for (unsigned Index = 1; Offset < Signature.size() && Index < 64; ++Index) {
+    const size_t Start = Offset;
+    const auto Type = parseObjCScalarType(Signature, Offset);
+    if (!Type || Type->Kind == NdTypeKind::Void)
+      return std::nullopt;
+    if (Index == Parameter)
+      Result = objcEncodedObjectClass(Signature.slice(Start, Offset));
+    if (!skipOffset(Signature, Offset))
+      return std::nullopt;
+  }
+  return Offset == Signature.size() ? Result : std::nullopt;
+}
+
 std::optional<ObjCBlockDescriptor>
 readObjCBlockDescriptor(const BinaryImage &Image, va_t Address, uint32_t Flags,
                         std::string &Diagnostic) {

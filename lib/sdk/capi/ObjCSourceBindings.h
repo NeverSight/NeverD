@@ -34,12 +34,14 @@
 
 namespace neverd::sdk {
 
-inline bool
-objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
-                    const std::map<va_t, const HighFunc *> &Functions,
-                    const ObjCProfileStorage *ProfileStorage,
-                    const std::set<const HighExpr *> *ReadOnlyHelpers,
-                    const HighFunc *ContainingFunction);
+inline bool objcSourceCallBound(
+    const HighExpr &Expression, const BinaryImage &Image,
+    const std::map<va_t, const HighFunc *> &Functions,
+    const ObjCProfileStorage *ProfileStorage = nullptr,
+    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr,
+    const HighFunc *ContainingFunction = nullptr,
+    const std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
+        *BlockParameterReceivers = nullptr);
 
 struct ObjCSourceBindingResult {
   HighFunc Function;
@@ -467,9 +469,8 @@ associationKeyHint(const BinaryImage &Image, va_t Address,
       !Segment->isReadable() || Section->isExecutable() ||
       Segment->isExecutable() || !Image.readVA(Address, 1))
     return std::nullopt;
-  const bool Writable =
-      (Section->isWritable() || Segment->isWritable()) &&
-      !Segment->ReadOnlyAfterRelocations;
+  const bool Writable = (Section->isWritable() || Segment->isWritable()) &&
+                        !Segment->ReadOnlyAfterRelocations;
   if (Writable && !AllowWritable)
     return std::nullopt;
   const bool CString = (Section->Type & llvm::MachO::SECTION_TYPE) ==
@@ -4065,12 +4066,14 @@ privateFrameArgumentOffset(const ExprPtr &Argument, const HighFunc &Function,
   return Offset;
 }
 
-inline bool
-objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
-                    const std::map<va_t, const HighFunc *> &Functions,
-                    const ObjCProfileStorage *ProfileStorage = nullptr,
-                    const std::set<const HighExpr *> *ReadOnlyHelpers = nullptr,
-                    const HighFunc *ContainingFunction = nullptr) {
+inline bool objcSourceCallBound(
+    const HighExpr &Expression, const BinaryImage &Image,
+    const std::map<va_t, const HighFunc *> &Functions,
+    const ObjCProfileStorage *ProfileStorage,
+    const std::set<const HighExpr *> *ReadOnlyHelpers,
+    const HighFunc *ContainingFunction,
+    const std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
+        *BlockParameterReceivers) {
   using namespace objc_binding_detail;
   if (Expression.Kind != ExprKind::Call || !Expression.SourceCallHint ||
       Expression.IntrinsicId != Intrinsic::None ||
@@ -4978,6 +4981,24 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
     return Expected && runtimeBindingMatches(Binding, *Expected);
   }
   if (Binding.Receiver) {
+    if (Binding.Receiver->Origin ==
+            ObjCReceiverTypeHint::OriginKind::BlockParameter &&
+        BlockParameterReceivers) {
+      if (!ContainingFunction)
+        return false;
+      const auto Function =
+          BlockParameterReceivers->find(ContainingFunction->Entry);
+      if (Function == BlockParameterReceivers->end())
+        return false;
+      const auto Parameter =
+          Function->second.find(Binding.Receiver->SourceParameter);
+      if (Parameter == Function->second.end())
+        return false;
+      auto Root = *Binding.Receiver;
+      Root.Steps.clear();
+      if (!(Root == Parameter->second))
+        return false;
+    }
     const auto Expected =
         Binding.ObjCIndirectResultStorage
             ? objcNonNilSelfSourceTypeHint(Image, Binding.Selector,

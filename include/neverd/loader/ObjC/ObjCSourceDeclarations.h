@@ -115,6 +115,12 @@ objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry);
 std::optional<ObjCReceiverTypeHint>
 objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
                                     unsigned Parameter);
+/// Re-read an exact block descriptor and its encoded object parameter. The
+/// caller must separately prove descriptor-to-invoke association.
+std::optional<ObjCReceiverTypeHint>
+objcBlockParameterReceiverTypeHint(const BinaryImage &Image, va_t Invoke,
+                                   va_t Descriptor, uint32_t Flags,
+                                   unsigned Parameter);
 std::optional<SourceFunctionTypeHint>
 objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry);
 bool objcReceiverTypeHintValid(const BinaryImage &Image,

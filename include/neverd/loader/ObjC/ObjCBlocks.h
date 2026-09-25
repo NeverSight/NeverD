@@ -52,6 +52,12 @@ std::optional<SourceFunctionTypeHint>
 parseObjCBlockSignature(llvm::StringRef Signature, Arch Architecture,
                         std::string &Diagnostic);
 
+/// Return the declared class of one invoke parameter, indexed with the
+/// hidden block-object argument at zero. Bare id/protocol encodings supply no
+/// concrete class. The complete signature is parsed before a class is used.
+std::optional<std::string>
+objcBlockObjectParameterClass(llvm::StringRef Signature, unsigned Parameter);
+
 /// Read a descriptor at an exact address. Stack literal construction must be
 /// established independently before its flags/address may be passed here.
 std::optional<ObjCBlockDescriptor>

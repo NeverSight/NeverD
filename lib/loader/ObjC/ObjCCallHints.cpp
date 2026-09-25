@@ -946,8 +946,9 @@ objcSelectorStubDynamicFormatSourceCallHint(const BinaryImage &Image,
   return Hint;
 }
 
-std::map<va_t, SourceCallTypeHint>
-buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
+std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::map<unsigned, ObjCReceiverTypeHint> *BlockParameters) {
   std::map<va_t, SourceCallTypeHint> Result;
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
@@ -1039,6 +1040,17 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         EntryFacts.Values.emplace(key(NdVar::reg(Location.RegisterOffset, 8)),
                                   std::move(V));
       }
+    if (BlockParameters)
+      for (const auto &[Parameter, Root] : *BlockParameters) {
+        if (Root.Origin != ObjCReceiverTypeHint::OriginKind::BlockParameter ||
+            Root.Address != Function.Entry ||
+            Root.SourceParameter != Parameter || Parameter >= 8 ||
+            !Root.Steps.empty() || !objcReceiverTypeHintValid(Image, Root))
+          continue;
+        EntryFacts.Values.emplace(
+            key(NdVar::reg(TRI.IntParamRegs[Parameter], 8)),
+            Value{Value::Kind::Receiver, 0, {}, Root});
+      }
   }
   // Enumerate preserved physical bytes through the authoritative ABI policy.
   // This retains upper bytes of partial integer aliases and only the preserved
@@ -1060,7 +1072,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       std::tuple<ObjCReceiverTypeHint::OriginKind, va_t, std::string, bool,
                  std::vector<ObjCReceiverTypeHint::TypeStep>,
                  std::vector<ObjCReceiverTypeHint::OutParameterRoot>, unsigned,
-                 std::string>;
+                 va_t, uint32_t, std::string>;
   std::map<ReceiverKey, ObjCReceiverDeclaration> ReceiverDeclarations;
   auto Transfer = [&](size_t Index, Facts State,
                       Hints &BlockHints) -> std::optional<Facts> {
@@ -1218,11 +1230,15 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         const auto &[Space, Offset, Size] = It->first;
         // The exact libobjc dispatch entry still obeys Darwin's preserved
         // register contract when its selector ABI is unavailable. Keep only
-        // receiver type identity there; unknown arguments can escape the
-        // frame, and no other value fact crosses an unbound call.
+        // receiver provenance there; unknown arguments can escape the
+        // frame, and no other value fact crosses an unbound call. A declared
+        // source parameter with an authenticated object class retains that
+        // same identity in a full-width callee-saved register.
         const bool PreservedReceiver =
             PreserveReceiverRegisters &&
-            It->second.TheKind == Value::Kind::Receiver &&
+            (It->second.TheKind == Value::Kind::Receiver ||
+             (It->second.TheKind == Value::Kind::SourceParameter &&
+              It->second.Object.has_value())) &&
             Space == VnodeSpace::REG && TRI.isCallPreserved(Offset, Size);
         const bool StackIdentity = Space == VnodeSpace::REG &&
                                    Offset == TRI.StackPointer && Size == 8 &&
@@ -1602,11 +1618,12 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             }
           }
           if (Receiver && Target->Name == "objc_msgSend") {
-            auto [It, Inserted] = ReceiverDeclarations.try_emplace(
-                std::tuple{Receiver->Origin, Receiver->Address,
-                           Receiver->ClassName, Receiver->IsClassMethod,
-                           Receiver->Steps, Receiver->OutParameters,
-                           Receiver->SourceParameter, Target->Selector});
+            auto [It, Inserted] = ReceiverDeclarations.try_emplace(std::tuple{
+                Receiver->Origin, Receiver->Address, Receiver->ClassName,
+                Receiver->IsClassMethod, Receiver->Steps,
+                Receiver->OutParameters, Receiver->SourceParameter,
+                Receiver->BlockDescriptorAddress,
+                Receiver->BlockDescriptorFlags, Target->Selector});
             if (Inserted)
               It->second = objcReceiverSourceTypeHint(Image, Target->Selector,
                                                       *Receiver);

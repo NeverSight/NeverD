@@ -227,6 +227,13 @@ pipeline passes these exact field offsets to LowIR call binding on a later
 round; ordinary initialized capture words contribute only observed integer
 carriers. Conflicting assignments or descriptors with different fields remove
 the proof, and the call still requires an exact receiver-plus-16 target load.
+An invoke callback may receive a class-qualified object parameter from its
+compiler block signature. The source plan must first prove the literal's
+descriptor-to-invoke link and agree on the same class for every literal using
+that invoke. Call analysis carries this declared class through ordinary
+receiver copies; publication re-reads the descriptor and checks the final
+plan link. Bare `id`, conflicting descriptors, and unrelated invocations
+remain unqualified, and dynamic message dispatch is unchanged.
 Individual literal probes merge import evidence only for the isa slot they
 inspect; whole-image block discovery still walks the complete import inventory.
 
@@ -476,7 +483,10 @@ without matching compiler evidence remain unsupported.
 Objective-C receiver facts distinguish method-entry self from an exact class
 reference. All metadata records sharing an entry must agree before self is
 seeded. Full-width copies and ABI-preserved registers carry the fact through
-the same fixed point, including entry backedges. Declaration agreement uses
+the same fixed point, including entry backedges.
+An unbound but authenticated `objc_msgSend` retains a declared object
+parameter's provenance only in a complete callee-saved register; it does not
+preserve unknown argument or frame facts. Declaration agreement uses
 class/instance scope, recorded categories, superclass chains and adopted
 protocols; entry self also includes known subclass declarations. Compiler
 catalogs retain declaration owners and hierarchy separately from selector-wide

@@ -901,12 +901,47 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   return Result;
 }
 
+std::optional<ObjCReceiverTypeHint>
+objcBlockParameterReceiverTypeHint(const BinaryImage &Image, va_t Invoke,
+                                   va_t Descriptor, uint32_t Flags,
+                                   unsigned Parameter) {
+  if (!Invoke || !Image.isCodeAddress(Invoke) || !Descriptor || !Parameter)
+    return std::nullopt;
+  std::string Diagnostic;
+  const auto Block =
+      readObjCBlockDescriptor(Image, Descriptor, Flags, Diagnostic);
+  if (!Block || !Block->InvokeTypeHint || !Block->Limitations.empty() ||
+      Parameter >= Block->InvokeTypeHint->Parameters.size())
+    return std::nullopt;
+  const auto Class = objcBlockObjectParameterClass(Block->Signature, Parameter);
+  const auto &Argument = Block->InvokeTypeHint->Parameters[Parameter];
+  const auto &Location = Argument.Location;
+  if (!Class || !Argument.Type || Argument.Type->Kind != NdTypeKind::Ptr ||
+      Argument.Type->Size != 8 ||
+      Location.Kind != SourceABICarrierKind::IntegerRegister ||
+      Location.ValueBytes != 8 || Parameter >= 8 ||
+      Location.RegisterOffset !=
+          getTargetRegInfo(Image.Arch).IntParamRegs[Parameter])
+    return std::nullopt;
+  ObjCReceiverTypeHint Result;
+  Result.Origin = ObjCReceiverTypeHint::OriginKind::BlockParameter;
+  Result.Address = Invoke;
+  Result.ClassName = *Class;
+  Result.SourceParameter = Parameter;
+  Result.BlockDescriptorAddress = Descriptor;
+  Result.BlockDescriptorFlags = Flags;
+  return Result;
+}
+
 namespace {
 bool validReceiverRoot(const BinaryImage &Image,
                        const ObjCReceiverTypeHint &Receiver) {
   if (!Receiver.Address || Receiver.ClassName.empty() ||
       (Receiver.Origin != ObjCReceiverTypeHint::OriginKind::MethodParameter &&
+       Receiver.Origin != ObjCReceiverTypeHint::OriginKind::BlockParameter &&
        Receiver.SourceParameter) ||
+      (Receiver.Origin != ObjCReceiverTypeHint::OriginKind::BlockParameter &&
+       (Receiver.BlockDescriptorAddress || Receiver.BlockDescriptorFlags)) ||
       Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
@@ -926,6 +961,15 @@ bool validReceiverRoot(const BinaryImage &Image,
         Image, Receiver.Address, Receiver.SourceParameter);
     return Expected && Expected->ClassName == Receiver.ClassName &&
            Expected->SourceParameter == Receiver.SourceParameter;
+  }
+  case ObjCReceiverTypeHint::OriginKind::BlockParameter: {
+    if (Receiver.IsClassMethod || !Receiver.OutParameters.empty() ||
+        !Receiver.BlockDescriptorAddress)
+      return false;
+    const auto Expected = objcBlockParameterReceiverTypeHint(
+        Image, Receiver.Address, Receiver.BlockDescriptorAddress,
+        Receiver.BlockDescriptorFlags, Receiver.SourceParameter);
+    return Expected && Expected->ClassName == Receiver.ClassName;
   }
   case ObjCReceiverTypeHint::OriginKind::ClassReference: {
     if (!Receiver.OutParameters.empty())

@@ -43,8 +43,9 @@ objcRuntimeSourceCallHint(const BinaryImage &Image, va_t ImportSlot);
 
 /// Resolve source-only callsite declarations from runtime metadata and exact
 /// machine/LowIR evidence. Unknown and conflicting signatures remain unbound.
-std::map<va_t, SourceCallTypeHint>
-buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function);
+std::map<va_t, SourceCallTypeHint> buildObjCSourceCallHints(
+    const BinaryImage &Image, const LowFunc &Function,
+    const std::map<unsigned, ObjCReceiverTypeHint> *BlockParameters = nullptr);
 
 } // namespace neverd
 #endif

@@ -104,6 +104,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setSourceEntryTypeHints(&SourceEntryHints);
     Local.setSourceCalleeTypeHints(&SourceCalleeHints);
     Local.setObjCBlockCaptureCallFields(&Opts.ObjCBlockCaptureFields);
+    Local.setObjCBlockParameterReceivers(&Opts.ObjCBlockParameterReceivers);
     Local.setCalleePopMap(&CalleePop);
     Local.setStackProbeSlots(&StackProbeSlots);
     for (size_t I; (I = Claim()) < N;) {

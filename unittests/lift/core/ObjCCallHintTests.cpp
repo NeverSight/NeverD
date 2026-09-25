@@ -9375,6 +9375,50 @@ TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   EXPECT_FALSE(objcReceiverTypeHintValid(Image, WrongParameter));
 }
 
+TEST(ObjCCallHints, AuthenticatedBlockParameterQualifiesReceiverCopy) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  constexpr va_t Descriptor = 0x2500, Signature = 0x2600;
+  auto Put64 = [&](va_t Address, uint64_t Word) {
+    llvm::support::endian::write64le(
+        Image.Segments[0].Data.data() + Address - 0x1000, Word);
+  };
+  Put64(Descriptor, 0);
+  Put64(Descriptor + 8, 32);
+  Put64(Descriptor + 16, Signature);
+  constexpr llvm::StringLiteral Encoding = "v24@?0@\"NSArray\"8Q16";
+  std::copy(Encoding.bytes_begin(), Encoding.bytes_end(),
+            Image.Segments[0].Data.begin() + Signature - 0x1000);
+  Image.ObjCSourceReferences.at(0x2100).Name = "enumerateObjectsUsingBlock:";
+  const auto Root = objcBlockParameterReceiverTypeHint(
+      Image, 0x1200, Descriptor, 0x40000000, 1);
+  ASSERT_TRUE(Root);
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  auto Function = caller();
+  Function.Blocks[0].Ops.insert(
+      Function.Blocks[0].Ops.begin(),
+      operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                {NdVar::reg(TRI.IntParamRegs[1], 8)}, 0x11fc));
+  const std::map<unsigned, ObjCReceiverTypeHint> Parameters{{1, *Root}};
+  const auto Hints = buildObjCSourceCallHints(Image, Function, &Parameters);
+  ASSERT_TRUE(Hints.count(0x1200));
+  ASSERT_TRUE(Hints.at(0x1200).Receiver);
+  EXPECT_EQ(Hints.at(0x1200).Receiver->Origin,
+            ObjCReceiverTypeHint::OriginKind::BlockParameter);
+  EXPECT_EQ(Hints.at(0x1200).Receiver->ClassName, "NSArray");
+  EXPECT_TRUE(objcBlockParameterContract(Image, Hints.at(0x1200), 2));
+
+  auto Changed = Image;
+  Changed.Segments[0].Data[Signature - 0x1000 + 11] = 'X';
+  EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Root));
+  const auto Unqualified =
+      buildObjCSourceCallHints(Changed, Function, &Parameters);
+  EXPECT_FALSE(Unqualified.count(0x1200) && Unqualified.at(0x1200).Receiver);
+}
+
 TEST(ObjCCallHints, DDFileLoggerParameterQualifiesFileSize) {
   auto Image = image();
   Image.ObjCMethods.clear();
@@ -9442,6 +9486,37 @@ TEST(ObjCCallHints, DDFileLoggerParameterQualifiesFileSize) {
   ASSERT_TRUE(Hints.at(0x1200).Receiver);
   EXPECT_EQ(Hints.at(0x1200).Receiver->ClassName, "DDLogFileInfo");
   EXPECT_EQ(Hints.at(0x1200).Signature.ReturnType->Size, 8U);
+
+  // A selector without a source declaration can still dispatch through an
+  // exact objc_msgSend veneer. The input object held in x19 survives that
+  // Darwin call before the later, qualified fileSize message.
+  ObjCSourceReference Unknown = Image.ObjCSourceReferences.at(0x2100);
+  Unknown.Address = 0x2110;
+  Unknown.Name = "isOnInternalLoggerQueue";
+  Image.ObjCSourceReferences.emplace(Unknown.Address, Unknown);
+  std::copy_n(Image.Segments[0].Data.data() + 0x100, 20,
+              Image.Segments[0].Data.data() + 0x120);
+  llvm::support::endian::write32le(Image.Segments[0].Data.data() + 0x124,
+                                   0xf9408821); // selector slot 0x2110
+  LowFunc AcrossMessage = caller();
+  auto &Ops = AcrossMessage.Blocks[0].Ops;
+  Ops.clear();
+  Ops.push_back(operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                          {NdVar::reg(TRI.IntParamRegs[2], 8)}, 0x11fc));
+  Ops.push_back(operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                          {NdVar::cst(0x1120, 8)}, 0x1200));
+  Ops.push_back(operation(NdOp::COPY, NdVar::reg(TRI.IntParamRegs[0], 8),
+                          {NdVar::reg(a64reg::X19, 8)}, 0x1204));
+  Ops.push_back(operation(NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+                          {NdVar::cst(0x1100, 8)}, 0x1208));
+  Ops.push_back(operation(NdOp::RETURN, {},
+                          {NdVar::reg(TRI.IntReturnReg, 8)}, 0x120c));
+  AcrossMessage.Blocks[0].EndAddr = 0x1210;
+  const auto AfterUnknown = buildObjCSourceCallHints(Image, AcrossMessage);
+  ASSERT_FALSE(AfterUnknown.count(0x1200));
+  ASSERT_TRUE(AfterUnknown.count(0x1208));
+  ASSERT_TRUE(AfterUnknown.at(0x1208).Receiver);
+  EXPECT_EQ(AfterUnknown.at(0x1208).Receiver->ClassName, "DDLogFileInfo");
 
   auto Rejected = [&](const BinaryImage &Changed) {
     EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));

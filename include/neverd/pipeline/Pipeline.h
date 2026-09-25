@@ -73,6 +73,9 @@ struct PipelineOptions {
   std::map<va_t, SourceFunctionTypeHint> SourceCalleeTypeHints;
   /// Source-only descriptor and ownership proofs for captured block calls.
   std::map<va_t, ObjCBlockCaptureCallFields> ObjCBlockCaptureFields;
+  /// Source-only receiver roots from authenticated invoke/descriptor pairs.
+  std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
+      ObjCBlockParameterReceivers;
   std::string OutputFile;
   evm::Hardfork EVMFork = evm::Hardfork::Latest;
   bool EVMStrict = true;

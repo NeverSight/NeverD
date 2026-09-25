@@ -18,6 +18,7 @@ struct ObjCReceiverTypeHint {
   enum class OriginKind {
     MethodEntry,
     MethodParameter,
+    BlockParameter,
     ClassReference,
     OutParameter
   };
@@ -69,13 +70,20 @@ struct ObjCReceiverTypeHint {
   std::vector<OutParameterRoot> OutParameters;
   /// Source parameter index for a declaration erased to an Objective-C id.
   unsigned SourceParameter = 0;
+  /// Exact runtime descriptor that declares a block callback parameter.
+  /// The source plan separately proves that this descriptor belongs to the
+  /// invoke entry in Address.
+  va_t BlockDescriptorAddress = 0;
+  uint32_t BlockDescriptorFlags = 0;
 
   bool operator==(const ObjCReceiverTypeHint &Other) const {
     return Origin == Other.Origin && Address == Other.Address &&
            ClassName == Other.ClassName &&
            IsClassMethod == Other.IsClassMethod && Steps == Other.Steps &&
            OutParameters == Other.OutParameters &&
-           SourceParameter == Other.SourceParameter;
+           SourceParameter == Other.SourceParameter &&
+           BlockDescriptorAddress == Other.BlockDescriptorAddress &&
+           BlockDescriptorFlags == Other.BlockDescriptorFlags;
   }
 };
 

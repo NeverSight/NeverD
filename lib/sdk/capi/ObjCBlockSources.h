@@ -38,6 +38,9 @@ struct ObjCBlockSourcePlan {
   std::map<va_t, SourceFunctionTypeHint> InvokeHints;
   std::map<va_t, SourceFunctionTypeHint> HelperHints;
   std::map<va_t, std::vector<ObjCStackBlockSource>> StackBlocks;
+  /// Descriptor-declared callback classes shared by every proven literal
+  /// using an invoke entry. Runtime encodings still describe dynamic objects.
+  std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>> ParameterReceivers;
   std::map<va_t, ObjCBlockCaptureCallFields> CapturedCallFields;
   std::map<va_t, std::string> Rejections;
 };
@@ -354,9 +357,8 @@ public:
       // Other computed wide values remain unproven.
       if (Bytes == 16 && E->Operands[0]->Type &&
           E->Operands[0]->Type->Size == 8 && E->Operands[1]->Type &&
-          E->Operands[1]->Type->Size == 8 &&
-          Inputs[0].K == Value::Number && !Inputs[0].Bits &&
-          Inputs[1].K == Value::Number && !Inputs[1].Bits)
+          E->Operands[1]->Type->Size == 8 && Inputs[0].K == Value::Number &&
+          !Inputs[0].Bits && Inputs[1].K == Value::Number && !Inputs[1].Bits)
         return {Value::OpaqueBytes, 0, 0, {}, E.get()};
       const auto High = PointerPiece(Inputs[0]);
       const auto Low = PointerPiece(Inputs[1]);
@@ -1247,6 +1249,37 @@ discoverObjCBlockSources(const ObjCBlockSourceContext &Source,
       if (publish(Plan, Block.Descriptor, Block.InvokeEntry))
         Plan.StackBlocks[Function.Entry].push_back(std::move(Block));
   }
+  std::map<va_t, std::map<unsigned, std::optional<ObjCReceiverTypeHint>>>
+      CommonParameters;
+  auto MergeParameters = [&](va_t Invoke, const ObjCBlockDescriptor &D) {
+    if (Plan.Rejections.count(Invoke) || !Plan.InvokeHints.count(Invoke) ||
+        !D.InvokeTypeHint)
+      return;
+    for (unsigned Parameter = 1;
+         Parameter < D.InvokeTypeHint->Parameters.size(); ++Parameter) {
+      std::optional<ObjCReceiverTypeHint> Candidate;
+      if (objcBlockObjectParameterClass(D.Signature, Parameter))
+        Candidate = objcBlockParameterReceiverTypeHint(Image, Invoke, D.Address,
+                                                       D.Flags, Parameter);
+      auto [It, Added] = CommonParameters[Invoke].emplace(Parameter, Candidate);
+      if (!Added && It->second != Candidate)
+        It->second.reset();
+    }
+  };
+  for (const auto &[Address, Block] : Plan.Globals) {
+    (void)Address;
+    MergeParameters(Block.InvokeEntry, Block.Descriptor);
+  }
+  for (const auto &[Parent, Blocks] : Plan.StackBlocks) {
+    (void)Parent;
+    for (const auto &Block : Blocks)
+      MergeParameters(Block.InvokeEntry, Block.Descriptor);
+  }
+  for (const auto &[Invoke, Parameters] : CommonParameters)
+    if (!Plan.Rejections.count(Invoke))
+      for (const auto &[Parameter, Root] : Parameters)
+        if (Root)
+          Plan.ParameterReceivers[Invoke].emplace(Parameter, *Root);
   // A strong descriptor field is not necessarily a block. The validated copy
   // helper's _Block_object_assign flag 7 is the ownership evidence. Keep only
   // capture words shared by every descriptor using the same invoke entry.

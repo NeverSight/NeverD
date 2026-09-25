@@ -71,6 +71,37 @@ struct BlockFixture {
     return readObjCBlockLiteral(Image, Literal, Error);
   }
 };
+
+TEST(ObjCBlockSources, CallbackClassRequiresExactPublishedDescriptor) {
+  BlockFixture F;
+  F.string(F.Signature, "v24@?0@\"WMFFeedNewsStory\"8Q16");
+  PipelineResult Result;
+  Result.SourceImage = &F.Image;
+  const auto Plan = discoverObjCBlockSources(F.Image, Result);
+  ASSERT_EQ(Plan.ParameterReceivers.count(F.Invoke), 1U);
+  ASSERT_EQ(Plan.ParameterReceivers.at(F.Invoke).count(1), 1U);
+  const auto Root = Plan.ParameterReceivers.at(F.Invoke).at(1);
+  EXPECT_EQ(Root.ClassName, "WMFFeedNewsStory");
+  EXPECT_EQ(Root.Address, F.Invoke);
+  EXPECT_EQ(Root.BlockDescriptorAddress, F.Descriptor);
+  EXPECT_TRUE(objcReceiverTypeHintValid(F.Image, Root));
+
+  auto WrongDescriptor = Root;
+  ++WrongDescriptor.BlockDescriptorAddress;
+  EXPECT_FALSE(objcReceiverTypeHintValid(F.Image, WrongDescriptor));
+  auto WrongClass = Root;
+  WrongClass.ClassName = "OtherStory";
+  EXPECT_FALSE(objcReceiverTypeHintValid(F.Image, WrongClass));
+
+  F.put32(F.Literal + 8, 0x40000000); // no global-block storage flag
+  EXPECT_TRUE(
+      discoverObjCBlockSources(F.Image, Result).ParameterReceivers.empty());
+  F.put32(F.Literal + 8, 0x50000000);
+  F.string(F.Signature, "v24@?0@8Q16"); // bare id has no class
+  EXPECT_TRUE(
+      discoverObjCBlockSources(F.Image, Result).ParameterReceivers.empty());
+}
+
 ExprPtr parameter(unsigned Index, TypeRef Type) {
   MedVar V;
   V.Kind = MedVar::Param;
