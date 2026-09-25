@@ -5600,6 +5600,24 @@ TEST(ObjCSourceBindings, PrivateSwiftScalarAliasesKeepOneAssociationKey) {
             SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
   EXPECT_EQ(RegisteredContext->SourceCallHint->TargetAddress, Address);
 
+  // ADRP+ADD can preserve an exact image address without classifying its
+  // section in the IR. The uniquely named writable Swift scalar proves it.
+  auto GenericAddress = F.Function;
+  GenericAddress.Body[0].Val =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::Address);
+  const auto GenericBound = bindObjCSourceReferences(GenericAddress, F.Image);
+  ASSERT_TRUE(GenericBound.Limitation.empty()) << GenericBound.Limitation;
+  ASSERT_TRUE(GenericBound.Function.Body[0].Val->SourceCallHint);
+  EXPECT_EQ(GenericBound.Function.Body[0].Val->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeLocalStorageAddress);
+  EXPECT_EQ(GenericBound.LocalStorageExtents,
+            (std::map<va_t, uint64_t>{{Address, 1}}));
+
+  auto Scalar = F.Function;
+  Scalar.Body[0].Val =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::Scalar);
+  EXPECT_FALSE(bindObjCSourceReferences(Scalar, F.Image).Limitation.empty());
+
   ObjCMethod Callback;
   Callback.Implementation = 0x2000;
   Callback.ClassName = "Observer";

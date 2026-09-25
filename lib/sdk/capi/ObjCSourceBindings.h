@@ -2966,8 +2966,9 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     // by both exclusivity and identity-only APIs retain one storage address.
     if (Original->Kind == ExprKind::Const && Original->Type &&
         Original->Type->Size == 8 &&
-        isDataAddressProvenance(Original->ConstProvenance) && !NumericOperand &&
-        !MemoryAddress) {
+        (Original->ConstProvenance == ConstantAddressProvenance::DataAddress ||
+         Original->ConstProvenance == ConstantAddressProvenance::Address) &&
+        !NumericOperand && !MemoryAddress) {
       if (auto Storage =
               swiftPrivateScalarStorageHint(Image, Original->ConstVal)) {
         *Expression = *HighExpr::makeCall({}, 0, {});
