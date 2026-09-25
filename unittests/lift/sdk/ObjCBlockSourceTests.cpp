@@ -1354,6 +1354,14 @@ TEST(ObjCBlockSources, CoreDataAsyncCallCopiesOnlyAuthenticatedStackBlock) {
     EXPECT_EQ(Plan.StackBlocks.count(F.Caller), Mutation == 0 ? 1U : 0U)
         << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller)
                                             : "");
+    if (Mutation)
+      ASSERT_TRUE(Plan.Rejections.count(F.Caller));
+    if (Mutation == 1)
+      EXPECT_NE(Plan.Rejections.at(F.Caller).find("unqualified receiver"),
+                std::string::npos);
+    if (Mutation == 2)
+      EXPECT_NE(Plan.Rejections.at(F.Caller).find("callback ABI differs"),
+                std::string::npos);
   }
 }
 

@@ -985,11 +985,12 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           if (Contract)
             Consumer = Contract->Signature;
         }
-        const bool DeclaredConsumer =
+        const bool CallbackMatches =
             Consumer && Block.Descriptor.InvokeTypeHint &&
             objc_projection_detail::sameHint(*Block.Descriptor.InvokeTypeHint,
-                                             *Consumer) &&
-            objcSourceCallBound(E, Image, Functions);
+                                             *Consumer);
+        const bool DeclaredConsumer =
+            CallbackMatches && objcSourceCallBound(E, Image, Functions);
         if (!Direct && !Runtime && !DeclaredConsumer &&
             (!Binding || Binding->CallKind != CallKind::Native ||
              E.IsIndirectCall ||
@@ -997,9 +998,17 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
                        Active, Error))) {
           if (Error.empty() && Binding) {
             if (Binding->CallKind == CallKind::ObjCMessage &&
-                !Binding->Selector.empty())
+                !Binding->Selector.empty()) {
               Error = "Objective-C selector " + Binding->Selector;
-            else if (!Binding->TargetName.empty())
+              if (!Consumer)
+                Error += Binding->Receiver
+                             ? " (no authenticated lifetime contract)"
+                             : " (no contract for unqualified receiver)";
+              else if (!CallbackMatches)
+                Error += " (block callback ABI differs from contract)";
+              else
+                Error += " (call binding is unproven)";
+            } else if (!Binding->TargetName.empty())
               Error = "consumer " + Binding->TargetName;
           }
           if (Error.empty())

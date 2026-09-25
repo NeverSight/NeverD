@@ -243,6 +243,10 @@ The same copied-contract boundary covers `NSBlockOperation`
 `UNUserNotificationCenter` settings and authorization callbacks. The
 authorization callback is unavailable on x86-64 in this catalog because the
 macOS and iOS SDKs encode its `BOOL` argument differently.
+Rejected Objective-C block consumers distinguish an unqualified receiver,
+callback ABI mismatch, and unproven message binding in their dependency
+diagnostic, so a missing lifetime proof can be traced without treating a
+selector name alone as authority.
 
 Calls through copied stack blocks reuse the loader's source-call fixed point.
 A complete stack header and descriptor establish the invoke ABI before an
