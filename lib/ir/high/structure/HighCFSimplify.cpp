@@ -1365,6 +1365,20 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           Changed = true;
         }
       }
+      // T14 (late): `if (c) { ...; jump; } else { S... }`  ->
+      // `if (c) { ...; jump; }` S...: the arm never reaches S.
+      if (SpliceRegions && L[I].Kind == StmtKind::IfElse && L[I].Cond &&
+          !L[I].Body.empty() && !L[I].ElseBody.empty() &&
+          (isTerminator(L[I].Body.back()) ||
+           L[I].Body.back().Kind == StmtKind::Break ||
+           L[I].Body.back().Kind == StmtKind::Continue)) {
+        std::vector<HighStmt> Tail = std::move(L[I].ElseBody);
+        L[I].ElseBody.clear();
+        L[I].Kind = StmtKind::If;
+        L.insert(L.begin() + I + 1, std::make_move_iterator(Tail.begin()),
+                 std::make_move_iterator(Tail.end()));
+        Changed = true;
+      }
       if (!isCondGoto(L[I]))
         continue;
       const va_t X = L[I].Body[0].GotoTarget;
