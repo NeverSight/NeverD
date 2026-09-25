@@ -1928,17 +1928,19 @@ objcBlockParameterContract(const BinaryImage &Image,
   // EchoSubscriptionFetcher passes both completions to tokenized HTTP work.
   // Explore Feed's background-fetch entry forwards the completion to its
   // asynchronous update operation. MWKImageInfoFetcher forwards both callbacks
-  // into its asynchronous image-info request.
+  // into its asynchronous image-info request. PermanentCacheController's
+  // Swift class method declares its Core Data setup completion @escaping.
   // Authenticate exact method owners, encodings and callback ABIs before
   // treating an Objective-C stack block as copied by a callee.
-  struct WMFInstanceBlock {
+  struct WMFEmbeddedBlock {
     const char *Owner;
     const char *Selector;
     const char *Parent;
     const char *Callback;
     unsigned Parameter;
+    bool ClassMethod = false;
   };
-  static constexpr WMFInstanceBlock WMFInstanceBlocks[] = {
+  static constexpr WMFEmbeddedBlock WMFEmbeddedBlocks[] = {
       {"MWKDataStore", "setupCoreDataStackWithContainerURL:completion:",
        "v32@0:8@16@?24", "v8@?0", 3},
       {"MWKDataStore",
@@ -1989,12 +1991,16 @@ objcBlockParameterContract(const BinaryImage &Image,
       {"MWKImageInfoFetcher",
        "fetchGalleryInfoForImageFiles:fromSiteURL:success:failure:",
        "@48@0:8@16@24@?32@?40", "v16@?0@\"NSError\"8", 5},
+      {"WMFPermanentCacheController", "setupCoreDataStack:",
+       "v24@0:8@?16",
+       "v24@?0@\"NSManagedObjectContext\"8@\"NSError\"16", 2,
+       true},
   };
-  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
-      !Type->IsProtocol)
-    for (const auto &D : WMFInstanceBlocks) {
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsProtocol)
+    for (const auto &D : WMFEmbeddedBlocks) {
       if (Type->ClassName != D.Owner || Call.Selector != D.Selector ||
-          Parameter != D.Parameter)
+          Parameter != D.Parameter || Type->IsClassMethod != D.ClassMethod ||
+          (D.ClassMethod && Type->IncludeSubclasses))
         continue;
       const ObjCClass *Owner = nullptr;
       for (const auto &Class : Image.ObjCClasses)
@@ -2008,7 +2014,8 @@ objcBlockParameterContract(const BinaryImage &Image,
       const ObjCMethod *Method = nullptr;
       for (const auto &Candidate : Image.ObjCMethods)
         if (Candidate.ClassName == Owner->Name &&
-            Candidate.Selector == D.Selector && !Candidate.IsClassMethod) {
+            Candidate.Selector == D.Selector &&
+            Candidate.IsClassMethod == D.ClassMethod) {
           if (Method || Candidate.ClassAddress != Owner->Address ||
               Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
               !Candidate.MetadataAddress ||
@@ -2068,15 +2075,17 @@ objcBlockParameterContract(const BinaryImage &Image,
         ObjCBlockParameterContract::Lifetime::NonEscaping};
   }
 
-  // WMFBlocksKit.swift imports these collection callbacks as @escaping.
-  // Match the embedded Swift-extension methods, owner and complete callback
-  // ABI before treating an Objective-C stack literal as copied by the bridge.
+  // WMFBlocksKit.swift imports its collection callbacks as @escaping. The
+  // Objective-C wmf_mapAndRejectNil: forwards its callback through synchronous
+  // reduction. Match the embedded category method, owner and complete callback
+  // ABI before assigning the appropriate lifetime to a stack literal.
   struct WMFCollectionBlock {
     const char *Owner;
     const char *Selector;
     const char *Parent;
     const char *Callback;
     unsigned Parameter;
+    bool Copied = true;
   };
   static constexpr WMFCollectionBlock WMFCollectionBlocks[] = {
       {"NSArray", "wmf_map:", "@24@0:8@?16", "@16@?0@8", 2},
@@ -2084,6 +2093,8 @@ objcBlockParameterContract(const BinaryImage &Image,
       {"NSArray", "wmf_match:", "@24@0:8@?16", "B16@?0@8", 2},
       {"NSArray", "wmf_reduce:withBlock:", "@32@0:8@16@?24",
        "@24@?0@8@16", 3},
+      {"NSArray", "wmf_mapAndRejectNil:", "@24@0:8@?16",
+       "@16@?0@8", 2, false},
       {"NSSet", "wmf_map:", "@24@0:8@?16", "@16@?0@8", 2},
       {"NSSet", "wmf_select:", "@24@0:8@?16", "B16@?0@8", 2},
       {"NSSet", "wmf_match:", "@24@0:8@?16", "B16@?0@8", 2},
@@ -2122,7 +2133,9 @@ objcBlockParameterContract(const BinaryImage &Image,
           !SameDeclaration(*Expected, *Parent))
         return std::nullopt;
       return ObjCBlockParameterContract{
-          std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+          std::move(*Callback),
+          D.Copied ? ObjCBlockParameterContract::Lifetime::Copied
+                   : ObjCBlockParameterContract::Lifetime::NonEscaping};
     }
 
   struct Declaration {
