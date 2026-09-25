@@ -327,9 +327,11 @@ struct SourceCallTypeHint {
   /// equal-width carriers alone prove no source kind.
   std::optional<NdTypeKind> SelectorResultTypeUse;
   /// An exact Objective-C method-entry parameter flowed to one message
-  /// argument without changing its source type. This may select one otherwise
-  /// conflicting selector declaration only when the current method metadata,
-  /// physical source carrier and complete parameter type still agree.
+  /// argument without changing its source type. Parameter zero denotes the
+  /// receiver when an authenticated source declaration identifies its class.
+  /// This may select one otherwise conflicting selector declaration only when
+  /// the current method metadata, physical source carrier and complete
+  /// parameter type still agree.
   struct SelectorArgumentTypeEvidence {
     unsigned Parameter = 0;
     va_t MethodEntry = 0;

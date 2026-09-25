@@ -9107,6 +9107,217 @@ TEST(ObjCCallHints, SDWebImageDelegateNeedsEmbeddedManagerEvidence) {
   CheckRejected(Changed);
 }
 
+TEST(ObjCCallHints, SDWebImageOptionsResultNeedsEmbeddedClassEvidence) {
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  ObjCClass RootClass;
+  RootClass.Name = "NSObject";
+  RootClass.Address = 0x2200;
+  RootClass.RootClass = true;
+  RootClass.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(RootClass);
+  ObjCClass Manager;
+  Manager.Name = "SDWebImageManager";
+  Manager.Address = 0x2210;
+  Manager.SuperclassName = "NSObject";
+  Manager.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Manager);
+  ObjCClass ResultClass = Manager;
+  ResultClass.Name = "SDWebImageOptionsResult";
+  ResultClass.Address = 0x2220;
+  Image.ObjCClasses.push_back(ResultClass);
+  auto AddMethod = [&](llvm::StringRef Class, llvm::StringRef Selector,
+                       llvm::StringRef Encoding, va_t Entry) {
+    ObjCMethod Method;
+    Method.ClassName = Class.str();
+    Method.Selector = Selector.str();
+    Method.TypeEncoding = Encoding.str();
+    Method.Implementation = Entry;
+    Method.TypeHint = parseObjCMethodEncoding(Selector, Encoding);
+    EXPECT_TRUE(Method.TypeHint);
+    Image.ObjCMethods.push_back(std::move(Method));
+  };
+  AddMethod(Manager.Name, "useOptions:", "@24@0:8@16", 0x1200);
+  AddMethod(Manager.Name,
+            "processedResultForURL:options:context:", "@40@0:8@16Q24@32",
+            0x1400);
+  AddMethod(ResultClass.Name, "initWithOptions:context:", "@32@0:8Q16@24",
+            0x1500);
+  AddMethod(ResultClass.Name, "options", "Q16@0:8", 0x1600);
+  ObjCProperty Options;
+  Options.Owner = ObjCProperty::OwnerKind::Class;
+  Options.OwnerAddress = ResultClass.Address;
+  Options.ClassName = ResultClass.Name;
+  Options.Name = Options.Getter = "options";
+  Options.TypeEncoding = "Q";
+  Options.Status = "supported";
+  Options.GetterTypeHint = parseObjCMethodEncoding("options", "Q16@0:8");
+  ASSERT_TRUE(Options.GetterTypeHint);
+  Image.ObjCProperties.push_back(Options);
+
+  const auto Root = objcMethodReceiverTypeHint(Image, 0x1200);
+  ASSERT_TRUE(Root);
+  const auto Processed = objcReceiverCallResultTypeHint(
+      Image, *Root, "processedResultForURL:options:context:");
+  ASSERT_TRUE(Processed);
+  const auto Declaration =
+      objcReceiverSourceTypeHint(Image, "options", *Processed);
+  ASSERT_TRUE(Declaration.Signature);
+  EXPECT_EQ(Declaration.Signature->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Declaration.Signature->ReturnType->Size, 8U);
+  EXPECT_EQ(Declaration.Signature->ReturnLocation.Kind,
+            SourceABICarrierKind::IntegerRegister);
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Processed));
+    EXPECT_FALSE(
+        objcReceiverSourceTypeHint(Changed, "options", *Processed).Signature);
+  };
+  auto Changed = Image;
+  Changed.ObjCClasses.pop_back();
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCClasses.push_back(ResultClass);
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[1].TypeEncoding = "@32@0:8@16Q24";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.push_back(Image.ObjCMethods[1]);
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods[2].TypeEncoding = "v32@0:8Q16@24";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCProperties.front().TypeEncoding = "@";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.Arch = Arch::X64;
+  Rejected(Changed);
+}
+
+TEST(ObjCCallHints, SDImageLoaderErrorReceiverSelectsNSErrorCode) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = "code";
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Downloader;
+  Downloader.Name = "SDWebImageDownloader";
+  Downloader.Address = 0x2300;
+  Image.ObjCClasses.push_back(Downloader);
+  ObjCMethod Method;
+  Method.ClassAddress = Downloader.Address;
+  Method.ClassName = Downloader.Name;
+  Method.Selector = "shouldBlockFailedURLWithURL:error:options:context:";
+  Method.TypeEncoding = "B48@0:8@16@24Q32@40";
+  Method.Implementation = 0x1200;
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  Image.ObjCMethods.push_back(Method);
+  ObjCProtocol Protocol;
+  Protocol.Name = "SDImageLoader";
+  Protocol.Address = 0x2400;
+  Protocol.Status = "recovered";
+  ObjCProtocolMethod Declaration;
+  Declaration.Selector = Method.Selector;
+  Declaration.TypeEncoding = Method.TypeEncoding;
+  Declaration.Status = "supported";
+  Declaration.IsOptional = true;
+  Declaration.TypeHint =
+      parseObjCMethodEncoding(Declaration.Selector, Declaration.TypeEncoding);
+  ASSERT_TRUE(Declaration.TypeHint);
+  Protocol.Methods.push_back(Declaration);
+  Image.ObjCProtocols.push_back(Protocol);
+  ObjCMethod Conflicting;
+  Conflicting.ClassName = "MWKLicense";
+  Conflicting.Selector = "code";
+  Conflicting.TypeEncoding = "@16@0:8";
+  Conflicting.TypeHint =
+      parseObjCMethodEncoding(Conflicting.Selector, Conflicting.TypeEncoding);
+  ASSERT_TRUE(Conflicting.TypeHint);
+  Image.ObjCMethods.push_back(Conflicting);
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Image, "code"));
+
+  const auto Caller = objcMethodSourceTypeHint(Image, Method.Implementation);
+  ASSERT_TRUE(Caller);
+  SourceCallTypeHint::SelectorArgumentTypeEvidence Evidence;
+  Evidence.Parameter = 0;
+  Evidence.MethodEntry = Method.Implementation;
+  Evidence.Source = Caller->Parameters[3].Location;
+  Evidence.ConsumedAsObject = true;
+  const auto Exact =
+      objcSelectorSourceTypeHintForArgumentTypeUse(Image, "code", Evidence);
+  ASSERT_TRUE(Exact);
+  ASSERT_TRUE(Exact->ReturnType);
+  EXPECT_EQ(Exact->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Exact->ReturnType->Size, 8U);
+
+  Image.ImportPtrSlots[0x2190] = "_objc_retain";
+  const uint32_t RetainStub[] = {0xb0000010, 0xf940ca10, 0xd61f0200};
+  for (size_t I = 0; I < 3; ++I)
+    llvm::support::endian::write32le(
+        Image.Segments[0].Data.data() + 0x140 + I * 4, RetainStub[I]);
+  LowFunc Function;
+  Function.Entry = Method.Implementation;
+  Function.Name = "sd_image_loader_error_code";
+  LowBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = 0x1218;
+  Block.Ops = {
+      operation(NdOp::COPY, NdVar::reg(a64reg::X19, 8),
+                {NdVar::reg(a64reg::X3, 8)}, 0x1200),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x1204),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1140, 8)},
+                0x1208),
+      operation(NdOp::COPY, NdVar::reg(a64reg::X0, 8),
+                {NdVar::reg(a64reg::X19, 8)}, 0x120c),
+      operation(NdOp::CALL, NdVar::reg(a64reg::X0, 8), {NdVar::cst(0x1100, 8)},
+                0x1210),
+      operation(NdOp::RETURN, {}, {NdVar::reg(a64reg::X0, 8)}, 0x1214)};
+  Function.Blocks.push_back(Block);
+  const auto Hints = buildObjCSourceCallHints(Image, Function);
+  ASSERT_TRUE(Hints.count(0x1210));
+  ASSERT_TRUE(Hints.at(0x1210).SelectorArgumentTypeUse);
+  EXPECT_EQ(Hints.at(0x1210).SelectorArgumentTypeUse->Parameter, 0U);
+  EXPECT_EQ(Hints.at(0x1210).Signature.ReturnType->Kind, NdTypeKind::Int);
+
+  auto Rejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcSelectorSourceTypeHintForArgumentTypeUse(Changed, "code",
+                                                              Evidence));
+  };
+  auto Changed = Image;
+  Changed.ObjCClasses.clear();
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.front().ClassAddress = 0;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.front().TypeEncoding = "B32@0:8@16@24";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCProtocols.front().Methods.front().IsOptional = false;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.ObjCProtocols.front().Methods.front().TypeEncoding = "@16@0:8";
+  Rejected(Changed);
+  Changed = Image;
+  Changed.Arch = Arch::X64;
+  Rejected(Changed);
+  Changed = Image;
+  Changed.DynInfo.NeededLibs.clear();
+  Rejected(Changed);
+  Evidence.Source = Caller->Parameters[2].Location;
+  Rejected(Image);
+  Evidence.Source = Caller->Parameters[3].Location;
+  Evidence.ConsumedAsObject = false;
+  Rejected(Image);
+}
+
 TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
   const struct {

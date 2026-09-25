@@ -151,6 +151,60 @@ bool hasEmbeddedSDWebImageManagerDelegate(const BinaryImage &Image) {
   return Properties == 1 && Methods == 1;
 }
 
+bool hasEmbeddedSDWebImageOptionsResult(const BinaryImage &Image) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  const ObjCClass *Manager = nullptr;
+  const ObjCClass *Result = nullptr;
+  for (const auto &Class : Image.ObjCClasses) {
+    const ObjCClass **Match = Class.Name == "SDWebImageManager" ? &Manager
+                              : Class.Name == "SDWebImageOptionsResult"
+                                  ? &Result
+                                  : nullptr;
+    if (!Match)
+      continue;
+    if (*Match || !Class.Address)
+      return false;
+    *Match = &Class;
+  }
+  if (!Manager || !Result)
+    return false;
+  unsigned Factory = 0, Initializer = 0, Getter = 0, Property = 0;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.ClassName == Manager->Name &&
+        Method.Selector == "processedResultForURL:options:context:") {
+      if (Method.IsClassMethod || !Method.TypeHint ||
+          Method.TypeEncoding != "@40@0:8@16Q24@32")
+        return false;
+      ++Factory;
+    }
+    if (Method.ClassName == Result->Name &&
+        Method.Selector == "initWithOptions:context:") {
+      if (Method.IsClassMethod || !Method.TypeHint ||
+          Method.TypeEncoding != "@32@0:8Q16@24")
+        return false;
+      ++Initializer;
+    }
+    if (Method.ClassName == Result->Name && Method.Selector == "options") {
+      if (Method.IsClassMethod || !Method.TypeHint ||
+          Method.TypeEncoding != "Q16@0:8")
+        return false;
+      ++Getter;
+    }
+  }
+  for (const auto &Candidate : Image.ObjCProperties)
+    if (Candidate.Owner == ObjCProperty::OwnerKind::Class &&
+        Candidate.OwnerAddress == Result->Address &&
+        Candidate.ClassName == Result->Name && Candidate.Name == "options") {
+      if (Candidate.Getter != "options" || Candidate.IsClassProperty ||
+          Candidate.Status != "supported" || Candidate.TypeEncoding != "Q")
+        return false;
+      ++Property;
+    }
+  return Factory == 1 && Initializer == 1 && Getter == 1 && Property == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -336,11 +390,92 @@ objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry) {
   return Result;
 }
 
+static bool
+hasEmbeddedSDImageLoaderNSErrorParameter(const BinaryImage &Image, va_t Entry,
+                                         const SourceABIValueLocation &Source) {
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64)
+    return false;
+  const auto Caller = objcMethodSourceTypeHint(Image, Entry);
+  if (!Caller || Caller->Parameters.size() != 6 ||
+      !sameLocation(Caller->Parameters[3].Location, Source) ||
+      !isObjCSelectorArgumentEvidenceType(Caller->Parameters[3].Type, true))
+    return false;
+  const ObjCClass *Downloader = nullptr;
+  for (const auto &Class : Image.ObjCClasses)
+    if (Class.Name == "SDWebImageDownloader") {
+      if (Downloader || !Class.Address)
+        return false;
+      Downloader = &Class;
+    }
+  if (!Downloader)
+    return false;
+  constexpr llvm::StringLiteral Selector =
+      "shouldBlockFailedURLWithURL:error:options:context:";
+  constexpr llvm::StringLiteral Encoding = "B48@0:8@16@24Q32@40";
+  unsigned Implementations = 0;
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.Implementation == Entry) {
+      if (Method.ClassAddress != Downloader->Address ||
+          Method.ClassName != Downloader->Name || Method.IsClassMethod ||
+          Method.Selector != Selector || Method.TypeEncoding != Encoding ||
+          !Method.TypeHint)
+        return false;
+      ++Implementations;
+    }
+  if (Implementations != 1)
+    return false;
+  unsigned Protocols = 0, Declarations = 0;
+  for (const auto &Protocol : Image.ObjCProtocols)
+    if (Protocol.Name == "SDImageLoader") {
+      if (!Protocol.Address || Protocol.Status != "recovered")
+        return false;
+      ++Protocols;
+      for (const auto &Method : Protocol.Methods)
+        if (Method.Selector == Selector) {
+          if (Method.IsClassMethod || !Method.IsOptional ||
+              Method.TypeEncoding != Encoding || !Method.TypeHint)
+            return false;
+          ++Declarations;
+        }
+    }
+  return Protocols == 1 && Declarations == 1;
+}
+
 std::optional<SourceFunctionTypeHint>
 objcSelectorSourceTypeHintForArgumentTypeUse(
     const BinaryImage &Image, llvm::StringRef Selector,
     const SourceCallTypeHint::SelectorArgumentTypeEvidence &Evidence) {
-  if (!Evidence.MethodEntry || Evidence.Parameter < 2)
+  if (!Evidence.MethodEntry)
+    return std::nullopt;
+  if (Evidence.Parameter == 0) {
+    // The SDImageLoader declaration names this method's error parameter as
+    // NSError*. Runtime encodings erase that class. Revalidate the embedded
+    // vendor method and protocol before selecting Foundation's NSError.code
+    // declaration from the otherwise conflicting selector-wide signatures.
+    if (Selector != "code" || !Evidence.ConsumedAsObject ||
+        !hasEmbeddedSDImageLoaderNSErrorParameter(Image, Evidence.MethodEntry,
+                                                  Evidence.Source))
+      return std::nullopt;
+    const auto NSError =
+        objc::sdkReceiverDeclarations(Image, "NSError", false, false, Selector);
+    if (!NSError.Present || !NSError.Complete || NSError.Members.size() != 1 ||
+        !NSError.Members.front().Signature)
+      return std::nullopt;
+    const auto Candidates = selectorSourceTypeHints(Image, Selector, nullptr);
+    if (!Candidates)
+      return std::nullopt;
+    std::optional<SourceFunctionTypeHint> Result;
+    for (const auto &Candidate : *Candidates)
+      if (Candidate.Origin == SourceFunctionTypeHint::OriginKind::ObjCSDK &&
+          equalSourceABIs(Candidate, *NSError.Members.front().Signature)) {
+        if (Result)
+          return std::nullopt;
+        Result = Candidate;
+      }
+    return Result;
+  }
+  if (Evidence.Parameter < 2)
     return std::nullopt;
   const auto Caller = objcMethodSourceTypeHint(Image, Evidence.MethodEntry);
   if (!Caller)
@@ -916,9 +1051,21 @@ ObjCReceiverDeclaration receiverDeclaration(const BinaryImage &Image,
       for (const auto &Method : Image.ObjCMethods)
         if (Method.ClassName == Name &&
             Method.IsClassMethod == Type.IsClassMethod &&
-            Method.Selector == Selector)
-          Include(Method.TypeHint, declaredReturnClass(Method.TypeEncoding),
+            Method.Selector == Selector) {
+          // Upstream SDWebImage declares this embedded manager method to
+          // return SDWebImageOptionsResult*. The runtime erases that class to
+          // id, so require the matching manager and result-class declarations
+          // in this image before carrying the source type to a later message.
+          Include(Method.TypeHint,
+                  Name == "SDWebImageManager" && !Type.IsClassMethod &&
+                          Selector ==
+                              "processedResultForURL:options:context:" &&
+                          Method.TypeEncoding == "@40@0:8@16Q24@32" &&
+                          hasEmbeddedSDWebImageOptionsResult(Image)
+                      ? std::optional<std::string>("SDWebImageOptionsResult")
+                      : declaredReturnClass(Method.TypeEncoding),
                   declaredReturnProtocol(Method.TypeEncoding));
+        }
       if (!Superclass)
         KnownScope = false;
       else if (!Superclass->empty())

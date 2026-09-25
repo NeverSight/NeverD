@@ -1746,6 +1746,20 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
               }
             }
           if (!Signature && !Qualified && !SelectorForwardingContract) {
+            if (Self && Self->TheKind == Value::Kind::SourceParameter &&
+                Self->SourceConsumedAsObject) {
+              SourceCallTypeHint::SelectorArgumentTypeEvidence Evidence;
+              Evidence.Parameter = 0;
+              Evidence.MethodEntry = Self->SourceMethodEntry;
+              Evidence.Source = Self->SourceLocation;
+              Evidence.ConsumedAsObject = true;
+              Signature = objcSelectorSourceTypeHintForArgumentTypeUse(
+                  Image, Target->Selector, Evidence);
+              if (Signature)
+                SelectorArgumentTypeUse = Evidence;
+            }
+          }
+          if (!Signature && !Qualified && !SelectorForwardingContract) {
             for (size_t Parameter = 2; Parameter < TRI.IntParamRegs.size();
                  ++Parameter) {
               const auto Argument =
