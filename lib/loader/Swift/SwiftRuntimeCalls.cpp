@@ -196,6 +196,10 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
     // Swift String is passed as its two scalar carriers; the mutable
     // destination is the swiftself pointer.
     {"$sSS6appendyySSF", "/usr/lib/swift/libswiftCore.dylib", "vzpC"},
+    // WMF's arm64 callers pass the prefix/suffix and receiver as two
+    // independent String words each; Bool is returned in the low byte of x0.
+    {"$sSS9hasPrefixySbSSF", "/usr/lib/swift/libswiftCore.dylib", "bzpzp"},
+    {"$sSS9hasSuffixySbSSF", "/usr/lib/swift/libswiftCore.dylib", "bzpzp"},
     // Character occupies the same two scalar result carriers as String.
     {"$sSSySJSS5IndexVcig", "/usr/lib/swift/libswiftCore.dylib", "(zz)zzp"},
     {"$sSa10FoundationE19_bridgeToObjectiveCSo7NSArrayCyF",
@@ -262,6 +266,11 @@ constexpr SwiftSDKDeclaration SwiftSDKDeclarations[] = {
      "/usr/lib/swift/libswiftCore.dylib", "pzC"},
     {"$ss27_bridgeAnythingToObjectiveCyyXlxlF",
      "/usr/lib/swift/libswiftCore.dylib", "ppp"},
+    // _StringGuts carries the same two machine words as String. The frozen
+    // two-case comparison expectation occupies the low byte of x4.
+    {"$ss27_stringCompareWithSmolCheck__9expectingSbs11_StringGutsV_"
+     "ADs01_G16ComparisonResultOtF",
+     "/usr/lib/swift/libswiftCore.dylib", "bzpzpb"},
     // Swift 6.1.2 NativeDictionary.swift declares this exact diagnostic
     // with one Any.Type input and a Never result. It must retain its trap.
     {"$ss53KEY_TYPE_OF_DICTIONARY_VIOLATES_HASHABLE_REQUIREMENTSys5NeverOypXpF",
@@ -283,6 +292,15 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
   if (Found == std::end(SwiftSDKDeclarations) ||
       Hint.TargetName != Found->Name || Bind == Image.DyldBindSlots.end() ||
       !darwinExportModuleMatches(Found->Modules, Bind->second.Module))
+    return false;
+
+  const bool StringPredicate =
+      Hint.TargetName == "$sSS9hasPrefixySbSSF" ||
+      Hint.TargetName == "$sSS9hasSuffixySbSSF" ||
+      Hint.TargetName ==
+          "$ss27_stringCompareWithSmolCheck__9expectingSbs11_StringGutsV_"
+          "ADs01_G16ComparisonResultOtF";
+  if (StringPredicate && Image.Arch != Arch::AArch64)
     return false;
 
   const auto Word = NdType::makeInt(8, false);
@@ -312,6 +330,8 @@ bool declaredSDKABI(const BinaryImage &Image, va_t Slot,
   if (Hint.TargetName ==
       "$sSo7UIImageC5UIKitE24imageLiteralResourceNameABSS_tcfC")
     Hint.SwiftStringInputs = {{0, 1}};
+  if (StringPredicate)
+    Hint.SwiftStringInputs = {{0, 1}, {2, 3}};
   for (char Code : Encoding) {
     SourceParameterTypeHint Parameter;
     Parameter.Name = "arg" + std::to_string(Signature.Parameters.size());

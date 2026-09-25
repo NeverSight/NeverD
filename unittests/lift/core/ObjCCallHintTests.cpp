@@ -2197,6 +2197,75 @@ TEST(ObjCCallHints, SwiftLocalizationSDKCallsUseCompilerObservedABI) {
   }
 }
 
+TEST(ObjCCallHints, Arm64SwiftStringPredicatesKeepBothWordPairs) {
+  struct Case {
+    const char *Name;
+    unsigned Parameters;
+  };
+  const Case Cases[] = {
+      {"$sSS9hasPrefixySbSSF", 4},
+      {"$sSS9hasSuffixySbSSF", 4},
+      {"$ss27_stringCompareWithSmolCheck__9expectingSbs11_StringGutsV_"
+       "ADs01_G16ComparisonResultOtF",
+       5},
+  };
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    const std::string Import = std::string("_") + Case.Name;
+    auto Image = runtimeImage(Import);
+    Image.DyldBindSlots[0x2180] = {
+        Import, 0, "/usr/lib/swift/libswiftCore.dylib", false};
+    const auto Hint = swiftRuntimeSourceCallHint(Image, 0x2180);
+    ASSERT_TRUE(Hint);
+    EXPECT_EQ(Hint->CallKind, SourceCallTypeHint::Kind::SwiftRuntimeCall);
+    const auto &ABI = Hint->Signature;
+    EXPECT_EQ(ABI.Origin, SourceFunctionTypeHint::OriginKind::SwiftSDK);
+    EXPECT_EQ(ABI.Convention, SourceFunctionTypeHint::ConventionKind::Swift);
+    ASSERT_TRUE(ABI.ReturnType);
+    EXPECT_EQ(ABI.ReturnType->Kind, NdTypeKind::Int);
+    EXPECT_EQ(ABI.ReturnType->Size, 1U);
+    EXPECT_EQ(ABI.ReturnLocation.RegisterOffset, a64reg::X0);
+    ASSERT_EQ(ABI.Parameters.size(), Case.Parameters);
+    for (unsigned I = 0; I < Case.Parameters; ++I) {
+      EXPECT_EQ(ABI.Parameters[I].Type->Kind,
+                I == 1 || I == 3 ? NdTypeKind::Ptr : NdTypeKind::Int);
+      EXPECT_EQ(ABI.Parameters[I].Type->Size,
+                I == 4 ? 1U : 8U);
+      EXPECT_EQ(ABI.Parameters[I].Location.RegisterOffset,
+                getTargetRegInfo(Arch::AArch64).IntParamRegs[I]);
+    }
+    ASSERT_EQ(Hint->SwiftStringInputs.size(), 2U);
+    EXPECT_EQ(Hint->SwiftStringInputs[0].first, 0U);
+    EXPECT_EQ(Hint->SwiftStringInputs[0].second, 1U);
+    EXPECT_EQ(Hint->SwiftStringInputs[1].first, 2U);
+    EXPECT_EQ(Hint->SwiftStringInputs[1].second, 3U);
+    std::string Diagnostic;
+    EXPECT_TRUE(validateSourceABI(ABI, Diagnostic)) << Diagnostic;
+    std::vector<ExprPtr> Args;
+    for (unsigned I = 0; I < Case.Parameters; ++I)
+      Args.push_back(HighExpr::makeConst(0, I == 4 ? 1 : 8));
+    auto Call = HighExpr::makeCall("untrusted", 0x2180, std::move(Args));
+    Call->Type = ABI.ReturnType;
+    Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+    EXPECT_TRUE(sdk::objcSourceCallBound(*Call, Image, {}));
+
+    auto Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].Module = "/tmp/libswiftCore.dylib";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*Call, Wrong, {}));
+    Wrong = Image;
+    Wrong.DyldBindSlots[0x2180].WeakImport = true;
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    Wrong = Image;
+    Wrong.ImportPtrSlots[0x2180] += "_suffix";
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+    Wrong = runtimeImage(Import, Arch::X64);
+    Wrong.DyldBindSlots[0x2180] = {
+        Import, 0, "/usr/lib/swift/libswiftCore.dylib", false};
+    EXPECT_FALSE(swiftRuntimeSourceCallHint(Wrong, 0x2180));
+  }
+}
+
 TEST(ObjCCallHints, SwiftStringGutsGrowKeepsCapacityAndSwiftSelfABI) {
   constexpr llvm::StringLiteral Name = "$ss11_StringGutsV4growyySiF";
   constexpr llvm::StringLiteral Provider = "/usr/lib/swift/libswiftCore.dylib";
