@@ -2101,6 +2101,43 @@ objcBlockParameterContract(const BinaryImage &Image,
           ObjCBlockParameterContract::Lifetime::NonEscaping};
     }
 
+  // UIImageView's embedded face-detection category forwards both callbacks
+  // into an operation queued by WMFFaceDetectionCache. The outer caller's
+  // stack blocks therefore need copied ownership before the call returns.
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol && Type->ClassName == "UIImageView" &&
+      Call.Selector == "wmf_getFaceBoundsInImage:onGPU:failure:success:" &&
+      (Parameter == 4 || Parameter == 5)) {
+    constexpr llvm::StringLiteral ParentEncoding = "v44@0:8@16B24@?28@?36";
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == "UIImageView" &&
+          Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
+        if (Method || !Candidate.CategoryAddress ||
+            Candidate.CategoryName != "WMFContentOffset" ||
+            !Candidate.MetadataAddress ||
+            Candidate.TypeEncoding != ParentEncoding ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, ParentEncoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature(
+        Parameter == 4 ? "v16@?0@\"NSError\"8"
+                       : "v16@?0@\"NSValue\"8",
+        Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+  }
+
   // WMFBlocksKit.swift imports its collection callbacks as @escaping. The
   // Objective-C wmf_mapAndRejectNil: forwards its callback through synchronous
   // reduction. Match the embedded category method, owner and complete callback
