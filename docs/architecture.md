@@ -190,6 +190,11 @@ owned capture. Once an ISA identity is live, other frame arguments remain
 rejected until a declared copying or nonescaping consumer invalidates the
 literal storage. This keeps later unrelated frame calls available without
 forgetting a block identity that still exists on any reaching path.
+An unchanged entry pointer parameter cannot address the current invocation's
+fresh private block frame, so an ordinary scalar store through that exact
+parameter does not invalidate construction. Loaded pointers, reassigned
+parameters, pointer-derived values, and unsupported store effects remain
+unproven aliases.
 
 Capture-free global block literals may share one compiler descriptor. Source
 dependencies and generated helpers follow the exact literal references in the

@@ -782,6 +782,22 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
   bool SawIsa = false;
   try {
     Values State(Source, Function);
+    auto UntouchedEntryPointer = [&](const ExprPtr &Expr,
+                                     auto &&Visit) -> bool {
+      if (!Expr || !Expr->Type || Expr->Type->Size != 8)
+        return false;
+      if (Expr->Kind == ExprKind::Var)
+        return Expr->Var.Kind == MedVar::Param && Expr->Var.SSAVer == 0 &&
+               Expr->Var.RenameTag < 0 &&
+               Expr->Var.Id < Function.Params.size() &&
+               !State.Locals.count(
+                   objc_projection_detail::localIdentity(Expr->Var));
+      if ((Expr->Kind == ExprKind::Cast ||
+           Expr->Kind == ExprKind::BitCast) &&
+          Expr->Operands.size() == 1)
+        return Visit(Expr->Operands[0], Visit);
+      return false;
+    };
     auto Word = [&](int64_t Address) -> Value {
       auto Begin = Memory.find(Address);
       if (Begin == Memory.end() || Begin->second.Index ||
@@ -1032,7 +1048,17 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
               S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
               isFileBackedWritableImageRange(Image, Address.Bits,
                                              S.StoreVal->Type->Size);
-          if (Current.SawIsa && !ImageStore)
+          // A caller cannot pass an address inside this invocation's fresh
+          // private frame. This applies only to an unchanged entry parameter;
+          // a loaded pointer or a reassigned parameter may alias the literal.
+          const bool EntryStore =
+              Address.K == Value::Scalar && !pointerIdentity(V) &&
+              S.StoreVal && S.StoreVal->Type &&
+              scalarWidth(S.StoreVal->Type->Size) &&
+              S.MemoryOrdering == NdMemoryOrdering::None &&
+              S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+              UntouchedEntryPointer(S.StoreAddr, UntouchedEntryPointer);
+          if (Current.SawIsa && !ImageStore && !EntryStore)
             throw Invalid(
                 "stack block construction has an unknown aliasing write");
           break;

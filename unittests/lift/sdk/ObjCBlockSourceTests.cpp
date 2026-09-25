@@ -1043,6 +1043,40 @@ TEST(ObjCBlockSources, ImageWritesKeepPrivateBlockAddressesConfined) {
     }
 }
 
+TEST(ObjCBlockSources, UntouchedEntryPointerStoresCannotAliasPrivateBlock) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+      SCOPED_TRACE(Architecture == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Mutation);
+      SourceFixture F(true, Architecture);
+      auto &Caller = F.caller();
+      const auto Pointer = parameter(0, Caller.Params[0].Type);
+      ExprPtr Address = Pointer;
+      if (Mutation == 1)
+        Address = HighExpr::makeBitCast(Pointer, NdType::makeInt(8));
+      if (Mutation == 2)
+        Address = HighExpr::makeLoad(Pointer, Caller.Params[0].Type);
+      if (Mutation == 3) {
+        HighStmt Reassign;
+        Reassign.Kind = StmtKind::Assign;
+        Reassign.Dst = Pointer;
+        Reassign.Val = HighExpr::makeLoad(Pointer, Caller.Params[0].Type);
+        Caller.Body.insert(Caller.Body.end() - 1, Reassign);
+      }
+      Caller.Body.insert(Caller.Body.end() - 1,
+                         store(Address, HighExpr::makeConst(7, 8)));
+      const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+      EXPECT_EQ(Plan.StackBlocks.count(F.Caller), Mutation < 2 ? 1U : 0U)
+          << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller)
+                                              : "");
+      if (Mutation < 2) {
+        const auto Bound = bindObjCBlockSourceReferences(
+            Caller, F.Image, Plan, F.functions());
+        EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      }
+    }
+}
+
 TEST(ObjCBlockSources, DeclaredConsumerRequiresExactImportAndCallbackABI) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64})
     for (const auto *Name :
