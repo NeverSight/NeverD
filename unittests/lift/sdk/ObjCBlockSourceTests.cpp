@@ -1713,6 +1713,16 @@ TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
       {"WMFRelatedSearchFetcher",
        "fetchRelatedArticlesForArticleWithURL:completion:",
        "v32@0:8@16@?24", 3, 3},
+      {"WMFExploreFeedContentController",
+       "updateExploreFeedPreferences:willTurnOnContentGroupOrLanguage:"
+       "waitForCallbackFromCoordinator:apply:updateFeed:",
+       "v40@0:8@?16B24B28B32B36", 2, 2},
+      {"WMFNearbyContentSource",
+       "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
+       "v52@0:8@16@24B32@?36@?44", 5, 4},
+      {"WMFNearbyContentSource",
+       "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
+       "v52@0:8@16@24B32@?36@?44", 6, 2},
   };
   for (const auto &C : Cases) {
     BlockFixture F;

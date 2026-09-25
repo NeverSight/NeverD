@@ -1915,7 +1915,9 @@ objcBlockParameterContract(const BinaryImage &Image,
   // store enables asynchronous store loading and uses performBlock:; the feed
   // source forwards its completion into the fetcher's network callbacks; the
   // fetchers deliver their callbacks from asynchronous session requests.
-  // RelatedSearchFetcher declares its Swift completion @escaping.
+  // RelatedSearchFetcher declares its Swift completion @escaping. The explore
+  // feed coordinator captures its update callback in a main-queue block. The
+  // nearby source forwards its callbacks from a Core Data performBlock: body.
   // Authenticate exact method owners, encodings and callback ABIs before
   // treating an Objective-C stack block as copied by a callee.
   struct WMFInstanceBlock {
@@ -1950,6 +1952,18 @@ objcBlockParameterContract(const BinaryImage &Image,
       {"WMFRelatedSearchFetcher",
        "fetchRelatedArticlesForArticleWithURL:completion:",
        "v32@0:8@16@?24", "v24@?0@\"NSError\"8@\"NSDictionary\"16", 3},
+      {"WMFExploreFeedContentController",
+       "updateExploreFeedPreferences:willTurnOnContentGroupOrLanguage:"
+       "waitForCallbackFromCoordinator:apply:updateFeed:",
+       "v40@0:8@?16B24B28B32B36", "@16@?0@\"NSDictionary\"8", 2},
+      {"WMFNearbyContentSource",
+       "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
+       "v52@0:8@16@24B32@?36@?44",
+       "v32@?0@\"WMFContentGroup\"8@\"CLLocation\"16@\"CLPlacemark\"24",
+       5},
+      {"WMFNearbyContentSource",
+       "getGroupForLocation:inManagedObjectContext:force:completion:failure:",
+       "v52@0:8@16@24B32@?36@?44", "v16@?0@\"NSError\"8", 6},
   };
   if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
       !Type->IsProtocol)
