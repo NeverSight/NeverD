@@ -59,6 +59,11 @@ void foldStructuredContinuations(HighFunc &Func, const MedFunc *Med = nullptr);
 /// Returns true when a goto was replaced.
 bool duplicateSmallReturnTails(std::vector<HighStmt> &Body);
 
+/// Late goto reduction: merge conditional jumps to one target, move a block
+/// entered by a single forward jump into that `if`, and turn a jump over the
+/// fall-through path into `if`/`else`.  Returns true when anything changed.
+bool reduceSingleUseGotos(std::vector<HighStmt> &Body);
+
 /// Emit a label-per-block goto/return skeleton.  Used when structuring would
 /// exceed SSA limits, or when conversion fails and identity alone would leave
 /// an empty HighFunc that HighC can only trap.

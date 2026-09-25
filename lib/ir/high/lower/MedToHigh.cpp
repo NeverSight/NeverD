@@ -786,9 +786,13 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   foldStructuredContinuations(Func, &Med);
   coalesceBranchEntryStatements(Func);
   eliminateHighDeadPhiCopies(Func);
-  if (Func.Body.size() <= limits::kMaxStructuredHighStmts &&
-      duplicateSmallReturnTails(Func.Body))
-    eliminateDeadStmts(Func);
+  if (Func.Body.size() <= limits::kMaxStructuredHighStmts) {
+    bool Changed = duplicateSmallReturnTails(Func.Body);
+    for (int Round = 0; Round < 8 && reduceSingleUseGotos(Func.Body); ++Round)
+      Changed = true;
+    if (Changed)
+      eliminateDeadStmts(Func);
+  }
   Trace.high(Func, "after-exceptions");
   auto TEnd = std::chrono::steady_clock::now();
 

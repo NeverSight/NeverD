@@ -4035,11 +4035,145 @@ TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
   ASSERT_EQ(Body.size(), 5u);
   EXPECT_EQ(Body[3].Addr, 0x1040u);
 
-  // A tail with an effect (a call) is not duplicated.
-  std::vector<HighStmt> Effectful = Body;
-  Effectful[0].Body = {Goto};
-  Effectful[3].Val = HighExpr::makeCall("f", 0x2000, {});
-  EXPECT_FALSE(duplicateSmallReturnTails(Effectful));
+  // A direct call assignment is copied too: each path still runs exactly
+  // one copy of it.
+  std::vector<HighStmt> Calling = Body;
+  Calling[0].Body = {Goto};
+  Calling[3].Val = HighExpr::makeCall("f", 0x2000, {});
+  EXPECT_TRUE(duplicateSmallReturnTails(Calling));
+
+  // A tail that stores to memory is not duplicated.
+  std::vector<HighStmt> Storing = Body;
+  Storing[0].Body = {Goto};
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.Addr = 0x1040;
+  Store.StoreAddr = HighExpr::makeConst(0x5000, 8);
+  Store.StoreVal = HighExpr::makeConst(1, 8);
+  Storing[3] = Store;
+  EXPECT_FALSE(duplicateSmallReturnTails(Storing));
+}
+
+namespace {
+HighStmt condGoto(va_t Addr, uint64_t Cond, va_t Target) {
+  HighStmt Goto;
+  Goto.Kind = StmtKind::Goto;
+  Goto.GotoTarget = Target;
+  HighStmt If;
+  If.Kind = StmtKind::If;
+  If.Addr = Addr;
+  If.Cond = HighExpr::makeConst(Cond, 1);
+  If.Body.push_back(Goto);
+  return If;
+}
+HighStmt assignConst(va_t Addr, int Id, uint64_t Value) {
+  MedVar V;
+  V.Kind = MedVar::Temp;
+  V.Id = Id;
+  V.Size = 8;
+  HighStmt S;
+  S.Kind = StmtKind::Assign;
+  S.Addr = Addr;
+  S.Dst = HighExpr::makeVar(V);
+  S.Val = HighExpr::makeConst(Value, 8);
+  return S;
+}
+HighStmt returnAt(va_t Addr) {
+  HighStmt S;
+  S.Kind = StmtKind::Return;
+  S.Addr = Addr;
+  return S;
+}
+HighStmt gotoAt(va_t Addr, va_t Target) {
+  HighStmt S;
+  S.Kind = StmtKind::Goto;
+  S.Addr = Addr;
+  S.GotoTarget = Target;
+  return S;
+}
+unsigned countGotos(const std::vector<HighStmt> &Body) {
+  unsigned N = 0;
+  walkStmts(Body, [&](const HighStmt &S) { N += S.Kind == StmtKind::Goto; });
+  return N;
+}
+} // namespace
+
+TEST(HighCPointerAddresses, ReduceGotosMergesJumpsToOneTarget) {
+  // if (a) goto L; if (b) goto L; x = 0; return; L: x = 1; return;
+  std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1040),
+                                condGoto(0x1008, 0, 0x1040),
+                                assignConst(0x1010, 1, 0), returnAt(0x1018),
+                                assignConst(0x1040, 1, 1), returnAt(0x1048)};
+  ASSERT_TRUE(reduceSingleUseGotos(Body));
+  // The two jumps merge, and the single-use block moves into the `if`.
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body[0].Kind, StmtKind::If);
+  ASSERT_TRUE(Body[0].Cond);
+  EXPECT_EQ(Body[0].Cond->Op, NdOp::BOOL_OR);
+  ASSERT_EQ(Body[0].Body.size(), 2u);
+  EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 1u);
+  EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
+}
+
+TEST(HighCPointerAddresses, ReduceGotosBuildsIfElseAroundJoin) {
+  // if (c) goto X; a = 1; J: b = 2; return; X: a = 3; goto J;
+  std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1040),
+                                assignConst(0x1008, 1, 1),
+                                assignConst(0x1010, 2, 2), returnAt(0x1018),
+                                assignConst(0x1040, 1, 3),
+                                gotoAt(0x1048, 0x1010)};
+  ASSERT_TRUE(reduceSingleUseGotos(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body[0].Kind, StmtKind::IfElse);
+  ASSERT_EQ(Body[0].Body.size(), 1u);
+  EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 3u);
+  ASSERT_EQ(Body[0].ElseBody.size(), 1u);
+  EXPECT_EQ(Body[0].ElseBody[0].Val->ConstVal, 1u);
+  // The join stays after the if/else, reached by both arms.
+  ASSERT_GE(Body.size(), 3u);
+  EXPECT_EQ(Body[1].Addr, 0x1010u);
+}
+
+TEST(HighCPointerAddresses, ReduceGotosKeepsLabelOfRemovedGoto) {
+  // A goto that is itself a branch target keeps its label when a transform
+  // drops it:  if (c) goto J;  if (d) { a = 1; K: goto J; }  J: return;
+  // and another path jumps to K.
+  HighStmt Inner;
+  Inner.Kind = StmtKind::If;
+  Inner.Addr = 0x1008;
+  Inner.Cond = HighExpr::makeConst(0, 1);
+  Inner.Body = {assignConst(0x1010, 1, 1), gotoAt(0x1018, 0x1030)};
+  std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1018), Inner,
+                                returnAt(0x1030)};
+  reduceSingleUseGotos(Body);
+  bool LabelKept = false;
+  bool JumpKept = false;
+  walkStmts(Body, [&](const HighStmt &S) {
+    LabelKept |= S.Addr == 0x1018;
+    JumpKept |= S.Kind == StmtKind::Goto && S.GotoTarget == 0x1018;
+  });
+  EXPECT_TRUE(!JumpKept || LabelKept);
+}
+
+TEST(HighCPointerAddresses, ReduceGotosFormsLoopFromBackEdge) {
+  // H: a = 1; if (c) goto H; return;   ->   do { a = 1; } while (c); return;
+  std::vector<HighStmt> Body = {assignConst(0x1000, 1, 1),
+                                condGoto(0x1008, 1, 0x1000),
+                                returnAt(0x1010)};
+  ASSERT_TRUE(reduceSingleUseGotos(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body[0].Kind, StmtKind::DoWhile);
+  ASSERT_EQ(Body[0].Body.size(), 1u);
+  EXPECT_EQ(Body[1].Kind, StmtKind::Return);
+
+  // A break inside the range would rebind to the new loop: no loop.
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  std::vector<HighStmt> WithBreak = {assignConst(0x1000, 1, 1), Break,
+                                     condGoto(0x1008, 1, 0x1000),
+                                     returnAt(0x1010)};
+  reduceSingleUseGotos(WithBreak);
+  EXPECT_EQ(countGotos(WithBreak), 1u);
 }
 
 TEST(HighCPointerAddresses, InterruptFlagChangesDoNotClobberRax) {
