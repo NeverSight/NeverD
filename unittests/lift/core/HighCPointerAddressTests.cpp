@@ -4307,6 +4307,26 @@ TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
   expectCompilesForMsvc(HighC);
 }
 
+TEST(HighCPointerAddresses, SelfLoopTargetKeepsItsLabel) {
+  // `jmp $` spins forever.  The branch into it must stay a jump to a label
+  // whose statement loops, not fall through or reference a missing label.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x85, 0xc9, // test ecx, ecx
+                                     0x74, 0x03, // je spin
+                                     0x31, 0xc0, // xor eax, eax
+                                     0xc3,       // ret
+                                     0xeb, 0xfe, // spin: jmp spin
+                                     0xcc};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_TRUE(std::regex_search(
+      HighC,
+      std::regex(
+          R"re((L_140001007:\s*goto L_140001007;|while \(1\) \{\s*\}))re")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}
+
 TEST(HighCPointerAddresses, PopfRestoresSystemFlags) {
   // `pushfq; cli; ...; popfq` restores the interrupt flag through the saved
   // EFLAGS image.  The system flags are not modelled as registers, so the

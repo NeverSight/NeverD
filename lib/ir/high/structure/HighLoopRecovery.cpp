@@ -292,7 +292,10 @@ void detectAndConvertLoops(HighFunc &Func,
       // Only a hoisted header test transfers its native entry to the loop.
       // An always-true wrapper is synthetic: the first body statement keeps
       // its exact label, including for another backedge outside this region.
-      WhileStmt.Addr = LoopExitTarget ? Func.Body[HeaderIdx].Addr : 0;
+      // A self-loop (`jmp $`) leaves no body statement to carry the label.
+      WhileStmt.Addr = LoopExitTarget || LoopBody.empty()
+                           ? Func.Body[HeaderIdx].Addr
+                           : 0;
       WhileStmt.LoopHeaderAddr = Target;
       WhileStmt.Cond = WhileCond;
 

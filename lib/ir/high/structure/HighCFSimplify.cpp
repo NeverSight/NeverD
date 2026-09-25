@@ -50,12 +50,17 @@ static void removeTrivialGotos(std::vector<HighStmt> &Stmts,
     va_t NextAddr = Stmts[static_cast<size_t>(I) + 1].Addr;
     if (NextAddr == 0)
       continue;
-    if (!(Target == NextAddr || (Target < NextAddr && NextAddr - Target <= 16)))
+    // A target short of the next statement is fall-through only when it lies
+    // past the goto itself (padding between them); a target at or before the
+    // goto, such as the `jmp $` self-loop, is a real backward jump.
+    const va_t Own = Stmts[I].Addr;
+    const bool OwnKnown = Own != 0 && Own != InvalidVA;
+    if (!(Target == NextAddr || (OwnKnown && Target > Own &&
+                                 Target < NextAddr && NextAddr - Target <= 16)))
       continue;
     // A goto that is itself a branch target (a lone `jmp` block) keeps its
     // address as an empty anchor, so gotos to it still have a label.
-    const va_t Own = Stmts[I].Addr;
-    if (Own != 0 && Own != InvalidVA && Targets.count(Own)) {
+    if (OwnKnown && Targets.count(Own)) {
       HighStmt Anchor;
       Anchor.Kind = StmtKind::Block;
       Anchor.Addr = Own;
