@@ -608,6 +608,17 @@ void structureIfElse(HighFunc &Func, int MaxPasses, const MedFunc *Med) {
         for (auto It = Else.FallthroughIndices.rbegin();
              It != Else.FallthroughIndices.rend(); ++It)
           Func.Body.erase(Func.Body.begin() + static_cast<long>(*It));
+        // The taken edge still reaches its target: keep the transfer unless
+        // the target is now the very next statement.
+        const size_t After = static_cast<size_t>(I) + 1;
+        if (After >= Func.Body.size() ||
+            AddrMap::entryAddress(Func.Body[After]) != IfTarget) {
+          HighStmt Transfer;
+          Transfer.Kind = StmtKind::Goto;
+          Transfer.GotoTarget = IfTarget;
+          Func.Body.insert(Func.Body.begin() + static_cast<long>(After),
+                           std::move(Transfer));
+        }
         Changed = true;
         continue;
       }

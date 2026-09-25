@@ -4326,6 +4326,39 @@ TEST(HighCPointerAddresses, SelfLoopTargetKeepsItsLabel) {
   expectCompilesForMsvc(HighC);
 }
 
+TEST(HighCPointerAddresses, EarlyReturnFoldKeepsTakenEdgeTarget) {
+  // `jne rest; ...; ret; other: ...; jmp head; rest: ...; ret`.  Folding the
+  // early return into `if (eq) { ...; return; }` must still send the taken
+  // edge to `rest`, not fall into the unrelated `other` block (which loops
+  // back to the head).
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x39, 0x0a,       // 00: cmp [rdx], rcx
+      0x75, 0x09,             // 03: jne other (0x0e)
+      0x48, 0x89, 0x12,       // 05: head: mov [rdx], rdx
+      0x48, 0x3b, 0x0a,       // 08: cmp rcx, [rdx]
+      0x75, 0x0a,             // 0b: jne rest (0x17)
+      0xc3,                   // 0d: ret
+      0x48, 0x89, 0x0a,       // 0e: other: mov [rdx], rcx
+      0x48, 0x89, 0x51, 0x08, // 11: mov [rcx+8], rdx
+      0xeb, 0xee,             // 15: jmp head (0x05)
+      0x48, 0x89, 0x4a, 0x10, // 17: rest: mov [rdx+16], rcx
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  // The store at `rest` must stay reachable: it may not follow an
+  // unconditional goto or return without a label of its own.
+  const size_t Store = HighC.find("+ (uint64_t)(16)");
+  ASSERT_NE(Store, std::string::npos) << HighC;
+  const size_t LineStart = HighC.rfind('\n', Store);
+  const size_t PrevStart = HighC.rfind('\n', LineStart - 1);
+  const std::string Prev =
+      HighC.substr(PrevStart + 1, LineStart - PrevStart - 1);
+  EXPECT_EQ(Prev.find("goto "), std::string::npos) << HighC;
+  EXPECT_EQ(Prev.find("return"), std::string::npos) << HighC;
+  expectCompilesForMsvc(HighC);
+}
+
 TEST(HighCPointerAddresses, PopfRestoresSystemFlags) {
   // `pushfq; cli; ...; popfq` restores the interrupt flag through the saved
   // EFLAGS image.  The system flags are not modelled as registers, so the
