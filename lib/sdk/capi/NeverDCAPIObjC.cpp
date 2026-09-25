@@ -96,12 +96,10 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       bool WitnessChanged = false;
       for (const auto &Function : Result.HighFuncs) {
         const auto Hint =
-            objc_binding_detail::swiftWitnessAccessorCallHint(Function,
-                                                               S->Img);
+            objc_binding_detail::swiftWitnessAccessorCallHint(Function, S->Img);
         if (!Hint || Options.SourceCalleeTypeHints.count(Function.Entry))
           continue;
-        Options.SourceCalleeTypeHints.emplace(Function.Entry,
-                                               Hint->Signature);
+        Options.SourceCalleeTypeHints.emplace(Function.Entry, Hint->Signature);
         WitnessChanged = true;
       }
       OncePlan = discoverSwiftOnceSources(S->Img, Result);
@@ -128,9 +126,9 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
           continue;
         auto OnceBinding = bindSwiftOnceSourceReferences(
             Function, S->Img, OncePlan, RefinementInputs);
-        auto Binding = bindObjCSourceReferences(
-            OnceBinding.Function, S->Img, &RefinementStorage,
-            &RefinementInputs);
+        auto Binding =
+            bindObjCSourceReferences(OnceBinding.Function, S->Img,
+                                     &RefinementStorage, &RefinementInputs);
         elimUnreadPrivateFrameStores(Binding.Function, S->Img.Arch);
         SourceRefinements.emplace(Function.Entry, std::move(Binding.Function));
       }
@@ -177,15 +175,15 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     COptions.UseDebugNames = false;
     HighCEmitter Emitter;
     std::string NativeSource;
-    llvm::raw_string_ostream NativeOS(NativeSource);
-    llvm::raw_null_ostream DiscardNative;
-    llvm::raw_ostream &NativeOutput =
-        IncludeSources ? static_cast<llvm::raw_ostream &>(NativeOS)
-                       : DiscardNative;
-    if (!Emitter.emit(Result.HighFuncs, NativeOutput, COptions)) {
-      S->setError("native C source projection failed");
-      Trace.finish(false);
-      return nullptr;
+    // Summary mode still renders and checks every publishable method below.
+    // The unrelated whole-image native source is only returned by full export.
+    if (IncludeSources) {
+      llvm::raw_string_ostream NativeOS(NativeSource);
+      if (!Emitter.emit(Result.HighFuncs, NativeOS, COptions)) {
+        S->setError("native C source projection failed");
+        Trace.finish(false);
+        return nullptr;
+      }
     }
     std::map<va_t, const HighFunc *> Functions;
     size_t NativeFunctionCount = 0;
@@ -274,16 +272,16 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       // Its proved scalar pool offsets may numerically overlap image code;
       // reinterpreting those generated offsets as raw machine addresses would
       // discard their caller-specific proof. Revalidate the entire body below.
-      auto Binding = ImmutableStringInputs.count(Entry)
-                         ? ImmutableStringInputs.at(Entry)
-                         : bindObjCSourceReferences(
-                               MetadataFactoryBinding.Function, S->Img,
-                               &ProfileStorage, &Functions);
+      auto Binding =
+          ImmutableStringInputs.count(Entry)
+              ? ImmutableStringInputs.at(Entry)
+              : bindObjCSourceReferences(MetadataFactoryBinding.Function,
+                                         S->Img, &ProfileStorage, &Functions);
       if (const auto Immutable = ImmutableStringInputs.find(Entry);
           Immutable != ImmutableStringInputs.end()) {
         Binding.Function = MetadataFactoryBinding.Function;
         if (!objCImmutableStringCallbackValid(Binding.Function, S->Img, Result,
-                                             OncePlan))
+                                              OncePlan))
           Binding.Limitation =
               "immutable string callback proof is no longer valid";
       }
@@ -347,8 +345,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         // Only earlier, already transitively proved callees may justify a
         // caller rewrite during this ordered projection pass. A dependency
         // that is merely locally closed can still fail the final fixed point.
-        if (std::all_of(Binding.Dependencies.begin(), Binding.Dependencies.end(),
-                        [&](va_t Dependency) {
+        if (std::all_of(Binding.Dependencies.begin(),
+                        Binding.Dependencies.end(), [&](va_t Dependency) {
                           return StableClosed.count(Dependency) != 0;
                         })) {
           StableClosed.insert(Entry);
@@ -445,7 +443,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             });
         if (ImmutableStringInputs.count(Entry) &&
             !objCImmutableStringCallbackValid(Binding.Function, S->Img, Result,
-                                             OncePlan)) {
+                                              OncePlan)) {
           Evidence.Complete = false;
           Evidence.add(SourceProjectionIssue::Body,
                        "immutable string callback proof is no longer valid");
@@ -544,7 +542,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             Projection.Function, *Method.TypeHint, Audit, CallAllowed);
         if (ImmutableStringInputs.count(Method.Implementation) &&
             !objCImmutableStringCallbackValid(Projection.Function, S->Img,
-                                             Result, OncePlan)) {
+                                              Result, OncePlan)) {
           Reason = "immutable string callback proof is no longer valid";
           Evidence.Complete = false;
           Evidence.add(SourceProjectionIssue::Body, Reason);
