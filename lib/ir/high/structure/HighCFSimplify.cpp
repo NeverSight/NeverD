@@ -224,11 +224,30 @@ void MedToHighConverter::inlineGotoReturns(HighFunc &Func, const MedFunc &Med) {
     auto &LastOp = MedBlock.Ops.back();
     if (LastOp.Opcode != NdOp::RETURN)
       continue;
+    // Only register bookkeeping (epilogue restores, stack adjustment) may
+    // sit beside the return value: a goto replaced by `return v` must not
+    // skip a store or call, or a load that computes v itself.
+    bool OnlyBookkeeping = true;
+    for (size_t J = 0; J + 1 < MedBlock.Ops.size(); ++J) {
+      const MedOp &Op = MedBlock.Ops[J];
+      OnlyBookkeeping &=
+          Op.Output.Kind == MedVar::Reg && Op.Opcode != NdOp::STORE &&
+          Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL &&
+          Op.Opcode != NdOp::INTRINSIC && Op.Opcode != NdOp::ATOMIC_XCHG &&
+          Op.Opcode != NdOp::ATOMIC_ADD && Op.Opcode != NdOp::ATOMIC_CMPXCHG;
+    }
+    if (!OnlyBookkeeping)
+      continue;
     for (int J = static_cast<int>(MedBlock.Ops.size()) - 2; J >= 0; --J) {
       auto &CurrOp = MedBlock.Ops[J];
       if (CurrOp.Output.Kind == MedVar::Reg && CurrOp.Output.RegOff == 0) {
+        const bool DefinedHere = std::any_of(
+            MedBlock.Ops.begin(), MedBlock.Ops.end(), [&](const MedOp &Op) {
+              return CurrOp.NumInputs >= 1 && !Op.Output.isConst() &&
+                     Op.Output == CurrOp.Inputs[0];
+            });
         if ((CurrOp.Opcode == NdOp::COPY || CurrOp.Opcode == NdOp::INT_ZEXT) &&
-            CurrOp.NumInputs >= 1)
+            CurrOp.NumInputs >= 1 && !DefinedHere)
           ReturnBlocks[MedBlock.Ops.front().Addr] =
               medvarToExpr(CurrOp.Inputs[0]);
         break;
