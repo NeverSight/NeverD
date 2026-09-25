@@ -1794,6 +1794,44 @@ TEST(SwiftOnceSources, BindsContiguousSwiftStringStorageAsOneSharedObject) {
   }
 }
 
+TEST(SwiftOnceSources, BindsInteriorSwiftStringWordsAsOneSharedObject) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    StringOnceFixture F(Architecture);
+    F.Image.Symbols = {{"_predicate", 0x2000, 8, false},
+                       {"_MergedGlobals", 0x2020, 0, false},
+                       {"_nextStorage", 0x2050, 8, false}};
+    auto &Call = F.Pipeline.HighFuncs.back().Body[0].RetVal;
+    Call->Operands[1] = HighExpr::makeConst(0x2030, 8);
+    Call->Operands[2] = HighExpr::makeConst(0x2038, 8);
+
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.Getters.size(), 1U);
+    ASSERT_EQ(Plan.CallbackHints.size(), 1U);
+    const auto Bound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs.back(), F.Image, Plan, F.functions());
+    EXPECT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+    EXPECT_EQ(Bound.LocalStorageExtents,
+              (std::map<va_t, uint64_t>{{0x2000, 8}, {0x2020, 32}}));
+    for (unsigned Index = 1; Index <= 2; ++Index) {
+      const auto Word = Bound.Function.Body[0].RetVal->Operands[Index];
+      ASSERT_EQ(Word->Kind, ExprKind::BinOp);
+      ASSERT_EQ(Word->Operands.size(), 2U);
+      ASSERT_TRUE(Word->Operands[0]->SourceCallHint);
+      EXPECT_EQ(Word->Operands[0]->SourceCallHint->TargetAddress, 0x2020U);
+      EXPECT_EQ(Word->Operands[0]->SourceCallHint->ByteCount, 32U);
+      EXPECT_EQ(Word->Operands[1]->ConstVal, Index == 1 ? 16U : 24U);
+    }
+    EXPECT_TRUE(
+        bindObjCSourceReferences(Bound.Function, F.Image).Limitation.empty());
+
+    auto Intervening = F.Image;
+    Intervening.Symbols.push_back({"_intervening", 0x203c, 4, false});
+    EXPECT_TRUE(bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs.back(),
+                                              Intervening, Plan, F.functions())
+                    .Dependencies.empty());
+  }
+}
+
 TEST(SwiftOnceSources,
      SharedStringGetterMayIgnoreTwoLeadingObjCRegisterCarriers) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
