@@ -10421,6 +10421,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"CGImage", NdTypeKind::Ptr, 2},
       {"addSubview:", NdTypeKind::Void, 3},
       {"CGColor", NdTypeKind::Ptr, 2},
+      {"CGRectValue", NdTypeKind::Struct, 2},
       {"CIImage", NdTypeKind::Ptr, 2},
       {"CGSizeValue", NdTypeKind::Struct, 2},
       {"alpha", NdTypeKind::Float, 2},
@@ -10434,6 +10435,7 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
       {"imageForState:", NdTypeKind::Ptr, 3},
       {"imageNamed:inBundle:withConfiguration:", NdTypeKind::Ptr, 5},
       {"imageOrientation", NdTypeKind::Int, 2},
+      {"imageRendererFormat", NdTypeKind::Ptr, 2},
       {"imageWithCIImage:scale:orientation:", NdTypeKind::Ptr, 5},
       {"initWithCGImage:", NdTypeKind::Ptr, 3},
       {"initWithProgressViewStyle:", NdTypeKind::Ptr, 3},
@@ -10484,6 +10486,14 @@ TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
     EXPECT_EQ(Hint->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
     EXPECT_EQ(Hint->ReturnType->Kind, Case.ReturnKind);
     ASSERT_EQ(Hint->Parameters.size(), Case.Parameters);
+    if (llvm::StringRef(Case.Selector) == "CGRectValue") {
+      EXPECT_EQ(Hint->ReturnType->Size, 32U);
+      ASSERT_EQ(Hint->ReturnComponents.size(), 4U);
+      for (const auto &Component : Hint->ReturnComponents) {
+        EXPECT_EQ(Component.Kind, SourceABICarrierKind::FloatingRegister);
+        EXPECT_EQ(Component.ValueBytes, 8U);
+      }
+    }
     if (llvm::StringRef(Case.Selector) == "endBackgroundTask:") {
       EXPECT_EQ(Hint->Parameters[2].Type->Size, 8U);
       EXPECT_FALSE(Hint->Parameters[2].Type->IsSigned);

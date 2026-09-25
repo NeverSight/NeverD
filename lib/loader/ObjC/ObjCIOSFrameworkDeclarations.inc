@@ -24,6 +24,9 @@
 {"CoreImage", "/System/Library/Frameworks/CoreImage.framework/CoreImage", "outputImage", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGColor", "^{CGColor=}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGImage", "^{CGImage=}16@0:8", nullptr},
+// NSValue's Core Graphics rectangle property has a 32-byte struct result.
+// Apple Clang emits this encoding for arm64 iOS.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGRectValue", "{CGRect={CGPoint=dd}{CGSize=dd}}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CGSizeValue", "{CGSize=dd}16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "CIImage", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "addSubview:", "v24@0:8@16", nullptr},
@@ -49,6 +52,8 @@
 // result. Apple Clang independently emits this exact arm64 encoding.
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageNamed:inBundle:withConfiguration:", "@40@0:8@16@24@32", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageOrientation", "q16@0:8", nullptr},
+// UIImage's readonly imageRendererFormat property returns an object pointer.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageRendererFormat", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageWithCGImage:", "@24@0:8^{CGImage=}16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "imageWithCIImage:scale:orientation:", "@40@0:8@16d24q32", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "initWithCGImage:", "@24@0:8^{CGImage=}16", nullptr},
