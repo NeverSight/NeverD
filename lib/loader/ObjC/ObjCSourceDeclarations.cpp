@@ -1911,6 +1911,62 @@ objcBlockParameterContract(const BinaryImage &Image,
         std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
   }
 
+  // MWKDataStore passes these callbacks into asynchronous Core Data work.
+  // Its implementation enables asynchronous store loading for setup and
+  // enqueues the temporary-context callback with performBlock:. Authenticate
+  // the exact embedded methods and callback ABIs before copying a stack block.
+  struct MWKDataStoreBlock {
+    const char *Selector;
+    const char *Parent;
+    const char *Callback;
+    unsigned Parameter;
+  };
+  static constexpr MWKDataStoreBlock MWKDataStoreBlocks[] = {
+      {"setupCoreDataStackWithContainerURL:completion:", "v32@0:8@16@?24",
+       "v8@?0", 3},
+      {"performBackgroundCoreDataOperationOnATemporaryContext:",
+       "v24@0:8@?16", "v16@?0@\"NSManagedObjectContext\"8", 2},
+  };
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol && Type->ClassName == "MWKDataStore")
+    for (const auto &D : MWKDataStoreBlocks) {
+      if (Call.Selector != D.Selector || Parameter != D.Parameter)
+        continue;
+      const ObjCClass *Owner = nullptr;
+      for (const auto &Class : Image.ObjCClasses)
+        if (Class.Name == "MWKDataStore") {
+          if (Owner)
+            return std::nullopt;
+          Owner = &Class;
+        }
+      if (!Owner || !Owner->Address)
+        return std::nullopt;
+      const ObjCMethod *Method = nullptr;
+      for (const auto &Candidate : Image.ObjCMethods)
+        if (Candidate.ClassName == Owner->Name &&
+            Candidate.Selector == D.Selector && !Candidate.IsClassMethod) {
+          if (Method || Candidate.ClassAddress != Owner->Address ||
+              Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
+              !Candidate.MetadataAddress ||
+              Candidate.TypeEncoding != D.Parent ||
+              !objcMethodHasSourceBody(Candidate) ||
+              !Image.isCodeAddress(Candidate.Implementation))
+            return std::nullopt;
+          Method = &Candidate;
+        }
+      if (!Method)
+        return std::nullopt;
+      auto Parent = parseObjCMethodEncoding(D.Selector, D.Parent);
+      std::string Error;
+      auto Callback = parseObjCBlockSignature(D.Callback, Image.Arch, Error);
+      if (!Parent || !Callback ||
+          !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+          !SameDeclaration(*Expected, *Parent))
+        return std::nullopt;
+      return ObjCBlockParameterContract{
+          std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+    }
+
   // WMFBlocksKit.swift imports these collection callbacks as @escaping.
   // Match the embedded Swift-extension methods, owner and complete callback
   // ABI before treating an Objective-C stack literal as copied by the bridge.

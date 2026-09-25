@@ -1682,6 +1682,76 @@ TEST(ObjCBlockSources, WMFSessionCopiesJSONCompletion) {
   EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 4));
 }
 
+TEST(ObjCBlockSources, MWKDataStoreCopiesCoreDataCallbacks) {
+  struct Case {
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameter;
+    unsigned CallbackParameters;
+  };
+  constexpr Case Cases[] = {
+      {"setupCoreDataStackWithContainerURL:completion:", "v32@0:8@16@?24",
+       3, 1},
+      {"performBackgroundCoreDataOperationOnATemporaryContext:",
+       "v24@0:8@?16", 2, 2},
+  };
+  for (const auto &C : Cases) {
+    BlockFixture F;
+    F.Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    ObjCClass Class;
+    Class.Name = "MWKDataStore";
+    Class.Address = 0x2700;
+    Class.SuperclassName = "NSObject";
+    Class.InheritanceStatus = "resolved";
+    F.Image.ObjCClasses.push_back(Class);
+    ObjCMethod Method;
+    Method.Implementation = 0x1300;
+    Method.MetadataAddress = 0x2800;
+    Method.ClassAddress = Class.Address;
+    Method.ClassName = Class.Name;
+    Method.Selector = C.Selector;
+    Method.TypeEncoding = C.Encoding;
+    Method.Status = "supported";
+    Method.TypeHint = parseObjCMethodEncoding(Method.Selector,
+                                              Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    F.Image.ObjCMethods.push_back(Method);
+    ObjCMethod Caller;
+    Caller.Implementation = 0x1200;
+    Caller.ClassAddress = Class.Address;
+    Caller.ClassName = Class.Name;
+    Caller.Selector = "submit:";
+    Caller.TypeEncoding = "v24@0:8@16";
+    Caller.Status = "supported";
+    Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector,
+                                              Caller.TypeEncoding);
+    ASSERT_TRUE(Caller.TypeHint);
+    F.Image.ObjCMethods.push_back(Caller);
+    const auto Receiver =
+        objcMethodReceiverTypeHint(F.Image, Caller.Implementation);
+    ASSERT_TRUE(Receiver);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = Method.Selector;
+    Call.Receiver = *Receiver;
+    const auto Declaration =
+        objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+    ASSERT_TRUE(Declaration.Signature);
+    Call.Signature = *Declaration.Signature;
+    const auto Contract = objcBlockParameterContract(F.Image, Call, C.Parameter);
+    ASSERT_TRUE(Contract) << C.Selector;
+    EXPECT_EQ(Contract->Storage, ObjCBlockParameterContract::Lifetime::Copied);
+    EXPECT_EQ(Contract->Signature.Parameters.size(), C.CallbackParameters);
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, C.Parameter - 1));
+    auto Changed = Call;
+    Changed.Receiver.reset();
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, C.Parameter));
+    F.Image.ObjCMethods.front().TypeEncoding = "v16@0:8";
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, C.Parameter));
+  }
+}
+
 TEST(ObjCBlockSources, WMFCollectionSwiftExtensionsCopyCallbacks) {
   struct Case {
     const char *Owner;
