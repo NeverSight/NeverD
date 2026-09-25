@@ -147,17 +147,24 @@ constexpr uint32_t kMaxJumpTableModuloRecipeSymbolEvidenceWork = 262144;
 /// power-of-two ceiling preserves bounded headroom without granting fresh
 /// per-phase or per-round allowances.
 constexpr uint32_t kMaxJumpTableMaskFixedPointEvidenceWork = 134217728;
+/// One jump-table candidate's whole evidence account.  Large kernel functions
+/// (thousands of instructions with cold chunks) can spend most of the mask
+/// fixed-point allowance on inventory prepayment alone, so the candidate keeps
+/// twice that allowance for its remaining guard, role and claim proofs.
+constexpr uint32_t kMaxJumpTableCandidateEvidenceWork = 268435456;
+static_assert(kMaxJumpTableCandidateEvidenceWork >=
+              kMaxJumpTableMaskFixedPointEvidenceWork);
 
 /// Aggregate allowance for one transactional multi-candidate resolver stage.
 /// A real function can contain several exact branch occurrences that consume
 /// the same physical table (peeled loops and computed-goto dispatch relays are
 /// common examples).  Each occurrence remains independently capped by
-/// kMaxJumpTableMaskFixedPointEvidenceWork; this larger, still finite account
+/// kMaxJumpTableCandidateEvidenceWork; this larger, still finite account
 /// retains four-candidate headroom so the stage can validate a complete
 /// sibling batch before committing it.
-constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 536870912;
+constexpr uint32_t kMaxJumpTableProposalStageEvidenceWork = 1073741824;
 static_assert(uint64_t{kMaxJumpTableProposalStageEvidenceWork} >=
-              uint64_t{kMaxJumpTableMaskFixedPointEvidenceWork} * 4);
+              uint64_t{kMaxJumpTableCandidateEvidenceWork} * 4);
 
 /// Aggregate allowance for proving that one authenticated Med jump-table
 /// target load is consumed exclusively by its recovered terminal branch.

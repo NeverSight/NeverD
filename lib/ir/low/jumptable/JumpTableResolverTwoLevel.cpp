@@ -95,7 +95,8 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
     const std::vector<LowOp> &Ops, int LoadIdx, uint16_t EntryWidth,
     va_t &TableAddr, uint64_t &IndexReg, uint32_t &Scale, NdVar *IndexValue,
     va_t *IndexUseAddr, int *IndexUseSeq,
-    std::function<bool(size_t)> ConsumeWork) const {
+    std::function<bool(size_t)> ConsumeWork,
+    JumpTableDisplacedAddressRole *Displaced) const {
   if (LoadIdx <= 0 || LoadIdx >= static_cast<int>(Ops.size()))
     return false;
   // The decomposition performs several full backward scans: the address COPY
@@ -128,7 +129,29 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
   va_t LoadAddr = L.Addr;
 
   // One operand is the (constant / foldable) table base; the other is the
-  // switch-variable index, optionally scaled by the entry width.
+  // switch-variable index, optionally scaled by the entry width.  A PE image
+  // addresses the table as `image base + index + table RVA`: peel that outer
+  // displacement and decompose the inner `base + index` add.
+  uint64_t Disp = 0;
+  const int CompleteIdx = AddIdx;
+  for (int Which = 0; Which < 2; ++Which) {
+    if (!Ops[AddIdx].Inputs[Which].isConst())
+      continue;
+    const int InnerIdx =
+        reachingDefIdx(Ops, AddIdx - 1, Ops[AddIdx].Inputs[1 - Which]);
+    if (InnerIdx < 0 || Ops[InnerIdx].Opcode != NdOp::INT_ADD ||
+        Ops[InnerIdx].NumInputs < 2 || Ops[InnerIdx].Inputs[0].isConst() ||
+        Ops[InnerIdx].Inputs[1].isConst())
+      continue;
+    Disp = Ops[AddIdx].Inputs[Which].Offset;
+    AddIdx = InnerIdx;
+    break;
+  }
+  const uint64_t PointerMask =
+      Img.getPointerSize() >= 8
+          ? ~uint64_t{0}
+          : (uint64_t{1} << (Img.getPointerSize() * 8)) - 1;
+
   for (int BaseW = 0; BaseW < 2; ++BaseW) {
     const NdVar &BaseV = Ops[AddIdx].Inputs[BaseW];
     const NdVar &IdxV = Ops[AddIdx].Inputs[1 - BaseW];
@@ -140,13 +163,18 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
       uint64_t BaseReg = traceToRegister(Ops, AddIdx - 1, BaseV);
       if (BaseReg == InvalidVA)
         continue;
-      auto Folded = foldRegConstant(Img, Rec, BaseReg, LoadAddr, ConsumeWork);
+      auto Folded = foldRegConstant(Img, Rec, BaseReg, LoadAddr, ConsumeWork,
+                                    /*RequireMappedValue=*/true,
+                                    /*AllowUnmappedCOFFImageBase=*/
+                                    Disp != 0 && Img.isCOFF());
       if (!Folded)
         continue;
       Base = *Folded;
     } else {
       continue;
     }
+    const va_t RuntimeBase = Base;
+    Base = (Base + Disp) & PointerMask;
     if (!Img.getSegmentFor(Base))
       continue;
 
@@ -189,6 +217,16 @@ bool CFGBuilder::decomposeIndexTableLoadAddr(
     if (S != EntryWidth)
       continue;
 
+    if (Displaced) {
+      *Displaced = JumpTableDisplacedAddressRole{};
+      if (Disp != 0)
+        *Displaced = {{BaseV, Ops[AddIdx].Addr, Ops[AddIdx].Seq,
+                       /*DefinedAtPoint=*/false},
+                      {Ops[CompleteIdx].Output, Ops[CompleteIdx].Addr,
+                       Ops[CompleteIdx].Seq, /*DefinedAtPoint=*/true},
+                      RuntimeBase,
+                      static_cast<int64_t>(Disp)};
+    }
     TableAddr = Base;
     IndexReg = IdxReg;
     Scale = S;
@@ -1010,6 +1048,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // 1) Locate the address-table (jmptab) load: the last pointer-width scaled
   //    load feeding the branch, `jmptab + entryIdx*W2`.
   uint64_t JmpBaseReg = InvalidVA, EntryIdxReg = InvalidVA;
+  uint64_t JmpDisp = 0;
+  JumpTableValueOccurrence JmpCompleteAddress;
+  JumpTableFrameAddressUse JmpRuntimeBase;
   uint16_t W2 = 0;
   int JmpLoadIdx = -1;
   {
@@ -1038,11 +1079,18 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
       if (!AddrV.isReg() && !AddrV.isTemp())
         continue;
+      JmpCompleteAddress = {};
+      JmpRuntimeBase = {};
       if (analyzeTableLoadAddr(Ops, I - 1, AddrV, JmpBaseReg, EntryIdxReg,
-                               Scaled, Disp) &&
+                               Scaled, Disp, /*AddrAddVA=*/nullptr,
+                               /*IndexValue=*/nullptr,
+                               /*IndexUseAddr=*/nullptr,
+                               /*IndexUseSeq=*/nullptr, &JmpCompleteAddress,
+                               &JmpRuntimeBase) &&
           Scaled) {
         W2 = W;
         JmpLoadIdx = I;
+        JmpDisp = Disp;
         break;
       }
     }
@@ -1118,6 +1166,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   va_t SwitchIndexUseAddr = InvalidVA;
   int SwitchIndexUseSeq = -1;
   uint32_t IdxScale = 1;
+  JumpTableDisplacedAddressRole IdxDisplaced;
   // decomposeIndexTableLoadAddr may test both ADD operands before finding the
   // mapped base.  Include every nested getSegmentFor/getSectionFor performed
   // by mappedObjectOwnerEnd and isCodeAddress, plus the sectionless-symbol
@@ -1129,20 +1178,119 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   if (!decomposeIndexTableLoadAddr(
           Img, Rec, Ops, IdxLoadIdx, W1, IdxTab, SwitchIdxReg, IdxScale,
           &SwitchIndexValue, &SwitchIndexUseAddr, &SwitchIndexUseSeq,
-          [&](size_t Amount) { return consumeEvidence(Amount); }))
+          [&](size_t Amount) { return consumeEvidence(Amount); },
+          &IdxDisplaced))
     return false;
 
   // 4) Fold the address-table base and confirm it is distinct from idxtab.
   va_t JmpTab = 0;
+  va_t JmpBase = 0;
   {
     va_t FoldAt = Ops[JmpLoadIdx].Addr;
-    auto Folded =
-        foldRegConstant(Img, Rec, JmpBaseReg, FoldAt,
-                        [&](size_t Amount) { return consumeEvidence(Amount); });
-    if (!Folded || !Img.getSegmentFor(*Folded))
+    auto Folded = foldRegConstant(
+        Img, Rec, JmpBaseReg, FoldAt,
+        [&](size_t Amount) { return consumeEvidence(Amount); },
+        /*RequireMappedValue=*/true,
+        /*AllowUnmappedCOFFImageBase=*/JmpDisp != 0 && Img.isCOFF());
+    if (!Folded)
       return false;
-    JmpTab = *Folded;
+    // The address table may be displaced from the folded base register (a PE
+    // image base plus the table RVA).
+    const uint64_t PointerMask =
+        Img.getPointerSize() >= 8
+            ? ~uint64_t{0}
+            : (uint64_t{1} << (Img.getPointerSize() * 8)) - 1;
+    JmpBase = *Folded;
+    JmpTab = (*Folded + JmpDisp) & PointerMask;
+    if (!Img.getSegmentFor(JmpTab))
+      return false;
   }
+  // A linked x64 PE switch stores 32-bit RVAs without relocations, addresses
+  // both tables as `image base + index + table RVA` and branches to
+  // `image base + entry`.  MSVC places such tables in the executable section
+  // after the function.  Admit that exact encoding only when the branch target
+  // is proven to add the image base to the zero-extended inner entry.
+  bool PEImageRVA = false;
+  if (Img.isCOFF() && !Img.IsRelocatable && Img.Arch == Arch::X64 &&
+      Img.getPointerSize() == 8 && W2 == sizeof(uint32_t) && JmpDisp != 0 &&
+      JmpBase == Img.Base) {
+    if (!consumeProduct(Ops.size(), size_t(limits::kMaxQuasiCopyDepth) * 4))
+      return false;
+    int BranchIdx = -1;
+    for (int I = static_cast<int>(Ops.size()) - 1; I > JmpLoadIdx; --I)
+      if (Ops[I].Opcode == NdOp::INDIR_BR && Ops[I].NumInputs >= 1) {
+        BranchIdx = I;
+        break;
+      }
+    // Follow plain transports of a value back to its defining operation.
+    auto definingOp = [&](NdVar V, int From) -> int {
+      for (int Hop = 0; Hop < limits::kMaxQuasiCopyDepth; ++Hop) {
+        if (!V.isReg() && !V.isTemp())
+          return -1;
+        const int D = reachingDefIdx(Ops, From, V);
+        if (D < 0)
+          return -1;
+        const LowOp &O = Ops[D];
+        if (O.Opcode == NdOp::COPY && O.NumInputs >= 1) {
+          V = O.Inputs[0];
+          From = D - 1;
+          continue;
+        }
+        return D;
+      }
+      return -1;
+    };
+    // The inner entry, zero-extended from 32 bits, reaches this operand.
+    auto isZeroExtendedEntry = [&](NdVar V, int From) {
+      for (int Hop = 0; Hop < limits::kMaxQuasiCopyDepth; ++Hop) {
+        const int D = definingOp(V, From);
+        if (D < 0)
+          return false;
+        if (D == JmpLoadIdx)
+          return true;
+        const LowOp &O = Ops[D];
+        if (O.Opcode != NdOp::INT_ZEXT || O.NumInputs < 1)
+          return false;
+        V = O.Inputs[0];
+        From = D - 1;
+      }
+      return false;
+    };
+    const int Sum = BranchIdx >= 0
+                        ? definingOp(Ops[BranchIdx].Inputs[0], BranchIdx - 1)
+                        : -1;
+    if (Sum >= 0 && Ops[Sum].Opcode == NdOp::INT_ADD &&
+        Ops[Sum].NumInputs >= 2) {
+      for (int Which = 0; Which < 2 && !PEImageRVA; ++Which) {
+        if (!isZeroExtendedEntry(Ops[Sum].Inputs[Which], Sum - 1))
+          continue;
+        const uint64_t BaseReg =
+            traceToRegister(Ops, Sum - 1, Ops[Sum].Inputs[1 - Which]);
+        if (BaseReg == InvalidVA)
+          continue;
+        const std::optional<uint64_t> Base = foldRegConstant(
+            Img, Rec, BaseReg, Ops[Sum].Addr,
+            [&](size_t Amount) { return consumeEvidence(Amount); },
+            /*RequireMappedValue=*/true, /*AllowUnmappedCOFFImageBase=*/true);
+        PEImageRVA = Base && *Base == Img.Base;
+      }
+    }
+  }
+  // Decoded instructions must not overlap table storage: bytes a function
+  // executes are not a compiler-emitted table.
+  auto overlapsDecodedCode = [&](va_t Begin, uint64_t Size) {
+    if (Size == 0 || Size > InvalidVA - Begin)
+      return true;
+    auto It = Insns.lower_bound(Begin);
+    if (It != Insns.end() && It->first < Begin + Size)
+      return true;
+    if (It != Insns.begin()) {
+      --It;
+      if (It->first + It->second.Size > Begin)
+        return true;
+    }
+    return false;
+  };
   if (JmpTab == IdxTab)
     return false;
   const auto *JmpSeg = Img.getSegmentFor(JmpTab);
@@ -1156,37 +1304,115 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     return false;
   // The index table lives in read-only data; a writable/executable "idxtab"
   // would not be a compiler-emitted constant index table.
-  if (IdxSeg->isWritable() || Img.isCodeAddress(IdxTab))
+  if (IdxSeg->isWritable() || (Img.isCodeAddress(IdxTab) && !PEImageRVA))
     return false;
   // 5) The address table's signature: a run of loader-applied code-pointer
   //    relocations (absolute) or PC-relative-to-code relocations (relative).
   //    The bounded run length M is authenticated physical capacity, and every
   //    idxtab byte must be < M — the constraint that distinguishes a genuine
   //    two-level table from an unrelated pair of chained loads.
-  const uint64_t OwnerEntries = (*JmpOwnerEnd - JmpTab) / W2;
+  uint64_t OwnerEntries = (*JmpOwnerEnd - JmpTab) / W2;
+  if (PEImageRVA && IdxTab > JmpTab)
+    OwnerEntries = std::min<uint64_t>(OwnerEntries, (IdxTab - JmpTab) / W2);
   bool Relative = false;
-  const size_t CodePtrRelocLookup =
-      orderedLookupWork(Img.CodePtrRelocSlots.size()) + 1;
-  const auto AbsoluteRun =
-      relocRunIn(Img.CodePtrRelocSlots, JmpTab, W2, OwnerEntries,
-                 [&] { return consumeEvidence(CodePtrRelocLookup); });
-  if (!AbsoluteRun)
-    return false;
-  uint32_t M = AbsoluteRun->Count;
-  bool RelocationIdentityComplete = AbsoluteRun->Complete;
-  if (M < limits::kMinJumpTableEntries) {
-    const size_t RelCodeRelocLookup =
-        orderedLookupWork(Img.RelCodeRelocSlots.size()) + 1;
-    const auto RelativeRun =
-        relocRunIn(Img.RelCodeRelocSlots, JmpTab, W2, OwnerEntries,
-                   [&] { return consumeEvidence(RelCodeRelocLookup); });
-    if (!RelativeRun)
+  // Decode one inner entry under the recovered encoding.
+  auto decodeInner = [&](const uint8_t *Entry) -> std::optional<va_t> {
+    if (PEImageRVA)
+      return decodeTableEntry(Entry, W2, /*IsRelative=*/true,
+                              /*IsSigned=*/false, JmpTab,
+                              /*HasTargetBase=*/true, Img.Base, /*Scale=*/1,
+                              Img.getPointerSize());
+    std::optional<va_t> Target =
+        decodeTableEntry(Entry, W2, Relative, Relative, JmpTab,
+                         /*HasTargetBase=*/false, /*TargetBase=*/0,
+                         /*Scale=*/1, Img.getPointerSize());
+    if (Target && !Relative)
+      Target = canonicalizeAbsoluteTableCodeTarget(Img, *Target);
+    return Target;
+  };
+  uint32_t M = 0;
+  bool RelocationIdentityComplete = false;
+  // Validated inner targets of a PE RVA table, one per physical slot.
+  std::vector<va_t> RVAInnerTargets;
+  // The loader/ownership inventory one isValidTarget query may traverse.
+  auto consumeTargetValidation = [&](size_t Count) {
+    const size_t KnownEntryLookup =
+        KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
+    const size_t FragmentLookup =
+        orderedLookupWork(Img.ExceptionMetadata.Functions.size());
+    const size_t FragmentWorkPerEntry =
+        FragmentLookup <= (std::numeric_limits<size_t>::max() - 3) / 2
+            ? FragmentLookup * 2 + 3
+            : std::numeric_limits<size_t>::max();
+    return consumeProducts({{Count, 16}}) &&
+           consumeFactorProduct({Count, Img.Symbols.size(), 4}) &&
+           consumeFactorProduct({Count, Img.Segments.size(), 16}) &&
+           consumeFactorProduct({Count, Img.Sections.size(), 8}) &&
+           consumeFactorProduct({Count, Img.ExceptionMetadata.Functions.size(),
+                                 FragmentWorkPerEntry}) &&
+           consumeFactorProduct({Count, Img.ImportStubRanges.size(), 3}) &&
+           consumeFactorProduct({Count, Img.Imports.size(), 2}) &&
+           consumeFactorProduct({Count, Img.KnownCodeRanges.size(), 2}) &&
+           consumeFactorProduct(
+               {Count, Img.Imports.size(), Img.Segments.size(), 4}) &&
+           consumeFactorProduct(
+               {Count, Img.Imports.size(), Img.Sections.size(), 4}) &&
+           consumeFactorProduct(
+               {Count, orderedLookupWork(Img.RuntimeFunctionAddrs.size()),
+                2}) &&
+           consumeFactorProduct(
+               {Count, orderedLookupWork(Img.VerifiedFunctionEntries.size()),
+                2}) &&
+           consumeFactorProduct(
+               {Count, orderedLookupWork(Img.ImportStubIndices.size()), 2}) &&
+           consumeFactorProduct({Count, orderedLookupWork(Insns.size())}) &&
+           consumeFactorProduct({Count, KnownEntryLookup, 2});
+  };
+  if (PEImageRVA) {
+    // The RVA run ends at the first entry that is not a valid target in this
+    // function or whose bytes the function executes.  Each slot pays for its
+    // decode, overlap scan and target validation before performing them.
+    while (M < OwnerEntries && M < limits::kMaxJumpTableEntries) {
+      const va_t Slot = JmpTab + static_cast<uint64_t>(M) * W2;
+      if (!consumeProducts({{1, Img.Segments.size() + 8},
+                            {1, orderedLookupWork(Insns.size()) + 2}}) ||
+          !consumeTargetValidation(1))
+        return false;
+      const uint8_t *Entry = Img.readVA(Slot, W2);
+      if (!Entry || overlapsDecodedCode(Slot, W2))
+        break;
+      const std::optional<va_t> Target = decodeInner(Entry);
+      if (!Target || !isValidTarget(Img, *Target, CurrentFuncEntry))
+        break;
+      RVAInnerTargets.push_back(*Target);
+      ++M;
+    }
+    RelocationIdentityComplete = true;
+  } else {
+
+    const size_t CodePtrRelocLookup =
+        orderedLookupWork(Img.CodePtrRelocSlots.size()) + 1;
+    const auto AbsoluteRun =
+        relocRunIn(Img.CodePtrRelocSlots, JmpTab, W2, OwnerEntries,
+                   [&] { return consumeEvidence(CodePtrRelocLookup); });
+    if (!AbsoluteRun)
       return false;
-    const uint32_t RM = RelativeRun->Count;
-    if (RM >= limits::kMinJumpTableEntries) {
-      M = RM;
-      Relative = true;
-      RelocationIdentityComplete = RelativeRun->Complete;
+    M = AbsoluteRun->Count;
+    RelocationIdentityComplete = AbsoluteRun->Complete;
+    if (M < limits::kMinJumpTableEntries) {
+      const size_t RelCodeRelocLookup =
+          orderedLookupWork(Img.RelCodeRelocSlots.size()) + 1;
+      const auto RelativeRun =
+          relocRunIn(Img.RelCodeRelocSlots, JmpTab, W2, OwnerEntries,
+                     [&] { return consumeEvidence(RelCodeRelocLookup); });
+      if (!RelativeRun)
+        return false;
+      const uint32_t RM = RelativeRun->Count;
+      if (RM >= limits::kMinJumpTableEntries) {
+        M = RM;
+        Relative = true;
+        RelocationIdentityComplete = RelativeRun->Complete;
+      }
     }
   }
   if (M < limits::kMinJumpTableEntries)
@@ -1472,7 +1698,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   // before publishing the composed target vector.
   const bool OrdinaryGuardProven =
       CandidateEvidenceBudget &&
-      inferBoundsFromPreciseGuards(Rec, Info, CandidateEvidenceBudget);
+      inferBoundsFromPreciseGuards(Rec, Info, CandidateEvidenceBudget,
+                                   /*UseDefinedAlternativesAsRoots=*/false,
+                                   /*CertifiedEdgeOverrides=*/nullptr,
+                                   /*AllowSparseDomain=*/PEImageRVA);
   const uint32_t OrdinaryGuardBound = Info.MaxEntries;
   bool GuardProven = OrdinaryGuardProven;
   uint32_t IdxCap = static_cast<uint32_t>(std::min<uint64_t>(
@@ -1598,14 +1827,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
           Img.readVA(JmpTab + static_cast<uint64_t>(Slot) * W2, W2);
       if (!Entry)
         return false;
-      std::optional<va_t> Target =
-          decodeTableEntry(Entry, W2, Relative, Relative, JmpTab,
-                           /*HasTargetBase=*/false, /*TargetBase=*/0,
-                           /*Scale=*/1, Img.getPointerSize());
-      if (!Target)
-        return false;
-      if (!Relative)
-        Target = canonicalizeAbsoluteTableCodeTarget(Img, *Target);
+      std::optional<va_t> Target = decodeInner(Entry);
       if (!Target || !isValidTarget(Img, *Target, CurrentFuncEntry))
         return false;
       ProofTargets.push_back(*Target);
@@ -1613,10 +1835,10 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     Info.setBaseAddr(JmpTab);
     Info.EntrySize = W2;
     Info.PhysicalCapacity = M;
-    Info.RelocAbsolute = !Relative;
+    Info.RelocAbsolute = !Relative && !PEImageRVA;
     Info.ExplicitTargets = std::move(ProofTargets);
     Info.StorageRanges = {JumpTableStorageRange{JmpTab, W2, W2, M}};
-    if (!Relative) {
+    if (!Relative && !PEImageRVA) {
       Info.SuppressibleRelocationSlots.reserve(M);
       for (uint32_t Slot = 0; Slot < M; ++Slot)
         Info.SuppressibleRelocationSlots.push_back(
@@ -1987,7 +2209,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
                         {Scan, InnerSlotLookup + 3},
                         {1, 4}}))
     return false;
-  if (!Clamp.Present) {
+  if (!Clamp.Present && !PEImageRVA) {
     const size_t KnownEntryLookup =
         KnownFuncEntries ? orderedLookupWork(KnownFuncEntries->size()) : 0;
     const size_t RuntimeEntryLookup =
@@ -2046,24 +2268,20 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       if (Iidx >= Info.ExplicitTargets.size())
         return false;
       Target = Info.ExplicitTargets[Iidx];
+    } else if (PEImageRVA) {
+      // Every physical slot was decoded and validated by the capacity scan.
+      if (Iidx >= RVAInnerTargets.size())
+        return false;
+      Target = RVAInnerTargets[Iidx];
     } else {
       const uint8_t *EP =
           Img.readVA(JmpTab + static_cast<uint64_t>(Iidx) * W2, W2);
       if (!EP)
         return false;
-      std::optional<va_t> TargetOpt = decodeTableEntry(
-          EP, W2, Relative, Relative, JmpTab, /*HasTargetBase=*/false,
-          /*TargetBase=*/0, /*Scale=*/1, Img.getPointerSize());
+      std::optional<va_t> TargetOpt = decodeInner(EP);
       if (!TargetOpt)
         return false;
       Target = *TargetOpt;
-      if (!Relative) {
-        std::optional<va_t> Canonical =
-            canonicalizeAbsoluteTableCodeTarget(Img, Target);
-        if (!Canonical)
-          return false;
-        Target = *Canonical;
-      }
       if (!isValidTarget(Img, Target, CurrentFuncEntry))
         return false;
     }
@@ -2072,10 +2290,13 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
   if (Targets.size() != Scan)
     return false;
+  if (PEImageRVA && (overlapsDecodedCode(IdxTab, uint64_t(Scan) * W1) ||
+                     overlapsDecodedCode(JmpTab, uint64_t(M) * W2)))
+    return false;
 
   const size_t StorageUpper = InnerSlotUpper + 1;
   const size_t SuppressibleUpper =
-      Clamp.Present && !Relative ? InnerSlotUpper : 0;
+      Clamp.Present && !Relative && !PEImageRVA ? InnerSlotUpper : 0;
   // Build all final dynamic metadata locally.  Three work units per retained
   // element cover vector storage, element construction, and future cleanup;
   // the fixed terms cover the vector objects.  One source traversal of the
@@ -2110,6 +2331,15 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   OuterRole.Indices = {{SwitchIndexValue, SwitchIndexUseAddr, SwitchIndexUseSeq,
                         /*DefinedAtPoint=*/false}};
   OuterRole.AddressScale = IdxScale;
+  // Both PE RVA tables are addressed from the image base plus their RVA.
+  if (PEImageRVA) {
+    if (IdxDisplaced.ByteAddend == 0 ||
+        IdxDisplaced.ExpectedRuntimeBase != Img.Base ||
+        JmpRuntimeBase.Use.Value.Size == 0 ||
+        JmpRuntimeBase.ByteAddend != static_cast<int64_t>(JmpDisp))
+      return false;
+    OuterRole.DisplacedAddress = IdxDisplaced;
+  }
 
   JumpTableLoadRole InnerRole;
   InnerRole.Load = {Ops[JmpLoadIdx].Output, Ops[JmpLoadIdx].Addr,
@@ -2126,6 +2356,9 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
   InnerRole.AddressScale = W2;
   InnerRole.AllowZeroExtension = true;
   InnerRole.AllowSignExtension = false;
+  if (PEImageRVA)
+    InnerRole.DisplacedAddress = {JmpRuntimeBase.Use, JmpCompleteAddress,
+                                  Img.Base, JmpRuntimeBase.ByteAddend};
   std::vector<JumpTableLoadRole> FinalLoadRoles;
   FinalLoadRoles.reserve(2);
   FinalLoadRoles.push_back(std::move(OuterRole));
@@ -2133,9 +2366,13 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
 
   Info.setBaseAddr(JmpTab);
   Info.EntrySize = W2;
-  Info.IsRelative = Relative;
+  Info.IsRelative = Relative || PEImageRVA;
   Info.IsSigned = Relative;
-  Info.RelocAbsolute = Clamp.Present && !Relative;
+  Info.RelocAbsolute = Clamp.Present && !Relative && !PEImageRVA;
+  if (PEImageRVA) {
+    Info.setTargetBase(Img.Base);
+    Info.IsPEImageRelativeRVA = true;
+  }
   Info.IndexReg = SwitchSrc;
   Info.TwoLevelIndex = true;
   Info.IndexDomainAuthenticated = true;

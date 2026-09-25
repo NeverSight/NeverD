@@ -644,6 +644,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for " << Func.Name
                             << " insns=" << Low.DecodedInstructionCount
                             << " ops=" << CopiedOps << "\n");
+    // The unoptimized ops still carry their LowIR occurrences, so switch
+    // selectors bind exactly as they would after the full pipeline.
+    resolveSwitchSelectorPlans(Func);
     return Func;
   }
 

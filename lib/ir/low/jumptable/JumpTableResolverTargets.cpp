@@ -55,8 +55,13 @@ bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
   if (!Seg || !Img.hasExecutableCodeOwnerAt(Target))
     return false;
 
+  // Distance is only a heuristic for ownership; a chained/cold fragment that
+  // runtime unwind metadata links back to this exact function may lie farther
+  // away (MSVC moves cold switch arms to the end of the section).
   uint64_t Dist = Target > FuncEntry ? Target - FuncEntry : FuncEntry - Target;
-  if (Dist > limits::kMaxJumpTargetDistance)
+  if (Dist > limits::kMaxJumpTargetDistance &&
+      !isExplicitlyOwnedFunctionFragment(Img, FuncEntry, Target,
+                                         ExecutableCodeOwners))
     return false;
 
   uint32_t Align = getInsnAlignment();
@@ -108,7 +113,9 @@ bool CFGBuilder::sanityCheckTargets(const BinaryImage &Img,
   for (size_t I = 1; I < Targets.size(); ++I) {
     uint64_t Dist =
         Targets[I] > RefAddr ? Targets[I] - RefAddr : RefAddr - Targets[I];
-    if (Dist > limits::kMaxJumpTargetDistance) {
+    if (Dist > limits::kMaxJumpTargetDistance &&
+        !isExplicitlyOwnedFunctionFragment(Img, CurrentFuncEntry, Targets[I],
+                                           ExecutableCodeOwners)) {
       TruncAt = I;
       break;
     }

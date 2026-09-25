@@ -370,7 +370,8 @@ enum class DenseGuardPrefixProof : uint8_t {
 
 DenseGuardPrefixProof proveDenseGuardPrefix(GuardSymbolization &State,
                                             SymRef ReachesTable,
-                                            uint32_t Prefix) {
+                                            uint32_t Prefix,
+                                            bool UpperBoundOnly = false) {
   if (!State.Index || !ReachesTable || State.Ctx.width(ReachesTable) != 1 ||
       Prefix < limits::kMinJumpTableEntries ||
       Prefix > limits::kMaxJumpTableEntries)
@@ -378,7 +379,11 @@ DenseGuardPrefixProof proveDenseGuardPrefix(GuardSymbolization &State,
   const uint32_t IndexWidth = State.Ctx.width(State.Index);
   SymRef Expected = State.Ctx.mkUlt(
       State.Index, State.Ctx.mkConst(IndexWidth, uint64_t(Prefix)));
-  SymRef Counterexample = State.Ctx.mkXor(ReachesTable, Expected);
+  // A sparse domain needs only the upper bound: no value at or past Prefix
+  // reaches the table.  A dense one must also reach every value below it.
+  SymRef Counterexample =
+      UpperBoundOnly ? State.Ctx.mkAnd(ReachesTable, State.Ctx.mkNot(Expected))
+                     : State.Ctx.mkXor(ReachesTable, Expected);
 
   solver::SolverOptions Options;
   Options.BuildModel = false;
@@ -550,7 +555,8 @@ std::optional<uint64_t> evaluateGuardExpr(const GuardExprPtr &Expr,
 bool CFGBuilder::inferBoundsFromPreciseGuards(
     const InsnRecord &Rec, JumpTableInfo &Info, size_t *CandidateEvidenceBudget,
     bool UseDefinedAlternativesAsRoots,
-    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides) {
+    const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
+    bool AllowSparseDomain) {
   Info.IncompleteGuardDomain = false;
   Info.SemanticGuardDomainAmbiguous = false;
   if ((!Info.IndexValueAtUse.isReg() && !Info.IndexValueAtUse.isTemp()) ||
@@ -1618,6 +1624,9 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
 
   uint32_t FirstRejected = 0;
   bool SawRejected = false;
+  // A sparse domain (a two-level index table, whose unreached index bytes are
+  // simply unused) is bounded by its last reaching value.
+  std::optional<uint64_t> LastReaching;
   for (uint64_t Value = 0; Value <= LastSample; ++Value) {
     bool Reaches = true;
     for (const auto &[Expr, TableCondition] : IndexGuards) {
@@ -1626,13 +1635,20 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
         return failSemantic();
       Reaches &= ((*Condition != 0) == TableCondition);
     }
+    if (Reaches)
+      LastReaching = Value;
     if (!SawRejected && !Reaches) {
       FirstRejected = static_cast<uint32_t>(Value);
       SawRejected = true;
-    } else if (SawRejected && Reaches) {
+    } else if (SawRejected && Reaches && !AllowSparseDomain) {
       return failSemantic();
     }
   }
+  const bool SparseDomain = AllowSparseDomain && SawRejected && LastReaching &&
+                            *LastReaching >= FirstRejected &&
+                            *LastReaching < LastSample;
+  if (SparseDomain)
+    FirstRejected = static_cast<uint32_t>(*LastReaching + 1);
   if (!SawRejected || FirstRejected < limits::kMinJumpTableEntries ||
       FirstRejected > limits::kMaxJumpTableEntries) {
     if (SawControllingGuard)
@@ -1655,7 +1671,8 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   if (!consumeGuardBuildWork(/*constant + ult + xor=*/3) ||
       !consumeCandidateEvidence(SolverProofWork))
     return failIncomplete();
-  switch (proveDenseGuardPrefix(Symbolic, ReachesTable, FirstRejected)) {
+  switch (proveDenseGuardPrefix(Symbolic, ReachesTable, FirstRejected,
+                                SparseDomain)) {
   case DenseGuardPrefixProof::Proven:
     break;
   case DenseGuardPrefixProof::Counterexample:

@@ -373,9 +373,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   I386GOTOFFPrivateFrameModelAuthenticated = false;
   CurrentI386GOTOFFAmbiguityKeys.clear();
   const size_t CandidateEvidenceLimit =
-      std::min<size_t>(limits::kMaxJumpTableMaskFixedPointEvidenceWork,
+      std::min<size_t>(limits::kMaxJumpTableCandidateEvidenceWork,
                        MaskFixedPointEvidenceBudgetForTesting.value_or(
-                           limits::kMaxJumpTableMaskFixedPointEvidenceWork));
+                           limits::kMaxJumpTableCandidateEvidenceWork));
   const size_t InitialCandidateEvidenceBudget =
       CandidateProposalStageActive
           ? std::min(CandidateEvidenceLimit,
