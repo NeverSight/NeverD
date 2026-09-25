@@ -356,6 +356,44 @@ TEST_F(MachOFunctionListingTest,
 }
 
 TEST_F(MachOFunctionListingTest,
+       NonzeroUndefinedAliasDoesNotDuplicateAddressableDataSymbol) {
+  auto Binary = makeMachOFunctionFixture();
+  auto *Header = reinterpret_cast<llvm::MachO::mach_header_64 *>(Binary.data());
+  Header->flags &= ~llvm::MachO::MH_NOUNDEFS;
+  constexpr uint32_t SymtabCommandOff =
+      sizeof(llvm::MachO::mach_header_64) +
+      sizeof(llvm::MachO::segment_command_64) +
+      3 * sizeof(llvm::MachO::section_64) +
+      sizeof(llvm::MachO::segment_command_64);
+  auto *Symtab = reinterpret_cast<llvm::MachO::symtab_command *>(
+      Binary.data() + SymtabCommandOff);
+  auto *Symbols =
+      reinterpret_cast<llvm::MachO::nlist_64 *>(Binary.data() + kSymtabOff);
+  std::memmove(Binary.data() + kStringTableOff + sizeof(llvm::MachO::nlist_64),
+               Binary.data() + kStringTableOff, Symtab->strsize);
+  Symtab->stroff += sizeof(llvm::MachO::nlist_64);
+  Symbols[4] = Symbols[3];
+  Symbols[4].n_type =
+      static_cast<uint8_t>(llvm::MachO::N_UNDF) |
+      static_cast<uint8_t>(llvm::MachO::N_EXT);
+  Symbols[4].n_sect = 0;
+  Symtab->nsyms = 5;
+
+  MachOLoader Loader;
+  auto ImageOrErr = Loader.load(writeFixture(Binary));
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_EQ(ImageOrErr->Symbols.size(), 4U);
+  EXPECT_EQ(std::count_if(ImageOrErr->Symbols.begin(),
+                          ImageOrErr->Symbols.end(),
+                          [](const Symbol &Item) {
+                            return Item.Name == "_neverd_const_bl" &&
+                                   Item.Addr == kImageBase + kConstOff;
+                          }),
+            1);
+}
+
+TEST_F(MachOFunctionListingTest,
        LoaderClassifiesCodeSymbolsAndMergesExactUnwindSizes) {
   MachOLoader Loader;
   auto ImageOrErr = Loader.load(writeFixture());

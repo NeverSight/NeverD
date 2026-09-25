@@ -367,6 +367,13 @@ MachOLoader::load(const std::filesystem::path &Path) {
     if ((NType & llvm::MachO::N_STAB) != 0)
       continue;
 
+    // N_UNDF's n_value is a common-symbol size or linker bookkeeping, not an
+    // addressable definition. Some linked Swift images retain a nonzero
+    // undefined record beside the actual N_SECT metadata symbol. Publishing
+    // both as image symbols makes the exact storage identity look ambiguous.
+    if ((NType & llvm::MachO::N_TYPE) == llvm::MachO::N_UNDF)
+      continue;
+
     bool IsSect = (NType & llvm::MachO::N_TYPE) == llvm::MachO::N_SECT &&
                   NSect > 0 && NSect <= Img.Sections.size();
     if (SymAddr == 0 && !IsSect)
