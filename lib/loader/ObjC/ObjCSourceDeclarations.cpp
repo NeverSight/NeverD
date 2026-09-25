@@ -1730,6 +1730,100 @@ objcBlockParameterContract(const BinaryImage &Image,
     return false;
   };
 
+  // FLAnimatedImage's logging implementation invokes the supplied string
+  // producer before returning and never retains it. Its public source and the
+  // embedded class method agree on this exact declaration. Require an exact
+  // class reference so a subclass override cannot inherit the lifetime rule.
+  if (Image.Arch == Arch::AArch64 && Type && Type->IsClassMethod &&
+      !Type->IncludeSubclasses && !Type->IsProtocol &&
+      Type->ClassName == "FLAnimatedImage" &&
+      Call.Selector == "logStringFromBlock:withLevel:" && Parameter == 2) {
+    const ObjCClass *Owner = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == "FLAnimatedImage") {
+        if (Owner)
+          return std::nullopt;
+        Owner = &Class;
+      }
+    if (!Owner || !Owner->Address)
+      return std::nullopt;
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == "FLAnimatedImage" &&
+          Candidate.Selector == "logStringFromBlock:withLevel:" &&
+          Candidate.IsClassMethod) {
+        if (Method || Candidate.ClassAddress != Owner->Address ||
+            Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
+            !Candidate.MetadataAddress ||
+            Candidate.TypeEncoding != "v32@0:8@?16Q24" ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, Method->TypeEncoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature("@8@?0", Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::NonEscaping};
+  }
+
+  // Mantle's transformer factories retain both callbacks in the constructed
+  // transformer using copied block properties. Limit this rule to the exact
+  // embedded class methods and their published block ABI.
+  if (Image.Arch == Arch::AArch64 && Type && Type->IsClassMethod &&
+      !Type->IncludeSubclasses && !Type->IsProtocol &&
+      Type->ClassName == "MTLValueTransformer" &&
+      (Call.Selector == "transformerUsingForwardBlock:" ||
+       Call.Selector == "transformerUsingForwardBlock:reverseBlock:") &&
+      (Parameter == 2 ||
+       (Call.Selector == "transformerUsingForwardBlock:reverseBlock:" &&
+        Parameter == 3))) {
+    const llvm::StringRef Encoding =
+        Call.Selector == "transformerUsingForwardBlock:"
+            ? "@24@0:8@?16"
+            : "@32@0:8@?16@?24";
+    const ObjCClass *Owner = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == "MTLValueTransformer") {
+        if (Owner)
+          return std::nullopt;
+        Owner = &Class;
+      }
+    if (!Owner || !Owner->Address)
+      return std::nullopt;
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == "MTLValueTransformer" &&
+          Candidate.Selector == Call.Selector && Candidate.IsClassMethod) {
+        if (Method || Candidate.ClassAddress != Owner->Address ||
+            Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
+            !Candidate.MetadataAddress || Candidate.TypeEncoding != Encoding ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, Encoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature("@32@?0@8^B16^@24",
+                                            Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+  }
+
   struct Declaration {
     const char *Selector;
     const char *AArch64Parent;
