@@ -864,6 +864,45 @@ bool loopifyBackwardGotos(std::vector<HighStmt> &Body) {
   return Changed;
 }
 
+bool hoistLoopEntryLabels(std::vector<HighStmt> &Body) {
+  std::map<va_t, unsigned> Uses;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
+        S.GotoTarget != InvalidVA)
+      ++Uses[S.GotoTarget];
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.HandlerVA != 0 && Clause.HandlerVA != InvalidVA)
+        Uses[Clause.HandlerVA] = ~0u;
+  });
+  bool Changed = false;
+  walkStmts(Body, [&](HighStmt &S) {
+    // Entering `while (1)` at the top of its body is entering the loop.
+    const bool Forever =
+        !S.Cond || (S.Cond->Kind == ExprKind::Const && S.Cond->ConstVal != 0);
+    if (S.Kind != StmtKind::While || !Forever || S.Body.empty() ||
+        (S.Addr != 0 && S.Addr != InvalidVA))
+      return;
+    const va_t X = S.Body.front().Addr;
+    auto It = Uses.find(X);
+    if (X == 0 || X == InvalidVA || It == Uses.end() || It->second == ~0u)
+      return;
+    unsigned Inside = 0;
+    walkStmts(S.Body, [&](const HighStmt &C) {
+      Inside += C.Kind == StmtKind::Goto && C.GotoTarget == X;
+    });
+    if (Inside != 0)
+      return;
+    for (HighStmt &C : S.Body) {
+      if (C.Addr != X)
+        break;
+      C.Addr = 0;
+    }
+    S.Addr = X;
+    Changed = true;
+  });
+  return Changed;
+}
+
 bool groupSwitchCases(std::vector<HighStmt> &Body) {
   std::map<va_t, unsigned> Uses;
   walkStmts(Body, [&](const HighStmt &S) {
