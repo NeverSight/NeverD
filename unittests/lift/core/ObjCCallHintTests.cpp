@@ -8895,6 +8895,73 @@ TEST(ObjCCallHints, SharedFrameworkDeclarationsKeepExactProviderAndScalarABI) {
   }
 }
 
+TEST(ObjCCallHints, MapKitPlacemarkCoordinateKeepsRecordAndNilDictionaryABI) {
+  constexpr auto Selector = "initWithCoordinate:addressDictionary:";
+  constexpr auto Module = "/System/Library/Frameworks/MapKit.framework/MapKit";
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = Selector;
+  Image.DynInfo.NeededLibs = {Module};
+
+  const auto Declaration = objcSelectorSourceTypeHint(Image, Selector);
+  ASSERT_TRUE(Declaration);
+  EXPECT_EQ(Declaration->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  ASSERT_EQ(Declaration->Parameters.size(), 4U);
+  const auto &Coordinate = Declaration->Parameters[2];
+  ASSERT_EQ(Coordinate.Type->Kind, NdTypeKind::Struct);
+  ASSERT_EQ(Coordinate.Type->Fields.size(), 2U);
+  ASSERT_EQ(Coordinate.Components.size(), 2U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (size_t I = 0; I < 2; ++I) {
+    EXPECT_EQ(Coordinate.Type->Fields[I]->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Coordinate.Type->Fields[I]->Size, 8U);
+    EXPECT_EQ(Coordinate.Components[I].Kind,
+              SourceABICarrierKind::FloatingRegister);
+    EXPECT_EQ(Coordinate.Components[I].RegisterOffset, TRI.FPParamRegs[I]);
+  }
+  EXPECT_EQ(Declaration->Parameters[3].Type->Kind, NdTypeKind::Ptr);
+  EXPECT_EQ(Declaration->Parameters[3].Location.RegisterOffset,
+            TRI.IntParamRegs[2]);
+
+  const auto Hints = buildObjCSourceCallHints(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Binding = Hints.at(0x1204);
+  EXPECT_EQ(Binding.CallKind, SourceCallTypeHint::Kind::ObjCMessage);
+  EXPECT_TRUE(sdk::objcSourceCallBound(*receiverCallExpression(Binding), Image,
+                                      {}));
+  const auto Med = convert(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  ASSERT_TRUE(Med.CallInfos.front().SourceCallHint);
+  ASSERT_EQ(Med.CallInfos.front().Args.size(), 5U);
+  EXPECT_EQ(Med.CallInfos.front().Args[2].RegOff, TRI.FPParamRegs[0]);
+  EXPECT_EQ(Med.CallInfos.front().Args[3].RegOff, TRI.FPParamRegs[1]);
+  EXPECT_EQ(Med.CallInfos.front().Args[4].RegOff, TRI.IntParamRegs[2]);
+
+  for (const auto &WrongModule :
+       {"/tmp/MapKit.framework/MapKit",
+        "/System/Library/Frameworks/Foundation.framework/Foundation"}) {
+    auto Invalid = Image;
+    Invalid.DynInfo.NeededLibs = {WrongModule};
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Invalid, Selector));
+    EXPECT_FALSE(sdk::objcSourceCallBound(
+        *receiverCallExpression(Binding), Invalid, {}));
+  }
+  auto Conflict = Image;
+  ObjCMethod Other;
+  Other.Selector = Selector;
+  Other.TypeHint = parseObjCMethodEncoding(Selector, "@32@0:8@16@24");
+  ASSERT_TRUE(Other.TypeHint);
+  Conflict.ObjCMethods.push_back(std::move(Other));
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Conflict, Selector));
+  EXPECT_FALSE(sdk::objcSourceCallBound(*receiverCallExpression(Binding),
+                                       Conflict, {}));
+
+  auto Unsupported = image(Arch::X64);
+  Unsupported.ObjCMethods.clear();
+  Unsupported.DynInfo.NeededLibs = {Module};
+  EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
+}
+
 TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
   const struct {
