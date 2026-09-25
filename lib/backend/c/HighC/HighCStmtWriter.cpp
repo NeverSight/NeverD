@@ -579,13 +579,16 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     // C forbids a goto into a __try body, but machine code may branch into
     // the middle of a protected range.  x64 SEH protection is by address,
     // so splitting an __except try at that entry into two consecutive tries
-    // is equivalent and puts the label between them.  __finally runs on
-    // normal exit too, and an inline handler body would be copied, so only
-    // out-of-line __except handlers are split.
+    // is equivalent and puts the label between them.  An inline handler body
+    // would be copied, so only out-of-line handlers are split.  A __finally
+    // runs on normal exit too, but an out-of-line one prints an empty body
+    // (its normal-exit call is already explicit code), so each piece runs
+    // nothing extra.
     if (Stmt.Body.size() >= 2 && !Stmt.EHClauses.empty() &&
         std::all_of(Stmt.EHClauses.begin(), Stmt.EHClauses.end(),
                     [](const HighEHClause &Clause) {
-                      return Clause.Kind == HighEHClauseKind::SEHExcept;
+                      return Clause.Kind == HighEHClauseKind::SEHExcept ||
+                             Clause.Kind == HighEHClauseKind::SEHFinally;
                     }) &&
         std::all_of(Stmt.EHClauseBodies.begin(), Stmt.EHClauseBodies.end(),
                     [](const auto &Body) { return Body.empty(); })) {
