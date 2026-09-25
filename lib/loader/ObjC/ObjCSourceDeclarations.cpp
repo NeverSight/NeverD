@@ -799,15 +799,115 @@ std::optional<ObjCReceiverTypeHint>
 objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
                                     unsigned Parameter) {
   if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
-      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry ||
-      Parameter != 2)
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry)
+    return std::nullopt;
+  // These WMF source declarations name an NSManagedObjectContext argument,
+  // although the Objective-C method encoding retains only its object carrier.
+  // Keep the exact owner, selector, encoding and parameter position together;
+  // performBlock: still needs its separate Core Data lifetime contract.
+  struct ManagedContextDeclaration {
+    const char *Owner;
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameter;
+  };
+  static constexpr ManagedContextDeclaration ManagedContexts[] = {
+      {"WMFSuggestedEditsContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFContinueReadingContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFNearbyContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFFeedContentSource",
+       "saveContentForFeedDay:pageViews:onDate:inManagedObjectContext:"
+       "completion:",
+       "v56@0:8@16@24@32@40@?48", 5},
+      {"WMFAnnouncementsContentSource",
+       "saveAnnouncements:inManagedObjectContext:completion:",
+       "v40@0:8@16@24@?32", 3},
+  };
+  const ManagedContextDeclaration *Context = nullptr;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.Implementation != Entry)
+      continue;
+    for (const auto &Candidate : ManagedContexts)
+      if (Candidate.Parameter == Parameter &&
+          Method.ClassName == Candidate.Owner &&
+          Method.Selector == Candidate.Selector) {
+        if (Context)
+          return std::nullopt;
+        Context = &Candidate;
+      }
+  }
+  if (Context) {
+    const auto SDK = objc::sdkReceiverDeclarations(
+        Image, "NSManagedObjectContext", false, false, "performBlock:");
+    if (!SDK.Present || !SDK.Complete || SDK.Members.size() != 1 ||
+        !SDK.Members.front().Signature)
+      return std::nullopt;
+    const ObjCClass *Owner = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == Context->Owner) {
+        if (Owner)
+          return std::nullopt;
+        Owner = &Class;
+      }
+    if (!Owner || !Owner->Address)
+      return std::nullopt;
+    const ObjCMethod *Found = nullptr;
+    for (const auto &Method : Image.ObjCMethods) {
+      if (Method.Implementation != Entry &&
+          !(Method.ClassName == Context->Owner &&
+            Method.Selector == Context->Selector))
+        continue;
+      if (Found || Method.Implementation != Entry ||
+          Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
+          !Method.CategoryName.empty() || !Method.MetadataAddress ||
+          Method.IsClassMethod || Method.TypeEncoding != Context->Encoding ||
+          !objcMethodHasSourceBody(Method) || !Image.isCodeAddress(Entry))
+        return std::nullopt;
+      Found = &Method;
+    }
+    if (!Found)
+      return std::nullopt;
+    const auto Signature = objcMethodSourceTypeHint(Image, Entry);
+    if (!Signature ||
+        Signature->Parameters.size() !=
+            2 + llvm::StringRef(Context->Selector).count(':') ||
+        Parameter >= Signature->Parameters.size() ||
+        !Signature->Parameters[Parameter].Type ||
+        Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
+        Signature->Parameters[Parameter].Type->Size != 8 ||
+        Signature->Parameters[Parameter].Location.Kind !=
+            SourceABICarrierKind::IntegerRegister ||
+        Signature->Parameters[Parameter].Location.RegisterOffset !=
+            getTargetRegInfo(Arch::AArch64).IntParamRegs[Parameter] ||
+        Signature->Parameters[Parameter].Location.ValueBytes != 8)
+      return std::nullopt;
+    ObjCReceiverTypeHint Result;
+    Result.Origin = ObjCReceiverTypeHint::OriginKind::MethodParameter;
+    Result.Address = Entry;
+    Result.ClassName = "NSManagedObjectContext";
+    Result.SourceParameter = Parameter;
+    return Result;
+  }
+  if (Parameter != 2)
     return std::nullopt;
   // Objective-C's runtime encoding erases these source parameter classes.
   // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *;
+  // its top-read argument is WMFFeedTopReadResponse *.
+  // WMFAnnouncementsContentSource.m declares announcements as NSArray *.
   // CocoaLumberjack 3.6.2 DDFileLogger.m declares mostRecentLogFileInfo as
   // DDLogFileInfo *. Recheck the exact embedded method and its ABI below.
   constexpr llvm::StringLiteral NewsSelector =
       "saveGroupForNews:pageViews:date:inManagedObjectContext:";
+  constexpr llvm::StringLiteral TopReadSelector =
+      "saveGroupForTopRead:pageViews:date:inManagedObjectContext:";
+  constexpr llvm::StringLiteral AnnouncementsSelector =
+      "saveAnnouncements:inManagedObjectContext:completion:";
   constexpr llvm::StringLiteral LogSelector = "lt_shouldLogFileBeArchived:";
   const auto Matches = [&](llvm::StringRef ClassName,
                            llvm::StringRef Selector) {
@@ -819,18 +919,56 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
                        });
   };
   const bool News = Matches("WMFFeedContentSource", NewsSelector);
+  const bool TopRead = Matches("WMFFeedContentSource", TopReadSelector);
+  const bool Announcements =
+      Matches("WMFAnnouncementsContentSource", AnnouncementsSelector);
   const bool LogFile = Matches("DDFileLogger", LogSelector);
-  if (News == LogFile)
+  if (unsigned(News) + unsigned(TopRead) + unsigned(Announcements) +
+          unsigned(LogFile) !=
+      1)
     return std::nullopt;
-  const llvm::StringRef OwnerName =
-      News ? "WMFFeedContentSource" : "DDFileLogger";
-  const llvm::StringRef Selector = News ? NewsSelector : LogSelector;
-  const llvm::StringRef Encoding = News ? "v48@0:8@16@24@32@40" : "B24@0:8@16";
-  const llvm::StringRef ParameterClass = News ? "NSArray" : "DDLogFileInfo";
-  if (News) {
+  const llvm::StringRef OwnerName = LogFile ? "DDFileLogger"
+                                    : Announcements
+                                        ? "WMFAnnouncementsContentSource"
+                                        : "WMFFeedContentSource";
+  const llvm::StringRef Selector = LogFile         ? LogSelector
+                                   : Announcements ? AnnouncementsSelector
+                                   : TopRead       ? TopReadSelector
+                                                   : NewsSelector;
+  const llvm::StringRef Encoding = LogFile         ? "B24@0:8@16"
+                                   : Announcements ? "v40@0:8@16@24@?32"
+                                                   : "v48@0:8@16@24@32@40";
+  const llvm::StringRef ParameterClass = LogFile   ? "DDLogFileInfo"
+                                         : TopRead ? "WMFFeedTopReadResponse"
+                                                   : "NSArray";
+  if (News || Announcements) {
     const auto Array = objc::sdkReceiverDeclarations(
         Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
     if (!Array.Present || !Array.Complete)
+      return std::nullopt;
+  } else if (TopRead) {
+    const ObjCClass *Response = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == ParameterClass) {
+        if (Response)
+          return std::nullopt;
+        Response = &Class;
+      }
+    if (!Response || !Response->Address)
+      return std::nullopt;
+    const ObjCProperty *Previews = nullptr;
+    for (const auto &Property : Image.ObjCProperties)
+      if (Property.ClassName == ParameterClass &&
+          Property.Name == "articlePreviews") {
+        if (Previews || Property.Owner != ObjCProperty::OwnerKind::Class ||
+            Property.OwnerAddress != Response->Address ||
+            !Property.MetadataAddress || Property.Getter != "articlePreviews" ||
+            Property.IsClassProperty || Property.Status != "supported" ||
+            Property.TypeEncoding != "@\"NSArray\"")
+          return std::nullopt;
+        Previews = &Property;
+      }
+    if (!Previews)
       return std::nullopt;
   } else {
     const ObjCClass *FileInfo = nullptr;
@@ -883,7 +1021,10 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   if (!Found)
     return std::nullopt;
   const auto Signature = objcMethodSourceTypeHint(Image, Entry);
-  if (!Signature || Signature->Parameters.size() != (News ? 6U : 3U) ||
+  if (!Signature ||
+      Signature->Parameters.size() != (LogFile         ? 3U
+                                       : Announcements ? 5U
+                                                       : 6U) ||
       !Signature->Parameters[Parameter].Type ||
       Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
       Signature->Parameters[Parameter].Type->Size != 8 ||

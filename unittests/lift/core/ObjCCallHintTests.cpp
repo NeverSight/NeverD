@@ -9375,6 +9375,190 @@ TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   EXPECT_FALSE(objcReceiverTypeHintValid(Image, WrongParameter));
 }
 
+TEST(ObjCCallHints, WMFTopReadResponseParameterQualifiesArticlePreviews) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Owner;
+  Owner.Name = "WMFFeedContentSource";
+  Owner.Address = 0x2300;
+  Image.ObjCClasses.push_back(Owner);
+  ObjCClass NSObject;
+  NSObject.Name = "NSObject";
+  NSObject.Address = 0x2700;
+  NSObject.RootClass = true;
+  NSObject.InheritanceStatus = "root";
+  Image.ObjCClasses.push_back(NSObject);
+  ObjCClass Response;
+  Response.Name = "WMFFeedTopReadResponse";
+  Response.Address = 0x2500;
+  Response.SuperclassName = "NSObject";
+  Response.InheritanceStatus = "resolved";
+  Image.ObjCClasses.push_back(Response);
+  ObjCMethod Method;
+  Method.ClassName = Owner.Name;
+  Method.ClassAddress = Owner.Address;
+  Method.MetadataAddress = 0x2400;
+  Method.Selector =
+      "saveGroupForTopRead:pageViews:date:inManagedObjectContext:";
+  Method.TypeEncoding = "v48@0:8@16@24@32@40";
+  Method.Implementation = 0x1200;
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  Image.ObjCMethods.push_back(Method);
+  ObjCProperty Previews;
+  Previews.Owner = ObjCProperty::OwnerKind::Class;
+  Previews.OwnerAddress = Response.Address;
+  Previews.ClassName = Response.Name;
+  Previews.Name = Previews.Getter = "articlePreviews";
+  Previews.TypeEncoding = "@\"NSArray\"";
+  Previews.MetadataAddress = 0x2600;
+  Previews.Status = "supported";
+  Previews.GetterTypeHint = parseObjCMethodEncoding(Previews.Getter, "@16@0:8");
+  ASSERT_TRUE(Previews.GetterTypeHint);
+  Image.ObjCProperties.push_back(Previews);
+
+  const auto Root = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+  ASSERT_TRUE(Root);
+  EXPECT_EQ(Root->ClassName, Response.Name);
+  EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+  const auto Array =
+      objcReceiverCallResultTypeHint(Image, *Root, "articlePreviews");
+  ASSERT_TRUE(Array);
+  const auto Enumeration =
+      objcReceiverSourceTypeHint(Image, "enumerateObjectsUsingBlock:", *Array);
+  ASSERT_TRUE(Enumeration.Signature);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = "enumerateObjectsUsingBlock:";
+  Call.Receiver = *Array;
+  Call.Signature = *Enumeration.Signature;
+  EXPECT_TRUE(objcBlockParameterContract(Image, Call, 2));
+
+  auto Changed = Image;
+  Changed.ObjCProperties[0].TypeEncoding = "@\"NSSet\"";
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCProperties[0].MetadataAddress = 0;
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCClasses.push_back(Response);
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+  Changed = Image;
+  Changed.ObjCMethods[0].TypeEncoding = "v40@0:8@16@24@32";
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Changed, 0x1200, 2));
+}
+
+TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
+  static constexpr struct {
+    const char *Owner;
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameter;
+  } Cases[] = {
+      {"WMFSuggestedEditsContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFContinueReadingContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFNearbyContentSource",
+       "loadNewContentInManagedObjectContext:force:completion:",
+       "v36@0:8@16B24@?28", 2},
+      {"WMFFeedContentSource",
+       "saveContentForFeedDay:pageViews:onDate:inManagedObjectContext:"
+       "completion:",
+       "v56@0:8@16@24@32@40@?48", 5},
+      {"WMFAnnouncementsContentSource",
+       "saveAnnouncements:inManagedObjectContext:completion:",
+       "v40@0:8@16@24@?32", 3},
+  };
+  for (const auto &Case : Cases) {
+    auto Image = image();
+    Image.ObjCMethods.clear();
+    Image.DynInfo.NeededLibs = {
+        "/System/Library/Frameworks/CoreData.framework/CoreData",
+        "/System/Library/Frameworks/Foundation.framework/Foundation"};
+    ObjCClass Owner;
+    Owner.Name = Case.Owner;
+    Owner.Address = 0x2300;
+    Image.ObjCClasses.push_back(Owner);
+    ObjCMethod Method;
+    Method.ClassName = Owner.Name;
+    Method.ClassAddress = Owner.Address;
+    Method.MetadataAddress = 0x2400;
+    Method.Selector = Case.Selector;
+    Method.TypeEncoding = Case.Encoding;
+    Method.Implementation = 0x1200;
+    Method.Status = "supported";
+    Method.TypeHint =
+        parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+    ASSERT_TRUE(Method.TypeHint);
+    Image.ObjCMethods.push_back(Method);
+
+    const auto Root =
+        objcMethodParameterReceiverTypeHint(Image, 0x1200, Case.Parameter);
+    ASSERT_TRUE(Root) << Case.Owner;
+    EXPECT_EQ(Root->ClassName, "NSManagedObjectContext");
+    EXPECT_EQ(Root->SourceParameter, Case.Parameter);
+    EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Root));
+    const auto ContextCall =
+        objcReceiverSourceTypeHint(Image, "performBlock:", *Root);
+    ASSERT_TRUE(ContextCall.Signature) << Case.Owner;
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = "performBlock:";
+    Call.Receiver = *Root;
+    Call.Signature = *ContextCall.Signature;
+    const auto Callback = objcBlockParameterContract(Image, Call, 2);
+    ASSERT_TRUE(Callback) << Case.Owner;
+    EXPECT_EQ(Callback->Storage, ObjCBlockParameterContract::Lifetime::Copied);
+    if (Case.Parameter == 3) {
+      const auto Array = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+      ASSERT_TRUE(Array);
+      EXPECT_EQ(Array->ClassName, "NSArray");
+      EXPECT_TRUE(objcReceiverTypeHintValid(Image, *Array));
+      const auto Enumeration = objcReceiverSourceTypeHint(
+          Image, "enumerateObjectsUsingBlock:", *Array);
+      ASSERT_TRUE(Enumeration.Signature);
+      Call.Selector = "enumerateObjectsUsingBlock:";
+      Call.Receiver = *Array;
+      Call.Signature = *Enumeration.Signature;
+      const auto Elements = objcBlockParameterContract(Image, Call, 2);
+      ASSERT_TRUE(Elements);
+      EXPECT_EQ(Elements->Storage,
+                ObjCBlockParameterContract::Lifetime::NonEscaping);
+    }
+
+    auto Rejected = [&](const BinaryImage &Changed) {
+      EXPECT_FALSE(
+          objcMethodParameterReceiverTypeHint(Changed, 0x1200, Case.Parameter))
+          << Case.Owner;
+      EXPECT_FALSE(objcReceiverTypeHintValid(Changed, *Root)) << Case.Owner;
+    };
+    auto Changed = Image;
+    Changed.ObjCMethods[0].MetadataAddress = 0;
+    Rejected(Changed);
+    Changed = Image;
+    Changed.ObjCMethods[0].TypeEncoding = "v24@0:8@16";
+    Rejected(Changed);
+    Changed = Image;
+    Changed.ObjCMethods.push_back(Method);
+    Rejected(Changed);
+    Changed = Image;
+    Changed.DynInfo.NeededLibs.clear();
+    Rejected(Changed);
+    Changed = Image;
+    Changed.Arch = Arch::X64;
+    Rejected(Changed);
+    EXPECT_FALSE(
+        objcMethodParameterReceiverTypeHint(Image, 0x1200, Case.Parameter + 1));
+  }
+}
+
 TEST(ObjCCallHints, AuthenticatedBlockParameterQualifiesReceiverCopy) {
   auto Image = image();
   Image.ObjCMethods.clear();

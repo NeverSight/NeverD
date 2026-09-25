@@ -1167,6 +1167,16 @@ Runtime call catalogs may declare `ReturnedArgument` only for exact imported rou
 The compiler-derived framework and receiver catalogs share one provider list: Foundation, CoreData, CoreLocation, CoreSpotlight, QuartzCore, UniformTypeIdentifiers and UserNotifications. QuartzCore uses its public `CoreAnimation.h` umbrella; compatibility imports for other frameworks do not contribute owned declarations. Both generators retain the same four preprocessing profiles, exact framework identities and negative declaration evidence.
 
 Object result types extend the same bounded receiver proof through agreed method declarations. Named object results and compiler-declared related result types contribute class facts; bare id alone does not. Field loads and message results share an eight-step budget, and source validation rechecks every step against the current declarations. Exact imported allocation helpers use the corresponding message result contracts; calls, custom overrides and ownership effects remain intact. Conflicting result classes or incomplete receiver hierarchies cancel propagation.
+For an exact WMF method whose runtime encoding erases a named argument class,
+the source declaration may seed that class only after the method identity and
+ABI are rechecked against the image. `saveGroupForTopRead:...` additionally
+requires the embedded `WMFFeedTopReadResponse.articlePreviews` declaration to
+agree on `NSArray`; its subsequent messages remain dynamically dispatched.
+The exact WMF content-source declarations that take a named
+`NSManagedObjectContext *` can similarly seed the corresponding parameter
+only when the embedded method, source ABI and imported Core Data declaration
+agree. A `performBlock:` stack literal then uses Core Data's independent
+copied-block contract; this parameter fact does not authorize other selectors.
 
 Format-call bindings retain their language contract. NSString attributes and the documented predicate entry points are checked against SDK declarations and all runtime alternatives. Predicate substitution excludes single- and double-quoted literals and treats `%K` as an object argument for a property name. Exact Darwin `snprintf` imports use their public fixed prototype only when the format is a uniquely mapped, immutable, NUL-terminated C string with no fixups. Its `printf` grammar admits the supported promoted scalar conversions and rejects Objective-C conversions, `%n`, long double and unsupported wide-string forms. The same promoted scalar and Darwin variadic ABI rules assign the actual arguments. Unsupported escapes and formatting modifiers fail explicitly. Source validation repeats the language, constant identity and argument proof; generated code still calls the original framework or C runtime parser.
 

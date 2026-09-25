@@ -529,6 +529,8 @@ Darwin ARM64 的固定 C 调用还支持通过隐藏的 x8 指针返回由三个
 编译器生成的框架目录与接收者目录共享提供方列表：Foundation、CoreData、CoreLocation、CoreSpotlight、QuartzCore、UniformTypeIdentifiers 和 UserNotifications。QuartzCore 使用公共入口 `CoreAnimation.h`，其他框架的兼容性导入不提供所属声明。两个生成器均保留四种预处理配置、准确框架身份及声明的否定证据。
 
 对象返回类型通过一致的方法声明扩展同一条有界接收者证明。具名对象返回类型和编译器声明的关联返回类型可以提供类事实；单独的 id 不可以。字段读取和消息返回共用八步预算，源码验证会根据当前声明重新检查每一步。精确绑定的分配辅助函数使用对应消息的返回类型契约，保留调用、自定义重写和所有权效果。返回类冲突或接收者继承关系不完整时停止传播。
+对于运行时编码抹除了具名参数类的精确 WMF 方法，只有在方法身份及 ABI 与镜像重新核对后，源码声明才能建立该类事实。`saveGroupForTopRead:...` 还要求镜像内的 `WMFFeedTopReadResponse.articlePreviews` 声明明确为 `NSArray`；后续消息仍动态派发。
+精确的 WMF 内容来源方法若声明 `NSManagedObjectContext *` 参数，还需同时核对镜像内方法、源码 ABI 与导入的 Core Data 声明，才能建立该参数类型。传给 `performBlock:` 的栈 Block 仍依据独立的 Core Data 复制契约验证生命周期；参数类型不会授权其他选择器。
 
 格式调用绑定保留所属语言规则。NSString 属性和公开谓词入口均核对 SDK 声明及所有运行时替代声明。谓词不会替换单引号或双引号中的占位符，`%K` 则接收属性名对象。精确匹配的 Darwin `snprintf` 导入只有在格式串是唯一映射、不可变、无 fixup 且以 NUL 结尾的 C 字符串时，才使用其公开的固定参数原型；它的 `printf` 语法只接受受支持并完成默认提升的标量转换，拒绝 Objective-C 转换、`%n`、long double 和未支持的宽字符串形式。实参沿用统一的标量提升和 Darwin 可变参数 ABI。不支持的转义及格式修饰符明确拒绝。源码发布前重新校验语法、常量身份及参数证明，生成代码仍调用原框架或 C 运行时解析器。
 
