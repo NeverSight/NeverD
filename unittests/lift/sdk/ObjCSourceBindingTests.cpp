@@ -1975,6 +1975,160 @@ TEST(ObjCSourceBindings, ReadOnlyTablesBindEveryBoundedScalarLoadOccurrence) {
     }
 }
 
+namespace {
+Fixture countdownByteTableFixture() {
+  Fixture F;
+  F.Image.ObjCSourceReferences.clear();
+  F.Image.Segments[0].Size = F.Image.Segments[0].FileSz = 0x400;
+  F.Image.Segments[0].Data.resize(0x400);
+  F.Image.Sections[0].Size = F.Image.Sections[0].FileSz = 0x400;
+  for (unsigned I = 0; I < 720; ++I)
+    F.Image.Segments[0].Data[0x40 + I] = uint8_t(I % 251);
+  F.Function.ReturnType = NdType::makeVoid();
+  auto Var = [](int Id, uint16_t Width = 8) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = Width;
+    return HighExpr::makeVar(V, NdType::makeInt(Width, false));
+  };
+  auto Assign = [](ExprPtr Dst, ExprPtr Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Value);
+    return S;
+  };
+  const auto Count = Var(1), Pointer = Var(2);
+  const auto Decrement = Var(3), Predicate = Var(4, 1), Increment = Var(5);
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond = HighExpr::makeConst(1, 1);
+  for (unsigned Bias : {2U, 1U, 0U}) {
+    auto Address = Bias ? HighExpr::makeBinop(NdOp::INT_SUB, Pointer,
+                                              HighExpr::makeConst(Bias, 8))
+                        : Pointer;
+    Loop.Body.push_back(
+        Assign(Var(10 + Bias, 1),
+               HighExpr::makeLoad(Address, NdType::makeInt(1, false))));
+  }
+  Loop.Body.push_back(
+      Assign(Decrement, HighExpr::makeBinop(NdOp::INT_SUB, Count,
+                                            HighExpr::makeConst(1, 8))));
+  auto Test =
+      HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Count, HighExpr::makeConst(1, 8));
+  Test->Type = NdType::makeInt(1, false);
+  Loop.Body.push_back(Assign(Predicate, Test));
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  HighStmt Exit;
+  Exit.Kind = StmtKind::If;
+  Exit.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Predicate);
+  Exit.Cond->Type = NdType::makeInt(1, false);
+  Exit.Body = {Break};
+  Loop.Body.push_back(Exit);
+  Loop.Body.push_back(
+      Assign(Increment, HighExpr::makeBinop(NdOp::INT_ADD, Pointer,
+                                            HighExpr::makeConst(3, 8))));
+  Loop.Body.push_back(Assign(Count, Decrement));
+  Loop.Body.push_back(Assign(Pointer, Increment));
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  F.Function.Body = {Assign(Count, HighExpr::makeConst(240, 8)),
+                     Assign(Pointer, HighExpr::makeConst(0x1042, 8)), Loop,
+                     Return};
+  return F;
+}
+} // namespace
+
+TEST(ObjCSourceBindings, CountdownByteTableRebasesOnlyBoundedPrivatePointer) {
+  auto F = countdownByteTableFixture();
+  const auto Original = F.Function.Body[1].Val;
+  auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+  ASSERT_EQ(Bound.BorrowedBytes.size(), 1U);
+  EXPECT_EQ(*Bound.BorrowedBytes.begin(), (BorrowedByteRange{0x1040, 720}));
+  EXPECT_EQ(Original->ConstVal, 0x1042U);
+  EXPECT_EQ(Bound.Function.Body[1].Val->ConstVal, 2U);
+  const auto Allowed = readOnlyScalarSourceHelpers(Bound.Function, F.Image);
+  ASSERT_EQ(Allowed.size(), 3U);
+  for (unsigned I = 0; I < 3; ++I) {
+    const auto &Load = Bound.Function.Body[2].Body[I].Val;
+    const auto &Helper = Load->Operands[0]->Operands[0];
+    EXPECT_TRUE(Allowed.count(Helper.get()));
+    EXPECT_TRUE(objcSourceCallBound(*Helper, F.Image, {}, nullptr, &Allowed));
+  }
+  Bound.Function.Body[1].Val->ConstVal = 3;
+  EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
+}
+
+TEST(ObjCSourceBindings, CountdownByteTablePublicationRechecksLoopAndHelper) {
+  for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = countdownByteTableFixture();
+    auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty());
+    auto &Loop = Bound.Function.Body[2];
+    ASSERT_EQ(readOnlyScalarSourceHelpers(Bound.Function, F.Image).size(), 3U);
+    if (Mutation == 0)
+      Bound.Function.Body[0].Val->ConstVal = 241;
+    if (Mutation == 1)
+      Loop.Body[6].Val->Operands[1]->ConstVal = 4;
+    if (Mutation == 2)
+      Loop.Body.erase(Loop.Body.begin() + 1);
+    if (Mutation == 3) {
+      auto &Helper = Loop.Body[0].Val->Operands[0]->Operands[0];
+      auto Changed =
+          std::make_shared<SourceCallTypeHint>(*Helper->SourceCallHint);
+      Changed->ByteCount = 719;
+      Helper->SourceCallHint = std::move(Changed);
+    }
+    EXPECT_TRUE(readOnlyScalarSourceHelpers(Bound.Function, F.Image).empty());
+  }
+}
+
+TEST(ObjCSourceBindings, CountdownByteTableRejectsUnboundedOrEscapingWalks) {
+  for (unsigned Mutation = 0; Mutation < 8; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto F = countdownByteTableFixture();
+    auto &Loop = F.Function.Body[2];
+    if (Mutation == 0)
+      F.Function.Body[0].Val = HighExpr::makeConst(0, 8);
+    if (Mutation == 1)
+      Loop.Body[6].Val->Operands[1] = HighExpr::makeConst(4, 8);
+    if (Mutation == 2)
+      std::swap(Loop.Body[5], Loop.Body[6]);
+    if (Mutation == 3) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = 20;
+      V.Size = 8;
+      HighStmt Escape;
+      Escape.Kind = StmtKind::Assign;
+      Escape.Dst = HighExpr::makeVar(V, NdType::makeInt(8, false));
+      Escape.Val = Loop.Body[2].Val->Operands[0];
+      Loop.Body.insert(Loop.Body.begin(), Escape);
+    }
+    if (Mutation == 4) {
+      HighStmt Overwrite;
+      Overwrite.Kind = StmtKind::Assign;
+      Overwrite.Dst = Loop.Body[2].Val->Operands[0];
+      Overwrite.Val = HighExpr::makeConst(0x1042, 8);
+      F.Function.Body.insert(F.Function.Body.begin(), Overwrite);
+    }
+    if (Mutation == 5)
+      F.Image.Sections[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+    if (Mutation == 6)
+      F.Image.Sections[0].FileSz = 0x100;
+    if (Mutation == 7)
+      F.Function.Body[0].Val->Type = NdType::makeInt(1, true);
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Bound.Limitation.empty());
+    EXPECT_TRUE(Bound.BorrowedBytes.empty());
+  }
+}
+
 TEST(ObjCSourceBindings, ReadOnlyTablesNormalizeBoundedFixedAddressBias) {
   for (auto Architecture : {Arch::AArch64, Arch::X64})
     for (bool Subtract : {false, true}) {

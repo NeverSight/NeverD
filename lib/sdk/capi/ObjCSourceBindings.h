@@ -2615,7 +2615,10 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
     const auto Found = ClassObjects->find(Address);
     return Found == ClassObjects->end() ? nullptr : &Found->second;
   };
-  const auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
+  auto ScalarLoads = readOnlyScalarLoadPlans(Function, Image);
+  const auto LoopBytes = readOnlyLoopBytePlans(Function, Image);
+  for (const auto &[Load, Plan] : LoopBytes.Loads)
+    ScalarLoads.emplace(Load, Plan);
   const auto MergedIvarOffsets = mergedIvarOffsetPlans(Function, Image);
   const auto ObjectPointerLoads =
       readOnlyObjectPointerLoadPlans(Function, Image);
@@ -2929,6 +2932,12 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       return Found->second;
     auto Expression = std::make_shared<HighExpr>(*Original);
     Copies.emplace(Key, Expression);
+    if (const auto Found = LoopBytes.Initializers.find(Original.get());
+        Found != LoopBytes.Initializers.end()) {
+      *Expression = *HighExpr::makeConst(Found->second, 8,
+                                         ConstantAddressProvenance::Scalar);
+      return Expression;
+    }
     if (const auto Found = MergedIvarOffsets.Leaves.find(Original.get());
         Found != MergedIvarOffsets.Leaves.end()) {
       const auto &Reference = Found->second;
