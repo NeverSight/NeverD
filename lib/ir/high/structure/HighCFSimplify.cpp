@@ -766,12 +766,9 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
   // A load or pure value with no call inside it.
   std::function<bool(const HighExpr &, unsigned)> Foldable =
       [&](const HighExpr &E, unsigned Depth) -> bool {
+    // An atomic is still evaluated exactly once, at the same point.
     if (Depth > 32 || E.Kind == ExprKind::Call || E.Kind == ExprKind::Store ||
         E.Kind == ExprKind::Phi || E.Kind == ExprKind::Undef)
-      return false;
-    if (E.Kind == ExprKind::BinOp &&
-        (E.Op == NdOp::ATOMIC_ADD || E.Op == NdOp::ATOMIC_XCHG ||
-         E.Op == NdOp::ATOMIC_CMPXCHG))
       return false;
     for (const ExprPtr &Op : E.Operands)
       if (!Op || !Foldable(*Op, Depth + 1))
@@ -1145,7 +1142,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
         if (Follow != 0 && Follow != InvalidVA)
           for (size_t I = 0; I + 1 < L.size(); ++I)
             if (L[I].Kind == StmtKind::If && L[I].Cond &&
-                L[I].ElseBody.empty() && L[I].Body.size() >= 2 &&
+                L[I].ElseBody.empty() && !L[I].Body.empty() &&
                 L[I].Body.back().Kind == StmtKind::Goto &&
                 L[I].Body.back().GotoTarget == Follow) {
               popGoto(L[I].Body);
@@ -1154,6 +1151,13 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body) {
               L[I].ElseBody.assign(std::make_move_iterator(L.begin() + I + 1),
                                    std::make_move_iterator(L.end()));
               L.erase(L.begin() + I + 1, L.end());
+              if (L[I].Body.empty()) {
+                // `if (c) goto F; rest...`  ->  `if (!c) { rest... }`.
+                L[I].Kind = StmtKind::If;
+                L[I].Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, L[I].Cond);
+                L[I].Body = std::move(L[I].ElseBody);
+                L[I].ElseBody.clear();
+              }
               Changed = true;
               break;
             }
