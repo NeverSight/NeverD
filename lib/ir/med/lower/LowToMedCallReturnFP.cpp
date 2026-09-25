@@ -13,6 +13,7 @@
 #include "neverd/ir/med/LowToMed.h"
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -88,17 +89,21 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
     return false;
   };
 
+  std::map<int, const MedBlock *> BlockById;
+  for (const auto &B : Func.Blocks)
+    BlockById.emplace(B.Id, &B);
   auto succHasFPRetPhi = [&](int BlockId) -> bool {
-    for (const auto &B : Func.Blocks) {
-      bool IsSucc = false;
-      for (const auto &Cur : Func.Blocks)
-        if (Cur.Id == BlockId)
-          for (int S : Cur.Succs)
-            if (S == B.Id)
-              IsSucc = true;
-      if (!IsSucc)
+    auto Cur = BlockById.find(BlockId);
+    if (Cur == BlockById.end())
+      return false;
+    std::set<int> Visited;
+    for (int S : Cur->second->Succs) {
+      if (!Visited.insert(S).second)
         continue;
-      for (const auto &Phi : B.Phis)
+      auto Succ = BlockById.find(S);
+      if (Succ == BlockById.end())
+        continue;
+      for (const auto &Phi : Succ->second->Phis)
         if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == FPRet)
           for (const auto &A : Phi.Args)
             if (A.first == BlockId)

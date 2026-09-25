@@ -423,6 +423,9 @@ struct MedFunc {
         return &CI;
     return nullptr;
   }
+  /// LowToMed kept the unoptimized, non-SSA form (the function exceeded the
+  /// SSA size limit): a register variable has no unique definition.
+  bool SkippedSSA = false;
 };
 
 } // namespace neverd

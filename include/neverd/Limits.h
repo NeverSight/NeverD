@@ -360,6 +360,11 @@ constexpr size_t kMaxStructurableMedBlocks = 1024;
 constexpr size_t kMaxStructurableMedOps =
     static_cast<size_t>(kMaxSSANodes) * 2u;
 
+/// Build SSA and run the MedIR optimizations for functions up to this many
+/// operations.  HighIR structuring keeps its own, smaller limit; a larger
+/// SSA function is still lowered to statements, block by block.
+constexpr size_t kMaxSSAFunctionOps = 400000;
+
 /// Maximum estimated stack frame size.
 constexpr int64_t kMaxFrameSize = 16 * 1024 * 1024; // 16 MiB
 

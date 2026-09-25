@@ -19,7 +19,9 @@
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <map>
 #include <set>
+#include <tuple>
 
 namespace neverd {
 
@@ -160,6 +162,13 @@ private:
   std::vector<SourceABIParameter> SourceParameters;
   VarKeySet CallOutputs;
   VarKeySet PhiOutputVars;
+  /// Per-function indexes for the Win64 callee-save parameter mapping in
+  /// medvarToExpr: register COPYs whose source is an entry parameter (in
+  /// block/op order, with that parameter's index), and every defined
+  /// (Id, SSAVer).  Built lazily for \c ParamCopyIndexFunc.
+  const MedFunc *ParamCopyIndexFunc = nullptr;
+  std::vector<std::pair<const MedOp *, int>> ParamSourceCopies;
+  std::set<std::pair<int, int>> DefinedVersions;
   /// A native read is evaluated at its statement, then used as an SSA value.
   /// Re-expanding it at a use could cross an aliasing write or repeat the read.
   VarKeySet MemoryReadOutputs;
@@ -173,6 +182,10 @@ private:
   /// function).
   std::set<int64_t> LoadedEntrySlots;
   const MedFunc *LoadedEntrySlotsFor = nullptr;
+  /// Unique SSA definition of each (kind, id, version) in EntryOffsetDefsFor;
+  /// nullptr marks a value with more than one definition.
+  std::map<std::tuple<int, int, int>, const MedOp *> EntryOffsetDefs;
+  const MedFunc *EntryOffsetDefsFor = nullptr;
   const BinaryImage *Image = nullptr;
   Arch TargetArch = Arch::Unknown;
   const std::map<va_t, std::string> *FuncNames = nullptr;

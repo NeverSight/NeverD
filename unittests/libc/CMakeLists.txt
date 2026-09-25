@@ -1,7 +1,7 @@
 add_neverd_unittest(NeverDLibCTests
   LibCNamesTests.cpp
 
-  LINK_COMPONENTS LibC
+  LINK_COMPONENTS LibC Loader
 )
 
 target_include_directories(NeverDLibCTests PRIVATE

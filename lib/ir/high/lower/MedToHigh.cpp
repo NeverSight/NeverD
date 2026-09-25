@@ -408,22 +408,32 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
   // deletes that edge.
   if (CurMed && V.Kind == MedVar::Reg && TargetArch == Arch::X64 && Image &&
       Image->Format == BinaryFormat::COFF && !PhiOutputVars.count(varKey(V))) {
+    if (ParamCopyIndexFunc != CurMed) {
+      // One pass over the function instead of one per variable reference.
+      ParamCopyIndexFunc = CurMed;
+      ParamSourceCopies.clear();
+      DefinedVersions.clear();
+      for (const auto &Blk : CurMed->Blocks)
+        for (const auto &Op : Blk.Ops) {
+          DefinedVersions.insert({Op.Output.Id, Op.Output.SSAVer});
+          if (Op.Opcode != NdOp::COPY || Op.NumInputs < 1 ||
+              Op.Output.Kind != MedVar::Reg)
+            continue;
+          const MedVar &Src = Op.Inputs[0];
+          int Idx = -1;
+          if (Src.Kind == MedVar::Param)
+            Idx = abiParamIndex(Src);
+          else if (Src.Kind == MedVar::Reg && Src.SSAVer == 0)
+            Idx = regToArgIdx(Src.RegOff);
+          if (Idx >= 0 && static_cast<size_t>(Idx) < CurMed->Params.size())
+            ParamSourceCopies.push_back({&Op, Idx});
+        }
+    }
     int Fallback = -1;
-    for (const auto &Blk : CurMed->Blocks) {
-      for (const auto &Op : Blk.Ops) {
-        if (Op.Opcode != NdOp::COPY || Op.NumInputs < 1)
-          continue;
-        if (Op.Output.Kind != MedVar::Reg)
-          continue;
+    for (const auto &[OpPtr, Idx] : ParamSourceCopies) {
+      {
+        const MedOp &Op = *OpPtr;
         if (Op.Output.Id != V.Id && Op.Output.RegOff != V.RegOff)
-          continue;
-        const MedVar &Src = Op.Inputs[0];
-        int Idx = -1;
-        if (Src.Kind == MedVar::Param)
-          Idx = abiParamIndex(Src);
-        else if (Src.Kind == MedVar::Reg && Src.SSAVer == 0)
-          Idx = regToArgIdx(Src.RegOff);
-        if (Idx < 0 || static_cast<size_t>(Idx) >= CurMed->Params.size())
           continue;
         if (Op.Output.Id == V.Id && Op.Output.SSAVer == V.SSAVer) {
           MedVar Param = V;
@@ -440,17 +450,8 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
         // the GS_HANDLER_DATA bit-2 edge) is a new value; a copy of the
         // parameter itself already matched above.
         if (Fallback < 0 && regToArgIdx(V.RegOff) < 0) {
-          bool Computed = PhiOutputVars.count(varKey(V));
-          for (const auto &B2 : CurMed->Blocks) {
-            if (Computed)
-              break;
-            for (const auto &O2 : B2.Ops) {
-              if (O2.Output.Id == V.Id && O2.Output.SSAVer == V.SSAVer) {
-                Computed = true;
-                break;
-              }
-            }
-          }
+          const bool Computed = PhiOutputVars.count(varKey(V)) ||
+                                DefinedVersions.count({V.Id, V.SSAVer});
           if (!Computed)
             Fallback = Idx;
         }
@@ -696,6 +697,9 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
   auto TStart = std::chrono::steady_clock::now();
   TargetArch = TheArch;
   CurMed = &Med;
+  ParamCopyIndexFunc = nullptr;
+  LoadedEntrySlotsFor = nullptr;
+  EntryOffsetDefsFor = nullptr;
   SourceParameters = Med.SourceTypeHint
                          ? sourceABIParameters(*Med.SourceTypeHint)
                          : std::vector<SourceABIParameter>{};
@@ -749,7 +753,27 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
     MedOps += Block.Ops.size();
   if (Med.Blocks.size() > limits::kMaxStructurableMedBlocks ||
       MedOps > limits::kMaxStructurableMedOps) {
-    fillUnstructuredGotoSkeleton(Func, Med);
+    // Too large to structure: still lower every operation, block by block,
+    // with explicit gotos between blocks.  MedIR that skipped SSA cannot be
+    // lowered this way (a register has no unique definition), so it keeps the
+    // skeleton.
+    if (Med.SkippedSSA) {
+      fillUnstructuredGotoSkeleton(Func, Med);
+      return Func;
+    }
+    buildExpressions(Med);
+    structureControlFlow(Func, Med);
+    Trace.high(Func, "structured");
+    inferTypes(Func);
+    eraseKeepingBranchEntries(
+        Func.Body, gotoTargets(Func.Body), [](const HighStmt &S) {
+          return S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+                 S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Var &&
+                 S.Dst->Var == S.Val->Var;
+        });
+    ensureTrailingReturn(Func, Med);
+    structureExceptionRegions(Func, Med);
+    Trace.high(Func, "after-exceptions");
     return Func;
   }
 

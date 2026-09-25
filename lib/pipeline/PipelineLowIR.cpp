@@ -435,6 +435,11 @@ struct ModuleAddressFacts {
   bool MayBeNonFrame = false;
   bool Imprecise = false;
   bool ExactValuesWidened = false;
+  /// FrameOffsets grew past its finite bound (a pointer walking the frame in
+  /// a loop).  The set then holds a single placeholder offset: the value is
+  /// some frame address at an unknown offset, and MayBeNonFrame/Imprecise
+  /// make every consumer treat it as such.
+  bool FrameOffsetsWidened = false;
 
   bool empty() const { return Roots.empty() && ExactValues.empty(); }
   bool hasState() const {
@@ -451,7 +456,8 @@ struct ModuleAddressFacts {
            FrameCellOutgoingSeed == Other.FrameCellOutgoingSeed &&
            MayBeNonFrame == Other.MayBeNonFrame &&
            Imprecise == Other.Imprecise &&
-           ExactValuesWidened == Other.ExactValuesWidened;
+           ExactValuesWidened == Other.ExactValuesWidened &&
+           FrameOffsetsWidened == Other.FrameOffsetsWidened;
   }
 };
 using ModuleAddressState = std::map<LowValueKey, ModuleAddressFacts>;
@@ -523,7 +529,7 @@ std::optional<int64_t> signedConstantAtArithmeticWidth(uint64_t Value,
 
 bool adjustFrameOffsets(ModuleAddressFacts &Facts, uint64_t RawDelta,
                         uint16_t ArithmeticSize, bool Subtract) {
-  if (Facts.FrameOffsets.empty())
+  if (Facts.FrameOffsets.empty() || Facts.FrameOffsetsWidened)
     return true;
   const std::optional<int64_t> Delta =
       signedConstantAtArithmeticWidth(RawDelta, ArithmeticSize);
@@ -748,6 +754,9 @@ bool collectLowAddressUses(
   // Keep finite exact alternatives for slot-precise LOAD/STORE decisions.
   // Larger joins widen to the durable owner-summary lattice above.
   constexpr size_t kMaxExactAddressAlternatives = 16;
+  // Frame offsets widen the same way; without a bound a frame-walking loop
+  // adds one offset per fixpoint round.
+  constexpr size_t kMaxFrameOffsetAlternatives = 64;
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
     const LowFunc &Func = Funcs[FuncIndex];
     const size_t BlockCount = Func.Blocks.size();
@@ -847,6 +856,15 @@ bool collectLowAddressUses(
           Into.ExactValues.size() > kMaxExactAddressAlternatives) {
         Into.ExactValues.clear();
         Into.ExactValuesWidened = true;
+        Into.Imprecise = true;
+      }
+      Into.FrameOffsetsWidened |= From.FrameOffsetsWidened;
+      if (!Into.FrameOffsets.empty() &&
+          (Into.FrameOffsetsWidened ||
+           Into.FrameOffsets.size() > kMaxFrameOffsetAlternatives)) {
+        Into.FrameOffsets = {0};
+        Into.FrameOffsetsWidened = true;
+        Into.MayBeNonFrame = true;
         Into.Imprecise = true;
       }
       const bool Complete =

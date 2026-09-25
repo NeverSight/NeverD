@@ -27,6 +27,8 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <string_view>
+#include <unordered_set>
 
 namespace neverd {
 
@@ -1008,29 +1010,26 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
           if (!Expr || Displacements.empty() || Expr->Kind == ExprKind::Var)
             return;
           const std::string Text = ScanText(ScanText, *Expr);
-          for (auto It = Displacements.begin(); It != Displacements.end();) {
-            const std::string &Name = It->first;
-            bool Used = false;
-            for (size_t Pos = Text.find(Name); Pos != std::string::npos;
-                 Pos = Text.find(Name, Pos + 1)) {
-              auto Ident = [](char C) {
-                return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
-              };
-              if ((Pos == 0 || !Ident(Text[Pos - 1])) &&
-                  (Pos + Name.size() >= Text.size() ||
-                   !Ident(Text[Pos + Name.size()]))) {
-                Used = true;
-                break;
-              }
-            }
-            if (!Used) {
-              ++It;
+          // Each whole identifier in the text that names a displacement.
+          auto Ident = [](char C) {
+            return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
+          };
+          for (size_t Pos = 0; Pos < Text.size();) {
+            if (!Ident(Text[Pos])) {
+              ++Pos;
               continue;
             }
+            size_t End = Pos;
+            while (End < Text.size() && Ident(Text[End]))
+              ++End;
+            auto It = Displacements.find(Text.substr(Pos, End - Pos));
+            Pos = End;
+            if (It == Displacements.end())
+              continue;
             for (const HighStmt *Def : It->second)
               Analysis.DeadStmts.erase(Def);
-            Analysis.DeadVars.erase(Name);
-            It = Displacements.erase(It);
+            Analysis.DeadVars.erase(It->first);
+            Displacements.erase(It);
           }
         });
       });
@@ -1218,22 +1217,29 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     writeStmts(Func.Body, 1);
     Out.redirect(Saved);
   }
-  for (const auto &[Name, Decl] : DeferredDecls) {
-    if (ParamNames.count(Name))
-      continue;
-    for (size_t Pos = Body.find(Name); Pos != std::string::npos;
-         Pos = Body.find(Name, Pos + 1)) {
-      auto IsIdent = [](char C) {
-        return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
-      };
-      if ((Pos && IsIdent(Body[Pos - 1])) ||
-          (Pos + Name.size() < Body.size() && IsIdent(Body[Pos + Name.size()])))
+  std::unordered_set<std::string_view> BodyIdents;
+  if (!DeferredDecls.empty()) {
+    auto IsIdent = [](char C) {
+      return std::isalnum(static_cast<unsigned char>(C)) || C == '_';
+    };
+    for (size_t Pos = 0; Pos < Body.size();) {
+      if (!IsIdent(Body[Pos])) {
+        ++Pos;
         continue;
-      ParamNames.insert(Name);
-      emitIndent(1);
-      OS << Decl << ";\n";
-      break;
+      }
+      size_t End = Pos;
+      while (End < Body.size() && IsIdent(Body[End]))
+        ++End;
+      BodyIdents.insert(std::string_view(Body).substr(Pos, End - Pos));
+      Pos = End;
     }
+  }
+  for (const auto &[Name, Decl] : DeferredDecls) {
+    if (ParamNames.count(Name) || !BodyIdents.count(Name))
+      continue;
+    ParamNames.insert(Name);
+    emitIndent(1);
+    OS << Decl << ";\n";
   }
   DeferredDecls.clear();
   OS << Body;

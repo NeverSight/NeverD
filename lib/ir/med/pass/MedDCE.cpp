@@ -23,34 +23,33 @@ namespace neverd {
 void LowToMedConverter::runDce(MedFunc &Func) {
   std::set<std::pair<int, int>> LiveDefs;
 
-  std::map<uint64_t, std::vector<std::pair<int, uint16_t>>> RegOffVars;
+  // Distinct variable ids that name each register offset (its aliases).
+  std::map<uint64_t, std::set<int>> RegOffVars;
   for (auto &Blk : Func.Blocks) {
     for (auto &Op : Blk.Ops) {
       if (Op.Output.Kind == MedVar::Reg && Op.Output.Id >= 0)
-        RegOffVars[Op.Output.RegOff].push_back({Op.Output.Id, Op.Output.Size});
+        RegOffVars[Op.Output.RegOff].insert(Op.Output.Id);
       for (uint8_t I = 0; I < Op.NumInputs; ++I) {
         if (Op.Inputs[I].Kind == MedVar::Reg && Op.Inputs[I].Id >= 0)
-          RegOffVars[Op.Inputs[I].RegOff].push_back(
-              {Op.Inputs[I].Id, Op.Inputs[I].Size});
+          RegOffVars[Op.Inputs[I].RegOff].insert(Op.Inputs[I].Id);
       }
     }
   }
   for (const MedCallClobber &Clobber : Func.CallClobbers) {
     if (Clobber.Value.Kind == MedVar::Reg && Clobber.Value.Id >= 0)
-      RegOffVars[Clobber.Value.RegOff].push_back(
-          {Clobber.Value.Id, Clobber.Value.Size});
+      RegOffVars[Clobber.Value.RegOff].insert(Clobber.Value.Id);
     if (Clobber.PreservedPrefixSize > 0 &&
         Clobber.PreservedInput.Kind == MedVar::Reg &&
         Clobber.PreservedInput.Id >= 0)
-      RegOffVars[Clobber.PreservedInput.RegOff].push_back(
-          {Clobber.PreservedInput.Id, Clobber.PreservedInput.Size});
+      RegOffVars[Clobber.PreservedInput.RegOff].insert(
+          Clobber.PreservedInput.Id);
   }
 
   auto MarkLive = [&](const MedVar &V) {
     if (V.Id >= 0) {
       LiveDefs.insert({V.Id, V.SSAVer});
       if (V.Kind == MedVar::Reg) {
-        for (auto &[AliasId, AliasSz] : RegOffVars[V.RegOff]) {
+        for (int AliasId : RegOffVars[V.RegOff]) {
           if (AliasId != V.Id)
             LiveDefs.insert({AliasId, V.SSAVer});
         }
@@ -249,53 +248,65 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     if (Clobber.PreservedPrefixSize > 0)
       MarkLive(Clobber.PreservedInput);
 
-  // Propagate liveness
-  bool Changed = true;
-  while (Changed) {
-    Changed = false;
-    for (auto &Blk : Func.Blocks) {
-      for (auto &Phi : Blk.Phis) {
-        if (LiveDefs.count({Phi.Output.Id, Phi.Output.SSAVer})) {
-          for (auto &[PredId, Arg] : Phi.Args) {
-            if (Arg.Id >= 0) {
-              auto Key = std::make_pair(Arg.Id, Arg.SSAVer);
-              if (LiveDefs.insert(Key).second)
-                Changed = true;
-            }
-          }
-        }
-      }
-
-      for (auto &Op : Blk.Ops) {
-        bool IsEssential =
-            Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
-            Op.Opcode == NdOp::ATOMIC_ADD ||
-            Op.Opcode == NdOp::ATOMIC_CMPXCHG || Op.Opcode == NdOp::CALL ||
-            Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
-            Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
-            Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||
-            Op.MemoryOrdering != NdMemoryOrdering::None ||
-            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
-
-        bool OutputLive = Op.Output.Id >= 0 &&
-                          LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});
-
-        if (IsEssential || OutputLive) {
-          Op.Dead = false;
-          for (uint8_t I = 0; I < Op.NumInputs; ++I) {
-            if (Op.Inputs[I].Id >= 0) {
-              auto Key = std::make_pair(Op.Inputs[I].Id, Op.Inputs[I].SSAVer);
-              if (LiveDefs.insert(Key).second)
-                Changed = true;
-            }
-          }
-        } else if (!IsEssential && Op.Output.Id >= 0 &&
-                   !LiveDefs.count({Op.Output.Id, Op.Output.SSAVer})) {
-          Op.Dead = true;
-        }
-      }
-    }
+  // Propagate liveness with a worklist over definitions: a live value makes
+  // its defining operation (or PHI) live, which makes their inputs live.
+  auto isEssential = [](const MedOp &Op) {
+    return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
+           Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+           Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::RETURN ||
+           Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+           Op.Opcode == NdOp::INDIR_BR ||
+           Op.MemoryOrdering != NdMemoryOrdering::None ||
+           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default;
+  };
+  std::map<std::pair<int, int>, std::vector<MedOp *>> OpDefs;
+  std::map<std::pair<int, int>, std::vector<PhiNode *>> PhiDefs;
+  for (auto &Blk : Func.Blocks) {
+    for (auto &Phi : Blk.Phis)
+      if (Phi.Output.Id >= 0)
+        PhiDefs[{Phi.Output.Id, Phi.Output.SSAVer}].push_back(&Phi);
+    for (auto &Op : Blk.Ops)
+      if (Op.Output.Id >= 0)
+        OpDefs[{Op.Output.Id, Op.Output.SSAVer}].push_back(&Op);
   }
+  std::vector<std::pair<int, int>> Worklist(LiveDefs.begin(), LiveDefs.end());
+  auto markInputs = [&](const MedOp &Op) {
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      if (Op.Inputs[I].Id >= 0) {
+        auto Key = std::make_pair(Op.Inputs[I].Id, Op.Inputs[I].SSAVer);
+        if (LiveDefs.insert(Key).second)
+          Worklist.push_back(Key);
+      }
+  };
+  for (auto &Blk : Func.Blocks)
+    for (auto &Op : Blk.Ops)
+      if (isEssential(Op))
+        markInputs(Op);
+  while (!Worklist.empty()) {
+    const auto Key = Worklist.back();
+    Worklist.pop_back();
+    if (auto It = PhiDefs.find(Key); It != PhiDefs.end())
+      for (PhiNode *Phi : It->second)
+        for (auto &[PredId, Arg] : Phi->Args)
+          if (Arg.Id >= 0) {
+            auto ArgKey = std::make_pair(Arg.Id, Arg.SSAVer);
+            if (LiveDefs.insert(ArgKey).second)
+              Worklist.push_back(ArgKey);
+          }
+    if (auto It = OpDefs.find(Key); It != OpDefs.end())
+      for (MedOp *Op : It->second)
+        markInputs(*Op);
+  }
+  for (auto &Blk : Func.Blocks)
+    for (auto &Op : Blk.Ops) {
+      const bool OutputLive =
+          Op.Output.Id >= 0 && LiveDefs.count({Op.Output.Id, Op.Output.SSAVer});
+      if (isEssential(Op) || OutputLive)
+        Op.Dead = false;
+      else if (Op.Output.Id >= 0)
+        Op.Dead = true;
+    }
 
   for (auto &Blk : Func.Blocks) {
     Blk.Ops.erase(std::remove_if(Blk.Ops.begin(), Blk.Ops.end(),

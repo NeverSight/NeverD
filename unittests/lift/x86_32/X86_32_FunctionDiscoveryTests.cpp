@@ -392,7 +392,7 @@ TEST(X86_32_FunctionDiscovery, SkipsSsaWhenInstructionCountExceedsCap) {
   EXPECT_EQ(Med.Entry, 0x401000u);
 }
 
-TEST(X86_32_FunctionDiscovery, LargeMedIREmitsGotoSkeleton) {
+static MedFunc makeWideChainMed() {
   MedFunc Med;
   Med.Name = "wide_cfg";
   Med.Entry = 0x401000;
@@ -404,6 +404,12 @@ TEST(X86_32_FunctionDiscovery, LargeMedIREmitsGotoSkeleton) {
       Block.Succs = {I + 1};
     Med.Blocks.push_back(Block);
   }
+  return Med;
+}
+
+TEST(X86_32_FunctionDiscovery, LargeSkippedSSAMedIREmitsGotoSkeleton) {
+  MedFunc Med = makeWideChainMed();
+  Med.SkippedSSA = true;
   MedToHighConverter Conv;
   HighFunc HF = Conv.convert(Med, Arch::X86);
   ASSERT_FALSE(HF.Body.empty());
@@ -411,6 +417,20 @@ TEST(X86_32_FunctionDiscovery, LargeMedIREmitsGotoSkeleton) {
       std::any_of(HF.Body.begin(), HF.Body.end(),
                   [](const HighStmt &S) { return S.Kind == StmtKind::Goto; });
   EXPECT_TRUE(HasGoto);
+}
+
+TEST(X86_32_FunctionDiscovery, LargeSSAMedIRIsLoweredBlockByBlock) {
+  // Past the structuring limits an SSA function still gets its statements;
+  // a straight chain needs no goto at all.
+  MedFunc Med = makeWideChainMed();
+  MedToHighConverter Conv;
+  HighFunc HF = Conv.convert(Med, Arch::X86);
+  ASSERT_FALSE(HF.Body.empty());
+  const bool HasGoto =
+      std::any_of(HF.Body.begin(), HF.Body.end(),
+                  [](const HighStmt &S) { return S.Kind == StmtKind::Goto; });
+  EXPECT_FALSE(HasGoto);
+  EXPECT_EQ(HF.Body.back().Kind, StmtKind::Return);
 }
 
 TEST(X86_32_FunctionDiscovery, FillUnstructuredSkeletonFromTwoBlocks) {

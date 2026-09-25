@@ -639,8 +639,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   for (const auto &Block : Func.Blocks)
     CopiedOps += Block.Ops.size();
   if (Low.DecodedInstructionCount >
-          static_cast<uint64_t>(limits::kMaxSSANodes) ||
-      CopiedOps > static_cast<size_t>(limits::kMaxSSANodes)) {
+          static_cast<uint64_t>(limits::kMaxSSAFunctionOps) ||
+      CopiedOps > limits::kMaxSSAFunctionOps) {
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for " << Func.Name
                             << " insns=" << Low.DecodedInstructionCount
                             << " ops=" << CopiedOps << "\n");
@@ -649,6 +649,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
     // would after the full pipeline.
     markIntrinsicAuxResults(Func);
     resolveSwitchSelectorPlans(Func);
+    Func.SkippedSSA = true;
     return Func;
   }
 
