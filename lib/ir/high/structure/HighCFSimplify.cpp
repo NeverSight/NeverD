@@ -22,6 +22,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/libc/LibCNames.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -1081,8 +1082,18 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
     auto It = Uses.find(Addr);
     return It == Uses.end() ? 0 : It->second;
   };
+  // A call to a known noreturn function (KeBugCheckEx, ExRaiseStatus...)
+  // ends its block just like a return.
   auto isTerminator = [](const HighStmt &S) {
-    return S.Kind == StmtKind::Return || S.Kind == StmtKind::Goto;
+    if (S.Kind == StmtKind::Return || S.Kind == StmtKind::Goto)
+      return true;
+    const HighExpr *Call = S.Kind == StmtKind::Call       ? S.CallExpr.get()
+                           : S.Kind == StmtKind::Assign   ? S.Val.get()
+                           : S.Kind == StmtKind::ExprStmt ? S.Val.get()
+                                                          : nullptr;
+    return Call && Call->Kind == ExprKind::Call &&
+           Call->IntrinsicId == Intrinsic::None && !Call->CallTarget.empty() &&
+           libc::isNoReturnFunction(Call->CallTarget);
   };
   auto isCondGoto = [](const HighStmt &S) {
     return S.Kind == StmtKind::If && S.Cond && S.ElseBody.empty() &&

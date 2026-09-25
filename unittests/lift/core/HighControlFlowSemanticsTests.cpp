@@ -193,7 +193,8 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
           return R;
       }
       if (S.Kind == StmtKind::While) {
-        while (Value(S.Cond)) {
+        // `while (1)` has no condition expression.
+        while (!S.Cond || Value(S.Cond)) {
           if (!Budget--)
             throw std::runtime_error(
                 "control-flow oracle exceeded its loop budget");
