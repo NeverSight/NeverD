@@ -522,6 +522,137 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
 
 namespace {
 
+/// True when some byte of \p RegOff's incoming value reaches a use other than
+/// the byte moves (COPY, SUBBYTES, CONCAT, ZEXT, PHI) that carry it.  A byte
+/// or word write keeps the rest of an x86 register, and the lifter rebuilds
+/// the full register from its old value; when the rebuilt register only
+/// feeds an extraction of the new low bytes, no incoming byte is used and the
+/// register is not a parameter.
+bool incomingBytesReachUse(const MedFunc &Func, uint64_t RegOff) {
+  using med_calling_conv_detail::ValueKey;
+  using med_calling_conv_detail::valueKey;
+  llvm::DenseMap<ValueKey, uint64_t> Masks; // byte masks, bit I = byte I
+  llvm::SmallVector<ValueKey, 16> Work;
+  auto Add = [&](const MedVar &V, uint64_t Mask) {
+    if (V.isConst() || V.Size == 0)
+      return;
+    if (V.Size < 8)
+      Mask &= (uint64_t{1} << V.Size) - 1;
+    if (!Mask)
+      return;
+    uint64_t &Known = Masks[valueKey(V)];
+    if ((Mask & ~Known) == 0)
+      return;
+    Known |= Mask;
+    Work.push_back(valueKey(V));
+  };
+  for (const MedOp &Op : Func.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
+        Op.NumInputs >= 1 && Op.Inputs[0].Id == Op.Output.Id)
+      Add(Op.Output, ~uint64_t{0});
+  }
+  if (Work.empty())
+    return true; // no identifiable live-in: keep it
+  // A call whose register arguments are not explicit inputs (an unsummarized
+  // or indirect callee, a tail call) may read the register implicitly.
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          Op.CalleeRegisterArgs < 0)
+        return true;
+  // An incoming value with no reads at all is kept: an explicit entry
+  // self-copy declares a live-in, and a later rewrite (a wide call return)
+  // can carry the value without a MedIR read.  Only a value whose reads are
+  // all byte rebuilds is dropped.
+  {
+    bool AnyRead = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          AnyRead |= !Arg.isConst() && Masks.count(valueKey(Arg));
+        }
+      for (const MedOp &Op : Block.Ops) {
+        const bool IsSeed =
+            &Block == &Func.Blocks.front() && Op.Opcode == NdOp::COPY &&
+            Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == RegOff &&
+            Op.NumInputs >= 1 && Op.Inputs[0].Id == Op.Output.Id;
+        if (IsSeed)
+          continue;
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          AnyRead |=
+              !Op.Inputs[I].isConst() && Masks.count(valueKey(Op.Inputs[I]));
+      }
+    }
+    if (!AnyRead)
+      return true;
+  }
+  auto MaskOf = [&](const MedVar &V) -> uint64_t {
+    if (V.isConst())
+      return 0;
+    auto It = Masks.find(valueKey(V));
+    return It == Masks.end() ? 0 : It->second;
+  };
+  bool Used = false;
+  auto Visit = [&](const MedOp &Op) {
+    uint64_t Any = 0;
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      Any |= MaskOf(Op.Inputs[I]);
+    if (!Any)
+      return;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+      if (Op.NumInputs == 1 && Op.Output.Kind != MedVar::Const &&
+          Op.Output.Size) {
+        Add(Op.Output, MaskOf(Op.Inputs[0]));
+        return;
+      }
+      break;
+    case NdOp::SUBBYTES:
+      if (Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].ConstVal < 8 && MaskOf(Op.Inputs[1]) == 0) {
+        Add(Op.Output, MaskOf(Op.Inputs[0]) >> Op.Inputs[1].ConstVal);
+        return;
+      }
+      break;
+    case NdOp::CONCAT:
+      if (Op.NumInputs == 2 && Op.Inputs[1].Size < 8) {
+        Add(Op.Output,
+            MaskOf(Op.Inputs[1]) | (MaskOf(Op.Inputs[0]) << Op.Inputs[1].Size));
+        return;
+      }
+      break;
+    default:
+      break;
+    }
+    Used = true;
+  };
+  for (unsigned Round = 0; !Used && !Work.empty(); ++Round) {
+    Work.clear();
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis) {
+        uint64_t Mask = 0;
+        for (const auto &[Pred, Arg] : Phi.Args) {
+          (void)Pred;
+          Mask |= MaskOf(Arg);
+        }
+        Add(Phi.Output, Mask);
+      }
+      for (const MedOp &Op : Block.Ops) {
+        Visit(Op);
+        if (Used)
+          return true;
+      }
+    }
+    if (Round > 64)
+      return true; // did not settle: keep the parameter
+  }
+  return Used;
+}
+
 /// Find the set of self-copy parameter registers in the entry block.
 /// In the LowIR->MedIR translation, self-copies (COPY reg, reg) at the
 /// entry denote live-in registers from the caller.
@@ -551,8 +682,13 @@ std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
 
 void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> ParamRegs,
-                          const std::set<uint64_t> &UsedParamRegs,
-                          Arch TargetArch) {
+                          std::set<uint64_t> UsedParamRegs, Arch TargetArch) {
+  // Only Win64 calls to summarized callees publish their register arguments
+  // as inputs; elsewhere an argument read is invisible here.
+  if (TargetArch == Arch::X64 && Func.CC == CallingConv::Win64)
+    for (auto It = UsedParamRegs.begin(); It != UsedParamRegs.end();)
+      It = incomingBytesReachUse(Func, *It) ? std::next(It)
+                                            : UsedParamRegs.erase(It);
   // No parameter register is live-in: the function takes no register arguments
   // (a leaf with stack-only or no arguments).  Returning keeps Func.Params
   // empty so the cdecl/stack detector numbers arguments from arg0 rather than

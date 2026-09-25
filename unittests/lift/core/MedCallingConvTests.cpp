@@ -3923,3 +3923,54 @@ TEST(MedParamTypes, StackPointerRolesUseSlotIdentityAndAddressSpace) {
 }
 
 } // namespace
+
+TEST(LowToMedX64CallingConv, ByteWriteRebuildIsNotAParameter) {
+  // `mov r8b, 0Dh` lifts as a byte copy plus a rebuild of R8 from its old
+  // upper bytes.  Only R8B is then used, so no incoming byte reaches a use
+  // and R8 is not a parameter (HalpTimerInitializeClock).  When the full
+  // rebuilt R8 is returned, its incoming upper bytes are used and it is.
+  auto Convert = [](bool UseFullRegister) {
+    LowFunc Low;
+    Low.Entry = 0x140001000;
+    Low.Name = "byte_rebuild";
+    Low.Blocks.resize(1);
+    LowBlock &Block = Low.Blocks[0];
+    Block.Id = 0;
+    Block.StartAddr = 0x140001000;
+    Block.EndAddr = 0x140001010;
+    auto Push = [&](NdOp Opcode, NdVar Out, std::initializer_list<NdVar> In) {
+      LowOp Op;
+      Op.Opcode = Opcode;
+      Op.Addr = 0x140001000;
+      Op.Output = Out;
+      for (const NdVar &V : In)
+        Op.addInput(V);
+      Block.Ops.push_back(Op);
+    };
+    const NdVar R8B = NdVar::reg(x86reg::R8, 1);
+    const NdVar R8 = NdVar::reg(x86reg::R8, 8);
+    const NdVar RAX = NdVar::reg(x86reg::RAX, 8);
+    Push(NdOp::COPY, R8B, {NdVar::cst(0x0d, 1)});
+    Push(NdOp::SUBBYTES, NdVar::tmp(1, 7), {R8, NdVar::cst(1, 8)});
+    Push(NdOp::CONCAT, NdVar::tmp(2, 8), {NdVar::tmp(1, 7), R8B});
+    Push(NdOp::COPY, R8, {NdVar::tmp(2, 8)});
+    if (UseFullRegister)
+      Push(NdOp::COPY, RAX, {R8});
+    else
+      Push(NdOp::INT_ZEXT, RAX, {R8B});
+    LowOp Ret;
+    Ret.Opcode = NdOp::RETURN;
+    Ret.Addr = 0x14000100c;
+    Ret.addInput(RAX);
+    Block.Ops.push_back(Ret);
+    return LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::COFF);
+  };
+  const MedFunc ByteOnly = Convert(false);
+  for (const MedVar &P : ByteOnly.Params)
+    EXPECT_NE(P.RegOff, x86reg::R8) << ByteOnly.Params.size();
+  const MedFunc Full = Convert(true);
+  bool HasR8 = false;
+  for (const MedVar &P : Full.Params)
+    HasR8 |= P.RegOff == x86reg::R8;
+  EXPECT_TRUE(HasR8) << Full.Params.size();
+}
