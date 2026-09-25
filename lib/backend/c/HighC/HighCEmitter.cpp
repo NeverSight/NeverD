@@ -20,6 +20,7 @@
 #include "neverd/backend/llvm/LLVMX86AddressSpaces.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
@@ -865,6 +866,29 @@ void HighCWriter::collectCallTargets(const std::vector<HighStmt> &Stmts,
   }
 }
 
+bool HighCWriter::isOwnFunctionName(llvm::StringRef Name,
+                                    const std::vector<HighFunc> &Funcs) {
+  llvm::StringRef Clean = Name;
+  Clean.consume_front("_");
+  for (const HighFunc &F : Funcs) {
+    llvm::StringRef Own = F.Name;
+    if (Own == Name || Own == Clean || (Own.consume_front("_") && Own == Clean))
+      return true;
+  }
+  if (!Opts.Image)
+    return false;
+  if (!ImageFunctionNames) {
+    ImageFunctionNames.emplace();
+    for (const Symbol &Sym : Opts.Image->Symbols)
+      if (Sym.IsFunc && !Sym.Name.empty() &&
+          !Opts.Image->findImportAt(Sym.Addr))
+        ImageFunctionNames->insert(Sym.Name);
+  }
+  return ImageFunctionNames->count(Name.str()) ||
+         ImageFunctionNames->count(Clean.str()) ||
+         ImageFunctionNames->count(("_" + Clean).str());
+}
+
 void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   if (!Opts.EmitIncludes) {
     if (Has256BitInteger)
@@ -888,6 +912,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     collectCallTargets(F.Body, CallTargets);
 
   for (auto &Name : CallTargets) {
+    if (isOwnFunctionName(Name, Funcs))
+      continue;
     if (const char *Hdr = libc::headerFor(Name))
       Headers.insert(Hdr);
   }
@@ -1026,7 +1052,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
          DefinedFunctionsByIdentifier.count(Name)) &&
         !SourceRuntimeLinkNames.count(Name))
       continue;
-    if (libc::isKnownFunction(Name))
+    if (libc::isKnownFunction(Name) && !isOwnFunctionName(Name, Funcs))
       continue;
     if (CIntrinsicNames.count(Name))
       continue;
@@ -1034,7 +1060,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     std::string CleanName = Name;
     if (!CleanName.empty() && CleanName[0] == '_')
       CleanName = CleanName.substr(1);
-    if (libc::isKnownFunction(CleanName))
+    if (libc::isKnownFunction(CleanName) && !isOwnFunctionName(Name, Funcs))
       continue;
 
     ExternFuncs.insert(Name);

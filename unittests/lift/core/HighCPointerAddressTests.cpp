@@ -4523,3 +4523,26 @@ TEST(HighCPointerAddresses, RecursiveCallMatchesItsOwnSignature) {
       << HighC;
   expectCompilesForMsvc(HighC);
 }
+
+TEST(HighCPointerAddresses, ImageFunctionNamedLikeLibcIsNotLibc) {
+  // ntoskrnl implements its own two-argument `setjmp`.  A call to it is a
+  // call to that function, not to <setjmp.h>'s declaration.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t G = 0x140001020;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+                               0x48, 0x89, 0xe2,             // mov rdx, rsp
+                               0xe8, 0x14, 0x00, 0x00, 0x00, // call setjmp
+                               0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+                               0xc3};
+  Code.resize(G - Entry, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0xc1, // mov rax, rcx
+                           0x48, 0x01, 0xd0, // add rax, rdx
+                           0xc3});
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol GSym = Symbol::makeFunc(G);
+  GSym.Name = "setjmp";
+  Img.Symbols.push_back(GSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_EQ(HighC.find("<setjmp.h>"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("extern int setjmp()"), std::string::npos) << HighC;
+}

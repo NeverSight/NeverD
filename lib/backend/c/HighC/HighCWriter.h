@@ -197,6 +197,11 @@ public:
 
   std::set<std::string> ExternFuncs;
   std::map<std::string, const HighFunc *> DefinedFuncs;
+  /// True when \p Name is a function this file or the image defines, not a
+  /// libc routine of the same name (ntoskrnl implements its own `setjmp`).
+  bool isOwnFunctionName(llvm::StringRef Name,
+                         const std::vector<HighFunc> &Funcs);
+  std::optional<std::set<std::string>> ImageFunctionNames;
   std::map<std::string, const HighFunc *> DefinedFunctionsByIdentifier;
   std::map<va_t, const HighFunc *> DefinedFunctionsByAddress;
   CProjectionIdentifierAllocator GlobalIdentifierAllocator;
