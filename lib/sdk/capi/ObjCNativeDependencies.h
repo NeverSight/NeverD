@@ -45,7 +45,7 @@ walkObjCNativeDependencies(const BinaryImage &Image,
     Low.emplace(Function.Entry, &Function);
   std::vector<va_t> Pending;
   for (const auto &Method : Image.ObjCMethods)
-    if (Method.TypeHint && Method.Status == "supported") {
+    if (objcMethodHasSourceBody(Method)) {
       Pending.push_back(Method.Implementation);
       if (Evidence)
         Evidence->Roots.insert(Method.Implementation);

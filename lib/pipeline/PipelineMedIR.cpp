@@ -53,7 +53,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     for (const auto &[Entry, Hint] : Opts.SourceTypeHints)
       SourceHints.emplace(Entry, &Hint);
     for (const auto &Method : Img.ObjCMethods)
-      if (Method.Status == "supported" && Method.TypeHint)
+      if (objcMethodHasSourceBody(Method))
         SourceHints.emplace(Method.Implementation, &*Method.TypeHint);
   }
 

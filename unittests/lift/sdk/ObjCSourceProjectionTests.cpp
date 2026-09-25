@@ -1133,6 +1133,19 @@ TEST(ObjCSourceProjection, NativeDependencyGraphKeepsSharedCallsAndCycles) {
                 llvm::json::Value(nullptr));
 }
 
+TEST(ObjCSourceProjection,
+     AmbiguousSelectorBodiesRemainSeparateNativeDependencyRoots) {
+  NativeDependencyFixture F;
+  F.Image.ObjCMethods[0].Status = "ambiguous_dispatch";
+  F.Image.ObjCMethods[1].Status = "conflicting_encoding";
+  NativeSourceDependencyEvidence Evidence;
+  walkObjCNativeDependencies(F.Image, F.Result, &Evidence);
+  EXPECT_EQ(Evidence.Roots, (std::set<va_t>{0x1000}));
+  F.Image.ObjCMethods[0].TypeHint.reset();
+  walkObjCNativeDependencies(F.Image, F.Result, &Evidence);
+  EXPECT_TRUE(Evidence.Roots.empty());
+}
+
 TEST(ObjCSourceProjection, NativeInferenceSkipsCallOnlyThunkTargets) {
   NativeDependencyFixture F;
   F.call(0, 0x3000);

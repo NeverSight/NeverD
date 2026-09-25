@@ -452,24 +452,36 @@ inline std::optional<uint32_t> constantBorrowedByteCount(const ExprPtr &Value,
   return static_cast<uint32_t>(Count);
 }
 
+inline const Symbol *uniqueWritableDataSymbol(const BinaryImage &Image,
+                                              va_t Address, uint64_t Width);
+
 inline std::optional<SourceCallTypeHint>
-associationKeyHint(const BinaryImage &Image, va_t Address) {
+associationKeyHint(const BinaryImage &Image, va_t Address,
+                   bool AllowWritable = false) {
   if (Image.Format != BinaryFormat::MachO || Image.Bits != Bitness::Bits64 ||
       !Address)
     return std::nullopt;
   const auto *Section = Image.getSectionFor(Address);
   const auto *Segment = Image.getSegmentFor(Address);
   if (!Section || !Segment || !Section->isReadable() ||
-      !Segment->isReadable() ||
-      ((Section->isWritable() || Segment->isWritable()) &&
-       !Segment->ReadOnlyAfterRelocations) ||
-      Section->isExecutable() || Segment->isExecutable() ||
-      !Image.readVA(Address, 1))
+      !Segment->isReadable() || Section->isExecutable() ||
+      Segment->isExecutable() || !Image.readVA(Address, 1))
+    return std::nullopt;
+  const bool Writable =
+      (Section->isWritable() || Segment->isWritable()) &&
+      !Segment->ReadOnlyAfterRelocations;
+  if (Writable && !AllowWritable)
     return std::nullopt;
   const bool CString = (Section->Type & llvm::MachO::SECTION_TYPE) ==
                        llvm::MachO::S_CSTRING_LITERALS;
   const Symbol *Identity = nullptr;
-  if (CString) {
+  if (Writable) {
+    // Associated-object keys use only the address. Require the same exact,
+    // uniquely named writable storage proof as KVO context identities.
+    Identity = uniqueWritableDataSymbol(Image, Address, 1);
+    if (!Identity)
+      return std::nullopt;
+  } else if (CString) {
     // A pool with complete byte/identity evidence must use the same address
     // helper in key consumers and ordinary pointer uses.
     if (cstringStorageSourceHint(Image, Section->VA))
@@ -489,6 +501,7 @@ associationKeyHint(const BinaryImage &Image, va_t Address) {
   SourceCallTypeHint Hint;
   Hint.CallKind = SourceCallTypeHint::Kind::RuntimeAssociationKey;
   Hint.TargetAddress = Address;
+  Hint.ByteCount = Writable ? 1 : 0;
   if (Identity)
     Hint.TargetName = Identity->Name;
   Hint.Signature.ReturnType = NdType::makePtr(NdType::makeVoid());
@@ -3668,8 +3681,16 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       // one helper across methods, including addresses inside a string.
       if (Operand && identityKeyParameter(*Expression, Image) == Index) {
         const auto Address = constantAddress(*Operand);
-        auto Hint =
-            Address ? associationKeyHint(Image, *Address) : std::nullopt;
+        const bool ObjCAssociation =
+            Expression->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::ObjCRuntimeCall &&
+            (Expression->SourceCallHint->TargetName ==
+                 "objc_getAssociatedObject" ||
+             Expression->SourceCallHint->TargetName ==
+                 "objc_setAssociatedObject");
+        auto Hint = Address ? associationKeyHint(Image, *Address,
+                                                 ObjCAssociation)
+                            : std::nullopt;
         if (Hint) {
           auto Key = HighExpr::makeCall({}, 0, {});
           Key->Type = Operand->Type;
@@ -4248,10 +4269,12 @@ objcSourceCallBound(const HighExpr &Expression, const BinaryImage &Image,
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeAssociationKey) {
-    const auto Expected = associationKeyHint(Image, Binding.TargetAddress);
+    const auto Expected = associationKeyHint(Image, Binding.TargetAddress,
+                                             Binding.ByteCount == 1);
     return Expected && Binding.TargetName == Expected->TargetName &&
            Binding.Selector.empty() && Binding.OwnerClass.empty() &&
            !Binding.SelectorReferenceAddress &&
+           Binding.ByteCount == Expected->ByteCount &&
            objc_projection_detail::sameHint(Expected->Signature, Hint);
   }
   if (Binding.CallKind == SourceCallTypeHint::Kind::RuntimeKVOContext) {

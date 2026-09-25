@@ -493,7 +493,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
       if (auto It = Functions.find(Method.Implementation);
           It != Functions.end())
         Func = It->second;
-      if (Method.Status != "supported" || !Method.TypeHint) {
+      if (!objcMethodHasSourceBody(Method)) {
         Reason = "runtime method signature is not supported: " + Method.Status;
         Evidence.Complete = false;
         Evidence.add(SourceProjectionIssue::Signature, Reason);

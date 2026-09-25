@@ -54,12 +54,18 @@ struct ObjCMethod {
   std::string TypeEncoding;
   std::string Status;
   bool IsClassMethod = false;
-  /// Validated declaration ABI, independent of runtime override order. An
-  /// ambiguous_dispatch record may retain this hint for call agreement;
-  /// selecting a source method body additionally requires supported Status.
+  /// Validated declaration ABI, independent of runtime override order.
+  /// Colliding declarations may retain this hint for their separate IMP
+  /// bodies; it never selects a winner for Objective-C message dispatch.
   std::optional<SourceFunctionTypeHint> TypeHint;
   std::vector<std::string> Diagnostics;
 };
+
+inline bool objcMethodHasSourceBody(const ObjCMethod &Method) {
+  return Method.TypeHint &&
+         (Method.Status == "supported" ||
+          Method.Status == "ambiguous_dispatch");
+}
 
 /// A protocol describes a call contract, never an executable implementation.
 struct ObjCProtocolMethod {

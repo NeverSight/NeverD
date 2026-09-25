@@ -4632,6 +4632,68 @@ TEST(ObjCSourceBindings,
   }
 }
 
+TEST(ObjCSourceBindings, WritableAssociationKeysRequireExactNamedIdentity) {
+  constexpr va_t Slot = 0x1020;
+  constexpr va_t Address = 0x1040;
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (const char *Name : {"objc_getAssociatedObject",
+                             "objc_setAssociatedObject"}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Name);
+      Fixture F;
+      F.Image.Arch = Architecture;
+      F.Image.ObjCSourceReferences.clear();
+      F.Image.Segments[0].Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      F.Image.Sections[0].Flags = F.Image.Segments[0].Flags;
+      F.Image.Symbols.push_back({"_AssociationKey", Address, 1, false});
+      F.Image.ImportPtrSlots[Slot] = std::string("_") + Name;
+      const auto Hint = objcRuntimeSourceCallHint(F.Image, Slot);
+      ASSERT_TRUE(Hint);
+      std::vector<ExprPtr> Arguments;
+      for (size_t Index = 0; Index < Hint->Signature.Parameters.size(); ++Index)
+        Arguments.push_back(HighExpr::makeConst(
+            Index == 1 ? Address : 0, 8,
+            Index == 1 ? ConstantAddressProvenance::DataAddress
+                       : ConstantAddressProvenance::Unknown));
+      auto Call = HighExpr::makeCall(Name, Slot, Arguments);
+      Call->Type = Hint->Signature.ReturnType;
+      Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(*Hint);
+      F.Function.Body[0].RetVal = Call;
+
+      auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+      ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+      EXPECT_EQ(Bound.AssociationKeys, std::set<va_t>{Address});
+      const auto Key = Bound.Function.Body[0].RetVal->Operands[1];
+      ASSERT_TRUE(Key->SourceCallHint);
+      EXPECT_EQ(Key->SourceCallHint->TargetName, "_AssociationKey");
+      EXPECT_EQ(Key->SourceCallHint->ByteCount, 1U);
+      EXPECT_TRUE(objcSourceCallBound(*Key, F.Image, {}));
+
+      auto Forged = *Key->SourceCallHint;
+      Forged.ByteCount = 0;
+      Key->SourceCallHint = std::make_shared<SourceCallTypeHint>(Forged);
+      EXPECT_FALSE(objcSourceCallBound(*Key, F.Image, {}));
+
+      for (unsigned Mutation = 0; Mutation < 4; ++Mutation) {
+        auto Image = F.Image;
+        if (Mutation == 0)
+          Image.Symbols.clear();
+        else if (Mutation == 1)
+          Image.Symbols.push_back({"_AliasKey", Address, 1, false});
+        else if (Mutation == 2)
+          Image.Sections[0].Flags = SegmentFlags::Readable;
+        else
+          Image.Segments[0].Flags = SegmentFlags::Readable |
+                                    SegmentFlags::Writable |
+                                    SegmentFlags::Executable;
+        const auto Rejected = bindObjCSourceReferences(F.Function, Image);
+        EXPECT_FALSE(Rejected.Limitation.empty()) << Mutation;
+        EXPECT_TRUE(Rejected.AssociationKeys.empty()) << Mutation;
+      }
+    }
+}
+
 TEST(ObjCSourceBindings, DispatchSpecificKeysKeepExactNamedReadonlyIdentity) {
   struct Consumer {
     const char *Name;
