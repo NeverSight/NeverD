@@ -109,6 +109,12 @@ objcSuperSourceTypeHint(const BinaryImage &Image, llvm::StringRef Selector,
 
 std::optional<ObjCReceiverTypeHint>
 objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry);
+/// Recover an exact embedded source parameter's declared object class when
+/// Objective-C metadata erases it to id. The parameter remains dynamically
+/// dispatched; this is only receiver type provenance.
+std::optional<ObjCReceiverTypeHint>
+objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
+                                    unsigned Parameter);
 std::optional<SourceFunctionTypeHint>
 objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry);
 bool objcReceiverTypeHintValid(const BinaryImage &Image,

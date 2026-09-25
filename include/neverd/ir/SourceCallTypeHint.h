@@ -15,7 +15,12 @@ namespace neverd {
 /// classes from every reaching SDK call. No fact selects a dynamic method
 /// implementation.
 struct ObjCReceiverTypeHint {
-  enum class OriginKind { MethodEntry, ClassReference, OutParameter };
+  enum class OriginKind {
+    MethodEntry,
+    MethodParameter,
+    ClassReference,
+    OutParameter
+  };
   OriginKind Origin = OriginKind::MethodEntry;
   va_t Address = 0;
   /// Root receiver's declared class, before any type steps.
@@ -62,12 +67,15 @@ struct ObjCReceiverTypeHint {
   /// For OutParameter roots, each item identifies one authenticated selector
   /// reference and compiler-declared object-pointer argument reaching a join.
   std::vector<OutParameterRoot> OutParameters;
+  /// Source parameter index for a declaration erased to an Objective-C id.
+  unsigned SourceParameter = 0;
 
   bool operator==(const ObjCReceiverTypeHint &Other) const {
     return Origin == Other.Origin && Address == Other.Address &&
            ClassName == Other.ClassName &&
            IsClassMethod == Other.IsClassMethod && Steps == Other.Steps &&
-           OutParameters == Other.OutParameters;
+           OutParameters == Other.OutParameters &&
+           SourceParameter == Other.SourceParameter;
   }
 };
 

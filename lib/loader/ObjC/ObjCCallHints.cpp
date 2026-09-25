@@ -697,7 +697,10 @@ struct CallFacts {
 };
 
 std::optional<ObjCReceiverTypeHint> receiver(const Value &V) {
-  return V.TheKind == Value::Kind::Receiver ? V.Object : std::nullopt;
+  return V.TheKind == Value::Kind::Receiver ||
+                 V.TheKind == Value::Kind::SourceParameter
+             ? V.Object
+             : std::nullopt;
 }
 
 bool isObjCInitFamily(llvm::StringRef Selector) {
@@ -1015,7 +1018,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
       EntryFacts.Values.emplace(key(NdVar::reg(TRI.IntParamRegs[0], 8)),
                                 Value{Value::Kind::Receiver, 0, {}, *Receiver});
     if (const auto Signature = objcMethodSourceTypeHint(Image, Function.Entry))
-      for (const auto &Parameter : Signature->Parameters) {
+      for (size_t Index = 0; Index < Signature->Parameters.size(); ++Index) {
+        const auto &Parameter = Signature->Parameters[Index];
         const auto &Type = Parameter.Type;
         const auto &Location = Parameter.Location;
         const bool CompleteForwardedScalar =
@@ -1030,6 +1034,8 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
         V.TheKind = Value::Kind::SourceParameter;
         V.SourceMethodEntry = Function.Entry;
         V.SourceLocation = Location;
+        V.Object = objcMethodParameterReceiverTypeHint(Image, Function.Entry,
+                                                       unsigned(Index));
         EntryFacts.Values.emplace(key(NdVar::reg(Location.RegisterOffset, 8)),
                                   std::move(V));
       }
@@ -1053,7 +1059,7 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
   using ReceiverKey =
       std::tuple<ObjCReceiverTypeHint::OriginKind, va_t, std::string, bool,
                  std::vector<ObjCReceiverTypeHint::TypeStep>,
-                 std::vector<ObjCReceiverTypeHint::OutParameterRoot>,
+                 std::vector<ObjCReceiverTypeHint::OutParameterRoot>, unsigned,
                  std::string>;
   std::map<ReceiverKey, ObjCReceiverDeclaration> ReceiverDeclarations;
   auto Transfer = [&](size_t Index, Facts State,
@@ -1596,10 +1602,11 @@ buildObjCSourceCallHints(const BinaryImage &Image, const LowFunc &Function) {
             }
           }
           if (Receiver && Target->Name == "objc_msgSend") {
-            auto [It, Inserted] = ReceiverDeclarations.try_emplace(std::tuple{
-                Receiver->Origin, Receiver->Address, Receiver->ClassName,
-                Receiver->IsClassMethod, Receiver->Steps,
-                Receiver->OutParameters, Target->Selector});
+            auto [It, Inserted] = ReceiverDeclarations.try_emplace(
+                std::tuple{Receiver->Origin, Receiver->Address,
+                           Receiver->ClassName, Receiver->IsClassMethod,
+                           Receiver->Steps, Receiver->OutParameters,
+                           Receiver->SourceParameter, Target->Selector});
             if (Inserted)
               It->second = objcReceiverSourceTypeHint(Image, Target->Selector,
                                                       *Receiver);

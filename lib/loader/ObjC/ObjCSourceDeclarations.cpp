@@ -3,6 +3,7 @@
 #include "ObjCReceiverDeclarations.h"
 
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCBlocks.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
@@ -718,10 +719,79 @@ objcMethodReceiverTypeHint(const BinaryImage &Image, va_t Entry) {
   return Result;
 }
 
+std::optional<ObjCReceiverTypeHint>
+objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
+                                    unsigned Parameter) {
+  // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *.
+  // Its runtime method encoding erases that class, while the source callback
+  // passed to enumerateObjectsUsingBlock: uses NSArray's index argument.
+  if (Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits64 || Image.Arch != Arch::AArch64 || !Entry ||
+      Parameter != 2)
+    return std::nullopt;
+  constexpr llvm::StringLiteral Selector =
+      "saveGroupForNews:pageViews:date:inManagedObjectContext:";
+  if (!std::any_of(Image.ObjCMethods.begin(), Image.ObjCMethods.end(),
+                   [&](const ObjCMethod &Method) {
+                     return Method.Implementation == Entry &&
+                            Method.ClassName == "WMFFeedContentSource" &&
+                            Method.Selector == Selector;
+                   }))
+    return std::nullopt;
+  const auto Array = objc::sdkReceiverDeclarations(
+      Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
+  if (!Array.Present || !Array.Complete)
+    return std::nullopt;
+  const ObjCClass *Owner = nullptr;
+  for (const auto &Class : Image.ObjCClasses)
+    if (Class.Name == "WMFFeedContentSource") {
+      if (Owner)
+        return std::nullopt;
+      Owner = &Class;
+    }
+  if (!Owner || !Owner->Address)
+    return std::nullopt;
+  const ObjCMethod *Found = nullptr;
+  for (const auto &Method : Image.ObjCMethods) {
+    if (Method.Implementation != Entry &&
+        !(Method.ClassName == Owner->Name && Method.Selector == Selector))
+      continue;
+    if (Found || Method.Implementation != Entry ||
+        Method.ClassAddress != Owner->Address || Method.CategoryAddress ||
+        !Method.CategoryName.empty() || !Method.MetadataAddress ||
+        Method.IsClassMethod || Method.Selector != Selector ||
+        Method.TypeEncoding != "v48@0:8@16@24@32@40" ||
+        !objcMethodHasSourceBody(Method) || !Image.isCodeAddress(Entry))
+      return std::nullopt;
+    Found = &Method;
+  }
+  if (!Found)
+    return std::nullopt;
+  const auto Signature = objcMethodSourceTypeHint(Image, Entry);
+  if (!Signature || Signature->Parameters.size() != 6 ||
+      !Signature->Parameters[Parameter].Type ||
+      Signature->Parameters[Parameter].Type->Kind != NdTypeKind::Ptr ||
+      Signature->Parameters[Parameter].Type->Size != 8 ||
+      Signature->Parameters[Parameter].Location.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      Signature->Parameters[Parameter].Location.RegisterOffset !=
+          getTargetRegInfo(Arch::AArch64).IntParamRegs[Parameter] ||
+      Signature->Parameters[Parameter].Location.ValueBytes != 8)
+    return std::nullopt;
+  ObjCReceiverTypeHint Result;
+  Result.Origin = ObjCReceiverTypeHint::OriginKind::MethodParameter;
+  Result.Address = Entry;
+  Result.ClassName = "NSArray";
+  Result.SourceParameter = Parameter;
+  return Result;
+}
+
 namespace {
 bool validReceiverRoot(const BinaryImage &Image,
                        const ObjCReceiverTypeHint &Receiver) {
   if (!Receiver.Address || Receiver.ClassName.empty() ||
+      (Receiver.Origin != ObjCReceiverTypeHint::OriginKind::MethodParameter &&
+       Receiver.SourceParameter) ||
       Image.Format != BinaryFormat::MachO || Image.IsRelocatable ||
       Image.Bits != Bitness::Bits64 ||
       (Image.Arch != Arch::AArch64 && Image.Arch != Arch::X64))
@@ -733,6 +803,14 @@ bool validReceiverRoot(const BinaryImage &Image,
     const auto Expected = objcMethodReceiverTypeHint(Image, Receiver.Address);
     return Expected && Expected->ClassName == Receiver.ClassName &&
            Expected->IsClassMethod == Receiver.IsClassMethod;
+  }
+  case ObjCReceiverTypeHint::OriginKind::MethodParameter: {
+    if (Receiver.IsClassMethod || !Receiver.OutParameters.empty())
+      return false;
+    const auto Expected = objcMethodParameterReceiverTypeHint(
+        Image, Receiver.Address, Receiver.SourceParameter);
+    return Expected && Expected->ClassName == Receiver.ClassName &&
+           Expected->SourceParameter == Receiver.SourceParameter;
   }
   case ObjCReceiverTypeHint::OriginKind::ClassReference: {
     if (!Receiver.OutParameters.empty())
