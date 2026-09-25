@@ -1774,8 +1774,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
     return consumeCandidateFactorProduct(
                {ExpectedTargets, ValidationPasses, 16}) &&
-           consumeCandidateFactorProduct(
-               {ExpectedTargets, ValidationPasses, Img.Symbols.size(), 4}) &&
+           consumeCandidateFactorProduct({ExpectedTargets, ValidationPasses,
+                                          orderedLookupWork(Img.Symbols.size()),
+                                          4}) &&
            consumeCandidateFactorProduct(
                {ExpectedTargets, ValidationPasses, Img.Segments.size(), 16}) &&
            consumeCandidateFactorProduct(
@@ -1888,7 +1889,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       // is sized.
       if (Target == CurrentFuncEntry ||
           (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-          Img.hasFunctionSymbolAt(Target))
+          hasFunctionSymbolAtIndexed(Img, Target))
         return false;
       const bool InAuthoritativeBody = Target > (*OwnershipRange)->first &&
                                        Target < (*OwnershipRange)->second;
@@ -1958,7 +1959,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       const bool IsCallableEntry =
           Target == CurrentFuncEntry ||
           (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-          Img.hasFunctionSymbolAt(Target);
+          hasFunctionSymbolAtIndexed(Img, Target);
       if (Target == CurrentFuncEntry || IsOwnedFragment) {
         // A self jump re-enters with the current machine frame.  Turning it
         // into an ordinary indirect CALL would push a continuation and grow
@@ -4786,7 +4787,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (std::any_of(Targets.begin(), Targets.end(), [&](va_t Target) {
           return Target == CurrentFuncEntry ||
                  (KnownFuncEntries && KnownFuncEntries->count(Target)) ||
-                 Img.hasFunctionSymbolAt(Target);
+                 hasFunctionSymbolAtIndexed(Img, Target);
         })) {
       ClaimRejectedPhysicalTableIdentity();
       return {};

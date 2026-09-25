@@ -2092,3 +2092,120 @@ TEST(COFFExceptionIR, LargeImageStillResolvesAnImageRelativeJumpTable) {
   EXPECT_NE(Source.find("return 16;"), std::string::npos) << Source;
   EXPECT_NE(Source.find("return 55;"), std::string::npos) << Source;
 }
+
+TEST(COFFExceptionIR, SymbolHeavyImageStillResolvesAnImageRelativeJumpTable) {
+  // ntoskrnl: 41k symbols.  Checking whether each target is a function
+  // symbol was priced as a scan of every symbol, which exhausted the proof
+  // budget for a 43-case switch.  It is a lookup in a sorted index.
+  constexpr va_t Base = 0x140000000;
+  constexpr va_t F = 0x140001000;
+  constexpr va_t Table = 0x140003000;
+  constexpr unsigned Cases = 40;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = Base;
+  Img.Entry = F;
+  std::vector<uint8_t> Code = {
+      0x83, 0xf9, Cases - 1,                // cmp ecx, Cases-1
+      0x0f, 0x87, 0,         0,    0, 0,    // ja default (patched)
+      0x4c, 0x8d, 0x0d,      0,    0, 0, 0, // lea r9, [rip+Base-next] (patched)
+      0x8b, 0xc1,                           // mov eax, ecx
+      0x41, 0x8b, 0x84,      0x81, 0, 0, 0,
+      0,                // mov eax, [r9+rax*4+Table] (patched)
+      0x4c, 0x01, 0xc8, // add rax, r9
+      0xff, 0xe0};      // jmp rax
+  auto Put32 = [&](size_t At, uint32_t V) {
+    for (unsigned I = 0; I < 4; ++I)
+      Code[At + I] = static_cast<uint8_t>(V >> (8 * I));
+  };
+  Put32(12, static_cast<uint32_t>(Base - (F + 16)));
+  Put32(22, static_cast<uint32_t>(Table - Base));
+  std::vector<uint32_t> Entries;
+  for (unsigned I = 0; I < Cases; ++I) {
+    Entries.push_back(static_cast<uint32_t>(F + Code.size() - Base));
+    Code.insert(Code.end(), {0xb8, static_cast<uint8_t>(0x10 + I), 0, 0, 0,
+                             0xc3}); // mov eax, 10h+I; ret
+  }
+  const size_t Default = Code.size();
+  Put32(5, static_cast<uint32_t>(Default - 9));
+  Code.insert(Code.end(), {0x31, 0xc0, 0xc3}); // default: xor eax, eax; ret
+
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = F;
+  Text.Size = 0x1000;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  std::copy(Code.begin(), Code.end(), Text.Data.begin());
+  Img.Segments.push_back(std::move(Text));
+  Segment RData;
+  RData.Name = ".rdata";
+  RData.VA = Table;
+  RData.Size = 0x1000;
+  RData.Flags = SegmentFlags::Readable;
+  RData.Data.assign(RData.Size, 0);
+  for (unsigned I = 0; I < Cases; ++I)
+    for (unsigned B = 0; B < 4; ++B)
+      RData.Data[4 * I + B] = static_cast<uint8_t>(Entries[I] >> (8 * B));
+  Img.Segments.push_back(std::move(RData));
+  // Many one-byte functions elsewhere, each with its own unwind entry.
+  constexpr va_t Filler = 0x140100000;
+  constexpr size_t FillerCount = 16;
+  Segment Pad;
+  Pad.Name = ".text2";
+  Pad.VA = Filler;
+  Pad.Size = FillerCount;
+  Pad.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Pad.Data.assign(Pad.Size, 0xc3);
+  Img.Segments.push_back(std::move(Pad));
+  for (const auto &[Name, VA, Size, Flags] :
+       {std::tuple{".text", F, uint64_t{0x1000},
+                   SegmentFlags::Readable | SegmentFlags::Executable},
+        std::tuple{".rdata", Table, uint64_t{0x1000}, SegmentFlags::Readable},
+        std::tuple{".text2", Filler, uint64_t{FillerCount},
+                   SegmentFlags::Readable | SegmentFlags::Executable}}) {
+    Section Sec;
+    Sec.Name = Name;
+    Sec.VA = VA;
+    Sec.Size = Size;
+    Sec.Flags = Flags;
+    Img.Sections.push_back(std::move(Sec));
+  }
+  Img.KnownCodeRanges.emplace_back(F, F + Code.size());
+  Img.Symbols.push_back(Symbol::makeFunc(F, Code.size()));
+  ExceptionFunction EH;
+  EH.CodeRange = {F, F + Code.size()};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  for (size_t I = 0; I < FillerCount; ++I) {
+    ExceptionFunction Leaf;
+    Leaf.CodeRange = {Filler + I, Filler + I + 1};
+    Leaf.Kind = RuntimeFunctionKind::Primary;
+    Img.ExceptionMetadata.Functions.push_back(std::move(Leaf));
+  }
+  for (size_t I = 0; I < 250000; ++I) {
+    Symbol Label;
+    Label.Addr = 0x140200000 + I;
+    Label.IsFunc = true;
+    Img.Symbols.push_back(std::move(Label));
+  }
+  Img.ExceptionMetadata.rebuildIndex();
+
+  llvm::LLVMContext Ctx;
+  PipelineOptions One;
+  One.EmitDumpOutput = false;
+  One.OnlyFunctionEntries.insert(F);
+  auto Result = Pipeline().run(Img, Ctx, One);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.HighFuncs.size(), 1u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS));
+  OS.flush();
+  EXPECT_EQ(Source.find("L_FFFFFFFFFFFFFFFF"), std::string::npos) << Source;
+  // Every case keeps its return value.
+  EXPECT_NE(Source.find("return 16;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return 55;"), std::string::npos) << Source;
+}

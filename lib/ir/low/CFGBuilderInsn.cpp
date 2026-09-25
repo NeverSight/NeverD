@@ -245,6 +245,25 @@ CFGBuilder::makeInstructionBoundary(const InsnRecord &Rec,
 // isTailCallTarget / rewriteAsTailCall — model `jmp other_func` as call + ret
 //===----------------------------------------------------------------------===//
 
+bool CFGBuilder::hasFunctionSymbolAtIndexed(const BinaryImage &Img, va_t Addr) {
+  if (FunctionSymbolIndexImage != &Img ||
+      FunctionSymbolIndexData != Img.Symbols.data() ||
+      FunctionSymbolIndexCount != Img.Symbols.size()) {
+    FunctionSymbolIndex.clear();
+    for (const Symbol &Sym : Img.Symbols)
+      if (Sym.IsFunc)
+        FunctionSymbolIndex.push_back(
+            normalizeCodeAddress(Sym.Addr, Img.Arch, Img.Mode));
+    std::sort(FunctionSymbolIndex.begin(), FunctionSymbolIndex.end());
+    FunctionSymbolIndexImage = &Img;
+    FunctionSymbolIndexData = Img.Symbols.data();
+    FunctionSymbolIndexCount = Img.Symbols.size();
+  }
+  return std::binary_search(FunctionSymbolIndex.begin(),
+                            FunctionSymbolIndex.end(),
+                            normalizeCodeAddress(Addr, Img.Arch, Img.Mode));
+}
+
 bool CFGBuilder::isTailCallTarget(va_t Target) const {
   if (Target == InvalidVA || Target == CurrentFuncEntry)
     return false;

@@ -2496,6 +2496,15 @@ private:
   const libc::NoReturnTargetIndex *NoReturnTargets = nullptr;
   const detail::AbsoluteRelocationRootIndex *AbsoluteRelocationRoots = nullptr;
   const ExecutableCodeOwnerIndex *ExecutableCodeOwners = nullptr;
+  /// Sorted normalized addresses of \ref BinaryImage function symbols, so a
+  /// jump-table target check is a lookup, not a scan of every symbol.  Rebuilt
+  /// when the image or its symbol vector changes.
+  std::vector<va_t> FunctionSymbolIndex;
+  const BinaryImage *FunctionSymbolIndexImage = nullptr;
+  const void *FunctionSymbolIndexData = nullptr;
+  size_t FunctionSymbolIndexCount = 0;
+  /// Same answer as BinaryImage::hasFunctionSymbolAt.
+  bool hasFunctionSymbolAtIndexed(const BinaryImage &Img, va_t Addr);
   const std::set<va_t> *CrossFunctionContinuationRoots = nullptr;
   const std::set<va_t> *ProtectedJumpTableRelocationSlots = nullptr;
   /// Owned one-shot history for the next build, plus the snapshot active in
