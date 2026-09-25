@@ -1558,15 +1558,25 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     bool Push = (InsnId == X86_INS_PUSHF || InsnId == X86_INS_PUSHFD ||
                  InsnId == X86_INS_PUSHFQ);
     // Modelled EFLAGS bits at their architectural positions.  System flags
-    // (TF/IF/IOPL/...) are not modelled; the previous code pushed/popped an
-    // uninitialised temp, so flags were never actually (de)serialised.
+    // (TF/IF/IOPL/AC/ID/...) are not modelled as registers: PUSHF reads them
+    // from the machine (Pushf) and POPF writes them back (Popf), so e.g. a
+    // `pushfq; cli; ...; popfq` interrupt-state restore stays visible.
     const std::pair<uint64_t, unsigned> FlagBits[] = {
         {x86reg::CF, 0}, {x86reg::PF, 2},  {x86reg::AF, 4}, {x86reg::ZF, 6},
         {x86reg::SF, 7}, {x86reg::DF, 10}, {x86reg::OF, 11}};
     if (Push) {
-      // Assemble EFLAGS from the modelled flags (reserved bit 1 reads as 1).
+      // Take the unmodelled bits from the machine and merge the modelled
+      // flags into their positions.
+      uint64_t ModelledMask = 0;
+      for (auto [Fl, Bit] : FlagBits)
+        ModelledMask |= uint64_t{1} << Bit;
+      const uint64_t SizeMask =
+          FlagSize == 8 ? ~uint64_t{0} : (uint64_t{1} << (FlagSize * 8)) - 1;
+      NdVar Machine = S.makeTemp(FlagSize);
+      S.emitIntrinsic(Intrinsic::Pushf, Machine, {});
       NdVar Eflags = S.makeTemp(FlagSize);
-      S.emit(NdOp::COPY, Eflags, {NdVar::scalar(0x2, FlagSize)});
+      S.emit(NdOp::INT_AND, Eflags,
+             {Machine, NdVar::scalar(~ModelledMask & SizeMask, FlagSize)});
       for (auto [Fl, Bit] : FlagBits) {
         NdVar Z = S.makeTemp(FlagSize);
         S.emit(NdOp::INT_ZEXT, Z, {NdVar::reg(Fl, 1)});
@@ -1591,6 +1601,7 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::INT_NOTEQUAL, NdVar::reg(Fl, 1),
                {Bitv, NdVar::scalar(0, FlagSize)});
       }
+      S.emitVoidIntrinsic(Intrinsic::Popf, {Val});
     }
     break;
   }

@@ -182,6 +182,13 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
         S.emitIntrinsic(Id, NdVar::reg(x86reg::RAX, 8),
                         {NdVar::cst(Vector, 1)});
       }
+    } else if (Id == Intrinsic::Syscall && L.targetArch() == Arch::X64) {
+      // Every x64 system-call convention passes the service number in RAX
+      // and returns the status there.  The argument registers belong to the
+      // operating system's convention (R10/RDX/R8/R9 on Windows, RDI/RSI/...
+      // elsewhere), which the instruction alone does not determine.
+      S.emitIntrinsic(Intrinsic::Syscall, NdVar::reg(x86reg::RAX, 8),
+                      {NdVar::reg(x86reg::RAX, 8)});
     } else {
       S.emitIntrinsic(Id);
     }

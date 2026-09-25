@@ -54,11 +54,17 @@ llvm::ArrayRef<const char *> x86DebugServiceRegisters();
 /// take C expressions as operands, so each register input is first copied to a
 /// block-scoped temporary.  \p Inputs pairs a register with the C text of its
 /// value.  When \p ResultVar is not empty, \p ResultReg is moved into it
-/// inside the same block.
+/// inside the same block.  A non-empty \p Instruction (e.g. `syscall`)
+/// replaces the `int` instruction.
 std::string renderX86InterruptAsm(
     unsigned Vector,
     llvm::ArrayRef<std::pair<const char *, std::string>> Inputs,
-    llvm::StringRef ResultVar, llvm::StringRef ResultReg);
+    llvm::StringRef ResultVar, llvm::StringRef ResultReg,
+    llvm::StringRef Instruction = "");
+
+/// The registers the x64 `syscall` intrinsic reads, in input order: the
+/// service number in RAX.
+llvm::ArrayRef<const char *> x86SyscallRegisters();
 
 /// Returns the platform-specific intrinsic headers for the given arch.
 /// Dispatches to the per-arch lists implemented alongside the intrinsic

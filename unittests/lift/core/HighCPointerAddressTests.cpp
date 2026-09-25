@@ -4203,6 +4203,88 @@ TEST(HighCPointerAddresses, DebugServiceInterruptKeepsItsRegisterInputs) {
   expectCompilesForMsvc(HighC);
 }
 
+TEST(HighCPointerAddresses, MsrAccessKeepsSelectorAndValue) {
+  // RDMSR reads the MSR selected by ECX into EDX:EAX; WRMSR writes EDX:EAX
+  // to the MSR selected by ECX.  Neither the selector nor the written value
+  // may be dropped.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0xb9, 0x84, 0x00, 0x00, 0xc0, // mov ecx, 0C0000084h
+      0x0f, 0x32,                   // rdmsr
+      0x25, 0xff, 0xfe, 0xff, 0xff, // and eax, 0FFFFFEFFh
+      0x0f, 0x30,                   // wrmsr
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("0xC0000084"), std::string::npos) << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(__readmsr\(\S)")))
+      << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(__writemsr\(\S.*, )")))
+      << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"((-257|0xFFFFFEFF))")))
+      << HighC;
+  EXPECT_EQ(HighC.find("__readmsr()"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("__writemsr()"), std::string::npos) << HighC;
+  EXPECT_NE(LLVMC.find("__readmsr((uint32_t)3221225604)"), std::string::npos)
+      << LLVMC;
+  EXPECT_NE(LLVMC.find("__writemsr((uint32_t)3221225604, "), std::string::npos)
+      << LLVMC;
+  expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
+}
+
+TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
+  // x64 `syscall` takes the service number in RAX and returns a status in
+  // RAX under every operating system's convention.  The `mov eax` must not be
+  // dropped, and the status must be an ordinary C assignment.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0xb8, 0x55, 0x00, 0x00, 0x00, // mov eax, 55h
+      0x0f, 0x05,                   // syscall
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  for (const std::string *Source : {&HighC, &LLVMC}) {
+    EXPECT_NE(Source->find("syscall"), std::string::npos) << *Source;
+    EXPECT_NE(Source->find("mov rax, _rax"), std::string::npos) << *Source;
+    EXPECT_NE(Source->find("mov _rax, rax"), std::string::npos) << *Source;
+    EXPECT_TRUE(std::regex_search(*Source, std::regex(R"(\w+ = _rax;)")))
+        << *Source;
+    EXPECT_EQ(Source->find("void sub_140001000"), std::string::npos)
+        << *Source;
+  }
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(_rax = .*\b(85|0x55)\b)")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}
+
+TEST(HighCPointerAddresses, PopfRestoresSystemFlags) {
+  // `pushfq; cli; ...; popfq` restores the interrupt flag through the saved
+  // EFLAGS image.  The system flags are not modelled as registers, so the
+  // save must read the machine flags and the restore must write them back.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x9c,             // pushfq
+      0xfa,             // cli
+      0x48, 0x8b, 0x01, // mov rax, [rcx]
+      0x9d,             // popfq
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  const std::string LLVMC =
+      llvmcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("__readeflags()"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__writeeflags("), std::string::npos) << HighC;
+  EXPECT_LT(HighC.find("__readeflags()"), HighC.find("_disable()")) << HighC;
+  EXPECT_LT(HighC.find("_disable()"), HighC.find("__writeeflags(")) << HighC;
+  EXPECT_NE(LLVMC.find("__readeflags()"), std::string::npos) << LLVMC;
+  EXPECT_NE(LLVMC.find("__writeeflags("), std::string::npos) << LLVMC;
+  expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
+}
+
 TEST(HighCPointerAddresses,
      GotoTargetKeepsItsLabelWhenItsFramePointerWriteIsFolded) {
   // RtlUnicodeStringCat: a cold block after the return only sets EBP to a

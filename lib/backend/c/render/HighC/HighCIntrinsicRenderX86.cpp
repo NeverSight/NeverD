@@ -63,10 +63,16 @@ llvm::ArrayRef<const char *> x86DebugServiceRegisters() {
   return Regs;
 }
 
+llvm::ArrayRef<const char *> x86SyscallRegisters() {
+  static const char *const Regs[] = {"rax"};
+  return Regs;
+}
+
 std::string renderX86InterruptAsm(
     unsigned Vector,
     llvm::ArrayRef<std::pair<const char *, std::string>> Inputs,
-    llvm::StringRef ResultVar, llvm::StringRef ResultReg) {
+    llvm::StringRef ResultVar, llvm::StringRef ResultReg,
+    llvm::StringRef Instruction) {
   // MASM hex: a leading digit, then an `h` suffix (`int 2Dh`, `int 0CCh`).
   std::string Hex = llvm::utohexstr(Vector & 0xFF);
   if (!std::isdigit(static_cast<unsigned char>(Hex.front())))
@@ -75,7 +81,8 @@ std::string renderX86InterruptAsm(
   std::string Asm = Pad + "__asm {\n";
   for (const auto &[Reg, Value] : Inputs)
     Asm += Pad + "    mov " + std::string(Reg) + ", _" + Reg + "\n";
-  Asm += Pad + "    int " + Hex + "h\n";
+  Asm += Pad + "    " +
+         (Instruction.empty() ? "int " + Hex + "h" : Instruction.str()) + "\n";
   if (!ResultVar.empty())
     Asm += Pad + "    mov " + ResultVar.str() + ", " + ResultReg.str() + "\n";
   Asm += Pad + "}\n";
@@ -980,6 +987,28 @@ std::string renderX86InterruptStatement(
       Inputs.emplace_back(Regs[I], ExprFn(*Call.Operands[I]));
     }
     return renderX86InterruptAsm(0x2D, Inputs, ResultVar, Reg);
+  }
+  if (Call.IntrinsicId == Intrinsic::Syscall) {
+    const auto Regs = x86SyscallRegisters();
+    if (Call.Operands.empty())
+      return renderX86InterruptAsm(0, {}, ResultVar, Reg, "syscall");
+    if (TheArch != Arch::X64 || Call.Operands.size() != Regs.size())
+      llvm::report_fatal_error("x64 syscall has an invalid operand shape");
+    std::vector<std::pair<const char *, std::string>> Inputs;
+    for (size_t I = 0; I < Regs.size(); ++I) {
+      if (!Call.Operands[I])
+        llvm::report_fatal_error("x64 syscall has a missing operand");
+      Inputs.emplace_back(Regs[I], ExprFn(*Call.Operands[I]));
+    }
+    // Move the status out through the RAX temporary so the assignment is
+    // ordinary C after the block.
+    if (ResultVar.empty())
+      return renderX86InterruptAsm(0, Inputs, "", Reg, "syscall");
+    std::string Block = renderX86InterruptAsm(0, Inputs, "_rax", "rax",
+                                              "syscall");
+    Block.insert(Block.rfind('}'),
+                 "    " + ResultVar.str() + " = _rax;\n");
+    return Block;
   }
   if (Call.IntrinsicId != Intrinsic::IntN || Call.Operands.size() != 1 ||
       !Call.Operands[0] || isX86FastFailCall(Call))

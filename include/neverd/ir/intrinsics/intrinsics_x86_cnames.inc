@@ -120,6 +120,8 @@ C(Intrinsic::Wbinvd,           "_wbinvd");
 C(Intrinsic::Fxsave,           "_fxsave64");
 C(Intrinsic::Fxrstor,          "_fxrstor64");
 C(Intrinsic::Rdmsr,            "__readmsr");
+C(Intrinsic::Pushf,            "__readeflags");
+C(Intrinsic::Popf,             "__writeeflags");
 C(Intrinsic::Wrmsr,            "__writemsr");
 C(Intrinsic::Invlpg,           "__invlpg");
 C(Intrinsic::Cli,              "_disable");

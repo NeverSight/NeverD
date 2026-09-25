@@ -4,6 +4,7 @@
 #include "neverd/lift/X86Regs.h"
 #include "neverd/symbolic/SymExec.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <utility>
@@ -39,7 +40,26 @@ struct Machine {
   uint64_t getMemory(uint64_t Address, unsigned Size = 8) {
     return value(State.load(Ctx.mkConst(64, Address), Size));
   }
-  void run(Arch Target, std::initializer_list<uint8_t> Code) {
+  // The masked bits of a memory value, which must not depend on any machine
+  // input: evaluated with every input all-zeros and again all-ones.
+  uint64_t getMemoryBits(uint64_t Address, unsigned Size, uint64_t Mask) {
+    const SymRef Masked =
+        Ctx.mkAnd(State.load(Ctx.mkConst(64, Address), Size),
+                  Ctx.mkConst(Size * 8, Mask));
+    llvm::SmallVector<uint32_t, 4> Vars;
+    Ctx.collectVars(Masked, Vars);
+    uint32_t Count = 0;
+    for (uint32_t Var : Vars)
+      Count = std::max(Count, Var + 1);
+    const uint64_t Zeros =
+        Ctx.evalU64(Masked, std::vector<uint64_t>(Count, 0));
+    const uint64_t Ones =
+        Ctx.evalU64(Masked, std::vector<uint64_t>(Count, ~uint64_t{0}));
+    EXPECT_EQ(Zeros, Ones) << Ctx.toString(Masked);
+    return Zeros;
+  }
+  void run(Arch Target, std::initializer_list<uint8_t> Code,
+           unsigned ExpectedUnmodelled = 0) {
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Target));
     Dec.setStrict(true);
@@ -51,7 +71,7 @@ struct Machine {
     Dec.liftToLow(Insn, Ops);
     for (const auto &Op : Ops)
       Exec.step(Op);
-    EXPECT_EQ(Exec.unmodelledCount(), 0u);
+    EXPECT_EQ(Exec.unmodelledCount(), ExpectedUnmodelled);
   }
 };
 
@@ -156,6 +176,8 @@ constexpr std::pair<uint64_t, unsigned> TestedFlagBits[] = {
     {x86reg::CF, 0}, {x86reg::PF, 2},  {x86reg::AF, 4}, {x86reg::ZF, 6},
     {x86reg::SF, 7}, {x86reg::DF, 10}, {x86reg::OF, 11}};
 
+constexpr uint64_t TestedFlagMask = 0xcd5;
+
 void setArithmeticAndDirectionFlags(Machine &M, uint64_t Bits) {
   for (auto [Offset, Bit] : TestedFlagBits)
     M.State.write(SymSpace::Register, Offset,
@@ -173,13 +195,16 @@ TEST_P(X86FlagsStackSemantics, PushWritesOnlyOperandWidth) {
     M.memory(Sp - 16, UINT64_C(0xaaaaaaaaaaaaaaaa));
     M.memory(Sp - 8, UINT64_C(0xaaaaaaaaaaaaaaaa));
     M.memory(Sp, UINT64_C(0xaaaaaaaaaaaaaaaa));
+    // The system flags (IF, TF, IOPL, ...) are read from the machine, the
+    // one step the executor names rather than models.
     if (P.Word)
-      M.run(P.Target, {0x66, 0x9c});
+      M.run(P.Target, {0x66, 0x9c}, 1);
     else
-      M.run(P.Target, {0x9c});
+      M.run(P.Target, {0x9c}, 1);
     EXPECT_EQ(M.getReg(x86reg::RSP, P.Target == Arch::X64 ? 8 : 4),
               Sp - P.Width);
-    EXPECT_EQ(M.getMemory(Sp - P.Width, P.Width), Flags);
+    EXPECT_EQ(M.getMemoryBits(Sp - P.Width, P.Width, TestedFlagMask),
+              Flags & TestedFlagMask);
     for (uint64_t Address = Sp - 16; Address < Sp + 8; ++Address)
       if (Address < Sp - P.Width || Address >= Sp)
         EXPECT_EQ(M.getMemory(Address, 1), 0xaau) << Address;
@@ -197,10 +222,11 @@ TEST_P(X86FlagsStackSemantics, PopAdvancesByOperandWidth) {
     M.memory(Sp, UINT64_C(0xaaaaaaaaaaaaaaaa));
     M.memory(Sp, Flags, P.Width);
     M.memory(Sp + 8, UINT64_C(0xbbbbbbbbbbbbbbbb));
+    // The whole image is also written back to the machine flags.
     if (P.Word)
-      M.run(P.Target, {0x66, 0x9d});
+      M.run(P.Target, {0x66, 0x9d}, 1);
     else
-      M.run(P.Target, {0x9d});
+      M.run(P.Target, {0x9d}, 1);
     EXPECT_EQ(M.getReg(x86reg::RSP, P.Target == Arch::X64 ? 8 : 4),
               Sp + P.Width);
     for (auto [Offset, Bit] : TestedFlagBits)

@@ -66,6 +66,44 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
     }
   }
 
+  // The x64 `syscall` with its service number, as MedLLVM emits it.
+  if (TheArch == Arch::X64 && AsmStr == "syscall" &&
+      Args.size() == x86SyscallRegisters().size()) {
+    std::vector<std::pair<const char *, std::string>> Inputs;
+    for (size_t I = 0; I < Args.size(); ++I)
+      Inputs.emplace_back(x86SyscallRegisters()[I], Args[I]);
+    if (!ResultLive || ResultName.empty())
+      return {renderX86InterruptAsm(0, Inputs, "", "rax", "syscall"), false};
+    std::string Block =
+        renderX86InterruptAsm(0, Inputs, "_rax", "rax", "syscall");
+    Block.insert(Block.rfind('}'), "    " + ResultName + " = _rax;\n");
+    return {Block, false};
+  }
+
+  // RDMSR/WRMSR as MedLLVM emits them: the selector in ECX, the value as
+  // one 64-bit result (read) or as its EAX/EDX halves (write).
+  if (llvm::StringRef(AsmStr).starts_with("rdmsr") && Args.size() == 1) {
+    std::string Result;
+    if (ResultLive && !ResultName.empty())
+      Result = ResultName + " = ";
+    return {Result + "__readmsr(" + Args[0] + ");\n", true};
+  }
+  if (AsmStr == "wrmsr" && Args.size() == 3)
+    return {"__writemsr(" + Args[0] + ", ((unsigned __int64)(" + Args[2] +
+                ") << 32) | (uint32_t)(" + Args[1] + "));\n",
+            true};
+
+  // PUSHF/POPF of the whole EFLAGS image, as MedLLVM emits them.
+  if (llvm::StringRef(AsmStr).starts_with("pushf") && Args.empty()) {
+    std::string Result;
+    if (ResultLive && !ResultName.empty())
+      Result = ResultName + " = ";
+    return {Result + "__readeflags();\n", true};
+  }
+  if ((AsmStr == "pushq $0\n\tpopfq" || AsmStr == "pushl $0\n\tpopfl") &&
+      Args.size() == 1)
+    return {"__writeeflags(" + Args[0] + ");\n", true};
+
   if (Mnemonic == "cpuid") {
     std::string Leaf = Args.empty() ? "0" : Args[0];
     if (IsStructReturn)

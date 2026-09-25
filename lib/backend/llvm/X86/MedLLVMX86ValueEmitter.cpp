@@ -615,6 +615,48 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   if (IC == I::Rdtsc || IC == I::Rdtscp)
     return emitRdtscValue(Op, IC, Builder);
 
+  // x64 `syscall`: the service number in RAX, the status back in RAX; the
+  // instruction itself overwrites RCX and R11.
+  if (IC == I::Syscall && Op.NumInputs == 2 && Op.Output.Size > 0) {
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    std::vector<llvm::Value *> Vals;
+    for (uint16_t I = 1; I < Op.NumInputs; ++I)
+      Vals.push_back(Builder.CreateZExtOrTrunc(getVar(Op.Inputs[I], Builder),
+                                               I64Ty));
+    std::vector<llvm::Type *> Tys(Vals.size(), I64Ty);
+    auto *FnTy = llvm::FunctionType::get(I64Ty, Tys, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, "syscall",
+        "={rax},{rax},~{rcx},~{r11},~{memory}",
+        /*hasSideEffects=*/true);
+    llvm::CallInst *Result = Builder.CreateCall(IA, Vals, "syscall");
+    llvm_value_provenance::markSemanticProducer(*Result);
+    return Builder.CreateZExtOrTrunc(Result, sizeToType(Op.Output.Size));
+  }
+
+  // RDMSR reads the MSR selected by ECX into EDX:EAX; the lifter hands the
+  // selector in and splits the 64-bit result itself.  The asm returns the
+  // combined value so it reads as one `__readmsr(ecx)`.
+  if (IC == I::Rdmsr && Op.Output.Size > 0) {
+    if (Op.NumInputs != 2)
+      llvm::report_fatal_error("x86 RDMSR has no MSR selector");
+    auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    llvm::Value *Selector =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), I32Ty);
+    auto *FnTy = llvm::FunctionType::get(I64Ty, {I32Ty}, false);
+    auto *IA =
+        TargetArch == Arch::X64
+            ? llvm::InlineAsm::get(FnTy,
+                                   "rdmsr\n\tshlq $$32, %rdx\n\torq %rdx, %rax",
+                                   "={rax},{ecx},~{rdx},~{memory}",
+                                   /*hasSideEffects=*/true)
+            : llvm::InlineAsm::get(FnTy, "rdmsr", "=A,{ecx},~{memory}",
+                                   /*hasSideEffects=*/true);
+    llvm::Value *Value = Builder.CreateCall(IA, {Selector}, "msr");
+    return Builder.CreateZExtOrTrunc(Value, sizeToType(Op.Output.Size));
+  }
+
   // `int imm8` with a register result, and the x64 debug service (`int 2Dh`),
   // which also reads RAX, RCX, RDX, R8 and R9 in the lifter's input order.
   if ((IC == I::IntN || IC == I::DebugService) && Op.Output.Size > 0) {
@@ -659,8 +701,21 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     return llvm::ConstantInt::get(sizeToType(Op.Output.Size),
                                   limits::kDefaultMXCSR);
 
-  if (IC == I::Ldmxcsr || IC == I::Leave || IC == I::Enter || IC == I::Pushf ||
-      IC == I::Popf)
+  // PUSHF: the lifter merges the machine's unmodelled EFLAGS bits with the
+  // modelled arithmetic flags.
+  if (IC == I::Pushf && Op.Output.Size > 0) {
+    const bool Wide = TargetArch == Arch::X64;
+    auto *AsmTy = Wide ? llvm::Type::getInt64Ty(*Ctx)
+                       : llvm::Type::getInt32Ty(*Ctx);
+    auto *FnTy = llvm::FunctionType::get(AsmTy, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, Wide ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0",
+        "=r,~{memory}", /*hasSideEffects=*/true);
+    llvm::Value *Flags = Builder.CreateCall(IA, {}, "eflags");
+    return Builder.CreateZExtOrTrunc(Flags, sizeToType(Op.Output.Size));
+  }
+
+  if (IC == I::Ldmxcsr || IC == I::Leave || IC == I::Enter || IC == I::Popf)
     return (Op.Output.Size > 0)
                ? llvm::ConstantInt::get(sizeToType(Op.Output.Size), 0)
                : nullptr;

@@ -736,10 +736,54 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
     return true;
   }
 
+  // The x64 `syscall` with its service number returns a status in RAX; the
+  // value emitter lowers it.
+  if (IC == I::Syscall && Op.NumInputs == 2 && Op.Output.Size > 0)
+    return false;
+
+  // POPF writes the whole EFLAGS image, including the system flags.
+  if (IC == I::Popf) {
+    if (Op.NumInputs != 2)
+      llvm::report_fatal_error("x86 POPF has no EFLAGS image");
+    const bool Wide = TargetArch == Arch::X64;
+    auto *AsmTy = Wide ? llvm::Type::getInt64Ty(*Ctx)
+                       : llvm::Type::getInt32Ty(*Ctx);
+    llvm::Value *Flags =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), AsmTy);
+    auto *FnTy =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), {AsmTy}, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, Wide ? "pushq $0\n\tpopfq" : "pushl $0\n\tpopfl",
+        "r,~{memory},~{cc},~{dirflag},~{flags}", /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {Flags});
+    return true;
+  }
+
+  // WRMSR writes EDX:EAX to the MSR selected by ECX.
+  if (IC == I::Wrmsr) {
+    if (Op.NumInputs != 3)
+      llvm::report_fatal_error("x86 WRMSR has an invalid operand shape");
+    auto *I32Ty = llvm::Type::getInt32Ty(*Ctx);
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    llvm::Value *Selector =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), I32Ty);
+    llvm::Value *Value =
+        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[2], Builder), I64Ty);
+    llvm::Value *Lo = Builder.CreateTrunc(Value, I32Ty, "msr_lo");
+    llvm::Value *Hi =
+        Builder.CreateTrunc(Builder.CreateLShr(Value, 32), I32Ty, "msr_hi");
+    auto *FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                         {I32Ty, I32Ty, I32Ty}, false);
+    auto *IA = llvm::InlineAsm::get(FnTy, "wrmsr",
+                                    "{ecx},{eax},{edx},~{memory}",
+                                    /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {Selector, Lo, Hi});
+    return true;
+  }
+
   switch (IC) {
   case I::Cli:
   case I::Sti:
-  case I::Wrmsr:
   case I::Wrpkru:
   case I::Swapgs:
   case I::Wbinvd:

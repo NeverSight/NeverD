@@ -217,8 +217,10 @@ bool analyzeVoidReturn(const HighCAnalysisState &State, const HighFunc &Func,
         if (isMsvcCxxThrowCallName(Src->CallTarget) ||
             isNoreturnCallExpr(State, *Src))
           return true;
-        // The x64 debug service returns its status in RAX.
-        if (Src->IntrinsicId == Intrinsic::DebugService)
+        // The x64 debug service and a system call with its register inputs
+        // return their status in RAX.
+        if (Src->IntrinsicId == Intrinsic::DebugService ||
+            (Src->IntrinsicId == Intrinsic::Syscall && !Src->Operands.empty()))
           return false;
         if (Src->IntrinsicId != Intrinsic::None)
           return isSideeffectIntrinsic(Src->IntrinsicId) ||

@@ -26,6 +26,8 @@ SIDEEFFECT(Intrinsic::Hlt);
 // privileged
 SIDEEFFECT(Intrinsic::Cli);
 SIDEEFFECT(Intrinsic::Sti);
+SIDEEFFECT(Intrinsic::Pushf);
+SIDEEFFECT(Intrinsic::Popf);
 SIDEEFFECT(Intrinsic::Invlpg);
 SIDEEFFECT(Intrinsic::Lgdt);
 SIDEEFFECT(Intrinsic::Lidt);

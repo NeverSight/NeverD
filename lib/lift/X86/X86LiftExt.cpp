@@ -572,7 +572,23 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   // remains on its original intrinsic.
   case X86_INS_RDMSR:
     if (X86.op_count == 0) {
-      S.emitIntrinsic(Intrinsic::Rdmsr);
+      // ECX selects the MSR; its 64-bit value lands in EDX:EAX. In 64-bit
+      // mode the 32-bit writes zero-extend into RAX/RDX.
+      const NdVar Value = S.makeTemp(8);
+      S.emitIntrinsic(Intrinsic::Rdmsr, Value, {NdVar::reg(x86reg::RCX, 4)});
+      const NdVar Lo = S.makeTemp(4);
+      S.emit(NdOp::SUBBYTES, Lo, {Value, NdVar::cst(0, 4)});
+      const NdVar Shifted = S.makeTemp(8);
+      S.emit(NdOp::INT_RIGHT, Shifted, {Value, NdVar::cst(32, 8)});
+      const NdVar Hi = S.makeTemp(4);
+      S.emit(NdOp::SUBBYTES, Hi, {Shifted, NdVar::cst(0, 4)});
+      if (TargetArch == Arch::X64) {
+        S.emit(NdOp::INT_ZEXT, NdVar::reg(x86reg::RAX, 8), {Lo});
+        S.emit(NdOp::INT_ZEXT, NdVar::reg(x86reg::RDX, 8), {Hi});
+      } else {
+        S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 4), {Lo});
+        S.emit(NdOp::COPY, NdVar::reg(x86reg::RDX, 4), {Hi});
+      }
       break;
     }
     [[fallthrough]];
@@ -606,7 +622,15 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     }
     break;
   }
-  case X86_INS_WRMSR:
+  case X86_INS_WRMSR: {
+    // ECX selects the MSR; EDX:EAX is the value written.
+    const NdVar Value = S.makeTemp(8);
+    S.emit(NdOp::CONCAT, Value,
+           {NdVar::reg(x86reg::RDX, 4), NdVar::reg(x86reg::RAX, 4)});
+    S.emitIntrinsic(Intrinsic::Wrmsr, NdVar(),
+                    {NdVar::reg(x86reg::RCX, 4), Value});
+    break;
+  }
   case X86_INS_RDPMC:
   case X86_INS_RDPID:
   case X86_INS_RDRAND:
@@ -657,9 +681,6 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   case X86_INS_UMWAIT: {
     Intrinsic Id;
     switch (InsnId) {
-    case X86_INS_WRMSR:
-      Id = Intrinsic::Wrmsr;
-      break;
     case X86_INS_RDPMC:
       Id = Intrinsic::Rdpmc;
       break;
