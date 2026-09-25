@@ -884,11 +884,13 @@ bool hoistLoopEntryLabels(std::vector<HighStmt> &Body) {
   });
   bool Changed = false;
   walkStmts(Body, [&](HighStmt &S) {
-    // Entering `while (1)` at the top of its body is entering the loop.
+    // Entering `while (1)` or a do-while at the top of its body is
+    // entering the loop.
     const bool Forever =
         !S.Cond || (S.Cond->Kind == ExprKind::Const && S.Cond->ConstVal != 0);
-    if (S.Kind != StmtKind::While || !Forever || S.Body.empty() ||
-        (S.Addr != 0 && S.Addr != InvalidVA))
+    const bool TopIsEntry =
+        S.Kind == StmtKind::DoWhile || (S.Kind == StmtKind::While && Forever);
+    if (!TopIsEntry || S.Body.empty() || (S.Addr != 0 && S.Addr != InvalidVA))
       return;
     const va_t X = S.Body.front().Addr;
     auto It = Uses.find(X);
@@ -908,6 +910,78 @@ bool hoistLoopEntryLabels(std::vector<HighStmt> &Body) {
     S.Addr = X;
     Changed = true;
   });
+  return Changed;
+}
+
+bool loopifyTrailingArmBodies(std::vector<HighStmt> &Body) {
+  std::map<va_t, unsigned> Uses;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
+        S.GotoTarget != InvalidVA)
+      ++Uses[S.GotoTarget];
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.HandlerVA != 0 && Clause.HandlerVA != InvalidVA)
+        Uses[Clause.HandlerVA] = ~0u;
+  });
+  auto isJump = [](const HighStmt &S) {
+    return S.Kind == StmtKind::Return || S.Kind == StmtKind::Goto ||
+           S.Kind == StmtKind::Break || S.Kind == StmtKind::Continue;
+  };
+  bool Changed = false;
+  std::function<void(std::vector<HighStmt> &)> Visit =
+      [&](std::vector<HighStmt> &P) {
+        for (size_t I = 0; I + 1 < P.size(); ++I) {
+          // `if (a) {..} else { ..; jump; X: S.. }  if (c) goto X;`
+          //   ->  `if (a) {..} else { ..; jump; }  while (c) { S.. }`.
+          HighStmt &Arm = P[I];
+          HighStmt &Test = P[I + 1];
+          if ((Arm.Kind != StmtKind::If && Arm.Kind != StmtKind::IfElse) ||
+              Test.Kind != StmtKind::If || !Test.Cond ||
+              !Test.ElseBody.empty() || Test.Body.size() != 1 ||
+              Test.Body[0].Kind != StmtKind::Goto ||
+              (Test.Addr != 0 && Test.Addr != InvalidVA &&
+               Uses.count(Test.Addr)))
+            continue;
+          const va_t X = Test.Body[0].GotoTarget;
+          if (Uses[X] != 1)
+            continue;
+          for (std::vector<HighStmt> *LL : {&Arm.Body, &Arm.ElseBody}) {
+            size_t K = 1;
+            while (K < LL->size() &&
+                   !((*LL)[K].Addr == X && (*LL)[K - 1].Addr != X))
+              ++K;
+            if (K >= LL->size() || !isJump((*LL)[K - 1]))
+              continue;
+            std::vector<HighStmt> Loop(std::make_move_iterator(LL->begin() + K),
+                                       std::make_move_iterator(LL->end()));
+            bool Bad = hasLooseBreakOrContinue(Loop);
+            walkStmts(Loop, [&](const HighStmt &S) {
+              Bad |= S.Kind == StmtKind::SEHTry || S.Kind == StmtKind::CxxTry ||
+                     S.Kind == StmtKind::ItaniumTry;
+            });
+            if (Bad) {
+              std::move(Loop.begin(), Loop.end(), LL->begin() + K);
+              continue;
+            }
+            LL->erase(LL->begin() + K, LL->end());
+            Test.Kind = StmtKind::While;
+            Test.Body = std::move(Loop);
+            Uses.erase(X);
+            Changed = true;
+            break;
+          }
+        }
+        for (HighStmt &S : P) {
+          Visit(S.Body);
+          Visit(S.ElseBody);
+          for (auto &C : S.Cases)
+            Visit(C.Body);
+          Visit(S.DefaultBody);
+          for (auto &ClauseBody : S.EHClauseBodies)
+            Visit(ClauseBody);
+        }
+      };
+  Visit(Body);
   return Changed;
 }
 

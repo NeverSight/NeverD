@@ -74,9 +74,12 @@ bool groupSwitchCases(std::vector<HighStmt> &Body);
 /// `X: S...` whose every jump to X comes from inside S becomes
 /// `while (1) { S...; break; }` with those jumps as `continue`.
 bool loopifyBackwardGotos(std::vector<HighStmt> &Body);
-/// A label on the first statement of a `while (1)` body that is entered
-/// only from outside the loop moves onto the loop statement.
+/// A label on the first statement of a `while (1)` or do-while body that is
+/// entered only from outside the loop moves onto the loop statement.
 bool hoistLoopEntryLabels(std::vector<HighStmt> &Body);
+/// `if (a) {..} else { ..; jump; X: S.. }` followed by `if (c) goto X;`
+/// becomes `while (c) { S.. }` in place of the test.
+bool loopifyTrailingArmBodies(std::vector<HighStmt> &Body);
 
 /// Emit a label-per-block goto/return skeleton.  Used when structuring would
 /// exceed SSA limits, or when conversion fails and identity alone would leave

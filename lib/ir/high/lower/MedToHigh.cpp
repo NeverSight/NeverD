@@ -714,7 +714,8 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
     Changed |= Phase >= 2;
     for (int Round = 0; Round < 8; ++Round) {
       const bool Grouped = groupSwitchCases(Func.Body) |
-                           (Phase != 0 && hoistLoopEntryLabels(Func.Body));
+                           (Phase != 0 && hoistLoopEntryLabels(Func.Body)) |
+                           (Phase != 0 && loopifyTrailingArmBodies(Func.Body));
       if (!reduceSingleUseGotos(Func.Body, /*SpliceRegions=*/Phase != 0) &&
           !Grouped)
         break;
