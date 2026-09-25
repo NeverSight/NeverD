@@ -168,6 +168,11 @@ public:
   Values(ObjCBlockSourceContext &&, const HighFunc &,
          std::optional<size_t> = std::nullopt) = delete;
   Facts facts() const { return {Locals, FrameValues, FrameIdentityBytes}; }
+  void swap(Facts &F) {
+    Locals.swap(F.Locals);
+    FrameValues.swap(F.FrameValues);
+    FrameIdentityBytes.swap(F.FrameIdentityBytes);
+  }
   bool frameContainsPointerIdentity() const {
     return !FrameIdentityBytes.empty();
   }
@@ -673,9 +678,9 @@ inline bool noEscape(const ObjCBlockSourceContext &Source,
     proveSourceFlow(
         F, State.facts(),
         [&](Values::Facts &Facts, const HighSourceFlowNode &Node) {
-          State.restore(Facts);
+          State.swap(Facts);
           Evaluate(Node);
-          Facts = State.facts();
+          State.swap(Facts);
         },
         Values::merge);
     return true;
@@ -1133,9 +1138,9 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
           // An exception abandons the whole proof; normal exits swap back the
           // identical result before the worklist joins or charges its size.
           std::swap(Current, Facts);
-          State.restore(Current.Values);
+          State.swap(Current.Values);
           Evaluate(Node);
-          Current.Values = State.facts();
+          State.swap(Current.Values);
           std::swap(Current, Facts);
         },
         Merge);
