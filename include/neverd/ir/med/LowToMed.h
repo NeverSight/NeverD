@@ -65,6 +65,10 @@ public:
   void setCallEntryReadGPRs(const std::map<va_t, GPRReadWidths> *M) {
     CallEntryReadGPRs = M;
   }
+  /// Indirect-call dispatchers (PipelineResult::CallDispatchThunks).
+  void setCallDispatchThunks(const std::set<va_t> *S) {
+    CallDispatchThunks = S;
+  }
 
   /// Provide the set of GOT/pointer-slot VAs that hold a stack-probe import
   /// (`____chkstk_darwin`), derived by the loader from the binary's import
@@ -245,6 +249,10 @@ private:
   const std::map<va_t, int> *CalleePopMap = nullptr;
   const std::map<va_t, uint32_t> *CallMayWriteGPRs = nullptr;
   const std::map<va_t, GPRReadWidths> *CallEntryReadGPRs = nullptr;
+  const std::set<va_t> *CallDispatchThunks = nullptr;
+  /// Win64 argument registers (bit I = RCX, RDX, R8, R9) defined on every
+  /// path to the dispatcher call being converted.
+  uint8_t DispatchCallDefinedArgs = 0;
 
   /// GOT/pointer-slot VAs holding a stack-probe import; see setStackProbeSlots.
   /// Null/empty until the pipeline (which has the loaded import tables)

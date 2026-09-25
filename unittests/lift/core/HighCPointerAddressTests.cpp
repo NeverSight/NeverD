@@ -4392,3 +4392,63 @@ TEST(HighCPointerAddresses, ExRaiseStatusEndsTheColdPath) {
   EXPECT_EQ(HighC.find("119"), std::string::npos) << HighC;
   EXPECT_EQ(HighC.find("0x77"), std::string::npos) << HighC;
 }
+
+TEST(HighCPointerAddresses, GuardDispatchPassesOnlyRegistersTheCallerSet) {
+  // ObpRemoveObjectRoutine: an indirect call through _guard_dispatch_icall
+  // sets only RCX.  The dispatcher jumps to RAX with whatever registers it
+  // is given, but R8 and R9 here are just the caller's incoming values, so
+  // they are neither arguments of the call nor parameters of the caller.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Dispatch = 0x140001020;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+                               0x48, 0x8b, 0x01,             // mov rax, [rcx]
+                               0x48, 0x8b, 0x49, 0x08,       // mov rcx, [rcx+8]
+                               0xe8, 0x10, 0x00, 0x00, 0x00, // call dispatch
+                               0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+                               0xc3};
+  Code.resize(Dispatch - Entry, 0xcc);
+  Code.insert(Code.end(), {0xff, 0xe0}); // jmp rax
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol DSym = Symbol::makeFunc(Dispatch);
+  DSym.Name = "_guard_dispatch_icall";
+  Img.Symbols.push_back(DSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_TRUE(std::regex_search(
+      HighC, std::regex(R"(guard_dispatch_icall\([^,()]+\))")))
+      << HighC;
+}
+
+TEST(HighCPointerAddresses, DocumentedKernelRoutineTakesItsPrototypeArguments) {
+  // ExReleaseResourceLite(PERESOURCE) takes one argument.  Its body here
+  // also reads R8, which liveness alone would call a third parameter; the
+  // WDK prototype decides both the definition and every call.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Routine = 0x140001020;
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,       // sub rsp, 28h
+                               0x48, 0x8b, 0x49, 0x08,       // mov rcx, [rcx+8]
+                               0xe8, 0x13, 0x00, 0x00, 0x00, // call routine
+                               0x48, 0x83, 0xc4, 0x28,       // add rsp, 28h
+                               0xc3};
+  Code.resize(Routine - Entry, 0xcc);
+  Code.insert(Code.end(), {0x4c, 0x89, 0xc0, // mov rax, r8
+                           0x48, 0x01, 0xc8, // add rax, rcx
+                           0xc3});
+  auto Build = [&] {
+    BinaryImage Img = makeCodeFixture(Entry, Code);
+    Symbol RSym = Symbol::makeFunc(Routine);
+    RSym.Name = "ExReleaseResourceLite";
+    Img.Symbols.push_back(RSym);
+    return Img;
+  };
+  const std::string Caller = highcOnlyFunction(Build(), Entry);
+  EXPECT_EQ(Caller.find("arg1"), std::string::npos) << Caller;
+  EXPECT_TRUE(std::regex_search(
+      Caller, std::regex(R"(ExReleaseResourceLite\([^,()]+\))")))
+      << Caller;
+  const std::string Definition = highcOnlyFunction(Build(), Routine);
+  EXPECT_NE(Definition.find("ExReleaseResourceLite(int64_t arg0)"),
+            std::string::npos)
+      << Definition;
+}

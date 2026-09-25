@@ -13,6 +13,8 @@
 
 #include "neverd/Common.h"
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -78,6 +80,22 @@ struct LibCArityEntry {
 /// or a function whose arity is intentionally not modelled (mixed int/FP forms
 /// like ldexp/frexp).  Name must have its leading underscores already stripped.
 std::optional<LibCArity> libcArity(std::string_view Name);
+
+/// A Windows kernel routine's documented parameters
+/// (WindowsKernelRoutines.inc): the bytes the Win64 ABI passes for each, in
+/// order.
+struct WindowsKernelPrototype {
+  std::string_view Name;
+  std::array<uint8_t, 16> ArgWidths{};
+  uint8_t ArgCount = 0;
+};
+
+/// The WDK prototype of \p Name, or null.  Leading underscores are ignored.
+const WindowsKernelPrototype *windowsKernelPrototype(std::string_view Name);
+
+/// True for an indirect-call dispatcher such as MSVC Control Flow Guard's
+/// `_guard_dispatch_icall`, which jumps to RAX with the caller's arguments.
+bool isIndirectCallDispatchThunk(std::string_view Name);
 
 /// The fixed arity for a symbol name as it appears in an object or executable.
 /// This preserves platform-decorated spellings whose leading underscores are

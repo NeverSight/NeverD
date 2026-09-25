@@ -213,6 +213,42 @@ bool isNoReturnFunction(std::string_view Name) {
       .Default(false);
 }
 
+namespace {
+template <typename... Widths>
+constexpr WindowsKernelPrototype makeWindowsPrototype(std::string_view Name,
+                                                      Widths... W) {
+  static_assert(sizeof...(W) <= 16, "too many prototype parameters");
+  WindowsKernelPrototype P{
+      Name, {static_cast<uint8_t>(W)...}, static_cast<uint8_t>(sizeof...(W))};
+  return P;
+}
+constexpr WindowsKernelPrototype WindowsKernelPrototypes[] = {
+#define ND_WINDOWS_DISPATCH_THUNK(Name)
+#define ND_WINDOWS_PROTO(Name, ...) makeWindowsPrototype(Name, ##__VA_ARGS__),
+#include "neverd/libc/WindowsKernelRoutines.inc"
+#undef ND_WINDOWS_PROTO
+#undef ND_WINDOWS_DISPATCH_THUNK
+};
+} // namespace
+
+const WindowsKernelPrototype *windowsKernelPrototype(std::string_view Name) {
+  Name = stripLeadingUnderscores(Name);
+  for (const WindowsKernelPrototype &P : WindowsKernelPrototypes)
+    if (P.Name == Name)
+      return &P;
+  return nullptr;
+}
+
+bool isIndirectCallDispatchThunk(std::string_view Name) {
+  return llvm::StringSwitch<bool>(stripLeadingUnderscores(Name))
+#define ND_WINDOWS_DISPATCH_THUNK(Name) .Case(Name, true)
+#define ND_WINDOWS_PROTO(Name, ...)
+#include "neverd/libc/WindowsKernelRoutines.inc"
+#undef ND_WINDOWS_PROTO
+#undef ND_WINDOWS_DISPATCH_THUNK
+      .Default(false);
+}
+
 bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
   if (Target == InvalidVA)
     return false;

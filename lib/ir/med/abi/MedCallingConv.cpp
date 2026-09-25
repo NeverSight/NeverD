@@ -21,6 +21,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -683,12 +684,23 @@ std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
 void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> ParamRegs,
                           std::set<uint64_t> UsedParamRegs, Arch TargetArch) {
-  // Only Win64 calls to summarized callees publish their register arguments
-  // as inputs; elsewhere an argument read is invisible here.
-  if (TargetArch == Arch::X64 && Func.CC == CallingConv::Win64)
+  // A routine with a documented WDK prototype takes exactly its declared
+  // parameters, however its body forwards registers to other calls.
+  const libc::WindowsKernelPrototype *Proto =
+      TargetArch == Arch::X64 && Func.CC == CallingConv::Win64
+          ? libc::windowsKernelPrototype(Func.Name)
+          : nullptr;
+  if (Proto) {
+    UsedParamRegs.clear();
+    for (size_t I = 0; I < ParamRegs.size() && I < Proto->ArgCount; ++I)
+      UsedParamRegs.insert(ParamRegs[I]);
+  } else if (TargetArch == Arch::X64 && Func.CC == CallingConv::Win64) {
+    // Only Win64 calls to summarized callees publish their register
+    // arguments as inputs; elsewhere an argument read is invisible here.
     for (auto It = UsedParamRegs.begin(); It != UsedParamRegs.end();)
       It = incomingBytesReachUse(Func, *It) ? std::next(It)
                                             : UsedParamRegs.erase(It);
+  }
   // No parameter register is live-in: the function takes no register arguments
   // (a leaf with stack-only or no arguments).  Returning keeps Func.Params
   // empty so the cdecl/stack detector numbers arguments from arg0 rather than
@@ -756,8 +768,19 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
       if (Op.Output.Size == BestSize)
         break;
     }
-    if (!Marker)
+    if (!Marker) {
+      // A declared parameter the body never reads still holds its position.
+      if (Proto) {
+        MedVar Placeholder;
+        Placeholder.Kind = MedVar::Param;
+        Placeholder.Id = -1;
+        Placeholder.Size = TRI.FullRegWidth;
+        Placeholder.RegOff = PR;
+        Placeholder.TheArch = TargetArch;
+        Func.Params.push_back(Placeholder);
+      }
       continue;
+    }
 
     MedVar Param;
     Param.Kind = MedVar::Param;

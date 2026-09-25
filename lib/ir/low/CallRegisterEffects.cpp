@@ -149,7 +149,8 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
                               GPRFamilyMask VolatileFamilies,
-                              GPRFamilyMask ArgumentFamilies) {
+                              GPRFamilyMask ArgumentFamilies,
+                              const std::set<va_t> &DispatchThunks) {
   auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
     for (size_t I = 0; I < Live.size(); ++I)
       if ((Mask >> I) & 1)
@@ -165,7 +166,8 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
         for (size_t I = 0; I < Live.size(); ++I)
           if ((ArgumentFamilies >> I) & 1)
             Live[I] = 8;
-      } else if (Step.UnknownCall) {
+      } else if (Step.UnknownCall || (Step.Callee != InvalidVA &&
+                                      DispatchThunks.count(Step.Callee))) {
         Clear(Live, VolatileFamilies);
       } else if (Step.Callee != InvalidVA) {
         auto W = MayWrite.find(Step.Callee);
@@ -200,7 +202,9 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
 CallRegisterSummaries
 solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
                          GPRFamilyMask VolatileFamilies,
-                         GPRFamilyMask ArgumentFamilies) {
+                         GPRFamilyMask ArgumentFamilies,
+                         const std::set<va_t> &DispatchThunks,
+                         const std::map<va_t, GPRReadWidths> &FixedEntryReads) {
   CallRegisterSummaries Result;
   // Unknown is absorbing: a function is unknown if it or any callee is.
   std::set<va_t> Unknown;
@@ -246,12 +250,17 @@ solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
   for (const auto &[Entry, Effect] : Funcs)
     if (!Effect.Incomplete)
       Reads[Entry] = GPRReadWidths{};
+  for (const auto &[Entry, Widths] : FixedEntryReads)
+    Reads[Entry] = Widths;
   for (bool Changed = true; Changed;) {
     Changed = false;
     for (auto &[Entry, Widths] : Reads) {
+      if (FixedEntryReads.count(Entry) || !Funcs.count(Entry))
+        continue;
       GPRReadWidths Next = Widths;
       joinReads(Next, entryLiveWidths(Funcs.at(Entry), Writes, Reads,
-                                      VolatileFamilies, ArgumentFamilies));
+                                      VolatileFamilies, ArgumentFamilies,
+                                      DispatchThunks));
       if (Next != Widths) {
         Widths = Next;
         Changed = true;

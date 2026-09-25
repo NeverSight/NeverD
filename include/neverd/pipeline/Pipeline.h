@@ -162,6 +162,9 @@ struct PipelineResult {
   /// Bytes of each GPR family a lifted callee reads before writing (its
   /// register arguments, including pass-throughs), keyed by callee entry.
   std::map<va_t, GPRReadWidths> CallEntryReadGPRs;
+  /// Entries of indirect-call dispatchers (`_guard_dispatch_icall`): a call to
+  /// one passes the argument registers its caller set.
+  std::set<va_t> CallDispatchThunks;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   std::unique_ptr<llvm::Module> LlvmModule;

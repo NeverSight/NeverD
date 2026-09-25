@@ -233,8 +233,24 @@ void LowToMedConverter::applyCallRegisterEffect(MedOp &MOp, const LowOp &LOp) {
   // Publish the Win64 register arguments the callee reads as uses, so SSA
   // sees a pass-through argument and the call site knows its arity.  Mach-O
   // source-call binding owns single-input calls, hence COFF only.
-  if (CallEntryReadGPRs && TargetArch == Arch::X64 &&
-      TargetFormat == BinaryFormat::COFF && MOp.NumInputs == 1)
+  // A Control Flow Guard dispatcher is an indirect call to RAX: its
+  // arguments are the registers this function set before the call, the rule
+  // IDA uses.  A register only passed through from this function's entry is
+  // not taken as an argument.
+  if (CallDispatchThunks && TargetArch == Arch::X64 &&
+      TargetFormat == BinaryFormat::COFF && MOp.NumInputs == 1 &&
+      CallDispatchThunks->count(LOp.Inputs[0].Offset)) {
+    static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
+                                             x86reg::R8, x86reg::R9};
+    int8_t Count = 0;
+    for (int8_t I = 0; I < 4; ++I)
+      if ((DispatchCallDefinedArgs >> I) & 1)
+        Count = I + 1;
+    for (int8_t I = 0; I < Count; ++I)
+      MOp.addInput(ndVarToMedVar(NdVar::reg(Win64Args[I], 8)));
+    MOp.CalleeRegisterArgs = Count;
+  } else if (CallEntryReadGPRs && TargetArch == Arch::X64 &&
+             TargetFormat == BinaryFormat::COFF && MOp.NumInputs == 1)
     if (auto R = CallEntryReadGPRs->find(LOp.Inputs[0].Offset);
         R != CallEntryReadGPRs->end()) {
       static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
@@ -406,7 +422,64 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.ExceptionMetadata = Low.ExceptionMetadata;
 
+  // Win64 argument registers written on every path from entry, per block,
+  // for Control Flow Guard dispatcher calls.  A call clobbers them.
+  std::vector<uint8_t> DispatchDefinedIn;
+  const bool TrackDispatchArgs =
+      CallDispatchThunks && !CallDispatchThunks->empty() &&
+      TheArch == Arch::X64 && Fmt == BinaryFormat::COFF;
+  auto ArgBit = [](const NdVar &V) -> uint8_t {
+    if (!V.isReg())
+      return 0;
+    static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
+                                             x86reg::R8, x86reg::R9};
+    for (unsigned I = 0; I < 4; ++I)
+      if (V.Offset >= Win64Args[I] && V.Offset < Win64Args[I] + 8)
+        return uint8_t(1u << I);
+    return 0;
+  };
+  auto StepDefined = [&](uint8_t Defined, const LowOp &Op) {
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+      return uint8_t(0);
+    return uint8_t(Defined | ArgBit(Op.Output));
+  };
+  if (TrackDispatchArgs) {
+    std::map<int, size_t> IndexOf;
+    for (size_t B = 0; B < Low.Blocks.size(); ++B)
+      IndexOf[Low.Blocks[B].Id] = B;
+    DispatchDefinedIn.assign(Low.Blocks.size(), 0xF);
+    if (!DispatchDefinedIn.empty())
+      DispatchDefinedIn[0] = 0;
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (size_t B = 0; B < Low.Blocks.size(); ++B) {
+        uint8_t In = B == 0 ? 0 : 0xF;
+        bool AnyPred = false;
+        for (int P : Low.Blocks[B].Preds) {
+          auto It = IndexOf.find(P);
+          if (It == IndexOf.end())
+            continue;
+          uint8_t Out = DispatchDefinedIn[It->second];
+          for (const LowOp &Op : Low.Blocks[It->second].Ops)
+            Out = StepDefined(Out, Op);
+          In &= Out;
+          AnyPred = true;
+        }
+        if (B != 0 && !AnyPred)
+          In = 0;
+        if (In != DispatchDefinedIn[B]) {
+          DispatchDefinedIn[B] = In;
+          Changed = true;
+        }
+      }
+    }
+  }
+  size_t LowBlockIndex = 0;
+
   for (const auto &LB : Low.Blocks) {
+    uint8_t DispatchDefined =
+        TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
+    ++LowBlockIndex;
     MedBlock MB;
     MB.Id = LB.Id;
     MB.StartAddr = LB.StartAddr;
@@ -469,7 +542,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &Low, Arch TheArch,
         for (uint8_t I = 0; I < LOp.NumInputs; ++I)
           MOp.addInput(ndVarToMedVar(LOp.Inputs[I]));
       }
+      DispatchCallDefinedArgs = DispatchDefined;
       applyCallRegisterEffect(MOp, LOp);
+      if (TrackDispatchArgs)
+        DispatchDefined = StepDefined(DispatchDefined, LOp);
 
       MB.Ops.push_back(MOp);
 

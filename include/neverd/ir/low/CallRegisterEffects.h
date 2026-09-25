@@ -103,10 +103,19 @@ struct CallRegisterSummaries {
 /// effect).  A callee missing from \p Funcs, or reaching an unknown effect,
 /// has no may-write summary.  An unknown call is taken to clobber
 /// \p VolatileFamilies; an unknown tail call to read \p ArgumentFamilies.
-CallRegisterSummaries
-solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
-                         GPRFamilyMask VolatileFamilies,
-                         GPRFamilyMask ArgumentFamilies);
+///
+/// A call to one of \p DispatchThunks (an indirect-call dispatcher such as
+/// MSVC's `_guard_dispatch_icall`, which jumps to RAX with the caller's
+/// argument registers) is an indirect call whose target is unknown: it
+/// clobbers \p VolatileFamilies and does not make the caller read its own
+/// incoming argument registers.  The call site's arguments are the registers
+/// the caller itself set.  A function in \p FixedEntryReads (a documented
+/// prototype) reads exactly those bytes.
+CallRegisterSummaries solveCallRegisterEffects(
+    const std::map<va_t, LocalRegisterEffect> &Funcs,
+    GPRFamilyMask VolatileFamilies, GPRFamilyMask ArgumentFamilies,
+    const std::set<va_t> &DispatchThunks = {},
+    const std::map<va_t, GPRReadWidths> &FixedEntryReads = {});
 
 } // namespace neverd
 

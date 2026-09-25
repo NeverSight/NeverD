@@ -2857,8 +2857,38 @@ void computeCallRegisterEffects(
     Volatile |= Family(x86reg::RSI) | Family(x86reg::RDI);
     Arguments |= Family(x86reg::RSI) | Family(x86reg::RDI);
   }
-  CallRegisterSummaries Summaries =
-      solveCallRegisterEffects(Effects, Volatile, Arguments);
+  // Documented contracts (WindowsKernelRoutines.inc): a Control Flow Guard
+  // dispatcher is an indirect call, and a WDK routine reads exactly its
+  // prototype's parameters however its body forwards registers.
+  std::set<va_t> DispatchThunks;
+  std::map<va_t, GPRReadWidths> FixedEntryReads;
+  if (Win64) {
+    auto Classify = [&](va_t Entry, llvm::StringRef Name) {
+      if (Name.empty() || Entry == InvalidVA)
+        return;
+      if (libc::isIndirectCallDispatchThunk(Name)) {
+        DispatchThunks.insert(Entry);
+        return;
+      }
+      const libc::WindowsKernelPrototype *Proto =
+          libc::windowsKernelPrototype(Name);
+      if (!Proto)
+        return;
+      static constexpr uint64_t Win64Args[] = {x86reg::RCX, x86reg::RDX,
+                                               x86reg::R8, x86reg::R9};
+      GPRReadWidths Widths{};
+      for (unsigned I = 0; I < 4 && I < Proto->ArgCount; ++I)
+        Widths[Win64Args[I] / 8] = Proto->ArgWidths[I];
+      FixedEntryReads[Entry] = Widths;
+    };
+    for (const auto &[Entry, Effect] : Effects)
+      Classify(Entry, Img.getFunctionNameAt(Entry));
+    for (const Import &Imp : Img.Imports)
+      Classify(Imp.IATAddr, Imp.Name);
+  }
+  CallRegisterSummaries Summaries = solveCallRegisterEffects(
+      Effects, Volatile, Arguments, DispatchThunks, FixedEntryReads);
+  Result.CallDispatchThunks = std::move(DispatchThunks);
   Result.CallMayWriteGPRs = std::move(Summaries.MayWrite);
   Result.CallEntryReadGPRs = std::move(Summaries.EntryReads);
 }
