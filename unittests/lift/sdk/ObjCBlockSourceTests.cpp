@@ -1682,25 +1682,29 @@ TEST(ObjCBlockSources, WMFSessionCopiesJSONCompletion) {
   EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 4));
 }
 
-TEST(ObjCBlockSources, MWKDataStoreCopiesCoreDataCallbacks) {
+TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
   struct Case {
+    const char *Owner;
     const char *Selector;
     const char *Encoding;
     unsigned Parameter;
     unsigned CallbackParameters;
   };
   constexpr Case Cases[] = {
-      {"setupCoreDataStackWithContainerURL:completion:", "v32@0:8@16@?24",
-       3, 1},
-      {"performBackgroundCoreDataOperationOnATemporaryContext:",
+      {"MWKDataStore", "setupCoreDataStackWithContainerURL:completion:",
+       "v32@0:8@16@?24", 3, 1},
+      {"MWKDataStore",
+       "performBackgroundCoreDataOperationOnATemporaryContext:",
        "v24@0:8@?16", 2, 2},
+      {"WMFFeedContentSource", "fetchContentForDate:force:completion:",
+       "v36@0:8@16B24@?28", 4, 3},
   };
   for (const auto &C : Cases) {
     BlockFixture F;
     F.Image.DynInfo.NeededLibs = {
         "/System/Library/Frameworks/Foundation.framework/Foundation"};
     ObjCClass Class;
-    Class.Name = "MWKDataStore";
+    Class.Name = C.Owner;
     Class.Address = 0x2700;
     Class.SuperclassName = "NSObject";
     Class.InheritanceStatus = "resolved";

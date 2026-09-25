@@ -1911,30 +1911,37 @@ objcBlockParameterContract(const BinaryImage &Image,
         std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
   }
 
-  // MWKDataStore passes these callbacks into asynchronous Core Data work.
-  // Its implementation enables asynchronous store loading for setup and
-  // enqueues the temporary-context callback with performBlock:. Authenticate
-  // the exact embedded methods and callback ABIs before copying a stack block.
-  struct MWKDataStoreBlock {
+  // These embedded WMF methods pass callbacks to asynchronous work. The data
+  // store enables asynchronous store loading and uses performBlock:; the feed
+  // source forwards its completion into the fetcher's network callbacks.
+  // Authenticate exact method owners, encodings and callback ABIs before
+  // treating an Objective-C stack block as copied by a callee.
+  struct WMFInstanceBlock {
+    const char *Owner;
     const char *Selector;
     const char *Parent;
     const char *Callback;
     unsigned Parameter;
   };
-  static constexpr MWKDataStoreBlock MWKDataStoreBlocks[] = {
-      {"setupCoreDataStackWithContainerURL:completion:", "v32@0:8@16@?24",
-       "v8@?0", 3},
-      {"performBackgroundCoreDataOperationOnATemporaryContext:",
+  static constexpr WMFInstanceBlock WMFInstanceBlocks[] = {
+      {"MWKDataStore", "setupCoreDataStackWithContainerURL:completion:",
+       "v32@0:8@16@?24", "v8@?0", 3},
+      {"MWKDataStore",
+       "performBackgroundCoreDataOperationOnATemporaryContext:",
        "v24@0:8@?16", "v16@?0@\"NSManagedObjectContext\"8", 2},
+      {"WMFFeedContentSource", "fetchContentForDate:force:completion:",
+       "v36@0:8@16B24@?28",
+       "v24@?0@\"WMFFeedDayResponse\"8@\"NSDictionary\"16", 4},
   };
   if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
-      !Type->IsProtocol && Type->ClassName == "MWKDataStore")
-    for (const auto &D : MWKDataStoreBlocks) {
-      if (Call.Selector != D.Selector || Parameter != D.Parameter)
+      !Type->IsProtocol)
+    for (const auto &D : WMFInstanceBlocks) {
+      if (Type->ClassName != D.Owner || Call.Selector != D.Selector ||
+          Parameter != D.Parameter)
         continue;
       const ObjCClass *Owner = nullptr;
       for (const auto &Class : Image.ObjCClasses)
-        if (Class.Name == "MWKDataStore") {
+        if (Class.Name == D.Owner) {
           if (Owner)
             return std::nullopt;
           Owner = &Class;
