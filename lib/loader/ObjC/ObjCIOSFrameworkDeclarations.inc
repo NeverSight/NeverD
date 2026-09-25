@@ -29,12 +29,16 @@
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "addSubview:", "v24@0:8@16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "alpha", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "blackColor", "@16@0:8", nullptr},
+// UIDevice publicly declares these paired void orientation-notification
+// methods without parameters; Apple Clang emits v16@0:8 for arm64 iOS.
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "beginGeneratingDeviceOrientationNotifications", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "clearColor", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithAlphaComponent:", "@24@0:8d16", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "colorWithRed:green:blue:alpha:", "@48@0:8d16d24d32d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentDevice", "@16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "currentEDRHeadroom", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "dismissViewControllerAnimated:completion:", "v28@0:8B16@?20", nullptr},
+{"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "endGeneratingDeviceOrientationNotifications", "v16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "displayScale", "d16@0:8", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "getRed:green:blue:alpha:", "B48@0:8^d16^d24^d32^d40", nullptr},
 {"UIKit", "/System/Library/Frameworks/UIKit.framework/UIKit", "getWhite:alpha:", "B32@0:8^d16^d24", nullptr},
