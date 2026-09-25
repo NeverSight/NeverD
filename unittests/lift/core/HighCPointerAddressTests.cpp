@@ -4098,6 +4098,51 @@ unsigned countGotos(const std::vector<HighStmt> &Body) {
 }
 } // namespace
 
+TEST(HighCPointerAddresses, ReduceGotosHoistsLabelFromTheMiddleOfAnElse) {
+  // if (c) { goto M; } else { a = 1; M: b = 2; } return;
+  HighStmt IfElse;
+  IfElse.Kind = StmtKind::IfElse;
+  IfElse.Addr = 0x1000;
+  IfElse.Cond = HighExpr::makeConst(1, 1);
+  IfElse.Body.push_back(gotoAt(0x1004, 0x1020));
+  IfElse.ElseBody = {assignConst(0x1010, 1, 1), assignConst(0x1020, 2, 2)};
+  std::vector<HighStmt> Body = {IfElse, returnAt(0x1030)};
+  ASSERT_TRUE(reduceSingleUseGotos(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  ASSERT_EQ(Body.size(), 3u);
+  // `if (!c) { a = 1; }` then the hoisted `M: b = 2;`.
+  EXPECT_EQ(Body[0].Kind, StmtKind::If);
+  ASSERT_TRUE(Body[0].Cond);
+  EXPECT_EQ(Body[0].Cond->Op, NdOp::BOOL_NOT);
+  ASSERT_EQ(Body[0].Body.size(), 1u);
+  EXPECT_EQ(Body[1].Addr, 0x1020u);
+  EXPECT_EQ(Body[2].Kind, StmtKind::Return);
+}
+
+TEST(HighCPointerAddresses, ReturnTailContinuesPastTheEndOfAnArm) {
+  // if (c) goto E; ...; if (d) { E: r = 1; } else { r = 2; } return r;
+  HighStmt Arm;
+  Arm.Kind = StmtKind::IfElse;
+  Arm.Addr = 0x1020;
+  Arm.Cond = HighExpr::makeConst(1, 1);
+  Arm.Body = {assignConst(0x1030, 1, 1)};
+  Arm.ElseBody = {assignConst(0x1040, 1, 2)};
+  MedVar R;
+  R.Kind = MedVar::Temp;
+  R.Id = 1;
+  R.Size = 8;
+  HighStmt Ret = returnAt(0x1050);
+  Ret.RetVal = HighExpr::makeVar(R);
+  std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1030),
+                                assignConst(0x1010, 2, 0), Arm, Ret};
+  ASSERT_TRUE(duplicateSmallReturnTails(Body));
+  EXPECT_EQ(countGotos(Body), 0u);
+  // The jump became `r = 1; return r;`.
+  ASSERT_EQ(Body[0].Body.size(), 2u);
+  EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 1u);
+  EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
+}
+
 TEST(HighCPointerAddresses, LoopifyTurnsNestedBackJumpsIntoContinue) {
   // x = 0; X: x = 1; if (c) goto X; return;
   std::vector<HighStmt> Body = {assignConst(0x1000, 1, 0),

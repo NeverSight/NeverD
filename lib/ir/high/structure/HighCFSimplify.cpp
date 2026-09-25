@@ -511,8 +511,10 @@ static bool isTailValue(const HighExpr &E, unsigned Depth = 0) {
 }
 
 /// Number of pure variable assignments in \p S when it is one (or a block of
-/// only such assignments and removed statements); nullopt otherwise.
-static std::optional<size_t> pureAssignCount(const HighStmt &S) {
+/// only such assignments and removed statements); nullopt otherwise.  A
+/// block member may carry its own address only when no jump targets it.
+static std::optional<size_t> pureAssignCount(const HighStmt &S,
+                                             const std::set<va_t> &Targets) {
   if (S.Kind == StmtKind::Nop)
     return 0;
   if (S.Kind == StmtKind::Assign) {
@@ -534,10 +536,10 @@ static std::optional<size_t> pureAssignCount(const HighStmt &S) {
     return std::nullopt;
   size_t Count = 0;
   for (const HighStmt &Child : S.Body) {
-    if (Child.Addr != 0 && Child.Addr != S.Addr)
+    if (Child.Addr != 0 && Child.Addr != S.Addr && Targets.count(Child.Addr))
       return std::nullopt;
-    std::optional<size_t> ChildCount = pureAssignCount(Child);
-    if (!ChildCount || Child.Kind == StmtKind::Block)
+    std::optional<size_t> ChildCount = pureAssignCount(Child, Targets);
+    if (!ChildCount || (Child.Kind == StmtKind::Block && !Child.Body.empty()))
       return std::nullopt;
     Count += *ChildCount;
   }
@@ -551,62 +553,85 @@ static std::optional<size_t> pureAssignCount(const HighStmt &S) {
 bool duplicateSmallReturnTails(std::vector<HighStmt> &Body) {
   constexpr size_t kMaxTailAssigns = 3;
   constexpr size_t kMaxComposedTail = 2 * kMaxTailAssigns + 1;
+  std::set<va_t> Targets;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Goto)
+      Targets.insert(S.GotoTarget);
+  });
   std::map<va_t, std::vector<HighStmt>> Tails;
-  std::function<void(std::vector<HighStmt> &)> Collect =
-      [&](std::vector<HighStmt> &Stmts) {
+  // The tail that runs from Stmts[I]: a few pure assignments ending in a
+  // return, in a jump to a known tail, or at the end of the list followed
+  // by \p Cont (what runs after the construct owning this list).
+  auto TailAt = [&](const std::vector<HighStmt> &Stmts, size_t I,
+                    const std::vector<HighStmt> *Cont)
+      -> std::optional<std::vector<HighStmt>> {
+    // An empty block can anchor the label ahead of the tail.
+    // Removed statements (Nop) print nothing and are skipped.
+    size_t First = I;
+    while (First < Stmts.size() && ((Stmts[First].Kind == StmtKind::Block &&
+                                     Stmts[First].Body.empty()) ||
+                                    Stmts[First].Kind == StmtKind::Nop))
+      ++First;
+    size_t J = First;
+    size_t Assigns = 0;
+    while (J < Stmts.size()) {
+      std::optional<size_t> Count = pureAssignCount(Stmts[J], Targets);
+      if (!Count || Assigns + *Count > kMaxTailAssigns)
+        break;
+      Assigns += *Count;
+      ++J;
+    }
+    if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Return &&
+        (!Stmts[J].RetVal || isTailValue(*Stmts[J].RetVal)))
+      return std::vector<HighStmt>(Stmts.begin() + First,
+                                   Stmts.begin() + J + 1);
+    const std::vector<HighStmt> *Rest = nullptr;
+    if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Goto &&
+        Stmts[J].GotoTarget != Stmts[I].Addr) {
+      // Edge copies ahead of a jump to a shared return epilogue: the
+      // tail is those copies followed by the epilogue's own tail.
+      auto Target = Tails.find(Stmts[J].GotoTarget);
+      if (Target != Tails.end())
+        Rest = &Target->second;
+    } else if (J == Stmts.size()) {
+      Rest = Cont;
+    }
+    if (!Rest || Assigns + Rest->size() > kMaxComposedTail)
+      return std::nullopt;
+    std::vector<HighStmt> Tail(Stmts.begin() + First, Stmts.begin() + J);
+    Tail.insert(Tail.end(), Rest->begin(), Rest->end());
+    return Tail;
+  };
+  std::function<void(std::vector<HighStmt> &, const std::vector<HighStmt> *)>
+      Collect = [&](std::vector<HighStmt> &Stmts,
+                    const std::vector<HighStmt> *Cont) {
         for (size_t I = 0; I < Stmts.size(); ++I) {
           const va_t Label = Stmts[I].Addr;
           if (Label != 0 && Label != InvalidVA && !Tails.count(Label) &&
-              (I == 0 || Stmts[I - 1].Addr != Label)) {
-            // An empty block can anchor the label ahead of the tail.
-            // Removed statements (Nop) print nothing and are skipped.
-            size_t First = I;
-            while (First < Stmts.size() &&
-                   ((Stmts[First].Kind == StmtKind::Block &&
-                     Stmts[First].Body.empty()) ||
-                    Stmts[First].Kind == StmtKind::Nop))
-              ++First;
-            size_t J = First;
-            size_t Assigns = 0;
-            while (J < Stmts.size()) {
-              std::optional<size_t> Count = pureAssignCount(Stmts[J]);
-              if (!Count || Assigns + *Count > kMaxTailAssigns)
-                break;
-              Assigns += *Count;
-              ++J;
-            }
-            if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Return &&
-                (!Stmts[J].RetVal || isTailValue(*Stmts[J].RetVal))) {
-              Tails.emplace(Label,
-                            std::vector<HighStmt>(Stmts.begin() + First,
-                                                  Stmts.begin() + J + 1));
-            } else if (J < Stmts.size() && Stmts[J].Kind == StmtKind::Goto &&
-                       Stmts[J].GotoTarget != Label) {
-              // Edge copies ahead of a jump to a shared return epilogue: the
-              // tail is those copies followed by the epilogue's own tail.
-              auto Target = Tails.find(Stmts[J].GotoTarget);
-              if (Target != Tails.end() &&
-                  Assigns + Target->second.size() <= kMaxComposedTail) {
-                std::vector<HighStmt> Tail(Stmts.begin() + First,
-                                           Stmts.begin() + J);
-                Tail.insert(Tail.end(), Target->second.begin(),
-                            Target->second.end());
-                Tails.emplace(Label, std::move(Tail));
-              }
-            }
-          }
-          Collect(Stmts[I].Body);
-          Collect(Stmts[I].ElseBody);
+              (I == 0 || Stmts[I - 1].Addr != Label))
+            if (auto Tail = TailAt(Stmts, I, Cont))
+              Tails.emplace(Label, std::move(*Tail));
+          // Falling off an if/else arm or block continues after it.
+          std::optional<std::vector<HighStmt>> After;
+          const StmtKind K = Stmts[I].Kind;
+          if (K == StmtKind::If || K == StmtKind::IfElse ||
+              K == StmtKind::Block)
+            After = I + 1 < Stmts.size()
+                        ? TailAt(Stmts, I + 1, Cont)
+                        : (Cont ? std::optional(*Cont) : std::nullopt);
+          const std::vector<HighStmt> *ChildCont = After ? &*After : nullptr;
+          Collect(Stmts[I].Body, ChildCont);
+          Collect(Stmts[I].ElseBody, ChildCont);
           for (auto &C : Stmts[I].Cases)
-            Collect(C.Body);
-          Collect(Stmts[I].DefaultBody);
+            Collect(C.Body, nullptr);
+          Collect(Stmts[I].DefaultBody, nullptr);
         }
       };
   // A composed tail needs its epilogue's tail first; the epilogue usually
   // follows the jumps to it, so repeat until no new tail appears.
   for (size_t Round = 0; Round < 4; ++Round) {
     const size_t Before = Tails.size();
-    Collect(Body);
+    Collect(Body, nullptr);
     if (Tails.size() == Before)
       break;
   }
@@ -621,8 +646,13 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body) {
             if (It != Tails.end()) {
               std::vector<HighStmt> Copy = It->second;
               // The copies are not jump targets; keep the label unique.
+              const va_t Site = Stmts[I].Addr;
               for (HighStmt &C : Copy)
-                C.Addr = Stmts[I].Addr;
+                C.Addr = Site;
+              walkStmts(Copy, [&](HighStmt &C) {
+                if (C.Addr != 0)
+                  C.Addr = Site;
+              });
               Stmts.erase(Stmts.begin() + I);
               Stmts.insert(Stmts.begin() + I, Copy.begin(), Copy.end());
               I += Copy.size() - 1;
@@ -1081,6 +1111,28 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
     L.pop_back();
   };
 
+  // Placeholders left by an earlier block splice would hide the statement
+  // a rewrite inspects (the label opening an else, the next statement).
+  std::function<void(std::vector<HighStmt> &)> DropPlaceholders =
+      [&](std::vector<HighStmt> &L) {
+        L.erase(std::remove_if(L.begin(), L.end(),
+                               [&](const HighStmt &S) {
+                                 return S.Kind == StmtKind::Nop &&
+                                        usesOf(S.Addr) == 0;
+                               }),
+                L.end());
+        for (HighStmt &S : L) {
+          DropPlaceholders(S.Body);
+          DropPlaceholders(S.ElseBody);
+          for (auto &C : S.Cases)
+            DropPlaceholders(C.Body);
+          DropPlaceholders(S.DefaultBody);
+          for (auto &ClauseBody : S.EHClauseBodies)
+            DropPlaceholders(ClauseBody);
+        }
+      };
+  DropPlaceholders(Body);
+
   bool Changed = false;
   std::function<void(std::vector<HighStmt> &)> Visit = [&](std::vector<HighStmt>
                                                                &L) {
@@ -1238,20 +1290,36 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions) {
           --I;
         continue;
       }
-      // T8: `if (c) { A; goto Y; } else { Y: B }`  ->  `if (c) { A }` B.
+      // T8: `if (c) { A; goto Y; } else { B; Y: C }`
+      //   ->  `if (c) { A } else { B }` C.
       if (L[I].Kind == StmtKind::IfElse && L[I].Cond && !L[I].Body.empty() &&
           L[I].Body.back().Kind == StmtKind::Goto && !L[I].ElseBody.empty() &&
-          L[I].ElseBody.front().Addr == L[I].Body.back().GotoTarget &&
           L[I].Body.back().GotoTarget != 0 &&
           L[I].Body.back().GotoTarget != InvalidVA) {
-        --Uses[L[I].Body.back().GotoTarget];
-        popGoto(L[I].Body);
-        std::vector<HighStmt> Tail = std::move(L[I].ElseBody);
-        L[I].ElseBody.clear();
-        L[I].Kind = StmtKind::If;
-        L.insert(L.begin() + I + 1, std::make_move_iterator(Tail.begin()),
-                 std::make_move_iterator(Tail.end()));
-        Changed = true;
+        const va_t Y = L[I].Body.back().GotoTarget;
+        auto &Else = L[I].ElseBody;
+        size_t J = 0;
+        while (J < Else.size() &&
+               !(Else[J].Addr == Y && (J == 0 || Else[J - 1].Addr != Y)))
+          ++J;
+        if (J < Else.size()) {
+          --Uses[Y];
+          popGoto(L[I].Body);
+          std::vector<HighStmt> Tail(std::make_move_iterator(Else.begin() + J),
+                                     std::make_move_iterator(Else.end()));
+          Else.erase(Else.begin() + J, Else.end());
+          if (Else.empty())
+            L[I].Kind = StmtKind::If;
+          else if (L[I].Body.empty()) {
+            L[I].Kind = StmtKind::If;
+            L[I].Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, L[I].Cond);
+            L[I].Body = std::move(Else);
+            Else.clear();
+          }
+          L.insert(L.begin() + I + 1, std::make_move_iterator(Tail.begin()),
+                   std::make_move_iterator(Tail.end()));
+          Changed = true;
+        }
       }
       if (!isCondGoto(L[I]))
         continue;

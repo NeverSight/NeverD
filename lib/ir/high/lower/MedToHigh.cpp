@@ -817,10 +817,16 @@ HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
     // to a small return tail; those get one more tail-duplication pass.
     // Backward jumps become loops last, once fall-through joins no longer need
     // explicit jumps.
-    for (int Phase = 0; Phase < 4; ++Phase) {
+    for (int Phase = 0; Phase < 5; ++Phase) {
+      // Dead copies left by earlier rewrites can sit between a jump and
+      // its label; clear them before the next phase looks.
+      if (Phase != 0 && Changed)
+        eliminateDeadStmts(Func);
       if (Phase == 2 && !duplicateSmallReturnTails(Func.Body))
         continue;
       if (Phase == 3 && !loopifyBackwardGotos(Func.Body))
+        continue;
+      if (Phase == 4 && !duplicateSmallReturnTails(Func.Body))
         break;
       Changed |= Phase >= 2;
       for (int Round = 0; Round < 8; ++Round) {
