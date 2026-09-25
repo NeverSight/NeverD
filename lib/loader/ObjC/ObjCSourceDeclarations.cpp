@@ -1824,6 +1824,50 @@ objcBlockParameterContract(const BinaryImage &Image,
         std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
   }
 
+  // Wikipedia iOS declares AsyncBlockOperation.init(asyncBlock:) with an
+  // escaping Swift closure. The Objective-C bridge therefore owns a copy of
+  // the incoming block after this initializer returns.
+  if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
+      !Type->IsProtocol && Type->ClassName == "WMFAsyncBlockOperation" &&
+      Call.Selector == "initWithAsyncBlock:" && Parameter == 2) {
+    const ObjCClass *Owner = nullptr;
+    for (const auto &Class : Image.ObjCClasses)
+      if (Class.Name == "WMFAsyncBlockOperation") {
+        if (Owner)
+          return std::nullopt;
+        Owner = &Class;
+      }
+    if (!Owner || !Owner->Address ||
+        Owner->SuperclassName != "WMFAsyncOperation" ||
+        Owner->InheritanceStatus != "resolved")
+      return std::nullopt;
+    const ObjCMethod *Method = nullptr;
+    for (const auto &Candidate : Image.ObjCMethods)
+      if (Candidate.ClassName == Owner->Name &&
+          Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
+        if (Method || Candidate.ClassAddress != Owner->Address ||
+            Candidate.CategoryAddress || !Candidate.CategoryName.empty() ||
+            !Candidate.MetadataAddress ||
+            Candidate.TypeEncoding != "@24@0:8@?16" ||
+            !objcMethodHasSourceBody(Candidate) ||
+            !Image.isCodeAddress(Candidate.Implementation))
+          return std::nullopt;
+        Method = &Candidate;
+      }
+    if (!Method)
+      return std::nullopt;
+    auto Parent = parseObjCMethodEncoding(Call.Selector, Method->TypeEncoding);
+    std::string Error;
+    auto Callback = parseObjCBlockSignature(
+        "v16@?0@\"WMFAsyncBlockOperation\"8", Image.Arch, Error);
+    if (!Parent || !Callback ||
+        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+        !SameDeclaration(*Expected, *Parent))
+      return std::nullopt;
+    return ObjCBlockParameterContract{
+        std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
+  }
+
   struct Declaration {
     const char *Selector;
     const char *AArch64Parent;

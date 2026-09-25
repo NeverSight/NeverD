@@ -1557,6 +1557,73 @@ TEST(ObjCBlockSources, MantleTransformerFactoriesCopyBlocks) {
   }
 }
 
+TEST(ObjCBlockSources, WMFAsyncBlockOperationCopiesEscapingSwiftClosure) {
+  BlockFixture F;
+  F.Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Base;
+  Base.Name = "WMFAsyncOperation";
+  Base.Address = 0x2680;
+  Base.SuperclassName = "NSOperation";
+  Base.InheritanceStatus = "resolved";
+  F.Image.ObjCClasses.push_back(Base);
+  ObjCClass Class;
+  Class.Name = "WMFAsyncBlockOperation";
+  Class.Address = 0x2700;
+  Class.SuperclassName = Base.Name;
+  Class.InheritanceStatus = "resolved";
+  F.Image.ObjCClasses.push_back(Class);
+  ObjCMethod Method;
+  Method.Implementation = 0x1300;
+  Method.MetadataAddress = 0x2800;
+  Method.ClassAddress = Class.Address;
+  Method.ClassName = Class.Name;
+  Method.Selector = "initWithAsyncBlock:";
+  Method.TypeEncoding = "@24@0:8@?16";
+  Method.Status = "supported";
+  Method.TypeHint = parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  F.Image.ObjCMethods.push_back(Method);
+  ObjCMethod Caller;
+  Caller.Implementation = 0x1200;
+  Caller.ClassAddress = Class.Address;
+  Caller.ClassName = Class.Name;
+  Caller.Selector = "submit:";
+  Caller.TypeEncoding = "v24@0:8@16";
+  Caller.Status = "supported";
+  Caller.TypeHint = parseObjCMethodEncoding(Caller.Selector, Caller.TypeEncoding);
+  ASSERT_TRUE(Caller.TypeHint);
+  F.Image.ObjCMethods.push_back(Caller);
+  const auto Receiver = objcMethodReceiverTypeHint(F.Image, Caller.Implementation);
+  ASSERT_TRUE(Receiver);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = Method.Selector;
+  Call.Receiver = *Receiver;
+  const auto Declaration =
+      objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+  ASSERT_TRUE(Declaration.Signature);
+  Call.Signature = *Declaration.Signature;
+  const auto Contract = objcBlockParameterContract(F.Image, Call, 2);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage,
+            ObjCBlockParameterContract::Lifetime::Copied);
+  EXPECT_EQ(Contract->Signature.Parameters.size(), 2U);
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 1));
+
+  auto Changed = Call;
+  Changed.Receiver.reset();
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 2));
+  Changed = Call;
+  Changed.Signature.Parameters.pop_back();
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 2));
+  F.Image.ObjCMethods.front().TypeEncoding = "@24@0:8@16";
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
+  F.Image.ObjCMethods.front().TypeEncoding = Method.TypeEncoding;
+  F.Image.ObjCClasses.back().SuperclassName = "OtherOperation";
+  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
+}
+
 TEST(ObjCBlockSources, AppleAsyncConsumersRequireExactSDKBlockContract) {
   struct Case {
     const char *Framework;
