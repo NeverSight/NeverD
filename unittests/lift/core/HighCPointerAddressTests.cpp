@@ -4234,6 +4234,31 @@ TEST(HighCPointerAddresses, MsrAccessKeepsSelectorAndValue) {
   expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
 }
 
+TEST(HighCPointerAddresses, MergedXmm0ResultIsTheDoubleReturnValue) {
+  // A double result reaches the shared `ret` through an XMM0 merge; RAX is
+  // never written.  The rounding path must survive and the float compare must
+  // reinterpret the register bits rather than convert them numerically.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x66, 0x0f, 0x57, 0xc9,       // xorpd xmm1, xmm1
+      0x66, 0x0f, 0x2e, 0xc1,       // ucomisd xmm0, xmm1
+      0x76, 0x0a,                   // jbe ret
+      0xf2, 0x48, 0x0f, 0x2d, 0xc8, // cvtsd2si rcx, xmm0
+      0xf2, 0x48, 0x0f, 0x2a, 0xc1, // cvtsi2sd xmm0, rcx
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("double sub_140001000("), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__builtin_bit_cast(double, "), std::string::npos)
+      << HighC;
+  EXPECT_TRUE(std::regex_search(HighC, std::regex(R"(\(double\)\(int64_t\))")))
+      << HighC;
+  EXPECT_TRUE(
+      std::regex_search(HighC, std::regex(R"(return __builtin_bit_cast\(double)")))
+      << HighC;
+  expectCompilesForMsvc(HighC);
+}
+
 TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
   // x64 `syscall` takes the service number in RAX and returns a status in
   // RAX under every operating system's convention.  The `mov eax` must not be

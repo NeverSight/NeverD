@@ -112,7 +112,10 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   if (!RetVal && CurOp.NumInputs >= 1 && CurOp.Inputs[0].Id >= 0 &&
       CurOp.Inputs[0].Kind == MedVar::Reg) {
     uint64_t RO = CurOp.Inputs[0].RegOff;
-    if (!TRI.isFrameOrLinkReg(RO) && (!ExplicitABI || RO == ReturnReg))
+    // A floating-point result lives in the FP return register; the RETURN's
+    // default integer-register operand does not carry it.
+    if (!TRI.isFrameOrLinkReg(RO) &&
+        (!(ExplicitABI || UsesFPReturnReg) || RO == ReturnReg))
       RetVal = medvarToExpr(CurOp.Inputs[0]);
   }
 
@@ -183,11 +186,15 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     RetVal = HighExpr::makeVar(RV);
   }
 
-  if (ExplicitABI && UsesFPReturnReg &&
+  // The FP return register holds the scalar's bits in its low lane.
+  if (UsesFPReturnReg &&
       (!RetVal->Type || RetVal->Type->Kind != NdTypeKind::Float)) {
-    const auto Bytes = Med.SourceTypeHint->ReturnLocation.ValueBytes;
-    RetVal = HighExpr::makeBitCast(sourceBitSlice(RetVal, 0, Bytes),
-                                   Func.ReturnType);
+    const auto Bytes = ExplicitABI
+                           ? Med.SourceTypeHint->ReturnLocation.ValueBytes
+                           : Func.ReturnType->Size;
+    if (Bytes == Func.ReturnType->Size)
+      RetVal = HighExpr::makeBitCast(sourceBitSlice(RetVal, 0, Bytes),
+                                     Func.ReturnType);
   }
 
   S.RetVal = RetVal;

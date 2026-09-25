@@ -38,8 +38,10 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
     // scalar bit pattern just like the other explicit floating operations.
     return HighExpr::makeBitCast(Value, NdType::makeInt(Op.Output.Size, false));
   }
-  if (CurMed && CurMed->SourceTypeHint &&
-      CurMed->SourceTypeHint->HasExplicitABI) {
+  // HighC carries machine register values as integer bit patterns, so a
+  // floating-point operation reinterprets its operands as float and its result
+  // back as bits.  A numeric C conversion here would change the value.
+  {
     auto FloatBits = [&](ExprPtr Value) {
       Value->Type = NdType::makeFloat(Op.Output.Size);
       return HighExpr::makeBitCast(Value,
@@ -110,7 +112,9 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
       return FloatBits(Value);
     }
     case NdOp::SUBBYTES:
-      if (Op.NumInputs == 2 && Op.Inputs[1].isConst())
+      if (CurMed && CurMed->SourceTypeHint &&
+          CurMed->SourceTypeHint->HasExplicitABI && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst())
         return sourceBitSlice(medvarToExpr(Op.Inputs[0]), Op.Inputs[1].ConstVal,
                               Op.Output.Size);
       break;
