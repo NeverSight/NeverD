@@ -1,4 +1,5 @@
 #include "../../../lib/sdk/capi/ObjCBlockSources.h"
+#include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "gtest/gtest.h"
 
 #include "llvm/BinaryFormat/MachO.h"
@@ -1074,6 +1075,51 @@ TEST(ObjCBlockSources, UntouchedEntryPointerStoresCannotAliasPrivateBlock) {
             Caller, F.Image, Plan, F.functions());
         EXPECT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
       }
+    }
+}
+
+TEST(ObjCBlockSources, SuperMessageBorrowsOnlyDisjointCompleteFrameRecord) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(Architecture == Arch::AArch64 ? "arm64" : "x86_64");
+      SCOPED_TRACE(Mutation);
+      SourceFixture F(true, Architecture);
+      auto &Caller = F.caller();
+      Caller.Body.back().Kind = StmtKind::ExprStmt;
+      Caller.Body.back().Val = Caller.Body.back().RetVal;
+      Caller.Body.back().RetVal.reset();
+      Caller.Body.push_back(store(frame(F.Image, -64),
+                                  parameter(0, Caller.Params[0].Type)));
+      if (Mutation != 2)
+        Caller.Body.push_back(store(
+            frame(F.Image, -56),
+            Mutation == 1 ? frame(F.Image, 0)
+                          : HighExpr::makeConst(0x2800, 8)));
+      auto Signature = parseObjCMethodEncoding("dealloc", "v16@0:8");
+      ASSERT_TRUE(Signature);
+      std::string Error;
+      ASSERT_TRUE(assignDarwinObjCSourceABI(*Signature, Architecture, Error))
+          << Error;
+      auto Super = HighExpr::makeCall(
+          "objc_msgSendSuper2", 0,
+          {frame(F.Image, Mutation == 3 ? -40 : -64),
+           HighExpr::makeConst(0x2900, 8)});
+      Super->Type = NdType::makeVoid();
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->CallKind = SourceCallTypeHint::Kind::ObjCSuper2;
+      Hint->TargetName = Mutation == 4 ? "unrelated" : "objc_msgSendSuper2";
+      Hint->Selector = "dealloc";
+      Hint->Signature = *Signature;
+      Super->SourceCallHint = Hint;
+      HighStmt Send;
+      Send.Kind = StmtKind::Call;
+      Send.CallExpr = Super;
+      Caller.Body.push_back(Send);
+      Caller.Body.push_back(ret(HighExpr::makeConst(0, 4)));
+      const auto Plan = discoverObjCBlockSources(F.Image, F.Result);
+      EXPECT_EQ(Plan.StackBlocks.count(F.Caller), Mutation == 0 ? 1U : 0U)
+          << (Plan.Rejections.count(F.Caller) ? Plan.Rejections.at(F.Caller)
+                                              : "");
     }
 }
 

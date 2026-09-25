@@ -195,6 +195,11 @@ fresh private block frame, so an ordinary scalar store through that exact
 parameter does not invalidate construction. Loaded pointers, reassigned
 parameters, pointer-derived values, and unsupported store effects remain
 unproven aliases.
+An exact `objc_msgSendSuper2` call may synchronously borrow a separate,
+fully initialized 16-byte `objc_super` record in the same frame. Its two words
+must contain no block or frame identity, and every live pointer-identity byte
+must remain inside a known, disjoint block literal. Other frame arguments
+remain subject to the ordinary escape proof.
 
 Capture-free global block literals may share one compiler descriptor. Source
 dependencies and generated helpers follow the exact literal references in the

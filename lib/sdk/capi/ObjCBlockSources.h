@@ -903,6 +903,40 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
     State.Call = [&](const HighExpr &E,
                      const std::vector<Value> &Arguments) -> Value {
       std::map<int64_t, unsigned> InvalidatedBlocks;
+      auto BorrowsDisjointSuperRecord = [&](size_t Parameter,
+                                            int64_t Offset) -> bool {
+        const auto &Binding = E.SourceCallHint;
+        if (Parameter != 0 || !Binding ||
+            Binding->CallKind != CallKind::ObjCSuper2 ||
+            Binding->TargetName != "objc_msgSendSuper2" ||
+            E.CallTarget != "objc_msgSendSuper2" ||
+            !objcSourceCallBound(E, Image, Functions, nullptr, nullptr,
+                                 &Function) ||
+            !frameRange(Function, Offset, 16))
+          return false;
+        const auto InBlock = [&](int64_t Byte) {
+          for (const auto &[Base, Block] : Blocks)
+            if (Byte >= Base &&
+                Byte - Base < static_cast<int64_t>(Block.Descriptor.LiteralSize))
+              return true;
+          return false;
+        };
+        // The runtime reads only the two words of objc_super. Both must be
+        // initialized and separate from every live block, including one whose
+        // pointer identity survived a control-flow join.
+        for (int64_t Byte = Offset; Byte < Offset + 16; ++Byte) {
+          const auto Found = Memory.find(Byte);
+          if (InBlock(Byte) || Found == Memory.end() ||
+              Found->second.Width != 8 ||
+              Found->second.Index != unsigned((Byte - Offset) % 8) ||
+              pointerIdentity(Found->second.V))
+            return false;
+        }
+        for (const auto &[Byte, Stored] : Memory)
+          if (pointerIdentity(Stored.V) && !InBlock(Byte))
+            return false;
+        return true;
+      };
       for (size_t I = 0; I < Arguments.size(); ++I) {
         if (Arguments[I].K != Value::Frame)
           continue;
@@ -912,6 +946,8 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
             Header->second.Width == 8 && Header->second.V.K == Value::Isa &&
             Header->second.V.Name == "_NSConcreteStackBlock";
         if (!ExactBlockBase) {
+          if (BorrowsDisjointSuperRecord(I, Arguments[I].Offset))
+            continue;
           if (Blocks.count(Arguments[I].Offset) ||
               State.frameContainsPointerIdentity())
             throw Invalid("stack block construction exposes a nonliteral "
