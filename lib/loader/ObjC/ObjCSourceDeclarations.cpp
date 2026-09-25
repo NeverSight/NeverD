@@ -1183,6 +1183,15 @@ bool objcReceiverTypeHintValid(const BinaryImage &Image,
   return receiverType(Image, Receiver).has_value();
 }
 
+std::optional<std::string>
+objcReceiverInstanceClassName(const BinaryImage &Image,
+                              const ObjCReceiverTypeHint &Receiver) {
+  const auto Type = receiverType(Image, Receiver);
+  if (!Type || Type->IsClassMethod || Type->IsProtocol)
+    return std::nullopt;
+  return Type->ClassName;
+}
+
 std::optional<ObjCReceiverTypeHint>
 objcReceiverIvarTypeHint(const BinaryImage &Image,
                          const ObjCReceiverTypeHint &Receiver,

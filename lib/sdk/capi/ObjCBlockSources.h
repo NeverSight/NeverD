@@ -41,6 +41,9 @@ struct ObjCBlockSourcePlan {
   /// Descriptor-declared callback classes shared by every proven literal
   /// using an invoke entry. Runtime encodings still describe dynamic objects.
   std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>> ParameterReceivers;
+  /// Descriptor/role contradictions invalidate callback type evidence.
+  /// Body/lifetime rejections do not: they may depend on that very type.
+  std::set<va_t> InvalidInvokeDescriptors;
   std::map<va_t, ObjCBlockCaptureCallFields> CapturedCallFields;
   std::map<va_t, std::string> Rejections;
 };
@@ -182,6 +185,11 @@ public:
   }
   bool frameContainsPointerIdentity() const {
     return !FrameIdentityBytes.empty();
+  }
+  bool frameRangeContainsPointerIdentity(int64_t Offset, unsigned Bytes) const {
+    const auto First = FrameIdentityBytes.lower_bound(Offset);
+    return First != FrameIdentityBytes.end() &&
+           *First - Offset < static_cast<int64_t>(Bytes);
   }
   void restore(const Facts &F) {
     Locals = F.Locals;
@@ -587,6 +595,43 @@ noEscape(const ObjCBlockSourceContext &Source,
                           "explicit argument");
         return {};
       }
+      auto BoundedFastEnumerationBorrow = [&](size_t Parameter) {
+        if ((Parameter != 2 && Parameter != 3) || !B ||
+            B->CallKind != CallKind::ObjCMessage ||
+            B->Selector != "countByEnumeratingWithState:objects:count:" ||
+            !B->Receiver || Arguments.size() != 5 ||
+            !objcSourceCallBound(E, Source.Image, Functions) ||
+            objcReceiverInstanceClassName(Source.Image, *B->Receiver) !=
+                std::optional<std::string>{"NSArray"} ||
+            Arguments[2].K != Value::Frame ||
+            Arguments[3].K != Value::Frame ||
+            Arguments[4].K != Value::Number || !Arguments[4].Bits ||
+            Arguments[4].Bits > (1u << 16))
+          return false;
+        // NSFastEnumerationState has eight pointer-sized words. The SDK
+        // contract bounds the output buffer by `count` object pointers.
+        // Neither borrowed range may touch a private block or context word.
+        const auto Count = static_cast<unsigned>(Arguments[4].Bits);
+        const auto Disjoint = [&](int64_t Offset, unsigned Bytes) {
+          if (State.frameRangeContainsPointerIdentity(Offset, Bytes))
+            return false;
+          if (!ValidatedNestedBlocks)
+            return true;
+          const auto Blocks = ValidatedNestedBlocks->StackBlocks.find(Entry);
+          if (Blocks == ValidatedNestedBlocks->StackBlocks.end())
+            return true;
+          return std::none_of(Blocks->second.begin(), Blocks->second.end(),
+                              [&](const ObjCStackBlockSource &Block) {
+                                return Offset < Block.FrameOffset +
+                                                    Block.Descriptor.LiteralSize &&
+                                       Block.FrameOffset < Offset + Bytes;
+                              });
+        };
+        return frameRange(F, Arguments[2].Offset, 64) &&
+               frameRange(F, Arguments[3].Offset, Count * 8) &&
+               Disjoint(Arguments[2].Offset, 64) &&
+               Disjoint(Arguments[3].Offset, Count * 8);
+      };
       for (size_t I = 0; I < Arguments.size(); ++I) {
         const auto &A = Arguments[I];
         if (A.K == Value::Frame && ValidatedNestedBlocks &&
@@ -609,6 +654,8 @@ noEscape(const ObjCBlockSourceContext &Source,
         // been stored, an unbounded frame pointer could expose it and remains
         // rejected conservatively.
         if (A.K == Value::Frame && !State.frameContainsPointerIdentity())
+          continue;
+        if (A.K == Value::Frame && BoundedFastEnumerationBorrow(I))
           continue;
         if (A.K == Value::Frame || A.K == Value::Invoke || A.K == Value::Isa ||
             A.K == Value::PointerBits || A.K == Value::UnprovenIdentity)
@@ -730,7 +777,8 @@ noEscape(const ObjCBlockSourceContext &Source,
 
 inline bool publish(ObjCBlockSourcePlan &Plan,
                     const ObjCBlockDescriptor &Descriptor, va_t Invoke) {
-  if (!validDescriptor(Descriptor) || Plan.Rejections.count(Invoke) ||
+  if (!validDescriptor(Descriptor) ||
+      Plan.InvalidInvokeDescriptors.count(Invoke) ||
       Plan.Rejections.count(Descriptor.Address))
     return false;
   auto D = Plan.Descriptors.find(Descriptor.Address);
@@ -740,6 +788,7 @@ inline bool publish(ObjCBlockSourcePlan &Plan,
       (H != Plan.InvokeHints.end() &&
        !objc_projection_detail::sameHint(H->second,
                                          *Descriptor.InvokeTypeHint))) {
+    Plan.InvalidInvokeDescriptors.insert(Invoke);
     Plan.Rejections[Invoke] =
         "block invoke has conflicting descriptor ABI evidence";
     Plan.InvokeHints.erase(Invoke);
@@ -756,6 +805,10 @@ inline bool publish(ObjCBlockSourcePlan &Plan,
     if ((!Added &&
          !objc_projection_detail::sameHint(Existing->second, **Hint)) ||
         Plan.InvokeHints.count(Entry) || Plan.Rejections.count(Entry)) {
+      if (Plan.InvokeHints.count(Entry)) {
+        Plan.InvalidInvokeDescriptors.insert(Entry);
+        Plan.InvokeHints.erase(Entry);
+      }
       Plan.Rejections[Entry] =
           "block helper has conflicting descriptor ABI evidence";
       Plan.HelperHints.erase(Entry);
@@ -1216,6 +1269,47 @@ stackBlocks(const ObjCBlockSourceContext &Source, const HighFunc &Function,
 
 } // namespace objc_block_source_detail
 
+/// A callback body can be rejected for a nested block whose consumer needs
+/// this callback's descriptor-declared parameter class. Keep the independently
+/// proven literal-to-invoke type evidence, while dropping descriptor conflicts
+/// and disagreements between literals sharing an invoke.
+inline std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>>
+objcBlockParameterReceivers(const BinaryImage &Image,
+                            const ObjCBlockSourcePlan &Plan) {
+  std::map<va_t, std::map<unsigned, std::optional<ObjCReceiverTypeHint>>>
+      CommonParameters;
+  auto Merge = [&](va_t Invoke, const ObjCBlockDescriptor &D) {
+    if (Plan.InvalidInvokeDescriptors.count(Invoke) ||
+        !Plan.InvokeHints.count(Invoke) || !D.InvokeTypeHint)
+      return;
+    for (unsigned Parameter = 1;
+         Parameter < D.InvokeTypeHint->Parameters.size(); ++Parameter) {
+      std::optional<ObjCReceiverTypeHint> Candidate;
+      if (objcBlockObjectParameterClass(D.Signature, Parameter))
+        Candidate = objcBlockParameterReceiverTypeHint(Image, Invoke, D.Address,
+                                                       D.Flags, Parameter);
+      auto [It, Added] = CommonParameters[Invoke].emplace(Parameter, Candidate);
+      if (!Added && It->second != Candidate)
+        It->second.reset();
+    }
+  };
+  for (const auto &[Address, Block] : Plan.Globals) {
+    (void)Address;
+    Merge(Block.InvokeEntry, Block.Descriptor);
+  }
+  for (const auto &[Parent, Blocks] : Plan.StackBlocks) {
+    (void)Parent;
+    for (const auto &Block : Blocks)
+      Merge(Block.InvokeEntry, Block.Descriptor);
+  }
+  std::map<va_t, std::map<unsigned, ObjCReceiverTypeHint>> Result;
+  for (const auto &[Invoke, Parameters] : CommonParameters)
+    for (const auto &[Parameter, Root] : Parameters)
+      if (Root)
+        Result[Invoke].emplace(Parameter, *Root);
+  return Result;
+}
+
 inline ObjCBlockSourcePlan
 discoverObjCBlockSources(const ObjCBlockSourceContext &Source,
                          const PipelineResult &Result) {
@@ -1249,37 +1343,7 @@ discoverObjCBlockSources(const ObjCBlockSourceContext &Source,
       if (publish(Plan, Block.Descriptor, Block.InvokeEntry))
         Plan.StackBlocks[Function.Entry].push_back(std::move(Block));
   }
-  std::map<va_t, std::map<unsigned, std::optional<ObjCReceiverTypeHint>>>
-      CommonParameters;
-  auto MergeParameters = [&](va_t Invoke, const ObjCBlockDescriptor &D) {
-    if (Plan.Rejections.count(Invoke) || !Plan.InvokeHints.count(Invoke) ||
-        !D.InvokeTypeHint)
-      return;
-    for (unsigned Parameter = 1;
-         Parameter < D.InvokeTypeHint->Parameters.size(); ++Parameter) {
-      std::optional<ObjCReceiverTypeHint> Candidate;
-      if (objcBlockObjectParameterClass(D.Signature, Parameter))
-        Candidate = objcBlockParameterReceiverTypeHint(Image, Invoke, D.Address,
-                                                       D.Flags, Parameter);
-      auto [It, Added] = CommonParameters[Invoke].emplace(Parameter, Candidate);
-      if (!Added && It->second != Candidate)
-        It->second.reset();
-    }
-  };
-  for (const auto &[Address, Block] : Plan.Globals) {
-    (void)Address;
-    MergeParameters(Block.InvokeEntry, Block.Descriptor);
-  }
-  for (const auto &[Parent, Blocks] : Plan.StackBlocks) {
-    (void)Parent;
-    for (const auto &Block : Blocks)
-      MergeParameters(Block.InvokeEntry, Block.Descriptor);
-  }
-  for (const auto &[Invoke, Parameters] : CommonParameters)
-    if (!Plan.Rejections.count(Invoke))
-      for (const auto &[Parameter, Root] : Parameters)
-        if (Root)
-          Plan.ParameterReceivers[Invoke].emplace(Parameter, *Root);
+  Plan.ParameterReceivers = objcBlockParameterReceivers(Image, Plan);
   // A strong descriptor field is not necessarily a block. The validated copy
   // helper's _Block_object_assign flag 7 is the ownership evidence. Keep only
   // capture words shared by every descriptor using the same invoke entry.

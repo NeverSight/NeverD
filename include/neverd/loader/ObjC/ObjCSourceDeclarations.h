@@ -125,6 +125,12 @@ std::optional<SourceFunctionTypeHint>
 objcMethodSourceTypeHint(const BinaryImage &Image, va_t Entry);
 bool objcReceiverTypeHintValid(const BinaryImage &Image,
                                const ObjCReceiverTypeHint &Receiver);
+/// Resolve an authenticated instance receiver's declared class after all
+/// field and message-result type steps. Protocol-only and class receivers do
+/// not establish a concrete class contract.
+std::optional<std::string>
+objcReceiverInstanceClassName(const BinaryImage &Image,
+                              const ObjCReceiverTypeHint &Receiver);
 
 /// Extend a receiver proof by loading a declared object field. An exact
 /// offset reference or a complete byte offset must identify one field in its

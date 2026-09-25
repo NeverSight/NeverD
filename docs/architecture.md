@@ -234,6 +234,15 @@ that invoke. Call analysis carries this declared class through ordinary
 receiver copies; publication re-reads the descriptor and checks the final
 plan link. Bare `id`, conflicting descriptors, and unrelated invocations
 remain unqualified, and dynamic message dispatch is unchanged.
+An invoke body's unresolved nested block does not erase an independently
+validated outer literal's parameter declaration: that declaration may be
+needed to prove the nested block consumer on the next pipeline round.
+An authenticated `NSArray` fast-enumeration call may borrow its
+`NSFastEnumerationState` (64 bytes) and object buffer (`count * 8` bytes)
+from an invoke's frame while another validated block is live. Both ranges
+must fit the recovered frame and be disjoint from complete validated block
+literals and every private context identity byte. Unknown counts, receivers,
+and call bindings still fail the capture proof.
 Individual literal probes merge import evidence only for the isa slot they
 inspect; whole-image block discovery still walks the complete import inventory.
 

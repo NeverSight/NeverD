@@ -86,6 +86,17 @@ TEST(ObjCBlockSources, CallbackClassRequiresExactPublishedDescriptor) {
   EXPECT_EQ(Root.BlockDescriptorAddress, F.Descriptor);
   EXPECT_TRUE(objcReceiverTypeHintValid(F.Image, Root));
 
+  auto RejectedBody = Plan;
+  RejectedBody.Rejections[F.Invoke] = "nested block consumer is unresolved";
+  EXPECT_TRUE(objc_block_source_detail::publish(
+      RejectedBody, Plan.Globals.at(F.Literal).Descriptor, F.Invoke));
+  EXPECT_EQ(objcBlockParameterReceivers(F.Image, RejectedBody)
+                .at(F.Invoke)
+                .at(1),
+            Root);
+  RejectedBody.InvalidInvokeDescriptors.insert(F.Invoke);
+  EXPECT_TRUE(objcBlockParameterReceivers(F.Image, RejectedBody).empty());
+
   auto WrongDescriptor = Root;
   ++WrongDescriptor.BlockDescriptorAddress;
   EXPECT_FALSE(objcReceiverTypeHintValid(F.Image, WrongDescriptor));
@@ -1759,6 +1770,78 @@ TEST(ObjCBlockSources,
   EXPECT_FALSE(objc_block_source_detail::noEscape(
       Source, F.functions(), Function.Entry, 0, &Initialized, Active, Reason,
       nullptr, nullptr, &Plan));
+}
+
+TEST(ObjCBlockSources,
+     NSArrayFastEnumerationBorrowsOnlyDisjointBoundedFrameRanges) {
+  SourceFixture F(true);
+  F.Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCMethod Method;
+  Method.Implementation = F.Consumer;
+  Method.ClassName = "NSArray";
+  Method.Selector = "test";
+  Method.TypeHint = parseObjCMethodEncoding("test", "v16@0:8");
+  ASSERT_TRUE(Method.TypeHint);
+  F.Image.ObjCMethods.push_back(Method);
+  const auto Receiver = objcMethodReceiverTypeHint(F.Image, F.Consumer);
+  ASSERT_TRUE(Receiver);
+  EXPECT_EQ(objcReceiverInstanceClassName(F.Image, *Receiver),
+            std::optional<std::string>{"NSArray"});
+
+  SourceCallTypeHint Binding;
+  Binding.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Binding.TargetName = "objc_msgSend";
+  Binding.Selector = "countByEnumeratingWithState:objects:count:";
+  Binding.Receiver = *Receiver;
+  const auto Declaration =
+      objcReceiverSourceTypeHint(F.Image, Binding.Selector, *Receiver);
+  ASSERT_TRUE(Declaration.Signature);
+  Binding.Signature = *Declaration.Signature;
+
+  auto &Function = F.Result.HighFuncs[1];
+  Function.FrameSize = 256;
+  auto Call = HighExpr::makeCall(
+      "objc_msgSend", 0,
+      {HighExpr::makeConst(0x3000, 8), HighExpr::makeConst(0x2600, 8),
+       frame(F.Image, -256), frame(F.Image, -192),
+       HighExpr::makeConst(16, 8)});
+  Call->Type = Binding.Signature.ReturnType;
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Binding);
+  EXPECT_TRUE(objcSourceCallBound(*Call, F.Image, F.functions()));
+  HighStmt Send;
+  Send.Kind = StmtKind::Call;
+  Send.CallExpr = Call;
+  Function.Body = {store(frame(F.Image, -64),
+                         parameter(0, Function.Params[0].Type)),
+                   Send, ret(HighExpr::makeConst(0, 4))};
+  const ObjCBlockSourceContext Source(F.Image);
+  std::set<std::pair<va_t, size_t>> Active;
+  std::string Reason;
+  auto Safe = [&] {
+    Reason.clear();
+    return objc_block_source_detail::noEscape(
+        Source, F.functions(), Function.Entry, 0, nullptr, Active, Reason);
+  };
+  EXPECT_TRUE(Safe()) << Reason;
+  ObjCBlockSourcePlan Nested;
+  ObjCStackBlockSource Literal;
+  Literal.FrameOffset = -152;
+  Literal.Descriptor.LiteralSize = 40;
+  Nested.StackBlocks[Function.Entry].push_back(Literal);
+  Reason.clear();
+  EXPECT_FALSE(objc_block_source_detail::noEscape(
+      Source, F.functions(), Function.Entry, 0, nullptr, Active, Reason,
+      nullptr, nullptr, &Nested)); // borrowed buffer overlaps full literal
+  Call->Operands[4] = HighExpr::makeConst(17, 8);
+  EXPECT_FALSE(Safe()); // output buffer now overlaps the context spill
+  Call->Operands[4] = HighExpr::makeConst(16, 8);
+  Call->Operands[2] = frame(F.Image, -64);
+  EXPECT_FALSE(Safe()); // state overlaps the context spill
+  Call->Operands[2] = frame(F.Image, -256);
+  Binding.Receiver.reset();
+  Call->SourceCallHint = std::make_shared<SourceCallTypeHint>(Binding);
+  EXPECT_FALSE(Safe());
 }
 
 TEST(ObjCBlockSources, PartialContextPointerInFrameRemainsPrivate) {

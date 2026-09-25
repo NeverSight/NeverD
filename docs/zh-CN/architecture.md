@@ -70,6 +70,8 @@ Block invoke 只有在自己的新建栈帧中尚未保存 context、invoke、IS
 无捕获的全局 Block literal 可以共享同一个编译器 descriptor。源码依赖和生成 helper 只跟随当前源码闭包实际引用的 literal；共享该 descriptor 但未被引用的 literal，不会增加 invoke 依赖，也不会进入生成存储。descriptor 仍然共享，同一个原始 literal 在不同方法中继续使用同一个共享生成身份。
 
 Block 回调参数的具名对象类只来自编译器签名。源码计划先证明 literal 的 descriptor 与 invoke 入口对应，并要求共享该入口的所有 literal 对参数类达成一致；调用分析才沿接收者复制传播这个声明类。发布源码时重新读取 descriptor 并核对最终计划。裸 `id`、冲突的 descriptor 和无关 invoke 都不获得类限定，动态消息派发保持不变。
+invoke 函数体中的内层 Block 尚未通过验证时，不会抹除已经独立验证的外层 literal 参数声明；下一轮流水线可能需要该声明才能证明内层使用方。
+已验证的 `NSArray` 快速枚举调用可以在另一个 Block 仍存活时借用 invoke 栈帧中的 `NSFastEnumerationState`（64 字节）及对象缓冲区（`count * 8` 字节）。两段范围必须位于已恢复的栈帧内，并与完整的已验证 Block literal 及所有私有 context 身份字节不相交；未知长度、接收者或调用绑定仍会导致捕获证明失败。
 
 Darwin Block 使用方由加载器统一拥有回调和生命周期契约。生成的目录区分编译器声明的 `noescape` 参数与已审计的运行时复制型使用方。后者目前仅包括 `dispatch_async` 和 `dispatch_barrier_async`，其 SDK 契约规定复制并释放 Block。两类契约都要求导入及提供者身份精确、四种编译器配置一致，并且完整回调 ABI 匹配。源码发布仍会证明栈 Block 头、已初始化捕获、复制/析构 helper 和 invoke 依赖。两类使用方在调用后都会使调用方的构造事实失效；复制型使用方绝不会被报告为非逃逸。未标注的 Block 参数不会授予任何生命周期权限。
 
