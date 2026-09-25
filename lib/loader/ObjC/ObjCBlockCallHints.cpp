@@ -213,6 +213,35 @@ bool boundVoidObjCMessage(const std::map<va_t, SourceCallTypeHint> *BoundCalls,
   return true;
 }
 
+bool boundIntegerResultObjCMessage(
+    const std::map<va_t, SourceCallTypeHint> *BoundCalls, va_t Address,
+    Arch Architecture, const TargetRegInfo &TRI) {
+  if (Architecture != Arch::AArch64 || !BoundCalls)
+    return false;
+  const auto It = BoundCalls->find(Address);
+  if (It == BoundCalls->end())
+    return false;
+  const auto &Hint = It->second;
+  std::string Error;
+  if (Hint.CallKind != SourceCallTypeHint::Kind::ObjCMessage ||
+      Hint.Signature.Architecture != Architecture ||
+      Hint.Signature.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+      !Hint.Signature.HasExplicitABI ||
+      !validateSourceABI(Hint.Signature, Error) ||
+      !scalar(Hint.Signature.ReturnType) ||
+      !Hint.Signature.ReturnComponents.empty() ||
+      Hint.Signature.ReturnLocation.Kind !=
+          SourceABICarrierKind::IntegerRegister ||
+      Hint.Signature.ReturnLocation.RegisterOffset != TRI.IntReturnReg)
+    return false;
+  for (const auto &Parameter : Hint.Signature.Parameters)
+    if (!Parameter.Type || !scalar(Parameter.Type) ||
+        Parameter.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+        !Parameter.Components.empty())
+      return false;
+  return true;
+}
+
 bool boundRetainBlock(const BinaryImage &Image,
                       const SourceCallTypeHint &Bound) {
   if (Bound.CallKind != SourceCallTypeHint::Kind::ObjCRuntimeCall ||
@@ -358,7 +387,9 @@ resultWidth(const LowBlock &Block, size_t CallIndex, const TargetRegInfo &TRI,
         }
       }
       if (!Width && !IntegerLive && Op.Opcode == NdOp::CALL &&
-          boundVoidObjCMessage(BoundCalls, Op.Addr, Architecture))
+          (boundVoidObjCMessage(BoundCalls, Op.Addr, Architecture) ||
+           boundIntegerResultObjCMessage(BoundCalls, Op.Addr, Architecture,
+                                         TRI)))
         return 0U;
       return Width;
     }
@@ -462,7 +493,9 @@ bool discardedResultAcrossCFG(
             boundReleaseAwayFromResult(BoundCalls, Op.Addr, Image.Arch, TRI))
           continue;
         if (Op.Opcode == NdOp::CALL && !State.Integer0Live &&
-            boundVoidObjCMessage(BoundCalls, Op.Addr, Image.Arch)) {
+            (boundVoidObjCMessage(BoundCalls, Op.Addr, Image.Arch) ||
+             boundIntegerResultObjCMessage(BoundCalls, Op.Addr, Image.Arch,
+                                           TRI))) {
           Released = true;
           break;
         }

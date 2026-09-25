@@ -795,6 +795,49 @@ TEST(ObjCBlockCallHints, VoidObjCMessageDiscardsPriorBlockResult) {
       buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
 }
 
+TEST(ObjCBlockCallHints, IntegerObjCMessageDiscardsOverwrittenBlockResult) {
+  Fixture F(Arch::AArch64);
+  auto Pointer = NdType::makePtr(NdType::makeVoid());
+  SourceCallTypeHint Message;
+  Message.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Message.Signature.ReturnType = NdType::makeInt(8, false);
+  Message.Signature.Parameters = {{"self", Pointer}, {"cmd", Pointer}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinObjCSourceABI(Message.Signature, F.Image.Arch, Error))
+      << Error;
+  const std::map<va_t, SourceCallTypeHint> Calls{{0x1014, Message}};
+  auto &Ops = F.Low.Blocks[0].Ops;
+  Ops.back() =
+      op(NdOp::COPY, NdVar::reg(F.R0, 8), {NdVar::reg(F.R2, 8)}, 0x1010);
+  Ops.push_back(
+      op(NdOp::CALL, NdVar::reg(F.R0, 8), {NdVar::cst(0x3000, 8)}, 0x1014));
+  Ops.push_back(op(NdOp::RETURN, {}, {}, 0x1018));
+  auto Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Kind, NdTypeKind::Void);
+
+  auto WrongCalls = Calls;
+  WrongCalls.at(0x1014).CallKind = SourceCallTypeHint::Kind::Native;
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &WrongCalls).empty());
+  WrongCalls = Calls;
+  WrongCalls.at(0x1014).Signature.ReturnType = NdType::makeFloat(8);
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &WrongCalls).empty());
+  Ops.insert(Ops.end() - 2,
+             op(NdOp::COPY, NdVar::tmp(1, 8),
+                {NdVar::reg(getTargetRegInfo(F.Image.Arch).FPReturnReg, 8)},
+                0x1012));
+  EXPECT_TRUE(
+      buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls).empty());
+  Ops.erase(Ops.end() - 3);
+  Ops.insert(Ops.begin() + 5,
+             op(NdOp::COPY, NdVar::tmp(1, 8), {NdVar::reg(F.R0, 8)}, 0x100e));
+  Hints = buildObjCBlockCallHints(F.Image, F.Low, &F.Entry, &Calls);
+  ASSERT_EQ(Hints.size(), 1U);
+  EXPECT_EQ(Hints.at(0x100c).Signature.ReturnType->Size, 8U);
+}
+
 TEST(ObjCBlockCallHints, BoundReleaseProvesDiscardedResultAcrossJoin) {
   Fixture F(Arch::AArch64);
   F.Low.Blocks.reserve(3);
