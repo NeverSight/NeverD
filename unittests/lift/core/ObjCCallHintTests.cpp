@@ -9375,6 +9375,48 @@ TEST(ObjCCallHints, WMFNewsArrayParameterQualifiesEnumerationBlock) {
   EXPECT_FALSE(objcReceiverTypeHintValid(Image, WrongParameter));
 }
 
+TEST(ObjCCallHints, RecentSearchArrayParameterQualifiesSelectionBlock) {
+  auto Image = image();
+  Image.ObjCMethods.clear();
+  Image.DynInfo.NeededLibs = {
+      "/System/Library/Frameworks/Foundation.framework/Foundation"};
+  ObjCClass Owner;
+  Owner.Name = "MWKRecentSearchList";
+  Owner.Address = 0x2300;
+  Image.ObjCClasses.push_back(Owner);
+  ObjCMethod Method;
+  Method.ClassName = Owner.Name;
+  Method.ClassAddress = Owner.Address;
+  Method.MetadataAddress = 0x2400;
+  Method.Selector = "importEntries:";
+  Method.TypeEncoding = "v24@0:8@16";
+  Method.Implementation = 0x1200;
+  Method.Status = "supported";
+  Method.TypeHint =
+      parseObjCMethodEncoding(Method.Selector, Method.TypeEncoding);
+  ASSERT_TRUE(Method.TypeHint);
+  Image.ObjCMethods.push_back(Method);
+
+  const auto Root = objcMethodParameterReceiverTypeHint(Image, 0x1200, 2);
+  ASSERT_TRUE(Root);
+  EXPECT_EQ(Root->ClassName, "NSArray");
+  const auto ArrayCall =
+      objcReceiverSourceTypeHint(Image, "enumerateObjectsUsingBlock:", *Root);
+  ASSERT_TRUE(ArrayCall.Signature);
+  SourceCallTypeHint Call;
+  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+  Call.Selector = "enumerateObjectsUsingBlock:";
+  Call.Receiver = *Root;
+  Call.Signature = *ArrayCall.Signature;
+  const auto Contract = objcBlockParameterContract(Image, Call, 2);
+  ASSERT_TRUE(Contract);
+  EXPECT_EQ(Contract->Storage,
+            ObjCBlockParameterContract::Lifetime::NonEscaping);
+
+  Image.ObjCMethods.front().TypeEncoding = "v32@0:8@16@24";
+  EXPECT_FALSE(objcMethodParameterReceiverTypeHint(Image, 0x1200, 2));
+}
+
 TEST(ObjCCallHints, WMFTopReadResponseParameterQualifiesArticlePreviews) {
   auto Image = image();
   Image.ObjCMethods.clear();

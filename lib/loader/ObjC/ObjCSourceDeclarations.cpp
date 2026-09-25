@@ -926,6 +926,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   // WMFFeedContentSource.m declares news as NSArray<WMFFeedNewsStory *> *;
   // its top-read argument is WMFFeedTopReadResponse *.
   // WMFAnnouncementsContentSource.m declares announcements as NSArray *.
+  // MWKRecentSearchList.m declares its importEntries: parameter as NSArray *.
   // CocoaLumberjack 3.6.2 DDFileLogger.m declares mostRecentLogFileInfo as
   // DDLogFileInfo *. Recheck the exact embedded method and its ABI below.
   constexpr llvm::StringLiteral NewsSelector =
@@ -934,6 +935,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
       "saveGroupForTopRead:pageViews:date:inManagedObjectContext:";
   constexpr llvm::StringLiteral AnnouncementsSelector =
       "saveAnnouncements:inManagedObjectContext:completion:";
+  constexpr llvm::StringLiteral RecentSearchSelector = "importEntries:";
   constexpr llvm::StringLiteral LogSelector = "lt_shouldLogFileBeArchived:";
   const auto Matches = [&](llvm::StringRef ClassName,
                            llvm::StringRef Selector) {
@@ -948,26 +950,30 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   const bool TopRead = Matches("WMFFeedContentSource", TopReadSelector);
   const bool Announcements =
       Matches("WMFAnnouncementsContentSource", AnnouncementsSelector);
+  const bool RecentSearch = Matches("MWKRecentSearchList", RecentSearchSelector);
   const bool LogFile = Matches("DDFileLogger", LogSelector);
   if (unsigned(News) + unsigned(TopRead) + unsigned(Announcements) +
-          unsigned(LogFile) !=
+          unsigned(RecentSearch) + unsigned(LogFile) !=
       1)
     return std::nullopt;
   const llvm::StringRef OwnerName = LogFile ? "DDFileLogger"
+                                    : RecentSearch ? "MWKRecentSearchList"
                                     : Announcements
                                         ? "WMFAnnouncementsContentSource"
                                         : "WMFFeedContentSource";
   const llvm::StringRef Selector = LogFile         ? LogSelector
+                                   : RecentSearch    ? RecentSearchSelector
                                    : Announcements ? AnnouncementsSelector
                                    : TopRead       ? TopReadSelector
                                                    : NewsSelector;
   const llvm::StringRef Encoding = LogFile         ? "B24@0:8@16"
+                                   : RecentSearch    ? "v24@0:8@16"
                                    : Announcements ? "v40@0:8@16@24@?32"
                                                    : "v48@0:8@16@24@32@40";
   const llvm::StringRef ParameterClass = LogFile   ? "DDLogFileInfo"
                                          : TopRead ? "WMFFeedTopReadResponse"
                                                    : "NSArray";
-  if (News || Announcements) {
+  if (News || Announcements || RecentSearch) {
     const auto Array = objc::sdkReceiverDeclarations(
         Image, "NSArray", false, false, "enumerateObjectsUsingBlock:");
     if (!Array.Present || !Array.Complete)
@@ -1049,6 +1055,7 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
   const auto Signature = objcMethodSourceTypeHint(Image, Entry);
   if (!Signature ||
       Signature->Parameters.size() != (LogFile         ? 3U
+                                       : RecentSearch    ? 3U
                                        : Announcements ? 5U
                                                        : 6U) ||
       !Signature->Parameters[Parameter].Type ||
