@@ -511,11 +511,19 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx) {
       Name = calleeDisplayName(Call.Inputs[0].ConstVal);
     if (Name.empty())
       return Collected;
-    const auto Arity = libc::libcArityForSymbol(Name);
-    if (!Arity)
-      return Collected;
-    const size_t N = static_cast<size_t>(std::max(0, Arity->IntArgs) +
-                                         std::max(0, Arity->FpArgs));
+    size_t N = 0;
+    if (const libc::WindowsKernelPrototype *Proto =
+            Win64 ? libc::windowsKernelPrototype(Name) : nullptr) {
+      // A WDK prototype fixes the stack arguments too: outgoing-area stores
+      // for a later call are not arguments of this one.
+      N = Proto->ArgCount;
+    } else {
+      const auto Arity = libc::libcArityForSymbol(Name);
+      if (!Arity)
+        return Collected;
+      N = static_cast<size_t>(std::max(0, Arity->IntArgs) +
+                              std::max(0, Arity->FpArgs));
+    }
     if (Collected.size() > N)
       Collected.resize(N);
     return Collected;

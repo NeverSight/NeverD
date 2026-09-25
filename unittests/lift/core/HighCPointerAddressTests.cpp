@@ -4452,3 +4452,50 @@ TEST(HighCPointerAddresses, DocumentedKernelRoutineTakesItsPrototypeArguments) {
             std::string::npos)
       << Definition;
 }
+
+TEST(HighCPointerAddresses, OrWithAllOnesDoesNotReadTheRegister) {
+  // PspStorageEmptyArrayNonReadonly: `or ecx, -1` sets ECX to all ones.
+  // After an unknown call ECX holds no defined value, so the OR must not
+  // read it.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28, // sub rsp, 28h
+                                     0x85, 0xd2,             // test edx, edx
+                                     0x74, 0x06,             // je skip
+                                     0xff, 0x15, 0x00, 0x10,
+                                     0x00, 0x00,             // call [rip+1000h]
+                                     0x83, 0xc9, 0xff,       // skip: or ecx, -1
+                                     0x8b, 0xc1,             // mov eax, ecx
+                                     0x48, 0x83, 0xc4, 0x28, // add rsp, 28h
+                                     0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+  EXPECT_TRUE(HighC.find("-1") != std::string::npos ||
+              HighC.find("0xFFFFFFFF") != std::string::npos)
+      << HighC;
+}
+
+TEST(HighCPointerAddresses, PrototypeBoundsStackArgumentsOfACall) {
+  // A value stored in the outgoing argument area is not an argument of a
+  // call whose WDK prototype takes one parameter (ExAcquireFastMutexUnsafe).
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Routine = 0x140001030;
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xec, 0x48,       // sub rsp, 48h
+      0x48, 0x89, 0x54, 0x24, 0x20, // mov [rsp+20h], rdx
+      0x48, 0x89, 0x54, 0x24, 0x28, // mov [rsp+28h], rdx
+      0x48, 0x8b, 0x49, 0x08,       // mov rcx, [rcx+8]
+      0xe8, 0x19, 0x00, 0x00, 0x00, // call routine
+      0x48, 0x83, 0xc4, 0x48,       // add rsp, 48h
+      0xc3};
+  Code.resize(Routine - Entry, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0xc1, 0xc3}); // mov rax, rcx; ret
+  BinaryImage Img = makeCodeFixture(Entry, Code);
+  Symbol RSym = Symbol::makeFunc(Routine);
+  RSym.Name = "ExAcquireFastMutexUnsafe";
+  Img.Symbols.push_back(RSym);
+  const std::string HighC = highcOnlyFunction(std::move(Img), Entry);
+  EXPECT_TRUE(std::regex_search(
+      HighC, std::regex(R"(ExAcquireFastMutexUnsafe\([^,()]+\))")))
+      << HighC;
+}
