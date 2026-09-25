@@ -308,6 +308,12 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
             std::max(Binding.LocalStorageExtents[Address], Width);
       Binding.Dependencies.insert(BlockBinding.Dependencies.begin(),
                                   BlockBinding.Dependencies.end());
+      // Once binding can erase an ignored context operand while leaving its
+      // effect-free unknown-producing local definitions behind. Re-run the
+      // shared HighIR liveness cleanup on that final source view; observable
+      // calls and stores and externally targeted branch entries are retained.
+      if (!OnceBinding.Dependencies.empty())
+        eliminateUnusedValues(Binding.Function.Body);
       std::string Reason = BlockBinding.Limitation.empty()
                                ? Binding.Limitation
                                : BlockBinding.Limitation;

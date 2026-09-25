@@ -1,4 +1,5 @@
 #include "../../../lib/sdk/capi/ObjCSwiftOnceSources.h"
+#include "../../../lib/ir/high/pass/HighDCEDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/loader/ObjC/ObjCEncoding.h"
@@ -604,6 +605,60 @@ TEST(SwiftOnceSources, GenericNativeOnceCallsEraseIgnoredContexts) {
     EXPECT_EQ(Call->Operands[2]->Kind, ExprKind::Const);
     EXPECT_EQ(Call->Operands[2]->ConstVal, 0U);
     EXPECT_EQ(F.Once->Operands[2]->Kind, ExprKind::Var);
+  }
+}
+
+TEST(SwiftOnceSources, ErasedContextLeavesNoDeadUnknownDefinition) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64}) {
+    OnceFixture F(Architecture);
+    F.Pipeline.HighFuncs.resize(2);
+    F.Once->Operands[0] =
+        HighExpr::makeConst(0x2000, 8, ConstantAddressProvenance::DataAddress);
+    F.Once->Operands[1] =
+        HighExpr::makeConst(0x1080, 8, ConstantAddressProvenance::CodeAddress);
+    MedVar Context;
+    Context.Kind = MedVar::Temp;
+    Context.Id = 77;
+    Context.Size = 8;
+    const auto Pointer = NdType::makePtr(NdType::makeVoid());
+    F.Once->Operands[2] = HighExpr::makeVar(Context, Pointer);
+    HighStmt Unknown;
+    Unknown.Kind = StmtKind::Assign;
+    Unknown.Dst = HighExpr::makeVar(Context, Pointer);
+    Unknown.Val = HighExpr::makeUndef(8);
+    F.Pipeline.HighFuncs[0].Body.insert(F.Pipeline.HighFuncs[0].Body.begin() +
+                                            1,
+                                        Unknown);
+
+    const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+    ASSERT_EQ(Plan.CallbackHints.count(0x1080), 1U);
+    const auto Functions = F.functions();
+    auto Bound = bindSwiftOnceSourceReferences(F.Pipeline.HighFuncs[0], F.Image,
+                                               Plan, Functions);
+    ASSERT_EQ(Bound.Dependencies, std::set<va_t>{0x1080});
+    eliminateUnusedValues(Bound.Function.Body);
+    EXPECT_EQ(Bound.Function.Body.size(), 3U);
+    EXPECT_EQ(Bound.Function.Body[1].Kind, StmtKind::Call);
+    EXPECT_EQ(Bound.Function.Body[1].CallExpr->Operands[2]->Kind,
+              ExprKind::Const);
+
+    auto Observed = F.Pipeline.HighFuncs[0];
+    Observed.Body.back().RetVal = HighExpr::makeVar(Context, Pointer);
+    auto ObservedBinding =
+        bindSwiftOnceSourceReferences(Observed, F.Image, Plan, Functions);
+    ASSERT_EQ(ObservedBinding.Dependencies, std::set<va_t>{0x1080});
+    eliminateUnusedValues(ObservedBinding.Function.Body);
+    EXPECT_EQ(ObservedBinding.Function.Body.size(), 4U);
+    EXPECT_EQ(ObservedBinding.Function.Body[1].Val->Kind, ExprKind::Undef);
+
+    auto UnsafePlan = Plan;
+    UnsafePlan.CallbackHints.clear();
+    auto Unbound = bindSwiftOnceSourceReferences(
+        F.Pipeline.HighFuncs[0], F.Image, UnsafePlan, Functions);
+    ASSERT_TRUE(Unbound.Dependencies.empty());
+    eliminateUnusedValues(Unbound.Function.Body);
+    EXPECT_EQ(Unbound.Function.Body.size(), 4U);
+    EXPECT_EQ(Unbound.Function.Body[1].Val->Kind, ExprKind::Undef);
   }
 }
 
