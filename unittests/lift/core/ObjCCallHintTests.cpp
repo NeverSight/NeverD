@@ -9021,6 +9021,92 @@ TEST(ObjCCallHints, CoreImageDetectorFeaturesUsesExactProviderAndObjectABI) {
   EXPECT_FALSE(objcSelectorSourceTypeHint(Unsupported, Selector));
 }
 
+TEST(ObjCCallHints, SDWebImageDelegateNeedsEmbeddedManagerEvidence) {
+  constexpr auto Selector = "imageManager:shouldBlockFailedURL:withError:";
+  auto Image = image(Arch::AArch64);
+  Image.ObjCMethods.clear();
+  Image.ObjCSourceReferences.at(0x2100).Name = Selector;
+  ObjCClass Manager;
+  Manager.Address = 0x2200;
+  Manager.Name = "SDWebImageManager";
+  Image.ObjCClasses.push_back(Manager);
+  ObjCProperty Delegate;
+  Delegate.Owner = ObjCProperty::OwnerKind::Class;
+  Delegate.OwnerAddress = Manager.Address;
+  Delegate.ClassName = Manager.Name;
+  Delegate.Name = Delegate.Getter = "delegate";
+  Delegate.TypeEncoding = "@\"<SDWebImageManagerDelegate>\"";
+  Delegate.Status = "supported";
+  Image.ObjCProperties.push_back(Delegate);
+  ObjCMethod Witness;
+  Witness.ClassName = Manager.Name;
+  Witness.Selector = "shouldBlockFailedURLWithURL:error:options:context:";
+  Witness.TypeEncoding = "B48@0:8@16@24Q32@40";
+  Witness.TypeHint =
+      parseObjCMethodEncoding(Witness.Selector, Witness.TypeEncoding);
+  ASSERT_TRUE(Witness.TypeHint);
+  Image.ObjCMethods.push_back(Witness);
+
+  const auto Declaration = objcSelectorSourceTypeHint(Image, Selector);
+  ASSERT_TRUE(Declaration);
+  EXPECT_EQ(Declaration->Origin, SourceFunctionTypeHint::OriginKind::ObjCSDK);
+  EXPECT_EQ(Declaration->ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Declaration->ReturnType->Size, 1U);
+  ASSERT_EQ(Declaration->Parameters.size(), 5U);
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (size_t I = 0; I < Declaration->Parameters.size(); ++I) {
+    EXPECT_EQ(Declaration->Parameters[I].Type->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Declaration->Parameters[I].Location.RegisterOffset,
+              TRI.IntParamRegs[I]);
+  }
+  const auto Hints =
+      buildObjCSourceCallHints(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Hints.size(), 1U);
+  const auto &Binding = Hints.at(0x1204);
+  EXPECT_TRUE(
+      sdk::objcSourceCallBound(*receiverCallExpression(Binding), Image, {}));
+  const auto Med = convert(Image, receiverCaller(Arch::AArch64));
+  ASSERT_EQ(Med.CallInfos.size(), 1U);
+  ASSERT_TRUE(Med.CallInfos.front().SourceCallHint);
+  ASSERT_EQ(Med.CallInfos.front().Args.size(), 5U);
+  for (size_t I = 0; I < 5; ++I)
+    EXPECT_EQ(Med.CallInfos.front().Args[I].RegOff, TRI.IntParamRegs[I]);
+
+  auto CheckRejected = [&](const BinaryImage &Changed) {
+    EXPECT_FALSE(objcSelectorSourceTypeHint(Changed, Selector));
+    EXPECT_FALSE(sdk::objcSourceCallBound(*receiverCallExpression(Binding),
+                                          Changed, {}));
+  };
+  auto Changed = Image;
+  Changed.ObjCProperties.clear();
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.ObjCProperties.front().TypeEncoding = "@";
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.ObjCProperties.push_back(Delegate);
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.clear();
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.ObjCMethods.front().TypeEncoding = "v48@0:8@16@24Q32@40";
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.ObjCClasses.clear();
+  CheckRejected(Changed);
+  Changed = Image;
+  ObjCMethod Conflict;
+  Conflict.Selector = Selector;
+  Conflict.TypeHint = parseObjCMethodEncoding(Selector, "@40@0:8@16@24@32");
+  ASSERT_TRUE(Conflict.TypeHint);
+  Changed.ObjCMethods.push_back(Conflict);
+  CheckRejected(Changed);
+  Changed = Image;
+  Changed.Arch = Arch::X64;
+  CheckRejected(Changed);
+}
+
 TEST(ObjCCallHints, IOSFrameworkDeclarationsRequireExactDeviceEvidence) {
   constexpr auto Module = "/System/Library/Frameworks/UIKit.framework/UIKit";
   const struct {

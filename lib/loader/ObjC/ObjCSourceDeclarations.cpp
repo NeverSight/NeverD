@@ -121,6 +121,36 @@ const FrameworkCatalog *frameworkDeclarations(Arch Architecture) {
   return nullptr;
 }
 
+bool hasEmbeddedSDWebImageManagerDelegate(const BinaryImage &Image) {
+  if (Image.Arch != Arch::AArch64)
+    return false;
+  const ObjCClass *Manager = nullptr;
+  for (const auto &Class : Image.ObjCClasses)
+    if (Class.Name == "SDWebImageManager") {
+      if (Manager)
+        return false;
+      Manager = &Class;
+    }
+  if (!Manager || !Manager->Address)
+    return false;
+  unsigned Properties = 0, Methods = 0;
+  for (const auto &Property : Image.ObjCProperties)
+    if (Property.Owner == ObjCProperty::OwnerKind::Class &&
+        Property.OwnerAddress == Manager->Address &&
+        Property.ClassName == Manager->Name && Property.Name == "delegate" &&
+        Property.Getter == "delegate" && !Property.IsClassProperty &&
+        Property.Status == "supported" &&
+        Property.TypeEncoding == "@\"<SDWebImageManagerDelegate>\"")
+      ++Properties;
+  for (const auto &Method : Image.ObjCMethods)
+    if (Method.ClassName == Manager->Name && !Method.IsClassMethod &&
+        Method.Selector ==
+            "shouldBlockFailedURLWithURL:error:options:context:" &&
+        Method.TypeEncoding == "B48@0:8@16@24Q32@40" && Method.TypeHint)
+      ++Methods;
+  return Properties == 1 && Methods == 1;
+}
+
 bool usesFramework(const BinaryImage &Image,
                    const FrameworkDeclarations &Framework) {
   llvm::StringRef Modules(Framework.Modules);
@@ -208,6 +238,19 @@ selectorSourceTypeHints(const BinaryImage &Image, llvm::StringRef Selector,
       for (const auto &Declared : *Found->second)
         Add(Declared, true);
     }
+  // SDWebImage's optional delegate protocol is not necessarily emitted into
+  // the consuming image. Its public declaration can still be authenticated by
+  // the image's own manager class, typed delegate property, and matching
+  // manager method. Do not apply this vendor declaration to another image that
+  // merely uses the same selector spelling.
+  if (Selector == "imageManager:shouldBlockFailedURL:withError:" &&
+      hasEmbeddedSDWebImageManagerDelegate(Image)) {
+    auto Hint = parseObjCMethodEncoding(Selector, "B40@0:8@16@24@32");
+    std::string Diagnostic;
+    if (!Hint || !assignDarwinObjCSourceABI(*Hint, Image.Arch, Diagnostic))
+      return std::nullopt;
+    Add(std::move(*Hint), true);
+  }
   return Result;
 }
 
@@ -643,7 +686,10 @@ bool receiverProtocolKnown(const BinaryImage &Image, llvm::StringRef Name) {
     Present = true;
   }
   const auto SDK = objc::sdkReceiverDeclarations(Image, Name, true, false, {});
-  return SDK.Present ? SDK.Complete : Present;
+  if (SDK.Present)
+    return SDK.Complete;
+  return Present || (Name == "SDWebImageManagerDelegate" &&
+                     hasEmbeddedSDWebImageManagerDelegate(Image));
 }
 
 std::optional<ReceiverType> receiverType(const BinaryImage &Image,
