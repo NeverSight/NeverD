@@ -216,6 +216,49 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         OpStrs.push_back(GPRBytes == 8 ? "1" : "0");
     }
 
+    // An x86 integer-vector intrinsic takes and returns __m128i/__m256i/
+    // __m512i; HighC carries vector registers as same-width integers.
+    if ((Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) && E.Type &&
+        E.Type->Kind == NdTypeKind::Int &&
+        (E.Type->Size == 16 || E.Type->Size == 32 || E.Type->Size == 64))
+      if (const char *CName = intrinsicCName(E.IntrinsicId)) {
+        const llvm::StringRef Callee(CName);
+        if (Callee.starts_with("_mm") &&
+            (Callee.contains("_epi") || Callee.contains("_epu") ||
+             Callee.ends_with("_si128") || Callee.ends_with("_si256") ||
+             Callee.ends_with("_si512"))) {
+          const uint16_t Width = E.Type->Size;
+          const std::string Raw = typeToC(NdType::makeInt(Width, false));
+          const char *Vector = Width == 16   ? "__m128i"
+                               : Width == 32 ? "__m256i"
+                                             : "__m512i";
+          // A VEX/EVEX-widened form shares the SSE intrinsic ID; spell the
+          // intrinsic for the register width.
+          std::string Spelled = CName;
+          if (Width != 16 && Callee.starts_with("_mm_"))
+            Spelled = (Width == 32 ? "_mm256_" : "_mm512_") +
+                      Callee.drop_front(4).str();
+          std::string S = "__builtin_bit_cast(" + Raw + ", " + Spelled + "(";
+          for (size_t I = 0; I < E.Operands.size(); ++I) {
+            const HighExpr *Op = E.Operands[I].get();
+            if (I > 0)
+              S += ", ";
+            if (!Op) {
+              S += "0";
+              continue;
+            }
+            if (Op->Type && Op->Type->Kind == NdTypeKind::Int &&
+                Op->Type->Size == Width)
+              S += std::string("__builtin_bit_cast(") + Vector + ", (" + Raw +
+                   ")(" + exprStr(*Op) + "))";
+            else
+              S += exprStr(*Op);
+          }
+          HasCIntrinsics = true;
+          return S + "))";
+        }
+      }
+
     auto Rendered = renderIntrinsicCall(E.IntrinsicId, Opts.TheArch, OpStrs,
                                         HasCIntrinsics);
     if (!Rendered.empty())

@@ -4259,6 +4259,27 @@ TEST(HighCPointerAddresses, MergedXmm0ResultIsTheDoubleReturnValue) {
   expectCompilesForMsvc(HighC);
 }
 
+TEST(HighCPointerAddresses, IntegerVectorIntrinsicsTakeVectorOperands) {
+  // HighC carries vector registers as integers; `_mm*_shuffle_epi8` takes
+  // and returns __m128i/__m256i, and the VEX.256 form is the _mm256 spelling.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x66, 0x0f, 0x38, 0x00, 0xc1, // pshufb xmm0, xmm1
+      0xf3, 0x0f, 0x7f, 0x01,       // movdqu [rcx], xmm0
+      0xc4, 0xe2, 0x75, 0x00, 0xda, // vpshufb ymm3, ymm1, ymm2
+      0xc5, 0xfe, 0x7f, 0x1a,       // vmovdqu [rdx], ymm3
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  EXPECT_NE(HighC.find("_mm_shuffle_epi8(__builtin_bit_cast(__m128i, "),
+            std::string::npos)
+      << HighC;
+  EXPECT_NE(HighC.find("_mm256_shuffle_epi8(__builtin_bit_cast(__m256i, "),
+            std::string::npos)
+      << HighC;
+  expectCompilesForMsvc("#include <intrin.h>\n" + HighC);
+}
+
 TEST(HighCPointerAddresses, SyscallKeepsItsServiceNumberAndStatus) {
   // x64 `syscall` takes the service number in RAX and returns a status in
   // RAX under every operating system's convention.  The `mov eax` must not be
