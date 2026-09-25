@@ -404,6 +404,11 @@ swiftMangledObjCObjectVoidMethodSourceABI(const BinaryImage &Image,
   const auto &Owner = Function.Children[0];
   const auto &Labels = Function.Children[2];
   const auto &Type = Function.Children[3];
+  const bool OneNamedArgument =
+      Shape(Labels, "LabelList", 1) &&
+      Labels.Children[0].Kind == "Identifier" && Labels.Children[0].Text &&
+      !Labels.Children[0].Text->empty() && !Labels.Children[0].Index &&
+      Labels.Children[0].Children.empty();
   if (!Shape(Owner, "Class", 2) || Owner.Children[0].Kind != "Module" ||
       !Owner.Children[0].Text || Owner.Children[0].Text->empty() ||
       Owner.Children[0].Index || !Owner.Children[0].Children.empty() ||
@@ -413,19 +418,28 @@ swiftMangledObjCObjectVoidMethodSourceABI(const BinaryImage &Image,
       Function.Children[1].Kind != "Identifier" || !Function.Children[1].Text ||
       Function.Children[1].Text->empty() || Function.Children[1].Index ||
       !Function.Children[1].Children.empty() ||
-      !Shape(Labels, "LabelList", 0) || !Shape(Type, "Type", 1) ||
-      !Shape(Type.Children[0], "FunctionType", 2) ||
+      !(Shape(Labels, "LabelList", 0) || OneNamedArgument) ||
+      !Shape(Type, "Type", 1) || !Shape(Type.Children[0], "FunctionType", 2) ||
       !Shape(Type.Children[0].Children[0], "ArgumentTuple", 1) ||
       !Shape(Type.Children[0].Children[0].Children[0], "Type", 1) ||
-      !Shape(Type.Children[0].Children[0].Children[0].Children[0], "Class",
-             2) ||
       !Shape(Type.Children[0].Children[1], "ReturnType", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0], "Type", 1) ||
       !Shape(Type.Children[0].Children[1].Children[0].Children[0], "Tuple", 0))
     return std::nullopt;
-  const auto &Argument = Type.Children[0].Children[0].Children[0].Children[0];
-  const auto &ArgumentName = Argument.Children[1];
-  if (!Text(Argument.Children[0], "Module", "__C") ||
+  const auto &RawArgument =
+      Type.Children[0].Children[0].Children[0].Children[0];
+  const Node *Argument = nullptr;
+  if (Shape(Labels, "LabelList", 0) && Shape(RawArgument, "Class", 2))
+    Argument = &RawArgument;
+  else if (OneNamedArgument && Shape(RawArgument, "Tuple", 1) &&
+           Shape(RawArgument.Children[0], "TupleElement", 1) &&
+           Shape(RawArgument.Children[0].Children[0], "Type", 1) &&
+           Shape(RawArgument.Children[0].Children[0].Children[0], "Class", 2))
+    Argument = &RawArgument.Children[0].Children[0].Children[0];
+  if (!Argument)
+    return std::nullopt;
+  const auto &ArgumentName = Argument->Children[1];
+  if (!Text(Argument->Children[0], "Module", "__C") ||
       ArgumentName.Kind != "Identifier" || !ArgumentName.Text ||
       ArgumentName.Text->empty() || ArgumentName.Index ||
       !ArgumentName.Children.empty())

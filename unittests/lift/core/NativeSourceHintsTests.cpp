@@ -213,6 +213,19 @@ TEST(NativeSourceHints, SwiftObjCObjectVoidMethodUsesSwiftSelf) {
   std::string Error;
   EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
 
+  auto Named = Image;
+  Named.Symbols[0].Name =
+      "_$s3WMF28WMFSavedPageSpotlightManagerC10addToIndex3urlySo5NSURLC_tF";
+  const auto NamedHint =
+      sdk::swiftMangledObjCObjectVoidMethodSourceABI(Named, 0x1000);
+  ASSERT_TRUE(NamedHint);
+  ASSERT_EQ(NamedHint->Parameters.size(), 2U);
+  EXPECT_EQ(NamedHint->Parameters[0].Location.RegisterOffset, a64reg::X0);
+  EXPECT_EQ(NamedHint->Parameters[1].Location.RegisterOffset, a64reg::X20);
+  EXPECT_TRUE(validateSourceABI(*NamedHint, Error)) << Error;
+  Named.Symbols[0].Name += "Tf4nd_n";
+  EXPECT_FALSE(sdk::swiftMangledObjCObjectVoidMethodSourceABI(Named, 0x1000));
+
   auto Wrong = Image;
   Wrong.Symbols[0].Name += "ToTm";
   EXPECT_FALSE(sdk::swiftMangledObjCObjectVoidMethodSourceABI(Wrong, 0x1000));
