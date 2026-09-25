@@ -9472,6 +9472,12 @@ TEST(ObjCCallHints, WMFManagedContextParametersQualifyCopiedBlocks) {
        "saveContentForFeedDay:pageViews:onDate:inManagedObjectContext:"
        "completion:",
        "v56@0:8@16@24@32@40@?48", 5},
+      {"WMFFeedContentSource",
+       "saveGroupForTopRead:pageViews:date:inManagedObjectContext:",
+       "v48@0:8@16@24@32@40", 5},
+      {"WMFFeedContentSource",
+       "saveGroupForNews:pageViews:date:inManagedObjectContext:",
+       "v48@0:8@16@24@32@40", 5},
       {"WMFAnnouncementsContentSource",
        "saveAnnouncements:inManagedObjectContext:completion:",
        "v40@0:8@16@24@?32", 3},

@@ -1853,7 +1853,7 @@ TEST(ObjCBlockSources, WMFPermanentCacheClassSetupCopiesCompletion) {
   EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
 }
 
-TEST(ObjCBlockSources, WMFContentGroupEnumerationBorrowsCallback) {
+TEST(ObjCBlockSources, WMFContentGroupMethodsBorrowCallbacks) {
   BlockFixture F;
   F.Image.DynInfo.NeededLibs = {
       "/System/Library/Frameworks/CoreData.framework/CoreData",
@@ -1892,25 +1892,53 @@ TEST(ObjCBlockSources, WMFContentGroupEnumerationBorrowsCallback) {
   const auto Receiver =
       objcMethodReceiverTypeHint(F.Image, Caller.Implementation);
   ASSERT_TRUE(Receiver);
-  SourceCallTypeHint Call;
-  Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
-  Call.Selector = Method.Selector;
-  Call.Receiver = *Receiver;
-  const auto Declaration =
-      objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
-  ASSERT_TRUE(Declaration.Signature);
-  Call.Signature = *Declaration.Signature;
-  const auto Contract = objcBlockParameterContract(F.Image, Call, 3);
-  ASSERT_TRUE(Contract);
-  EXPECT_EQ(Contract->Storage,
-            ObjCBlockParameterContract::Lifetime::NonEscaping);
-  EXPECT_EQ(Contract->Signature.Parameters.size(), 3U);
-  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 2));
-  auto Changed = Call;
-  Changed.Receiver.reset();
-  EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, 3));
-  F.Image.ObjCMethods.front().CategoryName = "Other";
-  EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 3));
+  struct Case {
+    const char *Selector;
+    const char *Encoding;
+    unsigned Parameter;
+    unsigned CallbackParameters;
+  };
+  constexpr Case Cases[] = {
+      {"enumerateContentGroupsOfKind:withBlock:", "v28@0:8i16@?20", 3,
+       3},
+      {"createGroupForURL:ofKind:forDate:withSiteURL:associatedContent:"
+       "customizationBlock:",
+       "@60@0:8@16i24@28@36@44@?52", 7, 2},
+      {"createGroupOfKind:forDate:withSiteURL:associatedContent:"
+       "customizationBlock:",
+       "@52@0:8i16@20@28@36@?44", 6, 2},
+      {"fetchOrCreateGroupForURL:ofKind:forDate:withSiteURL:"
+       "associatedContent:customizationBlock:",
+       "@60@0:8@16i24@28@36@44@?52", 7, 2},
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Selector);
+    F.Image.ObjCMethods.front().Selector = C.Selector;
+    F.Image.ObjCMethods.front().TypeEncoding = C.Encoding;
+    F.Image.ObjCMethods.front().TypeHint =
+        parseObjCMethodEncoding(C.Selector, C.Encoding);
+    ASSERT_TRUE(F.Image.ObjCMethods.front().TypeHint);
+    SourceCallTypeHint Call;
+    Call.CallKind = SourceCallTypeHint::Kind::ObjCMessage;
+    Call.Selector = C.Selector;
+    Call.Receiver = *Receiver;
+    const auto Declaration =
+        objcReceiverSourceTypeHint(F.Image, Call.Selector, *Receiver);
+    ASSERT_TRUE(Declaration.Signature);
+    Call.Signature = *Declaration.Signature;
+    const auto Contract = objcBlockParameterContract(F.Image, Call, C.Parameter);
+    ASSERT_TRUE(Contract);
+    EXPECT_EQ(Contract->Storage,
+              ObjCBlockParameterContract::Lifetime::NonEscaping);
+    EXPECT_EQ(Contract->Signature.Parameters.size(), C.CallbackParameters);
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, C.Parameter - 1));
+    auto Changed = Call;
+    Changed.Receiver.reset();
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, C.Parameter));
+    F.Image.ObjCMethods.front().CategoryName = "Other";
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, C.Parameter));
+    F.Image.ObjCMethods.front().CategoryName = "WMFArticle";
+  }
 }
 
 TEST(ObjCBlockSources, WMFCollectionSwiftExtensionsCopyCallbacks) {

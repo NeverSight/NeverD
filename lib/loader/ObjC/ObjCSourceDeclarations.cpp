@@ -825,6 +825,12 @@ objcMethodParameterReceiverTypeHint(const BinaryImage &Image, va_t Entry,
        "saveContentForFeedDay:pageViews:onDate:inManagedObjectContext:"
        "completion:",
        "v56@0:8@16@24@32@40@?48", 5},
+      {"WMFFeedContentSource",
+       "saveGroupForTopRead:pageViews:date:inManagedObjectContext:",
+       "v48@0:8@16@24@32@40", 5},
+      {"WMFFeedContentSource",
+       "saveGroupForNews:pageViews:date:inManagedObjectContext:",
+       "v48@0:8@16@24@32@40", 5},
       {"WMFAnnouncementsContentSource",
        "saveAnnouncements:inManagedObjectContext:completion:",
        "v40@0:8@16@24@?32", 3},
@@ -2038,42 +2044,62 @@ objcBlockParameterContract(const BinaryImage &Image,
           std::move(*Callback), ObjCBlockParameterContract::Lifetime::Copied};
     }
 
-  // The embedded NSManagedObjectContext category enumerates a local NSArray
-  // synchronously and forwards the group and stop pointer to this callback.
-  // Its block is neither retained nor passed to asynchronous work.
+  // The embedded NSManagedObjectContext category invokes these callbacks
+  // synchronously. Enumeration forwards to a local NSArray; group creation
+  // invokes the customization block directly or forwards it to that method.
+  struct WMFContentGroupBlock {
+    const char *Selector;
+    const char *Parent;
+    const char *Callback;
+    unsigned Parameter;
+  };
+  static constexpr WMFContentGroupBlock WMFContentGroupBlocks[] = {
+      {"enumerateContentGroupsOfKind:withBlock:", "v28@0:8i16@?20",
+       "v24@?0@\"WMFContentGroup\"8^B16", 3},
+      {"createGroupForURL:ofKind:forDate:withSiteURL:associatedContent:"
+       "customizationBlock:",
+       "@60@0:8@16i24@28@36@44@?52",
+       "v16@?0@\"WMFContentGroup\"8", 7},
+      {"createGroupOfKind:forDate:withSiteURL:associatedContent:"
+       "customizationBlock:",
+       "@52@0:8i16@20@28@36@?44",
+       "v16@?0@\"WMFContentGroup\"8", 6},
+      {"fetchOrCreateGroupForURL:ofKind:forDate:withSiteURL:"
+       "associatedContent:customizationBlock:",
+       "@60@0:8@16i24@28@36@44@?52",
+       "v16@?0@\"WMFContentGroup\"8", 7},
+  };
   if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
       !Type->IsProtocol &&
-      DerivesFrom(Type->ClassName, "NSManagedObjectContext") &&
-      Call.Selector == "enumerateContentGroupsOfKind:withBlock:" &&
-      Parameter == 3) {
-    constexpr llvm::StringLiteral ParentEncoding = "v28@0:8i16@?20";
-    const ObjCMethod *Method = nullptr;
-    for (const auto &Candidate : Image.ObjCMethods)
-      if (Candidate.ClassName == "NSManagedObjectContext" &&
-          Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
-        if (Method || !Candidate.CategoryAddress ||
-            Candidate.CategoryName != "WMFArticle" ||
-            !Candidate.MetadataAddress ||
-            Candidate.TypeEncoding != ParentEncoding ||
-            !objcMethodHasSourceBody(Candidate) ||
-            !Image.isCodeAddress(Candidate.Implementation))
-          return std::nullopt;
-        Method = &Candidate;
-      }
-    if (!Method)
-      return std::nullopt;
-    auto Parent = parseObjCMethodEncoding(Call.Selector, ParentEncoding);
-    std::string Error;
-    auto Callback = parseObjCBlockSignature(
-        "v24@?0@\"WMFContentGroup\"8^B16", Image.Arch, Error);
-    if (!Parent || !Callback ||
-        !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
-        !SameDeclaration(*Expected, *Parent))
-      return std::nullopt;
-    return ObjCBlockParameterContract{
-        std::move(*Callback),
-        ObjCBlockParameterContract::Lifetime::NonEscaping};
-  }
+      DerivesFrom(Type->ClassName, "NSManagedObjectContext"))
+    for (const auto &D : WMFContentGroupBlocks) {
+      if (Call.Selector != D.Selector || Parameter != D.Parameter)
+        continue;
+      const ObjCMethod *Method = nullptr;
+      for (const auto &Candidate : Image.ObjCMethods)
+        if (Candidate.ClassName == "NSManagedObjectContext" &&
+            Candidate.Selector == Call.Selector && !Candidate.IsClassMethod) {
+          if (Method || !Candidate.CategoryAddress ||
+              Candidate.CategoryName != "WMFArticle" ||
+              !Candidate.MetadataAddress || Candidate.TypeEncoding != D.Parent ||
+              !objcMethodHasSourceBody(Candidate) ||
+              !Image.isCodeAddress(Candidate.Implementation))
+            return std::nullopt;
+          Method = &Candidate;
+        }
+      if (!Method)
+        return std::nullopt;
+      auto Parent = parseObjCMethodEncoding(Call.Selector, D.Parent);
+      std::string Error;
+      auto Callback = parseObjCBlockSignature(D.Callback, Image.Arch, Error);
+      if (!Parent || !Callback ||
+          !assignDarwinObjCSourceABI(*Parent, Image.Arch, Error) ||
+          !SameDeclaration(*Expected, *Parent))
+        return std::nullopt;
+      return ObjCBlockParameterContract{
+          std::move(*Callback),
+          ObjCBlockParameterContract::Lifetime::NonEscaping};
+    }
 
   // WMFBlocksKit.swift imports its collection callbacks as @escaping. The
   // Objective-C wmf_mapAndRejectNil: forwards its callback through synchronous
