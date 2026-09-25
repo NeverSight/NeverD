@@ -1913,7 +1913,9 @@ objcBlockParameterContract(const BinaryImage &Image,
 
   // These embedded WMF methods pass callbacks to asynchronous work. The data
   // store enables asynchronous store loading and uses performBlock:; the feed
-  // source forwards its completion into the fetcher's network callbacks.
+  // source forwards its completion into the fetcher's network callbacks; the
+  // fetchers deliver their callbacks from asynchronous session requests.
+  // RelatedSearchFetcher declares its Swift completion @escaping.
   // Authenticate exact method owners, encodings and callback ABIs before
   // treating an Objective-C stack block as copied by a callee.
   struct WMFInstanceBlock {
@@ -1932,6 +1934,22 @@ objcBlockParameterContract(const BinaryImage &Image,
       {"WMFFeedContentSource", "fetchContentForDate:force:completion:",
        "v36@0:8@16B24@?28",
        "v24@?0@\"WMFFeedDayResponse\"8@\"NSDictionary\"16", 4},
+      {"WMFFeedContentFetcher",
+       "fetchFeedContentForURL:date:force:failure:success:",
+       "v52@0:8@16@24B32@?36@?44", "v16@?0@\"NSError\"8", 5},
+      {"WMFFeedContentFetcher",
+       "fetchFeedContentForURL:date:force:failure:success:",
+       "v52@0:8@16@24B32@?36@?44",
+       "v16@?0@\"WMFFeedDayResponse\"8", 6},
+      {"WMFAnnouncementsFetcher",
+       "fetchAnnouncementsForURL:force:failure:success:",
+       "v44@0:8@16B24@?28@?36", "v16@?0@\"NSError\"8", 4},
+      {"WMFAnnouncementsFetcher",
+       "fetchAnnouncementsForURL:force:failure:success:",
+       "v44@0:8@16B24@?28@?36", "v16@?0@\"NSArray\"8", 5},
+      {"WMFRelatedSearchFetcher",
+       "fetchRelatedArticlesForArticleWithURL:completion:",
+       "v32@0:8@16@?24", "v24@?0@\"NSError\"8@\"NSDictionary\"16", 3},
   };
   if (Image.Arch == Arch::AArch64 && Type && !Type->IsClassMethod &&
       !Type->IsProtocol)

@@ -1698,6 +1698,21 @@ TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
        "v24@0:8@?16", 2, 2},
       {"WMFFeedContentSource", "fetchContentForDate:force:completion:",
        "v36@0:8@16B24@?28", 4, 3},
+      {"WMFFeedContentFetcher",
+       "fetchFeedContentForURL:date:force:failure:success:",
+       "v52@0:8@16@24B32@?36@?44", 5, 2},
+      {"WMFFeedContentFetcher",
+       "fetchFeedContentForURL:date:force:failure:success:",
+       "v52@0:8@16@24B32@?36@?44", 6, 2},
+      {"WMFAnnouncementsFetcher",
+       "fetchAnnouncementsForURL:force:failure:success:",
+       "v44@0:8@16B24@?28@?36", 4, 2},
+      {"WMFAnnouncementsFetcher",
+       "fetchAnnouncementsForURL:force:failure:success:",
+       "v44@0:8@16B24@?28@?36", 5, 2},
+      {"WMFRelatedSearchFetcher",
+       "fetchRelatedArticlesForArticleWithURL:completion:",
+       "v32@0:8@16@?24", 3, 3},
   };
   for (const auto &C : Cases) {
     BlockFixture F;
@@ -1747,7 +1762,7 @@ TEST(ObjCBlockSources, WMFInstanceMethodsCopyAsyncCallbacks) {
     ASSERT_TRUE(Contract) << C.Selector;
     EXPECT_EQ(Contract->Storage, ObjCBlockParameterContract::Lifetime::Copied);
     EXPECT_EQ(Contract->Signature.Parameters.size(), C.CallbackParameters);
-    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, C.Parameter - 1));
+    EXPECT_FALSE(objcBlockParameterContract(F.Image, Call, 1));
     auto Changed = Call;
     Changed.Receiver.reset();
     EXPECT_FALSE(objcBlockParameterContract(F.Image, Changed, C.Parameter));
