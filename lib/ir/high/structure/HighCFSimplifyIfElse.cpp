@@ -2530,9 +2530,13 @@ static bool exprUsesJoinDest(const HighExpr *E, const MedVar &Dest) {
 }
 
 static bool stmtUsesJoinDest(const HighStmt &S, const MedVar &Dest) {
-  return exprUsesJoinDest(S.Val.get(), Dest) ||
-         exprUsesJoinDest(S.CallExpr.get(), Dest) ||
-         exprUsesJoinDest(S.Dst.get(), Dest);
+  // Join values may be consumed by a return, condition, or store as well as
+  // by an assignment. A missed read here can erase an entire PHI edge.
+  bool Used = exprUsesJoinDest(S.Dst.get(), Dest);
+  forEachRhsExpr(S, [&](const ExprPtr &E) {
+    Used |= exprUsesJoinDest(E.get(), Dest);
+  });
+  return Used;
 }
 
 static bool stmtsUseJoinDest(const std::vector<HighStmt> &Stmts,
@@ -4491,25 +4495,11 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             S.GotoTarget != InvalidVA && S.GotoTarget != IfTarget)
           SkipIsElseGoto = true;
       }
-      bool TakenUsedAtJoin = false;
-      if (!TakenCopies.empty() && TargetIndex < Body.size()) {
-        for (const HighStmt &Copy : TakenCopies) {
-          MedVar Dest;
-          ExprPtr Val;
-          if (!isValueAssign(Copy, Dest, Val) || !Val ||
-              Val->Kind == ExprKind::Undef || Val->Kind == ExprKind::Load)
-            continue;
-          for (size_t K = TargetIndex;
-               K < Body.size() && K < TargetIndex + 8; ++K) {
-            if (stmtUsesJoinDest(Body[K], Dest))
-              TakenUsedAtJoin = true;
-          }
-        }
-      }
-      if ((TakenCopies.empty() ||
-           (armIsSkippable(TakenCopies) && !TakenUsedAtJoin)) &&
-          BackEdgeGoto == SIZE_MAX && TargetIndex > NextI &&
-          !SkipIsElseGoto && !SkipHasLoop &&
+      // A PHI copy on the taken edge may feed a use beyond the first few
+      // statements at the target (including a nested loop or call). Keep that
+      // edge intact; liveness cleanup can remove truly unused copies later.
+      if (TakenCopies.empty() && BackEdgeGoto == SIZE_MAX &&
+          TargetIndex > NextI && !SkipIsElseGoto && !SkipHasLoop &&
           RangeHasWork(NextI, TargetIndex) &&
           ownsRun(Body, AM, {NextI, TargetIndex}, I, Med)) {
         Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);

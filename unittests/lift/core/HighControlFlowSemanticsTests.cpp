@@ -978,6 +978,33 @@ TEST(HighControlFlowSemantics, ImmediateTargetKeepsBothEdgesAndPhiCopies) {
   }
 }
 
+TEST(HighControlFlowSemantics, DistantJoinReadKeepsTakenPhiCopy) {
+  HighFunc F;
+  auto Branch = conditional(0x1004, 0x1040);
+  auto Copy = assign(0x1004, 1, 0);
+  Copy.Val = local(2);
+  Copy.IsPhiCopy = true;
+  Branch.Body.insert(Branch.Body.begin(), Copy);
+  HighStmt Work;
+  Work.Kind = StmtKind::If;
+  Work.Addr = 0x1008;
+  Work.Cond = HighExpr::makeConst(1, 1);
+  Work.Body = {assign(0x100c, 3, 5)};
+  F.Body = {assign(0x1000, 1, 3), assign(0x1002, 2, 7), Branch, Work};
+  for (int I = 0; I < 12; ++I)
+    F.Body.push_back(assign(0x1040 + I * 4, 100 + I, I));
+  F.Body.push_back(result(0x1080, local(1)));
+
+  ASSERT_EQ(execute(F, 0), 3u);
+  ASSERT_EQ(execute(F, 1), 7u);
+  structureIfElse(F, 1);
+  EXPECT_EQ(execute(F, 0), 3u);
+  EXPECT_EQ(execute(F, 1), 7u);
+  structureIfElse(F, 10);
+  EXPECT_EQ(execute(F, 0), 3u);
+  EXPECT_EQ(execute(F, 1), 7u);
+}
+
 TEST(HighControlFlowSemantics, ExceptionalTargetKeepsItsExternalEntry) {
   HighFunc F;
   F.Body = {conditional(0x1000, 0x1020), jump(0x1004, 0x1040),
