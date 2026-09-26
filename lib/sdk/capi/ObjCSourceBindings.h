@@ -984,6 +984,85 @@ swiftNominalDescriptorAddressHint(const BinaryImage &Image, va_t Address) {
   return Hint;
 }
 
+// Swift may merge nominal metadata accessors into a native helper which
+// forwards its third argument to swift_getSingletonMetadata. A caller's
+// exported descriptor is still the runtime's descriptor identity when that
+// forwarding is present in the helper's typed body.
+inline bool swiftSingletonDescriptorForwardedByNativeHelper(
+    const BinaryImage &Image, const HighFunc &Helper,
+    const SourceCallTypeHint &Call) {
+  std::string ABIError;
+  if (Image.Arch != Arch::AArch64 || Helper.Entry != Call.TargetAddress ||
+      !Image.isCodeAddress(Helper.Entry) || !Helper.SourceTypeHint ||
+      Helper.SourceTypeHint->Origin !=
+          SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
+      !Helper.SourceTypeHint->HasExplicitABI ||
+      !validateSourceABI(*Helper.SourceTypeHint, ABIError) ||
+      !equalSourceABIs(*Helper.SourceTypeHint, Call.Signature) ||
+      Helper.SourceTypeHint->Parameters.size() != 3 ||
+      Helper.Params.size() != 3 || Helper.Body.empty() ||
+      Helper.StructuredExceptionRegions ||
+      Helper.UnstructuredExceptionRegions ||
+      (Helper.ExceptionMetadata &&
+       !objc_projection_detail::isPlainUnwind(*Helper.ExceptionMetadata)))
+    return false;
+  const auto &Forwarded = Helper.SourceTypeHint->Parameters[2];
+  if (Forwarded.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+      Forwarded.Location.RegisterOffset !=
+          getTargetRegInfo(Image.Arch).IntParamRegs[2] ||
+      Forwarded.Location.ValueBytes != 8 || !Forwarded.Type ||
+      Forwarded.Type->Size != 8)
+    return false;
+  std::set<const HighExpr *> Seen;
+  size_t RuntimeCalls = 0;
+  size_t Budget = 4096;
+  bool Valid = true;
+  walkStmts(Helper.Body, [&](const HighStmt &Statement) {
+    forEachExpr(Statement, [&](const ExprPtr &Root) {
+      std::vector<const HighExpr *> Pending{Root.get()};
+      while (Valid && !Pending.empty()) {
+        const HighExpr *Expression = Pending.back();
+        Pending.pop_back();
+        if (!Expression || !Seen.insert(Expression).second)
+          continue;
+        if (!Budget--) {
+          Valid = false;
+          break;
+        }
+        if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
+            Expression->SourceCallHint->CallKind ==
+                SourceCallTypeHint::Kind::SwiftRuntimeCall &&
+            Expression->SourceCallHint->TargetName ==
+                "swift_getSingletonMetadata") {
+          const auto Expected = swiftRuntimeSourceCallHint(
+              Image, Expression->SourceCallHint->TargetAddress);
+          const auto &Operands = Expression->Operands;
+          const HighExpr *Value =
+              Operands.size() == 2 ? Operands[1].get() : nullptr;
+          for (unsigned Depth = 0; Value && Depth < 4 &&
+                                   (Value->Kind == ExprKind::Cast ||
+                                    Value->Kind == ExprKind::BitCast) &&
+                                   Value->Type && Value->Type->Size == 8 &&
+                                   Value->Operands.size() == 1;
+               ++Depth)
+            Value = Value->Operands[0].get();
+          if (!Expected ||
+              !runtimeBindingMatches(*Expression->SourceCallHint, *Expected) ||
+              Expression->IsIndirectCall || !Value ||
+              Value->Kind != ExprKind::Var || !Value->Type ||
+              Value->Type->Size != 8 || Value->Var.Kind != MedVar::Param ||
+              Value->Var.Id != 2 || Value->Var.SSAVer != 0)
+            Valid = false;
+          ++RuntimeCalls;
+        }
+        for (const auto &Operand : Expression->Operands)
+          Pending.push_back(Operand.get());
+      }
+    });
+  });
+  return Valid && RuntimeCalls == 1;
+}
+
 // A value-witness call needs the original concrete metadata identity. A
 // copied metadata record would have different runtime identity and witness
 // pointers, so accept only one exported Swift struct metadata symbol whose
@@ -3561,6 +3640,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       }
     }
     std::optional<va_t> SingletonDescriptor;
+    size_t SingletonDescriptorIndex = 0;
     if (Expression->Kind == ExprKind::Call && !Expression->IsIndirectCall &&
         Image.isCodeAddress(Expression->CallAddr) &&
         Expression->SourceCallHint &&
@@ -3576,8 +3656,29 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           runtimeBindingMatches(Binding, *Expected) &&
           Expected->Signature.Parameters.size() == 2 &&
           Expected->Signature.Parameters[1].Type &&
-          Expected->Signature.Parameters[1].Type->Kind == NdTypeKind::Ptr)
+          Expected->Signature.Parameters[1].Type->Kind == NdTypeKind::Ptr) {
         SingletonDescriptor = constantAddress(*Expression->Operands[1]);
+        SingletonDescriptorIndex = 1;
+      }
+    }
+    if (!SingletonDescriptor && Expression->Kind == ExprKind::Call &&
+        !Expression->IsIndirectCall && Expression->SourceCallHint &&
+        Expression->SourceCallHint->CallKind ==
+            SourceCallTypeHint::Kind::Native &&
+        Expression->CallAddr == Expression->SourceCallHint->TargetAddress &&
+        Expression->Operands.size() == 3 && Expression->Operands[2] &&
+        Functions) {
+      const auto Candidate = constantAddress(*Expression->Operands[2]);
+      if (Candidate && swiftNominalDescriptorAddressHint(Image, *Candidate)) {
+        const auto Callee =
+            Functions->find(Expression->SourceCallHint->TargetAddress);
+        if (Callee != Functions->end() && Callee->second &&
+            swiftSingletonDescriptorForwardedByNativeHelper(
+                Image, *Callee->second, *Expression->SourceCallHint)) {
+          SingletonDescriptor = Candidate;
+          SingletonDescriptorIndex = 2;
+        }
+      }
     }
     std::optional<va_t> WitnessMetadata;
     if (Expression->Kind == ExprKind::Call && Expression->IsIndirectCall &&
@@ -3620,7 +3721,7 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
           continue;
         }
       }
-      if (Index == 1 && Operand && SingletonDescriptor) {
+      if (Index == SingletonDescriptorIndex && Operand && SingletonDescriptor) {
         auto Hint =
             swiftNominalDescriptorAddressHint(Image, *SingletonDescriptor);
         if (Hint) {
