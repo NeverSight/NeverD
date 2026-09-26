@@ -214,11 +214,13 @@ inline bool superInit(const BinaryImage &Image,
 /// Deliberately bounded to a verified Objective-C or native entry, at most
 /// eight comparison occurrences, and other direct calls with freshly catalogued
 /// runtime ABIs, exact super init dispatch or complete eight-instruction
-/// class-accessor machine proofs. Other direct calls require identical physical
-/// state and supply no ABI or binding facts. Indirect calls remain unsupported.
-inline std::vector<SwiftBooleanProjection>
-qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
-                               const SourceFunctionTypeHint &EntrySignature) {
+/// class-accessor machine proofs, or current native source ABIs. Other direct
+/// calls require identical physical state and supply no ABI or binding facts.
+/// Indirect calls remain unsupported.
+inline std::vector<SwiftBooleanProjection> qualifySwiftBooleanProjections(
+    const BinaryImage &Image, const LowFunc &Low,
+    const SourceFunctionTypeHint &EntrySignature,
+    const std::map<va_t, SourceFunctionTypeHint> *NativeCallees = nullptr) {
   if (Image.Format != BinaryFormat::MachO || Image.Arch != Arch::AArch64 ||
       Image.Bits != Bitness::Bits64 || Image.IsRelocatable ||
       Low.Blocks.empty() || Low.Blocks.size() > 256)
@@ -281,6 +283,28 @@ qualifySwiftBooleanProjections(const BinaryImage &Image, const LowFunc &Low,
         if (Slot || (TargetSection &&
                      TargetSection->Name == section_names::macho::ObjCStubs))
           return {};
+        // A current source-bound native callee supplies its exact physical
+        // inputs and result. The final caller still depends on that callee's
+        // independently validated source body and dependency closure.
+        if (NativeCallees) {
+          const auto Native = NativeCallees->find(*Site->StaticTarget);
+          if (Native != NativeCallees->end()) {
+            std::string Error;
+            const auto &Signature = Native->second;
+            if (Image.isCodeAddress(*Site->StaticTarget) &&
+                *Site->StaticTarget != Low.Entry &&
+                Signature.Origin ==
+                    SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+                Signature.Architecture == Image.Arch &&
+                Signature.HasExplicitABI &&
+                Signature.ReturnLocation.Kind !=
+                    SourceABICarrierKind::IndirectResultPointer &&
+                validateSourceABI(Signature, Error)) {
+              Calls.emplace(*Site, SourceBooleanOtherCallContract{&Signature});
+              continue;
+            }
+          }
+        }
         const auto Machine =
             objcClassAccessorMachine(Image, *Site->StaticTarget);
         if (!Machine) {

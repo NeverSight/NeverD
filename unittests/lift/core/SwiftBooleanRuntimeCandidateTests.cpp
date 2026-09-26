@@ -3,6 +3,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/AArch64Regs.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
@@ -1041,6 +1043,92 @@ TEST(SwiftBooleanProjection, OtherNativeCallsSeparateABIFromIdenticalState) {
   F.Image.DyldBindSlots[Slot + 8].Module = "/tmp/libobjc.A.dylib";
   EXPECT_FALSE(objcClassAccessorMachine(F.Image, 0x3040));
   EXPECT_TRUE(F.qualify()); // No callee facts are obtained from the bad body.
+}
+
+TEST(SwiftBooleanProjection,
+     CurrentNativeCalleeABIReplacesOpaqueCallStateRequirement) {
+  ProjectionFixture F;
+  auto &Block = F.Low.Blocks.front();
+  LowOp Copy;
+  Copy.Addr = 0x3004;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = NdVar::reg(a64reg::X8, 8);
+  Copy.addInput(NdVar::reg(a64reg::X0, 8));
+  auto Mask = Block.Ops[1];
+  Mask.Addr = 0x3008;
+  auto Native = Block.Ops.front();
+  Native.Addr = 0x300c;
+  Native.Inputs[0].Offset = 0x3040;
+  LowOp Restore;
+  Restore.Addr = 0x3010;
+  Restore.Opcode = NdOp::LOAD;
+  Restore.Output = NdVar::reg(getTargetRegInfo(Arch::AArch64).LinkRegister, 8);
+  Restore.addInput(NdVar::reg(getTargetRegInfo(Arch::AArch64).StackPointer, 8));
+  Block.Ops = {Block.Ops.front(), Copy, Mask, Native, Restore,
+               Block.Ops.back()};
+  Block.Ops.back().Addr = 0x3014;
+  Block.EndAddr = 0x3018;
+  F.word(0x3004, 0xaa0003e8); // MOV X8, X0.
+  F.word(0x3008, 0x92400000); // AND X0, X0, #1.
+  F.word(0x300c, 0x9400000d); // BL 0x3040.
+  F.word(0x3010, 0xf94003fe); // LDR X30, [SP].
+  F.word(0x3014, 0xd65f03c0); // RET.
+  F.word(0x3040, 0xd2800000); // MOV X0, #0.
+  F.word(0x3044, 0xd65f03c0); // RET.
+
+  SourceFunctionTypeHint Callee;
+  Callee.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Callee.ReturnType = NdType::makeInt(8, false);
+  Callee.Parameters = {{"value", NdType::makeInt(8)}};
+  std::string Error;
+  ASSERT_TRUE(assignDarwinScalarSourceABI(Callee, F.Image.Arch, Error))
+      << Error;
+  std::map<va_t, SourceFunctionTypeHint> NativeCallees{{0x3040, Callee}};
+  auto Prove = [&] {
+    return qualifySwiftBooleanProjections(F.Image, F.Low, F.Entry,
+                                          &NativeCallees);
+  };
+  EXPECT_TRUE(qualifySwiftBooleanProjections(F.Image, F.Low, F.Entry).empty());
+  ASSERT_EQ(Prove().size(), 1U);
+  LowToMedConverter Converter;
+  std::map<va_t, SourceFunctionTypeHint> EntryHints{{F.Low.Entry, F.Entry}};
+  Converter.setBinaryImage(&F.Image);
+  Converter.setSourceEntryTypeHints(&EntryHints);
+  Converter.setSourceCalleeTypeHints(&NativeCallees);
+  Converter.setSourceCallHintsEnabled(true);
+  const auto Med =
+      Converter.convert(F.Low, F.Image.Arch, BinaryFormat::MachO);
+  bool BoundBoolean = false;
+  bool BoundNative = false;
+  for (const auto &MedBlock : Med.Blocks)
+    for (const auto &Op : MedBlock.Ops) {
+      if (Op.Addr == 0x3000 && Op.SourceCallHint &&
+          Op.SourceCallHint->CallKind ==
+              SourceCallTypeHint::Kind::SwiftBooleanProjection)
+        BoundBoolean = true;
+      if (Op.Addr == 0x300c && Op.SourceCallHint &&
+          Op.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
+          Op.NumInputs == 2)
+        BoundNative = true;
+    }
+  EXPECT_TRUE(BoundBoolean);
+  EXPECT_TRUE(BoundNative);
+
+  NativeCallees.at(0x3040).Origin =
+      SourceFunctionTypeHint::OriginKind::ObjCRuntime;
+  EXPECT_TRUE(Prove().empty());
+  NativeCallees.at(0x3040) = Callee;
+  NativeCallees.at(0x3040).HasExplicitABI = false;
+  EXPECT_TRUE(Prove().empty());
+  NativeCallees.at(0x3040) = Callee;
+  F.Image.Sections.back().Flags = SegmentFlags::Readable;
+  EXPECT_TRUE(Prove().empty());
+  F.Image.Sections.back().Flags =
+      SegmentFlags::Readable | SegmentFlags::Executable;
+  NativeCallees.at(0x3040).Parameters[0].Location.RegisterOffset = a64reg::X8;
+  ASSERT_TRUE(validateSourceABI(NativeCallees.at(0x3040), Error))
+      << Error;
+  EXPECT_TRUE(Prove().empty());
 }
 
 TEST(SwiftBooleanProjection,

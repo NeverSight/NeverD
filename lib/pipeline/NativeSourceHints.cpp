@@ -361,9 +361,32 @@ bool hasNativeSourceStateContract(
         HasBoolean |= Op.SourceCallHint &&
                       Op.SourceCallHint->CallKind ==
                           SourceCallTypeHint::Kind::SwiftBooleanProjection;
-    if (HasBoolean)
-      BooleanProjections =
-          qualifySwiftBooleanProjections(Image, *Low, *EntrySignature);
+    if (HasBoolean) {
+      std::map<va_t, SourceFunctionTypeHint> NativeCallees;
+      std::set<va_t> ConflictingNativeCallees;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops) {
+          if (!Op.SourceCallHint || Op.Opcode != NdOp::CALL ||
+              Op.NumInputs < 1 || !Op.Inputs[0].isConst() ||
+              Op.SourceCallHint->CallKind != SourceCallTypeHint::Kind::Native ||
+              Op.SourceCallHint->TargetAddress != Op.Inputs[0].ConstVal ||
+              Op.DoesNotReturn ||
+              ConflictingNativeCallees.count(Op.Inputs[0].ConstVal))
+            continue;
+          if (Op.NumInputs !=
+              sourceABIParameters(Op.SourceCallHint->Signature).size() + 1)
+            continue;
+          auto [It, Inserted] = NativeCallees.emplace(
+              Op.Inputs[0].ConstVal, Op.SourceCallHint->Signature);
+          if (!Inserted &&
+              !equalSourceABIs(It->second, Op.SourceCallHint->Signature)) {
+            NativeCallees.erase(It);
+            ConflictingNativeCallees.insert(Op.Inputs[0].ConstVal);
+          }
+        }
+      BooleanProjections = qualifySwiftBooleanProjections(
+          Image, *Low, *EntrySignature, &NativeCallees);
+    }
   }
   size_t Remaining = 262144;
   for (const auto &Block : Med.Blocks)

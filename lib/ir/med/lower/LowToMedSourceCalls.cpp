@@ -110,7 +110,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (Image && (EntrySignature || ProvisionalBooleanEntry)) {
     const auto Booleans = qualifySwiftBooleanProjections(
         *Image, Low,
-        EntrySignature ? *EntrySignature : *ProvisionalBooleanEntry);
+        EntrySignature ? *EntrySignature : *ProvisionalBooleanEntry,
+        SourceCalleeTypeHints);
     for (const auto &Boolean : Booleans) {
       const auto Signature =
           swiftBooleanNormalizedSignature(Boolean.Runtime.ImportName);
