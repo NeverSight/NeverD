@@ -1527,6 +1527,71 @@ TEST(ObjCSourceBindings, SwiftStdlibDescriptorRejectsUnprovenImports) {
   }
 }
 
+TEST(ObjCSourceBindings,
+     SwiftConcreteTypeInstantiatorAcceptsIntegerReferenceCarrier) {
+  SwiftTypeMetadataFixture F(Arch::AArch64);
+  auto Call = F.Function.Body.front().Val;
+  ASSERT_TRUE(Call && Call->SourceCallHint);
+  auto Native = std::make_shared<SourceCallTypeHint>(*Call->SourceCallHint);
+  Native->TargetName = "___swift_instantiateConcreteTypeFromMangledNameV2";
+  Native->Signature.Parameters[1].Type = NdType::makeInt(8, false);
+  std::string Diagnostic;
+  ASSERT_TRUE(
+      assignDarwinScalarSourceABI(Native->Signature, F.Image.Arch, Diagnostic))
+      << Diagnostic;
+  Call->SourceCallHint = Native;
+  Call->Operands[1]->Type = NdType::makeInt(8, false);
+
+  const auto Result = bindObjCSourceReferences(F.Function, F.Image);
+  ASSERT_TRUE(Result.Limitation.empty()) << Result.Limitation;
+  ASSERT_EQ(Result.SwiftTypeMetadataPairs.size(), 1U);
+  auto Reference = Result.Function.Body.front().Val->Operands[1];
+  ASSERT_TRUE(Reference->SourceCallHint);
+  EXPECT_EQ(Reference->SourceCallHint->CallKind,
+            SourceCallTypeHint::Kind::RuntimeSwiftTypeMetadataAddress);
+  EXPECT_EQ(Reference->SourceCallHint->TargetAddress,
+            SwiftTypeMetadataFixture::Reference);
+  EXPECT_TRUE(objcSourceCallBound(*Reference, F.Image, {}));
+
+  MedVar ReferenceLocal;
+  ReferenceLocal.Kind = MedVar::Temp;
+  ReferenceLocal.Id = 503;
+  ReferenceLocal.Size = 8;
+  HighStmt Assignment;
+  Assignment.Kind = StmtKind::Assign;
+  Assignment.Dst = HighExpr::makeVar(ReferenceLocal, NdType::makeInt(8, false));
+  Assignment.Val = HighExpr::makeConst(SwiftTypeMetadataFixture::Reference, 8,
+                                       ConstantAddressProvenance::DataAddress);
+  F.Function.Body.insert(F.Function.Body.begin(), Assignment);
+  Call->Operands[1] =
+      HighExpr::makeVar(ReferenceLocal, NdType::makeInt(8, false));
+  EXPECT_TRUE(objc_binding_detail::swiftTypeMetadataPairCallCarrier(
+      *Call, F.Image.Arch));
+  const auto AliasFlow = analyzeHighSourceFlow(F.Function, false);
+  EXPECT_TRUE(AliasFlow.Complete);
+  EXPECT_TRUE(AliasFlow.Items.empty());
+  const auto Aliased = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_EQ(Aliased.SwiftTypeMetadataPairs.size(), 1U);
+  EXPECT_TRUE(Aliased.Function.Body.front().Val->SourceCallHint);
+  ASSERT_TRUE(Aliased.Limitation.empty()) << Aliased.Limitation;
+  ASSERT_EQ(Aliased.SwiftTypeMetadataPairs.size(), 1U);
+  ASSERT_TRUE(Aliased.Function.Body.front().Val->SourceCallHint);
+  F.Function.Body.erase(F.Function.Body.begin());
+  Call->Operands[1] =
+      HighExpr::makeConst(SwiftTypeMetadataFixture::Reference, 8,
+                          ConstantAddressProvenance::DataAddress);
+  Call->Operands[1]->Type = NdType::makeInt(8, false);
+
+  Native->TargetName = "unrelated_helper";
+  const auto Unrelated = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_TRUE(Unrelated.SwiftTypeMetadataPairs.empty());
+  EXPECT_FALSE(Unrelated.Limitation.empty());
+  Native->TargetName = "___swift_instantiateConcreteTypeFromMangledNameV2";
+  Native->Signature.Parameters[1].Type = NdType::makeInt(4, false);
+  const auto Narrow = bindObjCSourceReferences(F.Function, F.Image);
+  EXPECT_TRUE(Narrow.SwiftTypeMetadataPairs.empty());
+}
+
 TEST(ObjCSourceBindings, SwiftStdlibMetadataRecipeExecutesWithSharedCache) {
   auto F = swiftStdlibTypeMetadataFixture();
   const auto Result = bindObjCSourceReferences(F.Function, F.Image);

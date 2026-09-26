@@ -1257,6 +1257,48 @@ swiftTypeMetadataPair(const BinaryImage &Image, va_t CacheAddress,
   return Proof->Address;
 }
 
+/// The compiler's concrete-type instantiator dereferences both address
+/// registers, although lifting may type the MR reference as an integer. Keep
+/// the same carrier rule in the local-alias proof and the direct call binder.
+inline bool swiftTypeMetadataPairCallCarrier(const HighExpr &Call,
+                                             Arch Architecture) {
+  if (Call.Kind != ExprKind::Call || !Call.SourceCallHint ||
+      Call.SourceCallHint->CallKind != SourceCallTypeHint::Kind::Native ||
+      Call.Operands.size() < 2 || Call.Operands.size() > 4)
+    return false;
+  const auto &Signature = Call.SourceCallHint->Signature;
+  if (Signature.Parameters.size() != Call.Operands.size())
+    return false;
+  std::string Reason;
+  if (!validateSourceABI(Signature, Reason))
+    return false;
+  const bool PointerParameters = std::all_of(
+      Signature.Parameters.begin(), Signature.Parameters.end(),
+      [](const auto &Parameter) {
+        return Parameter.Type && Parameter.Type->Kind == NdTypeKind::Ptr;
+      });
+  if (PointerParameters)
+    return true;
+  const auto MetadataInstantiator = [](llvm::StringRef Name) {
+    return Name.ltrim('_') == "swift_instantiateConcreteTypeFromMangledNameV2";
+  };
+  const llvm::StringRef CalleeName = Call.SourceCallHint->TargetName.empty()
+                                         ? Call.CallTarget
+                                         : Call.SourceCallHint->TargetName;
+  return Architecture == Arch::AArch64 &&
+         Signature.Origin ==
+             SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+         !Call.IsIndirectCall &&
+         Call.CallAddr == Call.SourceCallHint->TargetAddress &&
+         MetadataInstantiator(CalleeName) && Signature.Parameters.size() == 2 &&
+         std::all_of(Signature.Parameters.begin(), Signature.Parameters.end(),
+                     [](const auto &Parameter) {
+                       return Parameter.Type && Parameter.Type->Size == 8 &&
+                              (Parameter.Type->Kind == NdTypeKind::Ptr ||
+                               Parameter.Type->Kind == NdTypeKind::Int);
+                     });
+}
+
 inline std::optional<SourceCallTypeHint> swiftTypeMetadataAddressHint(
     const BinaryImage &Image, va_t Address,
     const SourceCallTypeHint::SwiftTypeMetadataAddress &Candidate) {
@@ -2965,51 +3007,37 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
         }
         if (const auto Local = MetadataLocalAt(Value))
           ++MetadataReads[*Local];
-        if (Value->Kind == ExprKind::Call && Value->SourceCallHint &&
-            Value->SourceCallHint->CallKind ==
-                SourceCallTypeHint::Kind::Native &&
-            Value->Operands.size() >= 2 && Value->Operands.size() <= 4 &&
-            Value->SourceCallHint->Signature.Parameters.size() ==
-                Value->Operands.size()) {
-          const auto &Signature = Value->SourceCallHint->Signature;
-          std::string Reason;
-          const bool PointerParameters = std::all_of(
-              Signature.Parameters.begin(), Signature.Parameters.end(),
-              [](const auto &Parameter) {
-                return Parameter.Type &&
-                       Parameter.Type->Kind == NdTypeKind::Ptr;
-              });
-          if (PointerParameters && validateSourceABI(Signature, Reason))
-            for (size_t I = 0; I < Value->Operands.size(); ++I)
-              for (size_t J = I + 1; J < Value->Operands.size(); ++J) {
-                if (Value->Operands.size() == 4 && (I != 2 || J != 3))
-                  continue;
-                // Direct constants are handled by the ordinary call binder.
-                // This prepass only needs pairs involving a local alias.
-                if (!MetadataLocalAt(Value->Operands[I]) &&
-                    !MetadataLocalAt(Value->Operands[J]))
-                  continue;
-                const auto First = MetadataAddressAt(Value->Operands[I]);
-                const auto Second = MetadataAddressAt(Value->Operands[J]);
-                if (!First || !Second)
-                  continue;
-                auto Pair = swiftTypeMetadataPair(Image, *First, *Second);
-                if (!Pair)
-                  Pair = swiftTypeMetadataPair(Image, *Second, *First);
-                if (!Pair)
-                  continue;
-                for (const auto Index : {I, J})
-                  if (const auto Local =
-                          MetadataLocalAt(Value->Operands[Index])) {
-                    ++MetadataPairedReads[*Local];
-                    const MetadataAlias Alias{
-                        MetadataDefinitions.at(*Local).Address, *Pair};
-                    const auto [Found, Fresh] =
-                        MetadataPairCandidates.emplace(*Local, Alias);
-                    if (!Fresh && Found->second != Alias)
-                      MetadataConflicts.insert(*Local);
-                  }
-              }
+        if (swiftTypeMetadataPairCallCarrier(*Value, Image.Arch)) {
+          for (size_t I = 0; I < Value->Operands.size(); ++I)
+            for (size_t J = I + 1; J < Value->Operands.size(); ++J) {
+              if (Value->Operands.size() == 4 && (I != 2 || J != 3))
+                continue;
+              // Direct constants are handled by the ordinary call binder.
+              // This prepass only needs pairs involving a local alias.
+              if (!MetadataLocalAt(Value->Operands[I]) &&
+                  !MetadataLocalAt(Value->Operands[J]))
+                continue;
+              const auto First = MetadataAddressAt(Value->Operands[I]);
+              const auto Second = MetadataAddressAt(Value->Operands[J]);
+              if (!First || !Second)
+                continue;
+              auto Pair = swiftTypeMetadataPair(Image, *First, *Second);
+              if (!Pair)
+                Pair = swiftTypeMetadataPair(Image, *Second, *First);
+              if (!Pair)
+                continue;
+              for (const auto Index : {I, J})
+                if (const auto Local =
+                        MetadataLocalAt(Value->Operands[Index])) {
+                  ++MetadataPairedReads[*Local];
+                  const MetadataAlias Alias{
+                      MetadataDefinitions.at(*Local).Address, *Pair};
+                  const auto [Found, Fresh] =
+                      MetadataPairCandidates.emplace(*Local, Alias);
+                  if (!Fresh && Found->second != Alias)
+                    MetadataConflicts.insert(*Local);
+                }
+            }
         }
         for (const auto &Operand : Value->Operands)
           ScanMetadata(Operand, Depth + 1);
@@ -3679,58 +3707,58 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       Result.Dependencies.insert(Expression->SourceCallHint->TargetAddress);
     std::optional<SourceCallTypeHint::SwiftTypeMetadataAddress>
         SwiftMetadataPair;
-    if (Expression->Kind == ExprKind::Call && Expression->SourceCallHint &&
-        Expression->SourceCallHint->CallKind ==
-            SourceCallTypeHint::Kind::Native &&
-        Expression->Operands.size() >= 2 && Expression->Operands.size() <= 4 &&
-        Expression->SourceCallHint->Signature.Parameters.size() ==
-            Expression->Operands.size()) {
-      const auto &Signature = Expression->SourceCallHint->Signature;
-      std::string Reason;
-      const bool PointerParameters = std::all_of(
-          Signature.Parameters.begin(), Signature.Parameters.end(),
-          [](const auto &Parameter) {
-            return Parameter.Type && Parameter.Type->Kind == NdTypeKind::Ptr;
-          });
-      if (PointerParameters && validateSourceABI(Signature, Reason)) {
-        bool Ambiguous = false;
-        for (size_t FirstIndex = 0; FirstIndex < Expression->Operands.size();
-             ++FirstIndex) {
-          if (!Expression->Operands[FirstIndex])
+    const auto MetadataArgumentAddress =
+        [&](const ExprPtr &Operand) -> std::optional<va_t> {
+      if (!Operand)
+        return std::nullopt;
+      if (const auto Address = constantAddress(*Operand))
+        return Address;
+      const auto Local = MetadataLocalAt(Operand);
+      const auto Plan =
+          Local ? MetadataAliasPlans.find(*Local) : MetadataAliasPlans.end();
+      return Plan == MetadataAliasPlans.end()
+                 ? std::nullopt
+                 : std::optional<va_t>(Plan->second.first);
+    };
+    if (swiftTypeMetadataPairCallCarrier(*Expression, Image.Arch)) {
+      bool Ambiguous = false;
+      for (size_t FirstIndex = 0; FirstIndex < Expression->Operands.size();
+           ++FirstIndex) {
+        if (!Expression->Operands[FirstIndex])
+          continue;
+        const auto First =
+            MetadataArgumentAddress(Expression->Operands[FirstIndex]);
+        if (!First)
+          continue;
+        for (size_t SecondIndex = FirstIndex + 1;
+             SecondIndex < Expression->Operands.size(); ++SecondIndex) {
+          // Four-argument value helpers pass destination and source first;
+          // only their trailing cache/reference pair is a metadata recipe.
+          if (Expression->Operands.size() == 4 &&
+              (FirstIndex != 2 || SecondIndex != 3))
             continue;
-          const auto First = constantAddress(*Expression->Operands[FirstIndex]);
-          if (!First)
+          if (!Expression->Operands[SecondIndex])
             continue;
-          for (size_t SecondIndex = FirstIndex + 1;
-               SecondIndex < Expression->Operands.size(); ++SecondIndex) {
-            // Four-argument value helpers pass destination and source first;
-            // only their trailing cache/reference pair is a metadata recipe.
-            if (Expression->Operands.size() == 4 &&
-                (FirstIndex != 2 || SecondIndex != 3))
-              continue;
-            if (!Expression->Operands[SecondIndex])
-              continue;
-            const auto Second =
-                constantAddress(*Expression->Operands[SecondIndex]);
-            if (!Second)
-              continue;
-            auto Candidate = swiftTypeMetadataPair(Image, *First, *Second);
-            if (!Candidate)
-              Candidate = swiftTypeMetadataPair(Image, *Second, *First);
-            if (!Candidate)
-              continue;
-            if (SwiftMetadataPair && *SwiftMetadataPair != *Candidate) {
-              Ambiguous = true;
-              break;
-            }
-            SwiftMetadataPair = std::move(Candidate);
-          }
-          if (Ambiguous)
+          const auto Second =
+              MetadataArgumentAddress(Expression->Operands[SecondIndex]);
+          if (!Second)
+            continue;
+          auto Candidate = swiftTypeMetadataPair(Image, *First, *Second);
+          if (!Candidate)
+            Candidate = swiftTypeMetadataPair(Image, *Second, *First);
+          if (!Candidate)
+            continue;
+          if (SwiftMetadataPair && *SwiftMetadataPair != *Candidate) {
+            Ambiguous = true;
             break;
+          }
+          SwiftMetadataPair = std::move(Candidate);
         }
         if (Ambiguous)
-          SwiftMetadataPair.reset();
+          break;
       }
+      if (Ambiguous)
+        SwiftMetadataPair.reset();
     }
     std::optional<va_t> SingletonDescriptor;
     size_t SingletonDescriptorIndex = 0;
