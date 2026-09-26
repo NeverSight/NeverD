@@ -29947,7 +29947,7 @@ TEST(HighCPointerAddresses, ConsecutiveSkipGotosDropsReloadedCallPredicate) {
   EXPECT_EQ(Count, 1u) << Source;
 }
 
-TEST(HighCPointerAddresses, InvertThenDropsReloadedSkipInsideCxxTry) {
+TEST(HighCPointerAddresses, InvertThenKeepsReloadedCallInsideCxxTry) {
   HighFunc Func;
   Func.Name = "skip_dup_try";
   Func.Entry = 0x140001000;
@@ -30034,7 +30034,9 @@ TEST(HighCPointerAddresses, InvertThenDropsReloadedSkipInsideCxxTry) {
         Walk(T);
   };
   Walk(Func.Body[0]);
-  EXPECT_EQ(Count, 1u);
+  // The second predicate is a distinct call, and no purity proof allows its
+  // side effects to disappear even when both guards jump to the same label.
+  EXPECT_EQ(Count, 2u);
 }
 
 TEST(HighCPointerAddresses, ConsecutiveSkipGotosSharedTailKeepsGoto) {
