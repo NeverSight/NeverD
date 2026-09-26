@@ -5235,6 +5235,35 @@ TEST(ObjCSourceBindings,
     EXPECT_EQ(ComparedContext->SourceCallHint->CallKind,
               SourceCallTypeHint::Kind::RuntimeKVOContext);
     EXPECT_TRUE(objcSourceCallBound(*ComparedContext, F.Image, {}));
+
+    MedVar Local;
+    Local.Kind = MedVar::Temp;
+    Local.Id = 50001;
+    Local.Size = 8;
+    HighStmt Define;
+    Define.Kind = StmtKind::Assign;
+    Define.Dst = HighExpr::makeVar(Local, NdType::makePtr());
+    Define.Val = HighExpr::makeConst(
+        Address, 8, ConstantAddressProvenance::DataAddress);
+    F.Function.Body.insert(F.Function.Body.begin(), Define);
+    auto LocalValue = HighExpr::makeVar(Local, NdType::makePtr());
+    F.Function.Body[1].RetVal =
+        HighExpr::makeBinop(NdOp::INT_EQUAL, Context, LocalValue);
+    Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    EXPECT_EQ(Bound.KVOContexts, std::set<va_t>{Address});
+    ASSERT_TRUE(Bound.Function.Body[0].Val->SourceCallHint);
+    EXPECT_EQ(Bound.Function.Body[0].Val->SourceCallHint->CallKind,
+              SourceCallTypeHint::Kind::RuntimeKVOContext);
+
+    F.Function.Body[1].RetVal =
+        HighExpr::makeBinop(NdOp::BOOL_OR,
+                            HighExpr::makeBinop(NdOp::INT_EQUAL, Context,
+                                               LocalValue),
+                            LocalValue);
+    Bound = bindObjCSourceReferences(F.Function, F.Image);
+    EXPECT_FALSE(Bound.Limitation.empty());
+    EXPECT_TRUE(Bound.KVOContexts.empty());
   }
 }
 

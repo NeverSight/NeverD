@@ -1867,6 +1867,97 @@ inline bool exactParameterValue(const ExprPtr &Value, size_t Parameter,
   return false;
 }
 
+/// A lifted callback may keep its static KVO context in a register before
+/// comparing it with the context parameter. Rebuild the register's definition
+/// only when it has one exact image-address definition and every read is that
+/// callback comparison; other uses must retain the image-data diagnostic.
+inline std::map<HighSourceLocalIdentity, va_t> kvoContextLocalAliases(
+    const HighFunc &Function, const BinaryImage &Image,
+    std::optional<size_t> ContextParameter) {
+  std::map<HighSourceLocalIdentity, va_t> Aliases;
+  if (!ContextParameter)
+    return Aliases;
+  struct Definition {
+    va_t Address = 0;
+    unsigned Count = 0;
+    bool Valid = false;
+  };
+  std::map<HighSourceLocalIdentity, Definition> Definitions;
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (!Statement.Dst ||
+        (Statement.Dst->Kind != ExprKind::Var &&
+         Statement.Dst->Kind != ExprKind::Phi) ||
+        !Statement.Dst->Operands.empty() ||
+        (Statement.Dst->Var.Kind != MedVar::Reg &&
+         Statement.Dst->Var.Kind != MedVar::Temp))
+      return;
+    auto &Def = Definitions[highSourceLocalIdentity(Statement.Dst->Var)];
+    ++Def.Count;
+    const auto &Value = Statement.Val;
+    Def.Valid = Def.Count == 1 && Statement.Kind == StmtKind::Assign &&
+                Value && Value->Kind == ExprKind::Const && Value->Type &&
+                Value->Type->Size == 8 && Statement.Dst->Type &&
+                Statement.Dst->Type->Size == 8 &&
+                isExactAddressProvenance(Value->ConstProvenance) &&
+                !isCodeAddressProvenance(Value->ConstProvenance) &&
+                (Value->AddressOwnerVA == InvalidVA ||
+                 Value->AddressOwnerVA == Value->ConstVal) &&
+                bool(kvoContextHint(Image, Value->ConstVal));
+    if (Def.Valid)
+      Def.Address = Value->ConstVal;
+  });
+  std::map<HighSourceLocalIdentity, unsigned> Reads, ComparedReads;
+  size_t Budget = 1000000;
+  bool Complete = true;
+  std::function<void(const ExprPtr &, const HighExpr *, size_t, unsigned)> Scan =
+      [&](const ExprPtr &Value, const HighExpr *Parent, size_t Index,
+          unsigned Depth) {
+        if (!Value)
+          return;
+        if (Depth > 200 || !Budget--) {
+          Complete = false;
+          return;
+        }
+        if ((Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+            Value->Operands.empty() &&
+            (Value->Var.Kind == MedVar::Reg ||
+             Value->Var.Kind == MedVar::Temp)) {
+          const auto Local = highSourceLocalIdentity(Value->Var);
+          if (const auto Found = Definitions.find(Local);
+              Found != Definitions.end() && Found->second.Valid) {
+            ++Reads[Local];
+            if (Parent && Parent->Kind == ExprKind::BinOp &&
+                (Parent->Op == NdOp::INT_EQUAL ||
+                 Parent->Op == NdOp::INT_NOTEQUAL) &&
+                Parent->Operands.size() == 2 && Index < 2 &&
+                exactParameterValue(Parent->Operands[1 - Index],
+                                    *ContextParameter))
+              ++ComparedReads[Local];
+          }
+        }
+        for (size_t I = 0; I < Value->Operands.size(); ++I)
+          Scan(Value->Operands[I], Value.get(), I, Depth + 1);
+      };
+  walkStmts(Function.Body, [&](const HighStmt &Statement) {
+    if (Statement.Dst)
+      for (size_t I = 0; I < Statement.Dst->Operands.size(); ++I)
+        Scan(Statement.Dst->Operands[I], Statement.Dst.get(), I, 0);
+    forEachRhsExpr(Statement,
+                   [&](const ExprPtr &Value) { Scan(Value, nullptr, 0, 0); });
+  });
+  if (!Complete)
+    return Aliases;
+  for (const auto &[Local, Def] : Definitions)
+    if (Def.Valid && Reads[Local] && Reads[Local] == ComparedReads[Local])
+      Aliases.emplace(Local, Def.Address);
+  if (!Aliases.empty()) {
+    const auto Flow = analyzeHighSourceFlow(Function, false);
+    if (!Flow.Complete || !Flow.Items.empty())
+      Aliases.clear();
+  }
+  return Aliases;
+}
+
 inline std::optional<SourceCallTypeHint> profileStorageHint(Arch Architecture,
                                                             va_t Base) {
   SourceCallTypeHint Hint;
@@ -2805,6 +2896,8 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
       directLocalStorageAccessExtents(Function, Image);
   const auto KVOCallbackParameter =
       kvoCallbackContextParameter(Function, Image);
+  const auto KVOContextAliases =
+      kvoContextLocalAliases(Function, Image, KVOCallbackParameter);
   // A metadata pair can be moved through locals before an outlined helper
   // call. Bind its defining address only when every read of each local is a
   // direct argument of an exact, typed call carrying the proven pair.
@@ -4190,6 +4283,20 @@ inline ObjCSourceBindingResult bindObjCSourceReferences(
              Statement.Dst->Kind == ExprKind::Phi) &&
             Statement.Dst->Operands.empty()) {
           const auto Local = highSourceLocalIdentity(Statement.Dst->Var);
+          if (const auto Found = KVOContextAliases.find(Local);
+              Found != KVOContextAliases.end() && Expression &&
+              Expression->Kind == ExprKind::Const &&
+              Expression->ConstVal == Found->second) {
+            if (auto Hint = kvoContextHint(Image, Found->second)) {
+              auto Context = HighExpr::makeCall({}, 0, {});
+              Context->Type = Expression->Type;
+              Context->SourceCallHint =
+                  std::make_shared<SourceCallTypeHint>(std::move(*Hint));
+              Expression = std::move(Context);
+              Result.KVOContexts.insert(Found->second);
+              return;
+            }
+          }
           if (const auto Found = MetadataAliasPlans.find(Local);
               Found != MetadataAliasPlans.end()) {
             const auto &[Address, Pair] = Found->second;
