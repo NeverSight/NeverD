@@ -113,6 +113,29 @@ TEST(HighSourceRanges, CompoundPredicatesPreserveEveryShortCircuitArm) {
     }
 }
 
+TEST(HighSourceRanges, PureOpaquePredicatePreservesIndependentGuard) {
+  auto Index = input(0, 8);
+  auto OutOfRange = compare(NdOp::INT_LESS, HighExpr::makeConst(9, 8),
+                            Index);
+  auto Opaque = HighExpr::makeBinop(
+      NdOp::INT_DIV, Index, HighExpr::makeConst(2, 8));
+  auto Other = compare(NdOp::INT_EQUAL, Opaque,
+                       HighExpr::makeConst(0, 8));
+  auto Guard = compare(NdOp::BOOL_OR, OutOfRange, Other);
+  HighFunc F;
+  F.Body = {branch(Guard, {result(HighExpr::makeConst(0, 8))},
+                   {result(Index)})};
+  auto Bounds = highSourceUnsignedUpperBounds(
+      F, {{&F.Body[0].ElseBody[0], Index}});
+  ASSERT_EQ(Bounds.size(), 1U);
+  EXPECT_EQ(Bounds[0], 9U);
+
+  // A hidden register write during the other operand invalidates the fact.
+  Other->IntrinsicOutputs.push_back(Index->Var);
+  Bounds = highSourceUnsignedUpperBounds(F, {{&F.Body[0].ElseBody[0], Index}});
+  EXPECT_EQ(Bounds[0], UINT64_MAX);
+}
+
 TEST(HighSourceRanges, WrappedIndicesMasksAndWidthsKeepTheirOwnBounds) {
   auto Index =
       HighExpr::makeBinop(NdOp::INT_SUB, input(), HighExpr::makeConst(3, 4));

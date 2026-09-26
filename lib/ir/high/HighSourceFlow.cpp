@@ -659,25 +659,43 @@ class SourceFlow {
         Test->Type->Size > 8 || Test->IntrinsicId != Intrinsic::None ||
         !Test->IntrinsicOutputs.empty() ||
         Test->MemoryOrdering != NdMemoryOrdering::None ||
-        Test->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        Test->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Test->IndirectTarget)
       return false;
-    if (Test->Kind == ExprKind::UnaryOp && Test->Op == NdOp::BOOL_NOT &&
-        Test->Operands.size() == 1)
-      return purePredicate(Test->Operands[0], Depth + 1);
-    if (Test->Kind == ExprKind::BinOp && Test->Operands.size() == 2) {
-      if (Test->Op == NdOp::BOOL_AND || Test->Op == NdOp::BOOL_OR)
-        return purePredicate(Test->Operands[0], Depth + 1) &&
-               purePredicate(Test->Operands[1], Depth + 1);
-      if (Test->Op == NdOp::INT_LESS || Test->Op == NdOp::INT_LESSEQUAL ||
-          Test->Op == NdOp::INT_EQUAL || Test->Op == NdOp::INT_NOTEQUAL ||
-          Test->Op == NdOp::INT_SLESS || Test->Op == NdOp::INT_SLESSEQUAL) {
-        std::set<size_t> Unused;
-        return bool(indexRange(Test->Operands[0], Unused)) &&
-               bool(indexRange(Test->Operands[1], Unused));
+    if (Test->Kind == ExprKind::Const || Test->Kind == ExprKind::Var ||
+        Test->Kind == ExprKind::Phi || Test->Kind == ExprKind::Undef)
+      return Test->Operands.empty();
+    if (Test->Kind != ExprKind::BinOp && Test->Kind != ExprKind::UnaryOp &&
+        Test->Kind != ExprKind::Cast && Test->Kind != ExprKind::BitCast &&
+        Test->Kind != ExprKind::Field)
+      return false;
+    if (Test->Kind == ExprKind::BinOp || Test->Kind == ExprKind::UnaryOp)
+      switch (Test->Op) {
+      case NdOp::NOP:
+      case NdOp::LOAD:
+      case NdOp::STORE:
+      case NdOp::ATOMIC_XCHG:
+      case NdOp::ATOMIC_ADD:
+      case NdOp::ATOMIC_CMPXCHG:
+      case NdOp::BRANCH:
+      case NdOp::COND_BR:
+      case NdOp::INDIR_BR:
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+      case NdOp::RETURN:
+      case NdOp::INTRINSIC:
+        return false;
+      default:
+        break;
       }
-    }
-    std::set<size_t> Unused;
-    return bool(indexRange(Test, Unused));
+    // An unsupported arithmetic expression need not have a known range to
+    // preserve the bound from another arm of a compound condition. It only
+    // needs to be unable to change any source local while it is evaluated.
+    return !Test->Operands.empty() &&
+           std::all_of(Test->Operands.begin(), Test->Operands.end(),
+                       [&](const ExprPtr &Operand) {
+                         return purePredicate(Operand, Depth + 1);
+                       });
   }
 
   // Intersections constrain both predicates. Unions retain every feasible
