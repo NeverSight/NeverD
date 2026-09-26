@@ -124,6 +124,7 @@ add_neverd_unittest(NeverDLiftTests
   core/HighSourceRangeTests.cpp
   core/ObjCCallHintTests.cpp
   core/ObjCSentinelCallTests.cpp
+  core/DarwinAccelerateSourceCallTests.cpp
   core/DarwinUIKitSourceCallTests.cpp
   core/ObjCCategoryTests.cpp
   core/ObjCStorageTests.cpp
@@ -961,6 +962,7 @@ add_neverd_unittest(NeverDObjCSourceCallTests
   core/ObjCBlocksTests.cpp
   core/ObjCCallHintTests.cpp
   core/ObjCSentinelCallTests.cpp
+  core/DarwinAccelerateSourceCallTests.cpp
   core/DarwinUIKitSourceCallTests.cpp
   core/HighCSourceCallTests.cpp
   sdk/ObjCBlockSourceTests.cpp
