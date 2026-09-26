@@ -2846,6 +2846,40 @@ TEST(ObjCSourceBindings, ImmutableScalarsPreserveWidthSignAndFloatingBits) {
   }
 }
 
+TEST(ObjCSourceBindings, BooleanConditionsDoNotTurnScalarReadsIntoAddresses) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    Fixture F;
+    F.Image.Arch = Architecture;
+    F.Image.ObjCSourceReferences.clear();
+    llvm::support::endian::write64le(F.Image.Segments[0].Data.data() + 0x40,
+                                     7);
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.Id = 0;
+    Parameter.Size = 8;
+    auto Pointer = HighExpr::makeVar(Parameter, NdType::makePtr());
+    auto Load = HighExpr::makeLoad(HighExpr::makeConst(0x1040, 8),
+                                   NdType::makeInt(8));
+    auto Compare = HighExpr::makeBinop(NdOp::INT_EQUAL, Load,
+                                       HighExpr::makeConst(7, 8));
+    auto Condition = HighExpr::makeBinop(NdOp::BOOL_OR, Pointer, Compare);
+    ASSERT_EQ(Compare->Type->Kind, NdTypeKind::Int);
+    ASSERT_EQ(Compare->Type->Size, 1U);
+    ASSERT_EQ(Condition->Type->Kind, NdTypeKind::Int);
+    ASSERT_EQ(Condition->Type->Size, 1U);
+    F.Function.ReturnType = Condition->Type;
+    F.Function.Body[0].RetVal = Condition;
+
+    const auto Bound = bindObjCSourceReferences(F.Function, F.Image);
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    const auto Scalar = Bound.Function.Body[0].RetVal->Operands[1]->Operands[0];
+    ASSERT_EQ(Scalar->Kind, ExprKind::BitCast);
+    ASSERT_EQ(Scalar->Operands[0]->Kind, ExprKind::Const);
+    EXPECT_EQ(Scalar->Operands[0]->ConstVal, 7U);
+    EXPECT_EQ(Load->Kind, ExprKind::Load);
+  }
+}
+
 TEST(ObjCSourceBindings,
      ImmutableWideScalarsPreserveBothLanesAndRejectPointers) {
   for (Arch Architecture : {Arch::AArch64, Arch::X64}) {

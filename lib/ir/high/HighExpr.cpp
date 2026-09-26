@@ -151,7 +151,29 @@ ExprPtr HighExpr::makeBinop(NdOp Op, ExprPtr LHS, ExprPtr RHS) {
   E->Op = Op;
   E->Operands.push_back(LHS);
   E->Operands.push_back(RHS);
-  if (LHS->Type)
+  switch (Op) {
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::FLOAT_EQUAL:
+  case NdOp::FLOAT_NOTEQUAL:
+  case NdOp::FLOAT_LESS:
+  case NdOp::FLOAT_LESSEQUAL:
+    E->Type = NdType::makeInt(1, false);
+    break;
+  default:
+    break;
+  }
+  if (!E->Type && LHS->Type)
     E->Type = LHS->Type;
   return E;
 }
@@ -161,7 +183,9 @@ ExprPtr HighExpr::makeUnary(NdOp Op, ExprPtr Operand) {
   E->Kind = ExprKind::UnaryOp;
   E->Op = Op;
   E->Operands.push_back(Operand);
-  if (Operand->Type)
+  if (Op == NdOp::BOOL_NOT || Op == NdOp::FLOAT_ISNAN)
+    E->Type = NdType::makeInt(1, false);
+  else if (Operand->Type)
     E->Type = Operand->Type;
   return E;
 }
