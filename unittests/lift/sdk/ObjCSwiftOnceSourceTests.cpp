@@ -1222,6 +1222,24 @@ TEST(SwiftOnceSources, ProjectsSharedReturnObjCLazyStaticGetterThunk) {
   }
 }
 
+TEST(SwiftOnceSources, ProjectsIfElseSharedReturnObjCLazyStaticGetterThunk) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    for (const bool SeparateRetain : {false, true}) {
+      ObjCThunkFixture F(Architecture, SeparateRetain, true);
+      F.Pipeline.HighFuncs[0].Body[1].Kind = StmtKind::IfElse;
+
+      const auto Plan = discoverSwiftOnceSources(F.Image, F.Pipeline);
+      ASSERT_EQ(Plan.ObjCThunks.size(), 1U);
+      auto Bound = bindSwiftOnceSourceReferences(
+          F.Pipeline.HighFuncs[0], F.Image, Plan, F.functions());
+      EXPECT_EQ(Bound.SwiftOnceObjCThunks,
+                std::set<va_t>{ObjCThunkFixture::ThunkAddress});
+      EXPECT_TRUE(finalizeSwiftOnceObjCThunkProjection(Bound.Function, Plan));
+      EXPECT_EQ(Bound.Function.Params.size(), 2U);
+    }
+  }
+}
+
 TEST(SwiftOnceSources, SharedReturnObjCGetterRequiresExactControlFlow) {
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);

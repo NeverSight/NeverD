@@ -940,7 +940,10 @@ objcGetterThunkContract(const HighFunc &F, const BinaryImage &Image) {
            Label.MemoryAddressSpace == NdMemoryAddressSpace::Default;
   };
   if (!PredicateAssignment || !StorageAssignment || !RetainAssignment ||
-      !ResultAssignment || Branch.Kind != StmtKind::If || !Branch.Cond ||
+      !ResultAssignment ||
+      (Branch.Kind != StmtKind::If &&
+       !(SharedReturn && Branch.Kind == StmtKind::IfElse)) ||
+      !Branch.Cond ||
       (!BranchGoto && !SharedReturn) || !InertContinuationLabel() ||
       (BranchGoto &&
        Label.Addr != Branch.Body[OnceIndex + 1].GotoTarget) ||
