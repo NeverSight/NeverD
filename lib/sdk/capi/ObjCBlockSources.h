@@ -330,6 +330,8 @@ public:
         Inputs.size() == 1 &&
         (E->Kind != ExprKind::UnaryOp || E->Op == NdOp::INT_ZEXT ||
          E->Op == NdOp::INT_SEXT)) {
+      if (!E->Operands[0] || !E->Operands[0]->Type)
+        throw Invalid("block source cast has no typed input value");
       auto V = Inputs[0];
       if (V.K == Value::Number && scalarWidth(Bytes) &&
           scalarWidth(E->Operands[0]->Type->Size)) {

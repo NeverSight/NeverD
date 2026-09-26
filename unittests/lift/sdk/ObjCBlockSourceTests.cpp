@@ -100,6 +100,18 @@ TEST(ObjCBlockSources, FlowJoinPoisonsOnlyPossiblePointerIdentities) {
   EXPECT_FALSE(Values::merge(Into, From));
 }
 
+TEST(ObjCBlockSources, UntypedCallCannotSupplyCastBlockIdentity) {
+  BlockFixture Fixture;
+  HighFunc Function;
+  const ObjCBlockSourceContext Source(Fixture.Image);
+  objc_block_source_detail::Values State(Source, Function);
+  auto Cast = std::make_shared<HighExpr>();
+  Cast->Kind = ExprKind::Cast;
+  Cast->Type = NdType::makeInt(8);
+  Cast->Operands.push_back(HighExpr::makeCall("unknown", 0x1100, {}));
+  EXPECT_THROW(State.eval(Cast), objc_block_source_detail::Invalid);
+}
+
 TEST(ObjCBlockSources, CallbackClassRequiresExactPublishedDescriptor) {
   BlockFixture F;
   F.string(F.Signature, "v24@?0@\"WMFFeedNewsStory\"8Q16");
