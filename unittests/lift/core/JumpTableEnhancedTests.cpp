@@ -317,8 +317,9 @@ static fs::path i386AdjacentFunctionPointerObj() {
 
 static neverd::LowFunc buildI386AdjacentTwoTable(
     neverd::BinaryImage &Image, size_t Budget = 0, size_t *Published = nullptr,
-    const std::set<neverd::va_t> *ProtectedSlots = nullptr) {
-  const neverd::Symbol *Function = Image.findSymbol("x86tt_twomachine");
+    const std::set<neverd::va_t> *ProtectedSlots = nullptr,
+    const char *Name = "x86tt_twomachine") {
+  const neverd::Symbol *Function = Image.findSymbol(Name);
   if (!Function)
     return {};
   neverd::Decoder Decoder;
@@ -389,6 +390,126 @@ TEST_F(JTE_X86_32, O0ThreeSwitchLoopsRemainOpaqueOnIncompleteModelProof) {
   EXPECT_TRUE(Low.JumpTables.empty());
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 3u);
   EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 3u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, ThreeAdjacentGOTOFFRunsProveAllSixExactConsumers) {
+  auto ImageOrErr = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                       "test_i386_three_switch_loops_o2.o");
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.CodePtrRelocSlots.size(), 15u);
+  const neverd::va_t Begin = *Image.CodePtrRelocSlots.begin();
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(
+      Image, 0, &Published, nullptr, "i386_three_switch_loops");
+  EXPECT_TRUE(Low.hasCompleteInstructionLift());
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  ASSERT_EQ(Low.JumpTables.size(), 6u);
+  EXPECT_EQ(Published, 6u);
+  std::map<neverd::va_t, size_t> Consumers;
+  std::set<neverd::va_t> Suppressible;
+  for (const neverd::JumpTable &Table : Low.JumpTables) {
+    ASSERT_TRUE(Table.HasBaseAddr);
+    ASSERT_TRUE(Table.HasDispatchSlotMap);
+    ASSERT_GE(Table.BaseAddr, Begin);
+    ASSERT_LT(Table.BaseAddr, Begin + 60u);
+    ASSERT_EQ((Table.BaseAddr - Begin) % 20u, 0u);
+    ++Consumers[Table.BaseAddr];
+    ASSERT_EQ(Table.SlotIndices.size(), Table.Targets.size());
+    ASSERT_FALSE(Table.Targets.empty());
+    for (size_t I = 0; I < Table.Targets.size(); ++I) {
+      ASSERT_LT(Table.SlotIndices[I], 5u);
+      const uint8_t *Bytes =
+          Image.readVA(Table.BaseAddr + 4u * Table.SlotIndices[I], 4);
+      ASSERT_NE(Bytes, nullptr);
+      uint32_t Target = 0;
+      std::memcpy(&Target, Bytes, sizeof(Target));
+      EXPECT_EQ(Table.Targets[I], Target);
+    }
+    for (neverd::va_t Slot : Table.SuppressibleRelocationSlots) {
+      EXPECT_GE(Slot, Table.BaseAddr);
+      EXPECT_LT(Slot, Table.BaseAddr + 20u);
+      Suppressible.insert(Slot);
+    }
+  }
+  ASSERT_EQ(Consumers.size(), 3u);
+  for (const auto &[Base, Count] : Consumers) {
+    (void)Base;
+    EXPECT_EQ(Count, 2u);
+  }
+  EXPECT_EQ(Suppressible, Image.CodePtrRelocSlots);
+}
+
+TEST_F(JTE_X86_32, ThreeAdjacentGOTOFFRunsRejectIncompleteOwner) {
+  // Every partition must participate in the all-or-nothing proof, including
+  // a middle run and a trailing run that used to be conflated as one sibling.
+  for (unsigned Run = 0; Run < 3; ++Run) {
+    for (unsigned Damage = 0; Damage < 4; ++Damage) {
+      SCOPED_TRACE(::testing::Message()
+                   << "run=" << Run << " damage=" << Damage);
+      auto ImageOrErr = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                           "test_i386_three_switch_loops_o2.o");
+      ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+          << llvm::toString(ImageOrErr.takeError());
+      neverd::BinaryImage &Image = *ImageOrErr;
+      ASSERT_EQ(Image.CodePtrRelocSlots.size(), 15u);
+      const neverd::va_t Begin = *Image.CodePtrRelocSlots.begin();
+      const neverd::va_t Base = Begin + Run * 20u;
+      std::set<neverd::va_t> ProtectedSlots;
+      if (Damage == 0) {
+        size_t Removed = 0;
+        for (auto It = Image.DataAddressRelocOperands.begin();
+             It != Image.DataAddressRelocOperands.end();) {
+          if (It->second.TargetVA == Base) {
+            It = Image.DataAddressRelocOperands.erase(It);
+            ++Removed;
+          } else {
+            ++It;
+          }
+        }
+        ASSERT_EQ(Removed, 2u);
+      } else if (Damage == 1) {
+        bool Damaged = false;
+        for (auto &[FieldVA, Field] : Image.DataAddressRelocOperands) {
+          (void)FieldVA;
+          if (Field.TargetVA == Base) {
+            Field.TargetVA = Begin + ((Run + 1) % 3) * 20u;
+            Damaged = true;
+            break;
+          }
+        }
+        ASSERT_TRUE(Damaged);
+      } else if (Damage == 2) {
+        ASSERT_EQ(Image.CodePtrRelocSlots.erase(Base + 8u), 1u);
+      } else {
+        ProtectedSlots.insert(Base + 8u);
+      }
+      size_t Published = 0;
+      const neverd::LowFunc Low = buildI386AdjacentTwoTable(
+          Image, 0, &Published, &ProtectedSlots, "i386_three_switch_loops");
+      EXPECT_TRUE(Low.JumpTables.empty());
+      EXPECT_EQ(Published, 0u);
+      EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 6u);
+      EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 6u);
+      EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    }
+  }
+}
+
+TEST_F(JTE_X86_32, ThreeAdjacentGOTOFFRunsRemainOpaqueOnIncompleteProof) {
+  auto ImageOrErr = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                       "test_i386_three_switch_loops_o2.o");
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  size_t Published = 0;
+  const neverd::LowFunc Low = buildI386AdjacentTwoTable(
+      *ImageOrErr, 1, &Published, nullptr, "i386_three_switch_loops");
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_EQ(Published, 0u);
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 6u);
+  EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 6u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
 }
 

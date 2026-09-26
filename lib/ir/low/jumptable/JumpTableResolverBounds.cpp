@@ -2150,22 +2150,27 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
               GuardedGroupProofContext && finiteGOTOFFGroupClaimed()
                   ? GuardedGroupProofContext->FiniteRoundCertificate
                   : nullptr;
+          const size_t GroupMembers =
+              RoundCertificate ? GuardedGroupIdentity->MemberCount : 0;
+          if (RoundCertificate &&
+              (GroupMembers < 4 || GroupMembers > 8 || GroupMembers % 2 != 0))
+            return 0;
           if (RoundCertificate && !RoundCertificate->Domains.empty()) {
-            // Four domains and four physical runs are bounded at 64 entries
+            // The complete domains and physical runs are bounded at 64 entries
             // each. Pay for all vector copies and map comparisons before
             // reading a cached certificate, including eventual destruction.
             if (!consumeBudgetProducts(
-                    {{4, 64 * 32},
+                    {{GroupMembers, 64 * 32},
                      {GuardedGroupProofContext->Roots.size(), 8}}))
               return 0;
             const auto Physical =
                 RoundCertificate->PhysicalTargets.find(Rec.Addr);
             if (Physical == RoundCertificate->PhysicalTargets.end() ||
                 Physical->second != PhysicalTargets ||
-                RoundCertificate->Domains.size() != 4 ||
-                RoundCertificate->PhysicalTargets.size() != 4 ||
-                RoundCertificate->HypothesisEdges.size() != 4 ||
-                GuardedGroupProofContext->Edges.size() != 4 ||
+                RoundCertificate->Domains.size() != GroupMembers ||
+                RoundCertificate->PhysicalTargets.size() != GroupMembers ||
+                RoundCertificate->HypothesisEdges.size() != GroupMembers ||
+                GuardedGroupProofContext->Edges.size() != GroupMembers ||
                 !RoundCertificate->Domains.count(Rec.Addr) ||
                 RoundCertificate->HypothesisEdges !=
                     GuardedGroupProofContext->Edges ||
@@ -2192,11 +2197,11 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
               return 0;
             }
             if (RoundCertificate) {
-              if (JointDomains.size() != 4 ||
-                  GuardedGroupProofContext->Edges.size() != 4 ||
-                  RoundCertificate->PhysicalTargets.size() != 4 ||
+              if (JointDomains.size() != GroupMembers ||
+                  GuardedGroupProofContext->Edges.size() != GroupMembers ||
+                  RoundCertificate->PhysicalTargets.size() != GroupMembers ||
                   !consumeBudgetProducts(
-                      {{4, 64 * 32},
+                      {{GroupMembers, 64 * 32},
                        {GuardedGroupProofContext->Roots.size(), 8}}))
                 return 0;
               RoundCertificate->Domains = JointDomains;

@@ -3736,7 +3736,8 @@ bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
     // owner builder and never enters its provisional or strong proposal maps.
     const size_t ModeledBranches = CandidateFiniteProofModelEdges.size();
     if (CandidateProposalStageActive ||
-        (ModeledBranches != 2 && ModeledBranches != 4) ||
+        (ModeledBranches < 2 || ModeledBranches > 8 ||
+         ModeledBranches % 2 != 0) ||
         !ConsumeProduct(ModeledBranches, 8)) {
       RestoreProofRoots();
       return false;

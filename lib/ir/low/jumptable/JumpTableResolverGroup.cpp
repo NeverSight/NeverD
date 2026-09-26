@@ -70,7 +70,7 @@ struct FiniteGOTOFFClaimShape {
 // a nearby GOTOFF operand cannot turn a callback into a table consumer.
 std::optional<FiniteGOTOFFClaimShape>
 finiteGOTOFFClaimShape(const std::vector<LowOp> &Ops, va_t Branch,
-                       va_t FirstBase, va_t SecondBase) {
+                       va_t OwnerBegin, va_t OwnerEnd) {
   auto overlaps = [](const NdVar &A, const NdVar &B) {
     return A.Space == B.Space && A.Size && B.Size &&
            A.Offset < B.Offset + B.Size && B.Offset < A.Offset + A.Size;
@@ -161,7 +161,8 @@ finiteGOTOFFClaimShape(const std::vector<LowOp> &Ops, va_t Branch,
     for (int DispSide = 0; DispSide < 2; ++DispSide) {
       const NdVar &Disp = Outer.Inputs[DispSide];
       if (!Disp.isConst() || Disp.Size != 4 ||
-          (Disp.Offset != FirstBase && Disp.Offset != SecondBase))
+          (Disp.Offset < OwnerBegin || Disp.Offset >= OwnerEnd ||
+           (Disp.Offset - OwnerBegin) % 4 != 0))
         continue;
       const int InnerIdx =
           peel(Outer.Inputs[1 - DispSide], OuterIdx - 1, false);
@@ -476,7 +477,9 @@ bool CFGBuilder::finiteGOTOFFGroupClaimed() const {
   return GuardedGroupIdentity &&
          GuardedGroupIdentity->Kind ==
              GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF &&
-         GuardedGroupIdentity->MemberCount == 4;
+         GuardedGroupIdentity->MemberCount >= 4 &&
+         GuardedGroupIdentity->MemberCount <= 8 &&
+         GuardedGroupIdentity->MemberCount % 2 == 0;
 }
 
 bool CFGBuilder::guardedGroupHasNoLiveMembers() const {
@@ -577,7 +580,8 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       Img.Format != BinaryFormat::ELF || Img.Arch != Arch::X86 ||
       Img.getPointerSize() != 4 || !AuthoritativeCurrentFuncRange ||
       Img.I386GOTPCFields.empty() ||
-      (Img.DataAddressRelocOperands.size() < 2 && Candidates.size() != 4) ||
+      (Img.DataAddressRelocOperands.size() < 2 &&
+       (Candidates.size() < 4 || Candidates.size() % 2 != 0)) ||
       Candidates.size() < 2 || Candidates.size() > 8 ||
       !ResolvedTableInfo.empty() || !PriorStrongJumpTableProposals.empty() ||
       !NextStrongJumpTableProposals.empty() ||
@@ -647,7 +651,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     }
     if (!Valid)
       continue;
-    if (Candidates.size() == 4) {
+    if (Candidates.size() >= 4 && Candidates.size() % 2 == 0) {
       // ELF ET_REL keeps RelocationEntry::Address as the encoded r_offset,
       // local to the relocation section's target. Bind that raw field to one
       // uniquely named executable section before comparing it with a decoded
@@ -680,8 +684,8 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         return CodeSection->VA + Reloc.Address;
       };
       // Recognize the finite joint owner before validating every physical
-      // pointer. A missing B relocation is a group veto, not permission to
-      // recover A alone after this inventory rejects the owner.
+      // pointer. A missing run relocation vetoes the group; no intact
+      // run may recover alone after this inventory rejects the owner.
       size_t PerRawWork = 32 + lookupWork(Img.Relocations.size());
       if (!detail::addLinearComparisonWork(PerRawWork, Img.Segments.size(),
                                            4) ||
@@ -694,184 +698,155 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
                             {Img.Sections.size(), 4},
                             {1, 32}}))
         return Incomplete();
-      // Raw text relocations nominate only a possible *negative* identity.
-      // The normalized anchors may be missing entirely; that must veto the
-      // four-member group rather than let the intact A pair publish alone.
-      // Each branch below must still bind its own exact raw field and actual
-      // LOAD-to-INDIR_BR data flow before any identity is recorded.
-      std::map<va_t, size_t> RawBaseUses;
-      for (const RelocationEntry &Reloc : Img.Relocations) {
-        const auto FieldVA = MappedRawField(Reloc);
-        if (!FieldVA || *FieldVA < AuthoritativeCurrentFuncRange->first ||
-            *FieldVA >= AuthoritativeCurrentFuncRange->second ||
-            AuthoritativeCurrentFuncRange->second - *FieldVA < 4)
-          continue;
-        const uint8_t *Bytes = Img.readVA(*FieldVA, 4);
-        if (!Bytes)
-          continue;
-        const va_t Base = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
-                          uint32_t{Bytes[2]} << 16 | uint32_t{Bytes[3]} << 24;
-        if (Base >= Section.VA && Base < End && (Base - Section.VA) % 4 == 0)
-          ++RawBaseUses[Base];
+      // Only the actual indexed LOAD of each branch nominates a base.
+      // Unrelated raw references cannot add a partition or erase the negative
+      // identity when normalized anchors are damaged or missing.
+      // An adjacent array of function pointers has the same indexed
+      // GOTOFF dataflow but is a legitimate tail-call source. Require
+      // every readable slot to identify an interior instruction of this
+      // function before claiming the negative group identity. A missing
+      // relocation *slot* still has bytes and remains covered here.
+      size_t OwnerLookupWork = 128;
+      if (!detail::addLinearComparisonWork(OwnerLookupWork, Img.Segments.size(),
+                                           16) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork, Img.Sections.size(),
+                                           16) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork, Img.Symbols.size(),
+                                           16) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork,
+                                           Img.KnownCodeRanges.size(), 8) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork,
+                                           Img.ImportStubRanges.size(), 8) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork, Img.Imports.size(),
+                                           8) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork, Img.Exports.size(),
+                                           8) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork,
+                                           knownFunctionEntryCount(), 8) ||
+          !detail::addLinearComparisonWork(OwnerLookupWork, Insns.size(), 1) ||
+          !Budget.products({{SlotCount, OwnerLookupWork}}))
+        return Incomplete();
+      bool InteriorTargets = true;
+      for (va_t Slot = Section.VA; Slot < End; Slot += 4) {
+        const uint8_t *Bytes = Img.readVA(Slot, 4);
+        if (!Bytes) {
+          InteriorTargets = false;
+          break;
+        }
+        const va_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                            uint32_t{Bytes[2]} << 16 | uint32_t{Bytes[3]} << 24;
+        const bool HasFunctionSymbol =
+            Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners);
+        const bool KnownEntry = isKnownFunctionEntry(Target);
+        const bool OwnedInterior = isOwnedInteriorTarget(Img, Target);
+        if (Target <= AuthoritativeCurrentFuncRange->first ||
+            Target >= AuthoritativeCurrentFuncRange->second ||
+            HasFunctionSymbol || KnownEntry || !OwnedInterior) {
+          InteriorTargets = false;
+          break;
+        }
       }
-      // Global raw fields only nominate a second base. An unrelated fifth
-      // GOTOFF field must not erase the negative identity of four actual
-      // branch consumers; their own LOAD fields establish the exact 2+2.
-      for (const auto &[SecondBase, RawUses] : RawBaseUses) {
-        (void)RawUses;
-        if (SecondBase == Section.VA)
-          continue;
-        const size_t FirstCapacity = (SecondBase - Section.VA) / 4;
-        const size_t SecondCapacity = (End - SecondBase) / 4;
-        if (FirstCapacity >= limits::kMinJumpTableEntries &&
-            SecondCapacity >= limits::kMinJumpTableEntries &&
-            FirstCapacity <= 64 && SecondCapacity <= 64) {
-          if (!Budget.products({{Img.Symbols.size(), 2}}))
+      std::map<va_t, size_t> ShapedBases;
+      bool ExactClaim = InteriorTargets;
+      for (va_t Branch : Candidates) {
+        if (!ExactClaim)
+          break;
+        const auto BranchInsn = Insns.find(Branch);
+        if (BranchInsn == Insns.end() || !BranchInsn->second.IsBranch ||
+            !BranchInsn->second.IsIndirect || BranchInsn->second.IsCall ||
+            BranchInsn->second.IsRet || BranchInsn->second.IsCond) {
+          ExactClaim = false;
+          break;
+        }
+        va_t BlockStart = CurrentFuncEntry;
+        if (!PublishedBlockStarts.empty()) {
+          const auto It = std::upper_bound(PublishedBlockStarts.begin(),
+                                           PublishedBlockStarts.end(), Branch);
+          if (It != PublishedBlockStarts.begin())
+            BlockStart = *std::prev(It);
+        } else {
+          const auto It = BlockStarts.upper_bound(Branch);
+          if (It != BlockStarts.begin())
+            BlockStart = *std::prev(It);
+        }
+        std::vector<LowOp> Ops;
+        for (auto It = Insns.lower_bound(BlockStart);
+             It != Insns.end() && It->first <= Branch; ++It) {
+          // At most 432 bounded def() chains inspect the flattened Ops;
+          // include both candidate LOAD sides and near-matching paths.
+          if (!Budget.products({{It->second.Ops.size(), 512}}))
             return Incomplete();
-          if (Img.dataObjectSizeAt(Section.VA) != 0 ||
-              Img.dataObjectSizeAt(SecondBase) != 0)
+          Ops.insert(Ops.end(), It->second.Ops.begin(), It->second.Ops.end());
+        }
+        const auto Shape = finiteGOTOFFClaimShape(Ops, Branch, Section.VA, End);
+        if (!Shape) {
+          ExactClaim = false;
+          break;
+        }
+        if (!Budget.products(
+                {{Img.Relocations.size(), PerRawWork},
+                 {RelocatedInstructionAddressOccurrences.size(), 24},
+                 {1, lookupWork(Img.DataAddressRelocOperands.size())}}))
+          return Incomplete();
+        const auto Source = Insns.find(Shape->LoadInsn);
+        if (Source == Insns.end() || Source->second.IsInstructionGuard ||
+            Source->second.Size < 4 ||
+            Source->second.Size > InvalidVA - Source->first) {
+          ExactClaim = false;
+          break;
+        }
+        const va_t SourceEnd = Source->first + Source->second.Size;
+        va_t FieldVA = InvalidVA;
+        for (const RelocationEntry &Reloc : Img.Relocations) {
+          const auto Mapped = MappedRawField(Reloc);
+          if (!Mapped || *Mapped < Source->first || *Mapped >= SourceEnd)
             continue;
-          // An adjacent array of function pointers has the same indexed
-          // GOTOFF dataflow but is a legitimate tail-call source. Require
-          // every readable slot to identify an interior instruction of this
-          // function before claiming the negative group identity. A missing
-          // relocation *slot* still has bytes and remains covered here.
-          size_t OwnerLookupWork = 128;
-          if (!detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.Segments.size(), 16) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.Sections.size(), 16) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.Symbols.size(), 16) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.KnownCodeRanges.size(), 8) ||
-              !detail::addLinearComparisonWork(
-                  OwnerLookupWork, Img.ImportStubRanges.size(), 8) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.Imports.size(), 8) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               Img.Exports.size(), 8) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork,
-                                               knownFunctionEntryCount(), 8) ||
-              !detail::addLinearComparisonWork(OwnerLookupWork, Insns.size(),
-                                               1) ||
-              !Budget.products({{SlotCount, OwnerLookupWork}}))
-            return Incomplete();
-          bool InteriorTargets = true;
-          for (va_t Slot = Section.VA; Slot < End; Slot += 4) {
-            const uint8_t *Bytes = Img.readVA(Slot, 4);
-            if (!Bytes) {
-              InteriorTargets = false;
-              break;
-            }
-            const va_t Target = uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
-                                uint32_t{Bytes[2]} << 16 |
-                                uint32_t{Bytes[3]} << 24;
-            const bool HasFunctionSymbol =
-                Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners);
-            const bool KnownEntry = isKnownFunctionEntry(Target);
-            const bool OwnedInterior = isOwnedInteriorTarget(Img, Target);
-            if (Target <= AuthoritativeCurrentFuncRange->first ||
-                Target >= AuthoritativeCurrentFuncRange->second ||
-                HasFunctionSymbol || KnownEntry || !OwnedInterior) {
-              InteriorTargets = false;
-              break;
-            }
+          if (*Mapped > SourceEnd - 4 || FieldVA != InvalidVA) {
+            ExactClaim = false;
+            break;
           }
-          if (!InteriorTargets)
-            continue;
-          std::map<va_t, size_t> ShapedBases;
-          bool ExactClaim = true;
-          for (va_t Branch : Candidates) {
-            const auto BranchInsn = Insns.find(Branch);
-            if (BranchInsn == Insns.end() || !BranchInsn->second.IsBranch ||
-                !BranchInsn->second.IsIndirect || BranchInsn->second.IsCall ||
-                BranchInsn->second.IsRet || BranchInsn->second.IsCond) {
-              ExactClaim = false;
-              break;
-            }
-            va_t BlockStart = CurrentFuncEntry;
-            if (!PublishedBlockStarts.empty()) {
-              const auto It =
-                  std::upper_bound(PublishedBlockStarts.begin(),
-                                   PublishedBlockStarts.end(), Branch);
-              if (It != PublishedBlockStarts.begin())
-                BlockStart = *std::prev(It);
-            } else {
-              const auto It = BlockStarts.upper_bound(Branch);
-              if (It != BlockStarts.begin())
-                BlockStart = *std::prev(It);
-            }
-            std::vector<LowOp> Ops;
-            for (auto It = Insns.lower_bound(BlockStart);
-                 It != Insns.end() && It->first <= Branch; ++It) {
-              // At most 432 bounded def() chains inspect the flattened Ops;
-              // include both candidate LOAD sides and near-matching paths.
-              if (!Budget.products({{It->second.Ops.size(), 512}}))
-                return Incomplete();
-              Ops.insert(Ops.end(), It->second.Ops.begin(),
-                         It->second.Ops.end());
-            }
-            const auto Shape =
-                finiteGOTOFFClaimShape(Ops, Branch, Section.VA, SecondBase);
-            if (!Shape) {
-              ExactClaim = false;
-              break;
-            }
-            if (!Budget.products(
-                    {{Img.Relocations.size(), PerRawWork},
-                     {RelocatedInstructionAddressOccurrences.size(), 24},
-                     {1, lookupWork(Img.DataAddressRelocOperands.size())}}))
-              return Incomplete();
-            const auto Source = Insns.find(Shape->LoadInsn);
-            if (Source == Insns.end() || Source->second.IsInstructionGuard ||
-                Source->second.Size < 4 ||
-                Source->second.Size > InvalidVA - Source->first) {
-              ExactClaim = false;
-              break;
-            }
-            const va_t SourceEnd = Source->first + Source->second.Size;
-            va_t FieldVA = InvalidVA;
-            for (const RelocationEntry &Reloc : Img.Relocations) {
-              const auto Mapped = MappedRawField(Reloc);
-              if (!Mapped || *Mapped < Source->first || *Mapped >= SourceEnd)
-                continue;
-              if (*Mapped > SourceEnd - 4 || FieldVA != InvalidVA) {
-                ExactClaim = false;
-                break;
-              }
-              FieldVA = *Mapped;
-            }
-            if (!ExactClaim || FieldVA == InvalidVA) {
-              ExactClaim = false;
-              break;
-            }
-            if (!Budget.products(
-                    {{Img.Sections.size(), 4}, {Img.Segments.size(), 4}}))
-              return Incomplete();
-            const uint8_t *Bytes = Img.readVA(FieldVA, 4);
-            if (!Bytes || (uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
-                           uint32_t{Bytes[2]} << 16 |
-                           uint32_t{Bytes[3]} << 24) != Shape->Base) {
-              ExactClaim = false;
-              break;
-            }
-            // A present but malformed normalized anchor also fails the later
-            // positive group audit. It cannot erase the raw+dataflow witness
-            // that keeps this branch opaque during that failure.
-            ++ShapedBases[Shape->Base];
-          }
-          if (ExactClaim && ShapedBases[Section.VA] == 2 &&
-              ShapedBases[SecondBase] == 2) {
-            Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
-            const bool ChangedIdentity =
-                GuardedGroupIdentity && Key != *GuardedGroupIdentity;
-            GuardedGroupIdentity = Key;
-            if (ChangedIdentity) {
-              GuardedGroupRejected = true;
-              return false;
-            }
-          }
+          FieldVA = *Mapped;
+        }
+        if (!ExactClaim || FieldVA == InvalidVA) {
+          ExactClaim = false;
+          break;
+        }
+        if (!Budget.products(
+                {{Img.Sections.size(), 4}, {Img.Segments.size(), 4}}))
+          return Incomplete();
+        const uint8_t *Bytes = Img.readVA(FieldVA, 4);
+        if (!Bytes || (uint32_t{Bytes[0]} | uint32_t{Bytes[1]} << 8 |
+                       uint32_t{Bytes[2]} << 16 | uint32_t{Bytes[3]} << 24) !=
+                          Shape->Base) {
+          ExactClaim = false;
+          break;
+        }
+        // A present but malformed normalized anchor also fails the later
+        // positive group audit. It cannot erase the raw+dataflow witness
+        // that keeps this branch opaque during that failure.
+        ++ShapedBases[Shape->Base];
+      }
+      ExactClaim &= ShapedBases.size() * 2 == Candidates.size() &&
+                    ShapedBases.count(Section.VA) != 0;
+      for (auto Base = ShapedBases.begin();
+           ExactClaim && Base != ShapedBases.end(); ++Base) {
+        const auto Next = std::next(Base);
+        const va_t Bound = Next == ShapedBases.end() ? End : Next->first;
+        const size_t Capacity = (Bound - Base->first) / 4;
+        if (!Budget.products({{Img.Symbols.size(), 2}}))
+          return Incomplete();
+        ExactClaim = Base->second == 2 &&
+                     Capacity >= limits::kMinJumpTableEntries &&
+                     Capacity <= 64 && Img.dataObjectSizeAt(Base->first) == 0;
+      }
+      if (ExactClaim) {
+        Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
+        const bool ChangedIdentity =
+            GuardedGroupIdentity && Key != *GuardedGroupIdentity;
+        GuardedGroupIdentity = Key;
+        if (ChangedIdentity) {
+          GuardedGroupRejected = true;
+          return false;
         }
       }
     }
@@ -965,121 +940,117 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
   }
   bool FiniteJointGOTOFF = false;
   std::map<va_t, va_t> FiniteBranchBases;
-  if (Key.Kind == GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF &&
-      Candidates.size() == 4 && Bases.size() == 2 &&
-      *Bases.begin() == Section.VA) {
-    const va_t SecondBase = *std::next(Bases.begin());
-    const size_t FirstCapacity = Capacities.at(Section.VA);
-    const size_t SecondCapacity = Capacities.at(SecondBase);
-    if (!Budget.products({{Img.Symbols.size(), 4},
-                          {Img.Segments.size(), 4},
-                          {Img.Sections.size(), 4}}))
-      return Incomplete();
-    if (FirstCapacity >= limits::kMinJumpTableEntries &&
-        SecondCapacity >= limits::kMinJumpTableEntries && FirstCapacity <= 64 &&
-        SecondCapacity <= 64 &&
-        Section.VA + uint64_t{4} * FirstCapacity == SecondBase &&
-        Img.dataObjectSizeAt(Section.VA) == 0 &&
-        Img.dataObjectSizeAt(SecondBase) == 0) {
-      // Claim the complete four-member owner before inspecting its anchors.
-      // A damaged B consumer must veto A rather than falling through to an
-      // ordinary per-branch proposal after the group rejects.
-      Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
-      if (GuardedGroupIdentity && Key != *GuardedGroupIdentity)
-        return false;
-      GuardedGroupIdentity = Key;
-      FiniteJointGOTOFF = true;
-      size_t PerOccurrenceWork = 64;
-      if (!detail::addLinearComparisonWork(PerOccurrenceWork, Insns.size(),
-                                           12) ||
-          !detail::addLinearComparisonWork(PerOccurrenceWork,
-                                           Img.Symbols.size(), 8) ||
-          !detail::addLinearComparisonWork(PerOccurrenceWork,
-                                           Img.Segments.size(), 8) ||
-          !detail::addLinearComparisonWork(PerOccurrenceWork,
-                                           Img.Sections.size(), 8) ||
-          !detail::addLinearComparisonWork(
-              PerOccurrenceWork,
-              lookupWork(Img.DataAddressRelocOperands.size()) +
-                  lookupWork(Insns.size()),
-              2) ||
-          !Budget.products({{RelocatedInstructionAddressOccurrences.size(),
-                             PerOccurrenceWork},
-                            {Candidates.size(), 32},
-                            {Img.DataAddressRelocOperands.size(), 8}}))
+  if (Key.Kind == GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF) {
+    bool CompletePartition =
+        Bases.size() * 2 == Candidates.size() && *Bases.begin() == Section.VA;
+    for (const auto &[Base, Capacity] : Capacities) {
+      if (!Budget.products({{Img.Symbols.size(), 2}}))
         return Incomplete();
-      const std::set<va_t> CandidateSet(Candidates.begin(), Candidates.end());
-      bool Exact = true;
-      for (const RelocatedInstructionAddressOccurrence &Occurrence :
-           RelocatedInstructionAddressOccurrences) {
-        if (!Bases.count(Occurrence.TargetVA))
-          continue;
-        const auto Field =
-            Img.DataAddressRelocOperands.find(Occurrence.FieldVA);
-        if (Occurrence.Width != 4 ||
-            Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
-            Occurrence.PCRelativeFromInstructionEnd ||
-            Occurrence.OutputMayDepend || Occurrence.InputIndex < 0 ||
-            Field == Img.DataAddressRelocOperands.end() ||
-            Field->second.Kind != RelocatedAddressFieldKind::I386ELFGOTOFF ||
-            Field->second.Width != 4 ||
-            Field->second.TargetVA != Occurrence.TargetVA ||
-            Field->second.TargetOwnerVA != Occurrence.TargetOwnerVA ||
-            !Img.relocatedI386GOTOFFTargetBelongsToOwner(
-                Field->second.TargetVA, Field->second.TargetOwnerVA)) {
-          Exact = false;
-          break;
-        }
-        const auto Source = Insns.find(Occurrence.InstructionAddr);
-        if (Source == Insns.end() || Source->second.IsInstructionGuard ||
-            Source->second.Size == 0 ||
-            Source->second.Size > InvalidVA - Source->first ||
-            Occurrence.FieldVA < Source->first ||
-            Occurrence.FieldVA >= Source->first + Source->second.Size) {
-          Exact = false;
-          break;
-        }
-        va_t BlockEnd = CurrentFuncRange ? CurrentFuncRange->second : InvalidVA;
-        if (!PublishedBlockStarts.empty()) {
-          const auto Next =
-              std::upper_bound(PublishedBlockStarts.begin(),
-                               PublishedBlockStarts.end(), Source->first);
-          if (Next != PublishedBlockStarts.end())
-            BlockEnd = std::min(BlockEnd, *Next);
-        } else {
-          const auto Next = BlockStarts.upper_bound(Source->first);
-          if (Next != BlockStarts.end())
-            BlockEnd = std::min(BlockEnd, *Next);
-        }
-        va_t Branch = InvalidVA;
-        for (auto It = Insns.upper_bound(Source->first);
-             It != Insns.end() && It->first < BlockEnd; ++It) {
-          const InsnRecord &Candidate = It->second;
-          if (Candidate.IsCall || Candidate.IsBranch || Candidate.IsRet) {
-            if (Candidate.IsBranch && Candidate.IsIndirect &&
-                !Candidate.IsCall && !Candidate.IsRet && !Candidate.IsCond)
-              Branch = Candidate.Addr;
-            break;
-          }
-        }
-        if (!CandidateSet.count(Branch) ||
-            !FiniteBranchBases.emplace(Branch, Occurrence.TargetVA).second) {
-          Exact = false;
+      CompletePartition &= Capacity >= limits::kMinJumpTableEntries &&
+                           Capacity <= 64 && Img.dataObjectSizeAt(Base) == 0;
+    }
+    if (!CompletePartition) {
+      GuardedGroupRejected = true;
+      return false;
+    }
+    // Claim the complete multi-run owner before inspecting its anchors.
+    // A damaged consumer vetoes every sibling instead of falling through
+    // to an ordinary per-branch proposal after the group rejects.
+    Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
+    if (GuardedGroupIdentity && Key != *GuardedGroupIdentity)
+      return false;
+    GuardedGroupIdentity = Key;
+    FiniteJointGOTOFF = true;
+    size_t PerOccurrenceWork = 64;
+    if (!detail::addLinearComparisonWork(PerOccurrenceWork, Insns.size(), 12) ||
+        !detail::addLinearComparisonWork(PerOccurrenceWork, Img.Symbols.size(),
+                                         8) ||
+        !detail::addLinearComparisonWork(PerOccurrenceWork, Img.Segments.size(),
+                                         8) ||
+        !detail::addLinearComparisonWork(PerOccurrenceWork, Img.Sections.size(),
+                                         8) ||
+        !detail::addLinearComparisonWork(
+            PerOccurrenceWork,
+            lookupWork(Img.DataAddressRelocOperands.size()) +
+                lookupWork(Insns.size()),
+            2) ||
+        !Budget.products(
+            {{RelocatedInstructionAddressOccurrences.size(), PerOccurrenceWork},
+             {Candidates.size(), 32},
+             {Img.DataAddressRelocOperands.size(), 8}}))
+      return Incomplete();
+    const std::set<va_t> CandidateSet(Candidates.begin(), Candidates.end());
+    bool Exact = true;
+    for (const RelocatedInstructionAddressOccurrence &Occurrence :
+         RelocatedInstructionAddressOccurrences) {
+      if (!Bases.count(Occurrence.TargetVA))
+        continue;
+      const auto Field = Img.DataAddressRelocOperands.find(Occurrence.FieldVA);
+      if (Occurrence.Width != 4 ||
+          Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
+          Occurrence.PCRelativeFromInstructionEnd ||
+          Occurrence.OutputMayDepend || Occurrence.InputIndex < 0 ||
+          Field == Img.DataAddressRelocOperands.end() ||
+          Field->second.Kind != RelocatedAddressFieldKind::I386ELFGOTOFF ||
+          Field->second.Width != 4 ||
+          Field->second.TargetVA != Occurrence.TargetVA ||
+          Field->second.TargetOwnerVA != Occurrence.TargetOwnerVA ||
+          !Img.relocatedI386GOTOFFTargetBelongsToOwner(
+              Field->second.TargetVA, Field->second.TargetOwnerVA)) {
+        Exact = false;
+        break;
+      }
+      const auto Source = Insns.find(Occurrence.InstructionAddr);
+      if (Source == Insns.end() || Source->second.IsInstructionGuard ||
+          Source->second.Size == 0 ||
+          Source->second.Size > InvalidVA - Source->first ||
+          Occurrence.FieldVA < Source->first ||
+          Occurrence.FieldVA >= Source->first + Source->second.Size) {
+        Exact = false;
+        break;
+      }
+      va_t BlockEnd = CurrentFuncRange ? CurrentFuncRange->second : InvalidVA;
+      if (!PublishedBlockStarts.empty()) {
+        const auto Next =
+            std::upper_bound(PublishedBlockStarts.begin(),
+                             PublishedBlockStarts.end(), Source->first);
+        if (Next != PublishedBlockStarts.end())
+          BlockEnd = std::min(BlockEnd, *Next);
+      } else {
+        const auto Next = BlockStarts.upper_bound(Source->first);
+        if (Next != BlockStarts.end())
+          BlockEnd = std::min(BlockEnd, *Next);
+      }
+      va_t Branch = InvalidVA;
+      for (auto It = Insns.upper_bound(Source->first);
+           It != Insns.end() && It->first < BlockEnd; ++It) {
+        const InsnRecord &Candidate = It->second;
+        if (Candidate.IsCall || Candidate.IsBranch || Candidate.IsRet) {
+          if (Candidate.IsBranch && Candidate.IsIndirect && !Candidate.IsCall &&
+              !Candidate.IsRet && !Candidate.IsCond)
+            Branch = Candidate.Addr;
           break;
         }
       }
-      size_t FirstConsumers = 0;
-      size_t SecondConsumers = 0;
-      for (const auto &[Branch, Base] : FiniteBranchBases) {
-        (void)Branch;
-        FirstConsumers += Base == Section.VA;
-        SecondConsumers += Base == SecondBase;
+      if (!CandidateSet.count(Branch) ||
+          !FiniteBranchBases.emplace(Branch, Occurrence.TargetVA).second) {
+        Exact = false;
+        break;
       }
-      if (!Exact || FiniteBranchBases.size() != Candidates.size() ||
-          FirstConsumers != 2 || SecondConsumers != 2) {
-        GuardedGroupRejected = true;
-        return false;
-      }
+    }
+    std::map<va_t, size_t> ConsumersPerBase;
+    for (const auto &[Branch, Base] : FiniteBranchBases) {
+      (void)Branch;
+      ++ConsumersPerBase[Base];
+    }
+    const bool CompleteConsumers =
+        ConsumersPerBase.size() == Bases.size() &&
+        std::all_of(ConsumersPerBase.begin(), ConsumersPerBase.end(),
+                    [](const auto &Entry) { return Entry.second == 2; });
+    if (!Exact || FiniteBranchBases.size() != Candidates.size() ||
+        !CompleteConsumers) {
+      GuardedGroupRejected = true;
+      return false;
     }
   }
   if (!FiniteJointGOTOFF) {
@@ -1205,7 +1176,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
           (Info.RuntimeSlotIndices.size() == Result.size() ||
            (Info.RuntimeSlotIndices.empty() &&
             Result.size() == Capacity->second));
-      // A completed four-consumer finite-domain proof stands independently of
+      // A completed all-consumer finite-domain proof stands independently of
       // a syntactically ambiguous guard. Dense groups still require their
       // guard or mask proof to be unambiguous.
       bool Passed =

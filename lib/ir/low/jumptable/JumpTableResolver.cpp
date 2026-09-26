@@ -75,6 +75,7 @@
 #include <array>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -300,62 +301,67 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
   if (!OwnerEnd || *OwnerEnd < StorageEnd ||
       (SizedObject != 0 && SizedObject != SlotCount * 4))
     return false;
-  // Two adjacent unsized GOTOFF tables have one section owner. Either the
-  // leading or trailing run can be the current candidate; both must use the
-  // same four-consumer group graph and neither physical run length proves its
-  // selector domain.
+  // Every adjacent unsized run belongs to the same complete section owner.
+  // Its exact decoded anchors partition storage; no run length proves a
+  // selector domain. The immutable group graph covers every consumer.
   const bool HasFiniteOwner =
       GuardedGroupProofContext && finiteGOTOFFGroupClaimed() &&
       GuardedGroupIdentity->OwnerEnd == *OwnerEnd &&
       GuardedGroupIdentity->OwnerBegin <= Info.BaseAddr &&
       GuardedGroupIdentity->OwnerBegin < StorageEnd;
-  const bool LeadingAdjacent = SizedObject == 0 && *OwnerEnd != StorageEnd;
-  const bool TrailingAdjacent =
-      SizedObject == 0 && HasFiniteOwner && *OwnerEnd == StorageEnd &&
-      GuardedGroupIdentity->OwnerBegin < Info.BaseAddr;
-  const bool AdjacentTables = LeadingAdjacent || TrailingAdjacent;
+  const bool AdjacentTables =
+      SizedObject == 0 &&
+      (*OwnerEnd != StorageEnd ||
+       (HasFiniteOwner && GuardedGroupIdentity->OwnerBegin < Info.BaseAddr));
   if (AdjacentTables && !HasFiniteOwner)
     return false;
-  size_t SiblingSlotCount = 0;
-  va_t SiblingBase = InvalidVA;
+  std::map<va_t, size_t> RunCapacities{{Info.BaseAddr, SlotCount}};
   if (AdjacentTables) {
-    size_t SiblingInventoryWork = 8;
-    if (!detail::addLinearComparisonWork(SiblingInventoryWork,
-                                         Img.Symbols.size(), 2) ||
-        !Charge(SiblingInventoryWork))
-      return false;
-    SiblingBase =
-        TrailingAdjacent ? GuardedGroupIdentity->OwnerBegin : StorageEnd;
-    const uint64_t SiblingBytes = TrailingAdjacent ? Info.BaseAddr - SiblingBase
-                                                   : *OwnerEnd - SiblingBase;
-    if (SiblingBytes % 4 != 0 ||
-        SiblingBytes / 4 < limits::kMinJumpTableEntries ||
-        SiblingBytes / 4 > 64 || !Img.CodePtrRelocSlots.count(SiblingBase) ||
-        Img.dataObjectSizeAt(SiblingBase) != 0)
-      return false;
-    SiblingSlotCount = static_cast<size_t>(SiblingBytes / 4);
-    size_t AnchorScanWork = 0;
+    size_t AnchorScanWork = 32;
     if (!detail::addLinearComparisonWork(
-            AnchorScanWork, Img.DataAddressRelocOperands.size(), 8) ||
+            AnchorScanWork, Img.DataAddressRelocOperands.size(), 16) ||
         !Charge(AnchorScanWork))
       return Incomplete();
+    std::set<va_t> Bases;
     for (const auto &[FieldVA, Relocation] : Img.DataAddressRelocOperands) {
       (void)FieldVA;
       if (Relocation.TargetVA >= GuardedGroupIdentity->OwnerBegin &&
-          Relocation.TargetVA < *OwnerEnd &&
-          Relocation.TargetVA != Info.BaseAddr &&
-          Relocation.TargetVA != SiblingBase)
-        return false;
+          Relocation.TargetVA < *OwnerEnd)
+        Bases.insert(Relocation.TargetVA);
     }
+    if (Bases.size() < 2 || Bases.size() > 4 ||
+        Bases.size() * 2 != GuardedGroupIdentity->MemberCount ||
+        *Bases.begin() != GuardedGroupIdentity->OwnerBegin ||
+        !Bases.count(Info.BaseAddr))
+      return false;
+    RunCapacities.clear();
+    for (auto Base = Bases.begin(); Base != Bases.end(); ++Base) {
+      const auto Next = std::next(Base);
+      const va_t Bound = Next == Bases.end() ? *OwnerEnd : *Next;
+      const uint64_t Bytes = Bound - *Base;
+      size_t RunWork = 32;
+      if (!detail::addLinearComparisonWork(RunWork, Img.Symbols.size(), 2) ||
+          !Charge(RunWork))
+        return Incomplete();
+      if (Bytes % 4 != 0 || Bytes / 4 < limits::kMinJumpTableEntries ||
+          Bytes / 4 > 64 || !Img.CodePtrRelocSlots.count(*Base) ||
+          Img.dataObjectSizeAt(*Base) != 0)
+        return false;
+      RunCapacities.emplace(*Base, Bytes / 4);
+    }
+    if (RunCapacities.at(Info.BaseAddr) != SlotCount)
+      return false;
   }
-  const JumpTableStorageRange PhysicalStorage{
-      Info.BaseAddr, 4, 4, static_cast<uint32_t>(SlotCount)};
-  if (!Charge(AdjacentTables ? 12 : 6))
+  const size_t ExpectedConsumers = RunCapacities.size() * 2;
+  if (!Charge(RunCapacities.size() * 16))
     return false;
-  std::vector<JumpTableStorageRange> JointStorage{PhysicalStorage};
-  if (AdjacentTables)
-    JointStorage.push_back(JumpTableStorageRange{
-        SiblingBase, 4, 4, static_cast<uint32_t>(SiblingSlotCount)});
+  std::vector<JumpTableStorageRange> JointStorage;
+  size_t TotalSlotCount = 0;
+  for (const auto &[Base, Count] : RunCapacities) {
+    JointStorage.push_back(
+        JumpTableStorageRange{Base, 4, 4, static_cast<uint32_t>(Count)});
+    TotalSlotCount += Count;
+  }
   size_t PerSlotWork = 64;
   if (!detail::addLinearComparisonWork(PerSlotWork, Img.Segments.size(),
                                        12) ||
@@ -374,51 +380,44 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
                            LookupWork(Scratch.Insns.size()), 1))
     return Incomplete();
   size_t SlotWork = 0;
-  if (!detail::addLinearComparisonWork(SlotWork, SlotCount + SiblingSlotCount,
-                                       PerSlotWork) ||
+  if (!detail::addLinearComparisonWork(SlotWork, TotalSlotCount, PerSlotWork) ||
       !Charge(SlotWork))
     return false;
-  // Audit each run's slots and targets separately. The sibling slots become
-  // suppressible only after both of their exact consumers are discovered.
+  // Audit every physical run separately. Only the current run grants root
+  // suppression until all exact consumers of the other runs are established.
   std::vector<va_t> SuppressibleSlots;
-  SuppressibleSlots.reserve(SlotCount + SiblingSlotCount);
-  std::vector<va_t> SiblingTargets;
-  SiblingTargets.reserve(SiblingSlotCount);
-  for (size_t I = 0; I < SlotCount; ++I) {
-    const va_t Slot = Info.BaseAddr + I * uint64_t{4};
-    if (!Img.CodePtrRelocSlots.count(Slot))
-      return false;
-    const uint8_t *Bytes = Img.readVA(Slot, 4);
-    if (!Bytes ||
-        normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode) !=
-            PhysicalTargets[I] ||
-        !Scratch.isOwnedInteriorTarget(Img, PhysicalTargets[I]))
-      return false;
-    SuppressibleSlots.push_back(Slot);
-  }
-  for (size_t I = 0; I < SiblingSlotCount; ++I) {
-    const va_t Slot = SiblingBase + I * uint64_t{4};
-    if (!Img.CodePtrRelocSlots.count(Slot))
-      return false;
-    const uint8_t *Bytes = Img.readVA(Slot, 4);
-    if (!Bytes)
-      return false;
-    const va_t Target =
-        normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode);
-    if (!Scratch.isOwnedInteriorTarget(Img, Target))
-      return false;
-    SiblingTargets.push_back(Target);
+  SuppressibleSlots.reserve(TotalSlotCount);
+  std::map<va_t, std::vector<va_t>> RunTargets;
+  for (const auto &[Base, Count] : RunCapacities) {
+    auto &Targets = RunTargets[Base];
+    Targets.reserve(Count);
+    for (size_t I = 0; I < Count; ++I) {
+      const va_t Slot = Base + I * uint64_t{4};
+      if (!Img.CodePtrRelocSlots.count(Slot))
+        return false;
+      const uint8_t *Bytes = Img.readVA(Slot, 4);
+      if (!Bytes)
+        return false;
+      const va_t Target =
+          normalizeCodeAddress(readPtr(Bytes, false), Img.Arch, Img.Mode);
+      if (!Scratch.isOwnedInteriorTarget(Img, Target) ||
+          (Base == Info.BaseAddr && Target != PhysicalTargets[I]))
+        return false;
+      Targets.push_back(Target);
+      if (Base == Info.BaseAddr)
+        SuppressibleSlots.push_back(Slot);
+    }
   }
   CFGBuilder JointScratch;
   if (AdjacentTables) {
-    if (!Charge((SlotCount + SiblingSlotCount) * 5 + 16))
+    if (!Charge((TotalSlotCount) * 5 + 16))
       return false;
     std::vector<va_t> AllTargets;
-    AllTargets.reserve(SlotCount + SiblingSlotCount);
-    AllTargets.insert(AllTargets.end(), PhysicalTargets.begin(),
-                      PhysicalTargets.end());
-    AllTargets.insert(AllTargets.end(), SiblingTargets.begin(),
-                      SiblingTargets.end());
+    AllTargets.reserve(TotalSlotCount);
+    for (const auto &[Base, Targets] : RunTargets) {
+      (void)Base;
+      AllTargets.insert(AllTargets.end(), Targets.begin(), Targets.end());
+    }
     bool ScratchIncomplete = false;
     if (!prepareCandidateFiniteProofScratch(
             JointScratch, AllTargets, EvidenceBudget, &ScratchIncomplete)) {
@@ -450,9 +449,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
   for (const RelocatedInstructionAddressOccurrence &Occurrence :
        RelocatedInstructionAddressOccurrences) {
     const va_t ReferencedBase = Occurrence.TargetVA;
-    if ((ReferencedBase != Info.BaseAddr &&
-         (!AdjacentTables || ReferencedBase != SiblingBase)) ||
-        Occurrence.Width != 4 ||
+    if (!RunCapacities.count(ReferencedBase) || Occurrence.Width != 4 ||
         Occurrence.Provenance != ConstantAddressProvenance::DataAddress ||
         Occurrence.PCRelativeFromInstructionEnd || Occurrence.OutputMayDepend ||
         Occurrence.InputIndex < 0)
@@ -502,29 +499,31 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       continue;
     if (!BranchFields.emplace(Branch, Occurrence.FieldVA).second ||
         !BranchBases.emplace(Branch, ReferencedBase).second ||
-        BranchFields.size() > (AdjacentTables ? 4u : 2u))
+        BranchFields.size() > ExpectedConsumers)
       return false;
   }
   const auto CurrentBase = BranchBases.find(Current.Addr);
-  if (BranchFields.size() != (AdjacentTables ? 4u : 2u) ||
+  if (BranchFields.size() != ExpectedConsumers ||
       CurrentBase == BranchBases.end() || CurrentBase->second != Info.BaseAddr)
     return false;
   if (AdjacentTables) {
-    size_t FirstConsumers = 0;
-    size_t SecondConsumers = 0;
+    std::map<va_t, size_t> ConsumersPerBase;
     for (const auto &[Branch, Base] : BranchBases) {
       (void)Branch;
-      FirstConsumers += Base == Info.BaseAddr;
-      SecondConsumers += Base == SiblingBase;
+      ++ConsumersPerBase[Base];
     }
-    if (FirstConsumers != 2 || SecondConsumers != 2)
+    if (ConsumersPerBase.size() != RunCapacities.size() ||
+        !std::all_of(ConsumersPerBase.begin(), ConsumersPerBase.end(),
+                     [](const auto &Entry) { return Entry.second == 2; }))
       return false;
-    if (!Charge(SiblingSlotCount * 4 + 8))
+    if (!Charge(TotalSlotCount * 4 + 8))
       return Incomplete();
-    for (size_t I = 0; I < SiblingSlotCount; ++I)
-      SuppressibleSlots.push_back(SiblingBase + I * uint64_t{4});
-    // A later fixed-point stage must replay its own four proposals. None may
-    // supply a lower-rank borrowed fact while this joint proof is constructed.
+    for (const auto &[Base, Count] : RunCapacities)
+      if (Base != Info.BaseAddr)
+        for (size_t I = 0; I < Count; ++I)
+          SuppressibleSlots.push_back(Base + I * uint64_t{4});
+    // Each stage must replay its complete proposal set. None may supply a
+    // lower-rank borrowed fact while this joint proof is constructed.
     size_t PriorWork = 8;
     if (!detail::addLinearComparisonWork(PriorWork,
                                          PriorStrongJumpTableProposals.size(),
@@ -583,16 +582,14 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
   }
 
   size_t EdgeWork = 0;
-  if (!detail::addLinearComparisonWork(EdgeWork, SlotCount + SiblingSlotCount,
-                                       48) ||
+  if (!detail::addLinearComparisonWork(EdgeWork, TotalSlotCount, 48) ||
       !Charge(EdgeWork + 64))
     return false;
   std::map<va_t, std::vector<va_t>> HypotheticalEdges;
   for (const auto &[Branch, FieldVA] : BranchFields) {
     (void)FieldVA;
     const va_t Base = BranchBases.at(Branch);
-    const std::vector<va_t> &Targets =
-        Base == Info.BaseAddr ? PhysicalTargets : SiblingTargets;
+    const std::vector<va_t> &Targets = RunTargets.at(Base);
     const auto Found = ProofScratch.Insns.find(Branch);
     const auto Original = Insns.find(Branch);
     if (Found == ProofScratch.Insns.end() || Original == Insns.end() ||
@@ -616,8 +613,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
   for (const auto &[Branch, FieldVA] : BranchFields) {
     (void)FieldVA;
     const va_t Base = BranchBases.at(Branch);
-    const size_t BranchSlotCount =
-        Base == Info.BaseAddr ? SlotCount : SiblingSlotCount;
+    const size_t BranchSlotCount = RunCapacities.at(Base);
     ProofScratch.ActiveJumpTableCandidateAddr = Branch;
     ProofScratch.ActiveJumpTableCandidateProofRank = 0;
     ProofScratch.ActiveJumpTableCandidateDependencyRank = 0;
@@ -790,12 +786,11 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
   // snapshot. Every query and closed-world CFG check must succeed before any
   // domain reaches the enclosing resolver stage.
   std::map<va_t, std::vector<va_t>> CertifiedEdges;
-  if (!Charge((SlotCount + SiblingSlotCount) * 16 + 64))
+  if (!Charge((TotalSlotCount) * 16 + 64))
     return false;
   for (const auto &[Branch, Coordinates] : FiniteDomains) {
     const va_t Base = BranchBases.at(Branch);
-    const std::vector<va_t> &Physical =
-        Base == Info.BaseAddr ? PhysicalTargets : SiblingTargets;
+    const std::vector<va_t> &Physical = RunTargets.at(Base);
     std::vector<va_t> Targets;
     Targets.reserve(Coordinates.size());
     for (uint32_t Coordinate : Coordinates) {
@@ -812,8 +807,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       return false;
   }
   for (const auto &[Branch, Coordinates] : FiniteDomains) {
-    const size_t BranchSlotCount =
-        BranchBases.at(Branch) == Info.BaseAddr ? SlotCount : SiblingSlotCount;
+    const size_t BranchSlotCount = RunCapacities.at(BranchBases.at(Branch));
     bool ReachComplete = false;
     bool Closed = false;
     const std::set<va_t> &OwnerRoots =

@@ -1619,7 +1619,7 @@ private:
   /// They are never published as prior role/storage certificates. EmptyEdges
   /// removes every group edge for a hypothesis-free seed query.
   struct FiniteGOTOFFRoundCertificate {
-    // A complete four-consumer certificate belongs to exactly one immutable
+    // A complete all-consumer certificate belongs to exactly one immutable
     // group round. The next round uses a different edge/role hypothesis and
     // starts with an empty certificate.
     std::map<va_t, std::vector<uint32_t>> Domains;
