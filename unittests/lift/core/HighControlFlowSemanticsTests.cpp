@@ -739,6 +739,53 @@ TEST(HighControlFlowSemantics, SharedMergeDoesNotHideAnotherFalseArmEntry) {
     EXPECT_EQ(execute(F, Input), Input == 1 ? 5u : 6u);
 }
 
+TEST(HighControlFlowSemantics, NestedDiamondKeepsOuterSinglePredecessorEntry) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  auto Outer = conditional(0x1000, 0x1040);
+  Outer.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                   HighExpr::makeConst(0, 8));
+  auto Inner = conditional(0x1010, 0x1050);
+  Inner.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                   HighExpr::makeConst(1, 8));
+  F.Body = {Outer, Inner, assign(0x1020, 1, 2), jump(0x1030, 0x1060),
+            assign(0x1040, 1, 1), jump(0x1044, 0x1060),
+            assign(0x1050, 1, 0), result(0x1060, local(1))};
+
+  MedFunc Med;
+  Med.Entry = F.Entry;
+  const va_t Starts[] = {0x1000, 0x1010, 0x1020, 0x1040, 0x1050, 0x1060};
+  const va_t Ends[] = {0x1000, 0x1010, 0x1030, 0x1044, 0x1050, 0x1060};
+  Med.Blocks.resize(6);
+  for (int I = 0; I < 6; ++I) {
+    auto &Block = Med.Blocks[I];
+    Block.Id = I;
+    Block.StartAddr = Starts[I];
+    MedOp Last;
+    Last.Addr = Ends[I];
+    Last.Opcode = I < 2 ? NdOp::COND_BR
+                  : I == 5 ? NdOp::RETURN
+                           : NdOp::BRANCH;
+    Block.Ops = {Last};
+  }
+  Med.Blocks[0].Succs = {1, 3};
+  Med.Blocks[1].Preds = {0};
+  Med.Blocks[1].Succs = {2, 4};
+  Med.Blocks[2].Preds = {1};
+  Med.Blocks[2].Succs = {5};
+  Med.Blocks[3].Preds = {0};
+  Med.Blocks[3].Succs = {5};
+  Med.Blocks[4].Preds = {1};
+  Med.Blocks[4].Succs = {5};
+  Med.Blocks[5].Preds = {2, 3, 4};
+
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{2}})
+    ASSERT_EQ(execute(F, Input), Input == 0 ? 1u : Input == 1 ? 0u : 2u);
+  structureIfElse(F, 10, &Med);
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{2}})
+    EXPECT_EQ(execute(F, Input), Input == 0 ? 1u : Input == 1 ? 0u : 2u);
+}
+
 TEST(HighControlFlowSemantics, TargetReturnIsNotAnEarlyFallthroughReturn) {
   HighFunc F;
   auto Nested = conditional(0x1004, 0x1040);
@@ -1709,6 +1756,34 @@ TEST(HighControlFlowSemantics, EarlyReturnKeepsTransferPastOtherBranchEntries) {
     for (uint64_t Input : {0U, 1U, 2U, 3U})
       EXPECT_EQ(execute(Structured, Input), execute(F, Input)) << Passes;
   }
+}
+
+TEST(HighControlFlowSemantics, NearbyNestedFallthroughKeepsExactGotoTarget) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  HighStmt Inner;
+  Inner.Kind = StmtKind::IfElse;
+  Inner.Addr = 0x1010;
+  Inner.Cond = HighExpr::makeBinop(NdOp::INT_EQUAL, local(0),
+                                   HighExpr::makeConst(1, 8));
+  Inner.Body = {result(0x1014, HighExpr::makeConst(3, 8))};
+  Inner.ElseBody = {jump(0x1018, 0x1048)};
+  HighStmt Outer;
+  Outer.Kind = StmtKind::IfElse;
+  Outer.Addr = F.Entry;
+  Outer.Cond = local(0);
+  Outer.Body = {Inner};
+  Outer.ElseBody = {result(0x1008, HighExpr::makeConst(4, 8))};
+  F.Body = {Outer, result(0x1040, HighExpr::makeConst(1, 8)),
+            result(0x1048, HighExpr::makeConst(2, 8))};
+
+  ASSERT_EQ(execute(F, 0, true), 4U);
+  ASSERT_EQ(execute(F, 1, true), 3U);
+  ASSERT_EQ(execute(F, 2, true), 2U);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0, true), 4U);
+  EXPECT_EQ(execute(F, 1, true), 3U);
+  EXPECT_EQ(execute(F, 2, true), 2U);
 }
 
 TEST(HighControlFlowSemantics, InlinedElseJoinPreservesPhiCopyBeforeWork) {

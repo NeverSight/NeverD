@@ -3357,9 +3357,9 @@ static bool sameFallthroughLabel(va_t Target, va_t Fallthrough) {
   if (!Target || !Fallthrough || Target == InvalidVA ||
       Fallthrough == InvalidVA)
     return false;
-  return Target == Fallthrough ||
-         (Fallthrough > Target && Fallthrough - Target <= 16) ||
-         (Target > Fallthrough && Target - Fallthrough <= 16);
+  // Adjacent native blocks can be only a few bytes apart yet assign different
+  // join values. Dropping the transfer requires the exact continuation.
+  return Target == Fallthrough;
 }
 
 /// `if (c) { T } else { copies; goto L; } L:` can fall through after the
@@ -4348,7 +4348,11 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
           };
           const bool AssignDiamond =
               RangeAssignLike(NextI, ThenGoto) &&
-              RangeAssignLike(TargetIndex, JoinIdx);
+              RangeAssignLike(TargetIndex, JoinIdx) &&
+              ownsRunHighIR(Body, AM, {NextI, ThenGoto},
+                            static_cast<size_t>(I)) &&
+              ownsRunHighIR(Body, AM, {TargetIndex, JoinIdx},
+                            static_cast<size_t>(I));
           if (AssignDiamond) {
             Stmt.Kind = StmtKind::IfElse;
             Stmt.Cond = HighExpr::makeUnary(NdOp::BOOL_NOT, Stmt.Cond);
