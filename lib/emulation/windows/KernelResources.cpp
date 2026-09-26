@@ -88,13 +88,17 @@ KernelResources::resourceList(uint64_t PDO, bool Translated) const {
         (Resources.size() + I) * resources::ResourceDescriptorSize;
     Put(Base + resources::ResourceTypeOffset, resources::InterruptType, 1);
     Put(Base + resources::ResourceShareOffset, uint8_t(Interrupt.Share), 1);
-    Put(Base + resources::ResourceFlagsOffset,
-        Interrupt.Mode == DriverInterruptMode::Latched
-            ? resources::InterruptLatched
-            : resources::InterruptLevelSensitive,
-        2);
+    const uint16_t Flags =
+        (Interrupt.Mode == DriverInterruptMode::Latched
+             ? resources::InterruptLatched
+             : resources::InterruptLevelSensitive) |
+        (Interrupt.Messages.empty() ? 0 : resources::InterruptMessage);
+    Put(Base + resources::ResourceFlagsOffset, Flags, 2);
     Put(Base + resources::InterruptLevelOffset,
         Translated ? Interrupt.TranslatedLevel : Interrupt.RawLevel, 4);
+    if (!Translated && !Interrupt.Messages.empty())
+      Put(Base + resources::InterruptMessageCountOffset,
+          Interrupt.Messages.size(), 2);
     Put(Base + resources::InterruptVectorOffset,
         Translated ? Interrupt.TranslatedVector : Interrupt.RawVector, 4);
     Put(Base + resources::InterruptAffinityOffset,

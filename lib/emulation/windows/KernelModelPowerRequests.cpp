@@ -64,8 +64,8 @@ KernelModel::preparePowerRequest(const DriverRequest &Input, size_t Index,
     return powerError("PoRequestPowerIrp requires its original device in the "
                       "live PDO route");
   for (uint64_t Device : *Route) {
-    if (FrameworkDevices.count(Device) || Devices.at(Device).DeletePending)
-      return powerError("power route requires live non-framework devices");
+    if (Devices.at(Device).DeletePending)
+      return powerError("power route requires live devices");
     auto Flags = Memory.readInteger(Device + DeviceFlagsOffset, 4);
     if (!Flags)
       return Flags.takeError();
@@ -104,7 +104,12 @@ KernelModel::preparePowerRequest(const DriverRequest &Input, size_t Index,
   };
   const uint64_t PC =
       Result.MajorFunctions[static_cast<unsigned>(RequestMajor::Power)];
-  if (*Top != PDO && !PC)
+  const bool FrameworkPower = Framework && FrameworkDevices.count(*Top);
+  if (FrameworkPower &&
+      ((Child && Child->Origin != DriverRequestOrigin::FrameworkPowerPolicy) ||
+       Route->size() != 2 || Route->back() != PDO))
+    return powerError("framework power requires an explicit FDO/PDO request");
+  if (*Top != PDO && !PC && !FrameworkPower)
     return powerError("attached driver did not register DispatchPower");
   auto Packet = allocate(IRPSize + *Count * StackSize);
   if (!Packet)
@@ -147,7 +152,7 @@ KernelModel::preparePowerRequest(const DriverRequest &Input, size_t Index,
     DriverRequestResult Observation;
     Observation.Kind = DriverRequestKind::Power;
     Observation.DeviceID = Input.DeviceID;
-    Observation.Origin = DriverRequestOrigin::PoRequestPowerIrp;
+    Observation.Origin = Child->Origin;
     Observation.ResponseIndex = Child->ResponseIndex;
     Result.Requests.push_back(std::move(Observation));
   }
@@ -164,7 +169,7 @@ KernelModel::preparePowerRequest(const DriverRequest &Input, size_t Index,
   if (Child)
     Power.RequestedDeviceObject = Child->RequestDevice;
   Observation.Power = Power;
-  Invocation Call{*Top == PDO ? 0 : PC, *Top, *Packet};
+  Invocation Call{*Top == PDO || FrameworkPower ? 0 : PC, *Top, *Packet};
   Call.IRP = *Packet;
   return Call;
 }
@@ -175,13 +180,108 @@ KernelModel::beginPowerRequest(const DriverRequest &Input, size_t Index) {
   if (!Call)
     return Call.takeError();
   if (!Call->PC) {
-    auto Status = callProviderDriver(Call->Argument0, Call->IRP);
+    auto Status = dispatchPreparedPowerRequest(*Call);
     if (!Status)
       return Status.takeError();
-    if (auto E = recordDispatchReturn(Call->IRP, uint32_t(*Status)))
+    if (auto E = recordDispatchReturn(Call->IRP, *Status))
       return E;
   }
   return *Call;
+}
+
+llvm::Expected<uint32_t>
+KernelModel::dispatchPreparedPowerRequest(const Invocation &Call) {
+  auto *Request = requestForIRP(Call.IRP);
+  if (!Request || !Request->PowerOperation || Call.PC)
+    return powerError(
+        "framework/provider dispatch lost its prepared power IRP");
+  const auto Operation = *Request->PowerOperation;
+  const bool FrameworkPower =
+      Framework && FrameworkDevices.count(Call.Argument0);
+  if (FrameworkPower && Operation.Minor == DevicePowerRequest::Set &&
+      Operation.Type == DriverPowerType::Device &&
+      Operation.State != uint32_t(DevicePowerState::D0)) {
+    const auto Power = *Result.Requests[Request->ResultIndex].Power;
+    auto Deferred = Framework->beginDevicePowerTransition(
+        Request->PnpDevice, Call.IRP, Power.DeviceStateBefore,
+        DevicePowerState(Power.State));
+    if (!Deferred)
+      return Deferred.takeError();
+    if (*Deferred) {
+      Request->FrameworkTransitionAwaiting = true;
+      Request->FrameworkTransitionBeforeBus = true;
+      if (auto E = markRequestPending(Call.IRP))
+        return E;
+      return StatusPending;
+    }
+  }
+  auto Status = FrameworkPower ? forwardFrameworkTransitionRequest(Call.IRP)
+                               : callProviderDriver(Call.Argument0, Call.IRP);
+  if (!Status)
+    return Status.takeError();
+  return Request->FrameworkTransitionAwaiting ? StatusPending
+                                              : uint32_t(*Status);
+}
+
+llvm::Expected<bool> KernelModel::beginFrameworkPowerPolicy(uint64_t IRP) {
+  auto *Request = requestForIRP(IRP);
+  if (!Framework || !Request || !Request->PowerOperation ||
+      Request->PowerOperation->Type != DriverPowerType::System ||
+      Request->FrameworkPolicyIssued || Request->DeviceRoute.empty() ||
+      !FrameworkDevices.count(Request->DeviceRoute.front()))
+    return false;
+  auto Owner = Framework->ownsPowerPolicy(Request->DeviceRoute.front());
+  if (!Owner)
+    return Owner.takeError();
+  if (!*Owner)
+    return false;
+  const auto System = *Request->PowerOperation;
+  const auto Target = System.State == uint32_t(SystemPowerState::Working)
+                          ? DevicePowerState::D0
+                          : DevicePowerState::D3;
+  auto *Provider = pnpDeviceForPDO(Request->PnpDevice);
+  if (!Provider ||
+      Provider->RequestedPowerIndex >= Provider->RequestedDevicePower.size())
+    return powerError("framework power policy requires an explicit "
+                      "requested_device_power response");
+  const auto Index = Provider->RequestedPowerIndex;
+  const auto Operation = Provider->RequestedDevicePower[Index];
+  if (Operation.Type != DriverPowerType::Device ||
+      Operation.Minor != System.Minor || Operation.State != uint32_t(Target))
+    return powerError("framework power policy does not match the next "
+                      "requested_device_power response");
+  DriverRequest Input;
+  Input.Kind = DriverRequestKind::Power;
+  Input.DeviceID = Result.PnpDevices[Provider->ResultIndex].ID;
+  Input.Power = Operation;
+  RequestedPower Child;
+  Child.RequestDevice = Request->DeviceRoute.front();
+  Child.ResponseIndex = Index;
+  Child.Origin = DriverRequestOrigin::FrameworkPowerPolicy;
+  Child.FrameworkParent = Target == DevicePowerState::D0 ? 0 : IRP;
+  auto Call = preparePowerRequest(Input, Result.Requests.size(), Child);
+  if (!Call)
+    return Call.takeError();
+  ++Provider->RequestedPowerIndex;
+  Request->FrameworkPolicyIssued = true;
+  // S0 may complete after the independent D0 transaction is issued. S3 must
+  // retain its original packet until the matching device transaction finishes.
+  if (Target == DevicePowerState::D0) {
+    if (auto E = completeRequest(IRP, 0))
+      return E;
+  } else {
+    Request->FrameworkTransitionAwaiting = true;
+    if (auto E = markRequestPending(IRP))
+      return E;
+  }
+  auto Status = dispatchPreparedPowerRequest(*Call);
+  if (!Status)
+    return Status.takeError();
+  if (auto E = recordDispatchReturn(Call->IRP, *Status))
+    return E;
+  if (auto E = tryFinalizePowerRequest(Call->IRP))
+    return E;
+  return true;
 }
 
 llvm::Error

@@ -92,6 +92,42 @@ TEST(DriverWDMSEH, ThreeRaiseExportsExecuteConstantHandlersWithCfgAndRebasing) {
       }
 }
 
+TEST(DriverWDMSEH, GSCookiesMatchRealRuntimeForFixedAndAlignedFrames) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {SehGSCookie, SehGSAlignedCookie}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Mode);
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result, Mode);
+        EXPECT_NE(Result->SecurityCookieAddress, 0u);
+        EXPECT_LT(messageIndex(*Result, "GS cookie checked"),
+                  Result->Messages.size());
+        raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      }
+}
+
+TEST(DriverWDMSEH, CorruptGSCookiesCannotReachHandlersOrUnload) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {SehGSCorruptCookie, SehGSAlignedCorruptCookie}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Mode);
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
+            << Result->Diagnostic;
+        EXPECT_NE(Result->Diagnostic.find("GS security cookie check failed"),
+                  std::string::npos)
+            << Result->Diagnostic;
+        EXPECT_FALSE(Result->UnloadCompleted);
+        EXPECT_EQ(messageIndex(*Result, "GS cookie checked"),
+                  Result->Messages.size());
+        raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      }
+}
+
 TEST(DriverWDMSEH, HelperUnwindRestoresNonvolatileRegistersAndParentLocals) {
   for (const auto *Image : images()) {
     auto Result = emulateDriver(Image, options('H'));
@@ -102,6 +138,62 @@ TEST(DriverWDMSEH, HelperUnwindRestoresNonvolatileRegistersAndParentLocals) {
               Result->Messages.size());
     EXPECT_LT(messageIndex(*Result, "stage=11"), Result->Messages.size());
   }
+}
+
+TEST(DriverWDMSEH, FullNonvolatileXmmValuesSurviveRealHelperUnwind) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      auto Result = emulateDriver(Image, options(SehXmmUnwind, Address));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      clean(*Result, SehXmmUnwind);
+      raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      EXPECT_LT(messageIndex(*Result, "full nonvolatile XMM restored"),
+                Result->Messages.size());
+    }
+}
+
+TEST(DriverWDMSEH, ChainedRuntimeFunctionsRestoreOnePrimaryStack) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      auto Result = emulateDriver(Image, options(SehChainedUnwind, Address));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      clean(*Result, SehChainedUnwind);
+      raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      EXPECT_LT(messageIndex(*Result, "chained nonvolatile restored"),
+                Result->Messages.size());
+    }
+}
+
+TEST(DriverWDMSEH, FaultInsidePartialPrologueRestoresOnlyExecutedSaves) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      auto Options = options(SehPrologueUnwind, Address);
+      for (auto Kind :
+           {DriverRequestKind::Create, DriverRequestKind::DeviceControl,
+            DriverRequestKind::Cleanup, DriverRequestKind::Close}) {
+        DriverRequest Request;
+        Request.Kind = Kind;
+        Request.Device = "\\Device\\NeverDSEH";
+        if (Kind == DriverRequestKind::DeviceControl) {
+          Request.ControlCode = SehRecoverControlCode;
+          Request.Input = {0, 0, 0, 0};
+          Request.UserInputAccess = DriverUserPageAccess::NoAccess;
+        }
+        Options.Requests.push_back(std::move(Request));
+      }
+      auto Result = emulateDriver(Image, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      ASSERT_EQ(Result->Stop, DriverStopReason::Returned) << Result->Diagnostic;
+      ASSERT_EQ(Result->Requests.size(), 4u);
+      EXPECT_EQ(Result->Requests[1].IOStatus, 0u);
+      EXPECT_TRUE(Result->UnloadCompleted);
+      EXPECT_FALSE(Result->Fault);
+      EXPECT_LT(messageIndex(*Result, "partial prologue restored"),
+                Result->Messages.size());
+    }
 }
 
 TEST(DriverWDMSEH, InnermostConstantScopeHandlesBeforeOuterScope) {
@@ -189,23 +281,75 @@ TEST(DriverWDMSEH, FinallyRunsAfterSearchInUnwindOrderAndOnNormalExit) {
       }
 }
 
-TEST(DriverWDMSEH, UnsupportedFilterContinuationsFailWithoutInventingReturn) {
+TEST(DriverWDMSEH, NestedExceptionsHandledWithinCallbacksResumeParentDispatch) {
   for (const auto *Image : images())
-    for (char Mode : {char(SehContinueApi), char(SehNestedFilter),
-                      char(SehNestedFinally)}) {
-      auto Result = emulateDriver(Image, options(Mode));
-      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
-      EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
-          << Result->Diagnostic;
-      EXPECT_FALSE(Result->NTStatus);
-      EXPECT_FALSE(Result->UnloadCompleted);
-      EXPECT_NE(Result->Diagnostic.find(Mode == SehContinueApi
-                                            ? "continuing a modeled API"
-                                            : "nested exceptions"),
-                std::string::npos);
-      EXPECT_EQ(messageIndex(*Result, "dynamic inner handled"),
-                Result->Messages.size());
-    }
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {char(SehLocalFilter), char(SehLocalFinally)}) {
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result, Mode);
+        raisedCalls(*Result,
+                    {"ExRaiseAccessViolation", "ExRaiseDatatypeMisalignment"});
+        EXPECT_LT(messageIndex(*Result, "nested exception record linked"),
+                  messageIndex(*Result, "local nested handler"));
+        EXPECT_LT(messageIndex(*Result, "local nested handler"),
+                  messageIndex(*Result, Mode == SehLocalFilter
+                                            ? "dynamic inner handled"
+                                            : "finally handler"));
+      }
+}
+
+TEST(DriverWDMSEH, NestedSearchAndCollidedUnwindReachTheOwningStack) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {char(SehNestedFilter), char(SehNestedSearch),
+                        char(SehRepeatedFilter), char(SehNestedFinally)}) {
+        SCOPED_TRACE(Mode);
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result, Mode);
+        if (Mode == SehRepeatedFilter)
+          raisedCalls(*Result,
+                      {"ExRaiseAccessViolation", "ExRaiseDatatypeMisalignment",
+                       "ExRaiseStatus"});
+        else
+          raisedCalls(*Result, {"ExRaiseAccessViolation",
+                                "ExRaiseDatatypeMisalignment"});
+        const auto Nested = messageIndex(*Result, "nested filter decision=");
+        EXPECT_LT(Nested, Result->Messages.size());
+        if (Mode == SehNestedFinally) {
+          EXPECT_EQ(
+              std::count_if(Result->Messages.begin(), Result->Messages.end(),
+                            [](const std::string &Message) {
+                              return Message.find("collided finally entered") !=
+                                     std::string::npos;
+                            }),
+              1);
+          EXPECT_LT(messageIndex(*Result, "collided finally entered"), Nested);
+          EXPECT_LT(Nested, messageIndex(*Result, "parent finally abnormal=1"));
+          EXPECT_LT(messageIndex(*Result, "parent finally abnormal=1"),
+                    messageIndex(*Result, "finally handler"));
+        } else {
+          EXPECT_LT(Nested,
+                    messageIndex(*Result, Mode == SehNestedSearch
+                                              ? "dynamic outer handled"
+                                              : "dynamic inner handled"));
+        }
+      }
+}
+
+TEST(DriverWDMSEH, UnsupportedFilterContinuationsFailWithoutInventingReturn) {
+  for (const auto *Image : images()) {
+    auto Result = emulateDriver(Image, options(SehContinueApi));
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, DriverStopReason::ModelError) << Result->Diagnostic;
+    EXPECT_FALSE(Result->NTStatus);
+    EXPECT_FALSE(Result->UnloadCompleted);
+    EXPECT_NE(Result->Diagnostic.find("continuing a modeled API"),
+              std::string::npos);
+    EXPECT_EQ(messageIndex(*Result, "dynamic inner handled"),
+              Result->Messages.size());
+  }
 }
 
 TEST(DriverWDMSEH, ContinueExecutionRetriesUserFaultWithValidatedContext) {

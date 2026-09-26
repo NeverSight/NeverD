@@ -317,7 +317,9 @@ TEST(DriverInterruptScenario,
   IRQ.RawLevel = DriverInterruptRawLevelLimit + 1;
   invalidNative(Options, "group-zero");
   IRQ.RawLevel = 0;
-  for (uint32_t Level : {0u, 2u, 13u, UINT32_MAX}) {
+  IRQ.TranslatedLevel = 0;
+  validNative(Options);
+  for (uint32_t Level : {1u, 2u, 13u, UINT32_MAX}) {
     IRQ.TranslatedLevel = Level;
     invalidNative(Options, "DIRQL");
   }
@@ -642,5 +644,82 @@ TEST(DriverInterruptScenario, MissingOrUndeliveredPulseCannotReportSuccess) {
   EXPECT_EQ(Report->getAsObject()->getBoolean("scenario_success"), true);
 }
 
+TEST(DriverInterruptScenario, ExplicitMessagesAndLocalEventIdsRoundTrip) {
+  auto IRQ = llvm::json::parse(InterruptJSON);
+  auto Event = llvm::json::parse(EventJSON);
+  ASSERT_TRUE(bool(IRQ));
+  ASSERT_TRUE(bool(Event));
+  (*IRQ->getAsObject())["raw_level"] = 0;
+  auto Messages = llvm::json::parse(R"([
+    {"message_address":"0xfee01000","message_data":"0x1234",
+     "translated_vector":81,"translated_level":7,"translated_affinity":1,
+     "polarity":"rising_edge"},
+    {"message_address":"0xfee01000","message_data":"0x5678",
+     "translated_vector":93,"translated_level":9,"translated_affinity":1,
+     "polarity":"falling_edge"}])");
+  ASSERT_TRUE(bool(Messages));
+  (*IRQ->getAsObject())["messages"] = std::move(*Messages);
+  (*Event->getAsObject())["message_id"] = 1;
+  auto Parsed = driverOptionsFromScenarioJSON(scenario(
+      llvm::formatv("{0}", *IRQ).str(), llvm::formatv("{0}", *Event).str()));
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  validNative(*Parsed);
+  const auto &Resource = Parsed->PnpDevices[0].Interrupts[0];
+  ASSERT_EQ(Resource.Messages.size(), 2u);
+  EXPECT_EQ(Resource.Messages[1].MessageData, 0x5678u);
+  EXPECT_EQ(Resource.Messages[1].Polarity,
+            DriverInterruptPolarity::FallingEdge);
+  EXPECT_EQ(Parsed->Requests[0].InterruptEvents[0].MessageID, 1u);
+  auto Options = *Parsed;
+  Options.Requests[0].InterruptEvents[0].MessageID.reset();
+  invalidNative(Options, "message_id");
+  Options.Requests[0].InterruptEvents[0].MessageID = 2;
+  invalidNative(Options, "message_id");
+  Options = *Parsed;
+  Options.PnpDevices[0].Interrupts[0].Messages[1].MessageAddress++;
+  invalidNative(Options, "one address");
+  Options = *Parsed;
+  Options.PnpDevices[0].Interrupts[0].Messages[0].TranslatedVector++;
+  invalidNative(Options, "first message");
+  Options = *Parsed;
+  Options.PnpDevices[0].Interrupts[0].Messages[1].Polarity =
+      static_cast<DriverInterruptPolarity>(UINT32_MAX);
+  invalidNative(Options, "polarity");
+  for (const char *Name :
+       {"message_address", "message_data", "translated_vector",
+        "translated_level", "translated_affinity", "polarity"}) {
+    auto Copy = *IRQ;
+    (*Copy.getAsObject())["messages"]
+        .getAsArray()
+        ->front()
+        .getAsObject()
+        ->erase(Name);
+    invalidJSON(scenario(llvm::formatv("{0}", Copy).str(),
+                         llvm::formatv("{0}", *Event).str()));
+  }
+  for (const char *Value : {"[]", "null", "{}", "[null]"}) {
+    auto Copy = *IRQ;
+    auto Replacement = llvm::json::parse(Value);
+    ASSERT_TRUE(bool(Replacement));
+    (*Copy.getAsObject())["messages"] = std::move(*Replacement);
+    invalidJSON(scenario(llvm::formatv("{0}", Copy).str(),
+                         llvm::formatv("{0}", *Event).str()));
+  }
+}
+
+TEST(DriverInterruptScenario,
+     MessageLimitAndLineEventSeparationAreNativeChecks) {
+  auto Options = options();
+  Options.Requests[0].InterruptEvents[0].MessageID = 0;
+  invalidNative(Options, "message_id");
+  auto &Resource = Options.PnpDevices[0].Interrupts[0];
+  Resource.RawLevel = 0;
+  for (size_t I = 0; I < DriverScenarioInterruptMessageLimit; ++I)
+    Resource.Messages.push_back(
+        {0xfee01000, uint32_t(I), 81 + uint32_t(I), 7, 1});
+  validNative(Options);
+  Resource.Messages.push_back({0xfee01000, 32, 113, 7, 1});
+  invalidNative(Options, "combined count");
+}
 } // namespace
 } // namespace neverd::emulation

@@ -86,9 +86,12 @@ llvm::Error
 KernelScheduler::validateInterrupt(const InterruptCallback &Interrupt) const {
   if (auto E = validateCallback(Interrupt))
     return E;
-  if (Interrupt.Priority < scheduler::MinDeviceIRQL ||
+  const bool Passive = Interrupt.IRQL == scheduler::PassiveLevel;
+  if ((!Passive && Interrupt.Priority < scheduler::MinDeviceIRQL) ||
+      (Passive && Interrupt.Priority &&
+       Interrupt.Priority < scheduler::MinDeviceIRQL) ||
       Interrupt.Priority > scheduler::MaxDeviceIRQL ||
-      Interrupt.IRQL < Interrupt.Priority ||
+      (!Passive && Interrupt.IRQL < Interrupt.Priority) ||
       Interrupt.IRQL > scheduler::MaxDeviceIRQL)
     return schedulerError("interrupt requires a device priority and an equal "
                           "or higher synchronization IRQL");
@@ -275,9 +278,12 @@ KernelScheduler::enqueueInterrupt(InterruptCallback Interrupt) {
   Call.IRQL = IRQL;
   Call.InterruptPriority = Priority;
   const uint64_t ID = Call.ID;
-  auto Position = llvm::find_if(Interrupts, [Priority](const auto &Queued) {
-    return Queued.InterruptPriority < Priority;
-  });
+  auto Position =
+      llvm::find_if(Interrupts, [IRQL, Priority](const auto &Queued) {
+        if (bool(IRQL) != bool(Queued.IRQL))
+          return bool(IRQL);
+        return Queued.InterruptPriority < Priority;
+      });
   Interrupts.insert(Position, std::move(Call));
   return ID;
 }
@@ -639,11 +645,12 @@ KernelScheduler::next(bool AdvanceTime,
     if (queuedCallbackCount()) {
       if (Dispatches >= Bounds.MaxDispatches)
         return schedulerError("scheduler callback dispatch limit exhausted");
-      auto &Queue = !Interrupts.empty()      ? Interrupts
-                    : !DPCs.empty()          ? DPCs
-                    : !ReadyDMA.empty()      ? ReadyDMA
+      auto &Queue = !Interrupts.empty() && Interrupts.front().IRQL ? Interrupts
+                    : !DPCs.empty()                                ? DPCs
+                    : !ReadyDMA.empty()                            ? ReadyDMA
                     : !Cancellations.empty() ? Cancellations
                     : !Completions.empty()   ? Completions
+                    : !Interrupts.empty()    ? Interrupts
                     : !Workers.empty()       ? Workers
                                              : SystemThreads;
       Active = std::move(Queue.front());

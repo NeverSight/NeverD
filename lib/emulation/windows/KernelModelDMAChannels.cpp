@@ -27,7 +27,8 @@ llvm::Expected<KernelModel::DmaMdlView>
 KernelModel::dmaMdlView(uint64_t MDL, uint64_t CurrentVA, uint32_t Length,
                         bool ToDevice) const {
   const auto I = MDLs.find(MDL);
-  if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver)
+  if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver ||
+      I->second.Owner == LockedMdl::Ownership::ReleasedPages)
     return channelError("DMA requires a locked or nonpaged MDL");
   const auto &View = I->second;
   const uint64_t Virtual = View.OriginalAddress;
@@ -46,7 +47,8 @@ KernelModel::dmaMdlView(uint64_t MDL, uint64_t CurrentVA, uint32_t Length,
 
 llvm::Error KernelModel::flushIoBuffers(uint64_t MDL) {
   const auto I = MDLs.find(MDL);
-  if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver)
+  if (I == MDLs.end() || I->second.Owner == LockedMdl::Ownership::Driver ||
+      I->second.Owner == LockedMdl::Ownership::ReleasedPages)
     return channelError("KeFlushIoBuffers requires a locked or nonpaged MDL");
   const auto &View = I->second;
   const uint64_t Backing = View.BackingAddress;

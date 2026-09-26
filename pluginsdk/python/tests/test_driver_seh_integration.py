@@ -88,6 +88,24 @@ class DriverSEHIntegrationTests(unittest.TestCase):
                         self.assertTrue(any("code=" + code in m for m in result["messages"]))
                         self.assertTrue(any("local=12cb5687" in m for m in result["messages"]))
 
+    def test_gs_cookie_success_and_corruption_in_fixed_and_aligned_frames(self) -> None:
+        for variant, fixture in self.fixtures:
+            for mode in ("g", "a", "b", "d"):
+                with self.subTest(variant=variant, mode=mode):
+                    result = self._run(fixture, mode)
+                    self.assertNotEqual(int(result["security_cookie"], 16), 0)
+                    if mode in ("g", "a"):
+                        self._success(result, mode, ["ExRaiseAccessViolation"])
+                        self.assertTrue(any("GS cookie checked" in m
+                                            for m in result["messages"]))
+                    else:
+                        self.assertEqual(result["stop_reason"], "model_error")
+                        self.assertFalse(result["scenario_success"])
+                        self.assertFalse(result["unload_completed"])
+                        self.assertIn("GS security cookie check failed", result["diagnostic"])
+                        self.assertFalse(any("GS cookie checked" in m
+                                             for m in result["messages"]))
+
     def test_helper_registers_nested_scopes_and_reraised_handlers(self) -> None:
         cases = {
             "H": (["ExRaiseStatus"], "nonvolatile restored"),
@@ -124,18 +142,39 @@ class DriverSEHIntegrationTests(unittest.TestCase):
                                         if marker in message) for marker in markers]
                         self.assertEqual(indices, sorted(indices))
 
-    def test_unsupported_filter_continuation_and_nested_exceptions_stop(self) -> None:
+    def test_nested_filters_and_collided_finally_preserve_search_order(self) -> None:
         for variant, fixture in self.fixtures:
-            for mode, reason in (("E", "continuing a modeled API"),
-                                 ("B", "nested exceptions"), ("J", "nested exceptions")):
+            for mode in ("B", "J"):
                 with self.subTest(variant=variant, mode=mode):
                     result = self._run(fixture, mode)
-                    self.assertEqual(result["stop_reason"], "model_error")
-                    self.assertFalse(result["scenario_success"])
-                    self.assertFalse(result["unload_completed"])
-                    self.assertIn(reason, result["diagnostic"])
-                    self.assertFalse(any("dynamic inner handled" in m
-                                         for m in result["messages"]))
+                    self._success(result, mode, ["ExRaiseAccessViolation",
+                                                 "ExRaiseDatatypeMisalignment"])
+                    messages = result["messages"]
+                    nested = next(i for i, message in enumerate(messages)
+                                  if "nested filter decision=" in message)
+                    if mode == "B":
+                        handled = next(i for i, message in enumerate(messages)
+                                       if "dynamic inner handled" in message)
+                        self.assertLess(nested, handled)
+                    else:
+                        cleanups = [i for i, message in enumerate(messages)
+                                    if "collided finally entered" in message]
+                        self.assertEqual(len(cleanups), 1)
+                        self.assertLess(cleanups[0], nested)
+                        outer = next(i for i, message in enumerate(messages)
+                                     if "parent finally abnormal=1" in message)
+                        self.assertLess(nested, outer)
+
+    def test_unsupported_api_filter_continuation_stops(self) -> None:
+        for variant, fixture in self.fixtures:
+            with self.subTest(variant=variant):
+                result = self._run(fixture, "E")
+                self.assertEqual(result["stop_reason"], "model_error")
+                self.assertFalse(result["scenario_success"])
+                self.assertFalse(result["unload_completed"])
+                self.assertIn("continuing a modeled API", result["diagnostic"])
+                self.assertFalse(any("dynamic inner handled" in m
+                                     for m in result["messages"]))
 
     def test_unhandled_api_raise_and_cpu_fault_remain_distinct_stops(self) -> None:
         for variant, fixture in self.fixtures:

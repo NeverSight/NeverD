@@ -14,6 +14,8 @@
 #include "KernelModel.h"
 #include "WindowsKernelLayout.h"
 
+#include <algorithm>
+
 namespace neverd::emulation {
 namespace {
 llvm::Error apiError(const llvm::Twine &Message) {
@@ -41,7 +43,7 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     return 0;
   }
   if (Name == kernel_api::KeSynchronizeExecution) {
-    if (hasPendingModelGuestCall())
+    if (hasPendingModelGuestCall() || PendingWait)
       return apiError("cannot replace a prepared guest callback");
     const auto *Connection = Interrupts.connection(A[0]);
     if (!Connection || CurrentIRQL > Connection->SynchronizeIRQL)
@@ -50,6 +52,17 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     auto Call = Interrupts.synchronize(A[0], A[1], A[2]);
     if (!Call)
       return Call.takeError();
+    if (Connection->Passive) {
+      if (PendingWait)
+        return apiError(
+            "passive synchronization cannot replace a pending wait");
+      Wait Waiter;
+      Waiter.Type = Wait::Kind::InterruptSynchronization;
+      Waiter.Object = Call->Token.ID;
+      Waiter.Execution = CurrentExecution;
+      Waiter.IRQL = CurrentIRQL;
+      PendingWait = Waiter;
+    }
     PendingInterruptCall = std::move(*Call);
     return 0;
   }
@@ -69,13 +82,17 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
       Version = uint32_t(*VersionField);
       if (Version != interrupts::FullySpecified &&
           Version != interrupts::FullySpecifiedGroup &&
-          Version != interrupts::LineBased)
+          Version != interrupts::LineBased &&
+          Version != interrupts::MessageBased &&
+          Version != interrupts::MessageBasedPassive)
         return apiError("unsupported Ex disconnect version");
       Object = *Context;
     }
     if (auto E = Interrupts.disconnect(Object, Version))
       return E;
-    FreedRanges.emplace(Object, interrupts::TokenSize);
+    if (Version != interrupts::MessageBased &&
+        Version != interrupts::MessageBasedPassive)
+      FreedRanges.emplace(Object, interrupts::TokenSize);
     return 0;
   }
   if (Name != kernel_api::IoConnectInterrupt &&
@@ -86,7 +103,8 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
   uint64_t Vector = 0, IRQL = 0, Synchronize = 0, Mode = 0;
   uint64_t Share = 0, Affinity = 0, Floating = 0, Group = 0;
   uint32_t Version = 0;
-  bool LineBased = false;
+  bool LineBased = false, MessageBased = false, Passive = false;
+  uint64_t Fallback = 0;
   if (Name == kernel_api::IoConnectInterrupt) {
     Output = A[0];
     Routine = A[1];
@@ -108,10 +126,14 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     Version = uint32_t(*VersionField);
     if (Version != interrupts::FullySpecified &&
         Version != interrupts::FullySpecifiedGroup &&
-        Version != interrupts::LineBased)
-      return apiError("unsupported Ex connect version (message/passive "
-                      "interrupts are not modeled)");
+        Version != interrupts::LineBased &&
+        Version != interrupts::MessageBased &&
+        Version != interrupts::MessageBasedPassive)
+      return apiError("unsupported Ex connect version");
     LineBased = Version == interrupts::LineBased;
+    MessageBased = Version == interrupts::MessageBased ||
+                   Version == interrupts::MessageBasedPassive;
+    Passive = Version == interrupts::MessageBasedPassive;
     struct Field {
       uint64_t Offset;
       unsigned Size;
@@ -124,7 +146,9 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
                               {interrupts::SpinLockOffset, 8, &SpinLock},
                               {interrupts::SynchronizeIRQL, 1, &Synchronize},
                               {interrupts::FloatingSave, 1, &Floating}};
-    if (!LineBased) {
+    if (MessageBased)
+      Fields.push_back({interrupts::FallbackRoutine, 8, &Fallback});
+    if (!LineBased && !MessageBased) {
       Fields.push_back({interrupts::ShareVector, 1, &Share});
       Fields.push_back({interrupts::Vector, 4, &Vector});
       Fields.push_back({interrupts::IRQL, 1, &IRQL});
@@ -146,37 +170,80 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
     if (!PDO || !isProviderDevice(PDO))
       return apiError("Ex registration requires its configured PDO");
   }
+  if (!MessageBased && !LineBased && Version && !IRQL && !Synchronize)
+    Passive = true;
+  if (Passive && (SpinLock || Synchronize))
+    return windows::StatusInvalidParameter;
   if (!Output || !Routine)
     return apiError(
         "registration requires output storage and a service routine");
   if (Floating || Group)
     return apiError("only CPU0/group0 interrupts without floating state saving "
                     "are modeled");
-  if (!LineBased && !Affinity)
+  if (!LineBased && !MessageBased && !Affinity)
     return windows::StatusInvalidParameter;
   if (auto E = validateGuestAccess(Output, profile::PointerSize, true))
     return E;
   if (Context)
     if (auto E = validateDispatcherStorage(Context, 1, false))
       return E;
-  auto Candidate = Interrupts.match(PDO, uint32_t(Vector), uint8_t(IRQL),
-                                    Affinity, LineBased);
-  if (!Candidate)
-    return Candidate.takeError();
-  const auto &Resource =
-      Resources.find(Candidate->PDO)->Interrupts[Candidate->ResourceIndex];
-  if (!LineBased && Mode != uint32_t(Resource.Mode))
-    return apiError("interrupt mode must match the assigned resource");
-  if (!LineBased &&
-      bool(Share) != (Resource.Share == DriverInterruptShare::Shared))
-    return apiError("ShareVector must match the assigned interrupt resource");
-  if (LineBased && !Synchronize)
-    Synchronize = Candidate->IRQL;
-  if (Synchronize < Candidate->IRQL ||
-      Synchronize > DriverInterruptMaximumLevel ||
-      (!SpinLock && Synchronize != Candidate->IRQL))
-    return apiError("synchronization IRQL requires the assigned DIRQL or a "
-                    "shared caller lock at a higher device DIRQL");
+  std::vector<KernelInterrupts::Connection> Candidates;
+  if (MessageBased) {
+    auto Messages = Interrupts.matchMessages(PDO);
+    if (!Messages)
+      return Messages.takeError();
+    Candidates = std::move(*Messages);
+    if (Candidates.empty()) {
+      if (!Fallback)
+        return windows::StatusNotFound;
+      if (auto E = validateGuestAccess(A[0], 4, true))
+        return E;
+      Routine = Fallback;
+      MessageBased = false;
+      LineBased = true;
+      Version = interrupts::LineBased;
+    }
+  }
+  if (!MessageBased) {
+    auto Candidate = Interrupts.match(PDO, uint32_t(Vector), uint8_t(IRQL),
+                                      Affinity, LineBased, Passive);
+    if (!Candidate)
+      return Candidate.takeError();
+    if (LineBased && !Candidate->IRQL && !Synchronize)
+      Passive = true;
+    if (Passive && SpinLock)
+      return windows::StatusInvalidParameter;
+    if (!Version && !Candidate->IRQL)
+      return apiError("passive interrupts require IoConnectInterruptEx");
+    if (!Version && Candidate->ResourceMessage)
+      return apiError("message interrupts require IoConnectInterruptEx");
+    const auto &Resource =
+        Resources.find(Candidate->PDO)->Interrupts[Candidate->ResourceIndex];
+    if (!LineBased && Mode != uint32_t(Resource.Mode))
+      return apiError("interrupt mode must match the assigned resource");
+    if (!LineBased &&
+        bool(Share) != (Resource.Share == DriverInterruptShare::Shared))
+      return apiError("ShareVector must match the assigned interrupt resource");
+    if (LineBased && !Synchronize && !Passive)
+      Synchronize = Candidate->IRQL;
+    if (!Passive && (Synchronize < Candidate->IRQL ||
+                     Synchronize > DriverInterruptMaximumLevel ||
+                     (!SpinLock && Synchronize != Candidate->IRQL)))
+      return apiError("synchronization IRQL requires the assigned DIRQL or a "
+                      "shared caller lock at a higher device DIRQL");
+    Candidates.push_back(*Candidate);
+  }
+  uint8_t UnifiedIRQL = 0;
+  if (MessageBased && !Passive) {
+    uint8_t MaximumIRQL = 0;
+    for (const auto &Candidate : Candidates)
+      MaximumIRQL = std::max(MaximumIRQL, Candidate.IRQL);
+    if ((Synchronize && Synchronize < MaximumIRQL) ||
+        Synchronize > DriverInterruptMaximumLevel)
+      return apiError("message synchronization IRQL must cover every message");
+    if (SpinLock || Synchronize)
+      UnifiedIRQL = uint8_t(Synchronize ? Synchronize : MaximumIRQL);
+  }
   if (SpinLock) {
     if (SpinLock < profile::UserProbeLimit ||
         SpinLock > UINT64_MAX - profile::PointerSize ||
@@ -210,36 +277,85 @@ KernelModel::callInterruptAPI(llvm::StringRef Name,
   }
   const uint64_t Aligned = (NextAllocation + interrupts::TokenSize - 1) &
                            ~(interrupts::TokenSize - 1);
-  if (Aligned > AllocationEnd ||
-      interrupts::TokenSize > AllocationEnd - Aligned)
+  const uint64_t TableSize =
+      MessageBased ? interrupts::MessageTableHeaderSize +
+                         Candidates.size() * interrupts::MessageEntrySize
+                   : 0;
+  const uint64_t TokenOffset =
+      (TableSize + interrupts::TokenSize - 1) & ~(interrupts::TokenSize - 1);
+  const uint64_t AllocationSize =
+      TokenOffset + Candidates.size() * interrupts::TokenSize;
+  if (Aligned > AllocationEnd || AllocationSize > AllocationEnd - Aligned)
     return windows::StatusInsufficientResources;
-  Candidate->Object = Aligned;
-  Candidate->Routine = Routine;
-  Candidate->Context = Context;
-  Candidate->Version = Version;
-  Candidate->SpinLock = SpinLock;
-  Candidate->SynchronizeIRQL = uint8_t(Synchronize);
-  for (const auto &[Address, Device] : Devices)
-    if (Device.OwnerKind == DeviceOwnerKind::Guest && Device.Extension &&
-        Output >= Device.Extension && Output < Address + Device.Size &&
-        profile::PointerSize <= Address + Device.Size - Output) {
-      if (Device.DeletePending)
-        return apiError("interrupt output storage belongs to a deleted device");
-      Candidate->OutputDeviceBase = Address;
-      Candidate->OutputDeviceSize = Device.Size;
-      break;
+  for (size_t I = 0; I < Candidates.size(); ++I) {
+    auto &Candidate = Candidates[I];
+    Candidate.Object = Aligned + TokenOffset + I * interrupts::TokenSize;
+    Candidate.Routine = Routine;
+    Candidate.Context = Context;
+    Candidate.Version = Version;
+    Candidate.SpinLock = SpinLock;
+    Candidate.Passive = Passive;
+    Candidate.SynchronizeIRQL =
+        Passive        ? 0
+        : MessageBased ? (UnifiedIRQL ? UnifiedIRQL : Candidate.IRQL)
+                       : uint8_t(Synchronize);
+    for (const auto &[Address, Device] : Devices)
+      if (Device.OwnerKind == DeviceOwnerKind::Guest && Device.Extension &&
+          Output >= Device.Extension && Output < Address + Device.Size &&
+          profile::PointerSize <= Address + Device.Size - Output) {
+        if (Device.DeletePending)
+          return apiError(
+              "interrupt output storage belongs to a deleted device");
+        Candidate.OutputDeviceBase = Address;
+        Candidate.OutputDeviceSize = Device.Size;
+        break;
+      }
+  }
+  if (auto E = MessageBased ? Interrupts.canConnectMessages(Aligned, Candidates)
+                            : Interrupts.canConnect(Candidates.front()))
+    return E;
+  auto Storage = allocate(AllocationSize);
+  if (!Storage)
+    return Storage.takeError();
+  if (MessageBased) {
+    if (auto E = Memory.writeInteger(*Storage + interrupts::MessageTableIRQL,
+                                     UnifiedIRQL, 1))
+      return E;
+    if (auto E = Memory.writeInteger(*Storage + interrupts::MessageTableCount,
+                                     Candidates.size(), 4))
+      return E;
+    for (size_t I = 0; I < Candidates.size(); ++I) {
+      const auto Message = Interrupts.assignment(Candidates[I]);
+      const uint64_t Base = *Storage + interrupts::MessageTableHeaderSize +
+                            I * interrupts::MessageEntrySize;
+      struct Field {
+        uint64_t Offset;
+        uint64_t Value;
+        unsigned Size;
+      };
+      const Field Fields[] = {
+          {interrupts::MessageAddress, Message.MessageAddress, 8},
+          {interrupts::MessageAffinity, Message.TranslatedAffinity, 8},
+          {interrupts::MessageObject, Candidates[I].Object, 8},
+          {interrupts::MessageData, Message.MessageData, 4},
+          {interrupts::MessageVector, Message.TranslatedVector, 4},
+          {interrupts::MessageIRQL, Message.TranslatedLevel, 1},
+          {interrupts::MessageMode, uint32_t(DriverInterruptMode::Latched), 4},
+          {interrupts::MessagePolarity, uint32_t(Message.Polarity), 4}};
+      for (const auto &Field : Fields)
+        if (auto E = Memory.writeInteger(Base + Field.Offset, Field.Value,
+                                         Field.Size))
+          return E;
     }
-  if (auto E = Interrupts.canConnect(*Candidate))
+  }
+  if (Fallback && !MessageBased)
+    if (auto E = Memory.writeInteger(A[0], Version, 4))
+      return E;
+  // All identities and output storage are checked before publishing the group.
+  if (auto E = Memory.writeInteger(Output, *Storage, profile::PointerSize))
     return E;
-  auto Object = allocate(interrupts::TokenSize);
-  if (!Object)
-    return Object.takeError();
-  Candidate->Object = *Object;
-  // The candidate has been checked without publishing a connection. A failed
-  // output write cannot leave a live opaque interrupt registration behind.
-  if (auto E = Memory.writeInteger(Output, *Object, profile::PointerSize))
-    return E;
-  if (auto E = Interrupts.connect(*Candidate))
+  if (auto E = MessageBased ? Interrupts.connectMessages(*Storage, Candidates)
+                            : Interrupts.connect(Candidates.front()))
     return E;
   return windows::StatusSuccess;
 }

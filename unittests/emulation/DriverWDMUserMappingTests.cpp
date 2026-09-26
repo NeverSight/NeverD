@@ -60,6 +60,64 @@ void expectLifecycle(const DriverResult &Result,
   EXPECT_FALSE(Result.Fault);
 }
 
+TEST(DriverWDMUserMapping,
+     IndependentAllocatedPagesShareMappingsAndReleaseSeparately) {
+  for (const auto *Image : images())
+    for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL})
+      for (uint32_t Action :
+           {UserMappingIndependentPages, UserMappingLegacyPages,
+            UserMappingContiguousChunks}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(LoadAddress);
+        SCOPED_TRACE(Action);
+        auto Result = emulateDriver(Image, options(Action, LoadAddress));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        expectLifecycle(*Result,
+                        {1, UserMappingFirstByte, UserMappingSecondByte, 1});
+        EXPECT_TRUE(std::any_of(Result->Calls.begin(), Result->Calls.end(),
+                                [](const auto &Call) {
+                                  return Call.Name == "MmFreePagesFromMdl";
+                                }));
+        EXPECT_TRUE(std::any_of(Result->Calls.begin(), Result->Calls.end(),
+                                [](const auto &Call) {
+                                  return Call.Name == "ExFreePool" ||
+                                         (Call.Name == "ExFreePoolWithTag" &&
+                                          Call.Arguments[1] == 0);
+                                }));
+      }
+}
+
+TEST(DriverWDMUserMapping, KernelPoolProbeKeepsPagedMemoryResidentAtDispatch) {
+  for (const auto *Image : images())
+    for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(LoadAddress);
+      auto Result =
+          emulateDriver(Image, options(UserMappingKernelPoolLock, LoadAddress));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      expectLifecycle(*Result,
+                      {UserMappingFirstByte, UserMappingFirstByte + 1, 1, 1});
+    }
+}
+
+TEST(DriverWDMUserMapping, IrpCompletionReleasesOnlyItsBorrowedPartialPages) {
+  for (const auto *Image : images())
+    for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(LoadAddress);
+      auto Result = emulateDriver(
+          Image, options(UserMappingIndependentPartial, LoadAddress));
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      expectLifecycle(*Result, {1, UserMappingFirstByte, 1, 1});
+      const auto Free = std::find_if(
+          Result->Calls.begin(), Result->Calls.end(),
+          [](const auto &Call) { return Call.Name == "MmFreePagesFromMdl"; });
+      ASSERT_NE(Free, Result->Calls.end());
+      ASSERT_NE(Free, Result->Calls.begin());
+      EXPECT_EQ(std::prev(Free)->Name, "IofCompleteRequest");
+    }
+}
+
 TEST(DriverWDMUserMapping, PoolAliasesCatchReadOnlyFaultAndRelockTheSamePages) {
   for (const auto *Image : images())
     for (uint64_t LoadAddress : {0x180000000ULL, 0x190000000ULL}) {

@@ -46,6 +46,7 @@ ABI_SLOT(WdfDeviceCreate, 75);
 ABI_SLOT(WdfDeviceInitSetExclusive, 62);
 ABI_SLOT(WdfDeviceInitSetDeviceType, 66);
 ABI_SLOT(WdfDeviceInitSetPnpPowerEventCallbacks, 55);
+ABI_SLOT(WdfDeviceInitSetPowerPolicyOwnership, 57);
 ABI_SLOT(WdfCmResourceListGetCount, 304);
 ABI_SLOT(WdfCmResourceListGetDescriptor, 305);
 ABI_SLOT(WdfDriverCreate, 116);
@@ -66,9 +67,11 @@ ABI_SLOT(WdfRequestRetrieveOutputBuffer, 270);
 
 static WCHAR ServiceMode;
 static ULONG QueryStopCount, QueryRemoveCount;
+static ULONG PowerEntryCount, PowerExitCount;
 static const LONGLONG FileSendTimeout100ns = -5;
 static WDFQUEUE PowerQueue;
 static PVOID MappedResource;
+static WDFCMRESLIST ReleasedResourceList;
 static ULONG DeliveryCount;
 static PIO_WORKITEM PendingWorkItem;
 static ULONG FilePhase;
@@ -198,15 +201,21 @@ static VOID FilterFileCreate(WDFDEVICE Device, WDFREQUEST Request,
   DbgPrint("KMDF PnP: file create forwarded\n");
 }
 
+static BOOLEAN UsesSelfManagedIo(VOID) {
+  return (ServiceMode >= L'0' && ServiceMode <= L'9') || ServiceMode == L'G' ||
+         ServiceMode == L'e';
+}
+
 static BOOLEAN UsesPowerQueue(VOID) {
   return ServiceMode == L'M' || ServiceMode == L'T' || ServiceMode == L'C' ||
          ServiceMode == L'A' || ServiceMode == L'V' || ServiceMode == L'G' ||
          ServiceMode == L'B' || ServiceMode == L'D' || ServiceMode == L'E' ||
-         ServiceMode == L'Y' || ServiceMode == L'Z';
+         ServiceMode == L'Y' || ServiceMode == L'Z' || UsesSelfManagedIo();
 }
 
 static BOOLEAN UsesAssignedMemory(VOID) {
-  return ServiceMode == L'R' || ServiceMode == L'L' || ServiceMode == L'W';
+  return ServiceMode == L'R' || ServiceMode == L'L' || ServiceMode == L'W' ||
+         ServiceMode == L'9';
 }
 
 static BOOLEAN QueueIsPowerHeld(BOOLEAN Expected) {
@@ -220,12 +229,23 @@ static BOOLEAN QueueIsPowerHeld(BOOLEAN Expected) {
 _Static_assert(sizeof(WDF_PNPPOWER_EVENT_CALLBACKS) == 144,
                "KMDF 1.33 PnP callback layout");
 
+static BOOLEAN UsesDevicePowerTransitions(void) {
+  return ServiceMode == L'6' || ServiceMode == L'9';
+}
+
 static NTSTATUS DeviceD0Entry(WDFDEVICE Device,
                               WDF_POWER_DEVICE_STATE PreviousState) {
   UNREFERENCED_PARAMETER(Device);
-  if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-      PreviousState != WdfPowerDeviceD3Final ||
+  const WDF_POWER_DEVICE_STATE ExpectedState =
+      UsesDevicePowerTransitions() && PowerEntryCount ? WdfPowerDeviceD3
+                                                      : WdfPowerDeviceD3Final;
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || PreviousState != ExpectedState ||
       (UsesPowerQueue() && !QueueIsPowerHeld(TRUE)))
+    return STATUS_INVALID_DEVICE_STATE;
+  ++PowerEntryCount;
+  if (ServiceMode == L'9' &&
+      READ_REGISTER_ULONG((volatile ULONG *)MappedResource) !=
+          InitialRegisterValue)
     return STATUS_INVALID_DEVICE_STATE;
   DbgPrint("KMDF PnP: D0 entry\n");
   return ServiceMode == L'Q' || ServiceMode == L'J' ? STATUS_UNSUCCESSFUL
@@ -272,9 +292,16 @@ static VOID DeviceSurpriseRemoval(WDFDEVICE Device) {
 static NTSTATUS DeviceD0Exit(WDFDEVICE Device,
                              WDF_POWER_DEVICE_STATE TargetState) {
   UNREFERENCED_PARAMETER(Device);
-  if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-      TargetState != WdfPowerDeviceD3Final ||
+  const WDF_POWER_DEVICE_STATE ExpectedState =
+      UsesDevicePowerTransitions() && !PowerExitCount ? WdfPowerDeviceD3
+                                                      : WdfPowerDeviceD3Final;
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || TargetState != ExpectedState ||
       (UsesPowerQueue() && !QueueIsPowerHeld(TRUE)))
+    return STATUS_INVALID_DEVICE_STATE;
+  ++PowerExitCount;
+  if (ServiceMode == L'9' &&
+      READ_REGISTER_ULONG((volatile ULONG *)MappedResource) !=
+          InitialRegisterValue)
     return STATUS_INVALID_DEVICE_STATE;
   DbgPrint("KMDF PnP: D0 exit\n");
   return STATUS_SUCCESS;
@@ -332,7 +359,8 @@ static NTSTATUS DevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw,
 static NTSTATUS DeviceReleaseHardware(WDFDEVICE Device,
                                       WDFCMRESLIST Translated) {
   UNREFERENCED_PARAMETER(Device);
-  if (ServiceMode == L'R' || ServiceMode == L'L') {
+  ReleasedResourceList = Translated;
+  if (ServiceMode == L'R' || ServiceMode == L'L' || ServiceMode == L'9') {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
     if (KeGetCurrentIrql() != PASSIVE_LEVEL || Translated == NULL ||
         MappedResource == NULL || WdfCmResourceListGetCount(Translated) != 1)
@@ -357,8 +385,78 @@ static NTSTATUS DeviceReleaseHardware(WDFDEVICE Device,
 }
 
 static NTSTATUS DeviceSelfManagedIoInit(WDFDEVICE Device) {
+  if (Device == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+      !QueueIsPowerHeld(FALSE))
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: self-managed init\n");
+  return ServiceMode == L'1' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS DeviceSelfManagedIoSuspend(WDFDEVICE Device) {
+  if (Device == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: self-managed suspend\n");
+  return ServiceMode == L'2' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS DeviceSelfManagedIoRestart(WDFDEVICE Device) {
+  if (Device == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL ||
+      !QueueIsPowerHeld(FALSE))
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: self-managed restart\n");
+  return ServiceMode == L'3' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static VOID DeviceSelfManagedIoFlush(WDFDEVICE Device) {
   UNREFERENCED_PARAMETER(Device);
-  return STATUS_SUCCESS;
+  if (ServiceMode == L'e')
+    DbgPrint("KMDF PnP: expired resource count=%lu\n",
+             WdfCmResourceListGetCount(ReleasedResourceList));
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || !QueueIsPowerHeld(TRUE))
+    DbgPrint("KMDF PnP: self-managed order invalid\n");
+  DbgPrint("KMDF PnP: self-managed flush\n");
+}
+
+static VOID DeviceSelfManagedIoCleanup(WDFDEVICE Device) {
+  UNREFERENCED_PARAMETER(Device);
+  if (KeGetCurrentIrql() != PASSIVE_LEVEL || !QueueIsPowerHeld(TRUE))
+    DbgPrint("KMDF PnP: self-managed order invalid\n");
+  DbgPrint("KMDF PnP: self-managed cleanup\n");
+}
+
+static NTSTATUS
+DeviceD0EntryPostInterruptsEnabled(WDFDEVICE Device,
+                                   WDF_POWER_DEVICE_STATE PreviousState) {
+  const WDF_POWER_DEVICE_STATE ExpectedState =
+      UsesDevicePowerTransitions() && PowerEntryCount > 1
+          ? WdfPowerDeviceD3
+          : WdfPowerDeviceD3Final;
+  if (Device == NULL || PreviousState != ExpectedState ||
+      KeGetCurrentIrql() != PASSIVE_LEVEL || !QueueIsPowerHeld(TRUE))
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: D0 entry post interrupts\n");
+  return ServiceMode == L'4' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DeviceD0ExitPreInterruptsDisabled(WDFDEVICE Device,
+                                  WDF_POWER_DEVICE_STATE TargetState) {
+  const WDF_POWER_DEVICE_STATE ExpectedState =
+      UsesDevicePowerTransitions() && !PowerExitCount ? WdfPowerDeviceD3
+                                                      : WdfPowerDeviceD3Final;
+  if (Device == NULL || TargetState != ExpectedState ||
+      KeGetCurrentIrql() != PASSIVE_LEVEL || !QueueIsPowerHeld(TRUE))
+    return STATUS_INVALID_DEVICE_STATE;
+  DbgPrint("KMDF PnP: D0 exit pre interrupts\n");
+  return ServiceMode == L'5' ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static VOID DeviceUsageNotification(WDFDEVICE Device,
+                                    WDF_SPECIAL_FILE_TYPE Type,
+                                    BOOLEAN InPath) {
+  UNREFERENCED_PARAMETER(Device);
+  UNREFERENCED_PARAMETER(Type);
+  UNREFERENCED_PARAMETER(InPath);
 }
 
 static VOID DeviceCleanup(WDFOBJECT Object) {
@@ -524,9 +622,25 @@ static NTSTATUS DeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT Init) {
       PnpCallbacks.EvtDeviceReleaseHardware = DeviceReleaseHardware;
     }
     if (ServiceMode == L'U')
-      PnpCallbacks.EvtDeviceSelfManagedIoInit = DeviceSelfManagedIoInit;
+      PnpCallbacks.EvtDeviceUsageNotification = DeviceUsageNotification;
+    if (UsesSelfManagedIo()) {
+      PnpCallbacks.EvtDevicePrepareHardware = DevicePrepareHardware;
+      PnpCallbacks.EvtDeviceReleaseHardware = DeviceReleaseHardware;
+      PnpCallbacks.EvtDeviceD0EntryPostInterruptsEnabled =
+          DeviceD0EntryPostInterruptsEnabled;
+      PnpCallbacks.EvtDeviceD0ExitPreInterruptsDisabled =
+          DeviceD0ExitPreInterruptsDisabled;
+      if (ServiceMode != L'7')
+        PnpCallbacks.EvtDeviceSelfManagedIoInit = DeviceSelfManagedIoInit;
+      PnpCallbacks.EvtDeviceSelfManagedIoSuspend = DeviceSelfManagedIoSuspend;
+      PnpCallbacks.EvtDeviceSelfManagedIoRestart = DeviceSelfManagedIoRestart;
+      PnpCallbacks.EvtDeviceSelfManagedIoFlush = DeviceSelfManagedIoFlush;
+      PnpCallbacks.EvtDeviceSelfManagedIoCleanup = DeviceSelfManagedIoCleanup;
+    }
     WdfDeviceInitSetPnpPowerEventCallbacks(Init, &PnpCallbacks);
   }
+  if (ServiceMode == L'8')
+    WdfDeviceInitSetPowerPolicyOwnership(Init, FALSE);
   WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
   Attributes.ExecutionLevel = WdfExecutionLevelPassive;
   Attributes.SynchronizationScope = WdfSynchronizationScopeNone;

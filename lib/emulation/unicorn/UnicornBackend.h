@@ -14,6 +14,7 @@
 #include "../GuestMemory.h"
 #include "../X64Registers.h"
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -104,6 +105,9 @@ public:
   llvm::Error fetch(uint64_t Address, llvm::MutableArrayRef<uint8_t> Bytes);
   llvm::Expected<uint64_t> reg(X64Register Register);
   llvm::Error setReg(X64Register Register, uint64_t Value);
+  using XmmValue = std::array<uint64_t, 2>;
+  llvm::Expected<XmmValue> xmm(unsigned Register);
+  llvm::Error setXmm(unsigned Register, const XmmValue &Value);
   /// Capture the complete Unicorn CPU state, including SIMD and FPU registers.
   llvm::Expected<std::unique_ptr<BackendContext>> saveContext();
   /// Replace an existing snapshot with this backend's current CPU state.

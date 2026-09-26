@@ -426,6 +426,136 @@ static NTSTATUS CheckShortage(PMDL Mdl, volatile UCHAR *Report) {
   return Status;
 }
 
+static NTSTATUS CheckIndependentPages(volatile UCHAR *Report, ULONG Action) {
+  PHYSICAL_ADDRESS Low = {0}, High, Skip = {0};
+  High.QuadPart = MAXLONGLONG;
+  const BOOLEAN Chunks = Action == UserMappingContiguousChunks;
+  const SIZE_T Size = (Chunks ? 4 : 2) * PAGE_SIZE;
+  const ULONG Flags = MM_ALLOCATE_FULLY_REQUIRED | MM_ALLOCATE_NO_WAIT |
+                      (Chunks ? MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS : 0);
+  if (Chunks)
+    Skip.QuadPart = 2 * PAGE_SIZE;
+  PMDL Mdl = Action == UserMappingLegacyPages
+                 ? MmAllocatePagesForMdl(Low, High, Skip, Size)
+                 : MmAllocatePagesForMdlEx(Low, High, Skip, Size,
+                                           MmWriteCombined, Flags);
+  if (!Mdl)
+    return STATUS_INSUFFICIENT_RESOURCES;
+  if (MmGetMdlByteCount(Mdl) != Size) {
+    MmFreePagesFromMdl(Mdl);
+    ExFreePool(Mdl);
+    return STATUS_INSUFFICIENT_RESOURCES;
+  }
+  NTSTATUS Status = STATUS_SUCCESS;
+  if (Chunks) {
+    const PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
+    for (ULONG Index = 0; Index != 4; Index += 2)
+      if (Pages[Index] % 2 || Pages[Index + 1] != Pages[Index] + 1)
+        Status = STATUS_INVALID_ADDRESS;
+  }
+  PUCHAR User = NULL;
+  __try {
+    volatile UCHAR *System =
+        MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmNonCached, NULL, FALSE,
+                                     NormalPagePriority | MdlMappingNoExecute);
+    if (!System)
+      Status = STATUS_INSUFFICIENT_RESOURCES;
+    else {
+      if (MmProtectMdlSystemAddress(Mdl, PAGE_READONLY) != STATUS_SUCCESS)
+        Status = STATUS_UNSUCCESSFUL;
+      Report[0] = System[UserMappingByteOffset] == 0 &&
+                  System[PAGE_SIZE + UserMappingByteOffset] == 0;
+      if (MmProtectMdlSystemAddress(Mdl, PAGE_READWRITE) != STATUS_SUCCESS)
+        Status = STATUS_UNSUCCESSFUL;
+      System[UserMappingByteOffset] = UserMappingFirstByte;
+      User = MmMapLockedPagesSpecifyCache(Mdl, UserMode, MmCached, NULL, FALSE,
+                                          NormalPagePriority);
+      User[PAGE_SIZE + UserMappingByteOffset] = UserMappingSecondByte;
+      Report[1] = User[UserMappingByteOffset];
+      Report[2] = System[PAGE_SIZE + UserMappingByteOffset];
+      Report[3] =
+          MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority) == System;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    Status = GetExceptionCode();
+  }
+  if (User)
+    MmUnmapLockedPages(User, Mdl);
+  // Modern WDM releases an existing system mapping with these physical pages.
+  // The separately allocated descriptor remains ours until ExFreePool.
+  MmFreePagesFromMdl(Mdl);
+  ExFreePool(Mdl);
+  return Status;
+}
+
+static NTSTATUS CheckKernelPoolLock(volatile UCHAR *Report) {
+  NTSTATUS Status = STATUS_SUCCESS;
+  for (ULONG Kind = 0; Kind != 2; ++Kind) {
+    const POOL_FLAGS Flags = Kind ? POOL_FLAG_NON_PAGED : POOL_FLAG_PAGED;
+    PUCHAR Pool = ExAllocatePool2(Flags, PAGE_SIZE, UserMappingPoolTag);
+    if (!Pool)
+      return STATUS_INSUFFICIENT_RESOURCES;
+    PMDL Mdl =
+        IoAllocateMdl(Pool + UserMappingByteOffset, 1, FALSE, FALSE, NULL);
+    if (!Mdl) {
+      ExFreePoolWithTag(Pool, UserMappingPoolTag);
+      return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    KIRQL Previous = PASSIVE_LEVEL;
+    if (Kind)
+      KeRaiseIrql(DISPATCH_LEVEL, &Previous);
+    MmProbeAndLockPages(Mdl, KernelMode, IoWriteAccess);
+    volatile UCHAR *Alias =
+        MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+    if (!Kind)
+      KeRaiseIrql(DISPATCH_LEVEL, &Previous);
+    UCHAR Observed = 0;
+    if (Alias) {
+      *Alias = UserMappingFirstByte + (UCHAR)Kind;
+      Observed = Pool[UserMappingByteOffset];
+    } else
+      Status = STATUS_INSUFFICIENT_RESOURCES;
+    MmUnlockPages(Mdl);
+    KeLowerIrql(Previous);
+    Report[Kind] = Observed;
+    Report[Kind + 2] = (Mdl->MdlFlags & MDL_PAGES_LOCKED) == 0;
+    IoFreeMdl(Mdl);
+    ExFreePoolWithTag(Pool, UserMappingPoolTag);
+  }
+  return Status;
+}
+
+static NTSTATUS CompleteIndependentPartial(PIRP Irp, volatile UCHAR *Report) {
+  PHYSICAL_ADDRESS Low = {0}, High, Skip = {0};
+  High.QuadPart = MAXLONGLONG;
+  PMDL Source = MmAllocatePagesForMdlEx(Low, High, Skip, 2 * PAGE_SIZE,
+                                        MmCached, MM_ALLOCATE_FULLY_REQUIRED);
+  if (!Source)
+    return Complete(Irp, STATUS_INSUFFICIENT_RESOURCES);
+  PVOID Range = (PVOID)((ULONG_PTR)MmGetMdlVirtualAddress(Source) + PAGE_SIZE);
+  PMDL Partial = IoAllocateMdl(Range, PAGE_SIZE, FALSE, FALSE, Irp);
+  NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
+  if (Partial) {
+    IoBuildPartialMdl(Source, Partial, Range, PAGE_SIZE);
+    volatile UCHAR *Bytes =
+        MmGetSystemAddressForMdlSafe(Partial, NormalPagePriority);
+    if (Bytes) {
+      Report[0] = MmGetMdlPfnArray(Partial)[0] == MmGetMdlPfnArray(Source)[1];
+      Bytes[UserMappingByteOffset] = UserMappingFirstByte;
+      Report[1] = Bytes[UserMappingByteOffset];
+      Report[2] = (Partial->MdlFlags & MDL_PARTIAL) != 0;
+      Report[3] = MmGetMdlByteCount(Source) == 2 * PAGE_SIZE;
+      Status = STATUS_SUCCESS;
+    }
+  }
+  // The I/O manager owns only the partial descriptor. Its completion releases
+  // the partial mapping, after which our independent physical pages can retire.
+  Complete(Irp, Status);
+  MmFreePagesFromMdl(Source);
+  ExFreePool(Source);
+  return Status;
+}
+
 static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
   UNREFERENCED_PARAMETER(Object);
@@ -445,6 +575,13 @@ static NTSTATUS Dispatch(PDEVICE_OBJECT Object, PIRP Irp) {
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     return Complete(Irp, GetExceptionCode());
   }
+  if (Action == UserMappingIndependentPages ||
+      Action == UserMappingLegacyPages || Action == UserMappingContiguousChunks)
+    return Complete(Irp, CheckIndependentPages(Report, Action));
+  if (Action == UserMappingKernelPoolLock)
+    return Complete(Irp, CheckKernelPoolLock(Report));
+  if (Action == UserMappingIndependentPartial)
+    return CompleteIndependentPartial(Irp, Report);
   if (Action == UserMappingReleaseFirstProcessView ||
       Action == UserMappingReleaseSecondProcessView)
     return Complete(

@@ -48,12 +48,23 @@ public:
     uint64_t SpinLock = 0;
     /// Zero is the legacy API; otherwise the exact Ex connection version.
     uint32_t Version = 0;
+    /// Resource-local assignment index; also set for fully specified connects.
+    std::optional<uint32_t> ResourceMessage;
+    /// PDO table index supplied only to a message-service routine.
+    std::optional<uint32_t> MessageID;
+    bool Passive = false;
   };
   /// PDO zero selects the unique translated vector; LineBased selects the
   /// sole assigned line on an explicit PDO. Neither uses ServiceContext.
   llvm::Expected<Connection> match(uint64_t PDO, uint32_t Vector, uint8_t IRQL,
-                                   uint64_t Affinity,
-                                   bool LineBased = false) const;
+                                   uint64_t Affinity, bool LineBased = false,
+                                   bool Passive = false) const;
+  llvm::Expected<std::vector<Connection>> matchMessages(uint64_t PDO) const;
+  DriverInterruptMessage assignment(const Connection &Connection) const;
+  llvm::Error canConnectMessages(uint64_t Table,
+                                 llvm::ArrayRef<Connection> Candidates) const;
+  llvm::Error connectMessages(uint64_t Table,
+                              llvm::ArrayRef<Connection> Candidates);
   llvm::Error connect(Connection Candidate);
   llvm::Error canConnect(const Connection &Candidate) const;
   const Connection *connection(uint64_t Object) const;
@@ -63,7 +74,8 @@ public:
   /// Validate known storage retirement without inferring a context extent or
   /// recursively examining pointers stored inside caller-owned context data.
   llvm::Error canReleaseRange(uint64_t Base, uint64_t Size) const;
-  llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size) const;
+  llvm::Error validateGuestAccess(uint64_t Address, uint32_t Size,
+                                  bool IsWrite = false) const;
 
   llvm::Error canArm(llvm::ArrayRef<DriverInterruptEvent> Events,
                      size_t SourceIndex, uint64_t Now) const;
@@ -86,6 +98,7 @@ public:
 
   llvm::Expected<KernelGuestCall> synchronize(uint64_t Object, uint64_t Routine,
                                               uint64_t Context);
+  llvm::Expected<bool> reserveSynchronization(uint64_t Token);
   llvm::Expected<uint8_t> beginCall(uint64_t Token, uint8_t CallerIRQL,
                                     uint64_t Now);
   struct CallbackReturn {
@@ -118,6 +131,7 @@ private:
     std::vector<uint64_t> Chain;
     std::optional<uint32_t> Line;
     uint32_t DeliveryIndex = 0;
+    bool Reserved = false;
   };
   struct Event {
     uint64_t Object;
@@ -131,6 +145,7 @@ private:
     uint32_t Vector = 0;
     DriverInterruptAction Action = DriverInterruptAction::Pulse;
     uint64_t RetriggerAfter100ns = 0;
+    bool Observed = false;
   };
   using Source = std::pair<uint64_t, size_t>;
   struct LevelLine {
@@ -148,6 +163,12 @@ private:
   const KernelResources &Resources;
   DriverResult &Result;
   std::map<uint64_t, Connection> Connections;
+  struct MessageGroup {
+    uint64_t Size;
+    std::vector<uint64_t> Objects;
+    bool Live = true;
+  };
+  std::map<uint64_t, MessageGroup> MessageGroups;
   /// Opaque addresses remain reserved even after a disconnect.
   std::vector<uint64_t> Tokens;
   std::map<uint64_t, Call> Calls;
@@ -161,7 +182,13 @@ private:
   llvm::Error canHold(uint64_t Object, uint8_t CurrentIRQL) const;
   llvm::Error canPrepareCalls(uint64_t Count) const;
   uint64_t lockIdentity(uint64_t Object) const;
+  llvm::Error canShare(const Connection &Left, const Connection &Right) const;
+  llvm::Error canDisconnect(uint64_t Object, uint32_t Version) const;
+  KernelGuestCall serviceCall(uint64_t Token,
+                              const Connection &Connection) const;
   bool sameLine(const Connection &Left, const Connection &Right) const;
+  bool passiveAvailable(uint64_t Object, uint64_t Token = 0) const;
+  bool runnable(const Event &Event) const;
   Boundary planBoundary(uint64_t Time) const;
   llvm::Error validateEvent(const Event &Event, bool CheckPower) const;
   llvm::Error deliveryError(Event &Event, const llvm::Twine &Message,

@@ -65,7 +65,7 @@ NEVERD_KERNEL_IRQL_API(KeEnterGuardedRegion, APC)
 NEVERD_KERNEL_IRQL_API(KeLeaveGuardedRegion, APC)
 NEVERD_KERNEL_IRQL_API(KeAreApcsDisabled, Dispatch)
 NEVERD_KERNEL_IRQL_API(KeAreAllApcsDisabled, Dispatch)
-#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                          \
   NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelSpinLockAPIs.def"
 #undef NEVERD_KERNEL_SPINLOCK_API
@@ -75,7 +75,8 @@ NEVERD_KERNEL_IRQL_API(KeAreAllApcsDisabled, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquireinterruptspinlock
 // Object-dependent synchronization DIRQL and release ownership remain in the
 // interrupt model; Any is only the outer x64 valid-IRQL ceiling.
-#define NEVERD_KERNEL_INTERRUPT_API(Name, Arity, IRQL) NEVERD_KERNEL_IRQL_API(Name, IRQL)
+#define NEVERD_KERNEL_INTERRUPT_API(Name, Arity, IRQL)                         \
+  NEVERD_KERNEL_IRQL_API(Name, IRQL)
 #include "KernelInterruptAPIs.def"
 #undef NEVERD_KERNEL_INTERRUPT_API
 // These routines require PASSIVE_LEVEL, including case-sensitive comparison.
@@ -144,10 +145,15 @@ NEVERD_KERNEL_IRQL_API(IoFreeMdl, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmBuildMdlForNonPagedPool, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmProbeAndLockPages, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmUnlockPages, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmAllocatePagesForMdl, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmAllocatePagesForMdlEx, Dispatch)
+NEVERD_KERNEL_IRQL_API(MmFreePagesFromMdl, Dispatch)
 NEVERD_KERNEL_IRQL_API(KeFlushIoBuffers, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmMapLockedPagesSpecifyCache, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmGetSystemAddressForMdlSafe, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmUnmapLockedPages, Dispatch)
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprotectmdlsystemaddress
+NEVERD_KERNEL_IRQL_API(MmProtectMdlSystemAddress, Dispatch)
 NEVERD_KERNEL_IRQL_API(RtlInitUnicodeString, Dispatch)
 
 // IoCompleteRequest is the public macro for the IofCompleteRequest export.

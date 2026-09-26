@@ -13,6 +13,7 @@
 #include "KernelInterrupts.h"
 
 #include <algorithm>
+#include <set>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -23,9 +24,22 @@ llvm::Error interruptError(const llvm::Twine &Message) {
 }
 } // namespace
 
+DriverInterruptMessage
+KernelInterrupts::assignment(const Connection &Connection) const {
+  const auto &Resource =
+      Resources.find(Connection.PDO)->Interrupts[Connection.ResourceIndex];
+  if (Connection.ResourceMessage)
+    return Resource.Messages[*Connection.ResourceMessage];
+  DriverInterruptMessage Result;
+  Result.TranslatedVector = Resource.TranslatedVector;
+  Result.TranslatedLevel = Resource.TranslatedLevel;
+  Result.TranslatedAffinity = Resource.TranslatedAffinity;
+  return Result;
+}
+
 llvm::Expected<KernelInterrupts::Connection>
 KernelInterrupts::match(uint64_t PDO, uint32_t Vector, uint8_t IRQL,
-                        uint64_t Affinity, bool LineBased) const {
+                        uint64_t Affinity, bool LineBased, bool Passive) const {
   std::optional<Connection> Found;
   for (const auto &[Owner, Device] : Resources.devices()) {
     if (PDO && PDO != Owner)
@@ -34,28 +48,35 @@ KernelInterrupts::match(uint64_t PDO, uint32_t Vector, uint8_t IRQL,
       continue;
     for (size_t I = 0; I < Device.Interrupts.size(); ++I) {
       const auto &Resource = Device.Interrupts[I];
-      if (!LineBased && (Resource.TranslatedVector != Vector ||
-                         Resource.TranslatedLevel != IRQL ||
-                         Resource.TranslatedAffinity != Affinity))
+      if (LineBased && !Resource.Messages.empty())
         continue;
-      if (Found)
-        return interruptError("connection requires one assigned interrupt");
-      if (!Device.Assigned || !Device.Present)
-        return interruptError(
-            "connection requires a present assigned resource");
-      for (const auto &[Object, Existing] : Connections) {
-        (void)Object;
-        if (Existing.PDO == Owner && Existing.ResourceIndex == I &&
-            Resource.Share != DriverInterruptShare::Shared)
-          return interruptError("exclusive interrupt is already connected");
+      for (size_t J = 0; J < std::max(size_t(1), Resource.Messages.size());
+           ++J) {
+        Connection Candidate;
+        Candidate.PDO = Owner;
+        Candidate.Epoch = Device.Epoch;
+        Candidate.ResourceIndex = I;
+        if (!Resource.Messages.empty())
+          Candidate.ResourceMessage = uint32_t(J);
+        const auto Fact = assignment(Candidate);
+        if (!LineBased && (Fact.TranslatedVector != Vector ||
+                           (!Passive && Fact.TranslatedLevel != IRQL) ||
+                           Fact.TranslatedAffinity != Affinity))
+          continue;
+        if (Found)
+          return interruptError("connection requires one assigned interrupt");
+        if (!Device.Assigned || !Device.Present)
+          return interruptError(
+              "connection requires a present assigned resource");
+        for (const auto &[Object, Existing] : Connections)
+          if (Existing.PDO == Owner && Existing.ResourceIndex == I &&
+              Existing.ResourceMessage == Candidate.ResourceMessage &&
+              Resource.Share != DriverInterruptShare::Shared)
+            return interruptError("exclusive interrupt is already connected");
+        Candidate.IRQL = uint8_t(Fact.TranslatedLevel);
+        Candidate.SynchronizeIRQL = Candidate.IRQL;
+        Found = Candidate;
       }
-      Connection Candidate;
-      Candidate.PDO = Owner;
-      Candidate.Epoch = Device.Epoch;
-      Candidate.ResourceIndex = I;
-      Candidate.IRQL = uint8_t(Resource.TranslatedLevel);
-      Candidate.SynchronizeIRQL = Candidate.IRQL;
-      Found = Candidate;
     }
   }
   if (!Found)
@@ -64,13 +85,52 @@ KernelInterrupts::match(uint64_t PDO, uint32_t Vector, uint8_t IRQL,
   return *Found;
 }
 
+llvm::Expected<std::vector<KernelInterrupts::Connection>>
+KernelInterrupts::matchMessages(uint64_t PDO) const {
+  const auto *Device = Resources.find(PDO);
+  if (!Device || !Device->Assigned || !Device->Present)
+    return interruptError("message connection requires a present assigned PDO");
+  std::vector<Connection> Result;
+  for (size_t I = 0; I < Device->Interrupts.size(); ++I)
+    for (size_t J = 0; J < Device->Interrupts[I].Messages.size(); ++J) {
+      Connection Candidate;
+      Candidate.PDO = PDO;
+      Candidate.Epoch = Device->Epoch;
+      Candidate.ResourceIndex = I;
+      Candidate.ResourceMessage = uint32_t(J);
+      Candidate.MessageID = uint32_t(Result.size());
+      Candidate.IRQL = uint8_t(assignment(Candidate).TranslatedLevel);
+      Candidate.SynchronizeIRQL = Candidate.IRQL;
+      Result.push_back(Candidate);
+    }
+  return Result;
+}
+
 bool KernelInterrupts::sameLine(const Connection &Left,
                                 const Connection &Right) const {
-  const auto &L = Resources.find(Left.PDO)->Interrupts[Left.ResourceIndex];
-  const auto &R = Resources.find(Right.PDO)->Interrupts[Right.ResourceIndex];
+  const auto L = assignment(Left), R = assignment(Right);
   return L.TranslatedVector == R.TranslatedVector &&
          L.TranslatedLevel == R.TranslatedLevel &&
-         L.TranslatedAffinity == R.TranslatedAffinity && L.Mode == R.Mode;
+         L.TranslatedAffinity == R.TranslatedAffinity &&
+         Resources.find(Left.PDO)->Interrupts[Left.ResourceIndex].Mode ==
+             Resources.find(Right.PDO)->Interrupts[Right.ResourceIndex].Mode;
+}
+
+llvm::Error KernelInterrupts::canShare(const Connection &Left,
+                                       const Connection &Right) const {
+  const auto &L = Resources.find(Left.PDO)->Interrupts[Left.ResourceIndex];
+  const auto &R = Resources.find(Right.PDO)->Interrupts[Right.ResourceIndex];
+  if (assignment(Left).TranslatedVector == assignment(Right).TranslatedVector &&
+      (!sameLine(Left, Right) ||
+       L.RetriggerAfter100ns != R.RetriggerAfter100ns))
+    return interruptError("shared vector requires matching line facts");
+  if (sameLine(Left, Right) && (L.Share != DriverInterruptShare::Shared ||
+                                R.Share != DriverInterruptShare::Shared))
+    return interruptError("exclusive interrupt is already connected");
+  if (Left.SpinLock && Left.SpinLock == Right.SpinLock &&
+      Left.SynchronizeIRQL != Right.SynchronizeIRQL)
+    return interruptError("shared spin lock requires one synchronization IRQL");
+  return llvm::Error::success();
 }
 
 llvm::Error KernelInterrupts::canConnect(const Connection &Candidate) const {
@@ -78,11 +138,20 @@ llvm::Error KernelInterrupts::canConnect(const Connection &Candidate) const {
   if (!Device || !Device->Assigned || !Device->Present ||
       Device->Epoch != Candidate.Epoch ||
       Candidate.ResourceIndex >= Device->Interrupts.size() ||
-      !Candidate.Object || !Candidate.Routine ||
-      Candidate.IRQL !=
-          Device->Interrupts[Candidate.ResourceIndex].TranslatedLevel)
+      !Candidate.Object || !Candidate.Routine)
     return interruptError("connection lost its assigned resource identity");
   const auto &Resource = Device->Interrupts[Candidate.ResourceIndex];
+  if (Resource.Messages.empty()
+          ? Candidate.ResourceMessage.has_value()
+          : (!Candidate.ResourceMessage ||
+             *Candidate.ResourceMessage >= Resource.Messages.size()))
+    return interruptError("connection lost its message assignment identity");
+  if (Candidate.IRQL != assignment(Candidate).TranslatedLevel ||
+      (Candidate.MessageID &&
+       (!Candidate.ResourceMessage ||
+        (Candidate.Version != interrupts::MessageBased &&
+         Candidate.Version != interrupts::MessageBasedPassive))))
+    return interruptError("connection has an invalid message service identity");
   if ((Resource.Mode == DriverInterruptMode::LevelSensitive &&
        (!Resource.RetriggerAfter100ns || !*Resource.RetriggerAfter100ns ||
         *Resource.RetriggerAfter100ns > INT64_MAX)) ||
@@ -95,9 +164,15 @@ llvm::Error KernelInterrupts::canConnect(const Connection &Candidate) const {
   if (bool(Candidate.OutputDeviceBase) != bool(Candidate.OutputDeviceSize) ||
       Candidate.OutputDeviceSize > UINT64_MAX - Candidate.OutputDeviceBase)
     return interruptError("connection has an invalid output device extent");
-  if (Candidate.SynchronizeIRQL < Candidate.IRQL ||
-      Candidate.SynchronizeIRQL > DriverInterruptMaximumLevel ||
-      (!Candidate.SpinLock && Candidate.SynchronizeIRQL != Candidate.IRQL))
+  if (Candidate.Passive &&
+      (Candidate.SpinLock || Candidate.SynchronizeIRQL || !Candidate.Version))
+    return interruptError(
+        "passive interrupt requires a private synchronization event");
+  if (!Candidate.Passive &&
+      (Candidate.SynchronizeIRQL < Candidate.IRQL ||
+       Candidate.SynchronizeIRQL > DriverInterruptMaximumLevel ||
+       (!Candidate.SpinLock && !Candidate.MessageID &&
+        Candidate.SynchronizeIRQL != Candidate.IRQL)))
     return interruptError("invalid interrupt synchronization IRQL");
   if (Connections.size() >= DriverScenarioInterruptLimit)
     return interruptError("connection capacity exhausted");
@@ -105,23 +180,8 @@ llvm::Error KernelInterrupts::canConnect(const Connection &Candidate) const {
     return interruptError("connection token cannot be reused");
   for (const auto &[Object, Existing] : Connections) {
     (void)Object;
-    const auto &Peer =
-        Resources.find(Existing.PDO)->Interrupts[Existing.ResourceIndex];
-    if (Peer.TranslatedVector == Resource.TranslatedVector &&
-        (!sameLine(Existing, Candidate) ||
-         Peer.RetriggerAfter100ns != Resource.RetriggerAfter100ns))
-      return interruptError("shared vector requires matching line facts");
-    if (sameLine(Existing, Candidate) &&
-        (Device->Interrupts[Candidate.ResourceIndex].Share !=
-             DriverInterruptShare::Shared ||
-         Resources.find(Existing.PDO)
-                 ->Interrupts[Existing.ResourceIndex]
-                 .Share != DriverInterruptShare::Shared))
-      return interruptError("exclusive interrupt is already connected");
-    if (Candidate.SpinLock && Existing.SpinLock == Candidate.SpinLock &&
-        Existing.SynchronizeIRQL != Candidate.SynchronizeIRQL)
-      return interruptError(
-          "shared spin lock requires one synchronization IRQL");
+    if (auto E = canShare(Existing, Candidate))
+      return E;
   }
   return llvm::Error::success();
 }
@@ -131,6 +191,57 @@ llvm::Error KernelInterrupts::connect(Connection Candidate) {
     return E;
   Tokens.push_back(Candidate.Object);
   Connections.emplace(Candidate.Object, Candidate);
+  return llvm::Error::success();
+}
+
+llvm::Error KernelInterrupts::canConnectMessages(
+    uint64_t Table, llvm::ArrayRef<Connection> Candidates) const {
+  if (!Table || Candidates.empty() ||
+      Candidates.size() > DriverScenarioInterruptMessageLimit ||
+      Candidates.size() > DriverScenarioInterruptLimit - Connections.size() ||
+      MessageGroups.contains(Table))
+    return interruptError("invalid message table or connection capacity");
+  auto Assigned = matchMessages(Candidates.front().PDO);
+  if (!Assigned)
+    return Assigned.takeError();
+  if (Assigned->size() != Candidates.size())
+    return interruptError("message table must connect every assigned message");
+  for (size_t I = 0; I < Candidates.size(); ++I) {
+    const auto &Candidate = Candidates[I];
+    if (Candidate.ResourceIndex != (*Assigned)[I].ResourceIndex ||
+        Candidate.ResourceMessage != (*Assigned)[I].ResourceMessage)
+      return interruptError("message table does not follow resource order");
+    if (Candidate.MessageID != I || Candidate.PDO != Candidates.front().PDO ||
+        (Candidate.Version != interrupts::MessageBased &&
+         Candidate.Version != interrupts::MessageBasedPassive))
+      return interruptError(
+          "message table requires ordered PDO-wide identities");
+    if (auto E = canConnect(Candidate))
+      return E;
+    for (size_t J = 0; J < I; ++J) {
+      if (Candidates[J].Object == Candidate.Object)
+        return interruptError("message objects must be distinct");
+      if (auto E = canShare(Candidates[J], Candidate))
+        return E;
+    }
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error
+KernelInterrupts::connectMessages(uint64_t Table,
+                                  llvm::ArrayRef<Connection> Candidates) {
+  if (auto E = canConnectMessages(Table, Candidates))
+    return E;
+  MessageGroup Group{interrupts::MessageTableHeaderSize +
+                         Candidates.size() * interrupts::MessageEntrySize,
+                     {}};
+  for (const auto &Candidate : Candidates) {
+    Group.Objects.push_back(Candidate.Object);
+    Tokens.push_back(Candidate.Object);
+    Connections.emplace(Candidate.Object, Candidate);
+  }
+  MessageGroups.emplace(Table, std::move(Group));
   return llvm::Error::success();
 }
 
@@ -152,7 +263,8 @@ KernelInterrupts::connection(uint64_t Object) const {
   return It == Connections.end() ? nullptr : &It->second;
 }
 
-llvm::Error KernelInterrupts::disconnect(uint64_t Object, uint32_t Version) {
+llvm::Error KernelInterrupts::canDisconnect(uint64_t Object,
+                                            uint32_t Version) const {
   const auto *Connection = connection(Object);
   if (!Connection || Connection->Version != Version)
     return interruptError(
@@ -175,7 +287,27 @@ llvm::Error KernelInterrupts::disconnect(uint64_t Object, uint32_t Version) {
           Event.Chain.end())
         return interruptError(
             "disconnect cannot retire an asserted interrupt line");
-  // Future external pulses survive disconnect and will report the lost token.
+
+  return llvm::Error::success();
+}
+
+llvm::Error KernelInterrupts::disconnect(uint64_t Object, uint32_t Version) {
+  if (Version == interrupts::MessageBased ||
+      Version == interrupts::MessageBasedPassive) {
+    auto Group = MessageGroups.find(Object);
+    if (Group == MessageGroups.end() || !Group->second.Live)
+      return interruptError("disconnect requires its live message table");
+    for (uint64_t Member : Group->second.Objects)
+      if (auto E = canDisconnect(Member, Version))
+        return E;
+    for (uint64_t Member : Group->second.Objects)
+      Connections.erase(Member);
+    Group->second.Live = false;
+    return llvm::Error::success();
+  }
+  if (auto E = canDisconnect(Object, Version))
+    return E;
+  // Future external pulses survive disconnect and report their lost tokens.
   Connections.erase(Object);
   return llvm::Error::success();
 }
@@ -224,7 +356,13 @@ llvm::Error KernelInterrupts::canReleaseRange(uint64_t Base,
 }
 
 llvm::Error KernelInterrupts::validateGuestAccess(uint64_t Address,
-                                                  uint32_t Size) const {
+                                                  uint32_t Size,
+                                                  bool IsWrite) const {
+  for (const auto &[Table, Group] : MessageGroups)
+    if (Address < Table + Group.Size && Table < Address + Size &&
+        (!Group.Live || IsWrite))
+      return interruptError(
+          "message table is read-only live connection storage");
   for (uint64_t Token : Tokens)
     if (Address < Token + interrupts::TokenSize && Token < Address + Size)
       return interruptError("KINTERRUPT is an opaque model-owned object");
@@ -249,7 +387,8 @@ KernelInterrupts::resolveEvent(const DriverInterruptEvent &Input,
           "event submission requires an assigned present device");
     for (const auto &[Object, Connection] : Connections)
       if (Connection.PDO == PDO && Connection.Epoch == Device.Epoch &&
-          Device.Interrupts[Connection.ResourceIndex].ID == Input.InterruptID) {
+          Device.Interrupts[Connection.ResourceIndex].ID == Input.InterruptID &&
+          Connection.ResourceMessage == Input.MessageID) {
         const auto &Resource = Device.Interrupts[Connection.ResourceIndex];
         const bool Level = Resource.Mode == DriverInterruptMode::LevelSensitive;
         switch (Input.Action) {
@@ -273,7 +412,7 @@ KernelInterrupts::resolveEvent(const DriverInterruptEvent &Input,
               "level-sensitive sources require a positive sampling period");
         Event Event{Object, PDO, Device.Epoch, Now + Input.After100ns, 0};
         Event.ResourceIndex = Connection.ResourceIndex;
-        Event.Vector = Resource.TranslatedVector;
+        Event.Vector = assignment(Connection).TranslatedVector;
         Event.Action = Input.Action;
         Event.RetriggerAfter100ns = Resource.RetriggerAfter100ns.value_or(0);
         for (const auto &[PeerObject, Peer] : Connections)
@@ -323,6 +462,7 @@ llvm::Error KernelInterrupts::arm(llvm::ArrayRef<DriverInterruptEvent> Inputs,
     Observation.DeviceID = Inputs[I].DeviceID;
     Observation.InterruptID = Inputs[I].InterruptID;
     Observation.Action = Inputs[I].Action;
+    Observation.MessageID = Inputs[I].MessageID;
     Observation.Epoch = Event.Epoch;
     Observation.DueAt100ns = Event.Due;
     Result.Interrupts.push_back(std::move(Observation));
@@ -331,15 +471,45 @@ llvm::Error KernelInterrupts::arm(llvm::ArrayRef<DriverInterruptEvent> Inputs,
   return llvm::Error::success();
 }
 
+bool KernelInterrupts::passiveAvailable(uint64_t Object, uint64_t Token) const {
+  const auto *Connection = connection(Object);
+  if (!Connection || !Connection->Passive)
+    return true;
+  const uint64_t Identity = lockIdentity(Object);
+  for (const auto &Hold : Holds)
+    if (lockIdentity(Hold.Object) == Identity &&
+        !(Token && Hold.Kind == HoldKind::Callback && Hold.Owner == Token))
+      return false;
+  for (const auto &[ID, Call] : Calls) {
+    if (Token && ID >= Token)
+      continue;
+    if (lockIdentity(Call.Object) == Identity)
+      return false;
+    for (uint64_t Member : Call.Chain)
+      if (lockIdentity(Member) == Identity)
+        return false;
+  }
+  return true;
+}
+
+bool KernelInterrupts::runnable(const Event &Event) const {
+  return std::all_of(Event.Chain.begin(), Event.Chain.end(),
+                     [&](uint64_t Object) { return passiveAvailable(Object); });
+}
+
 std::optional<uint64_t> KernelInterrupts::nextEventTime() const {
   std::optional<uint64_t> Time;
   for (const auto &[Index, Event] : Events) {
     (void)Index;
-    if (!Event.Queued && (!Time || Event.Due < *Time))
+    if (!Event.Queued &&
+        (Event.Action != DriverInterruptAction::Pulse || !Event.Observed ||
+         runnable(Event)) &&
+        (!Time || Event.Due < *Time))
       Time = Event.Due;
   }
   for (const auto &[Vector, Line] : LevelLines)
-    if (!Line.Queued && !Line.Sources.empty() && (!Time || Line.Due < *Time))
+    if (!Line.Queued && !Line.Sources.empty() &&
+        runnable(Line.Sources.begin()->second) && (!Time || Line.Due < *Time))
       Time = Line.Due;
   return Time;
 }
@@ -372,7 +542,8 @@ KernelInterrupts::Boundary KernelInterrupts::planBoundary(uint64_t Time) const {
   Boundary Plan;
   Plan.Lines = LevelLines;
   for (const auto &[Index, Event] : Events) {
-    if (Event.Queued || Event.Due > Time)
+    if (Event.Queued || Event.Due > Time ||
+        (Event.Action == DriverInterruptAction::Pulse && !runnable(Event)))
       continue;
     (Event.Action == DriverInterruptAction::Pulse ? Plan.Pulses
                                                   : Plan.Transitions)
@@ -383,6 +554,23 @@ KernelInterrupts::Boundary KernelInterrupts::planBoundary(uint64_t Time) const {
            std::tie(Events.at(Right).Due, Right);
   };
   std::sort(Plan.Pulses.begin(), Plan.Pulses.end(), Earlier);
+  std::set<uint64_t> Claimed;
+  auto Redundant = [&](size_t Index) {
+    const auto &Event = Events.at(Index);
+    for (uint64_t Object : Event.Chain)
+      if (const auto *Connection = connection(Object);
+          Connection && Connection->Passive &&
+          Claimed.count(lockIdentity(Object)))
+        return true;
+    for (uint64_t Object : Event.Chain)
+      if (const auto *Connection = connection(Object);
+          Connection && Connection->Passive)
+        Claimed.insert(lockIdentity(Object));
+    return false;
+  };
+  Plan.Pulses.erase(
+      std::remove_if(Plan.Pulses.begin(), Plan.Pulses.end(), Redundant),
+      Plan.Pulses.end());
   std::sort(Plan.Transitions.begin(), Plan.Transitions.end(), Earlier);
   for (size_t Index : Plan.Transitions) {
     const auto &Event = Events.at(Index);
@@ -400,7 +588,8 @@ KernelInterrupts::Boundary KernelInterrupts::planBoundary(uint64_t Time) const {
     }
   }
   for (const auto &[Vector, Line] : Plan.Lines)
-    if (!Line.Queued && !Line.Sources.empty() && Line.Due <= Time)
+    if (!Line.Queued && !Line.Sources.empty() && Line.Due <= Time &&
+        runnable(Line.Sources.begin()->second))
       Plan.Levels.push_back(Vector);
   std::sort(Plan.Levels.begin(), Plan.Levels.end(),
             [&](uint32_t Left, uint32_t Right) {
@@ -451,6 +640,14 @@ KernelInterrupts::queueNextDue(uint64_t Now) {
   if (!Count)
     return Count.takeError();
   auto Plan = planBoundary(Now);
+  std::vector<size_t> Arrivals;
+  for (auto &[Index, Event] : Events)
+    if (!Event.Observed && Event.Action == DriverInterruptAction::Pulse &&
+        Event.Due <= Now) {
+      if (auto E = validateEvent(Event, true))
+        return deliveryError(Event, llvm::toString(std::move(E)), Now);
+      Arrivals.push_back(Index);
+    }
   for (size_t Index : Plan.Transitions) {
     auto &Event = Events.at(Index);
     if (auto E =
@@ -464,6 +661,10 @@ KernelInterrupts::queueNextDue(uint64_t Now) {
     auto &Event = Plan.Lines.at(Vector).Sources.begin()->second;
     if (auto E = validateEvent(Event, true))
       return deliveryError(Event, llvm::toString(std::move(E)), Now);
+  }
+  for (size_t Index : Arrivals) {
+    Events.at(Index).Observed = true;
+    Result.Interrupts[Index].OccurredAt100ns = Now;
   }
   for (size_t Index : Plan.Transitions) {
     Result.Interrupts[Index].OccurredAt100ns = Now;
@@ -507,10 +708,19 @@ KernelInterrupts::queueNextDue(uint64_t Now) {
   Delivery.PDO = Event.PDO;
   Delivery.IRQL = Connection->SynchronizeIRQL;
   Delivery.Priority = Connection->IRQL;
-  Delivery.Call = {{GuestCallOwner::Interrupt, Token},
-                   Connection->Routine,
-                   {First, Connection->Context}};
+  Delivery.Call = serviceCall(Token, *Connection);
   return std::optional<KernelInterrupts::Delivery>{std::move(Delivery)};
+}
+
+KernelGuestCall
+KernelInterrupts::serviceCall(uint64_t Token,
+                              const Connection &Connection) const {
+  KernelGuestCall Call{{GuestCallOwner::Interrupt, Token},
+                       Connection.Routine,
+                       {Connection.Object, Connection.Context}};
+  if (Connection.MessageID)
+    Call.Arguments.push_back(*Connection.MessageID);
+  return Call;
 }
 
 llvm::Error KernelInterrupts::canHold(uint64_t Object,
@@ -541,22 +751,47 @@ KernelInterrupts::synchronize(uint64_t Object, uint64_t Routine,
       {GuestCallOwner::Interrupt, Token}, Routine, {Context}};
 }
 
+llvm::Expected<bool> KernelInterrupts::reserveSynchronization(uint64_t Token) {
+  auto It = Calls.find(Token);
+  if (It == Calls.end() || It->second.Observation || It->second.Begun ||
+      !connection(It->second.Object)->Passive)
+    return interruptError("passive synchronization lost its waiting callback");
+  auto &Call = It->second;
+  if (Call.Reserved)
+    return true;
+  if (!passiveAvailable(Call.Object, Token))
+    return false;
+  Holds.push_back({Call.Object, Token, 0, HoldKind::Callback});
+  Call.Reserved = true;
+  return true;
+}
+
 llvm::Expected<uint8_t>
 KernelInterrupts::beginCall(uint64_t Token, uint8_t CallerIRQL, uint64_t Now) {
   auto It = Calls.find(Token);
   if (It == Calls.end() || It->second.Begun)
     return interruptError("callback entry lost its prepared continuation");
   auto &Call = It->second;
-  if (auto E = canHold(Call.Object, CallerIRQL))
-    return E;
-  Holds.push_back({Call.Object, Token, CallerIRQL, HoldKind::Callback});
+  if (!Call.Reserved) {
+    if (!passiveAvailable(Call.Object, Token))
+      return interruptError("passive interrupt synchronization event is owned");
+    if (auto E = canHold(Call.Object, CallerIRQL))
+      return E;
+    Holds.push_back({Call.Object, Token, CallerIRQL, HoldKind::Callback});
+  } else if (CallerIRQL) {
+    return interruptError("passive synchronization requires PASSIVE_LEVEL");
+  }
   Call.Begun = true;
   if (Call.Observation) {
     auto &Observation = Result.Interrupts[*Call.Observation];
     if (!Observation.DeliveredAt100ns)
       Observation.DeliveredAt100ns = Now;
-    Observation.Handlers.push_back(
-        {Call.Object, Now, {}, {}, Call.DeliveryIndex});
+    Observation.Handlers.push_back({Call.Object,
+                                    Now,
+                                    {},
+                                    {},
+                                    Call.DeliveryIndex,
+                                    connection(Call.Object)->MessageID});
   }
   return connection(Call.Object)->SynchronizeIRQL;
 }
@@ -565,12 +800,16 @@ llvm::Expected<KernelInterrupts::CallbackReturn>
 KernelInterrupts::finishCall(uint64_t Token, uint64_t Value,
                              uint8_t CurrentIRQL, uint64_t Now) {
   auto It = Calls.find(Token);
-  if (It == Calls.end() || !It->second.Begun || Holds.empty() ||
-      Holds.back().Kind != HoldKind::Callback || Holds.back().Owner != Token ||
-      Holds.back().Object != It->second.Object ||
+  auto Owned = std::find_if(Holds.begin(), Holds.end(), [&](const Hold &Hold) {
+    return Hold.Kind == HoldKind::Callback && Hold.Owner == Token;
+  });
+  if (It == Calls.end() || !It->second.Begun || Owned == Holds.end() ||
+      Owned->Object != It->second.Object ||
+      (!connection(It->second.Object)->Passive &&
+       std::next(Owned) != Holds.end()) ||
       CurrentIRQL != connection(It->second.Object)->SynchronizeIRQL)
     return interruptError("callback return lost its interrupt lock or IRQL");
-  CallbackReturn Return{uint8_t(Value), Holds.back().OldIRQL, {}};
+  CallbackReturn Return{uint8_t(Value), Owned->OldIRQL, {}};
   const auto &Pending = It->second;
   if (Pending.Line &&
       (Return.Value || Pending.Handler + 1 == Pending.Chain.size())) {
@@ -589,13 +828,12 @@ KernelInterrupts::finishCall(uint64_t Token, uint64_t Value,
     auto &Call = It->second;
     const auto &Chain = Call.Chain;
     if (++Call.Handler < Chain.size() && (!Call.Line || !Return.Value)) {
-      Holds.pop_back();
+      Holds.erase(Owned);
       Call.Object = Chain[Call.Handler];
       Call.Begun = false;
+      Call.Reserved = false;
       const auto *Connection = connection(Call.Object);
-      Return.Next = KernelGuestCall{{GuestCallOwner::Interrupt, Token},
-                                    Connection->Routine,
-                                    {Call.Object, Connection->Context}};
+      Return.Next = serviceCall(Token, *Connection);
       return Return;
     }
     Return.Value = *Observation.ReturnValue;
@@ -613,7 +851,7 @@ KernelInterrupts::finishCall(uint64_t Token, uint64_t Value,
       Events.erase(Index);
     }
   }
-  Holds.pop_back();
+  Holds.erase(Owned);
   Calls.erase(It);
   return Return;
 }
@@ -621,6 +859,10 @@ KernelInterrupts::finishCall(uint64_t Token, uint64_t Value,
 llvm::Expected<uint8_t> KernelInterrupts::acquire(uint64_t Object,
                                                   uint64_t Execution,
                                                   uint8_t CurrentIRQL) {
+  if (const auto *Connection = connection(Object);
+      Connection && Connection->Passive)
+    return interruptError(
+        "passive interrupts do not have an interrupt spin lock");
   if (auto E = canHold(Object, CurrentIRQL))
     return E;
   Holds.push_back({Object, Execution, CurrentIRQL, HoldKind::Manual});

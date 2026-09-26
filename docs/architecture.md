@@ -1052,8 +1052,9 @@ cannot bypass their ownership. `KernelGuestCall` preserves owner/token and
 caller CPU/IRQL state. `DriverResult.Interrupts` reports actual per-handler and
 per-sample observations, with source transitions separate from ISR returns.
 Unavailable or stale captured sources fail without rebinding. These explicit
-synthetic lines do not provide MSI, passive ISR delivery, arbitrary controller
-state or instruction-level preemption.
+synthetic sources do not provide arbitrary controller state or
+instruction-level preemption; explicit message resources and passive ISR
+delivery use the same ownership model described below.
 
 `KernelModelInterruptEvents` preflights same-time producer capacity before
 clock advancement or observation changes, including exact framework
@@ -1068,7 +1069,7 @@ locks. Interrupt reports never fabricate an IRP or an NTSTATUS completion.
 
 `KernelDMAChannels` extends that same domain allocator with channel reservations and a typed SG/channel FIFO. It keeps callback state, retained map registers and each operation's aggregate mapping separate. A channel operation reserves its logical aperture once and grows one physical pin in place, so interleaved MapTransfer calls do not copy RAM, double-charge registers or overlap another mapping. Pure transfer, return, flush and release plans validate identities and complete promotion batches before publication. `KernelModelDMAChannels` decodes the indirect ABI and actual CurrentIrp registration snapshot, and shares the MDL view helper with SG. The scheduler's distinct `DMAAdapterControl` kind shares DMA ordering, capacity and inline-parent preservation; only the DMA model interprets the callback's low 32-bit return action. A queued captured IRP is protected before terminal stack unwind, while callback entry releases that input hold so completion from its body is legal. Aggregate flush retires mapped bytes; exact FreeMapRegisters retires the independent reservation. `KeFlushIoBuffers` has a coherent-cache contract and does not discharge either obligation.
 
-`DriverPower.def` declares power type/action spellings and request origins, while `DriverPnp.h` shares one `DriverPowerOperation` between scenario packets and per-PDO response FIFOs. `KernelModelPowerRequests` owns explicit packet facts, captured routes and per-DEVICE_OBJECT notification state; `PoSetPowerState` returns that object's previous explicit notification value without changing the lifecycle transaction. `KernelModelPowerCompletion` owns real `PoRequestPowerIrp` children, each with a separate IRP, result row and response index. It consumes only the matching PDO FIFO head, never infers a parent from callback context or borrows a parent's result. Nested dispatch and terminal five-argument void callbacks reuse owner-tagged continuations, retained routes and separate callback stacks; the callback's status snapshot survives waits until callback return. Inline child completion may precede the API's STATUS_PENDING return, and a system S0 parent may complete before its device D0 child. Final upper completion controls observed lifecycle state; bus observations remain independent. This bounded profile requires DO_POWER_PAGABLE without DO_POWER_INRUSH and PASSIVE_LEVEL dispatch, supports Query/Set for D0/D3 and Working/Sleeping3, and keeps the explicit 32-bit SystemContext opaque. It does not provide general power policy, WAIT_WAKE, shutdown/hibernate, general hardware, KMDF power policy or concurrent public scenario submission.
+`DriverPower.def` declares power type/action spellings and request origins, while `DriverPnp.h` shares one `DriverPowerOperation` between scenario packets and per-PDO response FIFOs. `KernelModelPowerRequests` owns explicit packet facts, captured routes and per-DEVICE_OBJECT notification state; `PoSetPowerState` returns that object's previous explicit notification value without changing the lifecycle transaction. `KernelModelPowerCompletion` owns real `PoRequestPowerIrp` children, each with a separate IRP, result row and response index. It consumes only the matching PDO FIFO head, never infers a parent from callback context or borrows a parent's result. Nested dispatch and terminal five-argument void callbacks reuse owner-tagged continuations, retained routes and separate callback stacks; the callback's status snapshot survives waits until callback return. Inline child completion may precede the API's STATUS_PENDING return, and a system S0 parent may complete before its device D0 child. Final upper completion controls observed lifecycle state; bus observations remain independent. This bounded profile requires DO_POWER_PAGABLE without DO_POWER_INRUSH and PASSIVE_LEVEL dispatch, supports Query/Set for D0/D3 and Working/Sleeping3, and keeps the explicit 32-bit SystemContext opaque. It does not provide general power policy, WAIT_WAKE, shutdown/hibernate, general hardware, idle/wake policy or concurrent public scenario submission.
 
 `KernelFramework` owns KMDF 1.33 bindings, table identity, WDF objects/contexts, control-device initializers, manual, sequential and finite or unlimited parallel default and nondefault queues, and request handles. Its typed device and request hosts delegate WDM namespace, storage, packet state, MDL mapping and completion validation to `KernelModel`; neither side invents duplicate devices or IRPs. Queue routing carries a framework-owned dispatch status separately from the void guest callback return. Caller-context callbacks can obtain original neither-I/O user VAs; the request host checks page rights and locks the same physical bytes under a request-owned WDFMEMORY system alias. Buffered and direct request memory handles borrow the existing request buffers without adding MDL pins. Completion continuations run cleanup while buffers remain valid, complete the original IRP, release pinned user pages and invalidate request memory aliases, then destroy children when references permit. External references retain only WDF context. Pending-request deletion is rejected before ancestor mutation; automatic cancellation/draining during deletion remains unsupported. `DriverSession` executes nested callbacks with shared budgets and can batch pending parallel-queue requests before draining work items. Sequential automatic queues have one presentation slot and accept incoming requests into a FIFO wait list while it is occupied; finite parallel queues also hold excess requests until a slot opens. Manual default queues retain incoming requests without a delivery callback. Queue Stop/Start toggles delivery without refusing new requests; GetState counts framework-queued and driver-owned requests, and a stop-completion callback waits for the delivered count to reach zero without waiting for queued requests. Forwarding to another queue transfers ownership and may present its own callback; manual and sequential queues can explicitly return pending requests to the driver. Automatic delivery without a matching callback completes the request after a slot opens. `DriverImage` validates CFG metadata; `GuardControlFlow` owns declared image/API targets, and the CPU adapter preserves check/dispatch calling state. Direct FDO/PDO pairs for resource-free and configured register-bank devices form the supported PnP subset: `KernelFramework` owns the AddDevice initializer, WDF object graph, PrepareHardware/ReleaseHardware, D0Entry/D0Exit and QueryStop/QueryRemove/SurpriseRemoval callbacks, bounded resource-list handles and failed-Add or Remove cleanup callbacks, while `KernelModelPnpDevices` owns PDO identity and provider retirement. `KernelModelIRPStack` defers a provider-completed PnP IRP until the ordered framework guest callbacks return; `KernelModelFramework` resumes the same packet and applies failed hardware or D0 callback status. `DriverSession` drains callbacks before finalizing those phases. Query callbacks
 run before lower forwarding and can reject the original packet without any bus
@@ -1086,7 +1087,10 @@ separate from model errors and backend faults. `DriverImage` retains the
 loader's preferred-base exception metadata. `KernelSEH` owns a bounded pure
 search/unwind state machine over x64 version-one C scopes: it plans real guest
 filter callbacks, selects the handler, then invokes only the exited finally
-scopes. Supported helper unwinding restores nonvolatile GPRs. `DriverSession`
+scopes. `KernelSEHEpilogue` recognizes canonical V1 epilogues from live executable
+bytes before applying any stack read, tracking biased return PCs separately
+from fault PCs. Partial prologues, validated chains and full nonvolatile GPR/XMM
+restoration share the loader's unwind authority. `DriverSession`
 executes filters/finally on a private child stack with stable guest exception
 records and a saved full CPU context; callbacks inherit the parent's thread,
 process identity and existing user-access authority. Creating a child does not
@@ -1094,9 +1098,35 @@ turn an unrelated worker into a requestor-context execution. A negative filter
 may resume an admitted user read/write CPU fault using validated integer/control
 context changes. The adapter's narrow recoverable-fault channel never clears an
 unrelated retained terminal fault. Handler execution remains on the original
-stack. API-raise continuation, nested/collided filter/finally exceptions,
-GS/C++ personalities, chained/incomplete metadata, prologue unwinding and XMM
-unwind operations remain explicit failures.
+stack. Nested filter dispatch joins explicit logical stack segments and links
+exception records; collided finally dispatch advances past entered cleanups.
+Only abandoned exception callback frames are retired. API-raise continuation,
+C++ personalities, standalone GS handlers and incomplete metadata remain explicit failures.
+`KernelSEHGS` validates `__GSHandlerCheck_SEH` using loader-decoded offsets
+and live image/stack storage. GS checks are independent of wrapped C-handler
+flags. The unwind plan retains one check before each frame’s cleanup group,
+including frames with no finally, so search-time validation cannot hide later
+cookie corruption. Dynamic slot alignment does not change the frame pointer
+used to encode the cookie.
+
+`KernelFrameworkPower` owns the ordered self-managed I/O, hardware and D0
+callback plan. `KernelModelPowerCompletion` creates independent framework power
+policy IRPs using the same explicit response FIFO and completion authority as
+WDM children. Framework ownership, parent continuation and report origin are
+explicit facts; no callback address or diagnostic string selects behavior.
+
+`KernelPhysicalMemory` also owns independent MDL page allocations and exact
+pinned residency. `KernelModelMDL` centralizes their allocation, partial views,
+release dependencies and system-view protection. Actual backend page rights
+remain the authority for access checks; aliases can reuse retired VA ranges
+without creating a second permission flag. Pure `canAccess` queries may run
+inside CPU hooks without entering the execution engine.
+
+Message interrupt descriptors retain per-message assignment facts while
+`KernelInterrupts` owns the captured PDO-wide registration and opaque guest
+message table. Passive synchronization uses owned event holds and preserves
+independent suspended execution frames. Arrival observation precedes blocked
+admission, so a retained interrupt cannot prevent timer or DPC progress.
 
 ## Exception-rewrite boundaries
 

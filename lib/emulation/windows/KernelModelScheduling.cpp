@@ -523,6 +523,13 @@ llvm::Expected<uint64_t> KernelModel::beginWait(llvm::ArrayRef<uint64_t> A,
 
 llvm::Expected<std::optional<uint32_t>>
 KernelModel::pollWait(const Wait &Pending) {
+  if (Pending.Type == Wait::Kind::InterruptSynchronization) {
+    auto Ready = Interrupts.reserveSynchronization(Pending.Object);
+    if (!Ready)
+      return Ready.takeError();
+    return *Ready ? std::optional<uint32_t>{windows::StatusSuccess}
+                  : std::optional<uint32_t>{};
+  }
   if (Pending.Type == Wait::Kind::FrameworkFileSend) {
     if (!Framework)
       return schedulingError("synchronous file wait lost its framework");

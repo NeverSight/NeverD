@@ -48,10 +48,14 @@ NEVERD_KERNEL_API(IoFreeMdl, 1, Export)
 NEVERD_KERNEL_API(MmBuildMdlForNonPagedPool, 1, Export)
 NEVERD_KERNEL_API(MmProbeAndLockPages, 3, Export)
 NEVERD_KERNEL_API(MmUnlockPages, 1, Export)
+NEVERD_KERNEL_API(MmAllocatePagesForMdl, 4, Export)
+NEVERD_KERNEL_API(MmAllocatePagesForMdlEx, 6, Export)
+NEVERD_KERNEL_API(MmFreePagesFromMdl, 1, Export)
 NEVERD_KERNEL_API(KeFlushIoBuffers, 3, Export)
 NEVERD_KERNEL_API(MmMapLockedPagesSpecifyCache, 6, Export)
 NEVERD_KERNEL_API(MmGetSystemAddressForMdlSafe, 2, Helper)
 NEVERD_KERNEL_API(MmUnmapLockedPages, 2, Export)
+NEVERD_KERNEL_API(MmProtectMdlSystemAddress, 2, Export)
 NEVERD_KERNEL_API(memcpy, 3, Export)
 NEVERD_KERNEL_API(memmove, 3, Export)
 NEVERD_KERNEL_API(memset, 3, Export)
@@ -83,7 +87,7 @@ NEVERD_KERNEL_API(ObReferenceObjectByHandle, 6, Export)
 NEVERD_KERNEL_API(ObfDereferenceObject, 1, Export)
 NEVERD_KERNEL_API(KeStackAttachProcess, 2, Export)
 NEVERD_KERNEL_API(KeUnstackDetachProcess, 1, Export)
-#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                            \
+#define NEVERD_KERNEL_SPINLOCK_API(Name, Arity, IRQL)                          \
   NEVERD_KERNEL_API(Name, Arity, Export)
 #include "KernelSpinLockAPIs.def"
 #undef NEVERD_KERNEL_SPINLOCK_API

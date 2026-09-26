@@ -703,9 +703,10 @@ UnicornBackend::snapshotBacking(uint64_t Address,
 
 llvm::Expected<bool> UnicornBackend::canAccess(uint64_t Address, uint64_t Size,
                                                unsigned Permissions) const {
-  if ((Permissions & ~(Read | Write | Execute)) || State->Running ||
+  if ((Permissions & ~(Read | Write | Execute)) ||
       State->DeviceCallbackActive || State->effectsStopped())
-    return failure("CPU access preflight requires a healthy stopped CPU");
+    return failure("CPU access preflight requires valid permissions and a "
+                   "healthy CPU outside device callbacks");
   return !State->accessFault(Address, Size, Permissions) &&
          !State->overlappingMMIO(Address, Size);
 }
@@ -749,6 +750,25 @@ llvm::Expected<uint64_t> UnicornBackend::reg(X64Register Register) {
 llvm::Error UnicornBackend::setReg(X64Register Register, uint64_t Value) {
   return check(uc_reg_write(State->Engine, registerID(Register), &Value),
                "write guest register");
+}
+
+llvm::Expected<UnicornBackend::XmmValue>
+UnicornBackend::xmm(unsigned Register) {
+  if (Register > UC_X86_REG_XMM15 - UC_X86_REG_XMM0)
+    return failure("invalid x64 XMM register");
+  XmmValue Value{};
+  if (auto E = check(
+          uc_reg_read(State->Engine, UC_X86_REG_XMM0 + Register, Value.data()),
+          "read guest XMM register"))
+    return std::move(E);
+  return Value;
+}
+llvm::Error UnicornBackend::setXmm(unsigned Register, const XmmValue &Value) {
+  if (Register > UC_X86_REG_XMM15 - UC_X86_REG_XMM0)
+    return failure("invalid x64 XMM register");
+  return check(
+      uc_reg_write(State->Engine, UC_X86_REG_XMM0 + Register, Value.data()),
+      "write guest XMM register");
 }
 
 llvm::Expected<std::unique_ptr<BackendContext>> UnicornBackend::saveContext() {

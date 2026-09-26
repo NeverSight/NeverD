@@ -155,7 +155,20 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           return std::move(E);
         return CPU.readInteger(Address, PointerSize);
       },
-      [&](uint64_t Address) { return CPU.executable(Address); });
+      [&](uint64_t Address) { return CPU.executable(Address); },
+      [&](uint64_t Address, llvm::MutableArrayRef<uint8_t> Bytes) {
+        return CPU.fetch(Address, Bytes);
+      },
+      [&]() -> llvm::Expected<uint64_t> {
+        if (!Image->SecurityCookieAddress)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "x64 SEH: image has no security cookie");
+        if (auto E = Kernel.validateGuestAccess(Image->SecurityCookieAddress,
+                                                PointerSize, false))
+          return std::move(E);
+        return CPU.readInteger(Image->SecurityCookieAddress, PointerSize);
+      });
   uint64_t ExpectedReturnSP = 0;
   uint64_t ActiveStackBase = 0;
   uint64_t ActiveStackSize = 0;
@@ -465,6 +478,12 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
         return Value.takeError();
       Registers.GPR[I] = *Value;
     }
+    for (size_t I = 0; I < Registers.Xmm.size(); ++I) {
+      auto Value = CPU.xmm(seh::FirstNonvolatileXmm + I);
+      if (!Value)
+        return Value.takeError();
+      Registers.Xmm[I] = *Value;
+    }
     auto Flags = CPU.reg(X64Register::FLAGS);
     if (!Flags)
       return Flags.takeError();
@@ -485,28 +504,51 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     for (size_t I = 0; I < Registers.GPR.size(); ++I)
       if (auto E = CPU.setReg(static_cast<X64Register>(I), Registers.GPR[I]))
         return E;
+    for (size_t I = 0; I < Registers.Xmm.size(); ++I)
+      if (auto E = CPU.setXmm(seh::FirstNonvolatileXmm + I, Registers.Xmm[I]))
+        return E;
     return CPU.setReg(X64Register::FLAGS, Registers.Flags);
   };
   auto BeginException =
       [&](Execution &Frame, KernelSEH::Exception Raised, uint64_t ControlPC,
           bool CanContinue) -> llvm::Expected<std::optional<uint64_t>> {
+    size_t NestedDepth = 0;
     for (const Execution *Ancestor = &Frame; Ancestor;
-         Ancestor = Ancestor->Parent.get())
-      if (Ancestor->ExceptionCallback)
-        return failure("nested exceptions in SEH filters or finally callbacks "
-                       "are unsupported");
+         Ancestor = Ancestor->Parent.get()) {
+      if (!Ancestor->ExceptionCallback)
+        continue;
+      if (++NestedDepth > seh::MaxNestedExceptions)
+        return failure("nested exception depth limit exceeded");
+      if (!Raised.PreviousRecord)
+        Raised.PreviousRecord =
+            Ancestor->Base + Ancestor->Size - seh::RecordsSize;
+    }
     auto Search = Raised.Registers;
     Search.PC = ControlPC;
+    Search.FromReturnAddress = !CanContinue;
     auto State = std::make_unique<ExceptionExecution>();
-    State->Dispatch =
-        Exceptions.begin(Raised.Code, Search, {Frame.Base, Frame.Size});
+    if (Frame.ExceptionCallback) {
+      if (!Frame.Parent || !Frame.Parent->Exception)
+        return failure("SEH callback lost its suspended dispatch");
+      const auto &Parent = *Frame.Parent->Exception;
+      auto Nested =
+          Exceptions.beginNested(Raised.Code, Search, {Frame.Base, Frame.Size},
+                                 Parent.Dispatch, Parent.Next);
+      if (!Nested)
+        return Nested.takeError();
+      State->Dispatch = std::move(*Nested);
+    } else {
+      State->Dispatch =
+          Exceptions.begin(Raised.Code, Search, {Frame.Base, Frame.Size});
+    }
     auto Next = Exceptions.advance(State->Dispatch);
     if (!Next)
       return Next.takeError();
     if (Next->Kind == KernelSEH::ActionKind::Unhandled)
       return failure("unhandled guest exception 0x" +
                      llvm::utohexstr(Raised.Code));
-    if (Next->Kind == KernelSEH::ActionKind::Handler) {
+    if (Next->Kind == KernelSEH::ActionKind::Handler &&
+        Next->Bounds.Base == Frame.Base) {
       if (auto E = ApplyRegisters(Next->State.Registers))
         return std::move(E);
       return std::optional<uint64_t>{Next->State.HandlerPC};
@@ -516,6 +558,7 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       return Context.takeError();
     State->Original = std::move(*Context);
     State->Raised = std::move(Raised);
+    State->Raised.Flags = Next->ExceptionFlags;
     State->Next = *Next;
     State->CanContinue = CanContinue;
     Frame.Exception = std::move(State);
@@ -529,9 +572,14 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (!Status)
         return Status.takeError();
       if (*Status) {
+        const bool BeforeChild =
+            Frame->Wait->Type ==
+            KernelModel::Wait::Kind::InterruptSynchronization;
         Frame->Wait.reset();
-        Frame->ResumeValue = **Status;
-        Result.Calls[Frame->WaitEvent].Result = **Status;
+        if (!BeforeChild) {
+          Frame->ResumeValue = **Status;
+          Result.Calls[Frame->WaitEvent].Result = **Status;
+        }
       }
     }
     return llvm::Error::success();
@@ -846,6 +894,42 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       Current = std::move(*Frame);
       return llvm::Error::success();
     };
+    auto CommitException = [&](KernelSEH::Context Registers,
+                               const BackendContext &Original,
+                               uint64_t DestinationBase) -> llvm::Error {
+      const Execution *Destination = Current.get();
+      while (Destination && Destination->Base != DestinationBase) {
+        if (!Destination->ExceptionCallback)
+          return failure("exception transfer crosses a non-SEH callback");
+        Destination = Destination->Parent.get();
+      }
+      if (!Destination)
+        return failure("exception transfer lost its owning execution stack");
+      if (auto E = CPU.restoreContext(Original))
+        return E;
+      if (auto E = ApplyRegisters(Registers))
+        return E;
+      auto Context = CPU.saveContext();
+      if (!Context)
+        return Context.takeError();
+      while (Current->Base != DestinationBase) {
+        Kernel.enterExecution(Current->Base,
+                              Current->ID ? Current->ID : profile::StackBase);
+        if (auto E = Kernel.validateExecutionReturn(Current->Base,
+                                                    Current->EntryIRQL, true))
+          return E;
+        if (auto E = Kernel.retireStack(Current->Base, Current->Size))
+          return E;
+        StackInUse[(Current->Base - CallbackStackBase) / CallbackStackStride] =
+            false;
+        auto Parent = std::move(Current->Parent);
+        Current = std::move(Parent);
+      }
+      Current->Context = std::move(*Context);
+      Current->PC = Registers.PC;
+      Current->Exception.reset();
+      return llvm::Error::success();
+    };
     auto PrepareExceptionCallback = [&](Execution &Child,
                                         Execution &Parent) -> llvm::Error {
       auto &State = *Parent.Exception;
@@ -854,6 +938,10 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       if (auto E = ApplyRegisters(State.Next.State.Registers))
         return E;
       const uint64_t Storage = Child.Base + Child.Size - seh::RecordsSize;
+      State.Raised.Flags = State.Next.ExceptionFlags;
+      if (auto E = CPU.writeInteger(Storage + seh::ExceptionFlagsOffset,
+                                    State.Raised.Flags, 4))
+        return E;
       Child.PC = State.Next.State.HandlerPC;
       Child.ExceptionCallback = State.Next.Kind;
       Child.Context.reset();
@@ -871,12 +959,22 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
     };
     while (!DeadlineExceeded()) {
       if (Current) {
-        if (auto E = RunExecution(*Current)) {
-          ModelFailure(std::move(E));
-          return llvm::Error::success();
-        }
+        if (!Current->ChildCall)
+          if (auto E = RunExecution(*Current)) {
+            ModelFailure(std::move(E));
+            return llvm::Error::success();
+          }
         if (Current->Exception) {
           auto &State = *Current->Exception;
+          if (State.Next.Kind == KernelSEH::ActionKind::Handler) {
+            if (auto E =
+                    CommitException(State.Next.State.Registers, *State.Original,
+                                    State.Next.Bounds.Base)) {
+              ModelFailure(std::move(E));
+              return llvm::Error::success();
+            }
+            continue;
+          }
           auto Child =
               NewExecution(State.Next.State.HandlerPC, {}, Current->Phase,
                            Current->ID, true, seh::RecordsSize);
@@ -910,6 +1008,17 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
           continue;
         }
         if (Current->ChildCall) {
+          if (Current->Wait &&
+              Current->Wait->Type ==
+                  KernelModel::Wait::Kind::InterruptSynchronization) {
+            if (Current->ID)
+              if (auto E = Kernel.suspendScheduled(Current->ID)) {
+                ModelFailure(std::move(E));
+                return llvm::Error::success();
+              }
+            Waiting.push_back(std::move(Current));
+            continue;
+          }
           auto Call = std::move(*Current->ChildCall);
           Current->ChildCall.reset();
           if (auto E = Kernel.beginGuestCall(Call.Token)) {
@@ -988,30 +1097,15 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
               }
               Registers = *Restored;
             }
-            if (auto E = CPU.restoreContext(*State.Original)) {
+            const uint64_t DestinationBase =
+                Next->Kind == KernelSEH::ActionKind::ContinueExecution
+                    ? Parent.Base
+                    : Next->Bounds.Base;
+            if (auto E = CommitException(Registers, *State.Original,
+                                         DestinationBase)) {
               ModelFailure(std::move(E));
               return llvm::Error::success();
             }
-            if (auto E = ApplyRegisters(Registers)) {
-              ModelFailure(std::move(E));
-              return llvm::Error::success();
-            }
-            auto Context = CPU.saveContext();
-            if (!Context) {
-              ModelFailure(Context.takeError());
-              return llvm::Error::success();
-            }
-            Parent.Context = std::move(*Context);
-            Parent.PC = Registers.PC;
-            if (auto E = Kernel.retireStack(Current->Base, Current->Size)) {
-              ModelFailure(std::move(E));
-              return llvm::Error::success();
-            }
-            StackInUse[(Current->Base - CallbackStackBase) /
-                       CallbackStackStride] = false;
-            Parent.Exception.reset();
-            auto Resumed = std::move(Current->Parent);
-            Current = std::move(Resumed);
             continue;
           }
           if (auto E = Kernel.retireStack(Current->Base, Current->Size)) {

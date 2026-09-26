@@ -81,7 +81,8 @@ public:
   /// The model must separately authorize the exact live allocation and pins.
   virtual llvm::Error validateBacking(uint64_t Address, uint64_t Size) const;
   /// Pure CPU-permission preflight. False means an access would fault; no
-  /// first-fault state may be latched by this query.
+  /// first-fault state may be latched by this query. Instruction and memory
+  /// hooks may query permissions without reentering the execution engine.
   virtual llvm::Expected<bool> canAccess(uint64_t Address, uint64_t Size,
                                          unsigned Permissions) const;
   /// Access the same RAM bytes without changing CPU permissions.

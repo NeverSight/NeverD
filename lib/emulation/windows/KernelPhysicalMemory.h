@@ -18,6 +18,7 @@
 #include "neverd/emulation/DriverDMA.h"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -52,6 +53,7 @@ public:
   KernelPhysicalMemory &operator=(const KernelPhysicalMemory &) = delete;
   struct Region {
     uint64_t Backing, Size;
+    bool OwnsPages = false;
   };
   struct Segment {
     uint64_t Physical, Backing, Length;
@@ -60,9 +62,22 @@ public:
   const Region *find(uint64_t Owner) const;
   llvm::Error canRegisterRegion(uint64_t Owner, uint64_t Backing, uint64_t Size,
                                 CacheType Cache = CacheType::Cached) const;
-  /// Owner tokens and physical page identities are never recycled.
+  /// Ordinary RAM owner tokens and physical page identities are not recycled.
   llvm::Error registerRegion(uint64_t Owner, uint64_t Backing, uint64_t Size,
                              CacheType Cache = CacheType::Cached);
+  /// Select available pages from the explicit physical window. The returned
+  /// page addresses are a pure plan; no owner, cache type or page is published.
+  llvm::Expected<std::vector<uint64_t>>
+  planAllocatedPages(uint64_t Low, uint64_t High, uint64_t Skip,
+                     uint64_t PageCount, uint64_t ChunkPages = 0) const;
+  /// Publish private canonical backing against exactly the selected free pages.
+  llvm::Error registerAllocatedPages(uint64_t Owner, uint64_t Backing,
+                                     llvm::ArrayRef<uint64_t> PhysicalPages,
+                                     std::optional<CacheType> Cache);
+  /// Publish a previously unspecified cache attribute only after a mapping
+  /// succeeds. Failed mapping admission must not choose a page's cache type.
+  llvm::Error commitMappingCache(uint64_t Backing, uint64_t Size,
+                                 CacheType Cache);
   /// Existing RAM pages retain their allocation's cache attribute, regardless
   /// of the valid attribute requested for a new MDL mapping.
   llvm::Expected<CacheType> cacheTypeForMapping(uint64_t Backing, uint64_t Size,
@@ -90,6 +105,9 @@ public:
   /// Grow forward in place without releasing ownership or taking a second pin.
   llvm::Error canExtendPin(uint64_t Pin, uint64_t NewLength) const;
   llvm::Error extendPin(uint64_t Pin, uint64_t NewLength);
+  /// Residency is page-granular and shared by every live pin. This does not
+  /// grant byte ownership or change the CPU permissions of the original VA.
+  bool hasPinnedPages(uint64_t Backing, uint64_t Size) const;
   llvm::Error canUnpin(uint64_t Pin) const;
   llvm::Error unpin(uint64_t Pin);
   llvm::Error read(uint64_t Pin, uint64_t Offset,
@@ -106,7 +124,7 @@ private:
   };
   struct PageRecord {
     uint64_t Physical;
-    CacheType Cache;
+    std::optional<CacheType> Cache;
   };
   llvm::Expected<std::vector<uint64_t>> planRegion(uint64_t Owner,
                                                    uint64_t Backing,
