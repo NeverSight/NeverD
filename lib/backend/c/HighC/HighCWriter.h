@@ -63,21 +63,25 @@ public:
   std::optional<va_t> constAddress(const HighExpr &E) const;
   std::optional<uint64_t> foldReadonlyScalar(va_t Addr, uint16_t Size) const;
   std::optional<std::string> imageObjectName(va_t Addr) const;
+  std::optional<std::string> imageBackingAddress(va_t Addr) const;
   bool isImageDataAddress(va_t Addr) const;
-  void noteImageObject(va_t Addr, const TypeRef &Ty, bool Written);
+  void noteImageObject(va_t Addr, const TypeRef &Ty, bool Written,
+                       bool MemoryAccess = false);
   std::string memoryTypeName(const TypeRef &Ty) const;
   void writeIncludes(const std::vector<HighFunc> &Funcs);
   void writeMemoryHelpers();
-  std::string
-  memoryLoadExpr(const TypeRef &Ty, llvm::StringRef Addr,
-                 NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
-                 NdMemoryAddressSpace MemoryAddressSpace =
-                     NdMemoryAddressSpace::Default) const;
-  std::string
-  memoryStoreExpr(const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
-                  NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
-                  NdMemoryAddressSpace MemoryAddressSpace =
-                      NdMemoryAddressSpace::Default) const;
+  void writeX87FpremHelpers();
+  void writeX64SyscallHelper();
+  std::string memoryLoadExpr(
+      const TypeRef &Ty, llvm::StringRef Addr,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+      NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default,
+      bool ExactImageBytes = false) const;
+  std::string memoryStoreExpr(
+      const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
+      NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
+      NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default,
+      bool ExactImageBytes = false) const;
   std::string atomicExchangeExpr(const TypeRef &Ty, llvm::StringRef Addr,
                                  llvm::StringRef Val,
                                  NdMemoryOrdering MemoryOrdering,
@@ -349,6 +353,8 @@ public:
   std::map<std::string, std::string> ExternalSourceIdentifiers;
   std::set<va_t> GotoTargets;
   bool HasCIntrinsics = false;
+  bool NeedsX87FpremHelpers = false;
+  bool NeedsX64SyscallHelper = false;
   bool NeedsFEnvAccess = false;
   std::set<std::string> CIntrinsicNames;
   bool NeedsObjCRuntime = false;
@@ -468,8 +474,15 @@ public:
   struct ImageObject {
     std::string Name;
     TypeRef Type;
+    std::set<uint16_t> MemoryWidths;
   };
   std::map<va_t, ImageObject> ImageObjects;
+  struct ImageBacking {
+    va_t Base;
+    va_t End;
+    std::string Name;
+  };
+  std::vector<ImageBacking> ImageBackings;
 
   std::vector<HiLoPair> HiLoPairs;
 };

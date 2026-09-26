@@ -8,6 +8,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -41,11 +42,13 @@ void returnValue(HighFunc &Func, ExprPtr Value) {
   Func.Body.push_back(std::move(Return));
 }
 
-std::string emitFunctions(const std::vector<HighFunc> &Functions) {
+std::string emitFunctions(const std::vector<HighFunc> &Functions,
+                          const BinaryImage *Image = nullptr) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
+  Options.Image = Image;
   EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options));
   OS.flush();
   return Source;
@@ -714,6 +717,110 @@ TEST(HighCIntegerWidths, ArithmeticRightShiftRestoresTypeBeforeComparison) {
     }
   }
   compileAndExecute(emitFunctions(Functions) + executionHarness(Checks), true);
+}
+
+TEST(HighCIntegerWidths, OverlappingX87ImageStoresUpdateOne80BitValue) {
+  constexpr va_t Base = 0x140002000;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = Base;
+  Data.Data = {3, 0, 0, 0, 0, 0, 0, 0, 0x34, 0x12};
+  Data.Size = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Image.Segments.push_back(std::move(Data));
+
+  HighFunc Write;
+  Write.Name = "write_x87_image";
+  Write.ReturnType = NdType::makeVoid();
+  auto Store = [&](va_t Addr, uint64_t Value, uint16_t Size) {
+    HighStmt Stmt;
+    Stmt.Kind = StmtKind::Store;
+    Stmt.StoreAddr = HighExpr::makeConst(Addr, 8);
+    Stmt.StoreVal = HighExpr::makeConst(Value, Size);
+    Write.Body.push_back(std::move(Stmt));
+  };
+  Store(Base, UINT64_C(0x8000000000000001), 8);
+  Store(Base + 8, 0x7ffe, 2);
+
+  HighFunc Read;
+  Read.Name = "read_x87_image";
+  Read.ReturnType = NdType::makeInt(10, false);
+  returnValue(
+      Read, HighExpr::makeLoad(HighExpr::makeConst(Base, 8), Read.ReturnType));
+
+  const std::string Source = emitFunctions({Write, Read}, &Image);
+  EXPECT_NE(Source.find("unsigned char g_140002000_bytes[10]"),
+            std::string::npos)
+      << Source;
+  const std::string Checks = R"(
+    check_value("initial significand", (uint64_t)read_x87_image(), 3);
+    check_value("initial exponent", (uint64_t)(read_x87_image() >> 64), 0x1234);
+    write_x87_image();
+    check_value("written significand", (uint64_t)read_x87_image(),
+                UINT64_C(0x8000000000000001));
+    check_value("written exponent", (uint64_t)(read_x87_image() >> 64),
+                0x7ffe);
+)";
+  compileAndExecute(Source + executionHarness(Checks), false);
+}
+
+TEST(HighCIntegerWidths, LinuxX64ExitOmitsUnusedUnknownRegisterInputs) {
+  const auto U64 = NdType::makeInt(8, false);
+  auto UnknownRegister = [&](int Id) {
+    MedVar Register;
+    Register.Kind = MedVar::Reg;
+    Register.Id = Id;
+    Register.Size = 8;
+    Register.TheArch = Arch::X64;
+    return HighExpr::makeVar(Register, U64);
+  };
+  auto Pair = [&](int LowId, int HighId) {
+    auto Value = HighExpr::makeBinop(
+        NdOp::CONCAT, UnknownRegister(HighId), UnknownRegister(LowId));
+    Value->Type = NdType::makeInt(16, false);
+    return Value;
+  };
+  auto MakeCall = [&](uint64_t Number, const std::string &Name) {
+    HighFunc Func;
+    Func.Name = Name;
+    Func.ReturnType = NdType::makeVoid();
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall(
+        "neverd_x64_syscall", 0,
+        {HighExpr::makeConst(Number, 8), HighExpr::makeConst(0, 8),
+         Pair(6, 2), Pair(10, 8), UnknownRegister(9)});
+    Call.CallExpr->IntrinsicId = Intrinsic::X64Syscall;
+    Call.CallExpr->Type = NdType::makeInt(16, false);
+    Func.Body.push_back(std::move(Call));
+    return Func;
+  };
+
+  const std::string Source = emitFunctions(
+      {MakeCall(60, "call_exit"), MakeCall(231, "call_exit_group"),
+       MakeCall(39, "call_getpid")});
+  EXPECT_NE(Source.find("neverd_x64_syscall(60, 0, 0, 0, 0)"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("neverd_x64_syscall(231, 0, 0, 0, 0)"),
+            std::string::npos)
+      << Source;
+  const size_t Getpid = Source.find("call_getpid(");
+  ASSERT_NE(Getpid, std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_trap()", Getpid), std::string::npos)
+      << Source;
+#if defined(__x86_64__) && defined(__linux__)
+  compileAndExecute(Source + "int main(void) { call_exit(); return 99; }\n",
+                    false);
+  compileAndExecute(Source +
+                        "int main(void) { call_exit_group(); return 99; }\n",
+                    false);
+#endif
 }
 
 } // namespace

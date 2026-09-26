@@ -106,6 +106,56 @@ TEST(PipelineOutcome, UnsupportedArchitectureRetainsDecoderDiagnostic) {
   EXPECT_EQ(Result.LlvmModule, nullptr);
 }
 
+TEST(PipelineOutcome, PatchDiscoversStandaloneELFEntryButPreservesCRTEntry) {
+  llvm::LLVMContext Context;
+  auto run = [&Context](bool HasInterpreter) {
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Entry = 0x1000;
+
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = Image.Entry;
+    Text.Size = 16;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0x90);
+    Text.Data[0] = 0xc3; // ret
+    Image.Segments.push_back(Text);
+
+    Section TextSection;
+    TextSection.Name = ".text";
+    TextSection.VA = Text.VA;
+    TextSection.Size = Text.Size;
+    TextSection.FileSz = Text.FileSz;
+    TextSection.Flags = Text.Flags;
+    TextSection.Data = Text.Data;
+    Image.Sections.push_back(std::move(TextSection));
+    if (HasInterpreter) {
+      Section Interpreter;
+      Interpreter.Name = ".interp";
+      Image.Sections.push_back(std::move(Interpreter));
+    }
+    EXPECT_TRUE(Image.recordRuntimeFunction(Image.Entry));
+
+    PipelineOptions Options;
+    Options.PatchMode = true;
+    Options.NoOpt = true;
+    return Pipeline().run(Image, Context, Options);
+  };
+
+  PipelineResult Standalone = run(false);
+  ASSERT_TRUE(Standalone.Success) << Standalone.Error;
+  ASSERT_EQ(Standalone.LowFuncs.size(), 1u);
+  EXPECT_EQ(Standalone.LowFuncs.front().Entry, 0x1000u);
+
+  PipelineResult CRT = run(true);
+  ASSERT_TRUE(CRT.Success) << CRT.Error;
+  EXPECT_TRUE(CRT.LowFuncs.empty());
+}
+
 TEST(PipelineOutcome, RejectedLLVMEmissionRetainsStageDiagnostic) {
   BinaryImage Image;
   Image.Arch = Arch::X64;

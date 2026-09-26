@@ -2,6 +2,7 @@
 // Only for intrinsics with NO standard C builtin.
 
 A(Intrinsic::Syscall,      "syscall");
+A(Intrinsic::X64Syscall,   "syscall");
 A(Intrinsic::Int1,         "int1");
 A(Intrinsic::IntN,         "int");
 A(Intrinsic::Into,         "into");
@@ -58,6 +59,9 @@ A(Intrinsic::Xlatb,        "xlatb");
 A(Intrinsic::X87Op,        "x87");
 A(Intrinsic::X87Fninit,    "fninit");
 A(Intrinsic::X87Fnclex,    "fnclex");
+A(Intrinsic::X87Wait,      "fwait");
+A(Intrinsic::X87Ffree,     "ffree");
+A(Intrinsic::X87Fincstp,   "fincstp");
 A(Intrinsic::Xbegin,       "xbegin");
 A(Intrinsic::Xend,         "xend");
 A(Intrinsic::Xabort,       "xabort");

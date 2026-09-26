@@ -15,6 +15,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/X64Syscall.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -479,10 +480,46 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     if (!Typed.empty())
       return Typed;
 
+    std::optional<unsigned> LinuxSyscallArgs;
+    if (E.IntrinsicId == Intrinsic::X64Syscall && E.Operands.size() == 5 &&
+        E.Operands[0]) {
+      const HighExpr *Number = unwrapIntegerView(E.Operands[0].get());
+      if (Number && Number->Kind == ExprKind::Const)
+        LinuxSyscallArgs = linuxX64SyscallArgumentCount(Number->ConstVal);
+    }
+    // An unconsumed register read is not part of the syscall's behavior. The
+    // helper has a fixed six-register signature, so fill those positions with
+    // zero only when the omitted expression cannot fault or have side effects.
+    auto CanOmit = [&](auto &&Self, const HighExpr *Op, unsigned Depth) -> bool {
+      if (!Op || Depth > limits::kMaxIntegerViewUnwrapDepth)
+        return false;
+      Op = forwardedExpr(Op);
+      if (!Op)
+        return false;
+      switch (Op->Kind) {
+      case ExprKind::Load:
+      case ExprKind::Store:
+      case ExprKind::Call:
+        return false;
+      default:
+        break;
+      }
+      for (const auto &Child : Op->Operands)
+        if (Child && !Self(Self, Child.get(), Depth + 1))
+          return false;
+      return true;
+    };
     std::vector<std::string> OpStrs;
-    for (auto &Op : E.Operands)
-      if (Op)
-        OpStrs.push_back(exprStr(*Op));
+    for (size_t I = 0; I < E.Operands.size(); ++I) {
+      const auto &Op = E.Operands[I];
+      if (!Op)
+        continue;
+      if (LinuxSyscallArgs == 1 && I >= 2 && CanOmit(CanOmit, Op.get(), 0)) {
+        OpStrs.push_back("0");
+        continue;
+      }
+      OpStrs.push_back(exprStr(*Op));
+    }
 
     using I = Intrinsic;
     if (E.IntrinsicId == I::A64_GetFPSR || E.IntrinsicId == I::A64_SetFPSR)
@@ -765,6 +802,9 @@ std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec) {
   if (ProjectFrameAliasesIntoStorage)
     if (const auto Disp = certifiedFrameStorageDisplacement(E))
       return frameStorageAddress(*Disp);
+  if (auto VA = constAddress(E))
+    if (auto Backing = imageBackingAddress(*VA))
+      return *Backing;
   const HighExpr *Inner = peelIntegerViewOps(&E);
   if (!Inner)
     Inner = &E;
@@ -2466,6 +2506,14 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
     }
     if (auto Lit = imageStringLiteral(Opts.Image, E.ConstVal, AllowEmpty))
       return *Lit;
+    // Preserve the existing exact-object spelling, but do not turn an
+    // unrelated numeric immediate that happens to lie inside a backing range
+    // into an address.
+    if (ImageObjects.count(E.ConstVal) ||
+        E.ConstProvenance == ConstantAddressProvenance::Address ||
+        E.ConstProvenance == ConstantAddressProvenance::DataAddress)
+      if (auto Backing = imageBackingAddress(E.ConstVal))
+        return *Backing;
     if (auto Name = imageObjectName(E.ConstVal))
       return "&" + *Name;
     return constStr(E.ConstVal);
@@ -2488,10 +2536,14 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
   case ExprKind::Load: {
     if (E.Operands.empty())
       return "/* bad load */";
+    if (auto VA = constAddress(*E.Operands[0]))
+      if (imageBackingAddress(*VA))
+        return memoryLoadExpr(E.Type, addrStr(*E.Operands[0]), E.MemoryOrdering,
+                              E.MemoryAddressSpace, true);
     if (E.MemoryOrdering == NdMemoryOrdering::None &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-      if (auto Member = typedMemberAccess(*E.Operands[0],
-                                          E.Type ? E.Type->Size : 0))
+      if (auto Member =
+              typedMemberAccess(*E.Operands[0], E.Type ? E.Type->Size : 0))
         return *Member;
       if (auto Index = typedIndexAccess(*E.Operands[0]))
         return Index->Base + "[" + Index->Index + "]";
@@ -2528,12 +2580,16 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec) {
       return "/* bad store */";
     std::string Addr = addrStr(*E.Operands[0]);
     std::string Val = exprStr(*E.Operands[1]);
+    if (auto VA = constAddress(*E.Operands[0]))
+      if (imageBackingAddress(*VA))
+        return memoryStoreExpr(E.Operands[1]->Type, Addr, Val, E.MemoryOrdering,
+                               E.MemoryAddressSpace, true);
     if (E.MemoryOrdering == NdMemoryOrdering::None &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-      if (auto Member = typedMemberAccess(
-              *E.Operands[0],
-              E.Operands[1] && E.Operands[1]->Type ? E.Operands[1]->Type->Size
-                                                   : 0))
+      if (auto Member = typedMemberAccess(*E.Operands[0],
+                                          E.Operands[1] && E.Operands[1]->Type
+                                              ? E.Operands[1]->Type->Size
+                                              : 0))
         return *Member + " = " + Val;
       if (auto Slot = namedFrameSlot(*E.Operands[0]))
         return *Slot + " = " + Val;
@@ -2861,21 +2917,36 @@ std::optional<uint64_t> HighCWriter::foldReadonlyScalar(va_t Addr,
 }
 
 std::optional<std::string> HighCWriter::imageObjectName(va_t Addr) const {
+  if (imageBackingAddress(Addr))
+    return std::nullopt;
   auto It = ImageObjects.find(Addr);
   if (It == ImageObjects.end())
     return std::nullopt;
   return It->second.Name;
 }
 
-void HighCWriter::noteImageObject(va_t Addr, const TypeRef &Ty, bool Written) {
+std::optional<std::string> HighCWriter::imageBackingAddress(va_t Addr) const {
+  for (const ImageBacking &Backing : ImageBackings) {
+    if (Addr < Backing.Base)
+      break;
+    if (Addr < Backing.End)
+      return "&" + Backing.Name + "[" + std::to_string(Addr - Backing.Base) +
+             "]";
+  }
+  return std::nullopt;
+}
+
+void HighCWriter::noteImageObject(va_t Addr, const TypeRef &Ty, bool Written,
+                                  bool MemoryAccess) {
   if (!isImageDataAddress(Addr))
     return;
   ImageObject &Obj = ImageObjects[Addr];
+  if (MemoryAccess && Ty)
+    Obj.MemoryWidths.insert(Ty->Size);
   if (Obj.Name.empty()) {
     std::string Raw;
     if (Dbg) {
-      if (auto Data = Dbg->resolveDataObject(Addr);
-          Data && !Data->Name.empty())
+      if (auto Data = Dbg->resolveDataObject(Addr); Data && !Data->Name.empty())
         Raw = Data->Name;
     }
     if (Raw.empty() && Opts.Image) {

@@ -108,6 +108,15 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (Op.Dead)
     return;
 
+  const bool IsSyntheticX87StatusRead =
+      Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
+      Op.Inputs[0].isConst() &&
+      static_cast<Intrinsic>(Op.Inputs[0].ConstVal) == Intrinsic::X87ReadStatus;
+  if (!IsSyntheticX87StatusRead) {
+    PendingX87FpremStatus = nullptr;
+    PendingX87FpremBlock = nullptr;
+  }
+
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     llvm::report_fatal_error("MedIR contains an unknown memory address space");
   if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {

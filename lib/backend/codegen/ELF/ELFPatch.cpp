@@ -450,7 +450,9 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
             FixedSectionVA);
         if (!Img.Success || Img.Bytes.empty()) {
           llvm::WithColor::error()
-              << "elf_patch: compileImageForPatch failed\n";
+              << "elf_patch: compileImageForPatch failed (success="
+              << Img.Success << ", code bytes=" << Img.Bytes.size()
+              << ", sections=" << Img.Sections.size() << ")\n";
           return false;
         }
 

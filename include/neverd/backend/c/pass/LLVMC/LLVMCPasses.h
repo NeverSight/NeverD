@@ -43,6 +43,8 @@ void analyzeStoreForwarding(LLVMCAnalysisState &State, llvm::Function &Fn);
 bool analyzeVoidReturn(const LLVMCAnalysisState &State, llvm::Function &Fn);
 void analyzeVoidDeadChain(LLVMCAnalysisState &State, llvm::Function &Fn);
 void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn);
+/// Exact lifted Linux x64 SYSCALL ABI, including its RAX/R11 result pair.
+bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call);
 bool isCallResultLive(const LLVMCAnalysisState &State,
                       const llvm::CallInst *Call);
 const llvm::Value *tryCollapseHiLo(const LLVMCAnalysisState &State,

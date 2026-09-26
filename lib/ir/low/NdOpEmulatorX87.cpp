@@ -12,15 +12,12 @@
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/ir/low/X87PartialRemainder.h"
 #include "neverd/lift/X86Regs.h"
-
-#include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/APInt.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <optional>
 #include <utility>
 
@@ -29,100 +26,7 @@ namespace neverd {
 namespace {
 
 constexpr uint16_t X87DefaultControlWord = UINT16_C(0x037f);
-constexpr uint16_t X87ConditionMask = UINT16_C(0x4700);
 constexpr uint16_t X87ExceptionStatusMask = UINT16_C(0x80ff);
-
-struct X87Encoding {
-  uint64_t Significand = 0;
-  uint16_t SignExponent = 0;
-
-  unsigned exponent() const { return SignExponent & 0x7fffU; }
-  bool integerBit() const { return (Significand >> 63) != 0; }
-  bool isZero() const { return exponent() == 0 && Significand == 0; }
-  bool isSubnormal() const {
-    return exponent() == 0 && Significand != 0 && !integerBit();
-  }
-  bool isInfinity() const {
-    return exponent() == 0x7fffU && Significand == UINT64_C(0x8000000000000000);
-  }
-  bool isNaN() const {
-    return exponent() == 0x7fffU && Significand != UINT64_C(0x8000000000000000);
-  }
-  bool isCanonical() const {
-    if (exponent() == 0)
-      return !integerBit();
-    return integerBit();
-  }
-};
-
-X87Encoding decodeX87(llvm::ArrayRef<uint8_t> Bytes) {
-  X87Encoding Value;
-  std::memcpy(&Value.Significand, Bytes.data(), sizeof(Value.Significand));
-  std::memcpy(&Value.SignExponent, Bytes.data() + sizeof(Value.Significand),
-              sizeof(Value.SignExponent));
-  return Value;
-}
-
-llvm::APInt x87Bits(llvm::ArrayRef<uint8_t> Bytes) {
-  llvm::APInt Bits(80, 0);
-  for (unsigned Index = 0; Index != 10; ++Index)
-    Bits |= llvm::APInt(80, Bytes[Index]) << (Index * 8);
-  return Bits;
-}
-
-std::array<uint8_t, 10> encodeX87(const llvm::APFloat &Value) {
-  const llvm::APInt Bits = Value.bitcastToAPInt();
-  std::array<uint8_t, 10> Bytes{};
-  for (unsigned Index = 0; Index != Bytes.size(); ++Index)
-    Bytes[Index] =
-        static_cast<uint8_t>(Bits.extractBitsAsZExtValue(8, Index * 8));
-  return Bytes;
-}
-
-/// Return the low three bits of the absolute integral quotient.  The x87
-/// reports magnitude bits (matching Intel-compatible hardware and SoftFloat),
-/// not the two's-complement low bits of a negative quotient.
-uint8_t completedQuotientBits(const X87Encoding &Dividend,
-                              const X87Encoding &Divisor,
-                              bool RoundNearestEven) {
-  const int ExponentDifference = static_cast<int>(Dividend.exponent()) -
-                                 static_cast<int>(Divisor.exponent());
-
-  // With normalized significands in [1,2), a negative exponent difference
-  // always gives |dividend/divisor| < 1.  Only D=-1 can cross the one-half
-  // threshold used by FPREM1; avoiding a fixed-width left shift here also
-  // keeps the full x87 exponent range well-defined.
-  if (ExponentDifference < 0) {
-    if (!RoundNearestEven || ExponentDifference < -1)
-      return 0;
-    return Dividend.Significand > Divisor.Significand ? 1U : 0U;
-  }
-
-  llvm::APInt Numerator(128, Dividend.Significand);
-  llvm::APInt Denominator(128, Divisor.Significand);
-  Numerator <<= static_cast<unsigned>(ExponentDifference);
-
-  llvm::APInt Quotient = Numerator.udiv(Denominator);
-  if (RoundNearestEven) {
-    const llvm::APInt Remainder = Numerator.urem(Denominator);
-    const llvm::APInt TwiceRemainder = Remainder.shl(1);
-    if (TwiceRemainder.ugt(Denominator) ||
-        (TwiceRemainder == Denominator && Quotient[0]))
-      ++Quotient;
-  }
-  return static_cast<uint8_t>(Quotient.getZExtValue() & 7U);
-}
-
-uint16_t quotientConditionCodes(uint8_t Quotient) {
-  uint16_t Status = 0;
-  if ((Quotient & 4U) != 0)
-    Status |= UINT16_C(1) << x86reg::FPU_SW_C0_BIT;
-  if ((Quotient & 1U) != 0)
-    Status |= UINT16_C(1) << x86reg::FPU_SW_C1_BIT;
-  if ((Quotient & 2U) != 0)
-    Status |= UINT16_C(1) << x86reg::FPU_SW_C3_BIT;
-  return Status;
-}
 
 } // namespace
 
@@ -155,6 +59,21 @@ bool NdOpEmulator::executeX87(const LowOp &Op) {
     return false;
 
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::X87Wait) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 0)
+      return false;
+    const auto StatusValue = getRegister(x86reg::FPU_SW);
+    const auto ControlValue = getRegister(x86reg::FPU_CW);
+    if (!StatusValue || !ControlValue)
+      return false;
+    const uint16_t Status = static_cast<uint16_t>(*StatusValue);
+    const uint16_t Control = static_cast<uint16_t>(*ControlValue);
+    // A pending unmasked exception makes WAIT trap. The lightweight emulator
+    // has no exception delivery, so stop instead of continuing past the trap.
+    return (Status & UINT16_C(0x80)) == 0 &&
+           (Status & ~Control & UINT16_C(0x3f)) == 0;
+  }
+
   if (Id == Intrinsic::X87Fninit) {
     if (Op.NumInputs != 1 || Op.Output.Size != 0)
       return false;
@@ -180,6 +99,28 @@ bool NdOpEmulator::executeX87(const LowOp &Op) {
     Registers[x86reg::FPU_SW] = Status;
     WideRegisters.erase(x86reg::FPU_SW);
     return true;
+  }
+
+  if (Id == Intrinsic::X87Ffree) {
+    if (Op.NumInputs != 3 || Op.Output.Size != 0 || !Op.Inputs[1].isReg() ||
+        Op.Inputs[1].Size != x86reg::FPURegSize ||
+        Op.Inputs[1].Offset < x86reg::ST0 ||
+        Op.Inputs[1].Offset > x86reg::ST7 ||
+        (Op.Inputs[1].Offset - x86reg::ST0) % x86reg::FPURegStride != 0 ||
+        !Op.Inputs[2].isConst() || Op.Inputs[2].Size != 1 ||
+        Op.Inputs[2].Offset >= x86reg::FPUStackDepth)
+      return false;
+    // FFREE leaves C0/C1/C2/C3 undefined. The strict emulator has no
+    // unknown-bit status representation, so continuing would let a later
+    // FNSTSW observe the stale condition codes.
+    return false;
+  }
+
+  if (Id == Intrinsic::X87Fincstp) {
+    // Physical ST slots are statically rebased by the lifter, but this
+    // emulator does not track TOP through every FLD/FSTP. Updating SW.TOP
+    // from its cached word could publish a false status, so stop instead.
+    return false;
   }
 
   if (Id == Intrinsic::X87ReadStatus) {
@@ -215,62 +156,16 @@ bool NdOpEmulator::executeX87(const LowOp &Op) {
   const auto DivisorBytes = knownX87Bytes(Op.Inputs[2]);
   if (!DividendBytes || !DivisorBytes)
     return false;
-  const X87Encoding Dividend = decodeX87(*DividendBytes);
-  const X87Encoding Divisor = decodeX87(*DivisorBytes);
-
-  // Invalid encodings and operands that raise x87 exceptions need the tag
-  // word, exception masks, and sticky exception fields to decide whether the
-  // destination commits.  Those are deliberately outside this lightweight
-  // emulator, so reject them instead of returning a plausible quiet NaN.
-  if (!Dividend.isCanonical() || !Divisor.isCanonical() ||
-      Dividend.isSubnormal() || Divisor.isSubnormal() || Dividend.isNaN() ||
-      Divisor.isNaN() || Dividend.isInfinity() || Divisor.isZero())
+  const auto Result = evaluateX87PartialRemainder(*DividendBytes, *DivisorBytes,
+                                                  Id == Intrinsic::X87Fprem1);
+  if (!Result)
     return false;
-
-  uint16_t ConditionCodes = 0;
-  std::array<uint8_t, 10> ResultBytes = *DividendBytes;
-  if (!Dividend.isZero() && !Divisor.isInfinity()) {
-    llvm::APFloat Result(llvm::APFloat::x87DoubleExtended(),
-                         x87Bits(*DividendBytes));
-    const llvm::APFloat DivisorValue(llvm::APFloat::x87DoubleExtended(),
-                                     x87Bits(*DivisorBytes));
-    const int ExponentDifference = static_cast<int>(Dividend.exponent()) -
-                                   static_cast<int>(Divisor.exponent());
-    llvm::APFloat::opStatus ArithmeticStatus = llvm::APFloat::opOK;
-    if (ExponentDifference < 64) {
-      ArithmeticStatus = Id == Intrinsic::X87Fprem
-                             ? Result.mod(DivisorValue)
-                             : Result.remainder(DivisorValue);
-      const uint8_t Quotient =
-          completedQuotientBits(Dividend, Divisor, Id == Intrinsic::X87Fprem1);
-      ConditionCodes = quotientConditionCodes(Quotient);
-    } else {
-      // Intel permits an implementation-selected N in [32,63].  Modern
-      // 32-bit-and-later x87 implementations clear C0/C1/C3 on an incomplete
-      // reduction; use the deterministic maximal step also used by Unicorn.
-      constexpr int PartialReductionBits = 63;
-      llvm::APFloat ScaledDivisor =
-          llvm::scalbn(DivisorValue, ExponentDifference - PartialReductionBits,
-                       llvm::APFloat::rmNearestTiesToEven);
-      if (!ScaledDivisor.isFinite() || ScaledDivisor.isZero())
-        return false;
-      ArithmeticStatus = Result.mod(ScaledDivisor);
-      ConditionCodes = UINT16_C(1) << x86reg::FPU_SW_C2_BIT;
-    }
-    if (ArithmeticStatus != llvm::APFloat::opOK)
-      return false;
-    ResultBytes = encodeX87(Result);
-    const X87Encoding EncodedResult = decodeX87(ResultBytes);
-    if (!EncodedResult.isCanonical() || EncodedResult.isSubnormal() ||
-        EncodedResult.isNaN() || EncodedResult.isInfinity())
-      return false;
-  }
 
   const uint16_t OldStatus =
       static_cast<uint16_t>(getRegister(x86reg::FPU_SW).value_or(0));
-  const uint16_t NewStatus =
-      static_cast<uint16_t>((OldStatus & ~X87ConditionMask) | ConditionCodes);
-  writeOutputBytes(Op.Output, ResultBytes);
+  const uint16_t NewStatus = static_cast<uint16_t>(
+      (OldStatus & ~X87PartialRemainderConditionMask) | Result->ConditionCodes);
+  writeOutputBytes(Op.Output, Result->Value);
   Registers[x86reg::FPU_SW] = NewStatus;
   WideRegisters.erase(x86reg::FPU_SW);
   return true;

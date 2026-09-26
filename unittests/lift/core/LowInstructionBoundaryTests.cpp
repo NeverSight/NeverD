@@ -46,6 +46,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -674,6 +675,178 @@ const LowBlock *findBlock(const LowFunc &Function, va_t Address) {
     if (Block.StartAddr == Address)
       return &Block;
   return nullptr;
+}
+
+TEST(LowInstructionBoundary, X64SyscallRetainsNumberAndArguments) {
+  // A naked Linux exit sequence used to lose RAX and RDI during SSA cleanup:
+  // the emitted syscall had no operands, so the exit status was arbitrary.
+  LowFunc Low =
+      buildFunction(Arch::X64, InstructionMode::Default,
+                    {0xb8, 0x3c, 0, 0, 0, 0xbf, 7, 0, 0, 0, 0x0f, 0x05, 0xc3});
+  MedFunc Med = LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::ELF);
+  llvm::LLVMContext Context;
+  auto Module =
+      MedLLVMEmitter().emit({Med}, Context, "linux-syscall", Arch::X64);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_TRUE(validLLVMModule(*Module));
+  // Standalone emission retains virtual-register backing; perform the same
+  // promotion/folding needed before checking values at the syscall boundary.
+  for (llvm::Function &Function : *Module) {
+    if (Function.isDeclaration())
+      continue;
+    llvm::SmallVector<llvm::AllocaInst *> Allocas;
+    for (llvm::Instruction &Instruction : Function.getEntryBlock())
+      if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&Instruction))
+        if (llvm::isAllocaPromotable(Alloca))
+          Allocas.push_back(Alloca);
+    llvm::DominatorTree DT(Function);
+    llvm::PromoteMemToReg(Allocas, DT);
+    for (llvm::BasicBlock &Block : Function)
+      for (llvm::Instruction &Instruction : Block)
+        if (auto *Folded = llvm::ConstantFoldInstruction(
+                &Instruction, Module->getDataLayout()))
+          Instruction.replaceAllUsesWith(Folded);
+  }
+  unsigned Calls = 0;
+  for (const llvm::Function &Function : *Module)
+    for (const llvm::BasicBlock &Block : Function)
+      for (const llvm::Instruction &Instruction : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        if (!Call)
+          continue;
+        const auto *Asm =
+            llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+        if (!Asm || Asm->getAsmString() != "syscall")
+          continue;
+        ++Calls;
+        ASSERT_EQ(Call->arg_size(), 7u);
+        const auto *Number =
+            llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(0));
+        const auto *Status =
+            llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(1));
+        ASSERT_NE(Number, nullptr);
+        ASSERT_NE(Status, nullptr);
+        EXPECT_EQ(Number->getZExtValue(), 60u);
+        EXPECT_EQ(Status->getZExtValue(), 7u);
+        for (unsigned Index = 2; Index != 7; ++Index) {
+          const auto *Unused =
+              llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(Index));
+          ASSERT_NE(Unused, nullptr);
+          EXPECT_TRUE(Unused->isZero());
+        }
+        EXPECT_EQ(
+            Asm->getConstraintString(),
+            "={ax},={r11},0,{di},{si},{dx},{r10},{r8},{r9},~{rcx},~{memory},"
+            "~{dirflag},~{fpsr},~{flags}");
+        EXPECT_TRUE(Asm->hasSideEffects());
+        const auto *Result = llvm::dyn_cast<llvm::StructType>(Call->getType());
+        ASSERT_NE(Result, nullptr);
+        EXPECT_EQ(Result->getNumElements(), 2u);
+      }
+  EXPECT_EQ(Calls, 1u);
+}
+
+TEST(LowInstructionBoundary, X87FpremCapturesStatusInsideOneLLVMAsm) {
+  for (const auto &[Opcode, Mnemonic, IntrinsicId] :
+       {std::tuple<uint8_t, const char *, Intrinsic>{0xf8, "fprem",
+                                                     Intrinsic::X87Fprem},
+        {0xf5, "fprem1", Intrinsic::X87Fprem1}}) {
+    SCOPED_TRACE(Mnemonic);
+    // fprem/fprem1; fnstsw ax; ret. The lifter inserts X87ReadStatus
+    // immediately after FPREM to model its condition codes.
+    LowFunc Low = buildFunction(Arch::X64, InstructionMode::Default,
+                                {0xd9, Opcode, 0xdf, 0xe0, 0xc3});
+    MedFunc Med =
+        LowToMedConverter().convert(Low, Arch::X64, BinaryFormat::ELF);
+    bool PairedMedOps = false;
+    for (const MedBlock &Block : Med.Blocks)
+      for (size_t I = 1; I < Block.Ops.size(); ++I) {
+        const MedOp &Remainder = Block.Ops[I - 1];
+        const MedOp &Status = Block.Ops[I];
+        PairedMedOps |= Remainder.Opcode == NdOp::INTRINSIC &&
+                        Remainder.NumInputs > 0 &&
+                        Remainder.Inputs[0].isConst() &&
+                        Remainder.Inputs[0].ConstVal ==
+                            static_cast<uint64_t>(IntrinsicId) &&
+                        Status.Opcode == NdOp::INTRINSIC &&
+                        Status.NumInputs > 0 && Status.Inputs[0].isConst() &&
+                        Status.Inputs[0].ConstVal ==
+                            static_cast<uint64_t>(Intrinsic::X87ReadStatus);
+      }
+    ASSERT_TRUE(PairedMedOps);
+
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Med}, Context, "x87-fprem-status", Arch::X64);
+    ASSERT_NE(Module, nullptr);
+    EXPECT_TRUE(validLLVMModule(*Module));
+    unsigned FusedCalls = 0;
+    unsigned SeparateStatusCalls = 0;
+    for (const llvm::Function &Function : *Module)
+      for (const llvm::BasicBlock &Block : Function)
+        for (const llvm::Instruction &Instruction : Block) {
+          const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          if (!Call)
+            continue;
+          const auto *Asm =
+              llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+          if (!Asm)
+            continue;
+          if (Asm->getAsmString() == "fnstsw $0")
+            ++SeparateStatusCalls;
+          if (Asm->getAsmString() != std::string(Mnemonic) + "\n\tfnstsw $1")
+            continue;
+          ++FusedCalls;
+          EXPECT_EQ(Asm->getConstraintString(),
+                    "=&{st},={ax},0,{st(1)},~{dirflag},~{fpsr},~{flags}");
+          const auto *PairType =
+              llvm::dyn_cast<llvm::StructType>(Call->getType());
+          ASSERT_NE(PairType, nullptr);
+          EXPECT_EQ(PairType->getName(), "neverd.x87.fprem_result");
+          bool HasValue = false, HasStatus = false;
+          for (const llvm::User *User : Call->users())
+            if (const auto *Extract =
+                    llvm::dyn_cast<llvm::ExtractValueInst>(User)) {
+              const auto Indices = Extract->getIndices();
+              if (Indices.size() != 1)
+                continue;
+              HasValue |= Indices[0] == 0;
+              HasStatus |= Indices[0] == 1 && !Extract->use_empty();
+            }
+          EXPECT_TRUE(HasValue);
+          EXPECT_TRUE(HasStatus);
+        }
+    EXPECT_EQ(FusedCalls, 1u);
+    EXPECT_EQ(SeparateStatusCalls, 0u);
+
+    if (Opcode == 0xf8) {
+      MedFunc Unpaired = Med;
+      bool Inserted = false;
+      for (MedBlock &Block : Unpaired.Blocks) {
+        for (size_t I = 1; I < Block.Ops.size(); ++I) {
+          const MedOp &Status = Block.Ops[I];
+          if (Status.Opcode != NdOp::INTRINSIC || Status.NumInputs == 0 ||
+              !Status.Inputs[0].isConst() ||
+              Status.Inputs[0].ConstVal !=
+                  static_cast<uint64_t>(Intrinsic::X87ReadStatus))
+            continue;
+          Block.Ops.insert(Block.Ops.begin() + I, MedOp{});
+          Inserted = true;
+          break;
+        }
+        if (Inserted)
+          break;
+      }
+      ASSERT_TRUE(Inserted);
+      EXPECT_DEATH(
+          {
+            llvm::LLVMContext BadContext;
+            (void)MedLLVMEmitter().emit({Unpaired}, BadContext,
+                                        "x87-unpaired-status", Arch::X64);
+          },
+          "X87ReadStatus requires an immediately preceding FPREM");
+    }
+  }
 }
 
 TEST(LowInstructionBoundary, SegmentOffsetsPreserveNarrowShiftSemantics) {

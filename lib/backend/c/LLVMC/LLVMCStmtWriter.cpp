@@ -1089,6 +1089,107 @@ bool LLVMCWriter::deadNullAssignBlocks(
 void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
   if (llvm::isa<llvm::DbgInfoIntrinsic>(&Inst))
     return;
+  // A synthesized image byte array can be accessed at several overlapping
+  // widths.  Copy through its original base+offset so a scalar access never
+  // creates a separate C object or assumes alignment at an interior offset.
+  if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
+      Load && Load->getPointerAddressSpace() == 0) {
+    const unsigned Size = imageIntegerAccessSize(Load->getType());
+    if (Size)
+      if (auto Pointer = imageByteArrayPointer(Load->getPointerOperand(), Size)) {
+        if (Load->isAtomic())
+          llvm::report_fatal_error("unsupported atomic image byte-array C projection");
+        const std::string Name = getName(Load);
+        emitIndent(Indent);
+        OS << Name << " = 0;\n";
+        if (Load->isVolatile()) {
+          const std::string Index = freshVar("image_byte");
+          emitIndent(Indent);
+          OS << "for (unsigned " << Index << " = 0; " << Index << " < "
+             << Size << "; ++" << Index << ")\n";
+          emitIndent(Indent + 1);
+          OS << "((uint8_t*)&" << Name << ")[" << Index
+             << "] = ((volatile uint8_t*)" << *Pointer << ")[" << Index
+             << "];\n";
+        } else {
+          emitIndent(Indent);
+          OS << "__builtin_memcpy(&" << Name << ", " << *Pointer << ", "
+             << Size << ");\n";
+        }
+        return;
+      }
+  }
+  if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst);
+      Store && Store->getPointerAddressSpace() == 0) {
+    const unsigned Size =
+        imageIntegerAccessSize(Store->getValueOperand()->getType());
+    if (Size)
+      if (auto Pointer = imageByteArrayPointer(Store->getPointerOperand(), Size)) {
+        if (Store->isAtomic())
+          llvm::report_fatal_error("unsupported atomic image byte-array C projection");
+        const std::string Bits = freshVar("image_bits");
+        emitIndent(Indent);
+        OS << "{ " << typeToCLLVM(Store->getValueOperand()->getType()) << " "
+           << Bits << " = " << valueStr(Store->getValueOperand()) << ";\n";
+        if (Store->isVolatile()) {
+          const std::string Index = freshVar("image_byte");
+          emitIndent(Indent + 1);
+          OS << "for (unsigned " << Index << " = 0; " << Index << " < "
+             << Size << "; ++" << Index << ")\n";
+          emitIndent(Indent + 2);
+          OS << "((volatile uint8_t*)" << *Pointer << ")[" << Index
+             << "] = ((const uint8_t*)&" << Bits << ")[" << Index
+             << "];\n";
+        } else {
+          emitIndent(Indent + 1);
+          OS << "__builtin_memcpy(" << *Pointer << ", &" << Bits << ", "
+             << Size << ");\n";
+        }
+        emitIndent(Indent);
+        OS << "}\n";
+        return;
+      }
+  }
+  // LLVM i80 is the exact ten-byte x87 memory image.  C has no scalar with a
+  // ten-byte object size, so use a zero-extended carrier and copy only ten
+  // bytes.  A typed __uint128_t dereference would read/write six extra bytes.
+  if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
+      Load && Load->getType()->isIntegerTy(80) &&
+      Load->getPointerAddressSpace() == 0) {
+    if (Load->isAtomic())
+      llvm::report_fatal_error("unsupported atomic i80 C projection");
+    const llvm::Value *Address = Load->getPointerOperand();
+    std::string Pointer = valueStr(Address);
+    if (std::string Image = imageDataCName(Address); !Image.empty())
+      Pointer = "&" + Image;
+    const std::string Name = getName(Load);
+    emitIndent(Indent);
+    OS << Name << " = 0;\n";
+    emitIndent(Indent);
+    OS << "__builtin_memcpy(&" << Name << ", (const void*)(" << Pointer
+       << "), 10);\n";
+    return;
+  }
+  if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst);
+      Store && Store->getValueOperand()->getType()->isIntegerTy(80) &&
+      Store->getPointerAddressSpace() == 0) {
+    if (Store->isAtomic())
+      llvm::report_fatal_error("unsupported atomic i80 C projection");
+    const llvm::Value *Address = Store->getPointerOperand();
+    std::string Pointer = valueStr(Address);
+    if (std::string Image = imageDataCName(Address); !Image.empty())
+      Pointer = "&" + Image;
+    const std::string Bits = freshVar("x87_bits");
+    emitIndent(Indent);
+    OS << "{ __uint128_t " << Bits << " = "
+       << valueStr(Store->getValueOperand()) << ";\n";
+    emitIndent(Indent + 1);
+    OS << "__builtin_memcpy((void*)(" << Pointer << "), &" << Bits
+       << ", 10);\n";
+    emitIndent(Indent);
+    OS << "}\n";
+    return;
+  }
   if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
     if (const llvm::AllocaInst *Slot =
             asAllocaPointer(SI->getPointerOperand())) {
@@ -1199,6 +1300,20 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
   if (auto *CI = llvm::dyn_cast<llvm::ICmpInst>(&Inst)) {
     auto LHS = comparedOperandText(CI->getOperand(0), CI->getOperand(1));
     auto RHS = comparedOperandText(CI->getOperand(1), CI->getOperand(0));
+    // C equality operators bind more tightly than &, ^, and |.  Inlining
+    // the bit test from an x87 status word without parentheses changes the
+    // branch from `(sw & C2) != 0` to `sw & (C2 != 0)`.
+    auto GroupBitwise = [](const llvm::Value *V, std::string &Text) {
+      const auto *Op = llvm::dyn_cast<llvm::BinaryOperator>(V);
+      if (!Op)
+        return;
+      if (Op->getOpcode() == llvm::Instruction::And ||
+          Op->getOpcode() == llvm::Instruction::Or ||
+          Op->getOpcode() == llvm::Instruction::Xor)
+        Text = "(" + Text + ")";
+    };
+    GroupBitwise(CI->getOperand(0), LHS);
+    GroupBitwise(CI->getOperand(1), RHS);
     if (CI->isUnsigned()) {
       LHS = unsignedCompareOperand(CI->getOperand(0), std::move(LHS));
       RHS = unsignedCompareOperand(CI->getOperand(1), std::move(RHS));
@@ -1686,6 +1801,24 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
 
   if (Inst.isCast()) {
     auto Src = valueStr(Inst.getOperand(0));
+    if (auto *Cast = llvm::dyn_cast<llvm::BitCastInst>(&Inst);
+        Cast &&
+        ((Cast->getSrcTy()->isIntegerTy(80) &&
+          Cast->getDestTy()->isX86_FP80Ty()) ||
+         (Cast->getSrcTy()->isX86_FP80Ty() &&
+          Cast->getDestTy()->isIntegerTy(80)))) {
+      const std::string Source = freshVar("x87_source");
+      emitIndent(Indent);
+      OS << Name << " = 0;\n";
+      emitIndent(Indent);
+      OS << "{ " << typeToCLLVM(Cast->getSrcTy()) << " " << Source << " = "
+         << Src << ";\n";
+      emitIndent(Indent + 1);
+      OS << "__builtin_memcpy(&" << Name << ", &" << Source << ", 10);\n";
+      emitIndent(Indent);
+      OS << "}\n";
+      return;
+    }
     emitIndent(Indent);
     OS << Name << " = "
        << castStr(Inst.getOpcode(), Src, Inst.getOperand(0)->getType(),
@@ -3076,6 +3209,192 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   if (AsmStr.empty())
     return false;
 
+  bool ResultLive = !Call.getType()->isVoidTy();
+  if (ResultLive && InferredVoid)
+    ResultLive = isCallResultLive(Analysis, &Call);
+
+  // The native Linux x64 SYSCALL contract has seven scalar register inputs
+  // and two register outputs.  Keep r10/r8/r9 and r11 fixed in C, since the
+  // generic SysV call ABI would put the fourth argument in rcx instead.
+  if (Opts.TheArch == Arch::X64 && AsmStr == "syscall" &&
+      IA->getConstraintString() ==
+          "={ax},={r11},0,{di},{si},{dx},{r10},{r8},{r9},~{rcx},~{memory},"
+          "~{dirflag},~{fpsr},~{flags}") {
+    if (!isLinuxX64SyscallInlineAsm(Call))
+      llvm::report_fatal_error("invalid Linux x64 syscall C projection");
+    if (Opts.Format != BinaryFormat::Unknown &&
+        Opts.Format != BinaryFormat::ELF)
+      llvm::report_fatal_error("Linux x64 syscall requires an ELF C projection");
+    const std::string Rax = freshVar("syscall_rax");
+    const std::string Rdi = freshVar("syscall_rdi");
+    const std::string Rsi = freshVar("syscall_rsi");
+    const std::string Rdx = freshVar("syscall_rdx");
+    const std::string R10 = freshVar("syscall_r10");
+    const std::string R8 = freshVar("syscall_r8");
+    const std::string R9 = freshVar("syscall_r9");
+    const std::string R11 = freshVar("syscall_r11");
+    OS << "#if !defined(__linux__) || !defined(__x86_64__)\n"
+          "#error \"Linux x64 syscall C projection requires Linux x86-64\"\n"
+          "#endif\n";
+    emitIndent(Indent);
+    OS << "{\n";
+    const std::string ScalarNames[] = {Rax, Rdi, Rsi, Rdx};
+    for (unsigned Index = 0; Index < 4; ++Index) {
+      emitIndent(Indent + 1);
+      OS << "uint64_t " << ScalarNames[Index] << " = "
+         << valueStr(Call.getArgOperand(Index)) << ";\n";
+    }
+    const std::pair<llvm::StringRef, std::string> FixedInputs[] = {
+        {"r10", R10}, {"r8", R8}, {"r9", R9}};
+    for (unsigned Index = 0; Index < 3; ++Index) {
+      emitIndent(Indent + 1);
+      OS << "register uint64_t " << FixedInputs[Index].second
+         << " __asm__(\"" << FixedInputs[Index].first << "\") = "
+         << valueStr(Call.getArgOperand(Index + 4)) << ";\n";
+    }
+    emitIndent(Indent + 1);
+    OS << "register uint64_t " << R11 << " __asm__(\"r11\");\n";
+    emitIndent(Indent + 1);
+    OS << "__asm__ volatile(\"syscall\" : \"+a\"(" << Rax
+       << "), \"=r\"(" << R11 << ") : \"D\"(" << Rdi
+       << "), \"S\"(" << Rsi << "), \"d\"(" << Rdx
+       << "), \"r\"(" << R10 << "), \"r\"(" << R8
+       << "), \"r\"(" << R9
+       << ") : \"rcx\", \"memory\", \"cc\");\n";
+    if (ResultLive) {
+      emitIndent(Indent + 1);
+      OS << Name << ".field_0 = " << Rax << ";\n";
+      emitIndent(Indent + 1);
+      OS << Name << ".field_1 = " << R11 << ";\n";
+    }
+    emitIndent(Indent);
+    OS << "}\n";
+    return true;
+  }
+
+  if (Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) {
+    const llvm::StringRef Constraints = IA->getConstraintString();
+    auto X87Operand = [&](unsigned Index) -> std::string {
+      const llvm::Value *Arg = Call.getArgOperand(Index);
+      if (const auto *Cast = llvm::dyn_cast<llvm::BitCastInst>(Arg);
+          Cast && Cast->getSrcTy()->isIntegerTy(80) &&
+          Cast->getDestTy()->isX86_FP80Ty()) {
+        const std::string Temp = freshVar("x87_operand");
+        const std::string Bits = freshVar("x87_source");
+        emitIndent(Indent);
+        OS << "__uint128_t " << Bits << " = "
+           << valueStr(Cast->getOperand(0)) << ";\n";
+        emitIndent(Indent);
+        OS << "long double " << Temp << " = 0;\n";
+        emitIndent(Indent);
+        OS << "__builtin_memcpy(&" << Temp << ", &" << Bits << ", 10);\n";
+        return Temp;
+      }
+      return valueStr(Arg);
+    };
+    const auto *PairType = llvm::dyn_cast<llvm::StructType>(Call.getType());
+    if ((AsmStr == "fprem\n\tfnstsw $1" ||
+         AsmStr == "fprem1\n\tfnstsw $1") &&
+        PairType && PairType->getNumElements() == 2 &&
+        PairType->getElementType(0)->isX86_FP80Ty() &&
+        PairType->getElementType(1)->isIntegerTy(16) &&
+        Call.arg_size() == 2 &&
+        Call.getArgOperand(0)->getType()->isX86_FP80Ty() &&
+        Call.getArgOperand(1)->getType()->isX86_FP80Ty() &&
+        Constraints ==
+            "=&{st},={ax},0,{st(1)},~{dirflag},~{fpsr},~{flags}") {
+      const std::string Dividend = X87Operand(0);
+      const std::string Divisor = X87Operand(1);
+      const std::string Result =
+          ResultLive ? Name : freshVar("x87_unused_pair");
+      if (!ResultLive) {
+        emitIndent(Indent);
+        OS << typeToCLLVM(Call.getType()) << " " << Result << ";\n";
+      }
+      const llvm::StringRef Mnemonic = llvm::StringRef(AsmStr).take_front(
+          llvm::StringRef(AsmStr).find('\n'));
+      emitIndent(Indent);
+      OS << "__asm__ volatile(\"" << Mnemonic
+         << "\\n\\tfnstsw %%ax\" : \"=&t\"(" << Result
+         << ".field_0), \"=a\"(" << Result
+         << ".field_1) : \"0\"(" << Dividend << "), \"u\"("
+         << Divisor << ") : \"cc\");\n";
+      return true;
+    }
+    if ((AsmStr == "fprem" || AsmStr == "fprem1") &&
+        Call.getType()->isX86_FP80Ty() && Call.arg_size() == 2 &&
+        Call.getArgOperand(0)->getType()->isX86_FP80Ty() &&
+        Call.getArgOperand(1)->getType()->isX86_FP80Ty() &&
+        Constraints == "=&{st},0,{st(1)},~{dirflag},~{fpsr},~{flags}") {
+      const std::string Dividend = X87Operand(0);
+      const std::string Divisor = X87Operand(1);
+      const std::string Result =
+          ResultLive ? Name : freshVar("x87_unused_remainder");
+      if (!ResultLive) {
+        emitIndent(Indent);
+        OS << "long double " << Result << ";\n";
+      }
+      const llvm::CallInst *Status = nullptr;
+      const llvm::Instruction *Next = Call.getNextNode();
+      while (Next &&
+             (llvm::isa<llvm::BitCastInst>(Next) ||
+              llvm::isa<llvm::DbgInfoIntrinsic>(Next)))
+        Next = Next->getNextNode();
+      if (const auto *Candidate = llvm::dyn_cast_or_null<llvm::CallInst>(Next)) {
+        const auto *StatusAsm =
+            llvm::dyn_cast<llvm::InlineAsm>(Candidate->getCalledOperand());
+        if (StatusAsm && !Candidate->use_empty() &&
+            Candidate->getType()->isIntegerTy(16) &&
+            Candidate->arg_size() == 0 &&
+            StatusAsm->getAsmString() == "fnstsw $0" &&
+            StatusAsm->getConstraintString() ==
+                "={ax},~{dirflag},~{fpsr},~{flags}")
+          Status = Candidate;
+      }
+      emitIndent(Indent);
+      OS << "__asm__ volatile(\"" << AsmStr;
+      if (Status)
+        OS << "\\n\\tfnstsw %%ax";
+      OS << "\" : \"=&t\"(" << Result << ")";
+      if (Status)
+        OS << ", \"=a\"(" << getName(Status) << ")";
+      OS << " : \"0\"(" << Dividend << "), \"u\"(" << Divisor
+         << ") : \"cc\");\n";
+      if (Status)
+        CapturedX87StatusCalls.insert(Status);
+      return true;
+    }
+    if (AsmStr == "fnstsw $0" && Call.getType()->isIntegerTy(16) &&
+        Call.arg_size() == 0 &&
+        Constraints == "={ax},~{dirflag},~{fpsr},~{flags}") {
+      if (CapturedX87StatusCalls.count(&Call))
+        return true;
+      emitIndent(Indent);
+      if (ResultLive)
+        OS << "__asm__ volatile(\"fnstsw %%ax\" : \"=a\"(" << Name
+           << ") : : \"cc\");\n";
+      else
+        OS << "__asm__ volatile(\"fnstsw %%ax\" : : : \"ax\", "
+              "\"cc\");\n";
+      return true;
+    }
+    if (Call.getType()->isVoidTy() && Call.arg_size() == 0 &&
+        ((AsmStr == "fninit" && Constraints == "~{memory}") ||
+         ((AsmStr == "fwait" || AsmStr == "fincstp" ||
+           (AsmStr.size() == 12 &&
+            llvm::StringRef(AsmStr).starts_with("ffree %st(") &&
+            AsmStr[10] >= '0' && AsmStr[10] <= '7' &&
+            AsmStr[11] == ')')) &&
+          Constraints == "~{memory},~{dirflag},~{fpsr},~{flags}"))) {
+      std::string Template = AsmStr;
+      if (llvm::StringRef(AsmStr).starts_with("ffree %st("))
+        Template.insert(6, "%");
+      emitIndent(Indent);
+      OS << "__asm__ volatile(\"" << Template << "\" ::: \"memory\");\n";
+      return true;
+    }
+  }
+
   if (auto Stos = classifyX86RepStos(Opts.TheArch, Call)) {
     // Unsigned address arithmetic also models the final (possibly wrapping)
     // register update without creating an out-of-bounds C pointer. Byte stores
@@ -3130,10 +3449,6 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   std::vector<std::string> ArgStrs;
   for (unsigned I = 0; I < Call.arg_size(); ++I)
     ArgStrs.push_back(valueStr(Call.getArgOperand(I)));
-
-  bool ResultLive = !Call.getType()->isVoidTy();
-  if (ResultLive && InferredVoid)
-    ResultLive = isCallResultLive(Analysis, &Call);
 
   auto Render =
       renderInlineAsm(Opts.TheArch, AsmStr, Call.getType()->isStructTy(), Name,

@@ -37,6 +37,17 @@ at the same revision. The fixed Swift subset excludes the custom
 parameter attributes assigned to `swift_willThrow` by
 [`IRGenModule.cpp`](https://github.com/swiftlang/swift/blob/9215272a4725957dfabdd14e1ca76c0dfa4a3003/lib/IRGen/IRGenModule.cpp#L1127).
 
+## FPREM anti-emulation regression
+
+The FPREM regression in
+`unittests/semantic/x86/X86_X87TranscendentalRTTests.cpp` adapts the operand
+construction and status-check sequence from
+[`fprem-anti-emu.asm`](https://github.com/gmh5225/fprem-anti-emulation/blob/f49ff009e062af2a23c5c5eec91649520ca605f0/fprem-anti-emu.asm).
+Copyright (c) 2026 Packmad. The original MIT license is preserved in
+[LICENSES/FPREM-Anti-Emulation.txt](LICENSES/FPREM-Anti-Emulation.txt).
+The sequence was adapted into a callable C inline-assembly round-trip test
+on 2026-09-26.
+
 ## zlib
 
 Mobile ZIP extraction links zlib for DEFLATE and CRC-32. CMake uses an installed

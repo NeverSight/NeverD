@@ -1,5 +1,12 @@
 // x86 standard C intrinsic names — included by intrinsics.cpp.
 
+// Generated HighC helpers keep x87's 80-bit operands and the FPREM status
+// word together; these are NeverD helpers, not host compiler intrinsics.
+C(Intrinsic::X87Fprem,         "neverd_x87_fprem");
+C(Intrinsic::X87Fprem1,        "neverd_x87_fprem1");
+C(Intrinsic::X87ReadStatus,    "neverd_x87_read_status");
+C(Intrinsic::X64Syscall,       "neverd_x64_syscall");
+
 // SSE/AVX shuffle & unpack
 C(Intrinsic::Pshufb,           "_mm_shuffle_epi8");
 C(Intrinsic::Pshufd,           "_mm_shuffle_epi32");

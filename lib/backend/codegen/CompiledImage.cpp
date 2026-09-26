@@ -422,6 +422,9 @@ static CompiledImage compileImageForPatchImpl(
     Out.SourceFunctionOwners = std::move(Res1.SourceFunctionOwners);
     Out.WinEHSemanticRecords = std::move(Res1.WinEHSemanticRecords);
     if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
+      llvm::WithColor::error()
+          << "compileImageForPatch: sizing compile lost exact source "
+             "function ownership\n";
       Out.FunctionRangesValid = false;
       return Out;
     }
@@ -521,8 +524,11 @@ static CompiledImage compileImageForPatchImpl(
         << "compileImageForPatch: section layout overflows\n";
     return Out;
   }
-  if (SectionVA.empty())
+  if (SectionVA.empty()) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: section layout has no allocated sections\n";
     return Out;
+  }
 
   llvm::mc_rewrite::RewriteResult Final;
   std::vector<CapturedFixupReference> FinalFixups;
@@ -667,6 +673,9 @@ static CompiledImage compileImageForPatchImpl(
   Out.SourceFunctionOwners = std::move(Final.SourceFunctionOwners);
   Out.WinEHSemanticRecords = std::move(Final.WinEHSemanticRecords);
   if (!attachSourceFunctionOriginalVAs(Out, *OriginalVAs)) {
+    llvm::WithColor::error()
+        << "compileImageForPatch: layout compile lost exact source "
+           "function ownership\n";
     Out.FunctionRangesValid = false;
     return Out;
   }

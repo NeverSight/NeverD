@@ -32480,7 +32480,11 @@ TEST(LLVMCPointerAddresses, NdDataGepPrintsSyntheticGlobalNotNullLoad) {
                                   Function));
   OS.flush();
   EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("g_140005040"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("uint8_t g_140005000[256] = {0};"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("g_140005000 + 64"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("g_140005040"), std::string::npos) << Source;
 }
 
 TEST(LLVMCPointerAddresses, StaleAllocaZeroDoesNotFoldLaterComputedLoad) {

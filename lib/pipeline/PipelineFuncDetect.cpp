@@ -265,6 +265,20 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     }
   }
 
+  // The loader tags ELF e_entry as a runtime function so normal CRT startup
+  // is preserved by patch mode.  A standalone ELF with only that detected
+  // function has no other body to patch.  Allow its authenticated entry when
+  // there is no dynamic-loader or imported-code evidence; other runtime
+  // callbacks and CRT scaffolding remain excluded below.
+  const bool PatchStandaloneELFEntry =
+      Opts.PatchMode && Opts.OnlyFunctionEntries.empty() && Img.isELF() &&
+      !Img.IsRelocatable && Img.Entry != 0 && FuncEntries.size() == 1 &&
+      FuncEntries.front().first == Img.Entry &&
+      Img.DynInfo.NeededLibs.empty() && Img.Imports.empty() &&
+      std::none_of(Img.Sections.begin(), Img.Sections.end(),
+                   [](const Section &S) { return S.Name == ".interp"; }) &&
+      Img.hasAuthenticatedFunctionEntryAt(Img.Entry);
+
   Result.FunctionAudits.clear();
   Result.FunctionAudits.reserve(FuncEntries.size());
 
@@ -289,8 +303,10 @@ Pipeline::detectFunctions(const BinaryImage &Img, Decoder &Dec,
     // exact structural targets.  The ELF name table remains only a
     // compatibility fallback for old symbol-rich CRT scaffolding without
     // metadata.
-    if (Opts.PatchMode && (Img.isRuntimeFunctionAt(Entry) ||
-                           (Img.isELF() && isELFRuntimeScaffold(FName)))) {
+    if (Opts.PatchMode &&
+        (Img.isRuntimeFunctionAt(Entry) ||
+         (Img.isELF() && isELFRuntimeScaffold(FName))) &&
+        !(PatchStandaloneELFEntry && Entry == Img.Entry)) {
       Audit.Disposition = PipelineFunctionDisposition::SkippedRuntimeScaffold;
       Result.FunctionAudits.push_back(std::move(Audit));
       continue;

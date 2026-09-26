@@ -430,9 +430,12 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
           Stmt.Dst->Type->Kind == NdTypeKind::Int &&
           Stmt.Val->Type->Kind == NdTypeKind::Ptr)
         Value = "(" + typeToC(Stmt.Dst->Type) + ")(uintptr_t)(" + Value + ")";
-      OS << memoryStoreExpr(Stmt.Dst->Type, exprStr(*Stmt.Dst->Operands[0]),
+      bool ExactImageBytes = false;
+      if (auto VA = constAddress(*Stmt.Dst->Operands[0]))
+        ExactImageBytes = imageBackingAddress(*VA).has_value();
+      OS << memoryStoreExpr(Stmt.Dst->Type, addrStr(*Stmt.Dst->Operands[0]),
                             Value, Stmt.Dst->MemoryOrdering,
-                            Stmt.Dst->MemoryAddressSpace)
+                            Stmt.Dst->MemoryAddressSpace, ExactImageBytes)
          << ";\n";
       break;
     }
@@ -546,7 +549,7 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
     break;
   }
 
-  case StmtKind::Store:
+  case StmtKind::Store: {
     if (!Stmt.StoreAddr || !Stmt.StoreVal)
       return;
     {
@@ -676,13 +679,18 @@ void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
       }
     }
     emitIndent(Indent);
+    bool ExactImageBytes = false;
+    if (auto VA = constAddress(*Stmt.StoreAddr))
+      ExactImageBytes = imageBackingAddress(*VA).has_value();
     OS << memoryStoreExpr(Stmt.StoreVal->Type, addrStr(*Stmt.StoreAddr),
                           isUnknownCallOperand(Stmt.StoreVal.get())
                               ? "0"
                               : exprStr(*Stmt.StoreVal),
-                          Stmt.MemoryOrdering, Stmt.MemoryAddressSpace)
+                          Stmt.MemoryOrdering, Stmt.MemoryAddressSpace,
+                          ExactImageBytes)
        << ";\n";
     break;
+  }
 
   case StmtKind::Call:
     if (!Stmt.CallExpr)

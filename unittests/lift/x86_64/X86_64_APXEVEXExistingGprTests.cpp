@@ -5386,4 +5386,71 @@ void expectExplicitMsrInvalidateAndHighCFailClosed() {
   EXPECT_EQ(x86HighCIntrinsicFatalReason(Intrinsic::Cpuid), nullptr);
 }
 
+TEST(X86APXEVEXExistingGpr, X87FpremCleanupPreservesStatusInAx) {
+  EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X87Fprem));
+  EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X87Fprem1));
+
+  struct Probe {
+    std::vector<uint8_t> Encoding;
+    Intrinsic Id;
+  };
+  const Probe Probes[] = {
+      {{0x9b}, Intrinsic::X87Wait},
+      {{0xdd, 0xc0}, Intrinsic::X87Ffree},
+      {{0xd9, 0xf7}, Intrinsic::X87Fincstp},
+  };
+
+  BinaryImage Image = emptyImage();
+  NdOpEmulator Emulator(Image);
+  Emulator.setStrictMode(true);
+  Emulator.setRegister(x86reg::RAX, UINT64_C(0x12340400));
+  Emulator.setRegisterBytes(x86reg::ST0,
+                            std::vector<uint8_t>(x86reg::FPURegSize, 0));
+  for (const Probe &P : Probes) {
+    const std::vector<LowOp> Ops = liftX64(P.Encoding);
+    ASSERT_EQ(Ops.size(), 1U);
+    EXPECT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
+    ASSERT_GE(Ops[0].NumInputs, 1U);
+    ASSERT_TRUE(Ops[0].Inputs[0].isConst());
+    EXPECT_EQ(Ops[0].Inputs[0].Offset, static_cast<uint64_t>(P.Id));
+    EXPECT_EQ(Ops[0].Output.Size, 0U);
+    if (P.Id == Intrinsic::X87Ffree || P.Id == Intrinsic::X87Fincstp) {
+      // Undefined condition codes and an incompletely tracked TOP cannot be
+      // published as concrete state, so strict emulation must stop here.
+      EXPECT_FALSE(Emulator.step(Ops[0]));
+    } else {
+      EXPECT_EQ(Emulator.run(Ops), Ops.size());
+    }
+    EXPECT_EQ(Emulator.getRegister(x86reg::RAX), UINT64_C(0x12340400));
+  }
+  EXPECT_EQ(Emulator.getRegisterBytes(x86reg::ST0),
+            std::vector<uint8_t>(x86reg::FPURegSize, 0));
+  EXPECT_FALSE(Emulator.skips().any());
+
+  // FINCSTP changes the logical top used by the following x87 instruction.
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  DecodedInsn Insn{};
+  const std::vector<uint8_t> IncTop = {0xd9, 0xf7};
+  ASSERT_EQ(Dec.decodeOneForLift(IncTop.data(), IncTop.size(),
+                                 kInstructionAddress, Insn),
+            static_cast<int>(IncTop.size()));
+  std::vector<LowOp> SequenceOps;
+  Dec.liftToLow(Insn, SequenceOps);
+  EXPECT_EQ(Dec.getX86FpuTop(), 1);
+
+  const std::vector<uint8_t> FldOne = {0xd9, 0xe8};
+  ASSERT_EQ(Dec.decodeOneForLift(FldOne.data(), FldOne.size(),
+                                 kInstructionAddress + IncTop.size(), Insn),
+            static_cast<int>(FldOne.size()));
+  SequenceOps.clear();
+  Dec.liftToLow(Insn, SequenceOps);
+  EXPECT_EQ(Dec.getX86FpuTop(), 0);
+  EXPECT_TRUE(
+      std::any_of(SequenceOps.begin(), SequenceOps.end(), [](const LowOp &Op) {
+        return Op.Output.isReg() && Op.Output.Offset == x86reg::ST0 &&
+               Op.Output.Size == x86reg::FPURegSize;
+      }));
+}
+
 } // namespace

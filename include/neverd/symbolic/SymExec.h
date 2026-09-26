@@ -177,6 +177,7 @@ private:
   StepResult stepBits(const LowOp &Op);
   StepResult stepMemory(const LowOp &Op);
   StepResult stepControl(const LowOp &Op, const SymCallEffect *CallEffect);
+  StepResult stepX87Intrinsic(const LowOp &Op);
   StepResult unmodelled(const LowOp &Op);
 
   SymContext &Ctx;

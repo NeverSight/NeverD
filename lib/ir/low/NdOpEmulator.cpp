@@ -523,7 +523,8 @@ bool NdOpEmulator::step(const LowOp &Op) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
       if (Id == Intrinsic::X87Fprem || Id == Intrinsic::X87Fprem1 ||
           Id == Intrinsic::X87ReadStatus || Id == Intrinsic::X87Fninit ||
-          Id == Intrinsic::X87Fnclex)
+          Id == Intrinsic::X87Fnclex || Id == Intrinsic::X87Wait ||
+          Id == Intrinsic::X87Ffree || Id == Intrinsic::X87Fincstp)
         return executeX87(Op);
       if (Id == Intrinsic::MaskedLoadB || Id == Intrinsic::MaskedLoadW ||
           Id == Intrinsic::MaskedLoadD || Id == Intrinsic::MaskedLoadQ ||

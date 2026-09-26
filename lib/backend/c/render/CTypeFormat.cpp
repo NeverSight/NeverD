@@ -322,6 +322,8 @@ std::string typeToCLLVM(llvm::Type *Ty) {
       return "uint32_t";
     if (Bits <= 64)
       return "uint64_t";
+    if (Bits == 80)
+      return "__uint128_t";
     if (Bits == 128)
       return "__uint128_t";
     return "uint64_t";
@@ -330,6 +332,8 @@ std::string typeToCLLVM(llvm::Type *Ty) {
     return "float";
   if (Ty->isDoubleTy())
     return "double";
+  if (Ty->isX86_FP80Ty())
+    return "long double";
   if (Ty->isPointerTy())
     return "void*";
 
