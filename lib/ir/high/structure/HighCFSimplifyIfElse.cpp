@@ -2272,7 +2272,12 @@ static bool destHasRealUse(const std::vector<HighStmt> &Body, size_t Skip,
 }
 
 static void dropUnusedTrailingAssigns(std::vector<HighStmt> &Body, size_t End,
-                                      const ExprPtr &Pred) {
+                                      const ExprPtr &Pred,
+                                      const MedFunc *Med) {
+  // This local cleanup recognizes Win64 predicate copies. Other ABIs need a
+  // function-wide reaching-use proof before a nested assignment can be dropped.
+  if (Med && Med->CC != CallingConv::Win64)
+    return;
   size_t I = End;
   while (I > 0) {
     --I;
@@ -3297,15 +3302,18 @@ static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
     const size_t TargetInRest = findSkipTargetInList(Body, NextI, Target);
     if (TargetInRest != SIZE_MAX && TargetInRest <= CleanupI)
       continue;
-    HighStmt ElseGoto;
-    ElseGoto.Kind = StmtKind::Goto;
-    ElseGoto.GotoTarget = Target;
+    AddrMap AM;
+    AM.rebuild(Body);
+    if (!ownsRunHighIR(Body, AM, {NextI, CleanupI + 1},
+                       static_cast<size_t>(I)))
+      continue;
+    std::vector<HighStmt> ThenBody;
+    for (size_t K = NextI; K <= CleanupI; ++K)
+      ThenBody.push_back(std::move(Body[K]));
     Stmt.Kind = StmtKind::IfElse;
     Stmt.Cond = invertHighCond(Stmt.Cond);
-    Stmt.Body.clear();
-    for (size_t K = NextI; K <= CleanupI; ++K)
-      Stmt.Body.push_back(std::move(Body[K]));
-    Stmt.ElseBody = {std::move(ElseGoto)};
+    Stmt.ElseBody = std::move(Stmt.Body);
+    Stmt.Body = std::move(ThenBody);
     Body.erase(Body.begin() + static_cast<long>(NextI),
                Body.begin() + static_cast<long>(CleanupI + 1));
     Changed = true;
@@ -3712,12 +3720,16 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
   AddrMap AM;
   bool Changed = true;
   int Pass = 0;
+  // The default-assignment sink models Win64 register joins. Keep other
+  // calling conventions explicit until their incoming paths are proven.
+  const bool CanSinkWin64Join = !Med || Med->CC == CallingConv::Win64;
   while (Changed && Pass++ < MaxPasses) {
     Changed = false;
     AM.rebuild(Body);
     for (int Sinks = 0;
          Sinks < 32 &&
-         (sinkJoinDefaultAssign(Body) || foldJoinValueGotoChain(Body));
+         ((CanSinkWin64Join && sinkJoinDefaultAssign(Body)) ||
+          foldJoinValueGotoChain(Body));
          ++Sinks) {
       Changed = true;
       AM.rebuild(Body);
@@ -4086,7 +4098,7 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             } else {
               Inner.Cond = std::move(*Rest);
               Stmt.Body[InnerI] = std::move(Inner);
-              dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce);
+              dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce, Med);
             }
             Changed = true;
           } else if (!SideEffectPrefix && (InnerI == 0 || FoldPrefix)) {
@@ -4108,7 +4120,7 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             Changed = true;
           } else {
             Stmt.Body[InnerI] = std::move(Inner);
-            dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce);
+            dropUnusedTrailingAssigns(Stmt.Body, InnerI, PredForDce, Med);
           }
         } else {
           ExprPtr PredForDce =
@@ -4117,7 +4129,7 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
             auto Rest = peelInnerAgainstOuter(Stmt, static_cast<size_t>(I),
                                               Body, J);
             if (!Rest) {
-              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce);
+              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
               ++J;
               continue;
             }
@@ -4136,12 +4148,12 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
                   break;
                 }
               }
-              dropUnusedTrailingAssigns(Stmt.Body, DropAt, PredForDce);
+              dropUnusedTrailingAssigns(Stmt.Body, DropAt, PredForDce, Med);
             } else if (isConstTrue(*Rest)) {
               ++J;
             } else {
               Stmt.Body[J].Cond = std::move(*Rest);
-              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce);
+              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
               ++J;
             }
             Changed = true;
@@ -4149,7 +4161,7 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
           for (size_t J = 0; J < Stmt.Body.size(); ++J) {
             if (Stmt.Body[J].Kind == StmtKind::If ||
                 Stmt.Body[J].Kind == StmtKind::IfElse)
-              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce);
+              dropUnusedTrailingAssigns(Stmt.Body, J, PredForDce, Med);
           }
         }
       }
@@ -4668,7 +4680,7 @@ static void structureIfElseList(std::vector<HighStmt> &Body, int MaxPasses,
     for (size_t J = 0; J < S.Body.size(); ++J)
       if (S.Body[J].Kind == StmtKind::If ||
           S.Body[J].Kind == StmtKind::IfElse)
-        dropUnusedTrailingAssigns(S.Body, J, Pred);
+        dropUnusedTrailingAssigns(S.Body, J, Pred, Med);
   }
   for (HighStmt &S : Body) {
     structureIfElseNested(S.Body, limits::kIfElseNestedArmPasses, Med);

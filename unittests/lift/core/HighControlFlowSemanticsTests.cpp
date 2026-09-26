@@ -1748,6 +1748,73 @@ TEST(HighControlFlowSemantics, InlinedElseJoinPreservesPhiCopyBeforeWork) {
   EXPECT_EQ(execute(F, 1, true), 11U);
 }
 
+TEST(HighControlFlowSemantics, ExternalSkipInvertKeepsTakenPhiCopy) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  auto Branch = conditional(0x1000, 0x1040);
+  auto TakenCopy = assign(0x1000, 1, 7);
+  TakenCopy.IsPhiCopy = true;
+  Branch.Body.insert(Branch.Body.begin(), std::move(TakenCopy));
+  F.Body = {Branch, assign(0x1010, 1, 9), jump(0x1014, 0x1030),
+            result(0x1030, local(1)), result(0x1040, local(1))};
+
+  ASSERT_EQ(execute(F, 0), 9U);
+  ASSERT_EQ(execute(F, 1), 7U);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0), 9U);
+  EXPECT_EQ(execute(F, 1), 7U);
+}
+
+TEST(HighControlFlowSemantics, ExternalSkipInvertKeepsSharedTailEntry) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  auto Shared = assign(0x1020, 1, 0);
+  Shared.Val = HighExpr::makeBinop(NdOp::INT_ADD, local(1),
+                                   HighExpr::makeConst(1, 8));
+  F.Body = {assign(0x1000, 1, 0), conditional(0x1004, 0x1040),
+            assign(0x1010, 1, 5), Shared, jump(0x1024, 0x1030),
+            result(0x1030, local(1)), jump(0x1040, 0x1020)};
+
+  ASSERT_EQ(execute(F, 0, true), 6U);
+  ASSERT_EQ(execute(F, 1, true), 1U);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0, true), 6U);
+  EXPECT_EQ(execute(F, 1, true), 1U);
+}
+
+TEST(HighControlFlowSemantics, Arm64NestedCleanupKeepsOuterJoinValue) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  auto Store = HighStmt{};
+  Store.Kind = StmtKind::Store;
+  Store.Addr = 0x1014;
+  Store.StoreAddr = HighExpr::makeConst(0x2000, 8);
+  Store.StoreVal = HighExpr::makeConst(42, 8);
+  auto Load = assign(0x1018, 1, 0);
+  Load.Val = HighExpr::makeLoad(HighExpr::makeConst(0x2000, 8),
+                                NdType::makeInt(8));
+  HighStmt Inner;
+  Inner.Kind = StmtKind::If;
+  Inner.Addr = 0x1020;
+  Inner.Cond = local(2);
+  Inner.Body = {assign(0x1024, 3, 1)};
+  HighStmt Outer;
+  Outer.Kind = StmtKind::If;
+  Outer.Addr = 0x1010;
+  Outer.Cond = local(0);
+  Outer.Body = {Store, Load, Inner};
+  F.Body = {assign(0x1000, 1, 0), assign(0x1004, 2, 1), Outer,
+            result(0x1040, local(1))};
+  MedFunc Med;
+  Med.CC = CallingConv::ARM_AAPCS;
+
+  ASSERT_EQ(execute(F, 0), 0U);
+  ASSERT_EQ(execute(F, 1), 42U);
+  structureIfElse(F, 8, &Med);
+  EXPECT_EQ(execute(F, 0), 0U);
+  EXPECT_EQ(execute(F, 1), 42U);
+}
+
 TEST(HighControlFlowSemantics, MultiEntryCycleKeepsExplicitTransfers) {
   HighFunc F;
   F.Entry = 0x1000;

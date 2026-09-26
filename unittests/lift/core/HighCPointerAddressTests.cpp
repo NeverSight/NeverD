@@ -30078,7 +30078,9 @@ TEST(HighCPointerAddresses, ConsecutiveSkipGotosSharedTailKeepsGoto) {
                Exit};
   structureIfElse(Func, 8);
   const std::string Source = emitFunctions({Func});
-  EXPECT_EQ(Source.find("goto L_140001342"), std::string::npos) << Source;
+  // The shared tail has another incoming edge. Keep its entry outside the
+  // conditional, even when an explicit transfer is less compact.
+  EXPECT_NE(Source.find("goto L_140001342"), std::string::npos) << Source;
   EXPECT_NE(Source.find("goto L_14000132D"), std::string::npos) << Source;
   EXPECT_NE(Source.find("shared("), std::string::npos) << Source;
   EXPECT_NE(Source.find("taken("), std::string::npos) << Source;
