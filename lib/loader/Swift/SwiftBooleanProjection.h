@@ -4,6 +4,7 @@
 #include "../../ir/low/SourceBooleanResultProof.h"
 #include "../ObjC/ObjCClassAccessorMachine.h"
 #include "SwiftBooleanRuntimeCandidate.h"
+#include "SwiftMangledStringBundleABI.h"
 
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
@@ -54,8 +55,20 @@ inline bool nativeEntry(const BinaryImage &Image, va_t Address,
           SourceABICarrierKind::IntegerRegister &&
       Signature.ReturnComponents[1].RegisterOffset == Returns[1] &&
       Signature.ReturnComponents[1].ValueBytes == 8;
-  if (Signature.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis ||
-      !Image.isCodeAddress(Address) || (!ScalarReturn && !PairReturn))
+  const bool NativeAnalysis =
+      Signature.Origin == SourceFunctionTypeHint::OriginKind::NativeAnalysis &&
+      (ScalarReturn || PairReturn);
+  // The closed mangled String bundle has a pointer in its second return word.
+  // Recheck the exact symbol and full ABI here instead of treating its origin
+  // tag as evidence or forcing its pair through native integer inference.
+  const auto SwiftStringBundle =
+      Signature.Origin == SourceFunctionTypeHint::OriginKind::SwiftMangled &&
+              Image.Arch == Arch::AArch64
+          ? swiftMangledStringBundleSourceABI(Image, Address, true)
+          : std::nullopt;
+  if ((!NativeAnalysis && (!SwiftStringBundle ||
+                           !equalSourceABIs(*SwiftStringBundle, Signature))) ||
+      !Image.isCodeAddress(Address))
     return false;
   for (const auto &Method : Image.ObjCMethods)
     if (Method.Implementation == Address)

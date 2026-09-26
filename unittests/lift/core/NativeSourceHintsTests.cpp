@@ -1,3 +1,4 @@
+#include "../../../lib/loader/Swift/SwiftBooleanProjection.h"
 #include "../../../lib/pipeline/NativeSourcePreservation.h"
 #include "../../../lib/sdk/capi/ObjCSourceProjection.h"
 #include "../../../lib/sdk/capi/SwiftMangledSourceABI.h"
@@ -52,6 +53,14 @@ TEST(NativeSourceHints, ExactMangledStringBundleFunctionKeepsPairResult) {
     ASSERT_EQ(Hint->ReturnComponents.size(), 2U);
     ASSERT_EQ(Hint->Parameters.size(), 9U);
     EXPECT_EQ(Hint->Parameters[8].Location.Kind, SourceABICarrierKind::Stack);
+    if (Architecture == Arch::AArch64) {
+      EXPECT_TRUE(
+          swift_boolean_projection_detail::nativeEntry(Image, 0x1000, *Hint));
+      auto Forged = *Hint;
+      Forged.Parameters[0].Type = NdType::makePtr(NdType::makeVoid());
+      EXPECT_FALSE(
+          swift_boolean_projection_detail::nativeEntry(Image, 0x1000, Forged));
+    }
     std::string Error;
     EXPECT_TRUE(validateSourceABI(*Hint, Error)) << Error;
     EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Image, 0x1000, false));
@@ -60,6 +69,9 @@ TEST(NativeSourceHints, ExactMangledStringBundleFunctionKeepsPairResult) {
         "_$s4main9localized_12languageCode6bundle5value7commentS2S_SSSgSo8"
         "NSObjectCSgS2StF";
     EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Wrong, 0x1000, true));
+    if (Architecture == Arch::AArch64)
+      EXPECT_FALSE(
+          swift_boolean_projection_detail::nativeEntry(Wrong, 0x1000, *Hint));
     Wrong = Image;
     Wrong.Symbols.push_back({"_alias", 0x1000, 0, true});
     EXPECT_FALSE(sdk::swiftMangledStringBundleSourceABI(Wrong, 0x1000, true));
