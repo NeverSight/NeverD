@@ -29,6 +29,13 @@ bool nonvolatile(uint64_t Register) {
          ((seh::NonvolatileRegisterMask >> Register) & 1);
 }
 
+bool hasLanguageHandler(const ExceptionFunction &Frame, bool Unwinding) {
+  if (Frame.GSCookie)
+    return Unwinding ? Frame.GSCookie->HasUnwindHandler
+                     : Frame.GSCookie->HasExceptionHandler;
+  return true;
+}
+
 llvm::Error validateFrame(const ExceptionFunction &F) {
   if (F.ParseStatus != ExceptionParseStatus::Complete)
     return invalid("encountered incomplete exception metadata");
@@ -45,15 +52,29 @@ llvm::Error validateFrame(const ExceptionFunction &F) {
                         seh::ChainFlag) ||
       (Chained && F.UnwindFlags != seh::ChainFlag))
     return invalid("unsupported unwind flags");
-  if (F.GSCookie || (F.Personality != ExceptionPersonality::None &&
-                     F.Personality != ExceptionPersonality::CSpecificHandler))
+  const bool GS = F.Personality == ExceptionPersonality::GSHandlerCheckSEH;
+  const bool CHandler =
+      GS || F.Personality == ExceptionPersonality::CSpecificHandler;
+  if (!CHandler && F.Personality != ExceptionPersonality::None)
     return invalid("encountered unsupported language personality");
-  if (F.Cxx ||
-      (((F.UnwindFlags & ~seh::ChainFlag) != 0) !=
-       (F.Personality == ExceptionPersonality::CSpecificHandler)) ||
-      ((F.Personality == ExceptionPersonality::CSpecificHandler) !=
-       F.SEH.has_value()))
+  if (F.Cxx || GS != F.GSCookie.has_value() ||
+      (((F.UnwindFlags & ~seh::ChainFlag) != 0) != CHandler) ||
+      (CHandler != F.SEH.has_value()))
     return invalid("inconsistent C exception-handler metadata");
+  if (GS) {
+    const auto &Cookie = *F.GSCookie;
+    if (Cookie.ParseStatus != ExceptionParseStatus::Complete ||
+        Cookie.CookieOffset % int32_t(seh::PointerSize) ||
+        (Cookie.HasExceptionHandler &&
+         !(F.UnwindFlags & seh::ExceptionHandlerFlag)) ||
+        (Cookie.HasUnwindHandler &&
+         !(F.UnwindFlags & seh::UnwindHandlerFlag)) ||
+        (Cookie.HasAlignment &&
+         (!Cookie.Alignment || (Cookie.Alignment & (Cookie.Alignment - 1)))) ||
+        (!Cookie.HasAlignment &&
+         (Cookie.Alignment || Cookie.AlignmentBaseOffset)))
+      return invalid("inconsistent GS cookie metadata");
+  }
   if (F.FrameRegister && !nonvolatile(F.FrameRegister))
     return invalid("invalid frame register");
   if (F.FrameOffset > seh::MaxFrameOffset ||
@@ -117,10 +138,11 @@ llvm::Error validateFrame(const ExceptionFunction &F) {
 KernelSEH::KernelSEH(const ExceptionInfo &Metadata, uint64_t PreferredBase,
                      uint64_t ActualBase, uint64_t ImageSize,
                      ReadStack64 ReadStack, IsExecutable Executable,
-                     ReadCode Code)
+                     ReadCode Code, ReadSecurityCookie Cookie)
     : Metadata(Metadata), PreferredBase(PreferredBase), ActualBase(ActualBase),
       ImageSize(ImageSize), ReadStack(std::move(ReadStack)),
-      Executable(std::move(Executable)), Code(std::move(Code)) {}
+      Executable(std::move(Executable)), Code(std::move(Code)),
+      Cookie(std::move(Cookie)) {}
 
 KernelSEH::Dispatch KernelSEH::begin(uint32_t ExceptionCode,
                                      const Context &Caller,
@@ -274,6 +296,18 @@ KernelSEH::advanceImpl(Dispatch &State,
   const auto CollectCleanups = [&]() -> llvm::Error {
     if (!State.Frame || !State.Frame->SEH || State.InPrologue)
       return llvm::Error::success();
+    if (State.Frame->GSCookie &&
+        (State.Frame->UnwindFlags & seh::UnwindHandlerFlag)) {
+      if (State.Cleanups.size() >= seh::MaxUnwindSteps)
+        return invalid("exception cleanup limit exceeded");
+      State.Cleanups.push_back(
+          {{ActionKind::Unhandled,
+            {State.Current, State.Establisher, 0, State.Code},
+            State.Bounds},
+           State.Frame});
+    }
+    if (!hasLanguageHandler(*State.Frame, true))
+      return llvm::Error::success();
     for (size_t I = State.ScopeFloor; I < State.Frame->SEH->Scopes.size();
          ++I) {
       const auto &Scope = State.Frame->SEH->Scopes[I];
@@ -295,14 +329,14 @@ KernelSEH::advanceImpl(Dispatch &State,
       auto Target = ToActual(Scope.FilterOrFinallyVA);
       if (!Target)
         return Target.takeError();
-      if (State.Cleanups.size() >= seh::MaxScopes)
+      if (State.Cleanups.size() >= seh::MaxUnwindSteps)
         return invalid("exception cleanup limit exceeded");
       State.Cleanups.push_back(
-          {ActionKind::Finally,
-           {State.Current, State.Establisher, *Target, State.Code},
-           State.Bounds,
-           State.SegmentIndex,
-           I + 1});
+          {{ActionKind::Finally,
+            {State.Current, State.Establisher, *Target, State.Code},
+            State.Bounds,
+            State.SegmentIndex,
+            I + 1}});
     }
     return llvm::Error::success();
   };
@@ -327,7 +361,15 @@ KernelSEH::advanceImpl(Dispatch &State,
   while (true) {
     if (State.Selected) {
       if (State.CleanupIndex < State.Cleanups.size()) {
-        auto Cleanup = State.Cleanups[State.CleanupIndex++];
+        const auto &Step = State.Cleanups[State.CleanupIndex++];
+        if (Step.CookieFrame) {
+          if (auto E = checkGSCookie(*Step.CookieFrame,
+                                     Step.Call.State.EstablisherFrame,
+                                     Step.Call.Bounds))
+            return std::move(E);
+          continue;
+        }
+        auto Cleanup = Step.Call;
         Cleanup.ExceptionFlags = seh::ExceptionUnwindingFlag;
         if (Cleanup.Bounds.Base == State.Bounds.Base &&
             Cleanup.State.EstablisherFrame == State.Selected->EstablisherFrame)
@@ -421,6 +463,11 @@ KernelSEH::advanceImpl(Dispatch &State,
         if (State.Frame->SEH &&
             State.Frame->SEH->Scopes.size() > seh::MaxScopes)
           return invalid("SEH scope limit exceeded");
+        if (!State.InPrologue && State.Frame->GSCookie &&
+            (State.Frame->UnwindFlags & seh::ExceptionHandlerFlag))
+          if (auto E =
+                  checkGSCookie(*State.Frame, State.Establisher, State.Bounds))
+            return std::move(E);
       }
       const auto &Segment = State.Path[State.SegmentIndex];
       State.ScopeFloor = Current.PC == Segment.Registers.PC &&
@@ -434,7 +481,8 @@ KernelSEH::advanceImpl(Dispatch &State,
       State.ScopeIndex = State.ScopeFloor;
       State.FrameActive = true;
     }
-    if (State.Frame && State.Frame->SEH && !State.InPrologue) {
+    if (State.Frame && State.Frame->SEH && !State.InPrologue &&
+        hasLanguageHandler(*State.Frame, false)) {
       const auto &Frame = *State.Frame;
       while (State.ScopeIndex < Frame.SEH->Scopes.size()) {
         const auto &Scope = Frame.SEH->Scopes[State.ScopeIndex++];

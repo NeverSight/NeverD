@@ -849,7 +849,7 @@ and driver callback addresses. Guest addresses are hexadecimal strings so
 JSON consumers do not lose 64-bit precision.
 The `configuration` object records the run's limits, service name,
 `kernel_exports` overrides and original `registry` input.
-The profile is `wdm-x64-scheduled-v73`. `nt_status` remains the DriverEntry
+The profile is `wdm-x64-scheduled-v74`. `nt_status` remains the DriverEntry
 result, while `scenario_success` describes initialization and completed
 requests together. `phase`, `requests`, and `unload_completed` identify which
 parts of the requested lifecycle ran. Each API call and CPU write also records
@@ -897,11 +897,21 @@ already entered cleanup. The planner restores nonvolatile GPRs and full
 XMM6–XMM15 values, checks chained V1 records, and unwinds partial prologues.
 Canonical epilogues are decoded from current executable guest bytes: only
 remaining stack adjustments, nonvolatile pops and the return are simulated.
-GS/C++ personalities and incomplete metadata still fail explicitly. An uncaught API or supported user-memory
+C++ personalities and incomplete metadata still fail explicitly. An uncaught API or supported user-memory
 exception stops with `model_error`; other CPU memory, interrupt and
 invalid-instruction faults remain terminal.
 
-The original `driver_wdm_seh.c` fixture uses genuine WDK headers and `/GS-`. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. The separate genuine-WDK `driver_wdm_neither.c` fixture exercises request pointers, probes, in-context CPU exceptions and locked user MDLs in normal/active-CFG and preferred/rebased images through `NEVERD_WDM_NEITHER_FIXTURE` and `NEVERD_WDM_NEITHER_CFG_FIXTURE`. The [driver-neither-scenario.json](examples/driver-neither-scenario.json) example checks both plain and locked-alias output bytes through the public scenario interface.
+`__GSHandlerCheck_SEH` checks the live image security cookie before language
+handler search and again during unwind, including frames without finally
+callbacks. Fixed and dynamically aligned cookie slots use checked signed
+frame offsets; cookie encoding uses the original frame pointer. The wrapped
+handler flags control C scopes independently of the wrapper's cookie checks.
+Prologue and epilogue unwinding does not read an unestablished cookie. A
+mismatch stops before the affected filter, cleanup or handler can run. The
+standalone `__GSHandlerCheck` and GS/C++ wrappers remain unsupported. See
+[Microsoft's /GS contract](https://learn.microsoft.com/en-us/cpp/build/reference/gs-buffer-security-check).
+
+The original `driver_wdm_seh.c` fixture uses genuine WDK headers with `/GS-` for its C routines and explicit original GS-protected assembly in `driver_seh_gs.h`. Both GS forms execute the linked WDK cookie checker before raising, and negative variants corrupt only the stored cookie. Configure `NEVERD_WDM_SEH_FIXTURE` and `NEVERD_WDM_SEH_CFG_FIXTURE` for normal and active-CFG images. The [driver-seh-scenario.json](examples/driver-seh-scenario.json) example rebases the image, catches an API exception in DriverEntry and unloads. The separate genuine-WDK `driver_wdm_neither.c` fixture exercises request pointers, probes, in-context CPU exceptions and locked user MDLs in normal/active-CFG and preferred/rebased images through `NEVERD_WDM_NEITHER_FIXTURE` and `NEVERD_WDM_NEITHER_CFG_FIXTURE`. The [driver-neither-scenario.json](examples/driver-neither-scenario.json) example checks both plain and locked-alias output bytes through the public scenario interface.
 
 The same fixture can mark a neither IOCTL pending after locking input and
 output pages in caller context. A work item at `PASSIVE_LEVEL` uses the kernel

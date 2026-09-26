@@ -5,12 +5,12 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// Original driver exercising constant C exception handlers. Compile against
-/// genuine WDK headers with stack-protector wrappers explicitly disabled.
+/// genuine WDK headers. Explicit original GS frames exercise the linked WDK
+/// security runtime independently of the C compiler's stack-protector choice.
 //===----------------------------------------------------------------------===//
 
+#include "driver_seh_gs.h"
 #include "driver_seh_test.h"
-
-#include <ntifs.h>
 
 C_ASSERT(sizeof(NTSTATUS) == 4);
 C_ASSERT(sizeof(ULONG_PTR) == 8);
@@ -52,6 +52,17 @@ static NTSTATUS Check(BOOLEAN Condition, ULONG Line) {
     if (!NT_SUCCESS(CheckStatus))                                              \
       return CheckStatus;                                                      \
   } while (0)
+
+static NTSTATUS GSCookiePaths(VOID) {
+  const BOOLEAN Corrupt =
+      Mode == SehGSCorruptCookie || Mode == SehGSAlignedCorruptCookie;
+  const BOOLEAN Aligned =
+      Mode == SehGSAlignedCookie || Mode == SehGSAlignedCorruptCookie;
+  NTSTATUS Status = Aligned ? SehGSAlignedFrame(Corrupt) : SehGSFrame(Corrupt);
+  REQUIRE(NT_SUCCESS(Status));
+  DbgPrint("WDM SEH: GS cookie checked aligned=%u\n", Aligned);
+  return STATUS_SUCCESS;
+}
 
 __declspec(noinline) static NTSTATUS DirectRaise(VOID) {
   volatile ULONG Local = 0x12345678;
@@ -772,10 +783,18 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,
   if (RegistryPath && RegistryPath->Length >= sizeof(WCHAR)) {
     WCHAR Last = RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR) - 1];
     if ((Last >= 'A' && Last <= 'Z') || Last == SehXmmUnwind ||
-        Last == SehChainedUnwind || Last == SehPrologueUnwind)
+        Last == SehChainedUnwind || Last == SehPrologueUnwind ||
+        Last == SehGSCookie || Last == SehGSAlignedCookie ||
+        Last == SehGSCorruptCookie || Last == SehGSAlignedCorruptCookie)
       Mode = (CHAR)Last;
   }
   switch (Mode) {
+  case SehGSCookie:
+  case SehGSAlignedCookie:
+  case SehGSCorruptCookie:
+  case SehGSAlignedCorruptCookie:
+    Test = GSCookiePaths;
+    break;
   case SehChainedUnwind:
     Test = AcrossChainedHelper;
     break;

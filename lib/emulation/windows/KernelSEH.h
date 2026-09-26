@@ -101,18 +101,26 @@ public:
     uint64_t ControlOffset = 0;
     std::set<std::pair<uint64_t, uint64_t>> Seen;
     std::optional<Transfer> FilterCandidate, Selected;
-    std::vector<Action> Cleanups;
+    struct UnwindStep {
+      Action Call;
+      /// A GS check precedes this frame's language handler, even when it has
+      /// no finally scopes. It must run again after the search pass.
+      const ExceptionFunction *CookieFrame = nullptr;
+    };
+    std::vector<UnwindStep> Cleanups;
   };
   using ReadStack64 = std::function<llvm::Expected<uint64_t>(uint64_t)>;
   using IsExecutable = std::function<bool(uint64_t)>;
   using ReadCode =
       std::function<llvm::Error(uint64_t, llvm::MutableArrayRef<uint8_t>)>;
+  using ReadSecurityCookie = std::function<llvm::Expected<uint64_t>()>;
 
   /// Metadata retains preferred-base VAs. It must outlive the planner and
   /// remain immutable. Stack reads must be side-effect-free checked reads.
   KernelSEH(const ExceptionInfo &Metadata, uint64_t PreferredBase,
             uint64_t ActualBase, uint64_t ImageSize, ReadStack64 ReadStack,
-            IsExecutable Executable, ReadCode Code = {});
+            IsExecutable Executable, ReadCode Code = {},
+            ReadSecurityCookie Cookie = {});
 
   /// Caller is a local copy after the modeled raising API's return-address
   /// pop. Its control PC is the checked saved return address minus one.
@@ -156,6 +164,9 @@ private:
   ReadStack64 ReadStack;
   IsExecutable Executable;
   ReadCode Code;
+  ReadSecurityCookie Cookie;
+  llvm::Error checkGSCookie(const ExceptionFunction &Frame,
+                            uint64_t Establisher, Stack Bounds) const;
   llvm::Expected<std::optional<Context>>
   unwindEpilogue(const ExceptionFunction &Frame, const Context &Current,
                  Stack Bounds) const;

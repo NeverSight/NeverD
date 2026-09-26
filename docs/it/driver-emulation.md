@@ -571,7 +571,7 @@ dispositivo e gli indirizzi dei callback del driver. Gli indirizzi guest sono
 stringhe esadecimali, così i consumatori JSON non perdono la precisione a 64 bit.
 L’oggetto `configuration` registra i limiti, il nome del servizio e le
 sostituzioni `kernel_exports` e l’input `registry` dell’esecuzione.
-Il profilo è `wdm-x64-scheduled-v73`. `nt_status` rimane il risultato di DriverEntry,
+Il profilo è `wdm-x64-scheduled-v74`. `nt_status` rimane il risultato di DriverEntry,
 mentre `scenario_success` descrive insieme l’inizializzazione e le richieste
 completate. `phase`, `requests` e `unload_completed` identificano le parti
 eseguite del ciclo di vita richiesto. Ogni chiamata API e scrittura CPU registra
@@ -592,7 +592,9 @@ La consegna usa metadati unwind x64 V1 e `__C_specific_handler`. Uno scope costa
 
 I filtri ricevono `EXCEPTION_POINTERS`, record di eccezione e `CONTEXT_INTEGER | CONTEXT_CONTROL` stabili su uno stack limitato separato, fuori dallo shadow space Win64. Lo stato CPU originale completo, inclusi SIMD/floating point e flag, viene conservato. Un filtro negativo può riprendere un fault CPU utente di lettura/scrittura dopo verifica di GPR, RIP/RSP e flag aritmetici/di direzione modificati. I campi immutabili sono verificati per qualunque risultato del filtro. Riprendere un’eccezione sollevata da un’API modellata resta escluso. Identità del thread/processo, PreviousMode e autorità utente derivano dal padre senza autorizzare worker indipendenti; un worker collegato conserva processo creatore di sistema e KernelMode.
 
-Sono supportati eccezioni annidate e unwind in collisione, catene V1, prologhi parziali, epiloghi canonici e ripristino completo XMM6–XMM15. I record mantengono i collegamenti e un finally già iniziato non viene ripetuto. GS/C++ e metadati incompleti restano rifiutati. Eccezioni API o utente non gestite producono `model_error`; altri fault di memoria CPU, interrupt e istruzioni non valide restano terminali. A ogni ritorno del filtro, `EXCEPTION_POINTERS`, `EXCEPTION_RECORD` e i campi non supportati di `CONTEXT` devono restare invariati.
+Sono supportati eccezioni annidate e unwind in collisione, catene V1, prologhi parziali, epiloghi canonici e ripristino completo XMM6–XMM15. I record mantengono i collegamenti e un finally già iniziato non viene ripetuto. C++ e metadati incompleti restano rifiutati. Eccezioni API o utente non gestite producono `model_error`; altri fault di memoria CPU, interrupt e istruzioni non valide restano terminali. A ogni ritorno del filtro, `EXCEPTION_POINTERS`, `EXCEPTION_RECORD` e i campi non supportati di `CONTEXT` devono restare invariati.
+
+`__GSHandlerCheck_SEH` verifica il cookie corrente dell’immagine prima della ricerca e durante l’unwind, anche nei frame senza finally. Gli slot fissi o allineati dinamicamente usano offset con segno verificati e il frame pointer originale per la codifica. I flag del gestore C sono indipendenti dai controlli del cookie. Prologhi ed epiloghi non leggono cookie non ancora stabiliti. Una differenza arresta l’esecuzione prima del filtro, cleanup o gestore interessato. `__GSHandlerCheck` autonomo e i wrapper GS/C++ restano non supportati. I frame originali in `driver_seh_gs.h` eseguono anche il controllo WDK collegato.
 
 Il fixture originale `driver_wdm_seh.c` usa header WDK autentici e `/GS-`. Configurare `NEVERD_WDM_SEH_FIXTURE` e `NEVERD_WDM_SEH_CFG_FIXTURE` per immagini normali e con CFG attivo. L’esempio [driver-seh-scenario.json](../examples/driver-seh-scenario.json) riloca l’immagine, cattura un’eccezione API in DriverEntry e scarica il driver. Il percorso WDM separato per METHOD_NEITHER supporta sonde, MDL bloccati ed errori di memoria utente intercettabili.
 

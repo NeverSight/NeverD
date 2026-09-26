@@ -11,6 +11,7 @@
 
 #include "../TestProcess.h"
 #include "fixtures/driver_nested_user.h"
+#include "fixtures/driver_seh_test.h"
 #include "gtest/gtest.h"
 
 #include "neverd/emulation/DriverProfile.h"
@@ -3816,6 +3817,52 @@ TEST_F(DriverScenarioPublic, CAPIAndCLIResumeGenuineConstantExceptionHandler) {
       EXPECT_TRUE(Caught);
     }
   }
+#else
+  GTEST_SKIP() << "NEVERD_WDM_SEH_FIXTURE requires a genuine WDK fixture";
+#endif
+}
+
+TEST_F(DriverScenarioPublic, CAPIGSCookieFailureCannotBecomeSuccessfulSEH) {
+#ifdef NEVERD_WDM_SEH_FIXTURE
+  std::vector<const char *> Images{NEVERD_WDM_SEH_FIXTURE};
+#ifdef NEVERD_WDM_SEH_CFG_FIXTURE
+  Images.push_back(NEVERD_WDM_SEH_CFG_FIXTURE);
+#endif
+  for (const auto *Image : Images)
+    for (char Mode : {SehGSCookie, SehGSAlignedCookie, SehGSCorruptCookie,
+                      SehGSAlignedCorruptCookie}) {
+      SCOPED_TRACE(Image);
+      SCOPED_TRACE(Mode);
+      const bool Corrupt =
+          Mode == SehGSCorruptCookie || Mode == SehGSAlignedCorruptCookie;
+      const std::string Service = std::string("NeverDSEH") + Mode;
+      neverd_driver_options_v1 Options{};
+      Options.struct_size = sizeof(Options);
+      Options.instruction_limit =
+          neverd::emulation::profile::DefaultInstructionLimit;
+      Options.memory_limit = neverd::emulation::profile::DefaultMemoryLimit;
+      Options.event_limit = neverd::emulation::profile::DefaultEventLimit;
+      Options.timeout_milliseconds =
+          neverd::emulation::profile::DefaultTimeoutMilliseconds;
+      Options.service_name = Service.c_str();
+      auto Parsed =
+          llvm::json::parse(takeString(neverd_emulate_driver_scenario_json(
+              Session, Image, R"({"load_address":"0x190000000","unload":true})",
+              &Options)));
+      ASSERT_TRUE(bool(Parsed))
+          << llvm::toString(Parsed.takeError()) << error();
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      EXPECT_EQ(Report->getString("stop_reason"),
+                Corrupt ? "model_error" : "returned");
+      EXPECT_EQ(Report->getBoolean("scenario_success"), !Corrupt);
+      EXPECT_EQ(Report->getBoolean("unload_completed"), !Corrupt);
+      if (Corrupt)
+        EXPECT_NE(Report->getString("diagnostic")
+                      .value_or("")
+                      .find("GS security cookie check failed"),
+                  llvm::StringRef::npos);
+    }
 #else
   GTEST_SKIP() << "NEVERD_WDM_SEH_FIXTURE requires a genuine WDK fixture";
 #endif

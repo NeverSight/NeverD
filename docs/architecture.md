@@ -1052,8 +1052,9 @@ cannot bypass their ownership. `KernelGuestCall` preserves owner/token and
 caller CPU/IRQL state. `DriverResult.Interrupts` reports actual per-handler and
 per-sample observations, with source transitions separate from ISR returns.
 Unavailable or stale captured sources fail without rebinding. These explicit
-synthetic lines do not provide MSI, passive ISR delivery, arbitrary controller
-state or instruction-level preemption.
+synthetic sources do not provide arbitrary controller state or
+instruction-level preemption; explicit message resources and passive ISR
+delivery use the same ownership model described below.
 
 `KernelModelInterruptEvents` preflights same-time producer capacity before
 clock advancement or observation changes, including exact framework
@@ -1100,7 +1101,13 @@ unrelated retained terminal fault. Handler execution remains on the original
 stack. Nested filter dispatch joins explicit logical stack segments and links
 exception records; collided finally dispatch advances past entered cleanups.
 Only abandoned exception callback frames are retired. API-raise continuation,
-GS/C++ personalities and incomplete metadata remain explicit failures.
+C++ personalities, standalone GS handlers and incomplete metadata remain explicit failures.
+`KernelSEHGS` validates `__GSHandlerCheck_SEH` using loader-decoded offsets
+and live image/stack storage. GS checks are independent of wrapped C-handler
+flags. The unwind plan retains one check before each frame’s cleanup group,
+including frames with no finally, so search-time validation cannot hide later
+cookie corruption. Dynamic slot alignment does not change the frame pointer
+used to encode the cookie.
 
 `KernelFrameworkPower` owns the ordered self-managed I/O, hardware and D0
 callback plan. `KernelModelPowerCompletion` creates independent framework power

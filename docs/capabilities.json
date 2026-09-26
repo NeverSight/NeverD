@@ -3584,7 +3584,7 @@
         "The original genuine-WDK driver_wdm_dma_channel.c and optional NEVERD_WDM_DMA_CHANNEL_FIXTURE/NEVERD_WDM_DMA_CHANNEL_CFG_FIXTURE exercise real translated bus-master channel calls, aggregate fragments, retained-register reuse and shared common/SG/channel admission. Native normal/CFG/rebased runs and the seven-request C API/CLI example validate the bounded profile; Python uses the same scenario_json interface. Missing fixtures skip explicitly and evidence remains Linux-only.",
         "ExRaiseStatus, ExRaiseAccessViolation and ExRaiseDatatypeMisalignment produce typed guest exceptions without a normal API return. ExRaiseStatus uses only the low NTSTATUS dword; the wrappers use STATUS_ACCESS_VIOLATION and STATUS_DATATYPE_MISALIGNMENT. The selected profile follows the individual Microsoft DDI ceilings APC_LEVEL for ExRaiseStatus and PASSIVE_LEVEL for the wrappers, while acknowledging that some WDK SAL annotations permit APC_LEVEL for the wrappers. API traces retain a null result and record the raised code in detail.",
         "KernelSEH plans bounded x64 version-one C search/unwind over existing loader metadata, executes real guest filters and exited finally callbacks, and restores supported nonvolatile GPR saves across helpers. Filters receive stable exception/context records on a private stack; original full CPU state survives callbacks. Zero searches, positive selects a handler, and negative can resume an admitted user read/write CPU fault with validated INTEGER/CONTROL changes. Parent thread/process identity and existing user-access authority are preserved, without granting authority to unrelated workers. Actual handlers and enclosing-handler reraises execute. Nested filters and collided finally unwinding preserve explicit logical stack segments and linked exception records. Validated chains, partial prologues, canonical epilogues and complete XMM6-XMM15 restores are supported. API-raise continuation, GS/C++ personalities and incomplete records fail explicitly. Uncaught API/user exceptions are model_error; unrelated backend faults remain terminal. METHOD_NEITHER uses explicit requestor-owned user buffers, checked probes, independent MDL locks and shared kernel aliases; KMDF caller-context accessors and locked WDFMEMORY retain the same ownership rules.",
-        "The original genuine-WDK /GS- driver_wdm_seh.c uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, real filter/search/unwind ordering, guest exception records, supported CPU-fault continuation, full CPU restoration and foreground/worker/attached-worker identity and authority. Nested filters and collided finally callbacks execute; unrelated CPU faults fail explicitly. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
+        "The original genuine-WDK driver_wdm_seh.c with /GS- C routines and explicit GS assembly uses optional NEVERD_WDM_SEH_FIXTURE and NEVERD_WDM_SEH_CFG_FIXTURE. Native normal/active-CFG/rebased cases exercise all three exports, helper nonvolatile restoration, nested and reraised handlers, real filter/search/unwind ordering, guest exception records, supported CPU-fault continuation, full CPU restoration and foreground/worker/attached-worker identity and authority. __GSHandlerCheck_SEH validates fixed and dynamically aligned stack cookies during search and again during unwind, with flags separate from wrapped C handlers. Original GS frames also execute the linked WDK checker; native, C API and Python distinguish valid cookies from corruption before handler execution. Standalone GS and C++ personalities remain unsupported. Nested filters and collided finally callbacks execute; unrelated CPU faults fail explicitly. C API/CLI runs docs/examples/driver-seh-scenario.json with null raised-call results and actual handler messages. pluginsdk/python/tests/test_driver_seh_integration.py uses the existing JSON binding and optional NEVERD_TEST_LIBNEVERD / NEVERD_TEST_WDM_SEH_FIXTURE / NEVERD_TEST_WDM_SEH_CFG_FIXTURE inputs. Missing fixtures skip explicitly; evidence is Linux-only and does not establish general SEH.",
         "The original genuine-WDK driver_wdm_neither.c uses optional NEVERD_WDM_NEITHER_FIXTURE and NEVERD_WDM_NEITHER_CFG_FIXTURE. Native normal/active-CFG and preferred/rebased runs verify six packet/probe/CPU-fault/locked-MDL paths. Backend and request-owner tests verify shared alias bytes, independent pins, write protection, completion output and terminal kernel faults. C API/CLI and Python execute docs/examples/driver-neither-scenario.json and verify plain and locked-alias output bytes. Missing external images skip explicitly; Linux evidence does not establish arbitrary Windows process memory.",
         "A nonempty WDM METHOD_NEITHER IOCTL may independently set user_input_access and user_output_access to read_write (default), read_only or no_access. These explicit page facts are applied after buffer initialization and before guest dispatch. No-access still retains a non-NULL caller pointer and RAM backing, so ProbeForRead can pass its numerical check before a CPU read faults, while ProbeForWrite and MmProbeAndLockPages raise access violations according to page rights. Strict JSON/native validation rejects rights on buffered/direct IOCTLs, wrong directions, empty buffers, unknown values and wrong types. The original WDK fixture runs CPU/probe/MDL negative paths through normal/CFG and preferred/rebased images; C/CLI/Python observe completed failing statuses without terminal backend faults. Caller-context restrictions keep raw user pointers unavailable in ordinary workers; a work item with a live requesting IRP can explicitly attach to that process for bounded raw user-memory access, while locked MDL system aliases remain independently usable. Optional user_unmap_after_dispatch revokes original and declared user virtual access after dispatch returns and before queued work/cancellation; locked MDL aliases retain physical bytes and an unmapped output has no caller-visible output_hex. Synthetic requestor_process_id distinguishes bounded caller contexts; IoGetRequestorProcessId retains the file IRP identity and PsGetCurrentProcessId distinguishes foreground from modeled system work-item execution. requestor_exit_after_dispatch revokes every original and declared VA of that identity before callbacks, while pinned MDL aliases can still complete or cancel. Later new I/O from an exited identity is rejected; explicit CLEANUP/CLOSE remain available, with no inferred handle rundown or cancellation. Arbitrary process address spaces, attachment outside system work items, unmap timing and reuse of original scenario allocation addresses remain unsupported.",
         "READ/WRITE on a WDM device with neither DO_BUFFERED_IO nor DO_DIRECT_IO uses the original caller address only through IRP.UserBuffer. WRITE carries initialized user input and READ a separate user output; neither creates a SystemBuffer or implicit MDL. User page rights apply to WRITE input or READ output only, and explicit rights on a buffered/direct device stop before guest dispatch. A genuine WDK normal/CFG fixture probes and accesses both directions under x64 SEH, including read-only/no-access failures, at preferred and rebased image addresses. C API, CLI and Python observe the same report bytes and request statuses. Deferred raw access still requires locking; general process address spaces remain unsupported.",
@@ -3595,6 +3595,150 @@
         "IoBuildPartialMdl supports subranges, zero-length remainder, PFN capacity checks, source-independent nonpaged descriptors and separate root-lock/system-alias ownership. Target reuse uses the genuine MmPrepareMdlForReuse inline path. Completion preflights all dependencies before releasing chains in either order; live DMA prevents rebuild or retirement. MmMapLockedPagesSpecifyCache(UserMode) creates independent process-owned NX/read-only-capable views of existing private physical pages at IRQL <= APC_LEVEL without changing MappedSystemVa. Exact pair/process unmapping, canonical alias re-locking, typed resource shortage, process exit and lifetime guards are modeled. Requested addresses preserve page offsets in a bounded reusable arena. Exact unmapping releases address/budget; surviving pins/system aliases retain old backing after VA reuse. Different live processes can own the same VA with independent backing/rights; whole-set process switching preflights alias replacement before publishing context, and another process exit/unmap cannot retire the active view. Live opaque dispatcher objects in outgoing views reject switching. MmNonCached/MmCached/MmWriteCombined requests retain each physical page's existing cache attribute; ordinary model RAM is cached, and conflicting registrations or reserved types fail. Arbitrary virtual-memory allocation, page tables and a general process manager remain unsupported."
       ],
       "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSCookieIsCheckedDuringSearchAndTargetUnwind",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSAlignedSlotUsesOriginalFramePointerForEncoding",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSRejectsTruncatedOrMalformedCookieBeforeStackReads",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSBoundsDoNotPermitReadsOutsideCurrentStack",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSRejectsNonzeroUpperCookieBitsEvenWhenValuesMatch",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSSignedSlotArithmeticCannotWrapIntoTheStack",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSRequiresAnExplicitImageCookieReader",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSRechecksMutationByFilterBeforeTransferringControl",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSChecksBeforeFinallyAndAgainInEachOuterFrame",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSLanguageFlagsDoNotDisableTheCookieCheck",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSUnwindOnlyWrapperDoesNotCheckCookieDuringSearch",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/KernelSEHTests.cpp",
+          "filter": "DriverKernelSEH.GSPrologueAndEpilogueDoNotReadUnestablishedCookie",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMSEHTests.cpp",
+          "filter": "DriverWDMSEH.GSCookiesMatchRealRuntimeForFixedAndAlignedFrames",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationTests",
+          "source": "unittests/emulation/DriverWDMSEHTests.cpp",
+          "filter": "DriverWDMSEH.CorruptGSCookiesCannotReachHandlersOrUnload",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDDriverEmulationPublicTests",
+          "source": "unittests/emulation/DriverScenarioPublicTests.cpp",
+          "filter": "DriverScenarioPublic.CAPIGSCookieFailureCannotBecomeSuccessfulSEH",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDPythonSDKUnitTests",
+          "source": "pluginsdk/python/tests/test_driver_seh_integration.py",
+          "filter": "DriverSEHIntegrationTests.test_gs_cookie_success_and_corruption_in_fixed_and_aligned_frames",
+          "platforms": [
+            "linux"
+          ]
+        },
         {
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",
@@ -7010,7 +7154,7 @@
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverWDMSEHTests.cpp",
-          "filter": "DriverWDMSEH.DynamicFilterRemainsExplicitlyUnsupportedWithoutExecution",
+          "filter": "DriverWDMSEH.FiltersExecuteWithOriginalContextAndStableRecords",
           "platforms": [
             "linux"
           ]
@@ -7019,7 +7163,7 @@
           "runner": "gtest",
           "target": "NeverDDriverEmulationTests",
           "source": "unittests/emulation/DriverWDMSEHTests.cpp",
-          "filter": "DriverWDMSEH.FinallyRemainsExplicitlyUnsupportedWithoutExecutingCleanup",
+          "filter": "DriverWDMSEH.FinallyRunsAfterSearchInUnwindOrderAndOnNormalExit",
           "platforms": [
             "linux"
           ]

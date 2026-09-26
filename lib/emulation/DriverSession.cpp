@@ -158,6 +158,16 @@ llvm::Expected<DriverResult> emulateDriver(const std::filesystem::path &Path,
       [&](uint64_t Address) { return CPU.executable(Address); },
       [&](uint64_t Address, llvm::MutableArrayRef<uint8_t> Bytes) {
         return CPU.fetch(Address, Bytes);
+      },
+      [&]() -> llvm::Expected<uint64_t> {
+        if (!Image->SecurityCookieAddress)
+          return llvm::createStringError(
+              llvm::inconvertibleErrorCode(),
+              "x64 SEH: image has no security cookie");
+        if (auto E = Kernel.validateGuestAccess(Image->SecurityCookieAddress,
+                                                PointerSize, false))
+          return std::move(E);
+        return CPU.readInteger(Image->SecurityCookieAddress, PointerSize);
       });
   uint64_t ExpectedReturnSP = 0;
   uint64_t ActiveStackBase = 0;

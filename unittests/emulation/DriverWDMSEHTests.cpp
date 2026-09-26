@@ -92,6 +92,42 @@ TEST(DriverWDMSEH, ThreeRaiseExportsExecuteConstantHandlersWithCfgAndRebasing) {
       }
 }
 
+TEST(DriverWDMSEH, GSCookiesMatchRealRuntimeForFixedAndAlignedFrames) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {SehGSCookie, SehGSAlignedCookie}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Mode);
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        clean(*Result, Mode);
+        EXPECT_NE(Result->SecurityCookieAddress, 0u);
+        EXPECT_LT(messageIndex(*Result, "GS cookie checked"),
+                  Result->Messages.size());
+        raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      }
+}
+
+TEST(DriverWDMSEH, CorruptGSCookiesCannotReachHandlersOrUnload) {
+  for (const auto *Image : images())
+    for (uint64_t Address : {0x180000000ULL, 0x190000000ULL})
+      for (char Mode : {SehGSCorruptCookie, SehGSAlignedCorruptCookie}) {
+        SCOPED_TRACE(Image);
+        SCOPED_TRACE(Mode);
+        auto Result = emulateDriver(Image, options(Mode, Address));
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Stop, DriverStopReason::ModelError)
+            << Result->Diagnostic;
+        EXPECT_NE(Result->Diagnostic.find("GS security cookie check failed"),
+                  std::string::npos)
+            << Result->Diagnostic;
+        EXPECT_FALSE(Result->UnloadCompleted);
+        EXPECT_EQ(messageIndex(*Result, "GS cookie checked"),
+                  Result->Messages.size());
+        raisedCalls(*Result, {"ExRaiseAccessViolation"});
+      }
+}
+
 TEST(DriverWDMSEH, HelperUnwindRestoresNonvolatileRegistersAndParentLocals) {
   for (const auto *Image : images()) {
     auto Result = emulateDriver(Image, options('H'));

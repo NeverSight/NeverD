@@ -30,6 +30,8 @@ protected:
   std::map<uint64_t, std::vector<uint8_t>> Instructions;
   uint64_t DeniedPC = 0;
   uint64_t ActualBase = Base;
+  uint64_t SecurityCookie = 0x123456789abc;
+  unsigned CookieReads = 0;
 
   void SetUp() override {
     for (size_t I = 0; I < Caller.GPR.size(); ++I)
@@ -63,6 +65,15 @@ protected:
     F.SEH->Scopes.push_back(scope(RVA + 0x30, RVA + 0x60, RVA + 0x80));
     return F;
   }
+  ExceptionFunction &gsHandler(uint64_t RVA = 0x1000) {
+    auto &F = handler(RVA);
+    F.Personality = ExceptionPersonality::GSHandlerCheckSEH;
+    auto &GS = F.GSCookie.emplace();
+    GS.ParseStatus = ExceptionParseStatus::Complete;
+    GS.CookieOffset = 32;
+    GS.HasExceptionHandler = GS.HasUnwindHandler = true;
+    return F;
+  }
   static SEHScopeRecord scope(uint64_t Begin, uint64_t End, uint64_t Handler) {
     SEHScopeRecord S;
     S.Kind = SEHScopeKind::CatchAll;
@@ -92,6 +103,10 @@ protected:
               if (Start + I >= PC && Start + I - PC < Bytes.size())
                 Bytes[Start + I - PC] = Code[I];
           return llvm::Error::success();
+        },
+        [&]() -> llvm::Expected<uint64_t> {
+          ++CookieReads;
+          return SecurityCookie;
         });
   }
   llvm::Expected<std::optional<KernelSEH::Transfer>> plan() {
@@ -119,6 +134,202 @@ protected:
     EXPECT_EQ(Words, MemoryBefore);
   }
 };
+
+TEST_F(DriverKernelSEH, GSCookieIsCheckedDuringSearchAndTargetUnwind) {
+  gsHandler();
+  const uint64_t SP = Caller.GPR[4];
+  Words[SP + 32] = SP ^ SecurityCookie;
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  EXPECT_EQ(Reads, (std::vector<uint64_t>{SP + 32, SP + 32}));
+  EXPECT_EQ(CookieReads, 2u);
+  Words[SP + 32] ^= 1;
+  rejected("cookie check failed");
+}
+
+TEST_F(DriverKernelSEH, GSAlignedSlotUsesOriginalFramePointerForEncoding) {
+  auto &F = gsHandler();
+  F.FrameRegister = 5;
+  F.FrameOffset = 48;
+  F.UnwindOperations = {op(UnwindOperationKind::SetFramePointer, 8)};
+  F.GSCookie->HasAlignment = true;
+  F.GSCookie->Alignment = 64;
+  F.GSCookie->AlignmentBaseOffset = -8;
+  F.GSCookie->CookieOffset = -16;
+  Caller.GPR[5] = Caller.GPR[4] + F.FrameOffset;
+  const uint64_t Slot = ((Caller.GPR[4] - 8) & ~uint64_t(63)) - 16;
+  Words[Slot] = Caller.GPR[5] ^ SecurityCookie;
+  ActualBase = 0xfffff80000000000;
+  Caller.PC = ActualBase + 0x1040;
+  EXPECT_EQ(selected().HandlerPC, ActualBase + 0x1080);
+  EXPECT_EQ(Reads, (std::vector<uint64_t>{Slot, Slot}));
+}
+
+TEST_F(DriverKernelSEH, GSRejectsTruncatedOrMalformedCookieBeforeStackReads) {
+  auto &F = gsHandler();
+  F.GSCookie->ParseStatus = ExceptionParseStatus::Partial;
+  rejected("GS cookie metadata");
+  F.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+  F.GSCookie->CookieOffset = 7;
+  rejected("GS cookie metadata");
+  F.GSCookie->CookieOffset = 32;
+  F.GSCookie->HasAlignment = true;
+  for (uint32_t Alignment : {0u, 3u}) {
+    F.GSCookie->Alignment = Alignment;
+    rejected("GS cookie metadata");
+  }
+  F.GSCookie->Alignment = 32;
+  F.UnwindFlags = seh::ExceptionHandlerFlag;
+  rejected("GS cookie metadata");
+  EXPECT_TRUE(Reads.empty());
+  EXPECT_EQ(CookieReads, 0u);
+}
+
+TEST_F(DriverKernelSEH, GSBoundsDoNotPermitReadsOutsideCurrentStack) {
+  auto &F = gsHandler();
+  for (int32_t Offset : {int32_t(StackSize), -int32_t(StackSize)}) {
+    F.GSCookie->CookieOffset = Offset;
+    rejected("cookie exceeds");
+  }
+  EXPECT_TRUE(Reads.empty());
+  EXPECT_EQ(CookieReads, 0u);
+}
+
+TEST_F(DriverKernelSEH, GSRejectsNonzeroUpperCookieBitsEvenWhenValuesMatch) {
+  gsHandler();
+  SecurityCookie |= uint64_t(1) << 48;
+  Words[Caller.GPR[4] + 32] = Caller.GPR[4] ^ SecurityCookie;
+  rejected("cookie check failed");
+}
+
+TEST_F(DriverKernelSEH, GSSignedSlotArithmeticCannotWrapIntoTheStack) {
+  auto &F = gsHandler();
+  auto Planner = planner();
+  for (bool Overflow : {false, true}) {
+    const uint64_t SP = Overflow ? UINT64_MAX - 15 : 8;
+    F.GSCookie->CookieOffset = Overflow ? 32 : INT32_MIN;
+    Caller.GPR[4] = SP;
+    auto Result = Planner.plan(Code, Caller, {SP, 8});
+    ASSERT_FALSE(bool(Result));
+    EXPECT_NE(llvm::toString(Result.takeError())
+                  .find(Overflow ? "overflows" : "underflows"),
+              std::string::npos);
+  }
+  EXPECT_TRUE(Reads.empty());
+  EXPECT_EQ(CookieReads, 0u);
+}
+
+TEST_F(DriverKernelSEH, GSRequiresAnExplicitImageCookieReader) {
+  gsHandler();
+  KernelSEH Planner(
+      Metadata, Base, Base, ImageSize,
+      [&](uint64_t) -> llvm::Expected<uint64_t> {
+        ADD_FAILURE() << "missing cookie authority must fail before reads";
+        return 0;
+      },
+      [](uint64_t) { return true; });
+  auto Result = Planner.plan(Code, Caller, {StackBase, StackSize});
+  ASSERT_FALSE(bool(Result));
+  EXPECT_NE(llvm::toString(Result.takeError()).find("image security cookie"),
+            std::string::npos);
+}
+
+TEST_F(DriverKernelSEH, GSRechecksMutationByFilterBeforeTransferringControl) {
+  auto &F = gsHandler();
+  F.SEH->Scopes[0].Kind = SEHScopeKind::Filter;
+  F.SEH->Scopes[0].FilterOrFinallyVA = Base + 0x2000;
+  const auto Slot = Caller.GPR[4] + 32;
+  Words[Slot] = Caller.GPR[4] ^ SecurityCookie;
+  auto Planner = planner();
+  for (bool ChangeImageCookie : {false, true}) {
+    auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+    auto Filter = Planner.advance(State);
+    ASSERT_TRUE(bool(Filter)) << llvm::toString(Filter.takeError());
+    ASSERT_EQ(Filter->Kind, KernelSEH::ActionKind::Filter);
+    auto &Changed = ChangeImageCookie ? SecurityCookie : Words[Slot];
+    Changed ^= 1;
+    auto Invalid = Planner.advance(State, 1);
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(llvm::toString(Invalid.takeError()).find("cookie check failed"),
+              std::string::npos);
+    Changed ^= 1;
+    auto Retried = Planner.advance(State, 1);
+    ASSERT_TRUE(bool(Retried)) << llvm::toString(Retried.takeError());
+    EXPECT_EQ(Retried->Kind, KernelSEH::ActionKind::Handler);
+  }
+}
+
+TEST_F(DriverKernelSEH, GSChecksBeforeFinallyAndAgainInEachOuterFrame) {
+  gsHandler();
+  auto &Inner = gsHandler(0x2000);
+  Inner.UnwindOperations = {op(UnwindOperationKind::AllocateSmall, 8, 64)};
+  auto &Cleanup = Inner.SEH->Scopes[0];
+  Cleanup.Kind = SEHScopeKind::Finally;
+  Cleanup.HandlerVA = Cleanup.FilterOrFinallyVA = Base + 0x3000;
+  Cleanup.ContinuationVA = 0;
+  Caller.PC = Base + 0x2040;
+  const auto SP = Caller.GPR[4];
+  const auto OuterSP = SP + 72;
+  Words = {{SP + 32, SP ^ SecurityCookie},
+           {SP + 64, Base + 0x1041},
+           {OuterSP + 32, OuterSP ^ SecurityCookie}};
+  auto Planner = planner();
+  auto State = Planner.begin(Code, Caller, {StackBase, StackSize});
+  auto Finally = Planner.advance(State);
+  ASSERT_TRUE(bool(Finally)) << llvm::toString(Finally.takeError());
+  EXPECT_EQ(Finally->Kind, KernelSEH::ActionKind::Finally);
+  EXPECT_EQ(CookieReads, 3u); // Both search frames, then inner unwind.
+  Words[OuterSP + 32] ^= 1;
+  auto Invalid = Planner.advance(State);
+  ASSERT_FALSE(bool(Invalid));
+  EXPECT_NE(llvm::toString(Invalid.takeError()).find("cookie check failed"),
+            std::string::npos);
+  Words[OuterSP + 32] ^= 1;
+  auto Handler = Planner.advance(State);
+  ASSERT_TRUE(bool(Handler)) << llvm::toString(Handler.takeError());
+  EXPECT_EQ(Handler->Kind, KernelSEH::ActionKind::Handler);
+}
+
+TEST_F(DriverKernelSEH, GSLanguageFlagsDoNotDisableTheCookieCheck) {
+  handler();
+  auto &Inner = gsHandler(0x2000);
+  Inner.UnwindOperations = {op(UnwindOperationKind::AllocateSmall, 8, 64)};
+  Inner.GSCookie->HasExceptionHandler = false;
+  Inner.GSCookie->HasUnwindHandler = false;
+  Caller.PC = Base + 0x2040;
+  const auto SP = Caller.GPR[4];
+  Words = {{SP + 32, SP ^ SecurityCookie}, {SP + 64, Base + 0x1041}};
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  EXPECT_EQ(CookieReads, 2u);
+  Words[SP + 32] ^= 1;
+  rejected("cookie check failed");
+}
+
+TEST_F(DriverKernelSEH, GSUnwindOnlyWrapperDoesNotCheckCookieDuringSearch) {
+  handler();
+  auto &Inner = gsHandler(0x2000);
+  Inner.UnwindFlags = seh::UnwindHandlerFlag;
+  Inner.GSCookie->HasExceptionHandler = false;
+  Inner.GSCookie->HasUnwindHandler = false;
+  Inner.UnwindOperations = {op(UnwindOperationKind::AllocateSmall, 8, 64)};
+  Caller.PC = Base + 0x2040;
+  const auto SP = Caller.GPR[4];
+  Words = {{SP + 32, SP ^ SecurityCookie}, {SP + 64, Base + 0x1041}};
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  EXPECT_EQ(Reads, (std::vector<uint64_t>{SP + 64, SP + 32}));
+  EXPECT_EQ(CookieReads, 1u);
+}
+
+TEST_F(DriverKernelSEH, GSPrologueAndEpilogueDoNotReadUnestablishedCookie) {
+  handler();
+  gsHandler(0x2000);
+  Words[Caller.GPR[4]] = Base + 0x1041;
+  Caller.PC = Base + 0x2001;
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  Caller.PC = Base + 0x2040;
+  Instructions[Caller.PC] = {0xc3};
+  EXPECT_EQ(selected().HandlerPC, Base + 0x1080);
+  EXPECT_EQ(CookieReads, 0u);
+}
 
 TEST_F(DriverKernelSEH, CatchAllTransfersInsideOriginalFrame) {
   handler();
@@ -614,7 +825,7 @@ TEST_F(DriverKernelSEH, IncompleteAndUnsupportedFramesCannotActAsLeaves) {
   rejected("V1");
   F.UnwindVersion = 1;
   F.Personality = ExceptionPersonality::GSHandlerCheckSEH;
-  rejected("personality");
+  rejected("metadata");
   F.Personality = ExceptionPersonality::CxxFrameHandler3;
   rejected("personality");
   EXPECT_TRUE(Reads.empty());

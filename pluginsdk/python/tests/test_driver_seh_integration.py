@@ -88,6 +88,24 @@ class DriverSEHIntegrationTests(unittest.TestCase):
                         self.assertTrue(any("code=" + code in m for m in result["messages"]))
                         self.assertTrue(any("local=12cb5687" in m for m in result["messages"]))
 
+    def test_gs_cookie_success_and_corruption_in_fixed_and_aligned_frames(self) -> None:
+        for variant, fixture in self.fixtures:
+            for mode in ("g", "a", "b", "d"):
+                with self.subTest(variant=variant, mode=mode):
+                    result = self._run(fixture, mode)
+                    self.assertNotEqual(int(result["security_cookie"], 16), 0)
+                    if mode in ("g", "a"):
+                        self._success(result, mode, ["ExRaiseAccessViolation"])
+                        self.assertTrue(any("GS cookie checked" in m
+                                            for m in result["messages"]))
+                    else:
+                        self.assertEqual(result["stop_reason"], "model_error")
+                        self.assertFalse(result["scenario_success"])
+                        self.assertFalse(result["unload_completed"])
+                        self.assertIn("GS security cookie check failed", result["diagnostic"])
+                        self.assertFalse(any("GS cookie checked" in m
+                                             for m in result["messages"]))
+
     def test_helper_registers_nested_scopes_and_reraised_handlers(self) -> None:
         cases = {
             "H": (["ExRaiseStatus"], "nonvolatile restored"),
