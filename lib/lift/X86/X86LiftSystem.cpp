@@ -148,18 +148,40 @@ bool liftSystem(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   }
 
   // --- SYSCALL / INT ---
-  case X86_INS_SYSCALL:
+  case X86_INS_SYSCALL: {
+    if (L.targetArch() != Arch::X64)
+      return false;
+    // Keep all six syscall argument registers live through SSA. Pack pairs
+    // to fit the LowIR intrinsic operand limit without implicit register reads.
+    NdVar DxSi = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, DxSi,
+           {NdVar::reg(x86reg::RDX, 8), NdVar::reg(x86reg::RSI, 8)});
+    NdVar R8R10 = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, R8R10,
+           {NdVar::reg(x86reg::R8, 8), NdVar::reg(x86reg::R10, 8)});
+    NdVar Result = S.makeTemp(16);
+    S.emitIntrinsic(Intrinsic::X64Syscall, Result,
+                    {NdVar::reg(x86reg::RAX, 8), NdVar::reg(x86reg::RDI, 8),
+                     DxSi, R8R10, NdVar::reg(x86reg::R9, 8)});
+    S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, 8),
+           {Result, NdVar::scalar(0, 8)});
+    S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::R11, 8),
+           {Result, NdVar::scalar(8, 8)});
+    // Linux's normal user return resumes at the instruction after SYSCALL.
+    // Preserve the source code address, as for other lifted PC materialization.
+    S.emit(NdOp::COPY, NdVar::reg(x86reg::RCX, 8),
+           {NdVar::codeAddress(Insn->address + Insn->size, 8)});
+    break;
+  }
   case X86_INS_INT: {
-    Intrinsic Id =
-        (InsnId == X86_INS_SYSCALL) ? Intrinsic::Syscall : Intrinsic::IntN;
+    Intrinsic Id = Intrinsic::IntN;
     if (InsnId == X86_INS_INT && X86.op_count >= 1 &&
         X86.operands[0].type == X86_OP_IMM && X86.operands[0].imm == 3) {
       Id = Intrinsic::Int3;
     }
     if (InsnId == X86_INS_INT && X86.op_count >= 1 &&
         X86.operands[0].type == X86_OP_IMM) {
-      const uint64_t Vector =
-          static_cast<uint64_t>(X86.operands[0].imm) & 0xFF;
+      const uint64_t Vector = static_cast<uint64_t>(X86.operands[0].imm) & 0xFF;
       if (Vector == 0x29) {
         // Windows `int 0x29` is `__fastfail(ecx)`; it does not return a value
         // in RAX.

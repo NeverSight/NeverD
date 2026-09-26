@@ -17,6 +17,24 @@
 
 namespace neverd {
 
+bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call) {
+  const auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
+  if (!IA || IA->getAsmString() != "syscall" ||
+      IA->getConstraintString() !=
+          "={ax},={r11},0,{di},{si},{dx},{r10},{r8},{r9},~{rcx},~{memory},"
+          "~{dirflag},~{fpsr},~{flags}")
+    return false;
+  const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  if (!Pair || Pair->isOpaque() || Pair->getNumElements() != 2 ||
+      !Pair->getElementType(0)->isIntegerTy(64) ||
+      !Pair->getElementType(1)->isIntegerTy(64) || Call.arg_size() != 7)
+    return false;
+  for (const llvm::Use &Arg : Call.args())
+    if (!Arg->getType()->isIntegerTy(64))
+      return false;
+  return true;
+}
+
 void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn) {
   State.IntrinsicStructVals.clear();
   State.IntrinsicStructNames.clear();

@@ -64,6 +64,32 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
   if (Rest.empty())
     return mkConst(Acc);
 
+  // A small masked OR can expose known bits without expanding the general
+  // expression. In particular, a status bit remains constant when every
+  // unknown OR arm is masked away from that bit.
+  if (!Acc.isAllOnes() && Rest.size() == 1 && op(Rest[0]) == SymOp::Or) {
+    llvm::ArrayRef<SymRef> OrTerms = operands(Rest[0]);
+    llvm::SmallVector<SymRef, 8> Terms(OrTerms.begin(), OrTerms.end());
+    const auto IsDisjoint = [&](SymRef Term) {
+      if (isConst(Term))
+        return (constValue(Term) & Acc).isZero();
+      if (op(Term) != SymOp::And)
+        return false;
+      for (SymRef Factor : operands(Term))
+        if (isConst(Factor) && (constValue(Factor) & Acc).isZero())
+          return true;
+      return false;
+    };
+    if (Terms.size() <= 8 &&
+        std::any_of(Terms.begin(), Terms.end(), IsDisjoint)) {
+      llvm::SmallVector<SymRef, 8> Masked;
+      const SymRef Mask = mkConst(Acc);
+      for (SymRef Term : Terms)
+        Masked.push_back(mkAnd(Mask, Term));
+      return mkOr(Masked);
+    }
+  }
+
   if (Acc.isAllOnes()) {
     if (Rest.size() == 1)
       return Rest[0];

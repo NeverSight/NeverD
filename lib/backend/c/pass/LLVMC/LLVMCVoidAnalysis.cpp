@@ -52,7 +52,8 @@ bool analyzeVoidReturn(const LLVMCAnalysisState &State, llvm::Function &Fn) {
             CallProducer =
                 llvm::dyn_cast<llvm::CallInst>(Extract->getAggregateOperand());
         if (CallProducer) {
-          if (llvm_value_provenance::isSemanticProducer(*CallProducer))
+          if (llvm_value_provenance::isSemanticProducer(*CallProducer) ||
+              isLinuxX64SyscallInlineAsm(*CallProducer))
             AllRetResidual = false;
           continue;
         }

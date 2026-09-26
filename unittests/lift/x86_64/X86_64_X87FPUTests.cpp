@@ -1,4 +1,11 @@
 #include "NeverDLiftFixture.h"
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
+
+#include "llvm/Support/raw_ostream.h"
+
+using namespace neverd;
 
 class X86_64_X87FPU : public NeverDLiftTest {};
 
@@ -74,6 +81,62 @@ TEST_F(X86_64_X87FPU, DecompileSucceeds) {
     verifyDecompileProducesOutput(testObj());
 }
 
-TEST_F(X86_64_X87FPU, AllModesSucceed) {
-    verifyAllModesSucceed(testObj());
+TEST_F(X86_64_X87FPU, AllModesSucceed) { verifyAllModesSucceed(testObj()); }
+
+TEST_F(X86_64_X87FPU, HighCFpremKeeps80BitOperandsAndStatus) {
+  HighFunc Func;
+  Func.Entry = 0x1000;
+  Func.Name = "fprem_status";
+  Func.ReturnType = NdType::makeInt(2, false);
+  Func.Params = {{"dividend", NdType::makeInt(10, false)},
+                 {"divisor", NdType::makeInt(10, false)}};
+
+  auto Param = [](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Param;
+    V.TheArch = Arch::X64;
+    V.Id = Id;
+    V.Size = 10;
+    V.RegOff = kNoParamReg;
+    return V;
+  };
+  MedVar Result;
+  Result.Kind = MedVar::Temp;
+  Result.TheArch = Arch::X64;
+  Result.Id = 2;
+  Result.Size = 10;
+
+  auto Fprem = HighExpr::makeCall(
+      intrinsicName(Intrinsic::X87Fprem), 0,
+      {HighExpr::makeVar(Param(0), NdType::makeInt(10, false)),
+       HighExpr::makeVar(Param(1), NdType::makeInt(10, false))});
+  Fprem->IntrinsicId = Intrinsic::X87Fprem;
+  Fprem->Type = NdType::makeInt(10, false);
+  HighStmt Compute;
+  Compute.Kind = StmtKind::Assign;
+  Compute.Dst = HighExpr::makeVar(Result, NdType::makeInt(10, false));
+  Compute.Val = std::move(Fprem);
+  Func.Body.push_back(std::move(Compute));
+
+  auto Status =
+      HighExpr::makeCall(intrinsicName(Intrinsic::X87ReadStatus), 0, {});
+  Status->IntrinsicId = Intrinsic::X87ReadStatus;
+  Status->Type = NdType::makeInt(2, false);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = std::move(Status);
+  Func.Body.push_back(std::move(Return));
+
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("fldt %[rhs]"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("fprem\\n\\tfnstsw"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("neverd_x87_fprem("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("neverd_x87_read_status()"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("<unknown_"), std::string::npos) << Source;
 }

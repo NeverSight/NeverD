@@ -826,6 +826,15 @@ renderX86TypedIntrinsicCall(Arch TheArch, const HighExpr &Call,
                             std::function<std::string(const HighExpr &)> ExprFn,
                             bool &HasCIntrinsics) {
   using I = Intrinsic;
+  if (Call.IntrinsicId == I::X87Ffree) {
+    if ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
+        Call.Operands.size() != 2 || !Call.Operands[1] ||
+        Call.Operands[1]->Kind != ExprKind::Const ||
+        Call.Operands[1]->ConstVal >= 8)
+      llvm::report_fatal_error("invalid x87 FFREE HighC operand");
+    return "__asm {{ ffree st(" + std::to_string(Call.Operands[1]->ConstVal) +
+           ") }}";
+  }
   if (isX86FastFailCall(Call)) {
     if (TheArch != Arch::X86 && TheArch != Arch::X64)
       return {};

@@ -129,11 +129,10 @@ struct InplaceRunResult {
   bool OutputExists = false;
 };
 
-static InplaceRunResult runInplaceWithSpan(uint64_t OrigSize, Arch TargetArch,
-                                           InstructionMode Mode,
-                                           const char *Triple,
-                                           TestPatcherStats *Stats = nullptr,
-                                           bool HasExceptionMetadata = false) {
+static InplaceRunResult
+runInplaceWithSpan(uint64_t OrigSize, Arch TargetArch, InstructionMode Mode,
+                   const char *Triple, TestPatcherStats *Stats = nullptr,
+                   bool HasExceptionMetadata = false, bool EntryOnly = false) {
   ensureLLVMTargets();
 
   llvm::SmallString<128> InputPath;
@@ -164,12 +163,32 @@ static InplaceRunResult runInplaceWithSpan(uint64_t OrigSize, Arch TargetArch,
   Image.Mode = Mode;
   Image.Format = BinaryFormat::ELF;
   Image.Bits = TargetArch == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
-  Symbol Sym;
-  Sym.Name = "sum_to";
-  Sym.Addr = 0x1000;
-  Sym.Size = OrigSize;
-  Sym.IsFunc = true;
-  Image.Symbols.push_back(std::move(Sym));
+  if (EntryOnly) {
+    Image.Entry = 0x1000;
+    Segment Text;
+    Text.Name = ".text";
+    Text.VA = 0x1000;
+    Text.Size = 64;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.resize(Text.Size, 0xaa);
+    Image.Segments.push_back(std::move(Text));
+    Section TextSection;
+    TextSection.Name = ".text";
+    TextSection.VA = 0x1000;
+    TextSection.Size = 64;
+    TextSection.FileSz = TextSection.Size;
+    TextSection.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections.push_back(std::move(TextSection));
+    rewrite_source::setOriginalVA(*Mod->getFunction("sum_to"), Image.Entry);
+  } else {
+    Symbol Sym;
+    Sym.Name = "sum_to";
+    Sym.Addr = 0x1000;
+    Sym.Size = OrigSize;
+    Sym.IsFunc = true;
+    Image.Symbols.push_back(std::move(Sym));
+  }
   if (HasExceptionMetadata) {
     ExceptionFunction EH;
     EH.CodeRange = {0x1000, 0x1000 + OrigSize};
@@ -710,6 +729,14 @@ TEST(InplaceRewriter_ThumbSafety, InstalledGrowerReportsOneTrampoline) {
       4, Arch::ARM, InstructionMode::Thumb, "thumbv7-unknown-linux-gnueabihf");
   ASSERT_TRUE(Run.Result.Success);
   EXPECT_EQ(Run.Result.TrampolineCount, 1u);
+  EXPECT_TRUE(Run.OutputExists);
+}
+
+TEST(InplaceRewriter_EntryPoint, RecoversExactSourceWithoutFunctionSymbol) {
+  InplaceRunResult Run =
+      runInplaceWithSpan(0, Arch::X64, InstructionMode::Default,
+                         "x86_64-unknown-linux-gnu", nullptr, false, true);
+  ASSERT_TRUE(Run.Result.Success);
   EXPECT_TRUE(Run.OutputExists);
 }
 

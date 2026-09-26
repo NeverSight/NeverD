@@ -116,6 +116,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     return nullptr;
 
   CurMedFunc = &Func;
+  PendingX87FpremStatus = nullptr;
+  PendingX87FpremBlock = nullptr;
 
   // A page fragment or truncated exact address is an incomplete relocation
   // relation, not a runtime value.

@@ -281,6 +281,23 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 
     auto *Init = GV.getInitializer();
 
+    // Lifted writable image data can be one byte array with overlapping
+    // integer views.  Keep the backing range as an array; printing it as a
+    // pointer, or printing each offset as a separate C object, loses those
+    // overlaps (including the two ten-byte x87 operands in FPREM samples).
+    if (const auto *Array = llvm::dyn_cast<llvm::ArrayType>(GV.getValueType());
+        parseNdDataSymbol(RawName) && Array &&
+        Array->getElementType()->isIntegerTy(8) &&
+        llvm::isa<llvm::ConstantAggregateZero>(Init)) {
+      if (GV.hasLocalLinkage())
+        OS << "static ";
+      if (GV.isConstant())
+        OS << "const ";
+      OS << "uint8_t " << Name << "[" << Array->getNumElements()
+         << "] = {0};\n";
+      continue;
+    }
+
     if (auto *CDA = llvm::dyn_cast<llvm::ConstantDataArray>(Init)) {
       if (CDA->isString()) {
         llvm::StringRef Raw = CDA->getAsString();
@@ -303,15 +320,21 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 
 void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
   std::map<std::string, llvm::Type *> Objs;
+  std::map<va_t, const llvm::GlobalVariable *> ByteArrays;
   auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty, bool MayFold) {
+    if (!Ty)
+      return;
+    const uint64_t Size = imageIntegerAccessSize(Ty);
+    if (auto Backing = imageByteArrayBacking(Ptr, Size)) {
+      ByteArrays.emplace(*parseNdDataSymbol(Backing->first->getName()),
+                         Backing->first);
+      return;
+    }
     std::string Name = imageDataCName(Ptr);
-    if (Name.empty() || !Ty)
+    if (Name.empty())
       return;
     if (auto VA = imageDataVA(Ptr)) {
-      const uint16_t Size = Ty->isIntegerTy()
-                                ? static_cast<uint16_t>(Ty->getIntegerBitWidth() / 8)
-                                : 0;
-      if (MayFold && foldReadonlyScalar(*VA, Size))
+      if (MayFold && foldReadonlyScalar(*VA, static_cast<uint16_t>(Size)))
         return;
     }
     llvm::StringRef Raw = Name;
@@ -336,7 +359,16 @@ void LLVMCWriter::writeReferencedImageObjects(const llvm::Function &Fn) {
   for (const auto &[Name, Ty] : Objs) {
     OS << "extern " << typeToCLLVM(Ty) << " " << Name << ";\n";
   }
-  if (!Objs.empty())
+  for (const auto &[Base, GV] : ByteArrays) {
+    const auto *Array = llvm::cast<llvm::ArrayType>(GV->getValueType());
+    if (GV->hasLocalLinkage())
+      OS << "static ";
+    if (GV->isConstant())
+      OS << "const ";
+    OS << "uint8_t " << namedImageObject(Base) << "["
+       << Array->getNumElements() << "] = {0};\n";
+  }
+  if (!Objs.empty() || !ByteArrays.empty())
     OS << "\n";
 }
 

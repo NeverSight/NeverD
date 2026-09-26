@@ -20,14 +20,17 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-x86-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X64Syscall.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <cassert>
+#include <string>
 
 namespace neverd {
 
@@ -528,21 +531,78 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
                                                    llvm::IRBuilder<> &Builder) {
   using I = Intrinsic;
 
+  if (IC == I::X64Syscall) {
+    if (TargetArch != Arch::X64 || TargetFormat != BinaryFormat::ELF ||
+        !llvm::Triple(Mod->getTargetTriple()).isOSLinux())
+      llvm::report_fatal_error(
+          "X64Syscall requires the Linux x64 execution ABI");
+    if (Op.NumInputs != 6 || Op.Output.Size != 16 || Op.Inputs[1].Size != 8 ||
+        Op.Inputs[2].Size != 8 || Op.Inputs[3].Size != 16 ||
+        Op.Inputs[4].Size != 16 || Op.Inputs[5].Size != 8 ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        Op.MemoryOrdering != NdMemoryOrdering::None)
+      llvm::report_fatal_error("invalid X64Syscall register operands");
+    auto *I64Ty = llvm::Type::getInt64Ty(*Ctx);
+    auto *I128Ty = llvm::Type::getInt128Ty(*Ctx);
+    auto *PairTy =
+        llvm::StructType::getTypeByName(*Ctx, "neverd.x64.syscall_result");
+    if (!PairTy)
+      PairTy = llvm::StructType::create(*Ctx, {I64Ty, I64Ty},
+                                        "neverd.x64.syscall_result");
+    if (PairTy->isOpaque() || PairTy->getNumElements() != 2 ||
+        PairTy->getElementType(0) != I64Ty ||
+        PairTy->getElementType(1) != I64Ty)
+      llvm::report_fatal_error("invalid x64 syscall result structure");
+    llvm::Value *Number = getVar(Op.Inputs[1], Builder);
+    // getVar can materialize a known scalar through register backing loads.
+    // Use the relocation-aware MedIR control proof to identify the ABI call.
+    const auto KnownNumber = controlConstantMayRelocate(Op.Inputs[1])
+                                 ? std::nullopt
+                                 : traceControlConst(Op.Inputs[1]);
+    const bool OnlyFirstArgument =
+        KnownNumber && linuxX64SyscallArgumentCount(*KnownNumber) == 1;
+    // Linux exit/exit_group consume only RDI. Do not invent dependencies on
+    // undefined entry registers for operands outside that syscall's ABI.
+    llvm::Value *DxSi = OnlyFirstArgument ? llvm::ConstantInt::get(I128Ty, 0)
+                                          : getVar(Op.Inputs[3], Builder);
+    llvm::Value *R8R10 = OnlyFirstArgument ? llvm::ConstantInt::get(I128Ty, 0)
+                                           : getVar(Op.Inputs[4], Builder);
+    llvm::Value *Arguments[] = {
+        Number,
+        getVar(Op.Inputs[2], Builder),
+        Builder.CreateTrunc(DxSi, I64Ty),
+        Builder.CreateTrunc(Builder.CreateLShr(DxSi, 64), I64Ty),
+        Builder.CreateTrunc(R8R10, I64Ty),
+        Builder.CreateTrunc(Builder.CreateLShr(R8R10, 64), I64Ty),
+        OnlyFirstArgument ? llvm::ConstantInt::get(I64Ty, 0)
+                          : getVar(Op.Inputs[5], Builder)};
+    auto *FnTy = llvm::FunctionType::get(
+        PairTy, {I64Ty, I64Ty, I64Ty, I64Ty, I64Ty, I64Ty, I64Ty}, false);
+    auto *Asm = llvm::InlineAsm::get(
+        FnTy, "syscall",
+        "={ax},={r11},0,{di},{si},{dx},{r10},{r8},{r9},~{rcx},~{memory},"
+        "~{dirflag},~{fpsr},~{flags}",
+        true);
+    auto *Result = Builder.CreateCall(Asm, Arguments, "syscall_result");
+    auto *Rax =
+        Builder.CreateZExt(Builder.CreateExtractValue(Result, 0), I128Ty);
+    auto *R11 =
+        Builder.CreateZExt(Builder.CreateExtractValue(Result, 1), I128Ty);
+    return Builder.CreateOr(Rax, Builder.CreateShl(R11, 64));
+  }
+
   // FPREM/FPREM1 expose partial-reduction progress and quotient bits through
-  // the x87 status word.  Capture it immediately after the value-producing
-  // inline asm so a lifted FNSTSW observes the same C0/C1/C2/C3 state.
+  // the x87 status word. The fused asm below captures status before a compiler
+  // spill can change TOP or condition codes; the next synthetic read takes it.
   if (IC == I::X87ReadStatus) {
-    if (Op.Output.Size == 0)
-      return nullptr;
-    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
-    auto *FnTy = llvm::FunctionType::get(I16Ty, {}, false);
-    auto *IA = llvm::InlineAsm::get(
-        FnTy, "fnstsw $0", "={ax},~{dirflag},~{fpsr},~{flags}",
-        /*hasSideEffects=*/true);
-    llvm::Value *Status = Builder.CreateCall(IA, {}, "x87_status");
-    auto *OutTy = sizeToType(Op.Output.Size);
-    if (OutTy != I16Ty)
-      Status = Builder.CreateZExtOrTrunc(Status, OutTy);
+    if (Op.NumInputs != 1 || Op.Output.Size != 2 || !PendingX87FpremStatus ||
+        PendingX87FpremBlock != Builder.GetInsertBlock())
+      llvm::report_fatal_error(
+          "X87ReadStatus requires an immediately preceding FPREM in the "
+          "same block");
+    llvm::Value *Status = PendingX87FpremStatus;
+    PendingX87FpremStatus = nullptr;
+    PendingX87FpremBlock = nullptr;
     return Status;
   }
 
@@ -594,11 +654,34 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
       Res = Builder.CreateCall(IA, {In0}, "x87");
     } else {
       llvm::Value *In1 = (Op.NumInputs >= 3) ? ToX87(Op.Inputs[2]) : In0;
-      auto *FnTy = llvm::FunctionType::get(F80Ty, {F80Ty, F80Ty}, false);
-      auto *IA = llvm::InlineAsm::get(
-          FnTy, Mn, "=&{st},0,{st(1)},~{dirflag},~{fpsr},~{flags}",
-          /*hasSideEffects=*/true);
-      Res = Builder.CreateCall(IA, {In0, In1}, "x87");
+      if (IC == I::X87Fprem || IC == I::X87Fprem1) {
+        auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
+        auto *PairTy =
+            llvm::StructType::getTypeByName(*Ctx, "neverd.x87.fprem_result");
+        if (!PairTy)
+          PairTy = llvm::StructType::create(*Ctx, {F80Ty, I16Ty},
+                                            "neverd.x87.fprem_result");
+        if (PairTy->isOpaque() || PairTy->getNumElements() != 2 ||
+            PairTy->getElementType(0) != F80Ty ||
+            PairTy->getElementType(1) != I16Ty)
+          llvm::report_fatal_error("invalid x87 FPREM result structure");
+        auto *FnTy = llvm::FunctionType::get(PairTy, {F80Ty, F80Ty}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, std::string(Mn) + "\n\tfnstsw $1",
+            "=&{st},={ax},0,{st(1)},~{dirflag},~{fpsr},~{flags}",
+            /*hasSideEffects=*/true);
+        auto *Pair = Builder.CreateCall(IA, {In0, In1}, "x87_fprem_pair");
+        Res = Builder.CreateExtractValue(Pair, {0}, "x87_fprem_value");
+        PendingX87FpremStatus =
+            Builder.CreateExtractValue(Pair, {1}, "x87_fprem_status");
+        PendingX87FpremBlock = Builder.GetInsertBlock();
+      } else {
+        auto *FnTy = llvm::FunctionType::get(F80Ty, {F80Ty, F80Ty}, false);
+        auto *IA = llvm::InlineAsm::get(
+            FnTy, Mn, "=&{st},0,{st(1)},~{dirflag},~{fpsr},~{flags}",
+            /*hasSideEffects=*/true);
+        Res = Builder.CreateCall(IA, {In0, In1}, "x87");
+      }
     }
     llvm::Value *Bits = Builder.CreateBitCast(Res, I80Ty);
     auto *OutTy = sizeToType(Op.Output.Size);

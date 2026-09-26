@@ -335,3 +335,14 @@ X86RequireDivPrecondition,
 // selector and optional write value are retained for an authenticated
 // architectural execution environment; ordinary backends fail closed.
 X86MsrAccess,
+
+// Append-only: x87 state instructions used around FPREM status probes.
+// FFREE carries the physical ST slot and decoded relative stack index;
+// FINCSTP changes TOP without writing a general-purpose register.
+X87Wait, X87Ffree, X87Fincstp,
+
+// Append-only: explicit Linux x64 SYSCALL register boundary. Inputs are
+// RAX, RDI, CONCAT(RDX, RSI), CONCAT(R8, R10), R9. The i128 result carries
+// returned RAX in its low half and the kernel-returned R11 in its high half.
+// SYSENTER/SYSEXIT/SYSRET retain their separate, unsupported legacy shape.
+X64Syscall,

@@ -627,6 +627,33 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
 
 bool MedLLVMEmitter::emitX86Sideeffect(const MedOp &Op, Intrinsic IC,
                                        llvm::IRBuilder<> &Builder) {
+  if (IC == Intrinsic::X87Wait || IC == Intrinsic::X87Ffree ||
+      IC == Intrinsic::X87Fincstp) {
+    if (Op.Output.Size != 0 ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error(
+          "invalid x87 state intrinsic output/address space");
+    std::string Mnemonic;
+    if (IC == Intrinsic::X87Ffree) {
+      if (Op.NumInputs != 3 || Op.Inputs[1].Size != 10 ||
+          !Op.Inputs[2].isConst() || Op.Inputs[2].Size != 1 ||
+          Op.Inputs[2].ConstVal >= 8)
+        llvm::report_fatal_error("invalid x87 FFREE operand contract");
+      Mnemonic = "ffree %st(" + std::to_string(Op.Inputs[2].ConstVal) + ")";
+    } else {
+      if (Op.NumInputs != 1)
+        llvm::report_fatal_error(
+            "invalid x87 state intrinsic operand contract");
+      Mnemonic = IC == Intrinsic::X87Wait ? "fwait" : "fincstp";
+    }
+    auto *FnTy =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), {}, false);
+    auto *IA = llvm::InlineAsm::get(FnTy, Mnemonic,
+                                    "~{memory},~{dirflag},~{fpsr},~{flags}",
+                                    /*hasSideEffects=*/true);
+    Builder.CreateCall(IA, {});
+    return true;
+  }
   if (IC == Intrinsic::X86RequireDivPrecondition) {
     if (!intrinsicX86DivPreconditionShapeIsValid(
             IC, x86DivPreconditionMedShape(Op)))

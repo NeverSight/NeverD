@@ -295,10 +295,12 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   auto atomicMemberAddr = [&]() -> std::string {
     if (E.Operands.empty() || !E.Operands[0])
       return {};
-    if (auto Member =
-            typedMemberAccess(*E.Operands[0], E.Type ? E.Type->Size : 0))
-      return "&" + *Member;
-    return addrStr(*E.Operands[0]);
+    if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+      if (auto Member =
+              typedMemberAccess(*E.Operands[0], E.Type ? E.Type->Size : 0))
+        return "&" + *Member;
+    return addrStr(*E.Operands[0], 0,
+                   E.MemoryAddressSpace == NdMemoryAddressSpace::Default);
   };
   if (E.Op == NdOp::ATOMIC_CMPXCHG && E.Operands.size() == 3)
     return atomicCompareExchangeExpr(

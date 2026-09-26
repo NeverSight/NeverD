@@ -460,6 +460,17 @@ int runSymbolicExplore(neverd_session_t Sess) {
   }
 
   int FuncIdx = findFunction(Sess, DisasmFunc.getValue());
+  // Keep the loader's cheap symbol lookup for ordinary images. A stripped
+  // image may have no function symbols even when lifting recovers its entry;
+  // run discovery and retry only if that initial lookup misses.
+  if (FuncIdx < 0) {
+    if (!neverd_session_analyze(Sess)) {
+      WithColor::error() << "sym-explore failed: " << takeLastError(Sess)
+                         << "\n";
+      return 1;
+    }
+    FuncIdx = findFunction(Sess, DisasmFunc.getValue());
+  }
   if (FuncIdx < 0) {
     WithColor::error() << "sym-explore failed: function not found\n";
     return 1;

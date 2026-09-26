@@ -27,8 +27,14 @@
 
 #include "neverd/symbolic/SymExec.h"
 
+#include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/X87PartialRemainder.h"
+#include "neverd/lift/X86Regs.h"
+
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <array>
 #include <cassert>
 
 namespace neverd::symbolic {
@@ -36,6 +42,7 @@ namespace neverd::symbolic {
 namespace {
 
 constexpr uint32_t kByteBits = 8;
+constexpr uint16_t kX87TopMask = 0x3800;
 
 /// Widest operand the bit-count models are expanded over.  Each of them costs
 /// a node per bit, so letting a 256-bit word through would turn one operation
@@ -92,6 +99,190 @@ StepResult SymExec::unmodelled(const LowOp &Op) {
   if (widthOf(Op.Output) != 0)
     writeResult(Op.Output, State.freshInput("undef", widthOf(Op.Output)));
   return StepResult::Unmodelled;
+}
+
+StepResult SymExec::stepX87Intrinsic(const LowOp &Op) {
+  auto unknownX87State = [&]() {
+    StepResult Result = unmodelled(Op);
+    State.write(SymSpace::Register, x86reg::FPU_SW,
+                State.freshInput("x87_status", 16));
+    State.write(SymSpace::Register, x86reg::FPU_CW,
+                State.freshInput("x87_control", 16));
+    for (unsigned Index = 0; Index != x86reg::FPUStackDepth; ++Index)
+      State.write(SymSpace::Register, x86reg::stReg(Index),
+                  State.freshInput("x87_stack", 80));
+    return Result;
+  };
+  if (Op.NumInputs == 0 || !Op.Inputs[0].isConst() ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return unknownX87State();
+
+  const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+  if (Id == Intrinsic::X87Fninit) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 0)
+      return unknownX87State();
+    State.write(SymSpace::Register, x86reg::FPU_SW, Ctx.mkZero(16));
+    State.write(SymSpace::Register, x86reg::FPU_CW, Ctx.mkConst(16, 0x037f));
+    for (unsigned Index = 0; Index != x86reg::FPUStackDepth; ++Index)
+      State.write(SymSpace::Register, x86reg::stReg(Index),
+                  State.freshInput("x87_empty", 80));
+    // Tags are not represented by SymState. Keep the reset's known status and
+    // control word, but report the unmodelled empty-stack state.
+    ++Unmodelled;
+    ++OpaqueOperations;
+    return StepResult::Unmodelled;
+  }
+  if (Id == Intrinsic::X87Wait) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 0)
+      return unknownX87State();
+    const auto Status =
+        Ctx.asConst(State.read(SymSpace::Register, x86reg::FPU_SW, 2));
+    const auto Control =
+        Ctx.asConst(State.read(SymSpace::Register, x86reg::FPU_CW, 2));
+    if (!Status || !Control || (Status->getZExtValue() & 0x80) != 0 ||
+        (Status->getZExtValue() & ~Control->getZExtValue() & 0x3f) != 0)
+      return unmodelled(Op);
+    return StepResult::Continue;
+  }
+  if (Id == Intrinsic::X87Fnclex) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 0)
+      return unknownX87State();
+    SymRef Status = State.read(SymSpace::Register, x86reg::FPU_SW, 2);
+    State.write(SymSpace::Register, x86reg::FPU_SW,
+                Ctx.mkAnd(Status, Ctx.mkConst(16, ~uint16_t(0x80ff))));
+    return StepResult::Continue;
+  }
+  if (Id == Intrinsic::X87Ffree) {
+    if (Op.NumInputs != 3 || Op.Output.Size != 0 || !Op.Inputs[1].isReg() ||
+        Op.Inputs[1].Size != x86reg::FPURegSize ||
+        Op.Inputs[1].Offset < x86reg::ST0 ||
+        Op.Inputs[1].Offset > x86reg::ST7 ||
+        (Op.Inputs[1].Offset - x86reg::ST0) % x86reg::FPURegStride != 0 ||
+        !Op.Inputs[2].isConst() || Op.Inputs[2].Size != 1 ||
+        Op.Inputs[2].Offset >= x86reg::FPUStackDepth)
+      return unknownX87State();
+    // FFREE empties the tag for this slot and leaves its payload unusable.
+    // Intel also leaves every x87 condition code undefined.
+    State.write(SymSpace::Register, Op.Inputs[1].Offset,
+                State.freshInput("x87_empty", 80));
+    SymRef Status = State.read(SymSpace::Register, x86reg::FPU_SW, 2);
+    SymRef Preserved = Ctx.mkAnd(
+        Status, Ctx.mkConst(16, ~uint16_t(X87PartialRemainderConditionMask)));
+    SymRef UnknownCodes =
+        Ctx.mkAnd(State.freshInput("x87_ffree_codes", 16),
+                  Ctx.mkConst(16, X87PartialRemainderConditionMask));
+    State.write(SymSpace::Register, x86reg::FPU_SW,
+                Ctx.mkOr(Preserved, UnknownCodes));
+    ++Unmodelled;
+    ++OpaqueOperations;
+    return StepResult::Unmodelled;
+  }
+  if (Id == Intrinsic::X87Fincstp) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 0)
+      return unknownX87State();
+    SymRef Status = State.read(SymSpace::Register, x86reg::FPU_SW, 2);
+    constexpr uint16_t ChangedMask =
+        kX87TopMask | X87PartialRemainderConditionMask;
+    SymRef Cleared = Ctx.mkAnd(Status, Ctx.mkConst(16, ~ChangedMask));
+    SymRef UnknownStatus = Ctx.mkAnd(State.freshInput("x87_fincstp_status", 16),
+                                     Ctx.mkConst(16, ChangedMask));
+    State.write(SymSpace::Register, x86reg::FPU_SW,
+                Ctx.mkOr(Cleared, UnknownStatus));
+    // The condition codes are undefined, and LowIR's physical ST mapping does
+    // not keep the status-word TOP bits current across prior pushes and pops.
+    // Neither field may be read back as a guessed constant.
+    ++Unmodelled;
+    ++OpaqueOperations;
+    return StepResult::Unmodelled;
+  }
+  if (Id == Intrinsic::X87ReadStatus) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 2 ||
+        (!Op.Output.isReg() && !Op.Output.isTemp()))
+      return unmodelled(Op);
+    writeResult(Op.Output, State.read(SymSpace::Register, x86reg::FPU_SW, 2));
+    return StepResult::Continue;
+  }
+  if (Id != Intrinsic::X87Fprem && Id != Intrinsic::X87Fprem1) {
+    // X87ReadStatus now observes the tracked status word. Any x87 operation
+    // whose status effect is still opaque must invalidate that word, or a
+    // preceding known C2 value could survive an intervening status update.
+    if (Id == Intrinsic::X87Op || Id == Intrinsic::Fxrstor ||
+        Id == Intrinsic::Fxrstor64Mem || Id == Intrinsic::Xrstor ||
+        Id == Intrinsic::Xrstors || Id == Intrinsic::Xrstor64 ||
+        Id == Intrinsic::Xrstors64 ||
+        (Id >= Intrinsic::X87Fsin && Id <= Intrinsic::X87ReadStatus) ||
+        (Id >= Intrinsic::X87Fldenv && Id <= Intrinsic::X87Fnsave))
+      return unknownX87State();
+    return unmodelled(Op);
+  }
+
+  auto unknownRemainder = [&]() {
+    StepResult Result = unmodelled(Op);
+    // An unsupported remainder may still change the x87 condition codes and
+    // exception status. A later FNSTSW must never see a stale known value.
+    State.write(SymSpace::Register, x86reg::FPU_SW,
+                State.freshInput("x87_status", 16));
+    return Result;
+  };
+  if (State.byteOrder() != llvm::endianness::little || Op.NumInputs != 3 ||
+      Op.Output.Size != x86reg::FPURegSize ||
+      Op.Inputs[1].Size != x86reg::FPURegSize ||
+      Op.Inputs[2].Size != x86reg::FPURegSize ||
+      (!Op.Output.isReg() && !Op.Output.isTemp()))
+    return unknownRemainder();
+
+  auto concreteBytes =
+      [&](const NdVar &Operand) -> std::optional<std::array<uint8_t, 10>> {
+    if (!Operand.isReg() && !Operand.isTemp())
+      return std::nullopt;
+    const auto Value = Ctx.asConst(read(Operand));
+    if (!Value || Value->getBitWidth() != 80)
+      return std::nullopt;
+    std::array<uint8_t, 10> Bytes{};
+    for (unsigned Index = 0; Index != Bytes.size(); ++Index)
+      Bytes[Index] =
+          static_cast<uint8_t>(Value->extractBitsAsZExtValue(8, Index * 8));
+    return Bytes;
+  };
+  const auto Dividend = concreteBytes(Op.Inputs[1]);
+  const auto Divisor = concreteBytes(Op.Inputs[2]);
+  if (!Dividend || !Divisor)
+    return unknownRemainder();
+  const auto Result = evaluateX87PartialRemainder(*Dividend, *Divisor,
+                                                  Id == Intrinsic::X87Fprem1);
+  if (!Result)
+    return unknownRemainder();
+
+  StepResult Step = StepResult::Continue;
+  if (Result->Complete) {
+    llvm::APInt ResultBits(80, 0);
+    for (unsigned Index = 0; Index != Result->Value.size(); ++Index)
+      ResultBits |= llvm::APInt(80, Result->Value[Index]) << (Index * 8);
+    writeResult(Op.Output, Ctx.mkConst(ResultBits));
+  } else {
+    // Intel permits an implementation-selected reduction of 32 to 63 bits.
+    // The chosen partial remainder is not an invariant of the x87 ISA.
+    Step = unmodelled(Op);
+  }
+
+  SymRef OldStatus = State.read(SymSpace::Register, x86reg::FPU_SW, 2);
+  SymRef Preserved = Ctx.mkAnd(
+      OldStatus, Ctx.mkConst(16, ~uint16_t(X87PartialRemainderConditionMask |
+                                           kX87TopMask)));
+  const uint16_t KnownMask = Result->knownConditionMask();
+  const uint16_t UnknownMask = X87PartialRemainderConditionMask & ~KnownMask;
+  SymRef Codes = Ctx.mkConst(16, Result->ConditionCodes & KnownMask);
+  if (UnknownMask != 0)
+    Codes =
+        Ctx.mkOr(Codes, Ctx.mkAnd(State.freshInput("x87_partial_quotient", 16),
+                                  Ctx.mkConst(16, UnknownMask)));
+  // LowIR keeps physical ST slots but does not update SW.TOP on FLD/FSTP.
+  // FNSTSW after those stack operations must not inherit FNINIT's TOP=0.
+  SymRef UnknownTop =
+      Ctx.mkAnd(State.freshInput("x87_top", 16), Ctx.mkConst(16, kX87TopMask));
+  State.write(SymSpace::Register, x86reg::FPU_SW,
+              Ctx.mkOr(Ctx.mkOr(Preserved, Codes), UnknownTop));
+  return Step;
 }
 
 //===----------------------------------------------------------------------===//
@@ -645,6 +836,9 @@ StepResult SymExec::step(const LowOp &Op, const SymCallEffect *CallEffect) {
 
   case NdOp::NOP:
     return StepResult::Continue;
+
+  case NdOp::INTRINSIC:
+    return stepX87Intrinsic(Op);
 
   default:
     // Everything floating-point, and whatever a lifter routed through an

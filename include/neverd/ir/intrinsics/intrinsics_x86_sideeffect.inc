@@ -58,6 +58,13 @@ SIDEEFFECT(Intrinsic::Vmcall);
 SIDEEFFECT(Intrinsic::Vmmcall);
 SIDEEFFECT(Intrinsic::X87Fninit);
 SIDEEFFECT(Intrinsic::X87Fnclex);
+SIDEEFFECT(Intrinsic::X87Fprem);
+SIDEEFFECT(Intrinsic::X87Fprem1);
+SIDEEFFECT(Intrinsic::X87ReadStatus);
+SIDEEFFECT(Intrinsic::X87Wait);
+SIDEEFFECT(Intrinsic::X87Ffree);
+SIDEEFFECT(Intrinsic::X87Fincstp);
+SIDEEFFECT(Intrinsic::X64Syscall);
 // string ops (side-effect)
 SIDEEFFECT(Intrinsic::Movsb);
 SIDEEFFECT(Intrinsic::Movsw);

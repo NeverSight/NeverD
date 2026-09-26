@@ -1,5 +1,6 @@
 add_neverd_component_library(NeverDIRLowValidation
   LowIR.cpp
+  X87PartialRemainder.cpp
 )
 
 add_neverd_component_library(NeverDIRLow
