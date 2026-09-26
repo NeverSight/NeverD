@@ -182,7 +182,7 @@ bool immutableImportSlot(const BinaryImage &Image, va_t Address,
       Bind->second.Addend ||
       !Image.isValidImportStorageSlot(Address, Bind->second.Name))
     return false;
-  const auto Storage = Image.collectImportStorageSlots();
+  const auto Storage = Image.collectImportStorageSlot(Address);
   const auto Slot = Storage.Slots.find(Address);
   return !Storage.Conflicts.count(Address) && Slot != Storage.Slots.end() &&
          Slot->second.Name == Bind->second.Name && !Slot->second.Addend;
