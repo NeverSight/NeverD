@@ -36,6 +36,10 @@ set(NEVERD_WDM_SEH_FIXTURE "" CACHE FILEPATH
   "Optional original WDM API exception fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_SEH_CFG_FIXTURE "" CACHE FILEPATH
   "Optional genuine WDK API exception fixture linked with active CFG")
+set(NEVERD_WDM_USER_MAPPING_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK user-mode MDL mapping driver")
+set(NEVERD_WDM_USER_MAPPING_CFG_FIXTURE "" CACHE FILEPATH
+  "Optional genuine WDK user-mode MDL mapping driver with active CFG")
 set(NEVERD_WDM_NEITHER_FIXTURE "" CACHE FILEPATH
   "Optional original WDM user-buffer fixture linked with genuine WDK libraries")
 set(NEVERD_WDM_NEITHER_CFG_FIXTURE "" CACHE FILEPATH
@@ -468,7 +472,32 @@ foreach(_driver_neither_variable NEVERD_WDM_NEITHER_FIXTURE
   endif()
 endforeach()
 
+set(_driver_wdm_user_mapping_definitions)
+set(_driver_has_wdm_user_mapping_fixture FALSE)
+foreach(_driver_user_mapping_variable NEVERD_WDM_USER_MAPPING_FIXTURE
+    NEVERD_WDM_USER_MAPPING_CFG_FIXTURE)
+  if(NOT _driver_user_mapping_variable STREQUAL "NEVERD_WDM_USER_MAPPING_FIXTURE"
+      AND NOT _driver_has_wdm_user_mapping_fixture)
+    continue()
+  endif()
+  if(NOT "${${_driver_user_mapping_variable}}" STREQUAL ""
+      AND EXISTS "${${_driver_user_mapping_variable}}"
+      AND NOT IS_DIRECTORY "${${_driver_user_mapping_variable}}")
+    get_filename_component(_driver_user_mapping_path
+      "${${_driver_user_mapping_variable}}" ABSOLUTE)
+    list(APPEND _driver_wdm_user_mapping_definitions
+      "${_driver_user_mapping_variable}=\"${_driver_user_mapping_path}\"")
+    if(_driver_user_mapping_variable STREQUAL "NEVERD_WDM_USER_MAPPING_FIXTURE")
+      set(_driver_has_wdm_user_mapping_fixture TRUE)
+    endif()
+    message(STATUS "Driver WDM user MDL mapping fixture ${_driver_user_mapping_variable}: ${_driver_user_mapping_path}")
+  else()
+    message(STATUS "Driver WDM user MDL mapping tests requiring ${_driver_user_mapping_variable} skipped: optional fixture is missing")
+  endif()
+endforeach()
+
 add_neverd_unittest(NeverDDriverEmulationTests
+  DriverWDMUserMappingTests.cpp
   DriverWDMNeitherTests.cpp
   DriverWDMSEHTests.cpp
   KernelSEHTests.cpp
@@ -520,6 +549,7 @@ add_neverd_unittest(NeverDDriverEmulationTests
   KernelFrameworkRequestAccessorTests.cpp
   KernelRequestMDLTests.cpp
   KernelMDLChainTests.cpp
+  KernelMDLUserMappingTests.cpp
   KernelDeviceStackTests.cpp
   KernelPnpRequestTests.cpp
   KernelPnpDeviceTests.cpp
@@ -565,7 +595,8 @@ target_compile_definitions(NeverDDriverEmulationTests PRIVATE
   ${_driver_wdm_dma_definitions}
   ${_driver_wdm_dma_channel_definitions}
   ${_driver_wdm_seh_definitions}
-  ${_driver_wdm_neither_definitions})
+  ${_driver_wdm_neither_definitions}
+  ${_driver_wdm_user_mapping_definitions})
 add_dependencies(NeverDDriverEmulationTests NeverDDriverFixtures)
 
 if(TARGET neverd_shared AND TARGET neverd)
@@ -592,7 +623,8 @@ if(TARGET neverd_shared AND TARGET neverd)
   ${_driver_wdm_dma_definitions}
   ${_driver_wdm_dma_channel_definitions}
   ${_driver_wdm_seh_definitions}
-  ${_driver_wdm_neither_definitions})
+  ${_driver_wdm_neither_definitions}
+  ${_driver_wdm_user_mapping_definitions})
   if(WIN32)
     target_link_libraries(NeverDDriverEmulationPublicTests PRIVATE LLVMSupport)
   endif()

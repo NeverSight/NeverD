@@ -775,6 +775,43 @@ KernelModel::continueFrameworkCallerContext(uint64_t IRP) {
   return Call;
 }
 
+llvm::Expected<std::vector<std::pair<uint64_t, uint64_t>>>
+KernelModel::requestReleaseRanges(uint64_t IRP) const {
+  const auto *Request = requestForIRP(IRP);
+  if (!Request || Request->Completed)
+    return ioError("completion release requires a live IRP");
+  std::vector<std::pair<uint64_t, uint64_t>> Retiring{
+      {IRP, IRPSize + Request->StackCount * StackSize}};
+  if (Request->RawResources) {
+    Retiring.emplace_back(Request->RawResources, Request->ResourceListSize);
+    Retiring.emplace_back(Request->TranslatedResources,
+                          Request->ResourceListSize);
+  }
+  if (Request->SystemBuffer)
+    Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
+  if (Request->UserBuffer && !Request->Neither)
+    Retiring.emplace_back(Request->UserBuffer, Request->Direct
+                                                   ? Request->TransferSize
+                                                   : Request->OutputSize);
+  if (Request->SecurityContext)
+    Retiring.emplace_back(Request->SecurityContext, SecurityContextSize);
+  std::vector<uint64_t> RetiringPins;
+  if (auto E = appendRequestMDLReleaseResources(IRP, Retiring, RetiringPins))
+    return E;
+  // This check is shared with terminal completion planning. No stack cursor,
+  // continuation, dispatcher registration or output observation changes until
+  // the entire retirement set has passed its ownership checks.
+  for (const auto &[Address, Size] : Retiring) {
+    if (auto E = canReleaseUserViewsForBacking(Address, Size))
+      return E;
+    if (auto E = canRevokeVirtualRange(Address, Size))
+      return E;
+  }
+  if (auto E = Physical.canReleaseRanges(Retiring, RetiringPins))
+    return E;
+  return Retiring;
+}
+
 llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
                                                 uint8_t PriorityBoost) {
   auto *Request = requestForIRP(IRP);
@@ -796,37 +833,18 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
                                          *Information))
     return E;
   auto &Observation = Result.Requests[Request->ResultIndex];
-  Observation.IOStatus = static_cast<uint32_t>(*Status);
-  Observation.Information = *Information;
   const bool HasIOCTLOutput =
       Request->Kind == DriverRequestKind::DeviceControl && Request->OutputSize;
   auto Pending = dispatchPending(*Request, Request->StackCount - 1);
   if (!Pending)
     return Pending.takeError();
-  Request->PendingMarked = *Pending;
   if (Request->DispatchReturned &&
-      Observation.DispatchStatus == StatusPending && !Request->PendingMarked)
+      Observation.DispatchStatus == StatusPending && !*Pending)
     return ioError(
         "pending dispatch completion requires propagation to the top stack");
-  // Completion retires several allocations together. Preflight every range
-  // before unregistering any dispatcher state or delivering output bytes.
-  std::vector<std::pair<uint64_t, uint64_t>> Retiring{
-      {IRP, IRPSize + Request->StackCount * StackSize}};
-  if (Request->RawResources) {
-    Retiring.emplace_back(Request->RawResources, Request->ResourceListSize);
-    Retiring.emplace_back(Request->TranslatedResources,
-                          Request->ResourceListSize);
-  }
-  if (Request->SystemBuffer)
-    Retiring.emplace_back(Request->SystemBuffer, Request->BufferSize);
-  if (Request->UserBuffer && !Request->Neither)
-    Retiring.emplace_back(Request->UserBuffer, Request->Direct
-                                                   ? Request->TransferSize
-                                                   : Request->OutputSize);
-  if (Request->SecurityContext)
-    Retiring.emplace_back(Request->SecurityContext, SecurityContextSize);
-  if (auto E = appendRequestMDLReleaseRanges(IRP, Retiring))
-    return E;
+  auto Retiring = requestReleaseRanges(IRP);
+  if (!Retiring)
+    return Retiring.takeError();
   if (Request->PowerTicket) {
     if (auto E = validatePowerRequestCompletion(*Request, uint32_t(*Status)))
       return E;
@@ -837,8 +855,14 @@ llvm::Error KernelModel::retireCompletedRequest(uint64_t IRP,
     if (auto E = Lifecycle.validateIoCompletion(Request->PnpDevice, IRP))
       return E;
   }
-  if (auto E = prepareReleaseRanges(Retiring))
-    return E;
+  // The plan accounts for the exact pins released by this IRP. Revoke virtual
+  // registrations now; expireRequestMDL drops those pins before retiring RAM.
+  for (const auto &[Address, Size] : *Retiring)
+    if (auto E = prepareRevokeVirtualRange(Address, Size))
+      return E;
+  Observation.IOStatus = static_cast<uint32_t>(*Status);
+  Observation.Information = *Information;
+  Request->PendingMarked = *Pending;
   if (Request->ChildPower && Request->ChildPower->StatusBlock) {
     const auto Block = Request->ChildPower->StatusBlock;
     if (auto E = Memory.writeInteger(Block, uint32_t(*Status), 4))

@@ -556,6 +556,9 @@ llvm::Expected<uint64_t> KernelModel::call(
       Kind != KernelAPIKind::ProbeForRead &&
       Kind != KernelAPIKind::ProbeForWrite &&
       Kind != KernelAPIKind::MmProbeAndLockPages &&
+      Kind != KernelAPIKind::MmMapLockedPagesSpecifyCache &&
+      Kind != KernelAPIKind::MmGetSystemAddressForMdlSafe &&
+      Kind != KernelAPIKind::MmUnmapLockedPages &&
       Kind != KernelAPIKind::RtlCopyMemory &&
       Kind != KernelAPIKind::RtlMoveMemory)
     return modelError("process attachment permits only bounded user-memory "
@@ -721,6 +724,11 @@ llvm::Expected<uint64_t> KernelModel::call(
     return getDMAAdapter(A);
   if (Kind == KernelAPIKind::IoAllocateMdl)
     return allocateMDL(A);
+  if (Kind == KernelAPIKind::IoBuildPartialMdl) {
+    if (auto E = buildPartialMDL(A[0], A[1], A[2], uint32_t(A[3])))
+      return E;
+    return 0;
+  }
   if (Kind == KernelAPIKind::IoFreeMdl) {
     if (auto E = freeMDL(A[0]))
       return E;
@@ -732,7 +740,7 @@ llvm::Expected<uint64_t> KernelModel::call(
     return 0;
   }
   if (Kind == KernelAPIKind::MmProbeAndLockPages) {
-    if (auto E = probeAndLockPages(A[0], uint32_t(A[1]), uint32_t(A[2])))
+    if (auto E = probeAndLockPages(A[0], uint8_t(A[1]), uint32_t(A[2])))
       return E;
     return 0;
   }
@@ -747,7 +755,12 @@ llvm::Expected<uint64_t> KernelModel::call(
     return 0;
   }
   if (Kind == KernelAPIKind::MmMapLockedPagesSpecifyCache) {
-    if (static_cast<uint32_t>(A[1]) != KernelMode ||
+    if (static_cast<uint8_t>(A[1]) == UserMode) {
+      if (static_cast<uint32_t>(A[2]) != MmCached)
+        return modelError("user MDL mapping supports cached RAM pages");
+      return mapUserMDL(A[0], A[3], static_cast<uint32_t>(A[5]));
+    }
+    if (static_cast<uint8_t>(A[1]) != KernelMode ||
         static_cast<uint32_t>(A[2]) != MmCached || A[3] ||
         static_cast<uint8_t>(A[4]))
       return modelError(
@@ -759,6 +772,11 @@ llvm::Expected<uint64_t> KernelModel::call(
     return mapLockedPages(A[0], static_cast<uint32_t>(A[1]), true);
   }
   if (Kind == KernelAPIKind::MmUnmapLockedPages) {
+    if (UserMdlViews.contains(A[0])) {
+      if (auto E = unmapUserMDL(A[0], A[1]))
+        return E;
+      return 0;
+    }
     if (auto E = unmapLockedPages(A[0], A[1]))
       return E;
     return 0;
@@ -1113,6 +1131,8 @@ llvm::Error KernelModel::validateGuestAccessImpl(uint64_t Address,
     return modelError("overflowing guest access in Windows model");
   const uint64_t End = Address + Size;
   if (Address < profile::UserProbeLimit) {
+    if (auto E = validateUserMdlViewAccess(Address, Size, IsWrite))
+      return E;
     if (canCatchUserAccess(Address, Size))
       return llvm::Error::success();
     for (const auto &[Base, Allocation] : UserAllocations) {

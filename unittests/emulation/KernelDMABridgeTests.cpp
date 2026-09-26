@@ -393,5 +393,111 @@ TEST_F(KernelDMABridge,
   ok(Model->finalizeRequest(Request.IRP));
 }
 
+TEST_F(KernelDMABridge,
+       ActivePartialDmaRejectsFreeRebuildAndCompletionWithoutMutation) {
+  constexpr uint32_t OutputSize = 64;
+  constexpr uint32_t PartialOffset = 8;
+  constexpr uint32_t PartialLength = 32;
+  constexpr uint32_t RebuiltOffset = 16;
+  constexpr uint32_t RebuiltLength = 16;
+  const std::vector<uint8_t> Bytes(OutputSize, 0x5a);
+  auto Read = [&](uint64_t Address, size_t Size, bool Backing = false) {
+    std::vector<uint8_t> Storage(Size);
+    ok(Backing ? Memory->readBacking(Address, Storage)
+               : Memory->read(Address, Storage));
+    return Storage;
+  };
+
+  // Exercise preflight both before and after visiting the source descriptor.
+  // The DMA owner is the partial MDL, while the request owns the pinned pages.
+  for (bool PartialFirst : {false, true}) {
+    SCOPED_TRACE(PartialFirst);
+    DriverRequest Input;
+    Input.Kind = DriverRequestKind::DeviceControl;
+    Input.DeviceID = "dma";
+    Input.File = 1;
+    Input.ControlCode = 0x222002;
+    Input.OutputSize = OutputSize;
+    const auto Request = take(Model->beginRequest(Input));
+    const auto Source = get(Request.IRP + IRPMdlOffset);
+    const auto Original =
+        get(Source + MDLStartVAOffset) + get(Source + MDLByteOffsetOffset, 4);
+    const auto Data =
+        call("MmGetSystemAddressForMdlSafe", {Source, NormalPagePriority});
+    ASSERT_NE(Data, 0u);
+    ok(Memory->write(Data, Bytes));
+    const auto Partial =
+        call("IoAllocateMdl",
+             {Original + PartialOffset, PartialLength, 1, 0, Request.IRP});
+    ASSERT_NE(Partial, 0u);
+    call("IoBuildPartialMdl",
+         {Source, Partial, Original + PartialOffset, PartialLength});
+    EXPECT_EQ(get(Partial + MDLMappedSystemVAOffset), Data + PartialOffset);
+    if (PartialFirst) {
+      put(Source + MDLNextOffset, 0);
+      put(Partial + MDLNextOffset, Source);
+      put(Request.IRP + IRPMdlOffset, Partial);
+    }
+    call("IoMarkIrpPending", {Request.IRP});
+    ok(Model->recordDispatchReturn(Request.IRP, StatusPending));
+    put(Request.IRP + IRPStatusOffset, StatusSuccess, 4);
+    put(Request.IRP + IRPInformationOffset, OutputSize);
+    const auto Parent = dpc();
+    EXPECT_EQ(invoke(10, {Adapter, FDO, Partial, Original + PartialOffset,
+                          PartialLength, ListPC, 0, 0}),
+              StatusSuccess);
+    auto Guest = Model->takeGuestCall();
+    ASSERT_TRUE(Guest);
+    ok(Model->beginGuestCall(Guest->Token));
+    EXPECT_TRUE(take(Model->finishGuestCall(Guest->Token, 0)));
+
+    const auto SourceBytes = Read(Source, get(Source + MDLSizeOffset, 2));
+    const auto PartialBytes = Read(Partial, get(Partial + MDLSizeOffset, 2));
+    const auto IRPBytes = Read(Request.IRP, IRPSize);
+    const auto ListBytes =
+        Read(Guest->Token.ID,
+             dma::ScatterGatherHeaderSize + dma::ScatterGatherElementSize);
+    const auto RequestCount = Result.Requests.size();
+    const auto Report = Result.Requests.back();
+    auto ExpectUnchanged = [&] {
+      EXPECT_EQ(Read(Source, SourceBytes.size()), SourceBytes);
+      EXPECT_EQ(Read(Partial, PartialBytes.size()), PartialBytes);
+      EXPECT_EQ(Read(Request.IRP, IRPBytes.size()), IRPBytes);
+      EXPECT_EQ(Read(Guest->Token.ID, ListBytes.size()), ListBytes);
+      EXPECT_EQ(Read(Data, OutputSize, true), Bytes);
+      ASSERT_EQ(Result.Requests.size(), RequestCount);
+      EXPECT_EQ(Result.Requests.back().Completed, Report.Completed);
+      EXPECT_EQ(Result.Requests.back().DispatchStatus, Report.DispatchStatus);
+      EXPECT_EQ(Result.Requests.back().IOStatus, Report.IOStatus);
+      EXPECT_EQ(Result.Requests.back().Information, Report.Information);
+      EXPECT_EQ(Result.Requests.back().Output, Report.Output);
+      reject(Model->validateGuestAccess(Data + PartialOffset, 1, false), "DMA");
+    };
+    reject(Model->call("IoFreeMdl", {Partial}), "DMA");
+    ExpectUnchanged();
+    reject(
+        Model->call("IoBuildPartialMdl",
+                    {Source, Partial, Original + RebuiltOffset, RebuiltLength}),
+        "DMA");
+    ExpectUnchanged();
+    reject(Model->call("IofCompleteRequest", {Request.IRP, 0}), "DMA");
+    ExpectUnchanged();
+
+    invoke(11, {Adapter, Guest->Token.ID, 0});
+    ok(Model->validateGuestAccess(Data + PartialOffset, PartialLength, true));
+    call("IoBuildPartialMdl",
+         {Source, Partial, Original + RebuiltOffset, RebuiltLength});
+    EXPECT_EQ(get(Partial + MDLMappedSystemVAOffset), Data + RebuiltOffset);
+    EXPECT_EQ(get(Partial + MDLByteCountOffset, 4), RebuiltLength);
+    call("IofCompleteRequest", {Request.IRP, 0});
+    EXPECT_TRUE(Result.Requests.back().Completed);
+    EXPECT_EQ(Result.Requests.back().Output, Bytes);
+    reject(Model->validateGuestAccess(Source, 1, false), "freed");
+    reject(Model->validateGuestAccess(Partial, 1, false), "freed");
+    ok(Model->finishScheduled(Parent.ID));
+    ok(Model->finalizeRequest(Request.IRP));
+  }
+}
+
 } // namespace
 } // namespace neverd::emulation

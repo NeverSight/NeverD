@@ -47,21 +47,28 @@ KernelModel::allocatePhysicalBuffer(uint64_t AllocationSize, uint64_t Alignment,
 }
 
 llvm::Error KernelModel::initializeMDLPhysicalPages(const LockedMdl &State) {
-  auto Owner = Physical.ownerForRange(State.Buffer, State.ByteCount);
+  const uint64_t Backing = State.BackingAddress;
+  auto Owner = Physical.ownerForRange(Backing, State.ByteCount);
   if (!Owner)
     return Owner.takeError();
   const auto *Region = Physical.find(*Owner);
-  auto Segments = Physical.describe(*Owner, State.Buffer - Region->Backing,
-                                    State.ByteCount);
+  auto Segments =
+      Physical.describe(*Owner, Backing - Region->Backing, State.ByteCount);
   if (!Segments)
     return Segments.takeError();
-  const uint64_t Count = ((State.Buffer & (profile::PageSize - 1)) +
+  const uint64_t Count = ((Backing & (profile::PageSize - 1)) +
                           State.ByteCount + profile::PageSize - 1) /
                          profile::PageSize;
   if (Segments->size() != Count ||
-      State.Size != windows::MDLSize + Count * profile::PointerSize)
+      State.Size < windows::MDLSize + Count * profile::PointerSize)
     return physicalModelError(
         "MDL physical pages do not match descriptor extent");
+  auto Writable = Memory.canAccess(State.Address, State.Size, Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return physicalModelError("MDL physical pages require writable descriptor "
+                              "storage");
   for (size_t I = 0; I != Segments->size(); ++I)
     if (auto E = Memory.writeInteger(
             State.Address + windows::MDLSize + I * profile::PointerSize,

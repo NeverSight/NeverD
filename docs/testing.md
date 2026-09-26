@@ -68,6 +68,17 @@ mistaking revoked memory for caller-visible output. Backend tests prove terminal
 snapshots preserve the original fault and reject MMIO, running CPUs and invalid
 spans without destination changes.
 
+`KernelMDLChainTests` and `KernelMDLUserMappingTests` verify partial-MDL
+capacity, reuse, physical identity, mapping ownership, process permissions and
+failure-atomic retirement. Optional genuine WDK user-view fixtures use
+`NEVERD_WDM_USER_MAPPING_FIXTURE` and
+`NEVERD_WDM_USER_MAPPING_CFG_FIXTURE`; missing artifacts are explicit skips.
+The [user mapping scenario](examples/driver-user-mapping-scenario.json) also
+runs through the CLI and Python C API binding. It checks shared bytes, caught
+read-only faults, process attachment and mapping ownership. Group-retirement
+tests release several relocked views before their request backing and verify
+that external pins reject completion without changing IRP or MDL state.
+
 Additional fixtures cover driver-owned nonpaged pool MDLs, independent descriptor
 and buffer lifetimes, registry query layouts and short buffers, handle rights,
 deletion and leaks, and full-width `information_hex` for zero-output IOCTLs.

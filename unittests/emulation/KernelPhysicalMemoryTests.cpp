@@ -156,6 +156,63 @@ TEST_F(KernelPhysicalRAM, IgnoredPinMustBeOwnedAndDoesNotHideOtherPins) {
   EXPECT_EQ(llvm::toString(Model->retire(1)), "");
 }
 
+TEST_F(KernelPhysicalRAM, GroupReleaseOnlyExcludesItsExactLivePins) {
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 32)), "");
+  ASSERT_EQ(llvm::toString(Model->registerRegion(2, Base + 64, 32)), "");
+  ASSERT_EQ(llvm::toString(Model->registerRegion(3, Base + Page, 32)), "");
+  const auto A = take(Model->pin(1, 0, 16));
+  const auto B = take(Model->pin(1, 8, 8));
+  const auto C = take(Model->pin(2, 0, 16));
+  const auto Retained = take(Model->pin(3, 0, 16));
+  const auto External = take(Model->pin(2, 8, 8));
+  const std::array<std::pair<uint64_t, uint64_t>, 2> Ranges{
+      {{Base, 32}, {Base + 64, 32}}};
+  const std::array<uint64_t, 4> Pins{A, B, C, Retained};
+  const std::array<uint8_t, 4> Written{1, 2, 3, 4};
+  ASSERT_EQ(llvm::toString(Model->write(C, 8, Written)), "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges(Ranges, Pins)), "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges(Ranges, {})), "");
+  std::array<uint8_t, 4> Bytes{};
+  ASSERT_EQ(llvm::toString(Model->read(External, 0, Bytes)), "");
+  EXPECT_EQ(Bytes, Written);
+  ASSERT_EQ(llvm::toString(Model->unpin(External)), "");
+  EXPECT_EQ(llvm::toString(Model->canReleaseRanges(Ranges, Pins)), "");
+  // The plan can unlock a descriptor whose owner survives this retirement;
+  // validation still leaves every pin and owner intact until the commit phase.
+  for (uint64_t Pin : Pins)
+    EXPECT_EQ(llvm::toString(Model->canUnpin(Pin)), "");
+  for (uint64_t Owner : {1u, 2u, 3u})
+    EXPECT_NE(llvm::toString(Model->canRetire(Owner)), "");
+  ASSERT_EQ(llvm::toString(Model->read(C, 8, Bytes)), "");
+  EXPECT_EQ(Bytes, Written);
+  for (uint64_t Pin : Pins)
+    ASSERT_EQ(llvm::toString(Model->unpin(Pin)), "");
+  EXPECT_EQ(llvm::toString(Model->canReleaseRanges(Ranges, {})), "");
+  EXPECT_EQ(llvm::toString(Model->retire(1)), "");
+  EXPECT_EQ(llvm::toString(Model->retire(2)), "");
+  EXPECT_NE(Model->find(3), nullptr);
+}
+
+TEST_F(KernelPhysicalRAM, InvalidGroupReleaseNeverConsumesPins) {
+  ASSERT_EQ(llvm::toString(Model->registerRegion(1, Base, 32)), "");
+  const auto Pin = take(Model->pin(1, 0, 16));
+  const std::array<uint8_t, 1> Written{0x67};
+  ASSERT_EQ(llvm::toString(Model->write(Pin, 0, Written)), "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges({{Base, 32}}, {Pin, Pin})),
+            "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges({{Base, 32}}, {Pin + 1})),
+            "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges({{Base, 0}}, {Pin})), "");
+  EXPECT_NE(llvm::toString(Model->canReleaseRanges(
+                {{Base, 32}, {UINT64_MAX - 1, 4}}, {Pin})),
+            "");
+  std::array<uint8_t, 1> Bytes{};
+  ASSERT_EQ(llvm::toString(Model->read(Pin, 0, Bytes)), "");
+  EXPECT_EQ(Bytes, Written);
+  EXPECT_NE(llvm::toString(Model->retire(1)), "");
+  EXPECT_EQ(llvm::toString(Model->canReleaseRanges({{Base, 32}}, {Pin})), "");
+}
+
 TEST_F(KernelPhysicalRAM, InvalidRangesDoNotPublishOwnerOrConsumePageIdentity) {
   for (auto Range : {std::array<uint64_t, 2>{Base, 0},
                      std::array<uint64_t, 2>{UINT64_MAX - 1, 4},

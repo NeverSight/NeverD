@@ -159,7 +159,7 @@ KernelModel::referenceThreadByHandle(llvm::ArrayRef<uint64_t> A) {
   // Only the modeled thread object type and kernel caller mode are available.
   if (!A[4])
     return windows::StatusInvalidParameter;
-  if (A[2] || A[3] != windows::KernelMode || A[5])
+  if (A[2] || uint8_t(A[3]) != windows::KernelMode || A[5])
     return schedulingError(
         "unsupported object type, access mode or handle-information output");
   if (uint32_t(A[1]) & ~windows::ThreadAllAccess)
@@ -597,6 +597,8 @@ llvm::Error KernelModel::canReleaseRange(uint64_t Base, uint64_t Size,
                                          uint64_t IgnoredDMAPin) const {
   if (Size > UINT64_MAX - Base)
     return schedulingError("overflowing object storage range");
+  if (auto E = canReleaseUserViewsForBacking(Base, Size))
+    return E;
   if (Size)
     if (auto E = Physical.canReleaseRange(Base, Size, IgnoredDMAPin))
       return E;

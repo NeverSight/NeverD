@@ -68,6 +68,12 @@ public:
   /// containing padding or several adjacent allocations. No owner is retired.
   llvm::Error canReleaseRange(uint64_t Backing, uint64_t Size,
                               uint64_t IgnoredPin = 0) const;
+  /// Preflight a transaction that releases the listed live pins before any
+  /// backing owners. Pins outside RetiringPins continue to protect every owner
+  /// touched by Ranges. This does not unpin or retire anything.
+  llvm::Error
+  canReleaseRanges(llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges,
+                   llvm::ArrayRef<uint64_t> RetiringPins) const;
   llvm::Error retire(uint64_t Owner);
   /// Each segment is contained in one physical page and in the owner range.
   llvm::Expected<std::vector<Segment>> describe(uint64_t Owner, uint64_t Offset,

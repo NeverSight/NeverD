@@ -139,6 +139,7 @@ NEVERD_KERNEL_IRQL_API(ExFreePool, Dispatch)
 // https://learn.microsoft.com/windows-hardware/drivers/ddi/wdmsec/nf-wdmsec-wdmlibrtlinitunicodestringex
 NEVERD_KERNEL_IRQL_API(IoGetDmaAdapter, Passive)
 NEVERD_KERNEL_IRQL_API(IoAllocateMdl, Dispatch)
+NEVERD_KERNEL_IRQL_API(IoBuildPartialMdl, Dispatch)
 NEVERD_KERNEL_IRQL_API(IoFreeMdl, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmBuildMdlForNonPagedPool, Dispatch)
 NEVERD_KERNEL_IRQL_API(MmProbeAndLockPages, Dispatch)

@@ -94,6 +94,9 @@ llvm::Error KernelModel::validateRequestCompletion(uint64_t IRP,
       Information > MaxCreateInformation)
     return frameworkRequestError(
         "CREATE IoStatus.Information is not a defined create result");
+  auto Ranges = requestReleaseRanges(IRP);
+  if (!Ranges)
+    return Ranges.takeError();
   return llvm::Error::success();
 }
 

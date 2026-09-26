@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <tuple>
 
 namespace neverd::emulation {
 namespace {
@@ -110,6 +111,8 @@ llvm::Expected<uint64_t> KernelModel::allocateMDL(llvm::ArrayRef<uint64_t> A) {
       MDLSize + ((Offset + Size + profile::PageSize - 1) / profile::PageSize) *
                     profile::PointerSize;
   State.Buffer = A[0];
+  State.OriginalAddress = A[0];
+  State.BackingAddress = A[0];
   State.ByteCount = Size;
   MDLs.emplace(*Record, State);
   if (Link)
@@ -157,6 +160,112 @@ llvm::Error KernelModel::buildNonPagedMDL(uint64_t MDL) {
   return llvm::Error::success();
 }
 
+llvm::Error KernelModel::canReleaseMDLDependencies(
+    uint64_t MDL, llvm::ArrayRef<uint64_t> Retiring, bool ReleasePages) const {
+  for (const auto &[Address, State] : MDLs) {
+    if (Address == MDL || State.Owner != LockedMdl::Ownership::Partial ||
+        std::find(Retiring.begin(), Retiring.end(), Address) != Retiring.end())
+      continue;
+    if ((ReleasePages && State.LockOwnerMDL == MDL) ||
+        State.SystemMappingOwnerMDL == MDL)
+      return mdlError("MDL release requires dependent partial MDLs to be "
+                      "released or rebuilt first");
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error KernelModel::buildPartialMDL(uint64_t Source, uint64_t Target,
+                                         uint64_t Address, uint32_t Length) {
+  const auto SourceIt = MDLs.find(Source);
+  const auto TargetIt = MDLs.find(Target);
+  if (Source == Target || SourceIt == MDLs.end() || TargetIt == MDLs.end() ||
+      SourceIt->second.Owner == LockedMdl::Ownership::Driver ||
+      (TargetIt->second.Owner != LockedMdl::Ownership::Driver &&
+       TargetIt->second.Owner != LockedMdl::Ownership::Partial))
+    return mdlError("IoBuildPartialMdl requires a built source and an unbuilt "
+                    "or reusable partial target");
+  const auto &Parent = SourceIt->second;
+  auto &Child = TargetIt->second;
+  if (Child.OwnsSystemMapping)
+    return mdlError("partial MDL reuse requires MmPrepareMdlForReuse to "
+                    "release its system mapping");
+  const uint64_t Begin = Parent.OriginalAddress;
+  if (Address < Begin || Address - Begin >= Parent.ByteCount)
+    return mdlError("partial MDL starts outside the source MDL");
+  const uint64_t Offset = Address - Begin;
+  const uint64_t Available = Parent.ByteCount - Offset;
+  const uint64_t Count = Length ? Length : Available;
+  if (!Count || Count > Available)
+    return mdlError("partial MDL exceeds the source MDL");
+  const uint64_t Pages =
+      ((Address & (profile::PageSize - 1)) + Count + profile::PageSize - 1) /
+      profile::PageSize;
+  if (Child.Size < MDLSize + Pages * profile::PointerSize)
+    return mdlError("partial MDL target has insufficient PFN capacity");
+  const uint64_t Backing = Parent.BackingAddress + Offset;
+  auto Owner = Physical.ownerForRange(Backing, Count);
+  if (!Owner)
+    return Owner.takeError();
+  if (auto E = canReleaseMDLDependencies(Target))
+    return E;
+  if (auto E = canReleaseMdlUserViews(Target))
+    return E;
+  if (auto E = canRevokeVirtualRange(Target, Child.Size))
+    return E;
+  auto Writable = Memory.canAccess(Target, Child.Size, Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return mdlError("partial MDL target requires writable descriptor storage");
+
+  const uint64_t SystemVA = Parent.Mapped ? Parent.Buffer + Offset : 0;
+  const uint16_t Flags =
+      MDLPartial |
+      (Parent.Mapped ? MDLMappedToSystemVA | MDLParentMappedSystemVA : 0);
+  LockedMdl Candidate = Child;
+  Candidate.Owner = LockedMdl::Ownership::Partial;
+  // A partial descriptor borrows a page lock, not the source descriptor's
+  // lifetime. Nonpaged storage has no lock owner; descendants inherit the
+  // original lock and mapping owners even when an intermediate MDL is freed.
+  Candidate.LockOwnerMDL =
+      Parent.Owner == LockedMdl::Ownership::Partial
+          ? Parent.LockOwnerMDL
+          : (Parent.Owner == LockedMdl::Ownership::NonPagedPool ? 0 : Source);
+  Candidate.SystemMappingOwnerMDL =
+      !Parent.Mapped || Parent.Owner == LockedMdl::Ownership::NonPagedPool
+          ? 0
+          : (Parent.Owner == LockedMdl::Ownership::Partial
+                 ? Parent.SystemMappingOwnerMDL
+                 : Source);
+  Candidate.OwnsSystemMapping = false;
+  Candidate.OriginalAddress = Address;
+  Candidate.BackingAddress = Backing;
+  Candidate.Buffer = SystemVA ? SystemVA : Backing;
+  Candidate.ByteCount = Count;
+  Candidate.AllocationSize = 0;
+  Candidate.UserAddress = Address;
+  Candidate.Pool = *Owner;
+  Candidate.Pin = Parent.Pin;
+  Candidate.Writable = Parent.Writable;
+  Candidate.DmaWritable = Parent.DmaWritable;
+  Candidate.MappingWritable = Parent.MappingWritable;
+  Candidate.Mapped = Parent.Mapped;
+  if (auto E = initializeMDLPhysicalPages(Candidate))
+    return E;
+  // Keep Next and the allocation's PFN capacity while publishing the new view.
+  for (const auto &[Field, Value, Width] :
+       std::array<std::tuple<uint64_t, uint64_t, unsigned>, 5>{
+           {{MDLStartVAOffset, pageBase(Address), profile::PointerSize},
+            {MDLByteCountOffset, Count, 4},
+            {MDLByteOffsetOffset, Address & (profile::PageSize - 1), 4},
+            {MDLMappedSystemVAOffset, SystemVA, profile::PointerSize},
+            {MDLFlagsOffset, Flags, 2}}})
+    if (auto E = Memory.writeInteger(Target + Field, Value, Width))
+      return E;
+  Child = Candidate;
+  return llvm::Error::success();
+}
+
 llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
                                            uint32_t Operation) {
   auto It = MDLs.find(MDL);
@@ -171,33 +280,17 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     return mdlError("user page locking requires the requesting process at "
                     "IRQL <= APC_LEVEL");
   auto &State = It->second;
-  auto Region = UserAllocations.upper_bound(State.Buffer);
-  if (Region == UserAllocations.begin())
-    return llvm::make_error<KernelGuestException>(
-        exceptions::StatusAccessViolation);
-  --Region;
-  const uint64_t Offset = State.Buffer - Region->first;
-  if (RevokedUserAllocations.contains(Region->first))
-    return llvm::make_error<KernelGuestException>(
-        exceptions::StatusAccessViolation);
-  if (Region->second.ProcessID != CurrentUserProcessID ||
-      Offset >= Region->second.Size ||
-      State.ByteCount > Region->second.Size - Offset)
-    return llvm::make_error<KernelGuestException>(
-        exceptions::StatusAccessViolation);
-  auto Allowed =
-      Memory.canAccess(State.Buffer, State.ByteCount,
-                       Operation == IoReadAccess ? Read : Read | Write);
-  if (!Allowed)
-    return Allowed.takeError();
-  if (!*Allowed)
-    return llvm::make_error<KernelGuestException>(
-        exceptions::StatusAccessViolation);
-  if (auto E = Physical.canPin(Region->first, Offset, State.ByteCount))
+  auto Range = resolveUserMemoryRange(State.OriginalAddress, State.ByteCount,
+                                      Operation != IoReadAccess);
+  if (!Range)
+    return Range.takeError();
+  if (auto E = Physical.canPin(Range->Owner, Range->Offset, State.ByteCount))
     return E;
-  if (auto E = initializeMDLPhysicalPages(State))
+  LockedMdl Candidate = State;
+  Candidate.BackingAddress = Range->Backing;
+  if (auto E = initializeMDLPhysicalPages(Candidate))
     return E;
-  auto Pin = Physical.pin(Region->first, Offset, State.ByteCount);
+  auto Pin = Physical.pin(Range->Owner, Range->Offset, State.ByteCount);
   if (!Pin)
     return Pin.takeError();
   if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, MDLPagesLocked, 2)) {
@@ -205,9 +298,10 @@ llvm::Error KernelModel::probeAndLockPages(uint64_t MDL, uint32_t Mode,
     return E;
   }
   State.Owner = LockedMdl::Ownership::UserLocked;
-  State.Pool = Region->first;
+  State.Pool = Range->Owner;
   State.Pin = *Pin;
-  State.UserAddress = State.Buffer;
+  State.UserAddress = State.OriginalAddress;
+  State.BackingAddress = Range->Backing;
   State.Writable = Operation != IoReadAccess;
   State.DmaWritable = State.Writable;
   return llvm::Error::success();
@@ -218,8 +312,19 @@ llvm::Error KernelModel::unlockPages(uint64_t MDL) {
   if (It == MDLs.end() || It->second.Owner != LockedMdl::Ownership::UserLocked)
     return mdlError("MmUnlockPages requires a locked user MDL");
   auto &State = It->second;
+  if (auto E = canReleaseMDLDependencies(MDL))
+    return E;
+  if (auto E = canReleaseMdlUserViews(MDL))
+    return E;
   if (auto E = DMA.canReleaseRange(MDL, State.Size))
     return E;
+  if (auto E = Physical.canUnpin(State.Pin))
+    return E;
+  auto Writable = Memory.canAccess(MDL, State.Size, Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return mdlError("unlock requires writable MDL descriptor storage");
   if (State.Mapped) {
     if (auto E = unmapLockedPages(State.Buffer, MDL))
       return E;
@@ -247,6 +352,25 @@ llvm::Error KernelModel::freeMDL(uint64_t MDL) {
         "IoFreeMdl cannot release a request-owned system-buffer MDL");
   if (It->second.Owner == LockedMdl::Ownership::UserLocked)
     return mdlError("IoFreeMdl requires MmUnlockPages for a user MDL");
+  if (auto E = canReleaseMDLDependencies(MDL))
+    return E;
+  if (auto E = canReleaseMdlUserViews(MDL))
+    return E;
+  if (It->second.Owner == LockedMdl::Ownership::Partial &&
+      It->second.OwnsSystemMapping) {
+    const auto &State = It->second;
+    const std::array<std::pair<uint64_t, uint64_t>, 2> Ranges{
+        {{State.Address, State.Size},
+         {pageBase(State.Buffer), State.AllocationSize}}};
+    if (auto E = prepareReleaseRanges(Ranges))
+      return E;
+    if (auto E =
+            Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
+      return E;
+    FreedRanges.emplace(State.Address, State.Size);
+    MDLs.erase(It);
+    return llvm::Error::success();
+  }
   if (auto E = prepareReleaseRange(It->second.Address, It->second.Size))
     return E;
   // A nonpaged pool MDL owns only its descriptor. Its original buffer and
@@ -292,6 +416,8 @@ KernelModel::createRequestMDL(uint64_t IRP, uint32_t Size,
   State.Address = *Record;
   State.Size = MDLSize + Pages * profile::PointerSize;
   State.Buffer = Buffer;
+  State.OriginalAddress = UserAddress;
+  State.BackingAddress = Buffer;
   State.AllocationSize = AllocationSize;
   State.UserAddress = UserAddress;
   State.ByteCount = Size;
@@ -360,6 +486,8 @@ llvm::Expected<uint64_t> KernelModel::frameworkRequestMDL(uint64_t IRP,
                ((Offset + Length + profile::PageSize - 1) / profile::PageSize) *
                    profile::PointerSize;
   State.Buffer = Request->SystemBuffer;
+  State.OriginalAddress = Request->SystemBuffer;
+  State.BackingAddress = Request->SystemBuffer;
   State.ByteCount = Length;
   State.Writable = true;
   State.DmaWritable = true;
@@ -458,6 +586,20 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
   if (State.Owner == LockedMdl::Ownership::Driver)
     return mdlError("mapping requires a built MDL; allocated metadata does "
                     "not lock or map the described buffer");
+  if (State.Owner == LockedMdl::Ownership::NonPagedPool &&
+      !Allocations.count(State.Pool))
+    return mdlError("nonpaged pool MDL describes a freed pool allocation");
+  auto PhysicalOwner =
+      Physical.ownerForRange(State.BackingAddress, State.ByteCount);
+  if (!PhysicalOwner)
+    return PhysicalOwner.takeError();
+  if (!State.Mapped) {
+    auto Writable = Memory.canAccess(MDL, State.Size, Write);
+    if (!Writable)
+      return Writable.takeError();
+    if (!*Writable)
+      return mdlError("mapping requires writable MDL descriptor storage");
+  }
   if (State.Owner == LockedMdl::Ownership::RequestSystemBuffer) {
     const auto *Owner = requestForIRP(State.OwnerIRP);
     if (!Owner || Owner->Completed || Owner->SystemMdl != MDL ||
@@ -473,19 +615,18 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
     if (!ReuseExisting)
       return mdlError("a nonpaged pool MDL cannot create an additional "
                       "system-space mapping");
-    if (!Allocations.count(State.Pool))
-      return mdlError("nonpaged pool MDL describes a freed pool allocation");
     // Existing mappings retain their permissions even when safe-helper flags
     // request no-write/no-execute. No page protections are changed here.
     return State.Buffer;
   }
-  if (State.Owner == LockedMdl::Ownership::UserLocked) {
+  if (State.Owner == LockedMdl::Ownership::Partial ||
+      State.Owner == LockedMdl::Ownership::UserLocked) {
     if (State.Mapped) {
       if (!ReuseExisting)
         return mdlError("an MDL cannot have a second system-space mapping");
       return State.Buffer;
     }
-    const uint64_t Offset = State.UserAddress & (profile::PageSize - 1);
+    const uint64_t Offset = State.BackingAddress & (profile::PageSize - 1);
     const uint64_t AllocationSize =
         (Offset + State.ByteCount + profile::PageSize - 1) &
         ~(profile::PageSize - 1);
@@ -497,23 +638,29 @@ llvm::Expected<uint64_t> KernelModel::mapLockedPages(uint64_t MDL,
     const unsigned Permissions =
         Read | (Writable ? Write : 0) |
         ((Priority & MdlMappingNoExecute) ? 0 : Execute);
-    if (auto E = Memory.mapAlias(NextUserAlias, pageBase(State.UserAddress),
+    if (auto E = Memory.mapAlias(NextUserAlias, pageBase(State.BackingAddress),
                                  AllocationSize, Permissions)) {
       if (E.isA<GuestMemoryLimitError>()) {
         llvm::consumeError(std::move(E));
         return 0;
       }
-      return std::move(E);
-    }
-    if (auto E = Memory.writeInteger(MDL + MDLMappedSystemVAOffset, Alias, 8))
       return E;
-    if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset,
-                                     MDLPagesLocked | MDLMappedToSystemVA, 2))
+    }
+    const uint16_t Flags =
+        MDLMappedToSystemVA | (State.Owner == LockedMdl::Ownership::Partial
+                                   ? MDLPartial | MDLPartialHasBeenMapped
+                                   : MDLPagesLocked);
+    if (auto E = Memory.writeInteger(MDL + MDLMappedSystemVAOffset, Alias,
+                                     profile::PointerSize))
+      return E;
+    if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, Flags, 2))
       return E;
     State.Buffer = Alias;
     State.AllocationSize = AllocationSize;
     State.MappingWritable = Writable;
     State.Mapped = true;
+    State.OwnsSystemMapping = true;
+    State.SystemMappingOwnerMDL = MDL;
     NextUserAlias += AllocationSize;
     return Alias;
   }
@@ -554,9 +701,12 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
                     "system-space mapping");
   if (It == MDLs.end() ||
       (It->second.Owner != LockedMdl::Ownership::Request &&
-       It->second.Owner != LockedMdl::Ownership::UserLocked))
+       It->second.Owner != LockedMdl::Ownership::UserLocked &&
+       It->second.Owner != LockedMdl::Ownership::Partial))
     return mdlError("unmapping requires the active request's locked MDL");
   auto &State = It->second;
+  if (State.Owner == LockedMdl::Ownership::Partial && !State.OwnsSystemMapping)
+    return mdlError("partial MDL borrows its parent's system mapping");
   if (State.Owner == LockedMdl::Ownership::Request) {
     const auto *Owner = requestForIRP(State.OwnerIRP);
     if (!Owner || Owner->Completed || Owner->Mdl != MDL)
@@ -564,6 +714,13 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
   }
   if (!State.Mapped || State.Buffer != Address)
     return mdlError("MDL unmapping requires its live system mapping address");
+  if (auto E = canReleaseMDLDependencies(MDL, {}, false))
+    return E;
+  auto Writable = Memory.canAccess(MDL, State.Size, Write);
+  if (!Writable)
+    return Writable.takeError();
+  if (!*Writable)
+    return mdlError("unmapping requires writable MDL descriptor storage");
   if (auto E = prepareRevokeVirtualRange(pageBase(State.Buffer),
                                          State.AllocationSize))
     return E;
@@ -572,12 +729,21 @@ llvm::Error KernelModel::unmapLockedPages(uint64_t Address, uint64_t MDL) {
   if (auto E = Memory.writeInteger(MDL + MDLMappedSystemVAOffset, 0,
                                    profile::PointerSize))
     return E;
-  if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, MDLPagesLocked, 2))
+  const uint16_t Flags = State.Owner == LockedMdl::Ownership::Partial
+                             ? MDLPartial
+                             : MDLPagesLocked;
+  if (auto E = Memory.writeInteger(MDL + MDLFlagsOffset, Flags, 2))
     return E;
   State.Mapped = false;
   State.MappingWritable = false;
+  State.OwnsSystemMapping = false;
+  State.SystemMappingOwnerMDL = 0;
   if (State.Owner == LockedMdl::Ownership::UserLocked) {
     State.Buffer = State.UserAddress;
+    State.AllocationSize = 0;
+  }
+  if (State.Owner == LockedMdl::Ownership::Partial) {
+    State.Buffer = State.BackingAddress;
     State.AllocationSize = 0;
   }
   return llvm::Error::success();
@@ -592,10 +758,10 @@ llvm::Expected<std::vector<uint8_t>> KernelModel::readMDLBytes(uint64_t MDL,
   std::vector<uint8_t> Bytes(Count);
   // The I/O manager consumes the original locked storage after all DMA pins
   // were released. Reading it never grants the guest a system mapping.
-  auto Owner = Physical.ownerForRange(State.Buffer, State.ByteCount);
+  auto Owner = Physical.ownerForRange(State.BackingAddress, State.ByteCount);
   if (!Owner)
     return Owner.takeError();
-  if (auto E = Memory.readBacking(State.Buffer, Bytes))
+  if (auto E = Memory.readBacking(State.BackingAddress, Bytes))
     return std::move(E);
   return Bytes;
 }
@@ -646,13 +812,23 @@ KernelModel::requestMDLChain(uint64_t IRP) const {
   return Chain;
 }
 
-llvm::Error KernelModel::appendRequestMDLReleaseRanges(
-    uint64_t IRP, std::vector<std::pair<uint64_t, uint64_t>> &Ranges) const {
+llvm::Error KernelModel::appendRequestMDLReleaseResources(
+    uint64_t IRP, std::vector<std::pair<uint64_t, uint64_t>> &Ranges,
+    std::vector<uint64_t> &Pins) const {
   auto Chain = requestMDLChain(IRP);
   if (!Chain)
     return Chain.takeError();
   for (uint64_t Address : *Chain) {
     const auto &State = MDLs.at(Address);
+    if (auto E = canReleaseMDLDependencies(Address, *Chain))
+      return E;
+    if (auto E = canReleaseMdlUserViews(Address))
+      return E;
+    auto Writable = Memory.canAccess(Address, State.Size, Write);
+    if (!Writable)
+      return Writable.takeError();
+    if (!*Writable)
+      return mdlError("completion requires writable MDL descriptor storage");
     Ranges.emplace_back(State.Address, State.Size);
     if (State.Owner == LockedMdl::Ownership::Request) {
       Ranges.emplace_back(pageBase(State.Buffer), State.AllocationSize);
@@ -661,8 +837,12 @@ llvm::Error KernelModel::appendRequestMDLReleaseRanges(
       // alias. Validate every pin and alias before retiring any descriptor.
       if (auto E = Physical.canUnpin(State.Pin))
         return E;
+      Pins.push_back(State.Pin);
       if (State.Mapped)
         Ranges.emplace_back(pageBase(State.Buffer), State.AllocationSize);
+    } else if (State.Owner == LockedMdl::Ownership::Partial &&
+               State.OwnsSystemMapping) {
+      Ranges.emplace_back(pageBase(State.Buffer), State.AllocationSize);
     }
   }
   const auto *Owner = requestForIRP(IRP);
@@ -671,6 +851,10 @@ llvm::Error KernelModel::appendRequestMDLReleaseRanges(
     if (It == MDLs.end() || It->second.OwnerIRP != IRP ||
         It->second.Owner != LockedMdl::Ownership::RequestSystemBuffer)
       return mdlError("active request lost ownership of its system-buffer MDL");
+    if (auto E = canReleaseMDLDependencies(Owner->SystemMdl, *Chain))
+      return E;
+    if (auto E = canReleaseMdlUserViews(Owner->SystemMdl))
+      return E;
     Ranges.emplace_back(It->second.Address, It->second.Size);
   }
   return llvm::Error::success();
@@ -683,6 +867,32 @@ llvm::Error KernelModel::expireRequestMDL(uint64_t IRP) {
   for (uint64_t Address : *Chain) {
     auto It = MDLs.find(Address);
     auto &State = It->second;
+    if (State.Owner != LockedMdl::Ownership::Partial)
+      continue;
+    // Completion preflight checked the whole chain, including descendants of
+    // this mapping. Retire every partial before unlocking any root; Next order
+    // does not express the dependency order.
+    if (State.OwnsSystemMapping)
+      if (auto E =
+              Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
+        return E;
+    FreedRanges.emplace(State.Address, State.Size);
+    MDLs.erase(It);
+  }
+  // An independently relocked user view can share a request MDL's backing.
+  // Release every such pin before retiring any backing, regardless of Next.
+  for (uint64_t Address : *Chain) {
+    auto It = MDLs.find(Address);
+    if (It != MDLs.end() &&
+        It->second.Owner == LockedMdl::Ownership::UserLocked)
+      if (auto E = unlockPages(Address))
+        return E;
+  }
+  for (uint64_t Address : *Chain) {
+    auto It = MDLs.find(Address);
+    if (It == MDLs.end())
+      continue;
+    auto &State = It->second;
     if (State.Owner == LockedMdl::Ownership::Request) {
       if (auto E =
               Memory.protect(pageBase(State.Buffer), State.AllocationSize, 0))
@@ -690,9 +900,6 @@ llvm::Error KernelModel::expireRequestMDL(uint64_t IRP) {
       if (auto E = Physical.retire(pageBase(State.Buffer)))
         return E;
       FreedRanges.emplace(pageBase(State.Buffer), State.AllocationSize);
-    } else if (State.Owner == LockedMdl::Ownership::UserLocked) {
-      if (auto E = unlockPages(Address))
-        return E;
     }
     // Nonpaged descriptors only own their metadata, so their backing pool
     // allocation survives completion just as it survives IoFreeMdl.
@@ -723,15 +930,26 @@ llvm::Error KernelModel::validateMDLAccess(uint64_t Address, uint32_t Size,
       }
       if (First < MDLMappedSystemVAOffset && MDLFlagsOffset + 2 < Last)
         return mdlError("MDL process fields are not modeled");
-      if (Last > MDLSize && State.Owner == LockedMdl::Ownership::Driver)
-        return mdlError("unbuilt MDL physical PFN data is unavailable");
+      if (Last > MDLSize) {
+        if (State.Owner == LockedMdl::Ownership::Driver)
+          return mdlError("unbuilt MDL physical PFN data is unavailable");
+        const uint64_t Pages =
+            ((State.OriginalAddress & (profile::PageSize - 1)) +
+             State.ByteCount + profile::PageSize - 1) /
+            profile::PageSize;
+        if (Last > MDLSize + Pages * profile::PointerSize)
+          return mdlError("MDL physical PFN read exceeds its described pages");
+      }
     }
     // Driver MDLs describe an existing allocation; neither their byte range
     // nor their lifetime restricts otherwise valid accesses to that pool.
     if (State.Owner != LockedMdl::Ownership::Request &&
-        State.Owner != LockedMdl::Ownership::UserLocked)
+        State.Owner != LockedMdl::Ownership::UserLocked &&
+        State.Owner != LockedMdl::Ownership::Partial)
       continue;
-    if (State.Owner == LockedMdl::Ownership::UserLocked && !State.Mapped)
+    if ((State.Owner == LockedMdl::Ownership::UserLocked && !State.Mapped) ||
+        (State.Owner == LockedMdl::Ownership::Partial &&
+         !State.OwnsSystemMapping))
       continue;
     const uint64_t Base = pageBase(State.Buffer);
     if (Address >= Base + State.AllocationSize || End <= Base)

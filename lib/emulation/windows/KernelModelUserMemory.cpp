@@ -65,6 +65,9 @@ KernelModel::allocateUserBuffer(uint32_t Size, llvm::ArrayRef<uint8_t> Initial,
 
 llvm::Error KernelModel::setUserRequestContext(bool Active,
                                                uint32_t ProcessID) {
+  for (const auto &[Address, View] : UserMdlViews)
+    if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
+      return E;
   if (Active) {
     for (const auto &[Address, Allocation] : UserAllocations) {
       const uint64_t Pages =
@@ -84,6 +87,15 @@ llvm::Error KernelModel::setUserRequestContext(bool Active,
       if (auto E = Memory.protect(Address, Pages, Permissions))
         return E;
     }
+  }
+  for (const auto &[Address, View] : UserMdlViews) {
+    const unsigned Permissions =
+        Active && View.ProcessID == ProcessID && !View.Revoked &&
+                !ExitedUserProcesses.contains(ProcessID)
+            ? View.Permissions
+            : 0;
+    if (auto E = Memory.protect(View.PageBase, View.MappedSize, Permissions))
+      return E;
   }
   UserRequestContext = Active;
   CurrentUserProcessID = Active ? ProcessID : 0;
@@ -212,6 +224,24 @@ llvm::Error KernelModel::exitRequestorProcess(uint64_t IRP) {
     if (auto E = Memory.validateBacking(Address, Pages))
       return E;
     Ranges.emplace_back(Address, Pages);
+  }
+  std::vector<uint64_t> Views;
+  for (const auto &[Address, View] : UserMdlViews) {
+    if (View.Revoked || View.ProcessID != Request->ProcessID)
+      continue;
+    if (auto E = Memory.validateBacking(View.PageBase, View.MappedSize))
+      return E;
+    if (auto E = canRevokeVirtualRange(View.PageBase, View.MappedSize))
+      return E;
+    Views.push_back(Address);
+  }
+  for (uint64_t Address : Views) {
+    auto &View = UserMdlViews.at(Address);
+    if (auto E = prepareRevokeVirtualRange(View.PageBase, View.MappedSize))
+      return E;
+    if (auto E = Memory.protect(View.PageBase, View.MappedSize, 0))
+      return E;
+    View.Revoked = true;
   }
   for (const auto &[Address, Pages] : Ranges) {
     if (auto E = Memory.protect(Address, Pages, 0))

@@ -138,9 +138,36 @@ llvm::Error KernelPhysicalMemory::canReleaseRange(uint64_t Backing,
       return physicalError("ignored physical RAM pin must belong to the "
                            "released range");
   }
-  for (const auto &[ID, Pin] : Pins)
-    if (ID != IgnoredPin && Intersects(Regions.at(Pin.Owner)))
-      return physicalError("physical RAM release intersects a pinned owner");
+  return canReleaseRanges({{Backing, Size}},
+                          IgnoredPin ? llvm::ArrayRef<uint64_t>(IgnoredPin)
+                                     : llvm::ArrayRef<uint64_t>());
+}
+
+llvm::Error KernelPhysicalMemory::canReleaseRanges(
+    llvm::ArrayRef<std::pair<uint64_t, uint64_t>> Ranges,
+    llvm::ArrayRef<uint64_t> RetiringPins) const {
+  std::set<uint64_t> Retiring;
+  for (uint64_t Pin : RetiringPins) {
+    if (auto E = canUnpin(Pin))
+      return E;
+    if (!Retiring.insert(Pin).second)
+      return physicalError("physical RAM release repeats a retiring pin");
+  }
+  for (const auto &[Backing, Size] : Ranges) {
+    if (!Size || Size > UINT64_MAX - Backing)
+      return physicalError("physical RAM release requires a nonempty, "
+                           "nonoverflowing range");
+    for (const auto &[ID, Pin] : Pins) {
+      if (Retiring.count(ID))
+        continue;
+      const auto &Region = Regions.at(Pin.Owner);
+      const bool Intersects = Backing <= Region.Backing
+                                  ? Region.Backing - Backing < Size
+                                  : Backing - Region.Backing < Region.Size;
+      if (Intersects)
+        return physicalError("physical RAM release intersects a pinned owner");
+    }
+  }
   return llvm::Error::success();
 }
 

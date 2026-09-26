@@ -24,6 +24,7 @@ add_neverd_component_library(NeverDEmulation
   windows/KernelModelUserMemory.cpp
   windows/KernelModelPhysicalMemory.cpp
   windows/KernelModelMDL.cpp
+  windows/KernelModelMDLUserMappings.cpp
   windows/KernelModelIRPStack.cpp
   windows/KernelModelDeviceStack.cpp
   windows/KernelModelPnpDevices.cpp

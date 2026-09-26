@@ -40,8 +40,8 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 |----------------|----------|------------|
 | 使用下列 API 的 x64 软件 WDM 驱动 | 有界 x64 WDM 初始化、缓冲／直接／neither 请求、工作项、定时器、DPC、事件与等待，以及行为报告和限制 | 每个额外执行到的 API 都必须具有明确的模型 |
 | `METHOD_BUFFERED` IOCTL | 缓冲／直接 I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；仅允许跨文件或同一异步文件上的有界批量提交 |
-| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL、系统映射、共享物理页身份及 SG DMA | 用户映射及其他 DMA 接口 |
-| 驱动自行分配的 MDL | 独立或 IRP 关联的非分页池／单个用户分配描述符；来宾链指针与完成时释放 | 不支持配额、手工／部分 MDL 或任意用户映射 |
+| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 请求拥有的 MDL、系统映射、共享物理页身份及 SG DMA | 任意进程映射及其他 DMA 接口 |
+| 驱动自行分配的 MDL | 独立或 IRP 关联的非分页池／单个用户分配描述符；来宾链指针与完成时释放 | 不支持配额、手工 MDL 或任意进程映射 |
 | READ/WRITE | 缓冲／直接／neither I/O，可由工作项或 DPC 完成 | 仅支持下列 API 子集；同步文件仍不支持重叠请求，也不模拟隐式文件位置 |
 | WDM `METHOD_NEITHER` | 独立用户缓冲区、访问探测、MDL 锁页、合成请求进程身份、派发后 VA 撤销或进程退出及有限取消 | 不支持通用进程附加、任意用户映射或重新映射 |
 | KMDF 1.33 非 PnP 驱动 | 版本绑定、对象／上下文、具名控制设备、手动、顺序或有限或无限并行默认及非默认队列，以及实际执行回调的缓冲／直接／neither 请求 | 不支持 PnP 设备、通用队列调度、类扩展或 UMDF |
@@ -191,7 +191,7 @@ KMDF 1.33 支持使用精确的 1.33.0 ABI：458 个函数槽具有稳定的来�
 
 `WdfRequestGetInformation` 与 `WdfRequestSetInformation` 共享原 IRP 中的 64 位 `IoStatus.Information`，与来宾直接写入保持一致。Set 只赋值，传输长度在完成时才验证。`WdfRequestCompleteWithInformation` 在清理前写入同一字段；清理回调通过事先保存的 IRP 修改此值后，最终 Information 使用修改后的值，即使此阶段 GetInformation 已返回零。`WdfRequestGetIoQueue` 在驱动持有请求时返回递送队列；手动取回后返回目标手动队列。请求停留在手动队列期间归框架所有，驱动不可访问。默认文件配置下，`WdfRequestGetFileObject` 返回 NULL，不会把 WDM FILE_OBJECT 伪装成 WDF 文件对象。`WdfRequestWdmGetIrp` 返回同一个 IRP；来宾不能通过 `IoCompleteRequest`／`IofCompleteRequest` 绕过 WDF 完成流程。完成过程中或完成后，只要请求句柄仍有效，GetInformation／GetIoQueue 返回零；MDL 获取先将有效输出槽清为 NULL，再返回 `STATUS_INTERNAL_ERROR`。此时 SetInformation／GetFileObject／WdmGetIrp 仍被拒绝，已有的缓冲区与参数访问限制不变。
 
-`WdfRequestRetrieveInputWdmMdl` 与 `WdfRequestRetrieveOutputWdmMdl` 按需为缓冲 WRITE 输入、READ 输出及 IOCTL 输入／输出描述现有 SystemBuffer。每次获取都先验证方向有效且长度非零，再使用该请求唯一的缓存描述符；首次成功获取决定 ByteCount，即使另一方向的逻辑长度不同也保留此值。对此描述符，`MmGetSystemAddressForMdlSafe` 返回原 VA；额外映射、解除映射及驱动释放均被拒绝。直接 READ 输出、WRITE 输入及 IOCTL 输出返回现有 `IRP.MdlAddress`，获取本身不建立映射；直接 IOCTL 输入使用 SystemBuffer 缓存。描述符、IRP 和缓冲区在完成时一同失效。取消内部引用或外部引用只保留 WDF 上下文，不保留已完成的 I/O 存储。WDF 对 `METHOD_NEITHER` 的 MDL 获取函数仍不支持；请求所属的 WDFMEMORY 使用独立的锁页映射。已构建描述符的模型 PFN 数组可只读访问；未构建描述符的 PFN 访问被拒绝。
+`WdfRequestRetrieveInputWdmMdl` 与 `WdfRequestRetrieveOutputWdmMdl` 按需为缓冲 WRITE 输入、READ 输出及 IOCTL 输入／输出描述现有 SystemBuffer。每次获取都先验证方向有效且长度非零，再使用该请求唯一的缓存描述符；首次成功获取决定 ByteCount，即使另一方向的逻辑长度不同也保留此值。对此描述符，`MmGetSystemAddressForMdlSafe` 返回原 VA；额外系统映射、解除系统映射及驱动释放均被拒绝。直接 READ 输出、WRITE 输入及 IOCTL 输出返回现有 `IRP.MdlAddress`，获取本身不建立映射；直接 IOCTL 输入使用 SystemBuffer 缓存。描述符、IRP 和缓冲区在完成时一同失效。取消内部引用或外部引用只保留 WDF 上下文，不保留已完成的 I/O 存储。WDF 对 `METHOD_NEITHER` 的 MDL 获取函数仍不支持；请求所属的 WDFMEMORY 使用独立的锁页映射。已构建描述符的模型 PFN 数组可只读访问；未构建描述符的 PFN 访问被拒绝。
 
 对缓冲、直接和 neither KMDF 请求，`WdfDeviceInitSetIoInCallerContextCallback` 在请求方进程的 `PASSIVE_LEVEL` 执行预队列回调。回调必须完成请求，或恰好调用一次 `WdfDeviceEnqueueRequest` 后进入默认队列。对于 `METHOD_NEITHER` IOCTL 和 neither READ／WRITE，`WdfRequestRetrieveUnsafeUserInputBuffer` 与 `WdfRequestRetrieveUnsafeUserOutputBuffer` 仅在该回调中返回原始用户地址。`WdfRequestProbeAndLockUserBufferForRead` 与 `WdfRequestProbeAndLockUserBufferForWrite` 检查页面权限并锁定请求所属的页面；`WdfMemoryGetBuffer` 返回系统别名，在离开请求方上下文后的队列回调中仍可使用。请求完成时释放锁页和别名。也支持通过内嵌指针访问显式声明的 `user_buffers`；任意用户映射仍不支持。
 
@@ -311,11 +311,11 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 系统工作项可通过 `IoGetRequestorProcess` 获取活动 IRP 的不透明请求进程对象，用 `KeStackAttachProcess` 和可写的内核 `KAPC_STATE` 临时附加，在原始用户 VA 上操作，再以同一状态调用 `KeUnstackDetachProcess`。`IoGetCurrentProcess` 与 `PsGetProcessId` 反映附加进程；`PsGetCurrentProcessId` 仍返回创建工作线程的系统进程 ID 4。进程退出、IRP 结束、错误配对、附加期间等待或完成 IRP 均明确报错。
 
-对于 direct IOCTL，`input` 初始化第一个系统缓冲区，`direct_input` 初始化由 MDL 描述的独立第二缓冲区，并补零至 `output_size`。`METHOD_IN_DIRECT` 要求可读访问，但不意味着系统映射为只读。两种方法都使用可读写的场景缓冲区。`MdlMappingNoWrite` 移除映射的写权限，`MdlMappingNoExecute` 移除执行权限。解除映射会撤销系统虚拟地址；重新映射保留同一份锁定数据。请求完成时 MDL 和映射均失效。模型支持 WDM 宏使用的公共 MDL 字段；进程字段、未构建描述符的 PFN 访问、手工构造的 MDL、用户映射以及通过原始 UserBuffer 直接访问都会被拒绝；已构建描述符的 PFN 数组只读。零长度 direct 缓冲区的 MDL 为空。
+对于 direct IOCTL，`input` 初始化第一个系统缓冲区，`direct_input` 初始化由 MDL 描述的独立第二缓冲区，并补零至 `output_size`。`METHOD_IN_DIRECT` 要求可读访问，但不意味着系统映射为只读。两种方法都使用可读写的场景缓冲区。`MdlMappingNoWrite` 移除映射的写权限，`MdlMappingNoExecute` 移除执行权限。解除映射会撤销系统虚拟地址；重新映射保留同一份锁定数据。请求完成时 MDL 和映射均失效。模型支持 WDM 宏使用的公共 MDL 字段；进程字段、未构建描述符的 PFN 访问、手工构造的 MDL、超出下述受限进程契约的用户映射以及通过原始 UserBuffer 直接访问都会被拒绝；已构建描述符的 PFN 数组只读。零长度 direct 缓冲区的 MDL 为空。
 
 `IoAllocateMdl` 为非空、不溢出且不超过 1 MiB 的缓冲区分配元数据，不探测或锁定缓冲区。`Irp` 可为 NULL 或有效的建模 IRP。主描述符替换当前驱动链的头部，脱离的描述符仍由驱动拥有；`SecondaryBuffer` 将描述符追加到链尾，空链则设置为头部。原始请求拥有的 direct-I/O MDL 必须保持可达，不能由驱动替换或释放。`ChargeQuota` 必须为 FALSE；对象区耗尽时返回 NULL。`MmBuildMdlForNonPagedPool` 要求完整范围位于同一个有效非分页池分配内。安全辅助函数和 WDM 宏复用原始地址与权限；新增禁止写入／执行标志不改变既有权限，额外系统映射及解除映射会被拒绝。`IoFreeMdl` 仅释放指定的驱动描述符，不解除链连接，也不沿 `Next` 释放后继；手动释放用户 MDL 前必须先解锁。池缓冲区具有独立生命周期，只要不再访问已释放存储，两种释放顺序均受支持。
 
-驱动可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脱离建模描述符。IRP 最终完成前验证当前整条链，随后解锁附加的用户 MDL、撤销其别名并释放附加描述符；脱离的描述符和池缓冲区仍由驱动拥有。环、未知或已释放节点、多个活动 IRP 共用描述符，以及把 WDF 私有描述符接入 WDM 链，均明确失败。活动 DMA 和调度器依赖阻止过早回收。其他建模 MDL 字段及已构建 PFN 数组只读；进程字段、未构建 PFN、手工或部分 MDL、任意用户映射仍不支持。卸载前必须释放剩余驱动描述符。
+驱动可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脱离建模描述符。IRP 最终完成前验证当前整条链，随后解锁附加的用户 MDL、撤销其别名并释放附加描述符；脱离的描述符和池缓冲区仍由驱动拥有。环、未知或已释放节点、多个活动 IRP 共用描述符，以及把 WDF 私有描述符接入 WDM 链，均明确失败。活动 DMA 和调度器依赖阻止过早回收。其他建模 MDL 字段及已构建 PFN 数组只读；进程字段、未构建 PFN、手工 MDL、任意进程映射仍不支持。卸载前必须释放剩余驱动描述符。
 
 当 IOCTL 的 `output_size` 非零时，`Information` 不得超过该大小，即使输入缓冲区更大。无输出缓冲区的 IOCTL 可在此字段返回驱动自定义结果，且不会复制输出字节；`information_hex` 精确保留原始 64 位值。
 
@@ -381,6 +381,12 @@ JSON 报告区分 `stop_reason`、可为空的 `nt_status` 和 `nt_success`、�
 `neverd_emulate_driver_scenario_json(session, path, scenario_json, options)` 使用相同的 v1 选项与所有权规则，另外接受严格验证的场景输入。必须传入非 NULL、以 NUL 结尾的 JSON 字符串。原有 `neverd_emulate_driver_json` ABI 保持不变，仍仅执行初始化。C++ 解析器 `driverOptionsFromScenarioJSON` 为 `emulateDriver` 的调用方提供相同的场景验证。
 
 内部 C++ 入口为 `include/neverd/emulation/DriverSession.h` 中的 `neverd::emulation::emulateDriver`。格式解析由现有加载器负责；Windows 对象／API 行为由 `lib/emulation/windows` 负责；CPU 状态及执行由 Unicorn 适配器负责。适配器与模型使用相同的来宾内存接口。Windows API 行为不应放入 Unicorn fork。
+
+`IoBuildPartialMdl` 支持已构建 MDL 的非空子范围；长度为零表示剩余范围。目标必须具有足够 PFN 容量。部分 MDL 共享物理页，不重复锁页；可继承现有系统映射或建立自己的系统别名。释放或通过真实 WDK 内联 `MmPrepareMdlForReuse` 准备重用时，只撤销自身拥有的映射。非分页源描述符可独立释放；仍有部分 MDL 依赖的根锁页或系统别名不能提前释放。IRP 完成先检查整条链，清理不依赖链中顺序；活动 DMA 阻止重建或提前释放。
+
+`MmMapLockedPagesSpecifyCache` 支持在有效请求方进程（包括受限工作项附加上下文）中，以不高于 `APC_LEVEL` 的 IRQL 使用 `UserMode` 和 `MmCached` 建立独立用户视图。视图共享物理内容，不改变 `MappedSystemVa`；始终不可执行，`MdlMappingNoWrite` 使其只读。池内存必须非分页且独占完整页面。再次对用户视图锁页仍保持原 PFN。指定地址必须位于专用用户映射区且保留 MDL 页内偏移；空间不足引发可捕获的 `STATUS_INSUFFICIENT_RESOURCES`。
+
+解除用户映射要求创建进程和精确的地址／MDL 配对。撤销原始用户 VA 不影响独立视图；进程退出只撤销属于该进程的用户视图，锁页和系统别名继续有效。活动视图阻止描述符、根锁页、池或请求存储提前释放。已撤销地址不复用；任意进程地址空间、缓存策略和用户 VA 重映射仍不支持。
 
 WDM `METHOD_NEITHER` 的 `Type3InputBuffer` 与 `IRP.UserBuffer` 分别指向独立的用户内存。`ProbeForRead` 只检查范围和对齐，不触碰页面；`ProbeForWrite` 会触碰每一页。`ExGetPreviousMode` 返回请求模式。`MmProbeAndLockPages` 锁定单个用户分配的页面，`MmGetSystemAddressForMdlSafe` 建立共享内核别名，`MmUnlockPages` 撤销别名并解锁。不支持任意进程地址空间。
 

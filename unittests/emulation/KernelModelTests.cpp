@@ -162,13 +162,16 @@ TEST_F(DriverKernelModel, PoolOwnershipSurvivesBadTagAndRejectsUseAfterFree) {
 TEST_F(DriverKernelModel,
        SystemThreadObjectSurvivesHandleCloseUntilExitAndWait) {
   constexpr uint32_t ThreadAllAccess = 0x001fffff;
+  constexpr uint64_t KernelModeWithRegisterHighBits =
+      0xaabbccdd12345600 | windows::KernelMode;
   EXPECT_EQ(invoke("PsCreateSystemThread",
                    {Scratch, ThreadAllAccess, 0, 0, 0, Entry, Scratch + 0x100}),
             0u);
   const uint64_t Handle = integer(Scratch);
   ASSERT_NE(Handle, 0u);
   EXPECT_EQ(invoke("ObReferenceObjectByHandle",
-                   {Handle, 0x100000, 0, 0, Scratch + 8, 0}),
+                   {Handle, 0x100000, 0, KernelModeWithRegisterHighBits,
+                    Scratch + 8, 0}),
             0u);
   const uint64_t Object = integer(Scratch + 8);
   ASSERT_NE(Object, 0u);
@@ -178,7 +181,9 @@ TEST_F(DriverKernelModel,
   EXPECT_EQ(invoke("ObReferenceObjectByHandle",
                    {Handle, 0x100000, 0, 0, Scratch + 16, 0}),
             0xc0000008u);
-  EXPECT_EQ(invoke("KeWaitForSingleObject", {Object, 0, 0, 0, 0}), 0u);
+  EXPECT_EQ(invoke("KeWaitForSingleObject",
+                   {Object, 0, KernelModeWithRegisterHighBits, 0, 0}),
+            0u);
   auto Wait = Model->takeWait();
   ASSERT_TRUE(Wait);
   EXPECT_EQ(Wait->Type, KernelModel::Wait::Kind::Thread);

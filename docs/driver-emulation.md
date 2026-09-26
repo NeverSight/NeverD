@@ -54,7 +54,7 @@ establish compatibility with arbitrary third-party drivers.
 | x64 software WDM driver using the listed APIs | Bounded x64 WDM initialization, buffered/direct/neither requests, work items, timers, DPCs, events and waits, with behavior reports and limits | Each additional executed API must have a defined model |
 | `METHOD_BUFFERED` IOCTL | Buffered/direct I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial |
 | `METHOD_IN_DIRECT`, `METHOD_OUT_DIRECT` | Request-owned MDLs, system mappings and shared physical page identities | User mappings and DMA interfaces outside the subset below |
-| Driver-allocated MDLs | Standalone or IRP-associated descriptors over nonpaged pool or one live user allocation; guest chain links and completion-time release | Quota, hand-built/partial MDLs and arbitrary user mappings |
+| Driver-allocated MDLs | Standalone or IRP-associated descriptors, partial MDLs, shared user/system mappings and completion-time release | Quota, hand-built MDLs, arbitrary process address spaces and VA reuse |
 | READ/WRITE | Buffered/direct/neither I/O with work-item or DPC completion; pending WDM requests may overlap across files or on one asynchronous file | Only the API subset below; synchronous files remain serial and no implicit file position is modeled |
 | WDM `METHOD_NEITHER` | Separate user input/output VAs, access probes, catchable user-memory faults, driver-created user MDLs, synthetic requestor identities, bounded work-item process attachment, post-dispatch VA revocation or process exit and cancellation | No arbitrary user mappings or remapping |
 | KMDF 1.33 non-PnP driver | Binding, objects/contexts, named control devices, manual, sequential and parallel default queues, nondefault manual and automatic queues, and buffered/direct/neither requests with executed callbacks | No PnP devices, queue power transitions, class extensions or UMDF |
@@ -252,7 +252,7 @@ For an already canceled request, legacy void `WdfRequestMarkCancelable` executes
 
 `WdfRequestGetInformation` and `WdfRequestSetInformation` share the original 64-bit `IRP.IoStatus.Information`, including direct guest writes. Set assigns the value; transfer-length validation occurs at completion. `WdfRequestCompleteWithInformation` writes the same field before cleanup; changes through a previously saved IRP during cleanup determine the final Information even though GetInformation already returns zero in that phase. `WdfRequestGetIoQueue` returns the delivering queue while the driver owns the request, including the manual destination after retrieval; queued requests are framework-owned and cannot be inspected by the driver. With the default file configuration, `WdfRequestGetFileObject` returns NULL: no WDF file object is invented from the WDM FILE_OBJECT. `WdfRequestWdmGetIrp` returns the same IRP; guest `IoCompleteRequest`/`IofCompleteRequest` cannot bypass WDF completion. While a request handle remains valid during or after completion, GetInformation/GetIoQueue return zero, and MDL retrieval first clears a valid output slot to NULL then returns `STATUS_INTERNAL_ERROR`. SetInformation/GetFileObject/WdmGetIrp remain rejected then. Existing buffer and parameter accessor restrictions are unchanged.
 
-`WdfRequestRetrieveInputWdmMdl` and `WdfRequestRetrieveOutputWdmMdl` lazily describe the existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each requested direction must be valid and nonempty before using the request’s single cached descriptor; the first successful retrieval fixes its ByteCount even when the other direction has a different logical length. `MmGetSystemAddressForMdlSafe` returns the original VA for this descriptor; additional mapping, unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output instead return the existing `IRP.MdlAddress` without mapping it merely by retrieval; direct IOCTL input uses the SystemBuffer cache. Descriptors, IRP and buffers retire at completion. Cancellation-internal or external references retain only WDF context, not completed I/O storage. Built physical PFNs are read-only; WDF MDL retrieval for `METHOD_NEITHER` remains unsupported; request-owned WDFMEMORY uses a separate locked user-page mapping.
+`WdfRequestRetrieveInputWdmMdl` and `WdfRequestRetrieveOutputWdmMdl` lazily describe the existing SystemBuffer for buffered WRITE input, READ output and IOCTL input/output. Each requested direction must be valid and nonempty before using the request’s single cached descriptor; the first successful retrieval fixes its ByteCount even when the other direction has a different logical length. `MmGetSystemAddressForMdlSafe` returns the original VA for this descriptor; additional system mapping, system unmapping and driver freeing are rejected. Direct READ output, WRITE input and IOCTL output instead return the existing `IRP.MdlAddress` without mapping it merely by retrieval; direct IOCTL input uses the SystemBuffer cache. Descriptors, IRP and buffers retire at completion. Cancellation-internal or external references retain only WDF context, not completed I/O storage. Built physical PFNs are read-only; WDF MDL retrieval for `METHOD_NEITHER` remains unsupported; request-owned WDFMEMORY uses a separate locked user-page mapping.
 
 For buffered, direct and neither KMDF transfers, `WdfDeviceInitSetIoInCallerContextCallback` runs a prequeue callback in the requestor process at `PASSIVE_LEVEL`. It must complete the request or call `WdfDeviceEnqueueRequest` once before delivery to the default queue. For `METHOD_NEITHER` IOCTL and neither READ/WRITE, `WdfRequestRetrieveUnsafeUserInputBuffer` and `WdfRequestRetrieveUnsafeUserOutputBuffer` expose the original user VAs only in that callback. `WdfRequestProbeAndLockUserBufferForRead` and `WdfRequestProbeAndLockUserBufferForWrite` check page rights and pin request-owned memory; `WdfMemoryGetBuffer` returns a system alias that remains usable in the queue callback outside the requestor context. Completion releases the pins and aliases. The original scenario buffers and explicitly declared `user_buffers` are eligible, including buffers reached through embedded pointers. Locking remains restricted to the current request in caller context; arbitrary user mappings remain unsupported.
 
@@ -447,8 +447,9 @@ scenario buffers. `MdlMappingNoWrite` removes mapping write access and
 `MdlMappingNoExecute` removes execute access. Unmapping revokes the system VA;
 remapping retains the same locked data. Completion expires the MDL and mapping.
 The public MDL fields and built physical PFN arrays used by WDM macros are
-modeled read-only except for `MDL.Next`; process fields, unbuilt PFN access, hand-built MDLs, user
-mappings and direct access through raw UserBuffer are rejected. A zero-length direct buffer has a null MDL.
+modeled read-only except for `MDL.Next`. Process fields, unbuilt PFN access,
+hand-built MDLs and direct access through raw UserBuffer are rejected. User
+mappings follow the process-owned MDL contract below. A zero-length direct buffer has a null MDL.
 
 `IoAllocateMdl` allocates metadata for a nonempty, nonoverflowing buffer of at
 most 1 MiB; it does not probe or lock that buffer. `Irp` may be NULL or a live
@@ -473,9 +474,39 @@ attached descriptors. Detached descriptors and pool backing remain driver-owned.
 Cycles, unknown or freed links, descriptors shared between live IRPs and private
 WDF descriptors spliced into WDM chains fail explicitly. Live DMA and dispatcher
 dependencies prevent premature retirement. Other modeled MDL fields and built
-PFNs remain read-only; process fields, unbuilt PFN access, hand-built or partial
-MDLs and arbitrary user mappings remain unsupported. Unload must release every
+PFNs remain read-only; process fields, unbuilt PFN access and hand-built
+MDLs remain unsupported. Unload must release every
 remaining driver-owned descriptor.
+
+`IoBuildPartialMdl` describes a nonempty subrange of a built source MDL;
+length zero selects the remainder. The target must have enough PFN capacity.
+Partial descriptors share physical pages without taking another page lock.
+They either inherit a live source system mapping or create an independent
+mapping through `MmGetSystemAddressForMdlSafe`. Freeing or preparing a partial
+MDL for reuse releases only a mapping it owns. The real WDK inline
+`MmPrepareMdlForReuse` can then precede another `IoBuildPartialMdl` call.
+A nonpaged source descriptor can be freed independently; a root user lock or
+borrowed system alias cannot retire while a dependent partial MDL remains.
+Completion checks the entire chain before releasing dependencies, regardless
+of descriptor order. Active DMA prevents rebuild and premature retirement.
+
+`MmMapLockedPagesSpecifyCache` accepts `UserMode` and `MmCached` in a live
+requestor context, including the bounded attached work-item context, at or
+below `APC_LEVEL`. Each call creates a separate process-owned view of the same
+physical backing without changing `MappedSystemVa`. Views are always
+non-executable; `MdlMappingNoWrite` makes a view read-only. Pool backing must
+be nonpaged and occupy complete private pages. Mapping a user view again with
+`MmProbeAndLockPages` retains the original physical identity. A requested
+address must preserve the MDL page offset and lie in the dedicated user-view
+arena; exhaustion raises a catchable `STATUS_INSUFFICIENT_RESOURCES`.
+
+`MmUnmapLockedPages` requires the exact user address/MDL pair and the creating
+process. Unmapping an original scenario VA leaves independent MDL views and
+system aliases intact. Process exit revokes only that process's user views;
+locked physical pages and system aliases survive. Live views prevent descriptor,
+root-lock, pool and request-storage retirement. Revoked user addresses are not
+reused. Arbitrary process spaces, cache policies and user VA remapping remain
+outside this bounded profile.
 
 For a WDM `METHOD_NEITHER` IOCTL, the input pointer in
 `Type3InputBuffer` and the output pointer in `IRP.UserBuffer` refer to separate

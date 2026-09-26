@@ -258,6 +258,7 @@ private:
   uint32_t CurrentUserProcessID = 0;
   uint64_t NextUserAddress = profile::UserArenaBase;
   uint64_t NextUserAlias = profile::UserAliasBase;
+  uint64_t NextUserMappedAlias = profile::UserMappedAliasBase;
   struct UserAllocation {
     uint64_t Size;
     uint32_t ProcessID;
@@ -266,6 +267,18 @@ private:
   std::map<uint64_t, UserAllocation> UserAllocations;
   std::set<uint64_t> RevokedUserAllocations;
   std::set<uint32_t> ExitedUserProcesses;
+  struct UserMdlView {
+    uint64_t MDL = 0;
+    uint64_t Address = 0;
+    uint64_t PageBase = 0;
+    uint64_t MappedSize = 0;
+    uint64_t BackingAddress = 0;
+    uint32_t ProcessID = 0;
+    uint32_t Length = 0;
+    unsigned Permissions = 0;
+    bool Revoked = false;
+  };
+  std::map<uint64_t, UserMdlView> UserMdlViews;
   std::map<uint32_t, uint64_t> ProcessObjects;
   std::map<uint64_t, uint32_t> ProcessObjectIDs;
   struct ProcessAttachment {
@@ -637,13 +650,19 @@ private:
       RequestSystemBuffer,
       Driver,
       NonPagedPool,
-      UserLocked
+      UserLocked,
+      Partial
     };
     Ownership Owner = Ownership::Request;
     uint64_t OwnerIRP = 0;
     uint64_t Address = 0;
     uint64_t Size = 0;
     uint64_t Buffer = 0;
+    uint64_t OriginalAddress = 0;
+    uint64_t BackingAddress = 0;
+    uint64_t LockOwnerMDL = 0;
+    uint64_t SystemMappingOwnerMDL = 0;
+    bool OwnsSystemMapping = false;
     uint64_t AllocationSize = 0;
     uint64_t UserAddress = 0;
     uint32_t ByteCount = 0;
@@ -658,6 +677,11 @@ private:
   llvm::Error initializeMDLPhysicalPages(const LockedMdl &State);
   llvm::Expected<uint64_t> allocateMDL(llvm::ArrayRef<uint64_t> Arguments);
   llvm::Error buildNonPagedMDL(uint64_t MDL);
+  llvm::Error buildPartialMDL(uint64_t Source, uint64_t Target,
+                              uint64_t Address, uint32_t Length);
+  llvm::Error canReleaseMDLDependencies(uint64_t MDL,
+                                        llvm::ArrayRef<uint64_t> Retiring = {},
+                                        bool ReleasePages = true) const;
   llvm::Error probeAndLockPages(uint64_t MDL, uint32_t Mode,
                                 uint32_t Operation);
   llvm::Error unlockPages(uint64_t MDL);
@@ -675,12 +699,31 @@ private:
                                             bool DmaWritable);
   llvm::Expected<uint64_t> mapLockedPages(uint64_t MDL, uint32_t Priority,
                                           bool ReuseExisting);
+  llvm::Expected<uint64_t> mapUserMDL(uint64_t MDL, uint64_t RequestedAddress,
+                                      uint32_t Priority);
+  llvm::Error unmapUserMDL(uint64_t Address, uint64_t MDL);
+  llvm::Error canReleaseMdlUserViews(uint64_t MDL) const;
+  llvm::Error canReleaseUserViewsForBacking(uint64_t Address,
+                                            uint64_t Size) const;
+  llvm::Error validateUserMdlViewAccess(uint64_t Address, uint64_t Size,
+                                        bool IsWrite) const;
+  struct UserMemoryRange {
+    uint64_t Owner;
+    uint64_t Offset;
+    uint64_t Backing;
+  };
+  llvm::Expected<UserMemoryRange> resolveUserMemoryRange(uint64_t Address,
+                                                         uint64_t Length,
+                                                         bool ForWrite) const;
   llvm::Error unmapLockedPages(uint64_t Address, uint64_t MDL);
   llvm::Error validateMDLAccess(uint64_t Address, uint32_t Size,
                                 bool IsWrite) const;
   llvm::Expected<std::vector<uint64_t>> requestMDLChain(uint64_t IRP) const;
-  llvm::Error appendRequestMDLReleaseRanges(
-      uint64_t IRP, std::vector<std::pair<uint64_t, uint64_t>> &Ranges) const;
+  llvm::Expected<std::vector<std::pair<uint64_t, uint64_t>>>
+  requestReleaseRanges(uint64_t IRP) const;
+  llvm::Error appendRequestMDLReleaseResources(
+      uint64_t IRP, std::vector<std::pair<uint64_t, uint64_t>> &Ranges,
+      std::vector<uint64_t> &Pins) const;
   llvm::Error expireRequestMDL(uint64_t IRP);
   llvm::Expected<std::vector<uint8_t>> readMDLBytes(uint64_t MDL,
                                                     uint32_t Count);

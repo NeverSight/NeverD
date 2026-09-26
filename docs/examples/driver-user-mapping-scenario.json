@@ -1,0 +1,46 @@
+{
+  "load_address": "0x190000000",
+  "unload": true,
+  "requests": [
+    {
+      "kind": "create",
+      "device": "\\Device\\NeverDUserMapping"
+    },
+    {
+      "kind": "ioctl",
+      "code": "0x222103",
+      "input": "0000000000000000",
+      "user_buffers": [
+        {
+          "id": "report",
+          "size": 4
+        }
+      ],
+      "user_pointers": [
+        {
+          "source": { "buffer": "input", "offset": 0 },
+          "target": { "buffer": "memory", "id": "report", "offset": 0 }
+        }
+      ]
+    },
+    {
+      "kind": "ioctl",
+      "code": "0x222107",
+      "input": "0000000000000000",
+      "user_buffers": [
+        {
+          "id": "report",
+          "size": 4
+        }
+      ],
+      "user_pointers": [
+        {
+          "source": { "buffer": "input", "offset": 0 },
+          "target": { "buffer": "memory", "id": "report", "offset": 0 }
+        }
+      ]
+    },
+    { "kind": "cleanup" },
+    { "kind": "close" }
+  ]
+}

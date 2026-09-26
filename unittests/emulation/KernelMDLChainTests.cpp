@@ -163,6 +163,267 @@ TEST_F(KernelMDLChain, PrimaryAndSecondaryCompleteWithoutReleasingPoolStorage) {
   call("ExFreePoolWithTag", {Pool, PoolTag});
 }
 
+TEST_F(KernelMDLChain, PartialOfNonpagedMdlBorrowsItsMappingAndPhysicalPage) {
+  const auto Source = call("IoAllocateMdl", {Pool, 64, 0, 0, 0});
+  const auto Partial = call("IoAllocateMdl", {Pool + 8, 32, 0, 0, 0});
+  call("MmBuildMdlForNonPagedPool", {Source});
+  call("IoBuildPartialMdl", {Source, Partial, Pool + 8, 16});
+  EXPECT_EQ(get(Partial + MDLStartVAOffset), Pool & ~(profile::PageSize - 1));
+  EXPECT_EQ(get(Partial + MDLByteOffsetOffset, 4),
+            (Pool + 8) & (profile::PageSize - 1));
+  EXPECT_EQ(get(Partial + MDLByteCountOffset, 4), 16u);
+  EXPECT_EQ(get(Partial + MDLSize), get(Source + MDLSize));
+  EXPECT_EQ(get(Partial + MDLMappedSystemVAOffset), Pool + 8);
+  EXPECT_EQ(call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority}),
+            Pool + 8);
+  rejected(Model->call("MmUnmapLockedPages", {Pool + 8, Partial}), "borrows");
+  call("IoFreeMdl", {Source});
+  EXPECT_EQ(call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority}),
+            Pool + 8);
+  put(Pool + 8, 0x78563412, 4);
+  EXPECT_EQ(get(Pool + 8, 4), 0x78563412u);
+  call("IoFreeMdl", {Partial});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+}
+
+TEST_F(KernelMDLChain, PartialUserMdlOwnsOnlyItsNewSystemMapping) {
+  const uint64_t IRP = begin(NeitherIOCTL);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto User = get(IRP + IRPUserBufferOffset);
+  const auto Source = call("IoAllocateMdl", {User, 4, 0, 0, 0});
+  const auto Partial = call("IoAllocateMdl", {User + 1, 3, 0, 0, 0});
+  call("MmProbeAndLockPages", {Source, UserMode, IoWriteAccess});
+  call("IoBuildPartialMdl", {Source, Partial, User + 1, 0});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+  EXPECT_NE(Alias, 0u);
+  put(Alias, 0x4738, 2);
+  EXPECT_EQ(get(User + 1, 2), 0x4738u);
+  rejected(Model->call("MmUnlockPages", {Source}), "dependent partial");
+  call("MmUnmapLockedPages", {Alias, Partial});
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  call("IoFreeMdl", {Partial});
+  call("MmUnlockPages", {Source});
+  call("IoFreeMdl", {Source});
+  complete(IRP);
+}
+
+TEST_F(KernelMDLChain, PartialPoolViewsOutliveIntermediateDescriptors) {
+  const auto Source = call("IoAllocateMdl", {Pool, 64, 0, 0, 0});
+  const auto Partial = call("IoAllocateMdl", {Pool, 64, 0, 0, 0});
+  const auto Leaf = call("IoAllocateMdl", {Pool, 64, 0, 0, 0});
+  call("MmBuildMdlForNonPagedPool", {Source});
+  call("IoBuildPartialMdl", {Source, Partial, Pool + 8, 32});
+  call("IoBuildPartialMdl", {Partial, Leaf, Pool + 16, 8});
+  const auto PFN = get(Source + MDLSize);
+  call("IoFreeMdl", {Source});
+  call("IoFreeMdl", {Partial});
+  EXPECT_EQ(get(Leaf + MDLSize), PFN);
+  EXPECT_EQ(get(Leaf + MDLFlagsOffset, 2),
+            MDLPartial | MDLMappedToSystemVA | MDLParentMappedSystemVA);
+  EXPECT_EQ(call("MmGetSystemAddressForMdlSafe",
+                 {Leaf, NormalPagePriority | MdlMappingNoWrite}),
+            Pool + 16);
+  // A child view must not narrow the parent allocation's existing mapping.
+  put(Pool, 0x19, 1);
+  put(Pool + 63, 0x27, 1);
+  call("KeFlushIoBuffers", {Leaf, 0, 0});
+  call("ExFreePoolWithTag", {Pool, PoolTag});
+  rejected(
+      Model->call("MmGetSystemAddressForMdlSafe", {Leaf, NormalPagePriority}),
+      "physical");
+  rejected(Model->call("KeFlushIoBuffers", {Leaf, 0, 0}), "physical");
+  call("IoFreeMdl", {Leaf});
+}
+
+TEST_F(KernelMDLChain,
+       PartialReusePreservesNextAndChecksCapacityBeforeMutation) {
+  DriverRequest IO;
+  IO.Kind = DriverRequestKind::DeviceControl;
+  IO.ControlCode = NeitherIOCTL;
+  IO.OutputSize = 3 * profile::PageSize;
+  const auto IRP = begin(IO);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto User = get(IRP + IRPUserBufferOffset);
+  const auto Source = call("IoAllocateMdl", {User, IO.OutputSize, 0, 0, 0});
+  const auto Partial =
+      call("IoAllocateMdl", {User, profile::PageSize, 0, 0, 0});
+  const auto Tail = allocate(0, false);
+  put(Partial + MDLNextOffset, Tail);
+  call("MmProbeAndLockPages", {Source, UserMode, IoWriteAccess});
+  call("IoBuildPartialMdl", {Source, Partial, User + 8, 16});
+  const auto PFN = get(Partial + MDLSize);
+  const auto Capacity = get(Partial + MDLSizeOffset, 2);
+  auto Record = [&] {
+    std::vector<uint8_t> Bytes(Capacity);
+    success(Memory->read(Partial, Bytes));
+    return Bytes;
+  };
+  const auto Before = Record();
+  rejected(Model->call("IoBuildPartialMdl",
+                       {Source, Partial, User + profile::PageSize - 1, 2}),
+           "PFN capacity");
+  EXPECT_EQ(Record(), Before);
+  rejected(Model->call("IoBuildPartialMdl",
+                       {Source, Partial, User + IO.OutputSize, 0}),
+           "outside");
+  EXPECT_EQ(Record(), Before);
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+  const auto Mapped = Record();
+  rejected(Model->call("IoBuildPartialMdl", {Source, Partial, User + 32, 8}),
+           "MmPrepareMdlForReuse");
+  EXPECT_EQ(Record(), Mapped);
+  // MmPrepareMdlForReuse's WDK inline calls MmUnmapLockedPages only for a
+  // partial MDL carrying MDL_PARTIAL_HAS_BEEN_MAPPED.
+  ASSERT_NE(get(Partial + MDLFlagsOffset, 2) & MDLPartialHasBeenMapped, 0u);
+  call("MmUnmapLockedPages", {get(Partial + MDLMappedSystemVAOffset), Partial});
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  EXPECT_EQ(get(Partial + MDLFlagsOffset, 2), MDLPartial);
+  EXPECT_EQ(get(Partial + MDLByteCountOffset, 4), 16u);
+  EXPECT_EQ(get(Partial + MDLSize), PFN);
+  call("IoBuildPartialMdl",
+       {Source, Partial, User + profile::PageSize + 4, 12});
+  EXPECT_EQ(get(Partial + MDLNextOffset), Tail);
+  EXPECT_EQ(get(Partial + MDLSizeOffset, 2), Capacity);
+  EXPECT_EQ(get(Partial + MDLSize),
+            get(Source + MDLSize + profile::PointerSize));
+  const auto ReusedAlias =
+      call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+  put(ReusedAlias, 0x62, 1);
+  EXPECT_EQ(get(User + profile::PageSize + 4, 1), 0x62u);
+  call("IoFreeMdl", {Partial});
+  EXPECT_FALSE(take(Memory->canAccess(ReusedAlias, 1, Read)));
+  call("IoFreeMdl", {Tail});
+  call("MmUnlockPages", {Source});
+  call("IoFreeMdl", {Source});
+  complete(IRP);
+}
+
+TEST_F(KernelMDLChain,
+       BorrowedAndIndependentPartialMappingsHaveSeparateOwners) {
+  const auto IRP = begin(NeitherIOCTL);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto User = get(IRP + IRPUserBufferOffset);
+  const auto Source = allocate(0, false, User);
+  const auto Independent = allocate(0, false, User);
+  const auto Borrowed = allocate(0, false, User);
+  const auto Leaf = allocate(0, false, User);
+  call("MmProbeAndLockPages", {Source, UserMode, IoReadAccess});
+  call("IoBuildPartialMdl", {Source, Independent, User + 1, 3});
+  const auto IndependentAlias =
+      call("MmGetSystemAddressForMdlSafe", {Independent, NormalPagePriority});
+  call("IoBuildPartialMdl", {Independent, Leaf, User + 2, 2});
+  const auto SourceAlias =
+      call("MmGetSystemAddressForMdlSafe", {Source, NormalPagePriority});
+  call("IoBuildPartialMdl", {Source, Borrowed, User + 1, 3});
+  EXPECT_EQ(get(Borrowed + MDLMappedSystemVAOffset), SourceAlias + 1);
+  EXPECT_EQ(get(Leaf + MDLMappedSystemVAOffset), IndependentAlias + 1);
+  rejected(Model->call("MmUnmapLockedPages", {SourceAlias, Source}),
+           "dependent partial");
+  rejected(Model->call("IoFreeMdl", {Independent}), "dependent partial");
+  rejected(Model->call("MmUnlockPages", {Leaf}), "locked user MDL");
+  EXPECT_FALSE(take(Memory->canAccess(IndependentAlias, 1, Write)));
+  call("IoFreeMdl", {Borrowed});
+  call("MmUnmapLockedPages", {SourceAlias, Source});
+  EXPECT_TRUE(take(Memory->canAccess(IndependentAlias, 1, Read)));
+  // Dropping the intermediate descriptor is safe after its only mapping
+  // borrower is rebuilt against the unmapped root.
+  call("IoBuildPartialMdl", {Source, Leaf, User, 4});
+  call("IoFreeMdl", {Independent});
+  EXPECT_FALSE(take(Memory->canAccess(IndependentAlias, 1, Read)));
+  rejected(Model->call("MmUnlockPages", {Source}), "dependent partial");
+  call("IoFreeMdl", {Leaf});
+  call("MmUnlockPages", {Source});
+  call("IoFreeMdl", {Source});
+  complete(IRP);
+}
+
+TEST_F(KernelMDLChain, CompletionRetiresPartialDependenciesInEitherChainOrder) {
+  for (bool SourceFirst : {false, true}) {
+    DriverRequest IO;
+    IO.Kind = DriverRequestKind::DeviceControl;
+    IO.ControlCode = NeitherIOCTL;
+    IO.OutputSize = 32;
+    const auto IRP = begin(IO, SourceFirst ? 2 : 1);
+    Model->enterExecution(profile::StackBase);
+    success(Model->setUserRequestContext(true));
+    const auto User = get(IRP + IRPUserBufferOffset);
+    const auto Source = call("IoAllocateMdl", {User, 32, 0, 0, IRP});
+    const auto Partial = call("IoAllocateMdl", {User, 32, 1, 0, IRP});
+    const auto Leaf = call("IoAllocateMdl", {User, 32, 1, 0, IRP});
+    call("MmProbeAndLockPages", {Source, UserMode, IoWriteAccess});
+    call("IoBuildPartialMdl", {Source, Partial, User, 32});
+    const auto Alias =
+        call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+    call("IoBuildPartialMdl", {Partial, Leaf, User + 8, 16});
+    if (!SourceFirst) {
+      put(IRP + IRPMdlOffset, Leaf);
+      put(Leaf + MDLNextOffset, Partial);
+      put(Partial + MDLNextOffset, Source);
+      put(Source + MDLNextOffset, 0);
+    }
+    call("KeInitializeSpinLock", {Alias});
+    const auto PreviousIRQL = call("KfRaiseIrql", {scheduler::DispatchLevel});
+    call("KeAcquireSpinLockAtDpcLevel", {Alias});
+    status(IRP);
+    const auto Stack = get(IRP + IRPStackPointerOffset);
+    const auto Location = get(IRP + IRPLocationOffset, 1);
+    rejected(Model->call("IofCompleteRequest", {IRP, 0}), "spin lock");
+    EXPECT_FALSE(Result.Requests.back().Completed);
+    EXPECT_TRUE(Result.Requests.back().Output.empty());
+    EXPECT_EQ(get(IRP + IRPStackPointerOffset), Stack);
+    EXPECT_EQ(get(IRP + IRPLocationOffset, 1), Location);
+    for (auto MDL : {Source, Partial, Leaf})
+      success(Model->validateGuestAccess(MDL, profile::PointerSize, false));
+    EXPECT_TRUE(take(Memory->canAccess(Alias, 32, Read | Write)));
+    call("KeReleaseSpinLockFromDpcLevel", {Alias});
+    call("KeLowerIrql", {PreviousIRQL});
+    put(Alias + 8, 0x72, 1);
+    complete(IRP, 16);
+    ASSERT_EQ(Result.Requests.back().Output.size(), 16u);
+    EXPECT_EQ(Result.Requests.back().Output[8], 0x72u);
+    for (auto MDL : {Source, Partial, Leaf})
+      rejected(Model->validateGuestAccess(MDL, 1, false), "freed");
+    EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+    success(Model->recordDispatchReturn(IRP, StatusSuccess));
+    success(Model->finalizeRequest(IRP));
+  }
+}
+
+TEST_F(KernelMDLChain, CompletionRejectsPartialOutsideTheRetiringChain) {
+  const auto IRP = begin(DirectIOCTL);
+  const auto Source = get(IRP + IRPMdlOffset);
+  const auto Original =
+      get(Source + MDLStartVAOffset) + get(Source + MDLByteOffsetOffset, 4);
+  const auto Partial = call("IoAllocateMdl", {Original, 4, 0, 0, 0});
+  call("IoBuildPartialMdl", {Source, Partial, Original, 4});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+  put(Alias, 0x87654321, 4);
+  status(IRP, 4);
+  const auto Stack = get(IRP + IRPStackPointerOffset);
+  const auto Location = get(IRP + IRPLocationOffset, 1);
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}), "dependent partial");
+  EXPECT_FALSE(Result.Requests.back().Completed);
+  EXPECT_EQ(get(IRP + IRPStackPointerOffset), Stack);
+  EXPECT_EQ(get(IRP + IRPLocationOffset, 1), Location);
+  EXPECT_TRUE(Result.Requests.back().Output.empty());
+  EXPECT_EQ(Result.Requests.back().Information, 0u);
+  EXPECT_EQ(get(Alias, 4), 0x87654321u);
+  success(Model->validateGuestAccess(Source, profile::PointerSize, false));
+  put(Source + MDLNextOffset, Partial);
+  complete(IRP, 4);
+  EXPECT_EQ(Result.Requests.back().Output,
+            (std::vector<uint8_t>{0x21, 0x43, 0x65, 0x87}));
+  EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
+  success(Model->recordDispatchReturn(IRP, StatusSuccess));
+  success(Model->finalizeRequest(IRP));
+}
+
 TEST_F(KernelMDLChain, SecondaryCanBecomeFirstAndPrimaryReplacementDetaches) {
   const uint64_t IRP = begin();
   const auto First = allocate(IRP, true);
@@ -296,6 +557,104 @@ TEST_F(KernelMDLChain, CompletionUnlocksEveryUserDescriptorAndRevokesAliases) {
   EXPECT_FALSE(take(Memory->canAccess(Alias, 1, Read)));
   EXPECT_FALSE(take(Memory->canAccess(SecondAlias, 1, Read)));
   EXPECT_EQ(get(User, sizeof(uint32_t)), 0x55443322u);
+}
+
+TEST_F(KernelMDLChain, CompletionRetiresRelockedDirectViewsInEitherChainOrder) {
+  for (bool RootFirst : {false, true}) {
+    SCOPED_TRACE(RootFirst);
+    const auto IRP = begin(DirectIOCTL, RootFirst ? 2 : 1);
+    Model->enterExecution(profile::StackBase);
+    success(Model->setUserRequestContext(true));
+    const auto Root = get(IRP + IRPMdlOffset);
+    const auto User =
+        call("MmMapLockedPagesSpecifyCache",
+             {Root, UserMode, MmCached, 0, 0, NormalPagePriority});
+    const auto First = allocate(IRP, true, User);
+    const auto Second = allocate(IRP, true, User);
+    for (auto MDL : {First, Second})
+      call("MmProbeAndLockPages", {MDL, UserMode, IoWriteAccess});
+    const auto Partial = allocate(IRP, true, User);
+    call("IoBuildPartialMdl", {First, Partial, User, sizeof(uint32_t)});
+    const auto Alias =
+        call("MmGetSystemAddressForMdlSafe", {Partial, NormalPagePriority});
+    const auto PeerAlias =
+        call("MmGetSystemAddressForMdlSafe", {Second, NormalPagePriority});
+    if (!RootFirst) {
+      put(IRP + IRPMdlOffset, Partial);
+      put(Partial + MDLNextOffset, Second);
+      put(Second + MDLNextOffset, First);
+      put(First + MDLNextOffset, Root);
+      put(Root + MDLNextOffset, 0);
+    }
+    call("MmUnmapLockedPages", {User, Root});
+    EXPECT_FALSE(take(Memory->canAccess(User, 1, Read)));
+    put(Alias, 0x78563412, sizeof(uint32_t));
+    EXPECT_EQ(get(PeerAlias, sizeof(uint32_t)), 0x78563412u);
+    complete(IRP, sizeof(uint32_t));
+    EXPECT_TRUE(Result.Requests.back().Completed);
+    EXPECT_EQ(Result.Requests.back().Output,
+              (std::vector<uint8_t>{0x12, 0x34, 0x56, 0x78}));
+    for (auto MDL : {Root, First, Second, Partial})
+      rejected(Model->validateGuestAccess(MDL, 1, false), "freed");
+    for (auto Address : {User, Alias, PeerAlias})
+      EXPECT_FALSE(take(Memory->canAccess(Address, 1, Read)));
+    success(Model->recordDispatchReturn(IRP, StatusSuccess));
+    success(Model->finalizeRequest(IRP));
+  }
+}
+
+TEST_F(KernelMDLChain, ExternalDirectViewLockRejectsCompletionBeforeMutation) {
+  const auto IRP = begin(DirectIOCTL);
+  Model->enterExecution(profile::StackBase);
+  success(Model->setUserRequestContext(true));
+  const auto Root = get(IRP + IRPMdlOffset);
+  const auto User = call("MmMapLockedPagesSpecifyCache",
+                         {Root, UserMode, MmCached, 0, 0, NormalPagePriority});
+  const auto First = allocate(IRP, true, User);
+  const auto Second = allocate(IRP, true, User);
+  const auto External = allocate(0, false, User);
+  for (auto MDL : {First, Second, External})
+    call("MmProbeAndLockPages", {MDL, UserMode, IoWriteAccess});
+  const auto Alias =
+      call("MmGetSystemAddressForMdlSafe", {First, NormalPagePriority});
+  const auto ExternalAlias =
+      call("MmGetSystemAddressForMdlSafe", {External, NormalPagePriority});
+  call("MmUnmapLockedPages", {User, Root});
+  put(Alias, 0x78563412, sizeof(uint32_t));
+  status(IRP, sizeof(uint32_t));
+  auto Bytes = [&](uint64_t Address, uint64_t Size) {
+    std::vector<uint8_t> Value(Size);
+    success(Memory->read(Address, Value));
+    return Value;
+  };
+  const auto IRPBefore = Bytes(IRP, IRPSize);
+  const std::array Descriptors{Root, First, Second, External};
+  std::array<std::vector<uint8_t>, Descriptors.size()> Before;
+  for (size_t I = 0; I < Descriptors.size(); ++I)
+    Before[I] = Bytes(Descriptors[I], get(Descriptors[I] + MDLSizeOffset, 2));
+  rejected(Model->call("IofCompleteRequest", {IRP, 0}), "pinned owner");
+  EXPECT_EQ(Bytes(IRP, IRPSize), IRPBefore);
+  EXPECT_FALSE(Result.Requests.back().Completed);
+  EXPECT_TRUE(Result.Requests.back().Output.empty());
+  EXPECT_EQ(Result.Requests.back().Information, 0u);
+  for (size_t I = 0; I < Descriptors.size(); ++I) {
+    success(Model->validateGuestAccess(Descriptors[I], 1, false));
+    EXPECT_EQ(Bytes(Descriptors[I], Before[I].size()), Before[I]);
+  }
+  EXPECT_EQ(get(Alias, sizeof(uint32_t)), 0x78563412u);
+  EXPECT_EQ(get(ExternalAlias, sizeof(uint32_t)), 0x78563412u);
+  call("MmUnlockPages", {External});
+  call("IoFreeMdl", {External});
+  complete(IRP, sizeof(uint32_t));
+  EXPECT_TRUE(Result.Requests.back().Completed);
+  EXPECT_EQ(Result.Requests.back().Output,
+            (std::vector<uint8_t>{0x12, 0x34, 0x56, 0x78}));
+  for (auto MDL : Descriptors)
+    rejected(Model->validateGuestAccess(MDL, 1, false), "freed");
+  for (auto Address : {User, Alias, ExternalAlias})
+    EXPECT_FALSE(take(Memory->canAccess(Address, 1, Read)));
+  success(Model->recordDispatchReturn(IRP, StatusSuccess));
+  success(Model->finalizeRequest(IRP));
 }
 
 TEST_F(KernelMDLChain, ExplicitNestedPointersPreserveDeclaredPagePermissions) {

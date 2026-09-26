@@ -40,8 +40,8 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 |--------------------|----------|------------|
 | 使用下列 API 的 x64 軟體 WDM 驅動程式 | 有界 x64 WDM 初始化、循序緩衝／直接／neither 請求、工作項目、計時器、DPC、事件與等待，以及行為報告和限制 | 每個額外執行到的 API 都必須有明確的模型 |
 | `METHOD_BUFFERED` IOCTL | 循序緩衝／直接 I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交 或 一般 WDM 請求取消 |
-| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL、系統對映及唯讀共用模型 PFN | 使用者對映及其他 DMA 介面 |
-| 驅動程式自行配置的 MDL | 獨立或 IRP 關聯的非分頁集區／單一使用者配置描述元；來賓鏈指標與完成時釋放 | 不支援配額、手工／部分 MDL 或任意使用者映射 |
+| `METHOD_IN_DIRECT`、`METHOD_OUT_DIRECT` | 由請求擁有的 MDL、系統對映及唯讀共用模型 PFN | 以下支援範圍以外的使用者對映及 DMA 介面 |
+| 驅動程式自行配置的 MDL | 獨立或 IRP 關聯描述元、部分 MDL、共用使用者／系統對映及完成時釋放 | 不支援配額、手工 MDL、任意行程位址空間及 VA 重用 |
 | READ/WRITE | 循序緩衝／直接／neither I/O，可由工作項目或 DPC 完成 | 僅支援下列 API 子集；不支援並行公開情境提交、一般 WDM 請求取消或隱含檔案位置 |
 | WDM `METHOD_NEITHER` | 獨立使用者緩衝區、存取探測、MDL 鎖頁、合成要求行程身分、派送後 VA 撤銷或行程結束及有限取消 | 不支援一般行程附加、任意使用者對映或重新對映 |
 | KMDF 1.33 非 PnP 驅動程式 | 版本繫結、物件／內容、具名控制裝置、手動、循序或有限或無限並行預設及非預設佇列，以及實際執行回呼的緩衝／直接／neither 請求 | 不支援 PnP 裝置、一般佇列排程、類別擴充或 UMDF |
@@ -311,11 +311,17 @@ build-release/bin/neverd emulate-driver path/to/driver.sys \
 
 系統工作項可透過 `IoGetRequestorProcess` 取得作用中 IRP 的不透明要求行程物件，使用 `KeStackAttachProcess` 與可寫的核心 `KAPC_STATE` 暫時附加、存取原始使用者 VA，然後以相同狀態呼叫 `KeUnstackDetachProcess`。`IoGetCurrentProcess` 與 `PsGetProcessId` 反映附加行程；`PsGetCurrentProcessId` 仍回傳建立工作執行緒的系統行程 ID 4。行程已結束、IRP 已完成、狀態不配對，以及附加期間等待或完成 IRP 均明確報錯。
 
-對於直接 IOCTL，`input` 初始化第一個系統緩衝區，`direct_input` 則初始化由 MDL 描述的獨立第二個緩衝區，並以零補齊至 `output_size`。`METHOD_IN_DIRECT` 要求可讀取，但不代表系統對映唯讀。兩種方法都使用可讀寫的情境緩衝區。`MdlMappingNoWrite` 移除對映的寫入權限，`MdlMappingNoExecute` 移除執行權限。解除對映會撤銷系統 VA；重新對映仍保留相同的鎖定資料。完成請求後，MDL 及對映皆失效。模型提供 WDM 巨集使用的公開 MDL 欄位；處理程序欄位與未建立 MDL 的 PFN、手工建立的 MDL、使用者對映，以及透過原始 UserBuffer 直接存取都會遭拒絕。長度為零的直接緩衝區使用空 MDL。
+對於直接 IOCTL，`input` 初始化第一個系統緩衝區，`direct_input` 則初始化由 MDL 描述的獨立第二個緩衝區，並以零補齊至 `output_size`。`METHOD_IN_DIRECT` 要求可讀取，但不代表系統對映唯讀。兩種方法都使用可讀寫的情境緩衝區。`MdlMappingNoWrite` 移除對映的寫入權限，`MdlMappingNoExecute` 移除執行權限。解除對映會撤銷系統 VA；重新對映仍保留相同的鎖定資料。完成請求後，MDL 及對映皆失效。模型提供 WDM 巨集使用的公開 MDL 欄位；處理程序欄位與未建立 MDL 的 PFN、手工建立的 MDL、以下行程所屬 MDL 模型範圍外的使用者對映，以及透過原始 UserBuffer 直接存取都會遭拒絕。長度為零的直接緩衝區使用空 MDL。
 
 `IoAllocateMdl` 為非空、不溢位且不超過 1 MiB 的緩衝區配置中繼資料，不探測或鎖定緩衝區。`Irp` 可為 NULL 或有效的建模 IRP。主要描述元取代目前驅動鏈的頭部，脫離的描述元仍由驅動擁有；`SecondaryBuffer` 將描述元附加至鏈尾，空鏈則設為頭部。原始請求擁有的 direct-I/O MDL 必須保持可達，不能由驅動取代或釋放。`ChargeQuota` 必須為 FALSE；物件區耗盡時傳回 NULL。`MmBuildMdlForNonPagedPool` 要求完整範圍位於同一個有效非分頁集區配置內。安全輔助函式及 WDM 巨集重用原始位址與權限；新增禁止寫入／執行旗標不改變既有權限，額外系統映射及解除映射會被拒絕。`IoFreeMdl` 僅釋放指定的驅動描述元，不解除鏈連結，也不沿 `Next` 釋放後繼；手動釋放使用者 MDL 前必須先解除鎖定。集區緩衝區的生命週期獨立，只要不再存取已釋放儲存空間，兩種釋放順序均受支援。
 
-驅動可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脫離建模描述元。IRP 最終完成前驗證目前整條鏈，隨後解除附加使用者 MDL 的鎖定、撤銷其別名並釋放附加描述元；脫離的描述元和集區緩衝區仍由驅動擁有。環、未知或已釋放節點、多個活動 IRP 共用描述元，以及把 WDF 私有描述元接入 WDM 鏈，均明確失敗。活動 DMA 和排程器相依性阻止過早回收。其他建模 MDL 欄位及已建構 PFN 陣列唯讀；程序欄位、未建構 PFN、手工或部分 MDL、任意使用者映射仍不支援。卸載前必須釋放剩餘驅動描述元。
+驅動可修改 `MDL.Next` 和 `IRP.MdlAddress`，插入或脫離建模描述元。IRP 最終完成前驗證目前整條鏈，隨後解除附加使用者 MDL 的鎖定、撤銷其別名並釋放附加描述元；脫離的描述元和集區緩衝區仍由驅動擁有。環、未知或已釋放節點、多個活動 IRP 共用描述元，以及把 WDF 私有描述元接入 WDM 鏈，均明確失敗。活動 DMA 和排程器相依性阻止過早回收。其他建模 MDL 欄位及已建構 PFN 陣列唯讀；程序欄位、未建構 PFN、手工 MDL 仍不支援。卸載前必須釋放剩餘驅動描述元。
+
+`IoBuildPartialMdl` 描述已建構來源 MDL 的非空子範圍；長度零選取剩餘範圍，目標必須有足夠的 PFN 容量。部分描述元共用實體頁面，不會新增頁面鎖定。它們繼承來源仍有效的系統對映，或透過 `MmGetSystemAddressForMdlSafe` 建立獨立對映。釋放部分 MDL 或準備重用時，只釋放該 MDL 自己擁有的對映。真正的 WDK 行內函式 `MmPrepareMdlForReuse` 可在再次呼叫 `IoBuildPartialMdl` 前執行。非分頁來源描述元可獨立釋放；只要仍有部分 MDL 相依，根使用者鎖定及借用的系統別名就不能回收。完成操作先驗證整條鏈再釋放相依性，不受描述元順序影響。活動 DMA 會阻止重建及過早回收。
+
+`MmMapLockedPagesSpecifyCache` 在有效要求者情境中支援 `UserMode` 和 `MmCached`，包含有限支援的行程附加工作項情境；IRQL 不得高於 `APC_LEVEL`。每次呼叫為同一實體儲存建立獨立、隸屬行程的檢視，不改變 `MappedSystemVa`。檢視一律不可執行（NX），`MdlMappingNoWrite` 將其設為唯讀。集區儲存必須為非分頁記憶體，且占用完整的專用頁面。使用 `MmProbeAndLockPages` 再次鎖定使用者檢視時，仍保留原始實體身分。指定的位址必須保留 MDL 頁面內偏移，且位於使用者檢視專用的有限 VA 區域內；區域耗盡會引發可捕捉的 `STATUS_INSUFFICIENT_RESOURCES`。
+
+`MmUnmapLockedPages` 要求確切的使用者位址／MDL 配對，並由建立檢視的行程（PID）呼叫。解除情境原始 VA 的對映不影響獨立 MDL 檢視及系統別名。行程結束只撤銷該行程的使用者檢視；已鎖定實體頁面及系統別名仍有效。有效檢視會阻止回收描述元、根鎖定、集區及請求儲存空間。已撤銷的使用者位址不會重用。任意行程空間、其他快取策略及使用者 VA 重新對映仍不在此有限模型範圍內。
 
 IOCTL 的 `output_size` 非零時，`Information` 不得超過該大小，即使輸入緩衝區較大亦然。沒有輸出緩衝區的 IOCTL 可在此欄位傳回驅動程式自訂結果，不會複製輸出位元組；`information_hex` 精確保留原始 64 位元值。
 
