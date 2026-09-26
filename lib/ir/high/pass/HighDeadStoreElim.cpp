@@ -254,9 +254,15 @@ void narrowSourceConcatLocals(HighFunc &Func) {
       }
       return false;
     }();
+    // An extension keeps its entire operand at this definition site: the
+    // narrowed assignment reads its low bytes through frameValuePrefix.
+    // Only a CONCAT's discarded high half or a copied carrier needs the
+    // side-effect-free proof. In particular, a float bitcast feeding INT_ZEXT
+    // must remain evaluated even though it is not an integer-only tree.
     if ((!ConcatShape && !ExtensionShape && !CopyShape) ||
-        !discardableIntegerValue(
-            ConcatShape ? V->Operands[0] : V, Budget)) {
+        (!ExtensionShape &&
+         !discardableIntegerValue(ConcatShape ? V->Operands[0] : V,
+                                      Budget))) {
       C.Valid = false;
       continue;
     }

@@ -551,6 +551,26 @@ TEST(HighSourceScalarLocals, NarrowsPureExtendedAlternativeDefinition) {
   EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
 }
 
+TEST(HighSourceScalarLocals,
+     NarrowsExtendedFloatBitsWithoutDroppingTheirEvaluation) {
+  auto F = sourceConcatLocal(Arch::AArch64, 8);
+  auto FloatResult = HighExpr::makeCall("effect_float", 0x3000, {});
+  FloatResult->Type = NdType::makeFloat(8);
+  auto Bits = HighExpr::makeBitCast(FloatResult, NdType::makeInt(8, false));
+  auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Bits);
+  Extended->Type = NdType::makeInt(16, false);
+  F.Body[0].ElseBody[0].Val = Extended;
+
+  narrowSourceConcatLocals(F);
+
+  const auto &Definition = F.Body[0].ElseBody[0];
+  EXPECT_EQ(Definition.Dst->Var.Size, 8U);
+  ASSERT_TRUE(Definition.Val);
+  EXPECT_EQ(Definition.Val->Op, NdOp::SUBBYTES);
+  EXPECT_NE(Definition.Val->str().find("effect_float"), std::string::npos);
+  EXPECT_EQ(F.Body[1].RetVal->Operands[0]->Var.Size, 8U);
+}
+
 TEST(HighSourceScalarLocals, NarrowsFullWidthCopyAlternativeDefinition) {
   auto F = sourceConcatLocal(Arch::AArch64, 8);
   F.Body[0].ElseBody[0].Val = variable(7, 16);
