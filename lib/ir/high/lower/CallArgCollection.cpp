@@ -1144,6 +1144,11 @@ int MedToHighConverter::regToArgIdx(uint64_t RegOff) const {
 }
 
 std::string MedToHighConverter::calleeDisplayName(va_t Target) const {
+  if (ResolvedCalleeNames) {
+    auto It = ResolvedCalleeNames->find(Target);
+    if (It != ResolvedCalleeNames->end())
+      return It->second;
+  }
   auto Synthetic = [Target] {
     return (kAutoFuncPrefix + llvm::utohexstr(Target)).str();
   };
@@ -1164,6 +1169,69 @@ std::string MedToHighConverter::calleeDisplayName(va_t Target) const {
       return FromImage;
   }
   return Synthetic();
+}
+
+void MedToHighConverter::resolveCalleeNames(
+    const std::set<va_t> &Targets,
+    std::map<va_t, std::string> &Names) const {
+  if (!Image) {
+    for (va_t Target : Targets)
+      Names[Target] = calleeDisplayName(Target);
+    return;
+  }
+
+  // BinaryImage keeps publicly editable metadata vectors, so build these
+  // exact-address indexes for this immutable pipeline stage rather than
+  // caching them on the image. Preserve the *first* matching entry, including
+  // an empty name, just as findImportAt/findExportAt/findSymbolAt do.
+  std::map<va_t, const Import *> ImportsByIAT;
+  for (const Import &Imp : Image->Imports)
+    ImportsByIAT.try_emplace(Imp.IATAddr, &Imp);
+  std::map<va_t, std::string> ExportsByAddr;
+  for (const Export &Exp : Image->Exports)
+    ExportsByAddr.try_emplace(Exp.Addr, Exp.Name);
+  std::map<va_t, std::string> SymbolsByAddr;
+  for (const Symbol &Sym : Image->Symbols)
+    SymbolsByAddr.try_emplace(Sym.Addr, Sym.Name);
+
+  auto Usable = [](llvm::StringRef Name) {
+    return !Name.empty() && !Name.starts_with(kAutoFuncPrefix);
+  };
+  for (va_t Target : Targets) {
+    if (ResolvedCalleeNames) {
+      auto It = ResolvedCalleeNames->find(Target);
+      if (It != ResolvedCalleeNames->end()) {
+        Names[Target] = It->second;
+        continue;
+      }
+    }
+    if (FuncNames) {
+      auto It = FuncNames->find(Target);
+      if (It != FuncNames->end() && Usable(It->second)) {
+        Names[Target] = It->second;
+        continue;
+      }
+    }
+    const Import *Imp = nullptr;
+    if (auto It = ImportsByIAT.find(Target); It != ImportsByIAT.end())
+      Imp = It->second;
+    else
+      Imp = Image->findImportStubAt(Target);
+    if (Imp && Usable(Imp->Name)) {
+      Names[Target] = Imp->Name;
+      continue;
+    }
+    auto Exp = ExportsByAddr.find(Target);
+    auto Sym = SymbolsByAddr.find(Target);
+    llvm::StringRef FromImage;
+    if (Exp != ExportsByAddr.end() && !Exp->second.empty())
+      FromImage = Exp->second;
+    else if (Sym != SymbolsByAddr.end() && !Sym->second.empty())
+      FromImage = Sym->second;
+    Names[Target] = Usable(FromImage)
+                        ? FromImage.str()
+                        : (kAutoFuncPrefix + llvm::utohexstr(Target)).str();
+  }
 }
 
 int MedToHighConverter::abiParamIndex(const MedVar &V) const {

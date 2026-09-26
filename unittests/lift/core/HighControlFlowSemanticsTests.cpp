@@ -4,6 +4,7 @@
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/APInt.h"
 
@@ -26,6 +27,52 @@ void renameVars(std::vector<HighStmt> &);
 void eliminateUnusedValues(std::vector<HighStmt> &);
 } // namespace neverd
 using namespace neverd;
+
+TEST(HighControlFlowSemantics, CalleeNameSnapshotKeepsLookupPrecedence) {
+  BinaryImage Img;
+  Img.Imports.push_back({"", "import_name", 0, 0x1000});
+  Img.Imports.push_back({"", "sub_ignored", 0, 0x6000});
+  Img.Exports.push_back({"export_name", 0, 0x3000});
+  Img.Exports.push_back({"export_after_synthetic_import", 0, 0x6000});
+  Img.Exports.push_back({"sub_7000", 0, 0x7000});
+  Img.Exports.push_back({"", 0, 0x8000});
+  Img.Exports.push_back({"ignored_later_export", 0, 0x8000});
+  Img.Symbols.push_back({"symbol_behind_export", 0x3000});
+  Img.Symbols.push_back({"symbol_name", 0x4000});
+  Img.Symbols.push_back({"symbol_behind_synthetic", 0x7000});
+  Img.Symbols.push_back({"symbol_after_empty_export", 0x8000});
+  std::map<va_t, std::string> FunctionNames = {
+      {0x1000, "sub_1000"}, {0x2000, "declared_name"},
+      {0x3000, "sub_3000"}, {0x5000, "sub_5000"}};
+  std::set<va_t> Targets = {0,      0x1000, 0x2000, 0x3000, 0x4000,
+                            0x5000, 0x6000, 0x7000, 0x8000};
+
+  MedToHighConverter Resolver;
+  Resolver.setBinaryImage(&Img);
+  Resolver.setFuncNames(&FunctionNames);
+  std::map<va_t, std::string> Snapshot;
+  Resolver.resolveCalleeNames(Targets, Snapshot);
+  EXPECT_EQ(Snapshot.at(0), "sub_0");
+  EXPECT_EQ(Snapshot.at(0x1000), "import_name");
+  EXPECT_EQ(Snapshot.at(0x2000), "declared_name");
+  EXPECT_EQ(Snapshot.at(0x3000), "export_name");
+  EXPECT_EQ(Snapshot.at(0x4000), "symbol_name");
+  EXPECT_EQ(Snapshot.at(0x5000), "sub_5000");
+  EXPECT_EQ(Snapshot.at(0x6000), "export_after_synthetic_import");
+  EXPECT_EQ(Snapshot.at(0x7000), "sub_7000");
+  EXPECT_EQ(Snapshot.at(0x8000), "symbol_after_empty_export");
+
+  MedToHighConverter Cached;
+  Cached.setBinaryImage(&Img);
+  Cached.setFuncNames(&FunctionNames);
+  Cached.setResolvedCalleeNames(&Snapshot);
+  Img.Imports[0].Name = "changed_import";
+  Img.Symbols[1].Name = "changed_symbol";
+  std::map<va_t, std::string> Reused;
+  Cached.resolveCalleeNames({0x1000, 0x4000}, Reused);
+  EXPECT_EQ(Reused.at(0x1000), "import_name");
+  EXPECT_EQ(Reused.at(0x4000), "symbol_name");
+}
 
 namespace {
 ExprPtr local(int Id) {

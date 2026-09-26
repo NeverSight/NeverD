@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -67,6 +68,24 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
 
   detectThunkStubs(Result.LowFuncs, AllFuncNames);
 
+  // The same direct and indirect targets recur across MedIR operations.
+  // Resolve each distinct address before starting workers so absent names do
+  // not repeatedly scan the image's full symbol table (including address 0
+  // for unresolved indirect calls). Keep the existing naming precedence.
+  std::set<va_t> CallTargets;
+  for (const MedFunc &MF : Result.MedFuncs)
+    for (const MedBlock &B : MF.Blocks)
+      for (const MedOp &Op : B.Ops)
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          CallTargets.insert(Op.NumInputs && Op.Inputs[0].isConst()
+                                 ? static_cast<va_t>(Op.Inputs[0].ConstVal)
+                                 : 0);
+  std::map<va_t, std::string> ResolvedCalleeNames;
+  MedToHighConverter NameResolver;
+  NameResolver.setBinaryImage(&Img);
+  NameResolver.setFuncNames(&AllFuncNames);
+  NameResolver.resolveCalleeNames(CallTargets, ResolvedCalleeNames);
+
   const size_t Total = Result.MedFuncs.size();
   // A worker failure invalidates the whole stage. Keep output private until
   // every worker has joined so callers never receive a partially built batch.
@@ -86,6 +105,7 @@ void Pipeline::buildHighIR(const BinaryImage &Img,
     MedToHighConverter Local;
     Local.setBinaryImage(&Img);
     Local.setFuncNames(&AllFuncNames);
+    Local.setResolvedCalleeNames(&ResolvedCalleeNames);
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];
       auto keepIdentity = [&] {

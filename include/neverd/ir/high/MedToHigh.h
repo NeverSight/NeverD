@@ -68,6 +68,13 @@ public:
   void setFuncNames(const std::map<va_t, std::string> *Names) {
     FuncNames = Names;
   }
+  /// Resolve call targets once before parallel conversion. Workers read the
+  /// resulting snapshot while lowering functions from the same image.
+  void resolveCalleeNames(const std::set<va_t> &Targets,
+                          std::map<va_t, std::string> &Names) const;
+  void setResolvedCalleeNames(const std::map<va_t, std::string> *Names) {
+    ResolvedCalleeNames = Names;
+  }
   void setJumpTables(const std::vector<JumpTable> &JTs) { JumpTables = JTs; }
 
   struct CallIndTarget {
@@ -172,6 +179,7 @@ private:
   const BinaryImage *Image = nullptr;
   Arch TargetArch = Arch::Unknown;
   const std::map<va_t, std::string> *FuncNames = nullptr;
+  const std::map<va_t, std::string> *ResolvedCalleeNames = nullptr;
   std::vector<JumpTable> JumpTables;
   int NextHighTempId = 0;
   int ExprRecurseDepth = 0;
